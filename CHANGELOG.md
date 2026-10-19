@@ -5,7 +5,7 @@
 ### New
 
 - Edit mode: right-click a frame to open its settings (edit mode closes, the Settings window opens at that frame's section).
-- Edit mode: type a frame's exact position in the toolbar over it: its anchor (one of nine screen points), X and Y. Enter with a frame selected starts typing; Tab goes between X and Y, the arrow keys step 1 px (Shift: 10). An anchor you pick stays when you drag the frame; Reset brings the automatic one back.
+- Edit mode: type a frame's exact position in the toolbar over it: its anchor (one of nine screen points), X and Y. Enter with a frame selected starts typing; Tab goes between X and Y, the arrow keys step 1 px (Shift: 10). An anchor you pick stays when you drag the frame; Reset brings the automatic one back. The Edit mode panel can be dragged out of the way (double-click it to put it back).
 - **Durability** (Settings › General › Durability; each part can be turned off): SuuUI's own armour figure at the minimap's lower left in place of the game's, a damaged piece in amber and a broken one in ember, the lowest percent or Broken under it, the pieces when you hover it (move it in edit mode; it shows only while something is worn, or always if you like).
 - Durability: the lowest piece's percent on the micro menu's Character button (ember 0% once something breaks), and the worn pieces in its tooltip.
 - Durability: in the character window, a thin bar along each gear slot's foot with the percent on worn pieces (a broken one dimmed), and a Durability block under the stats (lowest, damaged, average). A broken piece's tooltip says it gives no stats until repaired.

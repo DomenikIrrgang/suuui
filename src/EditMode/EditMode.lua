@@ -31,6 +31,9 @@ ns.EditMode = EditMode
 Settings.Register("layout", {
     snap = true,
     gridSize = 4,
+    -- where the panel was dragged to ({ x, y }: its centre from the
+    -- screen's); empty: at the screen's left
+    panel = {},
 })
 
 -- The grid divides by its size: 0 or less would put frames nowhere.
@@ -381,8 +384,36 @@ end
 local function buildPanel()
     local p = UI.Panel(overlay, { title = "Edit mode", width = 250 })
     p:SetFrameStrata("FULLSCREEN_DIALOG")
-    p:SetPoint("LEFT", root(), "LEFT", S["space-7"], 0)
     p:EnableMouse(true)
+    -- dragged out of the way of a frame under it (asked 2026-10-19), by
+    -- anything on it that isn't a control; kept for next time, and back at
+    -- the left on a double-click
+    local function place()
+        local at = Settings.Get("layout", "panel")
+        p:ClearAllPoints()
+        if type(at) == "table" and at.x and at.y then
+            p:SetPoint("CENTER", root(), "CENTER", at.x, at.y)
+        else
+            p:SetPoint("LEFT", root(), "LEFT", S["space-7"], 0)
+        end
+    end
+    place()
+    p:SetMovable(true)
+    p:SetClampedToScreen(true)
+    p:RegisterForDrag("LeftButton")
+    p:SetScript("OnDragStart", p.StartMoving)
+    p:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local x, y = self:GetCenter()
+        local rx, ry = root():GetCenter()
+        local k = self:GetEffectiveScale() / root():GetEffectiveScale()
+        Settings.Set("layout", "panel", { x = math.floor(x * k - rx + 0.5), y = math.floor(y * k - ry + 0.5) })
+        place()
+    end)
+    p:SetScript("OnDoubleClick", function()
+        Settings.Set("layout", "panel", {})
+        place()
+    end)
     local stack = Layout.Stack(p.body, { gap = S["space-4"], autoSize = "height" })
 
     local snapRow = CreateFrame("Frame", nil, p.body)
@@ -443,7 +474,7 @@ local function buildPanel()
     hint:SetWordWrap(true)
     hint:SetJustifyH("LEFT")
     hint:SetFixedWidth(226)
-    hint:SetValue("Drag a frame to move it, or type its place in the toolbar over it. Arrow keys nudge the selected one, Shift for 10px. Right-click a frame for its settings.")
+    hint:SetValue("Drag a frame to move it, or type its place in the toolbar over it. Arrow keys nudge the selected one, Shift for 10px. Right-click a frame for its settings. Drag this panel to move it; double-click it to put it back.")
     stack:Add(hint)
     return p
 end
