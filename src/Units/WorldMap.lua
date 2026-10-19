@@ -1595,6 +1595,17 @@ function M:HideTownPins()
     end
 end
 
+-- Your arrow: SuuUI's (the design's, made for the minimap, whose arrow
+-- Forever won't let go: no Minimap:SetPlayerTexture), on the game's group
+-- members pin, as the game sets its own; the game's again when off.
+function M:StyleArrow(on)
+    local f = self.map
+    if not f or not f.EnumeratePinsByTemplate then return end
+    for pin in f:EnumeratePinsByTemplate("GroupMembersPinTemplate") do
+        if pin.SetPinTexture then pcall(pin.SetPinTexture, pin, "player", on and (TEXTURES .. "PlayerArrow.tga") or "UI-WorldMapArrow") end
+    end
+end
+
 --------------------------------------------------------------------------------
 -- Unexplored areas: the map's overlays you haven't explored, drawn as the
 -- game draws the explored ones (Blizzard_SharedMapDataProviders, read
@@ -1752,6 +1763,7 @@ function M:Attach()
     -- every time the map opens: the game's place for its filter comes back
     f:HookScript("OnShow", function()
         if not self:IsEnabled() then return end
+        self:StyleArrow(true)
         self.menu:SetValue(self:MenuValue())
         self:PlaceFilters()
     end)
@@ -1833,6 +1845,7 @@ function M:OnEnable()
     end)
     self:HookQuestProviders()
     self:StyleQuestPins()
+    self:StyleArrow(true)
     -- (the log lays its quests out again on every change)
     if _G.QuestLogQuests_Update then
         hooksecurefunc("QuestLogQuests_Update", function() if self:IsEnabled() then self:StyleLogQuestPins() end end)
@@ -1874,6 +1887,7 @@ function M:OnDisable()
     local f = self.map
     if not f then return end
     self:UnstyleQuest()
+    self:StyleArrow(false)
     f:RemoveDataProvider(self.provider)
     self.items = nil
     self:ClearPins()
