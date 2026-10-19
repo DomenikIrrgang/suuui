@@ -210,12 +210,17 @@ local function plan(kind, list, counts)
             calls[1] = { label = ("SetRaidSubgroup(%d, %d)"):format(m.index, to), fn = SetRaidSubgroup, args = { m.index, to } }
         end
     elseif kind == "swap" then
+        -- two others if there are; else you and another (a raid of two)
         local a, b
-        for i = #list, 1, -1 do
-            local m = list[i]
-            if not m.me then
-                if not a then a = m elseif m.group ~= a.group then b = m break end
+        for _, withMe in ipairs({ false, true }) do
+            a, b = nil, nil
+            for i = #list, 1, -1 do
+                local m = list[i]
+                if withMe or not m.me then
+                    if not a then a = m elseif m.group ~= a.group then b = m break end
+                end
             end
+            if b then break end
         end
         if a and b then
             members[1] = { name = a.name, from = a.group, to = b.group }
@@ -232,6 +237,21 @@ local function plan(kind, list, counts)
             counts[to] = counts[to] + 1
             members[#members + 1] = { name = m.name, from = m.group, to = to }
             calls[#calls + 1] = { label = ("SetRaidSubgroup(%d, %d)"):format(m.index, to), fn = SetRaidSubgroup, args = { m.index, to } }
+        end
+        -- fewer than three to move (a small raid): the last one on again, group
+        -- after group, in the same frame; landed means it reached the last
+        local last = members[#members]
+        while last and #calls < 3 do
+            local to
+            for g = last.to + 1, GROUPS do
+                if (counts[g] or 0) < 5 then to = g break end
+            end
+            if not to then break end
+            counts[last.to] = counts[last.to] - 1
+            counts[to] = counts[to] + 1
+            local index = calls[#calls].args[1]
+            calls[#calls + 1] = { label = ("SetRaidSubgroup(%d, %d) again"):format(index, to), fn = SetRaidSubgroup, args = { index, to } }
+            last.to = to
         end
     end
     return members, calls
