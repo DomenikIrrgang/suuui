@@ -1119,6 +1119,11 @@ function M:HookBox(box)
     self.hooked[box] = true
     box:HookScript("OnKeyDown", function(b, key)
         if not self:IsEnabled() or b ~= self.box then return end
+        -- with Ctrl held the key comes as "CTRL-TAB" (or "CTRL-SHIFT-TAB")
+        if key:find("TAB$") and IsControlKeyDown() and self:StepsCategory(b) then
+            self:StepCategory(IsShiftKeyDown() and -1 or 1)
+            return
+        end
         if IGNORED_KEYS[key] or key:find("SHIFT$") or key:find("CTRL$") or key:find("ALT$") or key:find("META$") then
             return
         end
@@ -1138,13 +1143,16 @@ function M:HookBox(box)
     end)
 end
 
+-- Ctrl-Tab changes the category: the command list shows on this input.
+function M:StepsCategory(box)
+    return self.box == box and self.query and self.query.mode == "commands" and self.palette
+        and self.palette:IsShown() or false
+end
+
 -- Tab, from ChatEdit_CustomTabPressed: true when the palette took it.
 function M:OnTab(box)
-    if IsControlKeyDown() and self.box == box and self.query and self.query.mode == "commands"
-        and self.palette and self.palette:IsShown() then
-        self:StepCategory(IsShiftKeyDown() and -1 or 1)
-        return true
-    end
+    -- Ctrl-Tab is the category's (OnKeyDown); the game's Tab doesn't run for it
+    if IsControlKeyDown() and self:StepsCategory(box) then return true end
     if not (self:TakesArrows(box) and self.flat[self.mark or 1]) then return false end
     return self:Put(self.flat[self.mark or 1])
 end
