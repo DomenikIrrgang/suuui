@@ -8,6 +8,8 @@
 --   m:SetItems({ { key, glyph, label, click = "CharacterMicroButton" | onClick = fn }, ... })
 --   m:SetAlert(key, text or nil)
 --   m:SetActive(key, on)      -- its window is open: the hover look stays
+--   m:SetCount(key, text, color, fill)  -- 0.17: a count in a pill
+--   m:SetLines(key, lines or nil)       -- 0.17: lines in its tooltip
 --
 -- An item with `click` is a secure button clicking that Blizzard micro
 -- button (so it works in combat wherever the game allows the window); one
@@ -114,7 +116,7 @@ local function buildButton(m, item)
         self.edge:SetShown(true)
         local key = keyOf(self.item.click)
         UI.ShowTooltip(self, { title = self.item.label, subtitle = key and ("Key: " .. key) or nil,
-            description = self.alertText })
+            lines = self.lines, maxWidth = self.lines and 320 or nil, description = self.alertText })
     end)
     b:HookScript("OnLeave", function(self)
         self.hover:SetShown(self.active and true or false)
@@ -163,6 +165,14 @@ function Menu:SetAlert(key, text)
     if not b then return end
     b.alertText = text
     b.alert:SetShown(text ~= nil)
+end
+
+-- 0.17: lines in a button's tooltip, under its key (UI.ShowTooltip's
+-- lines: { left, right }); nil takes them away.
+function Menu:SetLines(key, lines)
+    local b = self.buttons[key]
+    if not b then return end
+    b.lines = lines
 end
 
 local menus = setmetatable({}, { __mode = "k" })

@@ -6,6 +6,13 @@
 
 - Edit mode: right-click a frame to open its settings (edit mode closes, the Settings window opens at that frame's section).
 - Edit mode: type a frame's exact position in the toolbar over it: its anchor (one of nine screen points), X and Y. Enter with a frame selected starts typing; Tab goes between X and Y, the arrow keys step 1 px (Shift: 10). An anchor you pick stays when you drag the frame; Reset brings the automatic one back.
+- **Durability** (Settings › General › Durability; each part can be turned off): SuuUI's own armour figure at the minimap's lower left in place of the game's, a damaged piece in amber and a broken one in ember, the lowest percent or Broken under it, the pieces when you hover it (move it in edit mode; it shows only while something is worn, or always if you like).
+- Durability: the lowest piece's percent on the micro menu's Character button (ember 0% once something breaks), and the worn pieces in its tooltip.
+- Durability: in the character window, a thin bar along each gear slot's foot with the percent on worn pieces (a broken one dimmed), and a Durability block under the stats (lowest, damaged, average). A broken piece's tooltip says it gives no stats until repaired.
+- Durability: at a merchant who repairs, a line over the merchant window's foot names what is worn, and Repair all turns primary.
+- Durability: the Damaged gear note names the worn pieces and has a Show repairers button (the world map: turn on Map filters › Services › Repair for the repair pins). One alert when a piece breaks in combat.
+- Durability: Repair at merchants (off by default): SuuUI repairs everything by itself at a merchant who repairs, from the guild bank first if you choose, and says in chat what it paid.
+- Plugin API 0.17: `SuuUI.Durability()` and `SUUUI_DURABILITY_CHANGED`, your gear's wear as the Durability module reads it; the micro menu's `m:SetLines(key, lines)` for a button's tooltip.
 
 ### Changed
 

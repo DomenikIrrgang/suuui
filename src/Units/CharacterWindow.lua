@@ -154,12 +154,16 @@ function M:SkinSlot(b)
         local link = GetInventoryItemLink("player", id)
         local q = GetInventoryItemQuality("player", id)
         local icon = skin.icon:GetTexture()
-        skin:SetItem({ icon = icon, quality = (plain(q) and q and QUALITY[q]) or "common", dim = not link })
+        -- a broken piece dimmed (the Durability module's "On your gear")
+        local wear = self:WearOf(id)
+        skin:SetItem({ icon = icon, quality = (plain(q) and q and QUALITY[q]) or "common",
+            dim = not link or (wear ~= nil and wear.state == "broken") })
         updating = false
     end
     hooksecurefunc(skin.icon, "SetTexture", update)
     b:HookScript("OnShow", update)
     self.slotUpdates[#self.slotUpdates + 1] = update
+    self:WearBar(b)
     update()
 end
 
@@ -351,6 +355,142 @@ function M:SkinModel()
         _G.PaperDollFrame:HookScript("OnHide", function() box:Hide() end)
         box:SetShown(_G.PaperDollFrame:IsShown())
     end
+end
+
+--------------------------------------------------------------------------------
+-- Durability (the Durability module's "On your gear", design board
+-- "Durability" C): a 3 px bar inside each gear slot's foot (ink-muted, amber
+-- with the percent at or below the line, all ember with "0%" and the icon
+-- dimmed once broken; none on pieces that never wear), and a Durability
+-- block under the stats: the lowest piece, the damaged ones, the average.
+--------------------------------------------------------------------------------
+
+-- A slot's piece as SuuUI.Durability() reads it, while the gear part is on.
+function M:WearOf(slot)
+    local d = SuuUI.Durability()
+    if not (d and d.parts.gear) then return nil, d end
+    return d.bySlot[slot], d
+end
+
+function M:WearBar(b)
+    if self.wear[b] then return end
+    local o = CreateFrame("Frame", nil, b)
+    o:SetAllPoints()
+    o:SetFrameLevel(b:GetFrameLevel() + 3)
+    o.bar = CreateFrame("Frame", nil, o)
+    o.bar:SetPoint("BOTTOMLEFT", 3, 3)
+    o.bar:SetPoint("BOTTOMRIGHT", -3, 3)
+    o.bar:SetHeight(3)
+    o.bg = o.bar:CreateTexture(nil, "BACKGROUND")
+    o.bg:SetAllPoints()
+    o.fill = o.bar:CreateTexture(nil, "ARTWORK")
+    o.fill:SetPoint("TOPLEFT")
+    o.fill:SetPoint("BOTTOMLEFT")
+    o.pct = UI.Text(o, "micro", "amber")
+    o.pct:SetPoint("TOPLEFT", 3, -2)
+    o.pct:SetShadowed(true)
+    o:Hide()
+    self.wear[b] = o
+end
+
+function M:UpdateWear()
+    if not self.wear then return end
+    for b, o in pairs(self.wear) do
+        local p, d = self:WearOf(b:GetID())
+        local shown = p ~= nil and (d.parts.gearBars == "always" or p.state ~= "fine")
+        o:SetShown(shown)
+        if shown then
+            local w = o.bar:GetWidth()
+            w = (plain(w) and w > 0) and w or 30
+            if p.state == "broken" then
+                UI.PaintFill(o.bg, "ember")
+                o.fill:Hide()
+            else
+                UI.PaintFill(o.bg, "on-signal", 0.7)
+                UI.PaintFill(o.fill, p.state == "damaged" and "amber" or "ink-muted")
+                o.fill:SetWidth(math.max(1, w * p.percent / 100))
+                o.fill:Show()
+            end
+            o.pct:SetColor(p.state == "broken" and "ember-text" or "amber")
+            o.pct:SetValue(p.percent .. "%")
+            o.pct:SetShown(p.state ~= "fine")
+        end
+    end
+    self:UpdateWearBlock()
+    if self.slotUpdates then self:UpdateSlots() end
+end
+
+-- The block at the foot of the stats (the stats' list ends above it).
+local WEAR_ROWS = { "Lowest", "Damaged", "Average" }
+
+function M:BuildWearBlock()
+    local pane = _G.CharacterStatsPaneScrollBox
+    if not (pane and pane.ScrollBox) or self.wearBlock then return end
+    local blk = CreateFrame("Frame", nil, pane)
+    blk:SetPoint("BOTTOMLEFT", 10, 8)
+    blk:SetPoint("BOTTOMRIGHT", -12, 8)
+    blk.rule = UI.Hairline(blk, "gilt-faint")
+    blk.rule:SetPoint("TOPLEFT")
+    blk.rule:SetPoint("TOPRIGHT")
+    blk.head = UI.Text(blk, "header", "gilt-text")
+    blk.head:SetValue("Durability")
+    blk.rows = {}
+    for i, label in ipairs(WEAR_ROWS) do
+        local r = {}
+        r.label = UI.Text(blk, "body", "ink-muted")
+        r.label:SetValue(label)
+        r.value = UI.Text(blk, "body", "ink")
+        r.value:SetJustifyH("RIGHT")
+        r.value:SetWordWrap(false)
+        blk.rows[i] = r
+    end
+    blk:Hide()
+    self.wearBlock = blk
+end
+
+-- Laid out by the text styles' line heights (again after a theme change).
+function M:LayoutWearBlock()
+    local blk = self.wearBlock
+    local y = S["space-3"]
+    blk.head:ClearAllPoints()
+    blk.head:SetPoint("TOPLEFT", 0, -y)
+    y = y + T.type.header.lineHeight + S["space-2"]
+    local lh = T.type.body.lineHeight
+    for _, r in ipairs(blk.rows) do
+        r.label:ClearAllPoints()
+        r.label:SetPoint("TOPLEFT", 0, -y)
+        r.value:ClearAllPoints()
+        r.value:SetPoint("TOPRIGHT", 0, -y)
+        r.value:SetPoint("LEFT", r.label, "RIGHT", S["space-3"], 0)
+        y = y + lh + S["space-1"]
+    end
+    blk:SetHeight(y)
+    return y
+end
+
+function M:UpdateWearBlock()
+    local blk = self.wearBlock
+    local box = blk and _G.CharacterStatsPaneScrollBox.ScrollBox
+    if not blk then return end
+    local d = SuuUI.Durability()
+    if not (d and d.parts.gear and d.lowest) then
+        blk:Hide()
+        box:SetPoint("BOTTOMRIGHT", -30, 30)
+        return
+    end
+    local h = self:LayoutWearBlock()
+    box:SetPoint("BOTTOMRIGHT", -30, 8 + h + S["space-4"])
+    blk:Show()
+    local function c(token, text) return "|cff" .. T.color[token].hex .. text .. "|r" end
+    local low = d.lowest
+    blk.rows[1].value:SetValue(low.label .. " · " .. (low.state == "broken" and c("ember-text", "Broken")
+        or low.state == "damaged" and c("amber", low.percent .. "%") or (low.percent .. "%")))
+    local worn = {}
+    for _, p in ipairs(d.pieces) do
+        if p.state == "damaged" then worn[#worn + 1] = p.label .. " " .. p.percent .. "%" end
+    end
+    blk.rows[2].value:SetValue(#worn > 0 and c("amber", table.concat(worn, " · ")) or c("ink-faint", "None"))
+    blk.rows[3].value:SetValue((d.average or 0) .. "%")
 end
 
 --------------------------------------------------------------------------------
@@ -583,7 +723,7 @@ function M:AlignSetList()
 end
 
 function M:SkinPaperDoll()
-    self.slotSkins, self.slotUpdates = {}, {}
+    self.slotSkins, self.slotUpdates, self.wear = {}, {}, {}
     self:BuildIdentity()
     self:UpdateIdentity()
     for _, s in ipairs(SLOTS) do
@@ -601,6 +741,8 @@ function M:SkinPaperDoll()
     end
     self:SkinModel()
     self:SkinStatsPane()
+    self:BuildWearBlock()
+    self:UpdateWear()
     self:SkinSidebar()
     -- the toggle for the right pane: a small square with SuuUI's edge and a
     -- chevron pointing the way the pane goes
@@ -666,6 +808,9 @@ end
 function M:OnEnable()
     self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function() if self.slotUpdates then self:UpdateSlots() end end)
     self:OnGameEvent("PLAYER_LEVEL_UP", function() self:UpdateIdentity() end)
+    -- the Durability module's reading (it sends again on a theme change)
+    self:On("SUUUI_DURABILITY_CHANGED", function() self:UpdateWear() end)
+    self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:UpdateWear() end end)
     if _G.CharacterFrame then
         self:Skin()
     else

@@ -284,7 +284,7 @@ API.UI.ThreatMeter = UI.ThreatMeter -- ThreatMeter(parent, { rows }) -> m:SetTar
 API.UI.DamageMeter = UI.DamageMeter -- DamageMeter(parent, opts): one window on C_DamageMeter (see UI/DamageMeter.lua)
 API.UI.EncounterTimeline = UI.EncounterTimeline -- EncounterTimeline(parent, { variant, window, soonAt }) -> t:SetEvents(list), t:SetVariant(v), t:SetMeta(text)
 API.UI.Readiness = UI.Readiness -- Readiness(parent, { onReadyCheck }) -> r:SetRows(list), r:SetActionShown(on)
-API.UI.MicroMenu = UI.MicroMenu -- MicroMenu(parent, { name }) -> m:SetItems({ { key, glyph, label, click | onClick } }), m:SetAlert(key, text)
+API.UI.MicroMenu = UI.MicroMenu -- MicroMenu(parent, { name }) -> m:SetItems({ { key, glyph, label, click | onClick } }), m:SetAlert(key, text); 0.17: m:SetCount(key, text, color, fill), m:SetLines(key, lines)
 API.UI.DAMAGE_METER_TYPES = UI.DAMAGE_METER_TYPES -- the type select's options, Blizzard's order
 
 -- 0.11: the objective tracker
@@ -501,6 +501,14 @@ end
 function API.HideAlert(key)
     local a = Services.Get("alerts")
     if a and a.Hide then a.Hide(key) end
+end
+-- 0.17: your gear's durability (the Durability module; nil while it's off):
+-- { line, state, pieces, lowest, average, damaged, broken, bySlot, headline,
+-- summary, lines, parts }, read only (Docs/API.md). SUUUI_DURABILITY_CHANGED
+-- when what it says changes.
+function API.Durability()
+    local d = Services.Get("durability")
+    return d and d.Get and d.Get() or nil
 end
 
 -- 0.12: what your class trainer teaches (Data/Trainer, from the class

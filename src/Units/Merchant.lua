@@ -365,6 +365,23 @@ function M:Build()
     self.lastRow:SetPoint("BOTTOMRIGHT")
     self.lastRow.rule:Hide()
     last:Hide()
+    -- what is worn, over the foot (the Durability module's "On your gear",
+    -- design board "Durability" C): at a merchant who repairs, while a
+    -- piece is at or below the line
+    local wear = CreateFrame("Frame", nil, w.body)
+    wear:SetPoint("BOTTOMLEFT")
+    wear:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+    wear.glyph = wear:CreateTexture(nil, "ARTWORK")
+    wear.glyph:SetSize(16, 16)
+    wear.glyph:SetPoint("LEFT", 0, 0)
+    wear.glyph:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\anvil.tga")
+    wear.text = UI.Text(wear, "body", "ink-muted")
+    wear.text:SetPoint("LEFT", wear.glyph, "RIGHT", S["space-2"], 0)
+    wear.text:SetPoint("RIGHT")
+    wear.text:SetJustifyH("LEFT")
+    wear.text:SetWordWrap(false)
+    wear:Hide()
+    self.wear = wear
     self.empty = UI.Text(c, "body", "ink-muted")
     -- the foot: repair, guild repair, sell junk; your money at the right
     local f = w.footer
@@ -372,10 +389,14 @@ function M:Build()
     self.money:SetPoint("RIGHT", 0, 0)
     self.repair = UI.Button(f, { text = "Repair all", onClick = function() call(RepairAllItems, false) end })
     self.repair:SetPoint("LEFT", 0, 0)
+    -- the same, primary while the line over the foot names worn pieces
+    self.repairPrimary = UI.Button(f, { text = "Repair all", variant = "primary", icon = "anvil",
+        onClick = function() call(RepairAllItems, false) end })
+    self.repairPrimary:SetPoint("LEFT", 0, 0)
+    self.repairPrimary:Hide()
     self.repairOne = UI.Button(f, { text = "One", width = 52, onClick = function()
         if InRepairMode and InRepairMode() then call(HideRepairCursor) else call(ShowRepairCursor) end
     end, tooltip = { title = "Repair one item", description = "Then click the item: on your character or in your bags." } })
-    self.repairOne:SetPoint("LEFT", self.repair, "RIGHT", S["space-2"], 0)
     self.guild = UI.Button(f, { text = "Guild", onClick = function() call(RepairAllItems, true) end })
     self.guild:SetPoint("LEFT", self.repairOne, "RIGHT", S["space-2"], 0)
     self.junk = UI.Button(f, { text = "Sell junk", onClick = function() self:SellJunk() end })
@@ -418,10 +439,21 @@ function M:Refresh()
     local showLast = buy and lastN > 0
     self.last:SetShown(showLast)
     if showLast then self:DrawBuybackRow(self.lastRow, lastN, true) end
+    local wearShown = self:DrawWear()
+    self.last:ClearAllPoints()
+    if wearShown then
+        self.last:SetPoint("BOTTOMLEFT", self.wear, "TOPLEFT")
+        self.last:SetPoint("BOTTOMRIGHT", self.wear, "TOPRIGHT")
+    else
+        self.last:SetPoint("BOTTOMLEFT")
+        self.last:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+    end
     self.list:ClearAllPoints()
     self.list:SetPoint("TOPLEFT", 0, buy and -(30 + S["space-4"]) or 0)
     if showLast then
         self.list:SetPoint("BOTTOMRIGHT", self.last, "TOPRIGHT", 0, S["space-2"])
+    elseif wearShown then
+        self.list:SetPoint("BOTTOMRIGHT", self.wear, "TOPRIGHT", 0, S["space-2"])
     else
         self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
     end
@@ -497,18 +529,50 @@ function M:SellJunk()
     end)
 end
 
+-- The line over the foot: "Chest broken · Legs 9%, Main hand 12% · 6 more
+-- worn" (broken in ember, damaged in amber), at a merchant who repairs.
+-- Shown: true.
+function M:DrawWear()
+    local d = SuuUI.Durability()
+    local show = d ~= nil and d.parts.gear and d.state ~= "fine" and call(CanMerchantRepair) and true or false
+    self.wear:SetShown(show)
+    if not show then return false end
+    local broken, damaged, worn = {}, {}, 0
+    for _, p in ipairs(d.pieces) do
+        if p.state == "broken" then broken[#broken + 1] = p.label
+        elseif p.state == "damaged" then damaged[#damaged + 1] = p.label .. " " .. p.percent .. "%"
+        elseif p.current < p.max then worn = worn + 1 end
+    end
+    local function c(token, text) return "|cff" .. T.color[token].hex .. text .. "|r" end
+    local parts = {}
+    if #broken > 0 then parts[#parts + 1] = c("ember-text", table.concat(broken, ", ") .. " broken") end
+    if #damaged > 0 then parts[#parts + 1] = c("amber", table.concat(damaged, ", ")) end
+    if worn > 0 then parts[#parts + 1] = worn .. " more worn" end
+    self.wear.text:SetValue(table.concat(parts, " · "))
+    UI.Paint(self.wear.glyph, #broken > 0 and "ember-text" or "amber")
+    self.wear:SetHeight(math.max(16, T.type.body.lineHeight) + S["space-2"])
+    return true
+end
+
 function M:RefreshFoot()
     if not self.window then return end
     self.money:SetCopper(GetMoney() or 0)
     local canRepair = call(CanMerchantRepair)
     local cost, needed = call(GetRepairAllCost)
     cost = cost or 0
-    self.repair:SetShown(canRepair and true or false)
+    -- primary while the line over the foot shows
+    local primary = canRepair and self.wear:IsShown()
+    self.repair:SetShown(canRepair and not primary and true or false)
+    self.repairPrimary:SetShown(primary and true or false)
     self.repairOne:SetShown(canRepair and true or false)
     if canRepair then
-        self.repair:SetLabel(cost > 0 and ("Repair all  " .. coins(cost)) or "Repair all")
-        self.repair:SetEnabledState(needed and cost > 0 and (GetMoney() or 0) >= cost)
+        for _, b in ipairs({ self.repair, self.repairPrimary }) do
+            b:SetLabel(cost > 0 and ("Repair all  " .. coins(cost)) or "Repair all")
+            b:SetEnabledState(needed and cost > 0 and (GetMoney() or 0) >= cost)
+        end
     end
+    self.repairOne:ClearAllPoints()
+    self.repairOne:SetPoint("LEFT", primary and self.repairPrimary or self.repair, "RIGHT", S["space-2"], 0)
     local guild = canRepair and call(CanGuildBankRepair)
     self.guild:SetShown(guild and true or false)
     if guild then
@@ -588,6 +652,9 @@ function M:OnEnable()
         self:OnGameEvent(e, function() self:QueueRefresh() end)
     end
     self:OnGameEvent("PLAYER_MONEY", function() self:QueueRefresh() end)
+    -- the Durability module's reading (the line over the foot)
+    self:On("SUUUI_DURABILITY_CHANGED", function() self:QueueRefresh() end)
+    self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:QueueRefresh() end end)
     -- prices and notes carry colour codes; the strip's caption can change size
     self:On("SUUUI_THEME_CHANGED", function()
         if self.last then self.last:SetHeight(self:LastHeight()) end

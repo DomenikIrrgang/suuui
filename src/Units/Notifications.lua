@@ -180,18 +180,74 @@ local function worstDurability()
     return worst
 end
 
+-- The world map, for its Repair pins (the World map pins module's filter:
+-- Map filters › Services › Repair).
+local function showRepairers()
+    if WorldMapFrame and WorldMapFrame:IsShown() then return end
+    ToggleWorldMap()
+end
+
+-- "Legs 15% · Chest 18%": the worn pieces that aren't broken, lowest first.
+local function wornList(d)
+    local out = {}
+    for _, p in ipairs(d.pieces) do
+        if p.state == "damaged" then out[#out + 1] = p.label .. " " .. p.percent .. "%" end
+    end
+    return table.concat(out, " · ")
+end
+
+-- With the Durability module's "Name the pieces in the note" (design board
+-- "Durability" D): which pieces, and Show repairers. Its line too.
+local function namedNote(d)
+    local worn = wornList(d)
+    if d.state == "broken" then
+        local broken = {}
+        for _, p in ipairs(d.pieces) do
+            if p.state == "broken" then broken[#broken + 1] = p end
+        end
+        local title, gives
+        if #broken == 1 then
+            title = "Your " .. broken[1].label .. " is broken"
+            gives = broken[1].name .. " gives no stats until repaired"
+        else
+            local labels = {}
+            for _, p in ipairs(broken) do labels[#labels + 1] = p.label end
+            title = #broken .. " pieces are broken"
+            gives = table.concat(labels, ", ") .. " give no stats until repaired"
+        end
+        return title, worn ~= "" and (gives .. " · " .. worn) or gives
+    end
+    return "Your gear is badly damaged", worn
+end
+
 function M:CheckDurability()
-    local worst = self:Get("durability") and worstDurability()
+    local d = SuuUI.Durability()
+    local state, title, body, actions
+    if not self:Get("durability") then
+        state = "fine"
+    elseif d then
+        -- the Durability module's line and reading
+        state = d.state
+        if state ~= "fine" and d.parts.note then
+            title, body = namedNote(d)
+            actions = { { label = "Show repairers", variant = "primary", icon = "map", onClick = showRepairers } }
+        end
+    else
+        local worst = worstDurability()
+        state = (worst and worst <= 0 and "broken") or (worst and worst <= 0.2 and "damaged") or "fine"
+    end
     -- only when it changes (durability moves with every hit in combat)
-    local state = (worst and worst <= 0 and "broken") or (worst and worst <= 0.2 and "damaged") or "fine"
-    if state == self.durabilityState then return end
-    self.durabilityState = state
-    if worst and worst <= 0 then
+    local key = state .. "|" .. (title or "") .. "|" .. (body or "")
+    if key == self.durabilityState then return end
+    self.durabilityState = key
+    if state == "broken" then
         self:Notify({ id = "suu:durability", kind = "until", tone = "danger", category = "Durability",
-            title = "Some of your gear is broken", icon = { glyph = "anvil" }, ["until"] = "Goes when you repair" })
-    elseif worst and worst <= 0.2 then
+            title = title or "Some of your gear is broken", body = body, icon = { glyph = "anvil" },
+            ["until"] = "Goes when you repair", actions = actions })
+    elseif state == "damaged" then
         self:Notify({ id = "suu:durability", kind = "until", tone = "warning", category = "Durability",
-            title = "Your gear is badly damaged", icon = { glyph = "anvil" }, ["until"] = "Goes when you repair" })
+            title = title or "Your gear is badly damaged", body = body, icon = { glyph = "anvil" },
+            ["until"] = "Goes when you repair", actions = actions })
     elseif self.notes["suu:durability"] then
         self:Dismiss("suu:durability")
     end
@@ -1281,7 +1337,7 @@ local SECTION = {
         } },
         { title = "Notes", rows = {
             { key = "durability", label = "Damaged gear", control = "toggle",
-              description = "Amber while a piece is at 20% or less, ember once one breaks; goes when you repair." },
+              description = "Amber while a piece is at 20% or less (the Durability module's line while it's on, and the pieces by name), ember once one breaks; goes when you repair." },
             { key = "bagsFull", label = "Full bags", control = "toggle",
               description = "While your bags have no free slot; goes when one frees up." },
             { key = "talentPoints", label = "Talent points to spend", control = "toggle",
@@ -1359,6 +1415,9 @@ function M:OnEnable()
         if not valid or valid(e) then self:OnGameEvent(e, function() self:CheckBags() end) end
     end
     self:Watch("durability", function() self:CheckDurability() end)
+    -- the Durability module's reading (its line, the pieces' names)
+    self:On("SUUUI_DURABILITY_CHANGED", function() self:CheckDurability() end)
+    self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:CheckDurability() end end)
     self:Watch("bagsFull", function() self:CheckBags() end)
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED", "PLAYER_TALENT_UPDATE",
                          "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do

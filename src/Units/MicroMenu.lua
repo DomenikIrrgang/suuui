@@ -137,6 +137,7 @@ function M:Layout()
     self.pendingLayout = nil
     self:UpdateAlerts()
     self:UpdateBagCount()
+    self:UpdateDurability()
 end
 
 -- Which windows are open: a Blizzard micro button is pushed while its window
@@ -274,6 +275,30 @@ function M:UpdateBagCount()
     end
 end
 
+-- Your gear's wear on the Character button (the Durability module, design
+-- board "Durability" B, its setting there): the lowest piece's percent
+-- once it's at or below the line, ember 0% once one breaks, as the bags'
+-- count; the worn pieces in its tooltip.
+function M:UpdateDurability()
+    if not self.menu then return end
+    local d = SuuUI.Durability()
+    if not (d and d.parts.character and d.state ~= "fine") then
+        self.menu:SetCount("character", nil)
+        self.menu:SetLines("character", nil)
+        return
+    end
+    local broken = d.state == "broken"
+    if broken then
+        self.menu:SetCount("character", "0%", "ember-text", "ember-soft")
+    else
+        self.menu:SetCount("character", d.lowest.percent .. "%", "amber")
+    end
+    -- (colour codes: the Durability module sends its message again on a theme change)
+    local lines = { { "|cff" .. T.color[broken and "ember-text" or "amber"].hex .. d.headline .. "|r" } }
+    for _, l in ipairs(d.lines) do lines[#lines + 1] = l end
+    self.menu:SetLines("character", lines)
+end
+
 function M:OnEnable()
     if not self.menu then
         self.menu = UI.MicroMenu(SuuUI.Root, { name = "SuuUIMicroMenu" })
@@ -304,6 +329,8 @@ function M:OnEnable()
     self:OnGameEvent("BAG_UPDATE_DELAYED", function() self:UpdateBagCount() end)
     self:Watch("bagCount", function() self:UpdateBagCount() end)
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:UpdateBagCount() end)
+    self:On("SUUUI_DURABILITY_CHANGED", function() self:UpdateDurability() end)
+    self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:UpdateDurability() end end)
     self:On("SUUUI_ADDITIONS_CHANGED", function(_, list)
         if list ~= "micromenu" then return end
         self:AdoptPluginItems()

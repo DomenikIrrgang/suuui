@@ -34,6 +34,12 @@ box as the mark, flashed over it in turn while it waits.
 PlayerArrow.tga (64, colour): your arrow on the minimap, the design's
 (Minimap: "M8 1.5l5 12.5-5-3-5 3z" on 16 units) in arcane with a dark rim
 and a soft arcane glow; the engine draws it untinted.
+
+Durability/<Part>.tga and <Part>Edge.tga (128, white): the durability
+figure's eleven parts (design board "Durability", A), each on the whole
+figure's canvas so they all lie over one frame: the part's fill, and its
+1-unit outline (1 px with the figure at 64 px). Crack.tga: the broken
+chest's crack. Tinted in game (Units/Durability.lua).
 """
 
 import math
@@ -621,9 +627,43 @@ def dashed_ring(size, inner, outer, dashes=16, ss=4):
     return lambda x, y: (255, 255, 255, cache[(x, y)])
 
 
+# --- The durability figure (design board "Durability", A): the board's paths
+# on its 60 x 64 viewBox, moved 2 units right to centre them on a 64-unit
+# square, drawn at 128 px. The names are Units/Durability.lua's parts.
+FIGURE = {
+    "Main": "M10 12L12 15V41H14V43H11V49H9V43H6V41H8V15Z",
+    "Head": "M27 2H33A2 2 0 0 1 35 4V8A5 5 0 0 1 25 8V4A2 2 0 0 1 27 2Z",
+    "Shoulders": "M16 19V16.5A3 3 0 0 1 19 13.5H23V19ZM44 19V16.5A3 3 0 0 0 41 13.5H37V19Z",
+    "Chest": "M24 14H36L35 31H25Z",
+    "Wrists": "M16.5 20H21.5L21 32H17ZM38.5 20H43.5L43 32H39Z",
+    "Hands": "M16.5 33.5H21.5V37.5A2.5 2.5 0 0 1 16.5 37.5ZM38.5 33.5H43.5V37.5A2.5 2.5 0 0 1 38.5 37.5Z",
+    "Waist": "M25 32H35V35H25Z",
+    "Legs": "M25 36H29.5L29 52H25.5ZM30.5 36H35L34.5 52H31Z",
+    "Feet": "M25.5 53H29V59H23V57.5L25.5 56ZM31 53H34.5V56L37 57.5V59H31Z",
+    "Off": "M46 25H56V31C56 36 53 39 51 40C49 39 46 36 46 31Z",
+    "Ranged": "M48 44C56 47 56 59 48 62C51.5 58 51.5 48 48 44Z",
+}
+FIGURE_CRACK = "M29 17L31.5 21L28.5 24L31 28"
+FIGURE_BOX, FIGURE_SHIFT, FIGURE_PX = 64.0, 2.0, 128
+
+
+def figure_lines(d):
+    return [[(x + FIGURE_SHIFT, y) for (x, y) in pts] for pts in path_polylines(d)]
+
+
+def figure_fill(d):
+    polys = [[(x / FIGURE_BOX, y / FIGURE_BOX) for (x, y) in pts] for pts in figure_lines(d)]
+    return raster(polys, FIGURE_PX)
+
+
+def figure_stroke(d, width):
+    return stroke_alpha(figure_lines(d), width, FIGURE_BOX, FIGURE_PX)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(os.path.join(OUT, "Glyphs"), exist_ok=True)
+    os.makedirs(os.path.join(OUT, "Durability"), exist_ok=True)
     root = os.path.dirname(HERE)
     jobs = [
         ("Soft.tga", SIZE, lambda x, y: (255, 255, 255, round(255 * soft_alpha(x, y)))),
@@ -650,6 +690,10 @@ def main():
     for n in (2, 3, 4):
         jobs.append(("RingArc%d.tga" % n, 104, ring_arc(104, 1 - 2 / 13, 1, 4, 360 / n - 4)))
     jobs.append(("ChatDiamond.tga", 32, diamond(32, 0.5)))
+    for name, d in FIGURE.items():
+        jobs.append((os.path.join("Durability", name + ".tga"), FIGURE_PX, figure_fill(d)))
+        jobs.append((os.path.join("Durability", name + "Edge.tga"), FIGURE_PX, figure_stroke(d, 1.0)))
+    jobs.append((os.path.join("Durability", "Crack.tga"), FIGURE_PX, figure_stroke(FIGURE_CRACK, 1.3)))
     only = set(os.sys.argv[1:])
     for name, size, pixel in jobs:
         if only and name not in only and os.path.splitext(os.path.basename(name))[0] not in only:
