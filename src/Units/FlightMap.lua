@@ -8,7 +8,9 @@
 -- draws its route; clicking it flies there, or (Confirm before flying) puts
 -- where it stops, the cost, the time and Fly in a bar at the map's bottom.
 -- In the air the same map shows your flight: the part flown solid, the rest
--- dashed, the time left at the destination. Every route is drawn the way
+-- dashed, the time left at the destination; with the map closed, the flight
+-- bar at the top of the screen does (the time left, the stops passed and
+-- ahead, when you land). Every route is drawn the way
 -- the game flies it (SuuUI.FlightPaths: its waypoints, put on the shown map
 -- through world coordinates), else straight from master to master.
 --
@@ -39,7 +41,9 @@ local M = SuuUI.RegisterModule({
     description = "The world map as the flight master's map: routes, costs and flight times, and your flight on the map while you fly.",
     api = "0.17",
     combatSafe = true,
-    defaults = { atMaster = true, inFlight = true, confirm = false },
+    defaults = { atMaster = true, inFlight = true, confirm = false, timer = true,
+                 -- the flight bar: top centre, at the screen-edge inset
+                 timerPosition = { point = "TOP", x = 0, y = -28 } },
 })
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -303,7 +307,13 @@ function M:Taking(slot)
     local node
     for _, n in ipairs(s and s.nodes or {}) do if n.slot == slot then node = n end end
     if not (node and node.path) then return end
-    self.pending = { path = node.path, at = GetTime() }
+    -- (the stops' names for the flight bar: in the air there's no session)
+    local names = {}
+    for _, id in ipairs(node.path) do
+        local n = s.byID[id]
+        if n then names[id] = short(n.name) end
+    end
+    self.pending = { path = node.path, at = GetTime(), names = names }
 end
 
 function M:FlightStarted(at)
@@ -311,10 +321,11 @@ function M:FlightStarted(at)
     if not (p and GetTime() - p.at < 15 and UnitOnTaxi("player")) then return end
     self.pending = nil
     local expected, measured = self:FlightTime(p.path)
-    self.flight = { path = p.path, started = at, expected = expected, measured = measured }
+    self.flight = { path = p.path, started = at, expected = expected, measured = measured, names = p.names }
     -- kept over a reload, to show (not to time: the start isn't exact then)
-    self:CharData().flight = { path = p.path, wall = time() - (GetTime() - at) }
+    self:CharData().flight = { path = p.path, wall = time() - (GetTime() - at), names = p.names }
     self:QueueLayout()
+    self:UpdateTimer()
 end
 
 -- Landed: at the destination, its time is learned; landed early (the
@@ -337,6 +348,7 @@ function M:FlightEnded(at)
     end
     if there then self:Learn(f, seconds) end
     self:QueueLayout()
+    self:UpdateTimer()
 end
 
 -- After a reload in the air: the flight kept, shown but not timed.
@@ -347,7 +359,8 @@ function M:ResumeFlight()
     local ago = time() - kept.wall
     if not UnitOnTaxi("player") or ago > MAX_FLIGHT or ago < 0 then data.flight = nil return end
     local expected, measured = self:FlightTime(kept.path)
-    self.flight = { path = kept.path, started = GetTime() - ago, expected = expected, measured = measured, reloaded = true }
+    self.flight = { path = kept.path, started = GetTime() - ago, expected = expected, measured = measured,
+                    names = kept.names, reloaded = true }
 end
 
 --------------------------------------------------------------------------------
@@ -937,11 +950,11 @@ function M:Dashes(layer, points, dash, gap, thickness, token, alpha)
     end
 end
 
--- A route on the shown map, in px: its hops the way they fly (or straight)
--- one after another, and where each master on it falls among the points;
--- nil when one isn't on this map.
-function M:Way(path)
-    local v = self.view
+-- A route on the shown map (or `view`: { map, pos, w, h }), in px: its hops
+-- the way they fly (or straight) one after another, and where each master
+-- on it falls among the points; nil when one isn't on this map.
+function M:Way(path, view)
+    local v = view or self.view
     local points, stops = {}, {}
     for i, id in ipairs(path) do
         local p = v.pos[id]
@@ -1081,26 +1094,36 @@ function M:InkMaster(pos, w, h)
     end
 end
 
+-- The point on a route nearest x, y: the segment it's on, and the point.
+local function nearest(points, x, y)
+    local best, bk, bx, by
+    for k = 1, #points - 1 do
+        local a, b = points[k], points[k + 1]
+        local dx, dy = b[1] - a[1], b[2] - a[2]
+        local l2 = dx * dx + dy * dy
+        local t = l2 > 0 and math.max(0, math.min(1, ((x - a[1]) * dx + (y - a[2]) * dy) / l2)) or 0
+        local px, py = a[1] + dx * t, a[2] + dy * t
+        local d = (px - x) ^ 2 + (py - y) ^ 2
+        if not best or d < best then best, bk, bx, by = d, k, px, py end
+    end
+    return bk, bx, by
+end
+
+-- Your place on a map (0-1), nil while the game doesn't give it.
+local function myPlace(mapID)
+    local me = call(C_Map.GetPlayerMapPosition, mapID, "player")
+    local x, y
+    if me and me.GetXY then x, y = me:GetXY() end
+    if plain(x) and plain(y) and (x > 0 or y > 0) then return x, y end
+end
+
 -- How far along the flight you are: the point on the route nearest you
 -- (the game gives your place in flight), else by the time flown along the
 -- route's length. -> the segment it's on, and the point.
 function M:Along(points, w, h)
-    local f = self.map
-    local me = call(C_Map.GetPlayerMapPosition, f:GetMapID(), "player")
-    local x, y
-    if me and me.GetXY then x, y = me:GetXY() end
-    if plain(x) and plain(y) and (x > 0 or y > 0) then
-        x, y = x * w, y * h
-        local best, bk, bx, by
-        for k = 1, #points - 1 do
-            local a, b = points[k], points[k + 1]
-            local dx, dy = b[1] - a[1], b[2] - a[2]
-            local l2 = dx * dx + dy * dy
-            local t = l2 > 0 and math.max(0, math.min(1, ((x - a[1]) * dx + (y - a[2]) * dy) / l2)) or 0
-            local px, py = a[1] + dx * t, a[2] + dy * t
-            local d = (px - x) ^ 2 + (py - y) ^ 2
-            if not best or d < best then best, bk, bx, by = d, k, px, py end
-        end
+    local x, y = myPlace(self.map:GetMapID())
+    if x then
+        local bk, bx, by = nearest(points, x * w, y * h)
         if bk then return bk, bx, by end
     end
     local fl = self.flight
@@ -1202,6 +1225,330 @@ function M:QueueInk()
 end
 
 --------------------------------------------------------------------------------
+-- In the air with the map closed: the flight bar
+--------------------------------------------------------------------------------
+
+-- The flight bar (board option B, "In flight"): top centre, as wide as a
+-- cast bar, from take-off to landing while the world map is closed (open,
+-- the map shows the route instead). The destination and the time left over
+-- a thin bar, a diamond at each stop (placed by its distance along the
+-- route, gilt once passed), the next stop and when you land under it. A
+-- route never flown says so: estimated (its time marked ~, the fill
+-- hatched), or with no estimate either, the time flown so far over a
+-- sweep. The text once a second, the fill every frame; with Reduce motion
+-- the fill once a second and the sweep still. Its height is its lines'.
+
+local TIMER_W = 300  -- a cast bar's width (the board's)
+local TRACK_H = 6
+local STOP = 8       -- a stop's diamond
+local GLYPH = 13
+local SWEEP = 0.22   -- the sweep, of the bar's width
+local SWEEP_T = 1.8  -- s for the sweep to cross
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local HATCH = TEXTURES .. "Hatch.tga"
+
+-- "18:42" (or "6:42 PM", as the game's clock is set): the local time
+-- `seconds` from now
+local function clockAt(seconds)
+    local t = date("*t", time() + math.floor(math.max(0, seconds) + 0.5))
+    if C_CVar.GetCVarBool("timeMgrUseMilitaryTime") then return ("%02d:%02d"):format(t.hour, t.min) end
+    return ("%d:%02d %s"):format((t.hour - 1) % 12 + 1, t.min, t.hour >= 12 and "PM" or "AM")
+end
+
+-- A stop's name: kept from the flight master's map as the flight was taken,
+-- else (a reload from before they were kept) from the continent's masters.
+function M:StopName(fl, id)
+    fl.names = fl.names or {}
+    if not fl.names[id] and not fl.namesRead then
+        fl.namesRead = true
+        local continent = continentOf(C_Map.GetBestMapForUnit("player"))
+        local ok, list = pcall(C_TaxiMap.GetTaxiNodesForMap, continent)
+        for _, n in ipairs(ok and type(list) == "table" and list or {}) do
+            if plain(n.nodeID) and plain(n.name) and n.name and not fl.names[n.nodeID] then fl.names[n.nodeID] = short(n.name) end
+        end
+    end
+    return fl.names[id] or "?"
+end
+
+-- The flight's route for the bar, worked out once a flight: its points on
+-- the continent's map in yards across and down (so a stop's place is its
+-- distance along the way it's flown), the length run to each point, and
+-- each master's share of the whole (at[i] for path[i]). When the map can't
+-- place it, the shares by the hops' lengths alone (the progress then by
+-- the time flown); false when those aren't known either.
+function M:FlightRoute(fl)
+    if fl.route ~= nil then return fl.route end
+    local route = false
+    local continent = continentOf(C_Map.GetBestMapForUnit("player"))
+    local x0, y0, x1, y1, x2, y2
+    if continent and C_Map.GetWorldPosFromMapPos and CreateVector2D then
+        x0, y0 = worldXY(continent, 0, 0)
+        x1, y1 = worldXY(continent, 1, 0)
+        x2, y2 = worldXY(continent, 0, 1)
+    end
+    if x0 and y0 and x1 and y1 and x2 and y2 then
+        local view = { map = continent, pos = positions(continent),
+                       w = span({ x0, y0 }, { x1, y1 }), h = span({ x0, y0 }, { x2, y2 }) }
+        local points, stops = view.w > 0 and view.h > 0 and self:Way(fl.path, view)
+        if points and #points >= 2 then
+            local run = { 0 }
+            for k = 2, #points do run[k] = run[k - 1] + span(points[k - 1], points[k]) end
+            local total = run[#points]
+            if total > 0 then
+                route = { map = continent, w = view.w, h = view.h, points = points, run = run, total = total, at = {} }
+                for i, k in ipairs(stops) do route.at[i] = run[k] / total end
+            end
+        end
+    end
+    if not route then
+        local run, total = { 0 }, 0
+        for i = 1, #fl.path - 1 do
+            local yards = hopYards(fl.path[i], fl.path[i + 1])
+            if not yards then run = nil break end
+            total = total + yards
+            run[i + 1] = total
+        end
+        if run and total > 0 then
+            route = { at = {} }
+            for i = 1, #fl.path do route.at[i] = run[i] / total end
+        end
+    end
+    fl.route = route
+    return route
+end
+
+-- How far along the flight you are (0-1): your place projected onto the
+-- route, else the time flown of the time expected; nil with neither.
+function M:Flown(fl, route)
+    if route and route.points then
+        local x, y = myPlace(route.map)
+        if x then
+            local k, px, py = nearest(route.points, x * route.w, y * route.h)
+            if k then return (route.run[k] + span(route.points[k], { px, py })) / route.total end
+        end
+    end
+    if fl.expected and fl.expected > 0 then return math.min(1, (GetTime() - fl.started) / fl.expected) end
+end
+
+function M:BuildTimer()
+    if self.timer then return end
+    local f = UI.Panel(SuuUI.Root, { name = "SuuUIFlightTimer", width = TIMER_W, ornament = true })
+    f:SetFrameStrata("LOW")
+    f.suuManagedShow = true -- shown only in the air (and in edit mode)
+    f:Hide()
+    local body = f.body
+    f.glyph = body:CreateTexture(nil, "ARTWORK")
+    f.glyph:SetTexture(GLYPHS .. "wing.tga")
+    f.glyph:SetSize(GLYPH, GLYPH)
+    UI.Paint(f.glyph, "gilt-text")
+    f.name = UI.Text(body, "unit-name-sm", "ink")
+    f.name:SetJustifyH("LEFT")
+    f.time = UI.Text(body, "numeric", "ink")
+    -- the bar: the fill (hatched while estimated), the sweep while there's
+    -- no telling, the stops over both
+    f.track = UI.StatusBar(body, { width = TIMER_W, height = TRACK_H, track = "track", fill = "gilt", border = false })
+    local fill = f.track.bar:GetStatusBarTexture()
+    f.hatch = f.track.bar:CreateTexture(nil, "OVERLAY")
+    f.hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
+    f.hatch:SetHorizTile(true)
+    f.hatch:SetVertTile(true)
+    f.hatch:SetPoint("TOPLEFT", fill, "TOPLEFT")
+    f.hatch:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+    UI.Paint(f.hatch, "gilt")
+    f.clip = CreateFrame("Frame", nil, f.track)
+    f.clip:SetAllPoints()
+    f.clip:SetClipsChildren(true)
+    f.clip:SetFrameLevel(f.track.bar:GetFrameLevel() + 1)
+    f.sweep = CreateFrame("Frame", nil, f.clip)
+    for i, from in ipairs({ 0, 1 }) do
+        local t = f.sweep:CreateTexture(nil, "ARTWORK")
+        t:SetTexture(WHITE)
+        t:SetPoint("TOPLEFT", f.sweep, i == 1 and "TOPLEFT" or "TOP")
+        t:SetPoint("BOTTOMRIGHT", f.sweep, i == 1 and "BOTTOM" or "BOTTOMRIGHT")
+        UI.PaintGradient(t, "HORIZONTAL", "gilt", "gilt", from, 1 - from)
+    end
+    f.marks = CreateFrame("Frame", nil, f.track)
+    f.marks:SetAllPoints()
+    f.marks:SetFrameLevel(f.track.bar:GetFrameLevel() + 2)
+    f.stops = {}
+    f.next = UI.Text(body, "caption", "ink-muted")
+    f.next:SetJustifyH("LEFT")
+    f.lands = UI.Text(body, "caption", "ink-faint")
+    local wait = 0
+    f:SetScript("OnUpdate", function(_, elapsed)
+        wait = wait - elapsed
+        if wait <= 0 then
+            wait = 1
+            self:TickTimer()
+        end
+        self:MoveTimer()
+    end)
+    self.timer = f
+    self:LayoutTimer()
+    self:SampleTimer()
+end
+
+-- The lines from the text styles' line heights (a theme can change them):
+-- the name and time, the bar, the next stop and landing; the panel fits.
+function M:LayoutTimer()
+    local f = self.timer
+    if not f then return end
+    local body, gap = f.body, S["space-3"]
+    local head = math.max(T.type["unit-name-sm"].lineHeight, T.type.numeric.lineHeight, GLYPH)
+    local foot = T.type.caption.lineHeight
+    for _, r in ipairs({ f.glyph, f.name, f.time, f.track, f.next, f.lands }) do r:ClearAllPoints() end
+    f.glyph:SetPoint("LEFT", body, "TOPLEFT", 0, -head / 2)
+    f.time:SetPoint("RIGHT", body, "TOPRIGHT", 0, -head / 2)
+    f.name:SetPoint("LEFT", body, "TOPLEFT", GLYPH + S["space-3"], -head / 2)
+    f.name:SetPoint("RIGHT", f.time, "LEFT", -S["space-4"], 0)
+    f.track:SetPoint("TOPLEFT", body, "TOPLEFT", 0, -(head + gap))
+    f.track:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, -(head + gap))
+    local y = -(head + gap + TRACK_H + gap)
+    f.lands:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
+    f.next:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
+    f.next:SetPoint("TOPRIGHT", f.lands, "TOPLEFT", -S["space-4"], 0)
+    f.sweep:SetSize(math.max(1, (TIMER_W - S["space-5"] * 2) * SWEEP), TRACK_H)
+    body:SetHeight(head + gap + TRACK_H + gap + foot)
+end
+
+-- a stop's diamond: gilt-text rim, gilt once passed, surface ahead
+function M:Stop(i)
+    local f = self.timer
+    local d = f.stops[i]
+    if not d then
+        d = { rim = UI.Diamond(f.marks, STOP, "gilt-text", "OVERLAY", 6), dot = UI.Diamond(f.marks, STOP - 2, "surface", "OVERLAY", 7) }
+        f.stops[i] = d
+    end
+    return d
+end
+
+-- What the bar shows: { name, time, timeColor, left, right, fill ("solid",
+-- "hatch" or nil: the sweep), frac, rate (of the bar a second, for the
+-- fill between ticks), stops = { { at, passed } } }.
+function M:PaintTimer(v)
+    local f = self.timer
+    f.name:SetValue(v.name)
+    f.time:SetValue(v.time)
+    f.time:SetColor(v.timeColor)
+    f.next:SetValue(v.left)
+    f.lands:SetValue(v.right)
+    local token = v.fill == "hatch" and "progress-fill" or "gilt"
+    if f.fillToken ~= token then
+        f.fillToken = token
+        f.track:SetFill(token)
+    end
+    f.hatch:SetShown(v.fill == "hatch")
+    f.track.bar:SetShown(v.fill ~= nil)
+    f.sweep:SetShown(v.fill == nil)
+    f.still = SuuUI.Motion.Reduced()
+    -- the fill on from here at the flight's pace until the next tick: never
+    -- more than a second ahead, never back
+    local shown = f.drive and f.drive.flight == v.flight and f.drive.shown or 0
+    local frac = math.max(0, math.min(1, v.frac or 0))
+    if frac >= shown then
+        f.drive = { flight = v.flight, base = frac, rate = v.rate or 0, at = GetTime(), shown = frac }
+    else
+        f.drive = { flight = v.flight, base = shown, rate = 0, at = GetTime(), shown = shown }
+    end
+    local width = f.track:GetWidth()
+    if not (width and width > 0) then width = TIMER_W - S["space-5"] * 2 end
+    for i, s in ipairs(v.stops or {}) do
+        local d = self:Stop(i)
+        local x = s.at * width
+        for _, t in ipairs({ d.rim, d.dot }) do
+            t:ClearAllPoints()
+            t:SetPoint("CENTER", f.marks, "LEFT", x, 0)
+            t:Show()
+        end
+        UI.Paint(d.dot, s.passed and "gilt" or "surface")
+    end
+    for i = #(v.stops or {}) + 1, #f.stops do f.stops[i].rim:Hide(); f.stops[i].dot:Hide() end
+    self:MoveTimer()
+end
+
+-- Every frame: the fill, and the sweep across (still with Reduce motion).
+function M:MoveTimer()
+    local f = self.timer
+    local d = f and f.drive
+    if not d then return end
+    local now = GetTime()
+    if not f.still then
+        d.shown = math.min(1, d.base + math.min(now - d.at, 1) * d.rate)
+    end
+    f.track:SetValueNow(d.shown)
+    if f.sweep:IsShown() then
+        local width = f.track:GetWidth() or 0
+        local sw = f.sweep:GetWidth()
+        local x = f.still and width * 0.3 or ((now % SWEEP_T) / SWEEP_T) * (width + sw) - sw
+        f.sweep:ClearAllPoints()
+        f.sweep:SetPoint("LEFT", f.clip, "LEFT", x, 0)
+    end
+end
+
+-- Once a second in the air: the flight as it stands.
+function M:TickTimer()
+    local f, fl = self.timer, self.flight
+    if not (f and fl) then return end
+    local route = self:FlightRoute(fl)
+    local frac = self:Flown(fl, route)
+    local flown = GetTime() - fl.started
+    local left = fl.expected and math.max(0, fl.expected - flown)
+    local v = { flight = fl, name = self:StopName(fl, fl.path[#fl.path]), frac = frac,
+                rate = fl.expected and fl.expected > 0 and 1 / fl.expected or 0, stops = {} }
+    -- the stops between, by their place along the route
+    local ahead
+    if route and fl.expected then
+        for i = 2, #fl.path - 1 do
+            local at = route.at[i]
+            local passed = frac and frac >= at or false
+            v.stops[#v.stops + 1] = { at = at, passed = passed }
+            if not passed and not ahead then ahead = i end
+        end
+    end
+    if fl.measured then
+        v.time, v.timeColor, v.fill = clock(left), "ink", "solid"
+        if ahead then
+            v.left = ("Next stop %s · %s"):format(self:StopName(fl, fl.path[ahead]), clock(math.max(0, route.at[ahead] * fl.expected - flown)))
+        else
+            -- (stops it can't place: how many)
+            v.left = route and (#fl.path > 2 and "No more stops" or "Direct") or stopsText(fl.path)
+        end
+        v.right = "lands " .. clockAt(left)
+    elseif fl.expected then
+        v.time, v.timeColor, v.fill = "~" .. clock(left), "ink-muted", "hatch"
+        v.left = "Not timed yet · estimated · " .. clock(flown) .. " so far"
+        v.right = "about " .. clockAt(left)
+    else
+        v.time, v.timeColor, v.fill, v.frac, v.rate = clock(flown), "ink-muted", nil, 0, 0
+        -- (a flight resumed after a reload isn't timed: its start isn't exact)
+        v.left = fl.reloaded and "Not timed yet" or "Not timed yet · timing this flight"
+        v.right = "so far"
+    end
+    self:PaintTimer(v)
+end
+
+-- In edit mode on the ground: the board's timed flight, to place it by.
+function M:SampleTimer()
+    self:PaintTimer({ name = "Crossroads", time = clock(95), timeColor = "ink", fill = "solid", frac = 0.4,
+                      left = "Next stop Camp Taurajo · " .. clock(18), right = "lands " .. clockAt(95),
+                      stops = { { at = 0.51, passed = false } } })
+end
+
+-- Shown in the air while the world map is closed (and the setting is on);
+-- in edit mode to be moved, a sample on the ground.
+function M:UpdateTimer()
+    local f = self.timer
+    if not f then return end
+    local editing = SuuUI.EditMode.IsActive()
+    local flying = self.flight ~= nil and not (self.map and self.map:IsShown())
+    local shown = self:IsEnabled() and self:Get("timer") and not self:Get("timerPosition").hidden
+        and (flying or editing) or false
+    f:SetShown(shown)
+    if not shown then return end
+    if self.flight then self:TickTimer() else self:SampleTimer() end
+end
+
+--------------------------------------------------------------------------------
 -- The map
 --------------------------------------------------------------------------------
 
@@ -1244,14 +1591,17 @@ function M:Attach()
     provider.OnCanvasScaleChanged = function() self:QueueLayout() end
     provider.OnCanvasSizeChanged = function() self:QueueLayout() end
     self.provider = provider
-    -- the map closed at the flight master: the flight master too
+    -- the map closed at the flight master: the flight master too; in the
+    -- air the flight bar comes back
     f:HookScript("OnHide", function()
         if self.session and not self.closing then
             self:LeaveMaster(false)
             if CloseTaxiMap then CloseTaxiMap() end
         end
+        self:UpdateTimer()
     end)
-    -- opened in the air: the continent, where the route shows
+    -- opened in the air: the continent, where the route shows (the flight
+    -- bar away meanwhile)
     f:HookScript("OnShow", function()
         if self:IsEnabled() and self.flight and not self.session and self:Get("inFlight") then
             C_Timer.After(0, function()
@@ -1259,6 +1609,7 @@ function M:Attach()
                 if continent and f:IsShown() and f:GetMapID() ~= continent then f:SetMapID(continent) end
             end)
         end
+        self:UpdateTimer()
     end)
     -- the quest log opened or closed: the destinations go with it
     if f.SetQuestLogPanelShown then
@@ -1284,6 +1635,8 @@ local SECTION = {
         { title = "While flying", rows = {
             { key = "inFlight", label = "Your flight on the map", control = "toggle",
               description = "Open the map in the air to see your route: the part flown solid, the rest dashed, the time left at your destination." },
+            { key = "timer", label = "Flight timer on screen", control = "toggle",
+              description = "While you fly with the map closed: a bar at the top of the screen with your destination and the time left, a diamond for each stop (gilt once passed), the next stop and when you land. A route not flown yet shows an estimate, marked ~. Move it in edit mode." },
         } },
         { title = "Flight times", rows = {
             { label = "Timed flights", control = "button", text = "Forget",
@@ -1323,6 +1676,9 @@ function M:OnEnable()
         return
     end
     self:RegisterSettings(SECTION)
+    self:BuildTimer()
+    self:RegisterMover(self.timer, { key = "timerPosition", label = "Flight timer",
+        enabled = function() return self:Get("timer") end })
     self.map:AddDataProvider(self.provider)
     self.layer:Show()
     -- every flight's route, whichever map took it (the hook stays; it
@@ -1345,9 +1701,16 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
         if not self.flight then self:ResumeFlight() end
         self:QueueLayout()
+        self:UpdateTimer()
     end)
     self:Watch("atMaster", function() if not self:Get("atMaster") and self.session then self:LeaveMaster(false) end end)
     self:Watch("inFlight", function() self:QueueLayout() end)
+    self:Watch("timer", function()
+        SuuUI.EditMode.Refresh()
+        self:UpdateTimer()
+    end)
+    self:Watch("timerPosition", function() self:UpdateTimer() end)
+    self:On("SUUUI_EDITMODE_CHANGED", function() self:UpdateTimer() end)
     -- (a destination chosen to confirm: let go when clicks fly at once)
     self:Watch("confirm", function()
         if self.session and not self:Get("confirm") and self.selected then
@@ -1357,17 +1720,22 @@ function M:OnEnable()
             self:QueueInk()
         end
     end)
-    -- a theme: the tags and the bar measured again
+    -- a theme: the tags, the bar and the flight bar measured again
     self:On("SUUUI_THEME_CHANGED", function()
         if self.session then self:UpdateBar() end
+        self:LayoutTimer()
+        self:UpdateTimer()
         self:QueueLayout()
     end)
+    -- (once the module counts as on)
+    C_Timer.After(0, function() self:UpdateTimer() end)
 end
 
 function M:OnDisable()
     -- (at a flight master: the game's own map back, the session open)
     self:LeaveMaster(false)
     self.flight, self.pending = nil, nil
+    if self.timer then self.timer:Hide() end
     if not self.map then return end
     self.map:RemoveDataProvider(self.provider)
     self:ClearDrawing()

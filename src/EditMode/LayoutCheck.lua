@@ -21,7 +21,8 @@ local SCREENS = {
     { "1080p", 1920, 1080 }, { "1440p", 2560, 1440 }, { "4K", 3840, 2160 }, { "3440 × 1440", 3440, 1440 },
 }
 -- pairs that never show at once, and places that are only anchors
-local APART = { ["party.position"] = "raid.position", ["raid.position"] = "party.position" }
+local APART = { ["party.position"] = "raid.position", ["raid.position"] = "party.position",
+                ["flightmap.timerPosition"] = "timeline.position", ["timeline.position"] = "flightmap.timerPosition" }
 -- anchors and windows (they open over the HUD by design)
 local ANCHOR_ONLY = { ["tooltips.position"] = true, ["bags.position"] = true, ["bags.bankPosition"] = true,
                       ["loot.position"] = true }
