@@ -19,7 +19,7 @@
 -- points (the spec). Specs: from an inspect (one player at a time, out of
 -- combat), or from a raid member's own SuuUI (addon message, prefix "SuuUI":
 -- "RPSPEC\t<tree>", "RPSPECQ" asks everyone). Until known a player fills
--- provisionally, spec "?".
+-- provisionally, spec "?" (shown with their class's icon, not a spec's).
 -- Setups are account-wide (SuuUI.AccountData); what's tracked follows the
 -- profile. A built-in module written against the public API only.
 
@@ -64,6 +64,7 @@ local ROLE_WORD = { TANK = "tank", HEALER = "healer", DAMAGER = "damage" }
 local ROLE_NAME = { TANK = "Tank", HEALER = "Healer", DAMAGER = "Damage" }
 local INSPECT_CONFIG = Constants and Constants.TraitConsts and Constants.TraitConsts.INSPECT_TRAIT_CONFIG_ID or -1
 local SPEC_FRESH = 24 * 3600 -- a spec heard or inspected counts for a day
+local BLESSINGS = 3 -- Kings, Might or Wisdom, Light: one per paladin (Salvation isn't one on Forever)
 
 -- A name as a key: the realm only for another realm's players.
 local function key(name)
@@ -185,6 +186,7 @@ function M:Data()
     d.setups = d.setups or {}
     d.nextId = d.nextId or 1
     d.specs = d.specs or {}
+    d.treeIcons = d.treeIcons or {}
     d.size = d.size or 40
     return d
 end
@@ -703,6 +705,7 @@ function M:Refill(force)
         self:Render()
         return
     end
+    self:NoteOwnTreeIcons()
     self:ReadRoster()
     local review = self:Get("fill") == "review"
     self:RunFill(review and not force and self.fill ~= nil)
@@ -735,6 +738,56 @@ local function treeByName(class, name)
     end
 end
 
+--------------------------------------------------------------------------------
+-- Spec icons
+--------------------------------------------------------------------------------
+
+-- A tree's icon: the game's own (its talent group's in the class's trait
+-- tree, seen in your talents or an inspect, kept for the account), else the
+-- catalog's. Forever's spec IDs are one per class (probed: 1491 "Warrior",
+-- with the class icon; an inspected druid's is 1484 whatever the tree), so
+-- GetSpecializationInfoByID can't tell the trees apart.
+function M:TreeIcon(class, tree)
+    if not (class and tree) then return nil end
+    local seen = self:Data().treeIcons[class]
+    if seen and seen[tree] then return seen[tree] end
+    local c = CLASS[class]
+    return c and c.icons and c.icons[tree] or nil
+end
+
+local QUESTION_MARK = 134400
+
+-- Keeps the icons of a class's talent groups (GetGroupDisplayInfoByTreeID).
+function M:NoteTreeIcons(class, displays)
+    if not CLASS[class] or type(displays) ~= "table" then return end
+    local icons = self:Data().treeIcons
+    for _, d in ipairs(displays) do
+        local tree = type(d) == "table" and treeByName(class, d.displayName)
+        local icon = tree and d.icon
+        if plain(icon) and ((type(icon) == "number" and icon > 0 and icon ~= QUESTION_MARK) or (type(icon) == "string" and icon ~= "")) then
+            icons[class] = icons[class] or {}
+            icons[class][tree] = icon
+        end
+    end
+end
+
+-- Your own class's, from your talents (once they're there).
+function M:NoteOwnTreeIcons()
+    if self.ownIconsRead then return end
+    local _, class = UnitClass("player")
+    local traits = C_Traits or {}
+    local cfg = C_ClassTalents and call(C_ClassTalents.GetActiveConfigID)
+    if not plain(cfg) or not cfg then return end
+    local info = call(traits.GetConfigInfo, cfg)
+    local treeID = type(info) == "table" and info.treeIDs and info.treeIDs[1]
+    if not (plain(treeID) and treeID) then return end
+    local displays = call(traits.GetGroupDisplayInfoByTreeID, treeID)
+    if type(displays) == "table" and #displays > 0 then
+        self.ownIconsRead = true
+        self:NoteTreeIcons(class, displays)
+    end
+end
+
 function M:InspectedTree(unit, class)
     local best, bestSpent
     local traits = C_Traits or {}
@@ -742,10 +795,12 @@ function M:InspectedTree(unit, class)
     local treeID = type(info) == "table" and info.treeIDs and info.treeIDs[1]
     if plain(treeID) and treeID then
         local ids, names = {}, {}
-        for i, d in ipairs(call(traits.GetGroupDisplayInfoByTreeID, treeID) or {}) do
+        local displays = call(traits.GetGroupDisplayInfoByTreeID, treeID)
+        for i, d in ipairs(type(displays) == "table" and displays or {}) do
             ids[i] = d.groupID
             names[d.groupID] = d.displayName
         end
+        self:NoteTreeIcons(class, displays)
         local groups = #ids > 0 and call(traits.GetGroupCurrencyInfo, INSPECT_CONFIG, ids)
         for _, g in ipairs(type(groups) == "table" and groups or {}) do
             local c = g.currencyInfos and g.currencyInfos[1]
@@ -1004,8 +1059,8 @@ function M:RaidItem(item, people, open)
         return r
     end
     if item.count == "blessings" then
-        r.n = ("%d of 4"):format(math.min(#yes, 4))
-        r.warn = #yes == 0 or (#yes < 4 and #slots > 0)
+        r.n = ("%d of %d"):format(math.min(#yes, BLESSINGS), BLESSINGS)
+        r.warn = #yes == 0 or (#yes < BLESSINGS and #slots > 0)
     else
         r.n = #yes
         r.warn = #yes == 0
@@ -1189,7 +1244,8 @@ function M:Moves()
     for _, s in ipairs(self:Work().slots) do
         local f = self.fill.slot[s.id]
         if f and f.m.group ~= s.g then
-            out[#out + 1] = { name = f.m.name, class = f.m.class, from = f.m.group, to = s.g, m = f.m }
+            out[#out + 1] = { name = f.m.name, class = f.m.class, icon = self:TreeIcon(f.m.class, f.m.tree), known = f.m.tree ~= nil,
+                from = f.m.group, to = s.g, m = f.m }
         end
     end
     return out
@@ -1230,7 +1286,7 @@ function M:ViewData()
     v.palette = {}
     for _, c in ipairs(CLASSES) do
         local specs = {}
-        for t = 1, 3 do specs[t] = { spec = t, label = c.short[t], name = c.specs[t], role = c.roles[t] } end
+        for t = 1, 3 do specs[t] = { spec = t, label = c.short[t], name = c.specs[t], role = c.roles[t], icon = self:TreeIcon(c.file, t) } end
         v.palette[#v.palette + 1] = { class = c.file, name = c.name, specs = specs }
     end
 
@@ -1244,11 +1300,14 @@ function M:ViewData()
         for i, s in ipairs(slots) do
             local f = fill.slot[s.id]
             local req = reqText(s)
-            local card = { id = s.id, req = req }
+            -- open or away: the icon of what the slot asks for (drawn dimmed)
+            local card = { id = s.id, req = req, icon = self:TreeIcon(s.class, s.spec), iconClass = s.class }
             if f then
                 local m = f.m
                 card.who, card.class, card.player = m.name, m.class, m.name
                 card.spec = shortSpec(m.class, m.tree) or "?"
+                -- their spec's icon; their class's while the spec isn't known
+                card.icon, card.iconClass = self:TreeIcon(m.class, m.tree), m.class
                 card.pinned = f.how == "pinned"
                 card.state = f.how == "provisional" and "provisional" or "filled"
                 if card.pinned then card.req = "Pinned · " .. req end
@@ -1313,7 +1372,8 @@ function M:ViewData()
                     or ("no slot asks for a %s: drag onto a slot or add one"):format(c and c.name:lower() or "player")
             end
         end
-        v.unplaced[#v.unplaced + 1] = { name = m.name, class = m.class, detail = (c and c.name or "") .. " · " .. spec .. " · " .. why }
+        v.unplaced[#v.unplaced + 1] = { name = m.name, class = m.class, icon = self:TreeIcon(m.class, m.tree), known = m.tree ~= nil,
+            detail = (c and c.name or "") .. " · " .. spec .. " · " .. why }
     end
 
     -- coverage
@@ -1677,7 +1737,7 @@ local function resetFamily(family)
     M:SetTrackedSet(set)
 end
 
-local ESSENTIALS_TEXT = "The essentials: Fortitude, Mark, Intellect, Blessings, Battle Shout, Windfury, Mana Tide, Trueshot Aura, Sunder, the warlock curses, Faerie Fire, decursing and magic dispels, Rebirth, Soulstone, Innervate. Changing a box below makes it Custom."
+local ESSENTIALS_TEXT = "The essentials: Fortitude, Mark, Intellect, Blessings, Salvation, Battle Shout, Windfury, Mana Tide, Trueshot Aura, Sunder, the warlock curses, Faerie Fire, decursing and magic dispels, Rebirth, Soulstone, Innervate. Changing a box below makes it Custom."
 
 function M:Section()
     local groups = {
@@ -1706,7 +1766,7 @@ function M:Section()
               options = { { value = "auto", label = "Automatically" }, { value = "click", label = "On click" } },
               description = "Automatically: while the planner is open, one player at a time, out of combat, slowly so the game allows it. On click: only from the planner's Inspect button." },
             { key = "flagDoubled", label = "Flag doubled party-wide buffs", control = "toggle",
-              description = "Two Trueshot Auras or two Windfury Totems in one group: one is wasted." },
+              description = "Two Trueshot Auras or two Blood Pacts in one group: one is wasted." },
             { key = "shareSpec", label = "Share my spec", control = "toggle",
               description = "Tell raid members who use SuuUI your spec, out of combat, so their planner needn't inspect you." },
         } },

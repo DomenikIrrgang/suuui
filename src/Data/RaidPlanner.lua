@@ -8,7 +8,9 @@
 --   classes   the nine, in the palette's order: file, name, their trees left
 --             to right (specs, short), each tree's role, the role a player
 --             of the class most likely has before their spec is known
---             (`likely`), and which trees fight in melee
+--             (`likely`), which trees fight in melee, and each tree's icon
+--             (`icons`: the classic talent tabs' art, until the game's own
+--             is seen in a talent tree)
 --   families  the settings' groups, in order: key, title, scope ("raid":
 --             counted once for the whole raid; "party": per group of five)
 --   items     what can be tracked: key, label, short (chips and merged
@@ -21,47 +23,60 @@
 --                        "hunter", "healer"); missing is flagged only where
 --                        someone does
 --               single   party-wide: a second one in a group is wasted
---               count    "blessings": one Blessing per paladin, 4 at most
+--               count    "blessings": one Blessing per paladin, 3 at most
 --               ask      can't be known (from books, not trainers): shown
 --                        as "ask", never counted
 --
 -- On Forever: Battle Shout, Moonkin Aura and Leader of the Pack reach the
--- whole raid; the resistance auras and totems and Aspect of the Wild reach
--- party and raid members within 30 yards (raid-wide, in range); Blessing of
--- Kings, Divine Spirit and Innervate are baseline; Improved Scorch, Winter's
--- Chill, Shadow Weaving and Improved Shadow Bolt are the caster's own; no
--- Bloodlust or Heroism. Tranquilizing Shot and the group versions of
--- Fortitude, Intellect and Mark aren't taught by trainers.
+-- whole raid; Windfury, Strength of Earth and Grace of Air Totems, the
+-- resistance auras and totems and Aspect of the Wild reach party and raid
+-- members within 30 yards (raid-wide, in range); Salvation (Mass Salvation
+-- at 60) isn't a Blessing: a paladin gives it besides their one Blessing;
+-- Blessing of Kings, Divine Spirit and Innervate are baseline; Improved
+-- Scorch, Winter's Chill, Shadow Weaving and Improved Shadow Bolt are the
+-- caster's own; no Bloodlust or Heroism. Tranquilizing Shot and the group
+-- versions of Fortitude, Intellect and Mark aren't taught by trainers.
 
 local _, ns = ...
+
+local I = "Interface\\Icons\\"
 
 ns.RaidCatalog = {
     classes = {
         { file = "WARRIOR", name = "Warrior", specs = { "Arms", "Fury", "Protection" }, short = { "Arms", "Fury", "Prot" },
-          roles = { "DAMAGER", "DAMAGER", "TANK" }, likely = "DAMAGER", melee = { true, true, true } },
+          roles = { "DAMAGER", "DAMAGER", "TANK" }, likely = "DAMAGER", melee = { true, true, true },
+          icons = { I .. "Ability_Rogue_Eviscerate", I .. "Ability_Warrior_InnerRage", I .. "INV_Shield_06" } },
         { file = "PALADIN", name = "Paladin", specs = { "Holy", "Protection", "Retribution" }, short = { "Holy", "Prot", "Ret" },
-          roles = { "HEALER", "TANK", "DAMAGER" }, likely = "HEALER", melee = { false, true, true } },
+          roles = { "HEALER", "TANK", "DAMAGER" }, likely = "HEALER", melee = { false, true, true },
+          icons = { I .. "Spell_Holy_HolyBolt", I .. "Spell_Holy_DevotionAura", I .. "Spell_Holy_AuraOfLight" } },
         { file = "HUNTER", name = "Hunter", specs = { "Beast Mastery", "Marksmanship", "Survival" }, short = { "BM", "MM", "SV" },
-          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { false, false, false } },
+          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { false, false, false },
+          icons = { I .. "Ability_Hunter_BeastTaming", I .. "Ability_Marksmanship", I .. "Ability_Hunter_SwiftStrike" } },
         { file = "ROGUE", name = "Rogue", specs = { "Assassination", "Combat", "Subtlety" }, short = { "Assn", "Combat", "Sub" },
-          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { true, true, true } },
+          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { true, true, true },
+          icons = { I .. "Ability_Rogue_Eviscerate", I .. "Ability_BackStab", I .. "Ability_Stealth" } },
         { file = "PRIEST", name = "Priest", specs = { "Discipline", "Holy", "Shadow" }, short = { "Disc", "Holy", "Shadow" },
-          roles = { "HEALER", "HEALER", "DAMAGER" }, likely = "HEALER", melee = { false, false, false } },
+          roles = { "HEALER", "HEALER", "DAMAGER" }, likely = "HEALER", melee = { false, false, false },
+          icons = { I .. "Spell_Holy_WordFortitude", I .. "Spell_Holy_HolyBolt", I .. "Spell_Shadow_ShadowWordPain" } },
         { file = "SHAMAN", name = "Shaman", specs = { "Elemental", "Enhancement", "Restoration" }, short = { "Ele", "Enh", "Resto" },
-          roles = { "DAMAGER", "DAMAGER", "HEALER" }, likely = "HEALER", melee = { false, true, false } },
+          roles = { "DAMAGER", "DAMAGER", "HEALER" }, likely = "HEALER", melee = { false, true, false },
+          icons = { I .. "Spell_Nature_Lightning", I .. "Spell_Nature_LightningShield", I .. "Spell_Nature_MagicImmunity" } },
         { file = "MAGE", name = "Mage", specs = { "Arcane", "Fire", "Frost" }, short = { "Arcane", "Fire", "Frost" },
-          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { false, false, false } },
+          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { false, false, false },
+          icons = { I .. "Spell_Holy_MagicalSentry", I .. "Spell_Fire_FireBolt02", I .. "Spell_Frost_FrostBolt02" } },
         { file = "WARLOCK", name = "Warlock", specs = { "Affliction", "Demonology", "Destruction" }, short = { "Affl", "Demo", "Destr" },
-          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { false, false, false } },
+          roles = { "DAMAGER", "DAMAGER", "DAMAGER" }, likely = "DAMAGER", melee = { false, false, false },
+          icons = { I .. "Spell_Shadow_DeathCoil", I .. "Spell_Shadow_Metamorphosis", I .. "Spell_Shadow_RainOfFire" } },
         { file = "DRUID", name = "Druid", specs = { "Balance", "Feral Combat", "Restoration" }, short = { "Balance", "Feral", "Resto" },
-          roles = { "DAMAGER", "DAMAGER", "HEALER" }, likely = "HEALER", melee = { false, true, false } },
+          roles = { "DAMAGER", "DAMAGER", "HEALER" }, likely = "HEALER", melee = { false, true, false },
+          icons = { I .. "Spell_Nature_StarFall", I .. "Ability_Racial_BearForm", I .. "Spell_Nature_HealingTouch" } },
     },
 
     families = {
         { key = "raid", title = "Raid-wide buffs", scope = "raid",
-          description = "Reach the whole raid; counted once. Blessings count per paladin: one each." },
+          description = "Reach the whole raid; counted once. Blessings count per paladin: one each (Kings, Might or Wisdom, Light); Salvation comes besides." },
         { key = "party", title = "Party-wide buffs", scope = "party",
-          description = "Reach one group of five; counted per group. Missing is flagged only in groups that use it: melee for Windfury and Strength of Earth, hunters for Trueshot, healers for Mana Spring and Mana Tide." },
+          description = "Reach one group of five; counted per group. Missing is flagged only in groups that use it: hunters for Trueshot, healers for Mana Spring and Mana Tide." },
         { key = "boss", title = "Debuffs on the boss", scope = "raid" },
         { key = "dispel", title = "Dispels", scope = "raid" },
         { key = "rescue", title = "Rescue and mana", scope = "raid" },
@@ -80,7 +95,9 @@ ns.RaidCatalog = {
           by = { { "MAGE" } }, line = "mark", essential = true },
         { key = "blessings", label = "Blessings", short = "Blessings", family = "raid", spell = 20217,
           by = { { "PALADIN" } }, count = "blessings", note = "per paladin", essential = true,
-          detail = "Kings, Might or Wisdom, Salvation, Light" },
+          detail = "Kings, Might or Wisdom, Light" },
+        { key = "salvation", label = "Salvation", short = "Salvation", family = "raid", spell = 1038,
+          by = { { "PALADIN" } }, essential = true },
         { key = "shadowProtection", label = "Shadow Protection", short = "Shadow Protection", family = "raid", spell = 976,
           by = { { "PRIEST" } } },
         { key = "battleShout", label = "Battle Shout", short = "Battle Shout", family = "raid", spell = 6673,
@@ -89,15 +106,15 @@ ns.RaidCatalog = {
           by = { { "DRUID", 2, talent = true } }, line = "shouts", note = "Feral" },
         { key = "moonkin", label = "Moonkin Aura", short = "Moonkin", family = "raid", spell = 24858,
           by = { { "DRUID", 1, talent = true } }, line = "shouts", note = "Balance" },
+        { key = "windfury", label = "Windfury Totem", short = "Windfury", family = "raid", spell = 8512,
+          by = { { "SHAMAN" } }, line = "totems", note = "30 yd", essential = true },
+        { key = "earth", label = "Strength of Earth, Grace of Air", short = "Strength of Earth", family = "raid", spell = 8075,
+          by = { { "SHAMAN" } }, line = "totems", note = "30 yd" },
         { key = "resistance", label = "Resistance auras and totems", short = "Resistances", family = "raid", spell = 19876,
           by = { { "PALADIN" }, { "SHAMAN" }, { "HUNTER" } }, note = "30 yd",
           detail = "paladins' and shamans' resistances, Aspect of the Wild; in range" },
 
         -- party-wide buffs
-        { key = "windfury", label = "Windfury Totem", short = "Windfury", family = "party", spell = 8512,
-          by = { { "SHAMAN" } }, users = "melee", single = true, essential = true },
-        { key = "earth", label = "Strength of Earth, Grace of Air", short = "Strength of Earth", family = "party", spell = 8075,
-          by = { { "SHAMAN" } }, users = "melee" },
         { key = "manaSpring", label = "Mana Spring Totem", short = "Mana Spring", family = "party", spell = 5675,
           by = { { "SHAMAN" } }, users = "healer" },
         { key = "manaTide", label = "Mana Tide Totem", short = "Mana Tide", family = "party", spell = 16190,

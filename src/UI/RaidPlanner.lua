@@ -13,21 +13,25 @@
 --   local w = UI.RaidPlanner(parent)
 --   w:SetData({ meta, stats = { { n, label, warn } }, note, size,
 --       setups = { { id, name, meta, loaded, changed } },
---       palette = { { class, name, specs = { { spec, label, role } } } },
+--       palette = { { class, name, specs = { { spec, label, role, icon } } } },
 --       groups = { { n, kind, canAdd, slots = { { id, req, who, class, spec,
---           state, pinned, player, tip } }, chips = { { text, tone, tip } } } },
+--           icon, iconClass, state, pinned, player, tip } }, chips = { { text, tone, tip } } } },
 --       raidWide = { { label, detail, n, warn, tip } }, raidWideMeta, raidWideEmpty,
---       open = { { label, detail } }, unplaced = { { name, class, detail } },
+--       open = { { label, detail } }, unplaced = { { name, class, icon, known, detail } },
 --       hint, fill = { shown, enabled, reason }, inspect = { shown, label, enabled,
 --       reason }, arrange = { enabled, reason } })
 --   slot states: "filled", "provisional" (spec "?", underlined in dots),
 --   "open", "conflict" (two fit it), "away" (pinned, not in the raid); a
 --   slot's `player` (a name) makes it draggable
+--   a player's icon: `icon` (their spec's), else their class's (`class`, or
+--   a slot's `iconClass`), faded while the spec isn't known (a slot's spec
+--   "?", a person's `known` false); open and away slots show what they ask
+--   for, dimmed
 --   chip tones: "ok", "warn" (doubled, missing), "open" (its slot is open)
 --   w:EditSlot({ id, title, meta, class, spec, role, label, who, classes,
 --       specs, whoOptions }, card) -- the slot editor beside the card
 --   w:CloseEditor(), w:EditingSlot(), w:CardFor(id), w:Rename(id), w:ShowMoves({ meta, moves = { { name,
---       class, from, to } }, note }, onConfirm)
+--       class, icon, known, from, to } }, note }, onConfirm)
 --   w.onSize(size), w.onSetup(id), w.onSetupMenu(id, owner), w.onNew(owner),
 --   w.onRename(id, text), w.onSave(), w.onSaveAsNew(), w.onDuplicate(),
 --   w.onDelete(), w.onSlot(id, owner, button), w.onAdd(group, owner),
@@ -43,7 +47,7 @@ local UI, T = ns.UI, ns.Tokens
 local S = T.space
 
 local WIDTH, HEIGHT = 1400, 860
-local LEFT_W, RIGHT_W, COL_GAP = 220, 270, 16
+local LEFT_W, RIGHT_W, COL_GAP = 232, 270, 16
 local GROUP_GAP = 10
 local CHIP_H = 16
 local PAL_H = 18
@@ -51,8 +55,38 @@ local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local ROLE_GLYPH = { TANK = "shield", HEALER = "plus", DAMAGER = "sword" }
 
 local function lineH(style) return T.type[style].lineHeight end
--- a slot card: who and their spec on top, what the slot asks for under it
+-- a slot card: the player's icon, then who and their spec on top, what the
+-- slot asks for under it
 local function cardH() return 3 + lineH("label") + lineH("caption") + 4 end
+local function cardIcon() return lineH("label") + lineH("caption") - 4 end
+local function cardTextX() return 5 + cardIcon() + S["space-3"] end
+
+local CROP = 0.08
+local CLASS_ART = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
+
+-- A player's art on a texture: their spec's icon, else their class's (the
+-- character creation tiles); none when neither is known.
+local function setArt(tex, icon, class)
+    local coords = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
+    if icon then
+        tex:SetTexture(icon)
+        tex:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
+    elseif coords then
+        tex:SetTexture(CLASS_ART)
+        tex:SetTexCoord(unpack(coords))
+    else
+        tex:SetTexture(nil)
+    end
+    tex:SetShown((icon or coords) and true or false)
+end
+
+-- The same on a UI.Icon: faded while the spec isn't known, dimmed (`dim`)
+-- for what an open slot asks for.
+local function setPlayerIcon(f, icon, class, known, dim)
+    setArt(f.art, icon, class)
+    f:SetState(dim and "dim" or "rest")
+    f.art:SetAlpha(dim and 0.5 or ((known or icon) and 1 or 0.6))
+end
 
 local function classToken(file)
     local t = file and ("class-" .. file:lower())
@@ -94,7 +128,8 @@ function P:TargetUnderCursor()
     end
 end
 
-function P:StartDrag(what, text, token)
+-- art: { icon, class, known } (a player's or a spec's), or nil.
+function P:StartDrag(what, text, token, art)
     self.dragging = what
     local gh = self.ghost
     if not gh then
@@ -103,8 +138,9 @@ function P:StartDrag(what, text, token)
         gh:SetHeight(22)
         UI.Fill(gh, "surface-raised"):SetAllPoints()
         UI.Border(gh, "arcane")
+        gh.icon = UI.Icon(gh, 16)
+        gh.icon:SetPoint("LEFT", 3, 0)
         gh.text = UI.Text(gh, "label", "ink")
-        gh.text:SetPoint("LEFT", S["space-4"], 0)
         gh:SetScript("OnUpdate", function(f)
             local scale = f:GetEffectiveScale()
             local x, y = GetCursorPosition()
@@ -119,9 +155,15 @@ function P:StartDrag(what, text, token)
         end)
         self.ghost = gh
     end
+    local hasArt = art and (art.icon or art.class) and true or false
+    gh.icon:SetShown(hasArt)
+    if hasArt then setPlayerIcon(gh.icon, art.icon, art.class, art.known) end
+    local x = hasArt and (3 + 16 + S["space-3"]) or S["space-4"]
+    gh.text:ClearAllPoints()
+    gh.text:SetPoint("LEFT", x, 0)
     gh.text:SetValue(text or "")
     gh.text:SetColor(token or "ink")
-    gh:SetWidth(UI.MeasureText("label", text or "") + S["space-4"] * 2)
+    gh:SetWidth(x + UI.MeasureText("label", text or "") + S["space-4"])
     gh:Show()
 end
 
@@ -138,10 +180,10 @@ end
 local function draggable(self, f, carry)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", function(b)
-        local what, text, token = carry(b)
+        local what, text, token, art = carry(b)
         if not what then return end
         UI.HideTooltip()
-        self:StartDrag(what, text, token)
+        self:StartDrag(what, text, token, art)
     end)
     f:SetScript("OnDragStop", function() self:StopDrag() end)
 end
@@ -151,7 +193,7 @@ end
 --------------------------------------------------------------------------------
 
 -- A small chip (the palette's specs, a group's buffs): caption text in a
--- hairline box.
+-- hairline box, after a glyph or (glyph "icon") a spec's icon.
 local function chip(parent, glyph)
     local b = CreateFrame("Button", nil, parent)
     b:SetHeight(PAL_H)
@@ -160,10 +202,12 @@ local function chip(parent, glyph)
     b.edge = UI.Border(b, "gilt-faint")
     if glyph then
         b.glyph = b:CreateTexture(nil, "ARTWORK")
-        b.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
         b.glyph:SetSize(10, 10)
         b.glyph:SetPoint("LEFT", 4, 0)
-        UI.Paint(b.glyph, "ink-muted")
+        if glyph ~= "icon" then
+            b.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
+            UI.Paint(b.glyph, "ink-muted")
+        end
     end
     b.label = UI.Text(b, "caption", "ink-muted")
     b.label:SetPoint("LEFT", glyph and 17 or 4, 0)
@@ -196,10 +240,9 @@ function P:Card(g)
     c.fill = UI.Fill(c, "surface-raised")
     c.fill:SetAllPoints()
     c.edge = UI.Border(c, "amber")
-    c.diamond = UI.Diamond(c, 5, "ink")
-    c.diamond:SetPoint("TOPLEFT", 6 + 1, -(3 + lineH("label") / 2 - 2.5))
+    c.icon = UI.Icon(c, cardIcon())
     c.who = UI.Text(c, "label", "ink")
-    c.who:SetPoint("TOPLEFT", 17, -3)
+    c.who:SetPoint("TOPLEFT", cardTextX(), -3)
     c.who:SetJustifyH("LEFT")
     c.pin = c:CreateTexture(nil, "ARTWORK")
     c.pin:SetTexture(GLYPHS .. "pushpin.tga")
@@ -217,7 +260,7 @@ function P:Card(g)
         c.dots[i] = d
     end
     c.req = UI.Text(c, "caption", "ink-faint")
-    c.req:SetPoint("TOPLEFT", 17, -(3 + lineH("label")))
+    c.req:SetPoint("TOPLEFT", cardTextX(), -(3 + lineH("label")))
     c.req:SetJustifyH("LEFT")
     c.SetDropHover = function(self, on) self.dropHover = on; styleCard(self) end
     c:SetScript("OnClick", function(self, button)
@@ -233,7 +276,8 @@ function P:Card(g)
     draggable(self, c, function(b)
         local s = b.slot
         if not (s and s.player) then return end
-        return { player = s.player, from = s.id }, s.player, classToken(s.class)
+        return { player = s.player, from = s.id }, s.player, classToken(s.class),
+            { icon = s.icon, class = s.iconClass or s.class, known = s.spec ~= "?" }
     end)
     c.planner = self
     return c
@@ -243,8 +287,14 @@ function P:SetCard(c, s, w)
     c.slot = s
     c.state, c.class = s.state, s.class
     c:SetSize(w, cardH())
-    c.diamond:SetShown(s.state ~= "open")
-    UI.Paint(c.diamond, s.state == "away" and "ink-faint" or classToken(s.class))
+    -- the player's spec icon (their class's while it's "?"); an open or
+    -- away slot: what it asks for, dimmed, or an empty well
+    local open = s.state == "open" or s.state == "away"
+    local size = cardIcon()
+    c.icon:SetSize(size, size)
+    c.icon:ClearAllPoints()
+    c.icon:SetPoint("TOPLEFT", 5, -math.floor((cardH() - size) / 2))
+    setPlayerIcon(c.icon, s.icon, s.iconClass or s.class, s.spec ~= "?", open)
     c.who:SetValue(s.who or "Open")
     c.pin:SetShown(s.pinned and true or false)
     c.spec:SetValue(s.spec or "")
@@ -253,14 +303,15 @@ function P:SetCard(c, s, w)
     for _, d in ipairs(c.dots) do d:SetShown(q) end
     c.req:SetValue(s.req or "")
     -- placed from the text styles each time (a theme can change them)
-    c.diamond:SetPoint("TOPLEFT", 7, -(3 + lineH("label") / 2 - 2.5))
-    c.req:SetPoint("TOPLEFT", 17, -(3 + lineH("label")))
+    local x = cardTextX()
+    c.who:SetPoint("TOPLEFT", x, -3)
+    c.req:SetPoint("TOPLEFT", x, -(3 + lineH("label")))
     -- the name and what it asks for stop short of the spec and the edge
     local specW = (s.spec and s.spec ~= "") and (UI.MeasureText("caption", s.spec) + S["space-3"]) or 0
     -- (as wide as the name, so the pin sits right after it)
-    local room = math.max(10, w - 17 - 6 - specW - (s.pinned and 13 or 0))
+    local room = math.max(10, w - x - 6 - specW - (s.pinned and 13 or 0))
     c.who:SetWidth(math.min(room, UI.MeasureText("label", s.who or "Open") + 1))
-    c.req:SetWidth(w - 17 - 6)
+    c.req:SetWidth(w - x - 6)
     c.dropHover = false
     styleCard(c)
 end
@@ -421,12 +472,17 @@ function P:DrawLeft(d)
         r.edge:SetShown(s.loaded and true or false)
         r.name:SetValue(s.name or "")
         r.name:SetWidth(math.min(LEFT_W - 28, UI.MeasureText("label", s.name or "") + 1))
+        r.name:Show()
         r.changed:SetShown(s.changed and true or false)
         r.meta:SetValue(s.meta or "")
         r.meta:SetWidth(LEFT_W - 14)
         if self.renaming == s.id then
-            -- renaming in place: the field over the row's name
+            -- renaming in place: the field over the row, its own name hidden
+            -- (it showed under what's typed)
             local f = self.renameField
+            r.name:Hide()
+            r.changed:Hide()
+            f:SetFrameLevel(r:GetFrameLevel() + 5)
             f:ClearAllPoints()
             f:SetPoint("TOPLEFT", r, "TOPLEFT", 0, 0)
             f:Show()
@@ -480,11 +536,15 @@ function P:DrawLeft(d)
             f.name:SetPoint("LEFT", 8, 0)
             f.name:SetScript("OnEnter", nil)
             f.name:SetScript("OnLeave", nil)
-            draggable(self, f.name, function(b) return { spec = { class = b.class } }, b.text, classToken(b.class) end)
+            draggable(self, f.name, function(b) return { spec = { class = b.class } }, b.text, classToken(b.class), { class = b.class, known = true } end)
             f.specs = {}
             for k = 1, 3 do
-                local s = chip(f)
-                draggable(self, s, function(b) return { spec = { class = b.class, spec = b.spec, role = b.role } }, b.text, classToken(b.class) end)
+                -- each spec with its icon
+                local s = chip(f, "icon")
+                draggable(self, s, function(b)
+                    return { spec = { class = b.class, spec = b.spec, role = b.role } }, b.text, classToken(b.class),
+                        { icon = b.icon, class = b.class, known = true }
+                end)
                 f.specs[k] = s
             end
             return f
@@ -495,13 +555,14 @@ function P:DrawLeft(d)
         row.name:SetText(c.name)
         row.name.label:SetColor(classToken(c.class))
         row.name.class, row.name.text = c.class, "Any " .. c.name:lower()
-        local sx = 66
+        local sx = 62
         for k, s in ipairs(row.specs) do
             local sp = c.specs and c.specs[k]
             s:SetShown(sp ~= nil)
             if sp then
                 s:SetText(sp.label)
-                s.class, s.spec, s.role, s.text = c.class, sp.spec, sp.role, c.name .. " · " .. (sp.name or sp.label)
+                setArt(s.glyph, sp.icon, c.class)
+                s.class, s.spec, s.role, s.icon, s.text = c.class, sp.spec, sp.role, sp.icon, c.name .. " · " .. (sp.name or sp.label)
                 s:ClearAllPoints()
                 s:SetPoint("LEFT", sx, 0)
                 sx = sx + s:GetWidth() + S["space-2"]
@@ -582,6 +643,9 @@ local function drawListRow(r, item, first, w)
     return h
 end
 
+local PERSON_ICON = 16
+local PERSON_X = PERSON_ICON + S["space-3"]
+
 local function personRow(self)
     local r = CreateFrame("Button", nil, self.unplacedZone)
     r:RegisterForClicks("RightButtonUp")
@@ -589,16 +653,16 @@ local function personRow(self)
     r.rule:SetHeight(1)
     r.rule:SetPoint("TOPLEFT")
     r.rule:SetPoint("TOPRIGHT")
-    r.diamond = UI.Diamond(r, 5, "ink")
-    r.diamond:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
+    r.icon = UI.Icon(r, PERSON_ICON)
+    r.icon:SetPoint("TOPLEFT", 0, -4)
     r.name = UI.Text(r, "label", "ink")
-    r.name:SetPoint("TOPLEFT", 14, -4)
+    r.name:SetPoint("TOPLEFT", PERSON_X, -4)
     r.detail = UI.Text(r, "caption", "ink-muted")
     r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, 0)
     r.detail:SetJustifyH("LEFT")
     r.detail:SetWordWrap(true)
     r:SetScript("OnClick", function(b, button) if self.onPerson then self.onPerson(b.person, b, button) end end)
-    draggable(self, r, function(b) return { player = b.person }, b.person, classToken(b.class) end)
+    draggable(self, r, function(b) return { player = b.person }, b.person, classToken(b.class), { icon = b.icon, class = b.class, known = b.known } end)
     return r
 end
 
@@ -659,13 +723,12 @@ function P:DrawRight(d)
     local zy = 0
     for i, p in ipairs(people) do
         local r = pool(self.personRows, i, function() return personRow(self) end)
-        r.person, r.class = p.name, p.class
+        r.person, r.class, r.icon, r.known = p.name, p.class, p.icon, p.known
         r.rule:SetShown(i > 1)
-        r.diamond:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
-        UI.Paint(r.diamond, classToken(p.class))
+        setPlayerIcon(r.icon, p.icon, p.class, p.known)
         r.name:SetValue(p.name or "")
         r.name:SetColor(classToken(p.class))
-        r.detail:SetFixedWidth(RIGHT_W - 14)
+        r.detail:SetFixedWidth(RIGHT_W - PERSON_X)
         r.detail:SetValue(p.detail or "")
         local h = 4 + lineH("label") + r.detail:GetStringHeight() + 4
         r:SetSize(RIGHT_W, h)
@@ -907,10 +970,10 @@ function P:ShowMoves(def, onConfirm)
         local r = pool(p.rows, i, function()
             local f = CreateFrame("Frame", nil, p.body)
             f:SetHeight(20)
-            f.diamond = UI.Diamond(f, 5, "ink")
-            f.diamond:SetPoint("LEFT", 2, 0)
+            f.icon = UI.Icon(f, PERSON_ICON)
+            f.icon:SetPoint("LEFT", 0, 0)
             f.name = UI.Text(f, "label", "ink")
-            f.name:SetPoint("LEFT", 18, 0)
+            f.name:SetPoint("LEFT", PERSON_X, 0)
             f.name:SetJustifyH("LEFT")
             f.from = UI.Text(f, "caption", "ink-muted")
             f.from:SetPoint("RIGHT")
@@ -919,10 +982,10 @@ function P:ShowMoves(def, onConfirm)
         r:SetWidth(inner)
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", 0, -y)
-        UI.Paint(r.diamond, classToken(m.class))
+        setPlayerIcon(r.icon, m.icon, m.class, m.known)
         r.name:SetValue(m.name or "")
         r.name:SetColor(classToken(m.class))
-        r.name:SetWidth(inner - 18 - 90)
+        r.name:SetWidth(inner - PERSON_X - 90)
         r.from:SetValue(("group %d → %d"):format(m.from or 0, m.to or 0))
         y = y + 20 + S["space-1"]
     end
