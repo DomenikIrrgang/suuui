@@ -712,6 +712,18 @@ end
 -- Run by the diagnostics module's /suu probe.
 ns.Probe = {}
 
+-- The topics /suu probe takes (the chat's command palette lists them): a
+-- new topic in Command below goes here too.
+ns.Probe.TOPICS = {
+    "ahdata", "ahpost", "ahscan", "api", "bags", "bankslots", "calendar", "camp", "casttarget", "character", "chat",
+    "chatpalette", "class", "collart", "collown", "colltiles", "deathrecap", "dragon", "durability", "filters",
+    "flicker", "gamemenu", "garbage", "givers", "group", "hold", "hovertip", "icons", "legacy", "lfg", "loot", "map",
+    "mappins", "marks", "memory", "meter", "micro", "minimap", "mountfeet", "mountframe", "npcportrait", "partyauras",
+    "plates", "popups", "power", "professions", "proficons", "quest", "questgroup", "raid", "runtime", "show",
+    "skysight", "social", "sound", "spellbook", "spells", "support", "taint", "talents", "taxi", "timeline",
+    "tooltips", "totems", "toymodels", "track", "tree", "unitmenu", "unlearn", "windows",
+}
+
 function ns.Probe.Hide()
     if window then window:Hide() end
 end

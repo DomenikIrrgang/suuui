@@ -21,6 +21,9 @@ function API.GetModule(id)
     return Modules.Get(id)
 end
 
+-- 0.17: every /suu subcommand, { { name, help, args } } (Core/Init.lua)
+function API.Commands() return ns.Commands() end
+
 -- A snapshot of every module: { id, name, description, state, source, builtIn, error }.
 function API.ListModules()
     local out = {}

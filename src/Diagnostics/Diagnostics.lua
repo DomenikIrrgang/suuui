@@ -10,7 +10,7 @@ SuuUI.RegisterModule({
     description = "Developer tools: the client API probe, the design token sheet and the component gallery.",
     api = "0.2",
     OnEnable = function(self)
-        self:RegisterCommand("probe", "Check which client APIs SuuUI depends on exist here; \"/suu probe show\" reopens the last report; \"/suu probe track\" tests the tracker.", ns.Probe.Command)
+        self:RegisterCommand("probe", "Check which client APIs SuuUI depends on exist here; \"/suu probe show\" reopens the last report; \"/suu probe track\" tests the tracker.", ns.Probe.Command, ns.Probe.TOPICS)
         self:RegisterCommand("tokens", "Show every design token colour and text style.", ns.TokenSheet.Toggle)
         self:RegisterCommand("gallery", "Show every SuuUI component built so far.", ns.Gallery.Toggle)
     end,

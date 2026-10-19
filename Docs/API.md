@@ -10,7 +10,7 @@ The API follows semantic versioning. A module declares the oldest API it works w
 
 | | |
 |---|---|
-| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, the totem bar and duration text bindings, menu entries, micro and game menu items, notification kinds, role preset values, themes, the first-run welcome (ShowWelcome), role presets (RolePresetName, ApplyRolePreset), colour vision (ColorVisionModes, ColorVision, SetColorVision, ColorVisionColor), AccountData, SuuUI.Raw, colours that follow the theme (UI.Paint, PaintFill, PaintGradient, Bind, SUUUI_THEME_CHANGED), UI.TabMarker, your gear's durability (SuuUI.Durability, SUUUI_DURABILITY_CHANGED, the micro menu's SetLines), the raid planner (RaidCatalog, UI.RaidPlanner, the raidplanner service, RaidGroups' Plan), and the resource bar (UI.ResourceBar, the Cooldown Manager's SetFooter) |
+| `SuuUI.API_VERSION` | `"0.17.0"`. 0.2 added the screen root, components, layouts and motion; 0.3 the settings window and its controls; 0.4 edit mode; 0.5 unit frames; 0.6 anchors, cast bars and the swing timer; 0.7 aura containers; 0.8 action bars; 0.9 roles and party frames; 0.10 alerts and the threat meter; 0.11 a module's own data per character; 0.12 windows, talents, Legacy, the spellbook; 0.13 professions, the right-click menu, filters, whole names and the Social window; 0.14 the world map; 0.15 map marks; 0.16 the Defensives list and Warded; 0.17 the money input, window tabs, the loading mark, IsTooltipSkinned, WINDOW_HEAD_H, the collection sources, ShowTalentsOf, ModelStage, Motion.Reduced, the edit mode's group preview, SetGroupFilter, M:Peek, extending SuuUI's own UI (Each, Hook, Override, Instances), services and `replaces`, the totem bar and duration text bindings, menu entries, micro and game menu items, notification kinds, role preset values, themes, the first-run welcome (ShowWelcome), role presets (RolePresetName, ApplyRolePreset), colour vision (ColorVisionModes, ColorVision, SetColorVision, ColorVisionColor), AccountData, SuuUI.Raw, colours that follow the theme (UI.Paint, PaintFill, PaintGradient, Bind, SUUUI_THEME_CHANGED), UI.TabMarker, your gear's durability (SuuUI.Durability, SUUUI_DURABILITY_CHANGED, the micro menu's SetLines), the raid planner (RaidCatalog, UI.RaidPlanner, the raidplanner service, RaidGroups' Plan), the resource bar (UI.ResourceBar, the Cooldown Manager's SetFooter), and /suu commands' arguments (M:RegisterCommand's args, SuuUI.Commands, the `chat` anchor) |
 | `SuuUI.version` | The addon's version |
 | `SuuUI.APIAtLeast(version)` | `true` when this API can serve a module written for `version` |
 
@@ -44,6 +44,7 @@ local M = SuuUI.RegisterModule({
 |---|---|
 | `SuuUI.RegisterModule(def)` | Registers a module; returns it |
 | `SuuUI.GetModule(id)` | The module, or `nil` |
+| `SuuUI.Commands()` (0.17) | Every `/suu` subcommand in registration order: `{ { name, help, args } }`, `args` a list of words or `nil` |
 | `SuuUI.ListModules()` | A snapshot: `{ id, name, description, state, source, builtIn, error, pendingReload }` for each module. `state` is `registered`, `enabled`, `disabled`, `errored` or `incompatible` |
 
 ### Module methods
@@ -92,7 +93,7 @@ end)
 | Other | |
 |---|---|
 | `M:RunOutOfCombat(key, fn)` | Runs `fn` now, or after combat. A later call with the same key (per module) replaces a waiting one |
-| `M:RegisterCommand(name, help, fn)` | Adds `/suu <name>`; `fn(rest of the line)` |
+| `M:RegisterCommand(name, help, fn[, args])` | Adds `/suu <name>`; `fn(rest of the line)`. 0.17: `args`, the words that can follow it (a list, or a function returning one), which the chat's command palette offers after `/suu <name> ` |
 | `M:RegisterSettings(section)` | A section in the settings window for the module's own settings; it goes away when the module turns off (0.3) |
 | `M:RegisterMover(frame, { key = "position", label, enabled })` | An edit-mode handle for one of the module's frames (0.4); see *Edit mode* |
 | `M:Provide(name, functions)` (0.17) | Offers a service other modules reach by name; see *Services and replacing a module* |
@@ -384,7 +385,7 @@ Modules find each other's frames through published anchors, never through each o
 | `SuuUI.PublishAnchor(name, frame)` | Publishes a frame under a name (`nil` unpublishes) |
 | `SuuUI.GetAnchor(name)` | The frame, or `nil`; listen to `SUUUI_ANCHOR_CHANGED` for changes |
 
-Published by SuuUI: `microMenu` (0.12: the micro menu; windows that join its row line up under it), `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames), `party` and `raid` (the group frames' holders), `playerBuffs` (0.12: your buffs' holder while they show), `encounterTimeline` (0.17: the encounter timeline while it is on).
+Published by SuuUI: `microMenu` (0.12: the micro menu; windows that join its row line up under it), `player`, `target`, `targettarget`, `focus`, `pet`, `boss1` … `boss5` (unit frames), `party` and `raid` (the group frames' holders), `playerBuffs` (0.12: your buffs' holder while they show), `encounterTimeline` (0.17: the encounter timeline while it is on), `chat` (0.17: the chat's box of tabs and lines, without the input; the command palette opens over it).
 
 ## Unit frames and cast bars (0.5, 0.6)
 

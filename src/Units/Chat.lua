@@ -895,6 +895,9 @@ end
 -- input. A recall starts over once the text isn't the recalled line.
 function M:Recall(eb, step)
     if not self:Get("recall") or chatLockdown() then return end
+    -- the command palette's list is open: its arrows choose there
+    local palette = SuuUI.GetModule("chatcommands")
+    if palette and palette:IsEnabled() and palette:TakesArrows(eb) then return end
     local list = self:History()
     if #list == 0 then return end
     local r = self.recall
@@ -2222,6 +2225,9 @@ function M:OnEnable()
     self:LoadHistory()
     self:Layout()
     self:RegisterMover(self.panel, { key = "position", label = "Chat" })
+    -- the lines' box (tabs and lines, without the input): the command
+    -- palette opens over it
+    SuuUI.PublishAnchor("chat", self.panel.box)
     self:RegisterSettings(SECTION)
     self:Wake()
     -- one frame later: never while the chat code is mid-update

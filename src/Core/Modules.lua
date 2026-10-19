@@ -131,8 +131,8 @@ function Module:RunOutOfCombat(key, fn)
     Combat.Run("m:" .. self.id .. ":" .. tostring(key), fn, self.name)
 end
 
-function Module:RegisterCommand(name, help, fn)
-    ns.RegisterCommand(name, help, fn, self)
+function Module:RegisterCommand(name, help, fn, args)
+    ns.RegisterCommand(name, help, fn, self, args)
 end
 
 -- A settings section for this module: its rows read and write the module's

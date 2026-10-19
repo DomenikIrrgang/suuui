@@ -27,16 +27,34 @@ end
 -- Core files and modules add subcommands with ns.RegisterCommand. "/suu"
 -- alone opens the settings window; "/suu help" lists the commands in
 -- registration order. A command registered with an owner (a module) is
--- removed again with ns.UnregisterCommands(owner).
+-- removed again with ns.UnregisterCommands(owner). `args`, optional: the
+-- words that can follow it (a list, or a function returning one), for the
+-- chat's command palette.
 --------------------------------------------------------------------------------
 
 local commands, order = {}, {}
 
-function ns.RegisterCommand(name, help, fn, owner)
+function ns.RegisterCommand(name, help, fn, owner, args)
     name = name:lower()
     assert(not commands[name], "SuuUI: the command /suu " .. name .. " already exists")
-    commands[name] = { help = help, fn = fn, owner = owner }
+    commands[name] = { help = help, fn = fn, owner = owner, args = args }
     order[#order + 1] = name
+end
+
+-- Every /suu subcommand in registration order: { { name, help, args } },
+-- args a list of words (or nil).
+function ns.Commands()
+    local out = {}
+    for _, name in ipairs(order) do
+        local c = commands[name]
+        local args = c.args
+        if type(args) == "function" then
+            local ok, list = pcall(args)
+            args = ok and type(list) == "table" and list or nil
+        end
+        out[#out + 1] = { name = name, help = c.help, args = args }
+    end
+    return out
 end
 
 function ns.UnregisterCommands(owner)
