@@ -247,6 +247,7 @@ API.UI.StanceBar = UI.StanceBar
 API.UI.TotemBar = UI.TotemBar -- 0.17: TotemBar(parent, { name, label, onLayout }) -> a shaman's totem bar: SetButtonSize(px), SetEnabled(on), header
 API.UI.DurationTextBinding = UI.DurationTextBinding -- 0.17: DurationTextBinding(fontString[, expiringSeconds]) -> b:SetDuration(d), b:SetEnabled(on)
 API.UI.CooldownTracker = UI.CooldownTracker
+API.UI.ResourceBar = UI.ResourceBar -- 0.17: your power, combo points and a druid's mana in forms
 API.UI.TrackerSound = UI.TrackerSound -- "chime", "ping", "proc" or "warning" (anything else plays nothing)
 API.UI.MakeModal = UI.MakeModal -- a panel centred over a dimmed screen
 API.UI.ScrollArea = UI.ScrollArea -- 0.9: ScrollArea(parent[, bar]) -> a mouse-wheel scroll frame, content in .child, a thin bar `bar` px right of it while it overflows

@@ -7,8 +7,9 @@
 -- A built-in module written against the public API only.
 --
 -- Placement (2560x1440 reference): centred, space-3 above your cast bar
--- (its bottom 322px above the bottom edge), rows growing upward: Utility,
--- Essential, then the timers.
+-- (its bottom 322px above the bottom edge), rows growing upward: the
+-- resource bar (your power and combo points, as wide as the cast bar),
+-- Utility, Essential, then the timers.
 --
 -- Blizzard's own Cooldown Manager isn't used: its CVar is switched off while
 -- this module runs, so the two never show together.
@@ -39,6 +40,17 @@ local M = SuuUI.RegisterModule({
         -- this module switched Blizzard's Cooldown Manager off (its CVar), so
         -- turning the module off switches it back on
         viewerOff = false,
+        -- the resource bar under the rows (design B): your power, combo
+        -- points, a druid's mana in forms; as wide as your cast bar
+        resource = "both",          -- "off", "power" or "both" (with points)
+        resourceWidth = "cast",     -- "cast" (your cast bar's) or "own"
+        resourceOwnWidth = 340,
+        resourcePoints = "over",    -- combo points "over" or "under" the bar
+        resourceHeight = 14,
+        resourceNumber = "value",   -- "none", "value" or "pct"
+        resourceLow = true,         -- amber under 25% (mana, energy)
+        resourceDruidMana = true,   -- a mana line under rage or energy
+        resourceOoc = "fade",       -- out of combat: "show", "fade" or "hide"
     },
 })
 
@@ -284,6 +296,29 @@ function M:Apply()
     -- the tracker keeps them: its own copy of this spec's
     t:SetLists(deepCopy(self:Lists(self.spec)))
     self:ApplyVisibility()
+end
+
+-- Your cast bar's width (the cast bars module's setting), or the design's.
+local function castWidth()
+    local cast = SuuUI.GetModule("castbars")
+    return cast and cast:Get("playerWidth") or 340
+end
+
+-- The resource bar: its options, then the block lays out around it.
+function M:ApplyResource()
+    local r = self.resource
+    r:SetOptions({
+        show = self:Get("resource"),
+        width = self:Get("resourceWidth") == "own" and self:Get("resourceOwnWidth") or castWidth(),
+        points = self:Get("resourcePoints"),
+        height = self:Get("resourceHeight"),
+        number = self:Get("resourceNumber"),
+        low = self:Get("resourceLow"),
+        druidMana = self:Get("resourceDruidMana"),
+        ooc = self:Get("resourceOoc"),
+    })
+    if self:Get("resource") == "off" then r:Stop() else r:Start() end
+    self.tracker:Layout()
 end
 
 -- Where and when it shows: nothing to rebuild.
@@ -2569,6 +2604,11 @@ local function buildEditor(parent)
     return f
 end
 
+local function resourceOff()
+    if M:Get("resource") == "off" then return true, "Turn the resource bar on first." end
+    return false
+end
+
 local SECTION = {
     id = "cooldowns", label = "Cooldown Manager", category = "Frames", order = 26,
     groups = {
@@ -2586,6 +2626,43 @@ local SECTION = {
               description = "After Essential keeps the block two rows tall (the healer layout)." },
             { key = "readyPop", label = "Pop when ready", control = "toggle", description = "A cooldown coming off cooldown pops with the arcane flash." },
             { key = "procHighlight", label = "Proc highlight", control = "toggle", combat = true, description = "Procs wear the arcane edge and glow." },
+        } },
+        { title = "Resource bar", description = "Your mana, rage or energy under the icons, as wide as your cast bar: bar, cast bar and swing timer make one column. It moves with the Cooldown Manager.", rows = {
+            { key = "resource", label = "Resource bar", control = "segmented", combat = true,
+              options = { { value = "off", label = "Off" }, { value = "power", label = "Power" }, { value = "both", label = "Power + points" } },
+              description = "Combo points for rogues, and druids in cat form." },
+            { key = "resourceWidth", label = "Width", control = "segmented", combat = true, disabled = resourceOff,
+              options = { { value = "cast", label = "Cast bar" }, { value = "own", label = "Own" } },
+              description = "As your cast bar (Cast & swing bars › Width), or your own." },
+            { key = "resourceOwnWidth", label = "Own width", control = "slider", min = 160, max = 400, step = 10, unit = "px", combat = true,
+              disabled = function()
+                  if M:Get("resource") == "off" then return resourceOff() end
+                  if M:Get("resourceWidth") ~= "own" then return true, "Follows the cast bar's width." end
+                  return false
+              end },
+            { key = "resourcePoints", label = "Combo points", control = "segmented", combat = true,
+              options = { { value = "over", label = "Over the bar" }, { value = "under", label = "Under it" } },
+              disabled = function()
+                  if M:Get("resource") ~= "both" then return true, "Turn on Power + points first." end
+                  if CLASS ~= "ROGUE" and CLASS ~= "DRUID" then return true, "Only rogues and druids use combo points." end
+                  return false
+              end },
+            { key = "resourceHeight", label = "Height", control = "stepper", min = 8, max = 20, step = 1, unit = "px", combat = true, disabled = resourceOff },
+            { key = "resourceNumber", label = "Number", control = "segmented", combat = true, disabled = resourceOff,
+              options = { { value = "none", label = "Hidden" }, { value = "value", label = "Value" }, { value = "pct", label = "Percent" } },
+              description = "Written by the game: SuuUI never sees the amount." },
+            { key = "resourceLow", label = "Amber when low", control = "toggle", combat = true, disabled = resourceOff,
+              description = "Mana and energy under 25%." },
+            { key = "resourceDruidMana", label = "Druid mana in forms", control = "toggle", combat = true,
+              description = "A thin mana line under rage or energy.",
+              disabled = function()
+                  if M:Get("resource") == "off" then return resourceOff() end
+                  if CLASS ~= "DRUID" then return true, "Only druids change forms." end
+                  return false
+              end },
+            { key = "resourceOoc", label = "Out of combat", control = "segmented", combat = true, disabled = resourceOff,
+              options = { { value = "show", label = "Show" }, { value = "fade", label = "Fade" }, { value = "hide", label = "Hide" } },
+              description = "Fade rests at 60%. Hidden keeps its place, so the icons don't jump when a fight starts." },
         } },
     },
 }
@@ -2610,9 +2687,24 @@ function M:OnEnable()
     -- spec seen the first time starts from its preset (M:Setup).
     self.spec, self.points = self:DetectSpec()
     self:MigrateLists() -- before anything reads a setup (that would create it from the preset)
+    -- the resource bar under the rows, part of the same frame in edit mode
+    if not self.resource then
+        self.resource = UI.ResourceBar(self.tracker, { name = "SuuUIResourceBar" })
+        self.resource.onResize = function() self.tracker:Layout() end
+        self.tracker:SetFooter(self.resource)
+    end
     self:RegisterMover(self.tracker, { key = "position", label = "Cooldown Manager" })
     self:RegisterSettings(SECTION)
     self:Apply()
+    self:ApplyResource()
+    for _, key in ipairs({ "resource", "resourceWidth", "resourceOwnWidth", "resourcePoints", "resourceHeight",
+                           "resourceNumber", "resourceLow", "resourceDruidMana", "resourceOoc" }) do
+        self:Watch(key, function() self:ApplyResource() end)
+    end
+    -- as wide as your cast bar, live
+    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+        if namespace == "castbars" and key == "playerWidth" then self:ApplyResource() end
+    end)
     for _, key in ipairs({ "setups", "essentialSize", "utilityInline", "readyPop", "procHighlight" }) do
         self:Watch(key, function() self:Apply() end)
     end
@@ -2646,6 +2738,7 @@ function M:OnDisable()
         self.tracker:Stop()
         UI.SetVisibility(self.tracker, "hidden")
     end
+    if self.resource then self.resource:Stop() end
     if self:Get("viewerOff") then
         self:Set("viewerOff", false)
         self:RunOutOfCombat("viewer", function()

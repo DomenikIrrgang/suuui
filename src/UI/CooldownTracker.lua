@@ -12,6 +12,8 @@
 --                         -- debuffs "target" unless set)
 --   t:Stop(), t:Start()   -- 0.9: off (no events, aura sounds or containers in
 --                         -- use) and on again; a new tracker starts running
+--   t:SetFooter(frame)    -- 0.17: a frame under the rows (the resource bar);
+--                         -- t:Layout() when it resizes
 --
 -- Cooldowns are SuuUI's own icons: whether a cooldown runs stays readable in
 -- combat, and its sweep comes from the engine's duration object. Each entry
@@ -1242,8 +1244,12 @@ function TR:Layout()
     local half = math.max(leftW, rightW) + S["space-4"]
     local timersW = (self.hasLeft or self.hasRight) and (half * 2 + 1) or 0
 
-    local width = math.max(timersW, bottomW, inline and 0 or utilW, aura)
-    local y = 0
+    -- the footer (the resource bar) at the bottom, the rows space-4 over it
+    local footer = self.footer
+    local footW, footH = 0, 0
+    if footer and footer:IsShown() then footW, footH = footer:GetWidth(), footer:GetHeight() end
+    local width = math.max(timersW, bottomW, inline and 0 or utilW, aura, footW)
+    local y = footH > 0 and (footH + S["space-4"]) or 0
     local function place(cells, gap, rowW, bottomY, startX)
         local x = startX or (width - rowW) / 2
         for _, c in ipairs(cells) do
@@ -1489,6 +1495,20 @@ end
 function TR:SetLists(lists)
     self.lists = lists
     self.rebuild = true
+end
+
+-- 0.17: a frame under the rows, part of the block (the resource bar): it sits
+-- centred at the bottom, the rows space-4 over it, the block at least as
+-- wide. Lay out again when it resizes or hides (t:Layout()); nil takes it away.
+function TR:SetFooter(frame)
+    if self.footer and self.footer ~= frame then self.footer:Hide() end
+    self.footer = frame
+    if frame then
+        frame:SetParent(self)
+        frame:ClearAllPoints()
+        frame:SetPoint("BOTTOM", self, "BOTTOM", 0, 0)
+    end
+    self:Layout()
 end
 
 function TR:SetOptions(opts)
