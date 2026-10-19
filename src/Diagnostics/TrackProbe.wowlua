@@ -1,4 +1,4 @@
--- Diagnostics/TrackProbe.lua
+-- Diagnostics/TrackProbe.wowlua
 -- "/suu probe track": can SuuUI's own tracker work in combat? (plan step 1.7a)
 --
 -- 1. Capture (out of combat): your buffs are read while that is allowed (any
@@ -19,19 +19,30 @@
 --   /suu probe track new    capture again
 --   /suu probe track off    hide the panel
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import every from "wowlua:timer"
+import print from "/Core/Init"
+import tokens as T from "/Core/Tokens"
+import root from "/Core/Root"
+import * as DB from "/Core/DB"
+import * as Events from "/Core/Events"
+import * as fault from "/Core/Fault"
+import panel as uiPanel from "/UI/Panel"
+import type Panel from "/UI/Panel"
+import text as uiText from "/UI/Text"
+import type Text from "/UI/Text"
+import auraContainer from "/UI/Auras"
 
-local UI, T, Events = ns.UI, ns.Tokens, ns.Events
 local S = T.space
 
-local TP = {}
-ns.TrackProbe = TP
-
-local isSecret = issecretvalue or function() return false end
+type Map = { [any]: any }
+type Aura = { id: number, name: string }
+type RowDef = { label: string, unit: string, filter: string[], include?: number }
+type Row = { def: RowDef, count: Text, container: any }
 
 -- Reactive abilities by class: usable only after a dodge, parry or block, or
 -- below 20% health.
-local REACTIVE = {
+local REACTIVE: { [string]: string[] } = {
     WARRIOR = { "Overpower", "Revenge", "Execute" },
     ROGUE = { "Riposte" },
     HUNTER = { "Mongoose Bite", "Counterattack" },
@@ -40,7 +51,7 @@ local REACTIVE = {
 
 -- Debuff spells by class whose aura carries the spell's own ID. The first
 -- one you know becomes the test debuff.
-local DEBUFFS = {
+local DEBUFFS: { [string]: string[] } = {
     DRUID = { "Moonfire", "Faerie Fire", "Insect Swarm", "Rake", "Rip", "Demoralizing Roar" },
     HUNTER = { "Hunter's Mark", "Serpent Sting", "Scorpid Sting", "Viper Sting", "Wing Clip" },
     WARRIOR = { "Rend", "Sunder Armor", "Demoralizing Shout", "Thunder Clap", "Hamstring" },
@@ -52,16 +63,18 @@ local DEBUFFS = {
     PALADIN = { "Judgement of the Crusader", "Hammer of Justice" },
 }
 
-local panel, rows, statusText, verdictText
-local ticker
+local panel: Panel? = nil
+local rows: Row[] = {}
+local statusText: Text? = nil
+local verdictText: Text? = nil
+local ticker: TickerHandle? = nil
 
-local function store()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.track = SuuUIProbe.track or {}
-    return SuuUIProbe.track
+local function store(): Map
+    DB.probe.track = DB.probe.track or {}
+    return DB.probe.track
 end
 
-local function state(v)
+local function state(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     return tostring(v)
@@ -72,10 +85,10 @@ end
 --------------------------------------------------------------------------------
 
 -- The auras on `unit` while they can be read; nil if any read is secret.
-local function readAuras(unit, filter)
-    local out = {}
+local function readAuras(unit: string, filter: string): Aura[]?
+    local out: Aura[] = {}
     for i = 1, 40 do
-        local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
+        local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex :: any, unit, i, filter)
         if not ok or isSecret(a) then return nil end
         if not a then break end
         if isSecret(a.spellId) or isSecret(a.name) then return nil end
@@ -85,9 +98,9 @@ local function readAuras(unit, filter)
 end
 
 -- Your class's debuff spells you know, highest rank first found by name.
-local function knownDebuffs()
-    local _, class = UnitClass("player")
-    local out = {}
+local function knownDebuffs(): Aura[]
+    local _, class: any = UnitClass("player")
+    local out: Aura[] = {}
     for _, name in ipairs(DEBUFFS[class] or {}) do
         local info = C_Spell.GetSpellInfo(name)
         local id = info and info.spellID
@@ -96,11 +109,11 @@ local function knownDebuffs()
     return out
 end
 
-function TP.Capture()
+export function capture(): boolean
     local t = store()
     local buffs = readAuras("player", "HELPFUL")
     if not buffs then
-        ns.Print("Track probe: auras can't be read in combat (the open world too). Capture out of combat.")
+        print("Track probe: auras can't be read in combat (the open world too). Capture out of combat.")
         return false
     end
     local debuffs = knownDebuffs()
@@ -109,18 +122,18 @@ function TP.Capture()
     t.pickDebuff = debuffs[1] and debuffs[1].id or nil
     t.capturedAt = date("%Y-%m-%d %H:%M")
     t.samples, t.summary, t.glowEvents = {}, {}, {}
-    local function names(list)
-        local n = {}
+    local function names(list: Aura[]): string
+        local n: string[] = {}
         for _, a in ipairs(list) do n[#n + 1] = ("%s (%d)"):format(a.name, a.id) end
         return #n > 0 and table.concat(n, ", ") or "none"
     end
-    ns.Print(("Track probe captured buffs: %s"):format(names(buffs)))
-    ns.Print(("Track probe: your debuff spells it knows: %s"):format(names(debuffs)))
-    if #buffs < 2 then ns.Print("Track probe: have at least two buffs on you, or the buff test can't tell anything.") end
+    print(("Track probe captured buffs: %s"):format(names(buffs)))
+    print(("Track probe: your debuff spells it knows: %s"):format(names(debuffs)))
+    if #buffs < 2 then print("Track probe: have at least two buffs on you, or the buff test can't tell anything.") end
     if debuffs[1] then
-        ns.Print(("Track probe: test debuff is %s. On a mob, use it plus at least one other debuff."):format(debuffs[1].name))
+        print(("Track probe: test debuff is %s. On a mob, use it plus at least one other debuff."):format(debuffs[1].name))
     else
-        ns.Print("Track probe: no known debuff spell for your class; the debuff test will stay empty.")
+        print("Track probe: no known debuff spell for your class; the debuff test will stay empty.")
     end
     return true
 end
@@ -134,7 +147,7 @@ end
 -- container's width, if the engine sizes it to its icons; else "locked".
 local ICON = 24 -- icon-md
 local GAP = 4   -- space-2
-local function shownCount(c)
+local function shownCount(c: any): (any, string?)
     if not c then return "n/a" end
     local n, locked = 0, false
     for _, child in ipairs({ c.container:GetChildren() }) do
@@ -151,23 +164,23 @@ local function shownCount(c)
     return "locked"
 end
 
-local function nameOf(list, id)
+local function nameOf(list: Aura[]?, id: number?): string
     for _, a in ipairs(list or {}) do if a.id == id then return a.name end end
     return id and tostring(id) or "none"
 end
 
-local function buildPanel()
+local function buildPanel(): Panel
     local t = store()
-    local p = UI.Panel(ns.Root, { title = "Track probe", width = 520, height = 330 })
+    local p = uiPanel(root, { title = "Track probe", width = 520, height = 330 })
     p:SetFrameStrata("HIGH")
-    p:SetPoint("LEFT", ns.Root, "LEFT", 60, 60)
+    p:SetPoint("LEFT", root, "LEFT", 60, 60)
     p:EnableMouse(true)
     p:SetMovable(true)
     p:RegisterForDrag("LeftButton")
     p:SetScript("OnDragStart", p.StartMoving)
     p:SetScript("OnDragStop", p.StopMovingOrSizing)
 
-    local defs = {
+    local defs: RowDef[] = {
         { label = "Your buffs, all", unit = "player", filter = { "HELPFUL" } },
         { label = "Your buffs, only " .. nameOf(t.buffs, t.pickBuff), unit = "player", filter = { "HELPFUL" }, include = t.pickBuff },
         { label = "Your debuffs on the target, all", unit = "target", filter = { "HARMFUL", "PLAYER" } },
@@ -176,15 +189,15 @@ local function buildPanel()
     rows = {}
     for i, d in ipairs(defs) do
         local y = -(56 + (i - 1) * 52)
-        local label = UI.Text(p, "caption", "ink-muted")
+        local label = uiText(p, "caption", "ink-muted")
         label:SetPoint("TOPLEFT", S["space-5"], y)
         label:SetValue(d.label)
-        local count = UI.Text(p, "label", "ink")
+        local count = uiText(p, "label", "ink")
         count:SetPoint("TOPRIGHT", -S["space-5"], y)
         local holder = CreateFrame("Frame", nil, p)
         holder:SetSize(480, 24)
         holder:SetPoint("TOPLEFT", S["space-5"], y - 16)
-        local c = (d.include or not d.label:find("only")) and UI.AuraContainer(holder, d.unit, {
+        local c = (d.include or not d.label:find("only")) and auraContainer(holder, d.unit, {
             size = "icon-md", anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" }, lineWidth = 480,
             groups = { { key = "g", filter = d.filter, max = 12, include = d.include and { d.include } or nil } },
         }) or nil
@@ -192,13 +205,15 @@ local function buildPanel()
         rows[i] = { def = d, count = count, container = c }
     end
 
-    statusText = UI.Text(p, "caption", "ink-muted")
-    statusText:SetPoint("BOTTOMLEFT", S["space-5"], 40)
-    verdictText = UI.Text(p, "caption", "ink")
-    verdictText:SetWordWrap(true)
-    verdictText:SetJustifyH("LEFT")
-    verdictText:SetFixedWidth(480)
-    verdictText:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
+    local status = uiText(p, "caption", "ink-muted")
+    statusText = status
+    status:SetPoint("BOTTOMLEFT", S["space-5"], 40)
+    local verdictLine = uiText(p, "caption", "ink")
+    verdictText = verdictLine
+    verdictLine:SetWordWrap(true)
+    verdictLine:SetJustifyH("LEFT")
+    verdictLine:SetFixedWidth(480)
+    verdictLine:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
     return p
 end
 
@@ -206,7 +221,7 @@ end
 -- Sampling
 --------------------------------------------------------------------------------
 
-local function context()
+local function context(): string
     local _, kind = IsInInstance()
     local where = (kind == "party" or kind == "raid") and kind or "world"
     local fight = InCombatLockdown() and "combat" or "calm"
@@ -214,16 +229,16 @@ local function context()
     return where .. " " .. fight .. boss
 end
 
-local function aurasReadable()
-    local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", 1, "HELPFUL")
+local function aurasReadable(): string
+    local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex :: any, "player", 1, "HELPFUL")
     if not ok then return "error" end
     if isSecret(a) or (a and isSecret(a.spellId)) then return "secret" end
     return "readable"
 end
 
-local function reactiveStates()
-    local _, class = UnitClass("player")
-    local out = {}
+local function reactiveStates(): { [string]: string }
+    local _, class: any = UnitClass("player")
+    local out: { [string]: string } = {}
     for _, name in ipairs(REACTIVE[class] or {}) do
         local info = C_Spell.GetSpellInfo(name)
         local id = info and info.spellID
@@ -236,7 +251,7 @@ local function reactiveStates()
 end
 
 -- Per context: the highest count each row reached and whether reads were secret.
-local function record(counts)
+local function record(counts: any[])
     local t = store()
     t.summary = t.summary or {}
     t.samples = t.samples or {}
@@ -263,7 +278,7 @@ local function record(counts)
     end
 end
 
-local function verdict(all, only, what)
+local function verdict(all: any, only: any, what: string): string
     if type(all) ~= "number" or type(only) ~= "number" then return what .. ": counts unreadable" end
     if all < 2 then return what .. ": need 2+ to tell" end
     if only <= 1 then return what .. ": filtered (" .. only .. " of " .. all .. ")" end
@@ -273,21 +288,23 @@ end
 
 local function tick()
     if not (panel and panel:IsShown()) then return end
-    local counts, methods = {}, {}
+    local counts: any[], methods: { [number]: string? } = {}, {}
     for i, row in ipairs(rows) do
         counts[i], methods[i] = shownCount(row.container)
         row.count:SetValue(tostring(counts[i]) .. (methods[i] and " (by width)" or ""))
     end
     store().countMethod = methods[1] or methods[3] or "children"
     record(counts)
-    statusText:SetValue(("%s · auras %s · %s"):format(context(), aurasReadable(), date("%H:%M:%S")))
-    verdictText:SetValue(verdict(counts[1], counts[2], "Buffs") .. "   " .. verdict(counts[3], counts[4], "Target debuffs"))
+    -- (both exist once the panel does)
+    local status, verdictLine = statusText :: Text, verdictText :: Text
+    status:SetValue(("%s · auras %s · %s"):format(context(), aurasReadable(), date("%H:%M:%S")))
+    verdictLine:SetValue(verdict(counts[1], counts[2], "Buffs") .. "   " .. verdict(counts[3], counts[4], "Target debuffs"))
 end
 
 -- The game's proc glow: does the event come, and is its spell ID readable?
 local GLOW = "SPELL_ACTIVATION_OVERLAY_GLOW_SHOW"
 local glowExists = not (C_EventUtils and C_EventUtils.IsEventValid) or C_EventUtils.IsEventValid(GLOW)
-local glowOk = glowExists and pcall(Events.OnGame, GLOW, function(_, spellID)
+local glowOk = glowExists and pcall(Events.onGame, GLOW, function(_, spellID)
     if not (panel and panel:IsShown()) then return end
     local t = store()
     t.glowEvents = t.glowEvents or {}
@@ -300,20 +317,20 @@ end, "TrackProbe")
 -- The command
 --------------------------------------------------------------------------------
 
-function TP.Command(arg)
+export function command(arg: string?)
     if arg == "off" then
         if panel then panel:Hide() end
         return
     end
     local t = store()
     if arg == "new" or not t.buffs then
-        if not TP.Capture() then return end
+        if not capture() then return end
         if panel then panel:Hide(); panel = nil end -- rebuilt with the new test spells
     end
     panel = panel or buildPanel()
     panel:Show()
     t.glowEventExists = glowOk and true or false
-    ticker = ticker or C_Timer.NewTicker(1, function() ns.Fault.Call("TrackProbe", tick) end)
+    ticker = ticker or every(1, function() fault.call("TrackProbe", tick) end)
     tick()
-    ns.Print("Track probe running. Fight in a dungeon with the test buff and debuff up, then /reload to save the results.")
+    print("Track probe running. Fight in a dungeon with the test buff and debuff up, then /reload to save the results.")
 end

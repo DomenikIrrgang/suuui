@@ -1,4 +1,4 @@
--- Diagnostics/LfgProbe.lua
+-- Diagnostics/LfgProbe.wowlua
 -- "/suu probe lfg": what ForeverLFG (the group finder library: the game's
 -- tool and the public chat channels as one list) can rely on.
 --   The tool: its categories and activities (Dungeons, Quests & Zones,
@@ -28,18 +28,29 @@
 -- /reloads until "/suu probe lfg stop" (the parser is tuned on them).
 -- Saved in SuuUIProbe.lfg on /reload; only on this computer.
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import lfg as foreverLFG from "foreverlfg"
+import type ForeverLFG from "foreverlfg"
+import onLogin from "wowlua:lifecycle"
+import hookScript from "wowlua:hooks"
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
 
-local LP = {}
-ns.LfgProbe = LP
+type Record = { [string]: any }
 
-local isSecret = issecretvalue or function() return false end
+-- the probe's buttons, and the open test's state (kept across runs)
+local button: Button? = nil
+local whoButton: Button? = nil
+local delistButton: Button? = nil
+local openArmed, openHooked = false, false
+
 local MAX_LINES = 4000
 
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "<secret>" end
     if type(v) ~= "table" then return tostring(v) end
-    local parts = {}
+    local parts: string[] = {}
     for k, x in pairs(v) do
         local s = isSecret(x) and "<secret>" or (type(x) == "table" and "{...}" or tostring(x))
         parts[#parts + 1] = tostring(k) .. "=" .. s
@@ -48,27 +59,26 @@ local function show(v)
     return "{" .. table.concat(parts, ", ") .. "}"
 end
 
-local function names(t)
-    local out = {}
+local function names(t: any): string[]
+    local out: string[] = {}
     if type(t) ~= "table" then return out end
     for k, v in pairs(t) do if type(v) == "function" then out[#out + 1] = k end end
     table.sort(out)
     return out
 end
 
-local function store()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.lfg = SuuUIProbe.lfg or {}
-    return SuuUIProbe.lfg
+local function store(): Record
+    DB.probe.lfg = DB.probe.lfg or {}
+    return DB.probe.lfg
 end
 
 -- what a search result holds (compact), and its member counts
-local function result(lfg, id)
+local function result(lfg: any, id: any): string
     local ok, info = pcall(lfg.GetSearchResultInfo, id)
     if not ok then return "error: " .. tostring(info) end
     if not info then return "nil" end
     if isSecret(info) then return "<secret table>" end
-    local acts = {}
+    local acts: string[] = {}
     for _, a in ipairs(info.activityIDs or { info.activityID }) do acts[#acts + 1] = tostring(a) end
     local okC, counts = pcall(lfg.GetSearchResultMemberCounts, id)
     local need = ""
@@ -80,7 +90,7 @@ local function result(lfg, id)
         show(info.questID), show(info.name), show(info.comment), need)
 end
 
-function LP.Snapshot()
+export function snapshot()
     local s = store()
     s.at = date("%Y-%m-%d %H:%M:%S")
     local lfg = C_LFGList
@@ -91,9 +101,9 @@ function LP.Snapshot()
     local okCats, cats = pcall(lfg.GetAvailableCategories)
     for _, cat in ipairs(okCats and cats or {}) do
         local okI, info = pcall(lfg.GetLfgCategoryInfo, cat)
-        local entry = { id = cat, info = show(okI and info or nil), activities = {} }
+        local entry: Record = { id = cat, info = show(okI and info or nil), activities = {} :: string[] }
         -- the game's way: per activity group, then the ones in none
-        local acts, seen = {}, {}
+        local acts: number[], seen: { [number]: boolean } = {}, {}
         local okG, groups = pcall(lfg.GetAvailableActivityGroups, cat)
         entry.groups = {}
         for _, g in ipairs(okG and groups or {}) do
@@ -140,7 +150,7 @@ function LP.Snapshot()
 end
 
 -- A search from a timer: nothing you pressed behind it.
-function LP.TimerSearch()
+export function timerSearch()
     local s = store()
     local lfg = C_LFGList
     local okCats, cats = pcall(lfg.GetAvailableCategories)
@@ -166,16 +176,16 @@ function LP.TimerSearch()
             if i > 25 then break end
             t.results[i] = result(lfg, id)
         end
-        ns.Print(("LFG probe: the timer's search %s (%s results); /reload."):format(event == "LFG_LIST_SEARCH_FAILED" and "failed" or "came back", t.count))
+        print(("LFG probe: the timer's search %s (%s results); /reload."):format(event == "LFG_LIST_SEARCH_FAILED" and "failed" or "came back", t.count))
     end)
-    C_Timer.After(2, function()
+    after(2, function()
         local ok, err = pcall(lfg.Search, cat)
         s.timerSearch.call = ok and "called" or ("error: " .. tostring(err))
-        C_Timer.After(10, function()
+        after(10, function()
             if not s.timerSearch.event then
                 f:UnregisterAllEvents()
                 s.timerSearch.event = "nothing came back in 10 seconds"
-                ns.Print("LFG probe: the timer's search got no answer (saved); /reload.")
+                print("LFG probe: the timer's search got no answer (saved); /reload.")
             end
         end)
     end)
@@ -183,7 +193,7 @@ end
 
 -- A click: a search, and your listing saved again unchanged (only if you
 -- have one), each with the game's verdict.
-function LP.ClickTest()
+export function clickTest()
     local s = store()
     local lfg = C_LFGList
     s.clickTest = { blocked = {} }
@@ -198,8 +208,8 @@ function LP.ClickTest()
             t.count = okR and show(count) or "error"
         end
     end)
-    local b = LP.button or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
-    LP.button = b
+    local b = button or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    button = b
     b:SetSize(320, 30)
     b:ClearAllPoints()
     b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
@@ -220,20 +230,20 @@ function LP.ClickTest()
             t.update = "no listing: skipped"
         end
         self:Hide()
-        C_Timer.After(5, function()
+        after(5, function()
             f:UnregisterAllEvents()
-            ns.Print("LFG probe: click test done; /reload.")
+            print("LFG probe: click test done; /reload.")
         end)
     end)
     b:Show()
-    ns.Print("LFG probe: click the button at the top of the screen once.")
+    print("LFG probe: click the button at the top of the screen once.")
 end
 
 -- Searching the tool as the Group Finder opens.
-function LP.OpenTest()
+export function openTest()
     local s = store()
     local lfg = C_LFGList
-    local t = { armed = date("%H:%M:%S"), events = {} }
+    local t: Record = { armed = date("%H:%M:%S"), events = {} :: string[] }
     s.openTest = t
     local f = CreateFrame("Frame")
     for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED", "ADDON_ACTION_BLOCKED",
@@ -245,32 +255,32 @@ function LP.OpenTest()
     local parent = _G.LFGParentFrame
     if not parent then
         t.result = "no LFGParentFrame (open the Group Finder once, then run this again)"
-        ns.Print("LFG probe: open the Group Finder once first, then run it again.")
+        print("LFG probe: open the Group Finder once first, then run it again.")
         return
     end
-    LP.openArmed = true
-    if not LP.openHooked then
-        LP.openHooked = true
-        parent:HookScript("OnShow", function()
-            if not LP.openArmed then return end
-            LP.openArmed = false
+    openArmed = true
+    if not openHooked then
+        openHooked = true
+        hookScript(parent, "OnShow", function()
+            if not openArmed then return end
+            openArmed = false
             local tt = store().openTest
             tt.opened = date("%H:%M:%S")
             local okCats, cats = pcall(lfg.GetAvailableCategories)
             local cat = okCats and cats and cats[1]
             local ok, err = pcall(lfg.Search, cat, 0, 0, nil, false, nil, nil)
             tt.search = ok and "called" or ("error: " .. tostring(err))
-            C_Timer.After(4, function() ns.Print("LFG probe: open test done; /reload.") end)
+            after(4, function() print("LFG probe: open test done; /reload.") end)
         end)
     end
-    ns.Print("LFG probe: now open the Group Finder (press I or use the micro menu).")
+    print("LFG probe: now open the Group Finder (press I or use the micro menu).")
 end
 
 -- The Who search from a click (stage 5).
-function LP.WhoTest()
+export function whoTest()
     local s = store()
     local fl = C_FriendList
-    local t = { blocked = {}, at = date("%H:%M:%S") }
+    local t: Record = { blocked = {} :: string[], at = date("%H:%M:%S") }
     s.who = t
     t.api = {}
     for _, n in ipairs({ "SendWho", "GetNumWhoResults", "GetWhoInfo", "SetWhoToUi", "SortWho", "GetWhoRaceFilters", "AddFriend" }) do
@@ -299,8 +309,8 @@ function LP.WhoTest()
             t.blocked[#t.blocked + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
         end
     end)
-    local b = LP.whoButton or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
-    LP.whoButton = b
+    local b = whoButton or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    whoButton = b
     b:SetSize(320, 30)
     b:ClearAllPoints()
     b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
@@ -313,28 +323,28 @@ function LP.WhoTest()
         local ok, err = pcall(fl.SendWho, "1-60", origin, filters)
         t.send = ok and "called" or ("error: " .. tostring(err))
         self:Hide()
-        C_Timer.After(6, function()
+        after(6, function()
             f:UnregisterAllEvents()
-            ns.Print("Who probe: done; /reload.")
+            print("Who probe: done; /reload.")
         end)
     end)
     b:Show()
-    ns.Print("Who probe: click the button at the top of the screen once.")
+    print("Who probe: click the button at the top of the screen once.")
 end
 
 -- Watch for the game's verdict on what follows.
-local function verdicts(list, seconds)
+local function verdicts(list: string[], seconds: number?)
     local f = CreateFrame("Frame")
     for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "CHANNEL_UI_UPDATE", "CHAT_MSG_CHANNEL_NOTICE",
                          "LFG_LIST_ACTIVE_ENTRY_UPDATE" }) do f:RegisterEvent(e) end
     f:SetScript("OnEvent", function(_, event, a1, a2)
         list[#list + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
     end)
-    C_Timer.After(seconds or 5, function() f:UnregisterAllEvents() end)
+    after(seconds or 5, function() f:UnregisterAllEvents() end)
 end
 
-local function windowsWith(channel)
-    local out = {}
+local function windowsWith(channel: string): number[]
+    local out: number[] = {}
     for i = 1, (NUM_CHAT_WINDOWS or 10) do
         local list = { GetChatWindowChannels(i) }
         for j = 1, #list, 2 do
@@ -346,14 +356,14 @@ end
 
 -- Join LookingForGroup (from your command), then take it off every chat
 -- window: can the library read it without it showing in chat?
-function LP.Join()
+export function join()
     local s = store()
-    local t = { events = {} }
+    local t: Record = { events = {} :: string[] }
     s.join = t
     verdicts(t.events, 6)
-    local ok, err = pcall(JoinChannelByName, "LookingForGroup")
+    local ok, err = pcall(JoinChannelByName :: any, "LookingForGroup")
     t.call = ok and "called" or ("error: " .. tostring(err))
-    C_Timer.After(1.5, function()
+    after(1.5, function()
         local okN, index, name = pcall(GetChannelName, "LookingForGroup")
         t.joined = okN and (tostring(index) .. " " .. tostring(name)) or "error"
         local before = windowsWith("LookingForGroup")
@@ -365,9 +375,9 @@ function LP.Join()
                 t["remove" .. i] = okR and "called" or ("error: " .. tostring(errR))
             end
         end
-        C_Timer.After(1, function()
+        after(1, function()
             t.windowsAfter = table.concat(windowsWith("LookingForGroup"), ",")
-            ns.Print(("LFG probe: LookingForGroup %s, on windows %s, after removing: %s; /reload."):format(t.joined,
+            print(("LFG probe: LookingForGroup %s, on windows %s, after removing: %s; /reload."):format(t.joined,
                 t.windowsBefore ~= "" and t.windowsBefore or "none", t.windowsAfter ~= "" and t.windowsAfter or "none"))
         end)
     end)
@@ -375,34 +385,34 @@ end
 
 -- Leave LookingForGroup, then join it again from a timer (nothing you
 -- pressed behind it, as the library would at login).
-function LP.TimerJoin()
+export function timerJoin()
     local s = store()
-    local t = { events = {} }
+    local t: Record = { events = {} :: string[] }
     s.timerJoin = t
     verdicts(t.events, 8)
     pcall(LeaveChannelByName, "LookingForGroup")
-    C_Timer.After(3, function()
-        local ok, err = pcall(JoinChannelByName, "LookingForGroup")
+    after(3, function()
+        local ok, err = pcall(JoinChannelByName :: any, "LookingForGroup")
         t.call = ok and "called" or ("error: " .. tostring(err))
-        C_Timer.After(2, function()
+        after(2, function()
             local okN, index, name = pcall(GetChannelName, "LookingForGroup")
             t.joined = okN and (tostring(index) .. " " .. tostring(name)) or "error"
             t.windows = table.concat(windowsWith("LookingForGroup"), ",")
-            ns.Print(("LFG probe: joined from a timer: %s (windows %s); /reload."):format(t.joined, t.windows ~= "" and t.windows or "none"))
+            print(("LFG probe: joined from a timer: %s (windows %s); /reload."):format(t.joined, t.windows ~= "" and t.windows or "none"))
         end)
     end)
 end
 
 -- A button whose click removes your listing (you're delisted).
-function LP.Delist()
+export function delist()
     local s = store()
-    local t = { events = {} }
+    local t: Record = { events = {} :: string[] }
     s.delist = t
     local lfg = C_LFGList
     local okH, has = pcall(lfg.HasActiveEntryInfo)
     t.listedBefore = okH and tostring(has) or "error"
-    local b = LP.delistButton or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
-    LP.delistButton = b
+    local b = delistButton or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    delistButton = b
     b:SetSize(320, 30)
     b:ClearAllPoints()
     b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
@@ -413,44 +423,44 @@ function LP.Delist()
         local ok, err = pcall(lfg.RemoveListing)
         t.call = ok and "called" or ("error: " .. tostring(err))
         self:Hide()
-        C_Timer.After(2, function()
-            local okA, after = pcall(lfg.HasActiveEntryInfo)
-            t.listedAfter = okA and tostring(after) or "error"
-            ns.Print(("LFG probe: listed before %s, after %s; /reload."):format(t.listedBefore, t.listedAfter))
+        after(2, function()
+            local okA, listed = pcall(lfg.HasActiveEntryInfo)
+            t.listedAfter = okA and tostring(listed) or "error"
+            print(("LFG probe: listed before %s, after %s; /reload."):format(t.listedBefore, t.listedAfter))
         end)
     end)
     b:Show()
-    ns.Print("LFG probe: click the button at the top of the screen to delist yourself.")
+    print("LFG probe: click the button at the top of the screen to delist yourself.")
 end
 
 -- Forever's language preference (its "preferred play settings", which
 -- shard players by language): what an addon can read of it, plus the
 -- client's own locale and the tool's language filters.
-function LP.Lang()
+export function lang()
     local s = store()
-    local t = {}
+    local t: Record = {}
     s.lang = t
     t.clientLocale = tostring(GetLocale and GetLocale())
     local acc = C_AccountServices
     t.api = acc and "C_AccountServices" or "missing"
-    local function read(label)
+    local function read(label: string)
         if not acc then return end
-        local ok, loaded, localeID, dcID, localeDate, dcDate, cooldown = pcall(acc.GetPreferredPlaySettings)
+        local ok, loaded, localeID, dcID, localeDate, _dcDate, cooldown = pcall(acc.GetPreferredPlaySettings)
         t[label] = ok and ("loaded=%s locale=%s datacenter=%s localeChanged=%s cooldownDays=%s"):format(tostring(loaded),
             tostring(localeID), tostring(dcID), tostring(localeDate), tostring(cooldown)) or ("error: " .. tostring(loaded))
     end
     read("before")
     if acc then
-        local okL, ids, names = pcall(acc.GetPreferredLocales)
+        local okL, ids, localeNames = pcall(acc.GetPreferredLocales)
         t.locales = {}
         if okL and type(ids) == "table" then
-            for i, id in ipairs(ids) do t.locales[#t.locales + 1] = tostring(id) .. " " .. tostring(names and names[i]) end
+            for i, id in ipairs(ids :: any[]) do t.locales[#t.locales + 1] = tostring(id) .. " " .. tostring(localeNames and localeNames[i]) end
         else
             t.locales[1] = "error: " .. tostring(ids)
         end
         local okD, dids, dnames = pcall(acc.GetPreferredDatacenterLocalities)
         t.datacenters = {}
-        for i, id in ipairs(okD and type(dids) == "table" and dids or {}) do t.datacenters[#t.datacenters + 1] = tostring(id) .. " " .. tostring(dnames and dnames[i]) end
+        for i, id in ipairs((okD and type(dids) == "table" and dids or {}) :: any[]) do t.datacenters[#t.datacenters + 1] = tostring(id) .. " " .. tostring(dnames and dnames[i]) end
         local okF, canLocale, canDC = pcall(acc.GetPreferredPlaySettingsFeatures)
         t.features = okF and ("canChangeLocale=%s canChangeDatacenter=%s"):format(tostring(canLocale), tostring(canDC)) or "error"
     end
@@ -469,17 +479,17 @@ function LP.Lang()
         self:UnregisterAllEvents()
         t.event = "PREFERRED_PLAY_SETTINGS_UPDATED"
         read("after")
-        ns.Print("LFG probe: language preference read; /reload.")
+        print("LFG probe: language preference read; /reload.")
     end)
     if acc and acc.RequestPreferredPlaySettings then
         local ok, started = pcall(acc.RequestPreferredPlaySettings)
         t.request = ok and tostring(started) or ("error: " .. tostring(started))
     end
-    C_Timer.After(6, function()
+    after(6, function()
         if not t.event then
             f:UnregisterAllEvents()
             read("after6s")
-            ns.Print("LFG probe: language preference: no event in 6 seconds (saved); /reload.")
+            print("LFG probe: language preference: no event in 6 seconds (saved); /reload.")
         end
     end)
 end
@@ -487,23 +497,23 @@ end
 -- The library live (until the Group Finder module starts it): its events
 -- in chat (short) and in SuuUIProbe.lfg.live (all), the merged list on
 -- request, a tool search from your command.
-local liveHooked
-function LP.Live()
-    local LFG = ns.LFG
+local liveHooked = false
+export function live()
+    local LFG: ForeverLFG = foreverLFG
     local s = store()
     s.live = s.live or {}
     local log = s.live
-    local function note(text, show)
+    local function note(text: string, loud: boolean)
         log[#log + 1] = date("%H:%M:%S ") .. text
         while #log > 2000 do table.remove(log, 1) end
-        if show then ns.Print("LFG: " .. text) end
+        if loud then print("LFG: " .. text) end
     end
-    local function describe(e)
-        local roles = {}
+    local function describe(e: any): string
+        local roles: string[] = {}
         for side, set in pairs(e.roles or {}) do
             for role, v in pairs(set) do roles[#roles + 1] = side:sub(1, 1) .. ":" .. role .. (type(v) == "number" and v or "") end
         end
-        local src = {}
+        local src: string[] = {}
         for k in pairs(e.sources) do src[#src + 1] = k end
         table.sort(src)
         return ("%s [%s] %s %s roles %s need %s (%s) conf %.2f \"%s\""):format(e.key, table.concat(src, "+"), e.intent or "?",
@@ -528,27 +538,27 @@ function LP.Live()
     note(("started: languages %s"):format(table.concat(LFG.Languages(), ",")), true)
 end
 
-function LP.Entries()
-    local LFG = ns.LFG
+export function entries()
+    local LFG: ForeverLFG = foreverLFG
     local list = LFG.Entries()
     local st = LFG.Chat.stats or {}
-    ns.Print(("LFG: %d entries; chat lines seen %d, secret %d, channel off %d, not group %d, low confidence %d, entries %d, errors %d%s"):format(
+    print(("LFG: %d entries; chat lines seen %d, secret %d, channel off %d, not group %d, low confidence %d, entries %d, errors %d%s"):format(
         #list, st.seen or 0, st.secret or 0, st.channelOff or 0, st.nothing or 0, st.lowConfidence or 0, st.entries or 0,
         st.errors or 0, LFG.Chat.lastError and (" (" .. LFG.Chat.lastError .. ")") or ""))
     for i, e in ipairs(list) do
-        if i > 15 then ns.Print("...") break end
-        local src = {}
+        if i > 15 then print("...") break end
+        local src: string[] = {}
         for k in pairs(e.sources) do src[#src + 1] = k end
-        ns.Print(("  %s [%s] %s %s need %s"):format(e.key, table.concat(src, "+"), e.intent or "?",
+        print(("  %s [%s] %s %s need %s"):format(e.key, table.concat(src, "+"), e.intent or "?",
             table.concat(e.activities, ","), tostring(e.need)))
     end
 end
 
 -- The recorder: public chat as it arrives.
-local recorder
+local recorder: Frame? = nil
 local CHAT_EVENTS = { "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL" }
 
-local function record(event, text, author, _, channelName, _, _, _, _, channelBase)
+local function recordLine(event: string, text: any, author: any, _: any, channelName: any, _: any, _: any, _: any, _: any, channelBase: any)
     local s = store()
     local r = s.record
     if not (r and r.on) then return end
@@ -572,58 +582,57 @@ local function arm()
     if recorder then return end
     recorder = CreateFrame("Frame")
     for _, e in ipairs(CHAT_EVENTS) do recorder:RegisterEvent(e) end
-    recorder:SetScript("OnEvent", function(_, event, ...) record(event, ...) end)
+    recorder:SetScript("OnEvent", function(_, event, ...) recordLine(event, ...) end)
 end
 
-function LP.Record(on)
+export function record(on: boolean)
     local s = store()
     s.record = s.record or { lines = {} }
     s.record.on = on and true or false
     if on then
         s.record.since = s.record.since or date("%Y-%m-%d %H:%M:%S")
         arm()
-        ns.Print(("LFG recorder: on (%d lines so far); it keeps recording after /reload until \"/suu probe lfg stop\"."):format(#s.record.lines))
+        print(("LFG recorder: on (%d lines so far); it keeps recording after /reload until \"/suu probe lfg stop\"."):format(#s.record.lines))
     else
         if recorder then recorder:UnregisterAllEvents() end
-        ns.Print(("LFG recorder: off, %d lines kept; /reload to save them."):format(#s.record.lines))
+        print(("LFG recorder: off, %d lines kept; /reload to save them."):format(#s.record.lines))
     end
 end
 
 -- after a /reload: recording again if it was on
-local resume = CreateFrame("Frame")
-resume:RegisterEvent("PLAYER_LOGIN")
-resume:SetScript("OnEvent", function()
-    local s = SuuUIProbe and SuuUIProbe.lfg
+@onLogin
+local function resume()
+    local s = DB.probe.lfg
     if s and s.record and s.record.on then arm() end
-end)
+end
 
-function LP.Command(rest)
-    rest = (rest or ""):lower()
-    if rest == "record" then LP.Record(true) return end
-    if rest == "stop" then LP.Record(false) return end
-    if rest == "click" then LP.ClickTest() return end
-    if rest == "who" then LP.WhoTest() return end
-    if rest == "open" then LP.OpenTest() return end
-    if rest == "join" then LP.Join() return end
-    if rest == "timerjoin" then LP.TimerJoin() return end
-    if rest == "lang" then LP.Lang() return end
-    if rest == "live" then LP.Live() return end
-    if rest == "entries" then LP.Entries() return end
+export function command(arg: string?)
+    local rest = (arg or ""):lower()
+    if rest == "record" then record(true) return end
+    if rest == "stop" then record(false) return end
+    if rest == "click" then clickTest() return end
+    if rest == "who" then whoTest() return end
+    if rest == "open" then openTest() return end
+    if rest == "join" then join() return end
+    if rest == "timerjoin" then timerJoin() return end
+    if rest == "lang" then lang() return end
+    if rest == "live" then live() return end
+    if rest == "entries" then entries() return end
     local cat = rest:match("^refresh ?(%d*)$")
     if cat then
-        local ok = ns.LFG.Refresh(tonumber(cat))
-        ns.Print("LFG: searching the tool " .. (ok and "" or "(failed) ") .. (cat ~= "" and cat or "2"))
+        local ok = (foreverLFG :: ForeverLFG).Refresh(tonumber(cat))
+        print("LFG: searching the tool " .. (ok and "" or "(failed) ") .. (cat ~= "" and cat or "2"))
         return
     end
-    if rest == "delist" then LP.Delist() return end
+    if rest == "delist" then delist() return end
     if rest == "clear" then
         local s = store()
         s.record = { lines = {}, on = s.record and s.record.on or false }
-        ns.Print("LFG recorder: lines cleared.")
+        print("LFG recorder: lines cleared.")
         return
     end
-    LP.Snapshot()
-    if rest == "timer" then LP.TimerSearch() end
+    snapshot()
+    if rest == "timer" then timerSearch() end
     local s = store()
-    ns.Print(("LFG probe: %d categories, %d channels saved; /reload."):format(#(s.categories or {}), #(s.channels or {})))
+    print(("LFG probe: %d categories, %d channels saved; /reload."):format(#(s.categories or {}), #(s.channels or {})))
 end

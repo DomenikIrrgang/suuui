@@ -1,25 +1,23 @@
--- Diagnostics/MicroProbe.lua
+-- Diagnostics/MicroProbe.wowlua
 -- "/suu probe micro": what SuuUI's own micro menu and minimap (step 2.1) take
 -- over. The micro menu's buttons in Blizzard's order (name, shown, tooltip,
 -- art, whether it's flashing or has an alert), MICRO_BUTTONS, and the
 -- minimap cluster's and the minimap's children by name; a few APIs the
 -- minimap uses. Saved in SuuUIProbe.micro on /reload.
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import isSecret from "wowlua:secret"
 
-local MiP = {}
-ns.MicroProbe = MiP
 
-local isSecret = issecretvalue or function() return false end
-
-local function str(v)
+local function str(v: any): string?
     if isSecret(v) then return "secret" end
     if v == nil then return nil end
     return tostring(v):sub(1, 120)
 end
 
-local function children(frame)
-    local out = {}
+local function children(frame: any): string[]
+    local out: string[] = {}
     if not frame or not frame.GetChildren then return out end
     for i, c in ipairs({ frame:GetChildren() }) do
         local ok, name = pcall(c.GetName, c)
@@ -30,7 +28,7 @@ local function children(frame)
     return out
 end
 
-local function texInfo(tex)
+local function texInfo(tex: any): string?
     if not tex then return nil end
     local okA, atlas = pcall(tex.GetAtlas, tex)
     if okA and atlas then return "atlas " .. tostring(atlas) end
@@ -38,17 +36,16 @@ local function texInfo(tex)
     return okT and ("file " .. tostring(file)) or nil
 end
 
-function MiP.Command()
-    SuuUIProbe = SuuUIProbe or {}
+export function command()
     local out = { at = date("%H:%M:%S") }
     -- the micro menu, in its layout order
     local menu = _G.MicroMenu
     out.microMenu = menu and "present" or "missing"
     out.buttons = {}
-    local list = {}
+    local list: any[] = {}
     if menu and menu.GetLayoutChildren then
         local ok, kids = pcall(menu.GetLayoutChildren, menu)
-        if ok and type(kids) == "table" then list = kids end
+        if ok and type(kids) == "table" then list = kids :: any[] end
     end
     if #list == 0 and menu then list = { menu:GetChildren() } end
     for i, b in ipairs(list) do
@@ -64,11 +61,12 @@ function MiP.Command()
         e.protected = b.IsProtected and b:IsProtected() or nil
         out.buttons[i] = e
     end
-    out.MICRO_BUTTONS = type(MICRO_BUTTONS) == "table" and MICRO_BUTTONS or "missing"
+    out.MICRO_BUTTONS = type(_G.MICRO_BUTTONS) == "table" and _G.MICRO_BUTTONS or "missing"
     -- the minimap's surroundings
     out.minimapCluster = children(_G.MinimapCluster)
     out.minimap = children(_G.Minimap)
-    out.minimapParent = Minimap and Minimap:GetParent() and Minimap:GetParent():GetName() or "?"
+    local minimapParent = Minimap and Minimap:GetParent()
+    out.minimapParent = minimapParent and minimapParent:GetName() or "?"
     out.minimapSize = Minimap and ("%.0fx%.0f"):format(Minimap:GetSize()) or "?"
     out.apis = {}
     for _, n in ipairs({ "GetMinimapZoneText", "GetZonePVPInfo", "HasNewMail", "GetGameTime", "ToggleWorldMap",
@@ -79,7 +77,7 @@ function MiP.Command()
     end
     if C_Minimap then
         local fns = {}
-        for k in pairs(C_Minimap) do fns[#fns + 1] = k end
+        for k in pairs(C_Minimap :: any) do fns[#fns + 1] = k end
         table.sort(fns)
         out.C_Minimap = fns
     end
@@ -88,6 +86,6 @@ function MiP.Command()
         out.unspentTalents = ok and str(v) or "error"
     end
     if UnitCharacterPoints then out.characterPoints = str(UnitCharacterPoints("player")) end
-    SuuUIProbe.micro = out
-    ns.Print(("Micro probe: %d micro buttons, %d minimap cluster children. /reload to save."):format(#out.buttons, #out.minimapCluster))
+    DB.probe.micro = out
+    print(("Micro probe: %d micro buttons, %d minimap cluster children. /reload to save."):format(#out.buttons, #out.minimapCluster))
 end

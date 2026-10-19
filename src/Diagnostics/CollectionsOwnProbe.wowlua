@@ -1,4 +1,4 @@
--- Diagnostics/CollectionsOwnProbe.lua
+-- Diagnostics/CollectionsOwnProbe.wowlua
 -- "/suu probe collown": can SuuUI build its own collections window (asked
 -- 2026-10-16: an own window instead of the restyle)? Recorded at once:
 --   mounts       how many, how many yours, three samples with their extra
@@ -15,15 +15,31 @@
 -- What the game answers (a blocked action, the cast) is printed and saved.
 -- Saved in SuuUIProbe.collectionsOwn on /reload.
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import panel, closeButton, Panel from "/UI/Panel"
+import text as uiText from "/UI/Text"
+import button from "/UI/Controls"
+import fill, border from "/UI/Draw"
 
-local CP = {}
-ns.CollectionsOwnProbe = CP
+interface OwnPanel extends Panel
+    toy: Button
+    mountModel: PlayerModel
+    dress: DressUpModel
+    nextMount: () -> ()
+    tryOn: () -> ()
+end
 
-local UI = ns.UI
-local isSecret = issecretvalue or function() return false end
+-- what the data steps found, for the panel's buttons
+local mountIDs: any = nil
+local usableMount: any = nil
+local firstToy: any = nil
+local firstSource: any = nil
+local probePanel: OwnPanel? = nil
+local listening = false
 
-local function show(v, depth)
+local function show(v: any, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if type(v) == "table" then
@@ -40,7 +56,7 @@ local function show(v, depth)
 end
 
 -- every result of a call, or why it failed
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -49,21 +65,21 @@ local function call(fn, ...)
     return table.concat(parts, " | ")
 end
 
-local function raw(fn, ...)
+local function raw(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k, l, m, n = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k, l, m, n end
 end
 
-local out
-local function line(section, text)
+local out: { [string]: any } = {}
+local function line(section: string, text: string)
     out[section] = out[section] or {}
     table.insert(out[section], text)
 end
 
-local function note(text)
+local function note(text: string)
     line("clicks", date("%H:%M:%S") .. " " .. text)
-    ns.Print("Collections probe: " .. text)
+    print("Collections probe: " .. text)
 end
 
 --------------------------------------------------------------------------------
@@ -76,7 +92,7 @@ local function mounts()
     local ids = raw(MJ.GetMountIDs) or {}
     local yours, usable = 0, nil
     for _, id in ipairs(ids) do
-        local name, spellID, icon, active, isUsable, sourceType, fav, faction, factionID, hide, collected = raw(MJ.GetMountInfoByID, id)
+        local _name, _spellID, _icon, _active, isUsable, _sourceType, _fav, _faction, _factionID, _hide, collected = raw(MJ.GetMountInfoByID, id)
         if collected then
             yours = yours + 1
             if isUsable and not usable then usable = id end
@@ -87,7 +103,7 @@ local function mounts()
         line("mounts", "info " .. call(MJ.GetMountInfoByID, ids[i]))
         line("mounts", "extra " .. call(MJ.GetMountInfoExtraByID, ids[i]))
     end
-    CP.mountIDs, CP.usableMount = ids, usable
+    mountIDs, usableMount = ids, usable
 end
 
 local function pets()
@@ -110,7 +126,7 @@ local function toys()
         if i <= 3 then line("toys", ("%d: %s info %s has %s"):format(i, show(itemID), call(TB.GetToyInfo, itemID), call(PlayerHasToy, itemID))) end
     end
     line("toys", "first of yours " .. tostring(first))
-    CP.toy = first
+    firstToy = first
 end
 
 local function heirlooms()
@@ -143,14 +159,14 @@ local function appearances()
                 line("appearances", ("  %d sources, first %s"):format(#sources, show(sources[1])))
                 if sources[1] and sources[1].sourceID then
                     line("appearances", "  source info " .. call(TC.GetSourceInfo, sources[1].sourceID))
-                    CP.source = sources[1].sourceID
+                    firstSource = sources[1].sourceID
                 end
             end
         end
     end
     -- every category ID, asked plainly and with a slot (the game's wardrobe
     -- asks for armor with the slot's transmog location)
-    local function location(slot)
+    local function location(slot: any): any
         if not (TransmogUtil and TransmogUtil.GetTransmogLocation and Enum.TransmogType) then return nil end
         local ok, loc = pcall(TransmogUtil.GetTransmogLocation, slot, Enum.TransmogType.Appearance, false)
         return ok and loc and loc.GetData and loc:GetData() or nil
@@ -179,8 +195,8 @@ end
 -- The panel: SuuUI's own buttons and two models
 --------------------------------------------------------------------------------
 
-local function build()
-    local p = UI.Panel(UIParent, { title = "Collections probe", width = 470, height = 330, solid = true })
+local function build(): OwnPanel
+    local p = panel(UIParent, { title = "Collections probe", width = 470, height = 330, solid = true })
     p:SetFrameStrata("DIALOG")
     p:SetPoint("CENTER", 0, 60)
     p:EnableMouse(true)
@@ -188,8 +204,8 @@ local function build()
     p:RegisterForDrag("LeftButton")
     p:SetScript("OnDragStart", p.StartMoving)
     p:SetScript("OnDragStop", p.StopMovingOrSizing)
-    if UI.CloseButton then
-        local c = UI.CloseButton(p, function() p:Hide() end)
+    do
+        local c = closeButton(p, function() p:Hide() end)
         if c then c:SetPoint("TOPRIGHT", -8, -8) end
     end
     -- a mount's model
@@ -197,10 +213,10 @@ local function build()
     m:SetSize(200, 200)
     m:SetPoint("TOPLEFT")
     local mi = 0
-    local mountName = UI.Text(p.body, "caption", "ink-muted")
+    local mountName = uiText(p.body, "caption", "ink-muted")
     mountName:SetPoint("TOP", m, "BOTTOM", 0, -4)
     local function nextMount()
-        local ids = CP.mountIDs or {}
+        local ids = mountIDs or {}
         if #ids == 0 then mountName:SetValue("no mounts") return end
         mi = mi % #ids + 1
         local name = raw(C_MountJournal.GetMountInfoByID, ids[mi])
@@ -208,26 +224,26 @@ local function build()
         local ok, err = pcall(m.SetDisplayInfo, m, display or 0)
         mountName:SetValue(("%s (display %s)%s"):format(tostring(name), tostring(display), ok and "" or (" error " .. tostring(err))))
     end
-    local nm = UI.Button(p.body, { text = "Next mount", width = 110, onClick = nextMount })
+    local nm = button(p.body, { text = "Next mount", width = 110, onClick = nextMount })
     nm:SetPoint("TOP", mountName, "BOTTOM", 0, -6)
     -- you, trying on an appearance
     local d = CreateFrame("DressUpModel", nil, p.body)
     d:SetSize(200, 200)
     d:SetPoint("TOPRIGHT")
-    local tryText = UI.Text(p.body, "caption", "ink-muted")
+    local tryText = uiText(p.body, "caption", "ink-muted")
     tryText:SetPoint("TOP", d, "BOTTOM", 0, -4)
     local function tryOn()
         local ok = pcall(d.SetUnit, d, "player")
-        local src = CP.source
+        local src = firstSource
         local ok2, err = true, nil
         if src then ok2, err = pcall(d.TryOn, d, src) end
         tryText:SetValue(("you %s, try on source %s %s"):format(ok and "shown" or "error", tostring(src), ok2 and "ok" or ("error " .. tostring(err))))
     end
-    local tb = UI.Button(p.body, { text = "Try on", width = 110, onClick = tryOn })
+    local tb = button(p.body, { text = "Try on", width = 110, onClick = tryOn })
     tb:SetPoint("TOP", tryText, "BOTTOM", 0, -6)
     -- Summon / Dismiss from SuuUI's own button
-    local sum = UI.Button(p.body, { text = "Summon test", width = 130, onClick = function()
-        local id = CP.usableMount
+    local sum = button(p.body, { text = "Summon test", width = 130, onClick = function()
+        local id = usableMount
         if not id then note("no usable mount of yours on this character") return end
         if IsMounted and IsMounted() then
             note("Dismiss: " .. call(C_MountJournal.Dismiss))
@@ -241,39 +257,40 @@ local function build()
     toy:SetSize(130, 30)
     toy:SetPoint("BOTTOMRIGHT")
     toy:RegisterForClicks("AnyUp", "AnyDown")
-    UI.Fill(toy, "surface-raised"):SetAllPoints()
-    UI.Border(toy, "gilt-line")
-    local tt = UI.Text(toy, "label", "ink")
+    fill(toy, "surface-raised"):SetAllPoints()
+    border(toy, "gilt-line")
+    local tt = uiText(toy, "label", "ink")
     tt:SetPoint("CENTER")
     tt:SetValue("Toy test")
-    p.toy, p.mountModel, p.dress, p.nextMount, p.tryOn = toy, m, d, nextMount, tryOn
-    return p
+    local own = p :: OwnPanel
+    own.toy, own.mountModel, own.dress, own.nextMount, own.tryOn = toy, m, d, nextMount, tryOn
+    return own
 end
 
-function CP.Command()
+export function command()
     -- the game's slot helpers live with its collections window
     if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_Collections") end
     out = { at = date("%Y-%m-%d %H:%M:%S") }
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.collectionsOwn = out
+    DB.probe.collectionsOwn = out
     for _, step in ipairs({ mounts, pets, toys, heirlooms, appearances }) do
         local ok, err = pcall(step)
         if not ok then line("errors", tostring(err)) end
     end
-    CP.panel = CP.panel or build()
-    CP.panel:Show()
-    CP.panel.nextMount()
-    CP.panel.tryOn()
+    local p = probePanel or build()
+    probePanel = p
+    p:Show()
+    p.nextMount()
+    p.tryOn()
     -- the toy button: set up out of combat
-    if CP.toy and not InCombatLockdown() then
-        CP.panel.toy:SetAttribute("type", "toy")
-        CP.panel.toy:SetAttribute("toy", CP.toy)
-        note("toy button ready for item " .. CP.toy)
-    elseif not CP.toy then
+    if firstToy and not InCombatLockdown() then
+        p.toy:SetAttribute("type", "toy")
+        p.toy:SetAttribute("toy", firstToy)
+        note("toy button ready for item " .. firstToy)
+    elseif not firstToy then
         note("no toy of yours on this character: the toy test can't run here")
     end
-    if not CP.listening then
-        CP.listening = true
+    if not listening then
+        listening = true
         local f = CreateFrame("Frame")
         for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UNIT_SPELLCAST_SUCCEEDED", "UI_ERROR_MESSAGE",
                              "COMPANION_UPDATE", "NEW_MOUNT_ADDED" }) do
@@ -284,5 +301,5 @@ function CP.Command()
             note(("%s %s %s %s"):format(e, show(a), show(b), show(c)))
         end)
     end
-    ns.Print("Collections probe: data recorded. Try Summon test and Toy test if you can, look at both models (Next mount, Try on), then /reload.")
+    print("Collections probe: data recorded. Try Summon test and Toy test if you can, look at both models (Next mount, Try on), then /reload.")
 end

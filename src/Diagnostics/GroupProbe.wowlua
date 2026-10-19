@@ -1,4 +1,4 @@
--- Diagnostics/GroupProbe.lua
+-- Diagnostics/GroupProbe.wowlua
 -- "/suu probe group": what party frames can read about other players, and
 -- when (plan step 1.8b). For you, your target and party1-4 it records, per
 -- sample, whether each value is readable, secret, nil or an error:
@@ -16,27 +16,27 @@
 --   /suu probe group        arm and sample now (solo works: you and your target)
 --   /suu probe group off    stop sampling
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import * as events from "/Core/Events"
+import print from "/Core/Init"
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
 
-local Events = ns.Events
-
-local GP = {}
-ns.GroupProbe = GP
-
-local isSecret = issecretvalue or function() return false end
+-- the owner of the probe's event handlers
+local OWNER = {}
 local UNITS = { "player", "target", "party1", "party2", "party3", "party4" }
 local MAX_SAMPLES = 24
 local armed = false
 
 -- One value as text: secret, nil, or readable (with what it was).
-local function describe(v)
+local function describe(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     return "readable: " .. tostring(v)
 end
 
 -- Calls fn and describes its first (or chosen) returns; errors are kept short.
-local function try(fn, ...)
+local function try(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local ok, a, b = pcall(fn, ...)
     if not ok then return "error: " .. tostring(a):sub(1, 120) end
@@ -44,8 +44,8 @@ local function try(fn, ...)
     return describe(a)
 end
 
-local colorCurve
-local function dispelCurve()
+local colorCurve: any = nil
+local function dispelCurve(): any
     if colorCurve ~= nil then return colorCurve or nil end
     colorCurve = false
     local make = C_CurveUtil and (C_CurveUtil.CreateColorCurve or C_CurveUtil.CreateCurve)
@@ -56,9 +56,9 @@ local function dispelCurve()
     return colorCurve or nil
 end
 
-local function sampleUnit(unit)
+local function sampleUnit(unit: string): { [string]: any }?
     if not UnitExists(unit) then return nil end
-    local r = {}
+    local r: { [string]: any } = {}
     r.name = try(UnitName, unit)
     r.range = try(UnitInRange, unit)
     r.threat = try(UnitThreatSituation, unit)
@@ -96,16 +96,15 @@ local function sampleUnit(unit)
     return r
 end
 
-function GP.Sample(label)
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.group or { samples = {} }
-    SuuUIProbe.group = store
+export function sample(label: string): { [string]: any }
+    local store = DB.probe.group or { samples = {} }
+    DB.probe.group = store
     local s = {
         at = date("%H:%M:%S"), label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
         instance = select(2, IsInInstance()) or "none",
-        units = {},
+        units = {} :: { [string]: any },
     }
     for _, unit in ipairs(UNITS) do s.units[unit] = sampleUnit(unit) end
     table.insert(store.samples, s)
@@ -115,32 +114,32 @@ end
 
 local function onFight()
     if not armed then return end
-    C_Timer.After(1, function() if armed then GP.Sample("1s into the fight") end end)
-    C_Timer.After(4, function()
+    after(1, function() if armed then sample("1s into the fight") end end)
+    after(4, function()
         if armed then
-            GP.Sample("4s into the fight")
-            ns.Print("Group probe: fight sampled. /reload to save.")
+            sample("4s into the fight")
+            print("Group probe: fight sampled. /reload to save.")
         end
     end)
 end
 
 local function afterFight()
-    if armed then C_Timer.After(1, function() if armed then GP.Sample("after the fight") end end) end
+    if armed then after(1, function() if armed then sample("after the fight") end end) end
 end
 
-function GP.Command(arg)
+export function command(arg: string?)
     if arg == "off" then
         armed = false
-        ns.Print("Group probe: off.")
+        print("Group probe: off.")
         return
     end
     if not armed then
         armed = true
-        Events.OnGame("PLAYER_REGEN_DISABLED", onFight, GP)
-        Events.OnGame("PLAYER_REGEN_ENABLED", afterFight, GP)
+        events.onGame("PLAYER_REGEN_DISABLED", onFight, OWNER)
+        events.onGame("PLAYER_REGEN_ENABLED", afterFight, OWNER)
     end
-    local s = GP.Sample("on command")
+    local s = sample("on command")
     local n = 0
     for _ in pairs(s.units) do n = n + 1 end
-    ns.Print(("Group probe: armed (%s, %d units). Fight something with a target; it samples 1s and 4s in. /reload to save."):format(s.group, n))
+    print(("Group probe: armed (%s, %d units). Fight something with a target; it samples 1s and 4s in. /reload to save."):format(s.group, n))
 end

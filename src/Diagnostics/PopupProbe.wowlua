@@ -1,4 +1,4 @@
--- Diagnostics/PopupProbe.lua
+-- Diagnostics/PopupProbe.wowlua
 -- "/suu probe popups": what SuuUI's notifications (step 2.4) can take over
 -- from Blizzard's popups. Saved in SuuUIProbe.popups on /reload.
 --   * Blizzard's popup dialogs (StaticPopupDialogs) for the requests the plan
@@ -22,14 +22,14 @@
 --                            buttons invisible. Click Cancel (or No): does the
 --                            game take it as Blizzard's? Then /reload.
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import hook from "wowlua:hooks"
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
 
-local PP = {}
-ns.PopupProbe = PP
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "function" then return "function" end
@@ -81,8 +81,8 @@ local EVENTS = {
     "SPELL_CONFIRMATION_PROMPT", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN",
 }
 
-local function lookup(path)
-    local v = _G
+local function lookup(path: string): any
+    local v: any = _G
     for part in path:gmatch("[^%.]+") do
         if type(v) ~= "table" then return nil end
         v = v[part]
@@ -92,8 +92,8 @@ end
 
 -- A function's entry in the client's API documentation: every key that
 -- isn't its name, arguments, returns or prose (its flags).
-local docIndex
-local function docFlags(path)
+local docIndex: any = nil
+local function docFlags(path: string): string
     if docIndex == nil then
         docIndex = false
         for _, name in ipairs({ "Blizzard_APIDocumentationBasic", "Blizzard_APIDocumentation", "Blizzard_APIDocumentationGenerated" }) do
@@ -115,7 +115,7 @@ local function docFlags(path)
     if not docIndex then return "no docs" end
     local f = docIndex[path]
     if not f then return "not documented" end
-    local parts = {}
+    local parts: string[] = {}
     for k, v in pairs(f) do
         if k ~= "Name" and k ~= "Arguments" and k ~= "Returns" and k ~= "Documentation" and k ~= "System" and type(v) ~= "function" then
             parts[#parts + 1] = tostring(k) .. "=" .. (type(v) == "table" and "{…}" or tostring(v))
@@ -125,15 +125,15 @@ local function docFlags(path)
     return #parts > 0 and table.concat(parts, ", ") or "no flags"
 end
 
-local function frameInfo(name)
+local function frameInfo(name: string): string
     local f = _G[name]
     if not f then return "missing" end
-    local out = {}
+    local out: string[] = {}
     local ok, p = pcall(f.IsProtected, f)
     out[#out + 1] = "protected=" .. (ok and show(p) or "?")
     if f.IsForbidden then out[#out + 1] = "forbidden=" .. show(f:IsForbidden()) end
     if f.GetObjectType then out[#out + 1] = f:GetObjectType() end
-    local kids = {}
+    local kids: string[] = {}
     for k, v in pairs(f) do
         if type(k) == "string" and type(v) == "table" and v.GetObjectType then
             local okP, prot = pcall(v.IsProtected, v)
@@ -145,31 +145,31 @@ local function frameInfo(name)
     return table.concat(out, ", ")
 end
 
-local function args(...)
-    local parts = {}
+local function args(...: any): string
+    local parts: string[] = {}
     for i = 1, select("#", ...) do parts[#parts + 1] = show((select(i, ...))) end
     return table.concat(parts, " | ")
 end
 
 -- the log, from the first sample until /reload
 local logging = false
-local function startLog(store)
+local function startLog(store: { [string]: any })
     if logging then return end
     logging = true
     store.log = store.log or {}
-    local function note(s)
-        local log = SuuUIProbe.popups and SuuUIProbe.popups.log
+    local function note(s: string)
+        local log = DB.probe.popups and DB.probe.popups.log
         if not log then return end
         log[#log + 1] = date("%H:%M:%S") .. (InCombatLockdown() and " [combat] " or " ") .. s
         while #log > 200 do table.remove(log, 1) end
     end
     if StaticPopup_Show then
-        hooksecurefunc("StaticPopup_Show", function(which, text1, text2, data)
+        hook("StaticPopup_Show", function(which, text1, text2, data)
             note("StaticPopup_Show " .. show(which) .. " | " .. show(text1) .. " | " .. show(text2) .. " | data " .. show(data))
         end)
     end
     if StaticPopup_Hide then
-        hooksecurefunc("StaticPopup_Hide", function(which) note("StaticPopup_Hide " .. show(which)) end)
+        hook("StaticPopup_Hide", function(which) note("StaticPopup_Hide " .. show(which)) end)
     end
     local f = CreateFrame("Frame")
     local valid = C_EventUtils and C_EventUtils.IsEventValid
@@ -179,10 +179,9 @@ local function startLog(store)
     f:SetScript("OnEvent", function(_, event, ...) note(event .. " " .. args(...)) end)
 end
 
-function PP.Sample()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.popups or {}
-    SuuUIProbe.popups = store
+export function sample(): { [string]: any }
+    local store = DB.probe.popups or {}
+    DB.probe.popups = store
     store.at = date("%H:%M:%S")
     store.dialogs = {}
     local dialogs = StaticPopupDialogs or {}
@@ -204,7 +203,7 @@ function PP.Sample()
     if StaticPopup1 and StaticPopup1.ButtonContainer then
         local bc = StaticPopup1.ButtonContainer
         store.frames["StaticPopup1.ButtonContainer"] = "children: " .. (function()
-            local kids = {}
+            local kids: string[] = {}
             for k, v in pairs(bc) do
                 if type(v) == "table" and v.GetObjectType then
                     local ok, p = pcall(v.IsProtected, v)
@@ -240,11 +239,11 @@ local TRIES = {
     { "AcceptBattlefieldPort", args = { 1, false }, needsNoQueue = true },
 }
 
-function PP.Try()
-    if InCombatLockdown() then ns.Print("Popup probe: out of combat, please.") return end
-    local store = PP.Sample()
+export function try()
+    if InCombatLockdown() then print("Popup probe: out of combat, please.") return end
+    local store = sample()
     store.tries = {}
-    local current
+    local current: string? = nil
     local watch = CreateFrame("Frame")
     watch:RegisterEvent("ADDON_ACTION_BLOCKED")
     watch:RegisterEvent("ADDON_ACTION_FORBIDDEN")
@@ -260,10 +259,10 @@ function PP.Try()
         if not t then
             current = nil
             watch:UnregisterAllEvents()
-            ns.Print("Popup probe: tried them all. /reload to save.")
+            print("Popup probe: tried them all. /reload to save.")
             return
         end
-        local path = t[1]
+        local path = t[1] :: string
         current = path
         local fn = lookup(path)
         if type(fn) ~= "function" then
@@ -282,9 +281,9 @@ function PP.Try()
             -- a block noted while it ran stays (it comes inside the call)
             store.tries[path] = (ok and "called" or ("error: " .. tostring(err):sub(1, 160))) .. store.tries[path]
         end
-        C_Timer.After(0.5, step)
+        after(0.5, step)
     end
-    ns.Print("Popup probe: trying the answers (a Blizzard \"blocked\" message for some is expected)…")
+    print("Popup probe: trying the answers (a Blizzard \"blocked\" message for some is expected)…")
     step()
 end
 
@@ -293,16 +292,16 @@ end
 -- Blizzard's frames but points and alpha.
 local HOSTED = { CAMP = true, QUIT = true, DELETE_ITEM = true, DELETE_GOOD_ITEM = true,
                  DELETE_QUEST_ITEM = true, DELETE_GOOD_QUEST_ITEM = true }
-local hostPanel, hostArmed, hostHooked
+local hostPanel: any, hostArmed: boolean?, hostHooked: boolean? = nil, nil, nil
 
-local function hostNote(s)
-    local p = SuuUIProbe.popups
+local function hostNote(s: string)
+    local p = DB.probe.popups
     if not p then return end
     p.host = p.host or {}
     p.host[#p.host + 1] = date("%H:%M:%S") .. " " .. s
 end
 
-local function host(which)
+local function host(which: string)
     local dialog = StaticPopup_FindVisible and StaticPopup_FindVisible(which)
     if not dialog then hostNote("no visible dialog for " .. tostring(which)) return end
     if not hostPanel then
@@ -330,20 +329,19 @@ local function host(which)
 end
 
 local function hostTest()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = PP.Sample()
+    local store = sample()
     store.host = {}
     hostArmed = true
     if not hostHooked then
         hostHooked = true
-        hooksecurefunc("StaticPopup_Show", function(which)
+        hook("StaticPopup_Show", function(which)
             if hostArmed and HOSTED[which] then
                 hostArmed = false
-                C_Timer.After(0, function() host(which) end)
+                after(0, function() host(which) end)
             end
         end)
         if StaticPopup_Hide then
-            hooksecurefunc("StaticPopup_Hide", function(which)
+            hook("StaticPopup_Hide", function(which)
                 if HOSTED[which] then
                     hostNote("hidden " .. tostring(which))
                     if hostPanel then hostPanel:Hide() end
@@ -356,12 +354,12 @@ local function hostTest()
         end
         f:SetScript("OnEvent", function(_, event, a, b) hostNote(event .. " " .. show(a) .. " " .. show(b)) end)
     end
-    ns.Print("Popup probe: hosting armed. Type /camp (or start deleting an item), then click Cancel / No on the moved popup. /reload after.")
+    print("Popup probe: hosting armed. Type /camp (or start deleting an item), then click Cancel / No on the moved popup. /reload after.")
 end
 
-function PP.Command(arg)
-    if arg == "try" then return PP.Try() end
+export function command(arg: string?)
+    if arg == "try" then return try() end
     if arg == "host" then return hostTest() end
-    local s = PP.Sample()
-    ns.Print(("Popup probe: %d popup kinds. Logging popups and request events until /reload."):format(s.dialogCount or 0))
+    local s = sample()
+    print(("Popup probe: %d popup kinds. Logging popups and request events until /reload."):format(s.dialogCount or 0))
 end

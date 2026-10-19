@@ -1,15 +1,16 @@
--- Diagnostics/TokenSheet.lua
+-- Diagnostics/TokenSheet.wowlua
 -- /suu tokens: every colour and text style from the tokens, drawn in game, to
 -- compare against the design system's Color and Typography pages. Hover a
 -- swatch for its usage note.
 --
 -- Laid out by hand with a y cursor; the layout engine arrives in step 0.5.
 
-local _, ns = ...
+import tokens as T, Color, TextStyle from "/Core/Tokens"
+import * as fonts from "/Core/Fonts"
 
-local T = ns.Tokens
-local Fonts = ns.Fonts
-local C = T.color
+-- by name: the sheet walks them by their names
+local C = (T.color :: any) :: { [string]: Color }
+local STYLES = (T.type :: any) :: { [string]: TextStyle }
 
 local WIDTH, PAD = 900, 20
 local CONTENT_W = WIDTH - PAD * 2 - 24 -- room for the scroll bar
@@ -33,32 +34,32 @@ local GROUPS = {
     { "Coins", { "^coin%-" } },
 }
 
-local function groupOf(name)
+local function groupOf(name: string): number
     for i, group in ipairs(GROUPS) do
-        for _, pattern in ipairs(group[2]) do
+        for _, pattern in ipairs(group[2] :: string[]) do
             if name:find(pattern) then return i end
         end
     end
     return #GROUPS + 1
 end
 
-local function text(parent, style, color, value)
+local function text(parent: Frame, style: string, color: string, value: string): FontString
     local fs = parent:CreateFontString(nil, "OVERLAY")
-    Fonts.Apply(fs, style)
-    fs:SetTextColor(unpack(C[color]))
+    fonts.apply(fs, style)
+    fs:SetTextColor(unpack(assert(C[color])))
     fs:SetText(value)
     return fs
 end
 
 -- A 1px outline in a token colour around `frame`.
-local function outline(frame, color)
-    local c = C[color]
-    local function edge(a1, a2, w, h)
+local function outline(frame: Frame, color: string)
+    local c = assert(C[color])
+    local function edge(a1: FramePoint, a2: FramePoint, w: number?, h: number?)
         local t = frame:CreateTexture(nil, "BORDER")
         t:SetColorTexture(unpack(c))
         t:SetPoint(a1)
         t:SetPoint(a2)
-        if w then t:SetWidth(w) else t:SetHeight(h) end
+        if w then t:SetWidth(w) else t:SetHeight(h :: number) end
     end
     edge("TOPLEFT", "TOPRIGHT", nil, 1)
     edge("BOTTOMLEFT", "BOTTOMRIGHT", nil, 1)
@@ -66,7 +67,7 @@ local function outline(frame, color)
     edge("TOPRIGHT", "BOTTOMRIGHT", 1, nil)
 end
 
-local function showUsage(self)
+local function showUsage(self: any)
     local note = T.usage[self.token]
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:AddLine(self.token, 1, 1, 1)
@@ -82,20 +83,20 @@ end
 -- Sections
 --------------------------------------------------------------------------------
 
-local function heading(content, y, label)
+local function heading(content: Frame, y: number, label: string): number
     local fs = text(content, "header", "gilt-text", label)
     fs:SetPoint("TOPLEFT", 0, -y)
     local rule = content:CreateTexture(nil, "ARTWORK")
-    rule:SetColorTexture(unpack(C["gilt-line"]))
+    rule:SetColorTexture(unpack(assert(C["gilt-line"])))
     rule:SetHeight(1)
     rule:SetPoint("TOPLEFT", 0, -(y + 22))
     rule:SetPoint("TOPRIGHT", 0, -(y + 22))
     return y + 34
 end
 
-local function swatch(content, name, x, y)
-    local c = C[name]
-    local cell = CreateFrame("Frame", nil, content)
+local function swatch(content: Frame, name: string, x: number, y: number)
+    local c = assert(C[name])
+    local cell: any = CreateFrame("Frame", nil, content)
     cell:SetSize(CONTENT_W / COLUMNS - 8, ROW_H)
     cell:SetPoint("TOPLEFT", x, -y)
     cell:EnableMouse(true)
@@ -119,19 +120,21 @@ local function swatch(content, name, x, y)
     meta:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -1)
 end
 
-local function colorSection(content, y)
+local function colorSection(content: Frame, y: number): number
     y = heading(content, y, "Colour")
-    local buckets = {}
-    for _, name in ipairs(T.order.color) do
+    local buckets: { [number]: string[] } = {}
+    for _, name in ipairs(assert(T.order.color)) do
         local g = groupOf(name)
-        buckets[g] = buckets[g] or {}
-        table.insert(buckets[g], name)
+        local bucket = buckets[g] or {}
+        buckets[g] = bucket
+        table.insert(bucket, name)
     end
     local colW = CONTENT_W / COLUMNS
     for g = 1, #GROUPS + 1 do
         local names = buckets[g]
         if names then
-            local sub = text(content, "caption", "ink-muted", GROUPS[g] and GROUPS[g][1] or "Other")
+            local group = GROUPS[g]
+            local sub = text(content, "caption", "ink-muted", group and group[1] :: string or "Other")
             sub:SetPoint("TOPLEFT", 0, -y)
             y = y + 18
             for i, name in ipairs(names) do
@@ -145,12 +148,12 @@ local function colorSection(content, y)
     return y
 end
 
-local FAMILY_NAMES = { display = "Marcellus SC", sans = "Figtree" }
+local FAMILY_NAMES: { [string]: string } = { display = "Marcellus SC", sans = "Figtree" }
 
-local function typeSection(content, y)
+local function typeSection(content: Frame, y: number): number
     y = heading(content, y + 8, "Type")
-    for _, name in ipairs(T.order.type) do
-        local s = T.type[name]
+    for _, name in ipairs(assert(T.order.type)) do
+        local s = assert(STYLES[name])
         local label = text(content, "label", "ink", name)
         label:SetPoint("TOPLEFT", 0, -y)
         local meta = text(content, "caption", "ink-muted", ("%s %s/%s · %d%s"):format(
@@ -182,9 +185,9 @@ end
 -- Window
 --------------------------------------------------------------------------------
 
-local window
+local window: Frame?
 
-local function build()
+local function build(): Frame
     local f = CreateFrame("Frame", "SuuUITokenSheet", UIParent)
     f:SetSize(WIDTH, 700)
     f:SetPoint("CENTER")
@@ -198,13 +201,13 @@ local function build()
 
     local bg = f:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
-    bg:SetColorTexture(unpack(C.surface))
+    bg:SetColorTexture(unpack(assert(C.surface)))
     outline(f, "gilt-hairline")
 
     local title = text(f, "header", "gilt-text", "SuuUI tokens")
     title:SetPoint("TOPLEFT", PAD, -16)
     local meta = text(f, "caption", "ink-muted", ("Design tokens v%d · %d colours · %d text styles · hover a swatch for its usage")
-        :format(T.version, #T.order.color, #T.order.type))
+        :format(T.version, #assert(T.order.color), #assert(T.order.type)))
     meta:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
 
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
@@ -227,13 +230,12 @@ local function build()
 end
 
 -- Opened by the diagnostics module's /suu tokens.
-ns.TokenSheet = {}
-
-function ns.TokenSheet.Toggle()
-    window = window or build()
-    window:SetShown(not window:IsShown())
+export function toggle()
+    local w = window or build()
+    window = w
+    w:SetShown(not w:IsShown())
 end
 
-function ns.TokenSheet.Hide()
+export function hide()
     if window then window:Hide() end
 end

@@ -1,4 +1,4 @@
--- Diagnostics/TotemProbe.lua
+-- Diagnostics/TotemProbe.wowlua
 -- "/suu probe totems" (on a shaman, asked 2026-10-18: a totem bar in the
 -- stance bar's place, the design's TotemBar: earth, fire, water, air, each
 -- slot its totem with time left and a drain, or empty). What the client
@@ -10,59 +10,66 @@
 -- with a totem (a right click to dismiss), "check" saves what happened.
 -- Saved in SuuUIProbe.totems on /reload.
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import panel as uiPanel from "/UI/Panel"
+import text as uiText from "/UI/Text"
 
-local TP = {}
-ns.TotemProbe = TP
+type Map = { [any]: any }
+type ButtonDef = { kind: string, value: any, label: string, action?: any }
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "SECRET" end
     if type(v) == "table" or type(v) == "userdata" then return type(v) end
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error " .. tostring(res[2]):sub(1, 120) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, #res) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, ", ")
 end
 
-local function frameInfo(name)
-    local f = _G[name]
+local function frameInfo(name: string): string
+    local f: any = _G[name]
     if not f then return "missing" end
     return ("%s shown=%s visible=%s protected=%s"):format(f:GetObjectType(), tostring(f:IsShown()), tostring(f:IsVisible()), tostring(f:IsProtected()))
 end
 
 -- The totem event, counted from the first run on.
-local events = { count = 0, slots = {} }
-local listener, started
+local events: { count: number, slots: { [string]: number } } = { count = 0, slots = {} }
+local listener: Frame? = nil
+local started: string? = nil
+-- the test buttons' panel (was TP.panel)
+local panel: any = nil
 
-local function record()
-    local out = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false }
-    local _, class = UnitClass("player")
+local function record(): Map
+    local out: Map = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false }
+    local _, class: any = UnitClass("player")
     out.class, out.level = class, UnitLevel("player")
     out.numSlots = call(GetNumTotemSlots)
     out.maxTotems = tostring(MAX_TOTEMS)
     out.slotConstants = ("earth=%s fire=%s water=%s air=%s"):format(tostring(EARTH_TOTEM_SLOT), tostring(FIRE_TOTEM_SLOT),
         tostring(WATER_TOTEM_SLOT), tostring(AIR_TOTEM_SLOT))
-    out.priorities = SHAMAN_TOTEM_PRIORITIES and table.concat(SHAMAN_TOTEM_PRIORITIES, ",") or "missing"
+    out.priorities = SHAMAN_TOTEM_PRIORITIES and table.concat(SHAMAN_TOTEM_PRIORITIES :: any, ",") or "missing"
     out.slots = {}
     for slot = 1, 4 do
-        local s = {}
+        local s: Map = {}
         s.info = call(GetTotemInfo, slot)
         s.timeLeft = call(GetTotemTimeLeft, slot)
         s.cannotDismiss = call(GetTotemCannotDismiss, slot)
-        local ok, d = pcall(GetTotemDuration, slot)
+        local ok, d = pcall(GetTotemDuration :: any, slot)
         s.duration = ok and (d and (type(d) .. (isSecret(d) and " SECRET" or "")) or "nil") or ("error " .. tostring(d):sub(1, 80))
         if ok and d and not isSecret(d) and (type(d) == "table" or type(d) == "userdata") then
             -- what a duration object answers (the cooldown sweep and the drain take it)
-            s.durationRemaining = call(d.GetRemainingDuration, d)
-            s.durationTotal = call(d.GetTotalDuration, d)
+            local obj: any = d
+            s.durationRemaining = call(obj.GetRemainingDuration, d)
+            s.durationTotal = call(obj.GetTotalDuration, d)
         end
         out.slots[slot] = s
     end
@@ -97,8 +104,8 @@ local function record()
                 slot and call(HasAction, slot) or "-", slot and call(GetActionInfo, slot) or "-")
         end
     end
-    out.summonSpells = TOTEM_MULTI_CAST_SUMMON_SPELLS and table.concat(TOTEM_MULTI_CAST_SUMMON_SPELLS, ",") or "missing"
-    out.recallSpells = TOTEM_MULTI_CAST_RECALL_SPELLS and table.concat(TOTEM_MULTI_CAST_RECALL_SPELLS, ",") or "missing"
+    out.summonSpells = TOTEM_MULTI_CAST_SUMMON_SPELLS and table.concat(TOTEM_MULTI_CAST_SUMMON_SPELLS :: any, ",") or "missing"
+    out.recallSpells = TOTEM_MULTI_CAST_RECALL_SPELLS and table.concat(TOTEM_MULTI_CAST_RECALL_SPELLS :: any, ",") or "missing"
     out.summonKnown = MultiCastSummonSpellButton and tostring(MultiCastSummonSpellButton.spellId) or "missing"
     out.recallKnown = MultiCastRecallSpellButton and tostring(MultiCastRecallSpellButton.spellId) or "missing"
     out.slotSpells = {}
@@ -110,10 +117,9 @@ local function record()
     return out
 end
 
-function TP.Command(rest)
-    SuuUIProbe = SuuUIProbe or {}
-    local all = SuuUIProbe.totems or {}
-    SuuUIProbe.totems = all
+export function command(rest: string?)
+    local all = DB.probe.totems or {}
+    DB.probe.totems = all
     started = started or date("%H:%M:%S")
     if not listener then
         listener = CreateFrame("Frame")
@@ -125,11 +131,11 @@ function TP.Command(rest)
         end)
     end
     if rest == "buttons" then
-        TP.Buttons()
+        buttons()
         return
     end
     if rest == "choose" then
-        TP.Choose(all)
+        choose(all)
         return
     end
     if rest == "destroy" then
@@ -143,41 +149,40 @@ function TP.Command(rest)
             end
         end
         all.destroy.slot = all.destroy.slot or "no totem down"
-        ns.Print("Totem probe: tried to dismiss a totem. Did it go? Then /suu probe totems check and /reload.")
+        print("Totem probe: tried to dismiss a totem. Did it go? Then /suu probe totems check and /reload.")
         return
     end
     if rest == "check" then
         all.check = record()
         all.check.blocked = {}
         local since = started or "00:00:00"
-        for _, e in ipairs(SuuUIDB and SuuUIDB.blocked or {}) do
+        for _, e in ipairs(DB.db.blocked or {}) do
             if e.time and e.time >= date("%Y-%m-%d ") .. since then
                 all.check.blocked[#all.check.blocked + 1] = tostring(e.time) .. " " .. tostring(e.event) .. " " .. tostring(e.func)
             end
         end
-        ns.Print("Totem probe: checked. /reload to save it.")
+        print("Totem probe: checked. /reload to save it.")
         return
     end
     local out = record()
     all[out.combat and "inCombat" or "outOfCombat"] = out
-    ns.Print(("Totem probe: recorded %s (%s, %d totem events so far). Drop totems and run it again, once in a fight; /reload to save.")
+    print(("Totem probe: recorded %s (%s, %d totem events so far). Drop totems and run it again, once in a fight; /reload to save.")
         :format(out.combat and "in combat" or "out of combat", tostring(out.class), events.count))
 end
 
 -- "/suu probe totems buttons": SuuUI's own secure buttons for the game's
 -- totem slots (the first page's four action slots) and the summon and recall
 -- spells. Click them out of combat and in a fight: does the totem go down?
-function TP.Buttons()
-    ns.Print("Totem probe: placing the test buttons…")
-    if InCombatLockdown() then ns.Print("Totem probe: out of combat, to place the buttons.") return end
-    local UI = ns.UI
-    local p = TP.panel or UI.Panel(UIParent, { title = "Totem probe", width = 260, height = 120, solid = true })
-    TP.panel = p
+export function buttons()
+    print("Totem probe: placing the test buttons…")
+    if InCombatLockdown() then print("Totem probe: out of combat, to place the buttons.") return end
+    local p = panel or uiPanel(UIParent, { title = "Totem probe", width = 260, height = 120, solid = true })
+    panel = p
     p:SetFrameStrata("DIALOG")
     p:ClearAllPoints()
     p:SetPoint("LEFT", 40, 0)
     p.buttons = p.buttons or {}
-    local defs = {}
+    local defs: ButtonDef[] = {}
     -- the earth slot (the game's first button): the spell it holds, cast as a
     -- spell, and the slot's action itself (the first try did nothing)
     local b1 = _G.MultiCastActionButton1
@@ -209,7 +214,7 @@ function TP.Buttons()
             b:SetSize(36, 36)
             b.icon = b:CreateTexture(nil, "ARTWORK")
             b.icon:SetAllPoints()
-            b.label = UI.Text(b, "micro", "ink")
+            b.label = uiText(b, "micro", "ink")
             b.label:SetPoint("TOP", b, "BOTTOM", 0, -2)
             p.buttons[i] = b
         end
@@ -234,18 +239,18 @@ function TP.Buttons()
     end
     p:Show()
     for i = #defs + 1, #p.buttons do p.buttons[i]:Hide() end
-    ns.Print(("Totem probe: %d buttons: Spell casts the earth slot's totem as a spell, Act uses the slot's action, Pick puts another earth totem in the slot, X earth dismisses it. Click each, out of combat and in a fight."):format(#defs))
+    print(("Totem probe: %d buttons: Spell casts the earth slot's totem as a spell, Act uses the slot's action, Pick puts another earth totem in the slot, X earth dismisses it. Click each, out of combat and in a fight."):format(#defs))
 end
 
 -- "/suu probe totems choose": puts another totem of the same element in the
 -- first slot (SetMultiCastSpell, what the game's flyout calls), then puts
 -- the old one back a second later. Works out of combat? In a fight?
-function TP.Choose(all)
+export function choose(all: Map)
     local b = _G.MultiCastActionButton1
     local ok, action = pcall(b and b.CalculateAction or function() end, b)
     local c = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false }
     all.choose = c
-    if not (ok and action) then c.result = "no slot action" ns.Print("Totem probe: no slot to choose for.") return end
+    if not (ok and action) then c.result = "no slot action" print("Totem probe: no slot to choose for.") return end
     local _, before = GetActionInfo(action)
     c.action, c.before = action, tostring(before)
     -- the slot's element: the action's own totem slot from the game's button
@@ -254,14 +259,14 @@ function TP.Choose(all)
     local other
     for _, id in ipairs(spells) do if id ~= before then other = id break end end
     c.slot, c.other = tostring(slot), tostring(other)
-    if not other then c.result = "only one totem known for that element" ns.Print("Totem probe: you know one totem of that element; nothing to swap to.") return end
+    if not other then c.result = "only one totem known for that element" print("Totem probe: you know one totem of that element; nothing to swap to.") return end
     c.set = call(SetMultiCastSpell, action, other)
     local _, now = GetActionInfo(action)
     c.after = tostring(now)
-    C_Timer.After(1, function()
+    after(1, function()
         c.restore = call(SetMultiCastSpell, action, before)
         local _, back = GetActionInfo(action)
         c.restored = tostring(back)
     end)
-    ns.Print("Totem probe: swapped the first slot's totem and puts it back in a second. Watch the game's bar, then /suu probe totems check and /reload.")
+    print("Totem probe: swapped the first slot's totem and puts it back in a second. Watch the game's bar, then /suu probe totems check and /reload.")
 end

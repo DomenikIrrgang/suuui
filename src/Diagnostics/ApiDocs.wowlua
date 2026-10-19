@@ -1,4 +1,4 @@
--- Diagnostics/ApiDocs.lua
+-- Diagnostics/ApiDocs.wowlua
 -- "/suu probe api [words]": reads the client's own API documentation (what
 -- the in-game /api command shows) and saves every system, function, event,
 -- table and field whose name matches, with argument and field types, into
@@ -6,14 +6,14 @@
 -- Use: find out what the engine really offers (e.g. aura container filter
 -- options) instead of guessing from other addons.
 
-local _, ns = ...
-
-local AD = {}
-ns.ApiDocs = AD
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import trackerSoundFiles, trackerAuraSounds from "/UI/CooldownTracker"
+import after from "wowlua:timer"
 
 local DOC_ADDONS = { "Blizzard_APIDocumentationBasic", "Blizzard_APIDocumentation", "Blizzard_APIDocumentationGenerated" }
 
-local function load()
+local function load(): any
     for _, name in ipairs(DOC_ADDONS) do
         if C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(name) and not C_AddOns.IsAddOnLoaded(name) then
             pcall(C_AddOns.LoadAddOn, name)
@@ -22,7 +22,7 @@ local function load()
     return _G.APIDocumentation
 end
 
-local function typeText(v)
+local function typeText(v: any): string
     local t = tostring(v.Type or "?")
     if v.InnerType then t = t .. "<" .. tostring(v.InnerType) .. ">" end
     if v.Mixin then t = t .. "(" .. tostring(v.Mixin) .. ")" end
@@ -32,13 +32,13 @@ local function typeText(v)
     return t
 end
 
-local function fields(list)
-    local parts = {}
+local function fields(list: any): string
+    local parts: string[] = {}
     for _, v in ipairs(list or {}) do parts[#parts + 1] = tostring(v.Name) .. ": " .. typeText(v) end
     return table.concat(parts, ", ")
 end
 
-local function matches(name, words)
+local function matches(name: any, words: string[]): boolean
     name = tostring(name or ""):lower()
     for _, w in ipairs(words) do
         if name:find(w, 1, true) then return true end
@@ -46,13 +46,13 @@ local function matches(name, words)
     return false
 end
 
-function AD.Dump(words)
+export function dump(words: string[]): (string[]?, string?)
     local docs = load()
     if not docs or type(docs.systems) ~= "table" then
         return nil, "the client's API documentation didn't load"
     end
-    local lines = {}
-    local function add(s) lines[#lines + 1] = s end
+    local lines: string[] = {}
+    local function add(s: string) lines[#lines + 1] = s end
     for _, sys in ipairs(docs.systems) do
         local sysName = (sys.Namespace or sys.Name or "?")
         local whole = matches(sys.Name, words) or matches(sys.Namespace, words)
@@ -88,17 +88,17 @@ end
 -- What the documentation says of some functions beyond their types: every
 -- plain field of each one's entry (HasRestrictions, SecretArguments and the
 -- like), keyed by its full name; "not documented" for a name it lacks.
-function AD.Flags(names)
+export function flags(names: string[]): ({ [string]: string }?, string?)
     local docs = load()
     if not docs or type(docs.systems) ~= "table" then
         return nil, "the client's API documentation didn't load"
     end
-    local found, seen = {}, {}
+    local found: { [string]: string }, seen: { [string]: boolean } = {}, {}
     for _, sys in ipairs(docs.systems) do
         for _, f in ipairs(sys.Functions or {}) do
             for _, want in ipairs(names) do
                 if f.Name == want then
-                    local parts = {}
+                    local parts: string[] = {}
                     for k, v in pairs(f) do
                         if type(v) ~= "table" and type(v) ~= "function" and k ~= "Name" and k ~= "Type" then
                             parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
@@ -126,8 +126,8 @@ end
 
 local RUNTIME_WORDS = { "aura", "candidate", "filter" }
 
-local function keysOf(t)
-    local out = {}
+local function keysOf(t: { [any]: any }): string
+    local out: string[] = {}
     for k, v in pairs(t) do
         out[#out + 1] = tostring(k) .. (type(v) == "function" and "()" or (type(v) == "table" and " {…}" or (" = " .. tostring(v))))
     end
@@ -135,12 +135,12 @@ local function keysOf(t)
     return table.concat(out, ", ")
 end
 
-function AD.Runtime()
-    local lines = {}
-    local function add(s) lines[#lines + 1] = s end
+export function runtime()
+    local lines: string[] = {}
+    local function add(s: string) lines[#lines + 1] = s end
 
     -- Enums
-    for name, t in pairs(Enum or {}) do
+    for name, t in pairs(((Enum :: any) or {}) :: { [any]: any }) do
         if type(t) == "table" and matches(name, RUNTIME_WORDS) then add("Enum." .. name .. " { " .. keysOf(t) .. " }") end
     end
     -- global tables and functions (mixins, constants, utilities)
@@ -161,7 +161,7 @@ function AD.Runtime()
     local ok, c = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
     if ok and c then
         local mt = getmetatable(c)
-        local methods = {}
+        local methods: string[] = {}
         if mt and type(mt.__index) == "table" then
             for k, v in pairs(mt.__index) do if type(v) == "function" then methods[#methods + 1] = k end end
         end
@@ -179,9 +179,8 @@ function AD.Runtime()
         end
     end
     table.sort(lines)
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.runtime = { at = date("%Y-%m-%d %H:%M"), lines = lines }
-    ns.Print(("Runtime probe: %d entries saved. /reload to save them."):format(#lines))
+    DB.probe.runtime = { at = date("%Y-%m-%d %H:%M"), lines = lines }
+    print(("Runtime probe: %d entries saved. /reload to save them."):format(#lines))
 end
 
 -- "/suu probe filters": every aura filter word the game knows
@@ -194,17 +193,17 @@ local FILTER_TESTS = {
     "HARMFUL|CROWD_CONTROL", "HELPFUL|BIG_DEFENSIVE", "HELPFUL|IMPORTANT", "HELPFUL|NOTAFILTER",
 }
 
-function AD.Filters()
-    local lines = {}
-    local AU = AuraUtil or {}
-    local function dump(name, t, depth)
+export function filters()
+    local lines: string[] = {}
+    local AU: any = _G.AuraUtil or {}
+    local function dumpTable(name: string, t: any, depth: number)
         if type(t) ~= "table" or depth > 2 then return end
         for k, v in pairs(t) do
-            if type(v) == "table" then dump(name .. "." .. tostring(k), v, depth + 1)
+            if type(v) == "table" then dumpTable(name .. "." .. tostring(k), v, depth + 1)
             elseif type(v) ~= "function" then lines[#lines + 1] = ("%s.%s = %s"):format(name, tostring(k), tostring(v)) end
         end
     end
-    dump("AuraUtil.AuraFilters", AU.AuraFilters, 0)
+    dumpTable("AuraUtil.AuraFilters", AU.AuraFilters, 0)
     lines[#lines + 1] = "AuraUtil.AuraFilterNegationPrefix = " .. tostring(AU.AuraFilterNegationPrefix)
     for _, f in ipairs(FILTER_TESTS) do
         local ok, valid = pcall(AU.IsValidFilterString or function() return "n/a" end, f)
@@ -220,9 +219,8 @@ function AD.Filters()
         end
         c:Hide()
     end
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.filters = { at = date("%Y-%m-%d %H:%M"), lines = lines }
-    ns.Print(("Filter probe: %d lines saved. /reload to save them."):format(#lines))
+    DB.probe.filters = { at = date("%Y-%m-%d %H:%M"), lines = lines }
+    print(("Filter probe: %d lines saved. /reload to save them."):format(#lines))
 end
 
 -- "/suu probe sound": what C_UnitAuras.AddAuraSound wants. It isn't
@@ -240,10 +238,12 @@ local FILE_CANDIDATES = {
     warning = { 567397 },
 }
 
-function AD.SoundPlay()
-    local lines = {}
-    local steps = {}
-    local files = ns.UI.TrackerSoundFiles and ns.UI.TrackerSoundFiles() or {}
+type Step = { key: string, kit?: any, file?: any }
+
+export function soundPlay()
+    local lines: string[] = {}
+    local steps: Step[] = {}
+    local files: any = trackerSoundFiles() or {}
     for _, key in ipairs({ "chime", "ping", "proc", "warning" }) do
         local s = files[key]
         if s then
@@ -252,7 +252,7 @@ function AD.SoundPlay()
         end
     end
     for i, step in ipairs(steps) do
-        C_Timer.After((i - 1) * 2, function()
+        after((i - 1) * 2, function()
             local ok, willPlay, label
             if step.kit then
                 label = ("%s: sound kit %s"):format(step.key, step.kit)
@@ -263,32 +263,31 @@ function AD.SoundPlay()
             end
             local line = ("%d. %s -> %s"):format(i, label, ok and tostring(willPlay) or ("error " .. tostring(willPlay)))
             lines[#lines + 1] = line
-            ns.Print("Sound check " .. line)
-            SuuUIProbe.auraSoundPlay.lines = lines
+            print("Sound check " .. line)
+            DB.probe.auraSoundPlay.lines = lines
         end)
     end
-    local ids, what = {}, {}
-    if ns.UI.TrackerAuraSounds then ids, what = ns.UI.TrackerAuraSounds() end
+    local ids: any, what: any = trackerAuraSounds()
     lines[#lines + 1] = ("%d aura sounds registered"):format(#ids)
     for i, id in ipairs(ids) do lines[#lines + 1] = ("  #%s %s"):format(tostring(id), tostring(what[i])) end
     if what.error then lines[#lines + 1] = "last error: " .. what.error end
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.auraSoundPlay = { at = date("%Y-%m-%d %H:%M"), lines = lines }
-    ns.Print(("Sound check: %d lines saved. /reload to save them."):format(#lines))
+    DB.probe.auraSoundPlay = { at = date("%Y-%m-%d %H:%M"), lines = lines }
+    print(("Sound check: %d lines saved. /reload to save them."):format(#lines))
 end
 
-function AD.Sound()
-    local lines = {}
-    local U = C_UnitAuras or {}
-    local trig = Enum.UnitAuraSoundTrigger and Enum.UnitAuraSoundTrigger.Added or 0
+export function sound()
+    local lines: string[] = {}
+    local U: any = C_UnitAuras or {}
+    local E: any = Enum
+    local trig = E.UnitAuraSoundTrigger and E.UnitAuraSoundTrigger.Added or 0
     local id = 1126 -- Mark of the Wild, rank 1
     -- unitToken is required (round 1); now the sound field's name
-    local base = function(extra)
-        local t = { spellID = id, unitToken = "player" }
+    local base = function(extra: { [string]: any }): { [string]: any }
+        local t: { [string]: any } = { spellID = id, unitToken = "player" }
         for k, v in pairs(extra) do t[k] = v end
         return t
     end
-    local tries = {
+    local tries: { [number]: any }[] = {
         { "soundKitID", base({ soundKitID = 8960 }) },
         { "soundKit", base({ soundKit = 8960 }) },
         { "soundID", base({ soundID = 8960 }) },
@@ -308,21 +307,19 @@ function AD.Sound()
     end
     local ok, res = pcall(U.AddPrivateAuraAppliedSound, {})
     lines[#lines + 1] = "AddPrivateAuraAppliedSound({}) -> " .. (ok and ("ok, " .. tostring(res)) or ("error: " .. tostring(res)))
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.auraSound = { at = date("%Y-%m-%d %H:%M"), lines = lines }
-    ns.Print(("Sound probe: %d tries saved. /reload to save them."):format(#lines))
+    DB.probe.auraSound = { at = date("%Y-%m-%d %H:%M"), lines = lines }
+    print(("Sound probe: %d tries saved. /reload to save them."):format(#lines))
 end
 
-function AD.Command(arg)
-    local words = {}
+export function command(arg: string?)
+    local words: string[] = {}
     for w in tostring(arg or ""):gmatch("%S+") do words[#words + 1] = w:lower() end
     if #words == 0 then words = { "aura", "candidate", "container", "filter" } end
-    local lines, err = AD.Dump(words)
+    local lines, err = dump(words)
     if not lines then
-        ns.Print("API docs: " .. err)
+        print("API docs: " .. tostring(err))
         return
     end
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.apiDocs = { at = date("%Y-%m-%d %H:%M"), words = words, lines = lines }
-    ns.Print(("API docs: %d lines about %s saved. /reload to save them."):format(#lines, table.concat(words, ", ")))
+    DB.probe.apiDocs = { at = date("%Y-%m-%d %H:%M"), words = words, lines = lines }
+    print(("API docs: %d lines about %s saved. /reload to save them."):format(#lines, table.concat(words, ", ")))
 end

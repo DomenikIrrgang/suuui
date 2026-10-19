@@ -1,4 +1,4 @@
--- Diagnostics/ProfessionProbe.lua
+-- Diagnostics/ProfessionProbe.wowlua
 -- "/suu probe professions": what Forever's professions give an addon, for
 -- SuuUI's own Professions window (step 3.3). Saved in
 -- SuuUIProbe.professions[skillLine] on /reload, one per profession probed.
@@ -16,14 +16,12 @@
 --   /suu probe professions   with a profession's window open (cooking, first
 --                            aid, a crafting one), then /reload
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
 
-local PP = {}
-ns.ProfessionProbe = PP
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v, depth)
+local function show(v: any, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
@@ -40,7 +38,7 @@ local function show(v, depth)
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -49,28 +47,27 @@ local function call(fn, ...)
     return table.concat(parts, " | ")
 end
 
-local function raw(fn, ...)
+local function raw(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local res = { pcall(fn, ...) }
     if res[1] then return select(2, unpack(res)) end
 end
 
-local function namesIn(t)
-    local out = {}
+local function namesIn(t: any): string[]
+    local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
     table.sort(out)
     return out
 end
 
-function PP.Sample()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")) }
+export function sample(): { [string]: any }
+    local store: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")) }
     -- one per profession (its skill line), so each open window keeps its own;
     -- a probe from before that layout (a single one) is dropped
-    local saved = SuuUIProbe.professions
+    local saved = DB.probe.professions
     if type(saved) ~= "table" or saved.at then saved = {} end
-    SuuUIProbe.professions = saved
+    DB.probe.professions = saved
     store.api = namesIn(C_TradeSkillUI)
     -- your professions
     local list = { raw(GetProfessions) }
@@ -170,8 +167,8 @@ function PP.Sample()
         r.tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false)
         r.description = call(C_TradeSkillUI.GetRecipeDescription, id, {})
         r.outputLink = call(C_TradeSkillUI.GetRecipeItemLink, id)
-        r.numMade = call(C_TradeSkillUI.GetRecipeNumItemsProduced, id)
-        r.tools = call(C_TradeSkillUI.GetRecipeTools, id)
+        r.numMade = call((C_TradeSkillUI :: any).GetRecipeNumItemsProduced, id)
+        r.tools = call((C_TradeSkillUI :: any).GetRecipeTools, id)
         r.source = call(C_TradeSkillUI.GetRecipeSourceText, id)
         -- your counts of its reagents
         local sch = raw(C_TradeSkillUI.GetRecipeSchematic, id, false)
@@ -190,8 +187,8 @@ function PP.Sample()
     return store
 end
 
-function PP.Command()
-    local store = PP.Sample()
-    ns.Print(("Profession probe: %s, %d recipes saved (ready: %s). /reload to save."):format(
+export function command()
+    local store = sample()
+    print(("Profession probe: %s, %d recipes saved (ready: %s). /reload to save."):format(
         tostring(store.name or "no profession window open"), #store.all, tostring(store.ready)))
 end

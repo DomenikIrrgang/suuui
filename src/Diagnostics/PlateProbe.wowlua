@@ -1,4 +1,4 @@
--- Diagnostics/PlateProbe.lua
+-- Diagnostics/PlateProbe.wowlua
 -- "/suu probe plates": what nameplates allow on Forever (plan step 1.10),
 -- before SuuUI builds its own. Per sample, for every visible nameplate:
 -- whether the plate and Blizzard's unit frame on it are forbidden, whether
@@ -12,24 +12,24 @@
 --   /suu probe plates        arm and sample now (stand near mobs or players)
 --   /suu probe plates off    stop sampling
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as Events from "/Core/Events"
 
-local Events = ns.Events
-
-local PP = {}
-ns.PlateProbe = PP
-
-local isSecret = issecretvalue or function() return false end
+-- owns the fight listeners (was the probe's table)
+local OWNER = {}
 local MAX_SAMPLES = 12
 local armed = false
 
-local function describe(v)
+local function describe(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     return "readable: " .. tostring(v)
 end
 
-local function try(fn, ...)
+local function try(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local ok, a, b = pcall(fn, ...)
     if not ok then return "error: " .. tostring(a):sub(1, 120) end
@@ -37,7 +37,7 @@ local function try(fn, ...)
     return describe(a)
 end
 
-local function forbidden(frame)
+local function forbidden(frame: any): string
     if not frame then return "none" end
     local ok, f = pcall(frame.IsForbidden, frame)
     if not ok then return "error" end
@@ -45,9 +45,9 @@ local function forbidden(frame)
 end
 
 -- The APIs, enums and CVars SuuUI's plates would use.
-local function environment()
-    local env = {}
-    local function has(name, value) env[name] = value ~= nil and (type(value) == "function" and "function" or "present") or "missing" end
+local function environment(): { [string]: string }
+    local env: { [string]: string } = {}
+    local function has(name: string, value: any) env[name] = value ~= nil and (type(value) == "function" and "function" or "present") or "missing" end
     has("C_NamePlate.GetNamePlateForUnit", C_NamePlate and C_NamePlate.GetNamePlateForUnit)
     has("C_NamePlate.GetNamePlates", C_NamePlate and C_NamePlate.GetNamePlates)
     has("C_NamePlate.SetNamePlateSize", C_NamePlate and C_NamePlate.SetNamePlateSize)
@@ -55,8 +55,8 @@ local function environment()
     has("C_NamePlateManager.SetNamePlateHitTestInsets", C_NamePlateManager and C_NamePlateManager.SetNamePlateHitTestInsets)
     has("Enum.NamePlateType", Enum.NamePlateType)
     has("Enum.NamePlateStackType", Enum.NamePlateStackType)
-    has("NamePlateDriverFrame", NamePlateDriverFrame)
-    has("NamePlateDriverFrame.OnNamePlateAdded", NamePlateDriverFrame and NamePlateDriverFrame.OnNamePlateAdded)
+    has("NamePlateDriverFrame", _G.NamePlateDriverFrame)
+    has("NamePlateDriverFrame.OnNamePlateAdded", _G.NamePlateDriverFrame and _G.NamePlateDriverFrame.OnNamePlateAdded)
     has("UnitCastingDuration", UnitCastingDuration)
     has("UnitChannelDuration", UnitChannelDuration)
     has("C_CurveUtil.EvaluateColorValueFromBoolean", C_CurveUtil and C_CurveUtil.EvaluateColorValueFromBoolean)
@@ -68,7 +68,7 @@ local function environment()
         env["cvar " .. cvar] = ok and tostring(v) or "missing"
     end
     -- other nameplate addons: two would fight over the same plates
-    local loaded = {}
+    local loaded: string[] = {}
     for _, name in ipairs({ "Plater", "Kui_Nameplates", "TidyPlates_ThreatPlates", "Platynator", "NeatPlates" }) do
         if C_AddOns.IsAddOnLoaded(name) then loaded[#loaded + 1] = name end
     end
@@ -76,9 +76,9 @@ local function environment()
     return env
 end
 
-local function samplePlate(unit)
-    local plate = C_NamePlate.GetNamePlateForUnit(unit)
-    local r = {}
+local function samplePlate(unit: string): { [string]: string }
+    local plate: any = C_NamePlate.GetNamePlateForUnit(unit)
+    local r: { [string]: string } = {}
     r.plate = forbidden(plate)
     if plate and r.plate == "ok" then
         local uf = plate.UnitFrame
@@ -92,19 +92,18 @@ local function samplePlate(unit)
     r.threatOnYou = try(UnitThreatSituation, "player", unit)
     r.isTarget = try(UnitIsUnit, unit, "target")
     r.reaction = try(UnitReaction, unit, "player")
-    local okCast, castName, _, _, _, _, _, _, notInterruptible = pcall(UnitCastingInfo, unit)
+    local okCast, castName, _, _, _, _, _, _, notInterruptible = pcall(UnitCastingInfo :: any, unit)
     r.casting = not okCast and "error" or (isSecret(castName) and "secret" or (castName and ("readable: " .. castName) or "none"))
     if okCast and castName ~= nil then r.castInterruptible = describe(notInterruptible) end
     r.castDuration = UnitCastingDuration and try(UnitCastingDuration, unit) or "missing"
     return r
 end
 
-function PP.Sample(label)
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.plates or { samples = {} }
-    SuuUIProbe.plates = store
+export function sample(label: string?): { [string]: any }
+    local store = DB.probe.plates or { samples = {} }
+    DB.probe.plates = store
     store.environment = environment()
-    local s = {
+    local s: { [string]: any } = {
         at = date("%H:%M:%S"), label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         instance = select(2, IsInInstance()) or "none",
@@ -128,30 +127,30 @@ end
 
 local function onFight()
     if not armed then return end
-    C_Timer.After(1, function() if armed then PP.Sample("1s into the fight") end end)
-    C_Timer.After(4, function()
+    after(1, function() if armed then sample("1s into the fight") end end)
+    after(4, function()
         if armed then
-            PP.Sample("4s into the fight")
-            ns.Print("Plate probe: fight sampled. /reload to save.")
+            sample("4s into the fight")
+            print("Plate probe: fight sampled. /reload to save.")
         end
     end)
 end
 
 local function afterFight()
-    if armed then C_Timer.After(1, function() if armed then PP.Sample("after the fight") end end) end
+    if armed then after(1, function() if armed then sample("after the fight") end end) end
 end
 
-function PP.Command(arg)
+export function command(arg: string?)
     if arg == "off" then
         armed = false
-        ns.Print("Plate probe: off.")
+        print("Plate probe: off.")
         return
     end
     if not armed then
         armed = true
-        Events.OnGame("PLAYER_REGEN_DISABLED", onFight, PP)
-        Events.OnGame("PLAYER_REGEN_ENABLED", afterFight, PP)
+        Events.onGame("PLAYER_REGEN_DISABLED", onFight, OWNER)
+        Events.onGame("PLAYER_REGEN_ENABLED", afterFight, OWNER)
     end
-    local s = PP.Sample("on command")
-    ns.Print(("Plate probe: armed (%d plates now). Fight something (a caster if you can), then /reload."):format(s.count))
+    local s = sample("on command")
+    print(("Plate probe: armed (%d plates now). Fight something (a caster if you can), then /reload."):format(s.count))
 end

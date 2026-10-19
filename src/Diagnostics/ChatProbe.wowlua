@@ -1,4 +1,4 @@
--- Diagnostics/ChatProbe.lua
+-- Diagnostics/ChatProbe.wowlua
 -- "/suu probe chat": where this client keeps its chat window functions
 -- (adding and removing channels and message groups, opening and naming
 -- windows). Globals, ChatFrameUtil, ChatFrame1's own methods and C_ChatInfo
@@ -8,22 +8,20 @@
 -- mode, which key scripts it has, and every global, mixin method or field
 -- whose name mentions history (send a couple of lines before probing).
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import isSecret from "wowlua:secret"
 
-local CP = {}
-ns.ChatProbe = CP
-
-local isSecret = issecretvalue or function() return false end
 local WORDS = { "channel", "messagegroup", "chatwindow", "fcf_", "chatframe_" }
 
-local function matches(name)
+local function matches(name: string): boolean
     local low = name:lower()
     for _, w in ipairs(WORDS) do if low:find(w, 1, true) then return true end end
     return false
 end
 
-local function functionsIn(t, filter)
-    local out = {}
+local function functionsIn(t: any, filter: boolean?): string[]
+    local out: string[] = {}
     if type(t) ~= "table" then return out end
     for k, v in pairs(t) do
         if type(k) == "string" and type(v) == "function" and (not filter or matches(k)) then out[#out + 1] = k end
@@ -32,8 +30,7 @@ local function functionsIn(t, filter)
     return out
 end
 
-function CP.Command()
-    SuuUIProbe = SuuUIProbe or {}
+export function command()
     local out = { at = date("%H:%M:%S") }
     local globals = {}
     for k, v in pairs(_G) do
@@ -49,7 +46,7 @@ function CP.Command()
     -- the windows and what they hold
     out.windows = {}
     for i = 1, (NUM_CHAT_WINDOWS or 10) do
-        local name, size, _, _, _, _, shown, locked, docked = GetChatWindowInfo(i)
+        local name, _size, _, _, _, _, shown, _locked, docked = GetChatWindowInfo(i)
         local w = { name = isSecret(name) and "secret" or tostring(name), shown = tostring(shown), docked = tostring(docked) }
         local ok, channels = pcall(function() return { GetChatWindowChannels(i) } end)
         w.channels = ok and table.concat((function()
@@ -70,10 +67,10 @@ function CP.Command()
     for i = 1, #list, 3 do chans[#chans + 1] = tostring(list[i]) .. ":" .. tostring(list[i + 1]) end
     out.channelList = table.concat(chans, ", ")
     -- the input field and its history
-    local eb = ChatFrame1EditBox
+    local eb = _G.ChatFrame1EditBox
     local edit = {}
     if eb then
-        local function try(m) if eb[m] then local ok, v = pcall(eb[m], eb); return ok and (isSecret(v) and "secret" or tostring(v)) or "error" end return "missing" end
+        local function try(m: string): string if eb[m] then local ok, v = pcall(eb[m], eb); return ok and (isSecret(v) and "secret" or tostring(v)) or "error" end return "missing" end
         edit.historyLines = try("GetHistoryLines")
         edit.altArrowKeyMode = try("GetAltArrowKeyMode")
         edit.multiLine = try("IsMultiLine")
@@ -114,6 +111,6 @@ function CP.Command()
     local lastUsed = ChatEdit_GetLastActiveWindow and ChatEdit_GetLastActiveWindow()
     edit.lastActiveWindow = lastUsed and lastUsed:GetName() or "none"
     out.editBox = edit
-    SuuUIProbe.chat = out
-    ns.Print(("Chat probe: %d global functions found. /reload to save."):format(#globals))
+    DB.probe.chat = out
+    print(("Chat probe: %d global functions found. /reload to save."):format(#globals))
 end

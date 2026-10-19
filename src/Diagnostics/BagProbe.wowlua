@@ -1,4 +1,4 @@
--- Diagnostics/BagProbe.lua
+-- Diagnostics/BagProbe.wowlua
 -- "/suu probe bags": what Forever offers for SuuUI's bags and bank (step
 -- 2.5). Saved in SuuUIProbe.bags on /reload.
 --   * C_Container, C_Bank, C_NewItems, the bag numbering (Enum.BagIndex and
@@ -17,14 +17,12 @@
 --                            equip and swap back), then /reload
 --   /suu probe bags item off hide it
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
 
-local BP = {}
-ns.BagProbe = BP
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
@@ -36,8 +34,8 @@ local function show(v)
     return tostring(v)
 end
 
-local function namesIn(t)
-    local out = {}
+local function namesIn(t: any): string[]
+    local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
     table.sort(out)
@@ -68,7 +66,7 @@ local EVENTS = {
     "GUILDBANKFRAME_OPENED", "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE",
 }
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -78,16 +76,16 @@ local function call(fn, ...)
 end
 
 -- One bag: its size, free slots, name, family and the first few items.
-local function bag(index)
+local function bag(index: number): { [string]: any }
     local C = C_Container
-    local b = { index = index }
+    local b: { [string]: any } = { index = index }
     b.slots = call(C.GetContainerNumSlots, index)
     b.free = call(C.GetContainerNumFreeSlots, index)
     b.name = call(C.GetBagName, index)
     b.inventoryID = call(C.ContainerIDToInventoryID, index)
     local n = C.GetContainerNumSlots and C.GetContainerNumSlots(index) or 0
     if isSecret(n) then n = 0 end
-    local items = {}
+    local items: string[] = {}
     for slot = 1, math.min(n or 0, 40) do
         local ok, info = pcall(C.GetContainerItemInfo, index, slot)
         if ok and info then
@@ -101,12 +99,12 @@ local function bag(index)
 end
 
 local logging = false
-local function startLog(store)
+local function startLog(store: { [string]: any })
     if logging then return end
     logging = true
     store.log = store.log or {}
-    local function note(s)
-        local log = SuuUIProbe.bags and SuuUIProbe.bags.log
+    local function note(s: string)
+        local log = DB.probe.bags and DB.probe.bags.log
         if not log then return end
         log[#log + 1] = date("%H:%M:%S") .. (InCombatLockdown() and " [combat] " or " ") .. s
         while #log > 200 do table.remove(log, 1) end
@@ -134,10 +132,9 @@ local function startLog(store)
     f:SetScript("OnEvent", function(_, event, a, b) note(event .. " " .. show(a) .. " " .. show(b)) end)
 end
 
-function BP.Sample()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.bags or {}
-    SuuUIProbe.bags = store
+export function sample(): ({ [string]: any }, { [string]: any })
+    local store: { [string]: any } = DB.probe.bags or {}
+    DB.probe.bags = store
     local at = date("%H:%M:%S")
     store.C_Container = namesIn(C_Container)
     store.C_Bank = namesIn(C_Bank)
@@ -150,7 +147,7 @@ function BP.Sample()
     end
     store.globals = globals
     local enum = {}
-    for k, v in pairs(Enum.BagIndex or {}) do enum[#enum + 1] = tostring(k) .. "=" .. tostring(v) end
+    for k, v in pairs((Enum.BagIndex :: any) or {}) do enum[#enum + 1] = tostring(k) .. "=" .. tostring(v) end
     table.sort(enum)
     store.bagIndex = enum
     local valid = C_EventUtils and C_EventUtils.IsEventValid
@@ -192,10 +189,10 @@ function BP.Sample()
         end
     end
     -- the bags: every index the game names, and 0..12 besides
-    local sample = { at = at, bankOpen = BankFrame and BankFrame:IsShown() and true or false, money = show(GetMoney()) }
+    local snap: { [string]: any } = { at = at, bankOpen = BankFrame and BankFrame:IsShown() and true or false, money = show(GetMoney()) }
     local seen, bags = {}, {}
     local indexes = {}
-    for _, v in pairs(Enum.BagIndex or {}) do indexes[#indexes + 1] = v end
+    for _, v in pairs((Enum.BagIndex :: any) or {}) do indexes[#indexes + 1] = v end
     for i = -3, 12 do indexes[#indexes + 1] = i end
     table.sort(indexes)
     for _, i in ipairs(indexes) do
@@ -205,58 +202,63 @@ function BP.Sample()
             if b.slots ~= "0" and b.slots ~= "nil" and b.slots ~= "missing" then bags[#bags + 1] = b end
         end
     end
-    sample.bags = bags
+    snap.bags = bags
     store.samples = store.samples or {}
-    table.insert(store.samples, sample)
+    table.insert(store.samples, snap)
     while #store.samples > 4 do table.remove(store.samples, 1) end
     startLog(store)
-    return store, sample
+    return store, snap
 end
 
 -- A test item button for the backpack's first slot, from Blizzard's own
 -- template, in a parent whose ID is the bag (the template reads it).
-local testParent
-local function itemTest(off)
+interface TestParent extends Frame
+    button: any
+end
+
+local testParent: TestParent? = nil
+local function itemTest(off: boolean)
     if off then
         if testParent then testParent:Hide() end
-        ns.Print("Bag probe: test button hidden.")
+        print("Bag probe: test button hidden.")
         return
     end
-    if InCombatLockdown() then ns.Print("Bag probe: make it out of combat.") return end
-    SuuUIProbe = SuuUIProbe or {}
-    local log = { clicks = {}, blocked = {}, locks = {} }
-    SuuUIProbe.bagItem = log
-    if not testParent then
-        testParent = CreateFrame("Frame", "SuuUIBagProbeParent", UIParent)
-        testParent:SetID(0)
-        testParent:SetSize(40, 40)
-        testParent:SetPoint("CENTER", 0, 160)
-        local ok, b = pcall(CreateFrame, "ItemButton", "SuuUIBagProbeItem", testParent, "ContainerFrameItemButtonTemplate")
+    if InCombatLockdown() then print("Bag probe: make it out of combat.") return end
+    local log: { [string]: any } = { clicks = {}, blocked = {}, locks = {} }
+    DB.probe.bagItem = log
+    local tp = testParent
+    if not tp then
+        tp = CreateFrame("Frame", "SuuUIBagProbeParent", UIParent) :: TestParent
+        testParent = tp
+        tp:SetID(0)
+        tp:SetSize(40, 40)
+        tp:SetPoint("CENTER", 0, 160)
+        local ok, b = pcall(CreateFrame, "ItemButton", "SuuUIBagProbeItem", tp, "ContainerFrameItemButtonTemplate")
         if not ok then
             log.error = tostring(b)
-            ns.Print("Bag probe: the template didn't make a button: " .. tostring(b))
+            print("Bag probe: the template didn't make a button: " .. tostring(b))
             return
         end
         b:SetID(1)
         b:SetAllPoints()
         b:HookScript("PostClick", function(_, button)
-            local l = SuuUIProbe.bagItem
+            local l = DB.probe.bagItem
             if l then l.clicks[#l.clicks + 1] = date("%H:%M:%S") .. " " .. tostring(button) .. (InCombatLockdown() and " in combat" or "") end
         end)
-        testParent.button = b
+        tp.button = b
         local ev = CreateFrame("Frame")
         ev:RegisterEvent("ADDON_ACTION_BLOCKED")
         ev:RegisterEvent("ADDON_ACTION_FORBIDDEN")
         ev:RegisterEvent("ITEM_LOCK_CHANGED")
         ev:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
         ev:SetScript("OnEvent", function(_, event, a, b2)
-            local l = SuuUIProbe.bagItem
+            local l = DB.probe.bagItem
             if not l then return end
             local entry = date("%H:%M:%S") .. " " .. event .. " " .. show(a) .. " " .. show(b2) .. (InCombatLockdown() and " in combat" or "")
             if event:find("ADDON_ACTION") then l.blocked[#l.blocked + 1] = entry else l.locks[#l.locks + 1] = entry end
         end)
     end
-    local b = testParent.button
+    local b = tp.button
     local info = C_Container.GetContainerItemInfo(0, 1)
     -- the template starts hidden; its art from the game's own helper
     if SetItemButtonTexture then pcall(SetItemButtonTexture, b, info and info.iconFileID) end
@@ -267,15 +269,15 @@ local function itemTest(off)
     log.bagID = b.GetBagID and call(b.GetBagID, b) or "no GetBagID"
     log.slotID = call(b.GetID, b)
     log.hasBagIDField = b.bagID ~= nil and show(b.bagID) or "no field"
-    testParent:Show()
+    tp:Show()
     b:Show()
-    ns.Print("Bag probe: a test button for your backpack's first slot (" .. tostring(log.item) .. ") above the middle. Right click it out of combat and in combat, then /reload.")
+    print("Bag probe: a test button for your backpack's first slot (" .. tostring(log.item) .. ") above the middle. Right click it out of combat and in combat, then /reload.")
 end
 
-function BP.Command(arg)
+export function command(arg: string?)
     if arg == "item" then return itemTest(false) end
     if arg == "item off" then return itemTest(true) end
-    local _, sample = BP.Sample()
-    ns.Print(("Bag probe: %d bags%s. Logging bag opens until /reload; at a banker run it again."):format(
-        #sample.bags, sample.bankOpen and " (bank open)" or ""))
+    local _, snap = sample()
+    print(("Bag probe: %d bags%s. Logging bag opens until /reload; at a banker run it again."):format(
+        #snap.bags, snap.bankOpen and " (bank open)" or ""))
 end

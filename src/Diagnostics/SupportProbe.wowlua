@@ -1,4 +1,4 @@
--- Diagnostics/SupportProbe.lua
+-- Diagnostics/SupportProbe.wowlua
 -- "/suu probe support": can the Support window be SuuUI's own entirely
 -- (asked 2026-10-17: a window SuuUI can redo, it redoes)? The game's is a
 -- web page in a Browser frame (HelpBrowser:NavigateHome("KnowledgeBase")).
@@ -10,30 +10,29 @@
 -- page loads and takes clicks and typing. Saved in SuuUIProbe.support on
 -- /reload.
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import button from "/UI/Controls"
+import panel as makePanel, Panel from "/UI/Panel"
 
-local SP = {}
-ns.SupportProbe = SP
-
-local UI = ns.UI
+local panel: Panel? = nil
 
 local EVENTS = { "SIMPLE_BROWSER_WEB_PROXY_FAILED", "SIMPLE_BROWSER_WEB_ERROR" }
 
-function SP.Command()
-    SuuUIProbe = SuuUIProbe or {}
+export function command()
     local out = { at = date("%Y-%m-%d %H:%M:%S"), calls = {}, events = {} }
-    SuuUIProbe.support = out
-    local function note(text)
+    DB.probe.support = out
+    local function note(text: string)
         out.calls[#out.calls + 1] = date("%H:%M:%S ") .. text
-        ns.Print("Support probe: " .. text)
+        print("Support probe: " .. text)
     end
-    local function try(label, fn, ...)
+    local function try(label: string, fn: any, ...: any): boolean
         local ok, err = pcall(fn, ...)
         note(("%s: %s"):format(label, ok and "ok" or ("error " .. tostring(err))))
         return ok
     end
-    local p = SP.panel or UI.Panel(UIParent, { title = "Support probe", width = 1000, height = 700, solid = true })
-    SP.panel = p
+    local p = panel or makePanel(UIParent, { title = "Support probe", width = 1000, height = 700, solid = true })
+    panel = p
     p:SetFrameStrata("HIGH")
     p:ClearAllPoints()
     p:SetPoint("CENTER")
@@ -52,7 +51,7 @@ function SP.Command()
             if not ok or not b then return end
             p.own = b
             b:SetAllPoints(area)
-            local methods = {}
+            local methods: string[] = {}
             local mt = getmetatable(b)
             if mt and type(mt.__index) == "table" then
                 for k in pairs(mt.__index) do
@@ -105,7 +104,7 @@ function SP.Command()
         }
         local prev
         for _, d in ipairs(defs) do
-            local b = UI.Button(p.body, { text = d[1], width = 120, onClick = d[2] })
+            local b = button(p.body, { text = d[1], width = 120, onClick = d[2] })
             b:SetPoint("TOPLEFT", prev or p.body, prev and "TOPRIGHT" or "TOPLEFT", prev and 8 or 0, 0)
             prev = b
         end
@@ -120,6 +119,6 @@ function SP.Command()
     end
     p:Show()
     own()
-    ns.Print("Support probe: SuuUI's own browser first. Screenshot it, click a link and type in the search;"
+    print("Support probe: SuuUI's own browser first. Screenshot it, click a link and type in the search;"
         .. " then \"Game's browser\" and the same. Close and /reload.")
 end

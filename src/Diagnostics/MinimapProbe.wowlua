@@ -1,4 +1,4 @@
--- Diagnostics/MinimapProbe.lua
+-- Diagnostics/MinimapProbe.wowlua
 -- "/suu probe minimap": what Forever lets an addon change about what the
 -- engine draws on the minimap (step 2.1's open parts). Saved in
 -- SuuUIProbe.minimap on /reload.
@@ -13,32 +13,30 @@
 --   /suu probe minimap arrow      your arrow becomes SuuUI's (look at the map)
 --   /suu probe minimap arrow off  Blizzard's arrow back
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import isSecret from "wowlua:secret"
 
-local MmP = {}
-ns.MinimapProbe = MmP
-
-local isSecret = issecretvalue or function() return false end
 local ARROW = "Interface\\AddOns\\SuuUI\\Media\\Textures\\PlayerArrow.tga"
 
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 140) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, ", ")
 end
 
 -- Minimap's methods whose names matter here
-local function methods()
-    local out = {}
+local function methods(): string[]
+    local out: string[] = {}
     local mt = getmetatable(Minimap)
     local index = mt and mt.__index
     if type(index) ~= "table" then return { "no metatable index" } end
@@ -52,17 +50,16 @@ local function methods()
     return out
 end
 
-function MmP.Sample()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.minimap or { samples = {} }
-    SuuUIProbe.minimap = store
+export function sample(): { [string]: any }
+    local store = DB.probe.minimap or { samples = {} }
+    DB.probe.minimap = store
     store.methods = methods()
     local s = {
         at = date("%H:%M:%S"),
         instance = select(2, IsInInstance()) or "none",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
         combat = InCombatLockdown() and "in combat" or "out of combat",
-    }
+    } :: { [string]: any }
     s.zoom = call(Minimap.GetZoom, Minimap) .. " of " .. call(Minimap.GetZoomLevels, Minimap)
     s.viewRadius = C_Minimap and call(C_Minimap.GetViewRadius) or "missing"
     s.uiMapID = C_Minimap and call(C_Minimap.GetUiMapID) or "missing"
@@ -109,21 +106,20 @@ function MmP.Sample()
     return s
 end
 
-function MmP.Command(arg)
+export function command(arg: string?)
     if arg == "arrow" then
         local ok, err = pcall(Minimap.SetPlayerTexture, Minimap, ARROW)
-        ns.Print(ok and "Minimap probe: your arrow is SuuUI's now. Does it show? (/suu probe minimap arrow off)"
+        print(ok and "Minimap probe: your arrow is SuuUI's now. Does it show? (/suu probe minimap arrow off)"
             or ("Minimap probe: SetPlayerTexture failed: " .. tostring(err)))
-        SuuUIProbe = SuuUIProbe or {}
-        SuuUIProbe.minimapArrow = ok and "set" or tostring(err)
+        DB.probe.minimapArrow = ok and "set" or tostring(err)
         return
     end
     if arg == "arrow off" then
         pcall(Minimap.SetPlayerTexture, Minimap, "Interface\\Minimap\\MinimapArrow")
-        ns.Print("Minimap probe: Blizzard's arrow back.")
+        print("Minimap probe: Blizzard's arrow back.")
         return
     end
-    local s = MmP.Sample()
-    ns.Print(("Minimap probe: %d methods, %s, %s. Sample in a dungeon and in a group too, then /reload."):format(
-        #SuuUIProbe.minimap.methods, s.instance, s.group))
+    local s = sample()
+    print(("Minimap probe: %d methods, %s, %s. Sample in a dungeon and in a group too, then /reload."):format(
+        #DB.probe.minimap.methods, s.instance, s.group))
 end

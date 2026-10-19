@@ -1,4 +1,4 @@
--- Diagnostics/SkysightProbe.lua
+-- Diagnostics/SkysightProbe.wowlua
 -- "/suu probe skysight" (asked 2026-10-19: a world map filter for the
 -- Convergences of Elements, the tornadoes a Skyborne uses Skysight at; no
 -- data names their places but one): what the game tells about them.
@@ -11,32 +11,30 @@
 --          they come and go (VIGNETTE_MINIMAP_UPDATED), with their places
 -- Saved in SuuUIProbe.skysight on /reload. Values the game hides read SECRET.
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
 
-local SP = {}
-ns.SkysightProbe = SP
-
-local isSecret = issecretvalue or function() return false end
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "SECRET" end
     if type(v) == "table" and v.x then return ("%.4f,%.4f"):format(v.x, v.y) end
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): (any, any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d = pcall(fn, ...)
     if ok then return a, b, c, d end
 end
 
-local function out()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.skysight = SuuUIProbe.skysight or {}
-    return SuuUIProbe.skysight
+local function out(): { [string]: any }
+    DB.probe.skysight = DB.probe.skysight or {}
+    return DB.probe.skysight
 end
 
 local NAMES = { "skysight", "convergen", "tornado", "cyclone" }
-local function matches(text)
+local function matches(text: any): boolean
     if type(text) ~= "string" or isSecret(text) then return false end
     local low = text:lower()
     for _, n in ipairs(NAMES) do
@@ -45,14 +43,14 @@ local function matches(text)
     return false
 end
 
-local function here()
+local function here(): string
     local map = C_Map.GetBestMapForUnit("player")
     local pos = map and call(C_Map.GetPlayerMapPosition, map, "player")
     return ("map %s at %s"):format(show(map), show(pos))
 end
 
 -- Skysight in the spellbook, by name
-local function findSkysight()
+local function findSkysight(): string
     local SB = C_SpellBook
     if not (SB and SB.GetNumSpellBookSkillLines) then return "no C_SpellBook" end
     local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
@@ -75,8 +73,8 @@ local function findSkysight()
     return "not in the spellbook"
 end
 
-local function vignettes()
-    local list = {}
+local function vignettes(): string[]
+    local list: string[] = {}
     local map = C_Map.GetBestMapForUnit("player")
     for _, guid in ipairs(call(C_VignetteInfo and C_VignetteInfo.GetVignettes) or {}) do
         local v = call(C_VignetteInfo.GetVignetteInfo, guid)
@@ -89,8 +87,8 @@ local function vignettes()
     return list
 end
 
-local function areaPOIs()
-    local list = {}
+local function areaPOIs(): string[]
+    local list: string[] = {}
     local map = C_Map.GetBestMapForUnit("player")
     for _, id in ipairs(map and call(C_AreaPoiInfo and C_AreaPoiInfo.GetAreaPOIForMap, map) or {}) do
         local p = call(C_AreaPoiInfo.GetAreaPOIInfo, map, id)
@@ -102,8 +100,8 @@ local function areaPOIs()
 end
 
 -- achievements with a criterion naming one (the game's own list of them)
-local function achievements()
-    local found = {}
+local function achievements(): any
+    local found: { [any]: any } = {}
     local A = C_AchievementInfo
     if not (GetCategoryList and GetCategoryNumAchievements and GetAchievementInfo) then return "no achievement API" end
     for _, cat in ipairs(call(GetCategoryList) or {}) do
@@ -111,7 +109,7 @@ local function achievements()
             local id, name = call(GetAchievementInfo, cat, i)
             if id then
                 local hit = matches(name)
-                local crit = {}
+                local crit: string[] = {}
                 for c = 1, (call(GetAchievementNumCriteria, id)) or 0 do
                     local text, _, done = call(GetAchievementCriteriaInfo, id, c)
                     if matches(text) or hit then crit[#crit + 1] = ("%s%s"):format(show(text), done and " (done)" or "") end
@@ -130,7 +128,7 @@ local function snapshot()
               achievements = achievements() }
 end
 
-local listening
+local listening: Frame? = nil
 local function listen()
     if listening then return end
     listening = CreateFrame("Frame")
@@ -150,8 +148,8 @@ local function listen()
             o.casts[i] = line
             -- the buff it gives: longer at a convergence (the user, 2026-10-19),
             -- so its duration tells whether you stood at one
-            C_Timer.After(0.5, function()
-                local buffs = {}
+            after(0.5, function()
+                local buffs: string[] = {}
                 for n = 1, 40 do
                     local a = call(C_UnitAuras.GetAuraDataByIndex, "player", n, "HELPFUL")
                     if type(a) ~= "table" then break end
@@ -166,7 +164,7 @@ local function listen()
                     end
                 end
                 o.casts[i] = line .. "; buff: " .. (#buffs > 0 and table.concat(buffs, " | ") or "none found by name")
-                ns.Print(("Skysight probe: %s recorded where you stand; buff %s."):format(show(name), #buffs > 0 and buffs[1] or "not found"))
+                print(("Skysight probe: %s recorded where you stand; buff %s."):format(show(name), #buffs > 0 and buffs[1] or "not found"))
             end)
         else
             o.vignetteEvents = o.vignetteEvents or {}
@@ -178,8 +176,8 @@ local function listen()
     end)
 end
 
-function SP.Command()
+export function command(_rest: string?)
     snapshot()
     listen()
-    ns.Print("Skysight probe: recorded what the game gives here. Now go to a Convergence of Elements and use Skysight there (one or two); then /reload to save it.")
+    print("Skysight probe: recorded what the game gives here. Now go to a Convergence of Elements and use Skysight there (one or two); then /reload to save it.")
 end

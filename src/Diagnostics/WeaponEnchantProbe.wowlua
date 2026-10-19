@@ -1,4 +1,4 @@
--- Diagnostics/WeaponEnchantProbe.lua
+-- Diagnostics/WeaponEnchantProbe.wowlua
 -- "/suu probe weaponenchants" (asked 2026-10-19: temporary weapon enchants,
 -- a shaman's imbues, poisons, stones and oils, shown nowhere by SuuUI today,
 -- neither in the buff bar nor in the Cooldown Manager): what the client gives.
@@ -21,30 +21,34 @@
 -- Saved in SuuUIProbe.weaponenchants on /reload. Values the game hides read
 -- SECRET.
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after, every from "wowlua:timer"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
 
-local WP = {}
-ns.WeaponEnchantProbe = WP
+type Map = { [any]: any }
 
-local isSecret = issecretvalue or function() return false end
+-- the cancel button and the secure test's aura container (were WP.button
+-- and WP.secureFrame)
+local cancelButton: any = nil
+local secureFrame: any = nil
 
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "SECRET" end
     return tostring(v)
 end
 
-local function out()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.weaponenchants = SuuUIProbe.weaponenchants or {}
-    return SuuUIProbe.weaponenchants
+local function out(): Map
+    DB.probe.weaponenchants = DB.probe.weaponenchants or {}
+    return DB.probe.weaponenchants
 end
 
-local function push(list, line, cap)
+local function push(list: any[], line: any, cap: number?)
     if #list < (cap or 60) then list[#list + 1] = line end
 end
 
 local t0 = GetTime()
-local function stamp() return ("%.1fs"):format(GetTime() - t0) end
+local function stamp(): string return ("%.1fs"):format(GetTime() - t0) end
 
 -- weapon slot (Enum.WeaponSlot), inventory slot
 local SLOTS = {
@@ -56,18 +60,18 @@ local SLOTS = {
 local FIELDS = { "hasEnchant", "enchantType", "timeLeft", "charges", "enchantID", "enchantIconID" }
 
 -- C_Item.GetWeaponEnchantInfo(slot): each enchant's fields, or why not
-local function listInfo(ws)
+local function listInfo(ws: number): (string, any)
     if not (C_Item and C_Item.GetWeaponEnchantInfo) then return "no C_Item.GetWeaponEnchantInfo", nil end
-    local ok, list = pcall(C_Item.GetWeaponEnchantInfo, ws)
+    local ok, list = pcall(C_Item.GetWeaponEnchantInfo :: any, ws)
     if not ok then return "error: " .. tostring(list), nil end
     if isSecret(list) then return "SECRET (the list)", nil end
     if type(list) ~= "table" then return "returned " .. type(list), nil end
-    local parts, first = {}, nil
+    local parts: string[], first: any = {}, nil
     for i, e in pairs(list) do
         if isSecret(e) then
             parts[#parts + 1] = ("[%s] SECRET"):format(tostring(i))
         elseif type(e) == "table" then
-            local f = {}
+            local f: string[] = {}
             for _, k in ipairs(FIELDS) do f[#f + 1] = k .. "=" .. show(e[k]) end
             parts[#parts + 1] = ("[%s] %s"):format(tostring(i), table.concat(f, ", "))
             if not first and not isSecret(e.hasEnchant) and e.hasEnchant then first = e end
@@ -80,16 +84,16 @@ local function listInfo(ws)
 end
 
 -- the old global GetWeaponEnchantInfo(): all its returns
-local function oldInfo()
+local function oldInfo(): string
     if type(GetWeaponEnchantInfo) ~= "function" then return "no global GetWeaponEnchantInfo" end
     local r = { pcall(GetWeaponEnchantInfo) }
     if not r[1] then return "error: " .. tostring(r[2]) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(#r, 2) do parts[#parts + 1] = show(r[i]) end
     return table.concat(parts, ", ")
 end
 
-local function greenish(c)
+local function greenish(c: any): boolean
     if type(c) ~= "table" or isSecret(c) then return false end
     local r, g, b = c.r, c.g, c.b
     if isSecret(r) or isSecret(g) or isSecret(b) then return false end
@@ -97,13 +101,13 @@ local function greenish(c)
 end
 
 -- the tooltip's enchant lines: green, or with "(N min)" / "(N charges)"
-local function tooltipLines(inv)
+local function tooltipLines(inv: number): string[]
     if not (C_TooltipInfo and C_TooltipInfo.GetInventoryItem) then return { "no C_TooltipInfo.GetInventoryItem" } end
-    local ok, data = pcall(C_TooltipInfo.GetInventoryItem, "player", inv)
+    local ok, data = pcall(C_TooltipInfo.GetInventoryItem :: any, "player", inv)
     if not ok then return { "error: " .. tostring(data) } end
     if isSecret(data) then return { "SECRET (the data)" } end
     if type(data) ~= "table" or type(data.lines) ~= "table" then return { "no lines" } end
-    local found = {}
+    local found: string[] = {}
     for i, l in ipairs(data.lines) do
         local text, c = l.leftText, l.leftColor
         if isSecret(text) then
@@ -124,7 +128,7 @@ local function tooltipLines(inv)
 end
 
 -- "Windfury 1 (30 min)" -> "Windfury"
-local function enchantName(lines)
+local function enchantName(lines: string[]): string?
     for _, l in ipairs(lines) do
         local text = l:match("^line %d+: (.-) %(colour")
         if text and text:find("%(%d+ [%a ]+%)") then
@@ -134,8 +138,8 @@ local function enchantName(lines)
     end
 end
 
-local function blizzard()
-    local b = {}
+local function blizzard(): Map
+    local b: Map = {}
     local bf = _G.BuffFrame
     if bf then
         local shown = bf.IsShown and bf:IsShown()
@@ -159,9 +163,9 @@ local function blizzard()
     return b
 end
 
-local function api()
-    local a = {}
-    local function has(label, v) a[#a + 1] = label .. ": " .. type(v) end
+local function api(): string[]
+    local a: string[] = {}
+    local function has(label: string, v: any) a[#a + 1] = label .. ": " .. type(v) end
     has("C_Item.GetWeaponEnchantInfo", C_Item and C_Item.GetWeaponEnchantInfo)
     has("GetWeaponEnchantInfo (global)", GetWeaponEnchantInfo)
     has("C_Spell.CancelItemTempEnchantment", C_Spell and C_Spell.CancelItemTempEnchantment)
@@ -173,10 +177,10 @@ local function api()
 end
 
 -- Everything about the weapons now.
-local function snapshot(what)
-    local s = { at = date("%H:%M:%S"), t = stamp(), what = what, combat = InCombatLockdown() and true or false,
+local function snapshot(what: string): (Map, string)
+    local s: Map = { at = date("%H:%M:%S"), t = stamp(), what = what, combat = InCombatLockdown() and true or false,
                 old = oldInfo(), slots = {} }
-    local sig = {}
+    local sig: string[] = {}
     for _, slot in ipairs(SLOTS) do
         local list, first = listInfo(slot.ws)
         local lines = tooltipLines(slot.inv)
@@ -196,14 +200,15 @@ end
 -- Listening: changes, the cast before each, events, auras, fights
 --------------------------------------------------------------------------------
 
-local casts = {}        -- the last few player casts { at, id, name, icon }
-local lastSig
-local knownNames = {}   -- enchant names from the tooltip
-local seenAura = {}
+type Cast = { at: number, id: string, name: string, icon: string }
+local casts: Cast[] = {}        -- the last few player casts { at, id, name, icon }
+local lastSig: string? = nil
+local knownNames: { [string]: boolean } = {}   -- enchant names from the tooltip
+local seenAura: { [string]: boolean } = {}
 local fights = 0
 
-local function recentCasts(within)
-    local list = {}
+local function recentCasts(within: number): string
+    local list: string[] = {}
     for i = #casts, 1, -1 do
         local c = casts[i]
         if GetTime() - c.at <= within then
@@ -213,7 +218,7 @@ local function recentCasts(within)
     return #list > 0 and table.concat(list, " | ") or "none in " .. within .. " s"
 end
 
-local function checkChange(event)
+local function checkChange(event: string)
     local s, sig = snapshot("after " .. event)
     if sig == lastSig then return end
     lastSig = sig
@@ -225,14 +230,14 @@ local function checkChange(event)
     o.changes = o.changes or {}
     push(o.changes, s, 30)
     local mh = s.slots.MainHand
-    ns.Print(("Weapon enchant probe: a change (%s). Main hand: %s; cast before: %s."):format(event,
+    print(("Weapon enchant probe: a change (%s). Main hand: %s; cast before: %s."):format(event,
         mh.name or mh.list, s.castBefore))
 end
 
 local function scanAuras()
     if not next(knownNames) then return end
     for i = 1, 40 do
-        local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
+        local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex :: any, "player", i, "HELPFUL")
         if not ok or type(a) ~= "table" then break end
         local name = a.name
         if not isSecret(name) and type(name) == "string" then
@@ -250,14 +255,14 @@ local function scanAuras()
     end
 end
 
-local function sample(what)
+local function sample(what: string)
     local o = out()
     o.fights = o.fights or {}
     local s = snapshot(what)
     push(o.fights, s, 20)
 end
 
-local listening
+local listening: Frame? = nil
 local function listen()
     if listening then return end
     listening = CreateFrame("Frame")
@@ -286,20 +291,20 @@ local function listen()
             or event == "PLAYER_EQUIPMENT_CHANGED" then
             -- a moment later as well: the enchant may land after the event
             checkChange(event)
-            C_Timer.After(0.5, function() checkChange(event .. " +0.5 s") end)
+            after(0.5, function() checkChange(event .. " +0.5 s") end)
         elseif event == "UNIT_AURA" then
             scanAuras()
         elseif event == "PLAYER_REGEN_DISABLED" then
             fights = fights + 1
             if fights <= 6 then
                 local n = fights
-                C_Timer.After(1, function() sample(("fight %d, 1 s in"):format(n)) end)
-                C_Timer.After(5, function() sample(("fight %d, 5 s in"):format(n)) end)
+                after(1, function() sample(("fight %d, 1 s in"):format(n)) end)
+                after(5, function() sample(("fight %d, 5 s in"):format(n)) end)
             end
         elseif event == "PLAYER_REGEN_ENABLED" then
             if fights <= 6 then
                 local n = fights
-                C_Timer.After(0.5, function() sample(("fight %d, after it"):format(n)) end)
+                after(0.5, function() sample(("fight %d, after it"):format(n)) end)
             end
         elseif event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" or event == "UI_ERROR_MESSAGE" then
             o.blocked = o.blocked or {}
@@ -315,8 +320,8 @@ end
 local function cancel()
     local o = out()
     o.cancel = { armedAt = date("%H:%M:%S") }
-    local b = WP.button or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
-    WP.button = b
+    local b = cancelButton or CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    cancelButton = b
     b:SetSize(360, 30)
     b:ClearAllPoints()
     b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
@@ -344,15 +349,15 @@ local function cancel()
             r.calls = { "no cancel function" }
         end
         self:Hide()
-        C_Timer.After(1, function()
+        after(1, function()
             r.after = snapshot("1 s after the cancel")
             local mh = r.after.slots.MainHand
-            ns.Print(("Weapon enchant probe: cancel %s; main hand now: %s. /reload to save it."):format(
+            print(("Weapon enchant probe: cancel %s; main hand now: %s. /reload to save it."):format(
                 table.concat(r.calls, "; "), mh.list))
         end)
     end)
     b:Show()
-    ns.Print("Weapon enchant probe: the button at the top of the screen REMOVES your main hand's temporary enchant (imbue, poison, stone or oil). Click it once if that's fine.")
+    print("Weapon enchant probe: the button at the top of the screen REMOVES your main hand's temporary enchant (imbue, poison, stone or oil). Click it once if that's fine.")
 end
 
 --------------------------------------------------------------------------------
@@ -365,21 +370,21 @@ end
 
 local function secure()
     local o = out()
-    local r = { armedAt = date("%H:%M:%S") }
+    local r: Map = { armedAt = date("%H:%M:%S") }
     o.secure = r
     if not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") end
     r.before = snapshot("before the click")
     -- what the container reads an enchant with (nothing: it never shows one)
-    local PD = C_PaperDollInfo or {}
+    local PD: any = C_PaperDollInfo or {}
     r.tempInfo = {}
     for _, inv in ipairs({ 16, 17, 18 }) do
         if type(PD.GetTemporaryEnchantmentInfo) ~= "function" then r.tempInfo[inv] = "missing" break end
         local res = { pcall(PD.GetTemporaryEnchantmentInfo, inv) }
-        local parts = {}
+        local parts: string[] = {}
         for i = 2, math.max(2, #res) do
             local v = res[i]
             if type(v) == "table" and not isSecret(v) then
-                local kv = {}
+                local kv: string[] = {}
                 for k, x in pairs(v) do kv[#kv + 1] = ("%s=%s"):format(tostring(k), show(x)) end
                 table.sort(kv)
                 parts[#parts + 1] = "{" .. table.concat(kv, ", ") .. "}"
@@ -389,19 +394,19 @@ local function secure()
         end
         r.tempInfo[inv] = (res[1] and "" or "error: ") .. table.concat(parts, " | ")
     end
-    local function try(key, fn, ...)
+    local function try(key: string, fn: any, ...: any): (boolean?, any)
         if type(fn) ~= "function" then r[key] = "missing" return end
         local ok, err = pcall(fn, ...)
         r[key] = ok and "ran" or ("error: " .. tostring(err))
         return ok, err
     end
-    local c = WP.secureFrame
+    local c = secureFrame
     if not c then
         local ok, made = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
         r.container = ok and "made" or ("error: " .. tostring(made))
-        if not ok then ns.Print("Weapon enchant probe: no aura container (" .. tostring(made) .. "). /reload to save it.") return end
+        if not ok then print("Weapon enchant probe: no aura container (" .. tostring(made) .. "). /reload to save it.") return end
         c = made
-        WP.secureFrame = c
+        secureFrame = c
         c:SetSize(44, 44)
         c:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
         c:SetFrameStrata("DIALOG")
@@ -413,7 +418,7 @@ local function secure()
         -- as the buff bar's buttons: the engine only anchors them, their
         -- size is ours (unsized, nothing renders), regions made before
         -- they're registered
-        local function init(button)
+        local function init(button: any)
             try("size", button.SetSize, button, 40, 40)
             local icon = button:CreateTexture(nil, "ARTWORK")
             icon:SetAllPoints()
@@ -434,7 +439,7 @@ local function secure()
     c:Show()
     -- what the button is a few seconds on (size, shown, its icon), and the
     -- main hand each second for a minute: the moment its enchant goes
-    C_Timer.After(2, function()
+    after(2, function()
         local button = c.GetItemEnchantmentFrame and select(2, pcall(c.GetItemEnchantmentFrame, c, 0))
         if type(button) == "table" and button.GetSize then
             local w, h = button:GetSize()
@@ -444,33 +449,32 @@ local function secure()
         end
     end)
     -- (the list holds the time left, which ticks: only whether there is one)
-    local function has(snap) return (snap.slots.MainHand.list or ""):find("hasEnchant=true", 1, true) ~= nil end
+    local function has(snap: Map): boolean return (snap.slots.MainHand.list or ""):find("hasEnchant=true", 1, true) ~= nil end
     local first = has(r.before)
     local n = 0
-    local ticker
-    ticker = C_Timer.NewTicker(1, function()
+    every(1, function(ticker: TickerHandle)
         n = n + 1
         local now = snapshot("watching")
         if has(now) ~= first then
             r.after = now
             r.goneAfter = n .. " s"
             ticker:Cancel()
-            ns.Print("Weapon enchant probe: your main hand's enchant changed (" .. now.slots.MainHand.list .. "). /reload to save it.")
+            print("Weapon enchant probe: your main hand's enchant changed (" .. now.slots.MainHand.list .. "). /reload to save it.")
         elseif n >= 60 then
             ticker:Cancel()
             r.after = now
-            ns.Print("Weapon enchant probe: a minute passed, the enchant is still there. /reload to save it.")
+            print("Weapon enchant probe: a minute passed, the enchant is still there. /reload to save it.")
         end
     end)
-    ns.Print("Weapon enchant probe: right-click the icon at the top of the screen (a pink square shows where the container is); it REMOVES your main hand's temporary enchant. Watching for a minute.")
+    print("Weapon enchant probe: right-click the icon at the top of the screen (a pink square shows where the container is); it REMOVES your main hand's temporary enchant. Watching for a minute.")
 end
 
-function WP.Command(rest)
+export function command(rest: string?)
     local o = out()
     listen()
     if InCombatLockdown() then
         o.refused = ("%s: asked in combat (%s)"):format(date("%H:%M:%S"), tostring(rest))
-        ns.Print("Weapon enchant probe: not in combat; try again after the fight.")
+        print("Weapon enchant probe: not in combat; try again after the fight.")
         return
     end
     if (rest or ""):lower():match("^%s*secure") then
@@ -492,6 +496,6 @@ function WP.Command(rest)
     end
     scanAuras()
     local mh = s.slots.MainHand
-    ns.Print(("Weapon enchant probe: recorded your weapons (main hand: %s). Now put an enchant on (an imbue, a poison, a stone or an oil), fight a few mobs, then /reload."):format(
+    print(("Weapon enchant probe: recorded your weapons (main hand: %s). Now put an enchant on (an imbue, a poison, a stone or an oil), fight a few mobs, then /reload."):format(
         mh.name or mh.list))
 end

@@ -1,4 +1,4 @@
--- Diagnostics/BankSlotsProbe.lua
+-- Diagnostics/BankSlotsProbe.wowlua
 -- "/suu probe bankslots" (at a banker): can SuuUI's bags and bank windows
 -- change bags and buy bank slots (asked 2026-10-17)? On Forever the bank's
 -- "tabs" are bank bag slots (tab 1 the bank itself, 2 and up a bag each);
@@ -9,14 +9,21 @@
 -- popup should open untainted. Click it and answer No (or Yes to buy one),
 -- then Check. Saved in SuuUIProbe.bankSlots on /reload.
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import panel, Panel from "/UI/Panel"
+import text, Text from "/UI/Text"
+import button from "/UI/Controls"
 
-local BP = {}
-ns.BankSlotsProbe = BP
+interface SlotsPanel extends Panel
+    built?: boolean
+    status: Text
+    over: Button
+end
 
-local UI = ns.UI
+local probePanel: SlotsPanel? = nil
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error " .. tostring(res[2]):sub(1, 100) end
@@ -37,7 +44,7 @@ end
 -- The game's purchase button, wherever this client makes it: the bank
 -- frame's own (declared virtual on Forever, so maybe never made), or the
 -- bank panel's purchase prompt.
-local function purchaseButton()
+local function purchaseButton(): (any, any)
     local candidates = {
         { "BankFramePurchaseButton", _G.BankFramePurchaseButton },
         { "BankFrame.BankPanel.PurchaseButton", _G.BankFrame and _G.BankFrame.BankPanel and _G.BankFrame.BankPanel.PurchaseButton },
@@ -49,13 +56,13 @@ local function purchaseButton()
     end
 end
 
-local function frameInfo(name)
+local function frameInfo(name: string): string
     local f = _G[name]
     if not f then return "missing" end
     return ("%s shown=%s visible=%s protected=%s"):format(f:GetObjectType(), tostring(f:IsShown()), tostring(f:IsVisible()), tostring(f:IsProtected()))
 end
 
-local function record(out)
+local function record(out: { [string]: any })
     local C = Enum.BankType and Enum.BankType.Character
     out.bankType = tostring(C)
     out.maxTabs = call(C_Bank.FetchMaxNumBankTabs, C)
@@ -87,10 +94,9 @@ local function record(out)
     out.money = GetMoney()
 end
 
-function BP.Command(rest)
-    SuuUIProbe = SuuUIProbe or {}
-    local out = SuuUIProbe.bankSlots or {}
-    SuuUIProbe.bankSlots = out
+export function command(rest: string?)
+    local out = DB.probe.bankSlots or {}
+    DB.probe.bankSlots = out
     out.at = date("%Y-%m-%d %H:%M:%S")
     record(out)
     if rest == "check" then
@@ -102,29 +108,29 @@ function BP.Command(rest)
             out.check.onAcceptSecure = tostring(ok) .. " " .. tostring(by)
         end
         out.check.errors = {}
-        for _, e in ipairs(SuuUIDB and SuuUIDB.blocked or {}) do
+        for _, e in ipairs(DB.db.blocked or {}) do
             if e.time and e.time >= (out.clickedAt or out.at) then out.check.errors[#out.check.errors + 1] = tostring(e.func) end
         end
-        ns.Print("Bank slots probe: checked. /reload to save it.")
+        print("Bank slots probe: checked. /reload to save it.")
         return
     end
-    if InCombatLockdown() then ns.Print("Bank slots probe: out of combat, at a banker.") return end
-    local p = BP.panel or UI.Panel(UIParent, { title = "Bank slots probe", width = 300, height = 150, solid = true })
-    BP.panel = p
+    if InCombatLockdown() then print("Bank slots probe: out of combat, at a banker.") return end
+    local p = probePanel or panel(UIParent, { title = "Bank slots probe", width = 300, height = 150, solid = true }) :: SlotsPanel
+    probePanel = p
     p:SetFrameStrata("DIALOG")
     p:ClearAllPoints()
     p:SetPoint("LEFT", 40, 0)
     if not p.built then
         p.built = true
-        local note = UI.Text(p.body, "caption", "ink-muted")
+        local note = text(p.body, "caption", "ink-muted")
         note:SetPoint("TOPLEFT")
         note:SetWidth(276)
         note:SetJustifyH("LEFT")
         note:SetWordWrap(true)
         note:SetValue("1. Click the button: the game's own purchase popup should open. Answer No (or Yes to buy a slot). 2. /suu probe bankslots check. 3. /reload.")
-        local b = UI.Button(p.body, { text = "Buy next bank slot (game's button)", width = 276 })
+        local b = button(p.body, { text = "Buy next bank slot (game's button)", width = 276 })
         b:SetPoint("BOTTOMLEFT")
-        p.status = UI.Text(p.body, "caption", "gilt-text")
+        p.status = text(p.body, "caption", "gilt-text")
         p.status:SetPoint("BOTTOMLEFT", b, "TOPLEFT", 0, 6)
         -- the secure button on top: clicks the game's own purchase button
         local over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
@@ -143,5 +149,5 @@ function BP.Command(rest)
     p.over:SetAttribute("clickbutton1", target)
     p.status:SetValue(target and ("Clicks " .. path) or "No purchase button found: open the bank first")
     p:Show()
-    ns.Print("Bank slots probe: at a banker, click the button, answer the popup, then /suu probe bankslots check and /reload.")
+    print("Bank slots probe: at a banker, click the button, answer the popup, then /suu probe bankslots check and /reload.")
 end

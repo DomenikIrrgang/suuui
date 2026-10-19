@@ -1,4 +1,4 @@
--- Diagnostics/SpellbookProbe.lua
+-- Diagnostics/SpellbookProbe.wowlua
 -- "/suu probe spellbook": what Forever's spellbook data looks like, for
 -- SuuUI's own Spellbook page (step 3.2b). Saved in SuuUIProbe.spellbook on
 -- /reload.
@@ -23,18 +23,25 @@
 --                                 spell out of combat, then in combat, then
 --                                 /reload. Saved in SuuUIProbe.castbook
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as modules from "/Core/Modules"
 
-local SP = {}
-ns.SpellbookProbe = SP
+type Map = { [any]: any }
 
-local isSecret = issecretvalue or function() return false end
+-- The click recorder's current note function and whether its hooks are in
+-- (were SP.castNote and SP.castHooked).
+local castNote: (s: string) -> () = function(_: string) end
+local castHooked = false
 
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
             parts[#parts + 1] = tostring(k) .. "=" .. (isSecret(x) and "secret" or (type(x) == "table" and "table" or tostring(x)))
         end
@@ -44,25 +51,25 @@ local function show(v)
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 120) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, " | ")
 end
 
-local function namesIn(t)
-    local out = {}
+local function namesIn(t: any): string[]
+    local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
     table.sort(out)
     return out
 end
 
-local function enumList(e)
-    local out = {}
+local function enumList(e: any): string[]
+    local out: string[] = {}
     if type(e) ~= "table" then return { "missing" } end
     for k, v in pairs(e) do out[#out + 1] = tostring(k) .. "=" .. tostring(v) end
     table.sort(out)
@@ -70,10 +77,10 @@ local function enumList(e)
 end
 
 -- Functions whose names sound like training, cost or ranks.
-local function trainingFunctions()
-    local out = {}
+local function trainingFunctions(): Map
+    local out: Map = {}
     for _, ns2 in ipairs({ "C_SpellBook", "C_Spell", "C_Trainer", "C_SpellTrainer" }) do
-        local t = _G[ns2]
+        local t: any = _G[ns2]
         if type(t) == "table" then
             for k, v in pairs(t) do
                 local l = k:lower()
@@ -87,29 +94,29 @@ local function trainingFunctions()
         end
     end
     -- global names only listed (never called)
-    local globals = {}
+    local globals: string[] = {}
     for k, v in pairs(_G) do
         if type(k) == "string" and type(v) == "function" and (k:find("Trainer") or k:find("SpellRank")) then globals[#globals + 1] = k end
     end
     table.sort(globals)
     out.globals = globals
-    table.sort(out)
+    table.sort(out :: any)
     return out
 end
 
-local function sampleItems(store)
+local function sampleItems(store: Map): Map[]
     local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
-    local lines = {}
+    local lines: Map[] = {}
     local numLines = C_SpellBook.GetNumSpellBookSkillLines and C_SpellBook.GetNumSpellBookSkillLines() or 0
     local extra = store.trainingFunctions or {}
     for line = 1, numLines do
         local info = C_SpellBook.GetSpellBookSkillLineInfo(line)
-        local l = { info = show(info), items = {} }
+        local l: Map = { info = show(info), items = {} }
         if info then
             for i = info.itemIndexOffset + 1, math.min(info.itemIndexOffset + info.numSpellBookItems, info.itemIndexOffset + 40) do
                 local item = C_SpellBook.GetSpellBookItemInfo(i, bank)
                 local spellID = item and item.spellID
-                local e = { slot = i, info = show(item) }
+                local e: Map = { slot = i, info = show(item) }
                 e.name = call(C_SpellBook.GetSpellBookItemName, i, bank)
                 e.levelLearned = call(C_SpellBook.GetSpellBookItemLevelLearned, i, bank)
                 e.passive = call(C_SpellBook.IsSpellBookItemPassive, i, bank)
@@ -122,7 +129,7 @@ local function sampleItems(store)
                     e.levelLearnedSpell = call(C_Spell.GetSpellLevelLearned, spellID)
                 end
                 -- whatever sounds like training: called with (slot, bank) and with the spell
-                local tried = {}
+                local tried: string[] = {}
                 for _, path in ipairs(extra) do
                     local ns2, fn = path:match("^(.-)%.(.+)$")
                     local f = ns2 and _G[ns2] and _G[ns2][fn]
@@ -141,7 +148,7 @@ local function sampleItems(store)
 end
 
 -- Blizzard's spellbook page, three levels deep: keys, types, sizes, texts.
-local function pageTree(f, depth, out, prefix)
+local function pageTree(f: any, depth: number, out: string[], prefix: string)
     if not f or depth > 3 or #out > 400 then return end
     for _, c in ipairs({ f:GetChildren() }) do
         local ok, line = pcall(function()
@@ -161,10 +168,9 @@ local function pageTree(f, depth, out, prefix)
     end
 end
 
-function SP.Sample()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.spellbook or {}
-    SuuUIProbe.spellbook = store
+export function sample(): Map
+    local store = DB.probe.spellbook or {}
+    DB.probe.spellbook = store
     store.at = date("%Y-%m-%d %H:%M:%S")
     store.C_SpellBook = namesIn(C_SpellBook)
     store.itemTypes = enumList(Enum.SpellBookItemType)
@@ -176,7 +182,7 @@ function SP.Sample()
     local f = _G.PlayerSpellsFrame
     local page = f and (f.SpellBookFrame or f.SpellbookFrame)
     if page and page:IsVisible() then
-        local out = {}
+        local out: string[] = {}
         pageTree(page, 0, out, "")
         store.page = out
         store.pageAt = store.at
@@ -185,13 +191,12 @@ function SP.Sample()
 end
 
 -- SuuUI's code picks up the first learned spell and puts it back.
-function SP.Pickup()
-    if InCombatLockdown() then ns.Print("Spellbook probe: out of combat, please.") return end
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.spellbook or {}
-    SuuUIProbe.spellbook = store
+export function pickup()
+    if InCombatLockdown() then print("Spellbook probe: out of combat, please.") return end
+    local store = DB.probe.spellbook or {}
+    DB.probe.spellbook = store
     local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
-    local blocked = {}
+    local blocked: string[] = {}
     local f = CreateFrame("Frame")
     f:RegisterEvent("ADDON_ACTION_BLOCKED")
     f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
@@ -210,56 +215,55 @@ function SP.Pickup()
         r.cursor = call(GetCursorInfo)
         ClearCursor()
     end
-    C_Timer.After(0.5, function()
+    after(0.5, function()
         r.blocked = blocked
         f:UnregisterAllEvents()
-        ns.Print("Spellbook probe: pickup " .. tostring(r.pickup) .. ", cursor " .. tostring(r.cursor) .. (#blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked") .. ". /reload to save.")
+        print("Spellbook probe: pickup " .. tostring(r.pickup) .. ", cursor " .. tostring(r.cursor) .. (#blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked") .. ". /reload to save.")
     end)
     store.pickupTest = r
 end
 
-function SP.Cast()
-    local m = ns.Modules.Get("spellbook")
+export function cast()
+    local m: any = modules.get("spellbook")
     local book = m and m.book
-    if not book then ns.Print("Spellbook probe: open the Spellbook once first.") return end
-    SuuUIProbe = SuuUIProbe or {}
-    local log = {}
-    SuuUIProbe.castbook = { at = date("%H:%M:%S"), keyDownCVar = show(GetCVar and GetCVar("ActionButtonUseKeyDown")), log = log }
+    if not book then print("Spellbook probe: open the Spellbook once first.") return end
+    local log: string[] = {}
+    DB.probe.castbook = { at = date("%H:%M:%S"), keyDownCVar = show(GetCVar and GetCVar("ActionButtonUseKeyDown")), log = log }
     local t0 = GetTime()
-    local function note(s)
+    local function note(s: string)
         if #log < 300 then log[#log + 1] = ("%.2f %s %s"):format(GetTime() - t0, InCombatLockdown() and "[combat]" or "[calm]", s) end
     end
-    SP.castNote = note
-    if SP.castHooked then note("re-armed") ns.Print("Spellbook probe: recording again. Click spells, then /reload.") return end
-    SP.castHooked = true
-    local function foci()
-        local out = {}
+    castNote = note
+    if castHooked then note("re-armed") print("Spellbook probe: recording again. Click spells, then /reload.") return end
+    castHooked = true
+    local function foci(): string
+        local out: string[] = {}
         for _, f in ipairs(GetMouseFoci and GetMouseFoci() or {}) do
             local ok, n = pcall(function() return f:GetDebugName() end)
             out[#out + 1] = ok and n or tostring(f)
         end
         return table.concat(out, ", ")
     end
-    local function describe(b)
+    local function describe(b: any): string
         local ok1, prot = pcall(b.IsProtected, b)
         return ("type=%s spell=%s protected=%s shown=%s visible=%s mouse=%s alpha=%.2f foci=[%s]"):format(
             show(b:GetAttribute("type")), show(b:GetAttribute("spell")), ok1 and show(prot) or "?",
             show(b:IsShown()), show(b:IsVisible()), show(b:IsMouseEnabled()), b:GetEffectiveAlpha() or -1, foci())
     end
-    local hooked = {}
+    local hooked: { [any]: boolean } = {}
     local function hookCells()
         for i, c in ipairs(book.cells or {}) do
             local b = c.button
             if b and not hooked[b] then
                 hooked[b] = true
-                b:HookScript("OnMouseDown", function(_, btn) SP.castNote(("cell %d mousedown %s %s"):format(i, tostring(btn), describe(b))) end)
-                b:HookScript("PreClick", function(_, btn, down) SP.castNote(("cell %d preclick %s down=%s %s"):format(i, tostring(btn), tostring(down), describe(b))) end)
-                b:HookScript("PostClick", function(_, btn, down) SP.castNote(("cell %d postclick %s down=%s"):format(i, tostring(btn), tostring(down))) end)
+                b:HookScript("OnMouseDown", function(_, btn) castNote(("cell %d mousedown %s %s"):format(i, tostring(btn), describe(b))) end)
+                b:HookScript("PreClick", function(_, btn, down) castNote(("cell %d preclick %s down=%s %s"):format(i, tostring(btn), tostring(down), describe(b))) end)
+                b:HookScript("PostClick", function(_, btn, down) castNote(("cell %d postclick %s down=%s"):format(i, tostring(btn), tostring(down))) end)
             end
         end
     end
     hookCells()
-    hooksecurefunc(book, "SetSpells", hookCells)
+    hook(book, "SetSpells", hookCells)
     local f = CreateFrame("Frame")
     for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
         pcall(f.RegisterEvent, f, e)
@@ -268,16 +272,16 @@ function SP.Cast()
         pcall(f.RegisterUnitEvent, f, e, "player")
     end
     f:SetScript("OnEvent", function(_, e, a, b, c, d)
-        SP.castNote(("%s %s %s %s %s"):format(e, show(a), show(b), show(c), show(d)))
+        castNote(("%s %s %s %s %s"):format(e, show(a), show(b), show(c), show(d)))
     end)
     note("armed " .. #(book.cells or {}) .. " cells")
-    ns.Print("Spellbook probe: recording clicks. Click a spell out of combat, then in combat, then /reload.")
+    print("Spellbook probe: recording clicks. Click a spell out of combat, then in combat, then /reload.")
 end
 
-function SP.Command(arg)
-    if arg == "pickup" then return SP.Pickup() end
-    if arg == "cast" then return SP.Cast() end
-    local store = SP.Sample()
-    ns.Print(("Spellbook probe: %d schools sampled%s. Run it on another school too, then /reload."):format(#store.lines,
+export function command(arg: string?)
+    if arg == "pickup" then return pickup() end
+    if arg == "cast" then return cast() end
+    local store = sample()
+    print(("Spellbook probe: %d schools sampled%s. Run it on another school too, then /reload."):format(#store.lines,
         store.page and ", Blizzard's page read" or " (open the spellbook to read Blizzard's page)"))
 end

@@ -1,4 +1,4 @@
--- Diagnostics/DeathRecapProbe.lua
+-- Diagnostics/DeathRecapProbe.wowlua
 -- "/suu probe deathrecap" (asked 2026-10-18: SuuUI's own death recap,
 -- design "Death recap" A): after a death, what the game's recap gives for
 -- it: whether it has events, the max health, and each event's fields with
@@ -6,22 +6,18 @@
 -- event's table isn't documented on Forever). Saved in
 -- SuuUIProbe.deathRecap on /reload.
 
-local _, ns = ...
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import isSecret from "wowlua:secret"
 
-local DR = {}
-ns.DeathRecapProbe = DR
-
-local isSecret = issecretvalue or function() return false end
-
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "SECRET" end
     return tostring(v)
 end
 
-function DR.Command()
-    SuuUIProbe = SuuUIProbe or {}
-    local out = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false, dead = UnitIsDeadOrGhost("player") and true or false }
-    local api = C_DeathRecap
+export function command()
+    local out: { [string]: any } = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false, dead = UnitIsDeadOrGhost("player") and true or false }
+    local api: any = _G.C_DeathRecap
     if not api then
         out.api = "missing"
     else
@@ -35,15 +31,15 @@ function DR.Command()
         out.secretTable = okE and issecrettable and issecrettable(events) and true or false
         out.events = {}
         if okE and type(events) == "table" and not out.secretTable then
-            for i, e in ipairs(events) do
+            for i, e in ipairs(events :: any[]) do
                 if i > 6 then break end
-                local fields = {}
+                local fields: string[] = {}
                 for k, v in pairs(e) do fields[#fields + 1] = tostring(k) .. "=" .. show(v) end
                 table.sort(fields)
                 out.events[i] = table.concat(fields, "  ")
             end
         end
     end
-    SuuUIProbe.deathRecap = out
-    ns.Print(("Death recap probe: %s events, max health %s. /reload to save it."):format(tostring(out.hasEvents), tostring(out.maxHealth)))
+    DB.probe.deathRecap = out
+    print(("Death recap probe: %s events, max health %s. /reload to save it."):format(tostring(out.hasEvents), tostring(out.maxHealth)))
 end

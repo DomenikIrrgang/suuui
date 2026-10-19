@@ -1,4 +1,4 @@
--- Diagnostics/SpellData.lua
+-- Diagnostics/SpellData.wowlua
 -- "/suu probe spells": verified spell and aura IDs from this client, for the
 -- Cooldown Manager presets (plan step 1.7c).
 --
@@ -34,35 +34,35 @@
 --   /suu probe spells clear  drop all spell data from the save file (it is
 --                            copied into tools/data once Claude has read it)
 
-local _, ns = ...
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as events from "/Core/Events"
+import after, every from "wowlua:timer"
+import onLogin from "wowlua:lifecycle"
+import isSecret from "wowlua:secret"
 
-local Events = ns.Events
-
-local SD = {}
-ns.SpellData = SD
-
-local isSecret = issecretvalue or function() return false end
+-- the owner of the recording's event handlers
+const OWNER = "SpellData"
 local AFTER_COMBAT = 15 -- seconds of sweeps after a fight
 
 local recording = false
 
-local function charKey()
-    local name, realm = UnitFullName("player")
+local function charKey(): string
+    local name: any, realm: any = UnitFullName("player")
     return (name or "?") .. "-" .. (realm or GetRealmName() or "?")
 end
 
-local function store()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.spells = SuuUIProbe.spells or {}
+local function store(): { [string]: any }
+    DB.probe.spells = DB.probe.spells or {}
     local key = charKey()
-    local d = SuuUIProbe.spells[key] or { spellbook = {}, casts = {}, auras = {} }
+    local d = DB.probe.spells[key] or { spellbook = {}, casts = {}, auras = {} }
     local _, class = UnitClass("player")
     d.class, d.level = class, UnitLevel("player")
-    SuuUIProbe.spells[key] = d
+    DB.probe.spells[key] = d
     return d
 end
 
-local function readable(v)
+local function readable(v: any): boolean
     return v ~= nil and not isSecret(v)
 end
 
@@ -70,20 +70,20 @@ end
 -- Spellbook
 --------------------------------------------------------------------------------
 
-local ITEM_TYPE = {}
-for name, value in pairs(Enum.SpellBookItemType or {}) do ITEM_TYPE[value] = name end
+local ITEM_TYPE: { [any]: string } = {}
+for name, value in pairs(((Enum :: any).SpellBookItemType or {}) :: { [any]: any }) do ITEM_TYPE[value] = name end
 
-local function baseCooldown(id)
+local function baseCooldown(id: number): number?
     if not GetSpellBaseCooldown then return nil end
     local ok, ms = pcall(GetSpellBaseCooldown, id)
     return ok and readable(ms) and ms > 0 and ms or nil
 end
 
-local function dumpBank(d, bank, owner)
+local function dumpBank(d: { [string]: any }, bank: any, owner: string): number
     local count = 0
     local lines = C_SpellBook.GetNumSpellBookSkillLines and C_SpellBook.GetNumSpellBookSkillLines() or 0
-    local function add(index, tab)
-        local ok, it = pcall(C_SpellBook.GetSpellBookItemInfo, index, bank)
+    local function add(index: number, tab: string?)
+        local ok, it: any = pcall(C_SpellBook.GetSpellBookItemInfo, index, bank)
         if not (ok and it and readable(it.spellID)) then return end
         local id = it.spellID
         d.spellbook[id] = {
@@ -113,9 +113,9 @@ local function dumpBank(d, bank, owner)
     return count
 end
 
-function SD.DumpSpellbook()
+export function dumpSpellbook(): (number, number)
     if InCombatLockdown() then
-        ns.Print("Spell data: the spellbook is read out of combat.")
+        print("Spell data: the spellbook is read out of combat.")
         return 0, 0
     end
     local d = store()
@@ -129,7 +129,7 @@ end
 -- Casts and auras
 --------------------------------------------------------------------------------
 
-local function noteAura(d, unit, a, filter)
+local function noteAura(d: { [string]: any }, unit: string, a: any, filter: string)
     if not (readable(a.spellId) and readable(a.name)) then return end
     local e = d.auras[a.spellId] or { name = a.name, seen = 0, on = {} }
     e.seen = e.seen + 1
@@ -144,7 +144,7 @@ local function noteAura(d, unit, a, filter)
     d.auras[a.spellId] = e
 end
 
-local function sweep(unit)
+local function sweep(unit: string)
     if not recording or not UnitExists(unit) then return end
     local d = store()
     for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
@@ -165,11 +165,11 @@ end
 -- that outlast it.
 local function afterCombat()
     for s = 0, AFTER_COMBAT do
-        C_Timer.After(s, function() if recording then sweepAll() end end)
+        after(s, function() if recording then sweepAll() end end)
     end
 end
 
-local function noteCast(_, _, spellID)
+local function noteCast(_: string, _: any, spellID: any)
     if not recording or not readable(spellID) then return end
     local d = store()
     local e = d.casts[spellID] or { name = C_Spell.GetSpellName(spellID), count = 0 }
@@ -181,27 +181,27 @@ end
 local function start()
     if recording then return end
     recording = true
-    Events.OnUnit("UNIT_AURA", { "player", "target", "pet" }, function(_, unit)
+    events.onUnit("UNIT_AURA", { "player", "target", "pet" }, function(_, unit)
         if not InCombatLockdown() then sweep(unit) end
-    end, SD)
-    Events.OnGame("PLAYER_TARGET_CHANGED", sweepAll, SD)
-    Events.OnGame("PLAYER_REGEN_ENABLED", afterCombat, SD)
-    Events.OnUnit("UNIT_SPELLCAST_SUCCEEDED", "player", noteCast, SD)
+    end, OWNER)
+    events.onGame("PLAYER_TARGET_CHANGED", sweepAll, OWNER)
+    events.onGame("PLAYER_REGEN_ENABLED", afterCombat, OWNER)
+    events.onUnit("UNIT_SPELLCAST_SUCCEEDED", "player", noteCast, OWNER)
     -- each new pet: its spellbook (once it has loaded), out of combat
-    Events.OnUnit("UNIT_PET", "player", function()
-        C_Timer.After(1, function()
+    events.onUnit("UNIT_PET", "player", function()
+        after(1, function()
             if recording and UnitExists("pet") and not InCombatLockdown() then
-                local _, pet = SD.DumpSpellbook()
-                ns.Print(("Spell data: %s's %d spells read."):format(UnitCreatureFamily("pet") or UnitName("pet") or "pet", pet))
+                local _, pet = dumpSpellbook()
+                print(("Spell data: %s's %d spells read."):format(UnitCreatureFamily("pet") or UnitName("pet") or "pet", pet))
             end
         end)
-    end, SD)
+    end, OWNER)
     sweepAll()
 end
 
 local function stop()
     recording = false
-    Events.OffAll(SD)
+    events.offAll(OWNER)
 end
 
 --------------------------------------------------------------------------------
@@ -218,21 +218,20 @@ local BUDGET = 8 -- ms per frame
 local SAMPLES = 25
 local scanning = false
 
-function SD.Scan()
+export function scan()
     if scanning then return end
     if InCombatLockdown() then
-        ns.Print("Spell data: the scan runs out of combat.")
+        print("Spell data: the scan runs out of combat.")
         return
     end
     scanning = true
-    SuuUIProbe = SuuUIProbe or {}
-    local byName, buckets = {}, {}
+    local byName: { [string]: any[] }, buckets: { [number]: any } = {}, {}
     local total, kept, highest = 0, 0, 0
     local nextID = 1
     local subtext = C_Spell.GetSpellSubtext
-    ns.Print("Spell data: scanning the client's spells (about a minute; it pauses in combat)…")
-    local ticker
-    ticker = C_Timer.NewTicker(0, function()
+    print("Spell data: scanning the client's spells (about a minute; it pauses in combat)…")
+    local ticker: TickerHandle
+    ticker = every(0, function()
         if InCombatLockdown() then return end
         local stopAt = debugprofilestop() + BUDGET
         while nextID <= SCAN_TO and debugprofilestop() < stopAt do
@@ -264,9 +263,9 @@ function SD.Scan()
         if nextID > SCAN_TO then
             ticker:Cancel()
             scanning = false
-            SuuUIProbe.spellScan = { at = date("%Y-%m-%d %H:%M"), scannedTo = SCAN_TO, highest = highest,
+            DB.probe.spellScan = { at = date("%Y-%m-%d %H:%M"), scannedTo = SCAN_TO, highest = highest,
                 count = total, kept = kept, buckets = buckets, byName = byName }
-            ns.Print(("Spell data: %d spells found, %d kept (highest ID %d). /reload to save them."):format(total, kept, highest))
+            print(("Spell data: %d spells found, %d kept (highest ID %d). /reload to save them."):format(total, kept, highest))
         end
     end)
 end
@@ -275,26 +274,26 @@ end
 -- The command
 --------------------------------------------------------------------------------
 
-local function count(t)
+local function count(t: { [any]: any }?): number
     local n = 0
     for _ in pairs(t or {}) do n = n + 1 end
     return n
 end
 
 -- Forever's own spells, unfiltered: everything from 1.2 to 1.33 million.
-function SD.ScanForever()
+export function scanForever()
     if scanning then return end
     if InCombatLockdown() then
-        ns.Print("Spell data: the scan runs out of combat.")
+        print("Spell data: the scan runs out of combat.")
         return
     end
     scanning = true
     local from, to = 1200000, 1330000
-    local nextID, rows = from, {}
+    local nextID, rows: any[] = from, {}
     local subtext = C_Spell.GetSpellSubtext
-    ns.Print("Spell data: saving Forever's own spells…")
-    local ticker
-    ticker = C_Timer.NewTicker(0, function()
+    print("Spell data: saving Forever's own spells…")
+    local ticker: TickerHandle
+    ticker = every(0, function()
         if InCombatLockdown() then return end
         local stopAt = debugprofilestop() + BUDGET
         while nextID <= to and debugprofilestop() < stopAt do
@@ -309,26 +308,25 @@ function SD.ScanForever()
         if nextID > to then
             ticker:Cancel()
             scanning = false
-            SuuUIProbe = SuuUIProbe or {}
-            SuuUIProbe.spellScanForever = { at = date("%Y-%m-%d %H:%M"), from = from, to = to, rows = rows }
-            ns.Print(("Spell data: %d of Forever's own spells saved. /reload to save them."):format(#rows))
+            DB.probe.spellScanForever = { at = date("%Y-%m-%d %H:%M"), from = from, to = to, rows = rows }
+            print(("Spell data: %d of Forever's own spells saved. /reload to save them."):format(#rows))
         end
     end)
 end
 
 -- Only counts: is there anything above the main scan's range?
-function SD.ScanHigh()
+export function scanHigh()
     if scanning then return end
     if InCombatLockdown() then
-        ns.Print("Spell data: the scan runs out of combat.")
+        print("Spell data: the scan runs out of combat.")
         return
     end
     scanning = true
     local from, to = SCAN_TO + 1, 3000000
-    local nextID, total, first, last, samples = from, 0, nil, nil, {}
-    ns.Print(("Spell data: counting spells from %d to %d…"):format(from, to))
-    local ticker
-    ticker = C_Timer.NewTicker(0, function()
+    local nextID, total, first: number?, last: number?, samples: string[] = from, 0, nil, nil, {}
+    print(("Spell data: counting spells from %d to %d…"):format(from, to))
+    local ticker: TickerHandle
+    ticker = every(0, function()
         if InCombatLockdown() then return end
         local stopAt = debugprofilestop() + BUDGET
         while nextID <= to and debugprofilestop() < stopAt do
@@ -344,10 +342,9 @@ function SD.ScanHigh()
         if nextID > to then
             ticker:Cancel()
             scanning = false
-            SuuUIProbe = SuuUIProbe or {}
-            SuuUIProbe.spellScanHigh = { at = date("%Y-%m-%d %H:%M"), from = from, to = to, count = total,
+            DB.probe.spellScanHigh = { at = date("%Y-%m-%d %H:%M"), from = from, to = to, count = total,
                 first = first, last = last, samples = samples }
-            ns.Print(total == 0 and ("Spell data: nothing above %d. The main scan covered everything."):format(SCAN_TO)
+            print(total == 0 and ("Spell data: nothing above %d. The main scan covered everything."):format(SCAN_TO)
                 or ("Spell data: %d more spells between %d and %d. /reload to save, and tell Claude."):format(total, first, last))
         end
     end)
@@ -355,13 +352,13 @@ end
 
 -- Every ID with exactly this name, 1 to 1.4 million.
 -- Several names in one pass: "find Heating Up; Fingers of Frost".
-function SD.Find(text)
+export function find(text: string?)
     if scanning then return end
-    if not text or text == "" then ns.Print("Spell data: /suu probe spells find <spell name>[; <another>…]") return end
-    if InCombatLockdown() then ns.Print("Spell data: the scan runs out of combat.") return end
-    local names, byLower = {}, {}
+    if not text or text == "" then print("Spell data: /suu probe spells find <spell name>[; <another>…]") return end
+    if InCombatLockdown() then print("Spell data: the scan runs out of combat.") return end
+    local names: string[], byLower: { [string]: { name: string, ids: number[] } } = {}, {}
     for part in text:gmatch("[^;]+") do
-        local name = part:match("^%s*(.-)%s*$")
+        local name = part:match("^%s*(.-)%s*$") or ""
         if name ~= "" then
             names[#names + 1] = name
             byLower[name:lower()] = { name = name, ids = {} }
@@ -370,79 +367,78 @@ function SD.Find(text)
     if #names == 0 then return end
     scanning = true
     local nextID = 1
-    ns.Print(("Spell data: looking for %s…"):format(table.concat(names, ", ")))
-    local ticker
-    ticker = C_Timer.NewTicker(0, function()
+    print(("Spell data: looking for %s…"):format(table.concat(names, ", ")))
+    local ticker: TickerHandle
+    ticker = every(0, function()
         if InCombatLockdown() then return end
         local stopAt = debugprofilestop() + BUDGET
         while nextID <= SCAN_TO and debugprofilestop() < stopAt do
             local n = C_Spell.GetSpellName(nextID)
-            local hit = n and not isSecret(n) and byLower[n:lower()]
+            local hit: { name: string, ids: number[] }? = nil
+            if n and not isSecret(n) then hit = byLower[n:lower()] end
             if hit then hit.ids[#hit.ids + 1] = nextID end
             nextID = nextID + 1
         end
         if nextID > SCAN_TO then
             ticker:Cancel()
             scanning = false
-            SuuUIProbe = SuuUIProbe or {}
-            SuuUIProbe.spellFind = SuuUIProbe.spellFind or {}
+            DB.probe.spellFind = DB.probe.spellFind or {}
             for _, name in ipairs(names) do
-                local found = byLower[name:lower()].ids
-                SuuUIProbe.spellFind[name] = found
-                ns.Print(("Spell data: %q has %d IDs: %s."):format(name, #found, table.concat(found, ", ")))
+                local found = assert(byLower[name:lower()]).ids
+                DB.probe.spellFind[name] = found
+                print(("Spell data: %q has %d IDs: %s."):format(name, #found, table.concat(found, ", ")))
             end
-            ns.Print("Spell data: /reload to save.")
+            print("Spell data: /reload to save.")
         end
     end)
 end
 
-function SD.Command(arg)
+export function command(arg: string?)
     local findName = arg and arg:match("^find%s+(.+)$")
     if findName then
-        SD.Find(findName)
+        find(findName)
         return
     end
     if arg == "scan forever" then
-        SD.ScanForever()
+        scanForever()
         return
     end
     if arg == "clear" then
         stop()
-        if SuuUIProbe then
-            SuuUIProbe.spellScan, SuuUIProbe.spellScanHigh, SuuUIProbe.spells, SuuUIProbe.spellsRecording = nil, nil, nil, nil
-            SuuUIProbe.spellScanForever = nil
-        end
-        ns.Print("Spell data: cleared. /reload to shrink the save file.")
+        local probe = DB.probe
+        probe.spellScan, probe.spellScanHigh, probe.spells, probe.spellsRecording = nil, nil, nil, nil
+        probe.spellScanForever = nil
+        print("Spell data: cleared. /reload to shrink the save file.")
         return
     end
     if arg == "scan high" then
-        SD.ScanHigh()
+        scanHigh()
         return
     end
     if arg == "scan" then
-        SD.Scan()
+        scan()
         return
     end
     if arg == "off" then
         stop()
-        if SuuUIProbe then SuuUIProbe.spellsRecording = nil end
-        ns.Print("Spell data: recording stopped. /reload to save.")
+        DB.probe.spellsRecording = nil
+        print("Spell data: recording stopped. /reload to save.")
         return
     end
-    local mine, pet = SD.DumpSpellbook()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.spellsRecording = true
+    local mine, pet = dumpSpellbook()
+    DB.probe.spellsRecording = true
     start()
     local d = store()
-    ns.Print(("Spell data: %d spells in your spellbook, %d pet spells. Recording casts and auras (%d casts, %d auras so far) until /suu probe spells off."):format(
+    print(("Spell data: %d spells in your spellbook, %d pet spells. Recording casts and auras (%d casts, %d auras so far) until /suu probe spells off."):format(
         mine, pet, count(d.casts), count(d.auras)))
-    ns.Print("Play normally: cast your spells and use your cooldowns, pick up procs. /reload now and then to save.")
+    print("Play normally: cast your spells and use your cooldowns, pick up procs. /reload now and then to save.")
 end
 
 -- Recording survives reloads.
-Events.OnGame("PLAYER_LOGIN", function()
-    if SuuUIProbe and SuuUIProbe.spellsRecording then
+@onLogin
+local function resumeRecording()
+    if DB.probe.spellsRecording then
         start()
-        C_Timer.After(3, function() if not InCombatLockdown() then SD.DumpSpellbook() end end)
+        after(3, function() if not InCombatLockdown() then dumpSpellbook() end end)
     end
-end, "SpellData")
+end

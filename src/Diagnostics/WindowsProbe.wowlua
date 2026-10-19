@@ -1,4 +1,4 @@
--- Diagnostics/WindowsProbe.lua
+-- Diagnostics/WindowsProbe.wowlua
 -- "/suu probe windows": what the remaining windows (3.6: mail, merchant,
 -- trainer, auction house, collections; 3.7, asked 2026-10-17: gossip, the
 -- quest dialog, the dressing room, inspect, the inspected player's
@@ -17,20 +17,30 @@
 --   /suu probe windows    then visit a vendor, a mailbox, a class trainer,
 --                         the auction house, open Collections; then /reload
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import hookScript from "wowlua:hooks"
+import onAddonLoaded from "wowlua:lifecycle"
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
 
-local WP = {}
-ns.WindowsProbe = WP
+-- a window the probe knows: its frames, load-on-demand addons, events, APIs
+type Window = { frames: string[], addons?: string[], events?: string[], apis: string[] }
+type Record = { [string]: any }
 
-local isSecret = issecretvalue or function() return false end
+-- the event frame and which windows' OnShow are hooked (once a session)
+local frame: Frame? = nil
+local journalHooked, dressHooked, inspectHooked, menuHooked = false, false, false, false
+local shownHooked: { [string]: boolean }? = nil
 
-local function show(v, depth)
+
+local function show(v: any, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
         if depth > 2 then return "{…}" end
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
             if type(x) ~= "function" then parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1) end
             if #parts > 40 then break end
@@ -42,24 +52,24 @@ local function show(v, depth)
 end
 
 -- a call's every result, or why it failed
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, " | ")
 end
 
-local function raw(fn, ...)
+local function raw(fn: any, ...: any): any
     if type(fn) ~= "function" then return nil end
     local ok, a = pcall(fn, ...)
     if ok then return a end
 end
 
 -- "C_MountJournal.GetNumMounts" -> the function, or nil
-local function resolve(path)
-    local t = _G
+local function resolve(path: string): any
+    local t: any = _G
     for part in path:gmatch("[^%.]+") do
         if type(t) ~= "table" then return nil end
         t = t[part]
@@ -67,7 +77,7 @@ local function resolve(path)
     return t
 end
 
-local function anchorOf(r)
+local function anchorOf(r: any): string
     local ok, point, rel, relPoint, x, y = pcall(r.GetPoint, r, 1)
     if not ok or not point then return "" end
     local relName = rel and ((rel.GetName and rel:GetName()) or rel.suuProbeKey or "?") or "nil"
@@ -75,9 +85,9 @@ local function anchorOf(r)
 end
 
 -- frames and texts (no textures: the trees are long enough), 700 lines at most
-local function tree(f, depth, out, prefix)
+local function tree(f: any, depth: number, out: string[], prefix: string)
     if depth > 7 or not f or not f.GetChildren or #out >= 700 then return end
-    local keys = {}
+    local keys: { [any]: string } = {}
     for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then keys[v] = k end end
     for _, r in ipairs({ f:GetRegions() }) do
         if r:GetObjectType() == "FontString" and #out < 700 then
@@ -101,7 +111,7 @@ end
 
 -- The windows: their frames (classic and modern names, whichever exist),
 -- their load-on-demand addons, the events they open on, their APIs.
-local WINDOWS = {
+local WINDOWS: { [string]: Window } = {
     mail = {
         frames = { "MailFrame", "InboxFrame", "OpenMailFrame", "SendMailFrame" },
         events = { "MAIL_SHOW" },
@@ -223,13 +233,13 @@ local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip
 
 -- Every large window open now (named or by its parent's key), to find the
 -- ones the probe doesn't know by name (the inspected player's talents).
-local function openWindows()
-    local out = {}
+export function openWindows(): string[]
+    local out: string[] = {}
     for _, f in ipairs({ UIParent:GetChildren() }) do
         local okS, shown = pcall(f.IsShown, f)
         if okS and shown and not f:IsForbidden() then
             local w, h = f:GetWidth() or 0, f:GetHeight() or 0
-            if not (issecretvalue and (issecretvalue(w) or issecretvalue(h))) and w >= 250 and h >= 200 then
+            if not (isSecret(w) or isSecret(h)) and w >= 250 and h >= 200 then
                 local okP, protected = pcall(f.IsProtected, f)
                 out[#out + 1] = ("%s [%s] %dx%d%s"):format(f:GetName() or "?", f:GetObjectType(), math.floor(w), math.floor(h),
                     (okP and protected) and " PROTECTED" or "")
@@ -239,11 +249,10 @@ local function openWindows()
     table.sort(out)
     return out
 end
-WP.OpenWindows = openWindows
 
-local function frameInfo(name)
+local function frameInfo(name: string): string
     -- "Parent.Key" for a child kept by key
-    local f = _G[name:match("^[^.]+")]
+    local f: any = _G[name:match("^[^.]+") or ""]
     for key in name:gmatch("%.([^.]+)") do f = type(f) == "table" and f[key] or nil end
     if not f then return "missing" end
     if type(f) ~= "table" or not f.GetObjectType then return "not a frame: " .. type(f) end
@@ -252,11 +261,11 @@ local function frameInfo(name)
         math.floor(f:GetWidth() or 0), math.floor(f:GetHeight() or 0))
 end
 
-local function apiInfo(path)
+local function apiInfo(path: string): string
     local v = resolve(path)
     if v == nil then return "missing" end
     if type(v) == "table" then
-        local n = {}
+        local n: string[] = {}
         for k, x in pairs(v) do if type(x) == "function" then n[#n + 1] = k end end
         table.sort(n)
         return "namespace: " .. table.concat(n, ", ")
@@ -266,7 +275,7 @@ end
 
 -- The client's API documentation for these functions: every flag on them
 -- (restrictions and the like), not their arguments.
-local function docFlags(names)
+local function docFlags(names: string[]): string | { [string]: string }
     for _, a in ipairs({ "Blizzard_APIDocumentationBasic", "Blizzard_APIDocumentation", "Blizzard_APIDocumentationGenerated" }) do
         if C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(a) and not C_AddOns.IsAddOnLoaded(a) then
             pcall(C_AddOns.LoadAddOn, a)
@@ -274,14 +283,14 @@ local function docFlags(names)
     end
     local docs = _G.APIDocumentation
     if not (docs and docs.systems) then return "no APIDocumentation" end
-    local want = {}
+    local want: { [string]: boolean } = {}
     for _, n in ipairs(names) do want[n] = true end
-    local out = {}
+    local out: { [string]: string } = {}
     for _, sys in ipairs(docs.systems) do
         for _, fn in ipairs(sys.Functions or {}) do
             local full = (sys.Namespace and (sys.Namespace .. ".") or "") .. tostring(fn.Name)
             if want[full] or want[fn.Name] then
-                local flags = {}
+                local flags: string[] = {}
                 for k, v in pairs(fn) do
                     if type(v) ~= "table" and type(v) ~= "function" and k ~= "Name" and k ~= "Type" then
                         flags[#flags + 1] = tostring(k) .. "=" .. tostring(v)
@@ -296,7 +305,7 @@ local function docFlags(names)
 end
 
 -- What each window's APIs give while it's open.
-local SAMPLES = {
+local SAMPLES: { [string]: (s: Record) -> () } = {
     mail = function(s)
         local n = raw(GetInboxNumItems) or 0
         s.inbox = call(GetInboxNumItems)
@@ -310,7 +319,7 @@ local SAMPLES = {
         s.sample = {}
         for i = 1, math.min(3, n) do
             s.sample[i] = {
-                info = call(GetMerchantItemInfo, i),
+                info = call(_G.GetMerchantItemInfo, i),
                 infoC = C_MerchantFrame and call(C_MerchantFrame.GetItemInfo, i) or "no C_MerchantFrame",
                 link = call(GetMerchantItemLink, i),
                 cost = call(GetMerchantItemCostInfo, i),
@@ -344,9 +353,9 @@ local SAMPLES = {
         end
     end,
     auction = function(s)
-        s.canQuery = type(CanSendAuctionQuery) == "function" and call(CanSendAuctionQuery) or "missing"
-        s.listed = call(GetNumAuctionItems, "list")
-        s.owner = call(GetNumAuctionItems, "owner")
+        s.canQuery = type(_G.CanSendAuctionQuery) == "function" and call(_G.CanSendAuctionQuery) or "missing"
+        s.listed = call(_G.GetNumAuctionItems, "list")
+        s.owner = call(_G.GetNumAuctionItems, "owner")
         local ah = C_AuctionHouse
         if ah then
             s.throttleReady = call(ah.IsThrottledMessageSystemReady)
@@ -375,7 +384,7 @@ local SAMPLES = {
         s.completable = call(IsQuestCompletable)
         s.portrait = call(GetQuestPortraitGiver)
     end,
-    dressup = function(s) end,
+    dressup = function(_s) end,
     macros = function(s)
         s.counts = call(GetNumMacros)
         s.first = call(GetMacroInfo, 1)
@@ -383,7 +392,7 @@ local SAMPLES = {
     end,
     addons = function(s)
         s.count = call(C_AddOns.GetNumAddOns)
-        local list = {}
+        local list: string[] = {}
         for i = 1, math.min(C_AddOns.GetNumAddOns(), 20) do
             list[i] = call(C_AddOns.GetAddOnInfo, i) .. " | state " .. call(C_AddOns.GetAddOnEnableState, i, UnitName("player"))
                 .. " | deps " .. call(C_AddOns.GetAddOnDependencies, i)
@@ -393,7 +402,7 @@ local SAMPLES = {
     end,
     help = function(s)
         local f = _G.HelpFrame
-        local kinds = {}
+        local kinds: string[] = {}
         if f then
             for _, c in ipairs({ f:GetChildren() }) do
                 kinds[#kinds + 1] = ("%s %s shown=%s"):format(c:GetObjectType(), c:GetName() or c:GetDebugName() or "?", show(c:IsShown()))
@@ -404,7 +413,7 @@ local SAMPLES = {
     gamemenu = function(s)
         -- its buttons: each one's text and what it is
         local f = _G.GameMenuFrame
-        local buttons = {}
+        local buttons: string[] = {}
         for _, c in ipairs({ f and f:GetChildren() or nil }) do
             if c.GetText and c:IsShown() then
                 local okP, protected = pcall(c.IsProtected, c)
@@ -417,7 +426,7 @@ local SAMPLES = {
         s.canInspect = call(CanInspect, "target")
         s.itemLevel = call(C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel, "target")
         s.head = call(GetInventoryItemLink, "target", 1)
-        s.talentTabs = call(GetNumTalentTabs, true)
+        s.talentTabs = call(_G.GetNumTalentTabs, true)
         s.firstTab = call(GetTalentTabInfo, 1, true)
     end,
     collections = function(s)
@@ -439,26 +448,25 @@ local SAMPLES = {
     end,
 }
 
-local function store()
-    SuuUIProbe = SuuUIProbe or {}
-    if type(SuuUIProbe.windows) ~= "table" then SuuUIProbe.windows = {} end
-    return SuuUIProbe.windows
+local function store(): Record
+    if type(DB.probe.windows) ~= "table" then DB.probe.windows = {} end
+    return DB.probe.windows
 end
 
 -- One window as it shows now.
-function WP.Snapshot(key)
-    local def = WINDOWS[key]
-    local s = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown() }
+export function snapshot(key: string)
+    local def = WINDOWS[key] :: Window
+    local s: Record = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown() }
     s.frames = {}
     for _, name in ipairs(def.frames) do s.frames[name] = frameInfo(name) end
-    local ok, err = pcall(SAMPLES[key], s)
+    local ok, err = pcall(SAMPLES[key] :: any, s)
     if not ok then s.sampleError = tostring(err) end
     s.openWindows = openWindows()
     -- the open window's tree: the first of its frames that shows
     for _, name in ipairs(def.frames) do
         local f = _G[name]
         if type(f) == "table" and f.IsShown and f:IsShown() then
-            local out = {}
+            local out: string[] = {}
             tree(f, 1, out, "")
             s.treeOf, s.tree = name, out
             break
@@ -466,7 +474,7 @@ function WP.Snapshot(key)
     end
     -- every named frame of its family that shows (popups, side panels)
     local prefix = def.frames[1]:gsub("Frame$", ""):gsub("Journal$", "")
-    local named = {}
+    local named: string[] = {}
     for k, v in pairs(_G) do
         if type(k) == "string" and k:find("^" .. prefix) and type(v) == "table" and v.IsShown and v.GetObjectType
             and not k:find("%d$") then
@@ -478,20 +486,20 @@ function WP.Snapshot(key)
     table.sort(named)
     s.shownNamed = named
     store()[key] = s
-    ns.Print(("Windows probe: %s saved (%s lines of its frames); /reload when you're done."):format(key, s.tree and #s.tree or 0))
+    print(("Windows probe: %s saved (%s lines of its frames); /reload when you're done."):format(key, s.tree and #s.tree or 0))
 end
 
 -- What exists now, before any window opens.
-function WP.Static()
+export function static()
     local w = store()
     w.static = { at = date("%Y-%m-%d %H:%M:%S") }
-    local names = {}
+    local names: string[] = {}
     for _, key in ipairs(ORDER) do
-        local def = WINDOWS[key]
-        local s = { frames = {}, apis = {}, addons = {} }
+        local def = WINDOWS[key] :: Window
+        local s: Record = { frames = {}, apis = {}, addons = {} }
         for _, a in ipairs(def.addons or {}) do
             s.addons[a] = ("exists=%s loaded=%s lod=%s"):format(
-                show(C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(a)), show(C_AddOns.IsAddOnLoaded(a)),
+                show(C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(a)), show((C_AddOns.IsAddOnLoaded(a))),
                 show(C_AddOns.IsAddOnLoadOnDemand and C_AddOns.IsAddOnLoadOnDemand(a)))
         end
         for _, name in ipairs(def.frames) do s.frames[name] = frameInfo(name) end
@@ -506,13 +514,13 @@ end
 
 -- For 30 minutes: each window as it opens (a moment after, when its
 -- lists are filled); Collections when its journal shows.
-function WP.Arm()
-    local f = WP.frame or CreateFrame("Frame")
-    WP.frame = f
+export function arm()
+    local f = frame or CreateFrame("Frame")
+    frame = f
     f:UnregisterAllEvents()
-    local byEvent = {}
+    local byEvent: { [string]: string } = {}
     for _, key in ipairs(ORDER) do
-        for _, e in ipairs(WINDOWS[key].events or {}) do
+        for _, e in ipairs((WINDOWS[key] :: Window).events or {}) do
             byEvent[e] = key
             pcall(f.RegisterEvent, f, e)
         end
@@ -521,88 +529,89 @@ function WP.Arm()
     f:SetScript("OnEvent", function(_, event)
         if GetTime() > untilT then f:UnregisterAllEvents() return end
         local key = byEvent[event]
-        if key then C_Timer.After(0.6, function() WP.Snapshot(key) end) end
+        if key then after(0.6, function() snapshot(key) end) end
     end)
     local function hookJournal()
         local j = _G.CollectionsJournal
-        if j and not WP.journalHooked then
-            WP.journalHooked = true
-            j:HookScript("OnShow", function()
-                if GetTime() <= untilT then C_Timer.After(0.6, function() WP.Snapshot("collections") end) end
+        if j and not journalHooked then
+            journalHooked = true
+            hookScript(j, "OnShow", function()
+                if GetTime() <= untilT then after(0.6, function() snapshot("collections") end) end
             end)
         end
     end
     hookJournal()
     local d = _G.DressUpFrame
-    if d and not WP.dressHooked then
-        WP.dressHooked = true
-        d:HookScript("OnShow", function()
-            if GetTime() <= untilT then C_Timer.After(0.6, function() WP.Snapshot("dressup") end) end
+    if d and not dressHooked then
+        dressHooked = true
+        hookScript(d, "OnShow", function()
+            if GetTime() <= untilT then after(0.6, function() snapshot("dressup") end) end
         end)
     end
     -- inspect: saved when its window shows (INSPECT_READY came before it did)
     local function hookInspect()
         local i = _G.InspectFrame
-        if i and not WP.inspectHooked then
-            WP.inspectHooked = true
-            i:HookScript("OnShow", function()
-                if GetTime() <= untilT then C_Timer.After(0.8, function() WP.Snapshot("inspect") end) end
+        if i and not inspectHooked then
+            inspectHooked = true
+            hookScript(i, "OnShow", function()
+                if GetTime() <= untilT then after(0.8, function() snapshot("inspect") end) end
             end)
         end
     end
     hookInspect()
-    if not WP.inspectHooked and EventUtil and EventUtil.ContinueOnAddOnLoaded then
-        EventUtil.ContinueOnAddOnLoaded("Blizzard_InspectUI", hookInspect)
+    if not inspectHooked then
+        onAddonLoaded("Blizzard_InspectUI", hookInspect)
     end
     local g = _G.GameMenuFrame
-    if g and not WP.menuHooked then
-        WP.menuHooked = true
-        g:HookScript("OnShow", function()
-            if GetTime() <= untilT then C_Timer.After(0.3, function() WP.Snapshot("gamemenu") end) end
+    if g and not menuHooked then
+        menuHooked = true
+        hookScript(g, "OnShow", function()
+            if GetTime() <= untilT then after(0.3, function() snapshot("gamemenu") end) end
         end)
     end
     -- the game menu's windows, each when it shows
-    local function hookShow(key, name)
+    local function hookShow(key: string, name: string)
         local w = _G[name]
-        WP.shownHooked = WP.shownHooked or {}
-        if w and not WP.shownHooked[key] then
-            WP.shownHooked[key] = true
-            w:HookScript("OnShow", function()
-                if GetTime() <= untilT then C_Timer.After(0.6, function() WP.Snapshot(key) end) end
+        local hooked = shownHooked or {}
+        shownHooked = hooked
+        if w and not hooked[key] then
+            hooked[key] = true
+            hookScript(w, "OnShow", function()
+                if GetTime() <= untilT then after(0.6, function() snapshot(key) end) end
             end)
         end
     end
     hookShow("addons", "AddonList")
     hookShow("help", "HelpFrame")
     hookShow("macros", "MacroFrame")
-    if not (WP.shownHooked and WP.shownHooked.macros) and EventUtil and EventUtil.ContinueOnAddOnLoaded then
-        EventUtil.ContinueOnAddOnLoaded("Blizzard_MacroUI", function() hookShow("macros", "MacroFrame") end)
+    if not (shownHooked and shownHooked.macros) then
+        onAddonLoaded("Blizzard_MacroUI", function() hookShow("macros", "MacroFrame") end)
     end
-    if not WP.journalHooked and EventUtil and EventUtil.ContinueOnAddOnLoaded then
-        EventUtil.ContinueOnAddOnLoaded("Blizzard_Collections", hookJournal)
+    if not journalHooked then
+        onAddonLoaded("Blizzard_Collections", hookJournal)
     end
 end
 
 -- Whatever is open now: every large window and the tree of each.
-function WP.Now()
-    local s = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown(), openWindows = openWindows(), trees = {} }
+export function now()
+    local s = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown(), openWindows = openWindows(), trees = {} :: { [string]: string[] } }
     for _, f in ipairs({ UIParent:GetChildren() }) do
         local okS, shown = pcall(f.IsShown, f)
         local w, h = f:GetWidth() or 0, f:GetHeight() or 0
-        if okS and shown and not f:IsForbidden() and not (issecretvalue and (issecretvalue(w) or issecretvalue(h)))
+        if okS and shown and not f:IsForbidden() and not (isSecret(w) or isSecret(h))
             and w >= 250 and h >= 200 and f:GetName() and not f:GetName():find("^SuuUI") then
-            local out = {}
+            local out: string[] = {}
             tree(f, 1, out, "")
             s.trees[f:GetName()] = out
         end
     end
     store().now = s
-    ns.Print(("Windows probe: %d open windows saved; /reload to save them."):format(#s.openWindows))
+    print(("Windows probe: %d open windows saved; /reload to save them."):format(#s.openWindows))
 end
 
-function WP.Command(rest)
-    if rest == "now" then return WP.Now() end
-    WP.Static()
-    WP.Arm()
-    ns.Print("Windows probe: the frames and APIs saved. For 30 minutes, each window is saved as it opens: visit a vendor, a mailbox, a class trainer, the auction house and open Collections, then /reload.")
+export function command(rest: string?)
+    if rest == "now" then return now() end
+    static()
+    arm()
+    print("Windows probe: the frames and APIs saved. For 30 minutes, each window is saved as it opens: visit a vendor, a mailbox, a class trainer, the auction house and open Collections, then /reload.")
 end

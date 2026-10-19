@@ -1,18 +1,20 @@
--- Diagnostics/MenuProbe.lua
+-- Diagnostics/MenuProbe.wowlua
 -- "/suu probe unitmenu": what a unit menu is made of (asked 2026-10-17: a
 -- gap under SuuUI's restyled unit menu). Arms a one-time record of the next
 -- unit menu that opens: the menu's edges, and each child (and scroll target
 -- child) with its type, shown, top and bottom, its text and its regions.
 -- Saved in SuuUIProbe.unitMenu on /reload.
 
-local _, ns = ...
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
 
-local MP = {}
-ns.MenuProbe = MP
+local armed, hooked = false, false
 
-local function describe(f, menuTop)
+local function describe(f: any, menuTop: number): string
     local t, b = f:GetTop(), f:GetBottom()
-    local texts, regions = {}, {}
+    local texts: string[], regions: string[] = {}, {}
     for _, r in ipairs({ f:GetRegions() }) do
         local kind = r:GetObjectType()
         if kind == "FontString" then texts[#texts + 1] = tostring(r:GetText()) end
@@ -25,21 +27,21 @@ local function describe(f, menuTop)
         table.concat(texts, "|"), table.concat(regions, ","), select("#", f:GetChildren()))
 end
 
-function MP.Command()
-    local mgr = _G.UnitPopupManager
-    if not (mgr and mgr.OpenMenu) then ns.Print("Unit menu probe: no UnitPopupManager.") return end
-    MP.armed = true
-    if not MP.hooked then
-        MP.hooked = true
-        hooksecurefunc(mgr, "OpenMenu", function()
-            if not MP.armed then return end
-            MP.armed = false
-            C_Timer.After(0.1, function()
-                local manager = Menu and Menu.GetManager and Menu.GetManager()
+export function command()
+    local mgr: any = _G.UnitPopupManager
+    if not (mgr and mgr.OpenMenu) then print("Unit menu probe: no UnitPopupManager.") return end
+    armed = true
+    if not hooked then
+        hooked = true
+        hook(mgr, "OpenMenu", function()
+            if not armed then return end
+            armed = false
+            after(0.1, function()
+                local M: any = _G.Menu
+                local manager = M and M.GetManager and M.GetManager()
                 local menu = manager and manager:GetOpenMenu()
-                SuuUIProbe = SuuUIProbe or {}
-                local out = { at = date("%Y-%m-%d %H:%M:%S"), children = {}, target = {} }
-                SuuUIProbe.unitMenu = out
+                local out: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S"), children = {}, target = {} }
+                DB.probe.unitMenu = out
                 if not menu then out.menu = "none open" return end
                 local top = menu:GetTop() or 0
                 out.menu = ("top=0 bottom=%.0f h=%.0f w=%.0f scroll=%s"):format(top - (menu:GetBottom() or 0), menu:GetHeight() or 0,
@@ -49,9 +51,9 @@ function MP.Command()
                 if target then
                     for _, c in ipairs({ target:GetChildren() }) do out.target[#out.target + 1] = describe(c, top) end
                 end
-                ns.Print("Unit menu probe: recorded. /reload to save it.")
+                print("Unit menu probe: recorded. /reload to save it.")
             end)
         end)
     end
-    ns.Print("Unit menu probe: right-click your own frame now, then /reload.")
+    print("Unit menu probe: right-click your own frame now, then /reload.")
 end

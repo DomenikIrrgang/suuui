@@ -1,4 +1,4 @@
--- Diagnostics/AhScanProbe.lua
+-- Diagnostics/AhScanProbe.wowlua
 -- "/suu probe ahscan" (at the auction house): does the full scan work on
 -- Forever? It asks the game for every auction once (ReplicateItems), waits
 -- for REPLICATE_ITEM_LIST_UPDATE (a minute at most), and records how long it
@@ -9,24 +9,26 @@
 -- progress under the scanning mark). Saved in SuuUIProbe.ahScan on /reload.
 -- The game allows this only now and then (every 15 minutes), so run it once.
 
-local _, ns = ...
+import after, every from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
 
-local AP = {}
-ns.AhScanProbe = AP
+-- the scan being waited for, and the frame that hears its answer
+local waiting: boolean? = nil
+local listFrame: Frame? = nil
 
-local isSecret = issecretvalue or function() return false end
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     return tostring(v)
 end
 
-local function store(out)
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.ahScan = out
+local function store(out: { [string]: any })
+    DB.probe.ahScan = out
 end
 
 -- What came back: the count, the share with all info, five samples.
-local function collect(out)
+local function collect(out: { [string]: any })
     local ok, n = pcall(C_AuctionHouse.GetNumReplicateItems)
     out.count = ok and show(n) or ("error: " .. tostring(n))
     if not ok or type(n) ~= "number" then return end
@@ -48,25 +50,25 @@ local function collect(out)
     out.samples = samples
 end
 
-function AP.Command()
+export function command()
     if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then
-        ns.Print("Auction house scan probe: open the auction house first.")
+        print("Auction house scan probe: open the auction house first.")
         return
     end
-    if AP.waiting then ns.Print("Auction house scan probe: already waiting for the scan.") return end
-    local out = { at = date("%Y-%m-%d %H:%M:%S") }
+    if waiting then print("Auction house scan probe: already waiting for the scan.") return end
+    local out: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
     store(out)
     local okReady, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
     out.throttleReady = okReady and show(ready) or ("error: " .. tostring(ready))
     local started = GetTime()
-    local f = AP.frame or CreateFrame("Frame")
-    AP.frame = f
+    local f = listFrame or CreateFrame("Frame")
+    listFrame = f
     f:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
     -- what fills while it waits: the count every quarter second (when it
     -- changes), and every auction house event by name
     out.while_waiting, out.events = {}, {}
-    local last
-    local ticker = C_Timer.NewTicker(0.25, function()
+    local last: string? = nil
+    local ticker = every(0.25, function()
         local okN, n = pcall(C_AuctionHouse.GetNumReplicateItems)
         local v = okN and show(n) or "error"
         if v ~= last then
@@ -87,26 +89,26 @@ function AP.Command()
         ev.first = ev.first or ("%.2fs"):format(GetTime() - started)
         ev.last = ("%.2fs"):format(GetTime() - started)
     end)
-    local function finish(why)
-        if not AP.waiting then return end
-        AP.waiting = nil
+    local function finish(why: string)
+        if not waiting then return end
+        waiting = nil
         ticker:Cancel()
-        C_Timer.After(2, function() watch:UnregisterAllEvents() end)
+        after(2, function() watch:UnregisterAllEvents() end)
         f:UnregisterEvent("REPLICATE_ITEM_LIST_UPDATE")
         out.result = why
         out.seconds = ("%.1f"):format(GetTime() - started)
         collect(out)
-        ns.Print(("Auction house scan probe: %s after %ss, %s auctions (%s with all info). /reload to save."):format(
+        print(("Auction house scan probe: %s after %ss, %s auctions (%s with all info). /reload to save."):format(
             why, out.seconds, tostring(out.count), tostring(out.withAllInfo)))
     end
     f:SetScript("OnEvent", function() finish("list came back") end)
-    AP.waiting = true
+    waiting = true
     local ok, err = pcall(C_AuctionHouse.ReplicateItems)
     out.call = ok and "ok" or ("error: " .. tostring(err))
     if not ok then
         finish("the call failed")
         return
     end
-    ns.Print("Auction house scan probe: asked for every auction; waiting up to a minute.")
-    C_Timer.After(60, function() finish("no answer in a minute") end)
+    print("Auction house scan probe: asked for every auction; waiting up to a minute.")
+    after(60, function() finish("no answer in a minute") end)
 end

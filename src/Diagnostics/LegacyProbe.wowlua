@@ -1,4 +1,4 @@
--- Diagnostics/LegacyProbe.lua
+-- Diagnostics/LegacyProbe.wowlua
 -- "/suu probe legacy": what Forever's Legacy system gives an addon, for
 -- SuuUI's own Legacy pages (step 3.2d). Saved in SuuUIProbe.legacy on
 -- /reload.
@@ -13,20 +13,19 @@
 --
 --   /suu probe legacy     (out of combat), then /reload
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
 
-local LP = {}
-ns.LegacyProbe = LP
+type Map = { [string]: any }
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v, depth)
+local function show(v: any, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
         if depth > 2 then return "{…}" end
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
             parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1)
             if #parts > 30 then break end
@@ -37,16 +36,16 @@ local function show(v, depth)
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, " | ")
 end
 
-local function raw(fn, ...)
+local function raw(fn: any, ...: any): (any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c = pcall(fn, ...)
     if ok then return a, b, c end
@@ -56,8 +55,8 @@ local TREES = { 1187, 1188, 1189 }
 local FACTION = 2802
 local CURRENCY = 4225
 
-local function sampleTree(store, treeID)
-    local t = { id = treeID }
+local function sampleTree(store: Map[], treeID: number)
+    local t: Map = { id = treeID }
     store[#store + 1] = t
     local configID = raw(C_Traits.GetConfigIDByTreeID, treeID)
     t.config = show(configID)
@@ -107,13 +106,12 @@ local function sampleTree(store, treeID)
     end
 end
 
-function LP.Sample()
+export function sample()
     if C_AddOns and C_AddOns.IsAddOnLoaded and not C_AddOns.IsAddOnLoaded("Blizzard_LegacySystem") then
         pcall(C_AddOns.LoadAddOn, "Blizzard_LegacySystem")
     end
-    SuuUIProbe = SuuUIProbe or {}
     local store = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")) }
-    SuuUIProbe.legacy = store
+    DB.probe.legacy = store
     -- points
     store.points = {
         renown = call(C_MajorFactions and C_MajorFactions.GetCurrentRenownLevel, FACTION),
@@ -162,11 +160,11 @@ function LP.Sample()
     return store
 end
 
-function LP.Command()
-    if InCombatLockdown() then ns.Print("Legacy probe: out of combat, please.") return end
-    local store = LP.Sample()
+export function command(_rest: string?)
+    if InCombatLockdown() then print("Legacy probe: out of combat, please.") return end
+    local store = sample()
     local nodes = 0
     for _, t in ipairs(store.trees) do nodes = nodes + (t.nodeCount or 0) end
-    ns.Print(("Legacy probe: %d trees (%d nodes), %d reward levels, %d challenge categories. /reload to save."):format(
+    print(("Legacy probe: %d trees (%d nodes), %d reward levels, %d challenge categories. /reload to save."):format(
         #store.trees, nodes, #store.rewards.levels, store.challenges.count or 0))
 end

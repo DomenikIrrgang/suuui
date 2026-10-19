@@ -1,24 +1,22 @@
--- Diagnostics/MapPinsProbe.lua
+-- Diagnostics/MapPinsProbe.wowlua
 -- "/suu probe mappins" (asked 2026-10-19: the little houses the game draws
 -- on the world map, to hide them): every pin the game's map shows on the
 -- map open now, by template, with what each says it is (its POI's name,
 -- atlas and ID, its own textures' atlases).
 -- Saved in SuuUIProbe.mapPins on /reload. Values the game hides read SECRET.
 
-local _, ns = ...
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import isSecret from "wowlua:secret"
 
-local MP = {}
-ns.MapPinsProbe = MP
-
-local isSecret = issecretvalue or function() return false end
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "SECRET" end
     return tostring(v)
 end
 
 -- the atlases (or files) of a pin's own textures
-local function art(pin)
-    local out = {}
+local function art(pin: any): string
+    local out: string[] = {}
     for _, r in ipairs({ pin:GetRegions() }) do
         if r.GetAtlas and r:IsShown() then
             local a = r:GetAtlas()
@@ -29,8 +27,8 @@ local function art(pin)
     return table.concat(out, ", ")
 end
 
-local function describe(pin)
-    local parts = {}
+local function describe(pin: any): string
+    local parts: string[] = {}
     for _, key in ipairs({ "poiInfo", "areaPoiInfo", "vignetteInfo", "plotInfo", "taxiNodeData" }) do
         local i = pin[key]
         if type(i) == "table" then
@@ -44,13 +42,12 @@ local function describe(pin)
     return table.concat(parts, "; ")
 end
 
-function MP.Command()
+export function command()
     local f = WorldMapFrame
     if not (f and f:IsShown()) then
-        ns.Print("Map pins probe: open the world map on the map with the houses first, then run it again.")
+        print("Map pins probe: open the world map on the map with the houses first, then run it again.")
         return
     end
-    SuuUIProbe = SuuUIProbe or {}
     local o = { at = date("%H:%M:%S"), map = f:GetMapID(), templates = {} }
     local n = 0
     for template, pool in pairs(f.pinPools or {}) do
@@ -61,7 +58,7 @@ function MP.Command()
         end
         if #list > 0 then o.templates[template] = list end
     end
-    SuuUIProbe.mapPins = SuuUIProbe.mapPins or {}
-    table.insert(SuuUIProbe.mapPins, o)
-    ns.Print(("Map pins probe: %d of the game's pins on map %s recorded. /reload to save it."):format(n, show(o.map)))
+    DB.probe.mapPins = DB.probe.mapPins or {}
+    table.insert(DB.probe.mapPins, o)
+    print(("Map pins probe: %d of the game's pins on map %s recorded. /reload to save it."):format(n, show(o.map)))
 end

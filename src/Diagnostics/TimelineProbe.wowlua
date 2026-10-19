@@ -1,4 +1,4 @@
--- Diagnostics/TimelineProbe.lua
+-- Diagnostics/TimelineProbe.wowlua
 -- "/suu probe timeline": what Forever's encounter timeline gives an addon
 -- (plan step 1.13). Once: the client's documentation of C_EncounterTimeline
 -- (functions, events, tables), its enums, whether the feature is available
@@ -16,22 +16,28 @@
 --                              plus every console variable about the timeline
 --   /suu probe timeline off    stop sampling
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as Events from "/Core/Events"
+import * as apiDocs from "/Diagnostics/ApiDocs"
 
-local Events = ns.Events
+type Map = { [any]: any }
 
-local TP = {}
-ns.TimelineProbe = TP
-
-local isSecret = issecretvalue or function() return false end
-local isSecretTable = issecrettable or function() return false end
+const isSecretTable = (_G.issecrettable :: ((v: any) -> boolean)?) or function(_: any): boolean return false end
 local MAX_SAMPLES = 14
 local MAX_EVENTS = 8
 local armed = false
-local eventFrame, eventCounts, eventPayloads
+local eventFrame: Frame? = nil
+local eventCounts: { [string]: number }? = nil
+local eventPayloads: Map? = nil
+
+-- owns the fight listener (was the probe's table)
+local OWNER = {}
 local lastEventSample = 0
 
-local function shape(v, depth)
+local function shape(v: any, depth: number?): any
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
@@ -39,7 +45,7 @@ local function shape(v, depth)
     if t ~= "table" then return t .. ": " .. tostring(v):sub(1, 80) end
     if isSecretTable(v) then return "secret table" end
     if depth >= 4 then return "table (deeper)" end
-    local out, n = {}, 0
+    local out: Map, n = {}, 0
     local count = #v
     if count > 0 then out["#"] = count end
     for k, x in pairs(v) do
@@ -50,7 +56,7 @@ local function shape(v, depth)
     return out
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): any
     if type(fn) ~= "function" then return "missing" end
     local ok, a, b, c = pcall(fn, ...)
     if not ok then return "error: " .. tostring(a):sub(1, 160) end
@@ -58,8 +64,8 @@ local function call(fn, ...)
     return shape(a)
 end
 
-local function eventNames()
-    local names = {}
+local function eventNames(): string[]
+    local names: string[] = {}
     local docs = _G.APIDocumentation
     if not (docs and type(docs.systems) == "table") then return names end
     for _, sys in ipairs(docs.systems) do
@@ -72,44 +78,45 @@ local function eventNames()
     return names
 end
 
-local function watchEvents()
+local function watchEvents(): string[]?
     if eventFrame then return end
     eventFrame = CreateFrame("Frame")
-    eventCounts, eventPayloads = {}, {}
-    local registered = {}
+    local counts: { [string]: number }, payloads: Map = {}, {}
+    eventCounts, eventPayloads = counts, payloads
+    local registered: string[] = {}
     for _, n in ipairs(eventNames()) do
         if pcall(eventFrame.RegisterEvent, eventFrame, n) then registered[#registered + 1] = n end
     end
     eventFrame:SetScript("OnEvent", function(_, event, ...)
-        eventCounts[event] = (eventCounts[event] or 0) + 1
-        if not eventPayloads[event] then eventPayloads[event] = shape({ ... }) end
+        counts[event] = (counts[event] or 0) + 1
+        if not payloads[event] then payloads[event] = shape({ ... }) end
         if not armed then return end
         if event == "ENCOUNTER_START" then
-            C_Timer.After(3, function() if armed then TP.Sample("3s into the boss") end end)
-            C_Timer.After(10, function()
+            after(3, function() if armed then sample("3s into the boss") end end)
+            after(10, function()
                 if armed then
-                    TP.Sample("10s into the boss")
-                    ns.Print("Timeline probe: boss sampled. /reload after the fight to save.")
+                    sample("10s into the boss")
+                    print("Timeline probe: boss sampled. /reload after the fight to save.")
                 end
             end)
         elseif event:find("ENCOUNTER_TIMELINE") and GetTime() - lastEventSample > 5 then
             lastEventSample = GetTime()
-            C_Timer.After(0.5, function() if armed then TP.Sample("after " .. event) end end)
+            after(0.5, function() if armed then sample("after " .. event) end end)
         end
     end)
     return registered
 end
 
-local function enums()
-    local out = {}
-    for k, v in pairs(Enum) do
+local function enums(): Map
+    local out: Map = {}
+    for k, v in pairs(Enum :: any) do
         if type(k) == "string" and k:find("^EncounterTimeline") and not k:find("Meta$") then out[k] = shape(v) end
     end
     return out
 end
 
 -- One event in full.
-local function describeEvent(id)
+local function describeEvent(id: any): Map
     local ET = C_EncounterTimeline
     return {
         id = shape(id),
@@ -125,12 +132,11 @@ local function describeEvent(id)
     }
 end
 
-function TP.Sample(label)
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.timeline or { samples = {} }
-    SuuUIProbe.timeline = store
+export function sample(label: string?): Map
+    local store = DB.probe.timeline or { samples = {} }
+    DB.probe.timeline = store
     local ET = C_EncounterTimeline
-    local s = {
+    local s: Map = {
         at = date("%H:%M:%S"), label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         instance = select(2, IsInInstance()) or "none",
@@ -177,12 +183,12 @@ function TP.Sample(label)
 end
 
 -- Console variables whose name mentions the timeline or encounters.
-local function cvars()
-    local out = {}
+local function cvars(): any
+    local out: { [string]: string } = {}
     if not (C_Console and C_Console.GetAllCommands) then return "no C_Console.GetAllCommands" end
     local ok, all = pcall(C_Console.GetAllCommands)
     if not ok or type(all) ~= "table" then return "error" end
-    for _, c in ipairs(all) do
+    for _, c in ipairs(all :: any[]) do
         local name = c.command
         if type(name) == "string" then
             local low = name:lower()
@@ -195,11 +201,10 @@ local function cvars()
     return out
 end
 
-local function prepare()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.timeline or { samples = {} }
-    SuuUIProbe.timeline = store
-    if ns.ApiDocs and ns.ApiDocs.Dump then store.docs = ns.ApiDocs.Dump({ "encountertimeline" }) end
+local function prepare(): Map
+    local store = DB.probe.timeline or { samples = {} }
+    DB.probe.timeline = store
+    store.docs = apiDocs.dump({ "encountertimeline" })
     store.enums = enums()
     store.registeredEvents = watchEvents() or store.registeredEvents
     store.eventPayloads = eventPayloads
@@ -208,41 +213,41 @@ local function prepare()
     return store
 end
 
-function TP.Command(arg)
+export function command(arg: string?)
     if arg == "off" then
         armed = false
-        ns.Print("Timeline probe: off.")
+        print("Timeline probe: off.")
         return
     end
     prepare()
     local ET = C_EncounterTimeline
     if arg == "demo" then
-        if not ET then ns.Print("Timeline probe: no C_EncounterTimeline.") return end
-        TP.Sample("before the demo")
-        SuuUIProbe.timeline.demoAdd = call(ET.AddEditModeEvents)
+        if not ET then print("Timeline probe: no C_EncounterTimeline.") return end
+        sample("before the demo")
+        DB.probe.timeline.demoAdd = call(ET.AddEditModeEvents)
         -- one event of our own: Shield Wall's spell and art, 10 seconds
         local okS, id = pcall(ET.AddScriptEvent, { spellID = 871, iconFileID = 132362, duration = 10, overrideName = "SuuUI test" })
-        SuuUIProbe.timeline.scriptAdd = okS and shape(id) or ("error: " .. tostring(id))
+        DB.probe.timeline.scriptAdd = okS and shape(id) or ("error: " .. tostring(id))
         local scriptID = okS and not isSecret(id) and id or nil
-        C_Timer.After(1, function()
-            TP.Sample("demo, 1s")
-            C_Timer.After(3, function()
-                TP.Sample("demo, 4s")
-                SuuUIProbe.timeline.demoCancel = call(ET.CancelEditModeEvents)
-                if scriptID then SuuUIProbe.timeline.scriptCancel = call(ET.CancelScriptEvent, scriptID) end
-                ns.Print("Timeline probe: demo sampled. /reload to save.")
+        after(1, function()
+            sample("demo, 1s")
+            after(3, function()
+                sample("demo, 4s")
+                DB.probe.timeline.demoCancel = call(ET.CancelEditModeEvents)
+                if scriptID then DB.probe.timeline.scriptCancel = call(ET.CancelScriptEvent, scriptID) end
+                print("Timeline probe: demo sampled. /reload to save.")
             end)
         end)
-        ns.Print("Timeline probe: demo events added; sampling for 4 seconds.")
+        print("Timeline probe: demo events added; sampling for 4 seconds.")
         return
     end
     if not armed then
         armed = true
-        Events.OnGame("PLAYER_REGEN_DISABLED", function()
+        Events.onGame("PLAYER_REGEN_DISABLED", function()
             if not armed then return end
-            C_Timer.After(3, function() if armed then TP.Sample("3s into the fight") end end)
-        end, TP)
+            after(3, function() if armed then sample("3s into the fight") end end)
+        end, OWNER)
     end
-    TP.Sample("on command")
-    ns.Print("Timeline probe: armed. Fight a dungeon boss, then /reload. (Solo first look: /suu probe timeline demo)")
+    sample("on command")
+    print("Timeline probe: armed. Fight a dungeon boss, then /reload. (Solo first look: /suu probe timeline demo)")
 end

@@ -1,4 +1,4 @@
--- Diagnostics/CampProbe.lua
+-- Diagnostics/CampProbe.wowlua
 -- "/suu probe camp": what Forever's campfires look like to an addon (step
 -- 2.8). Saved in SuuUIProbe.camp on /reload.
 --   * now: every global and C_ namespace whose name holds Camp, Fire, Tent
@@ -14,14 +14,12 @@
 --                     benefits come, use any camp item or feature, walk
 --                     away; then /reload
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
 
-local CP = {}
-ns.CampProbe = CP
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
@@ -37,22 +35,22 @@ end
 
 local WORDS = { "camp", "fire", "tent", "rest", "cozy", "bonfire", "hearth" }
 
-local function interesting(name)
+local function interesting(name: any): boolean
     if type(name) ~= "string" then return false end
     local l = name:lower()
     for _, w in ipairs(WORDS) do if l:find(w, 1, true) then return true end end
     return false
 end
 
-local store
-local function note(s)
+local store: { [string]: any }? = nil
+local function note(s: string)
     local log = store and store.log
     if not log then return end
     log[#log + 1] = date("%H:%M:%S") .. (InCombatLockdown() and " [combat] " or " ") .. s
     while #log > 400 do table.remove(log, 1) end
 end
 
-local function where()
+local function where(): string
     local map = C_Map.GetBestMapForUnit("player")
     local pos = map and C_Map.GetPlayerMapPosition(map, "player")
     local x, y = pos and pos:GetXY()
@@ -61,11 +59,11 @@ local function where()
 end
 
 -- Your auras now: { [auraInstanceID] = "name (spell) dur src" }.
-local function auras()
-    local out = {}
+local function auras(): { [number]: string }
+    local out: { [number]: string } = {}
     for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
         for i = 1, 60 do
-            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, filter)
+            local ok, a: any = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, filter)
             if not ok or not a then break end
             local id = a.auraInstanceID
             if not isSecret(id) and id then
@@ -116,7 +114,7 @@ local function scanSpells()
     return out
 end
 
-local campItems = {}
+local campItems: { [number]: string } = {}
 local function scanItems()
     local out = {}
     for bag = 0, 5 do
@@ -134,7 +132,7 @@ local function scanItems()
 end
 
 local logging = false
-local known = {}
+local known: { [number]: string } = {}
 local function startLog()
     if logging then return end
     logging = true
@@ -163,7 +161,7 @@ local function startLog()
             note(event .. " resting=" .. show(IsResting()) .. " restState=" .. show(GetRestState()) .. " rested=" .. show(GetXPExhaustion()) .. " @ " .. where())
         elseif event == "BAG_UPDATE_COOLDOWN" then
             for id, name in pairs(campItems) do
-                local s, d = C_Container.GetItemCooldown(id)
+                local _s, d = C_Container.GetItemCooldown(id)
                 if not isSecret(d) and d and d > 0 then note("item cooldown " .. name .. " " .. show(d)) end
             end
         elseif event == "SPELL_UPDATE_COOLDOWN" then
@@ -178,27 +176,27 @@ local function startLog()
     end)
 end
 
-function CP.Sample()
-    SuuUIProbe = SuuUIProbe or {}
-    store = SuuUIProbe.camp or {}
-    SuuUIProbe.camp = store
-    store.at = date("%Y-%m-%d %H:%M:%S")
+export function sample()
+    local s: { [string]: any } = DB.probe.camp or {}
+    store = s
+    DB.probe.camp = s
+    s.at = date("%Y-%m-%d %H:%M:%S")
     local ok, g, c = pcall(scanGlobals)
-    store.globals, store.cFunctions = ok and g or tostring(g), ok and c or nil
+    s.globals, s.cFunctions = ok and g or tostring(g), ok and c or nil
     local ok2, sp = pcall(scanSpells)
-    store.spells = ok2 and sp or tostring(sp)
+    s.spells = ok2 and sp or tostring(sp)
     local ok3, it = pcall(scanItems)
-    store.items = ok3 and it or tostring(it)
+    s.items = ok3 and it or tostring(it)
     local now = {}
     for _, text in pairs(auras()) do now[#now + 1] = text end
     table.sort(now)
-    store.aurasNow = now
-    store.rest = { resting = show(IsResting()), state = show(GetRestState()), rested = show(GetXPExhaustion()), where = where() }
-    store.log = store.log or {}
+    s.aurasNow = now
+    s.rest = { resting = show(IsResting()), state = show(GetRestState()), rested = show(GetXPExhaustion()), where = where() }
+    s.log = s.log or {}
     startLog()
 end
 
-function CP.Command()
-    CP.Sample()
-    ns.Print("Camp probe: sampled. Walk up to a campfire, wait, sit for a minute until the benefits come, use any camp item, walk away, then /reload.")
+export function command()
+    sample()
+    print("Camp probe: sampled. Walk up to a campfire, wait, sit for a minute until the benefits come, use any camp item, walk away, then /reload.")
 end

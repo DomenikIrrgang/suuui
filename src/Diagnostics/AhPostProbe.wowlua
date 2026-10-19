@@ -1,4 +1,4 @@
--- Diagnostics/AhPostProbe.lua
+-- Diagnostics/AhPostProbe.wowlua
 -- "/suu probe ahpost" (at the auction house): may SuuUI's own buttons post
 -- and cancel an auction? Posting, bidding, buying and cancelling are
 -- "restricted" in the API docs; this tries two of them from SuuUI's own
@@ -10,36 +10,40 @@
 -- What the game answers (the call's result, its events, a blocked action) is
 -- printed and saved in SuuUIProbe.ahPost on /reload. Costs the small deposit.
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import panel, closeButton, Panel from "/UI/Panel"
+import itemSlot from "/UI/Inventory"
+import text as uiText from "/UI/Text"
+import button from "/UI/Controls"
 
-local AP = {}
-ns.AhPostProbe = AP
-
-local UI = ns.UI
-local isSecret = issecretvalue or function() return false end
+-- the item put in the slot, the panel, and whether its events are heard
+local itemLoc: any = nil
+local probePanel: Panel? = nil
+local listening = false
 local BUYOUT = 999 * 10000
 
-local function out(text)
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.ahPost = SuuUIProbe.ahPost or { lines = {} }
-    local lines = SuuUIProbe.ahPost.lines
+local function out(text: string)
+    DB.probe.ahPost = DB.probe.ahPost or { lines = {} }
+    local lines = DB.probe.ahPost.lines
     lines[#lines + 1] = date("%H:%M:%S") .. " " .. text
-    ns.Print("AH post probe: " .. text)
+    print("AH post probe: " .. text)
 end
 
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     return tostring(v)
 end
 
 -- The item in the slot as the auction house takes it.
-local function location()
-    local loc = AP.loc
+local function location(): any
+    local loc = itemLoc
     if loc and loc.IsValid and loc:IsValid() then return loc end
 end
 
-local function build()
-    local p = UI.Panel(UIParent, { title = "AH post probe", width = 300, height = 150, solid = true })
+local function build(): Panel
+    local p = panel(UIParent, { title = "AH post probe", width = 300, height = 150, solid = true })
     p:SetFrameStrata("DIALOG")
     p:SetPoint("TOP", UIParent, "TOP", 0, -120)
     p:EnableMouse(true)
@@ -47,16 +51,16 @@ local function build()
     p:RegisterForDrag("LeftButton")
     p:SetScript("OnDragStart", p.StartMoving)
     p:SetScript("OnDragStop", p.StopMovingOrSizing)
-    local slot = UI.ItemSlot(p.body)
+    local slot = itemSlot(p.body)
     slot:SetPoint("TOPLEFT")
-    local name = UI.Text(p.body, "label", "ink")
+    local name = uiText(p.body, "label", "ink")
     name:SetPoint("LEFT", slot, "RIGHT", 10, 0)
     name:SetValue("Drop a cheap item here")
     local function take()
         if not (C_Cursor and C_Cursor.GetCursorItem) then out("no C_Cursor.GetCursorItem") return end
         local loc = C_Cursor.GetCursorItem()
         if not loc then return end
-        AP.loc = loc
+        itemLoc = loc
         ClearCursor()
         local link = C_Item.GetItemLink(loc)
         local icon = C_Item.GetItemIcon(loc)
@@ -67,28 +71,28 @@ local function build()
     end
     slot:SetScript("OnReceiveDrag", take)
     slot:SetScript("OnClick", take)
-    local post = UI.Button(p.body, { text = "Post test", width = 120, onClick = function() AP.Post() end })
-    post:SetPoint("BOTTOMLEFT")
-    local cancel = UI.Button(p.body, { text = "Cancel test", width = 120, onClick = function() AP.Cancel() end })
-    cancel:SetPoint("BOTTOMRIGHT")
-    p.closeButton = UI.CloseButton and UI.CloseButton(p, function() p:Hide() end)
+    local postButton = button(p.body, { text = "Post test", width = 120, onClick = function() post() end })
+    postButton:SetPoint("BOTTOMLEFT")
+    local cancelButton = button(p.body, { text = "Cancel test", width = 120, onClick = function() cancel() end })
+    cancelButton:SetPoint("BOTTOMRIGHT")
+    p.closeButton = closeButton(p, function() p:Hide() end)
     if p.closeButton then p.closeButton:SetPoint("TOPRIGHT", -8, -8) end
     return p
 end
 
-function AP.Post()
+export function post()
     local loc = location()
     if not loc then out("put an item in the slot first") return end
     local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, loc)
     local commodity = ok and Enum.ItemCommodityStatus and status == Enum.ItemCommodityStatus.Commodity
     if commodity then
-        local okPost, res = pcall(C_AuctionHouse.PostCommodity, loc, 1, 1, BUYOUT)
+        local okPost, res = pcall((C_AuctionHouse :: any).PostCommodity, loc, 1, 1, BUYOUT)
         out(("PostCommodity(…, 12h, 1, 999g): %s %s"):format(okPost and "returned" or "error", show(res)))
     else
-        local okPost, res = pcall(C_AuctionHouse.PostItem, loc, 1, 1, nil, BUYOUT)
+        local okPost, res = pcall((C_AuctionHouse :: any).PostItem, loc, 1, 1, nil, BUYOUT)
         out(("PostItem(…, 12h, 1, no bid, 999g): %s %s"):format(okPost and "returned" or "error", show(res)))
         if okPost and res == true and C_AuctionHouse.ConfirmPostItem then
-            local okC, resC = pcall(C_AuctionHouse.ConfirmPostItem, loc, 1, 1, nil, BUYOUT)
+            local okC, resC = pcall((C_AuctionHouse :: any).ConfirmPostItem, loc, 1, 1, nil, BUYOUT)
             out(("ConfirmPostItem: %s %s"):format(okC and "returned" or "error", show(resC)))
         end
     end
@@ -96,10 +100,10 @@ end
 
 -- The newest of your auctions of the slot's item (the owned list is asked
 -- for when the panel opens and after each post).
-function AP.Cancel()
+export function cancel()
     local loc = location()
     local itemID = loc and C_Item.GetItemID(loc)
-    local best
+    local best: any = nil
     for i = 1, (C_AuctionHouse.GetNumOwnedAuctions() or 0) do
         local a = C_AuctionHouse.GetOwnedAuctionInfo(i)
         if a and a.itemKey and (not itemID or a.itemKey.itemID == itemID) and a.status == 0 then
@@ -115,15 +119,16 @@ function AP.Cancel()
     out(("CancelAuction(%s): %s %s"):format(tostring(best.auctionID), okC and "returned" or "error", show(res)))
 end
 
-function AP.Command()
+export function command()
     if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then
-        ns.Print("AH post probe: open the auction house first.")
+        print("AH post probe: open the auction house first.")
         return
     end
-    AP.panel = AP.panel or build()
-    AP.panel:Show()
-    if not AP.listening then
-        AP.listening = true
+    local p = probePanel or build()
+    probePanel = p
+    p:Show()
+    if not listening then
+        listening = true
         local f = CreateFrame("Frame")
         for _, e in ipairs({ "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_CANCELED", "AUCTION_HOUSE_POST_ERROR",
                              "AUCTION_HOUSE_POST_WARNING", "AUCTION_HOUSE_SHOW_ERROR", "AUCTION_HOUSE_SHOW_NOTIFICATION",

@@ -1,4 +1,4 @@
--- Diagnostics/MapProbe.lua
+-- Diagnostics/MapProbe.wowlua
 -- "/suu probe map": what Forever's world map is made of and what an addon
 -- can read for SuuUI's world map (step 3.5). Saved in SuuUIProbe.map on
 -- /reload. Open the map once first (M), ideally in a zone with quests in
@@ -15,14 +15,16 @@
 --     (C_EncounterJournal), user waypoints (C_Map), map areas
 --   * the map's own filters (its tracking menu's CVars)
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import SuuUI from "/Core/API"
 
-local MP = {}
-ns.MapProbe = MP
+-- the zones test's triangles, by key ("tri1", "tri2")
+local triangles: { [string]: Texture } = {}
 
-local isSecret = issecretvalue or function() return false end
 
-local function show(v, depth)
+local function show(v: any, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "<secret>" end
     if type(v) ~= "table" then return tostring(v) end
@@ -35,17 +37,16 @@ local function show(v, depth)
     return "{" .. table.concat(parts, ", ") .. "}"
 end
 
-local function call(t, name, ...)
+local function call(t: any, name: string, ...: any): (any, any, any)
     if not (t and type(t[name]) == "function") then return "missing" end
     local ok, a, b, c = pcall(t[name], ...)
     if not ok then return "error: " .. tostring(a) end
     return a, b, c
 end
 
-function MP.Snapshot()
-    SuuUIProbe = SuuUIProbe or {}
-    local s = { at = date("%Y-%m-%d %H:%M:%S") }
-    SuuUIProbe.map = s
+export function snapshot()
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.map = s
 
     -- the window
     local f = _G.WorldMapFrame
@@ -105,8 +106,8 @@ function MP.Snapshot()
         local ej = C_EncounterJournal and call(C_EncounterJournal, "GetDungeonEntrancesForMap", map)
         s.dungeons = type(ej) == "table" and { count = #ej, first = ej[1] and show(ej[1]) or "none" } or show(ej)
         s.userWaypoint = { can = show((call(cm, "CanSetUserWaypointOnMap", map))), has = show((call(cm, "HasUserWaypoint"))) }
-        local areas = C_MapExplorationInfo and call(C_MapExplorationInfo, "GetExploredAreaIDsAtPosition", map, CreateVector2D and CreateVector2D(0.5, 0.5))
-        s.exploration = show(areas)
+        local explored = C_MapExplorationInfo and call(C_MapExplorationInfo, "GetExploredAreaIDsAtPosition", map, CreateVector2D and CreateVector2D(0.5, 0.5))
+        s.exploration = show(explored)
     end
 
     -- the quest log
@@ -137,7 +138,7 @@ function MP.Snapshot()
         local ok, v = pcall(GetCVar, cv)
         s.cvars[cv] = ok and show(v) or "error"
     end
-    ns.Print(("Map probe: %s pin kinds, %s quests on this map, %s flight masters; /reload."):format(
+    print(("Map probe: %s pin kinds, %s quests on this map, %s flight masters; /reload."):format(
         tostring(s.frame.pinPools and #s.frame.pinPools or 0),
         tostring(type(s.questsOnMap) == "table" and s.questsOnMap.count or s.questsOnMap),
         tostring(type(s.taxi) == "table" and s.taxi.count or s.taxi)))
@@ -145,10 +146,9 @@ end
 
 -- "/suu probe map areas": why the game draws no quest objective area (it
 -- draws the followed quest's and the one hovered in the log).
-function MP.Areas()
-    SuuUIProbe = SuuUIProbe or {}
-    local s = { at = date("%Y-%m-%d %H:%M:%S") }
-    SuuUIProbe.mapAreas = s
+export function areas()
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.mapAreas = s
     local f = _G.WorldMapFrame
     s.mapID = f and show((call(f, "GetMapID", f)))
     s.questPOI = show((call(_G, "GetCVar", "questPOI")))
@@ -170,13 +170,14 @@ function MP.Areas()
     local map = f and f:GetMapID()
     local on = map and call(C_QuestLog, "GetQuestsOnMap", map)
     s.questsOnMap = {}
-    for _, q in ipairs(type(on) == "table" and on or {}) do
+    for _, q in ipairs((type(on) == "table" and on or {}) :: any[]) do
         s.questsOnMap[#s.questsOnMap + 1] = show(q)
         if #s.questsOnMap >= 8 then break end
     end
-    s.ourLayer = SuuUI.GetModule and SuuUI.GetModule("worldmap") and SuuUI.GetModule("worldmap").layer
-        and SuuUI.GetModule("worldmap").layer:GetFrameLevel() or "none"
-    ns.Print(("Areas: questPOI %s, followed quest %s, %d area pins (%s); /reload saves it."):format(
+    local getModule: any = SuuUI.GetModule
+    s.ourLayer = getModule and getModule("worldmap") and getModule("worldmap").layer
+        and getModule("worldmap").layer:GetFrameLevel() or "none"
+    print(("Areas: questPOI %s, followed quest %s, %d area pins (%s); /reload saves it."):format(
         s.questPOI, s.superTracked, #s.pins, s.pins[1] and ((s.pins[1].visible and "visible" or "hidden") .. ", allowed " .. s.pins[1].mapAllowsBlobs) or "none"))
 end
 
@@ -184,7 +185,7 @@ end
 -- (the list centred, the search box with it): each part's left and right
 -- from the panel's left (the map's right edge), its width, whether it
 -- shows, and its anchors.
-local function where(obj, x0)
+local function where(obj: any, x0: number): any
     if not (obj and obj.GetLeft) then return nil end
     local ok, l, r = pcall(function() return obj:GetLeft(), obj:GetRight() end)
     local out = { shown = obj.IsShown and obj:IsShown() or false, kind = obj.GetObjectType and obj:GetObjectType() or "?" }
@@ -204,19 +205,19 @@ local function where(obj, x0)
     return out
 end
 
-function MP.Log()
-    SuuUIProbe = SuuUIProbe or {}
+export function log()
     local f, q = _G.WorldMapFrame, _G.QuestMapFrame
-    local s = { at = date("%Y-%m-%d %H:%M:%S") }
-    SuuUIProbe.mapLog = s
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.mapLog = s
     local x0 = f.ScrollContainer and f.ScrollContainer:GetRight() or 0
     s.window = where(f, x0)
     s.mapArea = where(f.ScrollContainer, x0)
-    s.enlarged = SuuUI.GetModule("windows") and SuuUI.GetModule("windows"):Get("mapEnlarged")
-    if not q then ns.Print("Map log: no quest log.") return end
+    local windows: any = SuuUI.GetModule("windows")
+    s.enlarged = windows and windows:Get("mapEnlarged")
+    if not q then print("Map log: no quest log.") return end
     s.questMapFrame = where(q, x0)
     -- each part one level down, by its key, in the log, its quests frame and its list
-    local function walk(label, t)
+    local function walk(label: string, t: any)
         if not t then return end
         s[label] = {}
         for k, v in pairs(t) do
@@ -239,7 +240,7 @@ function MP.Log()
         end
     end
     local sb = list and list.SearchBox
-    ns.Print(("Map log: panel %s px wide; list %s..%s; search box %s..%s; /reload saves it."):format(
+    print(("Map log: panel %s px wide; list %s..%s; search box %s..%s; /reload saves it."):format(
         tostring(s.window and s.window.right), tostring(s.rows.headerFramePool and s.rows.headerFramePool.left),
         tostring(s.rows.headerFramePool and s.rows.headerFramePool.right),
         tostring(sb and where(sb, x0).left), tostring(sb and where(sb, x0).right)))
@@ -253,16 +254,15 @@ end
 --   * can a texture be drawn as a triangle (SetVertexOffset)? Draws a
 --     test: a blue triangle and a skewed one in the map's middle, until
 --     /reload. A screenshot of the map shows how they came out.
-function MP.Zones()
-    SuuUIProbe = SuuUIProbe or {}
-    local s = { at = date("%Y-%m-%d %H:%M:%S") }
-    SuuUIProbe.mapZones = s
+export function zones()
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.mapZones = s
     local f = _G.WorldMapFrame
     local map = f:GetMapID()
     s.mapID = show(map)
     local onMap = {}
     local on = map and call(C_QuestLog, "GetQuestsOnMap", map)
-    for _, q in ipairs(type(on) == "table" and on or {}) do if q.questID then onMap[q.questID] = q end end
+    for _, q in ipairs((type(on) == "table" and on or {}) :: any[]) do if q.questID then onMap[q.questID] = q end end
     local logPins = {}
     local contents = _G.QuestScrollFrame and _G.QuestScrollFrame.Contents
     local pool = contents and contents.buttonPool
@@ -291,9 +291,9 @@ function MP.Zones()
         and type(UIParent:CreateTexture().SetVertexOffset) == "function" or false
     if canvas and s.hasVertexOffset then
         local w, h = canvas:GetWidth(), canvas:GetHeight()
-        local function tri(key, x, y, size, skew, r, g, b)
-            local t = MP[key] or canvas:CreateTexture(nil, "OVERLAY", nil, 7)
-            MP[key] = t
+        local function tri(key: string, x: number, y: number, size: number, skew: boolean, r: number, g: number, b: number): string
+            local t = triangles[key] or canvas:CreateTexture(nil, "OVERLAY", nil, 7)
+            triangles[key] = t
             t:SetColorTexture(r, g, b, 0.55)
             t:ClearAllPoints()
             t:SetPoint("TOPLEFT", canvas, "TOPLEFT", w * x, -h * y)
@@ -314,29 +314,29 @@ function MP.Zones()
         total = total + 1
         if q.logMarker == "no" then none = none + 1 end
     end
-    ns.Print(("Map zones: %d quests in your log, %d without a marker in the log; triangles %s; take a screenshot of the map, then /reload."):format(
+    print(("Map zones: %d quests in your log, %d without a marker in the log; triangles %s; take a screenshot of the map, then /reload."):format(
         total, none, tostring(s.triangle or "not possible")))
 end
 
-function MP.Command(rest)
+export function command(rest: string?)
     if rest == "log" then
-        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then ns.Print("Map probe: open the map with its quest log, then run it again.") return end
-        MP.Log()
+        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then print("Map probe: open the map with its quest log, then run it again.") return end
+        log()
         return
     end
     if rest == "zones" then
-        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then ns.Print("Map probe: open the map with its quest log, then run it again.") return end
-        MP.Zones()
+        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then print("Map probe: open the map with its quest log, then run it again.") return end
+        zones()
         return
     end
     if rest == "areas" then
-        if not _G.WorldMapFrame then ns.Print("Map probe: open the map once (M), then run it again.") return end
-        MP.Areas()
+        if not _G.WorldMapFrame then print("Map probe: open the map once (M), then run it again.") return end
+        areas()
         return
     end
     if not _G.WorldMapFrame then
-        ns.Print("Map probe: open the map once (M), then run it again.")
+        print("Map probe: open the map once (M), then run it again.")
         return
     end
-    MP.Snapshot()
+    snapshot()
 end

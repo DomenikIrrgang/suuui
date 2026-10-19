@@ -1,4 +1,4 @@
--- Diagnostics/CollectionsTilesProbe.lua
+-- Diagnostics/CollectionsTilesProbe.wowlua
 -- "/suu probe colltiles": the open questions for SuuUI's own collections
 -- window (2026-10-16, while its design is drawn):
 --   toys       can every toy be listed, yours or not? (the game's filter
@@ -18,15 +18,22 @@
 -- Printed and saved in SuuUIProbe.collectionsTiles on /reload; the panel
 -- stays for a screenshot.
 
-local _, ns = ...
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import panel, closeButton, Panel from "/UI/Panel"
+import fill from "/UI/Draw"
 
-local CP = {}
-ns.CollectionsTilesProbe = CP
+interface TilesPanel extends Panel
+    closeButton?: Button
+    tiles?: DressUpModel[]
+    scene?: any
+end
 
-local UI = ns.UI
-local isSecret = issecretvalue or function() return false end
+local probePanel: TilesPanel? = nil
 
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if type(v) == "table" then
         local parts = {}
@@ -39,7 +46,7 @@ local function show(v)
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -48,14 +55,14 @@ local function call(fn, ...)
     return table.concat(parts, " | ")
 end
 
-local function raw(fn, ...)
+local function raw(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k end
 end
 
-local out
-local function line(section, text)
+local out: { [string]: any } = {}
+local function line(section: string, text: string)
     out[section] = out[section] or {}
     table.insert(out[section], text)
 end
@@ -77,7 +84,7 @@ local function toys()
     pcall(TB.ForceToyRefilter)
     local done = false
     local f = CreateFrame("Frame")
-    local function read(why)
+    local function read(why: string)
         if done then return end
         done = true
         f:UnregisterAllEvents()
@@ -97,8 +104,8 @@ local function toys()
             unusable = raw(TB.GetUnusableShown) }))
     end
     pcall(f.RegisterEvent, f, "TOYS_UPDATED")
-    f:SetScript("OnEvent", function() C_Timer.After(0.2, function() read("event") end) end)
-    C_Timer.After(1.5, function() read("timeout") end)
+    f:SetScript("OnEvent", function() after(0.2, function() read("event") end) end)
+    after(1.5, function() read("timeout") end)
 end
 
 local function sources()
@@ -106,7 +113,7 @@ local function sources()
     local ids = raw(MJ and MJ.GetMountIDs) or {}
     local shown = 0
     for _, id in ipairs(ids) do
-        local _, description, source = raw(MJ.GetMountInfoExtraByID, id)
+        local _, _description, source = raw(MJ.GetMountInfoExtraByID, id)
         local name, _, _, _, _, sourceType = raw(MJ.GetMountInfoByID, id)
         if shown < 10 and source and source ~= "" then
             shown = shown + 1
@@ -152,14 +159,14 @@ local function flags()
 end
 
 -- Up to 18 of your appearances in one slot (chest, else any armor slot).
-local function appearancesToShow()
+local function appearancesToShow(): { [string]: any }[]
     local TC = C_TransmogCollection
-    local list = {}
+    local list: { [string]: any }[] = {}
     for _, cat in ipairs({ 4, 10, 8, 11, 3, 7, 9, 2 }) do
         for _, a in ipairs(raw(TC.GetCategoryAppearances, cat) or {}) do
             if a.isCollected then
-                local sources = raw(TC.GetAppearanceSources, a.visualID) or {}
-                local src = sources[1] and sources[1].sourceID
+                local found = raw(TC.GetAppearanceSources, a.visualID) or {}
+                local src = found[1] and found[1].sourceID
                 if src then list[#list + 1] = { cat = cat, visual = a.visualID, source = src, new = raw(TC.IsNewAppearance, a.visualID),
                     fav = raw(TC.GetIsAppearanceFavorite, a.visualID), camera = raw(TC.GetAppearanceCameraID, a.visualID) } end
             end
@@ -174,8 +181,8 @@ local function tiles()
     local list = appearancesToShow()
     line("tiles", #list .. " appearances of yours to show")
     for i = 1, math.min(4, #list) do line("tiles", show(list[i])) end
-    local p = CP.panel or UI.Panel(UIParent, { title = "Collections tiles probe", width = 6 * 92 + 40, height = 3 * 120 + 90 + 230, solid = true })
-    CP.panel = p
+    local p = probePanel or panel(UIParent, { title = "Collections tiles probe", width = 6 * 92 + 40, height = 3 * 120 + 90 + 230, solid = true }) :: TilesPanel
+    probePanel = p
     p:SetFrameStrata("DIALOG")
     p:SetPoint("CENTER", 0, 40)
     p:EnableMouse(true)
@@ -183,21 +190,23 @@ local function tiles()
     p:RegisterForDrag("LeftButton")
     p:SetScript("OnDragStart", p.StartMoving)
     p:SetScript("OnDragStop", p.StopMovingOrSizing)
-    if not p.closeButton and UI.CloseButton then
-        p.closeButton = UI.CloseButton(p, function() p:Hide() end)
-        if p.closeButton then p.closeButton:SetPoint("TOPRIGHT", -8, -8) end
+    if not p.closeButton then
+        local c = closeButton(p, function() p:Hide() end)
+        p.closeButton = c
+        if c then c:SetPoint("TOPRIGHT", -8, -8) end
     end
-    p.tiles = p.tiles or {}
+    local previews: DressUpModel[] = p.tiles or {}
+    p.tiles = previews
     local fpsBefore = GetFramerate()
     local t0 = debugprofilestop()
     for i, a in ipairs(list) do
-        local m = p.tiles[i]
+        local m = previews[i]
         if not m then
             m = CreateFrame("DressUpModel", nil, p.body)
             m:SetSize(88, 116)
             m:SetPoint("TOPLEFT", ((i - 1) % 6) * 92, -math.floor((i - 1) / 6) * 120)
-            UI.Fill(m, "surface-sunk", "BACKGROUND"):SetAllPoints()
-            p.tiles[i] = m
+            fill(m, "surface-sunk", "BACKGROUND"):SetAllPoints()
+            previews[i] = m
         end
         pcall(m.SetUnit, m, "player")
         pcall(m.Undress, m)
@@ -209,7 +218,7 @@ local function tiles()
     end
     local built = debugprofilestop() - t0
     line("tiles", ("built %d previews in %.1f ms; frame rate before %.0f"):format(#list, built, fpsBefore))
-    line("tiles", ("model:ApplyUICamera %s, Model_ApplyUICamera %s; cameras used %s"):format(tostring(p.tiles[1] and p.tiles[1].ApplyUICamera ~= nil),
+    line("tiles", ("model:ApplyUICamera %s, Model_ApplyUICamera %s; cameras used %s"):format(tostring(previews[1] and previews[1].ApplyUICamera ~= nil),
         tostring(_G.Model_ApplyUICamera ~= nil), tostring(list[1] and list[1].camOK)))
     -- a mount in a ModelScene, framed by its own scene
     local ids = raw(C_MountJournal.GetMountIDs) or {}
@@ -225,7 +234,7 @@ local function tiles()
         if ok then
             scene:SetSize(300, 210)
             scene:SetPoint("BOTTOM", 0, 0)
-            UI.Fill(scene, "surface-sunk", "BACKGROUND"):SetAllPoints()
+            fill(scene, "surface-sunk", "BACKGROUND"):SetAllPoints()
             p.scene = scene
         end
     end
@@ -244,20 +253,19 @@ local function tiles()
     end
     p:Show()
     -- the frame rate while they show
-    C_Timer.After(3, function()
+    after(3, function()
         line("tiles", ("frame rate with them showing %.0f"):format(GetFramerate()))
-        ns.Print(("Collections tiles probe: frame rate %.0f before, %.0f with %d previews. /reload to save."):format(fpsBefore, GetFramerate(), #list))
+        print(("Collections tiles probe: frame rate %.0f before, %.0f with %d previews. /reload to save."):format(fpsBefore, GetFramerate(), #list))
     end)
 end
 
-function CP.Command()
+export function command()
     if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_Collections") end
     out = { at = date("%Y-%m-%d %H:%M:%S") }
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.collectionsTiles = out
+    DB.probe.collectionsTiles = out
     for _, step in ipairs({ toys, sources, flags, tiles }) do
         local ok, err = pcall(step)
         if not ok then line("errors", tostring(err)) end
     end
-    ns.Print("Collections tiles probe: recorded; the panel shows 18 previews. Take a screenshot; the frame rate comes in 3 seconds.")
+    print("Collections tiles probe: recorded; the panel shows 18 previews. Take a screenshot; the frame rate comes in 3 seconds.")
 end

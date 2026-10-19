@@ -1,4 +1,4 @@
--- Diagnostics/TalentProbe.lua
+-- Diagnostics/TalentProbe.wowlua
 -- "/suu probe talents": what Forever's talent system gives an addon, for
 -- SuuUI's own Talents page (step 3.2c). Saved in SuuUIProbe.talents on
 -- /reload.
@@ -15,23 +15,23 @@
 --                             at once (RollbackConfig): may an addon? Nothing
 --                             is applied. Then /reload
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
 
-local TP = {}
-ns.TalentProbe = TP
+type Map = { [any]: any }
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
-            local val
+            local val: string
             if isSecret(x) then val = "secret"
             elseif type(x) == "table" then
-                local inner = {}
+                local inner: string[] = {}
                 for k2, y in pairs(x) do
                     inner[#inner + 1] = tostring(k2) .. ":" .. (type(y) == "table" and "{…}" or tostring(y))
                     if #inner > 8 then break end
@@ -46,27 +46,26 @@ local function show(v)
     return tostring(v)
 end
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 140) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, " | ")
 end
 
-local function namesIn(t)
-    local out = {}
+local function namesIn(t: any): string[]
+    local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
     table.sort(out)
     return out
 end
 
-function TP.Sample()
-    SuuUIProbe = SuuUIProbe or {}
-    local store = {}
-    SuuUIProbe.talents = store
+export function sample(): Map
+    local store: Map = {}
+    DB.probe.talents = store
     store.at = date("%Y-%m-%d %H:%M:%S")
     store.level = UnitLevel("player")
     store.C_ClassTalents = namesIn(C_ClassTalents)
@@ -81,7 +80,7 @@ function TP.Sample()
         numSpecializations = call(GetNumSpecializations),
         specInfo1 = call(C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo, 1),
         activeTalentGroup = call(GetActiveTalentGroup),
-        numTalentGroups = call(GetNumTalentGroups),
+        numTalentGroups = call(_G.GetNumTalentGroups),
         classSpecs = call(C_SpecializationInfo and C_SpecializationInfo.GetNumSpecializationsForClassID, select(3, UnitClass("player"))),
     }
     if not configID or isSecret(configID) then return store end
@@ -92,7 +91,7 @@ function TP.Sample()
     local trees = info and info.treeIDs or {}
     store.trees = {}
     for _, treeID in ipairs(trees) do
-        local t = { id = treeID }
+        local t: Map = { id = treeID }
         t.info = call(C_Traits.GetTreeInfo, configID, treeID)
         t.currency = call(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
         local nodes = C_Traits.GetTreeNodes(treeID) or {}
@@ -101,18 +100,18 @@ function TP.Sample()
         for i, nodeID in ipairs(nodes) do
             if i > 120 then break end
             local n = C_Traits.GetNodeInfo(configID, nodeID)
-            local line = { id = nodeID }
+            local line: Map = { id = nodeID }
             if n then
                 line.pos = ("%s,%s"):format(show(n.posX), show(n.posY))
                 line.ranks = ("%s/%s (purchased %s) active=%s"):format(show(n.currentRank), show(n.maxRanks), show(n.ranksPurchased), show(n.activeRank))
                 line.state = ("available=%s canPurchase=%s meetsEdges=%s visible=%s type=%s flags=%s subTree=%s"):format(
                     show(n.isAvailable), show(n.canPurchaseRank), show(n.meetsEdgeRequirements), show(n.isVisible),
                     show(n.type), show(n.flags), show(n.subTreeID))
-                local edges = {}
+                local edges: string[] = {}
                 for _, e in ipairs(n.visibleEdges or {}) do edges[#edges + 1] = show(e) end
                 line.edges = table.concat(edges, " ")
                 line.conditions = show(n.conditionIDs)
-                local entries = {}
+                local entries: string[] = {}
                 for _, entryID in ipairs(n.entryIDs or {}) do
                     local entry = C_Traits.GetEntryInfo(configID, entryID)
                     local def = entry and entry.definitionID and C_Traits.GetDefinitionInfo(entry.definitionID)
@@ -139,15 +138,14 @@ function TP.Sample()
 end
 
 -- Plan one point on a node you can take, then undo it: may an addon?
-function TP.Plan()
-    if InCombatLockdown() then ns.Print("Talent probe: out of combat, please.") return end
-    SuuUIProbe = SuuUIProbe or {}
-    local store = SuuUIProbe.talents or {}
-    SuuUIProbe.talents = store
-    local configID = C_ClassTalents.GetActiveConfigID()
-    local r = { at = date("%H:%M:%S") }
+export function plan()
+    if InCombatLockdown() then print("Talent probe: out of combat, please.") return end
+    local store = DB.probe.talents or {}
+    DB.probe.talents = store
+    local configID: any = C_ClassTalents.GetActiveConfigID()
+    local r: Map = { at = date("%H:%M:%S") }
     store.planTest = r
-    local blocked = {}
+    local blocked: string[] = {}
     local f = CreateFrame("Frame")
     f:RegisterEvent("ADDON_ACTION_BLOCKED")
     f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
@@ -163,7 +161,7 @@ function TP.Plan()
     end
     r.node = show(target)
     if not target then
-        ns.Print("Talent probe: no node you can take now (no points to spend?).")
+        print("Talent probe: no node you can take now (no points to spend?).")
         f:UnregisterAllEvents()
         return
     end
@@ -173,17 +171,17 @@ function TP.Plan()
     r.after = call(C_Traits.GetNodeInfo, configID, target):sub(1, 200)
     r.rollback = call(C_Traits.RollbackConfig, configID)
     r.stagedAfterRollback = call(C_Traits.ConfigHasStagedChanges, configID)
-    C_Timer.After(0.5, function()
+    after(0.5, function()
         r.blocked = blocked
         f:UnregisterAllEvents()
-        ns.Print(("Talent probe: plan %s, undone %s%s. /reload to save."):format(tostring(r.purchase), tostring(r.rollback),
+        print(("Talent probe: plan %s, undone %s%s. /reload to save."):format(tostring(r.purchase), tostring(r.rollback),
             #blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked"))
     end)
 end
 
-function TP.Command(arg)
-    if arg == "plan" then return TP.Plan() end
-    if InCombatLockdown() then ns.Print("Talent probe: out of combat, please.") return end
-    local store = TP.Sample()
-    ns.Print(("Talent probe: config %s, %d trees. /reload to save."):format(tostring(store.activeConfig), store.trees and #store.trees or 0))
+export function command(arg: string?)
+    if arg == "plan" then return plan() end
+    if InCombatLockdown() then print("Talent probe: out of combat, please.") return end
+    local store = sample()
+    print(("Talent probe: config %s, %d trees. /reload to save."):format(tostring(store.activeConfig), store.trees and #store.trees or 0))
 end

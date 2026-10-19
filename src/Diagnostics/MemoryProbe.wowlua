@@ -1,30 +1,37 @@
--- Diagnostics/MemoryProbe.lua
+-- Diagnostics/MemoryProbe.wowlua
 -- "/suu probe memory" (asked 2026-10-18: SuuUI showed 68 MB): where SuuUI's
 -- memory goes. Records SuuUI's memory before and after a full garbage
 -- collection (what was only garbage), then an estimate of what each part
 -- holds, walked once so nothing counts twice: the saved variables
 -- (SuuUIProbe, then SuuUIDB's profiles and each character's data), each
 -- module, then the namespace's tables (the bundled data: quest givers,
--- collection sources…).
+-- collection sources…): since the wowlua port, each module's export table
+-- (the runtime's registry, keyed by module ID) and what is left in the
+-- addon table.
 -- Estimates use Lua 5.1's sizes (a table's header, array and hash parts; each
 -- string once); what no walk reaches (closures, upvalues, the frames' own
 -- objects) is the rest. Saved in SuuUIProbe.memory on /reload.
 
-local _, ns = ...
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as modules from "/Core/Modules"
 
-local MemP = {}
-ns.MemoryProbe = MemP
+local _, addonNs = ...
+-- the addon table, walked by hand
+local addonTable = addonNs :: { [any]: any }
 
 local ADDON = "SuuUI"
 
-local function addonKB()
+local function addonKB(): number
     UpdateAddOnMemoryUsage()
     return GetAddOnMemoryUsage(ADDON)
 end
 
 -- A walker with one seen set: a table or string reached again costs nothing.
-local function walker(seen)
-    local function size(v)
+type Size = (v: any) -> number
+
+local function walker(seen: { [any]: any }): Size
+    local function size(v: any): number
         local t = type(v)
         if t == "string" then
             if seen[v] then return 0 end
@@ -57,20 +64,22 @@ local function walker(seen)
     return size
 end
 
-local function kb(bytes) return math.floor(bytes / 1024 + 0.5) end
+local function kb(bytes: number): number return math.floor(bytes / 1024 + 0.5) end
 
 -- The largest entries of a table, each its own size (walked in order, so a
 -- table shared by two counts for the first).
-local function biggest(size, t, limit)
-    local rows = {}
+type Row = { k: string, v: any, n: number }
+
+local function biggest(size: Size, t: { [any]: any }, limit: number): (string[], number)
+    local rows: Row[] = {}
     for k, v in pairs(t) do
-        if type(v) == "table" then rows[#rows + 1] = { k = tostring(k), v = v } end
+        if type(v) == "table" then rows[#rows + 1] = { k = tostring(k), v = v, n = 0 } end
     end
-    table.sort(rows, function(a, b) return a.k < b.k end)
+    table.sort(rows, function(a: Row, b: Row): boolean return a.k < b.k end)
     local total = 0
     for _, r in ipairs(rows) do r.n = size(r.v); total = total + r.n end
-    table.sort(rows, function(a, b) return a.n > b.n end)
-    local out = {}
+    table.sort(rows, function(a: Row, b: Row): boolean return a.n > b.n end)
+    local out: string[] = {}
     for i = 1, math.min(limit, #rows) do
         if rows[i].n >= 10240 then out[#out + 1] = ("%s %d KB"):format(rows[i].k, kb(rows[i].n)) end
     end
@@ -80,14 +89,14 @@ end
 -- Down the biggest branch of a table: each level's largest fields, then
 -- into the largest, for up to `depth` levels (a list's items count as one
 -- field, "[n]", the size of all of them, shown with the first's breakdown).
-local function drill(gameFrames, t, depth)
-    local out = {}
+local function drill(gameFrames: { [any]: boolean }, t: any, depth: number): string[]
+    local out: string[] = {}
     for level = 1, depth do
         if type(t) ~= "table" then break end
         local seen = setmetatable({}, { __index = gameFrames })
         seen[t] = true
         local size = walker(seen)
-        local rows, items, itemN, first = {}, 0, 0, nil
+        local rows: Row[], items, itemN, first = {}, 0, 0, nil
         for k, v in pairs(t) do
             if type(k) == "number" then
                 items = items + 1
@@ -98,8 +107,8 @@ local function drill(gameFrames, t, depth)
             end
         end
         if items > 0 then rows[#rows + 1] = { k = "[" .. items .. "]", v = first, n = itemN } end
-        table.sort(rows, function(a, b) return a.n > b.n end)
-        local line = {}
+        table.sort(rows, function(a: Row, b: Row): boolean return a.n > b.n end)
+        local line: string[] = {}
         for i = 1, math.min(6, #rows) do line[#line + 1] = ("%s %d KB"):format(rows[i].k, kb(rows[i].n)) end
         out[level] = table.concat(line, ", ")
         t = rows[1] and rows[1].v
@@ -109,14 +118,14 @@ end
 
 -- An aura container's buttons: how many the engine made per group (and
 -- distinct buttons, in case it initialises one twice), against the maxima.
-local function containerInfo(c)
+local function containerInfo(c: any): string
     if not (c and c.buttons) then return "none" end
-    local per, distinct, n = {}, {}, 0
+    local per: { [any]: number }, distinct: { [any]: boolean }, n = {}, {}, 0
     for _, b in ipairs(c.buttons) do
         per[b.key] = (per[b.key] or 0) + 1
         if not distinct[b.button] then distinct[b.button] = true; n = n + 1 end
     end
-    local maxima = {}
+    local maxima: string[] = {}
     for _, g in ipairs(c.opts and c.opts.groups or {}) do
         local cur = c.container.GetAuraGroupMaxFrameCount and select(2, pcall(c.container.GetAuraGroupMaxFrameCount, c.container, g.key))
         maxima[#maxima + 1] = ("%s made=%d max=%s now=%s"):format(tostring(g.key), per[g.key] or 0, tostring(g.max), tostring(cur))
@@ -124,8 +133,8 @@ local function containerInfo(c)
     return ("%d entries, %d buttons: %s"):format(#c.buttons, n, table.concat(maxima, "; "))
 end
 
-function MemP.Command()
-    local out = { at = date("%Y-%m-%d %H:%M:%S") }
+export function command()
+    local out: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
     out.before = math.floor(addonKB())
     out.allAddonsBefore = math.floor(collectgarbage("count"))
     collectgarbage("collect")
@@ -134,7 +143,7 @@ function MemP.Command()
     out.garbage = out.before - out.after
 
     -- the game's named frames are the game's: never walked
-    local gameFrames = {}
+    local gameFrames: { [any]: boolean } = {}
     for name, v in pairs(_G) do
         if type(v) == "table" and type(rawget(v, 0)) == "userdata"
             and not (type(name) == "string" and name:find("^SuuUI")) then gameFrames[v] = true end
@@ -144,7 +153,7 @@ function MemP.Command()
     local walked = 0
 
     -- the probe data first, so the rest never counts it
-    local probe = SuuUIProbe
+    local probe = DB.probe
     local last = probe and probe.memory
     if probe then probe.memory = nil end
     out.probe, out.probeKB = biggest(size, probe or {}, 12)
@@ -152,7 +161,7 @@ function MemP.Command()
     walked = walked + out.probeKB
     if probe then probe.memory = last end
 
-    local db = SuuUIDB or {}
+    local db = DB.db
     local dbKB
     out.db, dbKB = biggest(size, db, 12)
     out.dbKB = kb(dbKB)
@@ -171,8 +180,8 @@ function MemP.Command()
     end
 
     -- each module, its frames included
-    local mods = {}
-    for _, m in ipairs(ns.Modules and ns.Modules.All() or {}) do mods[tostring(m.id)] = m end
+    local mods: { [string]: any } = {}
+    for _, m in ipairs(modules.all()) do mods[tostring(m.id)] = m end
     local modKB
     out.modules, modKB = biggest(size, mods, 25)
     out.modulesKB = kb(modKB)
@@ -184,9 +193,14 @@ function MemP.Command()
     end
 
     -- the namespace: bundled data, shared tables
-    local nsTables = {}
-    for k, v in pairs(ns) do
-        if type(v) == "table" and type(rawget(v, 0)) ~= "userdata" then nsTables[k] = v end
+    local nsTables: { [any]: any } = {}
+    for k, v in pairs(addonTable) do
+        if k ~= "__wowlua" and type(v) == "table" and type(rawget(v, 0)) ~= "userdata" then nsTables[k] = v end
+    end
+    -- the modules' export tables (ns.X before the port), by module ID
+    local wl = addonTable.__wowlua
+    for id, exports in pairs(wl and wl.modules or {}) do
+        if type(exports) == "table" and type(rawget(exports, 0)) ~= "userdata" then nsTables[id] = exports end
     end
     local nsKB
     out.ns, nsKB = biggest(size, nsTables, 25)
@@ -207,8 +221,7 @@ function MemP.Command()
     out.rest = out.after - walked
     collectgarbage("collect")
 
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.memory = out
-    ns.Print(("Memory probe: SuuUI %.1f MB (%.1f MB after collecting garbage); probe data ~%.1f MB, saved settings ~%.1f MB, data ~%.1f MB, modules ~%.1f MB. /reload to save it.")
+    DB.probe.memory = out
+    print(("Memory probe: SuuUI %.1f MB (%.1f MB after collecting garbage); probe data ~%.1f MB, saved settings ~%.1f MB, data ~%.1f MB, modules ~%.1f MB. /reload to save it.")
         :format(out.before / 1024, out.after / 1024, out.probeKB / 1024, out.dbKB / 1024, out.nsKB / 1024, out.modulesKB / 1024))
 end

@@ -1,4 +1,4 @@
--- Diagnostics/QuestGroupProbe.lua
+-- Diagnostics/QuestGroupProbe.wowlua
 -- "/suu probe questgroup" (asked 2026-10-18: the map's quest pins should
 -- mark group quests, design "Map quest difficulty" D): whether the client
 -- says a quest is a group quest for quests not in your log too. For the
@@ -8,14 +8,14 @@
 -- SuuUIProbe.questGroup on /reload. Asks each quest three times (now, after
 -- 2 s and 6 s): the game answers nil at first for a quest it hasn't loaded.
 
-local _, ns = ...
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import questStarts from "/Data/QuestStarts"
 
-local QG = {}
-ns.QuestGroupProbe = QG
 
-local isSecret = issecretvalue or function() return false end
-
-local function tagOf(id)
+local function tagOf(id: number): string
     if not (C_QuestLog and C_QuestLog.GetQuestTagInfo) then return "missing" end
     local ok, t = pcall(C_QuestLog.GetQuestTagInfo, id)
     if not ok then return "error" end
@@ -23,7 +23,7 @@ local function tagOf(id)
     return ("tagID=%s name=%s worldQuestType=%s"):format(tostring(t.tagID), tostring(t.tagName), tostring(t.worldQuestType))
 end
 
-local function groupOf(id)
+local function groupOf(id: number): string
     if not (C_QuestLog and C_QuestLog.GetSuggestedGroupSize) then return "missing" end
     local ok, n = pcall(C_QuestLog.GetSuggestedGroupSize, id)
     if not ok then return "error" end
@@ -35,9 +35,9 @@ end
 -- (with a load request), after 2 s and after 6 s, and each answer kept.
 local PASSES = { 0, 2, 6 }
 
-function QG.Command()
+export function command()
     local mapID = (WorldMapFrame and WorldMapFrame:IsShown() and WorldMapFrame:GetMapID()) or C_Map.GetBestMapForUnit("player")
-    local starts = ns.QuestStarts or {}
+    local starts = questStarts
     local out = { at = date("%H:%M:%S"), mapID = mapID, map = {}, log = {}, counts = { quests = 0, ours = 0 } }
     local ids, seen, inLog = {}, {}, {}
     for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
@@ -54,7 +54,7 @@ function QG.Command()
         end
     end
     local answers = {}
-    local function pass(n)
+    local function pass(n: number)
         local tagged = 0
         for _, id in ipairs(ids) do
             answers[id] = answers[id] or {}
@@ -82,13 +82,12 @@ function QG.Command()
                     tagOf(info.questID), groupOf(info.questID), tostring(info.suggestedGroup), tostring(starts.group and starts.group[info.questID]))
             end
         end
-        SuuUIProbe = SuuUIProbe or {}
-        SuuUIProbe.questGroup = out
-        ns.Print(("Quest group probe done: %d quests on map %s not in your log, tagged %d now, %d after 2 s, %d after 6 s (%d in SuuUI's data). /reload to save it.")
+        DB.probe.questGroup = out
+        print(("Quest group probe done: %d quests on map %s not in your log, tagged %d now, %d after 2 s, %d after 6 s (%d in SuuUI's data). /reload to save it.")
             :format(#ids, tostring(mapID), out.counts.tagged0s, out.counts.tagged2s, out.counts.tagged6s, out.counts.ours))
     end
     pass(1)
-    ns.Print(("Quest group probe: asking about %d quests on map %s, again in 2 and 6 seconds…"):format(#ids, tostring(mapID)))
-    C_Timer.After(PASSES[2], function() pass(2) end)
-    C_Timer.After(PASSES[3], function() pass(3); finish() end)
+    print(("Quest group probe: asking about %d quests on map %s, again in 2 and 6 seconds…"):format(#ids, tostring(mapID)))
+    after(PASSES[2], function() pass(2) end)
+    after(PASSES[3], function() pass(3); finish() end)
 end

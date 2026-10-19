@@ -1,4 +1,4 @@
--- Diagnostics/CollectionsArtProbe.lua
+-- Diagnostics/CollectionsArtProbe.wowlua
 -- "/suu probe collart" (with Collections open): what the collections window
 -- draws, for its restyle (3.6; asked 2026-10-16 after the first try showed
 -- the game's stone, corners and one side tab). It records now, then for two
@@ -8,31 +8,34 @@
 --          path of keys, layer, atlas or file, size, alpha, shown
 -- Saved in SuuUIProbe.collectionsArt on /reload.
 
-local _, ns = ...
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
 
-local CP = {}
-ns.CollectionsArtProbe = CP
+-- whether the tab switch is hooked, and until when it records
+local hooked = false
+local untilTime: number? = nil
 
-local isSecret = issecretvalue or function() return false end
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     return tostring(v)
 end
 -- a size or offset, rounded; geometry can be secret on Forever
-local function num(v)
+local function num(v: any): string
     if isSecret(v) then return "secret" end
     if type(v) ~= "number" then return tostring(v) end
     return tostring(math.floor(v + 0.5))
 end
 
-local function out()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.collectionsArt = SuuUIProbe.collectionsArt or {}
-    return SuuUIProbe.collectionsArt
+local function out(): { [string]: any }
+    DB.probe.collectionsArt = DB.probe.collectionsArt or {}
+    return DB.probe.collectionsArt
 end
 
 -- The key a child sits under in its parent (MountJournal.LeftInset), else its name.
-local function keyOf(parent, child)
+local function keyOf(parent: any, child: any): string
     if parent then
         for k, v in pairs(parent) do
             if v == child and type(k) == "string" then return k end
@@ -41,14 +44,14 @@ local function keyOf(parent, child)
     return child:GetName() or ("<" .. child:GetObjectType() .. ">")
 end
 
-local function pointOf(r)
+local function pointOf(r: any): string
     local ok, p, rel, rp, x, y = pcall(r.GetPoint, r, 1)
     if not ok or not p then return "-" end
     local relName = rel and (rel.GetName and rel:GetName() or "?") or "nil"
     return ("%s>%s.%s %s,%s"):format(show(p), show(relName), show(rp), num(x), num(y))
 end
 
-local function textures(frame, path, lines, depth)
+local function textures(frame: any, path: string, lines: string[], depth: number)
     if depth > 7 or #lines > 600 then return end
     for _, r in ipairs({ frame:GetRegions() }) do
         if r:GetObjectType() == "Texture" then
@@ -72,7 +75,7 @@ end
 
 local PANES = { "MountJournal", "PetJournal", "ToyBox", "HeirloomsJournal", "WardrobeCollectionFrame" }
 
-function CP.Record()
+export function record()
     local f = _G.CollectionsJournal
     if not (f and f:IsShown()) then return end
     local o = out()
@@ -98,30 +101,31 @@ function CP.Record()
     for _, name in ipairs(PANES) do
         local p = _G[name]
         if p and p:IsShown() then
-            local lines = {}
+            local lines: string[] = {}
             local ok, err = pcall(textures, p, name, lines, 0)
             if not ok then lines[#lines + 1] = "stopped: " .. tostring(err) end
             o[name] = lines
-            ns.Print(("Collections art probe: %s, %d textures."):format(name, #lines))
+            print(("Collections art probe: %s, %d textures."):format(name, #lines))
         end
     end
 end
 
-function CP.Command()
+export function command()
     local f = _G.CollectionsJournal
     if not (f and f:IsShown()) then
-        ns.Print("Collections art probe: open Collections first.")
+        print("Collections art probe: open Collections first.")
         return
     end
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.collectionsArt = {}
-    CP.Record()
-    if not CP.hooked and _G.CollectionsJournal_UpdateSelectedTab then
-        CP.hooked = true
-        hooksecurefunc("CollectionsJournal_UpdateSelectedTab", function()
-            if CP.untilTime and GetTime() < CP.untilTime then C_Timer.After(0.2, CP.Record) end
-        end)
+    DB.probe.collectionsArt = {}
+    record()
+    if not hooked and _G.CollectionsJournal_UpdateSelectedTab then
+        hooked = true
+        -- loaded already (checked above), so this hooks it now
+        hook(_G, "CollectionsJournal_UpdateSelectedTab", function()
+            local t = untilTime
+            if t and GetTime() < t then after(0.2, record) end
+        end, { addon = "Blizzard_Collections" })
     end
-    CP.untilTime = GetTime() + 120
-    ns.Print("Collections art probe: recorded; click through every tab within two minutes, then /reload.")
+    untilTime = GetTime() + 120
+    print("Collections art probe: recorded; click through every tab within two minutes, then /reload.")
 end

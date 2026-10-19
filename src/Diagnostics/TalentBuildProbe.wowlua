@@ -1,4 +1,4 @@
--- Diagnostics/TalentBuildProbe.lua
+-- Diagnostics/TalentBuildProbe.wowlua
 -- "/suu probe talentbuilds" (asked 2026-10-19: talent builds to save and
 -- switch, plan ahead as a guide while levelling, share as text, per talent
 -- group, and for other classes too, kept for the account): what Forever's
@@ -27,23 +27,24 @@
 -- Every step records blocked actions, UI errors and the talent events. Not
 -- in combat. Values the game hides read "secret".
 
-local _, ns = ...
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
 
-local TB = {}
-ns.TalentBuildProbe = TB
+type Map = { [any]: any }
 
-local isSecret = issecretvalue or function() return false end
-
-local function show(v)
+local function show(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
-            local val
+            local val: string
             if isSecret(x) then val = "secret"
             elseif type(x) == "table" then
-                local inner = {}
+                local inner: string[] = {}
                 for k2, y in pairs(x) do
                     inner[#inner + 1] = tostring(k2) .. ":" .. (isSecret(y) and "secret" or type(y) == "table" and "{…}" or tostring(y))
                     if #inner > 8 then break end
@@ -60,38 +61,37 @@ local function show(v)
 end
 
 -- every return as text ("missing" for no function, "error: …")
-local function call(fn, ...)
+local function call(fn: any, ...: any): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, " | ")
 end
 
 -- the first return itself, or nil
-local function get(fn, ...)
+local function get(fn: any, ...: any): (any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b = pcall(fn, ...)
     if ok then return a, b end
 end
 
-local function plain(v) return v ~= nil and not isSecret(v) end
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
-local function push(list, line, most)
+local function push(list: any[], line: any, most: number?)
     if #list < (most or 60) then list[#list + 1] = line end
 end
 
-local function out()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.talentbuilds = SuuUIProbe.talentbuilds or {}
-    return SuuUIProbe.talentbuilds
+local function out(): Map
+    DB.probe.talentbuilds = DB.probe.talentbuilds or {}
+    return DB.probe.talentbuilds
 end
 
-local CT = C_ClassTalents or {}
-local TR = C_Traits or {}
+local CT: any = C_ClassTalents or {}
+local TR: any = C_Traits or {}
 
-local VIEW_ID = Constants and Constants.TraitConsts and Constants.TraitConsts.VIEW_TRAIT_CONFIG_ID
+local VIEW_ID: any = Constants and Constants.TraitConsts and Constants.TraitConsts.VIEW_TRAIT_CONFIG_ID
 
 --------------------------------------------------------------------------------
 -- Watching: blocked actions, UI errors and the talent events
@@ -104,10 +104,13 @@ local EVENTS = {
     "PLAYER_SPECIALIZATION_CHANGED", "SELECTED_LOADOUT_CHANGED", "STARTER_BUILD_ACTIVATION_FAILED",
 }
 
-local watcher, step, t0
-local createdIDs = {}
+local watcher: Frame? = nil
+-- (read anew wherever it's used, as before: a later step replaces it)
+local step: any = nil
+local t0 = 0
+local createdIDs: any[] = {}
 
-local function watch(name)
+local function watch(name: string): any
     local o = out()
     step = { at = date("%H:%M:%S"), events = {}, blocked = {}, steps = {} }
     o[name] = step
@@ -131,12 +134,12 @@ local function watch(name)
     return step
 end
 
-local function note(text) push(step.steps, ("%.2fs %s"):format(GetTime() - t0, text), 60) end
+local function note(text: string) push(step.steps, ("%.2fs %s"):format(GetTime() - t0, text), 60) end
 
-local function refuseCombat()
+local function refuseCombat(): boolean?
     if InCombatLockdown() then
         out().combatTry = date("%H:%M:%S") .. ": refused in combat"
-        ns.Print("Talent builds probe: out of combat, please.")
+        print("Talent builds probe: out of combat, please.")
         return true
     end
 end
@@ -146,8 +149,8 @@ end
 --------------------------------------------------------------------------------
 
 -- Forever has one spec per class: its ID, by the player's spec index first
-local function mySpecID()
-    local SI = C_SpecializationInfo or {}
+local function mySpecID(): any
+    local SI: any = C_SpecializationInfo or {}
     local index = get(SI.GetSpecialization) or get(GetSpecialization) or 1
     local id = get(SI.GetSpecializationInfo, index) or get(GetSpecializationInfo, index)
     if plain(id) and type(id) == "number" then return id end
@@ -156,26 +159,26 @@ local function mySpecID()
     if plain(id) then return id end
 end
 
-local function classSpecID(classID)
+local function classSpecID(classID: number): (any, string?)
     local id = get(GetSpecializationInfoForClassID, classID, 1)
     if plain(id) and type(id) == "number" then return id, "GetSpecializationInfoForClassID" end
-    local SI = C_SpecializationInfo or {}
+    local SI: any = C_SpecializationInfo or {}
     local list = get(SI.GetSpecIDs, classID)
     if type(list) == "table" and plain(list[1]) then return list[1], "C_SpecializationInfo.GetSpecIDs" end
 end
 
-local function savedConfigs(specID)
+local function savedConfigs(specID: any): any[]
     local list = specID and get(CT.GetConfigIDsBySpecID, specID)
-    local outList = {}
+    local outList: any[] = {}
     if type(list) == "table" then
-        for _, id in ipairs(list) do if plain(id) then outList[#outList + 1] = id end end
+        for _, id in ipairs(list :: any[]) do if plain(id) then outList[#outList + 1] = id end end
     end
     return outList
 end
 
 -- The nodes you bought, as ImportLoadout takes them.
-local function entriesOf(configID, treeID)
-    local entries = {}
+local function entriesOf(configID: any, treeID: any): Map[]
+    local entries: Map[] = {}
     for _, nodeID in ipairs(get(TR.GetTreeNodes, treeID) or {}) do
         local n = get(TR.GetNodeInfo, configID, nodeID)
         if type(n) == "table" and plain(n.ranksPurchased) and n.ranksPurchased > 0 then
@@ -189,16 +192,16 @@ local function entriesOf(configID, treeID)
     return entries
 end
 
-local function activeTree(configID)
+local function activeTree(configID: any): (any, any)
     local info = configID and get(TR.GetConfigInfo, configID)
     return info and info.treeIDs and info.treeIDs[1], info
 end
 
 -- A node, briefly: what a planner needs.
-local function nodeLine(configID, nodeID)
+local function nodeLine(configID: any, nodeID: any): string
     local n = get(TR.GetNodeInfo, configID, nodeID)
     if type(n) ~= "table" then return show(nodeID) .. ": no info" end
-    local spells = {}
+    local spells: string[] = {}
     for _, entryID in ipairs(n.entryIDs or {}) do
         local entry = get(TR.GetEntryInfo, configID, entryID)
         local def = entry and entry.definitionID and get(TR.GetDefinitionInfo, entry.definitionID)
@@ -211,11 +214,11 @@ local function nodeLine(configID, nodeID)
 end
 
 -- How much of a tree reads: node count, positions and spells readable.
-local function treeSummary(configID, treeID)
+local function treeSummary(configID: any, treeID: any): Map
     local nodes = get(TR.GetTreeNodes, treeID)
     if type(nodes) ~= "table" then return { nodes = "GetTreeNodes: " .. call(TR.GetTreeNodes, treeID) } end
-    local s = { nodes = #nodes, withPos = 0, withSpell = 0, withInfo = 0, sample = {} }
-    for i, nodeID in ipairs(nodes) do
+    local s: Map = { nodes = #nodes, withPos = 0, withSpell = 0, withInfo = 0, sample = {} }
+    for i, nodeID in ipairs(nodes :: any[]) do
         local n = get(TR.GetNodeInfo, configID, nodeID)
         if type(n) == "table" and plain(n.ID) and n.ID ~= 0 then
             s.withInfo = s.withInfo + 1
@@ -228,7 +231,7 @@ local function treeSummary(configID, treeID)
         if i <= 3 then s.sample[#s.sample + 1] = nodeLine(configID, nodeID) end
     end
     -- a gate ("5 points in …"): the first condition found
-    for _, nodeID in ipairs(nodes) do
+    for _, nodeID in ipairs(nodes :: any[]) do
         local n = get(TR.GetNodeInfo, configID, nodeID)
         local cid = n and n.conditionIDs and n.conditionIDs[1]
         if cid then s.gate = show(cid) .. " " .. call(TR.GetConditionInfo, configID, cid) break end
@@ -240,8 +243,8 @@ end
 -- now: read only
 --------------------------------------------------------------------------------
 
-local function functionList()
-    local names = {}
+local function functionList(): string[]
+    local names: string[] = {}
     for _, n in ipairs({ "GetConfigIDsBySpecID", "GetActiveConfigID", "GetLastSelectedSavedConfigID", "CanCreateNewConfig",
                          "CanChangeTalents", "CanEditTalents", "GetHasStarterBuild", "GetStarterBuildActive",
                          "ImportLoadout", "ViewLoadout", "InitializeViewLoadout", "RequestNewConfig", "SaveConfig",
@@ -259,16 +262,16 @@ local function functionList()
                          "CheckTalentMasterDist", "ConfirmTalentWipe", "GetSpecializationInfoForClassID" }) do
         names[#names + 1] = ("%s: %s"):format(n, type(_G[n]))
     end
-    local SI = C_SpecializationInfo or {}
+    local SI: any = C_SpecializationInfo or {}
     for _, n in ipairs({ "GetActiveSpecGroup", "GetNumSpecGroups", "SetActiveSpecGroup", "GetSpecIDs" }) do
         names[#names + 1] = ("C_SpecializationInfo.%s: %s"):format(n, type(SI[n]))
     end
     return names
 end
 
-local function snapshot()
+local function snapshot(): Map
     local o = out()
-    local now = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")),
+    local now: Map = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")),
                   combat = InCombatLockdown(), money = GetMoney() }
     o.now = now
     now.functions = functionList()
@@ -300,7 +303,7 @@ local function snapshot()
     end
     now.byType = {}
     if Enum.TraitConfigType then
-        for name, value in pairs(Enum.TraitConfigType) do
+        for name, value in pairs(Enum.TraitConfigType :: any) do
             local list = get(TR.GetConfigsByType, value)
             now.byType[#now.byType + 1] = ("%s (%s): %s"):format(name, show(value), show(list))
         end
@@ -313,9 +316,9 @@ local function snapshot()
             or ("GenerateImportString: " .. call(TR.GenerateImportString, activeID))
     end
     -- talent groups (dual spec) and respec
-    local SI = C_SpecializationInfo or {}
+    local SI: any = C_SpecializationInfo or {}
     now.groups = {
-        numTalentGroups = call(GetNumTalentGroups),
+        numTalentGroups = call(_G.GetNumTalentGroups),
         activeTalentGroup = call(GetActiveTalentGroup),
         numSpecGroups = call(GetNumSpecGroups),
         activeSpecGroup = call(GetActiveSpecGroup),
@@ -323,8 +326,8 @@ local function snapshot()
         siNumSpecGroups = call(SI.GetNumSpecGroups),
     }
     now.respec = {
-        resetCost = call(GetTalentResetCost),
-        wipeCost = call(GetTalentWipeCost),
+        resetCost = call(_G.GetTalentResetCost),
+        wipeCost = call(_G.GetTalentWipeCost),
         masterDist = call(CheckTalentMasterDist),
     }
     return now
@@ -336,15 +339,15 @@ end
 
 local function otherClasses()
     local o = out()
-    local list = {}
+    local list: Map[] = {}
     o.otherClasses = list
     local activeID = get(CT.GetActiveConfigID)
-    local _, _, myClassID = UnitClass("player")
-    local viewTried
+    local _, _, myClassID: any = UnitClass("player")
+    local viewTried = false
     for classID = 1, 13 do
         local name, file = get(GetClassInfo, classID)
         if plain(name) and name then
-            local c = { class = ("%s (%s)"):format(show(file), classID), mine = classID == myClassID }
+            local c: Map = { class = ("%s (%s)"):format(show(file), classID), mine = classID == myClassID }
             local specID, how = classSpecID(classID)
             c.specID = ("%s via %s"):format(show(specID), show(how))
             local treeID = specID and get(CT.GetTraitTreeForSpec, specID)
@@ -388,7 +391,7 @@ local function otherClasses()
     local found = false
     for _, c in ipairs(list) do if c.treeID ~= "nil" then found = true end end
     if not found then
-        local scan = {}
+        local scan: string[] = {}
         for treeID = 1100, 1140 do
             local nodes = get(TR.GetTreeNodes, treeID)
             if type(nodes) == "table" and #nodes > 0 then scan[#scan + 1] = ("%d: %d nodes"):format(treeID, #nodes) end
@@ -407,8 +410,8 @@ end
 local NAME = "SuuUI probe"
 
 -- the configs that came since `before` (a list of IDs)
-local function newSince(before)
-    local had, out_ = {}, {}
+local function newSince(before: any[]): any[]
+    local had: Map, out_: any[] = {}, {}
     for _, id in ipairs(before) do had[id] = true end
     for _, id in ipairs(savedConfigs(mySpecID())) do if not had[id] then out_[#out_ + 1] = id end end
     for _, id in ipairs(createdIDs) do if not had[id] and not tContains(out_, id) then out_[#out_ + 1] = id end end
@@ -417,44 +420,44 @@ end
 
 -- every config named NAME: the spec's saved ones and each config type's (a
 -- probe left behind by an early /reload)
-local function leftovers()
-    local ids, seen = {}, {}
-    local function add(id)
+local function leftovers(): any[]
+    local ids: any[], seen: Map = {}, {}
+    local function add(id: any)
         if not plain(id) or seen[id] then return end
         seen[id] = true
         local info = get(TR.GetConfigInfo, id)
         if type(info) == "table" and info.name == NAME then ids[#ids + 1] = id end
     end
     for _, id in ipairs(savedConfigs(mySpecID())) do add(id) end
-    for _, value in pairs(Enum.TraitConfigType or {}) do
+    for _, value in pairs((Enum.TraitConfigType :: any) or {}) do
         local list = get(TR.GetConfigsByType, value)
-        if type(list) == "table" then for _, id in ipairs(list) do add(id) end end
+        if type(list) == "table" then for _, id in ipairs(list :: any[]) do add(id) end end
     end
     for _, id in ipairs(createdIDs) do add(id) end
     return ids
 end
 
-local function deleteNew(before, label)
+local function deleteNew(before: any[], label: string)
     local made = newSince(before)
     note(("%s: new configs %s"):format(label, show(made)))
     for _, id in ipairs(made) do
         note(("config %s: %s"):format(show(id), call(TR.GetConfigInfo, id)))
         note(("DeleteConfig(%s): %s"):format(show(id), call(CT.DeleteConfig, id)))
     end
-    C_Timer.After(1, function()
+    after(1, function()
         note(("after delete: saved %s"):format(show(savedConfigs(mySpecID()))))
         step.money = ("%s → %s"):format(show(step.moneyBefore), show(GetMoney()))
-        ns.Print(("Talent builds probe: %s done%s. Next step, or /reload to save."):format(label,
+        print(("Talent builds probe: %s done%s. Next step, or /reload to save."):format(label,
             #step.blocked > 0 and (" (" .. step.blocked[1] .. ")") or ", nothing blocked"))
     end)
 end
 
-function TB.Export()
+export function export()
     local s = watch("export")
     s.moneyBefore = GetMoney()
     local activeID = get(CT.GetActiveConfigID)
     local treeID = activeTree(activeID)
-    if not (activeID and treeID) then ns.Print("Talent builds probe: no active talent config.") return end
+    if not (activeID and treeID) then print("Talent builds probe: no active talent config.") return end
     local str = get(TR.GenerateImportString, activeID)
     s.string = plain(str) and type(str) == "string" and ("%d chars: %s"):format(#str, str:sub(1, 200))
         or ("GenerateImportString: " .. call(TR.GenerateImportString, activeID))
@@ -465,30 +468,30 @@ function TB.Export()
     local can = get(CT.CanCreateNewConfig)
     s.canCreateNew = show(can)
     if not can then
-        ns.Print("Talent builds probe: export recorded. The game won't make a new loadout here (CanCreateNewConfig), so no import. /reload to save.")
+        print("Talent builds probe: export recorded. The game won't make a new loadout here (CanCreateNewConfig), so no import. /reload to save.")
         return
     end
-    ns.Print("Talent builds probe: importing that string as a new saved loadout \"" .. NAME .. "\", then deleting it again (your talents stay).")
+    print("Talent builds probe: importing that string as a new saved loadout \"" .. NAME .. "\", then deleting it again (your talents stay).")
     local before = savedConfigs(mySpecID())
     wipe(createdIDs)
     note("ImportLoadout(active, entries, name, string): " .. call(CT.ImportLoadout, activeID, entries, NAME, plain(str) and str or ""))
-    C_Timer.After(2, function() deleteNew(before, "import") end)
+    after(2, function() deleteNew(before, "import") end)
 end
 
-function TB.Save()
+export function save()
     local s = watch("save")
     s.moneyBefore = GetMoney()
     local can = get(CT.CanCreateNewConfig)
     s.canCreateNew = show(can)
     if not can then
-        ns.Print("Talent builds probe: the game won't make a new loadout here (CanCreateNewConfig false). /reload to save.")
+        print("Talent builds probe: the game won't make a new loadout here (CanCreateNewConfig false). /reload to save.")
         return
     end
-    ns.Print("Talent builds probe: making a new saved loadout \"" .. NAME .. "\" from your talents, then deleting it again (your talents stay).")
+    print("Talent builds probe: making a new saved loadout \"" .. NAME .. "\" from your talents, then deleting it again (your talents stay).")
     local before = savedConfigs(mySpecID())
     wipe(createdIDs)
     note("RequestNewConfig(name): " .. call(CT.RequestNewConfig, NAME))
-    C_Timer.After(1.5, function()
+    after(1.5, function()
         local made = newSince(before)
         for _, id in ipairs(made) do
             note(("SaveConfig(%s): %s"):format(show(id), call(CT.SaveConfig, id)))
@@ -503,9 +506,9 @@ end
 -- switch: load the other saved loadout and back (asked twice)
 --------------------------------------------------------------------------------
 
-local armedSwitch
+local armedSwitch: number? = nil
 
-function TB.Switch()
+export function switch()
     local specID = mySpecID()
     local saved = savedConfigs(specID)
     local last = specID and get(CT.GetLastSelectedSavedConfigID, specID)
@@ -514,12 +517,12 @@ function TB.Switch()
     if #saved < 2 or not other then
         local s = watch("switch")
         s.skipped = ("%d saved loadouts (last selected %s): needs two"):format(#saved, show(last))
-        ns.Print("Talent builds probe: switch needs two saved loadouts; you have " .. #saved .. ". Skipped.")
+        print("Talent builds probe: switch needs two saved loadouts; you have " .. #saved .. ". Skipped.")
         return
     end
     if not armedSwitch or GetTime() - armedSwitch > 20 then
         armedSwitch = GetTime()
-        ns.Print(("Talent builds probe: this loads your saved loadout %s and then %s again: it changes your talents and may cost gold. Run /suu probe talentbuilds switch again within 20 s to do it."):format(
+        print(("Talent builds probe: this loads your saved loadout %s and then %s again: it changes your talents and may cost gold. Run /suu probe talentbuilds switch again within 20 s to do it."):format(
             show(other), show(last or "your current one")))
         return
     end
@@ -528,13 +531,13 @@ function TB.Switch()
     s.moneyBefore = GetMoney()
     s.from, s.to = show(last), show(other)
     note(("LoadConfig(%s, true): %s"):format(show(other), call(CT.LoadConfig, other, true)))
-    C_Timer.After(3, function()
+    after(3, function()
         note(("active now %s, last selected %s"):format(call(CT.GetActiveConfigID), call(CT.GetLastSelectedSavedConfigID, specID)))
         if last then note(("LoadConfig(%s, true) back: %s"):format(show(last), call(CT.LoadConfig, last, true))) end
-        C_Timer.After(3, function()
+        after(3, function()
             note(("active now %s, last selected %s"):format(call(CT.GetActiveConfigID), call(CT.GetLastSelectedSavedConfigID, specID)))
             s.money = ("%s → %s"):format(show(s.moneyBefore), show(GetMoney()))
-            ns.Print(("Talent builds probe: switch done%s. /reload to save."):format(
+            print(("Talent builds probe: switch done%s. /reload to save."):format(
                 #s.blocked > 0 and (" (" .. s.blocked[1] .. ")") or ", nothing blocked"))
         end)
     end)
@@ -549,10 +552,12 @@ local TRAINER_EVENTS = {
     "TRAINER_SHOW", "TRAINER_CLOSED", "PLAYER_MONEY", "CHARACTER_POINTS_CHANGED", "TRAIT_NODE_CHANGED",
     "TRAIT_TREE_CURRENCY_INFO_UPDATED", "SPELLS_CHANGED", "LEARNED_SPELL_IN_SKILL_LINE",
 }
-local trainerFrame, trainerUntil, popupHooked
+local trainerFrame: Frame? = nil
+local trainerUntil: number? = nil
+local popupHooked = false
 
 -- Your talents now: learned ranks, the points, money, the reset functions.
-local function talentState()
+local function talentState(): string
     local activeID = get(CT.GetActiveConfigID)
     local treeID = activeID and activeTree(activeID)
     local ranks, nodes = 0, 0
@@ -567,28 +572,28 @@ local function talentState()
     return ("%d ranks in %d talents · points %s · money %s · staged %s · wipe cost %s · reset cost %s · master %s"):format(
         ranks, nodes, activeID and treeID and call(TR.GetTreeCurrencyInfo, activeID, treeID, false) or "no config",
         show(GetMoney()), activeID and call(TR.ConfigHasStagedChanges, activeID) or "?",
-        call(GetTalentWipeCost), call(GetTalentResetCost), call(CheckTalentMasterDist))
+        call(_G.GetTalentWipeCost), call(_G.GetTalentResetCost), call(CheckTalentMasterDist))
 end
 
-local function gossipOptions()
-    local G = C_GossipInfo or {}
+local function gossipOptions(): string
+    local G: any = C_GossipInfo or {}
     local opts = get(G.GetOptions)
     if type(opts) ~= "table" then return call(G.GetOptions) end
-    local parts = {}
-    for _, o in ipairs(opts) do
+    local parts: string[] = {}
+    for _, o in ipairs(opts :: any[]) do
         parts[#parts + 1] = ("%s:%s%s"):format(show(o.gossipOptionID), show(o.name),
             o.status and (" status " .. show(o.status)) or "")
     end
     return table.concat(parts, " / ")
 end
 
-function TB.Trainer()
+export function trainer()
     local s = watch("trainer")
     local ok, before = pcall(talentState)
     s.before = ok and before or ("error: " .. tostring(before):sub(1, 160))
     s.timeline = {}
     trainerUntil = GetTime() + 180
-    local function mark(line) push(s.timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120) end
+    local function mark(line: string) push(s.timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120) end
     if not trainerFrame then
         trainerFrame = CreateFrame("Frame")
         trainerFrame:SetScript("OnEvent", function(_, event, a, b, c)
@@ -598,7 +603,7 @@ function TB.Trainer()
             mark(line)
             -- the state right after anything that may change it
             if event ~= "GOSSIP_SHOW" and event ~= "GOSSIP_CLOSED" then
-                C_Timer.After(0.5, function()
+                after(0.5, function()
                     if trainerUntil and GetTime() <= trainerUntil then
                         local ok, now = pcall(talentState)
                         mark("  after: " .. (ok and now or ("error: " .. tostring(now):sub(1, 160))))
@@ -611,38 +616,39 @@ function TB.Trainer()
     -- which popup the game shows (its name and text), without touching it
     if not popupHooked and type(StaticPopup_Show) == "function" then
         popupHooked = true
-        hooksecurefunc("StaticPopup_Show", function(which, text1, text2)
+        hook("StaticPopup_Show", function(which: any, text1: any, text2: any)
             if trainerUntil and GetTime() <= trainerUntil then
                 mark(("popup %s %s %s"):format(show(which), show(text1), show(text2)))
             end
         end)
     end
-    C_Timer.After(180, function()
-        for _, e in ipairs(TRAINER_EVENTS) do pcall(trainerFrame.UnregisterEvent, trainerFrame, e) end
+    after(180, function()
+        local tf = trainerFrame :: Frame
+        for _, e in ipairs(TRAINER_EVENTS) do pcall(tf.UnregisterEvent, tf, e) end
         trainerUntil = nil
         -- say done first: an error reading the state must not swallow it
-        ns.Print("Talent builds probe: trainer watch done. /reload to save.")
-        local ok, after = pcall(talentState)
-        s.after = ok and after or ("error: " .. tostring(after):sub(1, 160))
+        print("Talent builds probe: trainer watch done. /reload to save.")
+        local ok, state = pcall(talentState)
+        s.after = ok and state or ("error: " .. tostring(state):sub(1, 160))
     end)
-    ns.Print("Talent builds probe: watching for 3 minutes. Talk to your class trainer, pick the talent reset, and confirm or cancel it yourself; nothing is clicked for you. Then wait for \"done\" and /reload.")
+    print("Talent builds probe: watching for 3 minutes. Talk to your class trainer, pick the talent reset, and confirm or cancel it yourself; nothing is clicked for you. Then wait for \"done\" and /reload.")
 end
 
-function TB.Command(arg)
+export function command(arg: string?)
     if refuseCombat() then return end
     arg = (arg or ""):lower()
-    if arg == "export" then return TB.Export() end
-    if arg == "save" then return TB.Save() end
-    if arg == "switch" then return TB.Switch() end
-    if arg == "trainer" then return TB.Trainer() end
+    if arg == "export" then return export() end
+    if arg == "save" then return save() end
+    if arg == "switch" then return switch() end
+    if arg == "trainer" then return trainer() end
     if arg == "cleanup" then
         local s = watch("cleanup")
         local ids = leftovers()
         s.found = show(ids)
         for _, id in ipairs(ids) do note(("DeleteConfig(%s): %s"):format(show(id), call(CT.DeleteConfig, id))) end
-        C_Timer.After(1, function()
+        after(1, function()
             note(("left: %s"):format(show(leftovers())))
-            ns.Print(("Talent builds probe: cleanup deleted %d loadout(s) named \"%s\". /reload to save."):format(#ids, NAME))
+            print(("Talent builds probe: cleanup deleted %d loadout(s) named \"%s\". /reload to save."):format(#ids, NAME))
         end)
         return
     end
@@ -653,8 +659,8 @@ function TB.Command(arg)
     local left = leftovers()
     o.now.leftovers = show(left)
     if #left > 0 then
-        ns.Print(("Talent builds probe: a loadout named \"%s\" is left from an earlier run; /suu probe talentbuilds cleanup deletes it."):format(NAME))
+        print(("Talent builds probe: a loadout named \"%s\" is left from an earlier run; /suu probe talentbuilds cleanup deletes it."):format(NAME))
     end
-    ns.Print(("Talent builds probe: recorded (spec %s, %d saved loadouts, %d classes). Next: /suu probe talentbuilds export, then save, then switch; /reload to save."):format(
+    print(("Talent builds probe: recorded (spec %s, %d saved loadouts, %d classes). Next: /suu probe talentbuilds export, then save, then switch; /reload to save."):format(
         o.now.specID, #o.now.saved, #o.otherClasses))
 end

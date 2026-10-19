@@ -1,4 +1,4 @@
--- Diagnostics/GiverProbe.lua
+-- Diagnostics/GiverProbe.wowlua
 -- "/suu probe givers": while it's on, every NPC whose quests you open (its
 -- gossip, its quest greeting, a quest it offers straight away) is checked
 -- against the world map's pins: what the NPC offers next to what the map
@@ -8,33 +8,36 @@
 --   /suu probe givers        on or off
 --   /suu probe givers clear  forget what was recorded
 
-local _, ns = ...
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import SuuUI from "/Core/API"
 
-local GP = {}
-ns.GiverProbe = GP
+-- the frame hearing the quest events, and whether it's on
+local eventFrame: Frame? = nil
+local on: boolean? = nil
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
-local function store()
-    SuuUIProbe = SuuUIProbe or {}
-    SuuUIProbe.givers = SuuUIProbe.givers or { npcs = {}, checked = 0, differences = 0 }
-    return SuuUIProbe.givers
+local function store(): { [string]: any }
+    DB.probe.givers = DB.probe.givers or { npcs = {}, checked = 0, differences = 0 }
+    return DB.probe.givers
 end
 
 -- the NPC you're talking to: its ID from its GUID ("Creature-0-…-<id>-…")
-local function npc()
+local function npc(): (number?, string?)
     local ok, guid = pcall(UnitGUID, "npc")
     if not (ok and plain(guid)) then return nil end
-    local kind, id = guid:match("^(%a+)%-%d+%-%d+%-%d+%-%d+%-(%d+)")
+    local kind, id = (guid :: string):match("^(%a+)%-%d+%-%d+%-%d+%-%d+%-(%d+)")
     if kind ~= "Creature" and kind ~= "Vehicle" then return nil end
     local okName, name = pcall(UnitName, "npc")
-    return tonumber(id), okName and plain(name) and name or "?"
+    return tonumber(id), okName and plain(name) and (name :: string) or "?"
 end
 
 -- the quests it offers now: { [questID] = title }
-local function offered(event)
-    local out = {}
+local function offered(event: string): { [number]: string }
+    local out: { [number]: string } = {}
     if event == "GOSSIP_SHOW" and C_GossipInfo and C_GossipInfo.GetAvailableQuests then
         local ok, list = pcall(C_GossipInfo.GetAvailableQuests)
         for _, q in ipairs(ok and type(list) == "table" and list or {}) do
@@ -43,7 +46,7 @@ local function offered(event)
     elseif event == "QUEST_GREETING" then
         local ok, n = pcall(GetNumAvailableQuests)
         for i = 1, ok and plain(n) and n or 0 do
-            local okInfo, a, b, c, d, id = pcall(GetAvailableQuestInfo, i)
+            local okInfo, _a, _b, _c, _d, id = pcall(GetAvailableQuestInfo, i)
             local okTitle, title = pcall(GetAvailableTitle, i)
             -- (the quest ID is GetAvailableQuestInfo's fifth value)
             if okInfo and plain(id) and type(id) == "number" then out[id] = okTitle and title or "?" end
@@ -57,11 +60,11 @@ local function offered(event)
 end
 
 -- the quests before one and instead of it, done or not ("97246 done")
-local function why(id, done)
+local function why(id: number, done: { [number]: any }): string
     local q = SuuUI.QuestStarts().quests[id]
     if not q then return "not in the data" end
     local parts = {}
-    local function list(label, ids)
+    local function list(label: string, ids: number[]?)
         local items = {}
         for _, pre in ipairs(ids or {}) do items[#items + 1] = pre .. (done[pre] and " done" or " not done") end
         if #items > 0 then parts[#parts + 1] = label .. " " .. table.concat(items, ", ") end
@@ -74,8 +77,8 @@ local function why(id, done)
     return table.concat(parts, "; ")
 end
 
-function GP.Check(event)
-    local map = SuuUI.GetModule and SuuUI.GetModule("worldmap")
+export function check(event: string)
+    local map: any = SuuUI.GetModule and SuuUI.GetModule("worldmap")
     if not (map and map.QuestsFor) then return end
     local id, name = npc()
     if not id then return end
@@ -106,7 +109,7 @@ function GP.Check(event)
             red[#red + 1] = qid .. " " .. title
         elseif not shown[qid] then
             local known = false
-            for _, q in ipairs(expected) do if q.id == qid then known = true end end
+            for _, e in ipairs(expected) do if e.id == qid then known = true end end
             extra[#extra + 1] = { id = qid, name = title, why = known and why(qid, done) or "not given by this NPC in the data" }
         end
     end
@@ -119,36 +122,36 @@ function GP.Check(event)
     if #missing > 0 or #extra > 0 then
         s.differences = s.differences + 1
         for _, q in ipairs(missing) do
-            ns.Print(("Givers: %s doesn't offer %s (%d), the map shows it."):format(name, tostring(q.name), q.id))
+            print(("Givers: %s doesn't offer %s (%d), the map shows it."):format(name, tostring(q.name), q.id))
         end
         for _, q in ipairs(extra) do
-            ns.Print(("Givers: %s offers %s (%d), the map doesn't show it."):format(name, tostring(q.name), q.id))
+            print(("Givers: %s offers %s (%d), the map doesn't show it."):format(name, tostring(q.name), q.id))
         end
     end
 end
 
-function GP.Command(rest)
+export function command(rest: string?)
     local s = store()
     if rest == "clear" then
-        SuuUIProbe.givers = nil
-        ns.Print("Givers: forgotten.")
+        DB.probe.givers = nil
+        print("Givers: forgotten.")
         return
     end
-    local f = GP.frame
+    local f = eventFrame
     if not f then
         f = CreateFrame("Frame")
         f:SetScript("OnEvent", function(_, event)
             -- (the gossip's quests are there a moment after it shows)
-            C_Timer.After(0, function() GP.Check(event) end)
+            after(0, function() check(event) end)
         end)
-        GP.frame = f
+        eventFrame = f
     end
-    GP.on = not GP.on
-    if GP.on then
+    on = not on
+    if on then
         for _, e in ipairs({ "GOSSIP_SHOW", "QUEST_GREETING", "QUEST_DETAIL" }) do f:RegisterEvent(e) end
-        ns.Print(("Givers: on. Talk to quest givers; differences show here. %d checked so far; /suu probe givers again to stop."):format(s.checked))
+        print(("Givers: on. Talk to quest givers; differences show here. %d checked so far; /suu probe givers again to stop."):format(s.checked))
     else
         f:UnregisterAllEvents()
-        ns.Print(("Givers: off. %d checked, %d with differences; /reload saves them."):format(s.checked, s.differences))
+        print(("Givers: off. %d checked, %d with differences; /reload saves them."):format(s.checked, s.differences))
     end
 end

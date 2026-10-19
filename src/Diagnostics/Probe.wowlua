@@ -1,4 +1,4 @@
--- Diagnostics/Probe.lua
+-- Diagnostics/Probe.wowlua
 -- /suu probe: reports which client APIs, frames and Blizzard addons the design
 -- depends on exist on this client, and which unit values are secret right now.
 --
@@ -12,7 +12,78 @@
 -- it never compares or stores a value that might be secret, only the boolean
 -- issecretvalue() returns for it.
 
-local _, ns = ...
+import print, version from "/Core/Init"
+import * as DB from "/Core/DB"
+import isSecret from "wowlua:secret"
+import * as ahDataProbe from "/Diagnostics/AhDataProbe"
+import * as ahPostProbe from "/Diagnostics/AhPostProbe"
+import * as ahScanProbe from "/Diagnostics/AhScanProbe"
+import * as apiDocs from "/Diagnostics/ApiDocs"
+import * as bagProbe from "/Diagnostics/BagProbe"
+import * as bagSortProbe from "/Diagnostics/BagSortProbe"
+import * as bankSlotsProbe from "/Diagnostics/BankSlotsProbe"
+import * as calendarProbe from "/Diagnostics/CalendarProbe"
+import * as campProbe from "/Diagnostics/CampProbe"
+import * as castTargetProbe from "/Diagnostics/CastTargetProbe"
+import * as characterProbe from "/Diagnostics/CharacterProbe"
+import * as chatPaletteProbe from "/Diagnostics/ChatPaletteProbe"
+import * as chatProbe from "/Diagnostics/ChatProbe"
+import * as classData from "/Diagnostics/ClassData"
+import * as collectionsArtProbe from "/Diagnostics/CollectionsArtProbe"
+import * as collectionsOwnProbe from "/Diagnostics/CollectionsOwnProbe"
+import * as collectionsTilesProbe from "/Diagnostics/CollectionsTilesProbe"
+import * as deathRecapProbe from "/Diagnostics/DeathRecapProbe"
+import * as dragonProbe from "/Diagnostics/DragonProbe"
+import * as durabilityProbe from "/Diagnostics/DurabilityProbe"
+import * as flickerProbe from "/Diagnostics/FlickerProbe"
+import * as gameMenuProbe from "/Diagnostics/GameMenuProbe"
+import * as garbageProbe from "/Diagnostics/GarbageProbe"
+import * as giverProbe from "/Diagnostics/GiverProbe"
+import * as groupProbe from "/Diagnostics/GroupProbe"
+import * as holdProbe from "/Diagnostics/HoldProbe"
+import * as hoverTipProbe from "/Diagnostics/HoverTipProbe"
+import * as iconProbe from "/Diagnostics/IconProbe"
+import * as legacyProbe from "/Diagnostics/LegacyProbe"
+import * as lfgProbe from "/Diagnostics/LfgProbe"
+import * as lootProbe from "/Diagnostics/LootProbe"
+import * as mapPinsProbe from "/Diagnostics/MapPinsProbe"
+import * as mapProbe from "/Diagnostics/MapProbe"
+import * as markProbe from "/Diagnostics/MarkProbe"
+import * as memoryProbe from "/Diagnostics/MemoryProbe"
+import * as menuProbe from "/Diagnostics/MenuProbe"
+import * as meterProbe from "/Diagnostics/MeterProbe"
+import * as microProbe from "/Diagnostics/MicroProbe"
+import * as minimapProbe from "/Diagnostics/MinimapProbe"
+import * as mountFeetProbe from "/Diagnostics/MountFeetProbe"
+import * as mountFrameProbe from "/Diagnostics/MountFrameProbe"
+import * as npcPortraitProbe from "/Diagnostics/NpcPortraitProbe"
+import * as partyAuraProbe from "/Diagnostics/PartyAuraProbe"
+import * as plateProbe from "/Diagnostics/PlateProbe"
+import * as popupProbe from "/Diagnostics/PopupProbe"
+import * as powerProbe from "/Diagnostics/PowerProbe"
+import * as profIconProbe from "/Diagnostics/ProfIconProbe"
+import * as professionProbe from "/Diagnostics/ProfessionProbe"
+import * as questGroupProbe from "/Diagnostics/QuestGroupProbe"
+import * as questProbe from "/Diagnostics/QuestProbe"
+import * as raidProbe from "/Diagnostics/RaidProbe"
+import * as skysightProbe from "/Diagnostics/SkysightProbe"
+import * as socialProbe from "/Diagnostics/SocialProbe"
+import * as spellData from "/Diagnostics/SpellData"
+import * as spellbookProbe from "/Diagnostics/SpellbookProbe"
+import * as supportProbe from "/Diagnostics/SupportProbe"
+import * as taintProbe from "/Diagnostics/TaintProbe"
+import * as talentBuildProbe from "/Diagnostics/TalentBuildProbe"
+import * as talentProbe from "/Diagnostics/TalentProbe"
+import * as taxiProbe from "/Diagnostics/TaxiProbe"
+import * as timelineProbe from "/Diagnostics/TimelineProbe"
+import * as tooltipProbe from "/Diagnostics/TooltipProbe"
+import * as totemProbe from "/Diagnostics/TotemProbe"
+import * as toyModelProbe from "/Diagnostics/ToyModelProbe"
+import * as trackProbe from "/Diagnostics/TrackProbe"
+import * as treeProbe from "/Diagnostics/TreeProbe"
+import * as unlearnProbe from "/Diagnostics/UnlearnProbe"
+import * as weaponEnchantProbe from "/Diagnostics/WeaponEnchantProbe"
+import * as windowsProbe from "/Diagnostics/WindowsProbe"
 
 --------------------------------------------------------------------------------
 -- What to check, grouped by the part of the design that depends on it
@@ -29,7 +100,15 @@ local _, ns = ...
 --          namespace's functions
 --------------------------------------------------------------------------------
 
-local SECTIONS = {
+type Item = {
+    api?: string, ns?: string, frame?: string, addon?: string, enum?: string, method?: string[],
+    scan?: string, find?: string[], skip?: string[], within?: string,
+}
+type Section = { title: string, items: Item[] }
+-- the full lists a run collects, saved beside the report
+type Saved = { namespaces: { [string]: string[] }, enums: { [string]: { [any]: any } }, scans: { [string]: string[] } }
+
+local SECTIONS: Section[] = {
     { title = "Client", items = {
         { scan = "Game type APIs", find = { "gamerules", "gamemode", "loadgametype", "gametype" } },
     } },
@@ -202,8 +281,8 @@ local SAMPLE_SPELLS = { 29515, 61304 }
 -- Helpers
 --------------------------------------------------------------------------------
 
-local function resolve(path)
-    local v = _G
+local function resolve(path: string): any
+    local v: any = _G
     for part in path:gmatch("[^%.]+") do
         if type(v) ~= "table" then return nil end
         v = v[part]
@@ -211,8 +290,8 @@ local function resolve(path)
     return v
 end
 
-local function sortedKeys(t, filter)
-    local out = {}
+local function sortedKeys(t: { [any]: any }, filter: ((k: string, v: any) -> boolean)?): string[]
+    local out: string[] = {}
     for k, v in pairs(t) do
         if type(k) == "string" and (not filter or filter(k, v)) then
             out[#out + 1] = k
@@ -222,28 +301,29 @@ local function sortedKeys(t, filter)
     return out
 end
 
-local function functionNames(t)
+local function functionNames(t: { [any]: any }): string[]
     return sortedKeys(t, function(_, v) return type(v) == "function" end)
 end
 
-local function matchesAny(lower, needles)
+local function matchesAny(lower: string, needles: string[]): boolean
     for _, n in ipairs(needles) do
         if lower:find(n, 1, true) then return true end
     end
     return false
 end
 
-local function scan(item)
-    local function wanted(name)
+local function scan(item: Item): string[]
+    local function wanted(name: string): boolean
         local lower = name:lower()
-        return matchesAny(lower, item.find) and not (item.skip and matchesAny(lower, item.skip))
+        return matchesAny(lower, item.find or {}) and not (item.skip and matchesAny(lower, item.skip))
     end
-    local hits = {}
-    if item.within then
-        local t = resolve(item.within)
+    local hits: string[] = {}
+    local within = item.within
+    if within then
+        local t = resolve(within)
         if type(t) == "table" then
             for _, name in ipairs(functionNames(t)) do
-                if wanted(name) then hits[#hits + 1] = item.within .. "." .. name end
+                if wanted(name) then hits[#hits + 1] = within .. "." .. name end
             end
         end
         return hits
@@ -255,14 +335,14 @@ local function scan(item)
             hits[#hits + 1] = name
         end
     end
-    for name in pairs(Enum) do
+    for name in pairs(Enum :: any) do
         if type(name) == "string" and wanted(name) then hits[#hits + 1] = "Enum." .. name end
     end
     table.sort(hits)
     return hits
 end
 
-local function addonState(name)
+local function addonState(name: string): (boolean, string)
     local ok, exists = pcall(C_AddOns.DoesAddOnExist, name)
     if not ok or not exists then return false, "absent" end
     if C_AddOns.IsAddOnLoaded(name) then return true, "loaded" end
@@ -272,31 +352,33 @@ local function addonState(name)
     return true, "present, not loaded"
 end
 
-local widgets
-local function widget(kind)
-    if not widgets then
+local widgets: { [string]: any }?
+local function widget(kind: string): any
+    local w = widgets
+    if not w then
         local host = CreateFrame("Frame")
         host:Hide()
-        widgets = {
+        w = {
             Frame = host,
             StatusBar = CreateFrame("StatusBar", nil, host),
             Cooldown = CreateFrame("Cooldown", nil, host),
             Texture = host:CreateTexture(),
             FontString = host:CreateFontString(),
         }
+        widgets = w
     end
-    return widgets[kind]
+    return w[kind]
 end
 
-local function methodsOf(kind)
+local function methodsOf(kind: string): { [any]: any }
     local mt = getmetatable(widget(kind))
     local index = mt and mt.__index
     return type(index) == "table" and index or {}
 end
 
-local function preview(list, limit)
+local function preview(list: string[], limit: number): string
     if #list <= limit then return table.concat(list, ", ") end
-    local head = {}
+    local head: string[] = {}
     for i = 1, limit do head[i] = list[i] end
     return table.concat(head, ", ") .. (", +%d more"):format(#list - limit)
 end
@@ -306,55 +388,58 @@ end
 --------------------------------------------------------------------------------
 
 -- Returns ok, label, detail for one item; `saved` collects the full lists.
-local function check(item, saved)
-    if item.api then
-        return type(resolve(item.api)) == "function", item.api
-    elseif item.ns then
-        local t = resolve(item.ns)
-        if type(t) ~= "table" then return false, item.ns end
+local function check(item: Item, saved: Saved): (boolean, string, string?)
+    local api, ns, frame, addon, enum, method, scanName = item.api, item.ns, item.frame, item.addon, item.enum, item.method, item.scan
+    if api then
+        return type(resolve(api)) == "function", api
+    elseif ns then
+        local t = resolve(ns)
+        if type(t) ~= "table" then return false, ns end
         local names = functionNames(t)
-        saved.namespaces[item.ns] = names
-        return true, item.ns, ("%d functions"):format(#names)
-    elseif item.frame then
-        return type(_G[item.frame]) == "table", item.frame
-    elseif item.addon then
-        local ok, state = addonState(item.addon)
-        return ok, item.addon, state
-    elseif item.enum then
-        local label = "Enum." .. item.enum
-        local t = Enum[item.enum]
+        saved.namespaces[ns] = names
+        return true, ns, ("%d functions"):format(#names)
+    elseif frame then
+        return type(_G[frame]) == "table", frame
+    elseif addon then
+        local ok, state = addonState(addon)
+        return ok, addon, state
+    elseif enum then
+        local label = "Enum." .. enum
+        local t = (Enum :: any)[enum]
         if type(t) ~= "table" then return false, label end
-        local copy, n = {}, 0
+        local copy: { [any]: any }, n = {}, 0
         for k, v in pairs(t) do copy[k] = v; n = n + 1 end
-        saved.enums[item.enum] = copy
+        saved.enums[enum] = copy
         return true, label, ("%d values"):format(n)
-    elseif item.method then
-        local kind, name = item.method[1], item.method[2]
+    elseif method then
+        local kind, name = method[1], method[2]
         return type(methodsOf(kind)[name]) == "function", kind .. ":" .. name
-    elseif item.scan then
+    elseif scanName then
         local hits = scan(item)
-        saved.scans[item.scan] = hits
-        if #hits == 0 then return false, item.scan, "nothing found" end
-        return true, item.scan, preview(hits, 6)
+        saved.scans[scanName] = hits
+        if #hits == 0 then return false, scanName, "nothing found" end
+        return true, scanName, preview(hits, 6)
     end
+    -- (every item is one of the kinds above)
+    return false, "?"
 end
 
-local function collectMethods()
-    local out = {}
+local function collectMethods(): { [string]: string[] }
+    local out: { [string]: string[] } = {}
     for _, kind in ipairs(METHOD_WIDGETS) do
-        out[kind] = sortedKeys(methodsOf(kind), function(k, v)
+        out[kind] = sortedKeys(methodsOf(kind), function(k: string, v: any): boolean
             return type(v) == "function" and matchesAny(k:lower(), METHOD_HINTS)
         end)
     end
     return out
 end
 
-local function collectCVars()
+local function collectCVars(): string[]?
     if not (C_Console and C_Console.GetAllCommands) then return nil end
     local ok, all = pcall(C_Console.GetAllCommands)
     if not ok or type(all) ~= "table" then return nil end
-    local out = {}
-    for _, info in ipairs(all) do
+    local out: string[] = {}
+    for _, info in ipairs(all :: any[]) do
         local name = info.command
         if type(name) == "string" and matchesAny(name:lower(), CVAR_HINTS) then
             out[#out + 1] = name
@@ -368,15 +453,14 @@ end
 -- Secret-value samples for the current context
 --------------------------------------------------------------------------------
 
-local isSecret = issecretvalue or function() return false end
-local isSecretTable = issecrettable or function() return false end
+local isSecretTable: (t: any) -> boolean = issecrettable or function(_: any) return false end
 
-local function errText(msg)
+local function errText(msg: any): string
     return (tostring(msg):gsub("^Interface\\[^:]*:%d+: ", "")):sub(1, 160)
 end
 
 -- "secret", "readable" or "none" for one value; never keeps the value.
-local function state(v)
+local function state(v: any): string
     if isSecret(v) then return "secret" end
     if v == nil then return "none" end
     return "readable"
@@ -384,10 +468,10 @@ end
 
 -- The state of every string-keyed field of a table the client returned, or
 -- the state of a non-table value.
-local function describe(t)
+local function describe(t: any): any
     if isSecret(t) or type(t) ~= "table" then return state(t) end
     if isSecretTable(t) then return "secret table" end
-    local out = {}
+    local out: { [string]: string } = {}
     local ok, err = pcall(function()
         for k, v in pairs(t) do
             if type(k) == "string" then
@@ -400,14 +484,14 @@ local function describe(t)
 end
 
 -- Calls fn and describes its first result; errors become "error: <message>".
-local function call(fn, ...)
+local function call(fn: any, ...: any): any
     if type(fn) ~= "function" then return "missing" end
     local ok, v = pcall(fn, ...)
     if not ok then return "error: " .. errText(v) end
     return describe(v)
 end
 
-local UNIT_FIELDS = {
+local UNIT_FIELDS: { [number]: any }[] = {
     { "name", function(u) return UnitName(u) end },
     { "class", function(u) return (select(2, UnitClass(u))) end },
     { "level", UnitLevel },
@@ -432,9 +516,9 @@ local UNIT_FIELDS = {
 
 -- The first aura of each filter, read three ways: by index, through the slot
 -- API that Blizzard's AuraUtil uses, and as a list.
-local function sampleAuras(unit)
-    local A = C_UnitAuras or {}
-    local out = {}
+local function sampleAuras(unit: string): { [string]: any }
+    local A: any = C_UnitAuras or {}
+    local out: { [string]: any } = {}
     for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
         out["byIndex " .. filter] = call(A.GetAuraDataByIndex, unit, 1, filter)
         if A.GetAuraSlots then
@@ -462,11 +546,11 @@ local function sampleAuras(unit)
     return out
 end
 
-local function sampleUnits()
-    local out = {}
+local function sampleUnits(): { [string]: any }
+    local out: { [string]: any } = {}
     for _, unit in ipairs(SAMPLE_UNITS) do
         if UnitExists(unit) then
-            local fields = {}
+            local fields: { [string]: any } = {}
             for _, f in ipairs(UNIT_FIELDS) do
                 if not (f[1] == "threat" and unit == "player") then
                     fields[f[1]] = call(f[2], unit)
@@ -479,13 +563,13 @@ local function sampleUnits()
 end
 
 -- The GCD reference spells, then up to three actions on the current bar 1.
-local function sampleCooldowns()
-    local out = {}
+local function sampleCooldowns(): { [string]: any }
+    local out: { [string]: any } = {}
     for _, id in ipairs(SAMPLE_SPELLS) do
         out["spell " .. id] = call(C_Spell and C_Spell.GetSpellCooldown, id)
     end
-    local AB = C_ActionBar or {}
-    local hasAction = HasAction or AB.HasAction
+    local AB: any = C_ActionBar or {}
+    local hasAction = _G.HasAction or AB.HasAction
     local n = 0
     for slot = 1, 12 do
         if n < 3 and hasAction and hasAction(slot) then
@@ -499,8 +583,8 @@ end
 
 -- Calls the no-argument queries the messaging scan found and keeps their
 -- answer when it is readable.
-local function sampleMessaging(saved)
-    local out = {}
+local function sampleMessaging(saved: Saved): { [string]: string }
+    local out: { [string]: string } = {}
     for _, path in ipairs(saved.scans["Messaging lockdown APIs"] or {}) do
         local short = path:match("%.(%w+)$")
         if short and (short:find("^Is") or short:find("^In") or short:find("^Are")) then
@@ -515,29 +599,31 @@ end
 
 -- One report line from a describe() result: fields grouped by state, then
 -- each error with its message.
-local function summarize(label, d)
+local function summarize(label: string, d: any): string[]
     if type(d) ~= "table" then return { ("  %s: %s"):format(label, d) } end
-    local groups, errors = {}, {}
+    local groups: { [string]: string[] }, errors: string[] = {}, {}
     for _, k in ipairs(sortedKeys(d)) do
         local v = d[k]
         if type(v) == "table" then v = "table" end
         if v:find("^error") then
             errors[#errors + 1] = ("    %s %s"):format(k, v)
         else
-            groups[v] = groups[v] or {}
-            table.insert(groups[v], k)
+            local group = groups[v] or {}
+            groups[v] = group
+            table.insert(group, k)
         end
     end
-    local parts = {}
+    local parts: string[] = {}
     for _, s in ipairs({ "readable", "secret", "secret table", "none", "missing", "table" }) do
-        if groups[s] then parts[#parts + 1] = s .. " " .. table.concat(groups[s], ", ") end
+        local group = groups[s]
+        if group then parts[#parts + 1] = s .. " " .. table.concat(group, ", ") end
     end
     local lines = { ("  %s: %s"):format(label, #parts > 0 and table.concat(parts, " · ") or "nothing") }
     for _, e in ipairs(errors) do lines[#lines + 1] = e end
     return lines
 end
 
-local function context()
+local function context(): { [string]: any }
     local _, instance = IsInInstance()
     local group = IsInRaid() and "raid" or IsInGroup() and "party" or "solo"
     local combat = InCombatLockdown()
@@ -554,11 +640,11 @@ local function context()
     }
 end
 
-local function clientInfo()
-    local version, build, buildDate, toc = GetBuildInfo()
+local function clientInfo(): { [string]: any }
+    local clientVersion, build, buildDate, toc = GetBuildInfo()
     local w, h = GetPhysicalScreenSize()
     return {
-        version = version, build = build, date = buildDate, toc = toc,
+        version = clientVersion, build = build, date = buildDate, toc = toc,
         locale = GetLocale(),
         screen = ("%dx%d"):format(w, h),
         uiScale = UIParent:GetScale(),
@@ -570,22 +656,22 @@ end
 -- Run and report
 --------------------------------------------------------------------------------
 
-local function run()
-    local saved = { namespaces = {}, enums = {}, scans = {} }
-    local report, found, total = {}, 0, 0
+local function run(): (string, number, number)
+    local saved: Saved = { namespaces = {}, enums = {}, scans = {} }
+    local report: string[], found, total = {}, 0, 0
     local client, ctx = clientInfo(), context()
 
-    report[#report + 1] = ("SuuUI probe %s · %s"):format(ns.version, ctx.time)
+    report[#report + 1] = ("SuuUI probe %s · %s"):format(version, ctx.time)
     report[#report + 1] = ("Client %s build %s (interface %d), %s, screen %s, UI scale %.2f (useUiScale %s)")
         :format(client.version, client.build, client.toc, client.locale, client.screen, client.uiScale, tostring(client.useUiScale))
     report[#report + 1] = ("Context: %s, level %d %s, %s")
         :format(ctx.key, ctx.level, ctx.class or "?", ctx.zone or "?")
 
-    local sections = {}
+    local sections: { [string]: any }[] = {}
     for _, section in ipairs(SECTIONS) do
         report[#report + 1] = ""
         report[#report + 1] = section.title
-        local rows = {}
+        local rows: { [string]: any }[] = {}
         for _, item in ipairs(section.items) do
             local ok, label, detail = check(item, saved)
             total = total + 1
@@ -605,7 +691,7 @@ local function run()
 
     report[#report + 1] = ""
     report[#report + 1] = "Secret values right now (" .. ctx.key .. ")"
-    local function add(lines)
+    local function add(lines: string[])
         for _, line in ipairs(lines) do report[#report + 1] = line end
     end
     for _, unit in ipairs(SAMPLE_UNITS) do
@@ -627,9 +713,8 @@ local function run()
     report[#report + 1] = ""
     report[#report + 1] = ("Found %d of %d."):format(found, total)
 
-    SuuUIProbe = SuuUIProbe or {}
-    local db = SuuUIProbe
-    db.version = ns.version
+    local db = DB.probe
+    db.version = version
     db.client = client
     db.sections = sections
     db.namespaces = saved.namespaces
@@ -637,7 +722,7 @@ local function run()
     db.scans = saved.scans
     db.methods = collectMethods()
     db.cvars = collectCVars()
-    db.allNamespaces = sortedKeys(_G, function(k, v) return type(v) == "table" and k:find("^C_") ~= nil end)
+    db.allNamespaces = sortedKeys(_G, function(k: string, v: any): boolean return type(v) == "table" and k:find("^C_") ~= nil end)
     db.runs = db.runs or {}
     db.runs[ctx.key] = samples
     db.lastReport = table.concat(report, "\n")
@@ -650,10 +735,10 @@ end
 -- text can be selected and copied. It is a diagnostic, not part of the design.
 --------------------------------------------------------------------------------
 
-local window
+local window: any
 
-local function buildWindow()
-    local f = CreateFrame("Frame", "SuuUIProbeFrame", UIParent, "BackdropTemplate")
+local function buildWindow(): any
+    local f: any = CreateFrame("Frame", "SuuUIProbeFrame", UIParent, "BackdropTemplate")
     f:SetSize(720, 540)
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
@@ -699,7 +784,7 @@ local function buildWindow()
     return f
 end
 
-local function show(text)
+local function show(text: string)
     window = window or buildWindow()
     window.report = text
     window.edit:SetText(text)
@@ -710,11 +795,10 @@ local function show(text)
 end
 
 -- Run by the diagnostics module's /suu probe.
-ns.Probe = {}
 
 -- The topics /suu probe takes (the chat's command palette lists them): a
--- new topic in Command below goes here too.
-ns.Probe.TOPICS = {
+-- new topic in command below goes here too.
+export const TOPICS: string[] = {
     "ahdata", "ahpost", "ahscan", "api", "bags", "bagsort", "bankslots", "calendar", "camp", "casttarget", "character", "chat",
     "chatpalette", "class", "collart", "collown", "colltiles", "deathrecap", "dragon", "durability", "filters",
     "flicker", "gamemenu", "garbage", "givers", "group", "hold", "hovertip", "icons", "legacy", "lfg", "loot", "map",
@@ -724,310 +808,107 @@ ns.Probe.TOPICS = {
     "tooltips", "totems", "toymodels", "track", "tree", "unitmenu", "unlearn", "weaponenchants", "windows",
 }
 
-function ns.Probe.Hide()
+export function hide()
     if window then window:Hide() end
 end
 
-function ns.Probe.Command(arg)
+-- Each topic's command, called with the words after the topic. (One
+-- function testing every topic, as before the port, would hold more than
+-- Lua's 60 upvalues: one per probe module.)
+local TOPIC_COMMANDS: { [string]: (rest: string) -> () } = {
+    track = function(rest: string) trackProbe.command(rest) end,
+    spells = function(rest: string) spellData.command(rest) end,
+    plates = function(rest: string) plateProbe.command(rest) end,
+    meter = function(rest: string) meterProbe.command(rest) end,
+    timeline = function(rest: string) timelineProbe.command(rest) end,
+    micro = function() microProbe.command() end,
+    minimap = function(rest: string) minimapProbe.command(rest) end,
+    chat = function() chatProbe.command() end,
+    quest = function(rest: string) questProbe.command(rest) end,
+    popups = function(rest: string) popupProbe.command(rest) end,
+    bags = function(rest: string) bagProbe.command(rest) end,
+    bagsort = function(rest: string) bagSortProbe.command(rest) end,
+    loot = function(rest: string) lootProbe.command(rest) end,
+    tooltips = function() tooltipProbe.command() end,
+    camp = function() campProbe.command() end,
+    partyauras = function(rest: string) partyAuraProbe.command(rest) end,
+    hovertip = function() hoverTipProbe.command() end,
+    character = function() characterProbe.command() end,
+    tree = function(rest: string) treeProbe.command(rest) end,
+    spellbook = function(rest: string) spellbookProbe.command(rest) end,
+    flicker = function(rest: string) flickerProbe.command(rest) end,
+    professions = function() professionProbe.command() end,
+    unlearn = function() unlearnProbe.command() end,
+    social = function(rest: string) socialProbe.command(rest) end,
+    lfg = function(rest: string) lfgProbe.command(rest) end,
+    map = function(rest: string) mapProbe.command(rest) end,
+    calendar = function() calendarProbe.command() end,
+    proficons = function() profIconProbe.command() end,
+    givers = function(rest: string) giverProbe.command(rest) end,
+    marks = function(rest: string) markProbe.command(rest) end,
+    windows = function(rest: string) windowsProbe.command(rest) end,
+    npcportrait = function() npcPortraitProbe.command() end,
+    support = function() supportProbe.command() end,
+    gamemenu = function() gameMenuProbe.command() end,
+    unitmenu = function() menuProbe.command() end,
+    dragon = function() dragonProbe.command() end,
+    taxi = function(rest: string) taxiProbe.command(rest) end,
+    raid = function(rest: string) raidProbe.command(rest) end,
+    skysight = function(rest: string) skysightProbe.command(rest) end,
+    weaponenchants = function(rest: string) weaponEnchantProbe.command(rest) end,
+    chatpalette = function(rest: string) chatPaletteProbe.command(rest) end,
+    power = function(rest: string) powerProbe.command(rest) end,
+    mappins = function() mapPinsProbe.command() end,
+    durability = function(rest: string) durabilityProbe.command(rest) end,
+    deathrecap = function() deathRecapProbe.command() end,
+    questgroup = function() questGroupProbe.command() end,
+    casttarget = function() castTargetProbe.command() end,
+    totems = function(rest: string) totemProbe.command(rest) end,
+    garbage = function() garbageProbe.command() end,
+    memory = function() memoryProbe.command() end,
+    bankslots = function(rest: string) bankSlotsProbe.command(rest) end,
+    toymodels = function() toyModelProbe.command() end,
+    mountfeet = function() mountFeetProbe.command() end,
+    mountframe = function(rest: string) mountFrameProbe.command(rest) end,
+    collown = function() collectionsOwnProbe.command() end,
+    colltiles = function() collectionsTilesProbe.command() end,
+    collart = function() collectionsArtProbe.command() end,
+    ahscan = function() ahScanProbe.command() end,
+    ahpost = function() ahPostProbe.command() end,
+    ahdata = function(rest: string) ahDataProbe.command(rest) end,
+    legacy = function(rest: string) legacyProbe.command(rest) end,
+    taint = function() taintProbe.command() end,
+    hold = function() holdProbe.command() end,
+    talents = function(rest: string) talentProbe.command(rest) end,
+    talentbuilds = function(rest: string) talentBuildProbe.command(rest) end,
+    group = function(rest: string) groupProbe.command(rest) end,
+    class = function() classData.command() end,
+    icons = function() iconProbe.command() end,
+    api = function(rest: string) apiDocs.command(rest) end,
+    runtime = function() apiDocs.runtime() end,
+    filters = function() apiDocs.filters() end,
+    sound = function(rest: string)
+        if rest == "play" then apiDocs.soundPlay() else apiDocs.sound() end
+    end,
+}
+
+export function command(arg: string?)
     -- a full stop or comma copied along with the command is dropped
     local sub, rest = (arg or ""):gsub("[%.,;:!]+%s*$", ""):match("^(%S*)%s*(.-)$")
-    if sub == "track" then
-        ns.TrackProbe.Command(rest)
-        return
-    end
-    if sub == "spells" then
-        ns.SpellData.Command(rest)
-        return
-    end
-    if sub == "plates" then
-        ns.PlateProbe.Command(rest)
-        return
-    end
-    if sub == "meter" then
-        ns.MeterProbe.Command(rest)
-        return
-    end
-    if sub == "timeline" then
-        ns.TimelineProbe.Command(rest)
-        return
-    end
-    if sub == "micro" then
-        ns.MicroProbe.Command(rest)
-        return
-    end
-    if sub == "minimap" then
-        ns.MinimapProbe.Command(rest)
-        return
-    end
-    if sub == "chat" then
-        ns.ChatProbe.Command(rest)
-        return
-    end
-    if sub == "quest" then
-        ns.QuestProbe.Command(rest)
-        return
-    end
-    if sub == "popups" then
-        ns.PopupProbe.Command(rest)
-        return
-    end
-    if sub == "bags" then
-        ns.BagProbe.Command(rest)
-        return
-    end
-    if sub == "bagsort" then
-        ns.BagSortProbe.Command(rest)
-        return
-    end
-    if sub == "loot" then
-        ns.LootProbe.Command(rest)
-        return
-    end
-    if sub == "tooltips" then
-        ns.TooltipProbe.Command(rest)
-        return
-    end
-    if sub == "camp" then
-        ns.CampProbe.Command(rest)
-        return
-    end
-    if sub == "partyauras" then
-        ns.PartyAuraProbe.Command(rest)
-        return
-    end
-    if sub == "hovertip" then
-        ns.HoverTipProbe.Command(rest)
-        return
-    end
-    if sub == "character" then
-        ns.CharacterProbe.Command(rest)
-        return
-    end
-    if sub == "tree" then
-        ns.TreeProbe.Command(rest)
-        return
-    end
-    if sub == "spellbook" then
-        ns.SpellbookProbe.Command(rest)
-        return
-    end
-    if sub == "flicker" then
-        ns.FlickerProbe.Command(rest)
-        return
-    end
-    if sub == "professions" then
-        ns.ProfessionProbe.Command(rest)
-        return
-    end
-    if sub == "unlearn" then
-        ns.UnlearnProbe.Command(rest)
-        return
-    end
-    if sub == "social" then
-        ns.SocialProbe.Command(rest)
-        return
-    end
-    if sub == "lfg" then
-        ns.LfgProbe.Command(rest)
-        return
-    end
-    if sub == "map" then
-        ns.MapProbe.Command(rest)
-        return
-    end
-    if sub == "calendar" then
-        ns.CalendarProbe.Command(rest)
-        return
-    end
-    if sub == "proficons" then
-        ns.ProfIconProbe.Command(rest)
-        return
-    end
-    if sub == "givers" then
-        ns.GiverProbe.Command(rest)
-        return
-    end
-    if sub == "marks" then
-        ns.MarkProbe.Command(rest)
-        return
-    end
-    if sub == "windows" then
-        ns.WindowsProbe.Command(rest)
-        return
-    end
-    if sub == "npcportrait" then
-        ns.NpcPortraitProbe.Command(rest)
-        return
-    end
-    if sub == "support" then
-        ns.SupportProbe.Command(rest)
-        return
-    end
-    if sub == "gamemenu" then
-        ns.GameMenuProbe.Command(rest)
-        return
-    end
-    if sub == "unitmenu" then
-        ns.MenuProbe.Command(rest)
-        return
-    end
-    if sub == "dragon" then
-        ns.DragonProbe.Command(rest)
-        return
-    end
-    if sub == "taxi" then
-        ns.TaxiProbe.Command(rest)
-        return
-    end
-    if sub == "raid" then
-        ns.RaidProbe.Command(rest)
-        return
-    end
-    if sub == "skysight" then
-        ns.SkysightProbe.Command(rest)
-        return
-    end
-    if sub == "weaponenchants" then
-        ns.WeaponEnchantProbe.Command(rest)
-        return
-    end
-    if sub == "chatpalette" then
-        ns.ChatPaletteProbe.Command(rest)
-        return
-    end
-    if sub == "power" then
-        ns.PowerProbe.Command(rest)
-        return
-    end
-    if sub == "mappins" then
-        ns.MapPinsProbe.Command(rest)
-        return
-    end
-    if sub == "durability" then
-        ns.DurabilityProbe.Command(rest)
-        return
-    end
-    if sub == "deathrecap" then
-        ns.DeathRecapProbe.Command(rest)
-        return
-    end
-    if sub == "questgroup" then
-        ns.QuestGroupProbe.Command(rest)
-        return
-    end
-    if sub == "casttarget" then
-        ns.CastTargetProbe.Command(rest)
-        return
-    end
-    if sub == "totems" then
-        ns.TotemProbe.Command(rest)
-        return
-    end
-    if sub == "garbage" then
-        ns.GarbageProbe.Command(rest)
-        return
-    end
-    if sub == "memory" then
-        ns.MemoryProbe.Command(rest)
-        return
-    end
-    if sub == "bankslots" then
-        ns.BankSlotsProbe.Command(rest)
-        return
-    end
-    if sub == "toymodels" then
-        ns.ToyModelProbe.Command(rest)
-        return
-    end
-    if sub == "mountfeet" then
-        ns.MountFeetProbe.Command(rest)
-        return
-    end
-    if sub == "mountframe" then
-        ns.MountFrameProbe.Command(rest)
-        return
-    end
-    if sub == "collown" then
-        ns.CollectionsOwnProbe.Command(rest)
-        return
-    end
-    if sub == "colltiles" then
-        ns.CollectionsTilesProbe.Command(rest)
-        return
-    end
-    if sub == "collart" then
-        ns.CollectionsArtProbe.Command(rest)
-        return
-    end
-    if sub == "ahscan" then
-        ns.AhScanProbe.Command(rest)
-        return
-    end
-    if sub == "ahpost" then
-        ns.AhPostProbe.Command(rest)
-        return
-    end
-    if sub == "ahdata" then
-        ns.AhDataProbe.Command(rest)
-        return
-    end
-    if sub == "legacy" then
-        ns.LegacyProbe.Command(rest)
-        return
-    end
-    if sub == "taint" then
-        ns.TaintProbe.Command(rest)
-        return
-    end
-    if sub == "hold" then
-        ns.HoldProbe.Command(rest)
-        return
-    end
-    if sub == "talents" then
-        ns.TalentProbe.Command(rest)
-        return
-    end
-    if sub == "talentbuilds" then
-        ns.TalentBuildProbe.Command(rest)
-        return
-    end
-    if sub == "group" then
-        ns.GroupProbe.Command(rest)
-        return
-    end
-    if sub == "class" then
-        ns.ClassData.Command(rest)
-        return
-    end
-    if sub == "icons" then
-        ns.IconProbe.Command(rest)
-        return
-    end
-    if sub == "api" then
-        ns.ApiDocs.Command(rest)
-        return
-    end
-    if sub == "runtime" then
-        ns.ApiDocs.Runtime()
-        return
-    end
-    if sub == "filters" then
-        ns.ApiDocs.Filters()
-        return
-    end
-    if sub == "sound" then
-        if rest == "play" then ns.ApiDocs.SoundPlay() else ns.ApiDocs.Sound() end
+    local topic = TOPIC_COMMANDS[sub or ""]
+    if topic then
+        topic(rest or "")
         return
     end
     if arg == "show" then
-        if SuuUIProbe and SuuUIProbe.lastReport then
-            show(SuuUIProbe.lastReport)
+        if DB.probe.lastReport then
+            show(DB.probe.lastReport)
         else
-            ns.Print("No probe report yet. Run /suu probe.")
+            print("No probe report yet. Run /suu probe.")
         end
         return
     end
     local text, found, total = run()
     show(text)
-    ns.Print(("Probe found %d of %d. /reload to save it for Claude to read."):format(found, total))
+    print(("Probe found %d of %d. /reload to save it for Claude to read."):format(found, total))
 end
