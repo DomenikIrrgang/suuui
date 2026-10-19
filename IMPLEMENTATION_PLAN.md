@@ -607,6 +607,44 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
 - **Training cost (2026-10-13):** every school's spells to train and what they cost, after the open school's count in the Spellbook's head ("2 spells to train · 7 in all · 3g 20s", shorter forms when the switches leave less room; ember when your money doesn't cover it, redrawn on PLAYER_MONEY) and in the micro menu's Spellbook tooltip; Settings › Spellbook › Training cost turns both off (on by default).
 - **Unlearned spells' tooltips (2026-10-13, from play: SuuUI's own small tooltip lacked cost, range, cast time, cooldown):** the game's spell tooltip, as for learned spells, with "Train now at your class trainer  1g 40s" (arcane) or "Learn at level 24 · 1g 40s" under it; on the Spellbook and the level-up card. Data/Trainer now also carries every spell ID for each trainer name (tools/gen_trainer.lua, from the ID scan and the Forever-range scan: `SuuUI.TrainerSpellIDs()`); the Spellbook picks a rank's ID by C_Spell.GetSpellLevelLearned == the trainer level (rank and icon settle ties). Two names have no IDs (Totemic Projection, Victory Rush): SuuUI's tooltip still. Confirmed in game (the level-up card's tooltips too, after the SpellTooltip order fix).
 - **Level-up card (2026-10-13, design board "Level up · new spells"):** `UI.LevelUp`, shown by the Alerts module in the alert's place (`SuuUI.ShowLevelUp`): "Level 20", "7 new spells to train", the spells (icon, name, rank under it, New in arcane for a spell you never had; one column up to four, two from five, ten at most and "+ N more"), the cost of training all. The Spellbook module shows it on PLAYER_LEVEL_UP out of combat (after combat when gained in one); `/suu levelup <level>` simulates reaching that level from where you are (everything the levels in between bring, settings applied; no level: the next one that brings spells). Settings › General › Spellbook (preview: the next level's card at real size): Level-up card on/off; Card stays (By spells: 4 s + 1 for each spell on the card; or 5–60 s); Spells still to train (off by default): every level-up card also lists the earlier levels' spells you haven't trained ("Rank 2 · Level 18" in ink-faint), even on a level that brings nothing new. The card stays while the mouse is over it (goes 1 s after it leaves; "over it" is the mouse focus, not its rectangle, which held it forever after turning the camera: found in game); a click dismisses it; each spell has SuuUI's tooltip (name, rank, description, what training costs). An alert replaced by another now comes back when that one goes. Confirmed in game: the card, hover hold, tooltips; cooldown sweeps on the Spellbook; bags at a vendor.
+- **3.2e Talent builds (data model 2026-10-19; design board "Talent builds (options A–M, to pick)"; not built):**
+  - **Asked for:** save and switch builds; plan ahead; share as text; dual spec. Builds for any class, account-wide (every character sees every build), in the Talents window.
+    - A build keeps its point order, so it knows which talent comes at which level.
+    - **Level up with a build active:** the next talent is highlighted in the window, and a small notice names it. You click it yourself.
+    - **Share:** both. Copy gives SuuUI's text (with the order and the name). Import also takes the game's talent string.
+    - **Mismatch:** the build's missing points that fit are learned. When talents conflict, you're told to reset at a trainer, and the whole build is applied right after the reset.
+  - **Probed and confirmed (`/suu probe talentbuilds`, 2026-10-19, a level 11 shaman):**
+    - Forever has no game loadouts: Blizzard's own talents frame hides its load system. `RequestNewConfig` and `ImportLoadout` make a config, but `SaveConfig` and `DeleteConfig` return false and nothing lists it; three stray "SuuUI probe" configs stay on that shaman, unseen, with talents and gold unchanged. SuuUI keeps builds itself.
+    - Only the two spec groups exist (`C_SpecializationInfo.GetCombatConfigIDForSpecGroup`, `SetActiveSpecGroup`); dual spec is locked at level 11 (one group).
+    - Every class's tree reads live through the view loadout (all nine: node positions, ranks, spells, edges, gate conditions of 5 points a row tree-wide), and planning there with `PurchaseRank` stages and rolls back.
+    - `C_Traits.GenerateImportString(activeConfig)` works (37 characters for 2 points, serialization 2). `ViewLoadout(entries, string)` takes it (the entries need `ranksGranted`).
+    - Talents are `cannotRefund`: unlearning needs a trainer. The talents window already buys (`PurchaseRank`), undoes (`RollbackConfig`) and applies (`CommitConfig`).
+    - **Points:** 51 at 60 (the view's currency, every class). TraitCurrencySource 3820: one point a level from 10 to 60, and one each at levels 5–9 from the Legacy talent Talented (ranks 1–5). That's why the level 11 shaman had 7.
+  - **Data model:** builds live in `SuuUI.AccountData("talentbuilds")`, inside `SuuUIDB`, which is account-wide already. No new SavedVariable is needed. The trees are read live; there's no data file.
+    - `builds[id] = { id, name, class = "SHAMAN", treeID, steps = { { node, entry? }, … }, notes?, updated }`. A step is one rank, in order; `entry` only on a choice node. Each node's rank is how many times it appears; `#steps` ≤ 51.
+    - `active[charKey][specGroup] = id`: the build each character follows, per talent group.
+    - **Levels:** step i is due at the level that gives this character its i-th point. That's level 9 + i, or earlier with Talented ranks: read live from the currency's max, and the schedule above for levels to come.
+    - **Checks on load:** a node that's gone, or a rank past its maximum (the tree changed in a patch), marks the build "needs a look" and keeps the steps that still fit.
+  - **Share text:** `SuuUI:T1:` then base64 of a byte string: the class ID (1 byte); the tree ID (2); the name length (1) and name in UTF-8 (≤ 48 bytes); the step count (1); the lowest node ID (3); then each step as its node's offset from it (2 bytes; the high bit marks a choice node, followed by the entry's index, 1 byte). Then a 2-byte checksum (Fletcher-16, as profile strings).
+    - About 180 characters for a full build with a short name, which fits a chat line (255).
+    - Import reads it, or the game's string, decoded from its documented bit layout: version, spec, tree hash, then per node "selected, ranks, choice". The game's string has no order, so its points are ordered top to bottom and left to right, and it carries no name ("Imported build").
+    - Both show a preview before saving.
+    - `Core/Serialize` has base64 and the checksum, but modules can't reach it: export base64 encode/decode (or a share-text helper) in API 0.17.
+  - **Apply flow:** out of combat, on the viewed talent group (the active one, or the other with dual spec).
+    - Walk the steps in order, against the learned ranks:
+      - a step already covered is skipped;
+      - a step that can take a point now is staged (`PurchaseRank`), until the points run out;
+      - a learned rank the build doesn't have, or more ranks than it has, is a conflict.
+    - The staged points show as planned (arcane) and Apply commits them, so nothing is learned without a click.
+    - **Level up:** with a build active and a point to spend, the next due step's node is highlighted and a notice names it ("Level 24 · next in Enhancement: Flurry, rank 2"). You click it yourself.
+  - **Trainer flow:** a conflict says to reset at a trainer: the talents window's foot, and the build row.
+    - At the trainer the game's own reset runs (its gossip, then CONFIRM_TALENT_WIPE and the cost). That is not probed on Forever yet: probe whether `ConfirmTalentWipe` works from SuuUI's notification, or whether the game's popup must stay.
+    - On the TRAIT_CONFIG_UPDATED / PLAYER_TALENT_UPDATE that follows (all points back), the whole build is staged, and Apply or the notice's button commits it.
+  - **To probe before building:**
+    - the trainer reset on Forever: the event, the cost, whether `ConfirmTalentWipe` is allowed;
+    - `CommitConfig` with many staged ranks at once (Apply on a real point is still open from 3.2c);
+    - planning in another class's view loadout without a dual-spec side effect;
+    - the game string's bit layout at serialization 2 (decode the probe's 37-character string by hand).
 
 ### 3.3 Professions
 - **Build:**
