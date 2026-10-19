@@ -23,6 +23,11 @@
 --
 --   /suu probe taxi        snapshot and listen
 --   /suu probe taxi take   also the two buttons at the flight master
+--   /suu probe taxi land   (asked 2026-10-19: "Land at the next stop" on
+--                          the flight bar) in the air, SuuUI's own button
+--                          calls TaxiRequestEarlyLanding from a click; the
+--                          landing: when, where, the nearest flight master;
+--                          and whether the game's own leave button shows
 
 local _, ns = ...
 
@@ -305,12 +310,67 @@ local function flightSample()
         show(continent and call(C_Map.GetPlayerMapPosition, continent, "player")))
 end
 
+-- The land test: SuuUI's button in the air, and where the flight ends.
+local landMode = false
+local landButton
+local land -- this flight's land test
+
+-- the flight master nearest you on your continent, and how far (in the
+-- continent map's 0-1)
+local function nearestMaster()
+    local continent = continentOf(C_Map.GetBestMapForUnit("player"))
+    local me = continent and call(C_Map.GetPlayerMapPosition, continent, "player")
+    if not (type(me) == "table" and me.x and plain(me.x)) then return "no position" end
+    local best, far
+    local list = call(C_TaxiMap.GetTaxiNodesForMap, continent)
+    for _, n in ipairs(type(list) == "table" and list or {}) do
+        local x, y
+        if n.position and n.position.GetXY then x, y = n.position:GetXY() end
+        if plain(x) and plain(y) and x and y then
+            local d = ((x - me.x) ^ 2 + (y - me.y) ^ 2) ^ 0.5
+            if not far or d < far then best, far = n, d end
+        end
+    end
+    if not best then return "no flight masters" end
+    return ("%s (nodeID %s), %.4f away on map %s"):format(show(best.name), show(best.nodeID), far, show(continent))
+end
+
+local function leaveButtonState()
+    local b = _G.MainMenuBarVehicleLeaveButton
+    return ("game's leave button %s; CanExitVehicle %s"):format(b and (b:IsShown() and "shown" or "hidden") or "missing",
+        show(call(CanExitVehicle)))
+end
+
+local function offerLand()
+    land = { at = date("%H:%M:%S"), inAir = leaveButtonState(), events = {} }
+    local o = out()
+    o.land = o.land or {}
+    o.land[#o.land + 1] = land
+    landButton = landButton or button("Land at the next stop (SuuUI)", 220, nil)
+    landButton:SetScript("OnClick", function()
+        land.clicked = date("%H:%M:%S")
+        land.started = GetTime()
+        land.flown = flight and ("%.1f s into the flight"):format(GetTime() - flight.started) or "?"
+        watchFor(land)
+        local ok, err = pcall(TaxiRequestEarlyLanding)
+        land.call = ok and "ran" or ("error: " .. tostring(err):sub(1, 120))
+        landButton:Hide()
+        C_Timer.After(2, function()
+            land.after2s = leaveButtonState() .. "; onTaxi " .. show(call(UnitOnTaxi, "player"))
+            ns.Print(("Taxi probe: TaxiRequestEarlyLanding %s. Keep flying until you land, then /reload."):format(land.call))
+        end)
+    end)
+    landButton:Show()
+    ns.Print("Taxi probe: click \"Land at the next stop (SuuUI)\" above the middle, then stay on until you land.")
+end
+
 local function flightStart()
     local on = call(UnitOnTaxi, "player")
     if on ~= true then return end
     flight = { started = GetTime(), at = date("%H:%M:%S"), from = C_Map.GetBestMapForUnit("player"), samples = {} }
     flightSample()
     flight.ticker = C_Timer.NewTicker(5, flightSample)
+    if landMode then offerLand() end
 end
 
 local function flightEnd()
@@ -323,6 +383,13 @@ local function flightEnd()
     o.flights[#o.flights + 1] = { summary = ("%s: %s s, map %s to %s"):format(flight.at, flight.seconds, show(flight.from), show(flight.to)),
         positions = flight.samples }
     ns.Print(("Taxi probe: a flight of %s s recorded."):format(flight.seconds))
+    -- the land test: where it set you down
+    if land and not land.landed then
+        land.landed = ("%s, %s s after take-off%s; nearest master: %s"):format(date("%H:%M:%S"), flight.seconds,
+            land.started and (", %.1f s after the click"):format(GetTime() - land.started) or " (not clicked)", nearestMaster())
+        land.started = nil
+        if landButton then landButton:Hide() end
+    end
     flight = nil
 end
 
@@ -369,6 +436,13 @@ end
 function TP.Command(arg)
     snapshot()
     listen()
+    if arg == "land" then
+        landMode = true
+        if call(UnitOnTaxi, "player") == true and flight then offerLand() else
+            ns.Print("Taxi probe: land mode on. Take a flight with a stop on the way (or a long one): SuuUI's button comes up in the air.")
+        end
+        return
+    end
     if arg == "take" then
         takeMode = true
         local n = call(NumTaxiNodes)
