@@ -871,6 +871,14 @@ function ns.Probe.Command(arg)
         ns.SkysightProbe.Command(rest)
         return
     end
+    if sub == "chatpalette" then
+        ns.ChatPaletteProbe.Command(rest)
+        return
+    end
+    if sub == "power" then
+        ns.PowerProbe.Command(rest)
+        return
+    end
     if sub == "mappins" then
         ns.MapPinsProbe.Command(rest)
         return
