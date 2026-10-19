@@ -867,6 +867,10 @@ function ns.Probe.Command(arg)
         ns.RaidProbe.Command(rest)
         return
     end
+    if sub == "skysight" then
+        ns.SkysightProbe.Command(rest)
+        return
+    end
     if sub == "mappins" then
         ns.MapPinsProbe.Command(rest)
         return
