@@ -6,7 +6,8 @@
 -- comes from. A / alone lists them all. After a command and a space it shows
 -- what goes there: names for /invite, channels for /join, /suu's commands
 -- and /suu probe's topics. Up and Down mark a row, Tab (or a click) puts it
--- into the input, Ctrl-Left and Ctrl-Right (or a click) change the category.
+-- into the input, Ctrl-Tab and Ctrl-Shift-Tab (or a click) change the
+-- category (Ctrl-Left/Right never reach the game on a Mac: desktops).
 -- Enter always sends what you typed: nothing picks on Enter.
 --
 -- What the client allows (/suu probe chatpalette, 2026-10-19):
@@ -23,6 +24,9 @@
 --     the global the game calls through securecall for addons' Tab
 --     completion: true from it skips the game's own. While the list shows,
 --     Up and Down are the palette's and the chat's recall waits.
+--   - a click on the palette takes the focus from the input (it stays open
+--     with its text): the palette stays while the pointer is over it and the
+--     click gives the focus back (SetFocus, as clicking the input does).
 --   - typing hooks waiting for userInput never fire on this client: the
 --     text is compared each frame while an input has focus (EventRegistry
 --     ChatFrame.OnEditBoxFocusGained / FocusLost).
@@ -538,6 +542,7 @@ function M:Build()
     local p = CreateFrame("Frame", "SuuUICommandPalette", SuuUI.Root)
     p:SetFrameStrata("DIALOG")
     p:EnableMouse(true)
+    p:SetScript("OnMouseUp", function() self:Refocus() end)
     p:Hide()
     UI.Fill(p, "surface"):SetAllPoints()
     UI.Border(p, "gilt-line")
@@ -545,7 +550,7 @@ function M:Build()
     -- the categories
     p.chips = {}
     for _, c in ipairs(CATEGORIES) do
-        local b = chip(p, c.label, function() self:SetCategory(c.value) end)
+        local b = chip(p, c.label, function() self:Refocus(); self:SetCategory(c.value) end)
         b.value = c.value
         b:SetScript("OnEnter", function() if self:Category() ~= c.value then b.label:SetColor("ink") end end)
         b:SetScript("OnLeave", function() if self:Category() ~= c.value then b.label:SetColor("ink-muted") end end)
@@ -692,6 +697,7 @@ local function rowScripts(self, r)
         if btn.index then self.mark = btn.index; self:DrawMark() end
     end)
     r:SetScript("OnClick", function(btn)
+        self:Refocus()
         if btn.index then self:Put(self.flat[btn.index]) end
     end)
 end
@@ -778,7 +784,7 @@ function M:SetCategory(c)
     self:Refresh(true)
 end
 
--- Ctrl-Left / Ctrl-Right: the category before or after.
+-- Ctrl-Tab / Ctrl-Shift-Tab: the category after or before.
 function M:StepCategory(step)
     local list = {}
     for _, c in ipairs(CATEGORIES) do
@@ -922,7 +928,7 @@ function M:DrawCommands(typed)
                 self:DrawCommandList(list, typed)
             end
         end
-        keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Ctrl ←→", "category" } }
+        keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Ctrl Tab", "category" } }
     else
         local list = byCat[cat]
         if list then
@@ -930,7 +936,7 @@ function M:DrawCommands(typed)
             self:DrawCommandList(list, typed)
             local more = elsewhere(byCat, cat)
             if more ~= "" then self:DrawLine(more) end
-            keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Ctrl ←→", "category" } }
+            keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Ctrl Tab", "category" } }
         else
             self:DrawLine(("No %s starts with %s"):format(NOUN[cat], typed), "ink", NONE_H)
             self:DrawHead("In other categories")
@@ -941,7 +947,7 @@ function M:DrawCommands(typed)
                     self:DrawCommandList(byCat[c], typed, 3)
                 end
             end
-            keys = { { "Tab", "take " .. first.item.cmd }, { "Ctrl ←→", "category" } }
+            keys = { { "Tab", "take " .. first.item.cmd }, { "Ctrl Tab", "category" } }
         end
     end
     if not self:Get("tab") then
@@ -1113,11 +1119,6 @@ function M:HookBox(box)
     self.hooked[box] = true
     box:HookScript("OnKeyDown", function(b, key)
         if not self:IsEnabled() or b ~= self.box then return end
-        if (key == "LEFT" or key == "RIGHT") and IsControlKeyDown() and self.query and self.query.mode == "commands"
-            and self.palette and self.palette:IsShown() then
-            self:StepCategory(key == "LEFT" and -1 or 1)
-            return
-        end
         if IGNORED_KEYS[key] or key:find("SHIFT$") or key:find("CTRL$") or key:find("ALT$") or key:find("META$") then
             return
         end
@@ -1139,6 +1140,11 @@ end
 
 -- Tab, from ChatEdit_CustomTabPressed: true when the palette took it.
 function M:OnTab(box)
+    if IsControlKeyDown() and self.box == box and self.query and self.query.mode == "commands"
+        and self.palette and self.palette:IsShown() then
+        self:StepCategory(IsShiftKeyDown() and -1 or 1)
+        return true
+    end
     if not (self:TakesArrows(box) and self.flat[self.mark or 1]) then return false end
     return self:Put(self.flat[self.mark or 1])
 end
@@ -1169,8 +1175,20 @@ function M:Focus(box)
     self.driver:Show()
 end
 
+-- A click on the palette took the input's focus: give it back.
+function M:Refocus()
+    local box = self.box
+    if box and box:IsShown() and not box:HasFocus() then box:SetFocus() end
+end
+
+-- The pointer on the palette: a click there is on its way (it took the focus).
+function M:Clicking()
+    return self.box and self.box:IsShown() and self.palette and self.palette:IsShown() and self.palette:IsMouseOver()
+end
+
 function M:Unfocus(box)
     if box and box ~= self.box then return end
+    if self:Clicking() then return end
     self.box, self.text, self.query, self.queryKey = nil, nil, nil, nil
     if self.palette then self.palette:Hide() end
     if self.driver then self.driver:Hide() end
@@ -1180,7 +1198,7 @@ end
 function M:Tick()
     local box = self.box
     if not (box and box:IsShown() and box:HasFocus()) then
-        self:Unfocus()
+        if not self:Clicking() then self:Unfocus() end
         return
     end
     local text = box:GetText()
