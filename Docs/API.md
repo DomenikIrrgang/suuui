@@ -332,7 +332,9 @@ Controls on `SuuUI.UI`, all with `:SetValue(v)`, `.onChange = fn(v)` and `:SetDi
 | `Slider(parent, { min, max, step, value, unit, format, width, onChange })` | A size or amount you judge by eye |
 | `Stepper(parent, { min, max, step, value, unit, onChange })` | An exact number, in whole steps from `min` |
 | `TextField(parent, { width, placeholder, value, onChange, onTextChanged })` | Text; `onChange` on Enter or when it loses focus |
+| `NumberField(parent, { letter, value, min, max, width, onChange, onFocus, onTab, onTyping })` (0.17) | A compact whole number with a letter in front (`"X"`), for where a Stepper's − and + take too much room. Only digits and a leading minus go in. `onChange(v)` on Enter or when it loses focus, clamped to `min`..`max`; Escape puts the value back; Up and Down step 1 (Shift: 10) and apply. The edge turns amber while what's typed is out of range. `onFocus(focused)`, `onTab(shift)`, `onTyping(n)` (nil: not a number) as it's typed. `:SetRange(min, max)`, `:Focus()`, `:HasFocus()`, `:Cancel()` (drops what's typed), `:Clamp(v)`. `width` is the number's (default 44) |
 | `AnchorPicker(parent, { value, onChange })` (0.9) | One of the nine points (`"TOPLEFT"` … `"BOTTOMRIGHT"`, `"CENTER"`) on a 3×3 grid of diamonds, the chosen one larger and arcane, each point's name in its tooltip. No offsets. Default `"TOPRIGHT"` |
+| `AnchorButton(parent, { value, note, tooltip, onChange })` (0.17) | The same choice in a 30px button: the nine points in small, the chosen one lit; its tooltip names the point (`tooltip(point)` returns more tooltip data). A click opens the AnchorPicker as a popover under it, with `note` under the grid; a pick, a click outside or `:Close()` closes it. `:SetValue(point)`, `:SetDisabled(disabled)` (the tooltip still shows: say why), `:IsOpen()`, `:PopoverHasMouse()`. Default `"CENTER"` |
 | `SwatchRow(parent, { options, value, onChange })` (0.9) | A colour token from a row of swatches: `options = { { value = token, label } }`, the chosen one ringed in arcane, the label in its tooltip |
 | `ToggleChips(parent, { options, value, onChange })` (0.9) | On/off chips for choices that combine (`options = { { value, label } }`): the value is a list of the options that are on, and `onChange` gets that list; `:GetValue()` |
 | `SettingRow(parent, { label, description, control, stacked, onReset, width })`, `SettingsGroup(parent, { title, meta, description, width })` | The pieces sections are made of |
@@ -352,6 +354,8 @@ end,
 
 `point` is one of the nine screen anchors (`TOPLEFT` … `BOTTOMRIGHT`, `CENTER`) and `x`, `y` the offset of the frame's same point from it, in design pixels; `hidden = true` hides the frame. A dropped frame takes the anchor of the screen third its centre is in, so layouts keep their shape on every resolution. Protected frames are placed after combat.
 
+0.17: the toolbar over the selected frame types its position: the anchor (a new one converts `x` and `y`, so the frame stays where it is), X and Y (exact, off the snap grid, kept on screen). An anchor picked there sets `pinned = true`: a drag keeps that anchor and changes only `x`, `y`, and Reset (the default has no `pinned`) brings the automatic anchor back. A module that writes its own position table keeps a pinned anchor with `AnchorFor(l, b, w, h, pos.pinned and pos.point)`.
+
 | | |
 |---|---|
 | `SuuUI.RegisterMover(frame, { namespace, key, label })` | The same for a frame outside a module |
@@ -361,7 +365,7 @@ end,
 | `opts.action = { label = fn, onClick = fn }` (0.8) | One extra button in the selected frame's toolbar (e.g. "Attach to dock") |
 | `opts.dragFrame()` (0.8) | The frame a drag moves live, when it isn't the mover's own (a bar attached to the dock moves the dock) |
 | `opts.reset()` (0.8) | What Reset (the toolbar's, and Reset all) does for this frame, instead of resetting the position table |
-| `SuuUI.EditMode.Rect(frame)`, `.AnchorFor(l, b, w, h)` (0.8) | A frame's rectangle in root units, and the screen anchor edit mode would save for a rectangle |
+| `SuuUI.EditMode.Rect(frame)`, `.AnchorFor(l, b, w, h[, point])` (0.8) | A frame's rectangle in root units, and the screen anchor edit mode would save for a rectangle: `point, x, y`. 0.17: with `point`, that anchor and the rectangle's offset from it |
 | `opts.enabled` (0.8) | A function: while it returns false the frame is turned off and gets no mover in edit mode (a bar switched off in the settings). Hiding in edit mode is for frames that are on |
 | `SuuUI.EditMode.Refresh()` (0.8) | Re-reads every mover's `enabled`; call it when one changes |
 | `SuuUI.EditMode.GroupPreview()` / `.SetGroupPreview(size[, auras])` (0.17) | The edit mode panel's Group preview: made-up players fill the party frames (5) or the raid frames (10, 20, 40) at their real place and size while edit mode is open; 0 is off. `auras`: everyone carries defensives and a debuff of every type, and made-up auras fill your buffs and debuffs and the target's, focus's and bosses' ("Buffs and debuffs on every frame"; it works without a group size too). `GroupPreview()` returns size, auras. `SUUUI_EDITMODE_GROUP_PREVIEW(size, auras)` fires when either changes, and with 0 when edit mode closes |

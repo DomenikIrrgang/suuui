@@ -1,7 +1,8 @@
 -- EditMode/EditMode.lua
 -- SuuUI's edit mode: every frame that registers a mover can be dragged on a
--- snap grid, nudged with the arrow keys, hidden and reset. It runs beside the
--- game's own Edit Mode and closes itself when combat starts.
+-- snap grid, nudged with the arrow keys, placed by number (its anchor, X and
+-- Y in the toolbar over it), hidden and reset. It runs beside the game's own
+-- Edit Mode and closes itself when combat starts.
 --
 --   module:RegisterMover(frame, { key = "position", label = "Hello" })
 --
@@ -11,7 +12,9 @@
 -- `point` is one of the nine screen anchors and x, y the offset of the
 -- frame's same point from it, in design pixels. A dropped frame takes the
 -- anchor of the screen third its centre is in, so layouts keep their shape
--- on every resolution. position.hidden hides the frame.
+-- on every resolution. An anchor picked in the toolbar stays
+-- (position.pinned): a drag then changes only x and y, and Reset brings the
+-- automatic anchor back. position.hidden hides the frame.
 -- The panel's Group preview (0.17) fills the party or raid frames with
 -- made-up players at their real place and size while edit mode is open:
 -- EditMode.GroupPreview() is 0 (off), 5, 10, 20 or 40, and
@@ -73,20 +76,41 @@ local function rect(frame)
     return l * s, b * s, w * s, h * s
 end
 
--- The anchor for a rectangle: the screen third its centre falls in, and the
--- offset of the rectangle's same point from the screen's.
-local function anchorFor(l, b, w, h)
+-- Where a point sits across and up a rectangle: 0 left or bottom, 1 right
+-- or top, 0.5 the middle.
+local function fractions(point)
+    return (point:find("LEFT") and 0) or (point:find("RIGHT") and 1) or 0.5,
+        (point:find("BOTTOM") and 0) or (point:find("TOP") and 1) or 0.5
+end
+
+-- The anchor for a rectangle: `point` when given (one picked by hand), else
+-- the screen third its centre falls in; and the offset of the rectangle's
+-- same point from the screen's.
+local function anchorFor(l, b, w, h, point)
     local W, H = root():GetWidth(), root():GetHeight()
-    local cx, cy = l + w / 2, b + h / 2
-    local horiz = (cx < W / 3 and "LEFT") or (cx > W * 2 / 3 and "RIGHT") or ""
-    local vert = (cy < H / 3 and "BOTTOM") or (cy > H * 2 / 3 and "TOP") or ""
-    local point = vert .. horiz
-    if point == "" then point = "CENTER" end
-    local fx = (horiz == "LEFT" and l) or (horiz == "RIGHT" and l + w) or cx
-    local fy = (vert == "BOTTOM" and b) or (vert == "TOP" and b + h) or cy
-    local rx = (horiz == "LEFT" and 0) or (horiz == "RIGHT" and W) or W / 2
-    local ry = (vert == "BOTTOM" and 0) or (vert == "TOP" and H) or H / 2
-    return point, fx - rx, fy - ry
+    if not point then
+        local cx, cy = l + w / 2, b + h / 2
+        local horiz = (cx < W / 3 and "LEFT") or (cx > W * 2 / 3 and "RIGHT") or ""
+        local vert = (cy < H / 3 and "BOTTOM") or (cy > H * 2 / 3 and "TOP") or ""
+        point = vert .. horiz
+        if point == "" then point = "CENTER" end
+    end
+    local fx, fy = fractions(point)
+    return point, l + w * fx - W * fx, b + h * fy - H * fy
+end
+
+-- The offsets from `point` that keep a w × h frame on the screen.
+local function range(point, w, h)
+    local fx, fy = fractions(point)
+    local function span(f, size, full)
+        local lo, hi = f * (size - full), (1 - f) * (full - size)
+        if lo > hi then lo, hi = hi, lo end -- a frame larger than the screen
+        lo = math.ceil(lo)
+        return lo, math.max(lo, math.floor(hi))
+    end
+    local x0, x1 = span(fx, w, root():GetWidth())
+    local y0, y1 = span(fy, h, root():GetHeight())
+    return x0, x1, y0, y1
 end
 
 local function snap(v)
@@ -95,9 +119,11 @@ local function snap(v)
     return math.floor(v / g + 0.5) * g
 end
 
-local function save(m, point, x, y)
+-- `pinned`: the anchor was picked by hand, so drags keep it.
+local function save(m, point, x, y, pinned)
     local pos = Settings.Get(m.namespace, m.key)
     pos.point, pos.x, pos.y = point, x, y
+    if pinned then pos.pinned = true end
     Settings.Set(m.namespace, m.key, pos)
 end
 
@@ -109,6 +135,58 @@ end
 -- mode: hiding it there is for frames that are on.
 local function enabled(m)
     return not m.enabled or m.enabled() and true or false
+end
+
+-- The settings section a frame's right-click opens (nil: none).
+local function settingsSection(m)
+    return m and m.owner and ns.SettingsRegistry.ForOwner(m.owner, m.namespace)
+end
+
+-- A frame placed by another (a bar attached to the dock): a drag moves that
+-- one, and its own numbers can't be typed.
+local function placedByAnother(m)
+    return m.dragFrame ~= nil and m.dragFrame() ~= m.frame
+end
+
+local toolbar
+local KEYS_H = 26
+
+-- Over the frame, or under it when there is no room above (a frame at the
+-- screen's top edge); the line of keys on the side away from the frame.
+local function placeToolbar(m, top)
+    local gap = S["space-5"] + 6
+    local below = root():GetHeight() - top < gap + toolbar:GetHeight() + S["space-2"] + KEYS_H
+    local keys = toolbar.keys
+    toolbar:ClearAllPoints()
+    keys:ClearAllPoints()
+    if below then
+        toolbar:SetPoint("TOPRIGHT", m.overlay, "BOTTOMRIGHT", 0, -gap)
+        keys:SetPoint("TOPRIGHT", toolbar, "BOTTOMRIGHT", 0, -S["space-2"])
+    else
+        toolbar:SetPoint("BOTTOMRIGHT", m.overlay, "TOPRIGHT", 0, gap)
+        keys:SetPoint("BOTTOMRIGHT", toolbar, "TOPRIGHT", 0, S["space-2"])
+    end
+end
+
+-- The toolbar's anchor, X and Y: the saved position, or where a frame
+-- placed by another is (greyed). A field being typed in keeps its text.
+local function showPosition(m)
+    local locked = placedByAnother(m)
+    local pos = Settings.Get(m.namespace, m.key)
+    local point, x, y = pos.point or "CENTER", pos.x or 0, pos.y or 0
+    local l, b, w, h = rect(m.frame)
+    if locked and l then point, x, y = anchorFor(l, b, w, h) end
+    local bar = toolbar
+    bar.anchor:SetValue(point)
+    bar.anchor:SetDisabled(locked)
+    for _, f in ipairs({ bar.x, bar.y }) do f:SetDisabled(locked) end
+    if l then
+        local x0, x1, y0, y1 = range(point, w, h)
+        bar.x:SetRange(x0, x1)
+        bar.y:SetRange(y0, y1)
+    end
+    if not bar.x:HasFocus() then bar.x:SetValue(math.floor(x + 0.5)) end
+    if not bar.y:HasFocus() then bar.y:SetValue(math.floor(y + 0.5)) end
 end
 
 local function sync(m)
@@ -129,36 +207,44 @@ local function sync(m)
     o:SetAlpha(hidden and T.opacity["opacity-disabled"] or 1)
     UI.PaintFill(o.tagBg, hidden and "ink-faint" or "arcane")
     o.tag:SetValue(m.label .. (hidden and " (hidden)" or ""))
-    o.tagFrame:SetWidth(o.tag:GetUnboundedStringWidth() + 10)
     local on = selected == m
+    -- the selected frame's tag says what its right-click does
+    o.tagHint:SetShown(on and settingsSection(m) ~= nil)
+    o.tagFrame:SetWidth(o.tag:GetUnboundedStringWidth() + 10
+        + (o.tagHint:IsShown() and o.tagHint:GetUnboundedStringWidth() or 0))
     o.edge:SetColor("arcane", (on or o:IsMouseOver()) and 1 or 0.6)
     o.glow:SetShown(on)
+    if on and toolbar then
+        showPosition(m)
+        placeToolbar(m, b + h)
+    end
 end
-
-local toolbar
 
 local function select(m)
     local was = selected
+    -- what's typed for another frame (or as edit mode closes) is dropped
+    if toolbar and was ~= m then
+        toolbar.x:Cancel()
+        toolbar.y:Cancel()
+        toolbar.anchor:Close()
+    end
     selected = m
     if was then sync(was) end
     if not m then
         if toolbar then toolbar:Hide() end
         return
     end
-    sync(m)
     local hidden = Settings.Get(m.namespace, m.key).hidden
     toolbar.hide:SetLabel(hidden and "Show" or "Hide")
-    local base = 3 + 60 + S["space-2"] + 60 + 3
     if m.action then
         toolbar.action:SetLabel(m.action.label())
         toolbar.action:Show()
-        toolbar:SetWidth(base + S["space-2"] + 120)
+        toolbar:SetWidth(toolbar.baseWidth + S["space-2"] + 120)
     else
         toolbar.action:Hide()
-        toolbar:SetWidth(base)
+        toolbar:SetWidth(toolbar.baseWidth)
     end
-    toolbar:ClearAllPoints()
-    toolbar:SetPoint("BOTTOMRIGHT", m.overlay, "TOPRIGHT", 0, S["space-5"] + 6)
+    sync(m)
     toolbar:Show()
 end
 
@@ -192,6 +278,10 @@ local function buildOverlay(m)
     o.tagBg:SetAllPoints()
     o.tag = UI.Text(o.tagFrame, "caption", "on-signal")
     o.tag:SetPoint("LEFT", 5, 0)
+    o.tagHint = UI.Text(o.tagFrame, "caption", "on-signal")
+    o.tagHint:SetAlpha(0.72)
+    o.tagHint:SetPoint("LEFT", o.tag, "RIGHT")
+    o.tagHint:SetValue(" · right-click: settings")
     o.size = UI.Text(o, "micro", "ink-muted")
     o.size:SetShadowed(true)
     o.size:SetPoint("TOPRIGHT", o, "BOTTOMRIGHT", 0, -3)
@@ -234,7 +324,8 @@ local function buildOverlay(m)
             C_Timer.After(0, function() if active then sync(m) end end)
             return
         end
-        local point, x, y = anchorFor(l, b, w, h)
+        local pos = Settings.Get(m.namespace, m.key)
+        local point, x, y = anchorFor(l, b, w, h, pos.pinned and pos.point or nil)
         save(m, point, snap(x), snap(y))
         -- A drop that snaps back to the saved position changes no setting, so
         -- nothing else puts the frame and the outlines back on the grid.
@@ -352,9 +443,59 @@ local function buildPanel()
     hint:SetWordWrap(true)
     hint:SetJustifyH("LEFT")
     hint:SetFixedWidth(226)
-    hint:SetValue("Drag a frame to move it. Arrow keys nudge the selected one, Shift for 10px. Right-click a frame for its settings.")
+    hint:SetValue("Drag a frame to move it, or type its place in the toolbar over it. Arrow keys nudge the selected one, Shift for 10px. Right-click a frame for its settings.")
     stack:Add(hint)
     return p
+end
+
+-- The line of keys beside the toolbar while X or Y has focus, or what Enter
+-- does with a value past the screen's edge.
+local function buildKeys(bar)
+    local keys = CreateFrame("Frame", nil, bar)
+    keys:SetHeight(KEYS_H)
+    keys:SetClampedToScreen(true)
+    keys:Hide()
+    UI.Fill(keys, "surface"):SetAllPoints()
+    UI.Border(keys, "gilt-line")
+    keys.parts = {}
+    for _, p in ipairs({ { "Enter", "applies" }, { "Tab", "Y" }, { "Esc", "cancels" }, { "↑ ↓", "1 px, Shift 10" } }) do
+        local text = UI.Text(keys, "micro", "ink-muted")
+        text:SetValue(p[2])
+        keys.parts[#keys.parts + 1] = { key = p[1], chip = UI.KeyChip(keys, p[1]), text = text }
+    end
+    keys.warning = UI.Text(keys, "micro", "amber")
+    keys.warning:SetPoint("LEFT", S["space-3"], 0)
+    keys.warning:Hide()
+
+    function keys:Layout()
+        local x = S["space-3"]
+        for i, p in ipairs(self.parts) do
+            p.chip:SetKey(p.key) -- measured again (a theme changes the text size)
+            p.chip:SetPoint("LEFT", x, 0)
+            x = x + p.chip:GetWidth() + S["space-2"]
+            p.text:SetPoint("LEFT", x, 0)
+            x = x + p.text:GetUnboundedStringWidth() + (i < #self.parts and S["space-3"] or 0)
+        end
+        if self.warning:IsShown() then x = S["space-3"] + self.warning:GetUnboundedStringWidth() end
+        self:SetWidth(x + S["space-3"])
+    end
+    -- nil: the keys; text: the warning instead
+    function keys:Warn(text)
+        self.warning:SetValue(text or "")
+        self.warning:SetShown(text ~= nil)
+        for _, p in ipairs(self.parts) do
+            p.chip:SetShown(text == nil)
+            p.text:SetShown(text == nil)
+        end
+        self:Layout()
+    end
+    -- shown for a field: Tab goes to `nextLetter`
+    function keys:For(nextLetter)
+        self.parts[2].text:SetValue(nextLetter)
+        self:Warn(nil)
+        self:Show()
+    end
+    return keys
 end
 
 local function buildToolbar()
@@ -362,6 +503,67 @@ local function buildToolbar()
     bar.body:SetScript("OnSizeChanged", nil)
     bar.body:Hide()
     bar:SetFrameStrata("FULLSCREEN_DIALOG")
+    bar:SetClampedToScreen(true) -- a frame at the screen's left or right edge
+    bar.keys = buildKeys(bar)
+
+    -- The anchor: a new one leaves the frame where it is (X and Y converted)
+    -- and stays when the frame is dragged.
+    bar.anchor = UI.AnchorButton(bar, {
+        note = "The frame stays where it is; X and Y now measure from this point.",
+        tooltip = function()
+            if selected and placedByAnother(selected) then
+                return { description = "It moves with the frame it's attached to. Detach it to place it by number." }
+            end
+            if selected and Settings.Get(selected.namespace, selected.key).pinned then
+                return { description = "The screen point X and Y measure from, picked by you: it stays when you drag the frame. Reset brings the automatic one back." }
+            end
+            return { description = "The screen point X and Y measure from, the screen third the frame is in. Click to pick one that stays." }
+        end,
+        onChange = function(point)
+            local m = selected
+            local l, b, w, h
+            if m then l, b, w, h = rect(m.frame) end
+            if not l or placedByAnother(m) then return end
+            local _, x, y = anchorFor(l, b, w, h, point)
+            save(m, point, math.floor(x + 0.5), math.floor(y + 0.5), true)
+        end })
+    bar.anchor:SetPoint("LEFT", 3, 0)
+
+    -- X and Y: typed values skip the snap grid and keep the frame on screen.
+    local function field(letter, other)
+        local f
+        f = UI.NumberField(bar, { letter = letter,
+            onChange = function(v)
+                local m = selected
+                if not m or placedByAnother(m) then return end
+                local pos = Settings.Get(m.namespace, m.key)
+                local x, y = pos.x or 0, pos.y or 0
+                if letter == "X" then x = v else y = v end
+                save(m, pos.point or "CENTER", x, y)
+            end,
+            onFocus = function(on)
+                if on then
+                    bar.anchor:Close()
+                    bar.keys:For(other)
+                else
+                    bar.keys:Hide()
+                end
+            end,
+            onTab = function() bar[other:lower()]:Focus() end,
+            onTyping = function(n)
+                local kept = n and f:Clamp(n)
+                bar.keys:Warn(kept and kept ~= n and ("Off screen past %d: Enter keeps it at %d."):format(kept, kept) or nil)
+            end })
+        return f
+    end
+    bar.x = field("X", "Y")
+    bar.x:SetPoint("LEFT", bar.anchor, "RIGHT", S["space-2"], 0)
+    bar.y = field("Y", "X")
+    bar.y:SetPoint("LEFT", bar.x, "RIGHT", S["space-2"], 0)
+    bar.rule = UI.Fill(bar, "gilt-line", "ARTWORK")
+    bar.rule:SetSize(ns.Pixel.Size(bar), 20)
+    bar.rule:SetPoint("LEFT", bar.y, "RIGHT", S["space-3"], 0)
+
     bar.hide = UI.Button(bar, { text = "Hide", width = 60, onClick = function()
         local m = selected
         if not m then return end
@@ -370,7 +572,7 @@ local function buildToolbar()
         Settings.Set(m.namespace, m.key, pos)
         select(m)
     end })
-    bar.hide:SetPoint("LEFT", 3, 0)
+    bar.hide:SetPoint("LEFT", bar.y, "RIGHT", S["space-3"] * 2 + 1, 0)
     bar.reset = UI.Button(bar, { text = "Reset", width = 60, onClick = function()
         if not selected then return end
         if selected.onReset then selected.onReset() else Settings.Reset(selected.namespace, selected.key) end
@@ -385,7 +587,9 @@ local function buildToolbar()
         end
     end })
     bar.action:SetPoint("LEFT", bar.reset, "RIGHT", S["space-2"], 0)
-    bar:SetSize(3 + 60 + S["space-2"] + 60 + 3, 36)
+    bar.baseWidth = 3 + 30 + S["space-2"] + bar.x:GetWidth() + S["space-2"] + bar.y:GetWidth()
+        + S["space-3"] * 2 + 1 + 60 + S["space-2"] + 60 + 3
+    bar:SetSize(bar.baseWidth, 36)
     return bar
 end
 
@@ -403,9 +607,19 @@ local function buildLayer()
     overlay.wash:SetColorTexture(0, 0, 0, 0.25)
     overlay:SetScript("OnKeyDown", function(self, key)
         local nudge = ({ UP = { 0, 1 }, DOWN = { 0, -1 }, LEFT = { -1, 0 }, RIGHT = { 1, 0 } })[key]
-        if key == "ESCAPE" then
+        if toolbar.x:HasFocus() or toolbar.y:HasFocus() then
+            self:SetPropagateKeyboardInput(true) -- the field's own keys
+        elseif key == "ESCAPE" and toolbar.anchor:IsOpen() then
+            self:SetPropagateKeyboardInput(false)
+            toolbar.anchor:Close()
+        elseif key == "ESCAPE" then
             self:SetPropagateKeyboardInput(false)
             EditMode.Exit()
+        elseif key == "ENTER" and selected and not placedByAnother(selected) then
+            -- Enter starts typing the selected frame's X (once this key is
+            -- done, so the field doesn't take it as its own Enter)
+            self:SetPropagateKeyboardInput(false)
+            C_Timer.After(0, function() if active and selected then toolbar.x:Focus() end end)
         elseif nudge and selected then
             self:SetPropagateKeyboardInput(false)
             local step = IsShiftKeyDown() and 10 or 1
@@ -489,7 +703,7 @@ end
 -- A frame's settings (its right-click): edit mode closes and the Settings
 -- window opens at its module's section.
 function EditMode.OpenSettings(m)
-    local section = m and m.owner and ns.SettingsRegistry.ForOwner(m.owner, m.namespace)
+    local section = settingsSection(m)
     if not section then
         ns.Print(("%s has no settings of its own."):format(m and m.label or "This frame"))
         return
@@ -515,10 +729,14 @@ function EditMode.Refresh()
     end
 end
 
--- A click anywhere but on a mover, the toolbar or the panel deselects.
+-- A click anywhere but on a mover, the toolbar or the panel deselects. A
+-- click away from a field being typed in applies it first.
 Events.OnGame("GLOBAL_MOUSE_DOWN", function()
     if not (active and selected) then return end
-    if toolbar:IsMouseOver() or overlay.panel:IsMouseOver() then return end
+    for _, f in ipairs({ toolbar.x, toolbar.y }) do
+        if f:HasFocus() and not f:IsMouseOver() then f.edit:ClearFocus() end
+    end
+    if toolbar:IsMouseOver() or toolbar.anchor:PopoverHasMouse() or overlay.panel:IsMouseOver() then return end
     for _, m in ipairs(movers) do
         if m.overlay and m.overlay:IsShown() and m.overlay:IsMouseOver() then return end
     end
@@ -533,11 +751,15 @@ Events.OnGame("PLAYER_REGEN_DISABLED", function()
 end, "EditMode")
 
 Settings.Watch("layout", "gridSize", function() if active then drawGrid() end end, "EditMode")
-Events.On("SUUUI_ROOT_SCALED", function() if active then drawGrid() end end, "EditMode")
+Events.On("SUUUI_ROOT_SCALED", function()
+    if toolbar then toolbar.rule:SetWidth(ns.Pixel.Size(toolbar)) end
+    if active then drawGrid() end
+end, "EditMode")
 -- a theme change: what is sized by a text style's line height (colours
 -- follow by themselves)
 Events.On("SUUUI_THEME_CHANGED", function()
     for _, o in pairs(overlays) do o.tagFrame:SetHeight(T.type.caption.lineHeight + 2) end
+    if toolbar then toolbar.keys:Layout() end
     local p = overlay and overlay.panel
     if p then
         p.previewRow:SetHeight(T.type.label.lineHeight + S["space-2"] + 28)

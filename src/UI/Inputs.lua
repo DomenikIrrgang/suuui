@@ -1,6 +1,7 @@
 -- UI/Inputs.lua
--- The settings controls: Toggle, Checkbox, Segmented, Slider, Stepper and
--- TextField (Select has its own file). Every control shares one shape:
+-- The settings controls: Toggle, Checkbox, Segmented, Slider, Stepper,
+-- TextField and NumberField (Select has its own file). Every control shares
+-- one shape:
 --
 --   ctl:SetValue(v)            shows v; never calls onChange
 --   ctl.onChange = fn(v)       called when the player changes it
@@ -544,6 +545,146 @@ function UI.TextField(parent, opts)
         if self:HasFocus() then f.placeholder:Hide() end
     end)
     f:SetValue(opts.value or "")
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- NumberField (0.17): a compact whole-number field with a letter in front
+-- (X, Y), where a Stepper's − and + would take too much room.
+--   { letter = "X", value, min, max, width = 44, onChange = fn(v),
+--     onFocus = fn(focused), onTab = fn(shift), onTyping = fn(n or nil) }
+-- Only digits and a leading minus go in. Enter and focus lost apply (clamped
+-- to min..max), Escape puts the value back, Up and Down step 1 (Shift: 10)
+-- and apply. While what's typed is out of range the edge turns amber.
+-- :SetRange(min, max), :Focus(), :Cancel() (drops what's typed), :HasFocus().
+--------------------------------------------------------------------------------
+
+local NumberField = {}
+
+function NumberField:SetValue(v)
+    self.value = v
+    self.lastTyped = v and tostring(v) or ""
+    showText(self.edit, self.lastTyped)
+    self:Tone()
+end
+
+function NumberField:SetRange(min, max)
+    self.min, self.max = min, max
+end
+
+function NumberField:Clamp(v)
+    v = math.floor(v + 0.5)
+    if self.min then v = math.max(self.min, v) end
+    if self.max then v = math.min(self.max, v) end
+    return v
+end
+
+-- The edge: arcane with focus, amber while what's typed is out of range.
+function NumberField:Tone()
+    local e = self.edit
+    local n = tonumber(e:GetText())
+    local focus = e:HasFocus()
+    self.border:SetColor((focus and n and n ~= self:Clamp(n) and "amber") or (focus and "arcane") or "gilt-line")
+end
+
+function NumberField:Commit(text)
+    local n = tonumber(text)
+    if self.disabled or not n then return self:SetValue(self.value) end
+    n = self:Clamp(n)
+    local changed = n ~= self.value
+    self:SetValue(n)
+    if changed and self.onChange then self.onChange(n) end
+end
+
+function NumberField:Focus()
+    if not self.disabled then self.edit:SetFocus() end
+end
+
+function NumberField:HasFocus()
+    return self.edit:HasFocus()
+end
+
+function NumberField:Cancel()
+    if self.edit:HasFocus() then
+        self.cancelling = true
+        self.edit:ClearFocus()
+    end
+    self:SetValue(self.value)
+end
+
+NumberField.SetDisabled = function(self, disabled)
+    if disabled then self:Cancel() end
+    setDisabled(self, disabled)
+    self.edit:EnableMouse(not self.disabled)
+end
+
+function UI.NumberField(parent, opts)
+    opts = opts or {}
+    local f = CreateFrame("Frame", nil, parent)
+    Mixin(f, NumberField)
+    local width = opts.width or 44
+    f:SetSize(S["space-4"] + 10 + 5 + width + S["space-4"], 30)
+    UI.Fill(f, "surface-sunk"):SetAllPoints()
+    f.border = UI.Border(f, "gilt-line")
+    f.min, f.max = opts.min, opts.max
+    f.onChange, f.onFocus, f.onTab, f.onTyping = opts.onChange, opts.onFocus, opts.onTab, opts.onTyping
+
+    f.letter = UI.Text(f, "caption", "ink-faint")
+    f.letter:SetPoint("LEFT", S["space-4"], 0)
+    f.letter:SetValue(opts.letter or "")
+
+    local e = CreateFrame("EditBox", nil, f)
+    e:SetAutoFocus(false)
+    e:SetFontObject(ns.Fonts.Get("numeric"))
+    e:SetJustifyH("RIGHT")
+    e:SetMaxLetters(6)
+    e:SetSize(width, 28)
+    e:SetPoint("RIGHT", -S["space-4"], 0)
+    redrawOnShow(e)
+    f.edit = e
+    -- the letter's side takes clicks too
+    f:EnableMouse(true)
+    f:SetScript("OnMouseDown", function(self) self:Focus() end)
+
+    e:SetScript("OnEditFocusGained", function(self)
+        self:HighlightText()
+        f:Tone()
+        if f.onFocus then f.onFocus(true) end
+    end)
+    e:SetScript("OnEditFocusLost", function(self)
+        self:HighlightText(0, 0)
+        if f.cancelling then f.cancelling = nil else f:Commit(self:GetText()) end
+        f:Tone()
+        if f.onFocus then f.onFocus(false) end
+    end)
+    e:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    e:SetScript("OnEscapePressed", function() f:Cancel() end)
+    e:SetScript("OnTabPressed", function() if f.onTab then f.onTab(IsShiftKeyDown()) end end)
+    e:SetScript("OnArrowPressed", function(self, key)
+        local dir = (key == "UP" and 1) or (key == "DOWN" and -1)
+        if not dir then return end
+        f:Commit((tonumber(self:GetText()) or f.value or 0) + dir * (IsShiftKeyDown() and 10 or 1))
+        self:SetCursorPosition(#self:GetText())
+    end)
+    -- letters dropped as they're typed (compared, not gated on userInput:
+    -- the game doesn't always flag typing as user input on Forever)
+    e:SetScript("OnTextChanged", function(self)
+        local text = self:GetText()
+        local digits = text:gsub("[^%d]", "")
+        local clean = (text:sub(1, 1) == "-" and "-" or "") .. digits
+        if clean ~= text then
+            local cursor = self:GetCursorPosition() - (#text - #clean)
+            self:SetText(clean)
+            self:SetCursorPosition(math.max(0, cursor))
+            return
+        end
+        f:Tone()
+        if self:HasFocus() and text ~= f.lastTyped then
+            f.lastTyped = text
+            if f.onTyping then f.onTyping(tonumber(text)) end
+        end
+    end)
+    f:SetValue(opts.value)
     return f
 end
 

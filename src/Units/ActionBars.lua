@@ -488,8 +488,9 @@ function M:Dropped(a, l, b, w, h)
         local cl, cb = SuuUI.EditMode.Rect(a.header)
         local dl, db, dw, dh = SuuUI.EditMode.Rect(self.dock)
         if not (cl and dl) then return true end
-        local point, x, y = SuuUI.EditMode.AnchorFor(dl + (l - cl), db + (b - cb), dw, dh)
+        -- (an anchor picked by hand stays)
         local pos = self:Get("position")
+        local point, x, y = SuuUI.EditMode.AnchorFor(dl + (l - cl), db + (b - cb), dw, dh, pos.pinned and pos.point)
         pos.point, pos.x, pos.y = point, math.floor(x + 0.5), math.floor(y + 0.5)
         self:Set("position", pos)
         return true
@@ -507,8 +508,8 @@ function M:ToggleAttach(a)
     local l, b, w, h = SuuUI.EditMode.Rect(a.header)
     if not l then return end
     if self:Get("attach" .. a.key) then
-        local point, x, y = SuuUI.EditMode.AnchorFor(l, b, w, h)
         local pos = self:Get(a.pos)
+        local point, x, y = SuuUI.EditMode.AnchorFor(l, b, w, h, pos.pinned and pos.point)
         pos.point, pos.x, pos.y = point, math.floor(x + 0.5), math.floor(y + 0.5)
         self:Set(a.pos, pos)
         self:Set("attach" .. a.key, false)

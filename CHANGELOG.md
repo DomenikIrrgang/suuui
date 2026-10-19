@@ -5,6 +5,7 @@
 ### New
 
 - Edit mode: right-click a frame to open its settings (edit mode closes, the Settings window opens at that frame's section).
+- Edit mode: type a frame's exact position in the toolbar over it: its anchor (one of nine screen points), X and Y. Enter with a frame selected starts typing; Tab goes between X and Y, the arrow keys step 1 px (Shift: 10). An anchor you pick stays when you drag the frame; Reset brings the automatic one back.
 
 ### Changed
 
@@ -15,6 +16,7 @@
 ### Fixed
 
 - Chat: a tab's name sits centred over its underline.
+- Edit mode: the toolbar of a frame at the screen's top edge shows under the frame instead of off screen.
 
 ## 0.5.0-beta.6 (2026-10-19)
 
