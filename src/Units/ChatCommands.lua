@@ -703,14 +703,15 @@ function M:MakeRow(parent)
     r.cmd:SetPoint("LEFT", PAD, 0)
     r.cmd:SetWidth(CMD_W)
     r.cmd:SetJustifyH("LEFT")
+    -- the columns follow the command: a long one pushes them along
     r.alias = UI.Text(r, "caption", "ink-muted")
-    r.alias:SetPoint("LEFT", PAD + CMD_W + S["space-4"], 0)
+    r.alias:SetPoint("LEFT", r.cmd, "RIGHT", S["space-4"], 0)
     r.alias:SetWidth(ALIAS_W)
     r.alias:SetJustifyH("LEFT")
     r.badge = badge(r)
     r.badge:SetPoint("RIGHT", -PAD, 0)
     r.desc = UI.Text(r, "caption", "ink-muted")
-    r.desc:SetPoint("LEFT", PAD + CMD_W + ALIAS_W + S["space-4"] * 2, 0)
+    r.desc:SetPoint("LEFT", r.alias, "RIGHT", S["space-4"], 0)
     r.desc:SetPoint("RIGHT", r.badge, "LEFT", -S["space-4"], 0)
     r.desc:SetJustifyH("LEFT")
     return r
@@ -862,7 +863,13 @@ function M:DrawCommand(m, typed, put)
     local r = self:Take("row", self.drawY, ROW_H)
     local item = m.item
     r.cmd:SetValue(hit(item.cmd, typed))
-    r.alias:SetValue(aliasText(item, typed))
+    local w = math.max(CMD_W, math.ceil(UI.MeasureText("label", item.cmd)) + 2)
+    r.cmd:SetWidth(w)
+    local alias = aliasText(item, typed)
+    r.alias:SetValue(alias)
+    -- without aliases a long command takes their column, and the description
+    -- stays in line with the others while it fits
+    r.alias:SetWidth(alias == "" and math.max(1, CMD_W + ALIAS_W - w) or ALIAS_W)
     r.desc:SetValue(item.desc or "")
     r.badge:SetLabel(item.src)
     self.flat[#self.flat + 1] = { put = put or item.cmd, frame = r, y = self.drawY, h = ROW_H }
