@@ -207,6 +207,7 @@ end
 --
 --   UI.MakeModal(panel)             -- panel:Show()/Hide() bring the shade
 --   UI.Confirm({ title, text, confirm = "Replace", cancel = "Cancel",
+--                -- 0.17: cancel = false: OK alone
 --                onConfirm = fn, onCancel = fn,
 --                input = { label, placeholder, value }, -- 0.13: a text to
 --                -- enter, given to onConfirm(text); OK once there is some
@@ -453,6 +454,8 @@ function UI.Confirm(opts)
     p.text:SetValue(opts.text or "")
     p.ok:SetLabel(opts.confirm or "OK")
     p.cancel:SetLabel(opts.cancel or "Cancel")
+    -- 0.17: cancel = false, one button only (a message: why something can't be)
+    p.cancel:SetShown(opts.cancel ~= false)
     p:Hide() -- an older question still open is cancelled first
     p.onConfirm, p.onCancel = opts.onConfirm, opts.onCancel
     p.enterConfirms = opts.enterConfirms

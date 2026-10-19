@@ -15,8 +15,11 @@
 -- does: a click is C_Traits.PurchaseRank, a right-click RefundRank (planned
 -- ranks only: learned ones are unlearned at a trainer), Undo RollbackConfig,
 -- Apply C_ClassTalents.CommitConfig. Out of combat only.
+-- Talent builds (3.2e) live here too: a picker in the window's head, the
+-- build's order beside the trees, its next talent ringed (see below).
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
 
 local M = SuuUI.RegisterModule({
     id = "talents",
@@ -29,6 +32,7 @@ local M = SuuUI.RegisterModule({
 
 local isSecret = issecretvalue or function() return false end
 local function plain(v) return v ~= nil and not isSecret(v) end
+local _, CLASS = UnitClass("player")
 
 local STEP = 600          -- the grid's step in the tree's coordinates
 local TREE_GAP = 1500     -- more than this between columns: another tree
@@ -254,7 +258,11 @@ function M:Render()
     self:FitWindow()
     local inspected = self:Inspecting()
     for _, page in ipairs(pages) do
-        if page == self.windowPage and self.inspectUnit then
+        if page == self.windowPage and not self.inspectUnit and self:Planning() then
+            -- a build planned on its class's trees
+            page.data = data
+            self:FillPlan(page)
+        elseif page == self.windowPage and self.inspectUnit then
             -- another player's talents (View Talents on inspect), read only;
             -- what last arrived stays when the inspect ends
             local theirs = self:Collect(INSPECT_CONFIG)
@@ -294,13 +302,34 @@ function M:Fill(page, data, inspected)
         who = plain(UnitName(inspected)) and UnitName(inspected) or nil
         editable, why = false, ("Viewing %s's talents."):format(who or "their")
     end
+    -- your builds (SuuUI's own window, your talents): the picker, the
+    -- active build's next talent ringed and its order beside the trees
+    local builds = page == self.windowPage and not inspected
+    local nextTalent = builds and self:NextTalent(self.viewing, data.configID)
     local trees = {}
     for i, t in ipairs(data.trees) do
         for _, n in ipairs(t.nodes) do
             n.locked = not n.open and n.rank + n.pending == 0
             n.canSpend = editable and n.canPurchase and data.available > 0
+            n.next = nextTalent ~= nil and n.id == nextTalent.node
         end
         trees[i] = t
+    end
+    if builds then
+        local b = self:Viewed()
+        page:SetBuilds(self:Picker(b, false))
+        if b then
+            local learned = {}
+            for _, t in ipairs(data.trees) do
+                for _, n in ipairs(t.nodes) do learned[n.id] = n.rank end
+            end
+            page:SetOrder(self:OrderLines(b.steps, self:BuildTree(CLASS), learned, nextTalent and nextTalent.index))
+        else
+            page:SetOrder(nil)
+        end
+    elseif page == self.windowPage then
+        page:SetBuilds(nil)
+        page:SetOrder(nil)
     end
     -- the spec's name: the tree with the most points
     local best
@@ -328,7 +357,9 @@ function M:QueueRender()
     self.renderQueued = true
     C_Timer.After(0, function()
         self.renderQueued = nil
-        if self:IsEnabled() then self:Render() end
+        if not self:IsEnabled() then return end
+        self:CheckReset()
+        self:Render()
     end)
 end
 
@@ -384,6 +415,1116 @@ function M:Apply()
 end
 
 --------------------------------------------------------------------------------
+-- Talent builds (step 3.2e, design board "Talent builds": B, F, I, J, M).
+-- Forever has no loadouts of its own (/suu probe talentbuilds), so SuuUI
+-- keeps builds: every class's, for the whole account, each an order of
+-- points (a step is one rank). The picker in the window's head shows one;
+-- your active build (per character and talent group) shows on your talents
+-- with its next talent ringed, any other is planned on its class's trees
+-- (read live, the view loadout for another class) and its order listed
+-- right of them, where lines drag to a new place. Nothing is learned
+-- without Apply.
+--------------------------------------------------------------------------------
+
+local TALENTED_MAX = 5 -- Legacy's Talented: a point a level from 5 to 9
+local VIEW_CONFIG = Constants and Constants.TraitConsts and Constants.TraitConsts.VIEW_TRAIT_CONFIG_ID
+local EDGE = Enum and Enum.TraitEdgeType or {}
+local NOTE_RESET, NOTE_PLANNED = "suu:talentbuild:reset", "suu:talentbuild:planned"
+
+local function plural(n, one, many) return n == 1 and one or many end
+
+-- A dialog's height for a body `h` tall and a row of buttons under it.
+local function fitDialog(p, h)
+    p.body:SetHeight(h)
+    p:SetHeight(p:BodyTop() + h + S["space-5"] + 30 + 18 + S["space-4"])
+end
+
+local function store()
+    local d = SuuUI.AccountData("talentbuilds")
+    d.builds = d.builds or {}  -- [id] = { id, name, class, classID, treeID, steps, split, updated }
+    d.active = d.active or {}  -- [character][talent group] = id
+    d.reset = d.reset or {}    -- [character][talent group] = id: waits for a trainer's reset
+    d.nextID = d.nextID or 1
+    return d
+end
+
+local function charKey()
+    local guid = UnitGUID("player")
+    return plain(guid) and guid or ((UnitName("player") or "?") .. "-" .. (GetRealmName() or "?"))
+end
+
+local function copySteps(steps)
+    local out = {}
+    for i, s in ipairs(steps or {}) do out[i] = { node = s.node, entry = s.entry } end
+    return out
+end
+
+-- The classes and their trees: [file] = { classID, file, name, specID, treeID }.
+function M:Classes()
+    if self.classes then return self.classes end
+    local out, list = {}, {}
+    for classID = 1, 13 do
+        local name, file = call(GetClassInfo, classID)
+        if plain(name) and name and file then
+            local specID = call(GetSpecializationInfoForClassID, classID, 1)
+            local treeID = plain(specID) and specID and call(C_ClassTalents.GetTraitTreeForSpec, specID)
+            if plain(treeID) and treeID then
+                out[file] = { classID = classID, file = file, name = name, specID = specID, treeID = treeID }
+                list[#list + 1] = out[file]
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.name < b.name end)
+    out.list = list
+    self.classes = out
+    return out
+end
+
+-- A class's tree as builds need it (UI/TalentBuilds.lua's shape, and
+-- `trees`: the three classic trees, as the page draws them). Your own from
+-- your talents; another class's through the game's view loadout (else your
+-- config answers for it too: the probe read every class's both ways).
+function M:BuildTree(file)
+    self.buildTrees = self.buildTrees or {}
+    if self.buildTrees[file] then return self.buildTrees[file] end
+    local class = self:Classes()[file]
+    if not class then return nil end
+    local configs = {}
+    if file == CLASS then
+        configs[1] = call(C_ClassTalents.GetActiveConfigID)
+    elseif VIEW_CONFIG and C_ClassTalents.InitializeViewLoadout then
+        call(C_ClassTalents.InitializeViewLoadout, class.specID, 60)
+        call(C_ClassTalents.ViewLoadout, {})
+        configs[1] = VIEW_CONFIG
+        configs[2] = call(C_ClassTalents.GetActiveConfigID)
+    end
+    local order = call(C_Traits.GetTreeNodes, class.treeID) or {}
+    local configID, byID, nodes, minY
+    for _, cfg in ipairs(configs) do
+        if plain(cfg) and cfg then
+            byID, nodes, minY = {}, {}, nil
+            for _, nodeID in ipairs(order) do
+                local ni = call(C_Traits.GetNodeInfo, cfg, nodeID)
+                if ni and ni.isVisible ~= false and plain(ni.posX) and plain(ni.posY) and ni.maxRanks and ni.maxRanks > 0 then
+                    local talent = talentOf(cfg, ni)
+                    if talent then
+                        local n = { id = nodeID, x = ni.posX, y = ni.posY, max = ni.maxRanks, name = talent.name,
+                            icon = talent.icon, spellID = talent.spellID, entryID = talent.entryID,
+                            entryIDs = ni.entryIDs or {}, edges = ni.visibleEdges or {}, requires = {},
+                            choice = Enum.TraitNodeType and ni.type == Enum.TraitNodeType.Selection or false }
+                        nodes[#nodes + 1] = n
+                        byID[nodeID] = n
+                        minY = math.min(minY or n.y, n.y)
+                    end
+                end
+            end
+            if #nodes > 0 then configID = cfg break end
+        end
+    end
+    if not configID then return nil end
+    -- the trees, as Collect splits them
+    table.sort(nodes, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.y < b.y end)
+    local clusters, last = {}, nil
+    for _, n in ipairs(nodes) do
+        if not last or n.x - last > TREE_GAP then clusters[#clusters + 1] = { nodes = {}, links = {} } end
+        local c = clusters[#clusters]
+        c.nodes[#c.nodes + 1] = n
+        c.minX = math.min(c.minX or n.x, n.x)
+        c.maxX = math.max(c.maxX or n.x, n.x)
+        last = n.x
+    end
+    local displays = call(C_Traits.GetGroupDisplayInfoByTreeID, class.treeID) or {}
+    for i, c in ipairs(clusters) do
+        local base = math.min(c.minX, c.maxX - 3 * STEP)
+        c.name = displays[i] and displays[i].displayName or ("Tree " .. i)
+        for _, n in ipairs(c.nodes) do
+            n.col = math.max(0, math.min(3, math.floor((n.x - base) / STEP + 0.5)))
+            n.row = math.max(0, math.floor((n.y - minY) / STEP + 0.5))
+            n.treeIndex, n.treeName = i, c.name
+        end
+    end
+    -- the arrows: what each talent needs (any one of "sufficient" arrows,
+    -- every "required" one; drawn-only arrows need nothing)
+    for _, n in ipairs(nodes) do
+        for _, e in ipairs(n.edges) do
+            local to = e.targetNode and byID[e.targetNode]
+            if to and e.type ~= EDGE.VisualOnly then
+                to.requires[#to.requires + 1] = n.id
+                if e.type == EDGE.RequiredForAvailability then to.requiresAll = true end
+                if to.treeIndex == n.treeIndex then
+                    table.insert(clusters[n.treeIndex].links, { from = n, to = to })
+                end
+            end
+        end
+    end
+    local tree = { file = file, classID = class.classID, specID = class.specID, treeID = class.treeID,
+        configID = configID, order = order, byID = byID, trees = clusters }
+    self.buildTrees[file] = tree
+    return tree
+end
+
+-- "0 / 29 / 2": a build's points per tree.
+local function splitOf(tree, steps)
+    local per = {}
+    for i = 1, #(tree and tree.trees or {}) do per[i] = 0 end
+    for _, s in ipairs(steps) do
+        local n = tree and tree.byID[s.node]
+        if n then per[n.treeIndex] = (per[n.treeIndex] or 0) + 1 end
+    end
+    for i = 1, #per do per[i] = tostring(per[i]) end
+    return table.concat(per, " / ")
+end
+
+-- Legacy's Talented gives points before level 10: what the currency holds
+-- over one a level from 10 (0 to 5).
+function M:Talented()
+    local configID = call(C_ClassTalents.GetActiveConfigID)
+    local info = plain(configID) and configID and call(C_Traits.GetConfigInfo, configID)
+    local treeID = info and info.treeIDs and info.treeIDs[1]
+    local c = treeID and call(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
+    local max = c and c[1] and plain(c[1].maxQuantity) and c[1].maxQuantity
+    local level = UnitLevel("player") or 1
+    if not max or level >= 60 then return self.talented or 0 end
+    self.talented = math.max(0, math.min(TALENTED_MAX, max - math.max(0, level - 9)))
+    return self.talented
+end
+
+-- The level that brings step i.
+function M:StepLevel(i)
+    local t = self:Talented()
+    if i <= t then return 4 + i end
+    return 9 + i - t
+end
+
+-- The build the window shows, its draft (being planned) or as saved.
+function M:Builds() return store().builds end
+
+function M:ActiveID(group)
+    local _, active = self:SpecGroups()
+    local mine = store().active[charKey()]
+    return mine and mine[group or self.viewing or active]
+end
+
+function M:SetActive(id, group)
+    local _, active = self:SpecGroups()
+    local d = store()
+    local key = charKey()
+    d.active[key] = d.active[key] or {}
+    d.active[key][group or self.viewing or active] = id
+    self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+end
+
+function M:Viewed()
+    local id = self.buildView
+    if not id or id == "" then return nil end
+    if self.draft and self.draft.id == id then return self.draft end
+    return store().builds[id]
+end
+
+-- Planning: the draft of the build shown (a copy until Save build).
+function M:Planning()
+    local b = self:Viewed()
+    if not b or self.inspectUnit then return false end
+    if b.class ~= CLASS then return true end
+    return self.planning or self:ActiveID() ~= b.id
+end
+
+function M:Draft()
+    local b = self:Viewed()
+    if not b then return nil end
+    if not (self.draft and self.draft.id == b.id) then
+        self.draft = { id = b.id, name = b.name, class = b.class, classID = b.classID, treeID = b.treeID,
+            steps = copySteps(b.steps), dirty = false }
+        -- a tree that changed in a patch: the steps that still fit stay
+        local tree = self:BuildTree(b.class)
+        if tree then
+            local ok, at, why = UI.TalentOrderCheck(self.draft.steps, tree)
+            if not ok then
+                for i = #self.draft.steps, at, -1 do table.remove(self.draft.steps, i) end
+                self.draft.dirty, self.draft.problem = true, why
+            end
+        end
+    end
+    return self.draft
+end
+
+function M:SaveDraft()
+    local d = self.draft
+    if not d then return end
+    local b = store().builds[d.id]
+    if not b then return end
+    b.name, b.steps, b.updated = d.name, copySteps(d.steps), time()
+    b.split = splitOf(self:BuildTree(b.class), b.steps)
+    d.dirty, d.problem = false, nil
+    self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+    self:Render()
+end
+
+function M:DiscardDraft()
+    self.draft = nil
+    self:Render()
+end
+
+-- Something else to show while the draft has changes: asked first.
+function M:Leave(fn)
+    local d = self.draft
+    if d and d.dirty and store().builds[d.id] then
+        UI.Confirm({ title = "Discard changes?", text = ("Your changes to %s aren't saved."):format(d.name or "this build"),
+            confirm = "Discard", onConfirm = function() self.draft = nil; fn() end })
+        return
+    end
+    self.draft = nil
+    fn()
+end
+
+function M:ShowBuild(id)
+    self:Leave(function()
+        self.buildView, self.planning = id, false
+        self:Render()
+    end)
+end
+
+function M:NewID()
+    local d = store()
+    local id = "b" .. d.nextID
+    d.nextID = d.nextID + 1
+    return id
+end
+
+function M:AddBuild(name, file, steps)
+    local class = self:Classes()[file]
+    if not class then return nil end
+    local id = self:NewID()
+    local b = { id = id, name = name, class = file, classID = class.classID, treeID = class.treeID,
+        steps = copySteps(steps), updated = time() }
+    b.split = splitOf(self:BuildTree(file), b.steps)
+    store().builds[id] = b
+    self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+    return id
+end
+
+function M:DeleteBuild(id)
+    local d = store()
+    d.builds[id] = nil
+    for _, groups in pairs(d.active) do
+        for g, a in pairs(groups) do if a == id then groups[g] = nil end end
+    end
+    for _, groups in pairs(d.reset) do
+        for g, a in pairs(groups) do if a == id then groups[g] = nil end end
+    end
+    if self.draft and self.draft.id == id then self.draft = nil end
+    if self.buildView == id then self.buildView = nil end
+    SuuUI.DismissNotification(NOTE_RESET)
+    self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+    self:Render()
+end
+
+-- Runs of a talent's ranks one after another: the order panel's lines.
+function M:OrderLines(steps, tree, learned, nextIndex)
+    local lines, seen = {}, {}
+    local i = 1
+    while i <= #steps do
+        local id = steps[i].node
+        local j = i
+        while steps[j + 1] and steps[j + 1].node == id do j = j + 1 end
+        local n = tree and tree.byID[id]
+        local first = (seen[id] or 0) + 1
+        seen[id] = (seen[id] or 0) + (j - i + 1)
+        local a, b = self:StepLevel(i), self:StepLevel(j)
+        local state
+        if learned then
+            if seen[id] <= (learned[id] or 0) then state = "learned" end
+            if nextIndex and nextIndex >= i and nextIndex <= j then state = "next" end
+        end
+        lines[#lines + 1] = { node = id, from = i, to = j, count = j - i + 1, state = state,
+            levels = a == b and tostring(a) or (a .. "–" .. b), name = n and n.name or "?", icon = n and n.icon,
+            ranks = (n and n.max > 1) and (first == seen[id] and tostring(first) or (first .. "–" .. seen[id])) or "" }
+        i = j + 1
+    end
+    return lines
+end
+
+-- The first step not learned yet (each step is that talent's next rank),
+-- with the ranks you have: its index, else nil.
+local function nextStep(steps, have)
+    local count = {}
+    for i, s in ipairs(steps) do
+        count[s.node] = (count[s.node] or 0) + 1
+        if count[s.node] > (have[s.node] or 0) then return i, count[s.node] end
+    end
+end
+
+-- Your active build's next talent: for the window's ring and the points
+-- notice ({ name, icon, rank, max, treeName, build, node }), or nil.
+function M:NextTalent(group, configID)
+    local id = self:ActiveID(group)
+    local b = id and store().builds[id]
+    if not b or b.class ~= CLASS then return nil end
+    local tree = self:BuildTree(CLASS)
+    configID = configID or call(C_ClassTalents.GetActiveConfigID)
+    if not (tree and plain(configID) and configID) then return nil end
+    local have = {}
+    for _, s in ipairs(b.steps) do
+        if have[s.node] == nil then
+            local ni = call(C_Traits.GetNodeInfo, configID, s.node)
+            have[s.node] = ni and plain(ni.currentRank) and ni.currentRank or 0
+        end
+    end
+    local i, rank = nextStep(b.steps, have)
+    local n = i and tree.byID[b.steps[i].node]
+    if not n then return nil end
+    return { node = n.id, name = n.name, icon = n.icon, rank = rank, max = n.max, treeName = n.treeName,
+        build = b.name, index = i }
+end
+
+--------------------------------------------------------------------------------
+-- The picker
+--------------------------------------------------------------------------------
+
+function M:PickerOptions()
+    local classes = self:Classes()
+    local mine, others = {}, {}
+    for id, b in pairs(store().builds) do
+        local class = classes[b.class]
+        local o = { value = id, label = b.name or "?", diamond = "class-" .. (b.class or ""):lower(),
+            search = class and class.name or b.class,
+            note = (b.split or "") .. (self:ActiveID() == id and " · Active" or "") }
+        if b.class == CLASS then mine[#mine + 1] = o else o.note = (class and class.name or "") .. " · " .. (b.split or ""); others[#others + 1] = o end
+    end
+    local function byName(a, b) return a.label:lower() < b.label:lower() end
+    table.sort(mine, byName)
+    table.sort(others, function(a, b)
+        if a.search ~= b.search then return (a.search or "") < (b.search or "") end
+        return byName(a, b)
+    end)
+    local my = classes[CLASS]
+    local out = { { value = "", label = "Your talents", note = "no build" } }
+    out[#out + 1] = { heading = my and my.name or "Your class" }
+    for _, o in ipairs(mine) do out[#out + 1] = o end
+    if #mine == 0 then out[#out + 1] = { value = "__none", label = "No builds yet", disabled = true } end
+    if #others > 0 then
+        out[#out + 1] = { heading = "Other classes" }
+        for _, o in ipairs(others) do out[#out + 1] = o end
+    end
+    return out
+end
+
+function M:PickerFoot()
+    local foot = {
+        { label = "New build…", onClick = function() self:AskNewBuild() end },
+        { label = "Import…", onClick = function() self:ShowShare("import") end },
+    }
+    if self:Viewed() then foot[#foot + 1] = { label = "Copy this build as text", onClick = function() self:ShowShare("copy") end } end
+    return foot
+end
+
+-- The head's buttons for what the window shows.
+function M:HeadButtons(b, planning)
+    local out = {}
+    if not b then return out end
+    if planning then
+        if b.class == CLASS then
+            local d = self.draft
+            if self:ActiveID() == b.id then
+                out[#out + 1] = { label = "Your talents", onClick = function()
+                    self:Leave(function() self.planning = false; self:Render() end)
+                end }
+            else
+                out[#out + 1] = { label = "Use build", variant = "primary", disabled = d and d.dirty,
+                    reason = (d and d.dirty) and "Save it first." or "Follow it on this character: what fits is planned, Apply learns it.",
+                    onClick = function() self:UseBuild(b.id) end }
+            end
+        end
+        out[#out + 1] = { label = "Delete", onClick = function()
+            UI.Confirm({ title = ("Delete %s?"):format(b.name or "this build"),
+                text = "Every character on this account loses it.", confirm = "Delete",
+                onConfirm = function() self:DeleteBuild(b.id) end })
+        end }
+        out[#out + 1] = { label = "Rename", onClick = function()
+            UI.Confirm({ title = "Rename build", confirm = "Rename", input = { label = "Name", value = b.name },
+                onConfirm = function(name)
+                    local saved = store().builds[b.id]
+                    if saved then saved.name = name end
+                    if self.draft and self.draft.id == b.id then self.draft.name = name end
+                    self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+                    self:Render()
+                end })
+        end }
+    else
+        out[#out + 1] = { label = "Plan", onClick = function() self.planning = true; self:Render() end,
+            reason = "Change the build's order or talents; your talents stay as they are." }
+    end
+    return out
+end
+
+function M:Picker(b, planning)
+    return {
+        options = self:PickerOptions(), value = b and b.id or "", foot = self:PickerFoot(),
+        diamond = b and ("class-" .. b.class:lower()) or nil,
+        badge = (b and self:ActiveID() == b.id) and "Active" or nil,
+        buttons = self:HeadButtons(b, planning),
+        onChange = function(v)
+            if v == "__none" then return end
+            self:ShowBuild(v ~= "" and v or nil)
+        end,
+    }
+end
+
+--------------------------------------------------------------------------------
+-- Planning a build on its trees
+--------------------------------------------------------------------------------
+
+function M:FillPlan(page)
+    local d = self:Draft()
+    local tree = d and self:BuildTree(d.class)
+    if not tree then
+        page:SetBuilds(self:Picker(d, true))
+        page:SetOrder(nil)
+        page:SetData({ hint = "This class's talents can't be read right now." })
+        return
+    end
+    local count = {}
+    for _, s in ipairs(d.steps) do count[s.node] = (count[s.node] or 0) + 1 end
+    local trees = {}
+    for i, c in ipairs(tree.trees) do
+        local t = { name = c.name, nodes = {}, links = {}, points = 0 }
+        for _, n in ipairs(c.nodes) do
+            local r = count[n.id] or 0
+            local problem = UI.TalentNextProblem(d.steps, tree, n.id)
+            local node = { id = n.id, row = n.row, col = n.col, max = n.max, rank = r, pending = 0, icon = n.icon,
+                name = n.name, tree = t, entryID = n.entryID, canSpend = problem == nil,
+                locked = problem ~= nil and r == 0, problem = problem, build = true }
+            t.nodes[#t.nodes + 1] = node
+            t.points = t.points + r
+        end
+        for _, l in ipairs(c.links) do
+            local from, to
+            for _, x in ipairs(t.nodes) do
+                if x.id == l.from.id then from = x elseif x.id == l.to.id then to = x end
+            end
+            if from and to then t.links[#t.links + 1] = { from = from, to = to, met = from.rank >= from.max } end
+        end
+        trees[i] = t
+    end
+    self.planTree = tree
+    page:SetBuilds(self:Picker(d, true))
+    page:SetOrder(self:OrderLines(d.steps, tree))
+    local left = UI.TALENT_MAX_POINTS - #d.steps
+    local status, color
+    if d.problem then
+        status, color = "Needs a look: " .. d.problem, "ember"
+    elseif d.dirty then
+        status, color = "Not saved yet · click adds the next step, right-click takes the last back", "arcane"
+    else
+        status = "Click adds the next step, right-click takes the last back · drag a line to move it"
+    end
+    local saved = store().builds[d.id] ~= nil
+    page:SetData({
+        trees = trees, available = left, spentLabel = " planned", editable = true,
+        unspent = ("|cff%s%d|r %s left"):format(T.color.ink.hex, left, plural(left, "point", "points")),
+        status = status, statusColor = color,
+        actions = {
+            secondary = { label = "Discard", enabled = d.dirty, onClick = function() self:DiscardDraft() end },
+            primary = { label = "Save build", enabled = d.dirty and saved, onClick = function() self:SaveDraft() end },
+        },
+    })
+end
+
+function M:PlanAdd(n)
+    local d = self:Draft()
+    local tree = d and self:BuildTree(d.class)
+    if not tree then return end
+    local why = UI.TalentNextProblem(d.steps, tree, n.id)
+    if why then UIErrorsFrame:AddMessage(why, 1, 0.35, 0.21) return end
+    d.steps[#d.steps + 1] = { node = n.id, entry = tree.byID[n.id].choice and n.entryID or nil }
+    d.dirty, d.problem = true, nil
+    self:Render()
+end
+
+function M:PlanRemove(n)
+    local d = self:Draft()
+    local tree = d and self:BuildTree(d.class)
+    if not tree then return end
+    local at
+    for i = #d.steps, 1, -1 do if d.steps[i].node == n.id then at = i break end end
+    if not at then return end
+    local steps = copySteps(d.steps)
+    table.remove(steps, at)
+    local ok, _, why = UI.TalentOrderCheck(steps, tree)
+    if not ok then
+        UI.Confirm({ title = "That rank can't go", text = why, cancel = false })
+        return
+    end
+    d.steps, d.dirty, d.problem = steps, true, nil
+    self:Render()
+end
+
+-- A dragged line: its run of steps in front of line `before` (#lines + 1:
+-- the end), if the rows and arrows allow it; else why not.
+function M:MoveLine(page, from, before)
+    local lines = page.orderLines
+    local line = lines and lines[from]
+    if not line then return end
+    local planning = self:Planning()
+    local b = planning and self:Draft() or self:Viewed()
+    local tree = b and self:BuildTree(b.class)
+    if not tree then return end
+    local run, rest = {}, {}
+    for i, s in ipairs(b.steps) do
+        if i >= line.from and i <= line.to then run[#run + 1] = s else rest[#rest + 1] = s end
+    end
+    -- where it goes: in front of that line's first step, among the rest
+    local target = lines[before]
+    local at = target and target.from or (#b.steps + 1)
+    if at > line.to then at = at - #run end
+    local steps = {}
+    for i = 1, at - 1 do steps[#steps + 1] = rest[i] end
+    for _, s in ipairs(run) do steps[#steps + 1] = s end
+    for i = at, #rest do steps[#steps + 1] = rest[i] end
+    local ok, _, why = UI.TalentOrderCheck(steps, tree)
+    if not ok then
+        UI.Confirm({ title = ("%s can't go there"):format(line.name), text = why, cancel = false,
+            onConfirm = function() self:Render() end, onCancel = function() self:Render() end })
+        return
+    end
+    if planning then
+        b.steps, b.dirty, b.problem = steps, true, nil
+    else
+        -- your active build, shown on your talents: saved at once
+        b.steps, b.updated = steps, time()
+        self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+    end
+    self:Render()
+end
+
+-- A planned talent's tooltip: this build's rank, its text there, the
+-- steps and levels it takes, what a click does or why it can't.
+function M:ShowPlanTip(button, n)
+    local d = self.draft
+    local tree = d and self:BuildTree(d.class)
+    if not tree then return end
+    local tip = GameTooltip
+    tip:SetOwner(button, "ANCHOR_RIGHT")
+    GameTooltip_SetTitle(tip, n.name or "")
+    GameTooltip_AddHighlightLine(tip, ("Rank %d/%d in this build"):format(n.rank, n.max))
+    if n.entryID then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        tip:AppendInfo("GetTraitEntry", n.entryID, math.max(1, n.rank))
+    end
+    local at = {}
+    for i, s in ipairs(d.steps) do if s.node == n.id then at[#at + 1] = i end end
+    if #at > 0 then
+        GameTooltip_AddBlankLineToTooltip(tip)
+        local a, b = at[1], at[#at]
+        local la, lb = self:StepLevel(a), self:StepLevel(b)
+        GameTooltip_AddNormalLine(tip, ("%s %s · %s %s"):format(plural(#at, "Step", "Steps"), a == b and a or (a .. "–" .. b),
+            plural(#at, "level", "levels"), la == lb and la or (la .. "–" .. lb)))
+    end
+    GameTooltip_AddBlankLineToTooltip(tip)
+    if n.problem then
+        GameTooltip_AddErrorLine(tip, n.problem)
+    else
+        GameTooltip_AddInstructionLine(tip, ("Click: step %d, level %d"):format(#d.steps + 1, self:StepLevel(#d.steps + 1)))
+    end
+    if n.rank > 0 then GameTooltip_AddDisabledLine(tip, "Right-click takes its last step back") end
+    tip:Show()
+end
+
+--------------------------------------------------------------------------------
+-- Using a build: what fits is planned on your talents; what's in the way
+-- waits for a trainer (design M: asked first)
+--------------------------------------------------------------------------------
+
+-- Against your learned ranks: the steps that fit now (in order, up to your
+-- points), and the talents in the way (ranks the build doesn't have).
+function M:Fit(b, data)
+    local tree = self:BuildTree(CLASS)
+    local learned, spent = {}, 0
+    for _, t in ipairs(data.trees) do
+        for _, n in ipairs(t.nodes) do
+            learned[n.id] = n.rank
+            spent = spent + n.rank
+        end
+    end
+    local want = {}
+    for _, s in ipairs(b.steps) do want[s.node] = (want[s.node] or 0) + 1 end
+    local conflicts = {}
+    for id, r in pairs(learned) do
+        if r > (want[id] or 0) then
+            local n = tree and tree.byID[id]
+            conflicts[#conflicts + 1] = { node = id, name = n and n.name or "?", treeName = n and n.treeName or "",
+                ranks = r - (want[id] or 0) }
+        end
+    end
+    table.sort(conflicts, function(x, y) return x.name < y.name end)
+    local fits, count, points, seen = {}, {}, data.available or 0, {}
+    for id, r in pairs(learned) do count[id] = r end
+    for _, s in ipairs(b.steps) do
+        seen[s.node] = (seen[s.node] or 0) + 1
+        if seen[s.node] > (learned[s.node] or 0) then
+            if points <= 0 then break end
+            local n = tree and tree.byID[s.node]
+            if not n or UI.TalentStepProblem(tree, n, count, spent) then break end
+            fits[#fits + 1] = s
+            count[s.node] = (count[s.node] or 0) + 1
+            spent, points = spent + 1, points - 1
+        end
+    end
+    return fits, conflicts, learned
+end
+
+-- Plans the steps that fit (the game's staging; Apply learns them).
+function M:StageFits(fits, data)
+    if data.staged then call(C_Traits.RollbackConfig, data.configID) end
+    local n = 0
+    for _, s in ipairs(fits) do
+        if not call(C_Traits.PurchaseRank, data.configID, s.node) then break end
+        n = n + 1
+    end
+    return n
+end
+
+function M:UseBuild(id)
+    local b = store().builds[id]
+    if not b then return end
+    local editable, why = self:Editable()
+    if not editable then
+        UI.Confirm({ title = ("%s can't be used now"):format(b.name), text = why or "Talents can't change right now.", cancel = false })
+        return
+    end
+    local data = self:Collect()
+    if not data then return end
+    local fits, conflicts, learned = self:Fit(b, data)
+    local function go()
+        local _, group = self:SpecGroups()
+        group = self.viewing or group
+        self:SetActive(id, group)
+        self.draft, self.planning, self.buildView = nil, false, id
+        local d = store()
+        local key = charKey()
+        d.reset[key] = d.reset[key] or {}
+        SuuUI.DismissNotification(NOTE_PLANNED)
+        if #conflicts > 0 then
+            d.reset[key][group] = id
+            self:NotifyReset(b, #conflicts)
+        else
+            d.reset[key][group] = nil
+            SuuUI.DismissNotification(NOTE_RESET)
+        end
+        self:StageFits(fits, data)
+        self:Render()
+    end
+    if #conflicts == 0 then go() return end
+    self:AskMismatch(b, fits, conflicts, learned, go)
+end
+
+function M:NotifyReset(b, n, cost)
+    local my = self:Classes()[CLASS]
+    SuuUI.Notify({ id = NOTE_RESET, kind = "until", category = "Talents", icon = { glyph = "tree" },
+        title = "Reset at a trainer to use " .. (b.name or "your build"),
+        body = ("%d %s aren't in it. Any %s trainer can reset them%s."):format(n, plural(n, "talent", "talents"),
+            (my and my.name or "class"):lower(), (cost and GetMoneyString) and (" (" .. GetMoneyString(cost) .. ")") or ""),
+        ["until"] = "Goes when you reset, or pick another build" })
+end
+
+-- After a trainer's reset (every point back): the whole build is planned.
+function M:CheckReset()
+    local d = store()
+    local _, group = self:SpecGroups()
+    local mine = d.reset[charKey()]
+    local id = mine and mine[group]
+    if not id then return end
+    local b = d.builds[id]
+    if not b or self:ActiveID(group) ~= id then
+        mine[group] = nil
+        SuuUI.DismissNotification(NOTE_RESET)
+        return
+    end
+    if not self:Editable() then return end
+    local configID = call(C_ClassTalents.GetActiveConfigID)
+    local data = plain(configID) and configID and self:Collect(configID)
+    if not data or data.staged then return end
+    for _, t in ipairs(data.trees) do
+        for _, n in ipairs(t.nodes) do if n.rank > 0 then return end end
+    end
+    mine[group] = nil
+    SuuUI.DismissNotification(NOTE_RESET)
+    local fits = self:Fit(b, data)
+    local n = self:StageFits(fits, data)
+    SuuUI.Notify({ id = NOTE_PLANNED, kind = "until", category = "Talents", icon = { glyph = "tree" },
+        title = (b.name or "Your build") .. " is planned",
+        body = ("%d %s in its order. Nothing is learned until you apply."):format(n, plural(n, "point", "points")),
+        ["until"] = "Goes when you apply or undo",
+        actions = {
+            { label = "Apply", variant = "primary", onClick = function()
+                self.data = self:Collect()
+                self:Apply()
+                SuuUI.DismissNotification(NOTE_PLANNED)
+            end },
+            { label = "Open talents", onClick = function() if self.window and not self.window:IsShown() then self.window:Show() end end },
+        } })
+    self:QueueRender()
+end
+
+-- Design M: what fits, what's in the way (and in which tree), what a reset
+-- does; nothing changes until you choose.
+function M:AskMismatch(b, fits, conflicts, learned, onUse)
+    local p = self.mismatch
+    if not p then
+        p = UI.Panel(SuuUI.Root, { title = " ", width = 480, height = 300, solid = true })
+        p.lines = {}
+        p.use = UI.Button(p, { text = "Use", variant = "primary", onClick = function()
+            local fn = p.onUse
+            p:Hide()
+            if fn then fn() end
+        end })
+        p.use:SetPoint("BOTTOMRIGHT", -20, 18)
+        p.cancel = UI.Button(p, { text = "Cancel", onClick = function() p:Hide() end })
+        p.cancel:SetPoint("RIGHT", p.use, "LEFT", -S["space-3"], 0)
+        UI.MakeModal(p)
+        self.mismatch = p
+    end
+    for _, l in ipairs(p.lines) do l:Hide() end
+    local used, y = 0, 0
+    local function line(style, color, text)
+        used = used + 1
+        local t = p.lines[used]
+        if not t then
+            t = UI.Text(p.body, style, color)
+            t:SetJustifyH("LEFT")
+            t:SetWordWrap(true)
+            t:SetFixedWidth(440)
+            p.lines[used] = t
+        end
+        t:SetStyle(style)
+        t:SetColor(color)
+        t:SetValue(text)
+        t:ClearAllPoints()
+        t:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -y)
+        t:Show()
+        y = y + math.max(t:GetStringHeight(), T.type[style].lineHeight) + S["space-2"]
+        return t
+    end
+    local tree = self:BuildTree(CLASS)
+    -- the fits by talent: "Flurry, rank 1 · Enhancement"
+    line("header", "gilt-text", "Fits now")
+    if #fits == 0 then line("body", "ink-muted", "Nothing yet: the talents in the way come first.") end
+    local i = 1
+    local seen = {}
+    while i <= #fits do
+        local id = fits[i].node
+        local j = i
+        while fits[j + 1] and fits[j + 1].node == id do j = j + 1 end
+        local n = tree and tree.byID[id]
+        local a = (seen[id] or learned[id] or 0) + 1
+        local z = a + (j - i)
+        seen[id] = z
+        line("body", "ink", ("%s, %s · %s"):format(n and n.name or "?", a == z and ("rank " .. a) or ("ranks " .. a .. "–" .. z),
+            n and n.treeName or ""))
+        i = j + 1
+    end
+    y = y + S["space-3"]
+    line("header", "gilt-text", "Not in this build")
+    for _, c in ipairs(conflicts) do
+        line("body", "ink", ("%s, %d %s · %s"):format(c.name, c.ranks, plural(c.ranks, "rank", "ranks"), c.treeName))
+    end
+    y = y + S["space-3"]
+    line("caption", "ink-muted", "These stay until a trainer resets your talents. Once you do, the whole build is planned for you to apply.")
+    fitDialog(p, y)
+    p:SetTitle(("Use %s?"):format(b.name or "this build"))
+    local n = #fits
+    p.use:SetLabel(n == 0 and "Use it" or ("Use, plan the %d that %s"):format(n, plural(n, "fits", "fit")))
+    p.onUse = onUse
+    p:Show()
+end
+
+--------------------------------------------------------------------------------
+-- New build, and sharing (design J: one dialog, Copy and Import)
+--------------------------------------------------------------------------------
+
+function M:AskNewBuild()
+    local p = self.newBuild
+    local classes = self:Classes()
+    if not p then
+        p = UI.Panel(SuuUI.Root, { title = "New build", width = 360, height = 220, solid = true })
+        p.name = UI.TextField(p.body, { width = 320, placeholder = "Name, e.g. Levelling" })
+        p.name:SetPoint("TOPLEFT")
+        local options = {}
+        for _, c in ipairs(classes.list) do
+            options[#options + 1] = { value = c.file, label = c.name, diamond = "class-" .. c.file:lower() }
+        end
+        p.classLabel = UI.Text(p.body, "caption", "ink-muted")
+        p.classLabel:SetPoint("TOPLEFT", p.name, "BOTTOMLEFT", 0, -S["space-5"])
+        p.classLabel:SetValue("Class")
+        p.class = UI.Select(p.body, { width = 320, options = options, value = CLASS })
+        p.class:SetPoint("TOPLEFT", p.classLabel, "BOTTOMLEFT", 0, -S["space-2"])
+        p.create = UI.Button(p, { text = "Create", variant = "primary", onClick = function()
+            local name = strtrim(p.name.edit:GetText() or "")
+            if name == "" then p.name.edit:SetFocus() return end
+            p:Hide()
+            local id = self:AddBuild(name, p.class.value or CLASS, {})
+            if id then
+                self.draft = nil
+                self.buildView, self.planning = id, true
+                if self.window and not self.window:IsShown() then self.window:Show() end
+                self:Render()
+            end
+        end })
+        p.create:SetPoint("BOTTOMRIGHT", -20, 18)
+        p.cancel = UI.Button(p, { text = "Cancel", onClick = function() p:Hide() end })
+        p.cancel:SetPoint("RIGHT", p.create, "LEFT", -S["space-3"], 0)
+        p.name.edit:HookScript("OnEnterPressed", function() p.create:Click() end)
+        fitDialog(p, 30 + S["space-5"] + T.type.caption.lineHeight + S["space-2"] + 30)
+        UI.MakeModal(p)
+        self.newBuild = p
+    end
+    self:Leave(function()
+        p.name:SetValue("")
+        p.class:SetValue(CLASS)
+        p:Show()
+        p.name.edit:SetFocus()
+    end)
+end
+
+-- The game's string for a build (any class: written from the tree as the
+-- game writes it), or nil.
+function M:GameString(b)
+    local tree = self:BuildTree(b.class)
+    if not tree then return nil end
+    local version = call(C_Traits.GetLoadoutSerializationVersion)
+    local hash = call(C_Traits.GetTreeHash, tree.treeID)
+    if not (plain(version) and version and type(hash) == "table") then return nil end
+    local ranks, entries = {}, {}
+    for _, s in ipairs(b.steps) do
+        ranks[s.node] = (ranks[s.node] or 0) + 1
+        local n = tree.byID[s.node]
+        if n and n.choice and s.entry then
+            for i, e in ipairs(n.entryIDs) do if e == s.entry then entries[s.node] = i end end
+        end
+    end
+    local ok, text = pcall(UI.WriteGameTalentString, version, tree.specID, hash, tree, ranks, entries)
+    return ok and text or nil
+end
+
+function M:ShareText(b)
+    local tree = self:BuildTree(b.class)
+    return UI.EncodeTalentBuild({ name = b.name, classID = b.classID, treeID = b.treeID, steps = b.steps }, function(s)
+        local n = tree and tree.byID[s.node]
+        if not (n and n.choice) then return nil end
+        for i, e in ipairs(n.entryIDs) do if e == s.entry then return i end end
+    end)
+end
+
+-- What was pasted: a build to preview ({ name, class, steps, fromGame,
+-- note }), or nil and why not.
+function M:ReadPasted(text)
+    text = strtrim(text or "")
+    if text == "" then return nil end
+    local classes = self:Classes()
+    if text:find("^SuuUI:") then
+        local b, why = UI.DecodeTalentBuild(text)
+        if not b then return nil, why end
+        local class
+        for _, c in ipairs(classes.list) do if c.classID == b.classID then class = c end end
+        if not class then return nil, "That class has no talents here." end
+        local tree = self:BuildTree(class.file)
+        if not tree then return nil, "That class's talents can't be read right now." end
+        local steps = {}
+        for i, s in ipairs(b.steps) do
+            local n = tree.byID[s.node]
+            steps[i] = { node = s.node, entry = n and s.entryIndex and n.entryIDs[s.entryIndex] or nil }
+        end
+        local ok, _, problem = UI.TalentOrderCheck(steps, tree)
+        return { name = b.name ~= "" and b.name or "Shared build", class = class.file, steps = steps,
+            note = (not ok) and ("Needs a look: " .. problem) or (b.treeID ~= tree.treeID and "Made for another version of the talents.") or nil }
+    end
+    local version, specID = UI.ReadGameTalentHeader(text)
+    if not version then return nil, "This isn't SuuUI's text or the game's talent string." end
+    local class
+    for _, c in ipairs(classes.list) do if c.specID == specID then class = c end end
+    if not class then return nil, "This talent string is for a class without talents here." end
+    local tree = self:BuildTree(class.file)
+    if not tree then return nil, "That class's talents can't be read right now." end
+    local read, why = UI.ReadGameTalentString(text, tree)
+    if not read then return nil, why end
+    local entries = {}
+    for id, i in pairs(read.entries) do
+        local n = tree.byID[id]
+        entries[id] = n and n.entryIDs[i] or nil
+    end
+    local steps, all = UI.TalentStepsFromRanks(read.ranks, tree, entries)
+    return { name = "Imported build", class = class.file, steps = steps, fromGame = true,
+        note = (not all) and "Some talents don't fit their rows or arrows; check the order." or nil }
+end
+
+-- "36 points · Arcane 5, Fire 0, Frost 31 · levels 10–45, in order"
+function M:BuildSummary(file, steps)
+    local tree = self:BuildTree(file)
+    local per = {}
+    for i, c in ipairs(tree and tree.trees or {}) do per[i] = { name = c.name, n = 0 } end
+    for _, s in ipairs(steps) do
+        local n = tree and tree.byID[s.node]
+        if n and per[n.treeIndex] then per[n.treeIndex].n = per[n.treeIndex].n + 1 end
+    end
+    local parts = {}
+    for _, t in ipairs(per) do parts[#parts + 1] = t.name .. " " .. t.n end
+    local text = ("%d %s"):format(#steps, plural(#steps, "point", "points"))
+    if #parts > 0 then text = text .. " · " .. table.concat(parts, ", ") end
+    if #steps > 0 then text = text .. (" · levels %d–%d, in order"):format(self:StepLevel(1), self:StepLevel(#steps)) end
+    return text
+end
+
+function M:ShowShare(mode)
+    local p = self.share
+    if not p then
+        p = UI.Panel(SuuUI.Root, { title = " ", width = 460, height = 300, solid = true })
+        local W = 420
+        p.switch = UI.Segmented(p.body, { options = { { value = "copy", label = "Copy" }, { value = "import", label = "Import" } },
+            onChange = function(v) self:ShowShare(v) end })
+        p.switch:SetPoint("TOPLEFT")
+        -- Copy
+        p.copy = CreateFrame("Frame", nil, p.body)
+        p.copy:SetPoint("TOPLEFT", p.switch, "BOTTOMLEFT", 0, -S["space-5"])
+        p.copy:SetSize(W, 10)
+        p.text = UI.TextField(p.copy, { width = W, onTextChanged = function() p.reselect() end })
+        p.text:SetPoint("TOPLEFT")
+        p.textHint = UI.Text(p.copy, "caption", "ink-muted")
+        p.textHint:SetPoint("TOPLEFT", p.text, "BOTTOMLEFT", 0, -S["space-2"])
+        p.textHint:SetFixedWidth(W)
+        p.textHint:SetWordWrap(true)
+        p.textHint:SetJustifyH("LEFT")
+        p.textHint:SetValue("Selected: press Ctrl+C (Cmd+C on a Mac), then paste it in chat or a guide. Fits one chat line.")
+        p.gameLabel = UI.Text(p.copy, "caption", "ink-muted")
+        p.gameLabel:SetValue("The game's talent string (no order, no name)")
+        p.game = UI.TextField(p.copy, { width = W, onTextChanged = function() p.reselect() end })
+        -- Import
+        p.import = CreateFrame("Frame", nil, p.body)
+        p.import:SetPoint("TOPLEFT", p.switch, "BOTTOMLEFT", 0, -S["space-5"])
+        p.import:SetSize(W, 10)
+        p.paste = UI.TextField(p.import, { width = W, placeholder = "Paste SuuUI text or the game's string",
+            onTextChanged = function(text) self:PreviewPaste(text) end })
+        p.paste:SetPoint("TOPLEFT")
+        p.diamond = UI.Diamond(p.import, 7, "ink", "OVERLAY")
+        p.diamond:SetPoint("TOPLEFT", p.paste, "BOTTOMLEFT", 1, -(S["space-5"] + 6))
+        p.previewName = UI.Text(p.import, "label", "ink")
+        p.previewName:SetPoint("LEFT", p.diamond, "RIGHT", S["space-3"], 0)
+        p.previewClass = UI.Text(p.import, "caption", "ink-muted")
+        p.previewClass:SetPoint("LEFT", p.previewName, "RIGHT", S["space-4"], 0)
+        p.previewLine = UI.Text(p.import, "caption", "ink")
+        p.previewLine:SetPoint("TOPLEFT", p.paste, "BOTTOMLEFT", 0, -(S["space-5"] + 22))
+        p.previewLine:SetFixedWidth(W)
+        p.previewLine:SetJustifyH("LEFT")
+        p.previewNote = UI.Text(p.import, "caption", "ink-muted")
+        p.previewNote:SetPoint("TOPLEFT", p.previewLine, "BOTTOMLEFT", 0, -S["space-2"])
+        p.previewNote:SetFixedWidth(W)
+        p.previewNote:SetWordWrap(true)
+        p.previewNote:SetJustifyH("LEFT")
+        -- the buttons
+        p.ok = UI.Button(p, { text = "Done", variant = "primary", onClick = function()
+            if p.mode == "import" then
+                local found = p.found
+                if not found then return end
+                p:Hide()
+                local id = self:AddBuild(found.name, found.class, found.steps)
+                if id then
+                    self.draft = nil
+                    self.buildView, self.planning = id, true
+                    if self.window and not self.window:IsShown() then self.window:Show() end
+                    self:Render()
+                end
+            else
+                p:Hide()
+            end
+        end })
+        p.ok:SetPoint("BOTTOMRIGHT", -20, 18)
+        p.cancel = UI.Button(p, { text = "Cancel", onClick = function() p:Hide() end })
+        p.cancel:SetPoint("RIGHT", p.ok, "LEFT", -S["space-3"], 0)
+        -- the copy fields stay as written, all selected
+        function p.reselect()
+            for _, f in ipairs({ p.text, p.game }) do
+                if f.edit:GetText() ~= (f.shared or "") then f.edit:SetText(f.shared or "") end
+                if f.edit:HasFocus() then f.edit:HighlightText() end
+            end
+        end
+        UI.MakeModal(p)
+        self.share = p
+    end
+    local b = self:Viewed()
+    if mode == "copy" and not b then mode = "import" end
+    p.mode = mode
+    p.switch:SetValue(mode)
+    p.copy:SetShown(mode == "copy")
+    p.import:SetShown(mode == "import")
+    local height
+    if mode == "copy" then
+        p:SetTitle("Share " .. (b.name or "build"))
+        p.text.shared = self:ShareText(b) or ""
+        p.text:SetValue(p.text.shared)
+        local game = self:GameString(b)
+        p.game.shared = game or ""
+        p.game:SetValue(p.game.shared)
+        p.gameLabel:SetShown(game ~= nil)
+        p.game:SetShown(game ~= nil)
+        p.gameLabel:ClearAllPoints()
+        p.gameLabel:SetPoint("TOPLEFT", p.textHint, "BOTTOMLEFT", 0, -S["space-5"])
+        p.game:ClearAllPoints()
+        p.game:SetPoint("TOPLEFT", p.gameLabel, "BOTTOMLEFT", 0, -S["space-2"])
+        p.ok:SetLabel("Done")
+        p.ok:SetEnabledState(true)
+        p.cancel:Hide()
+        height = 30 + S["space-5"] + 30 + S["space-2"] + 2 * T.type.caption.lineHeight
+            + (game and (S["space-5"] + T.type.caption.lineHeight + S["space-2"] + 30) or 0)
+    else
+        p:SetTitle("Import a build")
+        p.paste:SetValue("")
+        self:PreviewPaste("")
+        p.ok:SetLabel("Save build")
+        p.cancel:Show()
+        height = 30 + S["space-5"] + 30 + S["space-5"] + 22 + T.type.caption.lineHeight * 4 + S["space-2"]
+    end
+    fitDialog(p, height)
+    p:Show()
+    if mode == "copy" then
+        C_Timer.After(0, function()
+            p.text.edit:SetFocus()
+            p.text.edit:SetCursorPosition(0)
+            p.text.edit:HighlightText()
+        end)
+    else
+        p.paste.edit:SetFocus()
+    end
+end
+
+function M:PreviewPaste(text)
+    local p = self.share
+    if not p then return end
+    local found, why = self:ReadPasted(text)
+    p.found = found
+    p.ok:SetEnabledState(found ~= nil)
+    p.diamond:SetShown(found ~= nil)
+    p.previewName:SetShown(found ~= nil)
+    p.previewClass:SetShown(found ~= nil)
+    if found then
+        local class = self:Classes()[found.class]
+        UI.Paint(p.diamond, "class-" .. found.class:lower())
+        p.previewName:SetColor("class-" .. found.class:lower())
+        p.previewName:SetValue(found.name)
+        p.previewClass:SetValue(class and class.name or "")
+        p.previewLine:SetColor("ink")
+        p.previewLine:SetValue(self:BuildSummary(found.class, found.steps))
+        local note = found.note
+        if found.fromGame then
+            note = (note and (note .. " ") or "") .. "From the game's string the order can't come along: the points are ordered top to bottom, and it's named \"Imported build\"."
+        end
+        p.previewNote:SetValue(note or "")
+    else
+        p.previewLine:SetColor(why and "ember-text" or "ink-muted")
+        p.previewLine:SetValue(why or "What you paste shows here before it's saved.")
+        p.previewNote:SetValue("")
+    end
+end
+
+--------------------------------------------------------------------------------
 -- SuuUI's own Talents window (asked for in game: open beside the Spellbook,
 -- which Blizzard's spells window can't: one tab at a time). N and the micro
 -- menu's Talents button open it; in the middle of the screen.
@@ -395,9 +1536,16 @@ function M:WindowHeight()
     return 44 + PAGE_H + 16 + ((self:SpecGroups() > 1 and not self.inspectUnit) and SPECS_H or 0)
 end
 
+-- Sized before the page fills (its trees measure the room they get): the
+-- build picker (your own talents) is taller than the summary line it
+-- replaces, and a build shown adds its order panel.
 function M:FitWindow()
     local w = self.window
-    if w then w:SetSize(UI.TALENT_TREE_W + 40, self:WindowHeight()) end
+    if not w then return end
+    local builds = not self.inspectUnit
+    local order = builds and self:Viewed() ~= nil
+    local extra = builds and math.max(0, 30 - T.type.label.lineHeight) or 0
+    w:SetSize(UI.TALENT_TREE_W + 40 + (order and UI.TALENT_ORDER_W or 0), self:WindowHeight() + extra)
 end
 
 function M:BuildWindow()
@@ -425,6 +1573,11 @@ function M:BuildWindow()
     -- Talents didn't close Legacy, found in game)
     f:HookScript("OnShow", function()
         PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_OPEN or 839)
+        -- your active build, unless a plan with changes is still open
+        if not (self.draft and self.draft.dirty) then
+            self.draft, self.planning = nil, false
+            self.buildView = self:ActiveID()
+        end
         self:Render()
         self:Emit("SUUUI_TALENTS_SHOWN", true)
     end)
@@ -515,13 +1668,24 @@ function M:Restore()
 end
 
 function M:Wire(page)
-    page.onClick = function(n) self:Purchase(n) end
-    page.onRemove = function(n) self:Refund(n) end
-    page.onEnter = function(b, n) self:ShowTip(b, n, page.data) end
+    -- a build's talents (planning) or yours
+    page.onClick = function(n) if n.build then self:PlanAdd(n) else self:Purchase(n) end end
+    page.onRemove = function(n) if n.build then self:PlanRemove(n) else self:Refund(n) end end
+    page.onEnter = function(b, n) if n.build then self:ShowPlanTip(b, n) else self:ShowTip(b, n, page.data) end end
     page.onLeave = function() GameTooltip:Hide() end
     page.onApply = function() self:Apply() end
     page.onUndo = function() self:Undo() end
-    page.onSpec = function(i) self.viewing = i; self:Render() end
+    page.onOrderEnter = function(line) page:MarkNode(line.node) end
+    page.onOrderLeave = function() page:MarkNode(nil) end
+    page.onOrderMove = function(from, before) self:MoveLine(page, from, before) end
+    -- the other talent group: its own active build
+    page.onSpec = function(i)
+        self:Leave(function()
+            self.viewing, self.planning = i, false
+            self.buildView = self:ActiveID(i)
+            self:Render()
+        end)
+    end
     page.onBack = function() if self.window then self.window:Hide() end end
     page.onActivate = function()
         if InCombatLockdown() or not self.viewing then return end
@@ -596,7 +1760,22 @@ function M:OnEnable()
         Toggle = function() self:Toggle() end,
         ShowInspect = function(unit) self:ShowInspect(unit) end,
         IsShown = function() return self.window and self.window:IsShown() or false end,
+        NextTalent = function() return self:NextTalent() end,
     })
+    -- a trainer's reset offered: what it costs, on the reset notice
+    self:OnGameEvent("CONFIRM_TALENT_WIPE", function(_, cost)
+        local mine = store().reset[charKey()]
+        local _, group = self:SpecGroups()
+        local b = mine and mine[group] and store().builds[mine[group]]
+        if b and plain(cost) then
+            local data = self:Collect(call(C_ClassTalents.GetActiveConfigID))
+            if not data then return end
+            local _, conflicts = self:Fit(b, data)
+            self:NotifyReset(b, #conflicts, cost)
+        end
+    end)
+    -- learned talents change the next one (the points notice asks again)
+    self:OnGameEvent("PLAYER_TALENT_UPDATE", function() self:Emit("SUUUI_TALENT_BUILD_CHANGED") end)
     self:OnGameEvent("UPDATE_BINDINGS", function() self:BindKeys() end)
     self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
     -- another player's talents: drawn when they arrive

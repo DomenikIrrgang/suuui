@@ -16,12 +16,31 @@
 --       Shaman), the points per tree by name and a "Read only" badge;
 --       readOnly = true: no points to spend, Undo or Apply; back = "label":
 --       a button at the foot's right (tt.onBack())
+--     0.17 (talent builds): actions = { primary = { label, enabled, onClick },
+--       secondary = { … } } in place of Apply and Undo; status = text and
+--       statusColor = token in place of the planned points' line; unspent =
+--       text in place of "N points to spend"
 --   tt.noSummary = true   -- no summary line (a page with its own head)
 --   tt.fillPanels = true  -- the trees' panels down to the foot (a taller page)
 --     node = { row, col, rank, pending, max, icon, locked, canSpend, ... }
+--       0.17: next = true: the build's next talent (a fel ring and a Next tag)
 --     link = { from = node, to = node, met }
 --   tt.onClick(node) / onRemove(node) / onEnter(button, node) / onLeave()
 --   tt.onApply() / onUndo() / onSpec(i) / onActivate()
+--
+-- 0.17, talent builds (design board "Talent builds", B and F):
+--   tt:SetBuilds({ options, value, onChange, foot, diamond, badge, buttons })
+--     the build picker in the summary's place: a Select of `options` (its
+--     search always shown; `foot` its links), the class `diamond` token left
+--     of it, a `badge` ("Active") after it, `buttons` ({ label, variant,
+--     onClick, disabled, reason }) at the row's right; nil: the summary
+--   tt:SetOrder(lines)     -- the order panel right of the trees (nil: none);
+--     lines = { { levels = "10–14", name, ranks = "1–5", icon, state =
+--     "learned"|"next"|nil, node } }; hovering one calls tt.onOrderEnter(line)
+--     and tt.onOrderLeave(); dragging one calls tt.onOrderMove(from, before)
+--     (before: the index of the line it goes in front of, #lines + 1 the end)
+--   tt:MarkNode(nodeID)    -- outlines one talent (the hovered line's), nil: none
+--   UI.TALENT_ORDER_W      -- the width the order panel adds to the page
 --
 -- A node: full or partly learned in ink; one that can take a point in arcane
 -- with a glow; planned points (not applied yet) with an arcane badge; locked
@@ -46,6 +65,11 @@ local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 -- The width the page needs: three panels and their gaps.
 local PANEL_W = GRAPH_W + PAD * 2
 UI.TALENT_TREE_W = PANEL_W * 3 + GAP * 2
+-- the order panel (talent builds): its lines and the room it adds
+local ORDER_W = 220
+local LINE_H, LINE_STEP = 22, 23
+UI.TALENT_ORDER_W = ORDER_W + GAP
+local PICKER_H = 30
 
 local function hex(token) return T.color[token].hex end
 local live = setmetatable({}, { __mode = "k" }) -- built trees, drawn again on a theme change
@@ -69,10 +93,32 @@ local function drawNode(b)
     elseif d.locked then border = "gilt-faint"
     elseif some then border = "ink"
     else border = "gilt-hairline" end
-    if b.hover and not d.locked then border = "gilt" end
+    if (b.hover or b.marked) and not d.locked then border = "gilt" end
+    if b.marked then border = "gilt" end
     b.icon:SetState((d.locked or not some) and "dim" or "rest")
     b.icon:SetBorder(border)
-    b.icon:SetGlow(canSpend and "glow-arcane" or nil)
+    b.icon:SetGlow(b.marked and "glow-ward" or (canSpend and "glow-arcane" or nil))
+    -- the build's next talent: a fel ring and a Next tag above it
+    if d.next and not b.ring then
+        b.ring = CreateFrame("Frame", nil, b)
+        b.ring:SetPoint("TOPLEFT", -4, 4)
+        b.ring:SetPoint("BOTTOMRIGHT", 4, -4)
+        b.ring:SetFrameLevel(b:GetFrameLevel() + 2)
+        UI.Border(b.ring, "fel", { width = 2 })
+        b.tag = CreateFrame("Frame", nil, b)
+        b.tag:SetFrameLevel(b:GetFrameLevel() + 5)
+        b.tag:SetHeight(12)
+        b.tag:SetPoint("BOTTOMLEFT", b, "TOPLEFT", -4, 5)
+        UI.Fill(b.tag, "fel"):SetAllPoints()
+        b.tag.text = UI.Text(b.tag, "micro", "on-signal")
+        b.tag.text:SetPoint("CENTER", 0, 0)
+        b.tag.text:SetValue("Next")
+    end
+    if b.ring then
+        b.ring:SetShown(d.next and true or false)
+        b.tag:SetShown(d.next and true or false)
+        b.tag:SetWidth(math.ceil(b.tag.text:GetUnboundedStringWidth()) + 8)
+    end
     local badge = b.badge
     badge.text:SetValue(total .. "/" .. (d.max or 1))
     badge:SetWidth(math.ceil(badge.text:GetUnboundedStringWidth()) + 6)
@@ -207,6 +253,218 @@ local function fillPanel(tt, p, t)
 end
 
 --------------------------------------------------------------------------------
+-- The order panel (talent builds, design F): one line per run of a talent's
+-- ranks, in the build's order; a line drags to another place
+--------------------------------------------------------------------------------
+
+-- How far the cursor is below the top of `frame`, in its own scale.
+local function cursorBelow(frame)
+    local top = frame:GetTop()
+    if not top then return nil end
+    local _, y = GetCursorPosition()
+    return top - y / frame:GetEffectiveScale()
+end
+
+local function smallTag(parent, text)
+    local tag = CreateFrame("Frame", nil, parent)
+    tag:SetHeight(12)
+    UI.Fill(tag, "fel"):SetAllPoints()
+    tag.text = UI.Text(tag, "micro", "on-signal")
+    tag.text:SetPoint("CENTER", 0, 0)
+    tag.text:SetValue(text)
+    return tag
+end
+
+local function drawLine(l)
+    local d = l.data
+    local on = l.hover or l.dragged
+    l.hoverFill:SetShown(on and true or false)
+    l.edge:SetShown(on and true or false)
+    local learned = d.state == "learned"
+    l.levels:SetColor(learned and "ink-faint" or "ink-muted")
+    l.name:SetColor(learned and "ink-muted" or "ink")
+    l.icon:SetDesaturated(learned)
+    l.icon:SetAlpha(learned and 0.6 or 1)
+    l.tag:SetShown(d.state == "next")
+    l.tag:SetWidth(math.ceil(l.tag.text:GetUnboundedStringWidth()) + 8)
+    l:SetAlpha(l.dragged and 0.4 or 1)
+end
+
+local function makeLine(tt, o)
+    local l = CreateFrame("Button", nil, o.scroll.child)
+    l:SetHeight(LINE_H)
+    l.hoverFill = UI.Fill(l, "surface-raised")
+    l.hoverFill:SetAllPoints()
+    l.hoverFill:Hide()
+    l.edge = UI.Border(l, "arcane")
+    l.edge:SetShown(false)
+    l.levels = UI.Text(l, "micro", "ink-muted")
+    l.levels:SetPoint("LEFT", S["space-3"], 0)
+    l.icon = l:CreateTexture(nil, "ARTWORK")
+    l.icon:SetSize(16, 16)
+    l.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    l.icon:SetPoint("LEFT", S["space-3"] + 40, 0)
+    l.tag = smallTag(l, "Next")
+    l.tag:SetPoint("RIGHT", -S["space-3"], 0)
+    l.name = UI.Text(l, "caption", "ink")
+    l.name:SetPoint("LEFT", l.icon, "RIGHT", S["space-3"], 0)
+    l.name:SetPoint("RIGHT", l.tag, "LEFT", -S["space-2"], 0)
+    l.name:SetJustifyH("LEFT")
+    l.name:SetWordWrap(false)
+    l:SetScript("OnEnter", function(self)
+        self.hover = true
+        drawLine(self)
+        if not o.dragging and tt.onOrderEnter then tt.onOrderEnter(self.data, self) end
+    end)
+    l:SetScript("OnLeave", function(self)
+        self.hover = false
+        drawLine(self)
+        if not o.dragging and tt.onOrderLeave then tt.onOrderLeave(self.data) end
+    end)
+    l:SetScript("OnMouseDown", function(self, button)
+        if button ~= "LeftButton" then return end
+        o.press = { index = self.index, y = cursorBelow(o.scroll.child) or 0, line = self }
+    end)
+    l:SetScript("OnMouseUp", function() o.finish() end)
+    return l
+end
+
+local function makeOrder(tt)
+    local o = CreateFrame("Frame", nil, tt)
+    UI.Fill(o, "surface-sunk"):SetAllPoints()
+    UI.Border(o, "gilt-faint")
+    o.title = UI.Text(o, "header", "gilt-text")
+    o.title:SetPoint("TOPLEFT", PAD, -PAD)
+    o.title:SetValue("Order")
+    o.count = UI.Text(o, "numeric", "ink")
+    o.count:SetPoint("TOPRIGHT", -PAD, -PAD)
+    o.scroll = UI.ScrollArea(o, 2)
+    o.scroll:SetPoint("TOPLEFT", o, "TOPLEFT", S["space-2"], -(PAD + HEAD_H + PAD))
+    o.scroll:SetPoint("BOTTOMRIGHT", o, "BOTTOMRIGHT", -(S["space-2"] + 6), PAD)
+    o.scroll:HookScript("OnSizeChanged", function(sc, w) sc.child:SetWidth(w) end)
+    o.empty = UI.Text(o.scroll.child, "caption", "ink-muted")
+    o.empty:SetPoint("TOPLEFT", S["space-3"], -S["space-2"])
+    o.empty:SetPoint("RIGHT", -S["space-3"], 0)
+    o.empty:SetJustifyH("LEFT")
+    o.empty:SetWordWrap(true)
+    o.empty:SetValue("Click talents in the order you'll learn them.")
+    o.lines = {}
+    -- where a dragged line lands: an arcane rule between two lines
+    o.drop = o.scroll.child:CreateTexture(nil, "OVERLAY")
+    UI.PaintFill(o.drop, "arcane")
+    o.drop:SetHeight(2)
+    o.drop:Hide()
+    -- the dragged line, lifted onto a plate under the cursor
+    o.plate = CreateFrame("Frame", nil, o.scroll.child)
+    o.plate:SetHeight(LINE_H)
+    o.plate:SetFrameLevel(o.scroll.child:GetFrameLevel() + 10)
+    UI.Fill(o.plate, "surface-raised"):SetAllPoints()
+    UI.Border(o.plate, "arcane")
+    o.plate.icon = o.plate:CreateTexture(nil, "ARTWORK")
+    o.plate.icon:SetSize(16, 16)
+    o.plate.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    o.plate.icon:SetPoint("LEFT", S["space-3"] + 40, 0)
+    o.plate.name = UI.Text(o.plate, "caption", "ink")
+    o.plate.name:SetPoint("LEFT", o.plate.icon, "RIGHT", S["space-3"], 0)
+    o.plate:Hide()
+
+    local function slot()
+        local y = cursorBelow(o.scroll.child) or 0
+        local n = #(tt.orderLines or {})
+        return math.max(0, math.min(n, math.floor((y + LINE_STEP / 2) / LINE_STEP))), y
+    end
+    function o.finish()
+        local press, dragging = o.press, o.dragging
+        o.press, o.dragging = nil, nil
+        o.drop:Hide()
+        o.plate:Hide()
+        if press and press.line then press.line.dragged = false; drawLine(press.line) end
+        if not (press and dragging) then return end
+        local before = slot() + 1
+        if before ~= press.index and before ~= press.index + 1 and tt.onOrderMove then
+            tt.onOrderMove(press.index, before)
+        end
+    end
+    o:SetScript("OnUpdate", function()
+        local press = o.press
+        if not press then return end
+        if not IsMouseButtonDown("LeftButton") then o.finish() return end
+        local s, y = slot()
+        if not o.dragging then
+            if math.abs(y - press.y) < 4 then return end
+            o.dragging = true
+            press.line.dragged = true
+            drawLine(press.line)
+            o.plate:SetWidth(press.line:GetWidth())
+            o.plate.icon:SetTexture(press.line.data.icon or 134400)
+            o.plate.name:SetValue(press.line.name:GetText() or "")
+            o.plate:Show()
+            if tt.onOrderLeave then tt.onOrderLeave(press.line.data) end
+        end
+        o.plate:ClearAllPoints()
+        o.plate:SetPoint("TOPLEFT", o.scroll.child, "TOPLEFT", 0, -(y - LINE_H / 2))
+        o.drop:ClearAllPoints()
+        o.drop:SetPoint("TOPLEFT", o.scroll.child, "TOPLEFT", 0, -(s * LINE_STEP) + 1)
+        o.drop:SetPoint("RIGHT", o.scroll.child, "RIGHT", 0, 0)
+        o.drop:Show()
+        -- near an edge the list scrolls along
+        local sc = o.scroll
+        local at = cursorBelow(sc)
+        local max = math.max(0, sc.child:GetHeight() - sc:GetHeight())
+        if at and at < 14 then
+            sc:SetVerticalScroll(math.max(0, sc:GetVerticalScroll() - 4))
+        elseif at and at > sc:GetHeight() - 14 then
+            sc:SetVerticalScroll(math.min(max, sc:GetVerticalScroll() + 4))
+        end
+    end)
+    return o
+end
+
+function TT:SetOrder(lines)
+    self.orderLines = lines
+    if lines and not self.order then self.order = makeOrder(self) end
+    local o = self.order
+    if o then
+        o:SetShown(lines ~= nil)
+        if lines then
+            o.empty:SetShown(#lines == 0)
+            local steps = 0
+            for i, d in ipairs(lines) do
+                local l = o.lines[i] or makeLine(self, o)
+                o.lines[i] = l
+                l.data, l.index = d, i
+                l:ClearAllPoints()
+                l:SetPoint("TOPLEFT", o.scroll.child, "TOPLEFT", 0, -(i - 1) * LINE_STEP)
+                l:SetPoint("RIGHT", o.scroll.child, "RIGHT", 0, 0)
+                l.levels:SetValue(d.levels or "")
+                l.icon:SetTexture(d.icon or 134400)
+                local ranks = d.ranks and d.ranks ~= "" and (" |cff" .. hex("ink-muted") .. d.ranks .. "|r") or ""
+                l.name:SetValue((d.name or "") .. ranks)
+                drawLine(l)
+                l:Show()
+                steps = steps + (d.count or 1)
+            end
+            for i = #lines + 1, #o.lines do o.lines[i]:Hide(); o.lines[i].data = nil end
+            o.scroll.child:SetHeight(math.max(1, #lines * LINE_STEP))
+            o.count:SetValue(tostring(steps))
+        end
+    end
+    self:Layout()
+end
+
+function TT:MarkNode(nodeID)
+    for _, p in ipairs(self.panels) do
+        for _, b in ipairs(p.nodes) do
+            local marked = nodeID ~= nil and b.data ~= nil and b.data.id == nodeID
+            if (b.marked or false) ~= marked then
+                b.marked = marked
+                drawNode(b)
+            end
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
 -- The page
 --------------------------------------------------------------------------------
 
@@ -237,6 +495,62 @@ function TT:SetSpecs(list, viewing)
     self:Layout()
 end
 
+-- The build picker in the summary's place (nil: the summary as before).
+function TT:SetBuilds(b)
+    self.builds = b
+    if b and not self.picker then
+        self.picker = UI.Select(self.summary, { width = 280, search = "always", maxRows = 12, minListWidth = 300,
+            onChange = function(v) if self.builds and self.builds.onChange then self.builds.onChange(v) end end })
+        self.pickerBadge = UI.StateBadge(self.summary, "neutral", "Active")
+        self.pickerButtons = {}
+    end
+    if self.picker then
+        self.picker:SetShown(b ~= nil)
+        self.pickerBadge:SetShown(b ~= nil and b.badge ~= nil)
+        if b then
+            self.picker.foot = b.foot
+            self.picker:SetOptions(b.options or {})
+            self.picker:SetValue(b.value)
+            if b.badge then self.pickerBadge:SetState("neutral", b.badge) end
+            self.picker:ClearAllPoints()
+            if b.diamond and T.color[b.diamond] then
+                self.summaryDiamond:Show()
+                UI.Paint(self.summaryDiamond, b.diamond)
+                self.picker:SetPoint("LEFT", self.summary, "LEFT", 14, 0)
+            else
+                self.summaryDiamond:Hide()
+                self.picker:SetPoint("LEFT", self.summary, "LEFT", 0, 0)
+            end
+            self.pickerBadge:ClearAllPoints()
+            self.pickerBadge:SetPoint("LEFT", self.picker, "RIGHT", S["space-4"], 0)
+        end
+        -- the row's buttons, right to left
+        local last
+        for i, def in ipairs(b and b.buttons or {}) do
+            local btn = self.pickerButtons[i]
+            if not btn then
+                btn = UI.Button(self.summary, { text = def.label, variant = def.variant or "quiet",
+                    onClick = function(x) if x.def and x.def.onClick and not x.def.disabled then x.def.onClick() end end })
+                btn:HookScript("OnEnter", function(x)
+                    if x.def and x.def.reason then UI.ShowTooltip(x, { title = x.def.label, description = x.def.reason }) end
+                end)
+                btn:HookScript("OnLeave", function() UI.HideTooltip() end)
+                self.pickerButtons[i] = btn
+            end
+            btn.def = def
+            btn:SetLabel(def.label)
+            btn:SetEnabledState(not def.disabled)
+            btn:ClearAllPoints()
+            if last then btn:SetPoint("RIGHT", last, "LEFT", -S["space-3"], 0)
+            else btn:SetPoint("RIGHT", self.summary, "RIGHT", 0, 0) end
+            btn:Show()
+            last = btn
+        end
+        for i = #(b and b.buttons or {}) + 1, #self.pickerButtons do self.pickerButtons[i]:Hide() end
+    end
+    self:Layout()
+end
+
 function TT:Layout()
     local top = 0
     if self.specRow:IsShown() then
@@ -250,11 +564,19 @@ function TT:Layout()
     self.summary:SetPoint("RIGHT", self, "RIGHT", 0, 0)
     self.summary:SetShown(not self.noSummary)
     local sh = self.headShown and T.type["unit-name-lg"].lineHeight or T.type.label.lineHeight
+    if self.builds then sh = PICKER_H end
     self.summary:SetHeight(sh)
     if not self.noSummary then top = top + sh + S["space-5"] end
+    local order = self.order and self.order:IsShown()
     self.treesRow:ClearAllPoints()
     self.treesRow:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
-    self.treesRow:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, FOOT_H + S["space-5"])
+    self.treesRow:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", order and -UI.TALENT_ORDER_W or 0, FOOT_H + S["space-5"])
+    if order then
+        self.order:ClearAllPoints()
+        self.order:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, -top)
+        self.order:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, FOOT_H + S["space-5"])
+        self.order:SetWidth(ORDER_W)
+    end
 end
 
 function TT:SetData(d)
@@ -269,7 +591,8 @@ function TT:SetData(d)
         self.headShown = head ~= nil
         self:Layout()
     end
-    self.summaryDiamond:SetShown(head ~= nil)
+    local builds = self.builds ~= nil and not head
+    self.summaryDiamond:SetShown(head ~= nil or (builds and self.builds.diamond ~= nil))
     self.summaryBadge:SetShown(head ~= nil)
     self.summaryLine:SetShown(head ~= nil)
     self.summaryName:ClearAllPoints()
@@ -290,11 +613,13 @@ function TT:SetData(d)
         self.summaryName:SetStyle("label")
         self.summaryName:SetColor("ink")
         self.summaryName:SetPoint("LEFT")
-        self.summaryName:SetValue(d.name or "")
-        self.summaryPoints:SetValue(#per > 0 and (table.concat(per, " / ") .. " · " .. total .. " spent") or "")
+        self.summaryName:SetValue(builds and "" or (d.name or ""))
+        self.summaryPoints:SetValue(#per > 0 and (table.concat(per, " / ") .. " · " .. total .. (d.spentLabel or " spent")) or "")
     end
     self.summaryPoints:ClearAllPoints()
-    self.summaryPoints:SetPoint("LEFT", head and self.summaryLine or self.summaryName, "RIGHT", S["space-5"], 0)
+    local after = head and self.summaryLine or self.summaryName
+    if builds then after = self.builds.badge and self.pickerBadge or self.picker end
+    self.summaryPoints:SetPoint("LEFT", after, "RIGHT", S["space-5"], 0)
     -- the trees, side by side, as wide as the row allows
     local width = self.treesRow:GetWidth()
     if not width or width <= 0 then width = UI.TALENT_TREE_W end
@@ -334,17 +659,31 @@ function TT:SetData(d)
         self.status:SetPoint("LEFT", self.unspent, "RIGHT", S["space-5"], 0)
     end
     self.status:SetPoint("RIGHT", d.back and self.back or (ro and self.foot or self.undo), d.back and "LEFT" or (ro and "RIGHT" or "LEFT"), -S["space-5"], 0)
-    self.unspent:SetText(("|cff%s%d|r %s"):format(hex("ink"), available, available == 1 and "point to spend" or "points to spend"))
+    self.unspent:SetText(d.unspent or ("|cff%s%d|r %s"):format(hex("ink"), available, available == 1 and "point to spend" or "points to spend"))
     local pending = d.pending or 0
-    if pending > 0 then
+    if d.status then
+        self.status:SetColor(d.statusColor or "ink-muted")
+        self.status:SetValue(d.status)
+    elseif pending > 0 then
         self.status:SetColor("arcane")
         self.status:SetValue(pending .. (pending == 1 and " point" or " points") .. " not applied yet · right-click to take one back")
     else
         self.status:SetColor("ink-muted")
         self.status:SetValue(d.hint or "Click a talent to plan a point. Nothing changes until you apply.")
     end
-    self.undo:SetEnabledState(pending > 0)
-    self.apply:SetEnabledState(pending > 0 and d.editable ~= false)
+    -- a build's plan has its own two (Discard, Save build)
+    local a = d.actions
+    self.undo:SetLabel(a and a.secondary and a.secondary.label or "Undo")
+    self.apply:SetLabel(a and a.primary and a.primary.label or "Apply")
+    if a then
+        self.undo:SetShown(a.secondary ~= nil and not ro)
+        self.apply:SetShown(a.primary ~= nil and not ro)
+        self.undo:SetEnabledState(a.secondary ~= nil and a.secondary.enabled ~= false)
+        self.apply:SetEnabledState(a.primary ~= nil and a.primary.enabled ~= false)
+    else
+        self.undo:SetEnabledState(pending > 0)
+        self.apply:SetEnabledState(pending > 0 and d.editable ~= false)
+    end
 end
 
 function UI.TalentTree(parent)
@@ -388,11 +727,15 @@ function UI.TalentTree(parent)
     rule:SetHeight(1)
     rule:SetPoint("TOPLEFT")
     rule:SetPoint("TOPRIGHT")
-    f.apply = UI.Button(f.foot, { text = "Apply", variant = "primary",
-        onClick = function() if f.onApply then f.onApply() end end })
+    f.apply = UI.Button(f.foot, { text = "Apply", variant = "primary", onClick = function()
+        local a = f.data and f.data.actions
+        if a and a.primary then a.primary.onClick() elseif f.onApply then f.onApply() end
+    end })
     f.apply:SetPoint("BOTTOMRIGHT", f.foot, "BOTTOMRIGHT", 0, 0)
-    f.undo = UI.Button(f.foot, { text = "Undo", variant = "quiet",
-        onClick = function() if f.onUndo then f.onUndo() end end })
+    f.undo = UI.Button(f.foot, { text = "Undo", variant = "quiet", onClick = function()
+        local a = f.data and f.data.actions
+        if a and a.secondary then a.secondary.onClick() elseif f.onUndo then f.onUndo() end
+    end })
     f.undo:SetPoint("RIGHT", f.apply, "LEFT", -S["space-3"], 0)
     f.back = UI.Button(f.foot, { text = "Back", icon = "chevronLeft",
         onClick = function() if f.onBack then f.onBack() end end })
@@ -416,6 +759,7 @@ ns.Events.On("SUUUI_THEME_CHANGED", function()
     for f in pairs(live) do
         f:Layout()
         f:SetData(f.data)
+        if f.orderLines then f:SetOrder(f.orderLines) end
     end
 end, "UI.TalentTree")
 

@@ -6,6 +6,9 @@
 --
 --   Serialize.Encode(value) -> "SUU1:…"
 --   Serialize.Decode(text)  -> value, or nil and why not
+--   Serialize.Base64(bytes), Serialize.FromBase64(text) -> bytes or nil,
+--   Serialize.Fletcher16(bytes) -> 0..65535: the pieces, for other share
+--   texts (talent builds)
 --
 -- Format: T / F, n<number>; , s<length>:<bytes>, { key value key value … }
 
@@ -131,15 +134,21 @@ local function decode64(s)
     return table.concat(out)
 end
 
--- Fletcher-16 over the payload, as four hex digits.
-local function checksum(s)
+-- Fletcher-16 over the payload; as four hex digits for profile strings.
+local function fletcher16(s)
     local a, b = 0, 0
     for i = 1, #s do
         a = (a + s:byte(i)) % 255
         b = (b + a) % 255
     end
-    return string.format("%04x", b * 256 + a)
+    return b * 256 + a
 end
+
+local function checksum(s)
+    return string.format("%04x", fletcher16(s))
+end
+
+Serialize.Base64, Serialize.FromBase64, Serialize.Fletcher16 = encode64, decode64, fletcher16
 
 --------------------------------------------------------------------------------
 

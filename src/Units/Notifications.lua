@@ -293,8 +293,11 @@ end
 
 function M:CheckTalents()
     local n = self:Get("talentPoints") and unspentTalents() or 0
-    if n == self.talentPointsShown then return end
-    self.talentPointsShown = n
+    -- with a talent build followed, the note names its next talent (design I)
+    local nextTalent = n > 0 and SuuUI.TalentBuildNext() or nil
+    local key = n .. (nextTalent and (":" .. nextTalent.node .. ":" .. nextTalent.rank) or "")
+    if key == self.talentPointsShown then return end
+    self.talentPointsShown = key
     if n > 0 then
         local talents = SuuUI.GetModule("talents")
         local actions
@@ -303,9 +306,16 @@ function M:CheckTalents()
                 if not SuuUI.TalentsShown() then SuuUI.ToggleTalents() end
             end } }
         end
+        local title = n == 1 and "1 talent point to spend" or (n .. " talent points to spend")
+        local body, icon = nil, { glyph = "tree" }
+        if nextTalent then
+            title = ("%d talent %s · next: %s"):format(n, n == 1 and "point" or "points", nextTalent.name)
+            body = ("Rank %d of %d · %s"):format(nextTalent.rank, nextTalent.max, nextTalent.build)
+            if nextTalent.icon then icon = { texture = nextTalent.icon } end
+        end
         self:Notify({ id = "suu:talents", kind = "until", tone = "info", category = "Talents",
-            title = n == 1 and "1 talent point to spend" or (n .. " talent points to spend"),
-            icon = { glyph = "tree" }, ["until"] = "Goes when you spend them", actions = actions })
+            title = title, body = body, icon = icon,
+            ["until"] = n == 1 and "Goes when you spend it" or "Goes when you spend them", actions = actions })
     elseif self.notes["suu:talents"] then
         self:Dismiss("suu:talents")
     end
@@ -1433,6 +1443,10 @@ function M:OnEnable()
         self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function() C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckLegacy() end end) end)
     end
     self:Watch("talentPoints", function() self:CheckTalents() end)
+    -- a talent build followed, changed or learned along
+    self:On("SUUUI_TALENT_BUILD_CHANGED", function()
+        C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckTalents() end end)
+    end)
     self:Watch("legacyPoints", function() self:CheckLegacy() end)
     -- the ready check's time
     self:OnGameEvent("READY_CHECK", function(_, _, timeLeft)

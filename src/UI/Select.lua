@@ -14,7 +14,9 @@
 --       maxRows = 10,       -- rows the open list shows; longer lists scroll
 --                           -- (mouse wheel, a thin scrollbar on the right)
 --       search = true,      -- a search field at the top once the list is longer
---                           -- than maxRows (false: never); Enter picks the first match
+--                           -- than maxRows (false: never; 0.17: "always");
+--                           -- Enter picks the first match. 0.17: an option's
+--                           -- `search` text is matched too (a build's class)
 --       lookup = fn(query), -- extra options for what was typed, shown first
 --                           -- (e.g. a spell found by its ID); implies a search field
 --       bare = true,        -- 0.10: no field until hovered (a panel header's
@@ -22,6 +24,9 @@
 --                           -- as wide as the chosen label (up to `width`)
 --       textStyle = "header", textColor = "gilt-text",
 --   })
+--   0.17: an option's diamond = "class-shaman": a small diamond in that colour
+--   left of its label; select.foot = { { label, onClick } }: links under the
+--   list (New build…, Import…), a click closes it first
 --   select:SetOptions(options), select:SetValue(v), select:SetDisabled(disabled)
 --
 -- Closed: a gilt-line field on surface-sunk with the value and a chevron.
@@ -155,6 +160,8 @@ local function row(self, i)
         r.icon:SetSize(18, 18)
         r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         r.icon:Hide()
+        r.diamond = UI.Diamond(r, 7, "ink", "OVERLAY")
+        r.diamond:Hide()
         r.note = UI.Text(r, "caption", "ink-muted")
         r.note:SetPoint("RIGHT", -S["space-4"], 0)
         r.check = UI.Check(r, 14, "arcane")
@@ -191,7 +198,7 @@ function Select:View()
     for _, o in ipairs(self.options) do
         if o.heading then
             heading = o
-        elseif tostring(o.label or ""):lower():find(q, 1, true) then
+        elseif tostring(o.label or ""):lower():find(q, 1, true) or (o.search and o.search:lower():find(q, 1, true)) then
             if heading then out[#out + 1] = heading; heading = nil end
             out[#out + 1] = o
         end
@@ -211,11 +218,12 @@ function Select:Refresh()
         if text then
             local w = UI.MeasureText(o.heading and "header" or "body", tostring(text))
             local note = o.note and (UI.MeasureText("caption", tostring(o.note)) + S["space-3"]) or 0
-            width = math.max(width, S["space-2"] * 2 + S["space-4"] * 2 + w + note + check + 8)
+            local diamond = o.diamond and (8 + S["space-3"]) or 0
+            width = math.max(width, S["space-2"] * 2 + S["space-4"] * 2 + w + note + check + diamond + 8)
         end
     end
     local maxRows = self.maxRows or MAX_ROWS
-    local searching = self.search ~= false and (#self.options > maxRows or self.lookup ~= nil)
+    local searching = self.search ~= false and (self.search == "always" or #self.options > maxRows or self.lookup ~= nil)
     list.search:SetShown(searching)
     if searching then
         list.search:ClearAllPoints()
@@ -258,6 +266,7 @@ function Select:Refresh()
             r.box:Hide()
             r.check:Hide()
             r.icon:Hide()
+            r.diamond:Hide()
             r.note:SetValue("")
             y = y + hh
         else
@@ -281,7 +290,14 @@ function Select:Refresh()
                 r.check:SetShown(on)
                 r.icon:SetPoint("LEFT", S["space-4"], 0)
             end
-            if o.icon then
+            r.diamond:SetShown(o.diamond ~= nil and T.color[o.diamond] ~= nil)
+            if o.diamond and T.color[o.diamond] then
+                UI.Paint(r.diamond, o.diamond)
+                r.diamond:ClearAllPoints()
+                r.diamond:SetPoint("CENTER", r, "LEFT", S["space-4"] + 4, 0)
+                r.icon:Hide()
+                r.label:SetPoint("LEFT", S["space-4"] + 8 + S["space-3"], 0)
+            elseif o.icon then
                 r.icon:SetTexture(o.icon)
                 r.icon:SetDesaturated(o.disabled and true or false)
                 r.icon:Show()
@@ -329,9 +345,45 @@ function Select:Refresh()
         r.label:SetColor("ink-muted")
         r.label:SetPoint("LEFT", S["space-4"], -2)
         r.label:SetValue("No match")
-        r.box:Hide(); r.check:Hide(); r.icon:Hide(); r.rule:Hide(); r.note:SetValue("")
+        r.box:Hide(); r.check:Hide(); r.icon:Hide(); r.diamond:Hide(); r.rule:Hide(); r.note:SetValue("")
         r:Show()
         y = y + 22
+    end
+    -- the foot's links, under a rule
+    list.footRule:SetShown(self.foot ~= nil and #self.foot > 0)
+    for _, b in ipairs(list.footLinks) do b:Hide() end
+    if self.foot and #self.foot > 0 then
+        y = y + S["space-2"]
+        list.footRule:ClearAllPoints()
+        list.footRule:SetPoint("TOPLEFT", S["space-2"], -y)
+        list.footRule:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+        y = y + 1 + S["space-1"]
+        for i, def in ipairs(self.foot) do
+            local b = list.footLinks[i]
+            if not b then
+                b = CreateFrame("Button", nil, list)
+                b:SetHeight(ROW_H)
+                b.hover = UI.Fill(b, "surface-raised")
+                b.hover:SetAllPoints()
+                b.hover:Hide()
+                b.label = UI.Text(b, "body", "ink-muted")
+                b.label:SetPoint("LEFT", S["space-4"], 0)
+                b:SetScript("OnEnter", function(x) x.hover:Show(); x.label:SetColor("ink") end)
+                b:SetScript("OnLeave", function(x) x.hover:Hide(); x.label:SetColor("ink-muted") end)
+                b:SetScript("OnClick", function(x)
+                    self:Close()
+                    if x.def and x.def.onClick then x.def.onClick() end
+                end)
+                list.footLinks[i] = b
+            end
+            b.def = def
+            b.label:SetValue(def.label)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", S["space-2"], -y)
+            b:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+            b:Show()
+            y = y + ROW_H
+        end
     end
     list:SetSize(width, y + S["space-2"])
 end
@@ -391,6 +443,11 @@ function Select:Open()
             end
             e:ClearFocus()
         end)
+        list.footRule = list:CreateTexture(nil, "ARTWORK")
+        UI.PaintFill(list.footRule, "gilt-faint")
+        list.footRule:SetHeight(1)
+        list.footRule:Hide()
+        list.footLinks = {}
         list.track = list:CreateTexture(nil, "ARTWORK")
         UI.PaintFill(list.track, "gilt-faint")
         list.thumb = list:CreateTexture(nil, "OVERLAY")

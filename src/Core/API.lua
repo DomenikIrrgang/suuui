@@ -390,6 +390,14 @@ function API.TalentsShown()
     local t = Services.Get("talents")
     return (t and t.IsShown and t.IsShown()) and true or false
 end
+-- 0.17: the talent build you follow: its next talent on this character's
+-- talent group ({ node, name, icon, rank, max, treeName, build, index }),
+-- or nil (no build, all learned, or the talents module off).
+-- SUUUI_TALENT_BUILD_CHANGED: a build was followed, changed or learned along.
+function API.TalentBuildNext()
+    local t = Services.Get("talents")
+    return t and t.NextTalent and t.NextTalent() or nil
+end
 -- 0.12: open or close the bags without Blizzard's bag functions (called
 -- from an addon they taint Esc in combat): SuuUI's bags when that module is
 -- on; else Blizzard's (ToggleAllBags).
@@ -412,6 +420,18 @@ API.UI.CenterWindow = UI.CenterWindow -- CenterWindow(frame, on): a skinned wind
 API.UI.Spellbook = UI.Spellbook -- Spellbook(parent, { rows }) -> SetSchools, SetHead, SetSwitches, SetSpells, SetPage; cells[i].button (secure); onSchool, onPage, onSwitch, onEnter, onLeave, onDragStart
 API.UI.TalentTree = UI.TalentTree -- TalentTree(parent) -> SetSpecs(list, viewing), SetData({ name, available, pending, editable, hint, trees = { { name, points, nodes, links } } }); onClick, onRemove, onEnter, onLeave, onApply, onUndo, onSpec, onActivate
 API.UI.TALENT_TREE_W = UI.TALENT_TREE_W -- the width the Talents page's three trees need
+API.UI.TALENT_ORDER_W = UI.TALENT_ORDER_W -- 0.17: the width TalentTree's order panel adds
+API.UI.TALENT_ROW_POINTS = UI.TALENT_ROW_POINTS -- 0.17: points a talent row needs spent before it (tree-wide)
+API.UI.TALENT_MAX_POINTS = UI.TALENT_MAX_POINTS -- 0.17: talent points at level 60
+API.UI.TalentOrderCheck = UI.TalentOrderCheck -- 0.17: TalentOrderCheck(steps, tree) -> true, or false, step, why (UI/TalentBuilds.lua)
+API.UI.TalentNextProblem = UI.TalentNextProblem -- 0.17: TalentNextProblem(steps, tree, nodeID) -> nil, or why one more rank can't come next
+API.UI.TalentStepProblem = UI.TalentStepProblem -- 0.17: TalentStepProblem(tree, node, count, spent) -> nil, or why not
+API.UI.TalentStepsFromRanks = UI.TalentStepsFromRanks -- 0.17: TalentStepsFromRanks(ranks, tree[, entries]) -> steps, allPlaced
+API.UI.EncodeTalentBuild = UI.EncodeTalentBuild -- 0.17: EncodeTalentBuild({ name, classID, treeID, steps }[, entryIndex]) -> "SuuUI:T1:…"
+API.UI.DecodeTalentBuild = UI.DecodeTalentBuild -- 0.17: DecodeTalentBuild(text) -> { name, classID, treeID, steps }, or nil and why
+API.UI.ReadGameTalentHeader = UI.ReadGameTalentHeader -- 0.17: ReadGameTalentHeader(text) -> version, specID, hash
+API.UI.ReadGameTalentString = UI.ReadGameTalentString -- 0.17: ReadGameTalentString(text, tree) -> { version, specID, hash, ranks, entries }, or nil and why
+API.UI.WriteGameTalentString = UI.WriteGameTalentString -- 0.17: WriteGameTalentString(version, specID, hash, tree, ranks[, entries]) -> the game's talent string
 API.UI.TraitTooltip = UI.TraitTooltip -- TraitTooltip(owner, configID, nodeID, { name, treeName, conditions, canSpend, pending, needs, blocked }): the game's talent tooltip
 API.UI.LegacyPoints = UI.LegacyPoints -- LegacyPoints(parent[, { account = false }]) -> SetPoints({ earned, total, spent, cap, pending, character })
 API.UI.LegacyChallenges = UI.LegacyChallenges -- LegacyChallenges(parent) -> SetCategories(list), Open(i), Close()
