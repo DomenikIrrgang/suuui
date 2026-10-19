@@ -16,6 +16,8 @@
 --            the events with their timing, player auras named like the
 --            enchant, samples 1 s and 5 s into each fight and after it
 --   cancel:  a button that removes the main hand's enchant (says so first)
+--   secure:  (2026-10-20) the same through the game's secure "cancelaura"
+--            action with "target-slot" 16, and whether CANCELABLE_ITEMS lists it
 -- Saved in SuuUIProbe.weaponenchants on /reload. Values the game hides read
 -- SECRET.
 
@@ -353,12 +355,58 @@ local function cancel()
     ns.Print("Weapon enchant probe: the button at the top of the screen REMOVES your main hand's temporary enchant (imbue, poison, stone or oil). Click it once if that's fine.")
 end
 
+--------------------------------------------------------------------------------
+-- Secure: the game's secure "cancelaura" action on a weapon slot (2026-10-20:
+-- the direct call is refused; Blizzard's secure templates cancel a weapon's
+-- enchant with type "cancelaura" and "target-slot", if CANCELABLE_ITEMS
+-- lists the slot)
+--------------------------------------------------------------------------------
+
+local function secure()
+    local o = out()
+    local items = rawget(_G, "CANCELABLE_ITEMS")
+    local listed = {}
+    if type(items) == "table" then
+        for k, v in pairs(items) do listed[#listed + 1] = ("%s=%s"):format(show(k), show(v)) end
+        table.sort(listed)
+    end
+    o.secure = { armedAt = date("%H:%M:%S"), cancelable = type(items) == "table" and table.concat(listed, " ") or show(items) }
+    local b = WP.secureButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
+    WP.secureButton = b
+    b:SetSize(380, 30)
+    b:ClearAllPoints()
+    b:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+    b:SetFrameStrata("DIALOG")
+    b:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+    b:SetAttribute("type", "cancelaura")
+    b:SetAttribute("target-slot", 16)
+    b:SetText("Weapon enchant probe: remove the main hand's enchant (secure)")
+    o.secure.before = snapshot("before the secure click")
+    b:SetScript("PostClick", function(self)
+        local r = o.secure
+        r.clicks = (r.clicks or 0) + 1
+        if r.clicks > 1 then return end
+        C_Timer.After(1, function()
+            r.after = snapshot("1 s after the secure click")
+            local mh = r.after.slots.MainHand
+            if not InCombatLockdown() then self:Hide() end
+            ns.Print(("Weapon enchant probe: secure click done; main hand now: %s. /reload to save it."):format(mh.list))
+        end)
+    end)
+    b:Show()
+    ns.Print("Weapon enchant probe: the button at the top of the screen REMOVES your main hand's temporary enchant (imbue, poison, stone or oil) through the game's secure cancel. Click it once if that's fine.")
+end
+
 function WP.Command(rest)
     local o = out()
     listen()
     if InCombatLockdown() then
         o.refused = ("%s: asked in combat (%s)"):format(date("%H:%M:%S"), tostring(rest))
         ns.Print("Weapon enchant probe: not in combat; try again after the fight.")
+        return
+    end
+    if (rest or ""):lower():match("^%s*secure") then
+        secure()
         return
     end
     if (rest or ""):lower():match("^%s*cancel") then
