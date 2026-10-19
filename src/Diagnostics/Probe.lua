@@ -721,7 +721,7 @@ ns.Probe.TOPICS = {
     "mappins", "marks", "memory", "meter", "micro", "minimap", "mountfeet", "mountframe", "npcportrait", "partyauras",
     "plates", "popups", "power", "professions", "proficons", "quest", "questgroup", "raid", "runtime", "show",
     "skysight", "social", "sound", "spellbook", "spells", "support", "taint", "talentbuilds", "talents", "taxi", "timeline",
-    "tooltips", "totems", "toymodels", "track", "tree", "unitmenu", "unlearn", "windows",
+    "tooltips", "totems", "toymodels", "track", "tree", "unitmenu", "unlearn", "weaponenchants", "windows",
 }
 
 function ns.Probe.Hide()
@@ -885,6 +885,10 @@ function ns.Probe.Command(arg)
     end
     if sub == "skysight" then
         ns.SkysightProbe.Command(rest)
+        return
+    end
+    if sub == "weaponenchants" then
+        ns.WeaponEnchantProbe.Command(rest)
         return
     end
     if sub == "chatpalette" then
