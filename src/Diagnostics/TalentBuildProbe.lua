@@ -17,6 +17,13 @@
 --         talents, then deleted again
 --   /suu probe talentbuilds switch   with two saved loadouts: load the
 --         other and back (asks to run it twice: it may change your talents)
+--   /suu probe talentbuilds trainer  (2026-10-19, talent builds' trainer
+--         flow) for 3 minutes, everything around a trainer's talent reset:
+--         the trainer's gossip options, CONFIRM_TALENT_WIPE and its cost,
+--         the popup the game shows, gossip and trainer events, the talent
+--         and trait events, your learned ranks, points and money before,
+--         at each step and after. It never confirms anything itself: you
+--         talk to the trainer and reset (or not) yourself
 -- Every step records blocked actions, UI errors and the talent events. Not
 -- in combat. Values the game hides read "secret".
 
@@ -533,12 +540,95 @@ function TB.Switch()
     end)
 end
 
+--------------------------------------------------------------------------------
+-- trainer: watch a trainer's talent reset (the player does it)
+--------------------------------------------------------------------------------
+
+local TRAINER_EVENTS = {
+    "CONFIRM_TALENT_WIPE", "GOSSIP_SHOW", "GOSSIP_CLOSED", "GOSSIP_CONFIRM", "GOSSIP_CONFIRM_CANCEL",
+    "TRAINER_SHOW", "TRAINER_CLOSED", "PLAYER_MONEY", "CHARACTER_POINTS_CHANGED", "TRAIT_NODE_CHANGED",
+    "TRAIT_TREE_CURRENCY_INFO_UPDATED", "SPELLS_CHANGED", "LEARNED_SPELL_IN_SKILL_LINE",
+}
+local trainerFrame, trainerUntil, popupHooked
+
+-- Your talents now: learned ranks, the points, money, the reset functions.
+local function talentState()
+    local activeID = get(CT.GetActiveConfigID)
+    local treeID = activeID and activeTree(activeID)
+    local ranks, nodes = 0, 0
+    if activeID and treeID then
+        for _, nodeID in ipairs(get(TR.GetTreeNodes, treeID) or {}) do
+            local n = get(TR.GetNodeInfo, activeID, nodeID)
+            if type(n) == "table" and plain(n.ranksPurchased) and n.ranksPurchased > 0 then
+                ranks, nodes = ranks + n.ranksPurchased, nodes + 1
+            end
+        end
+    end
+    return ("%d ranks in %d talents · points %s · money %s · staged %s · wipe cost %s · reset cost %s · master %s"):format(
+        ranks, nodes, activeID and treeID and call(TR.GetTreeCurrencyInfo, activeID, treeID, false) or "no config",
+        show(GetMoney()), activeID and call(TR.ConfigHasStagedChanges, activeID) or "?",
+        call(GetTalentWipeCost), call(GetTalentResetCost), call(CheckTalentMasterDist))
+end
+
+local function gossipOptions()
+    local G = C_GossipInfo or {}
+    local opts = get(G.GetOptions)
+    if type(opts) ~= "table" then return call(G.GetOptions) end
+    local parts = {}
+    for _, o in ipairs(opts) do
+        parts[#parts + 1] = ("%s:%s%s"):format(show(o.gossipOptionID), show(o.name),
+            o.status and (" status " .. show(o.status)) or "")
+    end
+    return table.concat(parts, " / ")
+end
+
+function TB.Trainer()
+    local s = watch("trainer")
+    s.before = talentState()
+    s.timeline = {}
+    trainerUntil = GetTime() + 180
+    local function mark(line) push(s.timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120) end
+    if not trainerFrame then
+        trainerFrame = CreateFrame("Frame")
+        trainerFrame:SetScript("OnEvent", function(_, event, a, b, c)
+            if not trainerUntil or GetTime() > trainerUntil then return end
+            local line = ("%s %s %s %s"):format(event, show(a), show(b), show(c))
+            if event == "GOSSIP_SHOW" then line = line .. " · options " .. gossipOptions() end
+            mark(line)
+            -- the state right after anything that may change it
+            if event ~= "GOSSIP_SHOW" and event ~= "GOSSIP_CLOSED" then
+                C_Timer.After(0.5, function()
+                    if trainerUntil and GetTime() <= trainerUntil then mark("  after: " .. talentState()) end
+                end)
+            end
+        end)
+    end
+    for _, e in ipairs(TRAINER_EVENTS) do pcall(trainerFrame.RegisterEvent, trainerFrame, e) end
+    -- which popup the game shows (its name and text), without touching it
+    if not popupHooked and type(StaticPopup_Show) == "function" then
+        popupHooked = true
+        hooksecurefunc("StaticPopup_Show", function(which, text1, text2)
+            if trainerUntil and GetTime() <= trainerUntil then
+                mark(("popup %s %s %s"):format(show(which), show(text1), show(text2)))
+            end
+        end)
+    end
+    C_Timer.After(180, function()
+        for _, e in ipairs(TRAINER_EVENTS) do pcall(trainerFrame.UnregisterEvent, trainerFrame, e) end
+        trainerUntil = nil
+        s.after = talentState()
+        ns.Print("Talent builds probe: trainer watch done. /reload to save.")
+    end)
+    ns.Print("Talent builds probe: watching for 3 minutes. Talk to your class trainer, pick the talent reset, and confirm or cancel it yourself; nothing is clicked for you. Then wait for \"done\" and /reload.")
+end
+
 function TB.Command(arg)
     if refuseCombat() then return end
     arg = (arg or ""):lower()
     if arg == "export" then return TB.Export() end
     if arg == "save" then return TB.Save() end
     if arg == "switch" then return TB.Switch() end
+    if arg == "trainer" then return TB.Trainer() end
     if arg == "cleanup" then
         local s = watch("cleanup")
         local ids = leftovers()
