@@ -1,0 +1,62 @@
+-- Saved settings and profile strings from SuuUI before the wowlua port:
+-- tests/profiles/legacy.json holds SuuUIDB as the unported SuuUI wrote it
+-- (in the emulated client: debug on, ui.scale 1.25, the player frame moved,
+-- a second profile "Raid Night" with reduced motion).
+
+import test, expect, config from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as settings from "/Core/Settings"
+import * as serialize from "/Core/Serialize"
+import * as DB from "/Core/DB"
+import LEGACY_PROFILE_STRING from "./legacyString"
+import errorsSoFar from "../smoke/helpers"
+
+config({ profile = "legacy" })
+
+@test("the old saved settings load as they were")
+local function oldSettings()
+    expect(settings.get("core", "debug")).toBe(true)
+    expect(settings.get("ui", "scale")).toBe(1.25)
+    expect(settings.get("unitframes", "playerPosition")).toEqual({ point = "BOTTOM", x = -300, y = 250 })
+    expect(settings.profiles.list()).toContain("Raid Night")
+    expect(DB.db.version).toBe(1)
+    expect(errorsSoFar()).toEqual({})
+end
+
+@test("another profile of the old data is used as it was")
+local function otherProfile()
+    expect(settings.profiles.use("Raid Night")).toBe(true)
+    expect(settings.get("ui", "reducedMotion")).toBe(true)
+    expect(settings.profiles.use("Player - Realm")).toBe(true)
+    expect(settings.get("ui", "reducedMotion")).toBe(false)
+end
+
+@test("an old SUU1 profile string still imports")
+local function oldString()
+    local value, err = serialize.decode(LEGACY_PROFILE_STRING)
+    expect(err).toBeNil()
+    expect(value.v).toBe(1)
+    expect(value.data.ui.scale).toBe(1.25)
+    expect(settings.profiles.import("From old string", value.data)).toBe(true)
+    expect(settings.get("ui", "scale")).toBe(1.25)
+    expect(settings.get("core", "debug")).toBe(true)
+end
+
+@test("a new string round-trips")
+local function newString()
+    local exported = assert(settings.profiles.export())
+    local text = serialize.encode({ v = 1, name = exported.name, data = exported.data })
+    expect(text:sub(1, 7)).toBe("!SUU:2!")
+    local back = serialize.decode(text)
+    expect(back.data).toEqual(exported.data)
+end
+
+@test("settings survive a reload")
+local function reload()
+    if mock.reloads() == 0 then
+        settings.set("ui", "scale", 1.5)
+        mock.reloadUI()
+    end
+    expect(settings.get("ui", "scale")).toBe(1.5)
+    expect(errorsSoFar()).toEqual({})
+end

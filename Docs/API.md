@@ -216,7 +216,7 @@ Settings: a module's settings section with `merge = "<section id>"` adds its gro
 | `SuuUI.Raw.UI` | Every component, the ones not exported too |
 | `SuuUI.Raw.Mixins` | The components' method tables by name (`UnitFrame`, `ActionButton`, `CastBar`, `AuraContainer`, `ActionBar`, `Panel`, `WindowChrome`, `Inventory`, `ObjectiveTracker`, `CooldownTracker`, `DamageMeter`, `ThreatMeter`, `MicroMenu`, `Notification`). Most are copied onto each frame when it's made: a change made when your plugin loads reaches every frame SuuUI builds later (its modules build at login) |
 | `SuuUI.Raw.Module(id)` | A module with its internals |
-| `SuuUI.Raw.ns` | SuuUI's private namespace |
+| `SuuUI.Raw.ns` | SuuUI's addon table. Since SuuUI is written in wowlua, its code lives in modules, not in this table: it holds the wowlua runtime (`__wowlua`, whose `require(id)` gives a module's exports, e.g. `"UI/Panel"`) |
 
 ## Design tokens and text
 

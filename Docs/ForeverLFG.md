@@ -38,7 +38,7 @@ Points still open are marked **Open** and listed at the end.
 
 ## Where it lives
 
-`src/Libs/ForeverLFG/`, loaded before the modules, published as `SuuUI.LFG` (documented in `Docs/API.md`):
+`libs/ForeverLFG/`, a wowlua library package (`foreverlfg`) in SuuUI's workspace that SuuUI depends on, compiled into SuuUI and loaded before the modules, published as `SuuUI.LFG` (documented in `Docs/API.md`). Its sources are `.wowlua` modules in `libs/ForeverLFG/src/` (the file names below without the extension); `tools/lfg_parse.lua` replays chat through the parser outside the game:
 
 | File | |
 |---|---|
