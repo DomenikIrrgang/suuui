@@ -13,7 +13,17 @@ Each entry has a short repro.
 
 ## 1. VM suspicions
 
-(none yet)
+### V1. `debugstack()` paths lack the `Interface/AddOns/<Addon>/` prefix
+
+In `wowlua test`, a stack line reads `tests/smoke/x.test.wowlua:5: in function 'fn'`
+(addon files likewise `src/Core/Modules.lua:…`). In the game the chunk names
+are `Interface/AddOns/SuuUI/…` (bundled: `Interface/AddOns/SuuUI/SuuUI.lua`).
+SuuUI's `RegisterModule` works out which addon registered a module from that
+path (`AddOns[/\\]([^/\\]+)[/\\]`), so in the VM every module's source is `?`
+and `builtIn` is false (`/suu modules` lists them as "- ?" instead of
+"built in"). Seen on the unported code too (baseline), so not a port bug.
+
+Repro: `expect(debugstack(1, 3, 0)).toEqual("")` in any test file.
 
 ## 2. Compiler and tooling issues
 

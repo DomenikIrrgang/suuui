@@ -50,6 +50,15 @@ FONT_FILES = {
 # Styles the design sets "with tabular figures" (README: Typography).
 TABULAR = {"numeric", "micro"}
 
+# SuuUI's own colours, not (yet) in the design system's tokens.json: the
+# map marks' eight symbols (added with the map marks, 5d12037). They follow
+# the design's colours in Tokens.wowlua and take part in themes like them.
+EXTRA_COLORS = [
+    ("mark-star", "#fff27a"), ("mark-circle", "#ff8c00"), ("mark-diamond", "#e25cf5"),
+    ("mark-triangle", "#2ecc71"), ("mark-moon", "#b5c9f0"), ("mark-square", "#1e5bff"),
+    ("mark-cross", "#f0365a"), ("mark-skull", "#ffffff"),
+]
+
 # README, In-game implementation: easing -> AnimationGroup smoothing.
 SMOOTHING = {"ease-out": "OUT", "ease-in": "IN", "ease-in-out": "IN_OUT", "ease-linear": "NONE"}
 
@@ -182,6 +191,10 @@ def main():
         colors[tok["name"]] = c
         usage.append((tok["name"], tok.get("usage")))
         entries.append((tok["name"], lua_color(c, hex_of(c))))
+    for name, value in EXTRA_COLORS:
+        c = parse_color(value, colors)
+        colors[name] = c
+        entries.append((name, lua_color(c, hex_of(c))))
     record("color", "Colors", "Color", entries)
 
     def simple(family, key, typename, valuetype, convert):
