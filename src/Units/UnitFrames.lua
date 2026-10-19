@@ -58,6 +58,12 @@ local M = SuuUI.RegisterModule({
         width = UI.Size("bar-lg"),
         height = UI.Size("unit-lg"),
         debuffBadges = "all",   -- your frame: "all" debuff types, "removable", "off"
+        -- the rested sign over your frame's top-right corner
+        restedSign = true,
+        restedShow = "resting",        -- or "carrying": also out in the world with rested XP left
+        restedAnimation = "animated",  -- or "still"
+        restedHideCombat = true,
+        restedHideMax = true,
     },
 })
 
@@ -217,6 +223,163 @@ function M:UpdateThreat()
 end
 
 --------------------------------------------------------------------------------
+-- Rested (design "Rested on the player frame", option A "Drift"): the sign
+-- over your frame's top-right corner while you rest, and its lines in your
+-- frame's tooltip. IsResting, GetXPExhaustion and UnitXPMax are plain
+-- values on Forever, in combat too (probed).
+--------------------------------------------------------------------------------
+
+local MOON = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\markMoon.tga"
+local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
+
+-- No XP to earn: the account's level cap, or XP turned off.
+local function noXP()
+    local cap = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion()
+        or GetMaxPlayerLevel and GetMaxPlayerLevel() or MAX_PLAYER_LEVEL or 60
+    return UnitLevel("player") >= cap or (IsXPUserDisabled and IsXPUserDisabled()) or false
+end
+
+-- The rested pool in XP, as a share of the level (0 to 1.5), and whether
+-- it is full (150% of a level).
+local function restedPool()
+    local pool, max = GetXPExhaustion() or 0, UnitXPMax("player") or 0
+    if max <= 0 then return pool, 0, false end
+    return pool, pool / max, pool >= math.floor(max * 1.5)
+end
+
+-- The sign's look now ("earn", "rest", "full", "carry" or nil, as
+-- UI.RestedSign takes it); `anyCombat` leaves Hide in combat out.
+function M:RestedLook(anyCombat)
+    if not self:Get("restedSign") then return nil end
+    local capped = noXP()
+    if capped and self:Get("restedHideMax") then return nil end
+    if not anyCombat and self:Get("restedHideCombat") and self.inCombat then return nil end
+    local pool, _, full = restedPool()
+    if IsResting() then
+        if capped then return "rest" end
+        return full and "full" or "earn"
+    end
+    if not capped and pool > 0 and self:Get("restedShow") == "carrying" then return "carry" end
+    return nil
+end
+
+-- `fade`: the seconds a change takes (nil: at once). In edit mode the sign
+-- stands still wherever it could show, so you see where it sits.
+function M:UpdateRested(fade)
+    local look, still = self:RestedLook(), self:Get("restedAnimation") == "still"
+    if SuuUI.EditMode.IsActive() then
+        local can = self:Get("restedSign") and not (self:Get("restedHideMax") and noXP())
+        look, still = can and (self:RestedLook(true) or "rest") or nil, true
+    end
+    self.restedSign:SetLook(look, { still = still, fade = fade })
+end
+
+local function tooltipIcon(full)
+    local r, g, b = UI.RGBA("progress-fill")
+    return ("|T%s:10:10:0:0:64:64:0:64:0:64:%d:%d:%d|t "):format(full and DISC or MOON, r * 255, g * 255, b * 255)
+end
+
+-- Your frame's tooltip: the rested lines after the unit's, while the sign shows.
+function M:AddRestedLines(tooltip)
+    local look = self:RestedLook()
+    if not look then return end
+    local ink, muted, fill = { UI.RGBA("ink") }, { UI.RGBA("ink-muted") }, { UI.RGBA("progress-fill") }
+    local function line(text, c) tooltip:AddLine(text, c[1], c[2], c[3]) end
+    tooltip:AddLine(" ")
+    line(tooltipIcon(look == "full") .. (look == "carry" and "Rested" or "Resting"), ink)
+    if look ~= "rest" then
+        local pool, share = restedPool()
+        local amount = BreakUpLargeNumbers and BreakUpLargeNumbers(pool) or tostring(pool)
+        tooltip:AddDoubleLine("Rested XP", ("%s · %d%% of a level"):format(amount, math.floor(share * 100 + 0.5)),
+            ink[1], ink[2], ink[3], muted[1], muted[2], muted[3])
+    end
+    if look == "earn" then
+        line("Earning rested XP", muted)
+    elseif look == "full" then
+        line("Rested XP full", fill)
+        line("Resting longer adds nothing.", muted)
+    elseif look == "carry" then
+        line("Kills give double XP until it's spent.", muted)
+        line("Rest in an inn or a city to earn more.", muted)
+    end
+    if look ~= "carry" then line("Logging out here is instant.", muted) end
+end
+
+--------------------------------------------------------------------------------
+-- The settings preview: your frame at its real size, resting and earning,
+-- with the current options; dimmed, with the reason under it, while the
+-- sign wouldn't show.
+--------------------------------------------------------------------------------
+
+-- How far the sign reaches past the frame's right end and over its top.
+local SIGN_REACH, SIGN_RISE = 36, 44
+
+local previewPerson
+local function person()
+    if not previewPerson then
+        local _, class = UnitClass("player")
+        previewPerson = { name = UnitName("player"), class = class, health = 1, power = 1 }
+    end
+    return previewPerson
+end
+
+function M:PreviewView(parent)
+    local v = self.previewView
+    if not v then
+        v = CreateFrame("Frame", nil, parent)
+        v.frame = UI.UnitFrame(v, "preview", { size = "lg", anchor = true, secure = false, api = UI.UnitStandIn(person) })
+        v.frame:SetScript("OnEnter", nil)
+        v.frame:SetScript("OnLeave", nil)
+        v.frame:EnableMouse(false)
+        v.sign = UI.RestedSign(v.frame)
+        v.reason = UI.Text(v, "caption", "ink-muted")
+        v.reason:SetWordWrap(true)
+        v.reason:SetJustifyH("CENTER")
+        v:HookScript("OnShow", function() self:DrawPreview() end)
+        self.previewView = v
+    end
+    v:SetParent(parent)
+    self:DrawPreview()
+    return v
+end
+
+function M:DrawPreview()
+    local v = self.previewView
+    if not v then return end
+    local f = v.frame
+    local w, h = self:Get("width"), self:Get("height")
+    f.opts.power = self:Get("showPower")
+    f.opts.healthText = self:Get("healthText")
+    f.opts.nameColor = self:Get("nameColor")
+    f:Resize(w, h)
+    f:Refresh()
+    -- centred with room for the sign on both sides; where the column is too
+    -- narrow for that, the frame's left end gives way, never the sign
+    local want = w + 2 * SIGN_REACH
+    local room = v:GetParent():GetWidth()
+    local width = (room and room >= 1) and math.min(want, room) or want
+    v:SetSize(width, h + 2 * SIGN_RISE)
+    f:ClearAllPoints()
+    if width >= want then
+        f:SetPoint("CENTER", v, "CENTER", 0, 0)
+    else
+        f:SetPoint("RIGHT", v, "RIGHT", -SIGN_REACH, 0)
+    end
+    local reason
+    if not self:Get("restedSign") then
+        reason = "The rested sign is off."
+    elseif self:Get("restedHideMax") and noXP() then
+        reason = "Hidden at the level cap: there is no XP to rest for."
+    end
+    f:SetAlpha(reason and T.opacity["opacity-disabled"] or 1)
+    v.reason:SetWidth(width)
+    v.reason:ClearAllPoints()
+    v.reason:SetPoint("TOP", v, "TOP", 0, -(SIGN_RISE + h + S["space-5"]))
+    v.reason:SetValue(reason or "")
+    v.sign:SetLook("earn", { still = self:Get("restedAnimation") == "still" })
+end
+
+--------------------------------------------------------------------------------
 -- Showing, hiding and options
 --------------------------------------------------------------------------------
 
@@ -256,6 +419,7 @@ function M:ApplyOptions()
     end
     self.combo:Update()
     self:UpdateFade()
+    self:DrawPreview()
 end
 
 -- The player and target frames' size, out of combat (secure buttons). The
@@ -265,6 +429,7 @@ function M:ApplySize()
         local w, h = self:Get("width"), self:Get("height")
         for _, key in ipairs({ "player", "target" }) do self.frames[key]:Resize(w, h) end
         SuuUI.EditMode.Refresh()
+        self:DrawPreview()
     end)
 end
 
@@ -272,8 +437,13 @@ end
 -- Settings
 --------------------------------------------------------------------------------
 
+local function signOff()
+    if not M:Get("restedSign") then return true, "The rested sign is off." end
+end
+
 local SECTION = {
     id = "unitframes", label = "Unit frames", category = "Frames", order = 10,
+    preview = function(parent) return M:PreviewView(parent) end,
     groups = {
         { title = "Frames", description = "Turning a frame off brings Blizzard's back after a reload.", rows = {
             { key = "showToT", label = "Target of target", control = "toggle", combat = true,
@@ -315,6 +485,21 @@ local SECTION = {
                   return false
               end },
         } },
+        { title = "Rested", description = "A sign on your frame while you rest in an inn or a city and earn rested XP. Hover your frame for how much you have.", rows = {
+            { key = "restedSign", label = "Show the rested sign", control = "toggle",
+              description = "Three letters rising from your frame's top-right corner; a full moon once your rested XP is full." },
+            { key = "restedShow", label = "Show", control = "select", width = 280, disabled = signOff,
+              options = { { value = "resting", label = "While resting" },
+                          { value = "carrying", label = "While resting or carrying rested XP" } },
+              description = "Out in the world with rested XP left: nothing, or the still sign at 60%." },
+            { key = "restedAnimation", label = "Animation", control = "segmented", disabled = signOff,
+              options = { { value = "animated", label = "Animated" }, { value = "still", label = "Still" } },
+              description = "Still whenever Reduce motion is on (General › Motion)." },
+            { key = "restedHideCombat", label = "Hide in combat", control = "toggle", disabled = signOff,
+              description = "Fades out when combat starts, back when it ends." },
+            { key = "restedHideMax", label = "Hide at max level", control = "toggle", disabled = signOff,
+              description = "At the level cap there is no XP to rest for. Off: a still sign in rest areas." },
+        } },
         { title = "Behaviour", rows = {
             { key = "fadeOutOfCombat", label = "Fade out of combat", control = "toggle",
               description = "Rest at 60% while you are out of combat at full health; full again in combat or on hover." },
@@ -352,6 +537,7 @@ local function build(self)
         self.allFrames["boss" .. i] = f
     end
     self.combo = buildCombo(self.frames.target)
+    self.restedSign = UI.RestedSign(self.frames.player)
 end
 
 function M:OnEnable()
@@ -408,6 +594,25 @@ function M:OnEnable()
     self:Watch("debuffBadges", function()
         self:RunOutOfCombat("debuffBadges", function() self.frames.player:SetDispelBadges(self:Get("debuffBadges")) end)
     end)
+
+    -- rested: the sign and the tooltip's lines
+    local base, fast = T.duration["dur-base"], T.duration["dur-fast"]
+    self.inCombat = InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
+    player.onTooltip = self:Guard(function(_, tooltip) self:AddRestedLines(tooltip) end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self.inCombat = true; self:UpdateRested(fast) end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self.inCombat = false; self:UpdateRested(base) end)
+    for _, e in ipairs({ "PLAYER_UPDATE_RESTING", "UPDATE_EXHAUSTION", "PLAYER_XP_UPDATE", "PLAYER_LEVEL_UP",
+                         "PLAYER_ENTERING_WORLD" }) do
+        self:OnGameEvent(e, function() self:UpdateRested(base) end)
+    end
+    self:On("SUUUI_EDITMODE_CHANGED", function() self:UpdateRested() end)
+    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+        if namespace == "ui" and key == "reducedMotion" then self:UpdateRested(); self:DrawPreview() end
+    end)
+    for _, key in ipairs({ "restedSign", "restedShow", "restedAnimation", "restedHideCombat", "restedHideMax" }) do
+        self:Watch(key, function() self:UpdateRested(base); self:DrawPreview() end)
+    end
+    self:UpdateRested()
 end
 
 function M:OnDisable()
@@ -416,6 +621,8 @@ function M:OnDisable()
         -- Withdraw the anchors, so nothing stays attached to frames that are gone.
         for _, d in ipairs(FRAMES) do SuuUI.PublishAnchor(d.unit, nil) end
         for i = 1, BOSSES do SuuUI.PublishAnchor("boss" .. i, nil) end
+        self.restedSign:SetLook(nil)
+        self.frames.player.onTooltip = nil
         for _, f in pairs(self.allFrames) do
             f:Deactivate()
             UnregisterUnitWatch(f)

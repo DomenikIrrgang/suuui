@@ -204,6 +204,7 @@ API.EditMode = {
 
 API.UI.UnitFrame = UI.UnitFrame
 API.UI.LevelColor = UI.LevelColor -- 0.17: LevelColor(level) -> a colour token by how hard the level is for you
+API.UI.RestedSign = UI.RestedSign -- 0.17: RestedSign(unitFrame) -> the rested sign over its top-right corner; :SetLook(look[, { still, fade }])
 API.UI.AnchorPicker = UI.AnchorPicker -- 0.9: the 3×3 point grid (no offsets)
 API.UI.AnchorButton = UI.AnchorButton -- 0.17: the nine points in a 30px button; a click opens the grid under it
 API.UI.SwatchRow = UI.SwatchRow       -- 0.9: token colour swatches

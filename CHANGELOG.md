@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Unit frames: while you rest in an inn or a city, a small "z Z Z" drifts up from your frame's top-right corner (a full moon once your rested XP is full), and hovering your frame shows your rested XP and what it means. Settings › Unit frames › Rested: show it also while carrying rested XP, keep it still, hide it in combat or at max level. The Unit frames settings now preview your frame.
+
 ## 0.5.0-beta.7 (2026-10-20)
 
 ### New

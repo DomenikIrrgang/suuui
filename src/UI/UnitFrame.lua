@@ -39,6 +39,7 @@
 --   f:SetState(tone, word)   -- a state border and badge ("danger", "Aggro"); nil clears it
 --   f:UpdateRaidMarker()     -- redraws the marker (after opts.raidMarker changes)
 --   f:Refresh()
+--   f.onTooltip = fn(f, tooltip)  -- 0.17: adds lines to the frame's tooltip after the unit's
 --
 -- A disconnected player shows "Offline" where the health text goes, the bar
 -- empty and the name faint, as a dead unit does.
@@ -223,6 +224,8 @@ function UI.UnitFrame(parent, unit, opts)
         if not self.unit then return end
         GameTooltip_SetDefaultAnchor(GameTooltip, self)
         GameTooltip:SetUnit(self.unit)
+        -- 0.17: a module's own lines after the unit's (the player frame's rested lines)
+        if self.onTooltip then self.onTooltip(self, GameTooltip) end
         GameTooltip:Show()
     end)
     f:SetScript("OnLeave", function() GameTooltip:Hide() end)
