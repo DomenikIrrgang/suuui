@@ -1,4 +1,4 @@
--- Units/Merchant.lua
+-- Units/Merchant.wowlua
 -- SuuUI's own merchant window (plan 3.6, design component MerchantWindow):
 -- the game's MerchantFrame stays open (it drives the conversation) but out of
 -- sight, and this window shows the goods as one scrolling list with a
@@ -6,6 +6,11 @@
 -- many you have and what you already know, buys back, repairs and sells
 -- junk. None of it is protected (/suu probe windows, 2026-10-16).
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import after, every from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -19,9 +24,11 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+local isSecret = secret.isSecret
+-- a value that is there and not secret (narrows: no longer nil or Secret)
+type Plain = string | number | boolean | table
+local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h end
@@ -33,25 +40,25 @@ local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary
 local HIGH_PRICE = 1500000 -- 150g: the game asks before a purchase this dear
 
 -- "1g 20s" in the coin colours, zero coins at the end left out.
-local function coins(copper)
+local function coins(copper: number?): string
     copper = math.max(0, math.floor(copper or 0))
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local parts = {}
-    local function part(v, unit, token) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
+    local function part(v: number, unit: string, token: string) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
     if g > 0 then part(g, "g", "coin-gold") end
     if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
     if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
     return table.concat(parts, " ")
 end
 
-local function icon(texture) return texture and ("|T" .. texture .. ":12:12:0:0|t") or "" end
+local function icon(texture: any): string return texture and ("|T" .. texture .. ":12:12:0:0|t") or "" end
 
 --------------------------------------------------------------------------------
 -- The goods
 --------------------------------------------------------------------------------
 
 -- "Already known" in the item's tooltip: a recipe, pet or mount you have.
-local function isKnown(index)
+local function isKnown(index: number): boolean
     local data = C_TooltipInfo and call(C_TooltipInfo.GetMerchantItem, index)
     for _, line in ipairs(data and data.lines or {}) do
         if plain(line.leftText) and line.leftText == ITEM_SPELL_KNOWN then return true end
@@ -60,7 +67,7 @@ local function isKnown(index)
 end
 
 -- How many of an item (or currency) you have.
-local function haveOf(link, isCurrency)
+local function haveOf(link: any, isCurrency: boolean?): number
     if not link then return 0 end
     if isCurrency then
         local info = C_CurrencyInfo and call(C_CurrencyInfo.GetCurrencyInfoFromLink, link)
@@ -69,8 +76,17 @@ local function haveOf(link, isCurrency)
     return call(C_Item.GetItemCount, link, true, false, true) or 0
 end
 
+-- A merchant item's other cost: an item or a currency.
+type Cost = { texture: any, value: number, link: any, currency: boolean, name: any }
+
 -- One merchant item as the list shows it.
-function M:Item(index)
+type Entry = {
+    index: number, name: string, texture: any, link: any, quality: string,
+    price: number, stack: number, stock: number, usable: any, purchasable: any,
+    maxStack: number, costs: Cost[], have: number, known: boolean,
+}
+
+function M:Item(index: number): Entry?
     local info = call(C_MerchantFrame.GetItemInfo, index)
     if not info or not info.name then return nil end
     local link = call(GetMerchantItemLink, index)
@@ -99,7 +115,7 @@ end
 
 -- How many purchases you can make of an item, and why not more (nil: no cap
 -- but the merchant's own).
-local function purchaseCap(e)
+local function purchaseCap(e: Entry): (number, string?)
     local cap, why = math.huge, nil
     if e.stock >= 0 then cap, why = e.stock, "left" end
     if e.price > 0 then
@@ -115,7 +131,7 @@ end
 
 -- What a quantity (in items) really buys: whole purchases of the stack size,
 -- capped. Returns purchases, items, and a note for the row.
-local function plan(e, qty)
+local function plan(e: Entry, qty: number?): (number, number, string?)
     qty = math.max(1, math.floor(qty or e.stack))
     local purchases = math.ceil(qty / e.stack)
     local cap, why = purchaseCap(e)
@@ -135,7 +151,7 @@ end
 
 -- Buys `items` of a merchant item, in calls the merchant takes (whole stacks,
 -- up to its most a time), a moment apart.
-function M:Buy(e, items)
+function M:Buy(e: Entry, items: number)
     if items <= 0 then return end
     local per = math.max(e.stack, math.floor(e.maxStack / e.stack) * e.stack)
     local queue, left = {}, items
@@ -149,13 +165,13 @@ function M:Buy(e, items)
         k = k + 1
         if not queue[k] or not self.open then return end
         BuyMerchantItem(e.index, queue[k])
-        if queue[k + 1] then C_Timer.After(0.3, step) end
+        if queue[k + 1] then after(0.3, step) end
     end
     step()
 end
 
 -- Asks first where the game would: other costs, or a dear purchase.
-function M:ConfirmBuy(e, purchases, items)
+function M:ConfirmBuy(e: Entry, purchases: number, items: number)
     local money = e.price * purchases
     local costs = {}
     for _, c in ipairs(e.costs) do costs[#costs + 1] = (c.value * purchases) .. " " .. icon(c.texture) end
@@ -173,14 +189,14 @@ end
 -- The window
 --------------------------------------------------------------------------------
 
-local function slotTooltip(b)
+local function slotTooltip(b: any)
     if not b.index then return end
     GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
     if b.buyback then GameTooltip:SetBuybackItem(b.index) else GameTooltip:SetMerchantItem(b.index) end
     GameTooltip:Show()
 end
 
-local function buildRow(parent)
+local function buildRow(parent: any): any
     local r = CreateFrame("Frame", nil, parent)
     r:SetHeight(ROW_H)
     r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
@@ -217,7 +233,7 @@ end
 
 -- The line under the name: the price, then what's left, what you have and
 -- the quantity's note.
-local function drawStatus(r, parts)
+local function drawStatus(r: any, parts: string[])
     local anchor = r.money:IsShown() and r.money or r.costs
     r.status:ClearAllPoints()
     r.status:SetPoint("LEFT", anchor, "RIGHT", S["space-4"], 0)
@@ -225,9 +241,9 @@ local function drawStatus(r, parts)
     r.status:SetValue(table.concat(parts, "  ·  "))
 end
 
-local function amber(text) return "|cff" .. T.color["amber"].hex .. text .. "|r" end
+local function amber(text: string): string return "|cff" .. T.color["amber"].hex .. text .. "|r" end
 
-function M:DrawGoodsRow(r, e)
+function M:DrawGoodsRow(r: any, e: Entry)
     r.entry = e
     r.slot.index, r.slot.buyback, r.slot.link = e.index, nil, e.link
     r.slot.skin:SetItem({ icon = e.texture, count = e.stack, quality = e.quality, dim = e.known })
@@ -280,7 +296,7 @@ function M:DrawGoodsRow(r, e)
     end)
 end
 
-function M:DrawBuybackRow(r, i, undo)
+function M:DrawBuybackRow(r: any, i: number, undo: boolean?)
     local name, texture, price, quantity, _, usable = call(GetBuybackItemInfo, i)
     local link = call(GetBuybackItemLink, i)
     local quality = link and select(3, call(C_Item.GetItemInfo, link))
@@ -307,9 +323,9 @@ end
 
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMerchantWindow", title = "Merchant", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end,
+        footer = true, onClose = function(win: any) win:Hide() end,
         tabs = { { key = "buy", label = "Merchant" }, { key = "buyback", label = "Buy back" } },
-        onTab = function(key)
+        onTab = function(key: string)
             self.tab = key
             if self.list then self.list:SetVerticalScroll(0) end
             self:Refresh()
@@ -341,7 +357,7 @@ function M:Build()
     if LE_LOOT_FILTER_ALL then options[#options + 1] = { value = LE_LOOT_FILTER_ALL, label = "All items" } end
     if LE_LOOT_FILTER_CLASS then options[#options + 1] = { value = LE_LOOT_FILTER_CLASS, label = "Your class" } end
     if LE_LOOT_FILTER_BOE then options[#options + 1] = { value = LE_LOOT_FILTER_BOE, label = "Bind on equip" } end
-    self.filter = UI.Select(tools, { width = 160, options = options, onChange = function(v)
+    self.filter = UI.Select(tools, { width = 160, options = options, onChange = function(v: any)
         call(SetMerchantFilter, v)
         self:Refresh()
     end })
@@ -403,7 +419,7 @@ function M:Build()
 end
 
 -- Keeps n rows in the list, positioned from y; returns them.
-function M:Rows(n, y)
+function M:Rows(n: number, y: number): any[]
     local c = self.content
     for i = 1, math.max(n, #self.rows) do
         local r = self.rows[i]
@@ -517,7 +533,7 @@ end
 -- One grey item a moment until none is left or the merchant closes.
 function M:SellJunk()
     if self.selling then return end
-    self.selling = C_Timer.NewTicker(0.2, function(ticker)
+    self.selling = every(0.2, function(ticker)
         local list = junkSlots()
         if not self.open or #list == 0 or InCombatLockdown() then
             ticker:Cancel()
@@ -543,7 +559,7 @@ function M:DrawWear()
         elseif p.state == "damaged" then damaged[#damaged + 1] = p.label .. " " .. p.percent .. "%"
         elseif p.current < p.max then worn = worn + 1 end
     end
-    local function c(token, text) return "|cff" .. T.color[token].hex .. text .. "|r" end
+    local function c(token: string, text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
     local parts = {}
     if #broken > 0 then parts[#parts + 1] = c("ember-text", table.concat(broken, ", ") .. " broken") end
     if #damaged > 0 then parts[#parts + 1] = c("amber", table.concat(damaged, ", ")) end
@@ -601,7 +617,7 @@ end
 function M:QueueRefresh()
     if self.refreshPending then return end
     self.refreshPending = true
-    C_Timer.After(0.05, function()
+    after(0.05, function()
         self.refreshPending = nil
         self:Refresh()
     end)
@@ -613,7 +629,7 @@ end
 
 -- The game's frame out of sight: see-through and off screen, still shown,
 -- and back off screen whenever the game places it again.
-function M:Away(frame)
+function M:Away(frame: any)
     if not frame or self.away then return end
     self.away = true
     local placing = false
@@ -626,8 +642,8 @@ function M:Away(frame)
         placing = false
     end
     away()
-    hooksecurefunc(frame, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
-    frame:HookScript("OnShow", function() C_Timer.After(0, away) end)
+    hook(frame, "SetPoint", function() if not placing then after(0, away) end end)
+    hookScript(frame, "OnShow", function() after(0, away) end)
 end
 
 function M:OnEnable()

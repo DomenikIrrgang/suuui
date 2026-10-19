@@ -1,4 +1,4 @@
--- Units/Alerts.lua
+-- Units/Alerts.wowlua
 -- Alerts (step 1.11): one short-lived alert at a time, centred on the screen
 -- 320px down from its top, and only in combat. Other modules raise them
 -- through the public API (written against it, like a plugin would):
@@ -18,6 +18,9 @@
 -- level-up card stays while the mouse is over it: hidden once it leaves; a
 -- click on it takes it away at once.
 
+import SuuUI from "/Core/API"
+import after, every from "wowlua:timer"
+
 local UI = SuuUI.UI
 
 local M = SuuUI.RegisterModule({
@@ -36,7 +39,7 @@ local URGENCY = { info = 1, warning = 2, danger = 3 }
 local TEST_TIME = 4
 
 -- May this key's alert show now, over the one showing?
-function M:Allowed(key, tone)
+function M:Allowed(key: string, tone: string): boolean
     if not self.frame then return false end
     local inCombat = InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
     if not inCombat and not self.testing and not (self.anytime and self.anytime[key]) then return false end
@@ -47,7 +50,7 @@ function M:Allowed(key, tone)
     return true
 end
 
-function M:Present(key, tone, shown, hidden, args)
+function M:Present(key: string, tone: string, shown: any, hidden: any, args: { [any]: any })
     self:StopHolding()
     local fresh = self.current ~= key or self.tone ~= tone
     self.current, self.tone = key, tone
@@ -66,7 +69,7 @@ function M:Present(key, tone, shown, hidden, args)
     end
 end
 
-function M:Show(key, tone, title, detail, ...)
+function M:Show(key: string, tone: string, title: any, detail: any, ...: any)
     if not self:Allowed(key, tone) then return end
     self.alert:SetAlert(tone, title, detail, ...)
     self:Present(key, tone, self.alert, self.card,
@@ -74,14 +77,14 @@ function M:Show(key, tone, title, detail, ...)
 end
 
 -- The level-up card in the alert's place (tone info).
-function M:ShowLevelUp(key, def)
+function M:ShowLevelUp(key: string, def: any)
     if not self:Allowed(key, "info") then return end
     self.card:SetLevelUp(def)
     self:Present(key, "info", self.card, self.alert, { key = key, kind = "card", def = def })
 end
 
 -- A key whose alerts may show out of combat too (a pull countdown).
-function M:AllowOutOfCombat(key)
+function M:AllowOutOfCombat(key: string)
     self.anytime = self.anytime or {}
     self.anytime[key] = true
 end
@@ -90,12 +93,12 @@ function M:StopHolding()
     if self.holding then self.holding:Cancel(); self.holding = nil end
 end
 
-function M:Hide(key, now)
+function M:Hide(key: string?, now: boolean?)
     -- the card under the mouse: it goes a moment after the mouse leaves
     if not now and key and key == self.current and self.card:IsShown() and self.card:IsHovered() then
         if not self.holding then
             local away = 0
-            self.holding = C_Timer.NewTicker(0.2, function()
+            self.holding = every(0.2, function()
                 if self.current ~= key then return self:StopHolding() end
                 away = self.card:IsHovered() and 0 or away + 0.2
                 if away >= 1 then
@@ -122,7 +125,7 @@ function M:Hide(key, now)
             local d = SuuUI.Tokens.duration["dur-slow"]
             SuuUI.Motion.AlphaTo(f, 0, d)
             if self.fading then self.fading:Cancel() end
-            self.fading = C_Timer.NewTimer(d, function()
+            self.fading = after(d, function()
                 self.fading = nil
                 if not self.current then f:Hide(); f:SetAlpha(1) end
             end)
@@ -148,21 +151,21 @@ function M:Test()
     }
     self.testing = true
     for i, s in ipairs(samples) do
-        C_Timer.After((i - 1) * TEST_TIME, function()
+        after((i - 1) * TEST_TIME, function()
             if not self:IsEnabled() then return end
             self.testing = true
             self.current = nil
             self:Show("test", s[1], s[2], s[3])
         end)
     end
-    C_Timer.After(#samples * TEST_TIME, function()
+    after(#samples * TEST_TIME, function()
         self.testing = nil
         self:Hide("test")
     end)
 end
 
 -- The settings' preview: the three tones at their real size.
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.previewView then
         local view = CreateFrame("Frame", nil, parent)
         local list = {
@@ -187,7 +190,7 @@ end
 
 local SECTION = {
     id = "alerts", label = "Alerts", category = "Insights", order = 10,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any): any return M:PreviewView(parent) end,
     previewNote = "In combat only, one at a time, 320px down from the top of the screen.",
     groups = {
         { title = "Alerts", description = "One line in the middle of the screen when something needs you now. Only in combat; the alert goes when the reason does.", rows = {
@@ -202,10 +205,10 @@ local SECTION = {
 
 function M:OnEnable()
     self:Provide("alerts", {
-        Show = function(...) self:Show(...) end,
-        ShowLevelUp = function(key, def) self:ShowLevelUp(key, def) end,
-        Hide = function(key) self:Hide(key) end,
-        AllowOutOfCombat = function(key) self:AllowOutOfCombat(key) end,
+        Show = function(...: any) self:Show(...) end,
+        ShowLevelUp = function(key: string, def: any) self:ShowLevelUp(key, def) end,
+        Hide = function(key: string?) self:Hide(key) end,
+        AllowOutOfCombat = function(key: string) self:AllowOutOfCombat(key) end,
     })
     if not self.frame then
         local f = CreateFrame("Frame", "SuuUIAlerts", SuuUI.Root)

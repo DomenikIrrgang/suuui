@@ -1,4 +1,4 @@
--- Units/Threat.lua
+-- Units/Threat.wowlua
 -- The threat meter and the pull warning (step 1.11). A built-in module
 -- written against the public API only.
 --
@@ -17,6 +17,9 @@
 -- 2-3) and aren't the tank: in a group, or (setting) while your pet is on the
 -- mob's threat table, so a hunter or warlock pulling off the pet hears it.
 -- Both go when the reason does.
+
+import SuuUI from "/Core/API"
+import isSecret as isSecretValue from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -46,8 +49,11 @@ M:Migrate("shows", function(values)
     values.shown = nil
 end)
 
-local isSecret = issecretvalue or function() return false end
-local function readable(v) return not isSecret(v) and type(v) == "number" end
+-- isSecret with its type: strict mode reads a named stdlib import as `any`
+-- while the project has an import cycle (Core has some), so the stdlib's own
+-- predicate wouldn't narrow here (Docs/port-notes/units-hud.md).
+local function isSecret(v: unknown): v is Secret<unknown> return isSecretValue(v) end
+local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 local TICK = 0.2
 
 -- What saves you from a mob you pulled, by class (the first one ready shows).
@@ -60,9 +66,9 @@ local THREAT_DROPS = {
     PALADIN = { "Divine Shield" },
 }
 
-local function playerClass()
+local function playerClass(): string
     local _, class = UnitClass("player")
-    return class
+    return class :: string -- your own class reads plain (used unguarded, as before)
 end
 
 -- The first threat drop you know and can use now, by name, or nil. A
@@ -73,8 +79,8 @@ end
 local GCD_SPELL = 29515
 local dropReady = {}
 
-local function running(id)
-    local cd = C_Spell.GetSpellCooldown(id)
+local function running(id: number): boolean?
+    local cd = C_Spell.GetSpellCooldown(id) :: SpellCooldownInfo? -- a table; its fields may be secret
     if not cd then return nil end
     local active = cd.isActive
     if not isSecret(active) and active ~= nil then return active and true or false end
@@ -101,15 +107,18 @@ end
 -- Reading the threat table
 --------------------------------------------------------------------------------
 
-local function roleOf(unit)
+local function roleOf(unit: string): string?
     if unit == "player" then return SuuUI.Role() end
     local role = UnitGroupRolesAssigned(unit)
     if isSecret(role) or role == "NONE" then return nil end
     return role
 end
 
+-- A row of the threat table (the name and the % may be secret).
+type Row = { name: any, class: string?, role: string?, status: number?, percent: any, raw: any, you: boolean, unit: string }
+
 -- One unit's row, or nil while it isn't on the target's threat table.
-local function sample(unit, pet)
+local function sample(unit: string, pet: boolean?): Row?
     if not UnitExists(unit) then return nil end
     local status = UnitThreatSituation(unit, "target")
     if isSecret(status) then status = nil end
@@ -130,7 +139,7 @@ end
 -- any % is secret.
 local function readRows()
     local rows, secret = {}, false
-    local function add(unit, pet)
+    local function add(unit: string, pet: boolean?)
         local r = sample(unit, pet)
         if r then
             rows[#rows + 1] = r
@@ -172,7 +181,7 @@ local function inCombat()
     return InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
 end
 
-function M:MeterOpts(byState)
+function M:MeterOpts(byState: boolean): { [string]: any }
     return { show = self:Get("who"), marker = self:Get("marker"), raw = self:Get("raw"), byState = byState }
 end
 
@@ -180,11 +189,11 @@ end
 -- driver runs every tick, out of combat too while the meter always shows:
 -- it told the Alerts module "no aggro" five times a second, found in game).
 local raised = {}
-function M.Alert(key, ...)
+function M.Alert(key: string, ...: any)
     raised[key] = true
     SuuUI.ShowAlert(key, ...)
 end
-function M.Unalert(key)
+function M.Unalert(key: string)
     if not raised[key] then return end
     raised[key] = nil
     SuuUI.HideAlert(key)
@@ -210,7 +219,7 @@ end
 -- Whether the alerts apply here: in an instance, or anywhere with Open
 -- world on; in a group with someone to hold the mobs; solo (the aggro
 -- alert's With my pet) with your pet on the mob.
-function M:AlertsApply(rows, aggro)
+function M:AlertsApply(rows: Row[], aggro: boolean?): boolean
     if not self:Get("openWorld") and not UI.Flag(IsInInstance()) then return false end
     if UI.Flag(IsInGroup()) then return groupHasHolder() end
     if aggro and self:Get("aggroAlert") ~= "pet" then return false end
@@ -220,12 +229,12 @@ function M:AlertsApply(rows, aggro)
     return false
 end
 
-function M:AggroApplies(rows)
+function M:AggroApplies(rows: Row[]): boolean
     if self:Get("aggroAlert") == "off" then return false end
     return self:AlertsApply(rows, true)
 end
 
-function M:Warn(rows)
+function M:Warn(rows: Row[])
     local me
     for _, r in ipairs(rows) do if r.you then me = r end end
     local status = me and me.status
@@ -308,7 +317,7 @@ local function meterRows()
     return dm and dm:Get("rows") or 8
 end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.preview then
         self.preview = UI.ThreatMeter(parent, { rows = meterRows() })
         self.preview:SetTarget("Lava Surger")
@@ -338,7 +347,7 @@ end
 
 local SECTION = {
     id = "threat", label = "Damage & threat", category = "Insights", order = 50, merge = "damagemeter",
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any) return M:PreviewView(parent) end,
     previewTitle = "Live preview · Threat",
     groups = {
         { title = "Threat meter", description = "Your target, in combat. On bosses the client lets SuuUI show each player's threat but not compare it, so the list orders by threat state.", rows = {

@@ -1,4 +1,4 @@
--- Units/MicroMenu.lua
+-- Units/MicroMenu.wowlua
 -- SuuUI's micro menu (step 2.1): top left, space-7 from the edges. Blizzard's
 -- micro buttons in their order (each SuuUI button clicks its Blizzard one
 -- through a secure button, so the game's own rules for each window apply,
@@ -7,6 +7,9 @@
 -- (unspent talent points). Blizzard's micro menu is hidden while this runs
 -- (its buttons stay, unseen, for SuuUI's to click); turned off, it's back.
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -31,17 +34,20 @@ local M = SuuUI.RegisterModule({
 
 -- Everything the menu can hold, in Blizzard's order (World map and Bags,
 -- the design's, before the game menu). `click`: the Blizzard micro button.
+type Item = { key: string, glyph: string, label: string, click?: string, bind?: string,
+              onClick?: () -> (), open?: () -> any }
+
 -- The Talents button when SuuUI's Talents window is on.
-local TALENTS_OWN = { key = "talents", glyph = "tree", label = "Talents", bind = "TOGGLETALENTS",
+local TALENTS_OWN: Item = { key = "talents", glyph = "tree", label = "Talents", bind = "TOGGLETALENTS",
     onClick = function() SuuUI.ToggleTalents() end,
     open = function() return SuuUI.TalentsShown() end }
 
 -- SuuUI's own Collections window, while the collections module is on (0.17)
-local COLLECTIONS_OWN = { key = "collections", glyph = "mount", label = "Collections", bind = "TOGGLECOLLECTIONS",
+local COLLECTIONS_OWN: Item = { key = "collections", glyph = "mount", label = "Collections", bind = "TOGGLECOLLECTIONS",
     onClick = function() SuuUI.ToggleCollections() end,
     open = function() return SuuUI.CollectionsShown() end }
 
-local ITEMS = {
+local ITEMS: Item[] = {
     { key = "character", glyph = "person", label = "Character", click = "CharacterMicroButton" },
     { key = "professions", glyph = "hammer", label = "Professions", click = "ProfessionMicroButton" },
     { key = "spellbook", glyph = "book", label = "Spellbook", click = "SpellbookMicroButton" },
@@ -77,12 +83,14 @@ function M:Items()
     for _, k in ipairs(self:Peek("buttons")) do chosen[k] = true end
     local out = {}
     for _, item in ipairs(ITEMS) do
-        if item.key == "talents" and SuuUI.GetModule("talents") and SuuUI.GetModule("talents"):Get("enabled") then
+        local talents = SuuUI.GetModule("talents")
+        if item.key == "talents" and talents and talents:Get("enabled") then
             -- SuuUI's own Talents window (the talents module; its setting is
             -- known before it is enabled, which is after this module)
             item = TALENTS_OWN
         end
-        if item.key == "collections" and SuuUI.GetModule("collections") and SuuUI.GetModule("collections"):Get("enabled") then
+        local collections = SuuUI.GetModule("collections")
+        if item.key == "collections" and collections and collections:Get("enabled") then
             item = COLLECTIONS_OWN
         end
         -- plugins' buttons (0.17) before the game menu's, which stays last
@@ -143,7 +151,7 @@ end
 -- Which windows are open: a Blizzard micro button is pushed while its window
 -- shows; the others check their window. Looked at a few times a second
 -- while the menu shows.
-local function isOpen(item)
+local function isOpen(item: Item): boolean
     if item.open then return item.open() and true or false end
     local b = item.click and _G[item.click]
     return b and b.GetButtonState and b:GetButtonState() == "PUSHED" or false
@@ -157,7 +165,7 @@ end
 -- Something to act on: unspent talent points; Legacy points to spend; spells to train (the
 -- Spellbook module says how many and, unless its setting is off, what they
 -- cost: SUUUI_SPELLS_TO_TRAIN).
-local function coins(copper)
+local function coins(copper: number): string
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local parts = {}
     if g > 0 then parts[#parts + 1] = g .. "g" end
@@ -169,13 +177,13 @@ end
 -- Legacy points this character can still spend (the Legacy trees' currency;
 -- one config for all three trees: 1187 is Professions).
 local LEGACY_TREE = 1187
-local function legacyToSpend()
+local function legacyToSpend(): number
     if not (C_Traits and C_Traits.GetConfigIDByTreeID) then return 0 end
     local ok, configID = pcall(C_Traits.GetConfigIDByTreeID, LEGACY_TREE)
-    if not ok or not configID or (issecretvalue and issecretvalue(configID)) then return 0 end
+    if not ok or not configID or secret.isSecret(configID) then return 0 end
     local ok2, info = pcall(C_Traits.GetTreeCurrencyInfo, configID, LEGACY_TREE, false)
-    local q = ok2 and info and info[1] and info[1].quantity
-    if q == nil or (issecretvalue and issecretvalue(q)) then return 0 end
+    local q = ok2 and info and info[1] and info[1].quantity or nil
+    if q == nil or secret.isSecret(q) then return 0 end
     return q
 end
 
@@ -184,7 +192,7 @@ function M:UpdateAlerts()
     local talents = C_ClassTalents and C_ClassTalents.HasUnspentTalentPoints
     local ok, has = false, false
     if talents then ok, has = pcall(talents) end
-    local unspent = ok and not (issecretvalue and issecretvalue(has)) and has == true
+    local unspent = ok and not secret.isSecret(has) and has == true
     self.menu:SetAlert("talents", unspent and "Talent points to spend" or nil)
     local n = self.spellsToTrain or 0
     local cost = self.trainingCost and (" · " .. coins(self.trainingCost)) or ""
@@ -211,7 +219,7 @@ end
 -- Settings
 --------------------------------------------------------------------------------
 
-local function buttonChips(parent, onChange)
+local function buttonChips(parent: Frame, onChange: any): any
     local opts = {}
     for _, item in ipairs(ITEMS) do
         if item.key == "menu" then
@@ -222,7 +230,7 @@ local function buttonChips(parent, onChange)
     return UI.ToggleChips(parent, { options = opts, value = M:Get("buttons"), onChange = onChange })
 end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: Frame)
     if not self.preview then
         -- plain buttons (no clicks) for the settings' preview
         local items = {}
@@ -242,7 +250,7 @@ end
 
 local SECTION = {
     id = "micromenu", label = "Micro menu", category = "Frames", order = 27, merge = "microbags",
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: Frame) return M:PreviewView(parent) end,
     groups = {
         { title = "Micro menu", description = "SuuUI's own: each button opens the same window as Blizzard's. An arcane diamond marks something to act on. Move it in edit mode.", rows = {
             { key = "buttons", label = "Buttons", control = "custom", build = buttonChips, stacked = true, combat = true,

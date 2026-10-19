@@ -1,4 +1,4 @@
--- Units/Guild.lua
+-- Units/Guild.wowlua
 -- SuuUI's Guild pages (step 3.4, design component GuildWindow) over
 -- Blizzard's Communities window (J; probed 2026-10-14: its communities list
 -- on the left, Chat, Roster, Info and play-style tabs, the member list, the
@@ -11,6 +11,11 @@
 -- Only for your guild: a community keeps Blizzard's own pages.
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
@@ -22,16 +27,19 @@ local M = SuuUI.RegisterModule({
     defaults = { showOffline = false },
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local isSecret = secret.isSecret
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
-local function call(fn, ...)
+-- A guild member as the roster and the details panel draw them.
+type Member = { [string]: any }
+
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q end
 end
 
-local function lastOnline(i)
+local function lastOnline(i: number): string
     local y, mo, d, h = call(GetGuildRosterLastOnline, i)
     if not (y or mo or d or h) then return "Offline" end
     y, mo, d, h = y or 0, mo or 0, d or 0, h or 0
@@ -52,7 +60,7 @@ function M:MyRank()
 end
 
 function M:Members()
-    local all, online = {}, 0
+    local all: Member[], online = {}, 0
     if not IsInGuild() then return all, 0, 0 end
     local me = SuuUI.FullName("player")
     for i = 1, (call(GetNumGuildMembers)) or 0 do
@@ -60,12 +68,12 @@ function M:Members()
         local guid = select(17, call(GetGuildRosterInfo, i))
         if plain(name) and name then
             local short = Ambiguate(name, "guild")
-            local m = { key = name, full = name, name = short, rank = rank, rankIndex = rankIndex or 0, level = level,
+            local m: Member = { key = name, full = name, name = short, rank = rank, rankIndex = rankIndex or 0, level = level,
                         zone = plain(zone) and zone or nil, note = plain(note) and note or nil,
                         officerNote = plain(officerNote) and officerNote or nil, online = isOnline and true or false,
                         away = status == 1, busy = status == 2, class = file, guid = guid,
                         className = plain(className) and className or nil,
-                        you = Ambiguate(name, "short") == Ambiguate(me, "short") }
+                        you = Ambiguate(name, "short") == Ambiguate(me :: string, "short") }
             if not m.online then m.lastOnline = lastOnline(i) end
             if m.online then online = online + 1 end
             all[#all + 1] = m
@@ -74,21 +82,21 @@ function M:Members()
     return all, online, #all
 end
 
-local SORTS = {
-    rank = function(a, b) if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end return a.name < b.name end,
-    name = function(a, b) return a.name < b.name end,
-    level = function(a, b) if (a.level or 0) ~= (b.level or 0) then return (a.level or 0) > (b.level or 0) end return a.name < b.name end,
-    zone = function(a, b)
+local SORTS: { [string]: (a: Member, b: Member) -> boolean } = {
+    rank = function(a: Member, b: Member): boolean if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end return a.name < b.name end,
+    name = function(a: Member, b: Member): boolean return a.name < b.name end,
+    level = function(a: Member, b: Member): boolean if (a.level or 0) ~= (b.level or 0) then return (a.level or 0) > (b.level or 0) end return a.name < b.name end,
+    zone = function(a: Member, b: Member): boolean
         local x, y = a.online and (a.zone or "") or "~", b.online and (b.zone or "") or "~"
         if x ~= y then return x < y end
         return a.name < b.name
     end,
-    class = function(a, b)
+    class = function(a: Member, b: Member): boolean
         local x, y = a.className or "~", b.className or "~"
         if x ~= y then return x < y end
         return a.name < b.name
     end,
-    note = function(a, b)
+    note = function(a: Member, b: Member): boolean
         local x, y = a.note or "~", b.note or "~"
         if x ~= y then return x < y end
         return a.name < b.name
@@ -96,8 +104,8 @@ local SORTS = {
 }
 
 -- What you may do with a member: { enabled, why } each.
-function M:Actions(m)
-    local out = {}
+function M:Actions(m: Member?)
+    local out: { [string]: any } = {}
     local inviteGuild = call(CanGuildInvite)
     out.guildInvite = { enabled = inviteGuild, why = "Your rank can't invite to the guild." }
     if not m then return out end
@@ -108,7 +116,7 @@ function M:Actions(m)
     local canGroup = not IsInGroup() or UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")
     out.invite = { enabled = m.online and not m.you and canGroup,
                    why = m.you and "That's you." or (not m.online and "They're offline.") or "Only your group's leader or an assistant can invite." }
-    local function rule(can, extra, whyRank, whyExtra)
+    local function rule(can: any, extra: boolean, whyRank: string, whyExtra: string?): { enabled: boolean, why?: string }
         if not can then return { enabled = false, why = whyRank } end
         if m.you then return { enabled = false, why = "That's you." } end
         if not below then return { enabled = false, why = "Only for members ranked below you." } end
@@ -129,7 +137,7 @@ local SLASH = { promote = "/gpromote ", demote = "/gdemote ", remove = "/gremove
 
 -- A secure button over one of the panel's buttons (on UIParent: a secure
 -- child would make the guild window protected).
-local function secureOver(button)
+local function secureOver(button: any)
     local s = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
     s:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
     s.target = button
@@ -141,7 +149,7 @@ end
 
 -- The roster foot's Promote, Demote and Remove: secure buttons on top that
 -- run the slash command for the selected member (out of combat).
-function M:FootOverlays(m, actions)
+function M:FootOverlays(m: Member?, actions: { [string]: any })
     local page = self.roster
     if not page then return end
     self.overs = self.overs or {}
@@ -162,7 +170,7 @@ function M:FootOverlays(m, actions)
                 end
                 over.armed = nil
                 if key == "remove" then btn:SetLabel("Remove"); over:SetAttribute("type1", nil) end
-                C_Timer.After(0.5, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
+                after(0.5, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
             end)
             self.overs[key] = over
         end
@@ -195,7 +203,7 @@ function M:Render()
     local all, online, total = self:Members()
     local showOffline = self:Get("showOffline")
     local search = self.search and self.search ~= "" and self.search:lower() or nil
-    local shown, selected = {}, nil
+    local shown: Member[], selected: Member? = {}, nil
     for _, m in ipairs(all) do
         local keep = (showOffline or m.online)
         if keep and search then
@@ -229,7 +237,7 @@ end
 function M:QueueRender()
     if self.renderQueued then return end
     self.renderQueued = true
-    C_Timer.After(0.15, function()
+    after(0.15, function()
         self.renderQueued = nil
         if self:IsEnabled() then self:Render() end
     end)
@@ -263,14 +271,14 @@ function M:SizeBlizzList()
     self.placingList = false
     if not self.listHooked then
         self.listHooked = true
-        local function again() if not self.placingList then C_Timer.After(0, function() self:SizeBlizzList() end) end end
-        hooksecurefunc(list, "SetPoint", again)
-        hooksecurefunc(list, "SetSize", again)
+        local function again() if not self.placingList then after(0, function() self:SizeBlizzList() end) end end
+        hook(list, "SetPoint", again)
+        hook(list, "SetSize", again)
     end
 end
 
 -- The game's row for a member (by GUID), if it has one.
-function M:BlizzRow(guid)
+function M:BlizzRow(guid: string?): any
     local list = self:BlizzList()
     if not (guid and list and list.ScrollBox and list.ScrollBox.ForEachFrame) then return nil end
     local found
@@ -297,7 +305,7 @@ end
 
 -- The game's note box over SuuUI's Edit (invisible: the panel it belongs
 -- to is see-through and off screen).
-function M:PlaceNoteBox(officer, edit, direct)
+function M:PlaceNoteBox(officer: boolean, edit: any, direct: boolean?)
     local d = self.frame and self.frame.GuildMemberDetailFrame
     if not d then return end
     local box = officer and d.OfficerNoteBackground or d.NoteBackground
@@ -315,7 +323,7 @@ end
 -- The details panel's two Edits: secure buttons on top that click the
 -- member's row in the game's list (out of combat; anchored only while
 -- shown, the way the roster's are).
-function M:NoteOverlays(m)
+function M:NoteOverlays(m: Member?)
     local p = self.details
     if not p or InCombatLockdown() then return end
     self.noteOvers = self.noteOvers or {}
@@ -363,7 +371,7 @@ end
 -- box at once. Right clicks pass through to the row (its menu), a double
 -- click goes to the row (whisper). Out of combat; anchored only while
 -- there, so the window doesn't stay protected.
-function M:RowOver(row, m)
+function M:RowOver(row: any, m: Member?)
     if InCombatLockdown() or not (row and m) then return end
     local over = self.rowOver
     if not over then
@@ -401,7 +409,7 @@ function M:RowOver(row, m)
     over:Show()
 end
 
-function M:RowLeft(row)
+function M:RowLeft(row: any)
     local over = self.rowOver
     -- the layer itself came over the row: the row keeps its hover
     if over and over:IsShown() and over.row == row and over:IsMouseOver() then
@@ -435,7 +443,7 @@ end
 -- lays its controls out in SuuUI's look (design component GuildControl).
 function M:GuildSettings() self:ShowOwn("settings") end
 
-function M:HostSettings(on)
+function M:HostSettings(on: any)
     local f = self.frame
     if not f then return end
     if on and not _G.GuildControlUI and C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
@@ -471,14 +479,14 @@ end
 -- on a secure button. The confirm dialog asks for the name; a secure button
 -- over its Invite runs /ginvite with what's typed (out of combat; anchored
 -- only while the dialog shows, so the dialog itself never turns protected).
-function M:InviteOverlay(p)
+function M:InviteOverlay(p: any)
     local over = self.inviteOver
     if not over then
         over = secureOver(p.ok)
         over:SetAttribute("type1", "macro")
         over:HookScript("PostClick", function()
-            C_Timer.After(0, function() if p:IsShown() then p:Hide() end end)
-            C_Timer.After(1, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
+            after(0, function() if p:IsShown() then p:Hide() end end)
+            after(1, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
         end)
         p:HookScript("OnHide", function()
             if over:IsShown() and not InCombatLockdown() then
@@ -500,7 +508,7 @@ function M:InviteOverlay(p)
     over:Show()
 end
 
-function M:Act(action, m)
+function M:Act(action: string, m: Member?)
     if action == "guildInvite" then
         if InCombatLockdown() then
             self:Print("Inviting to the guild works out of combat.")
@@ -523,13 +531,13 @@ function M:Act(action, m)
         local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
         if tell then tell(m.full) end
     elseif action == "invite" then
-        local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+        local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or _G.InviteUnit
         if fn then pcall(fn, m.full) end
     end
-    C_Timer.After(0.5, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
+    after(0.5, function() if C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end end)
 end
 
-function M:Menu(m, owner)
+function M:Menu(m: Member, owner: Frame)
     local a = self:Actions(m)
     UI.ContextMenuFrom(owner, function(_, root)
         root:CreateTitle(m.name)
@@ -540,20 +548,20 @@ function M:Menu(m, owner)
     end, "guildMember", { member = m })
 end
 
-function M:Wire(page)
-    page.onSearch = function(text) self.search = text; self:QueueRender() end
-    page.onShowOffline = function(on) self:Set("showOffline", on and true or false); self:Render() end
-    page.onSort = function(key) self.sort = key; self:Render() end
-    page.onSelect = function(key)
+function M:Wire(page: any)
+    page.onSearch = function(text: string) self.search = text; self:QueueRender() end
+    page.onShowOffline = function(on: boolean) self:Set("showOffline", on and true or false); self:Render() end
+    page.onSort = function(key: string) self.sort = key; self:Render() end
+    page.onSelect = function(key: string)
         self.selected = key
         self:Render()
         -- a click opens their details, as Blizzard's roster did
         for _, m in ipairs(self.members or {}) do if m.key == key then self:ShowDetails(m) end end
     end
-    page.onAction = function(action, m) self:Act(action, m) end
-    page.onMenu = function(m, owner) self:Menu(m, owner) end
-    page.onRowEnter = function(row, m) self:RowOver(row, m) end
-    page.onRowLeave = function(row) self:RowLeft(row) end
+    page.onAction = function(action: string, m: Member?) self:Act(action, m) end
+    page.onMenu = function(m: Member, owner: Frame) self:Menu(m, owner) end
+    page.onRowEnter = function(row: any, m: Member?) self:RowOver(row, m) end
+    page.onRowLeave = function(row: any) self:RowLeft(row) end
 end
 
 --------------------------------------------------------------------------------
@@ -579,7 +587,7 @@ function M:BuildDetails()
     p.line1:SetPoint("TOPLEFT")
     p.line2 = UI.Text(b, "caption", "ink-muted")
     p.line2:SetPoint("TOPLEFT", p.line1, "BOTTOMLEFT", 0, -2)
-    local function noteBlock(label, below, officer)
+    local function noteBlock(label: string, below: any, officer: boolean)
         local head = UI.Text(b, "caption", "gilt-text")
         head:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -S["space-5"])
         head:SetValue(label)
@@ -624,7 +632,7 @@ function M:BuildDetails()
     return p
 end
 
-function M:ShowDetails(m)
+function M:ShowDetails(m: Member?)
     if not m then return end
     local p = self:BuildDetails()
     p.member = m
@@ -731,7 +739,7 @@ function M:BlizzEdits()
     return { motd = info and info.EditMOTDButton, info = info and info.EditDetailsButton }
 end
 
-function M:EditInfo(key)
+function M:EditInfo(key: string)
     local button = self:BlizzEdits()[key]
     if button and button.Click then
         button:Click()
@@ -758,7 +766,7 @@ function M:InfoOverlays()
         if not over then
             over = secureOver(button)
             over:SetAttribute("type1", "click")
-            over:HookScript("PostClick", function() C_Timer.After(0, function() self:SkinTextEdit() end) end)
+            over:HookScript("PostClick", function() after(0, function() self:SkinTextEdit() end) end)
             self.infoOvers[key] = over
         end
         local on = button:IsVisible()
@@ -793,23 +801,23 @@ function M:SkinTextEdit()
     if not dlg then return end
     if not dlg.suuHooked then
         dlg.suuHooked = true
-        dlg:HookScript("OnShow", function() UI.ReskinDialog(dlg) end)
+        hookScript(dlg, "OnShow", function() UI.ReskinDialog(dlg) end)
         -- saved or not: the page shows what the game has now
-        dlg:HookScript("OnHide", function()
+        hookScript(dlg, "OnHide", function()
             if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end
-            for _, t in ipairs({ 0.3, 1.5 }) do C_Timer.After(t, function() self:RenderInfo(); self:RenderBanner() end) end
+            for _, t in ipairs({ 0.3, 1.5 }) do after(t, function() self:RenderInfo(); self:RenderBanner() end) end
         end)
     end
     if dlg:IsShown() then UI.ReskinDialog(dlg) end
 end
 
-function M:EditInfoOwn(key)
+function M:EditInfoOwn(key: string)
     local motd = key == "motd"
     local current = motd and call(GetGuildRosterMOTD) or call(GetGuildInfoText)
     UI.Confirm({ title = motd and "Message of the day" or "Guild information",
         text = motd and "Everyone in the guild sees it when they log in." or "What the guild is about, for its members.",
         input = { label = motd and "Message" or "Information", value = plain(current) and current or "" }, confirm = "Save",
-        onConfirm = function(text)
+        onConfirm = function(text: string)
             if motd then
                 local set = (C_GuildInfo and C_GuildInfo.SetMOTD) or GuildSetMOTD
                 if set then pcall(set, text) end
@@ -817,7 +825,7 @@ function M:EditInfoOwn(key)
                 local set = (C_GuildInfo and C_GuildInfo.SetInfoText) or SetGuildInfoText
                 if set then pcall(set, text) end
             end
-            C_Timer.After(0.5, function() self:RenderInfo() end)
+            after(0.5, function() self:RenderInfo() end)
         end })
 end
 
@@ -854,7 +862,7 @@ end
 
 -- SuuUI's own pages over the window: "log", "settings", or nil (Blizzard's
 -- tab's own page).
-function M:ShowOwn(key)
+function M:ShowOwn(key: string?)
     self.ownPage = key
     if key == "log" and QueryGuildEventLog then pcall(QueryGuildEventLog) end
     self:Follow()
@@ -864,13 +872,13 @@ end
 
 -- Your guild and communities, the guild first.
 function M:Clubs()
-    local out = {}
+    local out: { [string]: any }[] = {}
     for _, c in ipairs((C_Club and call(C_Club.GetSubscribedClubs)) or {}) do
         if c.clubId and plain(c.name) then
             out[#out + 1] = { value = c.clubId, label = c.name, guild = c.clubType == (Enum.ClubType and Enum.ClubType.Guild or 2) }
         end
     end
-    table.sort(out, function(a, b)
+    table.sort(out, function(a: { [string]: any }, b: { [string]: any }): boolean
         if a.guild ~= b.guild then return a.guild end
         return a.label < b.label
     end)
@@ -916,7 +924,7 @@ function M:BuildPicker()
     plus:SetScript("OnLeave", function(self2) self2.edge:SetColor("gilt-line"); GameTooltip:Hide() end)
     plus:SetScript("OnClick", function() self:JoinOrCreate() end)
     local picker = UI.Select(chrome.head, { bare = true, width = 220, textStyle = "label", textColor = "ink",
-        options = self:Clubs(), onChange = function(id)
+        options = self:Clubs(), onChange = function(id: any)
             self.ownPage = nil
             if f.SelectClub then f:SelectClub(id) end
         end })
@@ -950,10 +958,10 @@ function M:FoldList()
     self.folding = false
     if not self.listHooked then
         self.listHooked = true
-        local function again() if not self.folding then C_Timer.After(0, function() self:FoldList() end) end end
-        hooksecurefunc(list, "SetWidth", again)
-        hooksecurefunc(list, "SetSize", again)
-        hooksecurefunc(list, "SetPoint", again)
+        local function again() if not self.folding then after(0, function() self:FoldList() end) end end
+        hook(list, "SetWidth", again)
+        hook(list, "SetSize", again)
+        hook(list, "SetPoint", again)
     end
     -- Blizzard's View Log and Invite Member: the Log tab and the roster
     -- (Invite to guild) have their jobs (asked for in game)
@@ -973,7 +981,7 @@ end
 local HIDDEN_BUTTONS = { ["View Log"] = true, ["Invite Member"] = true }
 
 -- A Blizzard part off screen, back there whenever Blizzard places it.
-function M:Away(part)
+function M:Away(part: any)
     self.awayParts = self.awayParts or {}
     if self.awayParts[part] or InCombatLockdown() then return end
     self.awayParts[part] = true
@@ -986,10 +994,10 @@ function M:Away(part)
         placing = false
     end
     away()
-    hooksecurefunc(part, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+    hook(part, "SetPoint", function() if not placing then after(0, away) end end)
 end
 
-function M:HideButtons(frame, depth)
+function M:HideButtons(frame: any, depth: number)
     if depth > 4 or not frame or not frame.GetChildren then return end
     for _, c in ipairs({ frame:GetChildren() }) do
         if c.GetObjectType and c:GetObjectType() == "Button" and not c.suuOwn then
@@ -1075,14 +1083,14 @@ function M:LayChat()
     self.layingChat = false
     if not self.chatHooked then
         self.chatHooked = true
-        local function again() if not self.layingChat then C_Timer.After(0, function() self:LayChat() end) end end
-        hooksecurefunc(f.Chat, "SetPoint", again)
-        if f.ChatEditBox then hooksecurefunc(f.ChatEditBox, "SetPoint", again) end
-        if f.StreamDropdown then hooksecurefunc(f.StreamDropdown, "SetPoint", again) end
-        if f.Chat.MessageFrame then hooksecurefunc(f.Chat.MessageFrame, "SetPoint", again) end
+        local function again() if not self.layingChat then after(0, function() self:LayChat() end) end end
+        hook(f.Chat, "SetPoint", again)
+        if f.ChatEditBox then hook(f.ChatEditBox, "SetPoint", again) end
+        if f.StreamDropdown then hook(f.StreamDropdown, "SetPoint", again) end
+        if f.Chat.MessageFrame then hook(f.Chat.MessageFrame, "SetPoint", again) end
         -- the hidden member list takes no clicks in the chat's mode
         if f.MemberList then
-            f.MemberList:HookScript("OnShow", again)
+            hookScript(f.MemberList, "OnShow", again)
         end
     end
     -- its clicks: none while hidden there
@@ -1124,7 +1132,7 @@ function M:Follow()
         if onInfo then self:RenderInfo() else self:InfoOverlays() end
     end
     -- the rest in SuuUI's look: Blizzard's own parts restyled in place
-    C_Timer.After(0, function() if f:IsShown() then UI.Reskin(f) end end)
+    after(0, function() if f:IsShown() then UI.Reskin(f) end end)
     self.roster:SetShown(onRoster and true or false)
     if not onRoster and not InCombatLockdown() then
         for _, over in pairs(self.overs or {}) do over:Hide(); over:ClearAllPoints() end
@@ -1160,7 +1168,7 @@ function M:Build()
     info:EnableMouse(true)
     info:Hide()
     info.suuOwn = true
-    info.onEdit = function(key) self:EditInfo(key) end
+    info.onEdit = function(key: string) self:EditInfo(key) end
     -- the Chat tab's message of the day, pinned over the messages
     local banner = UI.GuildMotdBanner(f)
     banner:SetFrameLevel(f:GetFrameLevel() + 20)
@@ -1185,8 +1193,8 @@ function M:Build()
         detail:SetAlpha(0)
         self:Away(detail)
     end
-    f:HookScript("OnShow", function() self:Follow() end)
-    f:HookScript("OnHide", function()
+    hookScript(f, "OnShow", function() self:Follow() end)
+    hookScript(f, "OnHide", function()
         GameTooltip:Hide()
         if self.details then self.details:Hide() end
         -- the secure buttons let go of the window (it stays unprotected)
@@ -1195,8 +1203,8 @@ function M:Build()
         self:HideRowOver()
     end)
     self:SkinTextEdit()
-    if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() self:Follow() end) end
-    if f.SelectClub then hooksecurefunc(f, "SelectClub", function() C_Timer.After(0, function() self:Follow() end) end) end
+    if f.SetDisplayMode then hook(f, "SetDisplayMode", function() self:Follow() end) end
+    if f.SelectClub then hook(f, "SelectClub", function() after(0, function() self:Follow() end) end) end
     self:Follow()
 end
 
@@ -1206,7 +1214,7 @@ local NOTE_POPUP = "SET_GUILD_COMMUNITIY_NOTE"
 function M:HookNotePopup()
     if self.notePopupHooked or type(StaticPopup_Show) ~= "function" then return end
     self.notePopupHooked = true
-    hooksecurefunc("StaticPopup_Show", function(which)
+    hook("StaticPopup_Show", function(which)
         if which ~= NOTE_POPUP or not self:IsEnabled() then return end
         local dialog = StaticPopup_FindVisible and StaticPopup_FindVisible(which)
         if dialog then UI.ReskinPopup(dialog) end

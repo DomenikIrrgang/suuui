@@ -1,4 +1,4 @@
--- Units/ObjectiveTracker.lua
+-- Units/ObjectiveTracker.wowlua
 -- The objective tracker (step 2.3): your tracked quests on the world under
 -- the minimap, top right (28px in, 300px down, under its clock), 260px wide. Titles in their
 -- difficulty colour (the game's own: GetQuestDifficultyColor), grouped by
@@ -28,6 +28,9 @@
 -- craft". Left click opens it in Professions; right click: open, stop
 -- tracking.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -52,8 +55,10 @@ local M = SuuUI.RegisterModule({
 })
 
 local WIDTH = 260
+-- a tracked quest or recipe as the tracker draws it, a zone's sort keys
+type Quest = { [string]: any }
 local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 local ITEM = UI.Size("icon-md")
 
 --------------------------------------------------------------------------------
@@ -65,7 +70,7 @@ local DIFFICULTY_FONTS = {
     { "VeryDifficult", "very-difficult" }, { "Impossible", "impossible" }, { "Difficult", "difficult" },
     { "Standard", "standard" }, { "Trivial", "trivial" },
 }
-local function difficultyOf(level)
+local function difficultyOf(level: any): string
     if not (plain(level) and GetQuestDifficultyColor) then return "standard" end
     local ok, c = pcall(GetQuestDifficultyColor, level)
     local font = ok and type(c) == "table" and c.font
@@ -77,7 +82,7 @@ local function difficultyOf(level)
 end
 
 -- "0/2 Handful of Cattails" or "Cattails: 0/2" → the text and its count.
-local function splitObjective(text)
+local function splitObjective(text: string): (string?, string?)
     local count, rest = text:match("^(%d+%s*/%s*%d+)%s+(.+)$")
     if count then return rest, count end
     rest, count = text:match("^(.-):?%s+(%d+%s*/%s*%d+)$")
@@ -85,8 +90,8 @@ local function splitObjective(text)
     return text, nil
 end
 
-local function objectivesOf(questID)
-    local out = {}
+local function objectivesOf(questID: number): Quest[]
+    local out: Quest[] = {}
     local ok, list = pcall(C_QuestLog.GetQuestObjectives, questID)
     if not ok or type(list) ~= "table" then return out end
     for _, o in ipairs(list) do
@@ -98,12 +103,12 @@ local function objectivesOf(questID)
 end
 
 -- One tracked quest as the tracker draws it (nil: not in the log).
-local function questOf(questID)
+local function questOf(questID: number): Quest?
     local logIndex = C_QuestLog.GetLogIndexForQuestID(questID)
     if not plain(logIndex) or not logIndex then return nil end
     local info = C_QuestLog.GetInfo(logIndex)
     if type(info) ~= "table" or info.isHeader or info.isHidden then return nil end
-    local q = {
+    local q: Quest = {
         questID = questID,
         logIndex = logIndex,
         title = plain(info.title) and info.title or "",
@@ -116,7 +121,7 @@ local function questOf(questID)
     if not q.complete then q.objectives = objectivesOf(questID) end
     -- a quest with nothing to count, not complete (rare): its text instead
     if q.complete and GetQuestLogCompletionText then
-        local text = GetQuestLogCompletionText(logIndex)
+        local text = (GetQuestLogCompletionText :: any)(logIndex)
         if plain(text) and text and text ~= "" then q.tooltip = { title = q.title, description = text } end
     end
     -- its usable item
@@ -131,7 +136,7 @@ end
 
 -- The quest log's heading over a quest (its zone, or a group such as a
 -- class or "Dungeon").
-local function zoneOf(questID, logIndex)
+local function zoneOf(questID: number, logIndex: number): string?
     local header = C_QuestLog.GetHeaderIndexForQuest and C_QuestLog.GetHeaderIndexForQuest(questID)
     if not (plain(header) and header) then
         -- walk up the log to the heading above
@@ -145,7 +150,7 @@ local function zoneOf(questID, logIndex)
 end
 
 -- How far a quest is (squared), when it's on your continent; nil otherwise.
-local function distanceOf(questID)
+local function distanceOf(questID: number): number?
     if not C_QuestLog.GetDistanceSqToQuest then return nil end
     local ok, d, onContinent = pcall(C_QuestLog.GetDistanceSqToQuest, questID)
     if ok and plain(d) and d and plain(onContinent) and onContinent then return d end
@@ -159,7 +164,8 @@ local function hereNames()
         if plain(name) and name ~= "" then here[name] = true end
     end
     local map = C_Map.GetBestMapForUnit("player")
-    local info = plain(map) and map and C_Map.GetMapInfo(map)
+    local info = nil
+    if plain(map) and map then info = C_Map.GetMapInfo(map) end
     if info and plain(info.name) then here[info.name] = true end
     return here
 end
@@ -167,8 +173,8 @@ end
 -- Your tracked quests by zone: the zone you're in first, then the zones by
 -- their nearest quest, then the rest (another continent, nothing to point
 -- at) in quest log order; inside a zone the nearest first.
-function M:TrackedQuests()
-    local list = {}
+function M:TrackedQuests(): Quest[]
+    local list: Quest[] = {}
     local n = C_QuestLog.GetNumQuestWatches()
     if not plain(n) then return list end
     for i = 1, n do
@@ -183,7 +189,7 @@ function M:TrackedQuests()
         end
     end
     local here = hereNames()
-    local zones = {}
+    local zones: { [string]: any } = {}
     for _, q in ipairs(list) do
         local key = q.zone or ""
         local z = zones[key]
@@ -194,7 +200,7 @@ function M:TrackedQuests()
         if q.distance and (not z.nearest or q.distance < z.nearest) then z.nearest = q.distance end
         if q.logIndex < z.first then z.first = q.logIndex end
     end
-    table.sort(list, function(a, b)
+    table.sort(list, function(a: Quest, b: Quest): boolean
         local za, zb = zones[a.zone or ""], zones[b.zone or ""]
         if za ~= zb then
             if za.here ~= zb.here then return za.here end
@@ -213,9 +219,9 @@ end
 -- Quest item buttons (secure)
 --------------------------------------------------------------------------------
 
-local function itemCooldown(b)
+local function itemCooldown(b: any)
     if not b.logIndex or not GetQuestLogSpecialItemCooldown then return end
-    local ok, start, duration, enable = pcall(GetQuestLogSpecialItemCooldown, b.logIndex)
+    local ok, start, duration = pcall(GetQuestLogSpecialItemCooldown, b.logIndex)
     if ok and start and duration then
         pcall(b.cooldown.SetCooldown, b.cooldown, start, duration)
         local on = plain(duration) and duration > 1.5
@@ -229,7 +235,7 @@ end
 
 -- In the quest's area: the design's "suggested" look (an arcane border, its
 -- glow and an arcane ring just inside).
-local function setSuggested(b, on)
+local function setSuggested(b: any, on: any)
     on = on and true or false
     if b.suggested == on then return end
     b.suggested = on
@@ -243,7 +249,7 @@ local function setSuggested(b, on)
     b.suggest:SetShown(on)
 end
 
-function M:ItemButton(i)
+function M:ItemButton(i: number): any
     self.itemButtons = self.itemButtons or {}
     local b = self.itemButtons[i]
     if b then return b end
@@ -257,7 +263,7 @@ function M:ItemButton(i)
     b.hasAction = true
     b:UpdateEmpty()
     b.UpdateCooldown = itemCooldown
-    b.ShowTooltip = function(self)
+    b.ShowTooltip = function(self: any)
         if self.logIndex and GameTooltip.SetQuestLogSpecialItem then
             pcall(GameTooltip.SetQuestLogSpecialItem, GameTooltip, self.logIndex)
         elseif self.link then
@@ -269,7 +275,7 @@ function M:ItemButton(i)
 end
 
 -- The buttons beside their quests (out of combat only).
-function M:LayoutItems(quests)
+function M:LayoutItems(quests: Quest[])
     if InCombatLockdown() then self.pendingItems = true return end
     self.pendingItems = nil
     local used = 0
@@ -317,7 +323,7 @@ end
 -- Collapsing: the head's toggle and boss fights (secure, so in combat too)
 --------------------------------------------------------------------------------
 
-local function bossDriver(on)
+local function bossDriver(on: any): string
     return on and "[@boss1,exists] 1; 0" or "0"
 end
 
@@ -378,7 +384,7 @@ end
 -- Clicks on a quest
 --------------------------------------------------------------------------------
 
-function M:QuestClick(questID, button, row)
+function M:QuestClick(questID: number, button: string, row: any)
     if button == "LeftButton" then
         if QuestMapFrame_OpenToQuestDetails then pcall(QuestMapFrame_OpenToQuestDetails, questID) end
         return
@@ -415,7 +421,7 @@ end
 
 local QUALITY = { [0] = "quality-poor", "ink", "quality-uncommon", "quality-rare", "quality-epic", "quality-legendary" }
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j end
@@ -467,7 +473,7 @@ end
 -- recipe under the mouse and casts the spell that opens its profession, as
 -- an action bar would; the Professions window then chooses the recipe. A
 -- right click on it is SuuUI's menu. In combat the rows take the clicks.
-local function recipeSkillLine(recipeID)
+local function recipeSkillLine(recipeID: number): any
     local line, _, parent = call(C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
     return (parent and parent ~= 0) and parent or line
 end
@@ -489,7 +495,7 @@ function M:RecipeOpener()
             SuuUI.OpenRecipe(b.recipeID)
         end
         -- the next click decides afresh (opened, closed, chosen by now)
-        C_Timer.After(0.3, function()
+        after(0.3, function()
             if b:IsShown() and b.row and b:IsMouseOver() and not InCombatLockdown() then self:RowEnter(b.row) end
         end)
     end)
@@ -504,7 +510,7 @@ function M:RecipeOpener()
 end
 
 -- The mouse onto a tracked recipe: the secure opener over it (out of combat).
-function M:RowEnter(row)
+function M:RowEnter(row: any)
     if not (row.quest and row.quest.recipe) or InCombatLockdown() then return end
     local id = row.quest.questID
     local line = recipeSkillLine(id)
@@ -527,7 +533,7 @@ function M:RowEnter(row)
     b:Show()
 end
 
-function M:RecipeMenu(recipeID, row)
+function M:RecipeMenu(recipeID: number, row: any)
     UI.ContextMenuFrom(row, function(_, root)
         if row.quest and row.quest.title then root:CreateTitle(row.quest.title) end
         root:CreateButton("Stop tracking", function()
@@ -538,7 +544,7 @@ end
 
 -- The row's own clicks: in combat (no opener then), or the profession
 -- already open (choosing the recipe needs no cast).
-function M:RecipeClick(recipeID, button, row)
+function M:RecipeClick(recipeID: number, button: string, row: any)
     if button == "LeftButton" then
         local base = call(C_TradeSkillUI.GetBaseProfessionInfo)
         if base and base.professionID == recipeSkillLine(recipeID) and call(C_TradeSkillUI.IsTradeSkillReady) then
@@ -592,7 +598,7 @@ end
 function M:QueueRefresh()
     if self.refreshQueued then return end
     self.refreshQueued = true
-    C_Timer.After(0, function() if self:IsEnabled() then self:Refresh() end end)
+    after(0, function() if self:IsEnabled() then self:Refresh() end end)
 end
 
 function M:ApplySize()
@@ -624,7 +630,7 @@ local PREVIEW_QUESTS = {
     } },
 }
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.preview then
         self.preview = UI.ObjectiveTracker(parent, { width = WIDTH })
         self.preview:SetQuests(PREVIEW_QUESTS)
@@ -636,7 +642,7 @@ end
 
 local SECTION = {
     id = "tracker", label = "Objective tracker", category = "World", order = 15,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any): any return M:PreviewView(parent) end,
     groups = {
         { title = "Objective tracker", description = "Your tracked quests under the minimap. Left click a quest for its details on the map; right click to focus, share or stop tracking it. Move it in edit mode.", rows = {
             { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
@@ -669,15 +675,15 @@ function M:OnEnable()
         self:BuildSecure()
         self.tracker = UI.ObjectiveTracker(self.frame, { width = WIDTH, toggle = self.toggle })
         self.tracker:SetPoint("TOPLEFT")
-        self.tracker.onQuestClick = function(id, button, row) self:QuestClick(id, button, row) end
+        self.tracker.onQuestClick = function(id: number, button: string, row: any) self:QuestClick(id, button, row) end
         -- the items follow the list (out of combat: in combat it's locked
         -- while items show)
         self.tracker.onScroll = function()
             if not InCombatLockdown() and self.quests then self:LayoutItems(self.quests) end
         end
         self.toggle:SetFrameLevel(self.tracker:GetFrameLevel() + 5)
-        self.tracker.onRecipeClick = function(id, button, row) self:RecipeClick(id, button, row) end
-        self.tracker.onRowEnter = function(row) self:RowEnter(row) end
+        self.tracker.onRecipeClick = function(id: number, button: string, row: any) self:RecipeClick(id, button, row) end
+        self.tracker.onRowEnter = function(row: any) self:RowEnter(row) end
         self.tracker.onSectionToggle = function()
             self:Set("recipesCollapsed", not self:Get("recipesCollapsed"))
             self:Refresh()

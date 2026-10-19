@@ -1,4 +1,4 @@
--- Units/UnitFrames.lua
+-- Units/UnitFrames.wowlua
 -- The unit frames: player and target (step 1.1), target of target, focus,
 -- pet and boss frames (step 1.2). A built-in module written against the
 -- public API only.
@@ -16,11 +16,19 @@
 -- Blizzard's frames are stood down; only a reload brings them back, so this
 -- module turns off or on after a reload.
 
+import SuuUI from "/Core/API"
+import isSecret as isSecretValue from "wowlua:secret"
+
 local UI, Motion, T = SuuUI.UI, SuuUI.Motion, SuuUI.Tokens
 local S = T.space
 
+-- isSecret with its type: strict mode reads a named stdlib import as `any`
+-- while the project has an import cycle (Core has some), so the stdlib's own
+-- predicate wouldn't narrow here (Docs/port-notes/units-hud.md).
+local function isSecret(v: unknown): v is Secret<unknown> return isSecretValue(v) end
+
 local BAR_CHILDREN = { "healthbar", "healthBar", "HealthBar", "HealthBarsContainer.healthBar", "manabar", "ManaBar" }
-local function children(extra)
+local function children(extra: string[]?): string[]
     local list = { unpack(BAR_CHILDREN) }
     for _, c in ipairs(extra or {}) do list[#list + 1] = c end
     return list
@@ -121,8 +129,9 @@ end
 -- TargetFrame, so SuuUI draws them. (Not in the design yet.)
 --------------------------------------------------------------------------------
 
-local function comboClass()
-    local _, class = UnitClass("player")
+local function comboClass(): boolean
+    local _, cls = UnitClass("player")
+    local class = cls :: string? -- your own class reads plain (compared unguarded, as before)
     if class == "ROGUE" then return true end
     if class == "DRUID" then
         local _, token = UnitPowerType("player")
@@ -133,7 +142,7 @@ end
 
 -- Step curves: pip i is lit from i points up (UnitPowerPercent's 0-1 input).
 local pipCurves = {}
-local function pipCurve(i)
+local function pipCurve(i: number): any
     if not pipCurves[i] then
         local c = C_CurveUtil.CreateCurve()
         c:SetType(Enum.LuaCurveType.Step)
@@ -144,7 +153,7 @@ local function pipCurve(i)
     return pipCurves[i]
 end
 
-local function buildCombo(target)
+local function buildCombo(target: any): any
     local f = CreateFrame("Frame", nil, target)
     f:SetSize(5 * 12, 12)
     f:SetPoint("BOTTOMRIGHT", target, "TOPRIGHT", -2, S["space-3"])
@@ -193,7 +202,7 @@ end
 
 local function playerFull()
     local pct = UnitHealthPercent and CurveConstants and UnitHealthPercent("player", true, CurveConstants.ScaleTo100)
-    if issecretvalue and issecretvalue(pct) then return true end -- can't tell: rest on combat state alone
+    if isSecret(pct) then return true end -- can't tell: rest on combat state alone
     return (pct or 100) >= 100
 end
 
@@ -249,7 +258,7 @@ end
 
 -- The sign's look now ("earn", "rest", "full", "carry" or nil, as
 -- UI.RestedSign takes it); `anyCombat` leaves Hide in combat out.
-function M:RestedLook(anyCombat)
+function M:RestedLook(anyCombat: boolean?): string?
     if not self:Get("restedSign") then return nil end
     local capped = noXP()
     if capped and self:Get("restedHideMax") then return nil end
@@ -265,7 +274,7 @@ end
 
 -- `fade`: the seconds a change takes (nil: at once). In edit mode the sign
 -- stands still wherever it could show, so you see where it sits.
-function M:UpdateRested(fade)
+function M:UpdateRested(fade: number?)
     local look, still = self:RestedLook(), self:Get("restedAnimation") == "still"
     if SuuUI.EditMode.IsActive() then
         local can = self:Get("restedSign") and not (self:Get("restedHideMax") and noXP())
@@ -274,17 +283,17 @@ function M:UpdateRested(fade)
     self.restedSign:SetLook(look, { still = still, fade = fade })
 end
 
-local function tooltipIcon(full)
+local function tooltipIcon(full: boolean): string
     local r, g, b = UI.RGBA("progress-fill")
     return ("|T%s:10:10:0:0:64:64:0:64:0:64:%d:%d:%d|t "):format(full and DISC or MOON, r * 255, g * 255, b * 255)
 end
 
 -- Your frame's tooltip: the rested lines after the unit's, while the sign shows.
-function M:AddRestedLines(tooltip)
+function M:AddRestedLines(tooltip: any)
     local look = self:RestedLook()
     if not look then return end
     local ink, muted, fill = { UI.RGBA("ink") }, { UI.RGBA("ink-muted") }, { UI.RGBA("progress-fill") }
-    local function line(text, c) tooltip:AddLine(text, c[1], c[2], c[3]) end
+    local function line(text: string, c: number[]) tooltip:AddLine(text, c[1], c[2], c[3]) end
     tooltip:AddLine(" ")
     line(tooltipIcon(look == "full") .. (look == "carry" and "Rested" or "Resting"), ink)
     if look ~= "rest" then
@@ -323,7 +332,7 @@ local function person()
     return previewPerson
 end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     local v = self.previewView
     if not v then
         v = CreateFrame("Frame", nil, parent)
@@ -385,7 +394,7 @@ end
 
 -- A unit frame follows its unit (RegisterUnitWatch) unless it is turned off
 -- in the settings or hidden in edit mode.
-local function follow(self, frame, on)
+local function follow(self: any, frame: any, on: any)
     self:RunOutOfCombat("watch:" .. frame:GetName(), function()
         if on then
             RegisterUnitWatch(frame)
@@ -443,7 +452,7 @@ end
 
 local SECTION = {
     id = "unitframes", label = "Unit frames", category = "Frames", order = 10,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any) return M:PreviewView(parent) end,
     groups = {
         { title = "Frames", description = "Turning a frame off brings Blizzard's back after a reload.", rows = {
             { key = "showToT", label = "Target of target", control = "toggle", combat = true,
@@ -480,7 +489,8 @@ local SECTION = {
             { key = "comboPoints", label = "Combo points", control = "toggle",
               description = "Five diamonds over the target frame; all arcane at five.",
               disabled = function()
-                  local _, class = UnitClass("player")
+                  local _, cls = UnitClass("player")
+                  local class = cls :: string?
                   if class ~= "ROGUE" and class ~= "DRUID" then return true, "Only rogues and druids use combo points." end
                   return false
               end },
@@ -511,7 +521,7 @@ local SECTION = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
-local function build(self)
+local function build(self: any)
     self.frames, self.allFrames = {}, {}
     for _, d in ipairs(FRAMES) do
         local f = UI.UnitFrame(SuuUI.Root, d.unit, d.opts)

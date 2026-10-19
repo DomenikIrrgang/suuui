@@ -1,4 +1,4 @@
--- Units/ActionBars.lua
+-- Units/ActionBars.wowlua
 -- The action bars: the dock (step 1.5), bars 1-4 as one anchor panel, bottom
 -- centre; and bars 5-8 (step 1.6a), each on its own. A built-in module
 -- written against the public API only.
@@ -39,9 +39,14 @@
 -- mouse; the others move under a hidden parent. They come back after a
 -- reload, so this module turns off or on with a reload.
 
+import SuuUI from "/Core/API"
+import hook from "wowlua:hooks"
+import isSecret from "wowlua:secret"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
-local _, CLASS = UnitClass("player")
+local _, playerClass = UnitClass("player")
+local CLASS = playerClass :: string? -- your own class reads plain (compared unguarded, as before)
 
 local M = SuuUI.RegisterModule({
     id = "actionbars",
@@ -137,7 +142,7 @@ end)
 -- Mouse off, once. Never on a protected frame in combat: Blizzard re-shows
 -- its main bar on every form change, and EnableMouse there is a blocked call
 -- (it stays off from the first pass out of combat anyway).
-local function noMouse(f)
+local function noMouse(f: any)
     if not f or type(f.EnableMouse) ~= "function" then return end
     if f.IsMouseEnabled and not f:IsMouseEnabled() then return end
     if InCombatLockdown() and f.IsProtected and f:IsProtected() then return end
@@ -147,7 +152,7 @@ local function noMouse(f)
 end
 
 -- Its buttons: no events, no mouse, and Blizzard's own pass hides them.
-local function quietButtons(prefix)
+local function quietButtons(prefix: string)
     for i = 1, 12 do
         local b = _G[prefix .. i]
         if b then
@@ -160,8 +165,8 @@ end
 
 -- The main bar: invisible and click-through, never hidden (a Hide from
 -- addon code taints Edit Mode's next combat show).
-local function fadeMainBar(bar)
-    local function silence(self)
+local function fadeMainBar(bar: any)
+    local function silence(self: any)
         self:SetAlpha(0)
         noMouse(self)
         local pager = self.ActionBarPageNumber
@@ -180,7 +185,7 @@ local function fadeMainBar(bar)
         if self.Selection then self.Selection:SetAlpha(0); noMouse(self.Selection) end
     end
     silence(bar)
-    hooksecurefunc(bar, "Show", silence)
+    hook(bar, "Show", silence)
 end
 
 -- Blizzard's XP and reputation bars, replaced by SuuUI's XP bar. Their
@@ -207,7 +212,7 @@ local function standDownBlizzard()
         suppressTracking()
     end
     -- the game's fly-in for a newly learned spell aims at its own bars:
-    -- SuuUI's button pops instead (UI/ActionBar.lua)
+    -- SuuUI's button pops instead (UI/ActionBar.wowlua)
     local intro = _G.IconIntroTracker
     if intro then
         intro:UnregisterEvent("SPELL_PUSHED_TO_ACTIONBAR")
@@ -239,7 +244,7 @@ end
 --------------------------------------------------------------------------------
 
 -- The page bar 1 is on: the stance or form's name, else "Page 1" to "Page 6".
-local function pageName(page)
+local function pageName(page: number): string
     if page >= 2 and page <= 6 then return ("Page %d"):format(page) end
     if page > 10 then return "" end
     local form = GetShapeshiftForm and GetShapeshiftForm()
@@ -336,7 +341,7 @@ function M:Build()
             binding = def.binding,
             columns = def.free and self:Get("cols" .. def.id) or (def.id == 3 or def.id == 4) and 6 or 12,
             paging = def.id == 1 and UI.ActionBarPaging() or nil,
-            onPage = def.id == 1 and function(bar, page)
+            onPage = def.id == 1 and function(bar: any, page: number)
                 local note = pageName(page)
                 for _, b in ipairs(bar.buttons) do b.tooltipNote = note ~= "" and ("Bar 1: " .. note) or nil end
             end or nil,
@@ -362,7 +367,7 @@ function M:Build()
         -- character's own
         local char = self:CharData()
         self.totem = UI.TotemBar(d, { name = "SuuUITotemBar", label = "Totem bar",
-            page = char.totemPage or 1, onPage = function(page) char.totemPage = page end,
+            page = char.totemPage or 1, onPage = function(page: any) char.totemPage = page end,
             onLayout = function() self:FollowTotems() end })
     end
 
@@ -397,7 +402,7 @@ function M:Build()
             key = a.pos, label = a.label, enabled = a.enabled,
             place = function() self:Place(a) end,
             dragFrame = function() return self:Get("attach" .. a.key) and self.dock or a.header end,
-            onDrop = function(l, b, w, h) return self:Dropped(a, l, b, w, h) end,
+            onDrop = function(l: number, b: number, w: number, h: number): boolean return self:Dropped(a, l, b, w, h) end,
             -- Reset: attached, it is part of the dock, so the dock goes back
             -- to its place; free, the bar goes back to its default (attached
             -- again for stance and pet).
@@ -422,8 +427,11 @@ end
 -- Attaching to the dock
 --------------------------------------------------------------------------------
 
+-- A bar that can attach to the dock (bars 5-8, stance, pet).
+type Attachable = { key: string, header: any, pos: string, label: string, enabled: () -> any }
+
 -- Where (x, y) a point of a rectangle is.
-local function pointAt(point, l, b, w, h)
+local function pointAt(point: string, l: number, b: number, w: number, h: number): (number, number)
     local x = point:find("LEFT") and l or point:find("RIGHT") and l + w or l + w / 2
     local y = point:find("BOTTOM") and b or point:find("TOP") and b + h or b + h / 2
     return x, y
@@ -433,7 +441,7 @@ end
 -- bottom hangs from the dock's top; below it, its top from the dock's bottom;
 -- left, centre or right by the dock's thirds. So a bar above the dock stays
 -- above it when the dock grows.
-function M:DockOffset(l, b, w, h)
+function M:DockOffset(l: number, b: number, w: number, h: number): { [string]: any }
     local dl, db, dw, dh = SuuUI.EditMode.Rect(self.dock)
     local cx = l + w / 2
     local horiz = (cx < dl + dw / 3 and "LEFT") or (cx > dl + dw * 2 / 3 and "RIGHT") or ""
@@ -465,7 +473,7 @@ end
 
 -- Attached: hangs off the dock (and shows and fades with it). Detached: on
 -- the screen at its own position.
-function M:Place(a)
+function M:Place(a: Attachable)
     local f = a.header
     f:ClearAllPoints()
     if self:Get("attach" .. a.key) then
@@ -483,7 +491,7 @@ end
 -- Dragged (or nudged) in edit mode: an attached bar is part of the dock, so
 -- the whole dock moves by as much, with everything attached to it. A free
 -- bar dropped onto the dock (or within 12px of it) attaches there.
-function M:Dropped(a, l, b, w, h)
+function M:Dropped(a: Attachable, l: number, b: number, w: number, h: number): boolean
     if self:Get("attach" .. a.key) then
         local cl, cb = SuuUI.EditMode.Rect(a.header)
         local dl, db, dw, dh = SuuUI.EditMode.Rect(self.dock)
@@ -504,7 +512,7 @@ function M:Dropped(a, l, b, w, h)
     return true
 end
 
-function M:ToggleAttach(a)
+function M:ToggleAttach(a: Attachable)
     local l, b, w, h = SuuUI.EditMode.Rect(a.header)
     if not l then return end
     if self:Get("attach" .. a.key) then
@@ -523,10 +531,8 @@ end
 -- XP and reputation
 --------------------------------------------------------------------------------
 
-local isSecret = issecretvalue or function() return false end
-
 -- What the foot bar shows: XP below the level cap, else the watched faction.
-local function progress()
+local function progress(): (string?, any, any, any, any)
     local cap = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 60
     local xpOff = IsXPUserDisabled and IsXPUserDisabled()
     if UnitLevel("player") < cap and not xpOff then
@@ -560,7 +566,7 @@ function M:UpdateXP()
     end
 end
 
-function M:XPTooltip(owner)
+function M:XPTooltip(owner: any)
     local kind, cur, max, rested, name = progress()
     if not kind or isSecret(cur) or isSecret(max) or max <= 0 then return end
     GameTooltip:SetOwner(owner, "ANCHOR_TOP")
@@ -588,7 +594,7 @@ local SECTION = {
             { key = "showXP", label = "XP bar", control = "toggle", combat = true,
               description = "Along the dock's foot: your XP with rested XP after it, or your watched reputation at the level cap. Blizzard's own comes back after a reload." },
             { key = "textSize", label = "Text size", control = "slider", min = 9.5, max = 16, step = 0.5, live = false,
-              format = function(v) return ("%gpx"):format(v) end,
+              format = function(v: number) return ("%gpx"):format(v) end,
               description = "Key bindings, counts and cooldown digits on every bar, not only the dock's. 9.5px is the smallest the design allows." },
         } },
         { title = "Stance and pet bars", rows = {
@@ -633,7 +639,7 @@ end
 -- General > Keybinds: keybind mode, and which bars show their bindings.
 -- (the settings window binds it to keyBars: it writes through onChange and
 -- shows resets and profile switches through SetValue)
-local function keyBarChips(parent, onChange)
+local function keyBarChips(parent: any, onChange: any): any
     return UI.ToggleChips(parent, { options = KEY_BARS, value = M:Get("keyBars"), onChange = onChange })
 end
 

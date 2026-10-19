@@ -1,4 +1,4 @@
--- Units/Macros.lua
+-- Units/Macros.wowlua
 -- SuuUI's own macro window (plan 3.7, design component MacroWindow,
 -- direction A "Tabs", chosen 2026-10-17): General and this character's
 -- macros as two tabs, each with how many are used; the list on the left
@@ -11,6 +11,9 @@
 -- free out of combat (/suu probe windows, 2026-10-17); the game's window is
 -- closed and this one opens instead (/macro, the game menu).
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import hookScript from "wowlua:hooks"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -25,8 +28,8 @@ local M = SuuUI.RegisterModule({
 })
 
 local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h end
@@ -48,9 +51,12 @@ local SPELL = (Enum.SpellBookItemType and Enum.SpellBookItemType.Spell) or 1
 --------------------------------------------------------------------------------
 
 -- The macros of a tab: { index, name, icon, body }.
-function M:List(tab)
+-- A macro as the window keeps it.
+type Macro = { index: number, name: string, icon: any, body: string }
+
+function M:List(tab: string): Macro[]
     local general, char = GetNumMacros()
-    local list = {}
+    local list: Macro[] = {}
     local first, count = 1, general or 0
     if tab == "character" then first, count = MAX_GENERAL + 1, char or 0 end
     for i = first, first + count - 1 do
@@ -69,7 +75,7 @@ end
 -- The window
 --------------------------------------------------------------------------------
 
-function M:BuildRow(parent)
+function M:BuildRow(parent: Frame): any
     local r = CreateFrame("Button", nil, parent)
     r:SetHeight(ROW_H)
     r.hover = UI.Fill(r, "surface-raised", "BACKGROUND")
@@ -102,7 +108,7 @@ end
 
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMacroWindow", title = "Macros", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end })
+        footer = true, onClose = function(win: any) win:Hide() end })
     w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
     w:Hide()
     w.scroll:Hide()
@@ -121,7 +127,7 @@ function M:Build()
     rule:SetWidth(1)
     local who = UnitName("player") or "Character"
     self.tabs = UI.Segmented(left, { options = { { value = "general", label = "General Macros" },
-        { value = "character", label = who .. " Specific Macros" } }, value = "general", onChange = function(v)
+        { value = "character", label = who .. " Specific Macros" } }, value = "general", onChange = function(v: any)
             self.tab = v
             self.draft, self.chosen = nil, nil
             self:Refresh()
@@ -129,7 +135,7 @@ function M:Build()
     self.tabs:SetPoint("TOPLEFT")
     -- the two tabs share the list's width (by their labels' widths; a long
     -- name gets the short labels)
-    local function fit(labels)
+    local function fit(labels: (string | Secret<string>)[]): boolean
         local inner = LIST_W - 6 - 2
         local text = 0
         for i, b in ipairs(self.tabs.buttons) do
@@ -334,7 +340,7 @@ function M:Refresh()
 end
 
 -- Puts a macro (or a new one) into the editor.
-function M:Load(m)
+function M:Load(m: any)
     self.loaded = m
     self.icon = m and m.icon or QUESTION
     self.nameField:SetValue(m and m.name or "")
@@ -397,7 +403,7 @@ end
 -- Actions
 --------------------------------------------------------------------------------
 
-function M:Select(m)
+function M:Select(m: any)
     if InCombatLockdown() then return end
     self.draft = nil
     self.chosen = m
@@ -453,16 +459,16 @@ end
 local COLS, VISIBLE_ROWS, CELL = 8, 6, 36
 
 -- every macro icon, spells first, then items ("?" leads)
-function M:AllIcons(kind)
-    local list = { QUESTION }
+function M:AllIcons(kind: string?): any[]
+    local list: any[] = { QUESTION }
     if kind ~= "items" then
-        local spells = {}
+        local spells: any[] = {}
         call(GetLooseMacroIcons, spells)
         call(GetMacroIcons, spells)
         for _, v in ipairs(spells) do list[#list + 1] = v end
     end
     if kind ~= "spells" then
-        local items = {}
+        local items: any[] = {}
         call(GetLooseMacroItemIcons, items)
         call(GetMacroItemIcons, items)
         for _, v in ipairs(items) do list[#list + 1] = v end
@@ -471,10 +477,10 @@ function M:AllIcons(kind)
 end
 
 -- the icons of your spells and bag items whose name has what was typed
-function M:SearchIcons(text, kind)
+function M:SearchIcons(text: string, kind: string?): any[]
     text = text:lower()
-    local list, seen = {}, {}
-    local function add(icon)
+    local list: any[], seen: { [any]: boolean } = {}, {}
+    local function add(icon: any)
         if icon and not seen[icon] then seen[icon] = true; list[#list + 1] = icon end
     end
     if kind ~= "items" then
@@ -514,7 +520,7 @@ function M:BuildPicker()
     head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
     head:SetValue("Choose an icon")
     p.kind = UI.Select(p, { width = 120, value = "all", options = { { value = "all", label = "All icons" },
-        { value = "spells", label = "Spells" }, { value = "items", label = "Items" } }, onChange = function(v)
+        { value = "spells", label = "Spells" }, { value = "items", label = "Items" } }, onChange = function(v: any)
             p.kindValue = v
             self:FillPicker(true)
         end })
@@ -563,7 +569,7 @@ function M:BuildPicker()
         elseif kind == "item" then
             icon = a and call(C_Item.GetItemIconByID, a)
         elseif kind == "macro" then
-            local _, mi = GetMacroInfo(a)
+            local _, mi = GetMacroInfo(a :: any)
             icon = mi
         end
         if icon then
@@ -604,7 +610,7 @@ function M:PlacePicker()
     p:SetHeight(y + 30 + S["space-5"])
 end
 
-function M:FillPicker(reset)
+function M:FillPicker(reset: boolean?)
     local p = self.picker
     local text = strtrim(p.search:GetValue() or "")
     if reset or not p.icons then
@@ -667,7 +673,7 @@ function M:HookGame()
     local f = _G.MacroFrame
     if not f or self.hooked then return end
     self.hooked = true
-    f:HookScript("OnShow", function()
+    hookScript(f, "OnShow", function()
         if not self:IsEnabled() then return end
         HideUIPanel(f)
         if not self.window:IsShown() then self:Toggle() end
@@ -677,7 +683,7 @@ end
 function M:OnEnable()
     if not self.window then self:Build() end
     self:HookGame()
-    self:OnGameEvent("ADDON_LOADED", function(_, name) if name == "Blizzard_MacroUI" then self:HookGame() end end)
+    self:OnGameEvent("ADDON_LOADED", function(_: any, name: any) if name == "Blizzard_MacroUI" then self:HookGame() end end)
     self:OnGameEvent("UPDATE_MACROS", function() self:Refresh() end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
         self:ClosePicker()

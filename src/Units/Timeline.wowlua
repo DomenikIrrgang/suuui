@@ -1,4 +1,4 @@
--- Units/Timeline.lua
+-- Units/Timeline.wowlua
 -- The encounter timeline (step 1.13): top centre, 28px down, now at the
 -- left, the next 30 seconds to the right. It shows whatever the game's
 -- encounter timeline holds (C_EncounterTimeline): boss abilities if the game
@@ -15,6 +15,11 @@
 -- any addon, as Blizzard's numbers. While SuuUI's alert shows the countdown,
 -- Blizzard's own numbers (TimerTracker) stay away. On a
 -- client without it, SuuUI sends its own message to everyone with SuuUI.
+
+import SuuUI from "/Core/API"
+import after, every from "wowlua:timer"
+import hook from "wowlua:hooks"
+import isSecret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -48,8 +53,7 @@ M:Migrate("pullAlert-last10", function(values)
     if values.pullAlert == "last5" then values.pullAlert = "last10" end
 end)
 
-local isSecret = issecretvalue or function() return false end
-local function readable(v) return not isSecret(v) and type(v) == "number" end
+local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 
 local PREFIX = "SuuUI"
 local PULL_SPELL, PULL_ICON = 100, 132337 -- Charge's spell and art
@@ -61,7 +65,7 @@ local BADGES = {
     { "TankAlert", "warning", "Tank" }, { "Deadly", "danger", "Lethal" }, { "HealerAlert", "info", "Healer" },
     { "Dispel", "magic", "Dispel" }, { "Enrage", "warning", "Enrage" },
 }
-local function badgeOf(mask)
+local function badgeOf(mask: unknown): { tone: string, text: string }?
     if not readable(mask) or mask == 0 or not Enum.EncounterTimelineIconSet then return nil end
     for _, b in ipairs(BADGES) do
         local v = Enum.EncounterTimelineIconSet[b[1]]
@@ -80,17 +84,17 @@ local ACTIVE, PAUSED = 0, 1
 -- the ones loaded are offered; a source that's gone falls back to SuuUI.
 --------------------------------------------------------------------------------
 
-local function plain(v) return not isSecret(v) and type(v) == "string" and v ~= "" end
-local function iconOf(v)
+local function plain(v: unknown): v is string return not isSecret(v) and type(v) == "string" and v ~= "" end
+local function iconOf(v: unknown): any
     if isSecret(v) then return nil end
     return tonumber(v) or (type(v) == "string" and v ~= "" and v) or nil
 end
 -- a boss mod's own pull bar: SuuUI's countdown shows the pull already
-local function isPull(text) return plain(text) and text:lower():find("^pull") ~= nil end
+local function isPull(text: unknown): boolean return plain(text) and text:lower():find("^pull") ~= nil end
 
 local SOURCES = {
-    dbm = { label = "DBM", loaded = function() return DBM and DBM.RegisterCallback and true or false end },
-    bigwigs = { label = "BigWigs", loaded = function() return BigWigsLoader and BigWigsLoader.RegisterMessage and true or false end },
+    dbm = { label = "DBM", loaded = function() return _G.DBM and _G.DBM.RegisterCallback and true or false end },
+    bigwigs = { label = "BigWigs", loaded = function() return _G.BigWigsLoader and _G.BigWigsLoader.RegisterMessage and true or false end },
 }
 
 function M:SourceOptions()
@@ -102,7 +106,7 @@ function M:SourceOptions()
 end
 
 -- The boss mod's timers, by its own id: { label, icon, badge, endsAt or paused }
-function M:AddonTimer(source, id, text, seconds, icon, badge)
+function M:AddonTimer(source: string, id: any, text: any, seconds: any, icon: any, badge: any)
     if self:Get("source") ~= source or not readable(seconds) or seconds <= 0 or isPull(text) then return end
     self.addonTimers = self.addonTimers or {}
     self.addonTimers[id] = { id = "addon:" .. tostring(id), label = plain(text) and text or "", icon = iconOf(icon),
@@ -110,13 +114,13 @@ function M:AddonTimer(source, id, text, seconds, icon, badge)
     self:Refresh()
 end
 
-function M:AddonTimerStop(source, id)
+function M:AddonTimerStop(source: string, id: any)
     if self:Get("source") ~= source or not self.addonTimers then return end
     if id == nil then self.addonTimers = {} else self.addonTimers[id] = nil end
     self:Refresh()
 end
 
-function M:AddonTimerPause(source, id, paused)
+function M:AddonTimerPause(source: string, id: any, paused: boolean)
     local t = self:Get("source") == source and self.addonTimers and self.addonTimers[id]
     if not t then return end
     if paused and t.endsAt then
@@ -135,17 +139,17 @@ end
 -- it starts kept at alpha 0. BigWigs' messages have no way in from outside.
 --------------------------------------------------------------------------------
 
-function M:Suppressing(source)
+function M:Suppressing(source: string): boolean
     return self:IsEnabled() and self:Get("hideTheirs") and self:Get("source") == source
 end
 
 -- keep a frame invisible while `test()` says so (one hook per frame)
-local function keepHidden(frame, test)
+local function keepHidden(frame: any, test: () -> boolean)
     if not frame then return end
     frame.suuHideTest = test
     if not frame.suuHideHooked then
         frame.suuHideHooked = true
-        hooksecurefunc(frame, "SetAlpha", function(f, a)
+        hook(frame, "SetAlpha", function(f: any, a: number)
             if a > 0 and f.suuHideTest and f.suuHideTest() then f:SetAlpha(0) end
         end)
     end
@@ -154,14 +158,14 @@ end
 
 function M:ApplySuppression()
     -- DBM's warnings: on while DBM feeds the timeline, your own setting back otherwise
-    if DBM and DBM.Options then
+    if _G.DBM and _G.DBM.Options then
         local want = self:Suppressing("dbm")
         local was = self:Get("dbmWarningsWas")
         if want and was == "" then
-            self:Set("dbmWarningsWas", DBM.Options.HideDBMWarnings and "true" or "false")
-            DBM.Options.HideDBMWarnings = true
+            self:Set("dbmWarningsWas", _G.DBM.Options.HideDBMWarnings and "true" or "false")
+            _G.DBM.Options.HideDBMWarnings = true
         elseif not want and was ~= "" then
-            DBM.Options.HideDBMWarnings = was == "true"
+            _G.DBM.Options.HideDBMWarnings = was == "true"
             self:Set("dbmWarningsWas", "")
         end
     end
@@ -176,7 +180,7 @@ function M:HookDisplays()
     if not hooked.dbt and DBT and type(DBT.CreateBar) == "function" then
         hooked.dbt = true
         local create = DBT.CreateBar
-        DBT.CreateBar = function(dbt, ...)
+        DBT.CreateBar = function(dbt: any, ...: any)
             local bar = create(dbt, ...)
             if type(bar) == "table" and bar.frame then
                 keepHidden(bar.frame, function() return M:Suppressing("dbm") end)
@@ -188,7 +192,7 @@ function M:HookDisplays()
     local candy = not hooked.candy and LibStub and LibStub("LibCandyBar-3.0", true)
     if candy and candy.barPrototype and candy.barPrototype.Start then
         hooked.candy = true
-        hooksecurefunc(candy.barPrototype, "Start", function(bar)
+        hook(candy.barPrototype, "Start", function(bar: any)
             if bar.Get and bar:Get("bigwigs:module") ~= nil then
                 keepHidden(bar, function() return M:Suppressing("bigwigs") end)
             else
@@ -206,13 +210,13 @@ function M:HookSources()
     if self.hooked then return end
     self.hooked = true
     if SOURCES.dbm.loaded() then
-        pcall(DBM.RegisterCallback, DBM, "DBM_TimerBegin", function(_, id, msg, timer, icon, _, _, colorId)
+        pcall(_G.DBM.RegisterCallback, _G.DBM, "DBM_TimerBegin", function(_, id, msg, timer, icon, _, _, colorId)
             self:AddonTimer("dbm", id, msg, timer, icon, readable(colorId) and DBM_BADGE[colorId] or nil)
         end)
-        pcall(DBM.RegisterCallback, DBM, "DBM_TimerStop", function(_, id) self:AddonTimerStop("dbm", id) end)
-        pcall(DBM.RegisterCallback, DBM, "DBM_TimerPause", function(_, id) self:AddonTimerPause("dbm", id, true) end)
-        pcall(DBM.RegisterCallback, DBM, "DBM_TimerResume", function(_, id) self:AddonTimerPause("dbm", id, false) end)
-        pcall(DBM.RegisterCallback, DBM, "DBM_TimerUpdate", function(_, id, elapsed, total)
+        pcall(_G.DBM.RegisterCallback, _G.DBM, "DBM_TimerStop", function(_, id) self:AddonTimerStop("dbm", id) end)
+        pcall(_G.DBM.RegisterCallback, _G.DBM, "DBM_TimerPause", function(_, id) self:AddonTimerPause("dbm", id, true) end)
+        pcall(_G.DBM.RegisterCallback, _G.DBM, "DBM_TimerResume", function(_, id) self:AddonTimerPause("dbm", id, false) end)
+        pcall(_G.DBM.RegisterCallback, _G.DBM, "DBM_TimerUpdate", function(_, id, elapsed, total)
             local t = self:Get("source") == "dbm" and self.addonTimers and self.addonTimers[id]
             if t and readable(elapsed) and readable(total) then
                 t.endsAt, t.paused = GetTime() + math.max(0, total - elapsed), nil
@@ -223,8 +227,8 @@ function M:HookSources()
     if SOURCES.bigwigs.loaded() then
         -- BigWigs keys its bars by module and text
         local owner = {}
-        local function key(module, text) return tostring(module) .. "\31" .. (plain(text) and text or "?") end
-        local reg = BigWigsLoader.RegisterMessage
+        local function key(module: any, text: any): string return tostring(module) .. "\31" .. (plain(text) and text or "?") end
+        local reg = _G.BigWigsLoader.RegisterMessage
         pcall(reg, owner, "BigWigs_StartBar", function(_, module, _, text, time, icon)
             self:AddonTimer("bigwigs", key(module, text), text, time, icon)
         end)
@@ -290,7 +294,7 @@ function M:Refresh()
     if soonest then
         local token = {}
         self.refreshToken = token
-        C_Timer.After(math.max(0.05, soonest - GetTime() + 0.05), function()
+        after(math.max(0.05, soonest - GetTime() + 0.05), function()
             if self.refreshToken == token and self:IsEnabled() then self:Refresh() end
         end)
     end
@@ -312,7 +316,7 @@ local VOICES = { Heart = true, Bella = true, Michael = true }
 local VOICE_PATH = "Interface\\AddOns\\SuuUI\\Media\\Sounds\\Countdown\\%s\\%s.ogg"
 
 -- n: 1-10, or "pull"
-function M:Speak(n, voice)
+function M:Speak(n: any, voice: string?)
     voice = voice or self:Get("pullVoice")
     if not VOICES[voice] then return end
     if n ~= "pull" and (n < 1 or n > 10) then return end
@@ -320,20 +324,20 @@ function M:Speak(n, voice)
 end
 
 -- Each of the last ten seconds on the second, then "Pull!".
-function M:ScheduleVoice(seconds, token)
+function M:ScheduleVoice(seconds: number, token: any)
     local voice = self:Get("pullVoice")
     if not VOICES[voice] or self:Get("source") ~= "suui" then return end
     for n = math.min(10, math.floor(seconds)), 1, -1 do
-        C_Timer.After(seconds - n, function()
+        after(seconds - n, function()
             if self.voiceToken == token then self:Speak(n, voice) end
         end)
     end
-    C_Timer.After(seconds, function()
+    after(seconds, function()
         if self.voiceToken == token then self:Speak("pull", voice) end
     end)
 end
 
-function M:CancelPull(quiet)
+function M:CancelPull(quiet: boolean?)
     self.voiceToken = nil
     if self.pullID and ET then pcall(ET.CancelScriptEvent, self.pullID) end
     self.pullID = nil
@@ -343,7 +347,7 @@ function M:CancelPull(quiet)
     if not quiet then self:Refresh() end
 end
 
-function M:StartPull(seconds, from)
+function M:StartPull(seconds: any, from: string?)
     self:CancelPull(true)
     seconds = math.floor(tonumber(seconds) or 0)
     if seconds <= 0 then
@@ -372,7 +376,7 @@ function M:StartPull(seconds, from)
         if left <= 0 then
             if mode ~= "off" then
                 SuuUI.ShowAlert("pull", "info", "Pull!", detail)
-                C_Timer.After(1.5, function() SuuUI.HideAlert("pull") end)
+                after(1.5, function() SuuUI.HideAlert("pull") end)
             end
             if self.pullTicker then self.pullTicker:Cancel() end
             self.pullTicker = nil
@@ -382,7 +386,7 @@ function M:StartPull(seconds, from)
             SuuUI.ShowAlert("pull", "info", ("Pull in %d"):format(math.ceil(left)), detail)
         end
     end
-    self.pullTicker = C_Timer.NewTicker(0.25, tick)
+    self.pullTicker = every(0.25, tick)
     tick()
     self:Refresh()
 end
@@ -399,7 +403,7 @@ local function blizzardCountdown()
     return C_PartyInfo and C_PartyInfo.DoCountdown
 end
 
-function M:Pull(arg)
+function M:Pull(arg: any)
     local seconds = math.floor(tonumber(arg) or self:Get("pullSeconds"))
     if UI.Flag(IsInGroup()) and not canLead() then
         self:Print("Only the leader or an assistant can start a pull countdown in a raid.")
@@ -414,7 +418,7 @@ function M:Pull(arg)
         self.awaiting = token
         if pcall(doCountdown, math.max(0, seconds)) then
             if seconds <= 0 then self.awaiting = nil; self:CancelPull() return end
-            C_Timer.After(0.5, function()
+            after(0.5, function()
                 if self.awaiting == token then
                     self.awaiting = nil
                     if not self.pullEnds then self:StartPull(seconds) end
@@ -433,7 +437,7 @@ end
 
 -- Blizzard's countdown started or cancelled (by anyone: SuuUI, DBM,
 -- BigWigs, /countdown).
-function M:OnCountdown(guid, seconds, ...)
+function M:OnCountdown(guid: any, seconds: any, ...: any)
     -- what the client sends (kept for /reload: SuuUIProbe.countdown)
     SuuUIProbe = SuuUIProbe or {}
     SuuUIProbe.countdown = SuuUIProbe.countdown or {}
@@ -452,7 +456,7 @@ function M:OnCountdown(guid, seconds, ...)
     -- the same countdown again (the event can come more than once): keep it
     if self.pullEnds and math.abs(GetTime() + seconds - self.pullEnds) < 1.5 then return end
     local from
-    if type(guid) == "string" and guid ~= UnitGUID("player") and GetPlayerInfoByGUID then
+    if type(guid) == "string" and guid ~= (UnitGUID("player") :: string?) and GetPlayerInfoByGUID then
         local ok, _, _, _, _, _, name = pcall(GetPlayerInfoByGUID, guid)
         if ok and not isSecret(name) and type(name) == "string" then from = name end
     end
@@ -460,7 +464,7 @@ function M:OnCountdown(guid, seconds, ...)
 end
 
 -- Blizzard's big countdown numbers, kept away while SuuUI's alert counts.
-function M:BlizzardNumbers(show)
+function M:BlizzardNumbers(show: boolean)
     local tracker = TimerTracker
     if not tracker then return end
     if show then
@@ -476,13 +480,13 @@ function M:BlizzardNumbers(show)
     end
 end
 
-function M:OnMessage(prefix, text, _, sender)
+function M:OnMessage(prefix: any, text: any, _: any, sender: any)
     if prefix ~= PREFIX or type(text) ~= "string" or isSecret(text) then return end
     local seconds = text:match("^PULL\t(%-?%d+)$")
     if not seconds then return end
     if isSecret(sender) or type(sender) ~= "string" then return end
     -- our own message comes back: already started
-    local me = Ambiguate(SuuUI.FullName("player"), "short")
+    local me = Ambiguate(SuuUI.FullName("player") :: string, "short")
     if Ambiguate(sender, "short") == me then return end
     self:StartPull(tonumber(seconds), Ambiguate(sender, "short"))
 end
@@ -491,7 +495,7 @@ end
 -- A test: four abilities and one past the window, on the real timeline
 --------------------------------------------------------------------------------
 
-local TEST = {
+local TEST: any[][] = {
     { 871, 132362, 4, "Shield Wall", { tone = "warning", text = "Tank" } },
     { 122, 135848, 11, "Frost Nova" },
     { 5740, 136186, 19, "Rain of Fire", { tone = "info", text = "Spread" } },
@@ -518,7 +522,7 @@ end
 -- Settings
 --------------------------------------------------------------------------------
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.preview then
         self.preview = UI.EncounterTimeline(parent, { variant = "track" })
     end
@@ -536,7 +540,7 @@ end
 
 local SECTION = {
     id = "timeline", label = "Timeline", category = "Insights", order = 30,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any) return M:PreviewView(parent) end,
     groups = {
         { title = "Encounter timeline", description = "What's coming, riding toward now: boss abilities when the game sends them (Forever doesn't yet) and SuuUI's pull countdown. Hidden while nothing is on it.", rows = {
             { key = "variant", label = "Show", control = "segmented", stacked = true,
@@ -575,7 +579,7 @@ local SECTION = {
               disabled = function() return M:Get("pullVoice") == "off", "Choose a voice first." end,
               onClick = function()
                   local voice = M:Get("pullVoice")
-                  for i, n in ipairs({ 3, 2, 1, "pull" }) do C_Timer.After(i - 1, function() M:Speak(n, voice) end) end
+                  for i, n in ipairs({ 3, 2, 1, "pull" }) do after(i - 1, function() M:Speak(n, voice) end) end
               end },
             { label = "Start one", control = "button", text = "Start a pull countdown",
               onClick = function() M:Pull() end },
@@ -614,7 +618,7 @@ function M:OnEnable()
     end
     publish()
     self:RegisterSettings(SECTION)
-    self:RegisterCommand("pull", "Start a pull countdown: /suu pull [seconds] (0 cancels).", function(arg) self:Pull(arg) end)
+    self:RegisterCommand("pull", "Start a pull countdown: /suu pull [seconds] (0 cancels).", function(arg: any) self:Pull(arg) end)
     SuuUI.AllowAlertOutOfCombat("pull")
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
     self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
@@ -646,8 +650,8 @@ end
 function M:OnDisable()
     self:BlizzardNumbers(true)
     -- DBM's own setting back (Suppressing is false once disabled)
-    if DBM and DBM.Options and self:Get("dbmWarningsWas") ~= "" then
-        DBM.Options.HideDBMWarnings = self:Get("dbmWarningsWas") == "true"
+    if _G.DBM and _G.DBM.Options and self:Get("dbmWarningsWas") ~= "" then
+        _G.DBM.Options.HideDBMWarnings = self:Get("dbmWarningsWas") == "true"
         self:Set("dbmWarningsWas", "")
     end
     self:CancelPull(true)

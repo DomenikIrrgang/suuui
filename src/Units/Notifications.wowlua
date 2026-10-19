@@ -1,4 +1,4 @@
--- Units/Notifications.lua
+-- Units/Notifications.wowlua
 -- Notifications (step 2.4): a stack at the top left under the micro menu.
 -- Requests are Blizzard's own popups (party invite, resurrection, summon,
 -- duel, trade, release spirit, delete item, logout, battleground entry …)
@@ -17,6 +17,11 @@
 -- (a logout cancelled from a moved popup worked). Nothing is written on
 -- Blizzard's frames but points, sizes, alphas and fonts, and all of it goes
 -- back when the popup closes. Popups SuuUI doesn't know stay Blizzard's.
+-- (The hooks on Blizzard's popups and buttons stay plain hooksecurefunc and
+-- HookScript calls, as they were before the wowlua port.)
+
+import SuuUI from "/Core/API"
+import * as timer from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -46,7 +51,12 @@ local M = SuuUI.RegisterModule({
 })
 
 local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
+-- a note's or a hosted popup's card data, a hosted popup, a person on a
+-- friends card (see Notify, HostFrame, WhoIs)
+type Note = { [string]: any }
+type Host = { [string]: any }
+type Person = { [string]: any }
 local ACTION_H = 26
 local OFF_SCREEN = 200
 
@@ -91,7 +101,7 @@ local KINDS = {
     CLIENT_INVENTORY_FULL_OVERFLOW = { category = "Inventory full", glyph = "bag", tone = "warning", primary = 1 },
     -- the bags' buy cell (a secure click on the game's purchase button):
     -- the game's own question, its cost on the card
-    CONFIRM_BUY_BANK_TAB = { category = "Bank", glyph = "bank", primary = 1, cost = function(dialog)
+    CONFIRM_BUY_BANK_TAB = { category = "Bank", glyph = "bank", primary = 1, cost = function(dialog: any): any
         -- what the popup's own money frame shows, else the next tab's price
         local mf = dialog and dialog.MoneyFrame
         if mf and plain(mf.staticMoney) and mf.staticMoney and mf.staticMoney > 0 then return mf.staticMoney end
@@ -103,10 +113,10 @@ local KINDS = {
 }
 
 -- "1g 20s 5c", each in its coin's colour (zero coins left out).
-local function coinString(copper)
+local function coinString(copper: number): string
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local out = {}
-    local function add(n, unit, token)
+    local function add(n: number, unit: string, token: string)
         out[#out + 1] = ("|cff%s%d%s|r"):format(T.color[token].hex, n, unit)
     end
     if g > 0 then add(g, "g", "coin-gold") end
@@ -125,11 +135,11 @@ local nextNote = 0
 -- icon, tone, duration (timed, default 8), ["until"] (the text), actions }
 -- → id. A request (roll) with duration and remaining counts down on its own
 -- and stays until it is dismissed.
-function M:Notify(def)
+function M:Notify(def: any): string?
     if type(def) ~= "table" then return nil end
     nextNote = nextNote + 1
     local id = def.id or ("note:" .. nextNote)
-    local d = {}
+    local d: Note = {}
     for k, v in pairs(def) do d[k] = v end
     d.id = id
     d.kind = d.kind or "timed"
@@ -148,7 +158,7 @@ function M:Notify(def)
     return id
 end
 
-function M:Dismiss(id)
+function M:Dismiss(id: string)
     if not self.notes[id] then return end
     self.notes[id] = nil
     for i, x in ipairs(self.noteOrder) do
@@ -191,7 +201,7 @@ local function showRepairers()
 end
 
 -- "Legs 15% · Chest 18%": the worn pieces that aren't broken, lowest first.
-local function wornList(d)
+local function wornList(d: any): string
     local out = {}
     for _, p in ipairs(d.pieces) do
         if p.state == "damaged" then out[#out + 1] = p.label .. " " .. p.percent .. "%" end
@@ -201,7 +211,7 @@ end
 
 -- With the Durability module's "Name the pieces in the note" (design board
 -- "Durability" D): which pieces, and Show repairers. Its line too.
-local function namedNote(d)
+local function namedNote(d: any): (string, string)
     local worn = wornList(d)
     if d.state == "broken" then
         local broken = {}
@@ -369,7 +379,7 @@ end
 
 -- A pattern from one of the game's format strings: "%s" a capture, the
 -- rest literal.
-local function patternOf(fmt)
+local function patternOf(fmt: any): string?
     if type(fmt) ~= "string" then return nil end
     local parts = {}
     -- the text between the "%s"s (one more "%s" at the end closes the last)
@@ -392,28 +402,28 @@ local GAMES = { App = "Battle.net", BSAp = "Battle.net Mobile", WTCG = "Hearthst
                 Pro = "Overwatch", S2 = "StarCraft II", S1 = "StarCraft", D3 = "Diablo III", Fen = "Diablo IV",
                 ANBS = "Diablo Immortal", VIPR = "Call of Duty", W3 = "Warcraft III", GRY = "Warcraft Rumble" }
 
-local function classIcon(file)
+local function classIcon(file: any): { [string]: any }?
     local c = file and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[file]
     if not c then return nil end
     return { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes", coords = c }
 end
 
-local function classColor(file)
+local function classColor(file: any): string?
     return file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or nil
 end
 
-local function whisper(name)
+local function whisper(name: string)
     local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
     if tell then tell(name) end
 end
 
-local function invite(name)
-    local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+local function invite(name: string)
+    local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or _G.InviteUnit
     if fn then pcall(fn, name) end
 end
 
 -- A character friend or guild member by name: kind and the card's person.
-function M:WhoIs(name)
+function M:WhoIs(name: string): (string?, Person?)
     local short = Ambiguate and Ambiguate(name, "short") or name
     local fl = C_FriendList
     local info = fl and fl.GetFriendInfo and fl.GetFriendInfo(short)
@@ -447,19 +457,19 @@ end
 -- game's own friends list asks the same).
 -- Same game and side (no realm check: Forever's realms are rulesets, and a
 -- friend on another realm ID still groups; the game says when it can't).
-local function canCooperate(game)
+local function canCooperate(game: any): boolean
     if not (game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID) then return false end
     return plain(game.factionName) and game.factionName == UnitFactionGroup("player")
 end
 
-function M:BnetPerson(accountID)
+function M:BnetPerson(accountID: number): Person?
     local info = C_BattleNet and C_BattleNet.GetAccountInfoByID and C_BattleNet.GetAccountInfoByID(accountID)
     if not info then return nil end
     local game = info.gameAccountInfo or {}
-    local person = { name = info.accountName or info.battleTag or "?", bnetID = accountID }
+    local person: Person = { name = info.accountName or info.battleTag or "?", bnetID = accountID }
     if plain(info.battleTag) and info.battleTag then person.tag = info.battleTag:match("(#%d+)$") end
     person.whisper = function()
-        local tell = (ChatFrameUtil and ChatFrameUtil.SendBNetTell) or ChatFrame_SendBNetTell
+        local tell = (ChatFrameUtil and ChatFrameUtil.SendBNetTell) or _G.ChatFrame_SendBNetTell
         if tell and info.accountName then tell(info.accountName) end
     end
     -- the character they play, remembered so going offline matches too
@@ -497,7 +507,7 @@ local KINDS_OF = {
 }
 
 -- One more arrival or departure; a card once the burst is over.
-function M:Presence(kind, online, person)
+function M:Presence(kind: string, online: boolean, person: Person?)
     local k = KINDS_OF[kind]
     if not (k and person) then return end
     if not self:Get(k.setting .. (online and "Online" or "Offline")) then return end
@@ -507,7 +517,7 @@ function M:Presence(kind, online, person)
     if not q then
         q = { kind = kind, online = online, people = {} }
         self.presence[key] = q
-        C_Timer.After(BATCH, function() self:FlushPresence(key) end)
+        timer.after(BATCH, function() self:FlushPresence(key) end)
     end
     for _, x in ipairs(q.people) do if x.name == person.name then return end end
     q.people[#q.people + 1] = person
@@ -515,18 +525,18 @@ end
 
 -- A character's whole name ("Frassilla Grim": Battle.net gives the surname
 -- too, seen 2026-10-18), and its first name for a side that has none.
-local function wholeName(name)
+local function wholeName(name: string): string
     return Ambiguate(name, "short")
 end
-local function firstName(name)
-    return (wholeName(name):match("^(%S+)"))
+local function firstName(name: string): string
+    return (wholeName(name):match("^(%S+)")) :: string
 end
 
 -- The characters your Battle.net friends play (now, or last seen): a
 -- guild member or friend who is one of them gets the Battle.net card only.
 function M:BnetCharacterSet()
     local out = {}
-    local function add(name)
+    local function add(name: string)
         out[wholeName(name)] = true
         -- a first name alone matches only a name without a surname
         out["first:" .. firstName(name)] = true
@@ -542,7 +552,7 @@ function M:BnetCharacterSet()
     return out
 end
 
-function M:FlushPresence(key)
+function M:FlushPresence(key: string)
     local q = self.presence and self.presence[key]
     if not q then return end
     -- in combat they wait for the fight's end
@@ -581,7 +591,7 @@ function M:FlushPresence(key)
     -- one Battle.net friend still loading in: the card gains Invite when
     -- their character arrives on your realm and side, while it shows
     if q.online and single and single.bnetID and not single.invite then
-        self.awaitInvite = { id = id, bnetID = single.bnetID, refresh = function(person)
+        self.awaitInvite = { id = id, bnetID = single.bnetID, refresh = function(person: Person)
             q.people[1], single = person, person
             show()
         end }
@@ -601,7 +611,7 @@ function M:BnetInfoChanged()
 end
 
 -- The game's system line: who, and whether it's theirs to show.
-function M:SystemLine(msg)
+function M:SystemLine(msg: any)
     if not plain(msg) or type(msg) ~= "string" then return end
     local online, name = true, nil
     if ONLINE then
@@ -612,7 +622,7 @@ function M:SystemLine(msg)
         name = msg:match(OFFLINE)
         online = false
     end
-    if not name or Ambiguate(name, "short") == SuuUI.FullName("player") then return end
+    if not name or Ambiguate(name, "short") == (SuuUI.FullName("player") :: any) then return end
     -- a link's name keeps its colour codes out
     name = name:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
     local kind, person = self:WhoIs(name)
@@ -620,7 +630,7 @@ function M:SystemLine(msg)
 end
 
 -- Is this one of the game's online/offline lines (for the chat filter)?
-local function isPresenceLine(msg)
+local function isPresenceLine(msg: any): boolean?
     if not plain(msg) or type(msg) ~= "string" then return false end
     return (ONLINE and msg:match(ONLINE) ~= nil) or (OFFLINE and msg:match(OFFLINE) ~= nil)
 end
@@ -660,20 +670,20 @@ end
 function M:TestPresence()
     -- the whole name: Forever's characters have a surname (UnitName's
     -- second value), which whispers need
-    local full = SuuUI.FullName("player")
+    local full: any = SuuUI.FullName("player")
     local me = full
     local _, file = UnitClass("player")
     local zone = GetRealZoneText and GetRealZoneText() or ""
-    local function mine(detail)
+    local function mine(detail: string): Person
         return { name = me, color = classColor(file), icon = classIcon(file), detail = detail,
                  whisper = function() whisper(full) end, inviteName = full }
     end
-    local function sample(name, f)
+    local function sample(name: string, f: string): Person
         return { name = name, color = classColor(f), icon = classIcon(f), whisper = function() whisper(name) end }
     end
-    local function card(kind, online, people)
+    local function card(kind: string, online: boolean, people: Person[])
         local k = KINDS_OF[kind]
-        local single = #people == 1 and people[1]
+        local single: Person? = #people == 1 and people[1] or nil
         self.presenceCount = (self.presenceCount or 0) + 1
         self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = online and 20 or 15,
             presence = { online = online, source = k.source or (GetGuildInfo("player")) or "Guild", people = people,
@@ -694,7 +704,7 @@ end
 -- Hosting Blizzard's popups
 --------------------------------------------------------------------------------
 
-local function buttonsOf(dialog)
+local function buttonsOf(dialog: any): { [string]: any }[]
     local out = {}
     local bc = dialog.ButtonContainer
     for i = 1, 4 do
@@ -704,19 +714,19 @@ local function buttonsOf(dialog)
     return out
 end
 
-local function savePoints(f)
+local function savePoints(f: any): any[]
     local pts = {}
     for i = 1, f:GetNumPoints() do pts[i] = { f:GetPoint(i) } end
     return pts
 end
 
-local function restorePoints(f, pts)
+local function restorePoints(f: any, pts: any[]?)
     f:ClearAllPoints()
     for _, p in ipairs(pts or {}) do f:SetPoint(unpack(p)) end
 end
 
 -- What we change on a Blizzard button or edit box, and how it was.
-function M:Remember(h, f)
+function M:Remember(h: Host, f: any): { [string]: any }
     h.saved = h.saved or {}
     if h.saved[f] then return h.saved[f] end
     local s = { points = savePoints(f), width = f:GetWidth(), height = f:GetHeight(), alphas = {},
@@ -737,7 +747,7 @@ function M:Remember(h, f)
     return s
 end
 
-function M:Undo(h)
+function M:Undo(h: Host)
     -- every part loose first: the buttons hang off each other here (each
     -- beside the next) and in Blizzard's layout the other way round, so
     -- restoring one by one anchored a button to one depending on it (an
@@ -761,7 +771,7 @@ end
 
 -- SuuUI's look behind a Blizzard button: quiet (surface-raised, gilt-line),
 -- primary (arcane) or danger (ember edge); hover brightens the edge.
-function M:ArtFor(b)
+function M:ArtFor(b: any): any
     local art = self.arts[b]
     if art then return art end
     art = CreateFrame("Frame", nil, self.stack)
@@ -783,7 +793,7 @@ function M:ArtFor(b)
     return art
 end
 
-function M:StyleButton(h, b, variant)
+function M:StyleButton(h: Host, b: any, variant: string): number
     local s = self:Remember(h, b)
     for r in pairs(s.alphas) do r:SetAlpha(0) end
     local fs = b:GetFontString()
@@ -825,7 +835,7 @@ function M:StyleButton(h, b, variant)
     return w
 end
 
-function M:StyleEditBox(h, eb, box)
+function M:StyleEditBox(h: Host, eb: any, box: any)
     local s = self:Remember(h, eb)
     for r in pairs(s.alphas) do r:SetAlpha(0) end
     eb:SetFontObject(SuuUI.Fonts.Get("body"))
@@ -835,11 +845,11 @@ function M:StyleEditBox(h, eb, box)
 end
 
 -- The card's data for a hosted popup.
-function M:CardData(h)
+function M:CardData(h: Host): Note
     local kind = h.kind
     local text = h.text()
     local title = plain(text) and text or (kind.title or "")
-    local d = {
+    local d: Note = {
         id = h.id, kind = "action", tone = kind.tone, category = kind.category,
         title = title, icon = { glyph = kind.glyph },
         host = { buttons = #h.buttons(), roles = h.roles and #h.roles() or nil },
@@ -867,7 +877,7 @@ function M:CardData(h)
 end
 
 -- The popup's own buttons and edit box onto its card.
-function M:Attach(h)
+function M:Attach(h: Host)
     local card = self.stack:CardFor(h.id)
     if not card then
         -- not among the shown cards: its parts back in the (off screen) popup
@@ -918,12 +928,12 @@ local ROLE_TEX = { TANK = "RoleTank.tga", HEALER = "RoleHealer.tga", DAMAGER = "
 local ROLE_WORD = { TANK = TANK or "Tank", HEALER = HEALER or "Healer", DAMAGER = DAMAGER or "Damage" }
 local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 
-function M:RoleArt(b)
+function M:RoleArt(b: any): any
     local art = self.arts[b]
     if art then return art end
     art = CreateFrame("Frame", nil, self.stack)
     art:EnableMouse(false)
-    local function circle(file, layer)
+    local function circle(file: string, layer: string): any
         local t = art:CreateTexture(nil, layer)
         t:SetTexture(TEXTURES .. file)
         t:SetAllPoints()
@@ -972,7 +982,7 @@ function M:RoleArt(b)
     return art
 end
 
-function M:HostRole(h, card, b, i)
+function M:HostRole(h: Host, card: any, b: any, i: number)
     local cb = b.checkButton
     local s = self:Remember(h, b)
     for r in pairs(s.alphas) do r:SetAlpha(0) end
@@ -1008,14 +1018,14 @@ end
 -- A Blizzard popup: its buttons, text, time left and edit box.
 -- A popup's kind: SuuUI's own, else one a plugin added (0.17,
 -- M:AddNotificationKind(which, def), def as above).
-local function kindOf(which)
+local function kindOf(which: string): { [string]: any }?
     if KINDS[which] then return KINDS[which] end
     for _, def in ipairs(SuuUI.Additions("notificationkinds")) do
         if def.which == which then return def end
     end
 end
 
-function M:Host(dialog, which)
+function M:Host(dialog: any, which: string)
     local kind = kindOf(which)
     if not kind then return end
     local info = StaticPopupDialogs and StaticPopupDialogs[which]
@@ -1034,7 +1044,7 @@ end
 
 -- Any Blizzard request window: `parts` says where its buttons ({ button,
 -- index } in order), text, time (duration, remaining) and edit box are.
-function M:HostFrame(dialog, which, kind, parts)
+function M:HostFrame(dialog: any, which: string, kind: { [string]: any }, parts: { [string]: any })
     if not self:Get("requests") then return end
     local h = self.hosts[dialog]
     if h and h.which ~= which then self:Undo(h) end
@@ -1060,7 +1070,7 @@ function M:HostFrame(dialog, which, kind, parts)
     self:Rebuild()
 end
 
-function M:Release(dialog)
+function M:Release(dialog: any)
     local h = self.hosts[dialog]
     if not h then return end
     self:Undo(h)
@@ -1096,7 +1106,7 @@ local WINDOWS = {
     {
         name = "LFGInvitePopup",
         kind = { category = "Party invite", glyph = "people", primary = 1 },
-        parts = function(f)
+        parts = function(f: any): { [string]: any }
             return {
                 buttons = function() return shownButtons(_G.LFGInvitePopupAcceptButton, _G.LFGInvitePopupDeclineButton) end,
                 text = function() return _G.LFGInvitePopupText and _G.LFGInvitePopupText:GetText() end,
@@ -1117,7 +1127,7 @@ local WINDOWS = {
     {
         name = "PVPReadyDialog",
         kind = { category = "Battleground", glyph = "flag", primary = 1, title = "Your battleground is ready" },
-        parts = function(f)
+        parts = function(f: any): { [string]: any }
             local total -- the first reading: the whole time to enter
             return {
                 buttons = function() return shownButtons(f.enterButton, f.leaveButton) end,
@@ -1138,7 +1148,7 @@ local WINDOWS = {
     {
         name = "ReadyCheckFrame",
         kind = { category = "Ready check", glyph = "flag", primary = 1, title = "Are you ready?" },
-        parts = function(f)
+        parts = function(f: any): { [string]: any }
             local l = _G.ReadyCheckListenerFrame or f
             return {
                 buttons = function() return shownButtons(l.YesButton, l.NoButton) end,
@@ -1329,7 +1339,7 @@ local PREVIEW = {
       duration = 4, remaining = 3 },
 }
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.preview then
         self.preview = UI.NotificationStack(parent, { max = 5 })
         self.preview:SetItems(PREVIEW, false)
@@ -1340,7 +1350,7 @@ end
 
 local SECTION = {
     id = "notifications", label = "Notifications", category = "General", order = 30,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any): any return M:PreviewView(parent) end,
     groups = {
         { title = "Notifications", description = "Requests and notes at the top left, under the micro menu: requests first, then what waits on something, then notes. In combat only requests and conditions show. Move them in edit mode.", rows = {
             { key = "requests", label = "Blizzard's popups as cards", control = "toggle",
@@ -1377,8 +1387,8 @@ local SECTION = {
 
 function M:OnEnable()
     self:Provide("notifications", {
-        Notify = function(def) return self:Notify(def) end,
-        Dismiss = function(id) self:Dismiss(id) end,
+        Notify = function(def: any): string? return self:Notify(def) end,
+        Dismiss = function(id: string) self:Dismiss(id) end,
     })
     self.notes = self.notes or {}
     self.noteOrder = self.noteOrder or {}
@@ -1436,16 +1446,16 @@ function M:OnEnable()
                          "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do
         if not valid or valid(e) then
             -- a moment later: the points read right only after the change has landed
-            self:OnGameEvent(e, function() C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckTalents(); self:CheckLegacy() end end) end)
+            self:OnGameEvent(e, function() timer.after(0.2, function() if self:IsEnabled() then self:CheckTalents(); self:CheckLegacy() end end) end)
         end
     end
     if not valid or valid("MAJOR_FACTION_RENOWN_LEVEL_CHANGED") then
-        self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function() C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckLegacy() end end) end)
+        self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function() timer.after(0.2, function() if self:IsEnabled() then self:CheckLegacy() end end) end)
     end
     self:Watch("talentPoints", function() self:CheckTalents() end)
     -- a talent build followed, changed or learned along
     self:On("SUUUI_TALENT_BUILD_CHANGED", function()
-        C_Timer.After(0.2, function() if self:IsEnabled() then self:CheckTalents() end end)
+        timer.after(0.2, function() if self:IsEnabled() then self:CheckTalents() end end)
     end)
     self:Watch("legacyPoints", function() self:CheckLegacy() end)
     -- the ready check's time

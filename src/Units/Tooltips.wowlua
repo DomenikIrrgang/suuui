@@ -1,4 +1,4 @@
--- Units/Tooltips.lua
+-- Units/Tooltips.wowlua
 -- Blizzard's tooltips in SuuUI's look (step 2.7, design board "Tooltips"):
 -- the game tooltip, the compare tooltips and the item link tooltip on
 -- surface-glass with a gilt edge and diamond, SuuUI's type (the title in
@@ -21,6 +21,11 @@
 -- tooltip shows them instead, drawn by the game's own aura container: icons
 -- and timers, no names.
 
+import SuuUI from "/Core/API"
+import isSecret from "wowlua:secret"
+import hook, hookScript from "wowlua:hooks"
+import after from "wowlua:timer"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
@@ -39,8 +44,8 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+-- (secrecy tested first: comparing a secret is an error in strict mode)
+local function plain(v: unknown): v is string | number | boolean | table return not isSecret(v) and v ~= nil end
 
 local TOOLTIPS = { "GameTooltip", "ShoppingTooltip1", "ShoppingTooltip2", "ItemRefTooltip",
                    "ItemRefShoppingTooltip1", "ItemRefShoppingTooltip2" }
@@ -77,13 +82,13 @@ end
 -- The unit's name and the health bar
 --------------------------------------------------------------------------------
 
-local function reactionToken(r)
+local function reactionToken(r: number): string
     if r <= 3 then return "reaction-hostile" end
     if r == 4 then return "reaction-neutral" end
     return "reaction-friendly"
 end
 
-function M:ColorUnit(tooltip)
+function M:ColorUnit(tooltip: any)
     if not self:Get("nameColors") or not tooltip.GetUnit then return end
     local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
     if not ok or not plain(unit) or not unit then return end
@@ -105,7 +110,7 @@ end
 
 -- The unit's level in its difficulty's colour on the "Level 34 …" line
 -- (asked 2026-10-18), the rest of the line as it is.
-function M:ColorLevel(tooltip)
+function M:ColorLevel(tooltip: any)
     if not tooltip.GetUnit then return end
     local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
     if not ok or not plain(unit) or not unit then return end
@@ -118,9 +123,9 @@ function M:ColorLevel(tooltip)
         local line = name and _G[name .. "TextLeft" .. i]
         local text = line and line:GetText()
         if plain(text) and text then
-            local before, num, after = text:match("^(.-" .. word .. " )(%S+)(.*)$")
+            local before, num, rest = text:match("^(.-" .. word .. " )(%S+)(.*)$")
             if num and not num:find("|c", 1, true) then
-                line:SetText(before .. "|cff" .. hex .. num .. "|r" .. after)
+                line:SetText(before .. "|cff" .. hex .. num .. "|r" .. rest)
                 return
             end
         end
@@ -140,7 +145,7 @@ function M:SkinStatusBar()
     -- the game colours the bar on every show: it goes back to the unit fill,
     -- read each time (a theme may have changed it)
     local setting = false
-    hooksecurefunc(bar, "SetStatusBarColor", function(b)
+    hook(bar, "SetStatusBarColor", function(b: any)
         if setting then return end
         setting = true
         b:SetStatusBarColor(UI.RGBA("unit-fill"))
@@ -174,13 +179,13 @@ end
 local MAX_LINES = 12
 local PER_ROW = 8
 
-local function groupUnit(unit)
+local function groupUnit(unit: any): boolean
     if type(unit) ~= "string" then return false end
     if unit:match("^party%d") or unit:match("^raid%d") then return true end
     return unit == "player" and IsInGroup()
 end
 
-local function timeLeft(a)
+local function timeLeft(a: any): string
     local d, x = a.duration, a.expirationTime
     if not (plain(d) and plain(x)) or not d or d <= 0 or not x then return "" end
     local left = x - GetTime()
@@ -191,11 +196,12 @@ local function timeLeft(a)
 end
 
 -- Out of combat: the auras as lines (debuffs first, in ember), at most 12.
-function M:AddAuraLines(tooltip, unit)
+function M:AddAuraLines(tooltip: any, unit: string)
     local list = {}
     for _, filter in ipairs({ "HARMFUL", "HELPFUL" }) do
         for i = 1, 40 do
-            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
+            -- (the aura is read as before: typed any, its fields guarded one by one)
+            local ok: boolean, a: any = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
             if not ok or not a then break end
             if plain(a.name) and a.name then list[#list + 1] = { a = a, harmful = filter == "HARMFUL" } end
         end
@@ -248,7 +254,7 @@ function M:AuraPanel()
     return p
 end
 
-function M:ShowAuraPanel(tooltip, unit)
+function M:ShowAuraPanel(tooltip: any, unit: string)
     local p = self:AuraPanel()
     if not p.auras then return end
     p.auras:SetUnit(unit)
@@ -268,7 +274,7 @@ function M:HideAuraPanel()
     self.auraFor = nil
 end
 
-function M:GroupAuras(tooltip)
+function M:GroupAuras(tooltip: any)
     if not self:Get("groupAuras") or tooltip ~= GameTooltip or not tooltip.GetUnit then return end
     local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
     if not ok or not plain(unit) or not groupUnit(unit) then return end
@@ -285,7 +291,7 @@ end
 
 -- Tooltips SuuUI doesn't know by name (the aura buttons' own one, an
 -- addon's) get the look the first time they show the game's data.
-function M:SkinAny(tooltip)
+function M:SkinAny(tooltip: any)
     if UI.IsTooltipSkinned(tooltip) then return end
     if tooltip.IsForbidden and tooltip:IsForbidden() then return end
     if tooltip.GetObjectType and tooltip:GetObjectType() ~= "GameTooltip" then return end
@@ -333,7 +339,7 @@ end
 -- Spell IDs, and who cast an aura
 --------------------------------------------------------------------------------
 
-function M:AddSpellID(tooltip, data)
+function M:AddSpellID(tooltip: any, data: any)
     if not self:Get("ids") then return end
     local id = data and data.id
     if not plain(id) or type(id) ~= "number" then return end
@@ -343,10 +349,10 @@ function M:AddSpellID(tooltip, data)
 end
 
 -- After SetUnitAura & co: "From" and the caster in their class colour.
-function M:AddSource(tooltip, unit, auraInstanceID, index, filter)
+function M:AddSource(tooltip: any, unit: any, auraInstanceID: number?, index: any, filter: any)
     if not self:Get("ids") then return end
     if not plain(unit) or not unit then return end
-    local ok, a
+    local ok: boolean, a: any
     if auraInstanceID then
         ok, a = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, auraInstanceID)
     else
@@ -372,9 +378,9 @@ function M:HookAuraSources()
     local api = getmetatable(GameTooltip)
     api = api and api.__index
     if type(api) ~= "table" then return end
-    local function hook(method, byID, defaultFilter)
+    local function hookSetter(method: string, byID: boolean, defaultFilter: string?)
         if type(api[method]) ~= "function" then return end
-        hooksecurefunc(api, method, function(tooltip, unit, a2, a3)
+        hook(api, method, function(tooltip: any, unit: any, a2: any, a3: any)
             if not self:IsEnabled() or (tooltip.IsForbidden and tooltip:IsForbidden()) then return end
             if byID then
                 self:Guard(self.AddSource)(self, tooltip, unit, a2)
@@ -383,19 +389,19 @@ function M:HookAuraSources()
             end
         end)
     end
-    hook("SetUnitAura", false, "HELPFUL")
-    hook("SetUnitBuff", false, "HELPFUL")
-    hook("SetUnitDebuff", false, "HARMFUL")
-    hook("SetUnitBuffByAuraInstanceID", true)
-    hook("SetUnitDebuffByAuraInstanceID", true)
-    hook("SetUnitAuraByAuraInstanceID", true)
+    hookSetter("SetUnitAura", false, "HELPFUL")
+    hookSetter("SetUnitBuff", false, "HELPFUL")
+    hookSetter("SetUnitDebuff", false, "HARMFUL")
+    hookSetter("SetUnitBuffByAuraInstanceID", true)
+    hookSetter("SetUnitDebuffByAuraInstanceID", true)
+    hookSetter("SetUnitAuraByAuraInstanceID", true)
 end
 
 --------------------------------------------------------------------------------
 -- Where a tooltip without an owner of its own opens
 --------------------------------------------------------------------------------
 
-function M:Anchor(tooltip)
+function M:Anchor(tooltip: any)
     if self:Get("anchor") ~= "suuui" or tooltip ~= GameTooltip then return end
     tooltip:ClearAllPoints()
     local bags = _G.SuuUIBags
@@ -441,14 +447,14 @@ function M:HookUnitMenus()
     local mgr = _G.UnitPopupManager
     if self.unitMenusHooked or not (mgr and mgr.OpenMenu) then return end
     self.unitMenusHooked = true
-    hooksecurefunc(mgr, "OpenMenu", function()
+    hook(mgr, "OpenMenu", function()
         if not (self:IsEnabled() and self:Get("unitMenus")) then return end
         local manager = Menu and Menu.GetManager and Menu.GetManager()
         local menu = manager and manager.GetOpenMenu and manager:GetOpenMenu()
         if not menu then return end
         UI.ReskinMenu(menu)
         -- its rows may come a frame later
-        C_Timer.After(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
+        after(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
     end)
 end
 
@@ -489,11 +495,11 @@ function M:OnEnable()
                 self:Guard(self.GroupAuras)(self, tooltip)
             end)
         end
-        GameTooltip:HookScript("OnHide", function() self:HideAuraPanel() end)
+        hookScript(GameTooltip, "OnHide", function() self:HideAuraPanel() end)
         -- another unit (or no unit) on the same tooltip: the panel goes
-        GameTooltip:HookScript("OnTooltipCleared", function() self:HideAuraPanel() end)
+        hookScript(GameTooltip, "OnTooltipCleared", function() self:HideAuraPanel() end)
         if type(GameTooltip_SetDefaultAnchor) == "function" then
-            hooksecurefunc("GameTooltip_SetDefaultAnchor", function(tooltip)
+            hook("GameTooltip_SetDefaultAnchor", function(tooltip: any)
                 if self:IsEnabled() then self:Anchor(tooltip) end
             end)
         end
@@ -502,7 +508,7 @@ function M:OnEnable()
     -- the aura panel's container made out of combat, ready for a fight
     if not InCombatLockdown() then self:AuraPanel() end
     for _, e in ipairs({ "UI_SCALE_CHANGED", "DISPLAY_SIZE_CHANGED" }) do
-        self:OnGameEvent(e, function() C_Timer.After(0, function() self:ApplyScale(); self:StyleAuraTooltip() end) end)
+        self:OnGameEvent(e, function() after(0, function() self:ApplyScale(); self:StyleAuraTooltip() end) end)
     end
     self:On("SUUUI_ROOT_SCALED", function() self:ApplyScale() end)
     self:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end)

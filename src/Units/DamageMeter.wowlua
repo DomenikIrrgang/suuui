@@ -1,4 +1,4 @@
--- Units/DamageMeter.lua
+-- Units/DamageMeter.wowlua
 -- The damage meter (step 1.12): Blizzard's own meter data (C_DamageMeter) in
 -- SuuUI windows, bottom right (28px from the corner), the threat meter to
 -- their left. Up to three windows stacked upward, each with its own type and
@@ -10,6 +10,9 @@
 -- then), on the meter's events out of combat, and again half a second and
 -- a second and a half after combat (the values turn readable a moment
 -- after combat ends).
+
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -63,12 +66,12 @@ end
 -- Windows
 --------------------------------------------------------------------------------
 
-function M:ViewOf(i)
+function M:ViewOf(i: number): { [string]: any }
     local views = self:Get("views")
     return views[i] or { type = "damage" }
 end
 
-function M:SaveView(i, typeValue, session)
+function M:SaveView(i: number, typeValue: any, session: any)
     local views = self:Get("views")
     local copy = {}
     for k, v in ipairs(views) do copy[k] = { type = v.type, session = v.session } end
@@ -79,13 +82,13 @@ function M:SaveView(i, typeValue, session)
     self:Set("views", copy)
 end
 
-function M:Window(i)
+function M:Window(i: number): any
     self.windows = self.windows or {}
     local w = self.windows[i]
     if not w then
         w = UI.DamageMeter(self.frame, {
             rows = self:Get("rows"),
-            onView = function(typeValue, session) self:SaveView(i, typeValue, session) end,
+            onView = function(typeValue: any, session: any) self:SaveView(i, typeValue, session) end,
             onNewWindow = function() self:Set("windowCount", math.min(3, self:Get("windowCount") + 1)) end,
             onClose = i > 1 and function() self:CloseWindow(i) end or nil,
             onReset = function()
@@ -101,7 +104,7 @@ function M:Window(i)
 end
 
 -- Closing window i: the windows above it move down a place (their views too).
-function M:CloseWindow(i)
+function M:CloseWindow(i: number)
     local views = self:Get("views")
     local copy = {}
     for k, v in ipairs(views) do
@@ -164,10 +167,10 @@ function M:UpdateVisibility()
 end
 
 -- Out of combat: one refresh shortly after a burst of events.
-function M:Soon(delay)
+function M:Soon(delay: number?)
     if self.pending then return end
     self.pending = true
-    C_Timer.After(delay or 0.2, function()
+    after(delay or 0.2, function()
         self.pending = nil
         if self:IsEnabled() and self.frame:IsShown() then self:Refresh() end
     end)
@@ -202,7 +205,7 @@ for _, t in ipairs(UI.DAMAGE_METER_TYPES) do if t.value then PREVIEW_TYPE[Enum.D
 local PREVIEW_SPELLS = { { 116, 0.42 }, { 2136, 0.18 }, { 120, 0.13 }, { 1449, 0.11 }, { 122, 0.09 }, { 6603, 0.07 } }
 local PREVIEW_HEALS = { { 2060, 0.38 }, { 139, 0.24 }, { 2061, 0.2 }, { 17, 0.12 }, { 596, 0.06 } }
 
-local function previewSession(meterType)
+local function previewSession(meterType: any): { [string]: any }
     local key = PREVIEW_TYPE[meterType] or "damage"
     local _, myClass = UnitClass("player")
     local sources, total, max = {}, 0, 0
@@ -220,12 +223,12 @@ local function previewSession(meterType)
 end
 
 local PREVIEW_API = {
-    GetCombatSessionFromType = function(_, meterType) return previewSession(meterType) end,
-    GetCombatSessionFromID = function(_, meterType) return previewSession(meterType) end,
-    GetCombatSessionSourceFromType = function(_, meterType, guid)
+    GetCombatSessionFromType = function(_: any, meterType: any) return previewSession(meterType) end,
+    GetCombatSessionFromID = function(_: any, meterType: any) return previewSession(meterType) end,
+    GetCombatSessionSourceFromType = function(_: any, meterType: any, guid: any)
         local s = previewSession(meterType)
         local src
-        for _, x in ipairs(s.combatSources) do if x.sourceGUID == guid or (guid == UnitGUID("player") and x.isLocalPlayer) then src = x end end
+        for _, x in ipairs(s.combatSources) do if x.sourceGUID == guid or (guid == (UnitGUID("player") :: string?) and x.isLocalPlayer) then src = x end end
         if not src then return { combatSpells = {}, totalAmount = 0, maxAmount = 0 } end
         local heals = PREVIEW_TYPE[meterType] == "healing" or PREVIEW_TYPE[meterType] == "hps"
         local spells = {}
@@ -239,14 +242,14 @@ local PREVIEW_API = {
         return { { sessionID = 29, name = "Flamewaker Elite", durationSeconds = 38 }, { sessionID = 30, name = "Majordomo Executus", durationSeconds = 96 },
                  { sessionID = 31, name = "Ragnaros", durationSeconds = 151 } }
     end,
-    GetSessionDurationSeconds = function(sessionType)
+    GetSessionDurationSeconds = function(sessionType: any)
         return sessionType == (Enum.DamageMeterSessionType and Enum.DamageMeterSessionType.Overall) and 385 or PREVIEW_DURATION
     end,
 }
 PREVIEW_API.GetCombatSessionSourceFromID = PREVIEW_API.GetCombatSessionSourceFromType
 
 -- one recap for every death: oldest first here, newest first as returned
-local RECAP = {
+local RECAP: any[][] = {
     { 21158, "Lava Burst", "SPELL_DAMAGE", 1180, 71, 5.8 }, { 20566, "Wrath of Ragnaros", "SPELL_DAMAGE", 1460, 52, 4.1 },
     { 139, "Renew", "SPELL_HEAL", 410, 57, 3.0 }, { 6603, "Melee", "SWING_DAMAGE", 640, 49, 2.2 },
     { 21158, "Lava Burst", "SPELL_DAMAGE", 1240, 32, 1.0 }, { 20565, "Magma Blast", "SPELL_DAMAGE", 2960, 0, 0, 1018 },
@@ -264,7 +267,7 @@ local PREVIEW_RECAP = {
     GetRecapMaxHealth = function() return 4000 end,
 }
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.preview then
         local view = CreateFrame("Frame", nil, parent)
         self.preview = view
@@ -299,7 +302,7 @@ end
 
 local SECTION = {
     id = "damagemeter", label = "Damage & threat", category = "Insights", order = 50,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any) return M:PreviewView(parent) end,
     previewTitle = "Live preview · Damage & threat",
     groups = {
         { title = "Damage meter", description = "Blizzard's own meter, restyled. Blizzard's meter window stays off while this one is on.", rows = {
@@ -379,8 +382,8 @@ function M:OnEnable()
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         self:UpdateVisibility()
         -- the numbers turn readable a moment after combat
-        C_Timer.After(0.5, function() if self:IsEnabled() then self:Refresh() end end)
-        C_Timer.After(1.5, function() if self:IsEnabled() then self:Refresh() end end)
+        after(0.5, function() if self:IsEnabled() then self:Refresh() end end)
+        after(1.5, function() if self:IsEnabled() then self:Refresh() end end)
     end)
     self:OnGameEvent("GROUP_ROSTER_UPDATE", function() self:UpdateVisibility() end)
     local valid = C_EventUtils and C_EventUtils.IsEventValid

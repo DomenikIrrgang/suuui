@@ -1,4 +1,4 @@
--- Units/BuffIndicators.lua
+-- Units/BuffIndicators.wowlua
 -- Buff indicators on party and raid frames: your heals over time and shields
 -- (or anyone's buffs) as an icon, a coloured square, a border or a tint over
 -- the health fill. The engine filters them by spell, so they work in combat.
@@ -7,6 +7,9 @@
 -- the profile, so one profile serves every character, and hands the active
 -- spec's list to the group frames through SuuUI.UI.SetGroupIndicators;
 -- turned off, the frames show none.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -23,8 +26,9 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local _, CLASS = UnitClass("player")
-local isSecret = issecretvalue or function() return false end
+local _, classFile = UnitClass("player")
+local CLASS: string = secret.known(classFile, "")
+local isSecret = secret.isSecret
 
 -- Each class's starting set, by name (every rank's IDs come from the
 -- Cooldown Manager's presets): one list for every spec, or one per spec
@@ -72,7 +76,7 @@ local SIZE_OPTIONS = { { value = "5", label = "Party" }, { value = "10", label =
 local MISSING_COLORS = { { value = "ember", label = "Red" }, { value = "amber", label = "Amber" },
                          { value = "ink-faint", label = "Grey" }, { value = "arcane", label = "Blue" } }
 
-local function copy(t)
+local function copy(t: any): any
     if type(t) ~= "table" then return t end
     local out = {}
     for k, v in pairs(t) do out[k] = copy(v) end
@@ -94,12 +98,12 @@ local function knownBuffs()
 end
 
 -- The spec whose list the frames use, and the one the editor shows.
-local function specKey(spec) return tostring(spec or 0) end
+local function specKey(spec: number?) return tostring(spec or 0) end
 function M:ActiveSpec() return (SuuUI.Spec()) end
 function M:EditSpec() return self.editSpec or self:ActiveSpec() end
 
 -- A spec's name from the presets' trees ("Holy"), or Unspecced.
-local function specName(spec)
+local function specName(spec: number)
     if spec == 0 then return "Unspecced" end
     for _, p in ipairs(SuuUI.CooldownPresets and SuuUI.CooldownPresets() or {}) do
         if p.tree == spec then return (p.name:gsub("%s*%b()", "")) end
@@ -109,14 +113,14 @@ end
 
 -- Lists saved before specs (lists[CLASS] = { indicator, … }): every spec
 -- starts from it.
-local function migrated(byClass)
+local function migrated(byClass: any): any
     if type(byClass) ~= "table" or byClass[1] == nil then return byClass end
     local out = {}
     for spec = 0, 3 do out[specKey(spec)] = copy(byClass) end
     return out
 end
 
-function M:List(spec)
+function M:List(spec: number?)
     spec = spec or self:ActiveSpec()
     local byClass = migrated(self:Get("lists")[CLASS])
     if byClass and byClass[specKey(spec)] then return byClass[specKey(spec)] end
@@ -133,7 +137,7 @@ function M:List(spec)
     return list
 end
 
-function M:SetList(list, spec)
+function M:SetList(list: any[], spec: number?)
     local all = copy(self:Get("lists"))
     all[CLASS] = migrated(all[CLASS]) or {}
     all[CLASS][specKey(spec or self:ActiveSpec())] = list
@@ -141,7 +145,7 @@ function M:SetList(list, spec)
 end
 
 -- Edits go to the spec the editor shows.
-local function mutate(fn)
+local function mutate(fn: (list: any[]) -> ())
     local spec = M:EditSpec()
     local list = copy(M:List(spec))
     fn(list)
@@ -161,9 +165,10 @@ local WIDTH = 560
 local ROW_H = 46
 
 -- What a typed number finds: "Name · ID 123" (value "id:123").
-local function spellLookup(query)
+local function spellLookup(query: string?)
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
-    local name = id and C_Spell.GetSpellName(id)
+    if not id then return nil end
+    local name = C_Spell.GetSpellName(id)
     if isSecret(name) or not name then return nil end
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
 end
@@ -173,10 +178,10 @@ for _, o in ipairs(KINDS) do KIND_LABEL[o.value] = o.label end
 for _, o in ipairs(COLORS) do COLOR_LABEL[o.value] = o.label end
 for _, o in ipairs(MISSING_COLORS) do MISSING_LABEL[o.value] = o.label:lower() end
 
-local function placed(e) return e.kind == "icon" or e.kind == "square" or e.kind == nil end
+local function placed(e: any): boolean return e.kind == "icon" or e.kind == "square" or e.kind == nil end
 
 -- The effective show mode (a bar colour has no "both").
-local function showOf(e)
+local function showOf(e: any): string
     local show = e.show or "up"
     if e.kind == "fill" and show == "both" then show = "up" end
     return show
@@ -184,7 +189,7 @@ end
 
 -- One caption line, in the modal's order: "Square · Top left · 8px · Pale
 -- gold · Up or missing (red) · My group · Party, 10".
-local function summary(e)
+local function summary(e: any): string
     local parts = { KIND_LABEL[e.kind or "icon"] or "Icon" }
     if placed(e) then
         parts[#parts + 1] = POINT_LABEL[e.point or "TOPRIGHT"]
@@ -238,14 +243,14 @@ end
 
 local function editEntry() return editPanel and (M:List(M:EditSpec()))[editPanel.index] end
 
-local function editMutate(fn)
+local function editMutate(fn: (e: any) -> ())
     local index = editPanel.index
     mutate(function(l) if l[index] then fn(l[index]) end end)
 end
 
 -- A field: its label (caption) over its control, a reason under it while
 -- it doesn't apply. Returns the next y.
-local function field(col, y, label, control, h)
+local function field(col: Frame, y: number, label: string, control: any, h: number?): number
     local t = UI.Text(col, "caption", "ink-muted")
     t:SetPoint("TOPLEFT", 0, -y)
     t:SetValue(label)
@@ -258,7 +263,7 @@ local function field(col, y, label, control, h)
     return y + 18 + (h or 30) + 4 + 16 + 8
 end
 
-local function setApplies(control, applies, why)
+local function setApplies(control: any, applies: boolean, why: string?)
     if control.SetDisabled then control:SetDisabled(not applies) else control:SetAlpha(applies and 1 or T.opacity["opacity-disabled"]) end
     control.reason:SetValue(applies and (control.note or "") or (why or ""))
     UI.Paint(control.reason, applies and "ink-muted" or "ink-faint")
@@ -303,26 +308,26 @@ local function buildEditPanel()
     -- Look
     UI.SectionHeader(left, "Look", nil, COL_W):SetPoint("TOPLEFT")
     local y = 30
-    p.kind = UI.Segmented(left, { options = KINDS, onChange = function(v) editMutate(function(e) e.kind = v end) end })
+    p.kind = UI.Segmented(left, { options = KINDS, onChange = function(v: any) editMutate(function(e) e.kind = v end) end })
     y = field(left, y, "Kind", p.kind)
-    p.point = UI.AnchorPicker(left, { onChange = function(v) editMutate(function(e) e.point = v end) end })
+    p.point = UI.AnchorPicker(left, { onChange = function(v: any) editMutate(function(e) e.point = v end) end })
     local yPos = y
     y = field(left, y, "Position", p.point, 68)
-    p.size = UI.Stepper(left, { min = 6, max = 24, step = 1, unit = "px", onChange = function(v) editMutate(function(e) e.size = v end) end })
+    p.size = UI.Stepper(left, { min = 6, max = 24, step = 1, unit = "px", onChange = function(v: any) editMutate(function(e) e.size = v end) end })
     p.sizeLabel = UI.Text(left, "caption", "ink-muted")
     p.sizeLabel:SetPoint("TOPLEFT", 100, -yPos)
     p.sizeLabel:SetValue("Size")
     p.size:SetPoint("TOPLEFT", 100, -(yPos + 18))
     p.size.reason = p.point.reason -- one reason line serves both
-    p.color = UI.SwatchRow(left, { options = COLORS, onChange = function(v) editMutate(function(e) e.color = v end) end })
+    p.color = UI.SwatchRow(left, { options = COLORS, onChange = function(v: any) editMutate(function(e) e.color = v end) end })
     field(left, y, "Colour", p.color, 20)
 
     -- When it shows
     UI.SectionHeader(right, "When it shows", nil, COL_W):SetPoint("TOPLEFT")
     y = 30
-    p.show = UI.Segmented(right, { options = SHOW_OPTIONS, onChange = function(v) editMutate(function(e) e.show = v ~= "up" and v or nil end) end })
+    p.show = UI.Segmented(right, { options = SHOW_OPTIONS, onChange = function(v: any) editMutate(function(e) e.show = v ~= "up" and v or nil end) end })
     y = field(right, y, "Show", p.show)
-    p.missingColor = UI.SwatchRow(right, { options = MISSING_COLORS, onChange = function(v)
+    p.missingColor = UI.SwatchRow(right, { options = MISSING_COLORS, onChange = function(v: any)
         editMutate(function(e) e.missingColor = v ~= "ember" and v or nil end) end })
     y = field(right, y, "Missing colour", p.missingColor, 20)
 
@@ -331,13 +336,13 @@ local function buildEditPanel()
     where:SetPoint("TOPLEFT", 0, -y)
     y = y + 30
     p.source = UI.Segmented(right, { options = { { value = "mine", label = "Yours" }, { value = "any", label = "Anyone's" } },
-        onChange = function(v) editMutate(function(e) e.source = v end) end })
+        onChange = function(v: any) editMutate(function(e) e.source = v end) end })
     y = field(right, y, "Whose", p.source)
     p.on = UI.Segmented(right, { options = { { value = "all", label = "Everyone" }, { value = "group", label = "My group" } },
-        onChange = function(v) editMutate(function(e) e.on = v ~= "all" and v or nil; e.missingOn = nil end) end })
+        onChange = function(v: any) editMutate(function(e) e.on = v ~= "all" and v or nil; e.missingOn = nil end) end })
     p.on.note = "My group: only your own raid group (in a party, everyone), e.g. Battle Shout."
     y = field(right, y, "Show on", p.on)
-    p.sizes = UI.ToggleChips(right, { options = SIZE_OPTIONS, onChange = function(values)
+    p.sizes = UI.ToggleChips(right, { options = SIZE_OPTIONS, onChange = function(values: string[])
         editMutate(function(e)
             local set, n = {}, 0
             for _, t in ipairs(values) do set[t] = true; n = n + 1 end
@@ -424,7 +429,7 @@ function M:RefreshEdit()
     setApplies(p.sizes, true)
 end
 
-function M:OpenEdit(index)
+function M:OpenEdit(index: number)
     editPanel = editPanel or buildEditPanel()
     editPanel.index = index
     editPanel:Show()
@@ -436,7 +441,7 @@ end
 -- dragged by the grip to reorder (later ones draw over earlier ones)
 --------------------------------------------------------------------------------
 
-local function grip(parent)
+local function grip(parent: Frame)
     local g = CreateFrame("Frame", nil, parent)
     g:SetSize(10, 18)
     for row = 0, 2 do
@@ -450,7 +455,7 @@ local function grip(parent)
     return g
 end
 
-local function buildRow(parent, editor)
+local function buildRow(parent: Frame, editor: any)
     local r = CreateFrame("Frame", nil, parent)
     r:SetSize(WIDTH - 12, ROW_H)
     r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
@@ -484,12 +489,12 @@ local function specOptions()
     return out
 end
 
-local function buildEditor(parent)
+local function buildEditor(parent: Frame)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(WIDTH, 100)
     f.rows = {}
     -- which spec's list this shows (your active one by default)
-    f.spec = UI.Select(f, { width = 220, options = specOptions(), onChange = function(v)
+    f.spec = UI.Select(f, { width = 220, options = specOptions(), onChange = function(v: any)
         M.editSpec = v
         if editPanel then editPanel:Hide() end
         f:Refresh()
@@ -506,7 +511,7 @@ local function buildEditor(parent)
     f.line:SetHeight(2)
     f.line:Hide()
     f.add = UI.Select(f, { width = 300, placeholder = "+ Add… (name or spell ID)", lookup = spellLookup,
-        onChange = function(v)
+        onChange = function(v: any)
             if not v then return end
             local id = tonumber(tostring(v):match("^id:(%d+)$"))
             local e
@@ -537,7 +542,7 @@ local function buildEditor(parent)
         end
         return index
     end
-    function f:StartDrag(row)
+    function f:StartDrag(row: any)
         self.dragFrom = row.index
         row:SetAlpha(0.4)
         self.dragRow = row
@@ -637,7 +642,7 @@ local STAND_IN = UI.UnitStandIn(function(unit)
     return PEOPLE[tonumber(unit:match("(%d)$")) or 1]
 end)
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: Frame)
     if not self.previewView then
         local view = CreateFrame("Frame", nil, parent)
         view:SetSize(120, 3 * 26 + 2 * S["space-1"])
@@ -667,7 +672,7 @@ end
 
 local SECTION = {
     id = "indicators", label = "Buff indicators", category = "Frames", order = 18,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: Frame) return M:PreviewView(parent) end,
     groups = {
         { title = "Indicators", description = "Your heals over time and shields on party and raid frames, in combat too: an icon, a coloured square, a border or a tint over the health. Saved per class and spec in this profile, so one profile serves all your characters. Edit one for its look, when it shows and where.", rows = {
             { label = "Indicators", control = "custom", build = buildEditor, stacked = true },

@@ -1,4 +1,4 @@
--- Units/Durability.lua
+-- Units/Durability.wowlua
 -- Durability (design board "Durability", its four options together, asked
 -- 2026-10-19; each one a setting of its own): which piece of your gear is
 -- worn, how badly, and repairing it.
@@ -30,6 +30,10 @@
 -- merchant is left out.
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
@@ -56,9 +60,8 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
+local function call(fn: any, ...: any): (any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c = pcall(fn, ...)
     if ok then return a, b, c end
@@ -73,10 +76,10 @@ local SLOT_LABEL = { "Head", "Neck", "Shoulders", "Shirt", "Chest", "Waist", "Le
 local PART_OF = { [1] = "Head", [3] = "Shoulders", [5] = "Chest", [6] = "Waist", [7] = "Legs", [8] = "Feet",
                   [9] = "Wrists", [10] = "Hands", [16] = "Main", [17] = "Off", [18] = "Ranged" }
 
-local function hex(token) return "|cff" .. T.color[token].hex end
+local function hex(token: string): string return "|cff" .. T.color[token].hex end
 
 -- "2g 31s 8c" in the coin colours, zero coins left out.
-local function coins(copper)
+local function coins(copper: number): string
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local out = {}
     if g > 0 then out[#out + 1] = g .. hex("coin-gold") .. "g|r" end
@@ -91,8 +94,13 @@ end
 
 -- Every worn piece that wears, lowest first: { slot, label, part, link,
 -- name, quality, current, max, percent, state }.
-local function readPieces(line)
-    local pieces = {}
+type Piece = {
+    slot: number, label: string, part: string?, link: string?, name: string, quality: string,
+    current: number, max: number, percent: number, state: string,
+}
+
+local function readPieces(line: number): Piece[]
+    local pieces: Piece[] = {}
     for slot = 1, 19 do
         local cur, max = GetInventoryItemDurability(slot)
         if plain(cur) and plain(max) and cur and max and max > 0 then
@@ -111,19 +119,19 @@ local function readPieces(line)
             }
         end
     end
-    table.sort(pieces, function(a, b)
+    table.sort(pieces, function(a: Piece, b: Piece): boolean
         if a.percent ~= b.percent then return a.percent < b.percent end
         return a.slot < b.slot
     end)
     return pieces
 end
 
-local function piecesText(n) return n == 1 and "1 piece" or (n .. " pieces") end
+local function piecesText(n: number): string return n == 1 and "1 piece" or (n .. " pieces") end
 
 -- The tooltip's lines: the worn pieces and the next one, then how many more
 -- and from what percent (colour codes: made again on a theme change).
-local function tooltipLines(pieces)
-    local lines, shown = {}, 0
+local function tooltipLines(pieces: Piece[]): string[][]
+    local lines: string[][], shown = {}, 0
     for _, p in ipairs(pieces) do
         if p.state == "fine" and shown > 0 and pieces[shown].state == "fine" then break end
         local right = p.state == "broken" and (hex("ember-text") .. "Broken|r")
@@ -169,7 +177,7 @@ end
 
 -- Read again; tell the others when anything they show changed (durability
 -- moves with every hit in combat: only whole percents count).
-function M:Update(force)
+function M:Update(force: boolean?)
     local d = self:Read()
     local sig = { d.line, tostring(d.parts.figure), tostring(d.parts.character), tostring(d.parts.gear),
                   d.parts.gearBars, tostring(d.parts.note) }
@@ -189,7 +197,7 @@ end
 
 local ALERT = "durability"
 
-function M:WatchBreaks(d)
+function M:WatchBreaks(d: { [string]: any })
     local was = self.wasState or {}
     local now = {}
     for _, p in ipairs(d.pieces) do
@@ -201,7 +209,7 @@ function M:WatchBreaks(d)
             and self:Get("breakAlert") and InCombatLockdown() then
             SuuUI.ShowAlert(ALERT, "danger", "Your " .. p.label .. " broke", p.name .. " · no stats until repaired")
             if self.alertTimer then self.alertTimer:Cancel() end
-            self.alertTimer = C_Timer.NewTimer(4, function()
+            self.alertTimer = after(4, function()
                 self.alertTimer = nil
                 SuuUI.HideAlert(ALERT)
             end)
@@ -223,8 +231,8 @@ local BADGE_GAP = 4
 
 local function figureHeight() return FIGURE + BADGE_GAP + T.type.badge.lineHeight end
 
-local function buildFigure(parent)
-    local f = CreateFrame("Frame", nil, parent)
+local function buildFigure(parent: Frame): any
+    local f = CreateFrame("Frame", nil, parent) :: any
     f:SetSize(FIGURE, figureHeight())
     f.art = CreateFrame("Frame", nil, f)
     f.art:SetSize(FIGURE, FIGURE)
@@ -255,7 +263,7 @@ end
 
 -- states: part -> "damaged" | "broken"; calm: all is well (fainter);
 -- badge: { tone, text } or nil, or text for the quiet line.
-local function paintFigure(f, states, calm, badge, calmText)
+local function paintFigure(f: any, states: { [string]: string }, calm: boolean, badge: string[]?, calmText: string?)
     for _, part in ipairs(PARTS) do
         local s = states[part]
         if s == "broken" or s == "damaged" then
@@ -364,7 +372,7 @@ end
 
 -- The guild pays: your rank may repair from its bank, and today's limit
 -- covers it (-1: no limit).
-local function guildPays(cost)
+local function guildPays(cost: number): boolean
     if not call(CanGuildBankRepair) then return false end
     local left = call(GetGuildBankWithdrawMoney)
     return plain(left) and left ~= nil and (left < 0 or left >= cost)
@@ -386,20 +394,20 @@ function M:AutoRepair()
     end
     call(RepairAllItems, guild and true or false)
     -- what it cost and who paid, once the game has answered
-    C_Timer.After(1, function()
+    after(1, function()
         local left = call(GetRepairAllCost) or 0
         if guild and left > 0 and (GetMoney() or 0) >= left then
             -- the guild didn't pay after all: your own gold
             guild = false
             call(RepairAllItems, false)
-            C_Timer.After(1, function() self:ReportRepair(cost, money, worn) end)
+            after(1, function() self:ReportRepair(cost, money, worn) end)
             return
         end
         self:ReportRepair(cost, money, worn)
     end)
 end
 
-function M:ReportRepair(cost, moneyBefore, worn)
+function M:ReportRepair(cost: number, moneyBefore: number, worn: number)
     local left = call(GetRepairAllCost) or 0
     if left >= cost then
         self:Print("The game didn't let SuuUI repair by itself here; use Repair all.")
@@ -415,7 +423,7 @@ end
 --------------------------------------------------------------------------------
 
 -- The board's broken example: Chest broken, Legs and Main hand damaged.
-function M:PreviewView(parent)
+function M:PreviewView(parent: Frame): any
     if not self.preview then
         self.preview = buildFigure(parent)
     end
@@ -432,7 +440,7 @@ local function gearOff() return not M:Get("gear"), "On your gear is off." end
 
 local SECTION = {
     id = "durability", label = "Durability", category = "General", order = 31,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: Frame): any return M:PreviewView(parent) end,
     groups = {
         { title = "Durability", description = "When your gear wears down to the line, and when a piece breaks: amber for a damaged piece, ember for a broken one, always with its percent or the word Broken.", rows = {
             { key = "line", label = "Damaged at", control = "slider", min = 10, max = 50, step = 5, unit = "%",

@@ -1,4 +1,4 @@
--- Units/DressingRoom.lua
+-- Units/DressingRoom.wowlua
 -- SuuUI's own dressing room (plan 3.7, design component DressingRoom): the
 -- outfit bar on top (the saved outfits, Save, Delete, Link), the pieces you
 -- try on in a column at the left (each with its icon, name in its quality
@@ -14,6 +14,11 @@
 -- /suu probe windows, 2026-10-17).
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import isSecret from "wowlua:secret"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -26,9 +31,8 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
+local function call(fn: any, ...: any): (any, any, any, any, any, any, any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i end
@@ -54,24 +58,24 @@ local SLOTS = {
 -- The game's dressing room
 --------------------------------------------------------------------------------
 
-local function scene()
+local function scene(): any
     local f = _G.DressUpFrame
     return f and f.ModelScene
 end
 
-local function actor()
+local function actor(): any
     local s = scene()
     return s and call(s.GetPlayerActor, s)
 end
 
 -- What the doll wears now, by slot: { [slotID] = ItemTransmogInfo }.
-local function wornList()
+local function wornList(): any
     local a = actor()
     return a and call(a.GetItemTransmogInfoList, a)
 end
 
 -- What you wear in a slot (its shown appearance), to tell what you tried on.
-local function yours(slotID)
+local function yours(slotID: number): any
     if ItemLocation and C_Item.GetCurrentItemTransmogInfo then
         local loc = ItemLocation:CreateFromEquipmentSlot(slotID)
         if loc and loc:IsValid() then
@@ -88,7 +92,7 @@ local function yours(slotID)
 end
 
 -- A piece's name, quality, icon and link from its appearance source.
-local function piece(sourceID)
+local function piece(sourceID: any): { [string]: any }
     local info = call(TC.GetSourceInfo, sourceID)
     local name = info and plain(info.name) and info.name or nil
     local quality = info and info.quality
@@ -106,8 +110,8 @@ end
 -- The window
 --------------------------------------------------------------------------------
 
-function M:BuildRow(parent)
-    local r = CreateFrame("Button", nil, parent)
+function M:BuildRow(parent: Frame): any
+    local r = CreateFrame("Button", nil, parent) :: any
     r:SetHeight(ROW_H)
     r:RegisterForClicks("LeftButtonUp")
     r.bg = UI.Fill(r, "surface-raised", "BACKGROUND")
@@ -173,7 +177,7 @@ end
 function M:Build()
     self.rows = {}
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIDressingRoom", title = "Dressing Room", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end })
+        footer = true, onClose = function(win: any) win:Hide() end })
     w:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
     w:Hide()
     w.scroll:Hide()
@@ -191,7 +195,7 @@ function M:Build()
     bar:SetPoint("TOPRIGHT")
     bar:SetHeight(BAR_H)
     self.bar = bar
-    self.outfit = UI.Select(bar, { width = 220, placeholder = "Unsaved outfit", options = {}, onChange = function(v)
+    self.outfit = UI.Select(bar, { width = 220, placeholder = "Unsaved outfit", options = {}, onChange = function(v: any)
         self:LoadOutfit(v)
     end })
     self.outfit:SetPoint("LEFT")
@@ -306,7 +310,7 @@ function M:Borrow()
     local ctl = s.ControlFrame
     if ctl then
         ctl:SetAlpha(0)
-        ctl:HookScript("OnShow", function(c) c:Hide() end)
+        hookScript(ctl, "OnShow", function(c) c:Hide() end)
     end
 end
 
@@ -314,7 +318,7 @@ end
 -- Actions
 --------------------------------------------------------------------------------
 
-function M:TakeOff(slotID)
+function M:TakeOff(slotID: number?)
     local a = actor()
     if a and slotID then call(a.UndressSlot, a, slotID) end
 end
@@ -327,7 +331,7 @@ function M:Reset()
     self:Draw()
 end
 
-function M:LoadOutfit(id)
+function M:LoadOutfit(id: number?)
     self.chosen = id
     if not id then return end
     local list = call(TC.GetCustomSetItemTransmogInfoList, id)
@@ -357,7 +361,7 @@ function M:Save()
         return
     end
     UI.Confirm({ title = "Save outfit", text = "A name for this outfit.", input = { label = "Name", placeholder = "Outfit name" },
-        confirm = "Save", onConfirm = function(name)
+        confirm = "Save", onConfirm = function(name: string?)
             name = strtrim(name or "")
             if name == "" then return end
             if call(TC.IsValidCustomSetName, name) == false then
@@ -446,7 +450,7 @@ function M:DrawPieces()
             self.rows[used] = r
             local p = piece(source)
             r.slotID, r.data = s[1], p
-            r.tried = source ~= yours(s[1])
+            r.tried = source ~= yours(s[1] :: number)
             r.edge:SetShown(r.tried)
             r.slot.skin:SetItem({ icon = p.icon, quality = QUALITY[p.quality] })
             r.name:SetValue(p.name or "…")
@@ -468,7 +472,7 @@ function M:DrawPieces()
 end
 
 -- A mount (or pet) preview: its card in the column.
-function M:DrawCard(mode)
+function M:DrawCard(mode: string)
     local card = self.card
     local f = _G.DressUpFrame
     local link = f and f.GetLastLink and f:GetLastLink()
@@ -534,7 +538,7 @@ end
 function M:QueueDraw()
     if self.queued then return end
     self.queued = true
-    C_Timer.After(0, function()
+    after(0, function()
         self.queued = nil
         self:Draw()
     end)
@@ -545,7 +549,7 @@ end
 --------------------------------------------------------------------------------
 
 -- The game's window out of sight: see-through and off screen, still shown.
-function M:PutAway(frame)
+function M:PutAway(frame: any)
     if not self:IsEnabled() then return end
     self.placing = true
     frame:SetAlpha(0)
@@ -559,23 +563,23 @@ function M:Hook()
     if not f or self.hooked then return end
     self.hooked = true
     self:Borrow()
-    hooksecurefunc(f, "SetPoint", function() if not self.placing then C_Timer.After(0, function() self:PutAway(f) end) end end)
-    hooksecurefunc(f, "SetAlpha", function(_, a) if not self.placing and a ~= 0 then C_Timer.After(0, function() self:PutAway(f) end) end end)
-    f:HookScript("OnShow", function()
+    hook(f, "SetPoint", function() if not self.placing then after(0, function() self:PutAway(f) end) end end)
+    hook(f, "SetAlpha", function(_, a) if not self.placing and a ~= 0 then after(0, function() self:PutAway(f) end) end end)
+    hookScript(f, "OnShow", function()
         if not self:IsEnabled() then return end
         self:PutAway(f)
-        C_Timer.After(0, function() self:PutAway(f) end)
+        after(0, function() self:PutAway(f) end)
         -- the game's side panels stay closed (their lists are SuuUI's now)
         if f.CustomSetDetailsPanel then f.CustomSetDetailsPanel:Hide() end
         self.window:Show()
         self:QueueDraw()
     end)
-    f:HookScript("OnHide", function()
+    hookScript(f, "OnHide", function()
         if self.window:IsShown() then self.window:Hide() end
     end)
     -- what the doll wears changed, or what it shows (player, mount, pet)
-    if f.OnDressModel then hooksecurefunc(f, "OnDressModel", function() self:QueueDraw() end) end
-    if f.SetMode then hooksecurefunc(f, "SetMode", function() self:QueueDraw() end) end
+    if f.OnDressModel then hook(f, "OnDressModel", function() self:QueueDraw() end) end
+    if f.SetMode then hook(f, "SetMode", function() self:QueueDraw() end) end
 end
 
 function M:OnEnable()

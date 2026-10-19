@@ -1,4 +1,4 @@
--- Units/WorldMap.lua
+-- Units/WorldMap.wowlua
 -- The world map's pins (step 3.5, stage 2; design components MapPin and
 -- WorldMap): what the game doesn't draw on Forever's map (probed
 -- 2026-10-15: no flight masters, no dungeon entrances, no quests to pick
@@ -29,6 +29,10 @@
 -- The pins sit on the map's canvas through a data provider and keep their
 -- size at every zoom. A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local DEFAULT_FILTERS = {
     -- (objectives, levels and colours: the game's own settings)
     quests = { "objectives", "colours", "available", "repeatable", "items" },
@@ -52,8 +56,20 @@ local M = SuuUI.RegisterModule({
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+-- Who you are, for what you can pick up and who serves you (M:Player);
+-- the quest checks fill in the rest as they go.
+type Me = { level: number, raceBit: number, classBit: number, class?: string, faction?: string,
+            mapID?: number, skills?: { [number]: number }, reps?: { [number]: number } }
+-- A pin before merging (M:Collect): x, y, key, small, pin, name, detail, …
+type Item = { [string]: any }
+-- Pins merged into one, in px (merge)
+type Group = { x: number, y: number, items: Item[], key: string?, fixed: boolean?, small: boolean?,
+               distinct: number, uids: { [string]: boolean } }
+
+-- (the secret test first: a secret isn't compared, not even with nil)
+local function plain(v: unknown): v is string | number | boolean | table
+    return not issecretvalue(v) and v ~= nil
+end
 
 local MERGE_RADIUS = 38 -- px on screen (the design's 32 for 22 px pins, grown with them)
 local MERGE_RADIUS_CLOSEST = 6 -- zoomed all the way in: only pins on one spot (Blackrock Mountain's doors)
@@ -146,7 +162,7 @@ function M:Saved()
     local out = {}
     for _, g in ipairs(GROUPS) do out[g.key] = {} end
     for key, list in pairs(saved) do
-        for _, v in ipairs(type(list) == "table" and list or {}) do
+        for _, v in ipairs(type(list) == "table" and (list :: any[]) or {}) do
             local legacy = key == "services" and LEGACY[v]
             local group, value = legacy and legacy[1] or owner[v], legacy and legacy[2] or v
             if group then
@@ -196,7 +212,7 @@ local GAME_SETTINGS = {
 local gameSetting = {}
 for _, o in ipairs(GAME_SETTINGS) do gameSetting[o.value] = o.cvar end
 
-local function settingOn(cvar)
+local function settingOn(cvar: string): boolean?
     local ok, v = pcall(GetCVarBool, cvar)
     return not ok or v
 end
@@ -219,7 +235,7 @@ function M:MenuValue()
     return value
 end
 
-function M:OnFilters(value)
+function M:OnFilters(value: { [string]: any })
     -- (a character without the Skyborne group keeps its saved choice)
     if value.skyborne == nil then value.skyborne = self:Saved().skyborne end
     local want = {}
@@ -247,7 +263,7 @@ end
 -- The map open with one filter on (another module's "show me": the Damaged
 -- gear note's Show repairers turns Services › Repair on, asked 2026-10-19),
 -- at your zone; the menu shows it ticked. ("services", "repair")
-function M:OpenWith(group, item)
+function M:OpenWith(group: string, item: string)
     local value = self:MenuValue()
     local list = value[group]
     if list then
@@ -328,9 +344,9 @@ local HARDNESS = { trivial = 1, standard = 2, difficult = 3, ["very-difficult"] 
 local GROUP_TAGS = { [1] = true, [62] = true, [81] = true } -- elite, raid, dungeon
 local told, waiting, guessed = {}, nil, {}
 
-local function askTag(id)
+local function askTag(id: number): number?
     local ok, t = pcall(C_QuestLog.GetQuestTagInfo, id)
-    if ok and type(t) == "table" and type(t.tagID) == "number" and not isSecret(t.tagID) then return t.tagID end
+    if ok and type(t) == "table" and type(t.tagID) == "number" and not issecretvalue(t.tagID) then return t.tagID end
     return nil
 end
 
@@ -340,10 +356,10 @@ end
 -- when one turned out otherwise than guessed
 local askAgain
 local function startRound()
-    C_Timer.After(2, function() askAgain(false) end)
-    C_Timer.After(6, function() askAgain(true) end)
+    after(2, function() askAgain(false) end)
+    after(6, function() askAgain(true) end)
 end
-askAgain = function(final)
+askAgain = function(final: boolean)
     local changed, now = false, GetTime()
     for id, since in pairs(waiting) do
         local tag = askTag(id)
@@ -359,7 +375,7 @@ askAgain = function(final)
     if changed and M.map and M.map:IsShown() then M:Refresh() end
 end
 
-local function isGroupQuest(id)
+local function isGroupQuest(id: number): boolean
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
     local fixed = starts.tags and starts.tags[id]
     if fixed then return GROUP_TAGS[fixed] or false end
@@ -385,7 +401,7 @@ end
 -- edge a 2 px ring in the quest's difficulty colour (split per quest for
 -- several, easiest to hardest clockwise), outlined; the bar under it in the
 -- group quest's colour when one of them needs a group.
-local function questPin(list, best)
+local function questPin(list: Item[], best: Item): { [string]: any }
     local sorted = {}
     for i, q in ipairs(list) do sorted[i] = q end
     table.sort(sorted, function(a, b) return (HARDNESS[a.difficulty] or 2) < (HARDNESS[b.difficulty] or 2) end)
@@ -404,7 +420,7 @@ end
 -- The level at and below which a quest is grey for you, as the original
 -- game had it (Forever's own colour keeps a level 3 quest green for a level
 -- 15 character; found in game, Mulgore).
-local function grayLevel(p)
+local function grayLevel(p: number): number
     if p <= 5 then return 0 end
     if p <= 39 then return p - 5 - math.floor(p / 10) end
     if p <= 59 then return p - 1 - math.floor(p / 5) end
@@ -415,7 +431,7 @@ end
 -- above, orange 3, yellow within 2, green above the grey level, then grey.
 -- (Forever's own colour treats its quests as scaling and calls a level 3
 -- quest yellow for a level 15 character; found in game, Mulgore.)
-local function questDifficulty(level, mine)
+local function questDifficulty(level: number, mine: number): string
     local diff = level - mine
     if diff >= 5 then return "impossible" end
     if diff >= 3 then return "very-difficult" end
@@ -430,7 +446,7 @@ end
 local RACE_BIT = { [95] = 2 ^ 32, [96] = 2 ^ 33 }
 
 -- who you are, for what you can pick up and who serves you
-function M:Player()
+function M:Player(): Me
     local level = UnitLevel("player")
     local _, _, race = UnitRace("player")
     local _, class, classID = UnitClass("player")
@@ -444,7 +460,7 @@ function M:Player()
     }
 end
 
-local function maskHas(mask, bit)
+local function maskHas(mask: number?, bit: number): boolean
     if not mask or mask == 0 or bit == 0 then return true end
     return mask % (bit * 2) >= bit
 end
@@ -456,7 +472,7 @@ local function completedSet()
     if ok and type(list) == "table" then for _, id in ipairs(list) do set[id] = true end end
     return set
 end
-local function onQuest(id)
+local function onQuest(id: number): boolean
     if C_QuestLog.IsOnQuest then
         local ok, v = pcall(C_QuestLog.IsOnQuest, id)
         if ok then return v end
@@ -472,7 +488,7 @@ local function skillLines()
     local ok, a, b, c, d, e, f = pcall(GetProfessions)
     if not ok then return out end
     for _, index in pairs({ a, b, c, d, e, f }) do
-        local okInfo, _, _, rank, _, _, _, line = pcall(GetProfessionInfo, index)
+        local okInfo, _, _, rank, _, _, _, line = pcall(GetProfessionInfo, index :: any)
         if okInfo and plain(line) and line and plain(rank) then out[line] = rank end
     end
     return out
@@ -480,9 +496,11 @@ end
 
 -- Your standing with a faction (0 is the start of Neutral, 3000 Friendly,
 -- as the quest data counts it); 0 for one you haven't met.
-local function standing(me, faction)
-    me.reps = me.reps or {}
-    if me.reps[faction] then return me.reps[faction] end
+local function standing(me: Me, faction: number): number
+    local reps = me.reps or {}
+    me.reps = reps
+    local known = reps[faction]
+    if known then return known end
     local value = 0
     if C_Reputation and C_Reputation.GetFactionDataByID then
         local ok, data = pcall(C_Reputation.GetFactionDataByID, faction)
@@ -491,7 +509,7 @@ local function standing(me, faction)
         local ok, _, _, _, _, _, bar = pcall(GetFactionInfoByID, faction)
         if ok and plain(bar) and bar then value = bar end
     end
-    me.reps[faction] = value
+    reps[faction] = value
     return value
 end
 
@@ -516,7 +534,7 @@ local HOLIDAYS = {
 local DARKMOON_SITE = { [263] = 1429, [264] = 1412 } -- Elwynn Forest, Mulgore
 local events = { on = {} }
 
-local function stamp(t)
+local function stamp(t: any): number
     return t and (((t.year * 100 + t.month) * 100 + t.monthDay) * 100 + t.hour) * 100 + t.minute or 0
 end
 -- today's holidays; false while the calendar shows another month (you're
@@ -532,7 +550,7 @@ local function readCalendar()
     for i = 1, cal.GetNumDayEvents(0, now.monthDay) or 0 do
         local e = cal.GetDayEvent(0, now.monthDay, i)
         local key = e and e.calendarType == "HOLIDAY" and HOLIDAYS[e.eventID]
-        if key and stamp(e.startTime) <= t and t < stamp(e.endTime) then
+        if key and e and stamp(e.startTime) <= t and t < stamp(e.endTime) then
             on[key] = true
             site = DARKMOON_SITE[e.eventID] or site
         end
@@ -541,7 +559,7 @@ local function readCalendar()
     return true
 end
 
-local function eventOn(key, mapID)
+local function eventOn(key: string, mapID: number?): boolean
     if not events.on[key] then return false end
     if key == "darkmoonFaire" then return mapID == events.darkmoon end
     return true
@@ -550,14 +568,14 @@ end
 -- A quest's name: QuestieDB's, else the game's title, else its ID (some of
 -- Forever's newer quests have no name in QuestieDB yet: 2026-10-17, the
 -- library's book quests).
-local function questName(q, id)
+local function questName(q: any[]?, id: number): string
     if q and q[1] then return q[1] end
     local t = C_QuestLog and C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(id)
     if type(t) == "string" and t ~= "" and not (issecretvalue and issecretvalue(t)) then return t end
     return "Quest " .. tostring(id)
 end
 
-local function questState(q, id, me, done)
+local function questState(q: any[], id: number, me: Me, done: { [number]: boolean }): (string?, string?, number?)
     if onQuest(id) then return nil end
     local flags = q[10] or 0
     local repeatable = flags % 2 == 1
@@ -595,7 +613,7 @@ local function questState(q, id, me, done)
 end
 
 -- The continent a map lies on (itself for a continent), or nil (the world).
-local function continentOf(mapID)
+local function continentOf(mapID: number?): number?
     local info = mapID and C_Map.GetMapInfo(mapID)
     local guard = 0
     while info and guard < 8 do
@@ -607,8 +625,8 @@ end
 
 -- Taxi nodes the client still lists that no one flies to (an old copy of
 -- Powderfuse Port, transports, quest flights)
-local function junkTaxiNode(name)
-    return type(name) ~= "string" or isSecret(name) or name:find("^zzOLD") ~= nil or name:find("^Transport,") ~= nil
+local function junkTaxiNode(name: any): boolean
+    return type(name) ~= "string" or issecretvalue(name) or name:find("^zzOLD") ~= nil or name:find("^Transport,") ~= nil
         or name:find("^Quest Path") ~= nil
 end
 
@@ -648,7 +666,7 @@ end
 -- givers, which compares it with what the NPC does offer): every quest the
 -- data has it giving, with the state the map would show it in (nil: the
 -- map wouldn't), whether you're on it or have done it.
-function M:QuestsFor(npcID)
+function M:QuestsFor(npcID: number)
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
     local me, done = self:Player(), completedSet()
     local out, seen = {}, {}
@@ -673,8 +691,8 @@ function M:QuestsFor(npcID)
     return out, done
 end
 
-function M:Collect(mapID)
-    local items = {}
+function M:Collect(mapID: number): Item[]
+    local items: Item[] = {}
     local on = self:Layers()
     local me = self:Player()
     me.mapID = mapID
@@ -764,14 +782,15 @@ function M:Collect(mapID)
     -- entrances, with their recommended levels (the group finder's) and
     -- the wings' own; one whose door isn't known yet is in its area's middle
     local levels = SuuUI.InstanceLevels()
-    local function range(lo, hi) return lo == hi and ("level " .. lo) or ("level " .. lo .. "–" .. hi) end
+    local function range(lo: number, hi: number): string return lo == hi and ("level " .. lo) or ("level " .. lo .. "–" .. hi) end
     local muted = "|cff" .. T.color["ink-muted"].hex
     for _, e in ipairs(starts.entrances and starts.entrances[mapID] or {}) do
         local kind, faction = e[4], e[5]
         local show = (kind == "battleground" and on.places.battlegrounds) or (kind ~= "battleground" and on.places.dungeons)
         if show and (not faction or faction == me.faction) then
             local detail = kind == "raid" and "Raid" or kind == "battleground" and "Battleground" or "Dungeon"
-            local lv = levels[kind] and levels[kind][e[3]]
+            local ofKind = levels[kind]
+            local lv = ofKind and ofKind[e[3]]
             local lines = {}
             if lv then
                 detail = detail .. " · " .. range(lv[1], lv[2])
@@ -836,7 +855,7 @@ function M:Collect(mapID)
         -- (a holiday's NPC only while it's on)
         if n and n[4] and (n[3] and me.faction and n[3]:find(me.faction, 1, true)) and (not n[8] or eventOn(n[8], mapID)) then
             for kind in n[4]:gmatch("[^,]+") do
-                local item
+                local item: Item | false | nil
                 local class = kind:match("^class:(.+)$")
                 local prof = kind:match("^trainer:(.+)$")
                 if class then
@@ -873,10 +892,11 @@ function M:Collect(mapID)
                             .. ", shown on the map|r" } }
                     end
                     -- a weapon master: the weapons he teaches
-                    if prof == "weapon" and WEAPON_MASTERS[id] then
-                        item.teaches = WEAPON_MASTERS[id]
+                    local teaches = WEAPON_MASTERS[id]
+                    if prof == "weapon" and teaches then
+                        item.teaches = teaches
                         item.more = item.more or {}
-                        table.insert(item.more, 1, { "Teaches " .. WEAPON_MASTERS[id] })
+                        table.insert(item.more, 1, { "Teaches " .. teaches })
                     end
                     items[#items + 1] = item
                     break
@@ -968,8 +988,8 @@ end
 --------------------------------------------------------------------------------
 
 -- items → groups { x, y (px), items, key, fixed, small }
-local function merge(items, w, h, radius)
-    local groups = {}
+local function merge(items: Item[], w: number, h: number, radius: number): Group[]
+    local groups: Group[] = {}
     local r2 = radius * radius
     for _, it in ipairs(items) do
         local px, py = it.x * w, it.y * h
@@ -1003,7 +1023,7 @@ end
 -- middle moves as pins join it, and spreading moves groups too, so one pass
 -- can leave neighbours apart (two quest pins beside each other at Camp
 -- Taurajo; found in game).
-local function mergeGroups(groups, radius)
+local function mergeGroups(groups: Group[], radius: number): Group[]
     local r2 = radius * radius
     local merged = true
     while merged do
@@ -1035,7 +1055,7 @@ local function mergeGroups(groups, radius)
 end
 
 -- pins still overlapping: the movable ones (small or merged) step apart
-local function spread(groups)
+local function spread(groups: Group[])
     for _ = 1, 4 do
         local moved = false
         for i = 1, #groups do
@@ -1075,11 +1095,13 @@ end
 
 -- A quest's objectives text with the game's placeholders filled in: $N
 -- your name, $C your class, $R your race, $Gmale:female; by your sex.
-local function fillText(text)
+local function fillText(text: string): string
     local name = UnitName("player")
     local class = UnitClass("player")
     local race = UnitRace("player")
-    local female = UnitSex("player") == 3
+    -- (a secret sex reads as not female)
+    local sex = UnitSex("player")
+    local female = not issecretvalue(sex) and sex == 3
     text = text:gsub("%$[Gg]%s*([^:;]*):([^;]*);", function(m, f) return female and f or m end)
     return (text:gsub("%$(%a)", function(c)
         c = c:upper()
@@ -1090,8 +1112,8 @@ local function fillText(text)
 end
 
 -- The quests a pin's group holds (givers' and item drops'), once each.
-local function groupQuests(g)
-    local ids, seen = {}, {}
+local function groupQuests(g: Group): number[]
+    local ids: number[], seen: { [number]: boolean } = {}, {}
     for _, it in ipairs(g.items) do
         for _, id in ipairs(it.quests or {}) do
             if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
@@ -1110,11 +1132,11 @@ local MAX_OBJECTIVES = 6
 local ENTRY_GAP = S["space-5"]
 local FIRST_GAP = S["space-4"]
 local MAP_TIP_W = 360
-local function addObjectives(tip, ids)
+local function addObjectives(tip: { [string]: any }, ids: number[]): { [string]: any }
     local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
     local texts = starts.objectives or {}
     local muted = "|cff" .. T.color["ink-muted"].hex
-    local function text(id)
+    local function text(id: number): string
         return muted .. (texts[id] and fillText(texts[id]) or "The quest data doesn't say what this quest asks.") .. "|r"
     end
     if #ids == 1 and not tip.lines then
@@ -1147,7 +1169,7 @@ local function addObjectives(tip, ids)
 end
 
 local tipBase
-local function tipFor(g)
+local function tipFor(g: Group): { [string]: any }
     local ids = groupQuests(g)
     local tip = tipBase(g, #ids > 0 and not IsShiftKeyDown() and "Shift: what to do" or nil)
     -- the map's tooltips a bit wider (objectives and lists wrapped early; asked)
@@ -1157,7 +1179,7 @@ local function tipFor(g)
     return tip
 end
 
-function tipBase(g, hint)
+tipBase = function(g: Group, hint: string?): { [string]: any }
     local first = g.items[1]
     if g.distinct == 1 and first.tip then return first.tip() end
     if g.distinct == 1 then
@@ -1252,7 +1274,7 @@ end
 -- Hovering a quest's pin rings every pin of the same quest (its giver, all
 -- the places its item drops), a rare's every spot it spawns at, and fades
 -- the rest, so they show at a glance.
-local function relatedOf(g)
+local function relatedOf(g: Group): { quests: { [number]: boolean }, rares: { [number]: boolean } }?
     local quests, rares, any = {}, {}, false
     for _, it in ipairs(g.items) do
         for _, id in ipairs(it.quests or {}) do quests[id] = true; any = true end
@@ -1260,7 +1282,7 @@ local function relatedOf(g)
     end
     return any and { quests = quests, rares = rares } or nil
 end
-function M:HighlightQuests(group)
+function M:HighlightQuests(group: Group?)
     local set = group and relatedOf(group)
     for _, pin in ipairs(self.pins or {}) do
         if not set then
@@ -1280,7 +1302,7 @@ end
 -- A walking giver's route while you hover his pin: a dotted line in his
 -- pin's colour, a dot every 9 px on a surface rim, under the pins.
 local ROUTE_STEP, ROUTE_DOT = 9, 4
-function M:ShowRoutes(group)
+function M:ShowRoutes(group: Group?)
     local r = self.routes
     if not r then
         r = CreateFrame("Frame", nil, self.layer)
@@ -1293,7 +1315,7 @@ function M:ShowRoutes(group)
     local w, h, cs = self.lw, self.lh, self.lcs
     if not (group and w and cs) then return end
     local n = 0
-    local function dot(x, y, color)
+    local function dot(x: number, y: number, color: string)
         n = n + 1
         local d = r.dots[n]
         if not d then
@@ -1427,7 +1449,7 @@ function M:Layout()
 end
 
 -- The pin showing a mark (the marks module's card sits under it).
-function M:PinForMark(id)
+function M:PinForMark(id: any): any
     for _, pin in ipairs(self.pins or {}) do
         local g = pin.group
         if g and g.distinct == 1 and g.items[1].mark == id then return pin end
@@ -1437,7 +1459,7 @@ end
 function M:QueueLayout()
     if self.layoutQueued then return end
     self.layoutQueued = true
-    C_Timer.After(0, function() self:Layout() end)
+    after(0, function() self:Layout() end)
 end
 
 --------------------------------------------------------------------------------
@@ -1456,7 +1478,7 @@ end
 local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local SOFT = TEXTURES .. "CircleSoft.tga"
 
-local function questStyle(pin)
+local function questStyle(pin: any): string?
     local S = POIButtonUtil and POIButtonUtil.Style
     local style = pin.GetStyle and pin:GetStyle()
     if not S then return nil end
@@ -1476,7 +1498,7 @@ local function logButtons()
 end
 
 -- The game's look back (the module off).
-local function unstyle(pin)
+local function unstyle(pin: any)
     local o = pin.suuQuest
     if o then o:Hide() end
     for _, key in ipairs({ "NormalTexture", "PushedTexture", "HighlightTexture", "Glow", "Display",
@@ -1494,7 +1516,7 @@ function M:UnstyleQuest()
     for pin in logButtons() do unstyle(pin) end
 end
 
-function M:StyleQuestPin(pin)
+function M:StyleQuestPin(pin: any)
     if not self:IsEnabled() then unstyle(pin) return end
     local kind = questStyle(pin)
     local o = pin.suuQuest
@@ -1527,10 +1549,10 @@ function M:StyleQuestPin(pin)
         o.hideArt = hideArt
         local function restyle() self:StyleQuestPin(pin) end
         for _, fn in ipairs({ "UpdateButtonStyle", "SetSelected", "EvaluateManagedHighlight", "SetStyle" }) do
-            if pin[fn] then hooksecurefunc(pin, fn, restyle) end
+            if pin[fn] then hook(pin, fn, restyle) end
         end
-        pin:HookScript("OnEnter", function() o.hovered = true; restyle() end)
-        pin:HookScript("OnLeave", function() o.hovered = false; restyle() end)
+        hookScript(pin, "OnEnter", function() o.hovered = true; restyle() end)
+        hookScript(pin, "OnLeave", function() o.hovered = false; restyle() end)
     end
     o.hideArt()
     if kind == "disabled" then o:Hide() return end
@@ -1574,7 +1596,7 @@ function M:StyleQuestPin(pin)
     self:FitQuestPin(pin, (tracked or o.hovered) and 1.1 or 1)
 end
 
-function M:FitQuestPin(pin, grow)
+function M:FitQuestPin(pin: any, grow: number?)
     local o = pin.suuQuest
     local f = self.map
     if not o then return end
@@ -1632,9 +1654,9 @@ function M:HookQuestProviders()
     local quest, area = _G.QuestDataProviderMixin, _G.AreaPOIDataProviderMixin
     for provider in pairs(f.dataProviders or {}) do
         if quest and provider.RefreshAllData == quest.RefreshAllData then
-            hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:StyleQuestPins() end end)
+            hook(provider, "RefreshAllData", function() if self:IsEnabled() then self:StyleQuestPins() end end)
         elseif area and provider.RefreshAllData == area.RefreshAllData then
-            hooksecurefunc(provider, "RefreshAllData", function() if self:IsEnabled() then self:HideTownPins() end end)
+            hook(provider, "RefreshAllData", function() if self:IsEnabled() then self:HideTownPins() end end)
         end
     end
 end
@@ -1655,7 +1677,7 @@ end
 -- Your arrow: SuuUI's (the design's, made for the minimap, whose arrow
 -- Forever won't let go: no Minimap:SetPlayerTexture), on the game's group
 -- members pin, as the game sets its own; the game's again when off.
-function M:StyleArrow(on)
+function M:StyleArrow(on: boolean)
     local f = self.map
     if not f or not f.EnumeratePinsByTemplate then return end
     for pin in f:EnumeratePinsByTemplate("GroupMembersPinTemplate") do
@@ -1672,7 +1694,7 @@ end
 
 local TINT = { 0.62, 0.7, 0.92 }
 
-function M:Reveal(mapID)
+function M:Reveal(mapID: number?)
     for _, t in ipairs(self.revealUsed or {}) do t:Hide(); table.insert(self.revealFree, t) end
     self.revealUsed = {}
     local f = self.map
@@ -1818,11 +1840,11 @@ function M:Attach()
     self.menu = UI.FilterMenu(f, {
         groups = menuGroups(), defaults = DEFAULT_FILTERS, value = self:MenuValue(),
         placeholder = "Map filters", style = "button", height = 22, done = true,
-        onChange = function(value) self:OnFilters(value) end,
+        onChange = function(value: { [string]: any }) self:OnFilters(value) end,
     })
     -- every time the map opens: the game's place for its filter comes back
     self.skyborneMenu = convergences() ~= nil
-    f:HookScript("OnShow", function()
+    hookScript(f, "OnShow", function()
         if not self:IsEnabled() then return end
         self:StyleArrow(true)
         -- (the convergences module may come up after the map's menu)
@@ -1835,13 +1857,13 @@ function M:Attach()
         self:PlaceFilters()
     end)
     -- (a frame later: the window skin lays its row out on the same change)
-    hooksecurefunc(f, "OnMapChanged", function()
-        if self:IsEnabled() then C_Timer.After(0, function() self:PlaceFilters() end) end
+    hook(f, "OnMapChanged", function()
+        if self:IsEnabled() then after(0, function() self:PlaceFilters() end) end
     end)
 end
 
 -- Settings › World map: how solid the pins are.
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     local v = self.preview
     if not v then
         v = CreateFrame("Frame", nil, parent)
@@ -1871,7 +1893,7 @@ end
 
 local SECTION = {
     id = "worldmap", label = "World map", category = "World", order = 12,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any): any return M:PreviewView(parent) end,
     groups = {
         { title = "Map pins", description = "What shows is in the map's own Map filters.", rows = {
             { key = "pinAlpha", label = "Pin opacity", control = "slider", min = 20, max = 100, step = 5, unit = "%",
@@ -1915,7 +1937,7 @@ function M:OnEnable()
     self:StyleArrow(true)
     -- (the log lays its quests out again on every change)
     if _G.QuestLogQuests_Update then
-        hooksecurefunc("QuestLogQuests_Update", function() if self:IsEnabled() then self:StyleLogQuestPins() end end)
+        hook("QuestLogQuests_Update", function() if self:IsEnabled() then self:StyleLogQuestPins() end end)
     end
     self:StyleLogQuestPins()
     self:Watch("pinAlpha", function()
@@ -1931,7 +1953,7 @@ function M:OnEnable()
     -- what you can pick up changes as you level and turn quests in
     for _, event in ipairs({ "QUEST_TURNED_IN", "QUEST_ACCEPTED", "QUEST_REMOVED", "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED", "UPDATE_FACTION",
                             "MAP_EXPLORATION_UPDATED" }) do
-        self:OnGameEvent(event, function() if self.map:IsShown() then C_Timer.After(0.2, function() self:Refresh() end) end end)
+        self:OnGameEvent(event, function() if self.map:IsShown() then after(0.2, function() self:Refresh() end) end end)
     end
     -- the holidays on today: the calendar loads its events after
     -- OpenCalendar (it tells with CALENDAR_UPDATE_EVENT_LIST); read again
@@ -1942,7 +1964,7 @@ function M:OnEnable()
     self:On("SUUUI_CONVERGENCES_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
     -- the flight masters this character has found (the game's list at a
     -- flight master; its nodes are in a moment after it opens)
-    self:OnGameEvent("TAXIMAP_OPENED", function() C_Timer.After(0.2, function() self:RecordTaxiNodes() end) end)
+    self:OnGameEvent("TAXIMAP_OPENED", function() after(0.2, function() self:RecordTaxiNodes() end) end)
     -- a theme: the pins' tooltip lines carry its colour codes, gathered again
     self:On("SUUUI_THEME_CHANGED", function() if self.map:IsShown() then self:Refresh() end end)
     self:OnGameEvent("CALENDAR_UPDATE_EVENT_LIST", function()

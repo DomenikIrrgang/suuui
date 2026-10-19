@@ -1,4 +1,4 @@
--- Units/Spellbook.lua
+-- Units/Spellbook.wowlua
 -- SuuUI's Spellbook page (step 3.2b, design board "Spellbook") inside the
 -- spells window's Spellbook tab, in place of Blizzard's page: the schools
 -- down the left, two columns of spells, the unlearned ones too.
@@ -20,6 +20,10 @@
 -- SuuUI.ShowLevelUp) in the alerts' place, out of combat (a level gained in
 -- combat waits for its end). /suu levelup [level] shows it without one.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
@@ -38,11 +42,10 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local isSecret = issecretvalue or function(_: any) return false end
 
-local function coins(copper)
-    copper = tonumber(copper) or 0
+local function coins(copperArg: any): string
+    local copper = tonumber(copperArg) or 0
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local parts = {}
     if g > 0 then parts[#parts + 1] = g .. "g" end
@@ -51,7 +54,7 @@ local function coins(copper)
     return table.concat(parts, " ")
 end
 
-local function rankOf(sub)
+local function rankOf(sub: any): number?
     return type(sub) == "string" and tonumber(sub:match("(%d+)")) or nil
 end
 
@@ -79,16 +82,16 @@ function M:Schools()
     -- the trees, in order
     local _, class = UnitClass("player")
     local trees = {}
-    for _, t in ipairs(SuuUI.ClassTalents and SuuUI.ClassTalents(class) or {}) do
+    for _, t in ipairs(SuuUI.ClassTalents and SuuUI.ClassTalents(class :: string) or {}) do
         if t.tree and t.spec and not trees[t.tree] then trees[t.tree] = t.spec end
     end
     -- a tree's own icon: the game's spec info (when its name is the tree's),
     -- else the tree's earliest trainer spell (alphabetical was wrong: found
     -- in game)
     local _, _, classID = UnitClass("player")
-    local function treeIcon(name, tree)
+    local function treeIcon(name: string, tree: number): any
         local tries = {
-            function() local _, n, _, icon = GetSpecializationInfoForClassID(classID, tree); return n, icon end,
+            function() local _, n, _, icon = GetSpecializationInfoForClassID(classID :: number, tree); return n, icon end,
             function() local _, n, _, icon = C_SpecializationInfo.GetSpecializationInfo(tree); return n, icon end,
         }
         for _, try in ipairs(tries) do
@@ -105,7 +108,7 @@ function M:Schools()
     -- shaman's Elemental tree is the spellbook's Elemental Combat, the
     -- priest's Shadow its Shadow Magic (by the tree's name the school showed
     -- twice, once empty; found in game)
-    local function schoolName(name)
+    local function schoolName(name: string): string
         if byName[name] then return name end
         local prefix = name .. " "
         for _, s in ipairs(book) do
@@ -135,7 +138,7 @@ end
 
 -- A school's learned spells, in the spellbook's order, flyouts unpacked.
 -- Every spell that is its own entry in the spellbook, in any school.
-local function ownEntries()
+local function ownEntries(): { [number]: boolean }
     local ids = {}
     for i = 1, C_SpellBook.GetNumSpellBookSkillLines() do
         local line = C_SpellBook.GetSpellBookSkillLineInfo(i)
@@ -149,7 +152,7 @@ local function ownEntries()
     return ids
 end
 
-function M:Learned(school)
+function M:Learned(school: any)
     local list = {}
     -- a flyout's spells, unpacked, but not those with their own entry
     -- elsewhere (Forever's warrior has a stances flyout under Protection:
@@ -193,7 +196,7 @@ end
 --------------------------------------------------------------------------------
 
 -- Trainer entries by school name (unknown schools go to General).
-function M:TrainerBySchool(schools)
+function M:TrainerBySchool(schools: any[])
     local names = {}
     for _, s in ipairs(schools) do names[s.name] = true end
     local general = schools[1] and schools[1].name
@@ -209,7 +212,7 @@ function M:TrainerBySchool(schools)
 end
 
 -- The ranks you don't have yet, from the trainer's entries for each name.
-function M:Unlearned(entries, learnedAll)
+function M:Unlearned(entries: any[]?, learnedAll: any[])
     local known = {} -- name -> { levels = set, maxLevel, maxRank, ranked }
     for _, s in ipairs(learnedAll) do
         local k = known[s.label] or { levels = {}, maxRank = 0, maxLevel = 0 }
@@ -266,7 +269,7 @@ end
 -- with its name (Data/Trainer, from the ID scan), the one the game says is
 -- learned at that level; its rank and icon settle a tie. nil when none fits
 -- (SuuUI's own tooltip then).
-function M:SpellIDFor(s)
+function M:SpellIDFor(s: any)
     local name, level = s.label or s.name, s.level
     if not name or not level then return nil end
     self.ids = self.ids or {}
@@ -293,9 +296,9 @@ end
 
 -- The last line of an unlearned spell's tooltip: train now (arcane) and the
 -- cost in coin colours, or the level it comes at.
-local function hex(token) return T.color[token].hex end
-local function coinText(copper)
-    copper = tonumber(copper) or 0
+local function hex(token: string): string return (T.color :: any)[token].hex end
+local function coinText(copperArg: any): string
+    local copper = tonumber(copperArg) or 0
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local parts = {}
     if g > 0 then parts[#parts + 1] = g .. "|cff" .. hex("coin-gold") .. "g|r" end
@@ -303,7 +306,7 @@ local function coinText(copper)
     if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "|cff" .. hex("coin-copper") .. "c|r" end
     return table.concat(parts, " ")
 end
-function M:TrainLine(s)
+function M:TrainLine(s: any): string
     if s.level and s.level <= (UnitLevel("player") or 1) then
         return "|cff" .. hex("arcane") .. "Train now at your class trainer|r  |cff" .. hex("ink") .. coinText(s.cost) .. "|r"
     end
@@ -312,7 +315,7 @@ end
 
 -- An unlearned spell's tooltip: the game's own when its ID is found, with
 -- the training line under it; else SuuUI's.
-function M:ShowUnlearnedTip(owner, s)
+function M:ShowUnlearnedTip(owner: any, s: any)
     local id = self:SpellIDFor(s)
     if id then
         UI.SpellTooltip(owner, id, self:TrainLine(s))
@@ -327,7 +330,7 @@ end
 --------------------------------------------------------------------------------
 
 -- The list a school shows, with the switches applied.
-function M:SchoolList(school, trainer)
+function M:SchoolList(school: any, trainer: any)
     local learned = self:Learned(school)
     local shown = {}
     if self:Get("allRanks") then
@@ -365,7 +368,7 @@ end
 
 -- force: also while the window is closed (out of combat), so the page and
 -- its buttons are ready before a fight: the buttons can't change in one.
-function M:Render(force)
+function M:Render(force: boolean?)
     if not self.book or not (force or self.book:IsVisible()) then return end
     if InCombatLockdown() then
         self.renderAfterCombat = true
@@ -430,7 +433,7 @@ end
 -- The cooldown sweeps on the page's learned spells (the global one too):
 -- whether one runs is readable, its timing only as the engine's duration
 -- object (secret in combat).
-local function plainBool(v) return v ~= nil and not isSecret(v) and v or false end
+local function plainBool(v: any): any return v ~= nil and not isSecret(v) and v or false end
 function M:UpdateCooldowns()
     local book = self.book
     if not book or not book:IsVisible() then return end
@@ -476,8 +479,8 @@ function M:Build()
         end
         self.awaySpells = away
         away()
-        hooksecurefunc(spells, "SetPoint", function()
-            if not self.placingSpells then C_Timer.After(0, away) end
+        hook(spells, "SetPoint", function()
+            if not self.placingSpells then after(0, away) end
         end)
     end
     local book = UI.Spellbook(page, { rows = 6, edgeInset = 20 })
@@ -488,22 +491,22 @@ function M:Build()
     book:SetFrameLevel(page:GetFrameLevel() + 50)
     book:EnableMouse(true) -- Blizzard's buttons underneath get no clicks
     self.book = book
-    book.onSchool = function(i)
+    book.onSchool = function(i: number)
         if InCombatLockdown() then return end
         self.school, self.page = i, 1
         self:Render()
     end
-    book.onPage = function(delta)
+    book.onPage = function(delta: number)
         if InCombatLockdown() then return end
         self.page = (self.page or 1) + delta
         self:Render()
     end
-    book.onSwitch = function(key, on)
+    book.onSwitch = function(key: string, on: boolean)
         self:Set(key == "unlearned" and "unlearned" or "allRanks", on)
         self.page = 1
         self:Render()
     end
-    book.onEnter = function(i, c)
+    book.onEnter = function(i: number, c: any)
         local s = self.slice and self.slice[i]
         if not s then return end
         if s.status == "learned" or s.status == "passive" then
@@ -521,10 +524,10 @@ function M:Build()
     -- a sweep ended: the game can call it active a moment longer
     book.onCooldownDone = function()
         self:UpdateCooldowns()
-        C_Timer.After(0.1, function() self:UpdateCooldowns() end)
+        after(0.1, function() self:UpdateCooldowns() end)
     end
     book:HookScript("OnShow", function() self:UpdateCooldowns() end)
-    book.onDragStart = function(i)
+    book.onDragStart = function(i: number)
         local s = self.slice and self.slice[i]
         if not s or s.status ~= "learned" then return end
         if s.slot then
@@ -535,7 +538,7 @@ function M:Build()
     end
     -- Blizzard's maximise/minimise switches its own book between one and two
     -- pages: nothing to do with SuuUI's page, so it goes while this tab shows
-    local function maxMin(on)
+    local function maxMin(on: boolean)
         local mm = f.MaximizeMinimizeButton
         if not mm then return end
         mm:SetAlpha(on and 1 or 0)
@@ -550,9 +553,9 @@ function M:Build()
     local function again()
         if not self.sizing and page:IsShown() then self:Shorten() end
     end
-    hooksecurefunc(f, "SetHeight", again)
-    hooksecurefunc(f, "SetWidth", again)
-    hooksecurefunc(f, "SetSize", again)
+    hook(f, "SetHeight", again)
+    hook(f, "SetWidth", again)
+    hook(f, "SetSize", again)
     book:HookScript("OnSizeChanged", function() if book:IsVisible() then self:Render() end end)
     -- filled now, while the window is still closed
     self:Render(true)
@@ -605,7 +608,7 @@ end
 
 function M:SayToTrain()
     if self.sayTimer then return end
-    self.sayTimer = C_Timer.NewTimer(1, function()
+    self.sayTimer = after(1, function()
         self.sayTimer = nil
         if not self:IsEnabled() then return end
         local ok, n, cost = pcall(self.CountToTrain, self)
@@ -623,7 +626,7 @@ local SHOWN = 10
 -- The spells and ranks the trainer has for levels from..to that you don't
 -- have, and with the Untrained setting the earlier levels' ones too (their
 -- level as a note): this level's first, new spells first, then by name.
-function M:NewBetween(from, to)
+function M:NewBetween(from: number, to: number)
     local schools = self:Schools()
     local trainer = self:TrainerBySchool(schools)
     local older = self:Get("untrained")
@@ -648,11 +651,11 @@ function M:NewBetween(from, to)
     return list
 end
 
-local function spells(n) return n == 1 and "1 spell" or (n .. " spells") end
+local function spells(n: number): string return n == 1 and "1 spell" or (n .. " spells") end
 
 -- The card's content for reaching `level` (and any level since `from`); nil
 -- when the trainer has nothing for you.
-function M:LevelUpCard(level, from)
+function M:LevelUpCard(level: number, from: number?)
     local list = self:NewBetween(from or level, level)
     if #list == 0 then return nil end
     local cost, fresh, old = 0, 0, 0
@@ -684,7 +687,7 @@ function M:NextLevelUp()
 end
 
 -- The card for reaching `level`; false when the trainer has nothing for you.
-function M:ShowLevelUp(level, from)
+function M:ShowLevelUp(level: number, from: number?)
     local def, n = self:LevelUpCard(level, from)
     if not def then return false end
     SuuUI.ShowLevelUp(LEVEL_UP, def)
@@ -692,7 +695,7 @@ function M:ShowLevelUp(level, from)
     if self.levelTimer then self.levelTimer:Cancel() end
     local stay = tonumber(self:Get("levelUpFor")) or 0
     if stay <= 0 then stay = 4 + math.min(n, SHOWN) end
-    self.levelTimer = C_Timer.NewTimer(stay, function()
+    self.levelTimer = after(stay, function()
         self.levelTimer = nil
         SuuUI.HideAlert(LEVEL_UP)
     end)
@@ -700,12 +703,12 @@ function M:ShowLevelUp(level, from)
 end
 
 -- A level gained: now, or once combat ends.
-function M:LevelGained(level)
-    level = tonumber(level) or UnitLevel("player")
+function M:LevelGained(levelArg: any)
+    local level = tonumber(levelArg) or UnitLevel("player")
     self.levelFrom = math.min(self.levelFrom or level, level)
     self.levelTo = math.max(self.levelTo or level, level)
     if InCombatLockdown() then return end
-    C_Timer.After(0.5, function()
+    after(0.5, function()
         if not self.levelTo or InCombatLockdown() then return end
         local from, to = self.levelFrom, self.levelTo
         self.levelFrom, self.levelTo = nil, nil
@@ -722,12 +725,12 @@ function M:PreviewLevelUp()
 end
 
 -- The settings' preview: the next level's card at its real size.
-function M:PreviewView(parent)
+function M:PreviewView(parent: any)
     if not self.previewView then
         local view = CreateFrame("Frame", nil, parent)
         view.card = UI.LevelUp(view)
         view.card:SetPoint("TOPLEFT")
-        view.card:HookScript("OnSizeChanged", function(c) view:SetSize(c:GetWidth(), c:GetHeight()) end)
+        view.card:HookScript("OnSizeChanged", function(c: any) view:SetSize(c:GetWidth(), c:GetHeight()) end)
         self.previewView = view
         self:On("SUUUI_SETTING_CHANGED", function(_, namespace)
             if namespace == self.id and view:IsVisible() then self:DrawPreview() end
@@ -748,7 +751,7 @@ end
 
 local SECTION = {
     id = "spellbook", label = "Spellbook", category = "General", order = 27,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any) return M:PreviewView(parent) end,
     previewNote = "Your next level that brings spells, as the card will show it.",
     groups = {
         { title = "Spells to train", description = "What your class trainer has for you now, across every school.", rows = {
@@ -759,7 +762,7 @@ local SECTION = {
             { key = "levelUp", label = "Level-up card", control = "toggle",
               description = "The new spells and ranks your trainer has for you when you reach a level." },
             { key = "levelUpFor", label = "Card stays", control = "slider", min = 0, max = 60, step = 5,
-              format = function(v) return v == 0 and "By spells" or (v .. " s") end,
+              format = function(v: number) return v == 0 and "By spells" or (v .. " s") end,
               description = "By spells: 4 seconds and one more for each spell on the card. Or always this many seconds.",
               disabled = function() if not M:Get("levelUp") then return true, "The level-up card is off." end end },
             { key = "untrained", label = "Spells still to train", control = "toggle",
@@ -802,7 +805,7 @@ function M:HideLevelToasts()
     local f = _G.EventToastManagerFrame
     if not f or self.toastsHooked then return end
     self.toastsHooked = true
-    hooksecurefunc(f, "DisplayToast", function(frame)
+    hook(f, "DisplayToast", function(frame: any)
         local t = frame.currentDisplayingToast
         local info = t and t.toastInfo
         local level = self:IsEnabled() and self:Get("levelUp") and info and LEVEL_TOASTS[info.eventType]
@@ -815,8 +818,8 @@ function M:OnEnable()
     self:HideLevelToasts()
     local cf = _G.CharacterFrame
     if cf then
-        cf:HookScript("OnShow", function() C_Timer.After(0, function() self:MeasureCharacter() end) end)
-        cf:HookScript("OnSizeChanged", function() self:MeasureCharacter() end)
+        hookScript(cf, "OnShow", function() after(0, function() self:MeasureCharacter() end) end)
+        hookScript(cf, "OnSizeChanged", function() self:MeasureCharacter() end)
     end
     -- Blizzard's spells window loads the first time it opens; in combat the
     -- page couldn't be built then, and Blizzard's own showed (found in

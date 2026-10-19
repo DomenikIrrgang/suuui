@@ -1,4 +1,4 @@
--- Units/GameMenu.lua
+-- Units/GameMenu.wowlua
 -- SuuUI's own game menu (plan 3.7, design component GameMenu): Esc shows a
 -- compact panel in the middle of a dimmed screen. Return to Game first, then
 -- Game (Options, Edit Mode, Macros, AddOns, SuuUI settings), Help (Support)
@@ -14,6 +14,9 @@
 -- from SuuUI's code taints nothing (/suu probe gamemenu, 2026-10-17).
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -26,18 +29,12 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local function call(fn, ...)
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d = pcall(fn, ...)
-    if ok then return a, b, c, d end
-end
-
 local WIDTH = 300
 local ITEM_H = 30
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 
 -- Closes the game's menu (this panel follows), then does what was chosen.
-local function closeThen(fn, sound)
+local function closeThen(fn: (() -> ())?, sound: number?): () -> ()
     return function()
         PlaySound(sound or SOUNDKIT.IG_MAINMENU_OPTION)
         if GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end
@@ -45,18 +42,23 @@ local function closeThen(fn, sound)
     end
 end
 
-local function exitBlocked()
+local function exitBlocked(): string?
     if StaticPopup_Visible and (StaticPopup_Visible("CAMP") or StaticPopup_Visible("QUIT")) then
         return "Already on the way out"
     end
     if InCombatLockdown() then return "Not in combat" end
 end
 
-local function notInCombat()
+local function notInCombat(): string?
     if InCombatLockdown() then return "Not in combat" end
 end
 
-local GROUPS = {
+-- An entry: { label, glyph, onClick, blocked = fn -> reason }, and for the
+-- secure ones slash and sound; a group: { name, entries }.
+type Entry = { [number]: any, slash?: string, sound?: number }
+type Group = { [number]: any }
+
+local GROUPS: Group[] = {
     { "Game", {
         { "Options", "gear", closeThen(function() SettingsPanel:Open() end) },
         { "Edit Mode", "pushpin", closeThen(function() ShowUIPanel(EditModeManagerFrame) end),
@@ -85,7 +87,7 @@ local GROUPS = {
 -- The panel
 --------------------------------------------------------------------------------
 
-function M:BuildItem(parent, def)
+function M:BuildItem(parent: Frame, def: Entry)
     local b = CreateFrame("Button", nil, parent)
     b:SetHeight(ITEM_H)
     b.hover = UI.Fill(b, "surface-raised", "BACKGROUND")
@@ -127,7 +129,7 @@ end
 -- label, glyph, onClick, blocked = fn -> reason }): in their group, or a
 -- group of their own before Session, which stays last.
 function M:Groups()
-    local out, byName = {}, {}
+    local out: Group[], byName: { [string]: Group } = {}, {}
     for i, g in ipairs(GROUPS) do
         out[i] = { g[1], { unpack(g[2]) } }
         byName[g[1]] = out[i]
@@ -216,6 +218,7 @@ function M:Draw()
         b:SetAlpha(b.blocked and 0.45 or 1)
     end
     local name, realm = UnitFullName("player")
+    realm = secret.known(realm, "")
     self.who:SetValue((name or "") .. ((realm and realm ~= "") and (" · " .. realm) or ""))
     self:DrawPerf()
 end
@@ -249,7 +252,7 @@ end
 
 -- The secure buttons over Reload UI, Log Out and Exit Game: there while the
 -- menu shows (out of combat: a secure frame can't be placed in one).
-function M:PlaceSecure(on)
+function M:PlaceSecure(on: boolean)
     if InCombatLockdown() then return end
     self.overs = self.overs or {}
     for i, item in ipairs(self.secureItems or {}) do
@@ -296,7 +299,7 @@ end
 -- The game's menu out of sight: see-through and off screen, still shown.
 -- Again on every show and whenever the game places it (it sets both itself
 -- when it opens).
-function M:PutAway(frame)
+function M:PutAway(frame: Frame)
     if not self:IsEnabled() then return end
     self.placing = true
     frame:SetAlpha(0)
@@ -305,7 +308,7 @@ function M:PutAway(frame)
     self.placing = false
 end
 
-function M:Away(frame)
+function M:Away(frame: Frame)
     self:PutAway(frame)
     if self.awayHooked then return end
     self.awayHooked = true

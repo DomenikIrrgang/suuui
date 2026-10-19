@@ -1,4 +1,4 @@
--- Units/Support.lua
+-- Units/Support.wowlua
 -- SuuUI's own Support window (plan 3.7, design component SupportWindow):
 -- SuuUI's window chrome around a web page in a Browser frame of SuuUI's own
 -- (CreateFrame("Browser") works: /suu probe support, 2026-10-17), a slim
@@ -10,6 +10,10 @@
 -- too (seen 2026-10-17): the page shows what the site sends; only an error
 -- the browser itself reports brings the unavailable state.
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hookScript from "wowlua:hooks"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -23,7 +27,7 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): any
     if type(fn) ~= "function" then return nil end
     local ok, a = pcall(fn, ...)
     if ok then return a end
@@ -40,7 +44,7 @@ local LOAD_LIMIT = 12 -- seconds before the mark gives way to whatever shows
 
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUISupportWindow", title = "Support", width = WIDTH, height = HEIGHT,
-        onClose = function(win) win:Hide() end })
+        onClose = function(win: any) win:Hide() end })
     w:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
     w:Hide()
     w.scroll:Hide()
@@ -55,7 +59,7 @@ function M:Build()
     bar:SetPoint("TOPLEFT")
     bar:SetPoint("TOPRIGHT")
     bar:SetHeight(BAR_H)
-    local function tool(glyph, tip, fn, text)
+    local function tool(glyph: string, tip: string, fn: () -> (), text: string?): any
         local b = UI.Button(bar, { text = text, icon = glyph, onClick = fn, width = not text and (BAR_H + 6) or nil })
         b:SetHeight(BAR_H)
         b.tooltip = { title = tip }
@@ -121,13 +125,13 @@ function M:Build()
     self.over = over
 end
 
-function M:Call(method, ...)
+function M:Call(method: string, ...: any)
     local b = self.browser
     if b and b[method] then call(b[method], b, ...) end
 end
 
 -- A page asked for: the loading mark until it's done (or a while has passed).
-function M:Load(method, ...)
+function M:Load(method: string, ...: any)
     local o = self.over
     if not self.browser then return self:Unavailable() end
     self.loadingSince = GetTime()
@@ -139,7 +143,7 @@ function M:Load(method, ...)
     self.where:SetValue("Loading…")
     self:Call(method, ...)
     local since = self.loadingSince
-    C_Timer.After(LOAD_LIMIT, function()
+    after(LOAD_LIMIT, function()
         if self.loadingSince == since then self:Loaded() end
     end)
 end
@@ -182,7 +186,7 @@ function M:OnEnable()
     local help = _G.HelpFrame
     if help and not self.hooked then
         self.hooked = true
-        help:HookScript("OnShow", function()
+        hookScript(help, "OnShow", function()
             if not self:IsEnabled() then return end
             HideUIPanel(help)
             self:Open()

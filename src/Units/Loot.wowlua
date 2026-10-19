@@ -1,4 +1,4 @@
--- Units/Loot.lua
+-- Units/Loot.wowlua
 -- The loot window (step 2.6a, design board "Loot window and loot rolls"):
 -- what a corpse (a chest, a fishing catch) holds, beside the cursor with
 -- the first item under it, or at its own place (edit mode). Click a row to
@@ -22,6 +22,11 @@
 -- by the notifications). Needs the Notifications module; without it,
 -- Blizzard's roll frames show as always.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
@@ -37,19 +42,21 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local isSecret = secret.isSecret
+-- a value that is there and not secret (narrows: no longer nil or Secret)
+type Plain = string | number | boolean | table
+local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 local SLOT_MONEY = (Enum.LootSlotType and Enum.LootSlotType.Money) or 2
 
 -- "42 Silver\n3 Copper" (the game's money slot name) → copper, or nil.
-local function copperOf(text)
+local function copperOf(text: any): number?
     if type(text) ~= "string" then return nil end
     local units = { [(GOLD or "Gold"):lower()] = 10000, [(SILVER or "Silver"):lower()] = 100, [(COPPER or "Copper"):lower()] = 1 }
     local total, found = 0, false
     for n, unit in text:gmatch("(%d+)%s+(%a+)") do
         local mult = units[unit:lower()]
-        if mult then total, found = total + tonumber(n) * mult, true end
+        if mult then total, found = total + (tonumber(n) or 0) * mult, true end
     end
     return found and total or nil
 end
@@ -58,14 +65,17 @@ end
 -- What the corpse holds
 --------------------------------------------------------------------------------
 
-function M:Items()
-    local items = {}
+-- One row of the loot window (UI.LootWindow's SetItems).
+type LootItem = { index: number, icon: any, label: string, count?: number, quality: string, locked: boolean, copper?: number }
+
+function M:Items(): LootItem[]
+    local items: LootItem[] = {}
     local n = GetNumLootItems()
     if not plain(n) then return items end
     for slot = 1, n do
         local icon, name, count, _, quality, locked = GetLootSlotInfo(slot)
         if plain(icon) and icon then
-            local item = { index = slot, icon = icon, label = plain(name) and name or "",
+            local item: LootItem = { index = slot, icon = icon, label = plain(name) and name or "",
                 count = plain(count) and count or 1, quality = plain(quality) and QUALITY[quality] or "common",
                 locked = plain(locked) and locked or false }
             if GetLootSlotType(slot) == SLOT_MONEY then
@@ -83,7 +93,8 @@ end
 local function sourceName()
     if IsFishingLoot and IsFishingLoot() then return "Fishing" end
     local guid = GetLootSourceInfo and GetLootSourceInfo(1)
-    if plain(guid) and guid and plain(UnitGUID("target")) and UnitGUID("target") == guid then
+    local target = UnitGUID("target")
+    if plain(guid) and guid and plain(target) and target == guid then
         local name = UnitName("target")
         if plain(name) then return name end
     end
@@ -137,12 +148,12 @@ function M:HideBlizzardLoot()
     if not f or self.hooked then return end
     self.hooked = true
     f:SetClampedToScreen(false)
-    hooksecurefunc(f, "SetPoint", function()
+    hook(f, "SetPoint", function()
         if self.moving or not self:IsEnabled() then return end
         f:SetAlpha(0)
-        C_Timer.After(0, function() if self:IsEnabled() then self:Away() end end)
+        after(0, function() if self:IsEnabled() then self:Away() end end)
     end)
-    f:HookScript("OnShow", function() if self:IsEnabled() then self:Away() end end)
+    hookScript(f, "OnShow", function() if self:IsEnabled() then self:Away() end end)
     self:Away()
 end
 
@@ -150,18 +161,33 @@ end
 -- Loot rolls
 --------------------------------------------------------------------------------
 
-local CHOICES = {
+type ChoiceKey = "need" | "greed" | "disenchant" | "pass"
+type Choice = { key: ChoiceKey, label: string, type: number }
+local CHOICES: Choice[] = {
     { key = "need", label = "Need", type = LOOT_ROLL_TYPE_NEED or 1 },
     { key = "greed", label = "Greed", type = LOOT_ROLL_TYPE_GREED or 2 },
     { key = "disenchant", label = "Disenchant", type = LOOT_ROLL_TYPE_DISENCHANT or 3 },
     { key = "pass", label = "Pass", type = LOOT_ROLL_TYPE_PASS or 0 },
 }
-local CHOICE_BY_TYPE = {}
+local CHOICE_BY_TYPE: { [number]: Choice } = {}
 for _, c in ipairs(CHOICES) do CHOICE_BY_TYPE[c.type] = c end
 
+-- One group roll as the card shows it (a test roll has `test`, its own
+-- roster and classes).
+type Votes = { need: string[], greed: string[], disenchant: string[], pass: string[] }
+type Roll = {
+    id: number, test?: boolean, icon: any, name: string, quality: string, link: any, duration: number,
+    bind?: string, can: { [string]: boolean }, canDisenchant?: boolean, reason: { [string]: string? },
+    votes: Votes, rolled: { [string]: { label: string, value: any } }, group?: number,
+    remaining: () -> number, roster?: string[], classes?: { [string]: string }, choice?: string,
+    endedAt?: number, reported?: boolean,
+}
+
 -- The game's loot line formats as patterns: { pattern, order of captures }.
+type Pattern = any[]
+type Line = any[]
 -- "%s has selected Need for: %s" → "^(.+) has selected Need for: (.+)$".
-local function pattern(fmt)
+local function pattern(fmt: any): Pattern?
     if type(fmt) ~= "string" then return nil end
     local out, order, auto, i = { "^" }, {}, 0, 1
     while i <= #fmt do
@@ -192,7 +218,7 @@ local function pattern(fmt)
     return { table.concat(out), order }
 end
 
-local function match(pat, text)
+local function match(pat: Pattern?, text: string): { [number]: string }?
     if not pat then return nil end
     local caps = { text:match(pat[1]) }
     if #caps == 0 then return nil end
@@ -201,14 +227,17 @@ local function match(pat, text)
     return out
 end
 
-local LINES
-local function lines()
+-- What a loot line says: what, who, the item, the choice, the number.
+type LineFn = (c: { [number]: string }) -> (string, any, any, any?, number?)
+local LINES: Line[]?
+local function lines(): Line[]
     if LINES then return LINES end
     -- the whole name (Forever's characters have surnames: SuuUI.FullName)
-    local me = SuuUI.FullName("player")
+    local me = SuuUI.FullName("player") :: string -- yours: never secret
     me = me:match("^([^%-]+)") or me
-    LINES = {}
-    local function add(global, fn) local p = pattern(_G[global]); if p then LINES[#LINES + 1] = { p, fn } end end
+    local list: Line[] = {}
+    LINES = list
+    local function add(global: string, fn: LineFn) local p = pattern(_G[global]); if p then list[#list + 1] = { p, fn } end end
     -- votes: (who, item)
     add("LOOT_ROLL_NEED", function(c) return "vote", c[1], c[2], "need" end)
     add("LOOT_ROLL_GREED", function(c) return "vote", c[1], c[2], "greed" end)
@@ -229,19 +258,19 @@ local function lines()
     add("LOOT_ROLL_WON", function(c) return "won", c[1], c[2] end)
     add("LOOT_ROLL_YOU_WON", function(c) return "won", me, c[1] end)
     add("LOOT_ROLL_ALL_PASSED", function(c) return "allPassed", nil, c[1] end)
-    return LINES
+    return list
 end
 
-local function itemKey(link)
+local function itemKey(link: any): any
     return type(link) == "string" and link:match("item:(%d+)") or link
 end
 
-local function short(name)
+local function short(name: any): any
     return type(name) == "string" and (name:match("^([^%-]+)") or name) or name
 end
 
 -- A group member's class ("MAGE"), by name.
-local function classOf(name)
+local function classOf(name: any): string?
     if short(name) == short(SuuUI.FullName("player")) then return select(2, UnitClass("player")) end
     local prefix, n = IsInRaid() and "raid" or "party", GetNumGroupMembers()
     for i = 1, n do
@@ -251,14 +280,14 @@ local function classOf(name)
     end
 end
 
-local function classColored(name, known)
+local function classColored(name: any, known: { [string]: string }?): string
     local class = (known and known[short(name)]) or classOf(name)
     local c = class and T.color["class-" .. class:lower()]
     return c and ("|cff" .. c.hex .. short(name) .. "|r") or short(name)
 end
 
 -- Everyone in your group but you, by name (the roll's own list in a test).
-local function roster(roll)
+local function roster(roll: Roll): string[]
     if roll.roster then return roll.roster end
     local out = {}
     if IsInRaid() then
@@ -278,7 +307,7 @@ end
 local WAITING_SHOWN = 4
 
 -- The roll's card, made again from what is known.
-function M:ShowRoll(roll)
+function M:ShowRoll(roll: Roll)
     local actions = {}
     for _, c in ipairs(CHOICES) do
         if c.key ~= "disenchant" or roll.canDisenchant then
@@ -320,7 +349,7 @@ function M:ShowRoll(roll)
     local q = T.color["quality-" .. (roll.quality or "common")]
     SuuUI.Notify({
         id = "suu:roll:" .. roll.id, kind = "roll", category = "Loot roll",
-        icon = { texture = roll.icon, tooltip = function(owner) self:ItemTip(owner, roll) end },
+        icon = { texture = roll.icon, tooltip = function(owner: any) self:ItemTip(owner, roll) end },
         title = (q and roll.quality ~= "common") and ("|cff" .. q.hex .. roll.name .. "|r") or roll.name,
         body = #body > 0 and table.concat(body, "\n") or nil, bodyTooltip = tip,
         duration = roll.duration, remaining = roll.remaining(),
@@ -329,7 +358,7 @@ function M:ShowRoll(roll)
 end
 
 -- The item's tooltip: the game's for an open roll, else from its link.
-function M:ItemTip(owner, roll, ended)
+function M:ItemTip(owner: any, roll: Roll, ended: boolean?)
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     if not ended and not roll.test and self.rolls[roll.id] and GameTooltip.SetLootRollItem then
         GameTooltip:SetLootRollItem(roll.id)
@@ -341,7 +370,7 @@ function M:ItemTip(owner, roll, ended)
     GameTooltip:Show()
 end
 
-function M:Choose(roll, choice)
+function M:Choose(roll: Roll, choice: Choice)
     if roll.choice then return end
     if roll.test then
         roll.choice = choice.key
@@ -355,13 +384,13 @@ function M:Choose(roll, choice)
 end
 
 local QUALITY_NAMES = QUALITY
-function M:StartRoll(rollID, rollTime)
+function M:StartRoll(rollID: any, rollTime: any)
     if not plain(rollID) then return end
     local icon, name, count, quality, bop, canNeed, canGreed, canDE, reasonNeed, reasonGreed, reasonDE = GetLootRollItemInfo(rollID)
     if not plain(name) or not name then return end
-    local function reason(r) return plain(r) and r and r > 0 and _G["LOOT_ROLL_INELIGIBLE_REASON" .. r] or nil end
+    local function reason(r: any): string? return plain(r) and r and r > 0 and _G["LOOT_ROLL_INELIGIBLE_REASON" .. r] or nil end
     local start, duration = GetTime(), (plain(rollTime) and rollTime or 60000) / 1000
-    local roll = {
+    local roll: Roll = {
         id = rollID, icon = icon, name = name, quality = plain(quality) and QUALITY_NAMES[quality] or "common",
         link = GetLootRollItemLink(rollID), duration = duration,
         bind = (plain(bop) and bop) and (ITEM_BIND_ON_PICKUP or "Binds when picked up") or nil,
@@ -370,18 +399,18 @@ function M:StartRoll(rollID, rollTime)
         reason = { need = reason(reasonNeed), greed = reason(reasonGreed), disenchant = reason(reasonDE) },
         votes = { need = {}, greed = {}, disenchant = {}, pass = {} }, rolled = {},
         group = IsInGroup() and GetNumGroupMembers() or nil,
+        remaining = function(): number
+            local left = GetLootRollTimeLeft(rollID)
+            if plain(left) and left then return math.max(0, left / 1000) end
+            return math.max(0, duration - (GetTime() - start))
+        end,
     }
     roll.can.disenchant = roll.canDisenchant
-    roll.remaining = function()
-        local left = GetLootRollTimeLeft(rollID)
-        if plain(left) and left then return math.max(0, left / 1000) end
-        return math.max(0, duration - (GetTime() - start))
-    end
     self.rolls[rollID] = roll
     self:ShowRoll(roll)
 end
 
-function M:EndRoll(rollID)
+function M:EndRoll(rollID: number)
     local roll = self.rolls[rollID]
     if not roll then return end
     self.rolls[rollID] = nil
@@ -394,7 +423,7 @@ end
 
 -- The roll a chat line is about: the oldest open one for that item (else
 -- one just ended, for the result).
-function M:RollFor(link, who, field)
+function M:RollFor(link: any, who: string?, field: string?): Roll?
     local key = itemKey(link)
     local best
     for _, roll in pairs(self.rolls) do
@@ -409,7 +438,7 @@ function M:RollFor(link, who, field)
     end
 end
 
-function M:Result(roll, winner)
+function M:Result(roll: Roll, winner: string?)
     local title, body
     local me = short(SuuUI.FullName("player"))
     if winner then
@@ -424,11 +453,11 @@ function M:Result(roll, winner)
         title = "Everyone passed on " .. roll.name
     end
     SuuUI.Notify({ id = "suu:rollresult:" .. roll.id, kind = "timed", duration = 6, category = "Loot",
-        icon = { texture = roll.icon, tooltip = function(owner) self:ItemTip(owner, roll, true) end },
+        icon = { texture = roll.icon, tooltip = function(owner: any) self:ItemTip(owner, roll, true) end },
         title = title, body = body })
 end
 
-function M:OnLootLine(text)
+function M:OnLootLine(text: any)
     if not plain(text) or type(text) ~= "string" then return end
     for _, line in ipairs(lines()) do
         local caps = match(line[1], text)
@@ -478,12 +507,12 @@ function M:HideBlizzardRolls()
         self.movingRolls = false
     end
     f:SetClampedToScreen(false)
-    hooksecurefunc(f, "SetPoint", function()
+    hook(f, "SetPoint", function()
         if self.movingRolls then return end
         f:SetAlpha(0)
-        C_Timer.After(0, away)
+        after(0, away)
     end)
-    f:HookScript("OnShow", away)
+    hookScript(f, "OnShow", away)
     away()
 end
 
@@ -494,7 +523,7 @@ local RAID_NAMES = { "Ysolde", "Brannoc", "Morrow", "Kaelith", "Thessaly", "Veyr
     "Delphine", "Eamon", "Faela", "Gideon", "Halvard" }
 local RAID_CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 
-function M:TestRaidRoll(roll, id)
+function M:TestRaidRoll(roll: Roll, id: number)
     roll.roster, roll.classes = {}, {}
     for i, name in ipairs(RAID_NAMES) do
         roll.roster[i] = name
@@ -511,7 +540,7 @@ function M:TestRaidRoll(roll, id)
     end
     local picks = { "pass", "pass", "pass", "greed", "greed", "need" }
     for i = 1, #order - 3 do
-        C_Timer.After(1 + i * 0.6, function()
+        after(1 + i * 0.6, function()
             if not self.rolls[id] then return end
             table.insert(roll.votes[picks[math.random(#picks)]], order[i])
             self:ShowRoll(roll)
@@ -520,15 +549,16 @@ function M:TestRaidRoll(roll, id)
 end
 
 -- /suu lootroll [raid]: a roll that isn't one (made-up votes; "raid": 40 players).
-function M:TestRoll(arg)
-    if not (SuuUI.GetModule("notifications") and SuuUI.GetModule("notifications"):IsEnabled()) then
+function M:TestRoll(arg: string?)
+    local notifications = SuuUI.GetModule("notifications")
+    if not (notifications and notifications:IsEnabled()) then
         self:Print("Rolls show in the notification stack: turn the Notifications module on.")
         return
     end
     self.testRolls = (self.testRolls or 0) + 1
     local id = -self.testRolls
     local start = GetTime()
-    local roll = {
+    local roll: Roll = {
         id = id, test = true, icon = 134939, name = "Plans: Protector's Silvered Chain Helm", quality = "rare",
         link = "item:251382",
         classes = { Ysolde = "PRIEST", Brannoc = "WARRIOR", Morrow = "ROGUE", Kaelith = "MAGE", Thessaly = "DRUID" },
@@ -536,21 +566,21 @@ function M:TestRoll(arg)
         duration = 30, bind = ITEM_BIND_ON_PICKUP or "Binds when picked up",
         can = { need = true, greed = true, pass = true }, reason = {},
         votes = { need = { "Ysolde" }, greed = { "Brannoc", "Morrow" }, disenchant = {}, pass = {} }, rolled = {}, group = 5,
+        remaining = function(): number return math.max(0, 30 - (GetTime() - start)) end,
     }
-    roll.remaining = function() return math.max(0, 30 - (GetTime() - start)) end
     self.rolls[id] = roll
     if arg == "raid" then
         self:TestRaidRoll(roll, id)
     else
         -- someone makes up their mind, to see the waiting line change
-        C_Timer.After(8, function()
+        after(8, function()
             if not self.rolls[id] then return end
             table.insert(roll.votes.greed, "Kaelith")
             self:ShowRoll(roll)
         end)
     end
     self:ShowRoll(roll)
-    C_Timer.After(30, function()
+    after(30, function()
         if not self.rolls[id] then return end
         self:EndRoll(id)
         roll.rolled = { Ysolde = { label = "Need", value = 87 }, [short(SuuUI.FullName("player"))] = { label = "Need", value = 42 } }
@@ -562,7 +592,7 @@ end
 -- Settings
 --------------------------------------------------------------------------------
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any)
     if not self.preview then
         local w = UI.LootWindow(parent)
         w.onClose = function() end
@@ -581,7 +611,7 @@ end
 
 local SECTION = {
     id = "loot", label = "Loot", category = "General", order = 22,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any) return M:PreviewView(parent) end,
     groups = {
         { title = "Loot window", description = "What a corpse, chest or catch holds. Click a row to take it, shift-click to link it. Auto loot works as always: the window shows only when something stays behind.", rows = {
             { key = "atCursor", label = "Beside the cursor", control = "toggle",
@@ -615,7 +645,7 @@ function M:OnEnable()
             end
             LootSlot(slot)
         end)
-        self.window.onEnter = function(slot, row)
+        self.window.onEnter = function(slot: number, row: any)
             GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
             local kind = GetLootSlotType(slot)
             if kind == SLOT_MONEY then
@@ -638,7 +668,7 @@ function M:OnEnable()
         self.open = true
         if plain(autoLoot) and autoLoot then
             -- auto loot: only what stays behind
-            C_Timer.After(0.3, function() if self.open and not self.window:IsShown() then self:Open() end end)
+            after(0.3, function() if self.open and not self.window:IsShown() then self:Open() end end)
         else
             self:Open()
         end

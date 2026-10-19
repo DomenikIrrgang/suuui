@@ -1,4 +1,4 @@
--- Units/CooldownManager.lua
+-- Units/CooldownManager.wowlua
 -- SuuUI's own Cooldown Manager (step 1.7b): what it tracks is a setup per
 -- class and spec, kept in the profile, each starting from a preset of your
 -- class (Data/Presets/<CLASS>.lua). The spec is the talent tree with the most
@@ -13,6 +13,11 @@
 --
 -- Blizzard's own Cooldown Manager isn't used: its CVar is switched off while
 -- this module runs, so the two never show together.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import after from "wowlua:timer"
+import equal from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -64,11 +69,11 @@ end)
 -- Shared slots (groups) saved before every one had a uid get one, so the
 -- editor can follow them through moves and renames.
 M:Migrate("slot-uids", function(values)
-    local function give(lists, tag)
+    local function give(lists: any, tag: string)
         if type(lists) ~= "table" then return end
         for key, list in pairs(lists) do
             if type(list) == "table" then
-                for i, e in ipairs(list) do
+                for i, e in ipairs(list :: any[]) do
                     if type(e) == "table" and (e.group or e.collection) and not e.uid then e.uid = tag .. key .. i end
                 end
             end
@@ -93,7 +98,7 @@ end)
 M:Migrate("missing-per-entry", function(values)
     local old = { buffs = values.missingBuffs, debuffs = values.missingDebuffs }
     values.missingBuffs, values.missingDebuffs = nil, nil
-    local function set(e, mode)
+    local function set(e: any, mode: any)
         if type(e) ~= "table" then return end
         if e.collection then
             for _, x in ipairs(e.entries or {}) do set(x, mode) end
@@ -101,7 +106,7 @@ M:Migrate("missing-per-entry", function(values)
             e.missing = mode
         end
     end
-    local function apply(lists)
+    local function apply(lists: any)
         if type(lists) ~= "table" then return end
         for key, mode in pairs(old) do
             if type(mode) == "string" and type(lists[key]) == "table" then
@@ -126,8 +131,8 @@ end)
 -- member you know now, the spec's shield leading: a saved copy of it follows
 -- (one with the two shields, Water Shield's art fixed: Water Shield first).
 M:Migrate("shaman-shields-auto", function(values)
-    local function fix(list)
-        for _, e in ipairs(type(list) == "table" and list or {}) do
+    local function fix(list: any)
+        for _, e in ipairs((type(list) == "table" and list or {}) :: any[]) do
             if type(e) == "table" and e.collection then fix(e.entries) end
             local m = type(e) == "table" and e.group and e.fixedIcon and e.name == "Shields" and e.members
             if type(m) == "table" and #m == 2 and m[1].name == "Lightning Shield" and m[2].name == "Water Shield" then
@@ -148,8 +153,8 @@ end)
 -- the presets' shaman Shields, Battle Shout and Inner Fire, saved copies too.
 local SHORT_BUFFS = { SHAMAN = "Shields", WARRIOR = "Battle Shout", PRIEST = "Inner Fire" }
 M:Migrate("short-buffs-warn", function(values)
-    local function fix(list, name)
-        for _, e in ipairs(type(list) == "table" and list or {}) do
+    local function fix(list: any, name: string)
+        for _, e in ipairs((type(list) == "table" and list or {}) :: any[]) do
             if type(e) == "table" and e.collection then fix(e.entries, name) end
             if type(e) == "table" and e.name == name and e.missing == "remind" then e.missing = "warn" end
         end
@@ -163,19 +168,22 @@ M:Migrate("short-buffs-warn", function(values)
 end)
 
 local LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
-local isSecret = issecretvalue or function() return false end
-local _, CLASS = UnitClass("player")
+-- (a local predicate: the imported secret.isSecret doesn't narrow in this
+-- project, see Docs/port-notes/units-cooldowns.md)
+local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
+local _, classFile = UnitClass("player")
+local CLASS: string = secret.known(classFile, "")
 
 local function presets()
     return SuuUI.CooldownPresets and SuuUI.CooldownPresets() or {}
 end
 
-local function findPreset(id)
+local function findPreset(id: any)
     for _, p in ipairs(presets()) do if p.id == id then return p end end
 end
 
 -- A copy of a preset's lists, so editing them never touches the preset.
-local function deepCopy(t)
+local function deepCopy(t: any): any
     if type(t) ~= "table" then return t end
     local out = {}
     for k, v in pairs(t) do out[k] = deepCopy(v) end
@@ -185,7 +193,7 @@ end
 -- Shared slots and collections get a uid the editor follows them by (fold
 -- state, the Behaviour panel, matching the preset's in Changes): the same
 -- one for every copy of a preset, the shared slots in a collection after it.
-local function copyLists(p)
+local function copyLists(p: any)
     local out = {}
     for _, key in ipairs(LIST_KEYS) do
         out[key] = {}
@@ -212,7 +220,7 @@ end
 local function treePoints()
     local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
     local info = cfg and C_Traits and C_Traits.GetConfigInfo(cfg)
-    if not (info and info.treeIDs) then return { 0, 0, 0 }, 0 end
+    if not (cfg and info and info.treeIDs) then return { 0, 0, 0 }, 0 end
     local nodes = {}
     for _, treeID in ipairs(info.treeIDs) do
         for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
@@ -246,11 +254,11 @@ function M:DetectSpec()
 end
 
 -- A spec's starting preset (the first of its tree) and its name.
-local function specPreset(spec)
+local function specPreset(spec: number?)
     for _, p in ipairs(presets()) do if (p.tree or 0) == spec then return p end end
 end
 
-local function specName(spec)
+local function specName(spec: number)
     if spec == 0 then return "Unspecced" end
     local p = specPreset(spec)
     return p and (p.name:gsub("%s*%b()", "")) or ("Tree " .. spec)
@@ -262,9 +270,9 @@ end
 
 function M:EditSpec() return self.editSpec or self.spec or 0 end
 
-local function setupKey(spec) return tostring(spec or 0) end
+local function setupKey(spec: number?) return tostring(spec or 0) end
 
-function M:SaveSetup(spec, setup)
+function M:SaveSetup(spec: number?, setup: any)
     local all = deepCopy(self:Peek("setups"))
     all[CLASS] = all[CLASS] or {}
     all[CLASS][setupKey(spec)] = setup
@@ -274,7 +282,7 @@ end
 -- The setup for a spec; a spec seen the first time starts from its preset.
 -- The saved one itself, to read only (a copy of every class's setups was
 -- 414 KB of garbage a call): changes go through SetLists on a copy.
-function M:Setup(spec)
+function M:Setup(spec: number?)
     local all = self:Peek("setups")
     local s = all[CLASS] and all[CLASS][setupKey(spec)]
     if s then return s end
@@ -284,16 +292,16 @@ function M:Setup(spec)
     return s
 end
 
-function M:Lists(spec) return self:Setup(spec).lists end
-function M:PresetId(spec) return self:Setup(spec).preset end
+function M:Lists(spec: number?) return self:Setup(spec).lists end
+function M:PresetId(spec: number?) return self:Setup(spec).preset end
 
-function M:SetLists(lists, spec)
+function M:SetLists(lists: any, spec: number?)
     local s = deepCopy(self:Setup(spec))
     s.lists = lists
     self:SaveSetup(spec, s)
 end
 
-function M:LoadPreset(id, spec)
+function M:LoadPreset(id: any, spec: number?)
     local p = findPreset(id)
     if not p then return false end
     self:SaveSetup(spec, { preset = id, lists = copyLists(p) })
@@ -374,12 +382,12 @@ end
 
 -- The setup and preset bar: which spec's setup you edit (the active one by
 -- default), your class's presets, Load, and what the lists are based on.
-local function buildPresetBar(parent)
+local function buildPresetBar(parent: Frame)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(520, 112)
     local choice
 
-    f.setup = UI.Select(f, { width = 200, onChange = function(v)
+    f.setup = UI.Select(f, { width = 200, onChange = function(v: any)
         M.editSpec = v
         M:Emit("SUUUI_COOLDOWNS_SETUP")
     end })
@@ -389,7 +397,7 @@ local function buildPresetBar(parent)
 
     local options = {}
     for _, p in ipairs(presets()) do options[#options + 1] = { value = p.id, label = p.name } end
-    f.select = UI.Select(f, { width = 200, options = options, onChange = function(v) choice = v end })
+    f.select = UI.Select(f, { width = 200, options = options, onChange = function(v: any) choice = v end })
     f.select:SetPoint("TOPLEFT", f.setup, "BOTTOMLEFT", 0, -10)
     f.status = UI.Text(f, "caption", "ink-muted")
     f.status:SetPoint("TOPLEFT", f.select, "BOTTOMLEFT", 0, -6)
@@ -464,7 +472,7 @@ local LIST_INFO = {
 }
 local TABS = { cooldowns = { "essential", "utility" }, auras = { "buffs", "debuffs", "procs" } }
 
-local function copy(t)
+local function copy(t: any): any
     if type(t) ~= "table" then return t end
     local out = {}
     for k, v in pairs(t) do out[k] = copy(v) end
@@ -472,7 +480,7 @@ local function copy(t)
 end
 
 -- Change the lists through a copy, so the setting sees a new value.
-local function mutate(fn)
+local function mutate(fn: (lists: any) -> ())
     local spec = M:EditSpec()
     local lists = copy(M:Lists(spec))
     for _, key in ipairs(LIST_KEYS) do lists[key] = lists[key] or {} end
@@ -490,6 +498,10 @@ end
 -- deep). The editor names an entry by its path: { key, i } in the list, j
 -- inside a collection, m a shared slot's member.
 
+-- A path to an entry: { key, i } in a list, j inside a collection, m a
+-- shared slot's member.
+type Path = { key: string, i: number, j?: number, m?: number }
+
 local function newUid() return tostring(time()) .. math.random(1000, 9999) end
 
 -- A weapon enchant entry (buffs only): { enchant = "main"|"off"|"ranged",
@@ -497,14 +509,14 @@ local function newUid() return tostring(time()) .. math.random(1000, 9999) end
 -- spells). It goes by its uid, as its name follows the weapon.
 local ENCHANT_NAME = { main = "Main-hand enchant", off = "Off-hand enchant", ranged = "Ranged enchant" }
 local ENCHANT_INV = { main = 16, off = 17, ranged = 18 }
-local function enchantArt(e)
+local function enchantArt(e: any)
     local info = UI.WeaponEnchant(e.enchant)
     return info and info.icon or GetInventoryItemTexture("player", ENCHANT_INV[e.enchant] or 16) or 134400
 end
 
 -- The container a path points into (a list, a collection's entries or a
 -- shared slot's members), the index in it, and the shared slot it's in.
-local function locate(l, p)
+local function locate(l: any, p: Path)
     local t, i = l[p.key], p.i
     if t and p.j then t, i = t[p.i] and t[p.i].entries, p.j end
     if t and p.m then
@@ -515,19 +527,19 @@ local function locate(l, p)
     return t, i
 end
 
-local function entryAt(l, p)
+local function entryAt(l: any, p: Path)
     local t, i = locate(l, p)
     return t and t[i]
 end
 
-local function samePath(a, b)
+local function samePath(a: Path, b: Path): boolean
     return a.key == b.key and a.i == b.i and a.j == b.j and a.m == b.m
 end
 
 -- fn(entry, path) for every entry of a list: collections and what they
 -- hold, shared slots and their members.
-local function walk(list, key, fn)
-    local function one(e, p)
+local function walk(list: any, key: string, fn: (e: any, p: Path) -> ())
+    local function one(e: any, p: Path)
         fn(e, p)
         if e.group then
             for m, x in ipairs(e.members or {}) do fn(x, { key = key, i = p.i, j = p.j, m = m }) end
@@ -544,7 +556,7 @@ end
 -- A shared slot's IDs: every member's, once, sorted; its icon stays one of
 -- them (or a member's own icon). A fixed icon whose member left is no longer
 -- fixed.
-local function regroup(e)
+local function regroup(e: any)
     local seen, ids, art = {}, {}, {}
     for _, m in ipairs(e.members or {}) do
         for _, id in ipairs(m.ids or {}) do
@@ -562,7 +574,7 @@ local SOURCE_LABEL = { mine = "only yours", others = "only others'", any = "anyo
 -- Whose aura a list counts unless an entry says otherwise (the tracker's
 -- defaults): buffs from anyone, your debuffs and procs only yours.
 local LIST_SOURCE = { buffs = "any", debuffs = "mine", procs = "mine" }
-local function entrySource(e, key)
+local function entrySource(e: any, key: string)
     return e.source or (e.group and "mine") or (e.mine and "mine") or LIST_SOURCE[key] or "mine"
 end
 
@@ -611,7 +623,7 @@ local CONDITION_TYPES = {
 }
 
 -- A new condition of a type, with a first choice made.
-local function newCondition(kind)
+local function newCondition(kind: string)
     if kind == "group" then return { type = "group", value = "group" } end
     if kind == "classes" then return { type = "classes", classes = { CLASS } } end
     if kind == "role" then return { type = "role", roles = { "TANK" } } end
@@ -623,13 +635,13 @@ local function newCondition(kind)
 end
 
 -- "a, b or c"
-local function anyOf(words)
+local function anyOf(words: string[])
     if #words <= 1 then return words[1] end
     return table.concat(words, ", ", 1, #words - 1) .. " or " .. words[#words]
 end
 
 -- The words for a condition's choices: `field` names them in a sentence.
-local function picked(values, options, field)
+local function picked(values: any, options: any[], field: string): string[]
     local by, out = {}, {}
     for _, o in ipairs(options) do by[o.value] = o end
     for _, v in ipairs(values or {}) do
@@ -650,7 +662,8 @@ local function readLiveTalents()
     local out, seen = {}, {}
     pcall(function()
         local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
-        local info = cfg and C_Traits and C_Traits.GetConfigInfo(cfg)
+        if not cfg then return end
+        local info = C_Traits and C_Traits.GetConfigInfo(cfg)
         for _, treeID in ipairs(info and info.treeIDs or {}) do
             for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
                 local ni = C_Traits.GetNodeInfo(cfg, nodeID)
@@ -672,11 +685,11 @@ local function readLiveTalents()
     return out
 end
 
-local function classTalents(class)
+local function classTalents(class: string)
     local list = SuuUI.ClassTalents and SuuUI.ClassTalents(class)
     if type(list) == "table" and #list > 0 then
         local out = {}
-        for _, t in ipairs(list) do
+        for _, t in ipairs(list :: any[]) do
             if t.id then
                 out[#out + 1] = { id = t.id, name = t.name or C_Spell.GetSpellName(t.id) or ("ID " .. t.id), tree = t.tree, spec = t.spec }
             end
@@ -688,7 +701,7 @@ local function classTalents(class)
     return {}
 end
 
-local function talentName(id)
+local function talentName(id: number)
     local name = C_Spell.GetSpellName(id)
     return (name and not isSecret(name)) and name or ("ID " .. tostring(id))
 end
@@ -703,7 +716,7 @@ local ALL_STANCES = stanceOptions()
 -- One condition as a phrase ("in a raid", "with a druid or warlock in your
 -- group"), or nil while it has nothing chosen. `short`: the row summary's
 -- words ("with a warlock", "Defensive").
-local function conditionPhrase(c, inGroup, short)
+local function conditionPhrase(c: any, inGroup: boolean, short: boolean?): string?
     local no = c["not"]
     if c.type == "group" then
         if c.value == "solo" then return no and "in a group or raid" or (short and "solo" or "while solo") end
@@ -755,7 +768,7 @@ local function conditionPhrase(c, inGroup, short)
     end
 end
 
-local function phrases(when, short)
+local function phrases(when: any, short: boolean?): string[]
     local conds = when and when.conditions or {}
     local inGroup = false
     for _, c in ipairs(conds) do
@@ -768,7 +781,7 @@ end
 
 -- The conditions as one sentence: "Faerie Fire shows in a raid, with a druid
 -- or warlock in it, out of combat." With none: "Always shows."
-local function conditionSentence(subject, when)
+local function conditionSentence(subject: string?, when: any): string
     local list = phrases(when)
     if #list == 0 then return "Always shows." end
     local lead = subject and (subject .. " shows ") or "Shows "
@@ -780,7 +793,7 @@ end
 
 -- The conditions in a row's summary: "in a raid · with a warlock", or with
 -- Any of these, "in a raid or with a warlock".
-local function conditionWords(when)
+local function conditionWords(when: any): string?
     local list = phrases(when, true)
     if #list == 0 then return nil end
     if when.match == "any" then return anyOf(list) end
@@ -797,15 +810,11 @@ local ENTRY_KEYS = { "name", "hidden", "ids", "max", "icon", "members", "enchant
 -- A collection's own settings.
 local COLLECTION_KEYS = { "name", "when", "hidden" }
 
-local function same(a, b)
-    if type(a) ~= "table" or type(b) ~= "table" then return a == b end
-    for k, v in pairs(a) do if not same(v, b[k]) then return false end end
-    for k in pairs(b) do if a[k] == nil then return false end end
-    return true
-end
+-- deep equality (wowlua:table's: the same keys with equal values)
+local same = equal
 
 -- Whether an entry differs from the preset's entry of the same name.
-local function changed(e, base, key)
+local function changed(e: any, base: any, key: string): boolean
     if entrySource(e, key) ~= entrySource(base, key) then return true end
     for _, list in ipairs({ BEHAVIOUR_KEYS, ENTRY_KEYS }) do
         for _, k in ipairs(list) do
@@ -837,7 +846,7 @@ function M:Changes()
             end
         end
         local seen, used = {}, {}
-        local function entry(e, parent)
+        local function entry(e: any, parent: any)
             local b = base[e.name]
             seen[e.name] = true
             if not b or b.parent ~= parent or changed(e, b.e, key) then n = n + 1 end
@@ -873,7 +882,7 @@ function M:Changes()
 end
 
 -- The rank of an entry you know, as the spellbook names it.
-local function rankText(entry)
+local function rankText(entry: any)
     for i = #entry.ids, 1, -1 do
         local id = entry.ids[i]
         if IsPlayerSpell and IsPlayerSpell(id) then
@@ -916,9 +925,9 @@ end
 local auraClassNote = {}
 local candidateIcon = {}
 
-local function candidates(kind)
+local function candidates(kind: string)
     local byName, groups = {}, {}
-    local function add(name, ids)
+    local function add(name: any, ids: any)
         if not name then return end
         byName[name] = byName[name] or {}
         local seen = {}
@@ -928,7 +937,7 @@ local function candidates(kind)
     local keys = kind == "cooldown" and { "essential", "utility" } or { "buffs", "debuffs", "procs" }
     for _, p in ipairs(presets()) do
         for _, key in ipairs(keys) do
-            walk(p.lists[key], key, function(e, path)
+            walk(p.lists[key], key, function(e)
                 if e.collection or e.enchant then return end
                 if e.group then
                     groups[e.name] = groups[e.name] or { entry = e, key = key }
@@ -974,7 +983,7 @@ end
 -- class. A name already near the top isn't written again.
 local RECENT_MAX = 12
 
-local function remember(kind, name, id)
+local function remember(kind: string, name: any, id: any)
     if isSecret(name) or isSecret(id) or not name or not id then return end
     local all = M:Get("recent")
     local mine = all[CLASS] and all[CLASS][kind] or {}
@@ -996,7 +1005,7 @@ local function remember(kind, name, id)
     M:Set("recent", all)
 end
 
-local function recent(kind)
+local function recent(kind: string)
     local all = M:Get("recent")
     return all[CLASS] and all[CLASS][kind] or {}
 end
@@ -1032,7 +1041,7 @@ local function rememberAuras()
 end
 
 -- A spell you cast, if it's one of yours with a cooldown (or a preset's).
-local function rememberCast(spellID)
+local function rememberCast(spellID: any)
     if isSecret(spellID) or not spellID or not (IsPlayerSpell and IsPlayerSpell(spellID)) then return end
     local cd = GetSpellBaseCooldown and GetSpellBaseCooldown(spellID)
     if cd and not isSecret(cd) and cd > 0 then
@@ -1043,7 +1052,7 @@ end
 -- What a typed number finds: the spell with that ID, as "Name · ID 123".
 -- Its value is "id:123"; adding it adds exactly that ID.
 -- The art of a list of IDs for a dropdown: the rank you know, else the first.
-local function idsArt(ids)
+local function idsArt(ids: any)
     if not ids or not ids[1] then return nil end
     for i = #ids, 1, -1 do
         if IsPlayerSpell and IsPlayerSpell(ids[i]) then return C_Spell.GetSpellTexture(ids[i]) end
@@ -1051,19 +1060,20 @@ local function idsArt(ids)
     return C_Spell.GetSpellTexture(ids[1])
 end
 
-local function spellLookup(query)
+local function spellLookup(query: string?)
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
-    local name = id and C_Spell.GetSpellName(id)
+    if not id then return nil end
+    local name = C_Spell.GetSpellName(id)
     if isSecret(name) or not name then return nil end
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id), icon = C_Spell.GetSpellTexture(id) } }
 end
 
 -- An option's value as an entry: a name (every ID it carries), "id:123", or
 -- "group:Name" (a preset's shared slot, a copy with its own uid).
-local function entryFor(value, byName, groups)
+local function entryFor(value: any, byName: any, groups: any)
     local hand = type(value) == "string" and value:match("^enchant:(%a+)$")
     if hand and ENCHANT_NAME[hand] then return { enchant = hand, name = ENCHANT_NAME[hand], ids = {}, uid = newUid() } end
-    local id = type(value) == "string" and tonumber(value:match("^id:(%d+)$"))
+    local id = type(value) == "string" and tonumber(value:match("^id:(%d+)$")) or nil
     if id then return { name = C_Spell.GetSpellName(id), ids = { id } } end
     local gname = type(value) == "string" and value:match("^group:(.+)$")
     if gname and groups and groups[gname] then
@@ -1075,7 +1085,7 @@ local function entryFor(value, byName, groups)
 end
 
 -- A small square button with a drawn glyph: "up", "down" or "remove".
-local function glyphButton(parent, kind, onClick)
+local function glyphButton(parent: Frame, kind: string, onClick: () -> ())
     local b = CreateFrame("Button", nil, parent)
     b:SetSize(22, 22)
     local border = UI.Border(b, "gilt-line")
@@ -1125,7 +1135,7 @@ local MISSING_DEFAULT = { buffs = "grey", debuffs = "target", procs = "hide" }
 local MISSING_LABEL = { hide = "hide", grey = "grey", target = "with a target", warn = "warn", remind = "remind" }
 
 -- The grip at a row's left edge: two columns of three dots.
-local function grip(parent)
+local function grip(parent: Frame)
     local g = CreateFrame("Frame", nil, parent)
     g:SetSize(10, 16)
     for col = 0, 1 do
@@ -1141,7 +1151,7 @@ end
 
 -- The fold chevron of a collection or shared slot: down while open, right
 -- while folded.
-local function foldButton(parent, onClick)
+local function foldButton(parent: Frame, onClick: () -> ())
     local b = CreateFrame("Button", nil, parent)
     b:SetSize(18, 18)
     b.strokes = {}
@@ -1151,7 +1161,7 @@ local function foldButton(parent, onClick)
         t:SetSize(6, 1.5)
         b.strokes[n] = t
     end
-    function b:SetOpen(open)
+    function b:SetOpen(open: boolean?)
         local a, c = self.strokes[1], self.strokes[2]
         a:ClearAllPoints()
         c:ClearAllPoints()
@@ -1165,7 +1175,7 @@ local function foldButton(parent, onClick)
             c:SetPoint("CENTER", 0, -2)
         end
     end
-    function b:SetColor(name)
+    function b:SetColor(name: string)
         for _, t in ipairs(self.strokes) do UI.Paint(t, name) end
     end
     b:SetColor("ink-muted")
@@ -1177,7 +1187,7 @@ local function foldButton(parent, onClick)
 end
 
 -- A shared slot's mark: two small stacked cards at its icon's corner.
-local function slotMark(parent, level)
+local function slotMark(parent: Frame, level: number)
     local m = CreateFrame("Frame", nil, parent)
     m:SetFrameLevel(level)
     m:SetSize(11, 11)
@@ -1193,7 +1203,7 @@ local function slotMark(parent, level)
 end
 
 -- A collection's glyph in place of an icon: a gilt folder outline.
-local function folderGlyph(parent)
+local function folderGlyph(parent: Frame)
     local g = CreateFrame("Frame", nil, parent)
     g:SetSize(22, 22)
     local body = CreateFrame("Frame", nil, g)
@@ -1208,7 +1218,7 @@ local function folderGlyph(parent)
 end
 
 -- A cooldown shared slot shows the last member you know (upgrades last).
-local function knownMember(slot)
+local function knownMember(slot: any)
     local members = slot.members or {}
     for i = #members, 1, -1 do
         if rankText(members[i]) ~= "Not learned" then return members[i] end
@@ -1218,7 +1228,7 @@ end
 -- An entry's icon art: a single spell's rank you know, a shared slot's icon
 -- (a cooldown slot's: the member it shows; an aura slot's, unless its icon
 -- is fixed: the first member you know, else its icon).
-local function artOf(e, cooldown)
+local function artOf(e: any, cooldown: boolean)
     if e.enchant then return enchantArt(e) end
     local id
     if e.group and cooldown then
@@ -1245,7 +1255,7 @@ end
 -- An entry as a shared slot's member: its name and IDs, and in an aura list
 -- whose it counts (only where it differs from the slot's) and its condition.
 -- Its looks are the slot's.
-local function asMember(e, key, fromSlot, slot, slotKey)
+local function asMember(e: any, key: string, fromSlot: any, slot: any, slotKey: string)
     local m = { name = e.name, ids = copy(e.ids) }
     if LIST_INFO[slotKey].kind == "aura" then
         local src = fromSlot and (e.source or entrySource(fromSlot, key)) or entrySource(e, key)
@@ -1257,7 +1267,7 @@ end
 
 -- A member leaving its shared slot, as a single entry that counts the same
 -- auras (whose it was, written down where the list counts otherwise).
-local function asSingle(m, slotKey, slot, key)
+local function asSingle(m: any, slotKey: string, slot: any, key: string)
     local e = { name = m.name, ids = copy(m.ids) }
     if LIST_INFO[key].kind == "aura" then
         local src = m.source or entrySource(slot, slotKey)
@@ -1270,10 +1280,10 @@ end
 -- Moves the entry at `from` to the position `to` (an index past the end
 -- puts it last), turning it into a member or back as it enters or leaves a
 -- shared slot.
-local function moveEntry(l, from, to)
+local function moveEntry(l: any, from: Path, to: Path)
     local srcT, srcI, srcSlot = locate(l, from)
     local dstT, dstI, dstSlot = locate(l, to)
-    if not (srcT and srcT[srcI] and dstT) then return end
+    if not (srcT and srcI and srcT[srcI] and dstT and dstI) then return end
     local e = table.remove(srcT, srcI)
     if srcT == dstT and dstI > srcI then dstI = dstI - 1 end
     if dstSlot and dstSlot ~= srcSlot then
@@ -1288,7 +1298,7 @@ end
 
 -- "Make 'A + B' a shared slot": the slot takes A's place with A and B as its
 -- members, A's whose (aura lists, one at a time) and A's looks.
-local function combine(l, ontoPath, fromPath, uid, names)
+local function combine(l: any, ontoPath: Path, fromPath: Path, uid: string, names: any[])
     local aT, aI = locate(l, ontoPath)
     local bT, bI, bSlot = locate(l, fromPath)
     local a, b = aT and aT[aI], bT and bT[bI]
@@ -1315,7 +1325,7 @@ end
 -- Whether a dragged row may land on a target: a collection only between the
 -- list's own rows, a shared slot anywhere but in another slot, a single
 -- entry (or a member) anywhere, onto a single entry (a new shared slot) too.
-local function accepts(from, to)
+local function accepts(from: any, to: any): boolean
     local kind = from.kind
     local plain = kind == "entry" or kind == "member"
     -- a weapon enchant: only to another place in Buffs on you (or a
@@ -1340,7 +1350,7 @@ end
 
 -- The rails of the rows a row sits under: { level, faint } each, a
 -- collection's in gilt, a shared slot's fainter.
-local function setRails(fr, rails, level)
+local function setRails(fr: any, rails: any[], level: number)
     fr.rails = fr.rails or {}
     for n, rl in ipairs(rails) do
         local t = fr.rails[n]
@@ -1362,7 +1372,7 @@ end
 -- shared slot's with its mark, a collection's folder), name and summary,
 -- then (right to left) remove, Move to… (rows at the top of a list), Behaviour
 -- and shown. The row drags by its grip.
-local function buildEntryRow(parent)
+local function buildEntryRow(parent: any)
     local r = CreateFrame("Frame", nil, parent)
     r:SetSize(WIDTH, ROW_H)
     -- lit while a dragged row would land on it
@@ -1390,7 +1400,7 @@ local function buildEntryRow(parent)
     r.strip = {}
     r.remove = glyphButton(r, "remove", function() parent:RemoveAt(r.path) end)
     r.remove:SetPoint("RIGHT")
-    r.move = UI.Select(r, { width = 104, placeholder = "Move to…", onChange = function(to)
+    r.move = UI.Select(r, { width = 104, placeholder = "Move to…", onChange = function(to: any)
         if not to then return end
         mutate(function(l)
             local e = table.remove(l[r.key], r.path.i)
@@ -1398,7 +1408,7 @@ local function buildEntryRow(parent)
         end)
     end })
     r.behaviour = UI.Button(r, { text = "Behaviour", width = 96, onClick = function() parent:OpenBehaviour(r.path) end })
-    r.shown = UI.Toggle(r, { onChange = function(v)
+    r.shown = UI.Toggle(r, { onChange = function(v: any)
         mutate(function(l)
             local e = entryAt(l, r.path)
             if e then e.hidden = (not v) or nil end
@@ -1417,13 +1427,13 @@ end
 
 -- c = { key, path, entry, kind = "entry" | "slot" | "collection" | "member",
 --       level, open (folds), slot (a member's) }
-local function fillEntryRow(r, c)
+local function fillEntryRow(r: any, c: any)
     local e, key, kind = c.entry, c.key, c.kind
     r.key, r.path, r.kind, r.entry = key, c.path, kind, e
     local cooldown = LIST_INFO[key].kind == "cooldown"
     local member = kind == "member"
     local parts, strip, dim = {}, {}, false
-    local function add(s) if s then parts[#parts + 1] = s end end
+    local function add(s: string?) if s then parts[#parts + 1] = s end end
     r.icon:SetShown(kind ~= "collection")
     r.folder:SetShown(kind == "collection")
     r.mark:SetShown(kind == "slot")
@@ -1537,12 +1547,12 @@ local function fillEntryRow(r, c)
     r:Show()
 end
 
-local function buildEditor(parent)
+local function buildEditor(parent: Frame)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(WIDTH, 100)
     f.tab = "cooldowns"
     f.tabs = UI.Segmented(f, { options = { { value = "cooldowns", label = "Cooldowns" }, { value = "auras", label = "Auras" } },
-        onChange = function(v) f.tab = v; f:Refresh() end })
+        onChange = function(v: any) f.tab = v; f:Refresh() end })
     f.tabs:SetPoint("TOPLEFT")
     f.tabs:SetValue("cooldowns")
     f.rows, f.heads, f.adds, f.addTos = {}, {}, {}, {}
@@ -1550,7 +1560,7 @@ local function buildEditor(parent)
     -- collections start open, shared slots folded
     f.fold = {}
 
-    local function head(i)
+    local function head(i: number)
         local h = f.heads[i]
         if not h then
             h = CreateFrame("Frame", nil, f)
@@ -1568,13 +1578,13 @@ local function buildEditor(parent)
 
     -- The list's foot: "+ Add…" (a Select of candidates; a typed number finds
     -- any spell by its ID), "+ Shared slot" and (aura lists) "+ Collection".
-    local function addRow(i)
+    local function addRow(i: number)
         local a = f.adds[i]
         if not a then
             a = CreateFrame("Frame", nil, f)
             a:SetSize(WIDTH, 34)
             a.select = UI.Select(a, { width = 300, placeholder = "+ Add… (name or spell ID)", lookup = spellLookup,
-                onChange = function(value)
+                onChange = function(value: any)
                     local e = value and entryFor(value, a.byName, a.groups)
                     if e then mutate(function(l) table.insert(l[a.key], e) end) end
                 end })
@@ -1601,12 +1611,12 @@ local function buildEditor(parent)
     end
 
     -- "+ Add to <name>…" at the foot of an open collection or shared slot.
-    local function addToRow(n)
+    local function addToRow(n: number)
         local a = f.addTos[n]
         if not a then
             a = CreateFrame("Frame", nil, f)
             a:SetSize(WIDTH, ROW_H)
-            a.select = UI.Select(a, { width = 280, lookup = spellLookup, onChange = function(value)
+            a.select = UI.Select(a, { width = 280, lookup = spellLookup, onChange = function(value: any)
                 local e = value and entryFor(value, a.byName, a.groups)
                 if not e then return end
                 mutate(function(l)
@@ -1630,7 +1640,7 @@ local function buildEditor(parent)
     -- What an "+ Add" offers: what you cast or saw lately first, then
     -- everything by name, and (where shared slots may go) the presets'
     -- shared slots of this list. Nothing the list already has.
-    local function addOptions(kind, key, byName, groups, present, slots)
+    local function addOptions(kind: string, key: string, byName: any, groups: any, present: any, slots: any)
         local top, taken = {}, {}
         for _, r in ipairs(recent(kind)) do
             if not present[r.name] and not taken[r.name] then
@@ -1709,7 +1719,7 @@ local function buildEditor(parent)
             local top, bottom = L and L.head:GetTop(), L and L.add:GetBottom()
             if top and bottom and cy <= top and cy >= bottom then
                 local items = L.items
-                local function at(n)
+                local function at(n: number)
                     local it = items[n]
                     if it then return { path = it.before, frame = it.frame } end
                     return { path = L.endPath, frame = L.add }
@@ -1732,7 +1742,7 @@ local function buildEditor(parent)
         end
     end
 
-    function f:ShowDrop(t)
+    function f:ShowDrop(t: any)
         if self.lit then
             self.lit.dropFill:Hide()
             self.lit.dropEdge:SetShown(false)
@@ -1752,7 +1762,7 @@ local function buildEditor(parent)
         end
     end
 
-    function f:StartDrag(row)
+    function f:StartDrag(row: any)
         self.drag = { path = row.path, kind = row.kind, enchant = row.entry and row.entry.enchant }
         row:SetAlpha(0.4)
         self.dragRow = row
@@ -1809,7 +1819,7 @@ local function buildEditor(parent)
         mutate(function(l) moveEntry(l, from.path, dest) end)
     end
 
-    function f:RemoveAt(path)
+    function f:RemoveAt(path: Path)
         mutate(function(l)
             local t, i, slot = locate(l, path)
             if t and t[i] then
@@ -1819,15 +1829,15 @@ local function buildEditor(parent)
         end)
     end
 
-    local function foldKey(e, p) return e.uid or (p.key .. p.i .. "." .. (p.j or "")) end
+    local function foldKey(e: any, p: Path) return e.uid or (p.key .. p.i .. "." .. (p.j or "")) end
 
-    function f:IsOpen(e, p)
+    function f:IsOpen(e: any, p: Path)
         local v = self.fold[foldKey(e, p)]
         if v == nil then return e.collection and true or false end
         return v
     end
 
-    function f:ToggleFold(r)
+    function f:ToggleFold(r: any)
         self.fold[foldKey(r.entry, r.path)] = not self:IsOpen(r.entry, r.path)
         self:Refresh()
     end
@@ -1870,7 +1880,7 @@ local function buildEditor(parent)
             self.layout[key] = L
             y = y - 38
 
-            local function place(fr, level, rails)
+            local function place(fr: any, level: number, rails: any[])
                 fr:ClearAllPoints()
                 fr:SetPoint("TOPLEFT", level * INDENT, y)
                 fr:SetWidth(WIDTH - level * INDENT)
@@ -1880,7 +1890,7 @@ local function buildEditor(parent)
             end
             -- c: what fillEntryRow takes, plus rails, the position before
             -- the row (where a drop over its top lands) and what may land on it
-            local function row(c)
+            local function row(c: any)
                 rowN = rowN + 1
                 local r = self.rows[rowN] or buildEntryRow(self)
                 self.rows[rowN] = r
@@ -1889,7 +1899,7 @@ local function buildEditor(parent)
                 place(r, c.level, c.rails)
                 L.items[#L.items + 1] = { frame = r, before = c.path, onto = c.onto, path = c.path }
             end
-            local function addTo(box, path, level, rails, endPath)
+            local function addTo(box: any, path: Path, level: number, rails: any[], endPath: Path)
                 addN = addN + 1
                 local a = addToRow(addN)
                 a.path, a.byName, a.groups = path, byName, groups
@@ -1900,7 +1910,7 @@ local function buildEditor(parent)
                 L.items[#L.items + 1] = { frame = a, before = endPath }
             end
             -- a single entry, or a shared slot and (open) its members
-            local function entryRows(e, p, level, rails)
+            local function entryRows(e: any, p: Path, level: number, rails: any[])
                 if not e.group then
                     -- (nothing joins a weapon enchant in a shared slot)
                     row({ path = p, entry = e, kind = "entry", level = level, rails = rails, onto = not e.enchant and "entry" or nil })
@@ -1977,7 +1987,7 @@ local function buildEditor(parent)
     -- by uid (shared slots and collections have one; a member goes by its
     -- slot's), else at its path while that is still the same spell; nil
     -- once it's gone.
-    local function findEntry(l)
+    local function findEntry(l: any)
         local b = f.behaviour
         local uid = b.slotUid or b.uid
         if uid then
@@ -1991,7 +2001,7 @@ local function buildEditor(parent)
         if e and (b.uid or e.name == b.entryName) then return e, slot end
     end
 
-    local function mutateEntry(fn)
+    local function mutateEntry(fn: (e: any, slot: any) -> ())
         mutate(function(l)
             local e, slot = findEntry(l)
             if e then
@@ -2010,7 +2020,7 @@ local function buildEditor(parent)
     local COND_X = 56 -- a condition's control, under its type
 
     -- Changes the entry's conditions; with none left it has no `when`.
-    local function mutateWhen(fn)
+    local function mutateWhen(fn: (w: any) -> ())
         mutateEntry(function(e)
             local w = copy(e.when) or {}
             w.match, w.conditions = w.match or "all", w.conditions or {}
@@ -2019,7 +2029,7 @@ local function buildEditor(parent)
         end)
     end
 
-    local function setCondition(i, fn)
+    local function setCondition(i: number, fn: (c: any, w: any) -> ())
         mutateWhen(function(w)
             if w.conditions[i] then fn(w.conditions[i], w) end
         end)
@@ -2027,7 +2037,7 @@ local function buildEditor(parent)
 
     -- The types the Select offers: stance / form only for a class with one
     -- (or a condition that already is one, from another class's setup).
-    local function conditionTypes(current)
+    local function conditionTypes(current: string?)
         local out = {}
         for _, t in ipairs(CONDITION_TYPES) do
             if t.value ~= "stance" or STANCES[CLASS] or current == "stance" then out[#out + 1] = t end
@@ -2035,7 +2045,7 @@ local function buildEditor(parent)
         return out
     end
 
-    local function buildConditionRow(parent)
+    local function buildConditionRow(parent: Frame)
         local r = CreateFrame("Frame", nil, parent)
         r:SetWidth(CW)
         UI.Fill(r, "surface-sunk"):SetAllPoints()
@@ -2051,7 +2061,7 @@ local function buildEditor(parent)
         r.notButton:SetScript("OnClick", function()
             setCondition(r.index, function(c) c["not"] = (not c["not"]) or nil end)
         end)
-        r.type = UI.Select(r, { width = 196, onChange = function(v)
+        r.type = UI.Select(r, { width = 196, onChange = function(v: any)
             if not v then return end
             setCondition(r.index, function(c, w)
                 if c.type == v then return end
@@ -2068,15 +2078,15 @@ local function buildEditor(parent)
 
         -- the type's controls, one set showing
         local top = -(8 + 30 + 6)
-        local function chips(options, field)
-            local c = UI.ToggleChips(r, { options = options, onChange = function(values)
+        local function chips(options: any[], field: string)
+            local c = UI.ToggleChips(r, { options = options, onChange = function(values: any)
                 setCondition(r.index, function(cond) cond[field] = values end)
             end })
             c:SetPoint("TOPLEFT", COND_X, top)
             return c
         end
         r.group = UI.Segmented(r, { options = { { value = "solo", label = "Solo" }, { value = "group", label = "Group" }, { value = "raid", label = "Raid" } },
-            onChange = function(v) setCondition(r.index, function(c) c.value = v end) end })
+            onChange = function(v: any) setCondition(r.index, function(c) c.value = v end) end })
         r.group:SetPoint("TOPLEFT", COND_X, top)
         -- classes in two rows of chips, one list
         local function classes()
@@ -2090,7 +2100,7 @@ local function buildEditor(parent)
         r.classesB:SetPoint("TOPLEFT", COND_X, top - 32)
         -- you counted or not
         r.classesOthers = UI.Segmented(r, { options = { { value = "me", label = "Counting you" }, { value = "others", label = "Others only" } },
-            onChange = function(v) setCondition(r.index, function(c) c.others = (v == "others") or nil end) end })
+            onChange = function(v: any) setCondition(r.index, function(c) c.others = (v == "others") or nil end) end })
         r.classesOthers:SetPoint("TOPLEFT", COND_X, top - 64)
         r.roles = chips(ROLES, "roles")
         r.stances = STANCES[CLASS] and chips(STANCES[CLASS], "stances")
@@ -2103,12 +2113,12 @@ local function buildEditor(parent)
         -- talents (a typed number finds any spell by its ID)
         r.talentRows = {}
         r.talentClass = CLASS
-        r.talentClassSelect = UI.Select(r, { width = 160, options = CLASSES, value = CLASS, onChange = function(v)
+        r.talentClassSelect = UI.Select(r, { width = 160, options = CLASSES, value = CLASS, onChange = function(v: any)
             if not v then return end
             r.talentClass = v
             r:TalentOptions()
         end })
-        r.addTalent = UI.Select(r, { width = 300, placeholder = "+ Add talent…", lookup = spellLookup, onChange = function(v)
+        r.addTalent = UI.Select(r, { width = 300, placeholder = "+ Add talent…", lookup = spellLookup, onChange = function(v: any)
             local id = tonumber(v) or (type(v) == "string" and tonumber(v:match("^id:(%d+)$")))
             if not id then return end
             setCondition(r.index, function(c)
@@ -2150,7 +2160,7 @@ local function buildEditor(parent)
     end
 
     -- A chosen talent in a talent condition: icon, name, ✕.
-    local function talentRow(r, n)
+    local function talentRow(r: any, n: number)
         local t = r.talentRows[n]
         if t then return t end
         t = CreateFrame("Frame", nil, r)
@@ -2172,7 +2182,7 @@ local function buildEditor(parent)
         return t
     end
 
-    local function fillConditionRow(r, c)
+    local function fillConditionRow(r: any, c: any)
         r.notEdge:SetColor(c["not"] and "ember" or "gilt-line")
         r.notText:SetColor(c["not"] and "ember-text" or "ink-faint")
         r.type:SetOptions(conditionTypes(c.type))
@@ -2236,7 +2246,7 @@ local function buildEditor(parent)
         r:SetHeight(r.height)
     end
 
-    local function buildConditions(b)
+    local function buildConditions(b: any)
         local cs = CreateFrame("Frame", nil, b.inner)
         cs:SetWidth(CW)
         b.sections[#b.sections + 1] = cs
@@ -2247,7 +2257,7 @@ local function buildEditor(parent)
         title:SetPoint("TOPLEFT", 0, -18)
         title:SetValue("Conditions")
         b.match = UI.Segmented(cs, { options = { { value = "all", label = "All of these" }, { value = "any", label = "Any of these" } },
-            onChange = function(v) mutateWhen(function(w) w.match = v end) end })
+            onChange = function(v: any) mutateWhen(function(w) w.match = v end) end })
         b.match:SetPoint("TOPRIGHT", 0, -12)
         cs.rows = {}
         b.addCondition = UI.Button(cs, { text = "+ Add condition", onClick = function()
@@ -2271,7 +2281,7 @@ local function buildEditor(parent)
 
     -- subject: the entry's name in the sentence (nil: "Shows …");
     -- note: under it ("Applies to everything inside.")
-    local function fillConditions(b, e, subject, note)
+    local function fillConditions(b: any, e: any, subject: string?, note: string?)
         local cs = b.cond
         local conds = e.when and e.when.conditions or {}
         b.match:SetValue(e.when and e.when.match or "all")
@@ -2305,9 +2315,9 @@ local function buildEditor(parent)
     end
 
     -- A label over a control, stacked down a section.
-    local function stack(section)
+    local function stack(section: any)
         local y = 0
-        return function(label, control, h)
+        return function(label: string?, control: any, h: number?)
             if label then
                 local t = UI.Text(section, "caption", "ink-muted")
                 t:SetPoint("TOPLEFT", 0, -y)
@@ -2321,7 +2331,7 @@ local function buildEditor(parent)
         end
     end
 
-    local function section(b)
+    local function section(b: any)
         local s = CreateFrame("Frame", nil, b.inner)
         s:SetWidth(CW)
         b.sections[#b.sections + 1] = s
@@ -2361,15 +2371,15 @@ local function buildEditor(parent)
         local nameLabel = UI.Text(nm, "caption", "ink-muted")
         nameLabel:SetPoint("TOPLEFT")
         nameLabel:SetValue("Name")
-        b.name = UI.TextField(nm, { width = 240, onChange = function(text)
+        b.name = UI.TextField(nm, { width = 240, onChange = function(text: any)
             if text and text ~= "" then mutateEntry(function(e) e.name = text end) end
         end })
         b.name:SetPoint("TOPLEFT", 0, -18)
         b.sideLabel = UI.Text(nm, "caption", "ink-muted")
         b.sideLabel:SetPoint("TOPLEFT", 256, 0)
-        b.max = UI.Stepper(nm, { min = 1, max = 4, step = 1, onChange = function(v) mutateEntry(function(e) e.max = v end) end })
+        b.max = UI.Stepper(nm, { min = 1, max = 4, step = 1, onChange = function(v: any) mutateEntry(function(e) e.max = v end) end })
         b.max:SetPoint("TOPLEFT", 256, -18)
-        b.slotShown = UI.Toggle(nm, { onChange = function(v) mutateEntry(function(e) e.hidden = (not v) or nil end) end })
+        b.slotShown = UI.Toggle(nm, { onChange = function(v: any) mutateEntry(function(e) e.hidden = (not v) or nil end) end })
         b.slotShown:SetPoint("TOPLEFT", 256, -24)
         b.naming = nm
 
@@ -2377,7 +2387,7 @@ local function buildEditor(parent)
         local ic, addI = section(b)
         -- Automatic: what can show (the first member you know, else the
         -- icon); a member: always that one's
-        b.icon = UI.Select(ic, { width = 240, placeholder = "First spell", onChange = function(v)
+        b.icon = UI.Select(ic, { width = 240, placeholder = "First spell", onChange = function(v: any)
             if v == "auto" then
                 mutateEntry(function(e) e.fixedIcon = nil end)
             elseif v then
@@ -2389,7 +2399,7 @@ local function buildEditor(parent)
 
         -- a member's whose (unless set, the slot's)
         local ms, addM = section(b)
-        b.memberSource = UI.Segmented(ms, { options = WHOSE, onChange = function(v)
+        b.memberSource = UI.Segmented(ms, { options = WHOSE, onChange = function(v: any)
             mutateEntry(function(e, slot) e.source = v ~= entrySource(slot, f.behaviour.key) and v or nil end)
         end })
         addM("Whose", b.memberSource)
@@ -2398,37 +2408,37 @@ local function buildEditor(parent)
         -- cooldowns
         local cd, add = section(b)
         b.ready = UI.Segmented(cd, { options = { { value = "normal", label = "Normal" }, { value = "glow", label = "Glow" }, { value = "pulse", label = "Pulse" } },
-            onChange = function(v) mutateEntry(function(e) e.ready = v ~= "normal" and v or nil end) end })
+            onChange = function(v: any) mutateEntry(function(e) e.ready = v ~= "normal" and v or nil end) end })
         add("When ready", b.ready)
         b.pop = UI.Segmented(cd, { options = { { value = "default", label = "Like Display" }, { value = "on", label = "On" }, { value = "off", label = "Off" } },
-            onChange = function(v) mutateEntry(function(e) if v == "default" then e.pop = nil else e.pop = (v == "on") end end) end })
+            onChange = function(v: any) mutateEntry(function(e) if v == "default" then e.pop = nil else e.pop = (v == "on") end end) end })
         add("Pop when it comes ready", b.pop)
-        b.sound = UI.Select(cd, { width = 220, options = SOUND_OPTIONS, onChange = function(v)
+        b.sound = UI.Select(cd, { width = 220, options = SOUND_OPTIONS, onChange = function(v: any)
             mutateEntry(function(e) e.sound = v ~= "none" and v or nil end)
             if v ~= "none" then UI.TrackerSound(v) end
         end })
         add("Sound when ready", b.sound)
         b.onCooldown = UI.Segmented(cd, { options = { { value = "grey", label = "Grey" }, { value = "dim", label = "Dim" }, { value = "hide", label = "Hide" } },
-            onChange = function(v) mutateEntry(function(e) e.onCooldown = v ~= "grey" and v or nil end) end })
+            onChange = function(v: any) mutateEntry(function(e) e.onCooldown = v ~= "grey" and v or nil end) end })
         add("On cooldown", b.onCooldown)
         b.show = UI.Segmented(cd, { options = { { value = "always", label = "Always" }, { value = "ready", label = "Only when ready" }, { value = "cooldown", label = "Only on cooldown" } },
-            onChange = function(v) mutateEntry(function(e) e.show = v ~= "always" and v or nil end) end })
+            onChange = function(v: any) mutateEntry(function(e) e.show = v ~= "always" and v or nil end) end })
         add("Show", b.show)
         b.unusable = UI.Segmented(cd, { options = { { value = "dim", label = "Dim" }, { value = "hide", label = "Hide" } },
-            onChange = function(v) mutateEntry(function(e) e.unusable = v ~= "dim" and v or nil end) end })
+            onChange = function(v: any) mutateEntry(function(e) e.unusable = v ~= "dim" and v or nil end) end })
         add("When unusable (not enough rage, wrong form)", b.unusable)
-        b.cdEdge = UI.Segmented(cd, { options = EDGES, onChange = function(v)
+        b.cdEdge = UI.Segmented(cd, { options = EDGES, onChange = function(v: any)
             mutateEntry(function(e) e.border = v ~= "default" and v or nil end) end })
         add("Edge when ready", b.cdEdge)
         -- "Effect running": while the spell's buff (or your debuff on the
         -- target) is up, its aura covers the icon with its own time
         b.effect = UI.Segmented(cd, { options = { { value = "off", label = "Off" }, { value = "you", label = "Buff on you" }, { value = "target", label = "Debuff on target" } },
-            onChange = function(v)
+            onChange = function(v: any)
                 mutateEntry(function(e) e.effect = v ~= "off" and v or nil end)
                 b.effectAura:SetDisabled(v == "off")
             end })
         add("While its effect runs, show it over the icon", b.effect)
-        b.effectAura = UI.Select(cd, { width = 300, lookup = spellLookup, onChange = function(v)
+        b.effectAura = UI.Select(cd, { width = 300, lookup = spellLookup, onChange = function(v: any)
             if v == nil or v == "current" then return end
             mutateEntry(function(e)
                 local id = tonumber(tostring(v):match("^id:(%d+)$"))
@@ -2448,7 +2458,7 @@ local function buildEditor(parent)
         local au, addA = section(b)
         -- whose aura counts (a shared slot's own setting; its members may differ)
         b.source = UI.Segmented(au, { options = WHOSE,
-            onChange = function(v)
+            onChange = function(v: any)
                 mutateEntry(function(e)
                     e.mine = nil
                     e.source = v ~= LIST_SOURCE[f.behaviour.key] and v or nil
@@ -2457,23 +2467,23 @@ local function buildEditor(parent)
             end })
         addA("Whose", b.source)
         -- (unset = the list's default: grey for buffs, with a target for debuffs)
-        local function setMissing(v)
+        local function setMissing(v: any)
             mutateEntry(function(e) e.missing = v ~= MISSING_DEFAULT[f.behaviour.key] and v or nil end)
         end
         b.missing = UI.Segmented(au, { options = MISSING, onChange = setMissing })
         addA("When missing", b.missing)
         b.missingDebuff = UI.Segmented(au, { options = MISSING_DEBUFF, onChange = setMissing })
         b.missingDebuff:SetPoint(b.missing:GetPoint())
-        b.auEdge = UI.Segmented(au, { options = EDGES, onChange = function(v)
+        b.auEdge = UI.Segmented(au, { options = EDGES, onChange = function(v: any)
             mutateEntry(function(e) e.border = v ~= "default" and v or nil end) end })
         addA("Edge", b.auEdge)
         b.size = UI.Segmented(au, { options = { { value = "small", label = "Small" }, { value = "normal", label = "Normal" }, { value = "large", label = "Large" } },
-            onChange = function(v) mutateEntry(function(e) e.size = v ~= "normal" and v or nil end) end })
+            onChange = function(v: any) mutateEntry(function(e) e.size = v ~= "normal" and v or nil end) end })
         addA("Size", b.size)
         -- three switches in one row
         local row = CreateFrame("Frame", nil, au)
         row:SetSize(CW, 30)
-        local function switch(x, label, onChange)
+        local function switch(x: number, label: string, onChange: (v: any) -> ())
             local t = UI.Toggle(row, { onChange = onChange })
             t:SetPoint("LEFT", x, 0)
             local l = UI.Text(row, "label", "ink")
@@ -2491,7 +2501,7 @@ local function buildEditor(parent)
         local amberLabel = UI.Text(amber, "caption", "ink-muted")
         amberLabel:SetPoint("LEFT")
         amberLabel:SetValue("Timer turns amber in the last")
-        b.expiring = UI.Stepper(amber, { min = 1, max = 10, step = 1, unit = "s", onChange = function(v)
+        b.expiring = UI.Stepper(amber, { min = 1, max = 10, step = 1, unit = "s", onChange = function(v: any)
             mutateEntry(function(e) e.expiring = v ~= 3 and v or nil end) end })
         b.expiring:SetPoint("LEFT", amberLabel, "RIGHT", 12, 0)
         addA(nil, amber)
@@ -2504,7 +2514,7 @@ local function buildEditor(parent)
             local t = UI.Text(sounds, "caption", "ink-muted")
             t:SetPoint("TOPLEFT", (n - 1) * 150, 0)
             t:SetValue(s[2])
-            b[field] = UI.Select(sounds, { width = 140, options = SOUND_OPTIONS, onChange = function(v)
+            b[field] = UI.Select(sounds, { width = 140, options = SOUND_OPTIONS, onChange = function(v: any)
                 mutateEntry(function(e) e[field] = v ~= "none" and v or nil end)
                 if v ~= "none" then UI.TrackerSound(v) end
             end })
@@ -2526,16 +2536,16 @@ local function buildEditor(parent)
         local we, addW = section(b)
         b.weapon = UI.Segmented(we, { options = { { value = "main", label = "Main hand" }, { value = "off", label = "Off hand" },
             { value = "ranged", label = "Ranged" } },
-            onChange = function(v) mutateEntry(function(e) e.enchant, e.name = v, ENCHANT_NAME[v] end) end })
+            onChange = function(v: any) mutateEntry(function(e) e.enchant, e.name = v, ENCHANT_NAME[v] end) end })
         addW("Weapon", b.weapon)
         b.weaponMissing = UI.Segmented(we, { options = { { value = "hide", label = "Hide" }, { value = "grey", label = "Grey" },
             { value = "warn", label = "Warn" } },
-            onChange = function(v)
+            onChange = function(v: any)
                 mutateEntry(function(e) e.missing = v ~= "warn" and v or nil end)
                 b.warnOoc:SetDisabled(v ~= "warn")
             end })
         addW("When missing (Warn: the ember edge pulses)", b.weaponMissing)
-        b.warnOoc = UI.Toggle(we, { onChange = function(v) mutateEntry(function(e) e.warnCombat = (not v) or nil end) end })
+        b.warnOoc = UI.Toggle(we, { onChange = function(v: any) mutateEntry(function(e) e.warnCombat = (not v) or nil end) end })
         addW("Warn only out of combat", b.warnOoc)
         b.weaponSection = we
 
@@ -2601,7 +2611,7 @@ local function buildEditor(parent)
             b.slotShown:SetValue(not e.hidden)
         end
         if ctx == "slot" and not cooldown then
-            local iconOptions = { { value = "auto", label = "Automatic (what can show)" } }
+            local iconOptions: { [string]: any }[] = { { value = "auto", label = "Automatic (what can show)" } }
             for _, m in ipairs(e.members or {}) do
                 local art = m.icon or (m.ids and m.ids[1])
                 if art then iconOptions[#iconOptions + 1] = { value = art, label = m.name, icon = C_Spell.GetSpellTexture(art) } end
@@ -2684,7 +2694,7 @@ local function buildEditor(parent)
         b:SetHeight(math.min(b:BodyTop() + content + 20, math.floor(SuuUI.Root:GetHeight() * 0.85)))
     end
 
-    function f:OpenBehaviour(path)
+    function f:OpenBehaviour(path: Path)
         local t, i, slot = locate(M:Lists(M:EditSpec()), path)
         local e = t and t[i]
         if not e then return end
@@ -2826,16 +2836,16 @@ function M:OnEnable()
     self:OnUnitEvent("UNIT_AURA", { "player", "target" }, function()
         if pending or InCombatLockdown() then return end
         pending = true
-        C_Timer.After(1, function() pending = false; rememberAuras() end)
+        after(1, function() pending = false; rememberAuras() end)
     end)
-    self:OnGameEvent("PLAYER_TARGET_CHANGED", function() C_Timer.After(0.5, rememberAuras) end)
+    self:OnGameEvent("PLAYER_TARGET_CHANGED", function() after(0.5, rememberAuras) end)
     self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", function(_, _, _, spellID) rememberCast(spellID) end)
     -- respecs and new talent points switch the setup
     local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED",
                          "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD", "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" }) do
         if not valid or valid(e) then
-            self:OnGameEvent(e, function() C_Timer.After(0.2, function() self:UpdateSpec() end) end)
+            self:OnGameEvent(e, function() after(0.2, function() self:UpdateSpec() end) end)
         end
     end
 end

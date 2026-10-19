@@ -1,4 +1,4 @@
--- Units/Talents.lua
+-- Units/Talents.wowlua
 -- SuuUI's Talents page (step 3.2c, design boards "Talents" and "Talent
 -- nodes") over Blizzard's Talents tab of the spells window: the class's
 -- three trees side by side, points planned until you apply them. The same
@@ -18,6 +18,10 @@
 -- Talent builds (3.2e) live here too: a picker in the window's head, the
 -- build's order beside the trees, its next talent ringed (see below).
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -30,9 +34,11 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local _, CLASS = UnitClass("player")
+local isSecret = issecretvalue or function(_: any) return false end
+local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
+local _, classFile = UnitClass("player")
+-- (your own class: never secret; cast for strict mode)
+local CLASS = classFile :: string
 
 local STEP = 600          -- the grid's step in the tree's coordinates
 local TREE_GAP = 1500     -- more than this between columns: another tree
@@ -46,7 +52,7 @@ local SPECS_H = 42
 -- The game's data
 --------------------------------------------------------------------------------
 
-local function call(fn, ...)
+local function call(fn: any, ...: any): (any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c = pcall(fn, ...)
     if ok then return a, b, c end
@@ -71,7 +77,7 @@ function M:ConfigID()
 end
 
 -- A node's talent: name, icon, spell, entry.
-local function talentOf(configID, info)
+local function talentOf(configID: number, info: any)
     local entryID = info.activeEntry and info.activeEntry.entryID or (info.entryIDs and info.entryIDs[1])
     if not entryID then return nil end
     local entry = call(C_Traits.GetEntryInfo, configID, entryID)
@@ -98,7 +104,7 @@ function M:Inspecting()
 end
 
 -- Everything the page shows, for the config viewed (another's: configID given).
-function M:Collect(configID)
+function M:Collect(configID: number?)
     configID = configID or self:ConfigID()
     if not configID then return nil end
     local info = call(C_Traits.GetConfigInfo, configID)
@@ -210,7 +216,7 @@ function M:Collect(configID)
 end
 
 -- Why a node can't take a point: the tree's points, or a talent above it.
-function M:Requires(configID, n)
+function M:Requires(configID: any, n: any)
     for _, condID in ipairs(n.conditions) do
         local c = call(C_Traits.GetConditionInfo, configID, condID)
         if c and c.isMet == false and plain(c.spentAmountRequired) and c.spentAmountRequired > 0 then
@@ -280,7 +286,7 @@ function M:Render()
     end
 end
 
-function M:Fill(page, data, inspected)
+function M:Fill(page: any, data: any, inspected: any)
     -- the specs: only with two talent groups (yours)
     local groups, active = self:SpecGroups()
     if groups > 1 and not inspected then
@@ -355,7 +361,7 @@ end
 function M:QueueRender()
     if self.renderQueued then return end
     self.renderQueued = true
-    C_Timer.After(0, function()
+    after(0, function()
         self.renderQueued = nil
         if not self:IsEnabled() then return end
         self:CheckReset()
@@ -366,7 +372,7 @@ end
 -- A node's tooltip: the game's own, built as Blizzard's talent buttons build
 -- it (the title, "Rank 2/5", the talent's text at this rank and the next,
 -- what a click does, what it still needs in red); asked for in game.
-function M:ShowTip(button, n, data)
+function M:ShowTip(button: any, n: any, data: any)
     data = data or self.data
     if not data then return end
     local needs = {}
@@ -383,14 +389,14 @@ function M:ShowTip(button, n, data)
         canSpend = n.canSpend, pending = n.pending, needs = needs, blocked = (not editable) and why or nil })
 end
 
-function M:Purchase(n)
+function M:Purchase(n: any)
     local data = self.data
     if not data or not n.canSpend or data.configID == INSPECT_CONFIG then return end
     call(C_Traits.PurchaseRank, data.configID, n.id)
     self:Render()
 end
 
-function M:Refund(n)
+function M:Refund(n: any)
     local data = self.data
     if not data or n.pending <= 0 or not self:Editable() then return end
     call(C_Traits.RefundRank, data.configID, n.id)
@@ -431,10 +437,10 @@ local VIEW_CONFIG = Constants and Constants.TraitConsts and Constants.TraitConst
 local EDGE = Enum and Enum.TraitEdgeType or {}
 local NOTE_RESET, NOTE_PLANNED = "suu:talentbuild:reset", "suu:talentbuild:planned"
 
-local function plural(n, one, many) return n == 1 and one or many end
+local function plural(n: number, one: string, many: string): string return n == 1 and one or many end
 
 -- A dialog's height for a body `h` tall and a row of buttons under it.
-local function fitDialog(p, h)
+local function fitDialog(p: any, h: number)
     p.body:SetHeight(h)
     p:SetHeight(p:BodyTop() + h + S["space-5"] + 30 + 18 + S["space-4"])
 end
@@ -450,10 +456,11 @@ end
 
 local function charKey()
     local guid = UnitGUID("player")
-    return plain(guid) and guid or ((UnitName("player") or "?") .. "-" .. (GetRealmName() or "?"))
+    -- (your own name: never secret; cast for strict mode)
+    return (plain(guid) and guid or ((UnitName("player") or "?") .. "-" .. (GetRealmName() or "?"))) :: string
 end
 
-local function copySteps(steps)
+local function copySteps(steps: any)
     local out = {}
     for i, s in ipairs(steps or {}) do out[i] = { node = s.node, entry = s.entry } end
     return out
@@ -484,7 +491,7 @@ end
 -- `trees`: the three classic trees, as the page draws them). Your own from
 -- your talents; another class's through the game's view loadout (else your
 -- config answers for it too: the probe read every class's both ways).
-function M:BuildTree(file)
+function M:BuildTree(file: string)
     self.buildTrees = self.buildTrees or {}
     if self.buildTrees[file] then return self.buildTrees[file] end
     local class = self:Classes()[file]
@@ -564,7 +571,7 @@ function M:BuildTree(file)
 end
 
 -- "0 / 29 / 2": a build's points per tree.
-local function splitOf(tree, steps)
+local function splitOf(tree: any, steps: any)
     local per = {}
     for i = 1, #(tree and tree.trees or {}) do per[i] = 0 end
     for _, s in ipairs(steps) do
@@ -590,7 +597,7 @@ function M:Talented()
 end
 
 -- The level that brings step i.
-function M:StepLevel(i)
+function M:StepLevel(i: number): number
     local t = self:Talented()
     if i <= t then return 4 + i end
     return 9 + i - t
@@ -599,13 +606,13 @@ end
 -- The build the window shows, its draft (being planned) or as saved.
 function M:Builds() return store().builds end
 
-function M:ActiveID(group)
+function M:ActiveID(group: number?)
     local _, active = self:SpecGroups()
     local mine = store().active[charKey()]
     return mine and mine[group or self.viewing or active]
 end
 
-function M:SetActive(id, group)
+function M:SetActive(id: string, group: number?)
     local _, active = self:SpecGroups()
     local d = store()
     local key = charKey()
@@ -666,7 +673,7 @@ function M:DiscardDraft()
 end
 
 -- Something else to show while the draft has changes: asked first.
-function M:Leave(fn)
+function M:Leave(fn: () -> ())
     local d = self.draft
     if d and d.dirty and store().builds[d.id] then
         UI.Confirm({ title = "Discard changes?", text = ("Your changes to %s aren't saved."):format(d.name or "this build"),
@@ -677,7 +684,7 @@ function M:Leave(fn)
     fn()
 end
 
-function M:ShowBuild(id)
+function M:ShowBuild(id: string?)
     self:Leave(function()
         self.buildView, self.planning = id, false
         self:Render()
@@ -691,7 +698,7 @@ function M:NewID()
     return id
 end
 
-function M:AddBuild(name, file, steps)
+function M:AddBuild(name: string, file: string, steps: any[])
     local class = self:Classes()[file]
     if not class then return nil end
     local id = self:NewID()
@@ -703,7 +710,7 @@ function M:AddBuild(name, file, steps)
     return id
 end
 
-function M:DeleteBuild(id)
+function M:DeleteBuild(id: string)
     local d = store()
     d.builds[id] = nil
     for _, groups in pairs(d.active) do
@@ -720,7 +727,7 @@ function M:DeleteBuild(id)
 end
 
 -- Runs of a talent's ranks one after another: the order panel's lines.
-function M:OrderLines(steps, tree, learned, nextIndex)
+function M:OrderLines(steps: any, tree: any, learned: any, nextIndex: any)
     local lines, seen = {}, {}
     local i = 1
     while i <= #steps do
@@ -746,7 +753,7 @@ end
 
 -- The first step not learned yet (each step is that talent's next rank),
 -- with the ranks you have: its index, else nil.
-local function nextStep(steps, have)
+local function nextStep(steps: any[], have: { [number]: number }): (number?, number?)
     local count = {}
     for i, s in ipairs(steps) do
         count[s.node] = (count[s.node] or 0) + 1
@@ -756,7 +763,7 @@ end
 
 -- Your active build's next talent: for the window's ring and the points
 -- notice ({ name, icon, rank, max, treeName, build, node }), or nil.
-function M:NextTalent(group, configID)
+function M:NextTalent(group: number?, configID: number?)
     local id = self:ActiveID(group)
     local b = id and store().builds[id]
     if not b or b.class ~= CLASS then return nil end
@@ -791,14 +798,14 @@ function M:PickerOptions()
             note = (b.split or "") .. (self:ActiveID() == id and " · Active" or "") }
         if b.class == CLASS then mine[#mine + 1] = o else o.note = (class and class.name or "") .. " · " .. (b.split or ""); others[#others + 1] = o end
     end
-    local function byName(a, b) return a.label:lower() < b.label:lower() end
+    local function byName(a: any, b: any): boolean return a.label:lower() < b.label:lower() end
     table.sort(mine, byName)
     table.sort(others, function(a, b)
         if a.search ~= b.search then return (a.search or "") < (b.search or "") end
         return byName(a, b)
     end)
     local my = classes[CLASS]
-    local out = { { value = "", label = "Your talents", note = "no build" } }
+    local out: { [string]: any }[] = { { value = "", label = "Your talents", note = "no build" } }
     out[#out + 1] = { heading = my and my.name or "Your class" }
     for _, o in ipairs(mine) do out[#out + 1] = o end
     if #mine == 0 then out[#out + 1] = { value = "__none", label = "No builds yet", disabled = true } end
@@ -819,7 +826,7 @@ function M:PickerFoot()
 end
 
 -- The head's buttons for what the window shows.
-function M:HeadButtons(b, planning)
+function M:HeadButtons(b: any, planning: boolean)
     local out = {}
     if not b then return out end
     if planning then
@@ -842,7 +849,7 @@ function M:HeadButtons(b, planning)
         end }
         out[#out + 1] = { label = "Rename", onClick = function()
             UI.Confirm({ title = "Rename build", confirm = "Rename", input = { label = "Name", value = b.name },
-                onConfirm = function(name)
+                onConfirm = function(name: string)
                     local saved = store().builds[b.id]
                     if saved then saved.name = name end
                     if self.draft and self.draft.id == b.id then self.draft.name = name end
@@ -857,13 +864,13 @@ function M:HeadButtons(b, planning)
     return out
 end
 
-function M:Picker(b, planning)
+function M:Picker(b: any, planning: boolean)
     return {
         options = self:PickerOptions(), value = b and b.id or "", foot = self:PickerFoot(),
         diamond = b and ("class-" .. b.class:lower()) or nil,
         badge = (b and self:ActiveID() == b.id) and "Active" or nil,
         buttons = self:HeadButtons(b, planning),
-        onChange = function(v)
+        onChange = function(v: string)
             if v == "__none" then return end
             self:ShowBuild(v ~= "" and v or nil)
         end,
@@ -874,7 +881,7 @@ end
 -- Planning a build on its trees
 --------------------------------------------------------------------------------
 
-function M:FillPlan(page)
+function M:FillPlan(page: any)
     local d = self:Draft()
     local tree = d and self:BuildTree(d.class)
     if not tree then
@@ -930,7 +937,7 @@ function M:FillPlan(page)
     })
 end
 
-function M:PlanAdd(n)
+function M:PlanAdd(n: any)
     local d = self:Draft()
     local tree = d and self:BuildTree(d.class)
     if not tree then return end
@@ -941,7 +948,7 @@ function M:PlanAdd(n)
     self:Render()
 end
 
-function M:PlanRemove(n)
+function M:PlanRemove(n: any)
     local d = self:Draft()
     local tree = d and self:BuildTree(d.class)
     if not tree then return end
@@ -961,7 +968,7 @@ end
 
 -- A dragged line: its run of steps in front of line `before` (#lines + 1:
 -- the end), if the rows and arrows allow it; else why not.
-function M:MoveLine(page, from, before)
+function M:MoveLine(page: any, from: number, before: number)
     local lines = page.orderLines
     local line = lines and lines[from]
     if not line then return end
@@ -999,7 +1006,7 @@ end
 
 -- A planned talent's tooltip: this build's rank, its text there, the
 -- steps and levels it takes, what a click does or why it can't.
-function M:ShowPlanTip(button, n)
+function M:ShowPlanTip(button: any, n: any)
     local d = self.draft
     local tree = d and self:BuildTree(d.class)
     if not tree then return end
@@ -1037,7 +1044,7 @@ end
 
 -- Against your learned ranks: the steps that fit now (in order, up to your
 -- points), and the talents in the way (ranks the build doesn't have).
-function M:Fit(b, data)
+function M:Fit(b: any, data: any)
     local tree = self:BuildTree(CLASS)
     local learned, spent = {}, 0
     for _, t in ipairs(data.trees) do
@@ -1074,7 +1081,7 @@ function M:Fit(b, data)
 end
 
 -- Plans the steps that fit (the game's staging; Apply learns them).
-function M:StageFits(fits, data)
+function M:StageFits(fits: any, data: any)
     if data.staged then call(C_Traits.RollbackConfig, data.configID) end
     local n = 0
     for _, s in ipairs(fits) do
@@ -1084,7 +1091,7 @@ function M:StageFits(fits, data)
     return n
 end
 
-function M:UseBuild(id)
+function M:UseBuild(id: string)
     local b = store().builds[id]
     if not b then return end
     local editable, why = self:Editable()
@@ -1118,7 +1125,7 @@ function M:UseBuild(id)
     self:AskMismatch(b, fits, conflicts, learned, go)
 end
 
-function M:NotifyReset(b, n, cost)
+function M:NotifyReset(b: any, n: number, cost: number?)
     local my = self:Classes()[CLASS]
     SuuUI.Notify({ id = NOTE_RESET, kind = "until", category = "Talents", icon = { glyph = "tree" },
         title = "Reset at a trainer to use " .. (b.name or "your build"),
@@ -1174,7 +1181,7 @@ end
 
 -- Design M: what fits, what's in the way (and in which tree), what a reset
 -- does; nothing changes until you choose.
-function M:AskMismatch(b, fits, conflicts, learned, onUse)
+function M:AskMismatch(b: any, fits: any[], conflicts: any[], learned: { [number]: number }, onUse: () -> ())
     local p = self.mismatch
     if not p then
         p = UI.Panel(SuuUI.Root, { title = " ", width = 480, height = 300, solid = true })
@@ -1192,7 +1199,7 @@ function M:AskMismatch(b, fits, conflicts, learned, onUse)
     end
     for _, l in ipairs(p.lines) do l:Hide() end
     local used, y = 0, 0
-    local function line(style, color, text)
+    local function line(style: string, color: string, text: string)
         used = used + 1
         local t = p.lines[used]
         if not t then
@@ -1294,7 +1301,7 @@ end
 
 -- The game's string for a build (any class: written from the tree as the
 -- game writes it), or nil.
-function M:GameString(b)
+function M:GameString(b: any)
     local tree = self:BuildTree(b.class)
     if not tree then return nil end
     local version = call(C_Traits.GetLoadoutSerializationVersion)
@@ -1312,7 +1319,7 @@ function M:GameString(b)
     return ok and text or nil
 end
 
-function M:ShareText(b)
+function M:ShareText(b: any)
     local tree = self:BuildTree(b.class)
     return UI.EncodeTalentBuild({ name = b.name, classID = b.classID, treeID = b.treeID, steps = b.steps }, function(s)
         local n = tree and tree.byID[s.node]
@@ -1323,7 +1330,7 @@ end
 
 -- What was pasted: a build to preview ({ name, class, steps, fromGame,
 -- note }), or nil and why not.
-function M:ReadPasted(text)
+function M:ReadPasted(text: string?)
     text = strtrim(text or "")
     if text == "" then return nil end
     local classes = self:Classes()
@@ -1364,7 +1371,7 @@ function M:ReadPasted(text)
 end
 
 -- "36 points · Arcane 5, Fire 0, Frost 31 · levels 10–45, in order"
-function M:BuildSummary(file, steps)
+function M:BuildSummary(file: string, steps: any[]): string
     local tree = self:BuildTree(file)
     local per = {}
     for i, c in ipairs(tree and tree.trees or {}) do per[i] = { name = c.name, n = 0 } end
@@ -1380,13 +1387,13 @@ function M:BuildSummary(file, steps)
     return text
 end
 
-function M:ShowShare(mode)
+function M:ShowShare(mode: string)
     local p = self.share
     if not p then
         p = UI.Panel(SuuUI.Root, { title = " ", width = 460, height = 300, solid = true })
         local W = 420
         p.switch = UI.Segmented(p.body, { options = { { value = "copy", label = "Copy" }, { value = "import", label = "Import" } },
-            onChange = function(v) self:ShowShare(v) end })
+            onChange = function(v: string) self:ShowShare(v) end })
         p.switch:SetPoint("TOPLEFT")
         -- Copy
         p.copy = CreateFrame("Frame", nil, p.body)
@@ -1408,7 +1415,7 @@ function M:ShowShare(mode)
         p.import:SetPoint("TOPLEFT", p.switch, "BOTTOMLEFT", 0, -S["space-5"])
         p.import:SetSize(W, 10)
         p.paste = UI.TextField(p.import, { width = W, placeholder = "Paste SuuUI text or the game's string",
-            onTextChanged = function(text) self:PreviewPaste(text) end })
+            onTextChanged = function(text: string) self:PreviewPaste(text) end })
         p.paste:SetPoint("TOPLEFT")
         p.diamond = UI.Diamond(p.import, 7, "ink", "OVERLAY")
         p.diamond:SetPoint("TOPLEFT", p.paste, "BOTTOMLEFT", 1, -(S["space-5"] + 6))
@@ -1491,7 +1498,7 @@ function M:ShowShare(mode)
     fitDialog(p, height)
     p:Show()
     if mode == "copy" then
-        C_Timer.After(0, function()
+        after(0, function()
             p.text.edit:SetFocus()
             p.text.edit:SetCursorPosition(0)
             p.text.edit:HighlightText()
@@ -1501,7 +1508,7 @@ function M:ShowShare(mode)
     end
 end
 
-function M:PreviewPaste(text)
+function M:PreviewPaste(text: string?)
     local p = self.share
     if not p then return end
     local found, why = self:ReadPasted(text)
@@ -1615,7 +1622,7 @@ end
 
 -- Whose talents the window shows: an inspected player's (read only), or
 -- nil for yours.
-function M:SetInspect(unit)
+function M:SetInspect(unit: string?)
     if unit == nil and self.inspectUnit == nil then return end
     self.inspectUnit, self.inspectData = unit, nil
     local who = unit and UnitName(unit)
@@ -1625,7 +1632,7 @@ function M:SetInspect(unit)
 end
 
 -- View Talents on inspect: the window with their talents.
-function M:ShowInspect(unit)
+function M:ShowInspect(unit: string?)
     if not (self.window and unit) then return end
     self:SetInspect(unit)
     if self.window:IsShown() then self:Render() else self.window:Show() end
@@ -1673,19 +1680,19 @@ function M:Restore()
     self.blizzHeight, self.blizzWidth = nil, nil
 end
 
-function M:Wire(page)
+function M:Wire(page: any)
     -- a build's talents (planning) or yours
-    page.onClick = function(n) if n.build then self:PlanAdd(n) else self:Purchase(n) end end
-    page.onRemove = function(n) if n.build then self:PlanRemove(n) else self:Refund(n) end end
-    page.onEnter = function(b, n) if n.build then self:ShowPlanTip(b, n) else self:ShowTip(b, n, page.data) end end
+    page.onClick = function(n: any) if n.build then self:PlanAdd(n) else self:Purchase(n) end end
+    page.onRemove = function(n: any) if n.build then self:PlanRemove(n) else self:Refund(n) end end
+    page.onEnter = function(b: any, n: any) if n.build then self:ShowPlanTip(b, n) else self:ShowTip(b, n, page.data) end end
     page.onLeave = function() GameTooltip:Hide() end
     page.onApply = function() self:Apply() end
     page.onUndo = function() self:Undo() end
-    page.onOrderEnter = function(line) page:MarkNode(line.node) end
+    page.onOrderEnter = function(line: any) page:MarkNode(line.node) end
     page.onOrderLeave = function() page:MarkNode(nil) end
-    page.onOrderMove = function(from, before) self:MoveLine(page, from, before) end
+    page.onOrderMove = function(from: number, before: number) self:MoveLine(page, from, before) end
     -- the other talent group: its own active build
-    page.onSpec = function(i)
+    page.onSpec = function(i: number)
         self:Leave(function()
             self.viewing, self.planning = i, false
             self.buildView = self:ActiveID(i)
@@ -1719,8 +1726,8 @@ function M:Build()
     end
     self.away = away
     away()
-    hooksecurefunc(tab, "SetPoint", function()
-        if not self.placingTab then C_Timer.After(0, away) end
+    hook(tab, "SetPoint", function()
+        if not self.placingTab then after(0, away) end
     end)
     local page = UI.TalentTree(f)
     page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
@@ -1733,13 +1740,13 @@ function M:Build()
     -- shown with Blizzard's tab
     -- in the middle of the screen while this tab shows (asked for in game);
     -- the other tabs stay in the row under the micro menu
-    tab:HookScript("OnShow", function()
+    hookScript(tab, "OnShow", function()
         page:Show()
         self:Size()
         UI.CenterWindow(f, true)
         self:Render()
     end)
-    tab:HookScript("OnHide", function()
+    hookScript(tab, "OnHide", function()
         page:Hide()
         GameTooltip:Hide()
         self:Restore()
@@ -1750,10 +1757,10 @@ function M:Build()
         if not self.sizing and tab:IsShown() then self:Size() end
     end
     -- into and out of another player's talents
-    if f.SetInspecting then hooksecurefunc(f, "SetInspecting", function() self:QueueRender() end) end
-    hooksecurefunc(f, "SetHeight", again)
-    hooksecurefunc(f, "SetWidth", again)
-    hooksecurefunc(f, "SetSize", again)
+    if f.SetInspecting then hook(f, "SetInspecting", function() self:QueueRender() end) end
+    hook(f, "SetHeight", again)
+    hook(f, "SetWidth", again)
+    hook(f, "SetSize", again)
     page:HookScript("OnSizeChanged", function() if page:IsVisible() then self:QueueRender() end end)
     if tab:IsShown() then self:Size(); UI.CenterWindow(f, true) end
     self:Render()
@@ -1764,7 +1771,7 @@ function M:OnEnable()
     self:Build()
     self:Provide("talents", {
         Toggle = function() self:Toggle() end,
-        ShowInspect = function(unit) self:ShowInspect(unit) end,
+        ShowInspect = function(unit: string?) self:ShowInspect(unit) end,
         IsShown = function() return self.window and self.window:IsShown() or false end,
         NextTalent = function() return self:NextTalent() end,
     })
@@ -1798,7 +1805,7 @@ function M:OnEnable()
     for _, e in ipairs({ "PLAYER_TALENT_UPDATE", "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED" }) do
         if not valid or valid(e) then
             self:OnGameEvent(e, function()
-                if next(store().reset[charKey()] or {}) then C_Timer.After(0.5, function() self:CheckReset() end) end
+                if next(store().reset[charKey()] or {}) then after(0.5, function() self:CheckReset() end) end
             end)
         end
     end

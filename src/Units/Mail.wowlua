@@ -1,4 +1,4 @@
--- Units/Mail.lua
+-- Units/Mail.wowlua
 -- SuuUI's own mail window (plan 3.6, design component MailWindow): the game's
 -- MailFrame stays open (it holds the mailbox conversation) but out of sight,
 -- and this window shows the whole inbox as one list with the open mail
@@ -6,6 +6,11 @@
 -- this character sent. None of it is protected (/suu probe windows,
 -- 2026-10-16); sending money goes through the game's own confirmation.
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import after, every from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -19,9 +24,11 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+local isSecret = secret.isSecret
+-- a value that is there and not secret (narrows: no longer nil or Secret)
+type Plain = string | number | boolean | table
+local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k, l, m, n, o end
@@ -36,20 +43,20 @@ local SENT_MAX = 50
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 local ENVELOPE = "Interface\\Icons\\INV_Letter_15"
 
-local function coins(copper)
+local function coins(copper: number?): string
     copper = math.max(0, math.floor(copper or 0))
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local parts = {}
-    local function part(v, unit, token) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
+    local function part(v: number, unit: string, token: string) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
     if g > 0 then part(g, "g", "coin-gold") end
     if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
     if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
     return table.concat(parts, " ")
 end
-local function tint(token, text) return "|cff" .. T.color[token].hex .. text .. "|r" end
+local function tint(token: string, text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
 
 -- "12 d", "5 h", "under an hour" from the days a mail has left.
-local function daysLeft(d)
+local function daysLeft(d: number?): string
     if not d then return "" end
     if d >= 1 then return math.floor(d) .. " d" end
     local h = math.floor(d * 24)
@@ -57,7 +64,7 @@ local function daysLeft(d)
 end
 
 -- "3 days ago" from a time() stamp.
-local function ago(stamp)
+local function ago(stamp: number?): string
     local s = math.max(0, time() - (stamp or 0))
     if s < 60 then return "just now" end
     if s < 3600 then return math.floor(s / 60) .. " min ago" end
@@ -70,7 +77,11 @@ end
 --------------------------------------------------------------------------------
 
 -- One mail's header as the list shows it.
-local function header(i)
+type Header = {
+    index: number, icon: any, sender: string, subject: string, money: number, cod: number, days: number?,
+    items: number, read: any, returned: any, canReply: any, gm: any,
+}
+local function header(i: number): Header?
     local packageIcon, _, sender, subject, money, cod, days, itemCount, wasRead, wasReturned, _, canReply, isGM =
         call(GetInboxHeaderInfo, i)
     if subject == nil and sender == nil then return nil end
@@ -88,7 +99,7 @@ end
 
 -- What Collect all takes next: the money, else an attachment, of the first
 -- mail it may take from (not COD, not from a game master).
-local function nextTake(moneyOnly)
+local function nextTake(moneyOnly: boolean): (number?, number?)
     for i = 1, (call(GetInboxNumItems) or 0) do
         local h = header(i)
         if h and h.cod == 0 and not h.gm then
@@ -104,9 +115,9 @@ end
 
 -- Takes one thing a moment until nothing is left, the bags are full or the
 -- mailbox closes.
-function M:CollectAll(moneyOnly)
+function M:CollectAll(moneyOnly: boolean)
     if self.collecting then return end
-    self.collecting = C_Timer.NewTicker(0.25, function(ticker)
+    self.collecting = every(0.25, function(ticker)
         if C_Mail.IsCommandPending and call(C_Mail.IsCommandPending) then return end
         local i, a = nextTake(moneyOnly)
         local full = a and (call(C_Container.CalculateTotalNumberOfFreeBagSlots) or 1) == 0
@@ -121,7 +132,7 @@ function M:CollectAll(moneyOnly)
     self:Refresh()
 end
 
-local function buildMailRow(parent)
+local function buildMailRow(parent: any): any
     local r = CreateFrame("Button", nil, parent)
     r:SetHeight(ROW_H)
     r.hl = UI.Fill(r, "arcane-soft", "BACKGROUND")
@@ -265,7 +276,7 @@ function M:DrawOpen()
 end
 
 -- Takes an attachment of the open mail; asks first for COD.
-function M:Take(a)
+function M:Take(a: number)
     local i = self.openIndex
     local h = i and header(i)
     if not h then return end
@@ -281,7 +292,7 @@ function M:Take(a)
     TakeInboxItem(i, a)
 end
 
-function M:BuildInbox(page)
+function M:BuildInbox(page: any)
     local inbox = { rows = {} }
     self.inbox = inbox
     inbox.collect = UI.Button(page, { text = "Collect all", variant = "primary", width = 120, onClick = function() self:CollectAll(false) end,
@@ -361,7 +372,9 @@ function M:BuildInbox(page)
         local b = UI.ItemSlot(p.attach)
         b:SetScript("OnEnter", function(btn)
             GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
-            GameTooltip:SetInboxItem(self.openIndex, btn.attachment)
+            -- (0.9.1 declares SetInboxItem with one parameter: the cast keeps the game's two)
+            local tip: any = GameTooltip
+            tip:SetInboxItem(self.openIndex, btn.attachment)
             GameTooltip:Show()
         end)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -386,7 +399,7 @@ function M:BuildInbox(page)
         p.body:SetWidth(w)
         scroll.child:SetHeight(math.max(1, p.body:GetStringHeight()))
     end)
-    hooksecurefunc(p.body, "SetText", function()
+    hook(p.body, "SetText", function()
         p.scroll.child:SetHeight(math.max(1, p.body:GetStringHeight()))
     end)
 end
@@ -395,11 +408,11 @@ end
 -- Send
 --------------------------------------------------------------------------------
 
-function M:BuildSend(page)
+function M:BuildSend(page: any)
     local send = {}
     self.send = send
     local labelW = 70
-    local function label(text, anchor, y)
+    local function label(text: string, anchor: any, y: number)
         local l = UI.Text(page, "label", "ink-muted")
         l:SetValue(text)
         l:SetPoint("TOPLEFT", 0, y)
@@ -457,7 +470,9 @@ function M:BuildSend(page)
         b:SetScript("OnEnter", function(btn)
             if not call(HasSendMailItem, a) then return end
             GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
-            GameTooltip:SetSendMailItem(a)
+            -- (0.9.1 declares SetSendMailItem without parameters: the cast keeps the game's one)
+            local tip: any = GameTooltip
+            tip:SetSendMailItem(a)
             GameTooltip:Show()
         end)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -541,10 +556,10 @@ function M:Send()
     -- never stuck: if neither success nor failure comes, Send comes back
     local mark = {}
     self.sendMark = mark
-    C_Timer.After(30, function() if self.sending and self.sendMark == mark then self:SendDone(false) end end)
+    after(30, function() if self.sending and self.sendMark == mark then self:SendDone(false) end end)
 end
 
-function M:SendDone(ok)
+function M:SendDone(ok: boolean)
     self.sending = false
     if ok and self.pending then
         local data = self:CharData()
@@ -571,12 +586,12 @@ local SUGGEST_ROW, SUGGEST_HEAD = 26, 20
 local SUGGEST_MAX_H = 360 -- then the list scrolls
 local GUILD_MAX = 30 -- guild members shown: online first, filtered by what's typed
 
-local function classToken(file)
+local function classToken(file: any): string
     return file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or "ink"
 end
 
 -- "Online", or "last online 3 d" from the roster.
-local function lastOnline(i)
+local function lastOnline(i: number): string
     local y, mo, d, h = call(GetGuildRosterLastOnline, i)
     if not (y or mo or d or h) then return "Offline" end
     y, mo, d, h = y or 0, mo or 0, d or 0, h or 0
@@ -588,17 +603,19 @@ local function lastOnline(i)
 end
 
 -- The groups for what's typed: { { title, rows = { { name, color, note, right } } } }.
-function M:Suggestions(typed)
-    typed = strtrim(typed or ""):lower()
-    local seen, groups = {}, {}
-    local function matches(name)
+type SuggestRow = { name: string, color: string, note?: string, right?: string, diamond?: boolean, online?: boolean }
+type SuggestGroup = { title: string, rows: SuggestRow[] }
+function M:Suggestions(text: string?): SuggestGroup[]
+    local typed = strtrim(text or ""):lower()
+    local seen: { [string]: boolean }, groups: SuggestGroup[] = {}, {}
+    local function matches(name: string): number?
         if typed == "" then return 1 end
         local low = name:lower()
         if low:sub(1, #typed) == typed then return 1 end
         if low:find(typed, 1, true) then return 2 end
     end
-    local function add(title, rows)
-        local out = {}
+    local function add(title: string, rows: SuggestRow[])
+        local out: SuggestRow[] = {}
         for _, r in ipairs(rows) do
             local key = r.name:lower()
             if not seen[key] then
@@ -610,16 +627,16 @@ function M:Suggestions(typed)
     end
     -- your characters on this realm and side
     local me = self:CharData()
-    local mine = {}
+    local mine: SuggestRow[] = {}
     for key, d in pairs(self:AllCharData()) do
         if key ~= self:CharKey() and d.name and d.realm == me.realm and d.faction == me.faction and matches(d.name) then
             mine[#mine + 1] = { name = d.name, color = classToken(d.class), right = d.level and ("level " .. d.level) or nil }
         end
     end
-    table.sort(mine, function(a, b) return a.name < b.name end)
+    table.sort(mine, function(a: SuggestRow, b: SuggestRow) return a.name < b.name end)
     add("Your characters", mine)
     -- the people you sent to lately
-    local recent, had = {}, {}
+    local recent: SuggestRow[], had: { [string]: boolean } = {}, {}
     for _, e in ipairs(me.sent or {}) do
         if e.to and not had[e.to:lower()] and matches(e.to) then
             had[e.to:lower()] = true
@@ -629,7 +646,7 @@ function M:Suggestions(typed)
     add("Recent", recent)
     -- the guild: with nothing typed up to 30, online first; else the matches
     if IsInGuild() then
-        local first, rest = {}, {}
+        local first: SuggestRow[], rest: SuggestRow[] = {}, {}
         local myName = Ambiguate(SuuUI.FullName("player") or "", "short")
         for i = 1, (call(GetNumGuildMembers) or 0) do
             local full, rank, _, _, _, _, _, _, online, _, file = call(GetGuildRosterInfo, i)
@@ -637,7 +654,7 @@ function M:Suggestions(typed)
                 local name = Ambiguate(full, "mail")
                 local m = matches(name)
                 if m and Ambiguate(full, "short") ~= myName then
-                    local row = { name = name, color = classToken(file), note = plain(rank) and rank or nil,
+                    local row: SuggestRow = { name = name, color = classToken(file), note = plain(rank) and rank or nil,
                                   right = online and tint("fel", "● ") .. "Online" or lastOnline(i), diamond = true,
                                   online = online and true or false }
                     if typed == "" then
@@ -646,9 +663,9 @@ function M:Suggestions(typed)
                 end
             end
         end
-        table.sort(first, function(a, b) return a.name < b.name end)
-        table.sort(rest, function(a, b) return a.name < b.name end)
-        local guild = {}
+        table.sort(first, function(a: SuggestRow, b: SuggestRow) return a.name < b.name end)
+        table.sort(rest, function(a: SuggestRow, b: SuggestRow) return a.name < b.name end)
+        local guild: SuggestRow[] = {}
         local most = GUILD_MAX
         for _, list in ipairs({ first, rest }) do
             for _, r in ipairs(list) do if #guild < most then guild[#guild + 1] = r end end
@@ -658,7 +675,7 @@ function M:Suggestions(typed)
     return groups
 end
 
-function M:BuildSuggest(field)
+function M:BuildSuggest(field: any)
     local d = CreateFrame("Frame", nil, self.window)
     d:SetFrameStrata("FULLSCREEN_DIALOG")
     d:SetPoint("TOPLEFT", field, "BOTTOMLEFT", 0, -S["space-2"])
@@ -695,7 +712,7 @@ function M:BuildSuggest(field)
     end))
     -- leaving the field closes the list, unless the mouse is on it (its bar)
     edit:HookScript("OnEditFocusLost", function()
-        C_Timer.After(0.15, function() if not d:IsMouseOver() then d:Hide() end end)
+        after(0.15, function() if not d:IsMouseOver() then d:Hide() end end)
     end)
     d:SetScript("OnLeave", function() if not edit:HasFocus() and not d:IsMouseOver() then d:Hide() end end)
     edit:SetScript("OnArrowPressed", function(_, key)
@@ -719,7 +736,7 @@ function M:BuildSuggest(field)
     end)
 end
 
-function M:PickSuggest(row)
+function M:PickSuggest(row: SuggestRow)
     self.suggest.lastText = row.name
     self.send.to:SetValue(row.name)
     self.suggest:Hide()
@@ -727,7 +744,7 @@ function M:PickSuggest(row)
 end
 
 -- The dropdown for what To says now (keep: only the highlight moved).
-function M:DrawSuggest(keep)
+function M:DrawSuggest(keep: boolean?)
     local d = self.suggest
     local edit = self.send.to.edit
     if not edit:HasFocus() then d:Hide() return end
@@ -810,7 +827,7 @@ end
 -- Sent: the last mails this character sent
 --------------------------------------------------------------------------------
 
-function M:BuildSent(page)
+function M:BuildSent(page: any)
     local sent = { rows = {} }
     self.sent = sent
     sent.list = UI.ScrollArea(page, S["space-3"])
@@ -866,9 +883,9 @@ end
 
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMailWindow", title = "Mail", width = WIDTH, height = HEIGHT,
-        onClose = function(win) win:Hide() end,
+        onClose = function(win: any) win:Hide() end,
         tabs = { { key = "inbox", label = "Inbox" }, { key = "send", label = "Send" }, { key = "sent", label = "Sent" } },
-        onTab = function(key)
+        onTab = function(key: string)
             self.tab = key
             for k, page in pairs(self.pages) do page:SetShown(k == key) end
             -- the game attaches a right-clicked bag item while its send page shows
@@ -906,7 +923,7 @@ end
 function M:QueueRefresh()
     if self.refreshPending then return end
     self.refreshPending = true
-    C_Timer.After(0.05, function()
+    after(0.05, function()
         self.refreshPending = nil
         self:Refresh()
     end)
@@ -914,7 +931,7 @@ end
 
 -- The game's frame out of sight: see-through and off screen, still shown,
 -- and back off screen whenever the game places it again.
-function M:Away(frame)
+function M:Away(frame: any)
     if not frame or self.away then return end
     self.away = true
     local placing = false
@@ -927,8 +944,8 @@ function M:Away(frame)
         placing = false
     end
     away()
-    hooksecurefunc(frame, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
-    frame:HookScript("OnShow", function() C_Timer.After(0, away) end)
+    hook(frame, "SetPoint", function() if not placing then after(0, away) end end)
+    hookScript(frame, "OnShow", function() after(0, away) end)
 end
 
 function M:OnEnable()
@@ -936,9 +953,9 @@ function M:OnEnable()
     self:RememberMe()
     -- what To would suggest for a text, and what the guild roster gives
     -- (also saved to SuuUIProbe.mailSuggest on /reload)
-    self:RegisterCommand("mailsuggest", "test: what Send's To suggests for a text, and what the guild roster gives: /suu mailsuggest <text>", function(arg)
-        local lines = {}
-        local function out(text) lines[#lines + 1] = text; self:Print(text) end
+    self:RegisterCommand("mailsuggest", "test: what Send's To suggests for a text, and what the guild roster gives: /suu mailsuggest <text>", function(arg: string?)
+        local lines: string[] = {}
+        local function out(text: string) lines[#lines + 1] = text; self:Print(text) end
         local n, online = call(GetNumGuildMembers)
         out(("typed %q; in a guild %s, roster %s members (%s online)"):format(arg or "", tostring(IsInGuild()), tostring(n), tostring(online)))
         for i = 1, math.min(3, n or 0) do
@@ -957,7 +974,7 @@ function M:OnEnable()
         SuuUIProbe = SuuUIProbe or {}
         SuuUIProbe.mailSuggest = { at = date("%H:%M:%S"), lines = lines }
     end)
-    self:OnGameEvent("PLAYER_LEVEL_UP", function() C_Timer.After(1, function() self:RememberMe() end) end)
+    self:OnGameEvent("PLAYER_LEVEL_UP", function() after(1, function() self:RememberMe() end) end)
     self:OnGameEvent("MAIL_SHOW", function()
         self.open = true
         self.openIndex = nil

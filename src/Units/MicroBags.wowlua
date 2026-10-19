@@ -1,4 +1,4 @@
--- Units/MicroBags.lua
+-- Units/MicroBags.wowlua
 -- Blizzard's bag bar (and its micro menu while SuuUI's own, the Micro menu
 -- module, is off), moved out of the dock's way. A built-in module written
 -- against the public API only.
@@ -10,6 +10,10 @@
 -- is secure, so moving them is safe in combat too. When the game takes the
 -- micro menu for itself (a vehicle's or a pet battle's bar), it is left
 -- there, and comes back to its holder when the game hands it home.
+
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
 
 local UI = SuuUI.UI
 
@@ -27,8 +31,10 @@ local M = SuuUI.RegisterModule({
     },
 })
 
+type Item = { frame: string, home?: string, key: string, label: string, holder: string, holderFrame?: Frame }
+
 -- What moves, where Blizzard keeps it when it's home, and its setting.
-local ITEMS = {
+local ITEMS: Item[] = {
     { frame = "MicroMenu", home = "MicroMenuContainer", key = "microPosition", label = "Micro menu", holder = "SuuUIMicroHolder" },
     { frame = "BagsBar", key = "bagsPosition", label = "Bag bar", holder = "SuuUIBagsHolder" },
 }
@@ -37,7 +43,7 @@ local placing = false
 
 -- Into the holder, at Blizzard's size times the Scale setting (the root runs
 -- at its own scale).
-local function adopt(item)
+local function adopt(item: Item)
     local f, h = _G[item.frame], item.holderFrame
     if not (f and h) then return end
     placing = true
@@ -52,7 +58,7 @@ end
 
 -- Blizzard moves it back (layout passes, Edit Mode): adopt it again next
 -- frame, unless the game parented it somewhere else on purpose.
-local function guard(item)
+local function guard(item: Item)
     local f = _G[item.frame]
     local pending = false
     local function again()
@@ -65,10 +71,10 @@ local function guard(item)
     local function soon()
         if placing or pending then return end
         pending = true
-        C_Timer.After(0, again)
+        after(0, again)
     end
-    hooksecurefunc(f, "SetPoint", soon)
-    hooksecurefunc(f, "SetParent", soon)
+    hook(f, "SetPoint", soon)
+    hook(f, "SetParent", soon)
 end
 
 -- Each holder by Shows, or hidden when edit mode hid it.
@@ -86,7 +92,7 @@ local SECTION = {
             { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
               description = "Always, only in combat, or when the mouse is over it." },
             { key = "scale", label = "Scale", control = "slider", min = 0.6, max = 1.4, step = 0.05,
-              format = function(v) return ("%d%%"):format(v * 100 + 0.5) end,
+              format = function(v: number) return ("%d%%"):format(v * 100 + 0.5) end,
               description = "From Blizzard's size." },
         } },
     },
@@ -109,12 +115,12 @@ end
 -- game parents it again).
 local away = CreateFrame("Frame")
 away:Hide()
-local function putAway(f)
+local function putAway(f: any)
     if f:GetParent() ~= away then f:SetParent(away) end
     if not f.suuAwayHooked then
         f.suuAwayHooked = true
-        hooksecurefunc(f, "SetParent", function(frame, parent)
-            if parent ~= away and ownBagSlots() then C_Timer.After(0, function() frame:SetParent(away) end) end
+        hook(f, "SetParent", function(frame: any, parent: any)
+            if parent ~= away and ownBagSlots() then after(0, function() frame:SetParent(away) end) end
         end)
     end
 end

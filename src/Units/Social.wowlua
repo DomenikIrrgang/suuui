@@ -1,4 +1,4 @@
--- Units/Social.lua
+-- Units/Social.wowlua
 -- SuuUI's Social pages (step 3.4, design component SocialWindow) over
 -- Forever's own social window (SocialUIFrame, O: not the classic
 -- FriendsFrame, which it no longer shows; found with /suu probe social
@@ -13,6 +13,11 @@
 --             notes; Whisper, Invite, Add friend; the ignored; your status
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
@@ -24,21 +29,24 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local isSecret = secret.isSecret
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
-local function call(fn, ...)
+-- A friend, an ally, a request or a raid member as the pages draw them.
+type Row = { [string]: any }
+
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h end
 end
 
 
-local CLASS_FILES = {}
+local CLASS_FILES: { [string]: string } = {}
 for _, list in ipairs({ LOCALIZED_CLASS_NAMES_MALE or {}, LOCALIZED_CLASS_NAMES_FEMALE or {} }) do
     for file, name in pairs(list) do CLASS_FILES[name] = file end
 end
-local function classColor(className)
+local function classColor(className: string?): string?
     local file = CLASS_FILES[className or ""]
     return file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or nil
 end
@@ -48,7 +56,7 @@ local GAMES = { App = "the Battle.net app", BSAp = "Battle.net mobile", WTCG = "
                 ANBS = "Diablo Immortal", VIPR = "Call of Duty", W3 = "Warcraft III", GRY = "Warcraft Rumble" }
 
 -- "3 days ago" from a time() stamp.
-local function ago(stamp)
+local function ago(stamp: any): string?
     if not plain(stamp) or not stamp or stamp == 0 then return nil end
     local s = math.max(0, time() - stamp)
     if s < 3600 then return "less than an hour ago" end
@@ -64,7 +72,7 @@ end
 --------------------------------------------------------------------------------
 
 function M:Friends()
-    local out, online = {}, 0
+    local out: Row[], online = {}, 0
     -- Battle.net friends (their account name is protected text the game
     -- draws; never read)
     for i = 1, (call(BNGetNumFriends)) or 0 do
@@ -72,7 +80,7 @@ function M:Friends()
         if info then
             local game = info.gameAccountInfo or {}
             local isOnline = game.isOnline and true or false
-            local row = { key = "bn:" .. tostring(info.bnetAccountID), bnet = true, bnetID = info.bnetAccountID,
+            local row: Row = { key = "bn:" .. tostring(info.bnetAccountID), bnet = true, bnetID = info.bnetAccountID,
                           name = info.accountName or info.battleTag or "?", sort = (plain(info.battleTag) and info.battleTag or ""):lower(),
                           online = isOnline, note = plain(info.note) and info.note ~= "" and info.note or nil,
                           away = info.isAFK or game.isGameAFK, busy = info.isDND or game.isGameBusy, whisper = isOnline }
@@ -119,7 +127,7 @@ function M:Friends()
         local f = call(fl.GetFriendInfoByIndex, i)
         if f and plain(f.name) and f.name then
             local isOnline = f.connected and true or false
-            local row = { key = "c:" .. f.name, name = f.name, sort = f.name:lower(), online = isOnline,
+            local row: Row = { key = "c:" .. f.name, name = f.name, sort = f.name:lower(), online = isOnline,
                           color = classColor(f.className), note = plain(f.notes) and f.notes ~= "" and f.notes or nil,
                           away = f.afk, busy = f.dnd, whisper = isOnline, invite = isOnline, inviteName = f.name }
             if isOnline then
@@ -133,7 +141,7 @@ function M:Friends()
             out[#out + 1] = row
         end
     end
-    table.sort(out, function(a, b)
+    table.sort(out, function(a: Row, b: Row): boolean
         if a.online ~= b.online then return a.online end
         return a.sort < b.sort
     end)
@@ -141,7 +149,7 @@ function M:Friends()
 end
 
 function M:Ignored()
-    local out = {}
+    local out: string[] = {}
     local fl = C_FriendList
     for i = 1, (fl and call(fl.GetNumIgnores)) or 0 do
         local name = call(fl.GetIgnoreName, i)
@@ -177,15 +185,15 @@ end
 function M:QueueRender()
     if self.renderQueued then return end
     self.renderQueued = true
-    C_Timer.After(0.1, function()
+    after(0.1, function()
         self.renderQueued = nil
         if self:IsEnabled() then self:Render() end
     end)
 end
 
-local function whisper(row)
+local function whisper(row: Row)
     if row.bnet then
-        local tell = (ChatFrameUtil and ChatFrameUtil.SendBNetTell) or ChatFrame_SendBNetTell
+        local tell = (ChatFrameUtil and ChatFrameUtil.SendBNetTell) or _G.ChatFrame_SendBNetTell
         if tell and row.name then tell(row.name) end
     else
         local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
@@ -193,22 +201,23 @@ local function whisper(row)
     end
 end
 
-local function invite(row)
+local function invite(row: Row)
     if row.gameAccountID then
         local fn = (C_BattleNet and C_BattleNet.InviteFriend) or BNInviteFriend
         if fn then pcall(fn, row.gameAccountID) end
         return
     end
-    local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+    local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or _G.InviteUnit
     if fn and row.inviteName then pcall(fn, row.inviteName) end
 end
 
-function M:SetNote(row)
+function M:SetNote(row: Row)
     UI.Confirm({ title = "Note", text = "A note about this friend: only you see it.",
         input = { label = "Note", value = row.note or "" }, confirm = "Save",
-        onConfirm = function(text)
+        onConfirm = function(text: string)
             if row.bnet then
-                local set = BNSetFriendNote or (C_BattleNet and C_BattleNet.SetFriendNote)
+                local bn: any = C_BattleNet
+                local set = BNSetFriendNote or (bn and bn.SetFriendNote)
                 if set then pcall(set, row.bnetID, text) end
             else
                 pcall(C_FriendList.SetFriendNotes, row.name, text)
@@ -217,11 +226,12 @@ function M:SetNote(row)
         end })
 end
 
-function M:Remove(row)
+function M:Remove(row: Row)
     UI.Confirm({ title = "Remove friend?", text = "They leave your friends list. You can add them again any time.",
         confirm = "Remove", onConfirm = function()
             if row.bnet then
-                local remove = BNRemoveFriend or (C_BattleNet and C_BattleNet.RemoveFriend)
+                local bn: any = C_BattleNet
+                local remove = BNRemoveFriend or (bn and bn.RemoveFriend)
                 if remove then pcall(remove, row.bnetID) end
             else
                 pcall(C_FriendList.RemoveFriend, row.name)
@@ -231,25 +241,26 @@ function M:Remove(row)
         end })
 end
 
-function M:Wire(view)
-    view.onView = function(v) self.mode = v; self:Render() end
-    view.onSelect = function(key) self.selected = key; self:Render() end
+function M:Wire(view: any)
+    view.onView = function(v: string) self.mode = v; self:Render() end
+    view.onSelect = function(key: string?) self.selected = key; self:Render() end
     view.onWhisper = whisper
     view.onInvite = invite
-    view.onStatus = function(v)
+    view.onStatus = function(v: string)
         local bn = C_BattleNet
-        local afk = (bn and bn.SetAFK) or BNSetAFK
-        local dnd = (bn and bn.SetDND) or BNSetDND
+        local afk = (bn and bn.SetAFK) or _G.BNSetAFK
+        local dnd = (bn and bn.SetDND) or _G.BNSetDND
         if afk then pcall(afk, v == "away") end
         if dnd then pcall(dnd, v == "busy") end
-        C_Timer.After(0.3, function() self:QueueRender() end)
+        after(0.3, function() self:QueueRender() end)
     end
     view.onAdd = function()
         UI.Confirm({ title = "Add a friend", text = "Their character's whole name (first and last), or their BattleTag such as Kaelith#1234.",
             input = { label = "Name or BattleTag", placeholder = "Name or BattleTag" }, confirm = "Add",
-            onConfirm = function(text)
+            onConfirm = function(text: string)
                 if text:find("#") then
-                    local send = BNSendFriendInvite or (C_BattleNet and C_BattleNet.SendFriendInvite)
+                    local bn: any = C_BattleNet
+                    local send = BNSendFriendInvite or (bn and bn.SendFriendInvite)
                     if send then pcall(send, text) else self:Print("Battle.net friend requests aren't available here.") end
                 else
                     self:AddFriend(text)
@@ -260,10 +271,10 @@ function M:Wire(view)
     view.onIgnore = function()
         UI.Confirm({ title = "Ignore a player", text = "You won't see their messages, invites or trades.",
             input = { label = "Their whole name", placeholder = "Name" }, confirm = "Ignore",
-            onConfirm = function(text) pcall(C_FriendList.AddIgnore, text); self:QueueRender() end })
+            onConfirm = function(text: string) pcall(C_FriendList.AddIgnore, text); self:QueueRender() end })
     end
-    view.onUnignore = function(name) pcall(C_FriendList.DelIgnore, name); self:QueueRender() end
-    view.onMenu = function(row, owner)
+    view.onUnignore = function(name: string) pcall(C_FriendList.DelIgnore, name); self:QueueRender() end
+    view.onMenu = function(row: Row, owner: Frame)
         UI.ContextMenuFrom(owner, function(_, root)
             root:CreateTitle(row.character or row.name)
             if row.whisper then root:CreateButton("Whisper", function() whisper(row) end) end
@@ -282,7 +293,7 @@ end
 -- invites through BNGetFriendInviteInfo)
 --------------------------------------------------------------------------------
 
-local function classFileOf(classID)
+local function classFileOf(classID: number?): string?
     if not classID then return nil end
     local info = C_CreatureInfo and C_CreatureInfo.GetClassInfo and C_CreatureInfo.GetClassInfo(classID)
     if info and info.classFile then return info.classFile end
@@ -292,7 +303,7 @@ local function classFileOf(classID)
 end
 
 -- How you met them: the first interaction's own words, when it has any.
-local function metBy(a)
+local function metBy(a: any): string?
     local list = a.interactionData and a.interactionData.interactions
     local first = list and list[1]
     if type(first) ~= "table" then return nil end
@@ -304,7 +315,7 @@ end
 
 -- Pinned: what was just chosen until the game's own data agrees (it comes
 -- back a moment later: a pin seemed to need two clicks, found in game).
-function M:Pinned(guid)
+function M:Pinned(guid: string?): boolean
     if not guid then return false end
     local ra = C_RecentAllies
     local actual = (ra and call(ra.IsRecentAllyPinned, guid)) and true or false
@@ -316,7 +327,7 @@ end
 
 function M:Allies()
     local ra = C_RecentAllies
-    local out = {}
+    local out: Row[] = {}
     for _, a in ipairs((ra and call(ra.GetRecentAllies)) or {}) do
         local cd, sd = a.characterData or {}, a.stateData or {}
         local name = plain(cd.fullName) and cd.fullName or cd.name
@@ -329,24 +340,24 @@ function M:Allies()
             local met = metBy(a)
             if met then detail[#detail + 1] = met end
             local guid = cd.guid
-            local row = { key = guid or name, guid = guid, name = name, online = online,
+            local row: Row = { key = guid or name, guid = guid, name = name, online = online,
                           color = file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or nil,
                           detail = table.concat(detail, " · "),
                           note = a.interactionData and plain(a.interactionData.note) and a.interactionData.note ~= "" and a.interactionData.note or nil,
                           pinned = self:Pinned(guid),
                           friend = guid and C_FriendList.IsFriend and call(C_FriendList.IsFriend, guid) or false,
                           sent = sd.friendRequestSentThisSession }
-            local actions = {}
-            if online then actions[#actions + 1] = { label = "Whisper", onClick = function(r) self:Whisper(r.name) end } end
+            local actions: { [string]: any }[] = {}
+            if online then actions[#actions + 1] = { label = "Whisper", onClick = function(r: Row) self:Whisper(r.name) end } end
             if not row.friend then
                 actions[#actions + 1] = { label = row.sent and "Requested" or "Add friend", disabled = row.sent,
-                    onClick = function(r) self:AddFriend(r.name); C_Timer.After(0.5, function() self:RenderLists() end) end }
+                    onClick = function(r: Row) self:AddFriend(r.name); after(0.5, function() self:RenderLists() end) end }
             end
             row.actions = actions
             out[#out + 1] = row
         end
     end
-    table.sort(out, function(a, b)
+    table.sort(out, function(a: Row, b: Row): boolean
         if (a.pinned and true or false) ~= (b.pinned and true or false) then return a.pinned and true or false end
         if a.online ~= b.online then return a.online end
         return a.name < b.name
@@ -355,7 +366,7 @@ function M:Allies()
 end
 
 function M:Requests()
-    local out = {}
+    local out: Row[] = {}
     for i = 1, (call(BNGetNumFriendInvites)) or 0 do
         local id, accountName, _, _, sent = call(BNGetFriendInviteInfo, i)
         if id then
@@ -376,21 +387,21 @@ end
 -- nothing, found in game); its own window sends a title friend invite
 -- (C_BattleNet.SendTitleFriendInviteByName, watched with /suu probe social
 -- friends, 2026-10-14).
-function M:AddFriend(name)
+function M:AddFriend(name: string)
     if SuuUI.AddFriend(name) then self:Print("Friend request sent to " .. name .. ".") end
 end
 
 -- Ignore a player by their whole name (a confirmation first).
-function M:Ignore(name)
+function M:Ignore(name: string?)
     if not name or name == "" then return end
     UI.Confirm({ title = "Ignore " .. name .. "?", text = "You won't see their messages, invites or trades. Unignore them on the Ignored list.",
         confirm = "Ignore", onConfirm = function()
             pcall(C_FriendList.AddIgnore, name)
-            C_Timer.After(0.3, function() self:QueueRender() end)
+            after(0.3, function() self:QueueRender() end)
         end })
 end
 
-function M:Whisper(name)
+function M:Whisper(name: string?)
     local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
     if tell and name then tell(name) end
 end
@@ -405,14 +416,14 @@ function M:RenderLists()
     end
 end
 
-function M:AllyMenu(row, owner)
+function M:AllyMenu(row: Row, owner: Frame)
     local ra = C_RecentAllies
     UI.ContextMenuFrom(owner, function(_, root)
         root:CreateTitle(row.name)
         if row.online then
             root:CreateButton("Whisper", function() self:Whisper(row.name) end)
             root:CreateButton("Invite", function()
-                local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+                local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or _G.InviteUnit
                 if fn then pcall(fn, row.name) end
             end)
         end
@@ -424,7 +435,7 @@ function M:AllyMenu(row, owner)
                 self.pinWanted[row.guid] = want
                 self:RenderLists()
                 -- and again once the game has it
-                C_Timer.After(1, function() self:RenderLists() end)
+                after(1, function() self:RenderLists() end)
             end)
         end
         root:CreateButton("Ignore", function() self:Ignore(row.name) end)
@@ -432,9 +443,9 @@ function M:AllyMenu(row, owner)
             root:CreateButton("Set note", function()
                 UI.Confirm({ title = "Note", text = "A note about this ally: only you see it.",
                     input = { label = "Note", value = row.note or "" }, confirm = "Save",
-                    onConfirm = function(text)
+                    onConfirm = function(text: string)
                         pcall(ra.SetRecentAllyNote, row.guid, text)
-                        C_Timer.After(0.2, function() self:RenderLists() end)
+                        after(0.2, function() self:RenderLists() end)
                     end })
             end)
         end
@@ -454,7 +465,7 @@ local TEST_NAMES = { { "Kaelith Dawnmere", "PRIEST", "HEALER" }, { "Brannoc Iron
 
 function M:TestRaid()
     if self.raidTest then self.raidTest = nil; self:RenderRaid(); return end
-    local members = { { index = 1, name = SuuUI.FullName("player"), class = select(2, UnitClass("player")), role = "DAMAGER",
+    local members: Row[] = { { index = 1, name = SuuUI.FullName("player"), class = select(2, UnitClass("player")), role = "DAMAGER",
                         group = 1, leader = true, online = true, you = true } }
     for i, t in ipairs(TEST_NAMES) do
         members[#members + 1] = { index = i + 1, name = t[1], class = t[2], role = t[3], group = math.floor(i / 5) + 1,
@@ -469,7 +480,7 @@ end
 -- own box wasn't in SuuUI's look, found in game): each saved instance, its
 -- difficulty, how far you got and when it resets.
 function M:Lockouts()
-    local out = {}
+    local out: Row[] = {}
     for i = 1, (call(GetNumSavedInstances)) or 0 do
         local name, _, reset, _, locked, extended, _, isRaid, maxPlayers, difficultyName, numEncounters, progress = call(GetSavedInstanceInfo, i)
         if plain(name) and name and (locked or extended) then
@@ -544,13 +555,13 @@ end
 
 function M:RaidMembers()
     if self.raidTest then return self.raidTest end
-    local out = {}
+    local out: Row[] = {}
     if not UI.Flag(IsInRaid()) then return out end
     for i = 1, GetNumGroupMembers() do
         local name, rank, group, level, className, file, zone, online, dead, _, _, combatRole = GetRaidRosterInfo(i)
         if plain(name) and name then
             local unit = "raid" .. i
-            local role = (plain(combatRole) and combatRole ~= "NONE" and combatRole) or UnitGroupRolesAssigned(unit)
+            local role = (plain(combatRole) and combatRole ~= "NONE" and combatRole) or secret.known(UnitGroupRolesAssigned(unit), "NONE")
             out[#out + 1] = { index = i, unit = unit, name = name, class = file, className = className, level = level, zone = zone,
                               role = role ~= "NONE" and role or nil, group = group, leader = rank == 2, assistant = rank == 1,
                               online = online and true or false, dead = dead, you = UI.Flag(UnitIsUnit(unit, "player")) }
@@ -570,7 +581,7 @@ function M:RenderRaid()
                    plan = SuuUI.Service("raidplanner") ~= nil })
 end
 
-function M:WireRaid(page)
+function M:WireRaid(page: any)
     page.onReadyCheck = function() if DoReadyCheck then DoReadyCheck() end end
     page.onRoleCheck = function() if InitiateRolePoll then pcall(InitiateRolePoll) end end
     page.onRaidInfo = function() self:ToggleLockouts() end
@@ -580,10 +591,10 @@ function M:WireRaid(page)
         if planner then planner.Toggle() end
     end
     page.onConvert = function()
-        local convert = (C_PartyInfo and C_PartyInfo.ConvertToRaid) or ConvertToRaid
+        local convert = (C_PartyInfo and C_PartyInfo.ConvertToRaid) or _G.ConvertToRaid
         if convert then pcall(convert) end
     end
-    page.onMove = function(index, group)
+    page.onMove = function(index: number, group: number)
         if self.raidTest then
             for _, m in ipairs(self.raidTest) do if m.index == index then m.group = group end end
             return self:RenderRaid()
@@ -591,7 +602,7 @@ function M:WireRaid(page)
         if InCombatLockdown() then return end
         pcall(SetRaidSubgroup, index, group)
     end
-    page.onSwap = function(a, b)
+    page.onSwap = function(a: number, b: number)
         if self.raidTest then
             local ma, mb
             for _, m in ipairs(self.raidTest) do
@@ -603,7 +614,7 @@ function M:WireRaid(page)
         if InCombatLockdown() then return end
         pcall(SwapRaidSubgroup, a, b)
     end
-    page.onMember = function(m, button, owner)
+    page.onMember = function(m: Row, button: string, owner: Frame)
         if button ~= "RightButton" then return end
         local lead = UnitIsGroupLeader("player")
         UI.ContextMenuFrom(owner, function(_, root)
@@ -638,7 +649,7 @@ end
 
 -- A Blizzard part out of sight: see-through and off screen, still shown,
 -- and back off screen whenever Blizzard places it again.
-function M:Away(part)
+function M:Away(part: Frame?)
     if not part or self.awayParts[part] then return end
     self.awayParts[part] = true
     part:SetAlpha(0)
@@ -650,14 +661,14 @@ function M:Away(part)
         placing = false
     end
     away()
-    hooksecurefunc(part, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+    hook(part, "SetPoint", function() if not placing then after(0, away) end end)
 end
 
 
 
 -- The window's friends list: the content frame with a filter bar that is
 -- neither Recent Allies nor Friend Requests.
-local function friendsList(f)
+local function friendsList(f: any): any
     for _, c in ipairs({ f:GetChildren() }) do
         if c.FilterBar and c ~= f.RecentAlliesList and c ~= f.FriendRequestsList then return c end
     end
@@ -745,7 +756,7 @@ function M:Build()
     end
     if f.RecentAlliesList then
         self.alliesPage = listPage()
-        self.alliesPage.onMenu = function(row, owner) self:AllyMenu(row, owner) end
+        self.alliesPage.onMenu = function(row: Row, owner: Frame) self:AllyMenu(row, owner) end
     end
     if f.FriendRequestsList then self.requestsPage = listPage() end
     -- the Raid page
@@ -766,12 +777,12 @@ function M:Build()
     -- Blizzard's for now.
     self:Away(list)
     -- the page follows the window's content
-    f:HookScript("OnShow", function() self:Follow() end)
-    f:HookScript("OnHide", function() GameTooltip:Hide() end)
+    hookScript(f, "OnShow", function() self:Follow() end)
+    hookScript(f, "OnHide", function() GameTooltip:Hide() end)
     for _, c in ipairs({ list, f.RecentAlliesList, f.FriendRequestsList, f.RaidFrame }) do
         if c then
-            c:HookScript("OnShow", function() self:Follow() end)
-            c:HookScript("OnHide", function() self:Follow() end)
+            hookScript(c, "OnShow", function() self:Follow() end)
+            hookScript(c, "OnHide", function() self:Follow() end)
         end
     end
     self:Follow()
@@ -799,7 +810,7 @@ function M:OnEnable()
                          "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
         if not valid or valid(e) then
             self:OnGameEvent(e, function()
-                if self.raidPage and self.raidPage:IsVisible() then C_Timer.After(0.1, function() self:RenderRaid() end) end
+                if self.raidPage and self.raidPage:IsVisible() then after(0.1, function() self:RenderRaid() end) end
             end)
         end
     end

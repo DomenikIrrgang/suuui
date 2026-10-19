@@ -1,4 +1,4 @@
--- Units/Welcome.lua
+-- Units/Welcome.wowlua
 -- The first-run welcome (design board "First-run splash", direction B, Three
 -- steps): once per account, at the first login with SuuUI, a panel over the
 -- dimmed world asks two things and shows where things are, one step at a
@@ -11,6 +11,9 @@
 -- account (it applies at once). Skip changes nothing. Both mark it seen for the account; Settings › General and /suu welcome open it
 -- again.
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -33,8 +36,10 @@ local PANEL_W, BODY_H = 440, 640
 local PAD_TOP, PAD_SIDE, PAD_BOTTOM = 10, 6, 2
 local GAP = 16
 local INNER_W = PANEL_W - 2 * S["space-5"] - 2 * PAD_SIDE -- 404
+-- a text style by name (the styles are a record; a name read at run time)
+local function styleOf(style: string): any return (T.type :: any)[style] end
 -- a text style's line height, read when used (a theme may change it)
-local LINE = setmetatable({}, { __index = function(_, style) return T.type[style].lineHeight end })
+local LINE = setmetatable({}, { __index = function(_: any, style: string) return styleOf(style).lineHeight end }) :: { caption: number, label: number, body: number }
 
 local ROLES = {
     { id = "TANK", glyph = "shield", label = "Tank",
@@ -57,7 +62,7 @@ local SIGNALS = {
 
 local STEPS = { "1 · Role", "2 · Colours", "3 · Where things are" }
 
-local function glyph(parent, name, size, color, layer)
+local function glyph(parent: any, name: string, size: number, color: string, layer: string?)
     local t = parent:CreateTexture(nil, layer or "ARTWORK")
     t:SetTexture(GLYPHS .. name .. ".tga")
     t:SetSize(size, size)
@@ -65,7 +70,7 @@ local function glyph(parent, name, size, color, layer)
     return t
 end
 
-local function circle(parent, size, color, sublevel)
+local function circle(parent: any, size: number, color: string, sublevel: number)
     local t = parent:CreateTexture(nil, "ARTWORK", nil, sublevel)
     t:SetTexture(CIRCLE)
     t:SetSize(size, size)
@@ -74,30 +79,30 @@ local function circle(parent, size, color, sublevel)
 end
 
 -- the wrapped texts and their styles, for a theme change
-local wraps = setmetatable({}, { __mode = "k" })
+local wraps: { [any]: string } = setmetatable({}, { __mode = "k" })
 
 -- Caption text that wraps at `width`, 14 px a line as in the design.
-local function wrapped(parent, style, color, width)
+local function wrapped(parent: any, style: string, color: string, width: number)
     local fs = UI.Text(parent, style, color)
     fs:SetWordWrap(true)
     fs:SetJustifyH("LEFT")
     fs:SetJustifyV("TOP")
     fs:SetWidth(width)
-    fs:SetSpacing(T.type[style].lineHeight - T.type[style].size)
+    fs:SetSpacing(styleOf(style).lineHeight - styleOf(style).size)
     wraps[fs] = style
     return fs
 end
 
 -- The height a wrapped text takes in design lines.
-local function linesHeight(fs, style)
+local function linesHeight(fs: any, style: string): number
     local n = math.max(1, fs:GetNumLines() or 1)
-    return n * T.type[style].lineHeight
+    return n * styleOf(style).lineHeight
 end
 
 -- A text set in its design line: `top` is the line box's top in `parent`.
-local function placeLine(fs, parent, x, top, style)
+local function placeLine(fs: any, parent: any, x: number, top: number, style: string)
     fs:ClearAllPoints()
-    fs:SetPoint("LEFT", parent, "TOPLEFT", x, -(top + T.type[style].lineHeight / 2))
+    fs:SetPoint("LEFT", parent, "TOPLEFT", x, -(top + styleOf(style).lineHeight / 2))
 end
 
 --------------------------------------------------------------------------------
@@ -106,7 +111,7 @@ end
 
 local Tile = {}
 
-function Tile:SetSelected(on)
+function Tile:SetSelected(on: boolean)
     self.selected = on
     UI.PaintFill(self.bg, on and "arcane-soft" or "surface-raised")
     self.border:SetColor(on and "arcane" or "gilt-line")
@@ -118,7 +123,7 @@ function Tile:SetSelected(on)
     if self.meta then self.meta:SetColor(on and "arcane" or "ink-faint") end
 end
 
-local function newTile(parent, onClick)
+local function newTile(parent: any, onClick: (tile: any) -> ())
     local b = CreateFrame("Button", nil, parent)
     Mixin(b, Tile)
     b:SetWidth(INNER_W)
@@ -143,7 +148,7 @@ end
 -- Building
 --------------------------------------------------------------------------------
 
-function M:BuildHead(box)
+function M:BuildHead(box: any): number
     -- the emblem, still
     self.mark = UI.LoadingMark(box, { size = 30 })
     self.mark:SetPoint("TOP", 0, 0)
@@ -183,7 +188,7 @@ end
 
 -- The head's lines from the text styles (again after a theme change);
 -- returns where the steps start.
-function M:LayoutHead(box)
+function M:LayoutHead(box: any): number
     local y = self.mark:GetHeight() + S["space-3"] + 2
     self.headTitle:SetFont(T.type.alert.file, 21, "")
     self.headTitle:ClearAllPoints()
@@ -228,7 +233,7 @@ function M:DrawDots()
 end
 
 -- Step 1: the role tiles.
-function M:BuildRole(page)
+function M:BuildRole(page: any)
     page.header = UI.SectionHeader(page, "Your role layout", "this character", INNER_W)
     page.tiles = {}
     for _, r in ipairs(ROLES) do
@@ -248,7 +253,7 @@ function M:BuildRole(page)
     page.note:SetValue("For dungeons and raids alike. Settings › Profiles changes it later.")
 end
 
-function M:LayoutRole(page)
+function M:LayoutRole(page: any)
     page.header:SetPoint("TOPLEFT", 0, 0)
     local y = T.type.header.lineHeight + S["space-5"]
     for _, b in ipairs(page.tiles) do
@@ -272,7 +277,7 @@ function M:LayoutRole(page)
 end
 
 -- Step 2: the colour vision tiles, each with its six signals.
-function M:BuildColours(page)
+function M:BuildColours(page: any)
     page.header = UI.SectionHeader(page, "Colour vision", "every character", INNER_W)
     page.tiles = {}
     for _, mode in ipairs(SuuUI.ColorVisionModes()) do
@@ -298,7 +303,7 @@ function M:BuildColours(page)
     page.note:SetValue("Only the signal colours change; shapes, badges and labels stay.")
 end
 
-function M:LayoutColours(page)
+function M:LayoutColours(page: any)
     page.header:SetPoint("TOPLEFT", 0, 0)
     local y = T.type.header.lineHeight + S["space-5"]
     for _, b in ipairs(page.tiles) do
@@ -339,7 +344,7 @@ local PLACES = {
 }
 local KEY_COL = 104
 
-function M:BuildPlaces(page)
+function M:BuildPlaces(page: any)
     page.header = UI.SectionHeader(page, "Where things are", nil, INNER_W)
     page.rows = {}
     for _, p in ipairs(PLACES) do
@@ -375,7 +380,7 @@ function M:BuildPlaces(page)
     page.box = box
 end
 
-function M:LayoutPlaces(page)
+function M:LayoutPlaces(page: any)
     page.header:SetPoint("TOPLEFT", 0, 0)
     local y = T.type.header.lineHeight + S["space-5"]
     for _, r in ipairs(page.rows) do
@@ -406,7 +411,7 @@ function M:LayoutPlaces(page)
     page.box:SetPoint("TOPLEFT", 0, -y)
 end
 
-function M:DrawSummary(page)
+function M:DrawSummary(page: any)
     local role, vision = page.choices[1], page.choices[2]
     if self.role == "keep" then
         role.glyph:SetTexture(GLYPHS .. "pushpin.tga")
@@ -417,7 +422,7 @@ function M:DrawSummary(page)
             if r.id == self.role then
                 role.glyph:SetTexture(GLYPHS .. r.glyph .. ".tga")
                 role.text:SetValue(r.label .. " layout")
-                role.meta:SetValue(SuuUI.RolePresetName(r.id) .. ", this character")
+                role.meta:SetValue((SuuUI.RolePresetName(r.id) :: string) .. ", this character")
             end
         end
     end
@@ -505,7 +510,7 @@ function M:DrawChoices()
     for _, b in ipairs(self.pages[2].tiles) do b:SetSelected(b.value == self.vision) end
 end
 
-function M:Go(step)
+function M:Go(step: number)
     self.step = math.max(1, math.min(3, step))
     for i, page in ipairs(self.pages) do
         page:SetShown(i == self.step)
@@ -588,7 +593,7 @@ function M:OnEnable()
     -- a theme change: the line heights and faces again, the open step laid out anew
     self:On("SUUUI_THEME_CHANGED", function()
         if not self.panel then return end
-        for fs, style in pairs(wraps) do fs:SetSpacing(T.type[style].lineHeight - T.type[style].size) end
+        for fs, style in pairs(wraps) do fs:SetSpacing(styleOf(style).lineHeight - styleOf(style).size) end
         local top = self:LayoutHead(self.headTitle:GetParent())
         for _, page in ipairs(self.pages) do
             page:ClearAllPoints()
@@ -600,7 +605,7 @@ function M:OnEnable()
     -- once per account, at the first login with SuuUI: a moment after the
     -- world is in, and out of combat
     if not SuuUI.AccountData("welcome").seen then
-        C_Timer.After(2, function()
+        after(2, function()
             if not self:IsEnabled() or SuuUI.AccountData("welcome").seen then return end
             self:RunOutOfCombat("first", function()
                 if self:IsEnabled() and not (self.dim and self.dim:IsShown()) then self:Show() end

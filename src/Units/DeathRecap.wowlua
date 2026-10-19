@@ -1,4 +1,4 @@
--- Units/DeathRecap.lua
+-- Units/DeathRecap.wowlua
 -- SuuUI's own death recap (asked 2026-10-18, design "Death recap", option
 -- A "List under a health line"): the hits that killed you, from the game's
 -- recap (C_DeathRecap): the killing blow on top, a small health line falling
@@ -10,6 +10,9 @@
 -- An event's fields aren't documented on Forever: the ones Blizzard's own
 -- recap reads (/suu probe deathrecap records what a death gives).
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import hook from "wowlua:hooks"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -24,8 +27,8 @@ local M = SuuUI.RegisterModule({
 })
 
 local isSecret = issecretvalue or function() return false end
-local function readable(v) return type(v) == "number" and not isSecret(v) end
-local function text(v) return type(v) == "string" and not isSecret(v) and v ~= "" end
+local function readable(v: any): boolean return type(v) == "number" and not isSecret(v) end
+local function text(v: any): boolean return type(v) == "string" and not isSecret(v) and v ~= "" end
 
 local WIDTH, HEIGHT = 440, 470
 local LINE_H = 44
@@ -39,14 +42,14 @@ local ENVIRONMENT = { DROWNING = "spell_shadow_demonbreath", FALLING = "ability_
                       LAVA = "spell_fire_fire", SLIME = "inv_misc_slime_01", FATIGUE = "ability_creature_cursed_05" }
 
 -- "1,956"
-local function group3(n)
+local function group3(n: number): string
     local s = tostring(math.floor(n + 0.5))
     local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
     return (out:gsub("^,", ""))
 end
 
 -- An event's spell: its name, icon and whether it is a melee swing.
-local function spellOf(e)
+local function spellOf(e: any): (string, any)
     local kind = text(e.event) and e.event or ""
     if kind == "SWING_DAMAGE" then
         local swing = Constants and Constants.DeathRecapConsts and Constants.DeathRecapConsts.SWING_DAMAGE_SPELL_ID
@@ -62,8 +65,8 @@ local function spellOf(e)
 end
 
 -- What else a hit says, after its caster: absorbed, resisted, blocked.
-local function extras(e)
-    local out = {}
+local function extras(e: any): string[]
+    local out: string[] = {}
     for _, k in ipairs({ "absorbed", "resisted", "blocked" }) do
         if readable(e[k]) and e[k] > 0 then out[#out + 1] = group3(e[k]) .. " " .. k end
     end
@@ -76,7 +79,7 @@ end
 
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIDeathRecap", title = "Death recap", width = WIDTH, height = HEIGHT,
-        onClose = function(win) win:Hide() end })
+        onClose = function(win: any) win:Hide() end })
     w:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
     w:Hide()
     self.window = w
@@ -118,7 +121,7 @@ function M:Build()
     self.empty:SetWordWrap(true)
 end
 
-local function row(self, i)
+local function row(self: any, i: number): any
     local r = self.rows[i]
     if r then return r end
     local c = self.window.content
@@ -167,12 +170,12 @@ local function row(self, i)
 end
 
 -- Drops the health line's steps and marks before drawing it again.
-local function clearLine(line)
+local function clearLine(line: any)
     for _, t in ipairs(line.steps) do t:Hide() end
     for _, t in ipairs(line.marks) do t:Hide() end
 end
 
-local function piece(list, i, make)
+local function piece(list: any[], i: number, make: () -> any): any
     list[i] = list[i] or make()
     list[i]:Show()
     return list[i]
@@ -184,14 +187,14 @@ function M:SizeHead()
 end
 
 -- The recap of `id` (nil: your last death).
-function M:ShowRecap(id)
+function M:ShowRecap(id: number?)
     if not self.window then self:Build() end
     local w = self.window
     local api = C_DeathRecap
     local ok, events = pcall(api.GetRecapEvents, id)
     for _, r in ipairs(self.rows) do r:Hide() end
     clearLine(self.line)
-    local secret = ok and issecrettable and issecrettable(events)
+    local secret = ok and issecrettable and issecrettable(events :: any)
     if secret or not ok or type(events) ~= "table" or #events == 0 then
         self.head:Hide()
         self.line:Hide()
@@ -213,7 +216,7 @@ function M:ShowRecap(id)
     for _, e in ipairs(list) do
         if readable(e.timestamp) and (not deathAt or e.timestamp > deathAt) then deathAt = e.timestamp end
     end
-    local function before(e) return deathAt and readable(e.timestamp) and (deathAt - e.timestamp) or nil end
+    local function before(e: any): number? return deathAt and readable(e.timestamp) and (deathAt - e.timestamp) or nil end
     local first, last = list[1], list[#list]
 
     -- health after each hit (probe deathrecap: currentHP is the health
@@ -236,7 +239,10 @@ function M:ShowRecap(id)
     h.spell:SetValue(name)
     h.by:SetValue(text(last.sourceName) and not last.hideCaster and ("· " .. last.sourceName) or "")
     local bits = {}
-    if readable(last.amount) then bits[#bits + 1] = group3(last.amount) .. (SCHOOL[last.school] and (" " .. SCHOOL[last.school]) or "") end
+    if readable(last.amount) then
+        local school = SCHOOL[last.school]
+        bits[#bits + 1] = group3(last.amount) .. (school and (" " .. school) or "")
+    end
     if last.critical == true then bits[#bits + 1] = "critical" end
     if readable(last.overkill) and last.overkill > 0 then bits[#bits + 1] = group3(last.overkill) .. " overkill" end
     h.detail:SetValue(table.concat(bits, " · "))
@@ -249,9 +255,9 @@ function M:ShowRecap(id)
     local line = self.line
     local lineW = line:GetWidth() - 2
     if maxHP and span and span > 0 then
-        local function x(t) return 1 + (1 - t / span) * lineW end
+        local function x(t: number): number return 1 + (1 - t / span) * lineW end
         local n = 0
-        local function step(fromT, toT, hp)
+        local function step(fromT: number, toT: number, hp: any)
             if not readable(hp) then return end
             n = n + 1
             local s = piece(line.steps, n, function() return UI.Fill(line, "unit-fill", "ARTWORK") end)
@@ -324,14 +330,14 @@ function M:ShowRecap(id)
 end
 
 -- The window as tall as what it shows (it scrolls only past the screen).
-function M:Fit(height)
+function M:Fit(height: number)
     local w = self.window
     w.content:SetHeight(height)
     local chrome = w:BodyTop() + S["space-5"]
     w:SetHeight(math.min(height + chrome, UIParent:GetHeight() - 80))
 end
 
-function M:Toggle(id)
+function M:Toggle(id: number?)
     if self.window and self.window:IsShown() and self.shownID == (id or false) then
         self.window:Hide()
         return
@@ -345,7 +351,7 @@ function M:OnEnable()
     -- Recap, a death link in chat): this one instead
     if not self.hooked and type(OpenDeathRecapUI) == "function" then
         self.hooked = true
-        hooksecurefunc("OpenDeathRecapUI", function(id)
+        hook("OpenDeathRecapUI", function(id: number?)
             if not self:IsEnabled() then return end
             local f = _G.DeathRecapFrame
             if f and f:IsShown() then HideUIPanel(f) end

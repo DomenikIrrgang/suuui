@@ -1,4 +1,4 @@
--- Units/Legacy.lua
+-- Units/Legacy.wowlua
 -- SuuUI's Legacy pages (step 3.2d, design boards "Legacy · Tree /
 -- Challenges / Reward track") over Blizzard's Legacy window, which keeps
 -- its tabs (SuuUI's look from the windows module).
@@ -20,6 +20,10 @@
 --             window's foot on every tab (asked for in game) instead of a tab;
 --             Blizzard's reward page, when it opens, switches to the tree
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local M = SuuUI.RegisterModule({
@@ -31,8 +35,8 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local isSecret = issecretvalue or function(_: any) return false end
+local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
 
 local FACTION = 2802
 local CURRENCY = 4225
@@ -44,13 +48,13 @@ local TREES = {
 local STEP = 750
 
 -- fn(...) safely, every value it returns (GetAchievementInfo returns a dozen)
-local function results(ok, ...) if ok then return ... end end
-local function call(fn, ...)
+local function results(ok: boolean, ...: any): ...any if ok then return ... end end
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     return results(pcall(fn, ...))
 end
 
-local function hex(token) return T.color[token].hex end
+local function hex(token: string): string return (T.color :: any)[token].hex end
 
 --------------------------------------------------------------------------------
 -- Points
@@ -83,13 +87,13 @@ end
 -- The trees
 --------------------------------------------------------------------------------
 
-local function isPlaceholder(ni, name)
+local function isPlaceholder(ni: any, name: string): boolean
     if name == "Unknown" then return true end
     local flags = plain(ni.flags) and ni.flags or 0
     return bit and bit.band and bit.band(flags, 2) ~= 0 or false
 end
 
-local function talentOf(configID, ni)
+local function talentOf(configID: number, ni: any): any
     local entryID = ni.activeEntry and ni.activeEntry.entryID or (ni.entryIDs and ni.entryIDs[1])
     if not entryID then return nil end
     local entry = call(C_Traits.GetEntryInfo, configID, entryID)
@@ -102,7 +106,7 @@ local function talentOf(configID, ni)
     return { entryID = entryID, spellID = spellID, name = name or "?", icon = icon }
 end
 
-function M:Trees(configID)
+function M:Trees(configID: number)
     local staged = call(C_Traits.ConfigHasStagedChanges, configID) == true
     self.learned = self.learned or {}
     if not staged then self.learned = {} end
@@ -181,7 +185,7 @@ end
 --------------------------------------------------------------------------------
 
 -- A challenge's progress: a skill or count ("45/150"), or steps done.
-local function progressOf(id)
+local function progressOf(id: number): string?
     local n = call(GetAchievementNumCriteria, id) or 0
     if n == 1 then
         local _, _, done, quantity, required = call(GetAchievementCriteriaInfo, id, 1)
@@ -205,7 +209,7 @@ end
 -- whose only step is another achievement shows that one's steps instead.
 local CRITERIA_ACHIEVEMENT = 8
 
-local function countDone(id, n)
+local function countDone(id: number, n: number): number
     local done = 0
     for k = 1, n do
         local _, _, ok = call(GetAchievementCriteriaInfo, id, k)
@@ -214,8 +218,8 @@ local function countDone(id, n)
     return done
 end
 
-local function stepsOf(id, depth)
-    depth = depth or 0
+local function stepsOf(id: number, depthArg: number?): { [string]: any }[]
+    local depth = depthArg or 0
     local n = call(GetAchievementNumCriteria, id) or 0
     if n == 1 and depth < 4 then
         local _, ctype, done, _, _, _, _, asset = call(GetAchievementCriteriaInfo, id, 1)
@@ -240,7 +244,7 @@ local function stepsOf(id, depth)
     return out
 end
 
-local function challengeTip(owner, id, name, description, points)
+local function challengeTip(owner: any, id: number, name: string?, description: string?, points: number?)
     local tip = GameTooltip
     tip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip_SetTitle(tip, name or "")
@@ -263,7 +267,7 @@ local function challengeTip(owner, id, name, description, points)
     tip:Show()
 end
 
-local function itemsIn(category)
+local function itemsIn(category: number): { [string]: any }[]
     local out = {}
     local total = call(GetCategoryNumAchievements, category) or 0
     for i = 1, total do
@@ -293,11 +297,11 @@ local function itemsIn(category)
                     item.count = { quantity, required }
                 end
             end
-            item.onEnter = function(owner) challengeTip(owner, id, name, description, points) end
+            item.onEnter = function(owner: any) challengeTip(owner, id, name, description, points) end
             item.onLeave = function() GameTooltip:Hide() end
             -- how close: progress as a fraction, for the cards' order
             local a, b = (item.progress or ""):match("(%d+)/(%d+)")
-            item.closeness = (a and b and tonumber(b) > 0) and (tonumber(a) / tonumber(b)) or 0
+            item.closeness = (a and b and (tonumber(b) or 0) > 0) and ((tonumber(a) or 0) / (tonumber(b) or 1)) or 0
             out[#out + 1] = item
         end
     end
@@ -352,7 +356,7 @@ end
 
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
 
-function M:Rewards(earned, total)
+function M:Rewards(earned: number, total: number)
     local mf = C_MajorFactions
     local stops = {}
     for _, lv in ipairs((mf and call(mf.GetRenownLevels, FACTION)) or {}) do
@@ -370,7 +374,7 @@ function M:Rewards(earned, total)
             local quality = r.itemID and C_Item.GetItemQualityByID and call(C_Item.GetItemQualityByID, r.itemID)
             local stop = { at = lv.level, name = r.name, icon = r.icon, quality = QUALITY[quality or 3] or "rare",
                 collected = r.isCollected and true or false }
-            stop.onEnter = function(owner)
+            stop.onEnter = function(owner: any)
                 GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
                 if r.itemID then GameTooltip:SetItemByID(r.itemID) else GameTooltip_SetTitle(GameTooltip, r.name or "") end
                 if r.description and r.description ~= "" then
@@ -428,20 +432,20 @@ function M:Render()
         self.track:SetTrack(self:Rewards(points.earned, points.total))
         -- item names still loading: once more in a moment
         self.nameTries = self.namesPending and (self.nameTries or 0) + 1 or 0
-        if self.namesPending and self.nameTries <= 6 then C_Timer.After(0.5, function() self:QueueRender() end) end
+        if self.namesPending and self.nameTries <= 6 then after(0.5, function() self:QueueRender() end) end
     end
 end
 
 function M:QueueRender()
     if self.renderQueued then return end
     self.renderQueued = true
-    C_Timer.After(0.1, function()
+    after(0.1, function()
         self.renderQueued = nil
         if self:IsEnabled() then self:Render() end
     end)
 end
 
-function M:ShowTip(button, n)
+function M:ShowTip(button: any, n: any)
     if not self.configID then return end
     local needs = {}
     if not n.meetsEdges then
@@ -461,13 +465,13 @@ local PAGES = { tree = "TreePage", challenges = "ChallengesPage" }
 local TREE_PAGE = 3 -- Blizzard's page numbers: reward track 1, challenges 2, tree 3
 local S = T.space
 -- the track, a rule and room (a theme can change the track's height)
-local function stripH() return UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 end
+local function stripH(): number return UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 end
 -- between a page and the strip's rule (Apply touched it: found in game): as
 -- much as the tree's foot leaves above its buttons (38 - 30), so they sit
 -- evenly between the two rules (asked for)
 local STRIP_GAP = 8
 
-function M:Page(f, kind)
+function M:Page(f: any, kind: string)
     local blizz = f[PAGES[kind]]
     if not blizz then return nil end
     local view = CreateFrame("Frame", nil, f)
@@ -478,7 +482,6 @@ function M:Page(f, kind)
     view.points = UI.LegacyPoints(view, { account = false })
     view.points:SetPoint("TOPLEFT")
     view.points:SetPoint("TOPRIGHT")
-    local S = T.space
     if kind == "tree" then
         view.body = UI.TalentTree(view)
         view.body.noSummary = true
@@ -486,17 +489,17 @@ function M:Page(f, kind)
         -- its height settles after the first layout: again then
         view.body:HookScript("OnSizeChanged", function() self:QueueRender() end)
         local body = view.body
-        body.onClick = function(n)
+        body.onClick = function(n: any)
             if not (n.canSpend and self.configID) then return end
             call(C_Traits.PurchaseRank, self.configID, n.id)
             self:Render()
         end
-        body.onRemove = function(n)
+        body.onRemove = function(n: any)
             if not self.configID or n.pending <= 0 or not self:Editable() then return end
             call(C_Traits.RefundRank, self.configID, n.id)
             self:Render()
         end
-        body.onEnter = function(b, n) self:ShowTip(b, n) end
+        body.onEnter = function(b: any, n: any) self:ShowTip(b, n) end
         body.onLeave = function() GameTooltip:Hide() end
         body.onUndo = function()
             if self.configID then call(C_Traits.RollbackConfig, self.configID); self:Render() end
@@ -523,23 +526,23 @@ function M:Page(f, kind)
     end
     blizz:SetAlpha(0)
     away()
-    hooksecurefunc(blizz, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+    hook(blizz, "SetPoint", function() if not placing then after(0, away) end end)
     view:SetShown(blizz:IsShown())
-    blizz:HookScript("OnShow", function() view:Show(); self:Render() end)
-    blizz:HookScript("OnHide", function() view:Hide(); GameTooltip:Hide() end)
+    hookScript(blizz, "OnShow", function() view:Show(); self:Render() end)
+    hookScript(blizz, "OnHide", function() view:Hide(); GameTooltip:Hide() end)
     return view
 end
 
 -- One height for every tab (asked for in game): the header, the points and
 -- the challenges' two rows of cards; the trees' panels reach down to their
 -- foot.
-function M:Size(f)
+function M:Size(f: any)
     f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP + stripH() + 16)
 end
 
 -- The reward track along the window's foot, on every tab; Blizzard's reward
 -- page out of sight, and the tree instead whenever it opens.
-function M:Strip(f)
+function M:Strip(f: any)
     local strip = CreateFrame("Frame", nil, f)
     strip:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 16)
     strip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
@@ -565,13 +568,13 @@ function M:Strip(f)
             placing = false
         end
         away()
-        hooksecurefunc(blizz, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
+        hook(blizz, "SetPoint", function() if not placing then after(0, away) end end)
         local function toTree()
-            C_Timer.After(0, function()
+            after(0, function()
                 if blizz:IsShown() and f.SelectPage then pcall(f.SelectPage, f, TREE_PAGE) end
             end)
         end
-        blizz:HookScript("OnShow", toTree)
+        hookScript(blizz, "OnShow", toTree)
         if blizz:IsShown() then toTree() end
     end
 end
@@ -587,7 +590,7 @@ function M:Build()
     end
     self:Strip(f)
     self:Size(f)
-    f:HookScript("OnShow", function() self:Size(f); self:QueueRender() end)
+    hookScript(f, "OnShow", function() self:Size(f); self:QueueRender() end)
     self:Render()
 end
 

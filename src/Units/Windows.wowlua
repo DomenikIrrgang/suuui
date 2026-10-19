@@ -1,4 +1,4 @@
--- Units/Windows.lua
+-- Units/Windows.wowlua
 -- Blizzard's other windows in SuuUI's WindowFrame look (Phase 3), restyled
 -- in place through UI.SkinWindow: their clicks, tabs and panes stay
 -- Blizzard's. Each window is skinned when its addon has loaded.
@@ -16,6 +16,11 @@
 --         text tabs along the top, the empty ones greyed.
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import isSecret from "wowlua:secret"
+import hook, hookScript from "wowlua:hooks"
+import after from "wowlua:timer"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -32,7 +37,7 @@ local M = SuuUI.RegisterModule({
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 
 -- A tab button's own label ("Talents").
-local function label(b)
+local function tabLabel(b: any): string?
     local fs = b.Text or b.text
     local t = fs and fs:GetText()
     return type(t) == "string" and t or nil
@@ -47,7 +52,7 @@ local SPELL_BINDINGS = { Spellbook = "TOGGLESPELLBOOK", Talents = "TOGGLETALENTS
 
 -- Blizzard's maximise/minimise pair, next to the key chip: a gilt plus or
 -- minus on SuuUI's edge.
-local function skinMaxMin(chrome, mm)
+local function skinMaxMin(chrome: any, mm: any)
     if not mm then return end
     for _, key in ipairs({ "MaximizeButton", "MinimizeButton" }) do
         local b = mm[key]
@@ -64,8 +69,8 @@ local function skinMaxMin(chrome, mm)
             UI.Paint(glyph, "ink-muted")
             local edge = UI.Border(b, "gilt-line")
             edge:SetShown(false)
-            b:HookScript("OnEnter", function() edge:SetShown(true); UI.Paint(glyph, "ink") end)
-            b:HookScript("OnLeave", function() edge:SetShown(false); UI.Paint(glyph, "ink-muted") end)
+            hookScript(b, "OnEnter", function() edge:SetShown(true); UI.Paint(glyph, "ink") end)
+            hookScript(b, "OnLeave", function() edge:SetShown(false); UI.Paint(glyph, "ink-muted") end)
             b:SetSize(22, 22)
         end
     end
@@ -92,8 +97,8 @@ function M:SkinSpells()
     local list = {}
     if system then
         for _, b in ipairs({ system:GetChildren() }) do
-            if b:IsObjectType("Button") and label(b) then
-                list[#list + 1] = { button = b, label = label(b), short = label(b),
+            if b:IsObjectType("Button") and tabLabel(b) then
+                list[#list + 1] = { button = b, label = tabLabel(b), short = tabLabel(b),
                     selected = function() return b.LeftActive and b.LeftActive:IsShown() or false end }
             end
         end
@@ -113,9 +118,9 @@ function M:SkinSpells()
         if type(title) == "string" then chrome:SetTitle(title) end
         chrome:UpdateTabs()
     end
-    if _G.PlayerSpellsFrameTitleText then hooksecurefunc(_G.PlayerSpellsFrameTitleText, "SetText", follow) end
-    for _, def in ipairs(list) do def.button:HookScript("OnClick", function() C_Timer.After(0, follow) end) end
-    f:HookScript("OnShow", function() C_Timer.After(0, follow) end)
+    if _G.PlayerSpellsFrameTitleText then hook(_G.PlayerSpellsFrameTitleText, "SetText", follow) end
+    for _, def in ipairs(list) do hookScript(def.button, "OnClick", function() after(0, follow) end) end
+    hookScript(f, "OnShow", function() after(0, follow) end)
     skinMaxMin(chrome, f.MaximizeMinimizeButton)
     follow()
     self.spells = chrome
@@ -161,7 +166,7 @@ function M:SkinLegacy()
         def.selected = function() return b.SelectedTexture and b.SelectedTexture:IsShown() or false end
     end
     chrome:SetTabs(list)
-    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+    hookScript(f, "OnShow", function() after(0, function() chrome:UpdateTabs() end) end)
     -- in the middle of the screen, like the Talents window (asked for in game)
     UI.CenterWindow(f, true)
     self.legacy = chrome
@@ -226,9 +231,9 @@ function M:SkinFriends()
         qj:ClearAllPoints()
         qj:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
     end
-    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+    hookScript(f, "OnShow", function() after(0, function() chrome:UpdateTabs() end) end)
     if PanelTemplates_SetTab then
-        hooksecurefunc("PanelTemplates_SetTab", function(frame) if frame == f then chrome:UpdateTabs() end end)
+        hook("PanelTemplates_SetTab", function(frame) if frame == f then chrome:UpdateTabs() end end)
     end
     self.friends = chrome
 end
@@ -254,7 +259,7 @@ function M:SkinSocial()
     -- the friends list, Recent Allies, Friend Requests and Raid. Which one is
     -- lit follows the content actually shown. Set up when the window opens
     -- (the buttons aren't there, or have no size, when it's skinned at login)
-    f:HookScript("OnShow", function() C_Timer.After(0, function() self:SocialTabs() end) end)
+    hookScript(f, "OnShow", function() after(0, function() self:SocialTabs() end) end)
     if f:IsShown() then self:SocialTabs() end
     self.social = chrome
 end
@@ -292,7 +297,7 @@ function M:SocialTabs()
         if page then
             tabs[#tabs + 1] = { button = b, label = page.label, short = page.short or page.label,
                                 selected = function() return page.frame and page.frame:IsShown() or false end }
-            if page.frame then page.frame:HookScript("OnShow", function() chrome:UpdateTabs() end) end
+            if page.frame then hookScript(page.frame, "OnShow", function() chrome:UpdateTabs() end) end
         end
     end
     chrome:SetTabs(tabs)
@@ -327,7 +332,7 @@ function M:SkinCommunities()
     end
     -- the guild module's own pages (Log, Settings): while one shows,
     -- Blizzard's tabs aren't the lit one
-    local function own(key) local g = guild(); return g and g.ownPage == key or false end
+    local function own(key: string): boolean local g = guild(); return g and g.ownPage == key or false end
     local function anyOwn() local g = guild(); return g and g.ownPage ~= nil or false end
     for _, t in ipairs({ { f.ChatTab, "Chat" }, { f.RosterTab, "Roster" }, { f.GuildInfoTab, "Info" } }) do
         local b = t[1]
@@ -337,16 +342,16 @@ function M:SkinCommunities()
             b.suuOwn = true
             tabs[#tabs + 1] = { button = b, label = t[2], short = t[2],
                                 selected = function() return not anyOwn() and b.GetChecked and b:GetChecked() or false end }
-            b:HookScript("OnClick", function()
+            hookScript(b, "OnClick", function()
                 local g = guild()
                 if g and g.ShowOwn then g:ShowOwn(nil) end
-                C_Timer.After(0, function() chrome:UpdateTabs() end)
+                after(0, function() chrome:UpdateTabs() end)
             end)
         end
     end
     local gm = SuuUI.GetModule("guild")
     if gm and gm:Get("enabled") then
-        local function ownTab(key, label)
+        local function ownTab(key: string, label: string): any
             local b = CreateFrame("Button", nil, f)
             b:SetScript("OnClick", function()
                 local g = guild()
@@ -369,8 +374,8 @@ function M:SkinCommunities()
             b:EnableMouse(false)
         end
     end
-    if f.SetDisplayMode then hooksecurefunc(f, "SetDisplayMode", function() chrome:UpdateTabs() end) end
-    f:HookScript("OnShow", function() C_Timer.After(0, function() chrome:UpdateTabs() end) end)
+    if f.SetDisplayMode then hook(f, "SetDisplayMode", function() chrome:UpdateTabs() end) end
+    hookScript(f, "OnShow", function() after(0, function() chrome:UpdateTabs() end) end)
     self.communities = chrome
 end
 
@@ -418,7 +423,7 @@ function M:SkinGroupFinder()
         if t[1] then
             tabs[#tabs + 1] = { button = t[1], label = t[2], short = t[4] or t[2],
                                 selected = function() return t[3] and t[3]:IsShown() or false end }
-            if t[3] then t[3]:HookScript("OnShow", function() chrome:UpdateTabs() end) end
+            if t[3] then hookScript(t[3], "OnShow", function() chrome:UpdateTabs() end) end
         end
     end
     chrome:SetTabs(tabs)
@@ -447,7 +452,7 @@ function M:SkinGroupFinder()
     UI.Paint(glyph, "ink-muted")
     local edge = UI.Border(gear, "gilt-line")
     edge:SetShown(false)
-    gear:SetScript("OnEnter", function(b)
+    gear:SetScript("OnEnter", function(b: any)
         edge:SetShown(true); UI.Paint(glyph, "ink")
         UI.ShowTooltip(b, { title = "Group Finder settings", description = "Channels, languages, your ad and the notifications" })
     end)
@@ -470,7 +475,7 @@ end
 --------------------------------------------------------------------------------
 
 -- "Kalimdor › Durotar": the map's continent before its name.
-local function mapTitle(mapID)
+local function mapTitle(mapID: number?): string
     local info = mapID and C_Map.GetMapInfo(mapID)
     if not info then return "World map" end
     local continent
@@ -504,7 +509,7 @@ local ROW_MID = S["space-1"] + 11 + ROW_EXTRA / 2
 local SEARCH_H = 26
 
 -- A button in the header's second row: a glyph, its edge on hover.
-local function glyphButton(b, glyphName)
+local function glyphButton(b: any, glyphName: string)
     for _, r in ipairs({ b:GetRegions() }) do r:SetAlpha(0) end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
         local t = b[get] and b[get](b)
@@ -517,20 +522,20 @@ local function glyphButton(b, glyphName)
     UI.Paint(glyph, "ink-muted")
     local edge = UI.Border(b, "gilt-line")
     edge:SetShown(false)
-    b:HookScript("OnEnter", function() edge:SetShown(true); UI.Paint(glyph, "ink") end)
-    b:HookScript("OnLeave", function() edge:SetShown(false); UI.Paint(glyph, "ink-muted") end)
+    hookScript(b, "OnEnter", function() edge:SetShown(true); UI.Paint(glyph, "ink") end)
+    hookScript(b, "OnLeave", function() edge:SetShown(false); UI.Paint(glyph, "ink-muted") end)
     b:SetSize(22, 22)
 end
 
 -- The quest log's search box in the header's second row: as tall as the
 -- row's controls allow, SuuUI's search glyph in front (the reskin hid the
 -- game's), its × a glyph (the reskin had made it a button: a bare square).
-local function styleQuestSearch(sb)
+local function styleQuestSearch(sb: any)
     sb:SetHeight(SEARCH_H)
     -- (Forever sets it to 200 x 20 on every count update; its width is
     -- SuuUI's anchors')
     if _G.QuestLogQuests_ShowQuestCount then
-        hooksecurefunc("QuestLogQuests_ShowQuestCount", function() sb:SetHeight(SEARCH_H) end)
+        hook("QuestLogQuests_ShowQuestCount", function() sb:SetHeight(SEARCH_H) end)
     end
     local icon = sb.searchIcon or sb.SearchIcon
     if icon then
@@ -542,8 +547,8 @@ local function styleQuestSearch(sb)
         icon:SetAlpha(1)
         UI.Paint(icon, "ink-muted")
         -- (the game tints it on focus)
-        sb:HookScript("OnEditFocusGained", function() UI.Paint(icon, "ink") end)
-        sb:HookScript("OnEditFocusLost", function() UI.Paint(icon, "ink-muted") end)
+        hookScript(sb, "OnEditFocusGained", function() UI.Paint(icon, "ink") end)
+        hookScript(sb, "OnEditFocusLost", function() UI.Paint(icon, "ink-muted") end)
     end
     if sb.Instructions then
         sb.Instructions:SetFontObject(SuuUI.Fonts.Get("body"))
@@ -557,8 +562,8 @@ local function styleQuestSearch(sb)
         glyph:SetSize(10, 10)
         glyph:SetPoint("CENTER")
         UI.Paint(glyph, "ink-muted")
-        x:HookScript("OnEnter", function() UI.Paint(glyph, "ink") end)
-        x:HookScript("OnLeave", function() UI.Paint(glyph, "ink-muted") end)
+        hookScript(x, "OnEnter", function() UI.Paint(glyph, "ink") end)
+        hookScript(x, "OnLeave", function() UI.Paint(glyph, "ink-muted") end)
     end
     sb.suuSearch = true
 end
@@ -569,7 +574,7 @@ end
 -- quest; found in game). The game's sums (QuestLogQuests_AddQuestButton):
 -- 8 + the title, each objective 3 (the first) or 2 under the one before,
 -- 4 without objectives, 6 for the marker; then the list stacked again.
-local function fitQuestRows(list)
+local function fitQuestRows(list: any)
     local titles, lines = list.titleFramePool, list.objectiveFramePool
     if not (titles and titles.EnumerateActive and list.Contents and list.Contents.Layout) then return end
     local below = {}
@@ -598,7 +603,7 @@ local function fitQuestRows(list)
 end
 
 -- a font object's colour in ink (UI.Paint colours regions, not fonts)
-local function inkFont(font)
+local function inkFont(font: any)
     font:SetTextColor(UI.RGBA("ink"))
 end
 
@@ -637,9 +642,9 @@ function M:RestyleQuestLog()
             end
             -- (a frame after showing, when the positions are there; again when
             -- the window changes size: fullscreen)
-            local function place() C_Timer.After(0, function() M:PlaceQuestDetails() end) end
-            d:HookScript("OnShow", place)
-            if _G.WorldMapFrame then _G.WorldMapFrame:HookScript("OnSizeChanged", place) end
+            local function place() after(0, function() M:PlaceQuestDetails() end) end
+            hookScript(d, "OnShow", place)
+            if _G.WorldMapFrame then hookScript(_G.WorldMapFrame, "OnSizeChanged", place) end
             -- the strip with Back: its art away, a hairline under it
             local back = d.BackFrame
             if back then
@@ -731,7 +736,7 @@ end
 -- count leftwards, it ran 10px over the map) starts where the headers do.
 local LIST_SHIFT = 11
 local HEADER_X = 9 -- the game's zone headers, from the list's left
-function M:PlaceQuestList(q, list)
+function M:PlaceQuestList(q: any, list: any)
     local quests = q.QuestsFrame
     if quests then
         list:ClearAllPoints()
@@ -812,14 +817,14 @@ function M:SkinWorldMap()
         local info = C_Map.GetMapInfo(f:GetMapID())
         if info and info.parentMapID and info.parentMapID > 0 then f:SetMapID(info.parentMapID) end
     end)
-    up:SetScript("OnEnter", function(self)
+    up:SetScript("OnEnter", function(self: any)
         local info = C_Map.GetMapInfo(f:GetMapID())
         local parent = info and info.parentMapID and C_Map.GetMapInfo(info.parentMapID)
         if parent then UI.ShowTooltip(self, { title = "Up to " .. parent.name, description = "Or right-click the map" }) end
         chrome.title:SetColor("ink")
     end)
     up:SetScript("OnLeave", function() UI.HideTooltip(); chrome.title:SetColor("gilt-text") end)
-    EventRegistry:RegisterCallback("MapCanvas.MapSet", function(_, mapID)
+    EventRegistry:RegisterCallback("MapCanvas.MapSet", function(_: any, mapID: number?)
         if f:IsShown() then chrome:SetTitle(mapTitle(mapID)) end
     end, self)
     -- (left where the game puts it, which it measures itself against:
@@ -834,7 +839,7 @@ function M:SkinWorldMap()
         for _, key in ipairs({ "home", "overflowButton" }) do if nb[key] then nb[key]:EnableMouse(false) end end
     end
     quietNav()
-    hooksecurefunc(f, "OnMapChanged", quietNav)
+    hook(f, "OnMapChanged", quietNav)
     -- the map right under the header (the game sets its top whenever the
     -- quest log opens or closes)
     local spacer = f.TitleCanvasSpacerFrame
@@ -844,7 +849,7 @@ function M:SkinWorldMap()
         f:OnFrameSizeChanged()
     end
     if spacer and f.UpdateSpacerFrameAnchoring then
-        hooksecurefunc(f, "UpdateSpacerFrameAnchoring", placeSpacer)
+        hook(f, "UpdateSpacerFrameAnchoring", placeSpacer)
         placeSpacer()
         -- the breadcrumb bar measures itself between the spacer's top and
         -- bottom (25px under its top): kept as tall as it was
@@ -883,8 +888,8 @@ function M:SkinWorldMap()
     if pin then glyphButton(pin, "pushpin") end
     placeRow()
     -- the game anchors them over the map again on every map change
-    hooksecurefunc(f, "OnMapChanged", placeRow)
-    if f.AdjustOverlayFrames then hooksecurefunc(f, "AdjustOverlayFrames", placeRow) end
+    hook(f, "OnMapChanged", placeRow)
+    if f.AdjustOverlayFrames then hook(f, "AdjustOverlayFrames", placeRow) end
     local list = _G.QuestScrollFrame
     if list then
         -- the log's top level with the map's (the game's -25)
@@ -937,9 +942,9 @@ function M:SkinWorldMap()
     end
     -- the quest log: restyled now and whenever the game lays it out again
     self:RestyleQuestLog()
-    if _G.QuestLogQuests_Update then hooksecurefunc("QuestLogQuests_Update", function() self:RestyleQuestLog() end) end
+    if _G.QuestLogQuests_Update then hook("QuestLogQuests_Update", function() self:RestyleQuestLog() end) end
     if _G.QuestMapFrame_ShowQuestDetails then
-        hooksecurefunc("QuestMapFrame_ShowQuestDetails", function() C_Timer.After(0, function() self:RestyleQuestLog() end) end)
+        hook("QuestMapFrame_ShowQuestDetails", function() after(0, function() self:RestyleQuestLog() end) end)
     end
     -- the status line: the coordinates, over the map's bottom left (no zoom
     -- buttons: the mouse wheel zooms, asked in game)
@@ -957,7 +962,7 @@ function M:SkinWorldMap()
     local coord = UI.Text(status, "numeric", "ink")
     coord:SetPoint("LEFT", S["space-4"], 0)
     local wait = 0
-    status:SetScript("OnUpdate", function(_, elapsed)
+    status:SetScript("OnUpdate", function(_: any, elapsed: number)
         wait = wait - elapsed
         if wait > 0 then return end
         wait = 0.05
@@ -1019,7 +1024,7 @@ function M:SkinWorldMap()
         f:SetSize(math.floor(mapW + 5 + log), math.floor(mapH + MAP_TOP + 2))
         f:OnFrameSizeChanged()
     end
-    local function setEnlarged(on)
+    local function setEnlarged(on: boolean)
         M:Set("mapEnlarged", on)
         if mm then if on then mm:SetMinimizedLook() else mm:SetMaximizedLook() end end
         fit()
@@ -1032,22 +1037,22 @@ function M:SkinWorldMap()
         -- buttons' clicks change the size
         mm:SetOnMaximizedCallback(function() end)
         mm:SetOnMinimizedCallback(function() end)
-        if mm.MaximizeButton then mm.MaximizeButton:HookScript("OnClick", function() setEnlarged(true) end) end
-        if mm.MinimizeButton then mm.MinimizeButton:HookScript("OnClick", function() setEnlarged(false) end) end
+        if mm.MaximizeButton then hookScript(mm.MaximizeButton, "OnClick", function() setEnlarged(true) end) end
+        if mm.MinimizeButton then hookScript(mm.MinimizeButton, "OnClick", function() setEnlarged(false) end) end
     end
     -- the game's fullscreen, chosen before (its setting): enlarged instead
     if not GetCVarBool("miniWorldMap") then
         SetCVar("miniWorldMap", 1)
         M:Set("mapEnlarged", true)
     end
-    hooksecurefunc(f, "Minimize", fit)
-    if f.SetQuestLogPanelShown then hooksecurefunc(f, "SetQuestLogPanelShown", fit) end
+    hook(f, "Minimize", fit)
+    if f.SetQuestLogPanelShown then hook(f, "SetQuestLogPanelShown", fit) end
     UI.CenterWindow(f, enlarged())
-    f:HookScript("OnShow", function()
+    hookScript(f, "OnShow", function()
         if mm then if enlarged() then mm:SetMinimizedLook() else mm:SetMaximizedLook() end end
         fit()
     end)
-    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+    self:On("SUUUI_SETTING_CHANGED", function(_: any, namespace: string, key: string)
         if namespace == "worldmap" and key == "enlargedSize" and f:IsShown() then fit() end
     end)
     -- a theme can change the header's height and the numbers' width
@@ -1069,7 +1074,7 @@ end
 -- hover and the choice in SuuUI's colours, a 32px icon in an edge, the price
 -- as SuuUI's money (ember digits while you can't afford it), and the name
 -- and rank fitted again for SuuUI's type.
-local function styleTrainerRow(b)
+local function styleTrainerRow(b: any)
     if not b or not b.icon then return end
     if not b.suuRow then
         b.suuRow = true
@@ -1148,7 +1153,7 @@ local function styleTrainerRow(b)
 end
 
 -- A category row: its name as a SuuUI heading over a gilt-faint rule.
-local function styleTrainerCategory(c)
+local function styleTrainerCategory(c: any)
     if not c or c.suuHead then return end
     c.suuHead = true
     for _, key in ipairs({ "LeftPiece", "RightPiece", "CenterPiece" }) do
@@ -1165,8 +1170,8 @@ local function styleTrainerCategory(c)
     c.suuRule:SetPoint("BOTTOMLEFT", S["space-2"], 1)
     c.suuRule:SetPoint("BOTTOMRIGHT", -S["space-2"], 1)
     -- the game sets its own fonts on hover: back to SuuUI's after
-    c:HookScript("OnEnter", function() SuuUI.Fonts.Apply(c.Label, "header"); UI.Paint(c.Label, "ink") end)
-    c:HookScript("OnLeave", function() SuuUI.Fonts.Apply(c.Label, "header"); UI.Paint(c.Label, "gilt-text") end)
+    hookScript(c, "OnEnter", function() SuuUI.Fonts.Apply(c.Label, "header"); UI.Paint(c.Label, "ink") end)
+    hookScript(c, "OnLeave", function() SuuUI.Fonts.Apply(c.Label, "header"); UI.Paint(c.Label, "gilt-text") end)
 end
 
 function M:SkinTrainer()
@@ -1176,15 +1181,15 @@ function M:SkinTrainer()
     local own = SuuUI.GetModule("trainer")
     if own and own:IsEnabled() then return end
     if _G.ClassTrainerFrame_InitServiceButton then
-        hooksecurefunc("ClassTrainerFrame_InitServiceButton", function(b) styleTrainerRow(b) end)
+        hook(_G, "ClassTrainerFrame_InitServiceButton", function(b: any) styleTrainerRow(b) end)
     end
     if _G.ClassTrainerFrame_InitCategoryButton then
-        hooksecurefunc("ClassTrainerFrame_InitCategoryButton", function(c) styleTrainerCategory(c) end)
+        hook(_G, "ClassTrainerFrame_InitCategoryButton", function(c: any) styleTrainerCategory(c) end)
     end
     -- a profession's next rank (Journeyman Blacksmith) sits over the list as
     -- a row of its own, filled by the list's update
     if _G.ClassTrainerFrame_Update then
-        hooksecurefunc("ClassTrainerFrame_Update", function()
+        hook(_G, "ClassTrainerFrame_Update", function()
             local step = _G.ClassTrainerFrameSkillStepButton
             if step and step:IsShown() then styleTrainerRow(step) end
         end)
@@ -1230,8 +1235,8 @@ function M:SkinTrainer()
         UI.Reskin(f)
         mine:SetCopper(GetMoney() or 0)
     end
-    f:HookScript("OnEvent", function(_, event) if event == "PLAYER_MONEY" or event == "TRAINER_UPDATE" then mine:SetCopper(GetMoney() or 0) end end)
-    f:HookScript("OnShow", function() C_Timer.After(0, title) end)
+    hookScript(f, "OnEvent", function(_, event) if event == "PLAYER_MONEY" or event == "TRAINER_UPDATE" then mine:SetCopper(GetMoney() or 0) end end)
+    hookScript(f, "OnShow", function() after(0, title) end)
     if f:IsShown() then title() end
     self.trainer = chrome
 end
@@ -1260,14 +1265,14 @@ local COLLECTION_TABS = {
 }
 
 -- Whether a collection's count is 0 (an unreadable count isn't).
-local function emptyCount(def)
+local function emptyCount(def: any): boolean
     if not def.count then return false end
     local ok, n = pcall(def.count)
     return ok and type(n) == "number" and n == 0
 end
 
 -- The game's tab for a collection (by its ID), if there is one.
-local function gameTab(f, id)
+local function gameTab(f: any, id: number): any
     for _, t in ipairs(f.TabContainer and f.TabContainer.Tabs or {}) do
         if t:GetID() == id then return t end
     end
@@ -1309,7 +1314,7 @@ local PANE_ART = { "^collections%-background", "UI%-Frame%-Inner", "^uiframe%-ac
                    "^uiframe%-tab", "^_uiframe%-tab" }
 local PANE_FILES = { [374154] = true }
 
-local function clearPaneArt(frame, depth)
+local function clearPaneArt(frame: any, depth: number)
     if depth > 8 then return end
     for _, r in ipairs({ frame:GetRegions() }) do
         if r:GetObjectType() == "Texture" then
@@ -1333,7 +1338,7 @@ end
 local CONTROL_H = 26
 local PANES = { "MountJournal", "PetJournal", "ToyBox", "HeirloomsJournal", "WardrobeCollectionFrame" }
 
-local function sizeControls(pane)
+local function sizeControls(pane: any)
     if InCombatLockdown() then return end
     for _, key in ipairs({ "searchBox", "SearchBox", "FilterButton", "FilterDropdown", "filterButton" }) do
         local c = pane[key]
@@ -1346,9 +1351,7 @@ end
 -- hairline with its jewel when chosen; the game shows its LeftActive art on
 -- the chosen one), the tab as wide as its label. The game's own label keeps
 -- getting the game's font, so it stays out of sight.
-local isSecret = issecretvalue or function() return false end
-
-local function skinPaneTab(tab)
+local function skinPaneTab(tab: any)
     if not tab or tab.suuPaneTab then return end
     tab.suuNoButton = true
     for _, r in ipairs({ tab:GetRegions() }) do r:SetAlpha(0) end
@@ -1373,10 +1376,10 @@ local function skinPaneTab(tab)
         if on then marker:SetChosen(tab) elseif marker.chosen == tab then marker:SetChosen(nil) end
     end
     if tab.LeftActive then
-        for _, m in ipairs({ "Show", "Hide", "SetShown" }) do hooksecurefunc(tab.LeftActive, m, draw) end
+        for _, m in ipairs({ "Show", "Hide", "SetShown" }) do hook(tab.LeftActive, m, draw) end
     end
-    tab:HookScript("OnEnter", function() hover = true; draw() end)
-    tab:HookScript("OnLeave", function() hover = false; draw() end)
+    hookScript(tab, "OnEnter", function() hover = true; draw() end)
+    hookScript(tab, "OnLeave", function() hover = false; draw() end)
     tab.suuLabel = label
     tab.suuPaneTab = draw
     draw()
@@ -1386,7 +1389,7 @@ end
 -- arcane glow behind it (SuuUI's soft disc) instead of a square fill.
 local SOFT_DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
 
-local function skinSlotButtons(frame, depth)
+local function skinSlotButtons(frame: any, depth: number)
     if not frame or depth > 4 then return end
     for _, b in ipairs({ frame:GetChildren() }) do
         local sel = b.SelectedTexture
@@ -1408,7 +1411,7 @@ end
 -- level with the search box's, space-5 between the tabs. Read from where
 -- the game put those two (skipped while their places can't be read);
 -- out of combat, the window being protected.
-local function placePaneTabs(w)
+local function placePaneTabs(w: any)
     if InCombatLockdown() or not w then return end
     local items, sets = w.ItemsTab or _G.WardrobeCollectionFrameTab1, w.SetsTab or _G.WardrobeCollectionFrameTab2
     local class, search = w.ClassDropdown, w.searchBox
@@ -1467,9 +1470,9 @@ function M:SkinCollections()
         self:SetCollectionTabs()
     end
     if _G.CollectionsJournal_UpdateSelectedTab then
-        hooksecurefunc("CollectionsJournal_UpdateSelectedTab", function() C_Timer.After(0, refresh) end)
+        hook(_G, "CollectionsJournal_UpdateSelectedTab", function() after(0, refresh) end)
     end
-    f:HookScript("OnShow", function() C_Timer.After(0, refresh) end)
+    hookScript(f, "OnShow", function() after(0, refresh) end)
     self:SetCollectionTabs()
     if f:IsShown() then refresh() end
 end

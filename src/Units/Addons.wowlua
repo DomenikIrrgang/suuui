@@ -1,4 +1,4 @@
--- Units/Addons.lua
+-- Units/Addons.wowlua
 -- SuuUI's own AddOns window (plan 3.7, design component AddonsWindow):
 -- the character select (this character or all), a search, Enable all and
 -- Disable all; a performance strip (memory, the addons' share of the CPU,
@@ -12,6 +12,11 @@
 -- the game's AddonList is closed and this one opens instead.
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import isSecret from "wowlua:secret"
+import hookScript from "wowlua:hooks"
+import every from "wowlua:timer"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -24,9 +29,9 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+-- (secrecy tested first: comparing a secret is an error in strict mode)
+local function plain(v: unknown): v is string | number | boolean | table return not isSecret(v) and v ~= nil end
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h end
@@ -47,7 +52,7 @@ local STATUS = {
 }
 
 -- "1.2 MB", "340 KB"
-local function memory(kb)
+local function memory(kb: any): string?
     if not plain(kb) or kb <= 0 then return nil end
     if kb >= 1024 then return ("%.1f MB"):format(kb / 1024) end
     return ("%d KB"):format(math.floor(kb + 0.5))
@@ -55,14 +60,14 @@ end
 
 -- A title's leading icon, taken out to show in the row's icon slot (inline,
 -- it sits on the text's baseline, not in the middle of the row).
-local function splitIcon(text)
+local function splitIcon(text: string): (string, any)
     local path, rest = text:match("^%s*|T([^:|]+)[^|]*|t%s*(.*)$")
-    if path then return rest, tonumber(path) or path end
+    if path then return rest :: string, tonumber(path) or path end
     return text
 end
 
 -- a title without its colour codes and icons, for the search
-local function bare(text)
+local function bare(text: string?): (string, number)
     return (text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", ""):gsub("|A.-|a", "")
 end
 
@@ -70,12 +75,18 @@ end
 -- Data
 --------------------------------------------------------------------------------
 
+-- An addon as the window lists it.
+type Addon = {
+    index: number, name: string, title: string, icon: any, notes?: string, reason: any, deps: any[],
+    parent?: Addon, children?: Addon[], suuui?: boolean, memory: any,
+}
+
 -- the character the toggles are for: this one, or nil for all
 function M:Character()
     return self.perChar and UnitGUID("player") or nil
 end
 
-function M:Enabled(i)
+function M:Enabled(i: number): boolean
     return (call(A.GetAddOnEnableState, i, self:Character()) or 0) > 0
 end
 
@@ -114,7 +125,7 @@ function M:Collect()
         e.suuui = e.name == "SuuUI" or tContains(e.deps, "SuuUI")
     end
     local ordered = {}
-    local function add(e)
+    local function add(e: Addon)
         ordered[#ordered + 1] = e
         for _, c in ipairs(e.children or {}) do add(c) end
     end
@@ -125,7 +136,7 @@ function M:Collect()
     return ordered
 end
 
-function M:Status(e)
+function M:Status(e: Addon): string
     if call(A.IsAddOnLoaded, e.index) then return "loaded" end
     local _, reason = call(A.IsAddOnLoadable, e.index, self:Character())
     if reason == "INTERFACE_VERSION" then return "outdated" end
@@ -157,13 +168,13 @@ end
 -- The window
 --------------------------------------------------------------------------------
 
-local function chip(parent)
+local function chip(parent: any): any
     local c = CreateFrame("Frame", nil, parent)
     c:SetHeight(16)
     c.border = UI.Border(c, "gilt-faint")
     c.text = UI.Text(c, "micro", "ink-muted")
     c.text:SetPoint("CENTER", 0, 0)
-    function c:Set(label, ink, edge)
+    function c:Set(label: string, ink: string, edge: string)
         self.text:SetValue(label)
         self.text:SetColor(ink)
         self.border:SetColor(edge)
@@ -172,7 +183,7 @@ local function chip(parent)
     return c
 end
 
-function M:BuildRow(parent)
+function M:BuildRow(parent: any): any
     local r = CreateFrame("Frame", nil, parent)
     local line = CreateFrame("Button", nil, r)
     line:SetPoint("TOPLEFT")
@@ -194,7 +205,7 @@ function M:BuildRow(parent)
     r.indent:SetPoint("TOPLEFT", S["space-3"] + 10, 0)
     r.indent:SetPoint("BOTTOMLEFT", S["space-3"] + 10, 0)
     r.indent:SetWidth(1)
-    r.toggle = UI.Toggle(line, { onChange = function(on) self:SetEnabled(r.addon, on) end })
+    r.toggle = UI.Toggle(line, { onChange = function(on: boolean) self:SetEnabled(r.addon, on) end })
     -- the icon slot, in the middle of the line: the addon's own icon, or
     -- SuuUI's emblem on SuuUI and its plugins; empty keeps the titles in line
     r.icon = line:CreateTexture(nil, "ARTWORK")
@@ -251,7 +262,7 @@ end
 function M:Build()
     self.folded, self.rows = {}, {}
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIAddonsWindow", title = "AddOns", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end })
+        footer = true, onClose = function(win: any) win:Hide() end })
     w:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
     w:Hide()
     w.scroll:Hide()
@@ -274,7 +285,7 @@ function M:Build()
     bar:SetHeight(30)
     self.who = UI.Select(bar, { width = 200, value = "me", options = {
         { value = "me", label = UnitName("player") or "This character" }, { value = "all", label = "All characters" } },
-        onChange = function(v)
+        onChange = function(v: string)
             self.perChar = v == "me"
             self:Draw()
         end })
@@ -303,7 +314,7 @@ function M:Build()
     UI.Fill(perf, "surface-sunk"):SetAllPoints()
     UI.Border(perf, "gilt-faint")
     local x = S["space-5"]
-    local function metric(label, w2)
+    local function metric(label: string, w2: number): any
         local l = UI.Text(perf, "caption", "ink-muted")
         l:SetPoint("TOPLEFT", x, -S["space-3"])
         l:SetValue(label)
@@ -326,7 +337,7 @@ function M:Build()
     sub:SetPoint("TOPLEFT", perf, "BOTTOMLEFT", 0, -S["space-4"])
     sub:SetPoint("TOPRIGHT", perf, "BOTTOMRIGHT", 0, -S["space-4"])
     sub:SetHeight(20)
-    self.outdated = UI.Toggle(sub, { onChange = function(on)
+    self.outdated = UI.Toggle(sub, { onChange = function(on: boolean)
         call(A.SetAddonVersionCheck, not on)
         self:Draw()
     end })
@@ -400,7 +411,7 @@ function M:PlaceReload()
     end
 end
 
-function M:SetEnabled(e, on)
+function M:SetEnabled(e: Addon?, on: boolean)
     if not e then return end
     if on then call(A.EnableAddOn, e.index, self:Character()) else call(A.DisableAddOn, e.index, self:Character()) end
     self:Draw()
@@ -478,7 +489,7 @@ function M:Draw()
     self.apply.tooltip = not ready and { title = "Reload to apply", description = "After the fight." } or nil
 end
 
-function M:DrawRow(r, e)
+function M:DrawRow(r: any, e: Addon)
     local module = e.parent ~= nil
     local h = module and MODULE_H or LINE_H
     r.line:SetHeight(h)
@@ -514,7 +525,7 @@ function M:DrawRow(r, e)
     r.title:SetValue(e.title)
     local version = call(A.GetAddOnMetadata, e.index, "Version")
     local subText = {}
-    if suite then subText[#subText + 1] = #e.children .. " modules" end
+    if suite and e.children then subText[#subText + 1] = #e.children .. " modules" end
     if plain(version) and version ~= "" then subText[#subText + 1] = version end
     r.sub:SetValue(table.concat(subText, " · "))
     local open = self.open == e.name
@@ -532,7 +543,8 @@ function M:DrawRow(r, e)
         local facts = {}
         local author = call(A.GetAddOnMetadata, e.index, "Author")
         if plain(author) and author ~= "" then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "By|r " .. author end
-        if memory(e.memory) then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "Memory|r " .. memory(e.memory) end
+        local mem = memory(e.memory)
+        if mem then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "Memory|r " .. mem end
         r.facts:ClearAllPoints()
         r.facts:SetPoint("TOPLEFT", r.notes, "BOTTOMLEFT", 0, -S["space-3"])
         r.facts:SetValue(table.concat(facts, "      "))
@@ -575,7 +587,7 @@ function M:OnEnable()
     local list = _G.AddonList
     if list and not self.hooked then
         self.hooked = true
-        list:HookScript("OnShow", function()
+        hookScript(list, "OnShow", function()
             if not self:IsEnabled() then return end
             HideUIPanel(list)
             self:Open()
@@ -586,7 +598,7 @@ function M:OnEnable()
         self:OnGameEvent(e, function() if self.window:IsShown() then self:Draw() end end)
     end
     -- the memory and CPU while it shows, every 15 seconds (the memory count is dear)
-    C_Timer.NewTicker(15, function()
+    every(15, function()
         if self.window:IsShown() then self:DrawPerf(); self:Draw() end
     end)
     -- the theme: the 16px numbers' face (set apart from their style) and

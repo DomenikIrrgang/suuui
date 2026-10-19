@@ -1,4 +1,4 @@
--- Units/Minimap.lua
+-- Units/Minimap.wowlua
 -- The minimap (step 2.1, design board "Minimap"): top right, 28px from the
 -- edges. The zone (header, gilt) and subzone (caption, ink) above; the map
 -- itself, round, `minimap` across, in a 1px gilt ring with the inset-anchor
@@ -15,6 +15,12 @@
 -- Left click pings as always; right click opens the tracking menu; the mouse
 -- wheel zooms (an overlay passes the clicks through). Turned off: a /reload
 -- hands it all back.
+
+import SuuUI from "/Core/API"
+import isSecret from "wowlua:secret"
+import hook from "wowlua:hooks"
+import after, every from "wowlua:timer"
+import defer from "wowlua:combat"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -38,8 +44,7 @@ local M = SuuUI.RegisterModule({
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = TEX .. "Glyphs\\"
 local ROUND_MASK = 186178
-local isSecret = issecretvalue or function() return false end
-local function readable(v) return not isSecret(v) and type(v) == "number" end
+local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 -- the zone lines (zone, subzone, the instance line) end this far above the
 -- disc: the north marker's 8px over the ring, plus space-3
 local ZONE_GAP = 8 + S["space-3"]
@@ -48,7 +53,7 @@ local ZONE_GAP = 8 + S["space-3"]
 -- Round buttons and decorations (shared by the real map and the preview)
 --------------------------------------------------------------------------------
 
-local function circleTex(parent, file, color, layer, sublevel)
+local function circleTex(parent: any, file: string, color: string, layer: string?, sublevel: number?): any
     local t = parent:CreateTexture(nil, layer or "ARTWORK", nil, sublevel or 0)
     t:SetTexture(TEX .. file)
     UI.Paint(t, color)
@@ -56,7 +61,7 @@ local function circleTex(parent, file, color, layer, sublevel)
 end
 
 -- A round button: surface, a gilt-line edge (gilt on hover), a glyph.
-local function roundButton(parent, size, glyph, glyphSize)
+local function roundButton(parent: any, size: number, glyph: string?, glyphSize: number): any
     local b = CreateFrame("Button", nil, parent)
     b:SetSize(size, size)
     b.fill = circleTex(b, "CircleFill.tga", "surface", "BACKGROUND")
@@ -82,13 +87,16 @@ local function roundButton(parent, size, glyph, glyphSize)
 end
 
 -- The "N": 9.5 px in header's face (again when a theme changes it).
-local function northFace(text)
+local function northFace(text: any)
     text:SetFont(SuuUI.Fonts.Get("header"):GetFont(), 9.5, "")
 end
 
+-- What the block's buttons do (the real map's or the preview's).
+type Handlers = { jewel: any, zoom: (delta: number) -> (), clock: any, mailTip: () -> any }
+
 -- The ring, ornaments, north marker and the ring's buttons around `disc`.
-local function decorate(disc, handlers)
-    local d = {}
+local function decorate(disc: any, handlers: Handlers): { [string]: any }
+    local d: { [string]: any } = {}
     local over = CreateFrame("Frame", nil, disc)
     over:SetAllPoints()
     over:SetFrameLevel(disc:GetFrameLevel() + 20)
@@ -147,7 +155,7 @@ local function decorate(disc, handlers)
 end
 
 -- The whole block: zone above, the disc, the clock below.
-local function buildBlock(parent, name, handlers)
+local function buildBlock(parent: any, name: string?, handlers: Handlers): any
     local f = CreateFrame("Frame", name, parent)
     f.zone = UI.Text(f, "header", "gilt-text")
     f.zone:SetShadowed(true)
@@ -177,7 +185,7 @@ end
 
 -- The zone lines stack upward from the disc (the map never moves when a
 -- line comes or goes): the instance line lowest, the subzone, the zone.
-local function stackZone(f)
+local function stackZone(f: any)
     local below = nil
     for _, line in ipairs({ f.instance, f.sub, f.zone }) do
         line:ClearAllPoints()
@@ -191,7 +199,7 @@ local function stackZone(f)
     end
 end
 
-local function layoutBlock(f, size, zone, clock)
+local function layoutBlock(f: any, size: number, zone: boolean, clock: boolean)
     f.disc:SetSize(size, size)
     for _, line in ipairs({ f.zone, f.sub, f.instance }) do
         line:SetWidth(size + 40)
@@ -257,8 +265,9 @@ local function mailTip()
     return { title = "New mail", subtitle = #lines > 0 and "From" or nil, lines = lines }
 end
 
-function M:Zoom(delta)
-    local zoom, max = Minimap:GetZoom(), Minimap:GetZoomLevels() - 1
+function M:Zoom(delta: number)
+    -- (GetZoom and GetZoomLevels are declared without returns in 0.9.1)
+    local zoom: number, max: number = Minimap:GetZoom() :: any, (Minimap:GetZoomLevels() :: any) - 1
     zoom = math.max(0, math.min(max, zoom + delta))
     Minimap:SetZoom(zoom)
 end
@@ -270,7 +279,7 @@ end
 local hidden = CreateFrame("Frame")
 hidden:Hide()
 
-local function alphaOff(f)
+local function alphaOff(f: any)
     if not f then return end
     f:SetAlpha(0)
     if f.EnableMouse then f:EnableMouse(false) end
@@ -325,7 +334,7 @@ function M:PlaceMinimap()
     self.placing = nil
     self:StripBlizzard()
     -- a zoom nudge redraws the render at the new size
-    local zoom = Minimap:GetZoom()
+    local zoom: number = Minimap:GetZoom() :: any
     Minimap:SetZoom(zoom > 0 and 0 or 1)
     Minimap:SetZoom(zoom)
 end
@@ -334,7 +343,7 @@ end
 -- "Raid · 20 players" (Forever has no heroic modes: the kind and the size
 -- are what there is to say). Blizzard's difficulty badge stays in the
 -- invisible cluster.
-local function instanceLine(kind, size)
+local function instanceLine(kind: string, size: string): string
     local inkHex = T.color["ink"].hex
     return ("|cff%s%s|r · %s players"):format(inkHex, kind, size)
 end
@@ -356,10 +365,10 @@ end
 function M:Guard()
     if self.guarded then return end
     self.guarded = true
-    hooksecurefunc(Minimap, "SetParent", function()
+    hook(Minimap, "SetParent", function()
         if self.placing or not self:IsEnabled() or not self.block then return end
         if Minimap:GetParent() ~= self.block.disc then
-            C_Timer.After(0, function() if self:IsEnabled() then self:PlaceMinimap() end end)
+            after(0, function() if self:IsEnabled() then self:PlaceMinimap() end end)
         end
     end)
 end
@@ -377,16 +386,7 @@ function M:Overlay()
         if o.SetPassThroughButtons then o:SetPassThroughButtons("LeftButton") end
         if o.SetPropagateMouseMotion then o:SetPropagateMouseMotion(true) end
     end
-    if InCombatLockdown() then
-        local wait = CreateFrame("Frame")
-        wait:RegisterEvent("PLAYER_REGEN_ENABLED")
-        wait:SetScript("OnEvent", function(frame)
-            frame:UnregisterAllEvents()
-            passThrough()
-        end)
-    else
-        passThrough()
-    end
+    defer(passThrough)
     o:EnableMouseWheel(self:Get("wheelZoom"))
     Minimap:EnableMouseWheel(false)
     o:SetScript("OnMouseWheel", function(_, delta) self:Zoom(delta > 0 and 1 or -1) end)
@@ -408,7 +408,7 @@ end
 
 local function noop() end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.preview then
         local f = buildBlock(parent, nil, { jewel = noop, zoom = noop, clock = noop, mailTip = mailTip })
         -- a stand-in map: the world's dark, a few roads
@@ -434,7 +434,7 @@ end
 
 local SECTION = {
     id = "minimap", label = "Minimap", category = "World", order = 10,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any): any return M:PreviewView(parent) end,
     groups = {
         { title = "Minimap", description = "Left click pings, right click picks what the map tracks, the wheel zooms. The SuuUI button on the ring opens these settings (right click: edit layout).", rows = {
             { key = "size", label = "Size", control = "slider", min = 140, max = 260, step = 2, unit = "px", combat = true,
@@ -473,11 +473,11 @@ function M:OnEnable()
     if not Minimap then return end
     if not self.block then
         local handlers = {
-            jewel = function(_, button)
+            jewel = function(_: any, button: string)
                 if button == "RightButton" then SuuUI.EditMode.Enter() else SuuUI.ToggleSettings() end
             end,
-            zoom = function(delta) self:Zoom(delta) end,
-            clock = function(_, button)
+            zoom = function(delta: number) self:Zoom(delta) end,
+            clock = function(_: any, button: string)
                 if button == "RightButton" then
                     if ToggleCalendar then ToggleCalendar() end
                 else
@@ -494,11 +494,11 @@ function M:OnEnable()
     -- the game's clock code (GameTimeFrame, the calendar) loaded
     if not C_AddOns.IsAddOnLoaded("Blizzard_TimeManager") then pcall(C_AddOns.LoadAddOn, "Blizzard_TimeManager") end
     -- LibDBIcon and others place their buttons by this
-    GetMinimapShape = function() return "ROUND" end
+    _G.GetMinimapShape = function() return "ROUND" end
     self:RegisterMover(self.block, { key = "position", label = "Minimap" })
     self:RegisterSettings(SECTION)
     -- one frame later: moving it during a panel opening taints map pins
-    C_Timer.After(0, function()
+    after(0, function()
         if not self:IsEnabled() then return end
         self:PlaceMinimap()
         self:Guard()
@@ -525,7 +525,7 @@ function M:OnEnable()
     self:UpdateDifficulty()
     self:OnGameEvent("CVAR_UPDATE", function() self:UpdateClock() end)
     if not self.ticker then
-        self.ticker = C_Timer.NewTicker(10, function() if self:IsEnabled() then self:UpdateClock() end end)
+        self.ticker = every(10, function() if self:IsEnabled() then self:UpdateClock() end end)
     end
     for _, key in ipairs({ "size", "zone", "clock" }) do
         self:Watch(key, function()

@@ -1,4 +1,4 @@
--- Units/Inspect.lua
+-- Units/Inspect.wowlua
 -- SuuUI's own inspect window (plan 3.7, design component InspectWindow,
 -- direction B "Side panel", chosen 2026-10-17): the inspected player's name,
 -- level, race, class and guild; their gear on the Character window's paper
@@ -12,6 +12,11 @@
 -- (Forever's own inspect has no talents button: probed 2026-10-17).
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import isSecret from "wowlua:secret"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -24,9 +29,8 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
+local function call(fn: any, ...: any): (any, any, any, any, any, any, any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i end
@@ -55,14 +59,14 @@ local BODY_H = T.type["unit-name-lg"].lineHeight + S["space-4"] + TOOLS_H + S["s
 local WIDTH = S["space-5"] + DOLL_W + S["space-6"] + SIDE_W + S["space-5"]
 local HEIGHT = S["space-5"] + T.type.header.lineHeight + S["space-4"] + 1 + S["space-4"] + BODY_H + S["space-5"]
 
-local function itemLevel(link)
+local function itemLevel(link: any): number?
     if not plain(link) then return nil end
     local lvl = call(C_Item and C_Item.GetDetailedItemLevelInfo or GetDetailedItemLevelInfo, link)
     return plain(lvl) and lvl > 0 and lvl or nil
 end
 
 -- the rank's name as the game's own inspect window words it
-local function rankName(unit, rank)
+local function rankName(unit: string, rank: number): string
     if not rank or rank <= 0 then return PVP_RANK_0_NAME or "Civilian" end
     local affix = (UnitFactionGroup(unit) == "Alliance") and "_1" or "_0"
     local key = "PVP_RANK_" .. tostring(((Enum.PvPRanks and Enum.PvPRanks.Rank_1) or 5) + rank - 1) .. affix
@@ -75,7 +79,7 @@ end
 -- The window
 --------------------------------------------------------------------------------
 
-function M:BuildSlot(parent, key)
+function M:BuildSlot(parent: Frame, key: string): any
     local id = GetInventorySlotInfo(key .. "Slot")
     local b = UI.ItemSlot(parent, SLOT)
     b.slotID, b.key = id, key
@@ -115,8 +119,8 @@ function M:BuildSlot(parent, key)
 end
 
 -- One block of the side panel: a header and rows under it.
-local function block(parent, title)
-    local f = CreateFrame("Frame", nil, parent)
+local function block(parent: Frame, title: string): any
+    local f = CreateFrame("Frame", nil, parent) :: any
     f.head = UI.Text(f, "header", "gilt-text")
     f.head:SetPoint("TOPLEFT")
     f.head:SetValue(title)
@@ -124,7 +128,7 @@ local function block(parent, title)
     return f
 end
 
-local function row(f, label)
+local function row(f: any, label: string): any
     local l = UI.Text(f, "caption", "ink-muted")
     l:SetPoint("TOPLEFT", 0, -f.y)
     local v = UI.Text(f, "numeric", "ink")
@@ -145,7 +149,7 @@ end
 function M:Build()
     self.slots = {}
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIInspectWindow", title = "Inspect", width = WIDTH, height = HEIGHT,
-        onClose = function(win) win:Hide() end })
+        onClose = function(win: any) win:Hide() end })
     w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
     w:Hide()
     w.scroll:Hide()
@@ -177,7 +181,7 @@ function M:Build()
     tools:SetPoint("TOPLEFT", id, "BOTTOMLEFT", 0, -S["space-4"])
     tools:SetPoint("TOPRIGHT", id, "BOTTOMRIGHT", 0, -S["space-4"])
     tools:SetHeight(TOOLS_H)
-    self.compareToggle = UI.Toggle(tools, { value = self.compare, onChange = function(on)
+    self.compareToggle = UI.Toggle(tools, { value = self.compare, onChange = function(on: boolean)
         self.compare = on
         self:Draw()
     end })
@@ -307,7 +311,7 @@ end
 -- Drawing
 --------------------------------------------------------------------------------
 
-function M:DrawSlot(b)
+function M:DrawSlot(b: any)
     local unit, s = self.unit, b.skin
     local texture = unit and not self.loading and GetInventoryItemTexture(unit, b.slotID)
     b.delta:Hide()
@@ -342,7 +346,7 @@ function M:Draw()
     -- who
     local name = GetUnitName(unit, true)
     local _, class = UnitClass(unit)
-    local token = class and "class-" .. class:lower()
+    local token = class and not isSecret(class) and "class-" .. (class :: string):lower()
     if token and T.color[token] then
         UI.Paint(self.idRow.diamond, token)
         self.idRow.name:SetColor(token)
@@ -429,7 +433,7 @@ end
 
 -- The game's frame out of sight: see-through and off screen, still shown,
 -- and back off screen whenever the game places it again.
-function M:Away(frame)
+function M:Away(frame: any)
     if not frame or self.away then return end
     self.away = true
     local placing = false
@@ -442,12 +446,12 @@ function M:Away(frame)
         placing = false
     end
     away()
-    hooksecurefunc(frame, "SetPoint", function() if not placing then C_Timer.After(0, away) end end)
-    frame:HookScript("OnShow", function() C_Timer.After(0, away) end)
+    hook(frame, "SetPoint", function() if not placing then after(0, away) end end)
+    hookScript(frame, "OnShow", function() after(0, away) end)
 end
 
 -- Asked: the window opens at once, waiting for the gear.
-function M:Asked(unit)
+function M:Asked()
     local f = _G.InspectFrame
     if not (f and f.unit) then return end
     self.unit, self.loading = f.unit, true
@@ -456,7 +460,7 @@ function M:Asked(unit)
     self:Draw()
     -- the answer comes with INSPECT_READY; if it never does, show what there is
     local asked = self.unit
-    C_Timer.After(5, function()
+    after(5, function()
         if self.loading and self.unit == asked and self.window:IsShown() then
             self.loading = false
             self:Draw()
@@ -477,13 +481,13 @@ function M:HookInspect()
     local f = _G.InspectFrame
     if not f or self.hooked then return end
     self.hooked = true
-    hooksecurefunc("InspectFrame_Show", function(unit)
-        if self:IsEnabled() then self:Asked(unit) end
-    end)
-    f:HookScript("OnShow", function()
+    hook(_G, "InspectFrame_Show", function()
+        if self:IsEnabled() then self:Asked() end
+    end, { addon = "Blizzard_InspectUI" })
+    hookScript(f, "OnShow", function()
         if self:IsEnabled() then self:Ready() end
     end)
-    f:HookScript("OnHide", function()
+    hookScript(f, "OnHide", function()
         if self:IsEnabled() and self.window:IsShown() and not self.loading then self.window:Hide() end
     end)
 end
@@ -493,7 +497,8 @@ function M:OnEnable()
     self:HookInspect()
     self:OnGameEvent("ADDON_LOADED", function(_, name) if name == "Blizzard_InspectUI" then self:HookInspect() end end)
     self:OnGameEvent("INSPECT_READY", function(_, guid)
-        if self.unit and self.window:IsShown() and UnitGUID(self.unit) == guid then
+        local g = self.unit and UnitGUID(self.unit)
+        if self.unit and self.window:IsShown() and not isSecret(g) and g == guid then
             self.loading = false
             self:Draw()
         end

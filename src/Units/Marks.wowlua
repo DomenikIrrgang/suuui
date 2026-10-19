@@ -1,4 +1,4 @@
--- Units/Marks.lua
+-- Units/Marks.wowlua
 -- Your own marks on the map (3.5, stage 3): a spot you keep, with a name
 -- and one of eight symbols, saved per character. Ctrl+click on the world
 -- map drops one (the gesture the game uses for its own waypoint: SuuUI's
@@ -13,6 +13,11 @@
 -- A mark: { id, map (uiMapID), x, y (0-1), name, symbol, from (who shared
 -- it; nil: yours), at (time made) }.
 
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local M = SuuUI.RegisterModule({
     id = "marks",
     name = "Map marks",
@@ -22,8 +27,14 @@ local M = SuuUI.RegisterModule({
 
 local UI = SuuUI.UI
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
+-- wowlua:secret's test, as a predicate of this file's own (0.9.1 narrows
+-- nothing through an imported predicate while the project has an import
+-- cycle; Docs/port-notes/units-group.md)
+local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
+type Readable = string | number | boolean | table | function
+local function plain(v: unknown): v is Readable return v ~= nil and not isSecret(v) end
+
+type Mark = { id: number, map: number, x: number, y: number, name: string, symbol: string, from?: string, at: number, [string]: any }
 
 M.SYMBOLS = { "star", "circle", "diamond", "triangle", "moon", "square", "cross", "skull" }
 local SYMBOL = {}
@@ -36,27 +47,27 @@ local PREFIX = "SuuUI"
 -- The marks
 --------------------------------------------------------------------------------
 
-local function store(self)
+local function store(self: any): any
     local data = self:CharData()
     data.marks = data.marks or {}
     data.nextID = data.nextID or 1
     return data
 end
 
-function M:Marks()
+function M:Marks(): Mark[]
     return store(self).marks
 end
 
-function M:Get(id)
+function M:Get(id: any): Mark?
     for _, m in ipairs(self:Marks()) do if m.id == id then return m end end
 end
 
-local function changed(self)
+local function changed(self: any)
     self:Emit("SUUUI_MARKS_CHANGED")
 end
 
 -- (room for one more: the oldest shared mark goes, then the oldest)
-local function makeRoom(list)
+local function makeRoom(list: Mark[])
     if #list < MAX_MARKS then return end
     for i, m in ipairs(list) do
         if m.from then table.remove(list, i) return end
@@ -64,10 +75,10 @@ local function makeRoom(list)
     table.remove(list, 1)
 end
 
-function M:Add(map, x, y, fields)
+function M:Add(map: number, x: number, y: number, fields: { [string]: any }?): Mark
     local data = store(self)
     makeRoom(data.marks)
-    local mark = { id = data.nextID, map = map, x = x, y = y, name = "", symbol = "star", at = time() }
+    local mark: Mark = { id = data.nextID, map = map, x = x, y = y, name = "", symbol = "star", at = time() }
     for k, v in pairs(fields or {}) do mark[k] = v end
     if not SYMBOL[mark.symbol] then mark.symbol = "star" end
     data.nextID = data.nextID + 1
@@ -76,7 +87,7 @@ function M:Add(map, x, y, fields)
     return mark
 end
 
-function M:Update(id, fields)
+function M:Update(id: any, fields: { [string]: any }): Mark?
     local mark = self:Get(id)
     if not mark then return end
     for k, v in pairs(fields) do mark[k] = v end
@@ -85,7 +96,7 @@ function M:Update(id, fields)
     return mark
 end
 
-function M:Remove(id)
+function M:Remove(id: any)
     local list = self:Marks()
     for i, m in ipairs(list) do
         if m.id == id then
@@ -99,7 +110,7 @@ end
 
 -- A mark's place on another map (a zone's mark on its continent): through
 -- the world's coordinates; nil when that map doesn't hold it.
-function M:PlaceOn(mark, mapID)
+function M:PlaceOn(mark: Mark, mapID: number): (number?, number?)
     if mark.map == mapID then return mark.x, mark.y end
     if not (C_Map.GetWorldPosFromMapPos and C_Map.GetMapPosFromWorldPos and CreateVector2D) then return end
     local ok, continent, world = pcall(C_Map.GetWorldPosFromMapPos, mark.map, CreateVector2D(mark.x, mark.y))
@@ -119,7 +130,7 @@ end
 -- opacity 0). On while a mark shows the way, your own value back after
 -- (kept in the saved data, so a /reload on the way still puts it back).
 local NAV_CVAR = "showInGameNavigation"
-local function navigation(self, on)
+local function navigation(self: any, on: boolean)
     local data = store(self)
     if on then
         if data.navWas == nil then data.navWas = GetCVar(NAV_CVAR) or "0" end
@@ -130,7 +141,7 @@ local function navigation(self, on)
     end
 end
 
-function M:Follow(id)
+function M:Follow(id: any)
     local mark = id and self:Get(id)
     if mark and UiMapPoint and C_Map.CanSetUserWaypointOnMap and C_Map.CanSetUserWaypointOnMap(mark.map) then
         C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(mark.map, mark.x, mark.y))
@@ -150,7 +161,7 @@ end
 
 function M:Following() return self.following end
 
-function M:HideGamePin(provider)
+function M:HideGamePin(provider: any)
     local pin = provider and provider.pin
     if not pin then return end
     local hide = self:IsEnabled() and self.following ~= nil
@@ -164,7 +175,7 @@ end
 
 -- The group's chat: instance, raid or party; nil when you're not in one.
 function M:GroupChannel()
-    if UI.Flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then return "INSTANCE_CHAT" end
+    if UI.Flag(IsInGroup(_G.LE_PARTY_CATEGORY_INSTANCE)) then return "INSTANCE_CHAT" end
     if UI.Flag(IsInRaid()) then return "RAID" end
     if UI.Flag(IsInGroup()) then return "PARTY" end
 end
@@ -172,7 +183,7 @@ end
 -- The game's own map pin link for a spot ("[Map Pin Location]"): it makes
 -- links only for its waypoint, so the waypoint is set for a moment and put
 -- back as it was (with its navigation).
-local function linkFor(mark)
+local function linkFor(mark: Mark)
     if not (UiMapPoint and C_Map.SetUserWaypoint and C_Map.GetUserWaypointHyperlink) then return end
     local had = C_Map.GetUserWaypoint and C_Map.GetUserWaypoint()
     local tracking = C_SuperTrack and C_SuperTrack.IsSuperTrackingUserWaypoint and C_SuperTrack.IsSuperTrackingUserWaypoint()
@@ -184,10 +195,10 @@ local function linkFor(mark)
 end
 
 -- (names and the like can't break the message: no tabs or newlines)
-local function clean(s) return (tostring(s or ""):gsub("[\t\n\r|]", " ")) end
+local function clean(s: any): string return (tostring(s or ""):gsub("[\t\n\r|]", " ")) end
 
 -- From a click only: the game sends chat from a click.
-function M:Post(id)
+function M:Post(id: any): boolean
     local mark = self:Get(id)
     local channel = self:GroupChannel()
     if not (mark and channel) or InCombatLockdown() then return false end
@@ -204,14 +215,14 @@ function M:Post(id)
     return true
 end
 
-function M:MapName(map)
+function M:MapName(map: number?): string?
     local info = map and C_Map.GetMapInfo(map)
     return info and info.name
 end
 
 -- A shared mark from a group member: kept until you remove it; the same
 -- one posted again (same place, same sender) only updates its name.
-function M:OnMessage(prefix, text, channel, sender)
+function M:OnMessage(prefix: any, text: any, channel: any, sender: any)
     if prefix ~= PREFIX or not plain(text) or not plain(sender) then return end
     local tag, map, x, y, symbol, name = strsplit("\t", text)
     if tag ~= "MARK" then return end
@@ -219,7 +230,9 @@ function M:OnMessage(prefix, text, channel, sender)
     if not (map and x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1) then return end
     -- your own post coming back (the sender comes as "Name Surname" or
     -- "Name-Realm": found with /suu probe marks)
-    local name0, realm = UnitFullName("player")
+    -- (your own name and realm are never secret)
+    local fullName, fullRealm = UnitFullName("player")
+    local name0, realm = fullName :: string, fullRealm :: string
     if sender == name0 or (realm and (sender == name0 .. "-" .. realm or sender == name0 .. " " .. realm)) then return end
     local who = sender
     for _, m in ipairs(self:Marks()) do
@@ -244,7 +257,7 @@ local EDGE_REACH = 0.86 -- an edge mark sits at this much of the radius
 
 -- a mark's world position, cached ({ continent, north, west })
 local worldCache = setmetatable({}, { __mode = "k" })
-local function worldOf(mark)
+local function worldOf(mark: Mark)
     local w = worldCache[mark]
     if w == nil then
         w = false
@@ -352,7 +365,7 @@ function M:PlaceMinimapPins()
 end
 
 -- Only the marks the map's filters show (Marks › Your marks, Shared marks).
-function M:Filtered(places)
+function M:Filtered(places: { [string]: any }[])
     local map = SuuUI.GetModule and SuuUI.GetModule("worldmap")
     local on = map and map.MarksShown and map:MarksShown() or { yours = true, shared = true }
     local out = {}
@@ -368,12 +381,12 @@ end
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
-local function glyphOf(symbol) return "mark" .. symbol:sub(1, 1):upper() .. symbol:sub(2) end
-local function colorOf(symbol) return "mark-" .. symbol end
+local function glyphOf(symbol: string): string return "mark" .. symbol:sub(1, 1):upper() .. symbol:sub(2) end
+local function colorOf(symbol: string): string return "mark-" .. symbol end
 
 -- A mark's map pin: its symbol in its colour on a 2 px edge of its colour
 -- (other pins' are 1 px); the open one ringed in its colour.
-function M:PinLook(mark)
+function M:PinLook(mark: Mark)
     local c = colorOf(mark.symbol)
     return { glyph = glyphOf(mark.symbol), color = c, edge = c, edgeWidth = 2,
              ring = self.cardMark == mark.id and c or nil }
@@ -389,7 +402,7 @@ local MiniPin = {}
 -- one or two pixels as it moved, and its thicker side jumped about while
 -- you ran (found in game). The disc and its edge sized in whole pixels,
 -- and its place snapped to them (PlaceMinimapPins).
-local function screenPixel(region)
+local function screenPixel(region: any): number
     local factor = PixelUtil and PixelUtil.GetPixelToUIUnitFactor and PixelUtil.GetPixelToUIUnitFactor() or 1
     return factor / region:GetEffectiveScale()
 end
@@ -403,7 +416,7 @@ function MiniPin:Fit()
     self.fill:SetSize(size - 4 * px, size - 4 * px)
 end
 
-function MiniPin:SetMark(mark, edge, angle)
+function MiniPin:SetMark(mark: Mark, edge: boolean, angle: number)
     self:Fit()
     local c = colorOf(mark.symbol)
     UI.Paint(self.edge, c)
@@ -419,7 +432,7 @@ function MiniPin:SetMark(mark, edge, angle)
     end
     self.mark = mark
 end
-function M:MinimapPin(parent)
+function M:MinimapPin(parent: Frame)
     local b = CreateFrame("Frame", nil, parent)
     Mixin(b, MiniPin)
     b:SetSize(16, 16)
@@ -458,7 +471,7 @@ end
 
 local CARD_W, PAD, ROW = 256, 12, 8
 
-local function symbolButton(card, i, symbol)
+local function symbolButton(card: any, symbol: string)
     local b = CreateFrame("Button", nil, card)
     b:SetSize(24, 24)
     b.edge = b:CreateTexture(nil, "BORDER", nil, 1)
@@ -473,7 +486,7 @@ local function symbolButton(card, i, symbol)
     b.glyph:SetSize(16, 16)
     b.glyph:SetPoint("CENTER")
     b.symbol = symbol
-    function b:SetChosen(on)
+    function b:SetChosen(on: boolean)
         UI.Paint(self.edge, on and colorOf(symbol) or "gilt-line")
         self.fill:SetSize(on and 20 or 22, on and 20 or 22)
         UI.Paint(self.fill, on and "surface-raised" or "surface-sunk")
@@ -501,13 +514,13 @@ function M:Card()
 
     -- yours: the name to edit and the symbols to choose
     card.name = UI.TextField(card, { width = CARD_W - 2 * PAD, placeholder = "Name this mark",
-        onChange = function(text) if card.id then self:Update(card.id, { name = text }) end end })
+        onChange = function(text: string) if card.id then self:Update(card.id, { name = text }) end end })
     card.symbols = {}
     for i, sym in ipairs(M.SYMBOLS) do
-        local b = symbolButton(card, i, sym)
+        local b = symbolButton(card, sym)
         card.symbols[i] = b
     end
-    function card.Choose(_, symbol)
+    function card.Choose(_: any, symbol: string)
         if not card.id then return end
         self.lastSymbol = symbol
         self:Update(card.id, { symbol = symbol })
@@ -534,7 +547,7 @@ function M:Card()
     card.wayLabel = UI.Text(card, "body", "ink")
     card.wayLabel:SetValue("Show the way")
     card.way = UI.Toggle(card)
-    card.way.onChange = function(on) if card.id then self:Follow(on and card.id or nil) end end
+    card.way.onChange = function(on: boolean) if card.id then self:Follow(on and card.id or nil) end end
     card.rule = UI.Hairline(card, "gilt-faint")
     card.delete = UI.Button(card, { text = "Delete", onClick = function()
         local id = card.id
@@ -550,9 +563,9 @@ function M:Card()
 end
 
 -- Lays the card out for a mark of yours or a shared one; returns its height.
-local function layout(card, shared)
+local function layout(card: any, shared: boolean): number
     local y = -PAD
-    local function row(frame, h, x)
+    local function row(frame: Region, h: number, x: number?)
         frame:ClearAllPoints()
         frame:SetPoint("TOPLEFT", x or PAD, y)
         y = y - h - ROW
@@ -597,7 +610,7 @@ local function layout(card, shared)
     return y
 end
 
-function M:OpenCard(id, anchor)
+function M:OpenCard(id: any, anchor: Region?)
     local mark = self:Get(id)
     local map = _G.WorldMapFrame
     if not (mark and map) then return end
@@ -638,7 +651,7 @@ end
 -- Under its mark's pin, above it in the map's lower half, inside the map;
 -- again whenever the map lays its pins out (a pin may now be another's).
 -- No pin (the mark isn't on this map): the card closes.
-function M:AnchorCard(anchor)
+function M:AnchorCard(anchor: Region?)
     local card, map = self.card, _G.WorldMapFrame
     if not (card and card:IsShown() and map) then return end
     if not anchor then self:CloseCard() return end
@@ -651,7 +664,7 @@ function M:AnchorCard(anchor)
         if below then card:SetPoint("TOP", anchor, "BOTTOM", 0, -6) else card:SetPoint("BOTTOM", anchor, "TOP", 0, 6) end
         card:SetClampedToScreen(false)
         -- (inside the map: nudged back when it runs past an edge)
-        C_Timer.After(0, function()
+        after(0, function()
             local l, r, sl, sr = card:GetLeft(), card:GetRight(), scroll:GetLeft(), scroll:GetRight()
             if l and sl and l < sl then card:AdjustPointsOffset(sl - l + 4, 0) end
             if r and sr and r > sr then card:AdjustPointsOffset(sr - r - 4, 0) end
@@ -681,7 +694,7 @@ local CLICK_PRIORITY = 100
 function M:Hook()
     local f = _G.WorldMapFrame
     if not f or self.clickHandler then return end
-    self.clickHandler = function(map, button, cx, cy)
+    self.clickHandler = function(map: any, button: string, cx: any, cy: any): boolean
         if not self:IsEnabled() or button ~= "LeftButton" then return false end
         -- a plain click elsewhere closes the card (and goes on to the map)
         if not IsControlKeyDown() then self:CloseCard() return false end
@@ -689,7 +702,7 @@ function M:Hook()
         if not (mapID and plain(cx) and plain(cy)) then return false end
         local mark = self:Add(mapID, cx, cy, { symbol = self.lastSymbol or "star" })
         -- its card once its pin is there, the name to type
-        C_Timer.After(0.05, function()
+        after(0.05, function()
             local wm = SuuUI.GetModule("worldmap")
             local card = self:OpenCard(mark.id, wm and wm.PinForMark and wm:PinForMark(mark.id))
             if card then card.name.edit:SetFocus() end
@@ -698,7 +711,7 @@ function M:Hook()
     end
     f:AddCanvasClickHandler(self.clickHandler, CLICK_PRIORITY)
     -- the card goes with the map
-    f:HookScript("OnHide", function() self:CloseCard() end)
+    hookScript(f, "OnHide", function() self:CloseCard() end)
     -- the game draws its own waypoint pin where its waypoint is: while that
     -- is a mark showing the way, the mark is drawn already (found in game:
     -- the two on top of each other); a waypoint of your own stays
@@ -708,7 +721,7 @@ function M:Hook()
     for provider in pairs(f.dataProviders or {}) do
         if mixin and provider.RefreshAllData == mixin.RefreshAllData and provider.HandleClick == mixin.HandleClick then
             self.waypointProvider = provider
-            hooksecurefunc(provider, "RefreshAllData", function(p) self:HideGamePin(p) end)
+            hook(provider, "RefreshAllData", function(p) self:HideGamePin(p) end)
         end
     end
     -- a quiet hint after the header's waypoint pin: how to place one

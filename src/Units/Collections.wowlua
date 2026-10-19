@@ -1,4 +1,4 @@
--- Units/Collections.lua
+-- Units/Collections.wowlua
 -- SuuUI's own collections window (plan 3.6; asked 2026-10-16: our own
 -- window instead of the restyle; design: direction A, "Stage", on the board
 -- "Collections · own window"). The game's journal stays closed. Probed
@@ -10,6 +10,11 @@
 -- (SuuUI.CollectionSources(): the game gives no source for mounts, only the
 -- kind for appearances, and won't list the toys you lack).
 -- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import after, every from "wowlua:timer"
+import hookScript from "wowlua:hooks"
+import isSecret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -23,13 +28,12 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function call(fn, ...)
+local function call(fn: any, ...: any): (any, any, any, any, any, any, any, any, any, any, any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k, l, m = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k, l, m end
 end
-local function plain(v) return v ~= nil and not isSecret(v) end
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 --------------------------------------------------------------------------------
 -- Where something comes from: the best source as one line, all of it as a
@@ -41,36 +45,40 @@ local function plain(v) return v ~= nil and not isSecret(v) end
 local WORLD = 12
 local MAX_SHOWN = 3
 
-local function data() return SuuUI.CollectionSources() or {} end
+-- an entry the strip, the stage and the shelf show; a CollectionSources entry
+type Entry = { [string]: any }
+type Source = { [string]: any }
+
+local function data(): { [string]: any } return SuuUI.CollectionSources() or {} end
 
 -- "Name|Zone|Level|Faction" -> name, zone, level, faction
-local function npc(id)
+local function npc(id: number): (string?, string?, string?, string?)
     local s = data().npc and data().npc[id]
     if not s then return nil end
     local name, zone, level, faction = s:match("^(.-)|(.-)|(.-)|(.*)$")
     return name, zone ~= "" and zone or nil, level ~= "" and level or nil, faction ~= "" and faction or nil
 end
-local function object(id)
+local function object(id: number): (string?, string?)
     local s = data().obj and data().obj[id]
     if not s then return nil end
     local name, zone = s:match("^(.-)|(.*)$")
     return name, zone ~= "" and zone or nil
 end
-local function itemName(id)
+local function itemName(id: number?): string?
     local name = C_Item and C_Item.GetItemNameByID and call(C_Item.GetItemNameByID, id)
     return plain(name) and name or nil
 end
-local function questTitle(id)
+local function questTitle(id: number): string?
     local t = C_QuestLog and C_QuestLog.GetTitleForQuestID and call(C_QuestLog.GetTitleForQuestID, id)
     return plain(t) and t ~= "" and t or nil
 end
 
-local function place(name, zone) return zone and (name .. ", " .. zone) or name end
-local function more(list) return (#list > 1) and (" +" .. (#list - 1)) or "" end
+local function place(name: string, zone: string?): string return zone and (name .. ", " .. zone) or name end
+local function more(list: any[]): string return (#list > 1) and (" +" .. (#list - 1)) or "" end
 
 -- The game's own word for a source kind (its numbers: mounts use the pet
 -- journal's, appearances the transmog ones).
-local function kindName(kind, number)
+local function kindName(kind: string, number: number?): string?
     if not number or number < 0 then return nil end
     local g = kind == "appearance" and _G["TRANSMOG_SOURCE_" .. number] or _G["BATTLE_PET_SOURCE_" .. (number + 1)]
     return type(g) == "string" and g ~= "" and g or nil
@@ -78,7 +86,7 @@ end
 
 -- src: a CollectionSources entry (or nil); kind/number: the game's source
 -- kind as the fallback. -> "Vendor · Name, Zone +1" or nil
-function M:SourceLine(src, kind, number)
+function M:SourceLine(src: Source?, kind: string, number: number?): string
     if src then
         if src.v and src.v[1] then
             local name, zone = npc(src.v[1])
@@ -110,9 +118,9 @@ function M:SourceLine(src, kind, number)
 end
 
 -- The full card: { { title, lines = { … } }, … } (empty: nothing known).
-function M:SourceCard(src, kind, number)
-    local card = {}
-    local function section(title, lines) if lines[1] then card[#card + 1] = { title = title, lines = lines } end end
+function M:SourceCard(src: Source?, kind: string, number: number?): { title: string, lines: string[] }[]
+    local card: { title: string, lines: string[] }[] = {}
+    local function section(title: string, lines: string[]) if lines[1] then card[#card + 1] = { title = title, lines = lines } end end
     if src then
         local lines = {}
         for _, id in ipairs(src.v or {}) do
@@ -220,7 +228,7 @@ M.SLOTS = {
 }
 
 -- The weapon kinds this class can use for a hand (the game names only those).
-function M:WeaponKinds(hand)
+function M:WeaponKinds(hand: string?): { category: number, name: string }[]
     local TC = C_TransmogCollection
     local out = {}
     for cat = 12, 30 do
@@ -233,7 +241,7 @@ function M:WeaponKinds(hand)
 end
 
 -- The slot's transmog location (the game asks for armor with it).
-local function location(slot)
+local function location(slot: string): any
     if not (TransmogUtil and TransmogUtil.GetTransmogLocation and Enum.TransmogType) then return nil end
     local loc = call(TransmogUtil.GetTransmogLocation, slot, Enum.TransmogType.Appearance, false)
     return loc and loc.GetData and loc:GetData() or nil
@@ -241,7 +249,7 @@ end
 
 -- Each slot's yours and all (a weapon slot: over the kinds this class can
 -- use for it); a slot with no kind for this class: its reason.
-function M:SlotCounts(className)
+function M:SlotCounts(className: string?): { [string]: { have: number, all: number, reason: string? } }
     local TC = C_TransmogCollection
     local out = {}
     for _, def in ipairs(self.SLOTS) do
@@ -264,7 +272,7 @@ function M:SlotCounts(className)
 end
 
 -- What you wear in a slot: its appearance (visual) ID.
-function M:Worn(slot)
+function M:Worn(slot: string): any
     local id = call(GetInventorySlotInfo, slot)
     local itemID = id and call(GetInventoryItemID, "player", id)
     if not itemID then return nil end
@@ -274,7 +282,7 @@ end
 
 -- A category's appearances (yours first), each with its first source's item
 -- and that item's source data.
-function M:Appearances(category, slot)
+function M:Appearances(category: number, slot: string?): Entry[]
     local TC = C_TransmogCollection
     local worn = slot and self:Worn(slot)
     local out = {}
@@ -313,7 +321,7 @@ end
 -- first sees something yours (what you had before SuuUI: 0, "Before SuuUI")
 --------------------------------------------------------------------------------
 
-function M:Learned(kind, id, collected)
+function M:Learned(kind: string, id: number, collected: any): number?
     if not collected then return nil end
     local d = self:CharData()
     d.learned = d.learned or {}
@@ -330,7 +338,7 @@ function M:Learned(kind, id, collected)
 end
 
 -- A toy's cooldown: when it started and how long (0 when ready).
-local function toyCooldown(itemID)
+local function toyCooldown(itemID: number): (number, number)
     local start, duration = call(C_Container and C_Container.GetItemCooldown, itemID)
     if not (plain(start) and plain(duration)) then return 0, 0 end
     if duration and duration > 1.5 and start and start > 0 then return start, duration end
@@ -339,7 +347,7 @@ end
 M.toyCooldown = toyCooldown
 
 -- "Ready in 41 min", "Ready in 1 h 5 min", "Ready in 30 s"
-local function readyIn(start, duration)
+local function readyIn(start: number, duration: number): string
     local left = math.max(0, start + duration - GetTime())
     if left >= 3600 then return ("Ready in %d h %d min"):format(math.floor(left / 3600), math.floor(left % 3600 / 60)) end
     if left >= 60 then return ("Ready in %d min"):format(math.ceil(left / 60)) end
@@ -347,7 +355,7 @@ local function readyIn(start, duration)
 end
 
 -- what you collected last (any kind), for the foot
-function M:NoteLast(name, at)
+function M:NoteLast(name: string?, at: number?)
     if not (name and at and at > 0) then return end
     local d = self:CharData()
     if not d.last or (d.last.at or 0) < at then d.last = { name = name, at = at } end
@@ -441,21 +449,21 @@ local GLYPHS = MEDIA .. "Glyphs\\"
 local SOFT = MEDIA .. "CircleSoft.tga"
 local DISC = MEDIA .. "CircleFill.tga"
 
-local function day(at)
+local function day(at: number?): string?
     if not at then return nil end
     if at == 0 then return "before SuuUI" end
     return date("%d %b", at):gsub("^0", "")
 end
 
-local function status(e)
+local function status(e: Entry): (string, string)
     if not e.collected then return "Not collected", "ink-faint" end
     local when = day(e.learned)
     return "Collected" .. (when and (" · " .. when) or ""), "gilt-text"
 end
 
 -- A small round button (the stage's star, turn and zoom): a disc, a glyph.
-local function roundButton(parent, glyph, tip, onClick)
-    local b = CreateFrame("Button", nil, parent)
+local function roundButton(parent: Frame, glyph: string, tip: any, onClick: any): any
+    local b = CreateFrame("Button", nil, parent) :: any
     b:SetSize(26, 26)
     b.disc = b:CreateTexture(nil, "BACKGROUND")
     b.disc:SetTexture(DISC)
@@ -467,7 +475,7 @@ local function roundButton(parent, glyph, tip, onClick)
     b.glyph:SetPoint("CENTER")
     UI.Paint(b.glyph, "ink-muted")
     b.on = false
-    function b:Draw(hover)
+    function b:Draw(hover: boolean)
         UI.Paint(self.glyph, self.on and "gilt" or hover and "ink" or "ink-muted")
     end
     b:SetScript("OnEnter", function(self) self:Draw(true); if tip then UI.ShowTooltip(self, { title = type(tip) == "function" and tip(self) or tip }) end end)
@@ -480,8 +488,8 @@ end
 -- The card on the stage: name, status, a rule, the full source card
 --------------------------------------------------------------------------------
 
-local function buildCard(stage)
-    local c = CreateFrame("Frame", nil, stage)
+local function buildCard(stage: Frame): any
+    local c = CreateFrame("Frame", nil, stage) :: any
     c:SetPoint("TOPLEFT", S["space-6"], -S["space-6"])
     c:SetPoint("BOTTOMLEFT", S["space-6"], 52)
     c:SetWidth(CARD_W)
@@ -502,7 +510,7 @@ local function buildCard(stage)
     return c
 end
 
-function M:DrawCard(c, e, extra)
+function M:DrawCard(c: any, e: Entry, extra: string?)
     c.name:SetValue(e.name or "")
     local text, color = status(e)
     c.status:SetValue(text)
@@ -512,7 +520,7 @@ function M:DrawCard(c, e, extra)
     local card = self:SourceCard(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType)
     if not card[1] then card = { { title = "Source unknown", lines = {} } } end
     local n, prev = 0, c.rule
-    local function text(style, color, indent, gap)
+    local function text(style: string, color: string, indent: number, gap: number): any
         n = n + 1
         local t = c.texts[n]
         if not t then
@@ -541,8 +549,8 @@ end
 -- The strip: 40px cells, 2 rows of 18 a page
 --------------------------------------------------------------------------------
 
-local function buildCell(parent, owner)
-    local b = CreateFrame("Button", nil, parent)
+local function buildCell(parent: Frame, owner: any): any
+    local b = CreateFrame("Button", nil, parent) :: any
     b:SetSize(CELL, CELL)
     UI.Fill(b, "surface-sunk", "BACKGROUND"):SetAllPoints()
     b.icon = b:CreateTexture(nil, "ARTWORK")
@@ -574,7 +582,7 @@ local function buildCell(parent, owner)
     return b
 end
 
-function M:DrawCell(b)
+function M:DrawCell(b: any)
     local e = b.entry
     if not e then b:Hide() return end
     b.icon:SetTexture(e.icon)
@@ -596,7 +604,7 @@ end
 
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUICollectionsWindow", title = "Collections", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end,
+        footer = true, onClose = function(win: any) win:Hide() end,
         tabs = {
             { key = "mounts", label = "Mounts" },
             { key = "pets", label = "Pets", disabled = true, reason = "No pets on Forever yet" },
@@ -604,7 +612,7 @@ function M:Build()
             { key = "heirlooms", label = "Heirlooms", disabled = true, reason = "No heirlooms on Forever yet" },
             { key = "wardrobe", label = "Appearances" },
         },
-        onTab = function(key)
+        onTab = function(key: string)
             if key ~= self.tab then self.chosen, self.page = nil, 1 end
             self.tab = key
             local first = self.tools and self.tools.list.buttons[1]
@@ -619,7 +627,7 @@ function M:Build()
     -- choosing another and back): shown once more a frame later
     w:HookScript("OnShow", function()
         self:Refresh()
-        C_Timer.After(0, function()
+        after(0, function()
             self.showing = nil
             self:Refresh()
         end)
@@ -752,7 +760,7 @@ function M:Build()
     local x = 0
     for _, def in ipairs({ { "turnLeft", "Turn left", function() self:Turn(-1) end }, { "minus", "Zoom out", function() self:Zoom(1) end },
                            { "plus", "Zoom in", function() self:Zoom(-1) end }, { "turnRight", "Turn right", function() self:Turn(1) end } }) do
-        local glyph = def[1]
+        local glyph = def[1] :: string
         local file = GLYPHS .. glyph .. ".tga"
         local b = roundButton(ctl, glyph, def[2], def[3])
         if not (glyph == "minus" or glyph == "plus") then
@@ -823,7 +831,7 @@ function M:LayoutCells()
     end
 end
 
-function M:Page(step)
+function M:Page(step: number)
     local pages = self.pages or 1
     self.page = math.max(1, math.min(pages, (self.page or 1) + step))
     self:DrawStrip()
@@ -890,7 +898,7 @@ function M:Refresh()
     self:DrawFoot()
 end
 
-function M:Choose(e)
+function M:Choose(e: Entry?)
     if not e then return end
     self.chosen = e
     self:DrawStrip()
@@ -957,7 +965,7 @@ end
 -- the model fades in. The same mount again is left as it is (seen in game:
 -- shown twice on opening, the second load sent no signal and the icon
 -- stayed).
-function M:ShowMount(e)
+function M:ShowMount(e: Entry)
     local model, stage = self.model, self.stage
     if not model then return end
     if self.showing == e.id and model:IsShown() then return end
@@ -974,18 +982,18 @@ function M:ShowMount(e)
     call(model.SetFacing, model, FACING)
     -- no answer from the game in two seconds: shown anyway
     local id = e.id
-    C_Timer.After(2, function() if self.waiting == id then self:ModelLoaded() end end)
+    after(2, function() if self.waiting == id then self:ModelLoaded() end end)
 end
 
 -- how far below the frame's middle the ground under the model shows, with
 -- the camera at P aiming at T and the model lifted by `lift`
-local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
-local function norm(x, y, z)
+local function dot(a: number[], b: number[]): number return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function norm(x: number, y: number, z: number): number[]?
     local l = math.sqrt(x * x + y * y + z * z)
     if l == 0 then return nil end
     return { x / l, y / l, z / l }
 end
-local function groundBelow(P, T, lift)
+local function groundBelow(P: number[], T: number[], lift: number): number?
     local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
     if not f then return nil end
     local right = norm(f[2], -f[1], 0)
@@ -1033,7 +1041,7 @@ function M:ModelLoaded()
     local id = self.waiting
     self.waiting = nil
     call(model.SetCamDistanceScale, model, self.camScale or CAM_SCALE)
-    C_Timer.After(0.1, function()
+    after(0.1, function()
         if self.showing ~= id then return end
         self:PlaceModel()
         self.stage.loading:Hide()
@@ -1042,13 +1050,13 @@ function M:ModelLoaded()
     end)
 end
 
-function M:Turn(dir)
+function M:Turn(dir: number)
     local m = self.tab == "wardrobe" and self.wardrobe.doll or self.model
     if not m then return end
     call(m.SetFacing, m, (call(m.GetFacing, m) or 0) + dir * 0.35)
 end
 
-function M:Zoom(dir)
+function M:Zoom(dir: number)
     if self.tab == "wardrobe" then
         local d = self.wardrobe.doll
         self.dollScale = math.max(0.6, math.min(2.5, (self.dollScale or 1) * (dir > 0 and 1.12 or 0.89)))
@@ -1060,7 +1068,7 @@ function M:Zoom(dir)
     self.camScale = math.max(ZOOM_MIN * CAM_SCALE, math.min(ZOOM_MAX * CAM_SCALE, (self.camScale or CAM_SCALE) * (dir > 0 and 1.12 or 0.89)))
     call(m.SetCamDistanceScale, m, self.camScale)
     -- on the floor again at the new distance
-    C_Timer.After(0.05, function() self:PlaceModel() end)
+    after(0.05, function() self:PlaceModel() end)
 end
 
 -- A mount's favourite: the game keeps it by the mount's place in its own
@@ -1069,12 +1077,12 @@ function M:ToggleFavourite()
     local e = self.chosen
     if e and e.kind == "appearance" then
         call(C_TransmogCollection.SetIsAppearanceFavorite, e.visualID, not e.favourite)
-        C_Timer.After(0.1, function() self:Refresh() end)
+        after(0.1, function() self:Refresh() end)
         return
     end
     if e and e.kind == "toy" then
         call(C_ToyBox.SetIsFavorite, e.itemID, not e.favourite)
-        C_Timer.After(0.1, function() self:Refresh() end)
+        after(0.1, function() self:Refresh() end)
         return
     end
     if not (e and e.kind == "mount") then return end
@@ -1082,7 +1090,7 @@ function M:ToggleFavourite()
     for i = 1, (call(MJ.GetNumDisplayedMounts) or 0) do
         if call(MJ.GetDisplayedMountID, i) == e.id then
             call(MJ.SetIsFavorite, i, not e.favourite)
-            C_Timer.After(0.1, function() self:Refresh() end)
+            after(0.1, function() self:Refresh() end)
             return
         end
     end
@@ -1141,7 +1149,7 @@ end
 -- journal when something else opens it (closed again, ours instead)
 --------------------------------------------------------------------------------
 
-function M:Toggle(tab)
+function M:Toggle(tab: string?)
     if not self.window then return end
     if self.window:IsShown() and not tab then self.window:Hide() return end
     self.window:Show()
@@ -1161,7 +1169,7 @@ function M:HookJournal()
     local f = _G.CollectionsJournal
     if not f or self.journalHooked then return end
     self.journalHooked = true
-    f:HookScript("OnShow", function()
+    hookScript(f, "OnShow", function()
         if not self:IsEnabled() or InCombatLockdown() then return end
         HideUIPanel(f)
         self:Toggle("mounts")
@@ -1171,7 +1179,7 @@ end
 function M:OnEnable()
     if not self.window then self:Build() end
     self:Provide("collections", {
-        Toggle = function(tab) self:Toggle(tab) end,
+        Toggle = function(tab: string?) self:Toggle(tab) end,
         IsShown = function() return self.window and self.window:IsShown() or false end,
     })
     self.tab = self.tab or "mounts"
@@ -1214,7 +1222,7 @@ function M:OnEnable()
         if not (self.namesPending and self.window and self.window:IsShown()) then return end
         self.namesPending = nil
         if self.namesTimer then return end
-        self.namesTimer = C_Timer.NewTimer(0.3, function() self.namesTimer = nil; self:Refresh() end)
+        self.namesTimer = after(0.3, function() self.namesTimer = nil; self:Refresh() end)
     end)
     -- appearances: new ones, what you wear
     self:OnGameEvent("TRANSMOG_COLLECTION_UPDATED", function()
@@ -1226,7 +1234,7 @@ function M:OnEnable()
         if self.tab == "wardrobe" and self.window and self.window:IsShown() then self:Refresh() end
     end)
     if not self.ticker then
-        self.ticker = C_Timer.NewTicker(1, function()
+        self.ticker = every(1, function()
             if self.tab == "toys" and self.window and self.window:IsShown() then self:DrawCooldowns() end
         end)
     end
@@ -1259,7 +1267,7 @@ local SLOT_ATLAS = {
     SECONDARYHANDSLOT = "transmog-nav-slot-secondaryhand", RANGEDSLOT = "transmog-nav-slot-ranged",
 }
 
-local function slotDef(slot)
+local function slotDef(slot: string?): { [string]: any }?
     for _, d in ipairs(M.SLOTS) do if d.slot == slot then return d end end
 end
 
@@ -1275,8 +1283,8 @@ end
 
 -- One round slot: the game's slot art in a disc, the arcane glow under the
 -- chosen one, yours of all under it.
-local function buildSlot(parent, owner, slot)
-    local b = CreateFrame("Button", nil, parent)
+local function buildSlot(parent: Frame, owner: any, slot: string): any
+    local b = CreateFrame("Button", nil, parent) :: any
     b:SetSize(SLOT, SLOT)
     b.glow = b:CreateTexture(nil, "BACKGROUND", nil, 1)
     b.glow:SetTexture(SOFT)
@@ -1306,7 +1314,7 @@ local function buildSlot(parent, owner, slot)
     b:SetScript("OnEnter", function(self)
         self.hover = true
         owner:DrawSlot(self)
-        local def, c = slotDef(self.slot), owner.slotCounts and owner.slotCounts[self.slot] or {}
+        local def, c = assert(slotDef(self.slot)), owner.slotCounts and owner.slotCounts[self.slot] or {}
         UI.ShowTooltip(self, { title = def.label, description = c.reason or ("%d of %d collected"):format(c.have or 0, c.all or 0) })
     end)
     b:SetScript("OnLeave", function(self) self.hover = false; owner:DrawSlot(self); UI.HideTooltip() end)
@@ -1319,7 +1327,7 @@ local function buildSlot(parent, owner, slot)
     return b
 end
 
-function M:DrawSlot(b)
+function M:DrawSlot(b: any)
     local c = self.slotCounts and self.slotCounts[b.slot] or {}
     local on = self.slot == b.slot
     local off = c.reason ~= nil
@@ -1332,8 +1340,8 @@ end
 
 -- A tile: a framed preview of you wearing only that piece (the game's
 -- appearance camera), its icon until the model has loaded.
-local function buildTile(parent, owner)
-    local b = CreateFrame("Button", nil, parent)
+local function buildTile(parent: Frame, owner: any): any
+    local b = CreateFrame("Button", nil, parent) :: any
     b.bg = b:CreateTexture(nil, "BACKGROUND", nil, -8)
     b.bg:SetAllPoints()
     b.bg:SetColorTexture(1, 1, 1, 1)
@@ -1383,7 +1391,7 @@ local function buildTile(parent, owner)
     return b
 end
 
-function M:DrawTileState(b)
+function M:DrawTileState(b: any)
     local e = b.entry
     if not e then return end
     local chosen = self.chosen and self.chosen.id == e.id
@@ -1393,7 +1401,7 @@ function M:DrawTileState(b)
 end
 
 -- One tile with its entry (or hidden).
-function M:DrawTile(b)
+function M:DrawTile(b: any)
     local e = b.entry
     if not e then b:Hide() return end
     b:Show()
@@ -1414,7 +1422,7 @@ function M:DrawTile(b)
         call(m.TryOn, m, e.sourceID)
         -- no answer in two seconds: shown anyway
         local id = e.id
-        C_Timer.After(2, function()
+        after(2, function()
             if b.shownID == id and b.loading then
                 b.loading = false
                 b.icon:Hide()
@@ -1471,7 +1479,7 @@ function M:BuildWardrobe()
     w.doll = doll
     -- the slots
     w.slots = {}
-    local function column(list, x, fromRight)
+    local function column(list: string[], x: number, fromRight: boolean)
         local top, bottom = S["space-6"], S["space-6"] + 14
         local span = stage:GetHeight() > 0 and stage:GetHeight() or 410
         local step = (span - top - bottom - SLOT) / (#list - 1)
@@ -1486,14 +1494,14 @@ function M:BuildWardrobe()
     column(SLOTS_R, DOLL_R, true)
     -- the class and the weapon kind
     w.class = UI.Select(w, { options = classes(), value = select(3, UnitClass("player")), width = 140,
-        onChange = function(id)
+        onChange = function(id: number)
             call(C_TransmogCollection.SetClassFilter, id)
             self.weaponKind, self.chosen, self.page, self.slotCounts = {}, nil, 1, nil
             self:Refresh()
         end })
     w.class:SetPoint("TOPRIGHT", -S["space-6"], -S["space-6"])
     w.class:SetFrameLevel(w:GetFrameLevel() + 10)
-    w.kind = UI.Select(w, { options = {}, width = 180, onChange = function(cat)
+    w.kind = UI.Select(w, { options = {}, width = 180, onChange = function(cat: number)
         local def = slotDef(self.slot)
         self.weaponKind = self.weaponKind or {}
         if def and def.weapon then self.weaponKind[def.weapon] = cat end
@@ -1530,7 +1538,7 @@ end
 
 -- The slot's appearances (the chosen weapon kind for a weapon slot).
 function M:WardrobeEntries()
-    local def = slotDef(self.slot) or slotDef("CHESTSLOT")
+    local def = slotDef(self.slot) or assert(slotDef("CHESTSLOT"))
     local cat, kindName = def.category, nil
     if def.weapon then
         local kinds = self:WeaponKinds(def.weapon)
@@ -1595,7 +1603,7 @@ local CARD_H, SHELF_COLS = 88, 4
 
 -- What a toy does: the "Use:" line of its tooltip (kept once known).
 local useText = {}
-local function toyUse(itemID)
+local function toyUse(itemID: number): string?
     if useText[itemID] then return useText[itemID] end
     local data = C_TooltipInfo and C_TooltipInfo.GetToyByItemID and call(C_TooltipInfo.GetToyByItemID, itemID)
     for _, l in ipairs(data and data.lines or {}) do
@@ -1608,8 +1616,8 @@ local function toyUse(itemID)
     return nil
 end
 
-local function buildToyCard(parent, owner, i)
-    local c = CreateFrame("Frame", nil, parent)
+local function buildToyCard(parent: Frame, owner: any, i: number): any
+    local c = CreateFrame("Frame", nil, parent) :: any
     c:SetHeight(CARD_H)
     c:EnableMouse(true)
     c.bg = UI.Fill(c, "surface-sunk", "BACKGROUND")
@@ -1678,7 +1686,7 @@ local function buildToyCard(parent, owner, i)
     return c
 end
 
-function M:DrawCardState(c)
+function M:DrawCardState(c: any)
     local e = c.entry
     if not e then return end
     c.edge:SetColor(c.hover and "gilt" or "gilt-faint")
@@ -1686,7 +1694,7 @@ function M:DrawCardState(c)
 end
 
 -- A card's cooldown, its foot line and its Use.
-function M:DrawCardCooldown(c)
+function M:DrawCardCooldown(c: any)
     local e = c.entry
     if not e then return end
     local start, duration = 0, 0
@@ -1708,7 +1716,7 @@ function M:DrawCardCooldown(c)
     c.act.why = why
 end
 
-function M:DrawCard_Toy(c)
+function M:DrawCard_Toy(c: any)
     local e = c.entry
     if not e then c:Hide() return end
     c:Show()
@@ -1788,10 +1796,10 @@ function M:DrawShelfCooldowns()
     for _, c in ipairs(self.shelf.cards) do if c:IsShown() then self:DrawCardCooldown(c) end end
 end
 
-function M:ToggleToyFavourite(e)
+function M:ToggleToyFavourite(e: Entry?)
     if not (e and e.collected) then return end
     call(C_ToyBox.SetIsFavorite, e.itemID, not e.favourite)
-    C_Timer.After(0.1, function() self:Refresh() end)
+    after(0.1, function() self:Refresh() end)
 end
 
 -- The tab's layout: Toys the shelf with the tools on top; the others the

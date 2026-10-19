@@ -1,4 +1,4 @@
--- Units/Defensives.lua
+-- Units/Defensives.wowlua
 -- Which buffs count as defensives on party and raid frames. For another
 -- player's auras the game hides who cast them, and its own defensive filters
 -- then let almost every buff through, so SuuUI goes by this list: the
@@ -8,6 +8,9 @@
 -- party and raid frames (externals first) and the Warded badge and border
 -- (the entries with Warded on). Turned off, the frames show
 -- none of them.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -23,9 +26,9 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = issecretvalue or function() return false end
+local isSecret = secret.isSecret
 
-local function copy(t)
+local function copy(t: any): any
     if type(t) ~= "table" then return t end
     local out = {}
     for k, v in pairs(t) do out[k] = copy(v) end
@@ -44,7 +47,7 @@ end
 
 function M:IsDefault() return type(self:Get("list")) ~= "table" end
 
-local function mutate(fn)
+local function mutate(fn: (list: any[]) -> ())
     local list = copy(M:List())
     fn(list)
     M:Set("list", list)
@@ -80,16 +83,17 @@ local GROUPS = {
 local KIND_OPTIONS = { { value = "external", label = "External" }, { value = "defensive", label = "Defensive" } }
 
 -- What a typed number finds: "Name · ID 123" (value "id:123").
-local function spellLookup(query)
+local function spellLookup(query: string?)
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
-    local name = id and C_Spell.GetSpellName(id)
+    if not id then return nil end
+    local name = C_Spell.GetSpellName(id)
     if isSecret(name) or not name then return nil end
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
 end
 
 -- Warded: a small chip with the shield glyph; on, it takes the ward colour
 -- and glow.
-local function wardChip(parent, onClick)
+local function wardChip(parent: Frame, onClick: (self: any) -> ())
     local b = CreateFrame("Button", nil, parent)
     b:SetSize(76, 20)
     UI.Fill(b, "surface-sunk"):SetAllPoints()
@@ -102,7 +106,7 @@ local function wardChip(parent, onClick)
     b.label = UI.Text(b, "caption", "ink-faint")
     b.label:SetPoint("LEFT", b.glyph, "RIGHT", 4, 0)
     b.label:SetValue("Warded")
-    function b:SetValue(on)
+    function b:SetValue(on: any)
         self.value = on and true or false
         local token = self.value and "ward" or "ink-faint"
         self.edge:SetColor(self.value and "ward" or "gilt-line")
@@ -121,7 +125,7 @@ local function wardChip(parent, onClick)
     return b
 end
 
-local function buildRow(parent)
+local function buildRow(parent: Frame)
     local r = CreateFrame("Frame", nil, parent)
     r:SetSize(WIDTH - 12, ROW_H)
     r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
@@ -134,7 +138,7 @@ local function buildRow(parent)
         mutate(function(l) table.remove(l, r.index) end)
     end })
     r.remove:SetPoint("RIGHT", -2, 0)
-    r.toggle = UI.Toggle(r, { onChange = function(v)
+    r.toggle = UI.Toggle(r, { onChange = function(v: boolean)
         mutate(function(l) if l[r.index] then l[r.index].on = v end end)
     end })
     r.toggle:SetPoint("RIGHT", r.remove, "LEFT", -S["space-2"], 0)
@@ -142,7 +146,7 @@ local function buildRow(parent)
         mutate(function(l) if l[r.index] then l[r.index].ward = not self.value end end)
     end)
     r.ward:SetPoint("RIGHT", r.toggle, "LEFT", -S["space-2"], 0)
-    r.kind = UI.Segmented(r, { options = KIND_OPTIONS, onChange = function(v)
+    r.kind = UI.Segmented(r, { options = KIND_OPTIONS, onChange = function(v: string)
         mutate(function(l) if l[r.index] then l[r.index].kind = v end end)
     end })
     r.kind:SetPoint("RIGHT", r.ward, "LEFT", -S["space-2"], 0)
@@ -157,7 +161,7 @@ local function buildRow(parent)
     return r
 end
 
-local function buildEditor(parent)
+local function buildEditor(parent: Frame)
     local f = CreateFrame("Frame", nil, parent)
     f:SetSize(WIDTH, 100)
     f.rows, f.groups = {}, {}
@@ -181,7 +185,7 @@ local function buildEditor(parent)
         f.groups[i] = h
     end
     f.add = UI.Select(f, { width = 300, placeholder = "+ Add… (name or spell ID)", lookup = spellLookup,
-        onChange = function(v)
+        onChange = function(v: any)
             if not v then return end
             local id = tonumber(tostring(v):match("^id:(%d+)$"))
             local e
@@ -272,7 +276,11 @@ end
 --------------------------------------------------------------------------------
 
 -- auras: spell IDs (debuffs with their type)
-local PEOPLE = {
+type Person = {
+    name: string, class: string, role: string, health: number, max: number, power: number,
+    aggro?: boolean, debuff?: string, auras: any[],
+}
+local PEOPLE: Person[] = {
     { name = "Veyra", class = "SHAMAN", role = "HEALER", health = 0.92, max = 3800, power = 0.7, auras = { { 324 } } },
     { name = "Brannoc", class = "WARRIOR", role = "TANK", health = 0.58, max = 8800, power = 0.4, auras = { { 10901 }, { 871 } } },
     { name = "Ysolde", class = "PRIEST", role = "HEALER", health = 0.81, max = 3900, power = 0.66, auras = { { 10901 } } },
@@ -281,10 +289,10 @@ local PEOPLE = {
     { name = "Morrow", class = "ROGUE", role = "DAMAGER", health = 0.7, max = 4600, power = 0.8, debuff = "Poison",
       auras = { { 2818, "Poison" }, { 5277 } } },
 }
-local function person(unit) return PEOPLE[tonumber(unit:match("(%d)$")) or 1] end
+local function person(unit: string) return PEOPLE[tonumber(unit:match("(%d)$")) or 1] end
 local STAND_IN = UI.UnitStandIn(person)
 -- a power line for tanks and healers, as on the group frames
-local function powerFor(unit) return person(unit).role ~= "DAMAGER" end
+local function powerFor(unit: string) return person(unit).role ~= "DAMAGER" end
 
 local function partySize()
     local party = SuuUI.GetModule("party")
@@ -293,7 +301,7 @@ local function partySize()
     return w, h
 end
 
-local function previewFrame(view, unit, size, w, h, iconSize, count)
+local function previewFrame(view: Frame, unit: string, size: string, w: number, h: number, iconSize: any, count: number)
     local f = UI.UnitFrame(view, unit, { size = size, width = w, height = h, secure = false, api = STAND_IN,
         powerFor = powerFor, textOnSmall = size == "sm" })
     f:SetScript("OnEnter", nil)
@@ -315,7 +323,7 @@ local function previewFrame(view, unit, size, w, h, iconSize, count)
     return f
 end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: Frame)
     if not self.previewView then
         local view = CreateFrame("Frame", nil, parent)
         view:SetSize(1, 1)
@@ -335,7 +343,8 @@ end
 -- One frame: its state, Warded, and its icons as the group frames show
 -- them: listed defensives (externals first) and debuffs, each a set; other
 -- buffs don't show. place(icon, set, k) positions an icon.
-local function drawPerson(f, d, listed, warding, place)
+local function drawPerson(f: any, d: Person, listed: { [number]: string }, warding: { [number]: boolean },
+        place: (icon: any, set: string, k: number, nBuffs: number) -> boolean?)
     f:Refresh()
     f:SetState(d.aggro and "danger" or nil, d.aggro and "Aggro" or nil)
     for kind, deco in pairs(f.dispelDecos) do deco:SetShown(d.debuff == kind) end
@@ -413,7 +422,7 @@ end
 
 local SECTION = {
     id = "defensives", label = "Defensives", category = "Frames", order = 19,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: Frame) return M:PreviewView(parent) end,
     groups = {
         { title = "Defensives", description = "Which buffs count as defensives on your party and raid frames. The game doesn't tell which of another player's buffs are defensives, so SuuUI goes by this list: one list for this profile, for everyone's frames, yours included, in combat too. It drives the defensive icons on party and raid frames (externals first, then their own defensives) and the Warded badge and border (the spells with Warded on). Every rank counts.", rows = {
             { label = "Defensives", control = "custom", build = buildEditor, stacked = true },

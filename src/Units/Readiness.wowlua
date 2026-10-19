@@ -1,4 +1,4 @@
--- Units/Readiness.lua
+-- Units/Readiness.wowlua
 -- Readiness (step 1.13): between pulls, the big cooldowns of everyone in the
 -- group who runs SuuUI (battle resurrection, mana and survival cooldowns),
 -- and a Ready check button for the leader or an assistant. Each SuuUI shares
@@ -10,7 +10,12 @@
 -- and addon messages are restricted there); what a player sent last stays,
 -- counting down.
 
-local UI, T = SuuUI.UI, SuuUI.Tokens
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import after, every from "wowlua:timer"
+
+
+local UI = SuuUI.UI
 
 local M = SuuUI.RegisterModule({
     id = "readiness",
@@ -24,8 +29,11 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = issecretvalue or function() return false end
-local function readable(v) return not isSecret(v) and type(v) == "number" end
+-- wowlua:secret's test, as a predicate of this file's own (0.9.1 narrows
+-- nothing through an imported predicate while the project has an import
+-- cycle; Docs/port-notes/units-group.md)
+local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
+local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 local PREFIX = "SuuUI"
 local HEARTBEAT = 30
 
@@ -42,9 +50,15 @@ local MAJOR = {
     HUNTER = {},
 }
 
-local function playerClass()
+-- your own class is never secret
+local function playerClass(): string
     local _, class = UnitClass("player")
-    return class
+    return class :: string
+end
+
+-- your own short name (the whole name first: Forever's surnames)
+local function playerName(): string
+    return Ambiguate(SuuUI.FullName("player") :: string, "short")
 end
 
 -- Yours: { { id, left } } (left in seconds, 0 ready), or nil in combat.
@@ -57,7 +71,7 @@ function M:ReadOwn()
         if readable(id) and IsPlayerSpell(id) then
             local cd = C_Spell.GetSpellCooldown(id)
             local left = 0
-            if cd and readable(cd.startTime) and readable(cd.duration) and cd.duration > 1.5 then
+            if cd and not isSecret(cd) and readable(cd.startTime) and readable(cd.duration) and cd.duration > 1.5 then
                 left = math.max(0, cd.startTime + cd.duration - GetTime())
             end
             out[#out + 1] = { id = id, left = left }
@@ -75,7 +89,7 @@ local function channel()
     if UI.Flag(IsInGroup()) then return "PARTY" end
 end
 
-function M:Send(text)
+function M:Send(text: string)
     local ch = channel()
     if not ch or InCombatLockdown() then return end
     local ok, result = pcall(C_ChatInfo.SendAddonMessage, PREFIX, text, ch)
@@ -94,18 +108,18 @@ end
 function M:ShareSoon()
     if self.shareQueued then return end
     self.shareQueued = true
-    C_Timer.After(2, function()
+    after(2, function()
         self.shareQueued = nil
         if self:IsEnabled() then self:Share() end
     end)
 end
 
-function M:OnMessage(prefix, text, _, sender)
+function M:OnMessage(prefix: any, text: any, _: any, sender: any)
     if prefix ~= PREFIX or isSecret(text) or type(text) ~= "string" then return end
     if isSecret(sender) or type(sender) ~= "string" then return end
     local who = Ambiguate(sender, "short")
     -- whole names: Forever's characters have surnames (SuuUI.FullName)
-    if who == Ambiguate(SuuUI.FullName("player"), "short") then return end
+    if who == playerName() then return end
     if text == "RDYQ" then
         self:ShareSoon()
         return
@@ -115,7 +129,7 @@ function M:OnMessage(prefix, text, _, sender)
     local now = GetTime()
     local spells = {}
     for id, left in payload:gmatch("(%d+):(%d+)") do
-        spells[#spells + 1] = { id = tonumber(id), endsAt = now + tonumber(left) }
+        spells[#spells + 1] = { id = tonumber(id), endsAt = now + (tonumber(left) or 0) }
     end
     self.heard = self.heard or {}
     self.heard[who] = { at = now, spells = spells }
@@ -127,9 +141,10 @@ end
 --------------------------------------------------------------------------------
 
 -- The group's members (you first) as { name, class }.
-local function roster()
-    local out = { { name = Ambiguate(SuuUI.FullName("player"), "short"), class = playerClass(), you = true } }
-    local function add(unit)
+type Member = { name: string, class: (string | Secret<string>)?, you?: boolean }
+local function roster(): Member[]
+    local out: Member[] = { { name = playerName(), class = playerClass(), you = true } }
+    local function add(unit: string)
         if UnitExists(unit) and not UI.Flag(UnitIsUnit(unit, "player")) then
             -- the whole name, as their messages carry it (Forever's surnames)
             local name = SuuUI.FullName(unit)
@@ -194,7 +209,7 @@ function M:Update()
     self.panel:SetShown(shown and true or false)
 end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: Frame)
     if not self.preview then
         self.preview = UI.Readiness(parent, {})
         local now = GetTime()
@@ -212,7 +227,7 @@ end
 
 local SECTION = {
     id = "readiness", label = "Readiness", category = "Insights", order = 40,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: Frame) return M:PreviewView(parent) end,
     groups = {
         { title = "Readiness", description = "Between pulls: the big cooldowns of everyone in your group who runs SuuUI, and a Ready check button for the leader or an assistant. Hidden from the pull until the fight ends.", rows = {
             { key = "shows", label = "Show", control = "segmented", stacked = true,
@@ -252,7 +267,7 @@ function M:OnEnable()
     end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Update() end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        C_Timer.After(1, function() if self:IsEnabled() then self:Update(); self:ShareSoon() end end)
+        after(1, function() if self:IsEnabled() then self:Update(); self:ShareSoon() end end)
     end)
     self:OnGameEvent("ENCOUNTER_START", function() self.encounter = true; self:Update() end)
     self:OnGameEvent("ENCOUNTER_END", function() self.encounter = nil; self:Update() end)
@@ -260,7 +275,7 @@ function M:OnEnable()
     self:Watch("position", function() self:Update() end)
     -- a heartbeat: everyone's view stays fresh
     if not self.ticker then
-        self.ticker = C_Timer.NewTicker(HEARTBEAT, function()
+        self.ticker = every(HEARTBEAT, function()
             if self:IsEnabled() and channel() and not InCombatLockdown() then self:Share() end
         end)
     end

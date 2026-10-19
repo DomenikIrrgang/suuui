@@ -1,4 +1,4 @@
--- Units/PartyFrames.lua
+-- Units/PartyFrames.wowlua
 -- Party frames (step 1.8): you and up to four party members, one unit frame
 -- each. A built-in module written against the public API only.
 --
@@ -21,6 +21,10 @@
 -- across the whole frame. The engine shows and hides it, so it works in
 -- combat, where addon code can't read auras. Aggro comes from the threat
 -- state, which stays readable.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import after, every from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -66,12 +70,15 @@ M:Migrate("debuffBadges", function(values)
 end)
 
 local SLOTS = { "player", "party1", "party2", "party3", "party4" }
-local isSecret = issecretvalue or function() return false end
+-- wowlua:secret's test, as a predicate of this file's own (0.9.1 narrows
+-- nothing through an imported predicate while the project has an import
+-- cycle; Docs/port-notes/units-group.md)
+local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 
 -- Healing classes, for the power line when the group gives no roles.
 local HEALER_CLASS = { PRIEST = true, DRUID = true, PALADIN = true, SHAMAN = true }
 
-local function powerFor(unit, A)
+local function powerFor(unit: string, A: any)
     A = A or _G
     local mode = M:Get("power")
     if mode == "all" then return true end
@@ -99,7 +106,9 @@ end
 -- of debuffs: on the left side the debuffs come first from the bar. No
 -- other buffs: those come through buff indicators.
 local GAP_SETS = S["space-4"]
-local AURA_GROUPS = {
+type AuraGroup = { key: string, set: string, who?: string, filter: string[], list?: string, border?: string, glow?: string,
+    drain?: string, dispel?: boolean, harmfulEdge?: boolean }
+local AURA_GROUPS: AuraGroup[] = {
     { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", glow = "glow-ward", drain = "ward" },
     { key = "dispel", set = "debuffIcons", who = "me", filter = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, dispel = true, harmfulEdge = true },
     -- every other debuff (Forbearance, Weakened Soul…)
@@ -114,12 +123,12 @@ local ORDER = {
 }
 
 -- A group's count on a frame: its setting, on the frames it is for.
-local function groupMax(f, g)
+local function groupMax(f: any, g: AuraGroup): number
     if g.who and g.who ~= (f.unit == "player" and "me" or "others") then return 0 end
     return M:Get(g.set)
 end
 
-local function buildAuras(f)
+local function buildAuras(f: any)
     local defensives = UI.GroupDefensives()
     local clip = CreateFrame("Frame", nil, f)
     clip:SetClipsChildren(true)
@@ -135,7 +144,7 @@ local function buildAuras(f)
 end
 
 -- The row's width: both sets' icons, and the gap when both have room.
-local function rowWidth(self, h, buffs, debuffs)
+local function rowWidth(self: any, h: number, buffs: number, debuffs: number): number
     local n = buffs + debuffs
     if n == 0 then return 0 end
     return n * h + (n - 1) * S["space-2"] + ((buffs > 0 and debuffs > 0) and (GAP_SETS - S["space-2"]) or 0)
@@ -143,7 +152,7 @@ end
 
 -- The selected border (your target): its own frame, so a secret "is it the
 -- target?" can set its alpha through the engine.
-local function buildSelected(f)
+local function buildSelected(f: any)
     local sel = CreateFrame("Frame", nil, f)
     sel:SetAllPoints()
     sel:SetFrameLevel(f:GetFrameLevel() + 10)
@@ -160,7 +169,7 @@ end
 
 -- Five people: you, then a tank, a healer, a mage with aggro, a rogue out of
 -- range. Auras are spell textures with the edge the engine would give them.
-local PEOPLE = {
+local PEOPLE: { [string]: any }[] = {
     { you = true, health = 0.92, power = 0.7, auras = {} },
     { name = "Brannoc", class = "WARRIOR", role = "TANK", health = 0.64, max = 8800, power = 0.4, incoming = 0.18, absorb = 0.1,
       marker = 8, auras = { { 871 } } },
@@ -172,7 +181,7 @@ local PEOPLE = {
       debuff = "Poison", removable = false, auras = { { 2818, "dispel-poison" } } },
 }
 
-local function person(unit)
+local function person(unit: string)
     local i = tonumber(unit:match("^preview(%d)$"))
     local d = PEOPLE[i or 1]
     if d.you and not d.name then
@@ -192,7 +201,7 @@ local STAND_IN = UI.UnitStandIn(person)
 -- the frames' holder, and room beside it for the aura sets.
 -- A made-up party on a view: the settings window's, and edit mode's group
 -- preview (on the real frames' place).
-function M:BuildSet(parent)
+function M:BuildSet(parent: Frame)
     local view = CreateFrame("Frame", nil, parent)
     view:SetSize(1, 1)
     local holder = CreateFrame("Frame", nil, view)
@@ -224,7 +233,7 @@ function M:BuildSet(parent)
     return set
 end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: Frame)
     if self.previewView then
         self.previewView:SetParent(parent)
         self:DrawPreview(true)
@@ -238,7 +247,7 @@ function M:PreviewView(parent)
 end
 
 -- Both previews: the settings window's (while it shows) and edit mode's.
-function M:DrawPreview(force)
+function M:DrawPreview(force: boolean?)
     local set = self.previewSet
     if set and (force or set.view:IsVisible()) then self:DrawSet(set) end
     if self.screenSet and self.screenSet.view:IsShown() then self:DrawSet(self.screenSet) end
@@ -259,7 +268,7 @@ end
 
 -- Edit mode's group preview: a made-up party on the real frames' place, the
 -- real ones see-through meanwhile; any other size ends it.
-function M:ScreenPreview(size, auras)
+function M:ScreenPreview(size: any, auras: any)
     if not self.holder then return end
     if size ~= 5 then
         if self.screenSet then self.screenSet.view:Hide() end
@@ -283,7 +292,7 @@ function M:ScreenPreview(size, auras)
 end
 
 -- Draws a made-up party with the current settings.
-function M:DrawSet(set)
+function M:DrawSet(set: any)
     self:LayoutFrames(set.frames, set.holder)
     local h, far = self:Get("height"), self:Get("rangeAlpha")
     local badges = self:Get("debuffBadges")
@@ -293,8 +302,8 @@ function M:DrawSet(set)
     for _, id in ipairs(defensives.warded) do warding[id] = true end
     -- each person's auras by set: listed defensives, and debuffs (a dispel
     -- edge); other buffs don't show on party frames
-    local function aurasOf(d) return set.allAuras or d.auras end
-    local function split(d)
+    local function aurasOf(d: { [string]: any }) return set.allAuras or d.auras end
+    local function split(d: { [string]: any })
         local out = { buffs = {}, debuffs = {} }
         for _, a in ipairs(aurasOf(d)) do
             if a[2] then out.debuffs[#out.debuffs + 1] = a
@@ -381,7 +390,7 @@ function M:DrawSet(set)
     end
 end
 
-local function build(self)
+local function build(self: any)
     local holder = CreateFrame("Frame", "SuuUIPartyFrames", SuuUI.Root, "SecureHandlerStateTemplate")
     holder:SetSize(1, 1)
     holder.suuManagedShow = true -- its state driver shows it, not edit mode
@@ -404,7 +413,7 @@ end
 --------------------------------------------------------------------------------
 
 -- Places a set of frames (the real ones, or the preview's) in their holder.
-function M:LayoutFrames(frames, holder)
+function M:LayoutFrames(frames: any[], holder: any)
     local w, h, gap = self:Get("width"), self:Get("height"), self:Get("gap")
     local dir = self:Get("direction")
     local n = #SLOTS
@@ -533,7 +542,7 @@ end
 -- States: aggro, debuff types, your target, range
 --------------------------------------------------------------------------------
 
-function M:UpdateState(f)
+function M:UpdateState(f: any)
     local u = f.unit
     if not UnitExists(u) then return end
     -- aggro: a non-tank the enemy is attacking
@@ -572,7 +581,7 @@ end
 
 function M:QueueIndicators()
     if self.indicatorTimer then self.indicatorTimer:Cancel() end
-    self.indicatorTimer = C_Timer.NewTimer(1, function()
+    self.indicatorTimer = after(1, function()
         self.indicatorTimer = nil
         self:RunOutOfCombat("indicators", function() self:ApplyIndicators() end)
     end)
@@ -620,7 +629,7 @@ end
 local SECTION = {
     id = "party", label = "Party frames", category = "Frames", order = 14,
     -- the preview column: a made-up party with every setting applied
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: Frame) return M:PreviewView(parent) end,
     groups = {
         { title = "Layout", description = "One layout per profile. For a healer and a tank or DPS layout, make a profile for each and let SuuUI switch them with your role (General > Profiles > By role). Move the frames in edit mode (General > Appearance > Edit layout).", rows = {
             { key = "showSelf", label = "Show yourself", control = "toggle", combat = true, description = "You first, then your party." },
@@ -667,7 +676,7 @@ local SECTION = {
               description = "Magic, Curse, Poison, Disease as a badge and border on the frame, in combat too. Several at once: Magic shows over Curse, Poison, Disease." },
             -- step 0.01: the default is the design's opacity-oor (0.42)
             { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.01,
-              format = function(v) return ("%d%%"):format(v * 100 + 0.5) end,
+              format = function(v: number) return ("%d%%"):format(v * 100 + 0.5) end,
               description = "How faint a party member out of your range is." },
         } },
     },
@@ -737,7 +746,7 @@ function M:OnEnable()
         for _, f in ipairs(self.frames) do if f.unit == unit then self:UpdateState(f) end end
     end)
     -- "while missing" indicators: read out of combat, hidden in combat
-    local function presence(unit)
+    local function presence(unit: string?)
         for _, f in ipairs(self.frames) do
             if not unit or f.unit == unit then f:UpdateIndicatorPresence() end
         end
@@ -745,10 +754,10 @@ function M:OnEnable()
     self:OnGameEvent("UNIT_AURA", function(_, unit)
         if not InCombatLockdown() and unit and (unit == "player" or unit:find("^party") or unit:find("^raid")) then presence(unit) end
     end)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() C_Timer.After(0, function() presence() end) end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() after(0, function() presence() end) end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function() presence() end)
     -- range has no event worth trusting: a light poll while shown
-    self.rangeTicker = C_Timer.NewTicker(0.25, function()
+    self.rangeTicker = every(0.25, function()
         if self.holder:IsVisible() then self:UpdateRange() end
     end)
 end

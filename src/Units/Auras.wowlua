@@ -1,4 +1,4 @@
--- Units/Auras.lua
+-- Units/Auras.wowlua
 -- Auras (step 1.4). A built-in module written against the public API only;
 -- everything is an engine aura container (UI.AuraContainer), because addon
 -- code can't read auras in combat.
@@ -20,6 +20,10 @@
 -- SuuUI draws them itself (UI.WeaponEnchantIcon) as their own group at the
 -- edge your buffs grow from, an MH or OH tag on each, then a gilt line, then
 -- the buffs, their container moved past them.
+
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -108,7 +112,7 @@ end
 
 -- A half-width container's line: half the frame, less half the gap between
 -- the two sides.
-local function halfWidth(frame)
+local function halfWidth(frame: any): number
     local w = frame and frame:GetWidth() or 0
     return math.max(UI.Size("icon-md"), math.floor((w - S["space-4"]) / 2))
 end
@@ -116,7 +120,7 @@ end
 -- The container is made once (the engine never frees one) and follows the
 -- anchor: when another frame is published under the name (a plugin's own
 -- target frame), it moves onto that frame.
-function M:Attach(name, frame)
+function M:Attach(name: string, frame: any)
     local def = ATTACHED[name]
     if not def then return end
     local c = self.attached[name]
@@ -153,7 +157,7 @@ function M:Attach(name, frame)
 end
 
 -- Every container that follows an anchor.
-function M:AttachAnchor(anchor, frame)
+function M:AttachAnchor(anchor: string, frame: any)
     for name, def in pairs(ATTACHED) do
         if (def.anchor or name) == anchor then self:Attach(name, frame) end
     end
@@ -190,7 +194,7 @@ function M:UpdateOffline()
     local online = true
     if UI.Flag(UnitExists("target")) and UI.Flag(UnitIsPlayer("target")) then
         local c = UnitIsConnected("target")
-        if c ~= nil and not (issecretvalue and issecretvalue(c)) then online = c and true or false end
+        if c ~= nil and not isSecret(c) then online = c and true or false end
     end
     for _, key in ipairs({ "targetBuffs", "targetDebuffs" }) do
         if self.attached[key] then self.attached[key].container:SetAlpha(online and 1 or 0) end
@@ -217,11 +221,11 @@ local PREVIEW_FOR = {
     targetBuffs = "buffs", focusBuffs = "buffs",
 }
 
-function M:AuraPreview(on)
+function M:AuraPreview(on: boolean)
     local buffs, debuffs = {}, {}
     for _, id in ipairs(PREVIEW_BUFFS) do buffs[#buffs + 1] = { icon = C_Spell.GetSpellTexture(id) } end
     for _, d in ipairs(PREVIEW_DEBUFFS) do debuffs[#debuffs + 1] = { icon = C_Spell.GetSpellTexture(d[1]), border = d[2] } end
-    local function show(c, kind, place)
+    local function show(c: any, kind: string, place: any[]?)
         if not c then return end
         if not on then c:HidePreview() return end
         c:ShowPreview(kind == "buffs" and buffs or debuffs, place)
@@ -257,7 +261,7 @@ end
 -- timeline shares the top edge (asked for in game: at 1920 wide 16 ran into
 -- it; option A, fit and wrap). Measured from the side the row grows from to
 -- the timeline's near edge, space-5 short of it.
-function M:BuffsPerRow(size, sp)
+function M:BuffsPerRow(size: number, sp: number): number
     local n = self:Get("buffsPerRow")
     local tl = SuuUI.GetAnchor("encounterTimeline")
     if not (tl and self.buffHolder) then return n end
@@ -278,7 +282,7 @@ end
 
 -- The buff container at its edge of the holder, `offset` px in (past the
 -- enchants), its line that much shorter.
-function M:PlaceBuffs(offset)
+function M:PlaceBuffs(offset: number)
     local c = self.buffs.container
     local w = self.buffRowW or self.buffHolder:GetWidth()
     c:ClearAllPoints()
@@ -292,7 +296,7 @@ end
 
 -- The enchant icons for `slots` in a row from the holder's edge, the line
 -- after them; the rest hidden. Returns how far in the buffs start (0: none).
-function M:ArrangeEnchants(slots)
+function M:ArrangeEnchants(slots: string[]): number
     local size, sp = self:Get("buffSize"), S["space-2"]
     local right = self:Get("buffGrowth") == "right"
     local corner = right and "TOPLEFT" or "TOPRIGHT"
@@ -470,7 +474,7 @@ function M:OnEnable()
     for _, key in ipairs({ "showBuffs", "showDebuffs", "showTarget", "targetDebuffs", "targetBuffs", "showFocus", "showBoss", "buffPosition" }) do
         self:Watch(key, function() self:ApplyOptions() end)
     end
-    self:Watch("buffPosition", function() C_Timer.After(0, function() self:ApplyLayout() end) end)
+    self:Watch("buffPosition", function() after(0, function() self:ApplyLayout() end) end)
 end
 
 function M:OnDisable()

@@ -1,4 +1,4 @@
--- Units/Nameplates.lua
+-- Units/Nameplates.wowlua
 -- Enemy nameplates (step 1.10): SuuUI's own plate laid on Blizzard's, the
 -- design's Nameplate. A built-in module written against the public API only.
 --
@@ -31,6 +31,10 @@
 -- it attacks you; as a tank "Losing" when it is about to leave you and
 -- "Aggro" when it has. Solo, everyone reads as a non-tank (a tank has no one
 -- to lose a mob to): "Aggro" on what attacks you.
+
+import SuuUI from "/Core/API"
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -69,7 +73,6 @@ M:Migrate("healthText", function(values)
     if type(values.healthText) == "boolean" then values.healthText = values.healthText and "percent" or "none" end
 end)
 
-local isSecret = issecretvalue or function() return false end
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 -- the damage ghost's hold before it eases down (the unit frames' own)
 local GHOST_HOLD = 0.15
@@ -94,14 +97,14 @@ local function plateH() return NAME_H + ROW_GAP + barH() end
 
 -- A health amount for a StatusBar: a secret one goes through untouched (a
 -- secret value can't even be tested against nil), a missing one is `default`.
-local function amount(v, default)
+local function amount(v: any, default: number?): any
     if isSecret(v) then return v end
     return v or default or 0
 end
 
 -- Inside an instance: dungeons and raids, and with `pvp` battlegrounds and
 -- arenas too.
-local function inInstance(pvp)
+local function inInstance(pvp: boolean?): boolean
     local _, kind = IsInInstance()
     if kind == "party" or kind == "raid" then return true end
     return pvp and (kind == "pvp" or kind == "arena") or false
@@ -117,13 +120,16 @@ stash:Hide()
 local guard = false
 local hookedAlpha = setmetatable({}, { __mode = "k" })
 
-local function hideBlizzard(uf)
+local function hideBlizzard(uf: any)
     if not uf or uf:IsForbidden() then return end
     hidden[uf] = true
     uf:SetAlpha(0)
     if not hookedAlpha[uf] then
         hookedAlpha[uf] = true
-        hooksecurefunc(uf, "SetAlpha", function(self)
+        -- (hooksecurefunc, not wowlua:hooks: this runs on every alpha change of
+        -- every plate, and the stdlib's error isolation costs a table and a
+        -- closure per call)
+        hooksecurefunc(uf, "SetAlpha", function(self: any)
             if hidden[self] and not guard then
                 guard = true
                 self:SetAlpha(0)
@@ -139,7 +145,7 @@ local function hideBlizzard(uf)
     end
 end
 
-local function restoreBlizzard(uf)
+local function restoreBlizzard(uf: any)
     if not uf or uf:IsForbidden() or not hidden[uf] then return end
     hidden[uf] = nil
     uf:SetAlpha(1)
@@ -169,14 +175,14 @@ local function belowLow()
     return lowCurve or nil
 end
 
-local function gradient(bar, deep, fill)
+local function gradient(bar: any, deep: string, fill: string)
     UI.PaintGradient(bar:GetStatusBarTexture(), "HORIZONTAL", deep, fill)
 end
 
-local Plate = {}
+local Plate: { [string]: any } = {}
 
 -- Builds a plate. `api` (previews) stands in for the game's Unit* functions.
-local function buildPlate(parent, api)
+local function buildPlate(parent: any, api: any?): any
     local f = CreateFrame("Frame", nil, parent)
     Mixin(f, Plate)
     f.api = api or _G
@@ -275,7 +281,7 @@ local function buildPlate(parent, api)
 end
 
 -- Your debuffs on it, above the name (the engine fills them).
-local function buildAuras(f)
+local function buildAuras(f: any)
     f.auras = UI.AuraContainer(f, "none", { size = M:Get("auraSize"), spacing = S["space-1"], anchor = "BOTTOMLEFT", growth = { "RIGHT", "UP" },
         groups = {
             { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4, harmfulEdge = true },
@@ -287,7 +293,7 @@ local function buildAuras(f)
     end
 end
 
-function Plate:SetPlateWidth(w)
+function Plate:SetPlateWidth(w: number)
     self:SetSize(w, plateH())
     self.bar:SetHeight(barH())
     local mode = M:Get("healthText")
@@ -311,7 +317,7 @@ end
 -- not, have and need). Only quests in your own log count (a group member's
 -- objective is in your tooltip too). Returns false, or the count to show
 -- ("3/8", "45%", or "" for a single mob).
-local function questObjective(unit)
+local function questObjective(unit: string): string | false
     local LT = Enum.TooltipDataLineType
     local info = C_TooltipInfo.GetUnit(unit)
     if not (info and info.lines) then return false end
@@ -327,7 +333,8 @@ local function questObjective(unit)
                 local done = line.completed
                 if not isSecret(done) and done == false and (not questID or not onQuest or onQuest(questID)) then
                     local text = line.leftText
-                    local pct = (not isSecret(text) and type(text) == "string") and text:match("(%d+)%s*%%")
+                    -- (`or nil`: 0.9.1 types `boolean and x` as `true | x`)
+                    local pct = (not isSecret(text) and type(text) == "string") and text:match("(%d+)%s*%%") or nil
                     if pct then return pct .. "%" end
                     local have, need = line.numFulfilled, line.numRequired
                     if not isSecret(have) and not isSecret(need) and have and need and need > 1 then
@@ -341,10 +348,10 @@ local function questObjective(unit)
     return false
 end
 
-local function questText(unit)
+local function questText(unit: string): string | false
     local cached = questCache[unit]
     if cached ~= nil then return cached end
-    local result = false
+    local result: string | false = false
     -- players are never quest objectives: no tooltip to read (/suu perf)
     if UI.Flag(UnitIsPlayer(unit)) then
         questCache[unit] = false
@@ -352,7 +359,7 @@ local function questText(unit)
     end
     if C_TooltipInfo and C_TooltipInfo.GetUnit and Enum.TooltipDataLineType then
         local ok, r = pcall(questObjective, unit)
-        result = ok and r or false
+        if ok and r then result = r :: string end
     end
     questCache[unit] = result
     return result
@@ -408,8 +415,8 @@ function Plate:UpdateLevel()
             local elite = okC and not isSecret(c) and ELITE[c]
             -- "25+" an elite, "??" a boss or one far above you (the design's
             -- direction A, chosen 2026-10-18; after a quest mark, as asked)
-            local boss = (okC and not isSecret(c) and c == "worldboss") or level <= 0
-            text = boss and "??" or (tostring(level) .. (elite and "+" or ""))
+            local isBoss = (okC and not isSecret(c) and c == "worldboss") or level <= 0
+            text = isBoss and "??" or (tostring(level) .. (elite and "+" or ""))
             self.level:SetColor(UI.LevelColor(level))
         end
     end
@@ -421,7 +428,7 @@ function Plate:UpdateLevel()
 end
 
 -- `instant`: a plate given a unit (the ghost isn't the last mob's).
-function Plate:UpdateHealth(instant)
+function Plate:UpdateHealth(instant: boolean?)
     local A, u = self.api, self.unit
     local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
     self.health:SetMinMaxValues(0, amount(max, 1))
@@ -433,7 +440,7 @@ function Plate:UpdateHealth(instant)
     else
         self.ghostValue = amount(cur)
         if not self.ghostTimer then
-            self.ghostTimer = C_Timer.NewTimer(GHOST_HOLD, function()
+            self.ghostTimer = after(GHOST_HOLD, function()
                 self.ghostTimer = nil
                 self.ghost:SetValue(self.ghostValue, INTERPOLATE)
             end)
@@ -565,7 +572,7 @@ end
 -- Events per plate (its unit token changes as plates are reused)
 --------------------------------------------------------------------------------
 
-local function listen(f)
+local function listen(f: any)
     if not f.events then
         f.events = CreateFrame("Frame")
         f.events:SetScript("OnEvent", function(_, event)
@@ -601,9 +608,9 @@ local function fill()
         buildAuras(f)
         f:Hide()
         pool[#pool + 1] = f
-        C_Timer.After(0, step)
+        after(0, step)
     end
-    C_Timer.After(0, step)
+    after(0, step)
 end
 
 local function acquire()
@@ -616,7 +623,7 @@ local function acquire()
     return f
 end
 
-local function release(f)
+local function release(f: any)
     if f.events then f.events:UnregisterAllEvents() end
     f.cast:Deactivate()
     if f.auras then f.auras:SetUnit("none") end
@@ -627,7 +634,7 @@ local function release(f)
     pool[#pool + 1] = f
 end
 
-function M:OnPlateAdded(unit)
+function M:OnPlateAdded(unit: string)
     local plate = C_NamePlate.GetNamePlateForUnit(unit)
     if not plate or plate:IsForbidden() then return end
     local uf = plate.UnitFrame
@@ -651,7 +658,7 @@ function M:OnPlateAdded(unit)
         if not self.recheck then self.recheck = {} end
         if not self.recheck[unit] then
             self.recheck[unit] = true
-            C_Timer.After(0.2, function()
+            after(0.2, function()
                 self.recheck[unit] = nil
                 local f = byUnit[unit]
                 if self:IsEnabled() and UnitExists(unit) and UI.Flag(UnitCanAttack("player", unit)) and (not f or f.friendly) then self:OnPlateAdded(unit) end
@@ -664,7 +671,7 @@ end
 
 -- A plate whose unit may have changed sides (a duel): laid again only when
 -- it did, otherwise just redrawn.
-function M:Recheck(unit)
+function M:Recheck(unit: string)
     local f = byUnit[unit]
     if f and f.friendly == not UI.Flag(UnitCanAttack("player", unit)) then return f:Refresh() end
     self:OnPlateAdded(unit)
@@ -679,14 +686,14 @@ function M:FriendlyStyled()
 end
 
 -- A SuuUI plate sits on Blizzard's with the bar's middle on its centre.
-local function anchor(f, plate)
+local function anchor(f: any, plate: any)
     f:ClearAllPoints()
     f:SetPoint("BOTTOM", plate, "CENTER", 0, -(barH() / 2))
 end
 
 -- Lays a SuuUI plate on Blizzard's: an enemy's, or a friendly one (name,
 -- bar and health text only).
-function M:Attach(unit, plate, friendly)
+function M:Attach(unit: string, plate: any, friendly: boolean)
     local uf = plate.UnitFrame
     if uf and uf:IsForbidden() then return end
     hideBlizzard(uf)
@@ -714,7 +721,7 @@ function M:Attach(unit, plate, friendly)
     f:Show()
 end
 
-function M:OnPlateRemoved(unit)
+function M:OnPlateRemoved(unit: string)
     questCache[unit] = nil
     local f = byUnit[unit]
     if f then
@@ -723,14 +730,14 @@ function M:OnPlateRemoved(unit)
     end
 end
 
-function M:ApplyAuraCount(f)
+function M:ApplyAuraCount(f: any)
     if not f.auras then return end
     local n = self:Get("auras")
     f.auras:SetGroupMax("mine", f.friendly and 0 or n)
     f.auras:SetGroupMax("removable", f.friendly and n or 0)
 end
 
-function M:ForEach(fn)
+function M:ForEach(fn: (f: any) -> ())
     for _, f in pairs(byUnit) do fn(f) end
     for _, f in ipairs(self.previewPlates or {}) do fn(f) end
 end
@@ -738,12 +745,12 @@ end
 -- The sizes and cast options on every live, pooled and preview plate. Aura
 -- icons resize out of combat only (the engine's buttons refuse it in combat).
 function M:ApplySizes()
-    local function each(fn)
+    local function each(fn: (f: any) -> ())
         for _, f in pairs(byUnit) do fn(f) end
         for _, f in ipairs(pool) do fn(f) end
     end
     local w = self:Get("width")
-    local function apply(f)
+    local function apply(f: any)
         f.cast.totalW = w
         f.cast:SetWidth(w)
         f.cast:Arrange()
@@ -783,7 +790,8 @@ function M:ApplyGameSettings()
     self:RunOutOfCombat("cvars", function()
         for k, v in pairs(CVARS) do pcall(C_CVar.SetCVar, k, v) end
         if C_NamePlate and C_NamePlate.SetNamePlateSize then
-            pcall(C_NamePlate.SetNamePlateSize, self:Get("width"), plateH() + 8)
+            -- (0.9.1 declares its parameters as strings; the game takes numbers)
+            pcall(C_NamePlate.SetNamePlateSize :: any, self:Get("width"), plateH() + 8)
         end
     end)
 end
@@ -793,7 +801,7 @@ end
 -- whichever this client has (an unknown name reads back nil).
 local FRIENDLY_CVARS = { "nameplateShowFriendlyPlayers", "nameplateShowFriends" }
 
-local function showFriendly(on)
+local function showFriendly(on: boolean)
     for _, name in ipairs(FRIENDLY_CVARS) do
         if C_CVar.GetCVar(name) ~= nil then pcall(C_CVar.SetCVar, name, on and "1" or "0") end
     end
@@ -802,7 +810,7 @@ end
 -- No nameplates at all (the game's enemy and friendly plate settings off):
 -- a choice of its own, kept until it's turned on again, which brings the
 -- enemies' back and leaves the friendly ones to the setting above.
-function M:ApplyShown(changed)
+function M:ApplyShown(changed: boolean?)
     if self:Get("showPlates") and not changed then return end
     self:RunOutOfCombat("shown", function()
         local on = self:Get("showPlates")
@@ -815,7 +823,7 @@ end
 -- unless its own setting is on. With this, in the open world only, as the
 -- friendly players' (asked 2026-10-18: their level, as on every plate).
 -- Turned off, the game's setting goes back off once and is yours again.
-function M:ApplyFriendlyNPCs(released)
+function M:ApplyFriendlyNPCs(released: boolean?)
     if not self:Get("friendlyNPCs") and not released then return end
     self:RunOutOfCombat("friendlyNPCs", function()
         if C_CVar.GetCVar("nameplateShowFriendlyNPCs") == nil then return end
@@ -830,7 +838,7 @@ end
 -- shown (Blizzard's look). SuuUI owns the game's setting while this is on;
 -- turned off (`released`), the plates come back once and the game's setting
 -- is yours again.
-function M:ApplyFriendly(released)
+function M:ApplyFriendly(released: boolean?)
     if not self:Get("showPlates") then return end
     if not self:Get("friendlyOpenWorld") and not released then return end
     self:RunOutOfCombat("friendly", function()
@@ -843,7 +851,8 @@ end
 -- The preview: four made-up plates (the design's), your target first
 --------------------------------------------------------------------------------
 
-local PEOPLE = {
+-- (made-up units of different shapes: a map per unit)
+local PEOPLE: { [string]: any }[] = {
     { name = "Cinder Acolyte", marker = 8, health = 0.62, max = 13800, reaction = 2, target = true, threat = 3, debuffs = { 1978, 1130 }, cast = { name = "Flame Lash", icon = 133, progress = 0.55, time = "0.9s", target = "Kaelith", targetClass = "PRIEST" } },
     { name = "Ember Hound", marker = 7, health = 0.81, max = 8400, reaction = 2, threat = 2, quest = "3/8" },
     { name = "Ashbound Ritualist", health = 0.28, max = 11200, reaction = 2, threat = 0, cast = { name = "Rain of Ash", icon = 5740, progress = 0.3, time = "1.9s", locked = true } },
@@ -852,19 +861,19 @@ local PEOPLE = {
       cast = { name = "Flash of Light", icon = 19750, progress = 0.7, time = "0.4s" } },
 }
 
-local function person(unit) return PEOPLE[tonumber(unit:match("(%d)$")) or 1] end
+local function person(unit: string): { [string]: any } return PEOPLE[tonumber(unit:match("(%d)$")) or 1] end
 
-function M:PreviewView(parent)
+function M:PreviewView(parent: any): any
     if not self.previewView then
         local api = UI.UnitStandIn(person)
-        api.UnitReaction = function(u) return person(u).reaction end
-        api.UnitHealthPercent = function(u, _, curve)
+        api.UnitReaction = function(u: string): number return person(u).reaction end
+        api.UnitHealthPercent = function(u: string, _: any, curve: any): number
             local h = person(u).health
             if CurveConstants and curve == CurveConstants.ScaleTo100 then return h * 100 end
             return h < LOW and 1 or 0 -- the plate's low-health curve
         end
-        api.UnitThreatSituation = function(_, u) return person(u).threat end
-        api.UnitIsUnit = function(u, other) return other == "target" and person(u).target or false end
+        api.UnitThreatSituation = function(_: any, u: string): number? return person(u).threat end
+        api.UnitIsUnit = function(u: string, other: string): boolean return other == "target" and person(u).target or false end
         local view = CreateFrame("Frame", nil, parent)
         self.previewView, self.previewPlates = view, {}
         for i = 1, #PEOPLE do
@@ -962,7 +971,7 @@ function M:DrawPreview()
                 local c = C_ClassColor.GetClassColor(d.cast.targetClass)
                 local r, g, b = UI.RGBA("ink-muted")
                 f.fakeTarget:SetText(("|cff%02x%02x%02x›|r %s"):format(r * 255, g * 255, b * 255, d.cast.target))
-                f.fakeTarget:SetTextColor(c:GetRGB())
+                f.fakeTarget:SetTextColor((c :: ColorMixin):GetRGB()) -- (a class the preview names: never nil)
             end
         end
         y = y + top + plateH() + castH + S["space-6"]
@@ -982,7 +991,7 @@ end
 
 local SECTION = {
     id = "nameplates", label = "Nameplates", category = "Frames", order = 20,
-    preview = function(parent) return M:PreviewView(parent) end,
+    preview = function(parent: any): any return M:PreviewView(parent) end,
     groups = {
         { title = "Nameplates", rows = {
             { key = "showPlates", label = "Nameplates", control = "toggle", combat = true,
@@ -1050,7 +1059,7 @@ function M:OnEnable()
     self:ApplyFriendlyNPCs()
     -- your level up: the plates' levels change colour
     self:OnGameEvent("PLAYER_LEVEL_UP", function()
-        C_Timer.After(0.5, function() for _, f in pairs(byUnit) do f:UpdateLevel() end end)
+        after(0.5, function() for _, f in pairs(byUnit) do f:UpdateLevel() end end)
     end)
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
         self:ApplyShown()
@@ -1064,7 +1073,7 @@ function M:OnEnable()
         wipe(questCache)
         if questDirty then return end
         questDirty = true
-        C_Timer.After(0.5, function()
+        after(0.5, function()
             questDirty = false
             for _, f in pairs(byUnit) do f:UpdateQuest() end
         end)

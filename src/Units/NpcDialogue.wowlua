@@ -1,4 +1,4 @@
--- Units/NpcDialogue.lua
+-- Units/NpcDialogue.wowlua
 -- SuuUI's NPC dialogue (plan 3.7, design component NpcDialogue, the
 -- cinematic bar in its compact direction D3 "Answer pills", chosen
 -- 2026-10-17 over the first build's taller bar): talking to an NPC becomes a
@@ -24,6 +24,10 @@
 -- fight starts.
 -- A built-in module written against the public API only.
 
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
@@ -39,8 +43,8 @@ local M = SuuUI.RegisterModule({
 })
 
 local isSecret = issecretvalue or function() return false end
-local function plain(v) return v ~= nil and not isSecret(v) end
-local function call(fn, ...)
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
+local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i end
@@ -63,6 +67,9 @@ local CPS = 90 -- characters a second while a line types in
 local ANIM_TALK, ANIM_IDLE = 60, 0
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
+-- an answer pill's and a card's description (see DrawPills, DrawCards)
+type Answer = { [string]: any }
+type Card = { [string]: any }
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 -- the game's gossip icons as SuuUI glyphs (the icon itself where unknown)
@@ -81,13 +88,13 @@ local EQUIP_SLOTS = {
     INVTYPE_THROWN = { 18 }, INVTYPE_RELIC = { 18 }, INVTYPE_TABARD = { 19 },
 }
 
-local function itemLevel(link)
+local function itemLevel(link: string?): number?
     local lvl = link and call(C_Item.GetDetailedItemLevelInfo, link)
     return plain(lvl) and lvl or nil
 end
 
 -- Whether an item would raise the item level of what you wear there.
-local function upgrade(link)
+local function upgrade(link: string?): boolean
     if not link then return false end
     local _, _, _, _, _, _, _, _, equipLoc = C_Item.GetItemInfo(link)
     local slots = equipLoc and EQUIP_SLOTS[equipLoc]
@@ -102,10 +109,10 @@ local function upgrade(link)
 end
 
 -- A text's characters' byte ends, to type it in without cutting one.
-local function charEnds(text)
-    local ends, i = {}, 1
+local function charEnds(text: string): number[]
+    local ends: number[], i = {}, 1
     while i <= #text do
-        local c = text:byte(i)
+        local c = text:byte(i) or 0
         local n = c < 0x80 and 1 or c < 0xE0 and 2 or c < 0xF0 and 3 or 4
         -- colour codes and textures appear whole
         if text:sub(i, i + 1) == "|c" then n = 10
@@ -123,7 +130,7 @@ end
 
 -- One answer, a pill: its key, a glyph or a quest mark, the text, a tag.
 -- Why one is off shows in its tooltip.
-function M:BuildPill(parent)
+function M:BuildPill(parent: any): any
     local b = CreateFrame("Button", nil, parent)
     b:SetHeight(PILL_H)
     b.bg = UI.Fill(b, "surface-sunk", "BACKGROUND")
@@ -143,7 +150,7 @@ function M:BuildPill(parent)
     b.text = UI.Text(b, "body", "ink")
     b.text:SetWordWrap(false)
     b.tag = UI.Text(b, "micro", "gilt-text")
-    function b:Lit(on)
+    function b:Lit(on: any)
         on = on and not self.off
         self.hover:SetShown(on)
         self.border:SetColor(on and "arcane" or "gilt-faint")
@@ -163,7 +170,7 @@ function M:BuildPill(parent)
 end
 
 -- One card on one line: an item to choose, receive or hand over.
-function M:BuildCard(parent)
+function M:BuildCard(parent: any): any
     local c = CreateFrame("Button", nil, parent)
     c:SetHeight(CARD_H)
     c.bg = UI.Fill(c, "surface-sunk", "BACKGROUND")
@@ -198,7 +205,7 @@ function M:BuildCard(parent)
             HandleModifiedItemClick(self.link)
         end
     end)
-    function c:SetOn(on)
+    function c:SetOn(on: any)
         self.on = on
         self.border:SetColor(on and "arcane" or "gilt-faint")
         UI.PaintFill(self.bg, on and "arcane-soft" or "surface-sunk")
@@ -207,12 +214,12 @@ function M:BuildCard(parent)
 end
 
 -- the key light: gilt at a tenth (kept: Bind)
-local function lightTint(t)
+local function lightTint(t: any)
     local r, g, b = UI.RGBA("gilt")
     t:SetVertexColor(r * 0.1, g * 0.1, b * 0.1)
 end
 
-function M:BuildPortrait(parent)
+function M:BuildPortrait(parent: any): any
     local p = CreateFrame("Frame", nil, parent)
     p:SetSize(PORT_W, PORT_H)
     p:SetClipsChildren(true)
@@ -243,8 +250,8 @@ function M:BuildPortrait(parent)
         local t = over:CreateTexture(nil, "ARTWORK")
         t:SetColorTexture(1, 1, 1, 1)
         t:SetGradient("HORIZONTAL", CreateColor(0, 0, 0, side == "LEFT" and 0.35 or 0), CreateColor(0, 0, 0, side == "LEFT" and 0 or 0.35))
-        t:SetPoint("TOP" .. side)
-        t:SetPoint("BOTTOM" .. side)
+        t:SetPoint(("TOP" .. side) :: any)
+        t:SetPoint(("BOTTOM" .. side) :: any)
         t:SetWidth(PORT_W * 0.25)
     end
     UI.Border(over, "gilt-line")
@@ -433,7 +440,7 @@ function M:DrawSpeaker()
     local m = self.portrait.model
     -- a new speaker only: setting the unit again restarts the model
     local guid = unit and UnitGUID(unit)
-    if unit and (not plain(guid) or guid ~= self.speakerGUID) then
+    if unit and (not plain(guid) or (guid :: any) ~= self.speakerGUID) then
         self.speakerGUID = plain(guid) and guid or nil
         self.talking = nil
         m:ClearModel()
@@ -446,7 +453,7 @@ end
 
 -- The answers as pills, wrapping: { label, glyph | mark = { "!", token },
 -- tag = { text, token }, act, off = why, leave, key }.
-function M:DrawPills(list, y, width)
+function M:DrawPills(list: Answer[], y: number, width: number): number
     local x, rowGap = 0, S["space-3"]
     for i, a in ipairs(list) do
         local b = self.pills[i] or self:BuildPill(self.talk)
@@ -514,7 +521,7 @@ end
 
 -- The cards, a line each: items to choose or receive, or to hand over;
 -- money and experience in the same row after them.
-function M:DrawCards(y, width, items, caption, gains, need)
+function M:DrawCards(y: number, width: number, items: Card[], caption: string?, gains: { [string]: any }?, need: boolean?): number
     local cards = self.cards
     cards:ClearAllPoints()
     cards:SetPoint("TOPLEFT", 0, -y)
@@ -577,7 +584,7 @@ function M:DrawCards(y, width, items, caption, gains, need)
 end
 
 -- A reward or required item from the quest frame's lists.
-local function questItem(kind, i)
+local function questItem(kind: string, i: number): Card
     local name, icon, count, quality, _, itemID = GetQuestItemInfo(kind, i)
     local link = GetQuestItemLink(kind, i)
     return { kind = kind, index = i, name = plain(name) and name or nil, icon = icon, count = (count or 0) > 1 and count or nil,
@@ -585,8 +592,8 @@ local function questItem(kind, i)
 end
 
 -- The rewards: what to choose from, what comes anyway, money and experience.
-function M:Rewards(choosing)
-    local items = {}
+function M:Rewards(choosing: boolean): (Card[], string?, { [string]: any })
+    local items: Card[] = {}
     local choices = GetNumQuestChoices() or 0
     for i = 1, choices do
         local it = questItem("choice", i)
@@ -594,7 +601,7 @@ function M:Rewards(choosing)
         if choosing and choices > 1 then
             it.choosable = true
             it.on = self.chosen == i
-            it.choose = function(n) self.chosen = n; self:Draw() end
+            it.choose = function(n: number) self.chosen = n; self:Draw() end
         end
         items[#items + 1] = it
     end
@@ -651,14 +658,14 @@ function M:Draw()
         for i = 1, GetNumActiveQuests() or 0 do
             local title, done = GetActiveTitle(i)
             answers[#answers + 1] = { label = title, mark = { "?", done and "gilt-text" or "ink-faint" },
-                tag = done and { "Ready", "gilt-text" } or nil, act = function() SelectActiveQuest(i) end }
+                tag = done and { "Ready", "gilt-text" } or nil, act = function() (SelectActiveQuest :: any)(i) end }
         end
         for i = 1, GetNumAvailableQuests() or 0 do
             local trivial, frequency, repeatable = GetAvailableQuestInfo(i)
             local daily = frequency and frequency > 0
             answers[#answers + 1] = { label = GetAvailableTitle(i), mark = { "!", (daily or repeatable) and "arcane" or (trivial and "ink-faint") or "gilt-text" },
                 tag = daily and { "Daily", "arcane" } or repeatable and { "Repeatable", "arcane" } or nil,
-                act = function() SelectAvailableQuest(i) end }
+                act = function() (SelectAvailableQuest :: any)(i) end }
         end
         answers[#answers + 1] = { key = "Esc", label = "Goodbye", glyph = "door", leave = true, act = function() self:Leave() end }
     elseif view == "detail" then
@@ -798,7 +805,7 @@ function M:ShowTyped()
     end
 end
 
-function M:Type(elapsed)
+function M:Type(elapsed: number)
     local ends = self.ends
     if not ends or (self.shown or 0) >= #ends then return end
     self.typed = (self.typed or 0) + elapsed * CPS
@@ -821,7 +828,7 @@ end
 -- Keys and leaving
 --------------------------------------------------------------------------------
 
-function M:Key(key)
+function M:Key(key: string): boolean
     -- with a modifier held a key is the game's (shift-1, a screenshot's
     -- Cmd+Shift arrive as the bare key)
     if IsModifierKeyDown() then return false end
@@ -858,7 +865,7 @@ end
 -- With the game's frames
 --------------------------------------------------------------------------------
 
-function M:PutAway(frame)
+function M:PutAway(frame: any)
     if not self:IsEnabled() then return end
     self.placing = true
     frame:SetAlpha(0)
@@ -868,15 +875,15 @@ function M:PutAway(frame)
 end
 
 -- A game frame out of sight whenever it shows or is placed.
-function M:Away(frame)
-    hooksecurefunc(frame, "SetPoint", function() if not self.placing then C_Timer.After(0, function() self:PutAway(frame) end) end end)
-    hooksecurefunc(frame, "SetAlpha", function(_, a) if not self.placing and a ~= 0 then C_Timer.After(0, function() self:PutAway(frame) end) end end)
-    frame:HookScript("OnShow", function()
+function M:Away(frame: any)
+    hook(frame, "SetPoint", function() if not self.placing then after(0, function() self:PutAway(frame) end) end end)
+    hook(frame, "SetAlpha", function(_: any, a: number) if not self.placing and a ~= 0 then after(0, function() self:PutAway(frame) end) end end)
+    hookScript(frame, "OnShow", function()
         if not self:IsEnabled() then return end
         self:PutAway(frame)
-        C_Timer.After(0, function() self:PutAway(frame) end)
+        after(0, function() self:PutAway(frame) end)
     end)
-    frame:HookScript("OnHide", function()
+    hookScript(frame, "OnHide", function()
         -- the conversation over: the next one starts fresh
         if not ((GossipFrame and GossipFrame:IsShown()) or (QuestFrame and QuestFrame:IsShown())) then
             self.speakerGUID, self.questView = nil, nil
@@ -888,7 +895,7 @@ end
 function M:QueueDraw()
     if self.queued then return end
     self.queued = true
-    C_Timer.After(0, function()
+    after(0, function()
         self.queued = nil
         if self:IsEnabled() then self:Draw() end
     end)
@@ -900,15 +907,15 @@ function M:Hook()
     local g, q = _G.GossipFrame, _G.QuestFrame
     if g then
         self:Away(g)
-        if g.Update then hooksecurefunc(g, "Update", function() self:QueueDraw() end) end
-        g:HookScript("OnShow", function() self:QueueDraw() end)
+        if g.Update then hook(g, "Update", function() self:QueueDraw() end) end
+        hookScript(g, "OnShow", function() self:QueueDraw() end)
     end
     if q then
         self:Away(q)
         local panels = { greeting = _G.QuestFrameGreetingPanel, detail = _G.QuestFrameDetailPanel,
                          progress = _G.QuestFrameProgressPanel, reward = _G.QuestFrameRewardPanel }
         for view, panel in pairs(panels) do
-            if panel then panel:HookScript("OnShow", function()
+            if panel then hookScript(panel, "OnShow", function()
                 self.questView = view
                 if view == "reward" then self.chosen = nil end
                 self:QueueDraw()
@@ -981,7 +988,7 @@ function M:PlaceBar()
     bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, high and math.floor(UIParent:GetHeight() * HIGH_SHARE) or LOW_Y)
 end
 
-function M:HideUI(on)
+function M:HideUI(on: any)
     on = on and self:IsEnabled() and self:Get("hideUI") and not InCombatLockdown() or false
     if on == (self.uiHidden or false) then return end
     self.uiHidden = on
