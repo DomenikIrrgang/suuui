@@ -26,7 +26,7 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Power Word: Fortitude", icon = 1243, missing = "remind", ids = { 1243, 1244, 1245, 2791, 10937, 10938, 10939, 10940, 13864, 23947, 23948 } },
-            { name = "Inner Fire", icon = 588, missing = "remind", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
+            { name = "Inner Fire", icon = 588, missing = "warn", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
             { name = "Renew", icon = 139, missing = "hide", ids = { 139, 890, 6074, 6075, 6076, 6077, 6078, 8362, 10927, 10928, 10929, 11640, 22168, 23895, 25058, 25315, 27606, 28807, 425268, 425269, 425270, 425271, 425272, 425273, 425274, 425275, 425276, 425277, 438341, 450658, 1232734, 1236151, 1289450 } },
         },
         debuffs = {
@@ -53,7 +53,7 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Power Word: Fortitude", icon = 1243, missing = "remind", ids = { 1243, 1244, 1245, 2791, 10937, 10938, 10939, 10940, 13864, 23947, 23948 } },
-            { name = "Inner Fire", icon = 588, missing = "remind", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
+            { name = "Inner Fire", icon = 588, missing = "warn", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
             { group = true, name = "Spirits", source = "any", max = 1, icon = 14752, fixedIcon = true, missing = "remind", members = {
                 { name = "Divine Spirit", icon = 14752, ids = { 14752, 14818, 14819, 16875, 27841 } },
                 { name = "Prayer of Spirit", icon = 27681, ids = { 27681 } },
@@ -86,7 +86,7 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Power Word: Fortitude", icon = 1243, missing = "remind", ids = { 1243, 1244, 1245, 2791, 10937, 10938, 10939, 10940, 13864, 23947, 23948 } },
-            { name = "Inner Fire", icon = 588, missing = "remind", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
+            { name = "Inner Fire", icon = 588, missing = "warn", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
             { group = true, name = "Spirits", source = "any", max = 1, icon = 14752, fixedIcon = true, missing = "remind", members = {
                 { name = "Divine Spirit", icon = 14752, ids = { 14752, 14818, 14819, 16875, 27841 } },
                 { name = "Prayer of Spirit", icon = 27681, ids = { 27681 } },
@@ -120,7 +120,7 @@ ns.CooldownPresets = {
         },
         buffs = {
             { name = "Shadowform", icon = 15473, missing = "warn", when = { conditions = { { type = "stance", stances = { "shadowform" }, ["not"] = true } } }, ids = { 15473, 16592, 22917, 401980, 412527, 412569, 426223, 1213334 } },
-            { name = "Inner Fire", icon = 588, missing = "remind", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
+            { name = "Inner Fire", icon = 588, missing = "warn", ids = { 588, 602, 624, 1006, 1254, 7128, 10951, 10952 } },
             { name = "Power Word: Fortitude", icon = 1243, missing = "remind", ids = { 1243, 1244, 1245, 2791, 10937, 10938, 10939, 10940, 13864, 23947, 23948 } },
             { name = "Shadow Protection", icon = 7235, missing = "remind", when = { conditions = { { type = "group", value = "solo", ["not"] = true } } }, ids = { 976, 977, 1279, 7235, 7241, 7242, 7243, 7244, 10957, 10958, 16874, 17548 } },
             { group = true, name = "Spirits", source = "any", max = 1, icon = 14752, fixedIcon = true, missing = "remind", members = {

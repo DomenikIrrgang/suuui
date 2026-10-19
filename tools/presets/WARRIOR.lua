@@ -14,7 +14,8 @@
 --     Taunt and Defensive Stance are known before the trainer lists start.
 --   * Cooldowns whose buff/debuff only matters while it runs carry it as
 --     effect (Bloodrage, Recklessness, Shield Wall, Disarm ...) instead of
---     a separate aura entry. Battle Shout (3 min) is a reminder.
+--     a separate aura entry. Battle Shout (3 min) is a fixed slot that warns
+--     while missing.
 --   * Sunder Armor/Expose Armor and Demoralizing Shout/Roar don't stack, so
 --     each pair is one slot from anyone (shared groups).
 -- Stances (live conditions; the tracker dims what the stance rules out):
@@ -51,7 +52,8 @@ local function stance(...) return { type = "stance", stances = { ... } } end
 local function inStance(...) return { conditions = { stance(...) } } end
 local OUT_OF_COMBAT = { type = "combat", ["not"] = true }
 
-local BATTLE_SHOUT = { "Battle Shout", missing = "remind" }
+-- 3 min: a fixed slot (its time and stacks while up), warning while missing
+local BATTLE_SHOUT = { "Battle Shout", missing = "warn" }
 local CHARGE = { "Charge", when = { conditions = { OUT_OF_COMBAT } } }
 local BERSERKER_RAGE = you("Berserker Rage", { when = inStance("berserker") })
 local DISARM = onTarget("Disarm", { when = inStance("defensive") })

@@ -23,8 +23,8 @@
 --   out of combat while the weapon has none.
 --   Maelstrom Weapon's aura IDs come from tools/data/found.tsv (/suu probe
 --   spells find), the passive talent's ID left out.
---   Lightning Shield / Water Shield (10 min) reminds while missing, out of
---   combat. Totems: one Totems collection, a slot per element from any
+--   Lightning Shield / Water Shield: a fixed slot (its time and charges:
+--   attacks use them up), warning while missing. Totems: one Totems collection, a slot per element from any
 --   shaman, shown only while up (totems go down at the pull: a reminder out
 --   of combat would always show; most totem buffs aren't spells you know
 --   anyway). No Fire slot: Searing and Magma put no aura on you, and
@@ -36,7 +36,7 @@
 local S = dofile("tools/presets/shared.lua")
 local function shields(first)
     local members = first == "Water Shield" and { "Water Shield", "Lightning Shield" } or { "Lightning Shield", "Water Shield" }
-    return { group = "Shields", source = "mine", max = 1, missing = "remind", members = members }
+    return { group = "Shields", source = "mine", max = 1, missing = "warn", members = members }
 end
 -- the buffs totems put on you, per element (any shaman's totem counts)
 local function element(group, icon, members) return { group = group, source = "any", max = 1, icon = icon,

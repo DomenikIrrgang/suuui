@@ -143,6 +143,25 @@ M:Migrate("shaman-shields-auto", function(values)
     end
 end)
 
+-- Buffs of 3 minutes or less, or used up by charges, are fixed slots that
+-- warn while missing (their time and stacks while up), no longer reminders:
+-- the presets' shaman Shields, Battle Shout and Inner Fire, saved copies too.
+local SHORT_BUFFS = { SHAMAN = "Shields", WARRIOR = "Battle Shout", PRIEST = "Inner Fire" }
+M:Migrate("short-buffs-warn", function(values)
+    local function fix(list, name)
+        for _, e in ipairs(type(list) == "table" and list or {}) do
+            if type(e) == "table" and e.collection then fix(e.entries, name) end
+            if type(e) == "table" and e.name == name and e.missing == "remind" then e.missing = "warn" end
+        end
+    end
+    if type(values.setups) ~= "table" then return end
+    for class, name in pairs(SHORT_BUFFS) do
+        for _, s in pairs(type(values.setups[class]) == "table" and values.setups[class] or {}) do
+            if type(s) == "table" and type(s.lists) == "table" then fix(s.lists.buffs, name) end
+        end
+    end
+end)
+
 local LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
 local isSecret = issecretvalue or function() return false end
 local _, CLASS = UnitClass("player")

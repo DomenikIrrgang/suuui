@@ -18,8 +18,9 @@
 -- Fear Ward, Power Infusion and Inner Focus on you; Holy Fire, Devouring
 -- Plague, Vampiric Embrace and Silence on the target) show it on the icon
 -- (effect) instead of a buff or debuff entry of their own.
--- Buffs lasting a minute or more (Fortitude, Inner Fire, Divine Spirit,
--- Shadow Protection) are reminders: grey while missing, out of combat.
+-- Buffs lasting longer (Fortitude, Divine Spirit, Shadow Protection) are
+-- reminders: grey while missing, out of combat. Inner Fire's charges run out
+-- in a fight: a fixed slot (charges and time) that warns while missing.
 -- Shadowform is a warning instead (an ember slot, in combat too) while
 -- you're out of the form, and gone while in it (live stance condition):
 -- healing out of form is when you forget it. Renew on you is a heal you
@@ -44,6 +45,9 @@ local SPIRITS = { group = "Spirits", source = "any", max = 1, icon = "Divine Spi
     members = { "Divine Spirit", "Prayer of Spirit" } }
 
 local function remind(name) return { name, missing = "remind" } end
+-- used up by its charges: a fixed slot (its charges and time while up),
+-- warning while missing
+local INNER_FIRE = { "Inner Fire", missing = "warn" }
 local function onYou(name) return { name, effect = "you" } end
 local function onTarget(name) return { name, effect = "target" } end
 -- only while you're in a group (a party, raid, battleground or arena)
@@ -63,14 +67,14 @@ return {
     { id = "unspecced", name = "Unspecced", tree = 0,
       essential = { "Mind Blast", onTarget("Holy Fire"), onTarget("Devouring Plague"), onYou("Power Word: Shield") },
       utility = { "Psychic Scream", onYou("Fade"), inGroup(onYou("Fear Ward")), inGroup("Divine Grace") },
-      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), RENEW },
+      buffs = { remind("Power Word: Fortitude"), INNER_FIRE, RENEW },
       debuffs = { "Shadow Word: Pain" },
       procs = {} },
     { id = "discipline", name = "Discipline", tree = 1,
       essential = { "Penance", onYou("Power Word: Shield"), onTarget("Holy Fire"), "Mind Blast" },
       utility = { onYou("Power Infusion"), onYou("Inner Focus"), inGroup("Divine Grace"), inGroup(onYou("Fear Ward")),
                   "Psychic Scream", onYou("Fade"), onTarget("Devouring Plague") },
-      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), SPIRITS, inGroup(remind("Shadow Protection")), RENEW },
+      buffs = { remind("Power Word: Fortitude"), INNER_FIRE, SPIRITS, inGroup(remind("Shadow Protection")), RENEW },
       -- Weakened Soul on the friend you target: Renewed Hope's crit window,
       -- what Divine Grace clears; packed, so no grey slot on enemies
       debuffs = { "Shadow Word: Pain", { "Weakened Soul", missing = "hide" } },
@@ -81,7 +85,7 @@ return {
       essential = { onYou("Prayer of Mending"), onYou("Power Word: Shield"), onTarget("Holy Fire"), "Mind Blast" },
       utility = { onYou("Inner Focus"), inGroup("Divine Grace"), inGroup(onYou("Fear Ward")), "Psychic Scream", onYou("Fade"),
                   onTarget("Devouring Plague") },
-      buffs = { remind("Power Word: Fortitude"), remind("Inner Fire"), SPIRITS, inGroup(remind("Shadow Protection")), RENEW },
+      buffs = { remind("Power Word: Fortitude"), INNER_FIRE, SPIRITS, inGroup(remind("Shadow Protection")), RENEW },
       debuffs = { "Shadow Word: Pain", { "Weakened Soul", missing = "hide" } },
       -- Inspiration and Blessed Recovery when they land on you
       procs = { "Inspiration", "Blessed Recovery" } },
@@ -89,7 +93,7 @@ return {
       essential = { "Mind Blast", "Shadow Word: Death", onTarget("Devouring Plague"), onTarget("Vampiric Embrace") },
       utility = { onTarget("Silence"), onYou("Inner Focus"), "Psychic Scream", onYou("Fade"),
                   onYou("Power Word: Shield"), inGroup(onYou("Fear Ward")) },
-      buffs = { SHADOWFORM, remind("Inner Fire"), remind("Power Word: Fortitude"), inGroup(remind("Shadow Protection")), SPIRITS },
+      buffs = { SHADOWFORM, INNER_FIRE, remind("Power Word: Fortitude"), inGroup(remind("Shadow Protection")), SPIRITS },
       -- the dot you keep up warns while it's off the target, in combat with a
       -- target (without one a warn slot would pulse at nothing); Mind Flay
       -- and Blackout (a 10% proc) only while they're on it
