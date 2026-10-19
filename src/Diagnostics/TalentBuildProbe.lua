@@ -173,7 +173,9 @@ local function entriesOf(configID, treeID)
         local n = get(TR.GetNodeInfo, configID, nodeID)
         if type(n) == "table" and plain(n.ranksPurchased) and n.ranksPurchased > 0 then
             local entryID = n.activeEntry and n.activeEntry.entryID or (n.entryIDs and n.entryIDs[1])
+            -- ranksGranted is required (the first run failed on it: "Current Field: [ranksGranted]")
             entries[#entries + 1] = { nodeID = nodeID, ranksPurchased = n.ranksPurchased, selectionEntryID = entryID,
+                                      ranksGranted = plain(n.ranksGranted) and n.ranksGranted or 0,
                                       isChoiceNode = n.type == (Enum.TraitNodeType and Enum.TraitNodeType.Selection) }
         end
     end
@@ -406,6 +408,25 @@ local function newSince(before)
     return out_
 end
 
+-- every config named NAME: the spec's saved ones and each config type's (a
+-- probe left behind by an early /reload)
+local function leftovers()
+    local ids, seen = {}, {}
+    local function add(id)
+        if not plain(id) or seen[id] then return end
+        seen[id] = true
+        local info = get(TR.GetConfigInfo, id)
+        if type(info) == "table" and info.name == NAME then ids[#ids + 1] = id end
+    end
+    for _, id in ipairs(savedConfigs(mySpecID())) do add(id) end
+    for _, value in pairs(Enum.TraitConfigType or {}) do
+        local list = get(TR.GetConfigsByType, value)
+        if type(list) == "table" then for _, id in ipairs(list) do add(id) end end
+    end
+    for _, id in ipairs(createdIDs) do add(id) end
+    return ids
+end
+
 local function deleteNew(before, label)
     local made = newSince(before)
     note(("%s: new configs %s"):format(label, show(made)))
@@ -462,8 +483,12 @@ function TB.Save()
     note("RequestNewConfig(name): " .. call(CT.RequestNewConfig, NAME))
     C_Timer.After(1.5, function()
         local made = newSince(before)
-        for _, id in ipairs(made) do note(("SaveConfig(%s): %s"):format(show(id), call(CT.SaveConfig, id))) end
-        C_Timer.After(1.5, function() deleteNew(before, "save") end)
+        for _, id in ipairs(made) do
+            note(("SaveConfig(%s): %s"):format(show(id), call(CT.SaveConfig, id)))
+            note(("in saved list: %s"):format(show(tContains(savedConfigs(mySpecID()), id))))
+        end
+        -- deleted right away: the first run's /reload came before a later delete
+        deleteNew(before, "save")
     end)
 end
 
@@ -514,10 +539,26 @@ function TB.Command(arg)
     if arg == "export" then return TB.Export() end
     if arg == "save" then return TB.Save() end
     if arg == "switch" then return TB.Switch() end
+    if arg == "cleanup" then
+        local s = watch("cleanup")
+        local ids = leftovers()
+        s.found = show(ids)
+        for _, id in ipairs(ids) do note(("DeleteConfig(%s): %s"):format(show(id), call(CT.DeleteConfig, id))) end
+        C_Timer.After(1, function()
+            note(("left: %s"):format(show(leftovers())))
+            ns.Print(("Talent builds probe: cleanup deleted %d loadout(s) named \"%s\". /reload to save."):format(#ids, NAME))
+        end)
+        return
+    end
     watch("readOnly")
     snapshot()
     otherClasses()
     local o = out()
+    local left = leftovers()
+    o.now.leftovers = show(left)
+    if #left > 0 then
+        ns.Print(("Talent builds probe: a loadout named \"%s\" is left from an earlier run; /suu probe talentbuilds cleanup deletes it."):format(NAME))
+    end
     ns.Print(("Talent builds probe: recorded (spec %s, %d saved loadouts, %d classes). Next: /suu probe talentbuilds export, then save, then switch; /reload to save."):format(
         o.now.specID, #o.now.saved, #o.otherClasses))
 end
