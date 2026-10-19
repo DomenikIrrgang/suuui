@@ -1181,9 +1181,18 @@ function M:Refocus()
     if box and box:IsShown() and not box:HasFocus() then box:SetFocus() end
 end
 
--- The pointer on the palette: a click there is on its way (it took the focus).
+-- A click on the palette on its way: a button held on it (the press took the
+-- focus), or released a moment ago (its OnClick gives the focus back). The
+-- pointer merely resting there when Enter sends doesn't count.
 function M:Clicking()
-    return self.box and self.box:IsShown() and self.palette and self.palette:IsShown() and self.palette:IsMouseOver()
+    if not (self.box and self.box:IsShown() and self.palette and self.palette:IsShown() and self.palette:IsMouseOver()) then
+        return false
+    end
+    if IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton") then
+        self.heldUntil = GetTime() + 0.2
+        return true
+    end
+    return GetTime() < (self.heldUntil or 0)
 end
 
 function M:Unfocus(box)
