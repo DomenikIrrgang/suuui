@@ -1,0 +1,493 @@
+-- UI/WindowSkin.wowlua
+-- One of Blizzard's windows in SuuUI's WindowFrame look (design board
+-- "Window frame"), restyled in place: its clicks, tabs and panes stay
+-- Blizzard's. The header grows above the window: the gilt diamond at the top
+-- left, the icon and title in `header` gilt-text, the key chip, the close
+-- button (Blizzard's own, with SuuUI's cross), then the tab row: the window's
+-- own tab buttons as text tabs (ink-muted, gilt-text with a gilt hairline and
+-- diamond when selected), over a gilt-faint rule. surface-glass under a
+-- gilt-line edge behind it all.
+--
+--   local chrome = skinWindow(frame, {
+--       title = "Character", icon = "person", binding = "TOGGLECHARACTER0",
+--       close = CharacterFrameCloseButton,
+--       hide = { frame.NineSlice, frame.PortraitContainer, … },  -- alpha 0
+--       topInset = 20,   -- the window's own strip above its content, kept
+--       headExtra = 0,   -- px more for the header's second row (the world
+--                        -- map's search row); the header grows down
+--       under = "microMenu", -- an anchor name: the window opens lined up
+--                            -- under it (its left edge, space-5 below), and
+--                            -- goes back there when Blizzard places it
+--   })
+--   chrome:SetTabs({ { button = tab, label = "Character", short = "Char",
+--                      selected = function() … end,
+--                      disabled = function() … end, reason = "…" }, … })   -- in order
+--   (a disabled tab: ink-faint at opacity-disabled, a cover takes its click
+--   and its tooltip says the reason; 0.17)
+--   chrome:UpdateTabs()   -- after the window switched tab
+
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import tokens as T from "/Core/Tokens"
+import mixins from "/Core/Init"
+import * as anchors from "/Core/Anchors"
+import * as events from "/Core/Events"
+import * as extend from "/Core/Extend"
+import * as draw from "/UI/Draw"
+import text, measureText from "/UI/Text"
+import keyChip from "/UI/Panel"
+import tabMarker from "/UI/TabMarker"
+import showTooltip, hideTooltip from "/UI/Tooltip"
+
+local S = T.space
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+-- From the header style's line height, which a theme can change: worked
+-- out when used (Chrome:PlaceHead lays a header out again then).
+local function tabH(): number
+    return S["space-2"] + T.type.header.lineHeight + S["space-3"]
+end
+local function headH(): number
+    return S["space-5"] + T.type.header.lineHeight + S["space-3"] + tabH() -- the title line, then the tabs
+end
+local HEAD_H = headH() -- (WINDOW_HEAD_H: the design's)
+
+local Chrome: { [string]: any } = {}
+mixins.WindowChrome = Chrome
+
+local function hideRegions(f: any)
+    for _, r in ipairs({ f:GetRegions() }) do r:SetAlpha(0) end
+end
+
+-- A Blizzard tab button as a SuuUI text tab.
+local function skinTab(chrome: any, def: { [string]: any }): any
+    local b = def.button
+    if b.suuTab then return b.suuTab end
+    hideRegions(b)
+    local t: { [string]: any } = {}
+    t.label = text(b, "header", "ink-muted")
+    t.label:SetPoint("CENTER", 0, (S["space-3"] - S["space-2"]) / 2)
+    t.label:SetShadowColor(0, 0, 0, 0.9)
+    t.label:SetShadowOffset(0, -1)
+    hookScript(b, "OnEnter", function() t.hover = true; chrome:UpdateTabs() end)
+    hookScript(b, "OnLeave", function() t.hover = false; chrome:UpdateTabs() end)
+    -- while disabled: a cover of SuuUI's takes the click and says why
+    t.cover = CreateFrame("Frame", nil, b)
+    t.cover:SetAllPoints()
+    t.cover:SetFrameLevel(b:GetFrameLevel() + 5)
+    t.cover:EnableMouse(true)
+    t.cover:SetScript("OnEnter", function(c: any) showTooltip(c, { title = t.def and t.def.label, description = t.def and t.def.reason }) end)
+    t.cover:SetScript("OnLeave", function() hideTooltip() end)
+    t.cover:Hide()
+    -- Blizzard lays its tabs out again now and then: back in the row
+    hook(b, "SetPoint", function()
+        if chrome.placing then return end
+        after(0, function() chrome:LayoutTabs() end)
+    end)
+    -- the selected look follows Blizzard's own selected texture (or the
+    -- texture the def names: a tab system's LeftActive)
+    local sel = def.selectedTexture or b.SelectedTexture or b.LeftActive
+    if sel then
+        for _, m in ipairs({ "Show", "Hide", "SetShown" }) do
+            hook(sel, m, function() chrome:UpdateTabs() end)
+        end
+    end
+    b.suuTab = t
+    return t
+end
+
+function Chrome:SetTabs(list: { [string]: any }[])
+    self.tabs = list
+    -- the chosen tab's underline and jewel, gliding (tabMarker), on the
+    -- head: SuuUI's own frame, the tabs being Blizzard's
+    self.tabMarker = self.tabMarker or tabMarker(self.head, { level = 3 })
+    for _, def in ipairs(list) do
+        def.skin = skinTab(self, def)
+        def.skin.def = def
+        self.tabMarker:Track(def.button)
+    end
+    self:LayoutTabs()
+end
+
+-- The row, left to right; short labels and a smaller gap when the window is
+-- too narrow for the full ones.
+function Chrome:LayoutTabs()
+    local tabs = self.tabs
+    if not tabs then return end
+    -- a protected window (the spells window): its parts move only out of combat
+    if self.protected and InCombatLockdown() then
+        self.layoutAfterCombat = true
+        return
+    end
+    local room = self.frame:GetWidth() - S["space-5"] * 2
+    local function width(short: boolean, gap: number): number
+        local w = 0
+        for i, def in ipairs(tabs) do
+            local label = (short and def.short) or def.label
+            w = w + measureText("header", label) + (i > 1 and gap or 0)
+        end
+        return w
+    end
+    local short, gap = false, S["space-5"]
+    if width(false, gap) > room then
+        gap = S["space-4"]
+        if width(false, gap) > room then short = true end
+    end
+    self.placing = true
+    local prev: any
+    for _, def in ipairs(tabs) do
+        local b = def.button
+        local label = (short and def.short) or def.label
+        def.skin.label:SetValue(label)
+        b:SetSize(math.ceil(measureText("header", label)), tabH())
+        b:ClearAllPoints()
+        if prev then
+            b:SetPoint("BOTTOMLEFT", prev, "BOTTOMRIGHT", gap, 0)
+        else
+            b:SetPoint("BOTTOMLEFT", self.head, "BOTTOMLEFT", S["space-5"], 0)
+        end
+        b:SetFrameLevel(self.head:GetFrameLevel() + 2)
+        prev = b
+    end
+    self.placing = false
+    self:UpdateTabs()
+end
+
+function Chrome:UpdateTabs()
+    local chosen: any
+    for _, def in ipairs(self.tabs or {}) do
+        local t = def.skin
+        local off = def.disabled and def.disabled() or false
+        local on = not off and def.selected and def.selected() or false
+        t.label:SetColor(off and "ink-faint" or on and "gilt-text" or (t.hover and "ink" or "ink-muted"))
+        t.label:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
+        t.cover:SetShown(off)
+        if on then chosen = def.button end
+    end
+    if self.tabMarker then self.tabMarker:SetChosen(chosen) end
+end
+
+local allChromes: any[] = {}
+
+-- Whether an open window (one in SuuUI's look, its header included) covers
+-- part of `frame`: notes under it hide (asked for in game: the windows'
+-- glass let them show through). Edges secret in combat count as not.
+export function isCoveredByWindow(frame: any): boolean
+    local l, r, t, b = frame:GetLeft(), frame:GetRight(), frame:GetTop(), frame:GetBottom()
+    local function plain(v: any): boolean return v ~= nil and not (issecretvalue and issecretvalue(v)) end
+    if not (plain(l) and plain(r) and plain(t) and plain(b)) then return false end
+    local fs = frame:GetEffectiveScale()
+    l, r, t, b = l * fs, r * fs, t * fs, b * fs
+    for _, c in ipairs(allChromes) do
+        local w = c.frame
+        if w:IsVisible() then
+            local wl, wr, wt, wb = w:GetLeft(), w:GetRight(), w:GetTop(), w:GetBottom()
+            if plain(wl) and plain(wr) and plain(wt) and plain(wb) then
+                local ws = w:GetEffectiveScale()
+                wl, wr, wb = wl * ws, wr * ws, wb * ws
+                wt = (wt + (c.riseH or 0)) * ws
+                if l < wr and r > wl and b < wt and t > wb then return true end
+            end
+        end
+    end
+    return false
+end
+
+export function skinWindow(frame: any, opts: { [string]: any }?): any
+    if frame.suuChrome then return frame.suuChrome end
+    opts = opts or {}
+    local chrome: { [string]: any } = setmetatable({ frame = frame }, { __index = Chrome })
+    frame.suuChrome = chrome
+    allChromes[#allChromes + 1] = chrome
+    chrome.protected = frame:IsProtected() and true or false
+    -- above the HUD (unit frames, bars): a window in the middle of the
+    -- screen sat under the player frame (found in game); the bags and the
+    -- loot window are on HIGH too. Skinned out of combat (protected ones).
+    if not (chrome.protected and InCombatLockdown()) and frame:GetFrameStrata() ~= "HIGH" then
+        frame:SetFrameStrata("HIGH")
+    end
+    -- in front when it opens or is clicked, as SuuUI's own windows: the
+    -- character window came up behind the merchant's, its gear out of the
+    -- repair cursor's reach (found in game, 2026-10-19)
+    if not (chrome.protected and InCombatLockdown()) then frame:SetToplevel(true) end
+    hookScript(frame, "OnShow", function(f: any)
+        if not (chrome.protected and InCombatLockdown()) then f:Raise() end
+    end)
+    for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
+    chrome.inset, chrome.headExtra = opts.topInset or 0, opts.headExtra or 0
+    -- the line the second row's 22px controls sit centred on, up from the
+    -- header's bottom (in the middle of headExtra)
+    chrome.rowMid = S["space-1"] + 11 + chrome.headExtra / 2
+
+    -- the art, on the window itself (behind every pane)
+    local bg = frame:CreateTexture(nil, "BACKGROUND", nil, -8)
+    draw.paintFill(bg, "surface-glass")
+    bg:SetPoint("BOTTOMRIGHT")
+    chrome.bg = bg
+    local edgeHolder = CreateFrame("Frame", nil, frame)
+    edgeHolder:SetPoint("BOTTOMRIGHT")
+    edgeHolder:SetFrameLevel(frame:GetFrameLevel() + 499)
+    edgeHolder:EnableMouse(false)
+    edgeHolder.suuOwn = true
+    chrome.edgeHolder = edgeHolder
+    chrome.edge = draw.border(edgeHolder, "gilt-line")
+
+    -- the header: diamond, icon, title, key, close; the tab row under it
+    -- (placed by PlaceHead)
+    local head = CreateFrame("Frame", nil, frame)
+    head:SetFrameLevel(frame:GetFrameLevel() + 500)
+    head.suuOwn = true
+    chrome.head = head
+    chrome.jewel = draw.diamond(head, 7, "gilt")
+    chrome.jewel:SetPoint("CENTER", head, "TOPLEFT", 0, 0)
+    local x = S["space-5"]
+    if opts.icon then
+        chrome.icon = head:CreateTexture(nil, "ARTWORK")
+        chrome.icon:SetTexture(GLYPHS .. opts.icon .. ".tga")
+        chrome.icon:SetSize(15, 15)
+        draw.paint(chrome.icon, "gilt-text")
+        x = x + 15 + S["space-4"]
+    end
+    chrome.titleX = x
+    chrome.title = text(head, "header", "gilt-text")
+    chrome.title:SetValue(opts.title or "")
+    -- close: Blizzard's button (its click closes the window as always), SuuUI's cross
+    local close = opts.close
+    local right = S["space-5"]
+    if close then
+        hideRegions(close)
+        close:SetSize(22, 22)
+        close:ClearAllPoints()
+        close:SetFrameLevel(head:GetFrameLevel() + 3)
+        local border = draw.border(close, "gilt-line")
+        border:SetShown(false)
+        local cross = draw.cross(close, 10, "ink-muted")
+        cross:SetPoint("CENTER")
+        hookScript(close, "OnEnter", function() border:SetShown(true); cross:SetColor("ink") end)
+        hookScript(close, "OnLeave", function() border:SetShown(false); cross:SetColor("ink-muted") end)
+        chrome.close = close
+        right = right + 22 + S["space-4"]
+    end
+    -- the key chip: the binding's first key
+    local key = opts.binding and GetBindingKey(opts.binding)
+    if key then
+        chrome.key = keyChip(head, GetBindingText and GetBindingText(key, "KEY_") or key)
+        chrome.keyRight = right
+    end
+    -- the tab row's rule
+    chrome.rule = head:CreateTexture(nil, "ARTWORK")
+    draw.paintFill(chrome.rule, "gilt-faint")
+    chrome.rule:SetHeight(1)
+    chrome.rule:SetPoint("BOTTOMLEFT", S["space-5"], 0)
+    chrome.rule:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
+    chrome:PlaceHead(true)
+
+    hookScript(frame, "OnSizeChanged", function() chrome:LayoutTabs() end)
+    if chrome.protected then
+        events.onGame("PLAYER_REGEN_ENABLED", function()
+            if chrome.headAfterCombat then
+                chrome.headAfterCombat = false
+                chrome:PlaceHead()
+                chrome:LayoutTabs()
+            end
+            if chrome.layoutAfterCombat then
+                chrome.layoutAfterCombat = false
+                chrome:LayoutTabs()
+            end
+        end, "UI.SkinWindow")
+    end
+
+    -- the panel-position rule: in a row under an anchor (the micro menu)
+    if opts.under then
+        chrome.under = opts.under
+        add(chrome)
+    end
+    extend.add("window", chrome, { name = frame:GetName(), skinned = frame })
+    return chrome
+end
+
+-- The header's height and its title line, from the header style: when
+-- skinned (`now`), and again when a theme changes it (a protected window's
+-- close button and tabs move out of combat only).
+function Chrome:PlaceHead(now: boolean?)
+    if not now and self.protected and InCombatLockdown() then
+        self.headAfterCombat = true
+        return
+    end
+    local h = headH() + self.headExtra
+    local rise = h - self.inset -- the header's height above the window's top
+    self.riseH, self.rise = rise, rise
+    local head = self.head
+    self.bg:SetPoint("TOPLEFT", 0, rise)
+    self.edgeHolder:SetPoint("TOPLEFT", 0, rise)
+    head:SetPoint("TOPLEFT", 0, rise)
+    head:SetPoint("TOPRIGHT", 0, rise)
+    head:SetHeight(h)
+    local lineY = -(S["space-5"] + T.type.header.lineHeight / 2)
+    if self.icon then self.icon:SetPoint("LEFT", head, "TOPLEFT", S["space-5"], lineY) end
+    self.title:SetPoint("LEFT", head, "TOPLEFT", self.titleX, lineY)
+    if self.close then self.close:SetPoint("RIGHT", head, "TOPRIGHT", -S["space-5"], lineY) end
+    if self.key then self.key:SetPoint("RIGHT", head, "TOPRIGHT", -self.keyRight, lineY) end
+end
+
+events.on("SUUUI_THEME_CHANGED", function()
+    for _, c in ipairs(allChromes) do
+        c:PlaceHead()
+        c:LayoutTabs()
+    end
+    queue()
+end, "UI.SkinWindow")
+
+-- The title, and the key chip for another binding (a window whose tabs
+-- open with different keys).
+function Chrome:SetTitle(title: string?)
+    self.title:SetValue(title or "")
+end
+
+function Chrome:SetBinding(binding: string?)
+    local key = binding and GetBindingKey(binding)
+    if self.key then
+        if key then self.key:SetKey(GetBindingText and GetBindingText(key, "KEY_") or key) end
+        self.key:SetShown(key ~= nil)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The window row: SuuUI-headed windows open in a row under the micro menu,
+-- in the order they opened, space-5 apart (the Character window, then the
+-- spells window beside it, …). Opening, closing or resizing one lays the
+-- row out again. A protected window moves only out of combat; the row goes
+-- on from where it stands.
+--------------------------------------------------------------------------------
+
+type RowState = { list: any[], seq: number, placing?: boolean, queued?: boolean }
+
+local Row = { list = {}, seq = 0 } :: RowState
+export const windowRow = Row
+
+-- The windows asked to sit in the middle of the screen (their headers
+-- included), out of the row; opening one there closes the other (see
+-- add), so normally one: in the middle. Should two be open at once (a
+-- protected one can't be closed from here), side by side, the group
+-- centred. A protected one moves out of combat only.
+local function centerAll(list: any[])
+    if #list == 0 then return end
+    table.sort(list, function(a: any, b: any): boolean return (a.openedAt or 0) < (b.openedAt or 0) end)
+    local us = UIParent:GetEffectiveScale()
+    local gap = S["space-5"] * us
+    local total = 0
+    for i, c in ipairs(list) do total = total + c.frame:GetWidth() * c.frame:GetEffectiveScale() + (i > 1 and gap or 0) end
+    local x = -total / 2
+    for _, c in ipairs(list) do
+        local f = c.frame
+        local es = f:GetEffectiveScale()
+        local w = f:GetWidth() * es
+        if InCombatLockdown() and c.protected then
+            c.placeAfterCombat = true
+        else
+            f:ClearAllPoints()
+            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es, -(c.rise or 0) / 2)
+        end
+        x = x + w + gap
+    end
+end
+
+export function layout()
+    if Row.placing then return end
+    local open: any[], middle: any[] = {}, {}
+    for _, c in ipairs(Row.list) do
+        if c.frame:IsShown() then
+            if c.centered then middle[#middle + 1] = c else open[#open + 1] = c end
+        end
+    end
+    Row.placing = true
+    centerAll(middle)
+    Row.placing = false
+    if #open == 0 then return end
+    table.sort(open, function(a: any, b: any): boolean return (a.openedAt or 0) < (b.openedAt or 0) end)
+    local anchor = anchors.get(open[1].under)
+    if not anchor or not anchor:IsVisible() then return end
+    local as = anchor:GetEffectiveScale()
+    local left, bottom = anchor:GetLeft(), anchor:GetBottom()
+    if not (left and bottom) then return end
+    -- in screen units (coordinates times effective scale)
+    local x = left * as
+    local top = bottom * as - S["space-5"] * as
+    local gap = S["space-5"] * as
+    Row.placing = true
+    for _, c in ipairs(open) do
+        local f = c.frame
+        local es = f:GetEffectiveScale()
+        if InCombatLockdown() and c.protected then
+            c.placeAfterCombat = true
+            local r = f:GetRight()
+            if r then x = r * es + gap end
+        else
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / es, top / es - c.rise)
+            x = x + f:GetWidth() * es + gap
+        end
+    end
+    Row.placing = false
+end
+
+-- In the middle of the screen (on) or back in the row (off): SuuUI's Talents
+-- tab centres the spells window while it shows (asked for in game).
+export function centerWindow(frame: any, center: any)
+    local chrome = frame and frame.suuChrome
+    if not chrome or not chrome.under then return end
+    local on = center and true or false
+    if chrome.centered == on then return end
+    chrome.centered = on
+    layout()
+    queue()
+end
+
+export function queue()
+    if Row.queued then return end
+    Row.queued = true
+    after(0, function()
+        Row.queued = false
+        layout()
+    end)
+end
+
+export function add(chrome: any)
+    Row.list[#Row.list + 1] = chrome
+    local f = chrome.frame
+    hookScript(f, "OnShow", function()
+        Row.seq = Row.seq + 1
+        chrome.openedAt = Row.seq
+        -- the middle holds one window: opening one there closes the other
+        -- (Talents and Legacy: asked for in game); protected ones aren't
+        -- closed from here
+        if chrome.centered then
+            for _, other in ipairs(Row.list) do
+                if other ~= chrome and other.centered and not other.protected and other.frame:IsShown() then
+                    other.frame:Hide()
+                end
+            end
+        end
+        layout()
+        queue()
+    end)
+    hookScript(f, "OnHide", queue)
+    hookScript(f, "OnSizeChanged", queue)
+    -- Blizzard places its panels again now and then (right after showing
+    -- one too): back in the row at once, so no frame is drawn elsewhere
+    -- (a flicker, found in game); and again a frame later
+    hook(f, "SetPoint", function()
+        if Row.placing then return end
+        layout()
+        queue()
+    end)
+    if f:IsShown() then
+        Row.seq = Row.seq + 1
+        chrome.openedAt = Row.seq
+        queue()
+    end
+end
+
+events.onGame("PLAYER_REGEN_ENABLED", function() queue() end, "UI.WindowRow")
+
+export const WINDOW_HEAD_H = HEAD_H

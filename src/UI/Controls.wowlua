@@ -1,0 +1,216 @@
+-- UI/Controls.wowlua
+-- Button and StateBadge.
+
+import tokens as T from "/Core/Tokens"
+import * as motion from "/Core/Motion"
+import * as events from "/Core/Events"
+import * as draw from "./Draw"
+import text, measureText, Text from "./Text"
+import showTooltip, hideTooltip from "./Tooltip"
+
+local S = T.space
+
+--------------------------------------------------------------------------------
+-- Button
+--
+--   button(parent, { text = "Ready check", variant = "primary", onClick = fn,
+--       width = nil, disabled = false, tooltip = { title = …, description = … },
+--       icon = "reset" })   -- 0.13: a 12px glyph left of the label (b:SetIcon(name) changes it)
+--
+-- quiet (default): surface-raised, gilt-line border, ink label; hover turns the
+-- border gilt. primary: arcane fill, on-signal label, arcane glow on hover;
+-- at most one per view. 30px tall, space-5 side padding; press moves the label
+-- 1px down; disabled sits at opacity-disabled.
+--------------------------------------------------------------------------------
+
+export type ButtonOptions = {
+    text?: string,
+    variant?: string,
+    onClick?: (self: SuuButton) -> (),
+    width?: number,
+    disabled?: boolean,
+    tooltip?: any,
+    icon?: string,
+}
+
+-- (named SuuButton: Button is the game's widget type)
+export interface SuuButton extends Button
+    variant: string
+    bg: Texture
+    border: draw.Border
+    glow?: draw.SoftEdge
+    label: Text
+    icon?: Texture
+    shift: number
+    fixedWidth?: number
+    tooltip: any
+    function SetLabel(text: string)
+    function Remeasure()
+    function SetIcon(name: string?)
+    function SetEnabledState(enabled: any)
+end
+
+local Button = {} :: SuuButton
+
+function Button:SetLabel(label: string)
+    self.label:SetValue(label)
+    self:Remeasure()
+end
+
+-- Sizes the button to its label (again on show, in case the text wasn't
+-- measurable while it was hidden).
+function Button:Remeasure()
+    if not self.fixedWidth then
+        self:SetWidth(self.label:GetUnboundedStringWidth() + S["space-5"] * 2 + ((self.icon and self.icon:IsShown()) and 12 + S["space-3"] or 0))
+    end
+end
+
+-- 0.13: a 12px glyph left of the label (nil: none).
+function Button:SetIcon(name: string?)
+    if name and not self.icon then
+        local icon = self:CreateTexture(nil, "ARTWORK")
+        self.icon = icon
+        icon:SetSize(12, 12)
+        icon:SetPoint("RIGHT", self.label, "LEFT", -S["space-3"], 0)
+        draw.paint(icon, self.variant == "primary" and "on-signal" or "ink-muted")
+    end
+    local icon = self.icon
+    if icon then
+        icon:SetShown(name ~= nil)
+        if name then icon:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. name .. ".tga") end
+    end
+    self.shift = name and (12 + S["space-3"]) / 2 or 0
+    self.label:SetPoint("CENTER", self.shift, 0)
+    self:Remeasure()
+end
+
+function Button:SetEnabledState(enabled: any)
+    self:SetEnabled(enabled)
+    self:SetAlpha(enabled and 1 or T.opacity["opacity-disabled"])
+end
+
+-- Sized to their text: measured again when a theme changes the text styles.
+local buttons: { [SuuButton]: boolean } = setmetatable({}, { __mode = "k" })
+events.on("SUUUI_THEME_CHANGED", function()
+    for b in pairs(buttons) do b:Remeasure() end
+end, "UI.Button")
+
+local function onEnter(self: SuuButton)
+    -- (a disabled one shows only its tooltip: why it's off)
+    if self:IsEnabled() then
+        if self.variant == "primary" then
+            (self.glow :: draw.SoftEdge):SetShown(true)
+        else
+            self.border:SetColor("gilt")
+        end
+    end
+    if self.tooltip then showTooltip(self, self.tooltip) end
+end
+
+local function onLeave(self: SuuButton)
+    if self.variant == "primary" then
+        (self.glow :: draw.SoftEdge):SetShown(false)
+    else
+        self.border:SetColor("gilt-line")
+    end
+    if self.tooltip then hideTooltip() end
+end
+
+export function button(parent: Frame, opts: ButtonOptions = {}): SuuButton
+    local b = CreateFrame("Button", nil, parent) :: SuuButton
+    Mixin(b, Button)
+    b.variant = opts.variant or "quiet"
+    local primary = b.variant == "primary"
+    b:SetHeight(30)
+    b.bg = draw.fill(b, primary and "arcane" or "surface-raised")
+    b.bg:SetAllPoints()
+    b.border = draw.border(b, primary and "arcane" or "gilt-line")
+    if primary then
+        local glow = draw.shadow(b, "glow-arcane")
+        b.glow = glow
+        glow:SetShown(false)
+    end
+    b.label = text(b, "label", primary and "on-signal" or "ink")
+    b.shift = 0
+    b.label:SetPoint("CENTER", 0, 0)
+    if opts.icon then b:SetIcon(opts.icon) end
+    b.fixedWidth = opts.width
+    if opts.width then b:SetWidth(opts.width) end
+    b:SetLabel(opts.text or "")
+    b.tooltip = opts.tooltip
+
+    -- hovered while disabled too, so its tooltip can say why (the game
+    -- sends a disabled button no hover otherwise; found in game)
+    b:SetMotionScriptsWhileDisabled(true)
+    b:SetScript("OnEnter", onEnter)
+    b:SetScript("OnLeave", onLeave)
+    b:HookScript("OnShow", b.Remeasure)
+    b:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self.label:SetPoint("CENTER", self.shift, -1) end end)
+    b:SetScript("OnMouseUp", function(self) self.label:SetPoint("CENTER", self.shift, 0) end)
+    b:SetScript("OnClick", function(self) if opts.onClick then opts.onClick(self :: SuuButton) end end)
+    b:SetEnabledState(not opts.disabled)
+    buttons[b] = true
+    return b
+end
+
+--------------------------------------------------------------------------------
+-- StateBadge: one or two words naming a state, on the state's fill.
+--
+--   stateBadge(parent, "danger", "Aggro")
+--   tones: danger, warning, magic, curse, poison, disease, ward, info, neutral
+--------------------------------------------------------------------------------
+
+local TONE_FILL: { [string]: string } = {
+    danger = "ember", warning = "amber",
+    magic = "dispel-magic", curse = "dispel-curse", poison = "dispel-poison", disease = "dispel-disease",
+    ward = "ward", info = "gilt-text", neutral = "surface-raised",
+}
+
+export interface StateBadge extends Frame
+    bg: Texture
+    edge: draw.Border
+    label: Text
+    text?: string
+    tone?: string
+    knownWidth: number
+    function SetState(tone: string?, text: string)
+end
+
+local Badge = {} :: StateBadge
+
+function Badge:SetState(tone: string?, value: string)
+    tone = tone and TONE_FILL[tone] and tone or "neutral"
+    draw.paintFill(self.bg, TONE_FILL[tone] :: string)
+    self.label:SetColor(tone == "neutral" and "ink" or "on-signal")
+    self.edge:SetShown(tone == "neutral")
+    local wasShown = self:IsShown() and self.text ~= nil
+    self.label:SetValue(value)
+    self.text, self.tone = value, tone
+    -- Kept: a badge anchored after secret text can't read its own width back.
+    self.knownWidth = measureText("badge", value) + 10
+    self:SetWidth(self.knownWidth)
+    if not wasShown then motion.fadeIn(self, T.duration["dur-fast"]) end
+end
+
+local badges: { [StateBadge]: boolean } = setmetatable({}, { __mode = "k" })
+events.on("SUUUI_THEME_CHANGED", function()
+    for f in pairs(badges) do
+        f:SetHeight(T.type.badge.lineHeight)
+        f.knownWidth = measureText("badge", f.text or "") + 10
+        f:SetWidth(f.knownWidth)
+    end
+end, "UI.StateBadge")
+
+export function stateBadge(parent: Frame, tone: string?, value: string?): StateBadge
+    local f = CreateFrame("Frame", nil, parent) :: StateBadge
+    Mixin(f, Badge)
+    f:SetHeight(T.type.badge.lineHeight)
+    f.bg = draw.fill(f, "surface-raised")
+    f.bg:SetAllPoints()
+    f.edge = draw.border(f, "gilt-hairline")
+    f.label = text(f, "badge", "on-signal")
+    f.label:SetPoint("CENTER", 0, 0)
+    f:SetState(tone, value or "")
+    badges[f] = true
+    return f
+end

@@ -1,0 +1,104 @@
+-- UI/Visibility.wowlua
+-- When a frame shows: always, only in combat, on mouseover, or never.
+--
+--   setVisibility(frame, "always" | "combat" | "mouseover" | "hidden", also)
+--
+-- `also` (0.9, optional): frames outside `frame` whose hover counts as its
+-- own for "mouseover" (bars attached to the dock, which fade with it but sit
+-- outside it). Setting the mode a frame already has changes nothing (a
+-- hovered mouseover frame stays faded in).
+--
+-- "combat" is a secure state driver, so it works for frames holding secure
+-- buttons and switches in combat too. "mouseover" keeps the frame shown at
+-- alpha 0 and fades it in while the mouse is over it or you drag something
+-- (its buttons stay clickable, as Blizzard's mouseover bars do). Changing the
+-- mode waits for the end of combat. While edit mode or keybind mode is open,
+-- every managed frame that isn't "hidden" shows fully, so it can be placed
+-- and bound.
+--
+-- VISIBILITY_OPTIONS (0.9): the choices a "Shows" setting offers, as a
+-- segmented control's options. "hidden" isn't one of them.
+
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import * as combat from "/Core/Combat"
+import * as motion from "/Core/Motion"
+import * as editMode from "/EditMode/EditMode"
+import * as keybindMode from "./KeybindMode"
+
+local modes: { [Frame]: string } = {}   -- frame -> mode
+local hover: { [Frame]: boolean } = {}   -- frames fading on mouseover
+local also: { [Frame]: Frame[] } = {}    -- frame -> frames whose hover counts as its own
+local forced = false
+
+export const VISIBILITY_OPTIONS: { value: string, label: string }[] = {
+    { value = "always", label = "Always" },
+    { value = "combat", label = "In combat" },
+    { value = "mouseover", label = "Mouseover" },
+}
+
+local function apply(frame: Frame)
+    local mode = modes[frame]
+    local useDriver = mode == "combat" and not forced
+    frame.suuHoverOn = nil
+    combat.run("visibility:" .. tostring(frame), function()
+        UnregisterStateDriver(frame, "visibility")
+        if mode == "hidden" then
+            frame:Hide()
+        elseif useDriver then
+            RegisterStateDriver(frame, "visibility", "[combat] show; hide")
+        else
+            frame:Show()
+        end
+    end, "Visibility")
+    if mode == "mouseover" and not forced then
+        hover[frame] = true
+        frame:SetAlpha(0)
+    else
+        hover[frame] = nil
+        motion.alphaTo(frame, 1, 0)
+    end
+end
+
+export function setVisibility(frame: Frame, mode: string?, extra: Frame[]?)
+    mode = mode or "always"
+    also[frame] = extra
+    if modes[frame] == mode then return end
+    modes[frame] = mode
+    apply(frame)
+end
+
+local function reapply()
+    forced = editMode.isActive() or keybindMode.isActive() or false
+    for frame in pairs(modes) do apply(frame) end
+end
+events.on("SUUUI_EDITMODE_CHANGED", reapply, "Visibility")
+events.on("SUUUI_KEYBINDMODE_CHANGED", reapply, "Visibility")
+
+-- Whether the mouse is over a frame or one of its `also` frames.
+local function mouseOver(frame: Frame): boolean
+    if not frame:IsVisible() then return false end
+    if frame:IsMouseOver() then return true end
+    for _, f in ipairs(also[frame] or {}) do
+        if f:IsVisible() and f:IsMouseOver() then return true end
+    end
+    return false
+end
+
+-- Mouseover: a light poll, only while some frame uses it.
+local poll = CreateFrame("Frame")
+local elapsed = 0
+poll:SetScript("OnUpdate", function(_, dt: number)
+    elapsed = elapsed + dt
+    if elapsed < 0.1 then return end
+    elapsed = 0
+    if not next(hover) then return end
+    local dragging = GetCursorInfo() ~= nil
+    for frame in pairs(hover) do
+        local on = dragging or mouseOver(frame)
+        if on ~= frame.suuHoverOn then
+            frame.suuHoverOn = on
+            motion.alphaTo(frame, on and 1 or 0, T.duration["dur-base"])
+        end
+    end
+end)

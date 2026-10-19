@@ -1,0 +1,229 @@
+-- UI/MicroMenu.wowlua
+-- The micro menu (design board "Micro menu and XP"): a glass panel of
+-- `menu-button` square buttons, space-2 apart, each a line glyph (18px, ink)
+-- that lifts to surface-raised with a gilt-line edge on hover; an arcane
+-- diamond in its top right corner while there's something to act on there.
+--
+--   local m = microMenu(parent, { name = "SuuUIMicroMenu" })
+--   m:SetItems({ { key, glyph, label, click = "CharacterMicroButton" | onClick = fn }, ... })
+--   m:SetAlert(key, text or nil)
+--   m:SetActive(key, on)      -- its window is open: the hover look stays
+--   m:SetCount(key, text, color, fill)  -- 0.17: a count in a pill
+--   m:SetLines(key, lines or nil)       -- 0.17: lines in its tooltip
+--
+-- An item with `click` is a secure button clicking that Blizzard micro
+-- button (so it works in combat wherever the game allows the window); one
+-- with `onClick` is a plain button. SetItems lays the menu out again, out of
+-- combat only (secure buttons): call it then.
+
+import tokens as T from "/Core/Tokens"
+import mixins from "/Core/Init"
+import * as events from "/Core/Events"
+import * as extend from "/Core/Extend"
+import * as fonts from "/Core/Fonts"
+import * as draw from "/UI/Draw"
+import showTooltip, hideTooltip from "/UI/Tooltip"
+
+local S = T.space
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
+
+local Menu: { [string]: any } = {}
+mixins.MicroMenu = Menu
+
+-- The tooltip: the item's label, and the key from Blizzard's own tooltip.
+local function keyOf(blizzard: string?): string?
+    local b = blizzard and _G[blizzard]
+    local tip = b and b.tooltipText
+    if type(tip) ~= "string" then return nil end
+    local key = tip:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):match("%(([^%)]+)%)%s*$")
+    return key
+end
+
+-- A pill's shape, `inset` px in from its frame: two half discs and the
+-- middle between them, apart, so a see-through colour stays even.
+type Pill = { left: Texture, right: Texture, mid: Texture, Paint: (token: string) -> () }
+
+local function pill(f: any, inset: number, layer: DrawLayer): Pill
+    local r = 7 - inset
+    local p = {} :: Pill
+    p.left = f:CreateTexture(nil, layer)
+    p.left:SetTexture(DISC)
+    p.left:SetTexCoord(0, 0.5, 0, 1)
+    p.left:SetSize(r, r * 2)
+    p.left:SetPoint("LEFT", inset, 0)
+    p.right = f:CreateTexture(nil, layer)
+    p.right:SetTexture(DISC)
+    p.right:SetTexCoord(0.5, 1, 0, 1)
+    p.right:SetSize(r, r * 2)
+    p.right:SetPoint("RIGHT", -inset, 0)
+    p.mid = f:CreateTexture(nil, layer)
+    p.mid:SetTexture("Interface\\Buttons\\WHITE8X8")
+    p.mid:SetPoint("TOPLEFT", p.left, "TOPRIGHT")
+    p.mid:SetPoint("BOTTOMRIGHT", p.right, "BOTTOMLEFT")
+    function p.Paint(token: string)
+        draw.paint(p.left, token)
+        draw.paint(p.right, token)
+        draw.paint(p.mid, token)
+    end
+    return p
+end
+
+local function buildButton(m: any, item: { [string]: any }): any
+    local secure = item.click ~= nil
+    local b = CreateFrame("Button", m.name and (m.name .. item.key) or nil, m, secure and "SecureActionButtonTemplate" or nil)
+    local px = draw.size("menu-button")
+    b:SetSize(px, px)
+    -- both: a secure button acts on the one the game's ActionButtonUseKeyDown names
+    if secure then b:RegisterForClicks("AnyDown", "AnyUp") else b:RegisterForClicks("LeftButtonUp") end
+    if secure then
+        b:SetAttribute("type", "click")
+        b:SetAttribute("clickbutton", _G[item.click])
+    else
+        b:SetScript("OnClick", function() if item.onClick then item.onClick() end end)
+    end
+    b.hover = draw.fill(b, "surface-raised", "BACKGROUND")
+    b.hover:SetAllPoints()
+    b.hover:Hide()
+    b.edge = draw.border(b, "gilt-line")
+    b.edge:SetShown(false)
+    b.glyph = b:CreateTexture(nil, "ARTWORK")
+    b.glyph:SetSize(18, 18)
+    b.glyph:SetPoint("CENTER")
+    b.glyph:SetTexture(GLYPHS .. item.glyph .. ".tga")
+    draw.paint(b.glyph, "ink")
+    -- the alert: a 6px arcane diamond, 3px in from the top right, glowing
+    b.alert = CreateFrame("Frame", nil, b)
+    b.alert:SetSize(8, 8)
+    b.alert:SetPoint("CENTER", b, "TOPRIGHT", -6, -6)
+    b.alert:SetFrameLevel(b:GetFrameLevel() + 2)
+    b.alertRing = draw.diamond(b.alert, 8, "surface", "OVERLAY", 6)
+    b.alertRing:SetPoint("CENTER")
+    b.alertDot = draw.diamond(b.alert, 6, "arcane", "OVERLAY", 7)
+    b.alertDot:SetPoint("CENTER")
+    b.alertGlow = draw.shadow(b.alert, "glow-arcane")
+    b.alert:Hide()
+    -- a count (the bags' free slots) in a pill on the bottom right corner
+    -- (design "Micro menu: Collections glyph and bag count" D): 14 px tall,
+    -- hanging into the panel's padding, a gilt-line edge around its fill
+    b.badge = CreateFrame("Frame", nil, b)
+    b.badge:SetHeight(14)
+    b.badge:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 4, -3)
+    b.badge:SetFrameLevel(b:GetFrameLevel() + 2)
+    b.badge.edge = pill(b.badge, 0, "BACKGROUND")
+    b.badge.fill = pill(b.badge, 1, "ARTWORK")
+    b.count = b.badge:CreateFontString(nil, "OVERLAY")
+    fonts.apply(b.count, "label")
+    b.count:SetPoint("CENTER", 0, 0)
+    b.badge:Hide()
+    b.item = item
+    b:HookScript("OnEnter", function(self: any)
+        self.hover:Show()
+        self.edge:SetShown(true)
+        local key = keyOf(self.item.click)
+        showTooltip(self, { title = self.item.label, subtitle = key and ("Key: " .. key) or nil,
+            lines = self.lines, maxWidth = self.lines and 320 or nil, description = self.alertText })
+    end)
+    b:HookScript("OnLeave", function(self: any)
+        self.hover:SetShown(self.active and true or false)
+        self.edge:SetShown(self.active and true or false)
+        hideTooltip()
+    end)
+    b:HookScript("OnMouseDown", function(self: any) self.glyph:SetPoint("CENTER", 0, -1) end)
+    b:HookScript("OnMouseUp", function(self: any) self.glyph:SetPoint("CENTER", 0, 0) end)
+    return b
+end
+
+function Menu:SetItems(items: { [string]: any }[]): boolean
+    if InCombatLockdown() then return false end
+    self.items = items
+    local px, gap, pad = draw.size("menu-button"), S["space-2"], S["space-2"]
+    for _, b in pairs(self.buttons) do b:Hide() end
+    local x = pad
+    for _, item in ipairs(items) do
+        local b = self.buttons[item.key]
+        if not b then
+            b = buildButton(self, item)
+            self.buttons[item.key] = b
+        end
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", x, -pad)
+        b:Show()
+        x = x + px + gap
+    end
+    self:SetSize(math.max(1, x - gap + pad), px + pad * 2)
+    return true
+end
+
+function Menu:SetActive(key: string, active: any)
+    local b = self.buttons[key]
+    local on = active and true or false
+    if not b or b.active == on then return end
+    b.active = on
+    if not b:IsMouseOver() then
+        b.hover:SetShown(on)
+        b.edge:SetShown(on)
+    end
+end
+
+function Menu:SetAlert(key: string, text: string?)
+    local b = self.buttons[key]
+    if not b then return end
+    b.alertText = text
+    b.alert:SetShown(text ~= nil)
+end
+
+-- 0.17: lines in a button's tooltip, under its key (showTooltip's
+-- lines: { left, right }); nil takes them away.
+function Menu:SetLines(key: string, lines: any[]?)
+    local b = self.buttons[key]
+    if not b then return end
+    b.lines = lines
+end
+
+local menus: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+
+local function fitBadge(b: any)
+    b.badge:SetWidth(math.max(14, math.ceil(b.count:GetStringWidth()) + 6))
+end
+
+-- a theme's label size: the counts' pills fitted again
+events.on("SUUUI_THEME_CHANGED", function()
+    for m in pairs(menus) do
+        for _, b in pairs(m.buttons) do fitBadge(b) end
+    end
+end, "MicroMenu")
+
+-- 0.17: a count on a button, in a pill on its bottom right corner (nil
+-- clears it): its text colour token (ink by default) and the pill's fill
+-- (surface by default).
+function Menu:SetCount(key: string, text: string?, color: string?, fill: string?)
+    local b = self.buttons[key]
+    if not b then return end
+    if text == nil or text == "" then
+        b.badge:Hide()
+        return
+    end
+    b.count:SetText(text)
+    draw.paint(b.count, color or "ink")
+    b.badge.edge.Paint("gilt-line")
+    b.badge.fill.Paint(fill or "surface")
+    fitBadge(b)
+    b.badge:Show()
+end
+
+export function microMenu(parent: any, opts: { name?: string }?): any
+    opts = opts or {}
+    local m = CreateFrame("Frame", opts.name, parent)
+    Mixin(m, Menu)
+    m.name = opts.name
+    m.buttons = {}
+    draw.fill(m, "surface-glass", "BACKGROUND"):SetAllPoints()
+    draw.border(m, "gilt-line")
+    draw.shadow(m, "shadow-panel")
+    m:SetSize(1, 1)
+    menus[m] = true
+    extend.add("micromenu", m, { name = opts and opts.name })
+    return m
+end

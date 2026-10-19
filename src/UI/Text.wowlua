@@ -1,0 +1,130 @@
+-- UI/Text.wowlua
+-- Text in a design text style and token colour.
+--
+--   local t = text(parent, "label", "ink")
+--   t:SetValue(value)    secret values go straight to the engine; readable
+--                        ones are compared first, so an unchanged text costs nothing
+--   t:SetStyle("caption"), t:SetColor("ink-muted"), t:SetShadowed(true)
+--   t:SetVisible(shown)  Show/Hide that tells the layout only when it changes
+--
+-- A text whose value may be secret can't be measured in code: give it a
+-- fixed width (t:SetFixedWidth(w)) when it sits in a layout.
+
+import isSecret from "wowlua:secret"
+import * as fonts from "/Core/Fonts"
+import * as events from "/Core/Events"
+import paint from "./Draw"
+
+-- A SuuUI text: a FontString with these methods mixed in.
+export interface Text extends FontString
+    style: string?
+    value: any
+    fixedWidth: number?
+    -- the layout it sits in (UI/Layout.wowlua), set by the layout
+    layout: any
+    function SetStyle(style: string)
+    function SetColor(r: string | number, g: number?, b: number?, a: number?)
+    function SetValue(v: any)
+    function SetShadowed(on: boolean?)
+    function SetFixedWidth(w: number)
+    function SetVisible(shown: any)
+    function Changed()
+end
+
+local Text = {} :: Text
+
+function Text:SetStyle(style: string)
+    fonts.apply(self, style)
+    self.style = style
+    self:Changed()
+end
+
+-- A token (kept: it follows the theme, Draw's paint) or r, g, b, a.
+function Text:SetColor(r: string | number, g: number?, b: number?, a: number?)
+    if type(r) == "string" then return paint(self, r, g) end
+    self:SetTextColor(r, g :: number, b :: number, a)
+end
+
+function Text:SetValue(v: any)
+    if isSecret(v) then
+        self.value = nil
+        self:SetText(v)
+        self:Changed()
+        return
+    end
+    if v == self.value then return end
+    self.value = v
+    self:SetText(v)
+    self:Changed()
+end
+
+-- The shadow every label straight on the world carries (0 1px 2px black, 90%).
+function Text:SetShadowed(on: boolean?)
+    if on then
+        self:SetShadowColor(0, 0, 0, 0.9)
+        self:SetShadowOffset(0, -1)
+    else
+        self:SetShadowOffset(0, 0)
+    end
+end
+
+function Text:SetFixedWidth(w: number)
+    self.fixedWidth = w
+    self:SetWidth(w)
+    self:Changed()
+end
+
+function Text:SetVisible(shown: any)
+    shown = shown and true or false
+    if shown == self:IsShown() then return end
+    self:SetShown(shown)
+    self:Changed()
+end
+
+function Text:Changed()
+    if self.layout then self.layout:Invalidate() end
+end
+
+-- A yes/no from the game as a plain boolean. In combat many unit queries
+-- return a secret boolean, and testing one (if, and, or, not) errors; a
+-- secret answer counts as unknown and reads as false. To show something from
+-- a secret boolean, use region:SetAlphaFromBoolean instead.
+export function flag(v: any): boolean
+    if isSecret(v) then return false end
+    return v and true or false
+end
+
+-- The width of `value` in a text style, measured on a hidden FontString that
+-- is anchored to nothing. A region anchored after one with secret text (an
+-- enemy's name in combat) reports its own size as secret too, so anything in
+-- such a chain must be measured here instead.
+local measurer: FontString? = nil
+export function measureText(style: string, value: string?): number
+    if not measurer then
+        measurer = UIParent:CreateFontString(nil, "OVERLAY")
+        measurer:Hide()
+    end
+    fonts.apply(measurer, style)
+    measurer:SetText(value or "")
+    return measurer:GetUnboundedStringWidth()
+end
+
+local texts: { [Text]: boolean } = setmetatable({}, { __mode = "k" })
+
+export function text(parent: Frame, style: string?, color: string?, layer: DrawLayer?): Text
+    local fs = parent:CreateFontString(nil, layer or "OVERLAY") :: Text
+    Mixin(fs, Text)
+    fs:SetWordWrap(false)
+    fs:SetStyle(style or "body")
+    fs:SetColor(color or "ink")
+    texts[fs] = true
+    return fs
+end
+
+-- A theme can change a text style's size (the Font object follows by
+-- itself): the layouts holding SuuUI texts measure them again.
+events.on("SUUUI_THEME_CHANGED", function()
+    for fs in pairs(texts) do
+        if fs.layout then fs.layout:Invalidate() end
+    end
+end, "Text")

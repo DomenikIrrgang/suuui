@@ -1,0 +1,622 @@
+-- UI/Select.wowlua
+-- One choice (or several) from a list too long or wordy for Segmented.
+--
+--   select(parent, {
+--       options = { { value = "a", label = "Alpha", note = "…", disabled = true, reason = "…",
+--                     icon = <texture or file ID> },   -- 0.9: an icon left of the label
+--                   -- 0.13: summary = "Sort: Skill", what the closed field
+--                   -- shows for it (the list keeps the label)
+--                   { heading = "Group title" }, … },
+--       value = "a", onChange = fn(value), width = 190, placeholder = "Choose",
+--       multiple = false,   -- the value is then a list; Select all / Clear at the top
+--                           -- (none chosen: the placeholder, else "None")
+--       maxShown = 2,       -- multiple: past this many, the field reads "3 of 6"
+--       maxRows = 10,       -- rows the open list shows; longer lists scroll
+--                           -- (mouse wheel, a thin scrollbar on the right)
+--       search = true,      -- a search field at the top once the list is longer
+--                           -- than maxRows (false: never; 0.17: "always");
+--                           -- Enter picks the first match. 0.17: an option's
+--                           -- `search` text is matched too (a build's class)
+--       lookup = fn(query), -- extra options for what was typed, shown first
+--                           -- (e.g. a spell found by its ID); implies a search field
+--       bare = true,        -- 0.10: no field until hovered (a panel header's
+--                           -- select): text in textStyle/textColor, 24px tall,
+--                           -- as wide as the chosen label (up to `width`)
+--       textStyle = "header", textColor = "gilt-text",
+--   })
+--   0.17: an option's diamond = "class-shaman": a small diamond in that colour
+--   left of its label; select.foot = { { label, onClick } }: links under the
+--   list (New build…, Import…), a click closes it first
+--   select:SetOptions(options), select:SetValue(v), select:SetDisabled(disabled)
+--
+-- Closed: a gilt-line field on surface-sunk with the value and a chevron.
+-- Open: a surface list under the field; the chosen option in ink with an
+-- arcane check. A click anywhere else closes it.
+
+import tokens as T, Color from "/Core/Tokens"
+import * as motion from "/Core/Motion"
+import * as fonts from "/Core/Fonts"
+import root from "/Core/Root"
+import * as draw from "./Draw"
+import text, measureText, Text from "./Text"
+import panel, Panel from "./Panel"
+import checkbox, check, chevron, textField, Glyph, TextField from "./Inputs"
+import showTooltip, hideTooltip from "./Tooltip"
+
+local S = T.space
+local colors = T.color :: { [string]: Color }
+
+export type SelectOption = {
+    value?: any,
+    label?: string,
+    note?: string,
+    disabled?: boolean,
+    reason?: string,
+    icon?: any,
+    summary?: string,
+    heading?: string,
+    search?: string,
+    diamond?: string,
+    font?: string,
+}
+
+export type SelectFootLink = { label: string, onClick?: () -> () }
+
+export type SelectOptions = {
+    options?: SelectOption[],
+    value?: any,
+    onChange?: (value: any) -> (),
+    width?: number,
+    placeholder?: string,
+    multiple?: boolean,
+    maxShown?: number,
+    maxRows?: number,
+    minListWidth?: number,
+    search?: boolean | string,
+    lookup?: (query: string) -> SelectOption[]?,
+    bare?: boolean,
+    textStyle?: string,
+    textColor?: string,
+}
+
+-- The open list: a Panel with its rows, the bulk links, the search field,
+-- the scrollbar and the foot's links.
+export interface SelectList extends Panel
+    rows: any[]
+    bulk: Frame
+    search: TextField
+    footRule: Texture
+    footLinks: any[]
+    track: Texture
+    thumb: Texture
+end
+
+export interface Select extends Button
+    options: SelectOption[]
+    value: any
+    multiple?: boolean
+    maxShown?: number
+    placeholder?: string
+    minListWidth?: number
+    maxRows?: number
+    search?: boolean | string
+    lookup?: (query: string) -> SelectOption[]?
+    onChange?: (value: any) -> ()
+    disabled?: boolean
+    bare?: boolean
+    maxWidth: number
+    textStyle: string
+    lookedUp?: SelectOption
+    query?: string
+    offset?: number
+    view?: SelectOption[]
+    -- 0.17: links under the list
+    foot?: SelectFootLink[]
+    bg: Texture
+    border: draw.Border
+    chevron: Glyph
+    text: Text
+    list?: SelectList
+    function Summary(): string?
+    function SetValue(v: any)
+    function SetOptions(options: SelectOption[]?)
+    function SetDisabled(disabled: any)
+    function Close()
+    function View(): SelectOption[]
+    function Refresh()
+    function Open()
+end
+
+local ROW_H = 28
+local MAX_ROWS = 10
+local SEARCH_H = 30
+
+--------------------------------------------------------------------------------
+-- One list at a time, plus a screen-wide catcher that closes it.
+--------------------------------------------------------------------------------
+
+local openList: Select? = nil
+local catcher = CreateFrame("Button", nil, UIParent)
+catcher:SetAllPoints(UIParent)
+catcher:SetFrameStrata("FULLSCREEN_DIALOG")
+catcher:Hide()
+catcher:RegisterForClicks("AnyDown")
+catcher:SetScript("OnClick", function() if openList then openList:Close() end end)
+
+local Select = {} :: Select
+
+local function contains(list: any[]?, v: any): boolean
+    for _, x in ipairs(list or {}) do
+        if x == v then return true end
+    end
+    return false
+end
+
+function Select:Summary(): string?
+    if not self.multiple then
+        for _, o in ipairs(self.options) do
+            if not o.heading and o.value == self.value then return o.summary or o.label end
+        end
+        local lookedUp = self.lookedUp
+        if lookedUp and lookedUp.value == self.value then return lookedUp.label end
+        return self.placeholder or ""
+    end
+    local chosen: string[], total = {}, 0
+    for _, o in ipairs(self.options) do
+        if not o.heading then
+            total = total + 1
+            if contains(self.value, o.value) then chosen[#chosen + 1] = o.label :: string end
+        end
+    end
+    if #chosen == 0 then return self.placeholder or "None" end
+    if #chosen == total then return "All" end
+    if #chosen > (self.maxShown or 2) then return ("%d of %d"):format(#chosen, total) end
+    return table.concat(chosen, ", ")
+end
+
+function Select:SetValue(v: any)
+    self.value = self.multiple and { unpack(v or {}) } or v
+    local summary = self:Summary()
+    self.text:SetValue(summary)
+    -- the placeholder in ink-muted (nothing chosen)
+    local empty = self.multiple and #self.value == 0 or (not self.multiple and self.value == nil)
+    if not self.bare then self.text:SetColor(empty and self.placeholder and "ink-muted" or "ink") end
+    -- bare: as wide as its label, chevron included
+    if self.bare then
+        local w = measureText(self.textStyle, summary) + S["space-2"] * 2 + S["space-1"] + 12
+        self:SetWidth(math.min(self.maxWidth, math.ceil(w)))
+    end
+    local list = self.list
+    if list and list:IsShown() then self:Refresh() end
+end
+
+function Select:SetOptions(options: SelectOption[]?)
+    self.options = options or {}
+    self:SetValue(self.value)
+end
+
+function Select:SetDisabled(disabled: any)
+    self.disabled = disabled and true or false
+    self:SetAlpha(self.disabled and T.opacity["opacity-disabled"] or 1)
+    self.border:SetColor((not self.disabled and self:IsMouseOver()) and "gilt" or "gilt-line")
+    if self.disabled then self:Close() end
+end
+
+function Select:Close()
+    local list = self.list
+    if list then
+        if list.search then list.search.edit:ClearFocus() end
+        list:Hide()
+    end
+    if openList == self then
+        openList = nil
+        catcher:Hide()
+    end
+end
+
+local function choose(self: Select, o: SelectOption)
+    if o.heading or o.disabled then return end
+    if self.multiple then
+        local v: any[] = { unpack(self.value or {}) }
+        if contains(v, o.value) then
+            for i = #v, 1, -1 do if v[i] == o.value then table.remove(v, i) end end
+        else
+            v[#v + 1] = o.value
+        end
+        self:SetValue(v)
+        if self.onChange then self.onChange({ unpack(self.value) }) end
+    else
+        self:Close()
+        self.lookedUp = o
+        if o.value ~= self.value then
+            self:SetValue(o.value)
+            if self.onChange then self.onChange(o.value) end
+        end
+    end
+end
+
+local function row(self: Select, i: number): any
+    local list = self.list :: SelectList
+    list.rows[i] = list.rows[i] or (function(): Button
+        local r = CreateFrame("Button", nil, list)
+        r:SetHeight(ROW_H)
+        r.hover = draw.fill(r, "surface-raised")
+        r.hover:SetAllPoints()
+        r.hover:Hide()
+        r.box = checkbox(r, { size = 14 })
+        r.box:SetPoint("LEFT", S["space-4"], 0)
+        r.box:EnableMouse(false)
+        r.label = text(r, "body", "ink")
+        -- an option's icon (spells, talents) left of its label
+        r.icon = r:CreateTexture(nil, "ARTWORK")
+        r.icon:SetSize(18, 18)
+        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        r.icon:Hide()
+        r.diamond = draw.diamond(r, 7, "ink", "OVERLAY")
+        r.diamond:Hide()
+        r.note = text(r, "caption", "ink-muted")
+        r.note:SetPoint("RIGHT", -S["space-4"], 0)
+        r.check = check(r, 14, "arcane")
+        r.check:SetPoint("RIGHT", -S["space-4"], 0)
+        -- a heading's rule (above every heading but the first)
+        r.rule = r:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(r.rule, "gilt-faint")
+        r.rule:SetHeight(1)
+        r.rule:SetPoint("TOPLEFT", S["space-2"], -S["space-1"])
+        r.rule:SetPoint("TOPRIGHT", -S["space-2"], -S["space-1"])
+        r.rule:Hide()
+        r:SetScript("OnEnter", function(b)
+            if not (b.option.heading or b.option.disabled) then b.hover:Show() end
+            if b.option.disabled and b.option.reason then
+                showTooltip(b, { title = b.option.label, description = b.option.reason })
+            end
+        end)
+        r:SetScript("OnLeave", function(b) b.hover:Hide(); hideTooltip() end)
+        r:SetScript("OnClick", function(b) choose(self, b.option) end)
+        return r
+    end)()
+    return list.rows[i]
+end
+
+-- The options the search leaves (headings only when something under them
+-- matches).
+function Select:View(): SelectOption[]
+    local q = (self.query or ""):lower()
+    if q == "" then return self.options end
+    local out: SelectOption[], heading: SelectOption? = {}, nil
+    if self.lookup then
+        for _, o in ipairs(self.lookup(self.query :: string) or {}) do out[#out + 1] = o end
+    end
+    for _, o in ipairs(self.options) do
+        if o.heading then
+            heading = o
+        elseif tostring(o.label or ""):lower():find(q, 1, true) or (o.search and (o.search :: string):lower():find(q, 1, true)) then
+            if heading then out[#out + 1] = heading; heading = nil end
+            out[#out + 1] = o
+        end
+    end
+    return out
+end
+
+function Select:Refresh()
+    local list = self.list :: SelectList
+    for _, r in ipairs(list.rows) do r:Hide() end
+    local y = S["space-2"]
+    -- as wide as the longest entry needs (a narrow field can open a wide list)
+    local width = math.max(self:GetWidth(), self.minListWidth or 0)
+    local checkW = (self.multiple and 14 + S["space-3"]) or (14 + S["space-3"])
+    for _, o in ipairs(self.options) do
+        local label = o.heading or o.label
+        if label then
+            local w = measureText(o.heading and "header" or "body", tostring(label))
+            local note = o.note and (measureText("caption", tostring(o.note)) + S["space-3"]) or 0
+            local diamond = o.diamond and (8 + S["space-3"]) or 0
+            width = math.max(width, S["space-2"] * 2 + S["space-4"] * 2 + w + note + checkW + diamond + 8)
+        end
+    end
+    local maxRows = self.maxRows or MAX_ROWS
+    local searching = self.search ~= false and (self.search == "always" or #self.options > maxRows or self.lookup ~= nil)
+    list.search:SetShown(searching)
+    if searching then
+        list.search:ClearAllPoints()
+        list.search:SetPoint("TOPLEFT", S["space-2"], -y)
+        list.search:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+        y = y + SEARCH_H + S["space-2"]
+    end
+    if self.multiple then
+        list.bulk:SetPoint("TOPLEFT", S["space-2"] + S["space-4"], -y - 4)
+        list.bulk:Show()
+        y = y + 26
+    else
+        list.bulk:Hide()
+    end
+    local view = self:View()
+    self.view = view
+    local maxOffset = math.max(0, #view - maxRows)
+    local offset = math.max(0, math.min(self.offset or 0, maxOffset))
+    self.offset = offset
+    local scrolling = maxOffset > 0
+    local rowsTop = y
+    for i = 1, math.min(maxRows, #view) do
+        local o = view[offset + i]
+        local r = row(self, i)
+        r.option = o
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", S["space-2"], -y)
+        r:SetPoint("RIGHT", list, "RIGHT", -(S["space-2"] + (scrolling and 8 or 0)), 0)
+        r.label:ClearAllPoints()
+        if o.heading then
+            -- a category: the header face in gilt, a rule above it (not
+            -- the first), set apart from the options under it
+            local first = i == 1
+            local hh = first and 22 or 30
+            r:SetHeight(hh)
+            r.label:SetStyle("header")
+            r.label:SetColor("gilt-text")
+            r.label:SetPoint("BOTTOMLEFT", S["space-4"], S["space-1"])
+            r.label:SetValue(o.heading)
+            r.rule:SetShown(not first)
+            r.box:Hide()
+            r.check:Hide()
+            r.icon:Hide()
+            r.diamond:Hide()
+            r.note:SetValue("")
+            y = y + hh
+        else
+            r.rule:Hide()
+            local on = self.multiple and contains(self.value, o.value) or (not self.multiple and o.value == self.value)
+            r:SetHeight(ROW_H)
+            r.label:SetStyle("body")
+            -- every option in ink (the design's); the check marks the chosen one
+            r.label:SetColor(o.disabled and "ink-faint" or "ink")
+            r.label:SetValue(o.label)
+            r.icon:ClearAllPoints()
+            local lead: any[]? = nil
+            if self.multiple then
+                r.box:Show()
+                r.box:SetValue(on)
+                r.check:Hide()
+                r.icon:SetPoint("LEFT", r.box, "RIGHT", S["space-3"], 0)
+                lead = { r.box, S["space-3"] }
+            else
+                r.box:Hide()
+                r.check:SetShown(on)
+                r.icon:SetPoint("LEFT", S["space-4"], 0)
+            end
+            r.diamond:SetShown(o.diamond ~= nil and colors[o.diamond] ~= nil)
+            if o.diamond and colors[o.diamond] then
+                draw.paint(r.diamond, o.diamond)
+                r.diamond:ClearAllPoints()
+                r.diamond:SetPoint("CENTER", r, "LEFT", S["space-4"] + 4, 0)
+                r.icon:Hide()
+                r.label:SetPoint("LEFT", S["space-4"] + 8 + S["space-3"], 0)
+            elseif o.icon then
+                r.icon:SetTexture(o.icon)
+                r.icon:SetDesaturated(o.disabled and true or false)
+                r.icon:Show()
+                r.label:SetPoint("LEFT", r.icon, "RIGHT", S["space-2"], 0)
+            else
+                r.icon:Hide()
+                if lead then r.label:SetPoint("LEFT", lead[1], "RIGHT", lead[2], 0)
+                else r.label:SetPoint("LEFT", S["space-4"], 0) end
+            end
+            if o.font then r.label:SetFontObject(fonts.get(o.font)) end
+            r.note:SetValue(o.note or "")
+            if o.note and not self.multiple and on then
+                r.note:ClearAllPoints()
+                r.note:SetPoint("RIGHT", r.check, "LEFT", -S["space-3"], 0)
+            else
+                r.note:ClearAllPoints()
+                r.note:SetPoint("RIGHT", -S["space-4"], 0)
+            end
+            y = y + ROW_H
+        end
+        r:Show()
+    end
+    -- the scrollbar: a thin track with a thumb for the visible part
+    list.track:SetShown(scrolling)
+    list.thumb:SetShown(scrolling)
+    if scrolling then
+        local trackH = y - rowsTop
+        list.track:ClearAllPoints()
+        list.track:SetPoint("TOPRIGHT", list, "TOPRIGHT", -S["space-2"] - 2, -rowsTop)
+        list.track:SetSize(3, trackH)
+        local thumbH = math.max(16, trackH * maxRows / #view)
+        list.thumb:ClearAllPoints()
+        list.thumb:SetPoint("TOP", list.track, "TOP", 0, -(trackH - thumbH) * offset / maxOffset)
+        list.thumb:SetSize(3, thumbH)
+    end
+    if #view == 0 then
+        local r = row(self, 1)
+        r.option = { heading = "No match" }
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", S["space-2"], -y)
+        r:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+        r:SetHeight(22)
+        r.label:ClearAllPoints()
+        r.label:SetStyle("caption")
+        r.label:SetColor("ink-muted")
+        r.label:SetPoint("LEFT", S["space-4"], -2)
+        r.label:SetValue("No match")
+        r.box:Hide(); r.check:Hide(); r.icon:Hide(); r.diamond:Hide(); r.rule:Hide(); r.note:SetValue("")
+        r:Show()
+        y = y + 22
+    end
+    -- the foot's links, under a rule
+    local foot = self.foot
+    list.footRule:SetShown(foot ~= nil and #foot > 0)
+    for _, b in ipairs(list.footLinks) do b:Hide() end
+    if foot and #foot > 0 then
+        y = y + S["space-2"]
+        list.footRule:ClearAllPoints()
+        list.footRule:SetPoint("TOPLEFT", S["space-2"], -y)
+        list.footRule:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+        y = y + 1 + S["space-1"]
+        for i, def in ipairs(foot) do
+            local b = list.footLinks[i]
+            if not b then
+                b = CreateFrame("Button", nil, list)
+                b:SetHeight(ROW_H)
+                b.hover = draw.fill(b, "surface-raised")
+                b.hover:SetAllPoints()
+                b.hover:Hide()
+                b.label = text(b, "body", "ink-muted")
+                b.label:SetPoint("LEFT", S["space-4"], 0)
+                b:SetScript("OnEnter", function(x) x.hover:Show(); x.label:SetColor("ink") end)
+                b:SetScript("OnLeave", function(x) x.hover:Hide(); x.label:SetColor("ink-muted") end)
+                b:SetScript("OnClick", function(x)
+                    self:Close()
+                    if x.def and x.def.onClick then x.def.onClick() end
+                end)
+                list.footLinks[i] = b
+            end
+            b.def = def
+            b.label:SetValue(def.label)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", S["space-2"], -y)
+            b:SetPoint("RIGHT", list, "RIGHT", -S["space-2"], 0)
+            b:Show()
+            y = y + ROW_H
+        end
+    end
+    list:SetSize(width, y + S["space-2"])
+end
+
+function Select:Open()
+    if self.disabled then return end
+    if openList and openList ~= self then openList:Close() end
+    if not self.list then
+        local list = panel(root, { solid = true }) :: SelectList
+        list.body:SetScript("OnSizeChanged", nil)
+        list.body:Hide()
+        list:SetFrameStrata("FULLSCREEN_DIALOG")
+        list:SetToplevel(true)
+        list:SetClampedToScreen(true)
+        list.rows = {}
+        local bulk = CreateFrame("Frame", nil, list)
+        bulk:SetSize(200, 18)
+        local all = CreateFrame("Button", nil, bulk)
+        all.text = text(all, "caption", "ink-muted")
+        all.text:SetValue("Select all")
+        all.text:SetPoint("LEFT")
+        all:SetHeight(18)
+        all:SetPoint("LEFT")
+        local none = CreateFrame("Button", nil, bulk)
+        none.text = text(none, "caption", "ink-muted")
+        none.text:SetValue("Clear")
+        none.text:SetPoint("LEFT")
+        none:SetHeight(18)
+        none:SetPoint("LEFT", all, "RIGHT", S["space-5"], 0)
+        bulk.links = { all, none }
+        for _, b in ipairs({ all, none }) do
+            b:SetScript("OnEnter", function(x) x.text:SetColor("ink") end)
+            b:SetScript("OnLeave", function(x) x.text:SetColor("ink-muted") end)
+        end
+        all:SetScript("OnClick", function()
+            local v: any[] = {}
+            for _, o in ipairs(self.options) do
+                if not (o.heading or o.disabled) then v[#v + 1] = o.value end
+            end
+            self:SetValue(v)
+            if self.onChange then self.onChange({ unpack(v) }) end
+        end)
+        none:SetScript("OnClick", function()
+            self:SetValue({})
+            if self.onChange then self.onChange({}) end
+        end)
+        list.bulk = bulk
+
+        -- search (long lists) and the scrollbar
+        list.search = textField(list, { width = 100, placeholder = "Search", onTextChanged = function(query: string)
+            self.query, self.offset = query, 0
+            self:Refresh()
+        end })
+        list.search.edit:SetScript("OnEnterPressed", function(e)
+            for _, o in ipairs(self.view or {}) do
+                if not (o.heading or o.disabled) then choose(self, o); break end
+            end
+            e:ClearFocus()
+        end)
+        list.footRule = list:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(list.footRule, "gilt-faint")
+        list.footRule:SetHeight(1)
+        list.footRule:Hide()
+        list.footLinks = {}
+        list.track = list:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(list.track, "gilt-faint")
+        list.thumb = list:CreateTexture(nil, "OVERLAY")
+        draw.paintFill(list.thumb, "ink-muted")
+        list:EnableMouseWheel(true)
+        list:SetScript("OnMouseWheel", function(_, delta)
+            self.offset = (self.offset or 0) - delta * 3
+            self:Refresh()
+        end)
+        self.list = list
+    end
+    -- the links' widths on each open (a theme may have changed the caption size)
+    local list = self.list :: SelectList
+    for _, b in ipairs(list.bulk.links) do b:SetWidth(b.text:GetUnboundedStringWidth()) end
+    list:ClearAllPoints()
+    list:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
+    self.query, self.offset = "", 0
+    list.search:SetValue("")
+    self:Refresh()
+    list:Show()
+    if list.search:IsShown() then list.search.edit:SetFocus() end
+    motion.enter(list, T.duration["dur-fast"])
+    openList = self
+    catcher:SetFrameLevel(math.max(0, list:GetFrameLevel() - 1))
+    catcher:Show()
+end
+
+export function select(parent: Frame, opts: SelectOptions): Select
+    local f = CreateFrame("Button", nil, parent) :: Select
+    Mixin(f, Select)
+    f:SetSize(opts.width or 190, 30)
+    f.bg = draw.fill(f, "surface-sunk")
+    f.bg:SetAllPoints()
+    f.border = draw.border(f, "gilt-line")
+    f.chevron = chevron(f, "ink-muted")
+    f.chevron:SetPoint("RIGHT", -S["space-4"], 0)
+    f.text = text(f, "body", "ink")
+    f.text:SetPoint("LEFT", S["space-4"], 0)
+    f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-3"], 0)
+    f.text:SetWordWrap(false) -- one line, cut short in a narrow field
+    f.multiple, f.maxShown, f.placeholder = opts.multiple, opts.maxShown, opts.placeholder
+    f.minListWidth = opts.minListWidth
+    f.maxRows, f.search, f.lookup = opts.maxRows, opts.search, opts.lookup
+    f.onChange = opts.onChange
+    f.options = opts.options or {}
+    f:SetScript("OnClick", function(self: Select)
+        local list = self.list
+        if list and list:IsShown() then self:Close() else self:Open() end
+    end)
+    f:SetScript("OnEnter", function(self: Select)
+        if self.disabled then return end
+        self.border:SetColor("gilt")
+        if self.bare then self.border:SetShown(true) end
+    end)
+    f:SetScript("OnLeave", function(self: Select)
+        self.border:SetColor("gilt-line")
+        if self.bare then self.border:SetShown(false) end
+    end)
+    if opts.bare then
+        f.bare, f.maxWidth = true, opts.width or 190
+        f.textStyle = opts.textStyle or "body"
+        f:SetHeight(24)
+        f.bg:Hide()
+        f.border:SetShown(false)
+        f.text:SetStyle(f.textStyle)
+        f.text:SetColor(opts.textColor or "ink")
+        f.text:SetWordWrap(false)
+        f.text:ClearAllPoints()
+        f.text:SetPoint("LEFT", S["space-2"], 0)
+        f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-1"], 0)
+        f.chevron:ClearAllPoints()
+        f.chevron:SetPoint("RIGHT", -S["space-2"], 0)
+        f.minListWidth = opts.minListWidth or 200
+    end
+    f:SetScript("OnHide", function(self: Select) self:Close() end)
+    f:SetValue(opts.value)
+    return f
+end

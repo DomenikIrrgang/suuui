@@ -1,0 +1,138 @@
+-- UI/Alert.wowlua
+-- An alert (design board "Alerts and badges"): a title in the display face
+-- over a detail caption, centred, between a 1px rule above and below, with a
+-- 9px diamond on each end of the band.
+--
+--   local a = alert(parent)
+--   a:SetAlert(tone, title, detail[, ...])
+--
+-- tone: "danger" (ember-soft ground, ember rules and glow, ember-text title),
+-- "warning" (glass ground, amber rules and title) or "info" (glass ground,
+-- gilt-line rules, gilt diamonds, gilt-text title). The detail is a format
+-- string when arguments follow (a target's name may be secret in a dungeon):
+-- they go to SetFormattedText untouched. A detail with a secret argument
+-- can't be measured, so the band then takes at least `notice-w` plus space-6
+-- either side, and a longer detail is cut. A plain detail may hold several
+-- lines ("\n"): the band grows down, as wide as the longest (0.12).
+
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import * as draw from "/UI/Draw"
+import text, measureText from "/UI/Text"
+
+local S = T.space
+
+local isSecret: (v: any) -> boolean = issecretvalue or function() return false end
+
+type Tone = { ground: string, line: string, jewel: string, title: string, glow?: boolean }
+
+local TONES: { [string]: Tone } = {
+    danger = { ground = "ember-soft", line = "ember", jewel = "ember", title = "ember-text", glow = true },
+    warning = { ground = "surface-glass", line = "amber", jewel = "amber", title = "amber" },
+    info = { ground = "surface-glass", line = "gilt-line", jewel = "gilt", title = "gilt-text" },
+}
+local JEWEL = 9
+
+local Alert: { [string]: any } = {}
+
+function Alert:SetTone(tone: string)
+    local t = TONES[tone] or assert(TONES.danger)
+    self.tone = TONES[tone] and tone or "danger"
+    draw.paintFill(self.ground, t.ground)
+    self.rules:SetColor(t.line)
+    draw.paint(self.left, t.jewel)
+    draw.paint(self.right, t.jewel)
+    self.title:SetColor(t.title)
+    self.glow:SetShown(t.glow and true or false)
+end
+
+-- The detail: plain text, or a format with arguments (secret ones allowed).
+-- Returns the text to measure, or nil when an argument is secret.
+local function setDetail(self: any, detail: string?, ...: any): string?
+    local n = select("#", ...)
+    local secret = false
+    for i = 1, n do
+        if isSecret((select(i, ...))) then secret = true; break end
+    end
+    if not detail or detail == "" then
+        self.detail:SetVisible(false)
+        return ""
+    end
+    self.detail:SetVisible(true)
+    if n > 0 then
+        self.detail:SetFormattedText(detail, ...)
+        self.detail.value = nil
+    else
+        self.detail:SetValue(detail)
+    end
+    if secret then return nil end
+    return n > 0 and detail:format(...) or detail
+end
+
+-- The band's size from the title and the readable detail (nil: secret);
+-- again after a theme changed the text styles.
+function Alert:Fit()
+    local readable: string? = self.detailText
+    local detailW: number? = nil
+    local lines = 1
+    if readable then
+        local w, n = 0, 0
+        for line in (readable .. "\n"):gmatch("(.-)\n") do
+            n = n + 1
+            w = math.max(w, measureText("caption", line))
+        end
+        detailW, lines = w, n
+    end
+    local titleW = measureText("alert", self.titleText)
+    local inner = math.max(titleW, detailW or draw.size("notice-w"))
+    -- a secret detail: fixed width, cut at the band's edge; several lines:
+    -- as wide as the longest, centred
+    if lines > 1 then
+        self.detail:SetWidth(math.ceil(detailW or 0) + 2)
+        self.detail:SetWordWrap(true)
+    else
+        self.detail:SetWidth(detailW and 0 or inner)
+        self.detail:SetWordWrap(false)
+    end
+    local h = S["space-4"] * 2 + T.type.alert.lineHeight
+    if self.detail:IsShown() then h = h + S["space-1"] + T.type.caption.lineHeight * lines end
+    self:SetSize(math.ceil(inner) + S["space-6"] * 2, h)
+end
+
+local alerts: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+events.on("SUUUI_THEME_CHANGED", function()
+    for a in pairs(alerts) do a:Fit() end
+end, "UI.Alert")
+
+function Alert:SetAlert(tone: string, title: string?, detail: string?, ...: any)
+    self:SetTone(tone)
+    self.title:SetValue(title or "")
+    self.titleText = title or ""
+    self.detailText = setDetail(self, detail, ...)
+    self:Fit()
+end
+
+export function alert(parent: any): any
+    local f = CreateFrame("Frame", nil, parent)
+    Mixin(f, Alert)
+    alerts[f] = true
+    f.ground = f:CreateTexture(nil, "BACKGROUND")
+    f.ground:SetAllPoints()
+    f.glow = draw.shadow(f, "glow-ember")
+    -- the rules above and below (a border without its sides)
+    f.rules = draw.border(f, "ember")
+    f.rules.left:Hide()
+    f.rules.right:Hide()
+    f.left = draw.diamond(f, JEWEL, "ember")
+    f.left:SetPoint("CENTER", f, "LEFT", 0, 0)
+    f.right = draw.diamond(f, JEWEL, "ember")
+    f.right:SetPoint("CENTER", f, "RIGHT", 0, 0)
+    f.title = text(f, "alert", "ember-text")
+    -- the display face is small caps with no descenders: its line box
+    -- centres 2px high, so it sits 2px lower
+    f.title:SetPoint("TOP", 0, -S["space-4"] - 2)
+    f.detail = text(f, "caption", "ink")
+    f.detail:SetPoint("TOP", f.title, "BOTTOM", 0, -S["space-1"])
+    f:SetAlert("danger", "")
+    return f
+end

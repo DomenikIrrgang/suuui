@@ -1,0 +1,796 @@
+-- UI/Panel.wowlua
+-- Containers: Panel, SectionHeader and WindowFrame, plus the close button and
+-- key chip their headers use. Sizes and colours follow the design system's
+-- Panel, SectionHeader and WindowFrame specs.
+
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
+import tokens as T from "/Core/Tokens"
+import * as motion from "/Core/Motion"
+import * as events from "/Core/Events"
+import * as extend from "/Core/Extend"
+import mixins from "/Core/Init"
+import root from "/Core/Root"
+import * as draw from "./Draw"
+import text, measureText, Text from "./Text"
+import button from "./Controls"
+import textField from "./Inputs"
+import tabMarker, TabMarker from "./TabMarker"
+import showTooltip, hideTooltip from "./Tooltip"
+
+local S = T.space
+
+--------------------------------------------------------------------------------
+-- Close button and key chip
+--------------------------------------------------------------------------------
+
+-- A 22px square close button: ink-muted cross, a gilt-line border on hover.
+export function closeButton(parent: Frame, onClick: ((b: Button) -> ())?): Button
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(22, 22)
+    local border = draw.border(b, "gilt-line")
+    border:SetShown(false)
+    local cross = draw.cross(b, 10, "ink-muted")
+    cross:SetPoint("CENTER")
+    b:SetScript("OnEnter", function() border:SetShown(true); cross:SetColor("ink") end)
+    b:SetScript("OnLeave", function() border:SetShown(false); cross:SetColor("ink-muted") end)
+    b:SetScript("OnClick", function() if onClick then onClick(b) end end)
+    return b
+end
+
+-- The kbd chip: a key in micro on surface-raised, at least 20px square.
+export interface KeyChip extends Frame
+    text: Text
+    function SetKey(k: string)
+end
+
+export function keyChip(parent: Frame, key: string?): KeyChip
+    local f = CreateFrame("Frame", nil, parent) :: KeyChip
+    draw.fill(f, "surface-raised"):SetAllPoints()
+    draw.border(f, "gilt-line")
+    f.text = text(f, "micro", "ink")
+    f.text:SetPoint("CENTER", 0, 0)
+    function f:SetKey(k: string)
+        self.text:SetValue(k)
+        self:SetSize(math.max(20, self.text:GetUnboundedStringWidth() + S["space-2"] * 2), 20)
+    end
+    f:SetKey(key or "")
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- Panel
+--
+--   panel(parent, {
+--       title = "Loot", meta = "Ember Hound",   -- optional header
+--       closable = true, onClose = fn,
+--       anchor = true,        -- the double gilt frame and two diamonds (screen anchors only)
+--       solid = false,        -- surface instead of surface-glass
+--       shadow = true,
+--       width = 240, height = nil,  -- a missing size follows the body
+--   })
+--
+-- Put content in panel.body. Without a fixed size the panel fits its body,
+-- so give the body a layout (or a size).
+--------------------------------------------------------------------------------
+
+-- top padding + title line (the header style's, which a theme can change)
+local function headH(): number
+    return S["space-5"] + T.type.header.lineHeight
+end
+
+export type PanelOptions = {
+    name?: string,
+    title?: string,
+    meta?: string,
+    keybind?: string,
+    closable?: boolean,
+    onClose?: (panel: Panel) -> (),
+    anchor?: boolean,
+    ornament?: boolean,
+    solid?: boolean,
+    shadow?: boolean,
+    width?: number,
+    height?: number,
+}
+
+export interface Panel extends Frame
+    bg: Texture
+    border: draw.Border
+    shadow?: draw.SoftEdge
+    ring?: draw.Border
+    ring2?: draw.Border
+    ornTL?: Texture
+    ornBR?: Texture
+    -- the header (titled panels only)
+    title?: Text
+    meta?: Text
+    close?: Button
+    key?: KeyChip
+    headRight?: Region
+    divider?: Frame
+    jewel?: Texture
+    -- content goes here
+    body: Frame
+    fixedWidth?: number
+    fixedHeight?: number
+    function SetTitle(title: string?, meta: string?)
+    function BodyTop(): number
+    function Fit()
+    function PlaceHead()
+    function PlaceBody()
+end
+
+local Panel = {} :: Panel
+mixins.Panel = Panel
+
+function Panel:SetTitle(title: string?, meta: string?)
+    if self.title then self.title:SetValue(title or "") end
+    if self.meta then self.meta:SetValue(meta or "") end
+end
+
+-- The offset of the body's top edge from the panel's top edge.
+function Panel:BodyTop(): number
+    if self.title then return headH() + S["space-4"] + 1 + S["space-4"] end
+    return S["space-4"]
+end
+
+function Panel:Fit()
+    if self.fixedWidth and self.fixedHeight then return end
+    local w, h = self.body:GetSize()
+    if not self.fixedWidth then self:SetWidth(w + S["space-5"] * 2) end
+    if not self.fixedHeight then self:SetHeight(self:BodyTop() + h + S["space-5"]) end
+end
+
+-- The head and the body from the title's line height: at build, and again
+-- when a theme changes it.
+function Panel:PlaceHead()
+    if not self.title then return end
+    local headRight, divider = self.headRight :: Region, self.divider :: Frame
+    headRight:SetPoint("RIGHT", self, "TOPRIGHT", -S["space-5"], -(S["space-5"] + T.type.header.lineHeight / 2))
+    divider:SetPoint("TOPLEFT", S["space-5"], -(headH() + S["space-4"]))
+    divider:SetPoint("TOPRIGHT", -S["space-5"], -(headH() + S["space-4"]))
+end
+
+function Panel:PlaceBody()
+    local top = self:BodyTop()
+    self.body:SetPoint("TOPLEFT", S["space-5"], -top)
+    if self.fixedWidth then self.body:SetPoint("TOPRIGHT", -S["space-5"], -top) end
+    self:Fit()
+end
+
+local function buildHead(f: Panel, opts: PanelOptions)
+    local title = text(f, "header", "gilt-text")
+    f.title = title
+    title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+    title:SetValue(opts.title)
+
+    -- Right of the title, right to left: close, key chip, meta, all centred
+    -- on the title's line (the first placed by PlaceHead).
+    local prev: Region? = nil
+    local function chain(region: Region, gap: number?)
+        if prev then
+            region:SetPoint("RIGHT", prev, "LEFT", -(gap :: number), 0)
+        else
+            f.headRight = region
+        end
+        prev = region
+    end
+    if opts.closable then
+        local close = closeButton(f, function() if opts.onClose then opts.onClose(f) else f:Hide() end end)
+        f.close = close
+        chain(close)
+    end
+    if opts.keybind then
+        local key = keyChip(f, opts.keybind)
+        f.key = key
+        chain(key, S["space-4"])
+    end
+    local meta = text(f, "caption", "ink-muted")
+    f.meta = meta
+    chain(meta, opts.keybind and S["space-3"] or S["space-4"])
+    meta:SetValue(opts.meta or "")
+
+    -- The divider: a gilt-line hairline fading at both ends, with its jewel.
+    local divider = draw.hairline(f, "gilt-line", "both")
+    f.divider = divider
+    f:PlaceHead()
+    local jewel = draw.diamond(f, 6, "gilt")
+    f.jewel = jewel
+    jewel:SetPoint("CENTER", divider, "CENTER", 0, 0)
+end
+
+-- A theme can change the header style: titled panels and section headers
+-- are laid out again (after combat, as a panel may hold secure frames).
+local titled: { [Panel]: boolean } = setmetatable({}, { __mode = "k" })
+local headers: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+local relayoutWait = CreateFrame("Frame")
+local function relayout()
+    if InCombatLockdown() then
+        relayoutWait:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+    for f in pairs(titled) do
+        f:PlaceHead()
+        f:PlaceBody()
+    end
+    for f in pairs(headers) do f:SetHeight(T.type.header.lineHeight) end
+end
+relayoutWait:SetScript("OnEvent", function(self)
+    self:UnregisterAllEvents()
+    relayout()
+end)
+events.on("SUUUI_THEME_CHANGED", relayout, "UI.Panel")
+
+export function panel(parent: Frame, opts: PanelOptions?): Panel
+    opts = opts or {}
+    local f = CreateFrame("Frame", opts.name, parent) :: Panel
+    Mixin(f, Panel)
+    f.bg = draw.fill(f, opts.solid and "surface" or "surface-glass")
+    f.bg:SetAllPoints()
+    f.border = draw.border(f, "gilt-line")
+    if opts.shadow ~= false then f.shadow = draw.shadow(f, "shadow-panel") end
+
+    if opts.anchor then
+        -- inset-anchor: a 3px dark ring inside the border, then a faint gilt line.
+        local rings = T.shadow["inset-anchor"]
+        f.ring = draw.border(f, rings[1].color, { width = rings[1].spread, inset = 1 })
+        f.ring2 = draw.border(f, rings[2].color, { width = 1, inset = 1 + rings[1].spread })
+        local tl = draw.diamond(f, 7, "gilt")
+        f.ornTL = tl
+        tl:SetPoint("CENTER", f, "TOPLEFT", 0, 0)
+        local br = draw.diamond(f, 7, "gilt")
+        f.ornBR = br
+        br:SetPoint("CENTER", f, "BOTTOMRIGHT", 0, 0)
+    elseif opts.ornament then
+        local tl = draw.diamond(f, 7, "gilt")
+        f.ornTL = tl
+        tl:SetPoint("CENTER", f, "TOPLEFT", 0, 0)
+    end
+
+    if opts.title then buildHead(f, opts) end
+
+    f.body = CreateFrame("Frame", nil, f)
+    f.body:SetPoint("TOPLEFT", S["space-5"], -f:BodyTop())
+    f.body:SetSize(1, 1)
+
+    f.fixedWidth, f.fixedHeight = opts.width, opts.height
+    if opts.width then
+        f:SetWidth(opts.width)
+        f.body:SetPoint("TOPRIGHT", -S["space-5"], -f:BodyTop())
+    end
+    if opts.height then
+        f:SetHeight(opts.height)
+        f.body:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
+    end
+    f.body:SetScript("OnSizeChanged", function() f:Fit() end)
+    f:Fit()
+    if opts.title then titled[f] = true end
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- Modal: a panel in the middle of the screen over a dark shade. The game
+-- can't blur the interface, so the background is dimmed instead; it takes
+-- every click, and a click on it, Esc or the panel's own buttons close.
+--
+--   makeModal(panel)                -- panel:Show()/Hide() bring the shade
+--   confirm({ title, text, confirm = "Replace", cancel = "Cancel",
+--                -- 0.17: cancel = false: OK alone
+--                onConfirm = fn, onCancel = fn,
+--                input = { label, placeholder, value }, -- 0.13: a text to
+--                -- enter, given to onConfirm(text); OK once there is some
+--                typeToConfirm = "UNLEARN",  -- 0.13: a field under the text;
+--                -- the confirm button only works once it says this word
+--                -- (any case), Enter then confirms
+--                enterConfirms = false })  -- 0.16: Enter in the field doesn't
+--                -- confirm (the dialog stays; only the button does)
+--------------------------------------------------------------------------------
+
+-- One shade for every modal, made up front: full screen, on the DIALOG layer
+-- under the modal, taking every click.
+local shade = CreateFrame("Button", nil, root)
+shade:SetAllPoints(root)
+shade:SetFrameStrata("DIALOG")
+shade:EnableMouse(true)
+shade:RegisterForClicks("AnyUp")
+do
+    local t = shade:CreateTexture(nil, "BACKGROUND")
+    t:SetAllPoints()
+    t:SetColorTexture(0, 0, 0, 0.8)
+end
+shade:Hide()
+shade:SetScript("OnClick", function(self) if self.owner then self.owner:Hide() end end)
+
+local function attach(modal: Frame)
+    if not modal:IsShown() then return end
+    shade.owner = modal
+    shade:SetFrameLevel(1)
+    modal:SetFrameLevel(math.max(modal:GetFrameLevel(), 10))
+    shade:SetAlpha(1)
+    shade:Show()
+    modal:Raise()
+end
+
+--------------------------------------------------------------------------------
+-- scrollArea(parent[, bar]): a scrolling area, mouse wheel only, content in
+-- area.child (size it to its content). With `bar`, a
+-- thin scrollbar (Select's: a gilt-faint track, an ink-muted thumb for the
+-- visible part) sits `bar` px right of the area, only while the content
+-- overflows.
+--------------------------------------------------------------------------------
+
+export interface ScrollArea extends ScrollFrame
+    child: Frame
+    -- with a bar
+    track?: Texture
+    thumb?: Texture
+    grip?: Button
+    grab?: number
+    dragging?: boolean
+end
+
+local function updateBar(scroll: ScrollArea)
+    local track, thumb = scroll.track :: Texture, scroll.thumb :: Texture
+    local viewH = scroll:GetHeight()
+    local max = math.max(0, scroll.child:GetHeight() - viewH)
+    local on = max >= 1 and viewH > 0
+    track:SetShown(on)
+    thumb:SetShown(on)
+    if scroll.grip then scroll.grip:SetShown(on) end
+    if not on then return end
+    local thumbH = math.max(24, viewH * viewH / (viewH + max))
+    thumb:SetHeight(thumbH)
+    thumb:ClearAllPoints()
+    thumb:SetPoint("TOP", track, "TOP", 0, -(viewH - thumbH) * math.min(1, scroll:GetVerticalScroll() / max))
+end
+
+-- The bar takes the mouse: drag the thumb, or press the track and the thumb
+-- jumps there and follows (only the wheel scrolled: found in game).
+local function followCursor(scroll: ScrollArea)
+    local track, thumb = scroll.track :: Texture, scroll.thumb :: Texture
+    local viewH = scroll:GetHeight()
+    local max = math.max(0, scroll.child:GetHeight() - viewH)
+    local range = viewH - thumb:GetHeight()
+    local top = track:GetTop()
+    if max <= 0 or range <= 0 or not top then return end
+    local _, y = GetCursorPosition()
+    y = y / track:GetEffectiveScale()
+    local pos = (top - y) - (scroll.grab or 0)
+    scroll:SetVerticalScroll(max * math.min(1, math.max(0, pos / range)))
+end
+
+local function makeGrip(scroll: ScrollArea, parent: Frame): Button
+    local grip = CreateFrame("Button", nil, parent)
+    grip:SetPoint("TOP", scroll.track :: Texture, "TOP")
+    grip:SetPoint("BOTTOM", scroll.track :: Texture, "BOTTOM")
+    grip:SetWidth(12)
+    grip:SetFrameLevel(scroll:GetFrameLevel() + 5)
+    grip:RegisterForClicks("AnyUp")
+    grip:SetScript("OnMouseDown", function()
+        local track, thumb = scroll.track :: Texture, scroll.thumb :: Texture
+        local thumbTop = thumb:GetTop()
+        if not thumbTop then return end
+        local _, y = GetCursorPosition()
+        y = y / track:GetEffectiveScale()
+        local at = thumbTop - y
+        -- on the thumb: keep the spot grabbed; on the track: its middle
+        scroll.grab = (at >= 0 and at <= thumb:GetHeight()) and at or thumb:GetHeight() / 2
+        scroll.dragging = true
+        followCursor(scroll)
+    end)
+    grip:SetScript("OnMouseUp", function() scroll.dragging = false end)
+    grip:SetScript("OnUpdate", function()
+        if scroll.dragging then
+            if not IsMouseButtonDown("LeftButton") then scroll.dragging = false return end
+            followCursor(scroll)
+        end
+    end)
+    grip:SetScript("OnEnter", function() draw.paintFill(scroll.thumb :: Texture, "ink") end)
+    grip:SetScript("OnLeave", function() draw.paintFill(scroll.thumb :: Texture, "ink-muted") end)
+    return grip
+end
+
+export function scrollArea(parent: Frame, bar: number?): ScrollArea
+    local scroll = CreateFrame("ScrollFrame", nil, parent) :: ScrollArea
+    local child = CreateFrame("Frame", nil, scroll)
+    child:SetSize(1, 1)
+    scroll:SetScrollChild(child)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        local max = math.max(0, child:GetHeight() - self:GetHeight())
+        self:SetVerticalScroll(math.min(max, math.max(0, self:GetVerticalScroll() - delta * 48)))
+    end)
+    scroll.child = child
+    if bar then
+        -- on the parent: the scroll frame clips what it holds
+        local track = draw.fill(parent, "gilt-faint", "ARTWORK")
+        scroll.track = track
+        track:SetPoint("TOPLEFT", scroll, "TOPRIGHT", bar, 0)
+        track:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", bar, 0)
+        track:SetWidth(3)
+        local thumb = draw.fill(parent, "ink-muted", "OVERLAY")
+        scroll.thumb = thumb
+        thumb:SetWidth(3)
+        scroll.grip = makeGrip(scroll, parent)
+        local function update() updateBar(scroll) end
+        scroll:SetScript("OnScrollRangeChanged", update)
+        scroll:SetScript("OnVerticalScroll", update)
+        scroll:SetScript("OnSizeChanged", update)
+        child:SetScript("OnSizeChanged", update)
+        update()
+    end
+    -- content that got shorter (or a taller area) pulls the scroll back, so
+    -- no empty space stays at the bottom. A frame later: the sizes settle
+    -- only after the change (a panel that shrinks with its content), and the
+    -- game's own range is then the truth.
+    local pending = false
+    local function settle()
+        pending = false
+        local max = math.max(0, scroll:GetVerticalScrollRange())
+        if scroll:GetVerticalScroll() > max then scroll:SetVerticalScroll(max) end
+        if scroll.track then updateBar(scroll) end
+    end
+    local function clamp()
+        if pending then return end
+        pending = true
+        after(0, settle)
+    end
+    scroll:HookScript("OnScrollRangeChanged", clamp)
+    scroll:HookScript("OnSizeChanged", clamp)
+    child:HookScript("OnSizeChanged", clamp)
+    return scroll
+end
+
+
+export function makeModal<F extends Frame>(modal: F): F
+    modal:SetFrameStrata("DIALOG")
+    modal:SetToplevel(true)
+    modal:EnableMouse(true)
+    modal:SetClampedToScreen(true)
+    modal:ClearAllPoints()
+    modal:SetPoint("CENTER", root, "CENTER", 0, 40)
+    -- Esc closes it (other keys pass on to the game)
+    modal:EnableKeyboard(true)
+    modal:SetScript("OnKeyDown", function(self, key)
+        if key == "ESCAPE" then
+            self:SetPropagateKeyboardInput(false)
+            self:Hide()
+        else
+            self:SetPropagateKeyboardInput(true)
+        end
+    end)
+    -- the shade comes with the panel, however it is shown
+    modal:HookScript("OnShow", function(self)
+        attach(self)
+        motion.enter(self, T.duration["dur-fast"])
+    end)
+    hook(modal, "Show", attach)
+    modal:HookScript("OnHide", function(self)
+        if shade.owner == self then
+            shade:Hide()
+            shade.owner = nil
+        end
+    end)
+    -- a new frame is already shown: start hidden so the first Show counts
+    modal:Hide()
+    return modal
+end
+
+export type ConfirmOptions = {
+    title?: string,
+    text?: string,
+    confirm?: string,
+    cancel?: string | false,
+    onConfirm?: (text: string?) -> (),
+    onCancel?: () -> (),
+    input?: { label?: string, placeholder?: string, value?: string },
+    typeToConfirm?: string,
+    enterConfirms?: boolean,
+}
+
+local confirmPanel: any = nil
+
+-- The confirm dialog: a Panel with its own fields (text, ok, cancel, field, …).
+export function confirm(opts: ConfirmOptions): Panel
+    if not confirmPanel then
+        local p: any = panel(root, { title = " ", width = 400, height = 170, solid = true })
+        p.text = text(p.body, "body", "ink")
+        p.text:SetWordWrap(true)
+        p.text:SetJustifyH("LEFT")
+        p.text:SetFixedWidth(360)
+        p.text:SetPoint("TOPLEFT")
+        local function confirmIt()
+            local value: string = p.field:GetValue() or ""
+            if p.word and value:upper() ~= p.word then return end
+            if p.input and strtrim(value) == "" then return end
+            local fn = p.onConfirm
+            p.onCancel = nil
+            p:Hide()
+            if fn then fn(p.input and strtrim(value) or nil) end
+        end
+        p.ok = button(p, { text = "OK", variant = "primary", width = 110, onClick = confirmIt })
+        p.ok:SetPoint("BOTTOMRIGHT", -20, 18)
+        -- the word to type: its line and field as one group, centred across
+        -- the panel and between the text and the buttons (asked for in game)
+        p.slot = CreateFrame("Frame", nil, p)
+        p.slot:SetPoint("TOP", p.text, "BOTTOM")
+        p.slot:SetPoint("BOTTOM", p.ok, "TOP")
+        p.slot:SetPoint("LEFT", p, "LEFT")
+        p.slot:SetPoint("RIGHT", p, "RIGHT")
+        p.group = CreateFrame("Frame", nil, p.slot)
+        p.group:SetWidth(200)
+        p.group:SetPoint("CENTER")
+        p.prompt = text(p.group, "caption", "ink-muted")
+        p.prompt:SetPoint("TOP")
+        p.field = textField(p.group, { width = 200, onTextChanged = function(value: string?)
+            if p.word then p.ok:SetEnabledState((value or ""):upper() == p.word) end
+            if p.input then p.ok:SetEnabledState(strtrim(value or "") ~= "") end
+        end })
+        p.field:SetPoint("BOTTOM")
+        p.field.edit:HookScript("OnEnterPressed", function(box)
+            if p.enterConfirms == false then box:SetFocus() return end
+            confirmIt()
+        end)
+        p.cancel = button(p, { text = "Cancel", width = 100, onClick = function() p:Hide() end })
+        p.cancel:SetPoint("RIGHT", p.ok, "LEFT", -8, 0)
+        p:HookScript("OnHide", function(self)
+            self.field.edit:ClearFocus() -- never keep the keyboard once gone
+            local fn = self.onCancel
+            self.onCancel, self.onConfirm = nil, nil
+            if fn then fn() end
+        end)
+        makeModal(p)
+        confirmPanel = p
+    end
+    local p = confirmPanel
+    p:SetTitle(opts.title or "Are you sure?")
+    p.text:SetValue(opts.text or "")
+    p.ok:SetLabel(opts.confirm or "OK")
+    p.cancel:SetLabel(opts.cancel or "Cancel")
+    -- 0.17: cancel = false, one button only (a message: why something can't be)
+    p.cancel:SetShown(opts.cancel ~= false)
+    p:Hide() -- an older question still open is cancelled first
+    p.onConfirm, p.onCancel = opts.onConfirm, opts.onCancel
+    p.enterConfirms = opts.enterConfirms
+    -- a word to type first, or something to enter (0.13: input = { label,
+    -- placeholder }: onConfirm gets the text; OK once there is some)
+    p.word = opts.typeToConfirm and opts.typeToConfirm:upper() or nil
+    p.input = opts.input
+    local field = p.word or p.input
+    p.group:SetShown(field and true or false)
+    p.group:SetHeight(T.type.caption.lineHeight + 6 + 30)
+    p.field:SetValue(p.input and p.input.value or "")
+    p.ok:SetEnabledState(not field or (p.input and (p.input.value or "") ~= "") or false)
+    if p.word then p.prompt:SetValue(("Type %q to confirm."):format(p.word))
+    elseif p.input then p.prompt:SetValue(p.input.label or "") end
+    if p.field.placeholder then p.field.placeholder:SetValue(p.input and p.input.placeholder or "") end
+    p:SetHeight(170 + (field and (p.group:GetHeight() + 12) or 0))
+    p:Show()
+    if field then p.field.edit:SetFocus() end
+    return p
+end
+
+--------------------------------------------------------------------------------
+-- SectionHeader: a label floating on the world, a gilt hairline fading out,
+-- and an optional meta caption. Give it a width.
+--------------------------------------------------------------------------------
+
+export interface SectionHeader extends Frame
+    label: Text
+    meta: Text
+    rule: Frame
+    function SetLabel(l: string?, m: string?)
+end
+
+export function sectionHeader(parent: Frame, label: string?, meta: string?, width: number?): SectionHeader
+    local f = CreateFrame("Frame", nil, parent) :: SectionHeader
+    f:SetSize(width or 380, T.type.header.lineHeight)
+    headers[f] = true
+    f.label = text(f, "header", "gilt-text")
+    f.label:SetShadowed(true)
+    f.label:SetPoint("LEFT")
+    f.meta = text(f, "caption", "ink-muted")
+    f.meta:SetShadowed(true)
+    f.meta:SetPoint("RIGHT")
+    f.rule = draw.hairline(f, "gilt-line", "out")
+    function f:SetLabel(l: string?, m: string?)
+        self.label:SetValue(l or "")
+        self.meta:SetValue(m or "")
+        self.rule:ClearAllPoints()
+        self.rule:SetPoint("LEFT", self.label, "RIGHT", S["space-4"], 0)
+        if m and m ~= "" then
+            self.rule:SetPoint("RIGHT", self.meta, "LEFT", -S["space-4"], 0)
+        else
+            self.rule:SetPoint("RIGHT", self, "RIGHT")
+        end
+    end
+    f:SetLabel(label, meta)
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- WindowFrame: the shell of every full window. A Panel with the jewel at the
+-- top left, title, optional key chip and close; a fixed size whose body
+-- scrolls with the mouse wheel when the content is taller; an optional footer
+-- row above a gilt-faint rule. Escape closes it (it needs a `name` for that).
+--
+--   windowFrame(parent, { name = "SuuUIGallery", title = "Gallery", meta = "…",
+--       keybind = "P", width = 780, height = 560, footer = true,
+--       tabs = { { key = "buy", label = "Merchant" }, … }, onTab = fn(key) })  -- 0.16
+--   window.content  the scrolling content frame; window.footer when asked for
+--   window:SetTab(key) (0.16): shows that tab as chosen and calls onTab
+--   a tab's `disabled` (true or a function) and `reason` (0.17): ink-faint
+--   at opacity-disabled, a cover takes its click, its tooltip says why;
+--   window:DrawTabs() after what it depends on changed
+--
+-- Tabs sit under the title as text tabs: header type in ink-muted, the
+-- chosen one gilt-text over a gilt hairline with its jewel.
+--------------------------------------------------------------------------------
+
+export type WindowTab = {
+    key: any,
+    label: string,
+    disabled?: boolean | (() -> any),
+    reason?: string,
+}
+
+export type WindowOptions = {
+    name?: string,
+    title?: string,
+    meta?: string,
+    keybind?: string,
+    onClose?: (panel: Panel) -> (),
+    width?: number,
+    height?: number,
+    footer?: boolean,
+    tabs?: WindowTab[],
+    onTab?: (key: any) -> (),
+}
+
+export interface WindowFrame extends Panel
+    -- the scrolling content frame
+    content: Frame
+    scroll: ScrollFrame
+    footer?: Frame
+    tabRow?: Frame
+    tabButtons?: Button[]
+    tabMarker?: TabMarker
+    tab: any
+    -- with tabs only (0.16)
+    function DrawTabs()
+    function SetTab(key: any)
+end
+
+export function windowFrame(parent: Frame, opts: WindowOptions): WindowFrame
+    local f = panel(parent, {
+        name = opts.name, title = opts.title, meta = opts.meta, keybind = opts.keybind,
+        closable = true, onClose = opts.onClose, ornament = true, solid = false,
+        width = opts.width, height = opts.height,
+    }) :: WindowFrame
+    f:SetFrameStrata("HIGH")
+    f:SetToplevel(true)
+    f:SetClampedToScreen(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetScript("OnShow", function(self) motion.enter(self, T.duration["dur-fast"]) end)
+
+    local TAB_H = 28
+    local tabs = opts.tabs
+    if tabs then
+        local tabRow = CreateFrame("Frame", nil, f)
+        f.tabRow = tabRow
+        tabRow:SetHeight(TAB_H)
+        local tabButtons: Button[] = {}
+        f.tabButtons = tabButtons
+        -- the chosen tab's underline and jewel, gliding (TabMarker)
+        local marker = tabMarker(tabRow)
+        f.tabMarker = marker
+        for _, t in ipairs(tabs) do
+            local b = CreateFrame("Button", nil, tabRow)
+            b.key = t.key
+            b.label = text(b, "header", "ink-muted")
+            b.label:SetPoint("CENTER", 0, 2)
+            b.label:SetValue(t.label)
+            b:SetHeight(TAB_H)
+            b.def = t
+            -- while disabled: a cover takes the click and says why
+            b.cover = CreateFrame("Frame", nil, b)
+            b.cover:SetAllPoints()
+            b.cover:SetFrameLevel(b:GetFrameLevel() + 5)
+            b.cover:EnableMouse(true)
+            b.cover:SetScript("OnEnter", function(c) showTooltip(c, { title = t.label, description = t.reason }) end)
+            b.cover:SetScript("OnLeave", function() hideTooltip() end)
+            b.cover:Hide()
+            b:SetScript("OnEnter", function(self) if f.tab ~= self.key then draw.paint(self.label, "ink") end end)
+            b:SetScript("OnLeave", function(self) if f.tab ~= self.key then draw.paint(self.label, "ink-muted") end end)
+            b:SetScript("OnClick", function(self) f:SetTab(self.key) end)
+            marker:Track(b)
+            tabButtons[#tabButtons + 1] = b
+        end
+        local function off(b: any): boolean
+            local d = b.def.disabled
+            if type(d) == "function" then return d() and true or false end
+            return d and true or false
+        end
+        function f:DrawTabs()
+            local chosen: Button? = nil
+            for _, b in ipairs(tabButtons) do
+                local dis = off(b)
+                local on = not dis and b.key == self.tab
+                draw.paint(b.label, dis and "ink-faint" or on and "gilt-text" or "ink-muted")
+                b.label:SetAlpha(dis and T.opacity["opacity-disabled"] or 1)
+                b.cover:SetShown(dis)
+                if on then chosen = b end
+            end
+            marker:SetChosen(chosen)
+        end
+        function f:SetTab(key: any)
+            self.tab = key
+            self:DrawTabs()
+            if opts.onTab then opts.onTab(key) end
+        end
+    end
+
+    local bottom = 0
+    if opts.footer then
+        local footH = 30 + S["space-4"] * 2
+        local footer = CreateFrame("Frame", nil, f)
+        f.footer = footer
+        footer:SetPoint("BOTTOMLEFT", S["space-5"], 0)
+        footer:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
+        footer:SetHeight(footH)
+        local rule = draw.hairline(f, "gilt-faint")
+        rule:SetPoint("BOTTOMLEFT", 0, footH)
+        rule:SetPoint("BOTTOMRIGHT", 0, footH)
+        -- the content ends space-4 above the footer's rule
+        bottom = footH - S["space-5"] + S["space-4"]
+    end
+
+    -- The tabs under the head, the body under them: at build, and again
+    -- when a theme changes the header style (Panel:PlaceHead).
+    function f:PlaceBody()
+        local top = self:BodyTop()
+        local tabRow = self.tabRow
+        if tabRow then
+            tabRow:SetPoint("TOPLEFT", S["space-5"], -top)
+            tabRow:SetPoint("TOPRIGHT", -S["space-5"], -top)
+            local x = 0
+            for _, b in ipairs(self.tabButtons :: Button[]) do
+                local w = measureText("header", b.def.label) + 2 * S["space-4"]
+                b:SetWidth(w)
+                b:SetPoint("LEFT", x, 0)
+                b.markLeft, b.markWidth = x, w
+                x = x + w + S["space-2"]
+            end
+            (self.tabMarker :: TabMarker):Aim()
+            top = top + TAB_H + S["space-4"]
+        end
+        self.body:SetPoint("TOPLEFT", S["space-5"], -top)
+    end
+
+    -- The body becomes a scroll frame; content goes into window.content.
+    f.body:ClearAllPoints()
+    f.body:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"] + bottom)
+    f:PlaceBody()
+    f.body:SetScript("OnSizeChanged", nil)
+    local scroll = CreateFrame("ScrollFrame", nil, f.body)
+    scroll:SetAllPoints()
+    f.content = CreateFrame("Frame", nil, scroll)
+    f.content:SetSize(1, 1)
+    scroll:SetScrollChild(f.content)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        local max = math.max(0, f.content:GetHeight() - self:GetHeight())
+        self:SetVerticalScroll(math.min(max, math.max(0, self:GetVerticalScroll() - delta * 40)))
+    end)
+    scroll:SetScript("OnSizeChanged", function(self, w) f.content:SetWidth(w) end)
+    f.scroll = scroll
+
+    if opts.name then tinsert(UISpecialFrames, opts.name) end
+    extend.add("window", f, { name = opts and opts.name })
+    return f
+end
