@@ -1142,7 +1142,13 @@ function M:CheckReset()
     end
     if not self:Editable() then return end
     local configID = call(C_ClassTalents.GetActiveConfigID)
-    local data = plain(configID) and configID and self:Collect(configID)
+    if not plain(configID) or not configID then return end
+    -- points Use build planned before the reset: dropped once the trainer
+    -- offered it (the whole build is planned after it anyway)
+    if self.wipeAt and GetTime() - self.wipeAt < 120 and call(C_Traits.ConfigHasStagedChanges, configID) == true then
+        call(C_Traits.RollbackConfig, configID)
+    end
+    local data = self:Collect(configID)
     if not data or data.staged then return end
     for _, t in ipairs(data.trees) do
         for _, n in ipairs(t.nodes) do if n.rank > 0 then return end end
@@ -1764,6 +1770,7 @@ function M:OnEnable()
     })
     -- a trainer's reset offered: what it costs, on the reset notice
     self:OnGameEvent("CONFIRM_TALENT_WIPE", function(_, cost)
+        self.wipeAt = GetTime()
         local mine = store().reset[charKey()]
         local _, group = self:SpecGroups()
         local b = mine and mine[group] and store().builds[mine[group]]
