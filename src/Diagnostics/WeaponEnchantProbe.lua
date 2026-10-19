@@ -369,6 +369,26 @@ local function secure()
     o.secure = r
     if not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") end
     r.before = snapshot("before the click")
+    -- what the container reads an enchant with (nothing: it never shows one)
+    local PD = C_PaperDollInfo or {}
+    r.tempInfo = {}
+    for _, inv in ipairs({ 16, 17, 18 }) do
+        if type(PD.GetTemporaryEnchantmentInfo) ~= "function" then r.tempInfo[inv] = "missing" break end
+        local res = { pcall(PD.GetTemporaryEnchantmentInfo, inv) }
+        local parts = {}
+        for i = 2, math.max(2, #res) do
+            local v = res[i]
+            if type(v) == "table" and not isSecret(v) then
+                local kv = {}
+                for k, x in pairs(v) do kv[#kv + 1] = ("%s=%s"):format(tostring(k), show(x)) end
+                table.sort(kv)
+                parts[#parts + 1] = "{" .. table.concat(kv, ", ") .. "}"
+            else
+                parts[#parts + 1] = show(v)
+            end
+        end
+        r.tempInfo[inv] = (res[1] and "" or "error: ") .. table.concat(parts, " | ")
+    end
     local function try(key, fn, ...)
         if type(fn) ~= "function" then r[key] = "missing" return end
         local ok, err = pcall(fn, ...)
