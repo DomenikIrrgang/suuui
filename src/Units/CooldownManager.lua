@@ -121,6 +121,28 @@ M:Migrate("missing-per-entry", function(values)
     apply(values.lists)
 end)
 
+-- The shaman presets' Shields slot had a fixed icon, so Restoration's
+-- reminder showed Water Shield before it was learned. It picks the first
+-- member you know now, the spec's shield leading: a saved copy of it follows
+-- (one with the two shields, Water Shield's art fixed: Water Shield first).
+M:Migrate("shaman-shields-auto", function(values)
+    local function fix(list)
+        for _, e in ipairs(type(list) == "table" and list or {}) do
+            if type(e) == "table" and e.collection then fix(e.entries) end
+            local m = type(e) == "table" and e.group and e.fixedIcon and e.name == "Shields" and e.members
+            if type(m) == "table" and #m == 2 and m[1].name == "Lightning Shield" and m[2].name == "Water Shield" then
+                e.fixedIcon = nil
+                if e.icon == m[2].icon then m[1], m[2] = m[2], m[1] end
+            end
+        end
+    end
+    local specs = type(values.setups) == "table" and values.setups.SHAMAN
+    if type(specs) ~= "table" then return end
+    for _, s in pairs(specs) do
+        if type(s) == "table" and type(s.lists) == "table" then fix(s.lists.buffs) end
+    end
+end)
+
 local LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
 local isSecret = issecretvalue or function() return false end
 local _, CLASS = UnitClass("player")

@@ -30,10 +30,14 @@
 --   anyway). No Fire slot: Searing and Magma put no aura on you, and
 --   Windfury Weapon voids Flametongue Totem's.
 
--- one elemental shield at a time (Water Shield is a Restoration talent)
+-- one elemental shield at a time (Water Shield is a Restoration talent). No
+-- fixed icon: the reminder shows the first member you know, so the spec's
+-- shield leads and Lightning Shield stands in until Water Shield is learned
 local S = dofile("tools/presets/shared.lua")
-local function shields(icon) return { group = "Shields", source = "mine", max = 1, icon = icon, missing = "remind",
-    members = { "Lightning Shield", "Water Shield" } } end
+local function shields(first)
+    local members = first == "Water Shield" and { "Water Shield", "Lightning Shield" } or { "Lightning Shield", "Water Shield" }
+    return { group = "Shields", source = "mine", max = 1, missing = "remind", members = members }
+end
 -- the buffs totems put on you, per element (any shaman's totem counts)
 local function element(group, icon, members) return { group = group, source = "any", max = 1, icon = icon,
     missing = "hide", members = members } end
