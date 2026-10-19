@@ -476,7 +476,8 @@ function M:DrawCard(mode)
     if mode == "mount" then
         card.head:SetValue("Mount")
         local id
-        local kind, opts = link and LinkUtil.ExtractLink(link)
+        local kind, opts
+        if link then kind, opts = LinkUtil.ExtractLink(link) end
         local linkID = opts and tonumber((LinkUtil.SplitLinkOptions(opts)))
         if kind == "item" then id = call(C_MountJournal.GetMountFromItem, linkID)
         elseif kind == "spell" or kind == "mount" then id = call(C_MountJournal.GetMountFromSpell, linkID) end

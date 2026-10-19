@@ -1289,8 +1289,9 @@ function M:FlightRoute(fl)
     if x0 and y0 and x1 and y1 and x2 and y2 then
         local view = { map = continent, pos = positions(continent),
                        w = span({ x0, y0 }, { x1, y1 }), h = span({ x0, y0 }, { x2, y2 }) }
-        local points, stops = view.w > 0 and view.h > 0 and self:Way(fl.path, view)
-        if points and #points >= 2 then
+        local points, stops
+        if view.w > 0 and view.h > 0 then points, stops = self:Way(fl.path, view) end
+        if points and stops and #points >= 2 then
             local run = { 0 }
             for k = 2, #points do run[k] = run[k - 1] + span(points[k - 1], points[k]) end
             local total = run[#points]

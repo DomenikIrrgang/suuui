@@ -286,7 +286,8 @@ local function classFileOf(classID)
     if not classID then return nil end
     local info = C_CreatureInfo and C_CreatureInfo.GetClassInfo and C_CreatureInfo.GetClassInfo(classID)
     if info and info.classFile then return info.classFile end
-    local _, file = GetClassInfo and GetClassInfo(classID)
+    if not GetClassInfo then return nil end
+    local _, file = GetClassInfo(classID)
     return file
 end
 
