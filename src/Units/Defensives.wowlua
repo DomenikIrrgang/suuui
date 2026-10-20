@@ -21,8 +21,11 @@ local M = SuuUI.RegisterModule({
     description = "Which buffs count as defensives on party and raid frames, and which make a frame Warded.",
     api = "0.16",
     defaults = {
-        -- false: SuuUI's list; else { { name, kind, ward, on, ids, note, custom } … }
-        list = false,
+        -- { entries = { { name, kind, ward, on, ids, note, custom } … } } once
+        -- the profile has its own; without entries, SuuUI's list. (It was
+        -- false or the entries themselves: Settings keeps a value of its
+        -- default's type, so no change could be saved.)
+        list = {},
     },
 })
 
@@ -36,8 +39,8 @@ local function copy(t: any): any
 end
 
 function M:List()
-    local list = self:Get("list")
-    if type(list) == "table" then return list end
+    local own = self:Get("list").entries
+    if type(own) == "table" then return own end
     local out = {}
     for _, d in ipairs(SuuUI.Defensives()) do
         out[#out + 1] = { name = d.name, kind = d.kind, ward = d.ward, on = true, ids = copy(d.ids), note = d.note }
@@ -45,12 +48,12 @@ function M:List()
     return out
 end
 
-function M:IsDefault() return type(self:Get("list")) ~= "table" end
+function M:IsDefault() return type(self:Get("list").entries) ~= "table" end
 
 local function mutate(fn: (list: any[]) -> ())
     local list = copy(M:List())
     fn(list)
-    M:Set("list", list)
+    M:Set("list", { entries = list })
 end
 
 -- The spell IDs by what they drive, from the entries switched on.
@@ -200,7 +203,7 @@ local function buildEditor(parent: Frame)
             end
         end })
     f.reset = UI.Button(f, { text = "Reset to SuuUI's list", icon = "reset", tooltip = { title = "Reset to SuuUI's list", description = "Your changes go; SuuUI's list comes back (new spells SuuUI adds later come with it)." },
-        onClick = function() M:Set("list", false) end })
+        onClick = function() M:Reset("list") end })
 
     function f:Refresh()
         for _, r in ipairs(self.rows) do r:Hide() end

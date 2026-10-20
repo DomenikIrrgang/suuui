@@ -1,0 +1,202 @@
+-- Units/Defensives: which buffs count as defensives on group frames. SuuUI's
+-- list or the profile's own, what it hands the group frames (by kind, the
+-- Warded ones, only those switched on), the editor (two wells by kind, a
+-- row's switch, kind, Warded and remove, "+ Add" by name or spell ID,
+-- Reset), the preview (a made-up party and raid as the list draws them),
+-- turning the module off and on.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as settings from "/Core/Settings"
+import * as registry from "/SettingsUI/Registry"
+import expectNoErrors, newParent from "../../helpers"
+
+local M: any = assert(SuuUI.GetModule("defensives"))
+local UI: any = SuuUI.UI
+
+@afterEach
+local function cleanup()
+    M:Reset("list")
+    expectNoErrors()
+end
+
+local function section(): registry.Section
+    return registry.get("defensives") :: registry.Section
+end
+
+local function editor(): any
+    local rows = ((section().groups or {})[1]).rows
+    return rows[1].build(newParent(600, 600))
+end
+
+-- The entry with this name in the list as it is now.
+local function entry(name: string): any
+    for _, e in ipairs(M:List()) do if e.name == name then return e end end
+    return nil
+end
+
+-- The editor's shown row for an entry.
+local function rowFor(f: any, name: string): any
+    for _, r in ipairs(f.rows) do
+        if r:IsShown() and r.name:GetText() == name then return r end
+    end
+    error("no row " .. name)
+end
+
+local function has(list: number[], id: number): boolean
+    for _, x in ipairs(list) do if x == id then return true end end
+    return false
+end
+
+--------------------------------------------------------------------------------
+-- The list and what the group frames get
+--------------------------------------------------------------------------------
+
+@test("SuuUI's list until the profile has its own: every entry on, its spell IDs copied")
+local function defaults()
+    expect(M:IsDefault()).toBe(true)
+    local list = M:List()
+    expect(#list).toBe(#SuuUI.Defensives())
+    expect(entry("Shield Wall").on).toBe(true)
+    list[1].ids[1] = -1                            -- a copy: SuuUI's own stays
+    expect(M:List()[1].ids[1] ~= -1).toBe(true)
+end
+
+@test("the group frames get the IDs by kind, the Warded ones, and only entries switched on")
+local function published()
+    local d = UI.GroupDefensives()
+    expect(has(d.external, 1022)).toBe(true)       -- Blessing of Protection
+    expect(has(d.defensive, 871)).toBe(true)       -- Shield Wall
+    expect(has(d.warded, 871)).toBe(true)
+    expect(has(d.warded, 17)).toBe(false)          -- Power Word: Shield isn't Warded
+    expect(has(d.all, 17)).toBe(true)
+    local list = M:List()
+    for _, e in ipairs(list) do if e.name == "Shield Wall" then e.on = false end end
+    M:Set("list", { entries = list })
+    expect(M:IsDefault()).toBe(false)
+    expect(has(UI.GroupDefensives().defensive, 871)).toBe(false)
+end
+
+@test("turned off, the group frames show none; on again, the list")
+local function offOn()
+    settings.set("defensives", "enabled", false)
+    expect(#UI.GroupDefensives().all).toBe(0)
+    settings.set("defensives", "enabled", true)
+    expect(has(UI.GroupDefensives().all, 871)).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The editor
+--------------------------------------------------------------------------------
+
+@test("the editor: Externals, then Defensives, each counted, each row's name, note and switches")
+local function wells()
+    local f = editor()
+    local ext, def = f.groups[1], f.groups[2]
+    local nExt, nDef = 0, 0
+    for _, e in ipairs(M:List()) do
+        if e.kind == "external" then nExt = nExt + 1 else nDef = nDef + 1 end
+    end
+    expect(ext.count:GetText()).toBe(tostring(nExt))
+    expect(def.count:GetText()).toBe(tostring(nDef))
+    expect(ext.empty).never.toBeShown()
+    local r = rowFor(f, "Shield Wall")
+    expect(r.note:GetText()).toBe("Warrior")
+    expect(r.kind.value).toBe("defensive")
+    expect(r.ward.value).toBe(true)
+    expect(r.toggle.value).toBe(true)
+    expect(f.reset:IsEnabled()).toBe(false)        -- SuuUI's list: nothing to reset
+end
+
+@test("a row's switch, kind, Warded and remove change the profile's list")
+local function rowControls()
+    local f = editor()
+    mock.click(rowFor(f, "Shield Wall").toggle)
+    expect(entry("Shield Wall").on).toBe(false)
+    local r = rowFor(f, "Shield Wall")
+    expect(r.icon:GetAlpha() < 1).toBe(true)
+    mock.hover(r.ward)
+    expect(GameTooltip).toBeShown()
+    mock.hover(nil)
+    expect(GameTooltip).never.toBeShown()
+    mock.click(rowFor(f, "Shield Wall").ward)
+    expect(entry("Shield Wall").ward).toBe(false)
+    for _, b in ipairs(rowFor(f, "Shield Wall").kind.buttons) do
+        if b.option.value == "external" then mock.click(b) end
+    end
+    expect(entry("Shield Wall").kind).toBe("external")
+    expect(f.reset:IsEnabled()).toBe(true)
+    local before = #M:List()
+    mock.click(rowFor(f, "Shield Wall").remove)
+    expect(#M:List()).toBe(before - 1)
+    expect(entry("Shield Wall")).toBe(nil)
+    mock.click(f.reset)
+    expect(M:IsDefault()).toBe(true)
+end
+
+@test("a well without entries says how to fill it")
+local function emptyWell()
+    local list = M:List()
+    for _, e in ipairs(list) do e.kind = "defensive" end
+    M:Set("list", { entries = list })
+    local f = editor()
+    expect(f.groups[1].count:GetText()).toBe("0")
+    expect(f.groups[1].empty).toBeShown()
+end
+
+@test("+ Add: an aura SuuUI knows by name, or any spell by its ID; added as yours")
+local function adding()
+    local f = editor()
+    local catalog = SuuUI.AuraCatalog()
+    local name: string? = nil
+    for n in pairs(catalog) do
+        if not entry(n) then name = n; break end
+    end
+    assert(name, "every aura is listed already")
+    f.add.onChange(name)
+    local e = entry(name :: string)
+    expect(e.kind).toBe("defensive")
+    expect(e.custom).toBe(true)
+    expect(rowFor(f, name :: string).note:GetText()).toBe("Added by you")
+    -- by ID: the lookup finds it, adding takes exactly that ID
+    local found = f.add.lookup("  133 ")
+    expect(found[1].value).toBe("id:133")
+    f.add.onChange("id:133")
+    expect(entry(C_Spell.GetSpellName(133) :: string).ids).toEqual({ 133 })
+    expect(f.add.lookup("fire")).toBe(nil)
+    expect(f.add.lookup("999999999")).toBe(nil)
+    local n = #M:List()
+    f.add.onChange(nil)
+    f.add.onChange("Not a known aura")
+    expect(#M:List()).toBe(n)
+    f:Hide()
+    f:Show()
+end
+
+--------------------------------------------------------------------------------
+-- The preview
+--------------------------------------------------------------------------------
+
+@test("the preview: a party and a raid of made-up players, their defensives as the list makes them")
+local function preview()
+    local view = (section().preview :: (parent: any) -> any)(newParent(400, 400))
+    expect(view:GetWidth() > 100).toBe(true)
+    local tank = M.previewParty[2]                 -- Shield Wall and Power Word: Shield
+    expect(tank.icons[1]).toBeShown()
+    expect(tank.wardDeco).toBeShown()               -- Shield Wall is Warded
+    local raidTank = M.previewRaid[2]
+    expect(raidTank.icons[2]).never.toBeShown()    -- a raid frame shows one of each
+    -- nothing listed: no icons, no ward
+    local list = M:List()
+    for _, e in ipairs(list) do e.on = false end
+    M:Set("list", { entries = list })
+    expect(tank.icons[1]).never.toBeShown()
+    expect(tank.wardDeco).never.toBeShown()
+    -- debuffs show anyway, with their type
+    expect(M.previewParty[5].icons[1]).toBeShown()
+    -- shown again: drawn again
+    view:Hide()
+    view:Show()
+    M:PreviewView(newParent(300, 300))
+end
