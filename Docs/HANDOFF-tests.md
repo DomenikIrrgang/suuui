@@ -47,7 +47,8 @@ release build of `wowlua-port` at d5345f5.
   user's PC). Agents run tests one file at a time with `-j 2`.
 - **Paused by the user:** no new agents until the user says so. Ask before
   resuming the queue.
-- When all tests are done: **write `Docs/wowlua-test-findings.md`**, one
+- **`Docs/wowlua-test-findings.md`** (written after the first 7 areas; keep
+  it up to date): one
   report with every wowlua finding from running the tests (VM suspicions,
   test runner/mock issues, compiler issues; repros), deduplicated, not
   repeating `Docs/wowlua-0.9.1-report.md` (reference it). Sources:
@@ -105,7 +106,9 @@ Then:
    then `wowlua test -j 2 --coverage` for the totals and set
    `test.coverage.lines` (and branches) in `wowlua.json` to what's reached.
 2. Grep the tests for `--!nocheck`, `--!basic`, `@nocheck`; review `:: any`.
-3. Write `Docs/wowlua-test-findings.md` (see above).
+3. Bring `Docs/wowlua-test-findings.md` up to date: it was written after
+   the first 7 areas; add the new findings of the remaining areas (from
+   their `Docs/test-notes/*.md`) in the same format, keeping the ids.
 4. Update `CLAUDE.md` (tests now exist: `wowlua test`, layout, strict tests).
 5. Commit, push `wowlua-tests`. Don't merge or push to `main` unless the
    user asks.
@@ -138,5 +141,5 @@ Then:
   fix (ui-windows).
 - The skipped bug in DamageMeter (secret `combatSources`), and the `plain(v)`
   nil-vs-secret order question (needs a probe in game).
-- wowlua issues to report: `Docs/wowlua-0.9.1-report.md` (done) and
-  `Docs/wowlua-test-findings.md` (to write).
+- wowlua issues to report: `Docs/wowlua-0.9.1-report.md` (the port) and
+  `Docs/wowlua-test-findings.md` (the tests; first 7 areas).
