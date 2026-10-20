@@ -1,0 +1,314 @@
+-- UI/SettingRow: a setting's row (label, description, control inline or
+-- stacked, the modified dot and reset arrow, disabled with its reason, the
+-- next-frame relayout) and SettingsGroup (title, meta, description, rows).
+
+import test, expect, afterEach, beforeAll, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as tooltip from "/UI/Tooltip"
+import settingRow, settingsGroup, SettingRow, SettingsGroup, SettingRowOptions, SettingsGroupOptions from "/UI/SettingRow"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf from "./PrimitivesHelpers"
+
+local S = T.space
+local parent: Frame? = nil
+local shown = mock.spy(function(_owner: any, _data: any) end)
+local hidden = mock.spy(function() end)
+
+@beforeAll
+local function fakeTooltips()
+    mock.module(tooltip, { showTooltip = shown, hideTooltip = hidden })
+end
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(700, 400)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function row(opts: SettingRowOptions): SettingRow
+    local r = settingRow(parent :: Frame, opts)
+    r:SetPoint("TOPLEFT")
+    return r
+end
+
+-- a control: a frame with SetDisabled
+interface FakeControl extends Frame
+    disabledNow?: boolean
+    function SetDisabled(d: boolean)
+end
+
+local function control(w: number, h: number): FakeControl
+    local c: FakeControl = CreateFrame("Frame", nil, UIParent) :: any
+    c:SetSize(w, h)
+    function c:SetDisabled(d: boolean) self.disabledNow = d end
+    return c
+end
+
+--------------------------------------------------------------------------------
+-- SettingRow
+--------------------------------------------------------------------------------
+
+@test("a row: its label, no description, no reset or dot, the label's height")
+local function rowBuild()
+    local r = row({ label = "Scale" })
+    expect(r:GetWidth()).toBeCloseTo(600, 3)
+    expect(r.label).toHaveText("Scale")
+    expect(tokenOf(r.label)).toBe("ink")
+    expect(r.desc).never.toBeShown()
+    expect(r.why).never.toBeShown()
+    expect(r.dot).never.toBeShown()
+    expect(r.modified).toBe(false)
+    expect(r.reset:GetAlpha()).toBe(0)
+    expect(r.reset:IsMouseEnabled()).toBe(false)
+    expect(r:GetHeight()).toBeCloseTo(r.label:GetStringHeight() + S["space-4"] * 2, 3)
+    expect(r.rule).toBeAnchoredTo(r, "TOPLEFT", "TOPLEFT")
+    local bare = row({})
+    expect(bare.label).toHaveText("")
+end
+
+@test("an inline control sits right of the text, the row as tall as the taller")
+local function inlineControl()
+    local c = control(34, 60)
+    local r = row({ label = "On", control = c, width = 500 })
+    expect(r.control).toBe(c)
+    expect(c:GetParent()).toBe(r)
+    expect(r:GetWidth()).toBeCloseTo(500, 3)
+    expect(pointOf(c)).toEqual({ point = "RIGHT", relativeTo = r, relativePoint = "RIGHT", x = -(24 + S["space-5"]), y = 0 })
+    expect(r:GetHeight()).toBeCloseTo(60 + S["space-4"] * 2, 3)
+    local labelY = (pointOf(r.label) :: any).y
+    expect(labelY).toBe(-(r:GetHeight() - r.label:GetStringHeight()) / 2)
+end
+
+@test("a stacked control sits under the text")
+local function stackedControl()
+    local c = control(200, 30)
+    local r = row({ label = "Name", description = "What it shows", control = c, stacked = true })
+    local textH = r.label:GetStringHeight() + 1 + r.desc:GetStringHeight()
+    expect(r.desc.fixedWidth).toBe(600 - 24 - S["space-5"])
+    expect(pointOf(c)).toEqual({ point = "TOPLEFT", relativeTo = r, relativePoint = "TOPLEFT", x = 0, y = -(S["space-4"] + textH + S["space-3"]) })
+    expect(r:GetHeight()).toBeCloseTo(S["space-4"] + textH + S["space-3"] + 30 + S["space-4"], 3)
+    expect((pointOf(r.label) :: any).y).toBe(-S["space-4"])
+    local alone = row({ label = "Alone", stacked = true })
+    expect(alone:GetHeight()).toBeCloseTo(S["space-4"] + alone.label:GetStringHeight() + S["space-4"], 3)
+end
+
+@test("a description wraps beside an inline control")
+local function description()
+    local c = control(100, 20)
+    local r = row({ label = "L", description = "Some words", control = c })
+    expect(r.desc).toBeShown()
+    expect(r.desc).toHaveText("Some words")
+    expect(r.desc.fixedWidth).toBe(600 - 24 - S["space-5"] - (100 + S["space-5"]))
+    expect(r.desc).toBeAnchoredTo(r.label, "TOPLEFT", "BOTTOMLEFT")
+end
+
+@test("SetDescription shows, changes or drops it, and lays out again")
+local function setDescription()
+    local r = row({ label = "L" })
+    local h = r:GetHeight()
+    r:SetDescription("New words")
+    expect(r.desc).toBeShown()
+    expect(r.descValue).toBe("New words")
+    expect(r:GetHeight()).toBeCloseTo(h + 1 + r.desc:GetStringHeight(), 3)
+    local arrange = mock.stub(r, "Arrange")
+    r:SetDescription("New words") -- the same: nothing
+    expect(arrange).never.toHaveBeenCalled()
+    r:SetDescription("")
+    expect(r.desc).never.toBeShown()
+    r:SetDescription(nil)
+    expect(r.desc).never.toBeShown()
+end
+
+@test("modified: the dot before the label, the reset arrow live")
+local function modified()
+    local r = row({ label = "L" })
+    r:SetModified(1)
+    expect(r.modified).toBe(true)
+    expect(r.dot).toBeShown()
+    expect(r.reset:GetAlpha()).toBe(1)
+    expect(r.reset:IsMouseEnabled()).toBe(true)
+    expect((pointOf(r.label) :: any).x).toBe(5 + S["space-3"])
+    expect(tokenOf(r.dot)).toBe("ink")
+    r:SetModified(nil)
+    expect(r.dot).never.toBeShown()
+    expect(r.reset:GetAlpha()).toBe(0)
+    expect((pointOf(r.label) :: any).x).toBe(0)
+end
+
+@test("disabled: ink-muted label, the control dimmed, the lock and reason")
+local function disabled()
+    local c = control(34, 18)
+    local r = row({ label = "L", control = c })
+    r:SetModified(true)
+    r:SetDisabled(true, "Turn on the bars first")
+    expect(r.disabled).toBe(true)
+    expect(tokenOf(r.label)).toBe("ink-muted")
+    expect(c.disabledNow).toBe(true)
+    expect(r.why).toBeShown()
+    expect(r.whyText).toHaveText("Turn on the bars first")
+    expect(r.whyText:GetWidth()).toBeCloseTo(600 - 24 - S["space-5"] - (34 + S["space-5"]) - 15, 3)
+    -- modified, but nothing to reset while disabled
+    expect(r.dot).never.toBeShown()
+    expect(r.reset:GetAlpha()).toBe(0)
+    expect(r.why).toBeAnchoredTo(r.label, "TOPLEFT", "BOTTOMLEFT")
+    r:SetDisabled(false)
+    expect(c.disabledNow).toBe(false)
+    expect(r.why).never.toBeShown()
+    expect(tokenOf(r.label)).toBe("ink")
+    expect(r.reset:GetAlpha()).toBe(1)
+end
+
+@test("disabled without a reason shows no lock; a control without SetDisabled is left alone")
+local function disabledPlain()
+    local c = CreateFrame("Frame", nil, UIParent)
+    c:SetSize(10, 10)
+    local r = row({ label = "L", description = "D", control = c })
+    r:SetDisabled(true)
+    expect(r.why).never.toBeShown()
+    r:SetDisabled(true, "why")
+    expect(r.why).toBeAnchoredTo(r.desc, "TOPLEFT", "BOTTOMLEFT")
+    local h = r.label:GetStringHeight() + 1 + r.desc:GetStringHeight() + 2 + math.max(11, r.whyText:GetStringHeight())
+    expect(r:GetHeight()).toBeCloseTo(math.max(h, 10) + S["space-4"] * 2, 3)
+end
+
+@test("a row without a control can be disabled")
+local function disabledNoControl()
+    local r = row({ label = "L" })
+    r:SetDisabled(true, "why")
+    expect(r.why).toBeShown()
+    expect(r.control).toBeNil()
+end
+
+@test("the reset arrow: its edge and tooltip on hover, onReset on a click")
+local function reset()
+    local s = mock.spy(function() end)
+    local r = row({ label = "L", onReset = s })
+    r:SetModified(true)
+    mock.hover(r.reset)
+    expect(r.reset.edge.top).toBeShown()
+    expect(tokenOf(r.reset.icon)).toBe("ink")
+    expect(shown).toHaveBeenCalledWith(r.reset, { title = "Reset to default" })
+    mock.hover(nil)
+    expect(r.reset.edge.top).never.toBeShown()
+    expect(tokenOf(r.reset.icon)).toBe("ink-muted")
+    expect(hidden).toHaveBeenCalled()
+    mock.click(r.reset)
+    expect(s).toHaveBeenCalledTimes(1)
+    local quiet = row({ label = "Q" })
+    quiet:SetModified(true)
+    mock.click(quiet.reset)
+end
+
+@test("Relayout arranges now and once more on the next frame")
+local function relayout()
+    local r = row({ label = "L" })
+    mock.advanceFrames(1)
+    local arrange = mock.stub(r, "Arrange")
+    r:Relayout()
+    r:Relayout()
+    expect(arrange).toHaveBeenCalledTimes(2)
+    expect(r.relayoutQueued).toBe(true)
+    mock.advanceFrames(1)
+    expect(arrange).toHaveBeenCalledTimes(3)
+    expect(r.relayoutQueued).toBe(false)
+end
+
+@test("a new width, or a control's new size, lays the row out again")
+local function resizes()
+    local c = control(34, 18)
+    local r = row({ label = "L", control = c })
+    mock.advanceFrames(1)
+    local arrange = mock.stub(r, "Arrange")
+    r:SetWidth(400) -- OnSizeChanged comes with the next frame
+    mock.advanceFrames(1)
+    expect(arrange).toHaveBeenCalled()
+    mock.advanceFrames(1)
+    arrange = mock.stub(r, "Arrange")
+    -- the same width again: nothing
+    mock.script(r, "OnSizeChanged", 400, r:GetHeight())
+    expect(arrange).never.toHaveBeenCalled()
+    c:SetHeight(40)
+    mock.advanceFrames(1)
+    expect(arrange).toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- SettingsGroup
+--------------------------------------------------------------------------------
+
+local function group(opts: SettingsGroupOptions): SettingsGroup
+    local g = settingsGroup(parent :: Frame, opts)
+    g:SetPoint("TOPLEFT")
+    return g
+end
+
+@test("a group: its title and meta, its rows under them")
+local function groupBuild()
+    local g = group({ title = "Bars", meta = "2 changed" })
+    expect(g:GetWidth()).toBeCloseTo(600, 3)
+    expect(g.title).toHaveText("Bars")
+    expect(tokenOf(g.title)).toBe("gilt-text")
+    expect(g.meta).toHaveText("2 changed")
+    expect(g.desc).never.toBeShown()
+    expect(g.rows:GetWidth()).toBeCloseTo(600, 3)
+    local headH = g.title:GetStringHeight()
+    expect((pointOf(g.rows) :: any).y).toBe(-(headH + S["space-4"]))
+    expect(g:GetHeight()).toBeCloseTo(headH + S["space-4"] + g.rows:GetHeight(), 3)
+    local bare = group({})
+    expect(bare.title).toHaveText("")
+    expect(bare.meta).toHaveText("")
+end
+
+@test("a description goes under the title")
+local function groupDescription()
+    local g = group({ title = "T", description = "About these", width = 400 })
+    expect(g.desc).toBeShown()
+    expect(g.desc.fixedWidth).toBe(400)
+    local headH = g.title:GetStringHeight() + S["space-1"] + g.desc:GetStringHeight()
+    expect((pointOf(g.rows) :: any).y).toBe(-(headH + S["space-4"]))
+end
+
+@test("AddRow sizes a row to the group and stacks it; the group grows")
+local function addRow()
+    local g = group({ title = "T", width = 500 })
+    local a = settingRow(g.rows, { label = "A" })
+    local b = settingRow(g.rows, { label = "B" })
+    expect(g:AddRow(a)).toBe(a)
+    g:AddRow(b)
+    expect(a:GetWidth()).toBeCloseTo(500, 3)
+    mock.advanceFrames(2)
+    expect(g.rows:GetHeight()).toBeCloseTo(a:GetHeight() + b:GetHeight(), 3)
+    expect(g:GetHeight()).toBeCloseTo(g.title:GetStringHeight() + S["space-4"] + g.rows:GetHeight(), 3)
+    expect(b).toBeAnchoredTo(g.rows, "TOPLEFT", "TOPLEFT")
+end
+
+@test("SetMeta changes or clears the meta")
+local function setMeta()
+    local g = group({ meta = "x" })
+    g:SetMeta("3 changed")
+    expect(g.meta).toHaveText("3 changed")
+    g:SetMeta(nil)
+    expect(g.meta).toHaveText("")
+end
+
+@test("a group's Relayout arranges now and on the next frame")
+local function groupRelayout()
+    local g = group({ title = "T" })
+    mock.advanceFrames(1)
+    local arrange = mock.stub(g, "Arrange")
+    g:Relayout()
+    g:Relayout()
+    expect(arrange).toHaveBeenCalledTimes(2)
+    mock.advanceFrames(1)
+    expect(arrange).toHaveBeenCalledTimes(3)
+    expect(g.relayoutQueued).toBe(false)
+end

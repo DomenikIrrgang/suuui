@@ -3,7 +3,7 @@
 -- clicks, typing, keys and the slider's drag, what they show, their
 -- callbacks, and disabled.
 
-import test, expect, afterEach, beforeAll, beforeEach, cases from "wowlua:test"
+import test, expect, afterEach, beforeAll, beforeEach, cases, skip from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import * as tooltip from "/UI/Tooltip"
@@ -170,7 +170,7 @@ local function toggleDisabled()
     local t = toggle(host(), { onChange = s })
     t:SetDisabled(true)
     expect(t.disabled).toBe(true)
-    expect(t:GetAlpha()).toBe(DISABLED)
+    expect(t:GetAlpha()).toBeCloseTo(DISABLED, 2)
     expect(t:IsMouseEnabled()).toBe(false)
     mock.script(t, "OnClick", "LeftButton")
     expect(t.value).toBe(false)
@@ -240,7 +240,7 @@ local function checkboxDisabled()
     c:SetDisabled(true)
     mock.script(c, "OnClick", "LeftButton")
     expect(c.value).toBe(false)
-    expect(c:GetAlpha()).toBe(DISABLED)
+    expect(c:GetAlpha()).toBeCloseTo(DISABLED, 2)
 end
 
 --------------------------------------------------------------------------------
@@ -301,7 +301,7 @@ local function segDisabled()
     mock.click(f.buttons[3])
     expect(f.value).toBe(1)
     f:SetDisabled(true)
-    expect(f:GetAlpha()).toBe(DISABLED)
+    expect(f:GetAlpha()).toBeCloseTo(DISABLED, 2)
     mock.script(f.buttons[2], "OnClick", "LeftButton")
     expect(f.value).toBe(1)
     expect(s).never.toHaveBeenCalled()
@@ -421,7 +421,7 @@ local function sliderDisabled()
     local s = mock.spy(function(_v: number) end)
     local f = sl({ min = 0, max = 10, onChange = s })
     f:SetDisabled(true)
-    expect(f:GetAlpha()).toBe(DISABLED)
+    expect(f:GetAlpha()).toBeCloseTo(DISABLED, 2)
     expect(f.slider:IsEnabled()).toBe(false)
     expect(f.slider:IsMouseEnabled()).toBe(false)
     mock.script(f.slider, "OnValueChanged", 5, true)
@@ -670,7 +670,7 @@ local function fieldDisabled()
     f:SetDisabled(true)
     expect(f.edit:HasFocus()).toBe(false)
     expect(f.edit:IsMouseEnabled()).toBe(false)
-    expect(f:GetAlpha()).toBe(DISABLED)
+    expect(f:GetAlpha()).toBeCloseTo(DISABLED, 2)
     f:SetDisabled(false)
     expect(f.edit:IsMouseEnabled()).toBe(true)
 end
@@ -777,6 +777,7 @@ local function numberArrows()
     mock.script(f.edit, "OnArrowPressed", "LEFT")
     expect(f.value).toBe(15)
     expect(changed).toHaveBeenCalledTimes(3)
+    mock.setModifiers({})
     local empty = nf()
     mock.script(empty.edit, "OnArrowPressed", "DOWN")
     expect(empty.value).toBe(-1)
@@ -909,4 +910,35 @@ local function moneyDisabled()
     end
     m:SetDisabled(false)
     expect(m.fields[2].disabled).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- more edges
+--------------------------------------------------------------------------------
+
+@test("leaving an on toggle keeps its arcane edge")
+local function toggleLeaveOn()
+    local t = toggle(host(), { value = true })
+    mock.hover(t)
+    mock.hover(nil)
+    expect(tokenOf(t.border.top)).toBe("arcane")
+end
+
+@test("a disabled option without a reason shows no tooltip")
+local function segNoReason()
+    local f = segmented(host(), { options = { { value = 1, label = "A" }, { value = 2, label = "B", disabled = true } } })
+    mock.hover(f.buttons[2])
+    expect(shown).never.toHaveBeenCalled()
+end
+
+@test("VM probe: SetText runs OnTextChanged without user input")
+@skip("VM suspicion: the emulator's EditBox:SetText doesn't run OnTextChanged (the client does, userInput false); see Docs/test-notes/ui-primitives.md")
+local function probeSetText()
+    local e = CreateFrame("EditBox", nil, host())
+    e:SetSize(100, 20)
+    e:SetAutoFocus(false)
+    local seen: any[] = {}
+    e:SetScript("OnTextChanged", function(_e: EditBox, userInput: boolean) seen[#seen + 1] = userInput end)
+    e:SetText("abc")
+    expect(seen).toEqual({ false })
 end

@@ -159,6 +159,22 @@ local function fixedCross()
     expect(h).toHaveSize(20, 50)
 end
 
+@test("autoSize on the cross axis only sizes that axis")
+local function crossAutoSize()
+    local c = host()
+    c:SetSize(5, 5)
+    local l = stack(c, { autoSize = "width" })
+    l:Add(box(c, 30, 20))
+    mock.advanceFrames(1)
+    expect(c).toHaveSize(30, 5)
+    local h = host()
+    h:SetSize(5, 5)
+    local hl = stack(h, { direction = "horizontal", autoSize = "height" })
+    hl:Add(box(h, 30, 20))
+    mock.advanceFrames(1)
+    expect(h).toHaveSize(5, 20)
+end
+
 @test("autoSize false leaves the container alone")
 local function noAutoSize()
     local c = host()
@@ -244,6 +260,20 @@ local function echoes()
     expect(s).toHaveBeenCalledTimes(1)
 end
 
+@test("in a start-aligned stack the echo is the whole size")
+local function echoesStart()
+    local c = host()
+    local l = stack(c)
+    local a = box(c, 10, 10)
+    l:Add(a)
+    mock.advanceFrames(1)
+    local s = mock.stub(l, "Invalidate")
+    mock.script(a, "OnSizeChanged", 10, 10)
+    expect(s).never.toHaveBeenCalled()
+    mock.script(a, "OnSizeChanged", 12, 10)
+    expect(s).toHaveBeenCalledTimes(1)
+end
+
 @test("in a horizontal stretched stack the width is the echo")
 local function echoesHorizontal()
     local c = host()
@@ -300,6 +330,17 @@ local function secretText()
         SetPoint = function(_: any, ...: any) placed[#placed + 1] = { ... } end,
     }
     l:Add(fake)
+    -- and one whose sizes read back nil
+    local blank: any = {
+        IsObjectType = function(_: any, _t: string): boolean return false end,
+        GetObjectType = function(_: any): string return "FontString" end,
+        IsShown = function(_: any): boolean return true end,
+        GetUnboundedStringWidth = function(_: any): any return nil end,
+        GetStringHeight = function(_: any): any return nil end,
+        ClearAllPoints = function(_: any) end,
+        SetPoint = function(_: any, ...: any) end,
+    }
+    l:Add(blank)
     l:Add(box(c, 10, 10))
     mock.advanceFrames(1)
     expect(c).toHaveSize(10, 10)
@@ -340,7 +381,7 @@ local function nested()
     mock.advanceFrames(1)
     expect(inner).toHaveSize(40, 25)
     expect(at(other)).toEqual({ 0, -30 })
-    expect(outerHost).toHaveSize(40, 35)
+    expect(outerHost).toHaveSize(40, 40)
     -- the inner content grows: both settle again
     il:Add(box(inner, 60, 5))
     mock.advanceFrames(1)

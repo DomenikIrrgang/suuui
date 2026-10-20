@@ -1,0 +1,819 @@
+-- UI/Panel: the close button and key chip, Panel (fitting its body, fixed
+-- sizes, the header, the anchor's rings, the theme relayout and its wait
+-- for the end of combat), scrollArea (wheel, scrollbar, dragging, settling),
+-- makeModal and its shade, confirm (OK, cancel, a word to type, a text to
+-- enter), SectionHeader and WindowFrame (tabs, footer, scrolling content).
+
+import test, expect, afterEach, beforeAll, beforeEach, skip from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as tooltip from "/UI/Tooltip"
+import * as draw from "/UI/Draw"
+import measureText from "/UI/Text"
+import closeButton, keyChip, panel, scrollArea, makeModal, confirm, sectionHeader, windowFrame, Panel, PanelOptions,
+    ScrollArea, WindowFrame, WindowOptions, ConfirmOptions from "/UI/Panel"
+import internal shade from "/UI/Panel"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf, themeChanged, reduceMotion from "./PrimitivesHelpers"
+
+local S = T.space
+local HEADER_LINE = T.type.header.lineHeight
+local parent: Frame? = nil
+local made: Frame[] = {}
+local shown = mock.spy(function(_owner: any, _data: any) end)
+local hidden = mock.spy(function() end)
+
+@beforeAll
+local function fakeTooltips()
+    mock.module(tooltip, { showTooltip = shown, hideTooltip = hidden })
+end
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(800, 600)
+end
+
+@afterEach
+local function cleanup()
+    T.type.header.lineHeight = HEADER_LINE
+    mock.hover(nil)
+    mock.player:leaveCombat()
+    reduceMotion(false)
+    for _, f in ipairs(made) do f:Hide() end
+    made = {}
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function host(): Frame
+    return parent :: Frame
+end
+
+local function y(r: any, i: number?): number
+    return (pointOf(r, i) :: any).y
+end
+
+--------------------------------------------------------------------------------
+-- close button, key chip
+--------------------------------------------------------------------------------
+
+@test("the close button: 22px, an ink-muted cross, a border on hover")
+local function close()
+    local s = mock.spy(function(_b: Button) end)
+    local b = closeButton(host(), s)
+    b:SetPoint("CENTER")
+    expect(b).toHaveSize(22, 22)
+    local cross = ({ b:GetChildren() })[1] :: draw.Cross
+    local border = { b:GetRegions() }
+    expect(#border).toBe(4)
+    expect(border[1]).never.toBeShown()
+    expect(tokenOf(cross.strokes[1])).toBe("ink-muted")
+    mock.hover(b)
+    expect(border[1]).toBeShown()
+    expect(tokenOf(cross.strokes[1])).toBe("ink")
+    mock.hover(nil)
+    expect(border[2]).never.toBeShown()
+    expect(tokenOf(cross.strokes[2])).toBe("ink-muted")
+    mock.click(b)
+    expect(s).toHaveBeenCalledWith(b)
+    local plain = closeButton(host())
+    plain:SetPoint("TOPLEFT")
+    mock.click(plain)
+end
+
+@test("the key chip: at least 20px square, as wide as its key")
+local function chip()
+    local k = keyChip(host(), "P")
+    expect(k.text).toHaveText("P")
+    expect(k).toHaveSize(math.max(20, measureText("micro", "P") + S["space-2"] * 2), 20)
+    k:SetKey("Shift-Ctrl-P")
+    expect(k:GetWidth()).toBeCloseTo(math.max(20, measureText("micro", "Shift-Ctrl-P") + S["space-2"] * 2), 3)
+    local empty = keyChip(host())
+    expect(empty.text).toHaveText("")
+    expect(empty).toHaveSize(20, 20)
+end
+
+--------------------------------------------------------------------------------
+-- Panel
+--------------------------------------------------------------------------------
+
+local function make(opts: PanelOptions?): Panel
+    local p = panel(host(), opts)
+    p:SetPoint("CENTER")
+    return p
+end
+
+local function headH(): number
+    return S["space-5"] + T.type.header.lineHeight
+end
+
+@test("a plain panel: glass, a gilt-line border, a shadow, fitting its body")
+local function plain()
+    local p = make()
+    expect(tokenOf(p.bg)).toBe("surface-glass")
+    expect(tokenOf(p.border.top)).toBe("gilt-line")
+    expect(p.shadow).toBeTruthy()
+    expect(p.title).toBeNil()
+    expect(p:BodyTop()).toBe(S["space-4"])
+    expect(pointOf(p.body)).toEqual({ point = "TOPLEFT", relativeTo = p, relativePoint = "TOPLEFT", x = S["space-5"], y = -S["space-4"] })
+    expect(p).toHaveSize(1 + S["space-5"] * 2, S["space-4"] + 1 + S["space-5"])
+    p.body:SetSize(100, 50)
+    mock.advanceFrames(1)
+    expect(p).toHaveSize(100 + S["space-5"] * 2, S["space-4"] + 50 + S["space-5"])
+end
+
+@test("solid, no shadow, a name")
+local function options()
+    local p = make({ solid = true, shadow = false, name = "SuuUITestPanel" })
+    expect(tokenOf(p.bg)).toBe("surface")
+    expect(p.shadow).toBeNil()
+    expect(p:GetName()).toBe("SuuUITestPanel")
+end
+
+@test("a fixed width stretches the body; a fixed height too")
+local function fixed()
+    local p = make({ width = 300 })
+    expect(p:GetWidth()).toBeCloseTo(300, 3)
+    expect(pointOf(p.body, 2)).toEqual({ point = "TOPRIGHT", relativeTo = p, relativePoint = "TOPRIGHT", x = -S["space-5"], y = -S["space-4"] })
+    p.body:SetHeight(80)
+    mock.advanceFrames(1)
+    expect(p:GetHeight()).toBeCloseTo(S["space-4"] + 80 + S["space-5"], 3)
+    expect(p:GetWidth()).toBeCloseTo(300, 3)
+    local q = make({ width = 200, height = 150 })
+    expect(q).toHaveSize(200, 150)
+    expect(pointOf(q.body, 3)).toEqual({ point = "BOTTOMLEFT", relativeTo = q, relativePoint = "BOTTOMLEFT", x = S["space-5"], y = S["space-5"] })
+    q.body:SetSize(10, 10)
+    q:Fit()
+    expect(q).toHaveSize(200, 150)
+    local r = make({ height = 90 })
+    r.body:SetWidth(40)
+    mock.advanceFrames(1)
+    expect(r).toHaveSize(40 + S["space-5"] * 2, 90)
+end
+
+@test("an anchor panel: the double ring and two diamonds; an ornament: one")
+local function anchors()
+    local p = make({ anchor = true })
+    local rings = T.shadow["inset-anchor"]
+    expect((p.ring :: draw.Border).width).toBe(rings[1].spread)
+    expect((p.ring :: draw.Border).inset).toBe(1)
+    expect((p.ring2 :: draw.Border).inset).toBe(1 + rings[1].spread)
+    expect(p.ornTL).toBeAnchoredTo(p, "CENTER", "TOPLEFT")
+    expect(p.ornBR).toBeAnchoredTo(p, "CENTER", "BOTTOMRIGHT")
+    expect(p.ornTL).toHaveSize(7, 7)
+    local o = make({ ornament = true })
+    expect(o.ornTL).toBeTruthy()
+    expect(o.ornBR).toBeNil()
+    expect(o.ring).toBeNil()
+end
+
+@test("a titled panel: the title, meta, divider and jewel; the body under them")
+local function titled()
+    local p = make({ title = "Loot", meta = "Ember Hound", width = 300 })
+    expect(p.title).toHaveText("Loot")
+    expect(tokenOf(p.title)).toBe("gilt-text")
+    expect(p.meta).toHaveText("Ember Hound")
+    expect(p.close).toBeNil()
+    expect(p.key).toBeNil()
+    expect(p.headRight).toBe(p.meta)
+    expect(pointOf(p.meta)).toEqual({ point = "RIGHT", relativeTo = p, relativePoint = "TOPRIGHT", x = -S["space-5"], y = -(S["space-5"] + HEADER_LINE / 2) })
+    expect(y(p.divider)).toBe(-(headH() + S["space-4"]))
+    expect(p.jewel).toBeAnchoredTo(p.divider, "CENTER", "CENTER")
+    expect(p:BodyTop()).toBe(headH() + S["space-4"] + 1 + S["space-4"])
+    expect(y(p.body)).toBe(-p:BodyTop())
+    p:SetTitle("Bags", nil)
+    expect(p.title).toHaveText("Bags")
+    expect(p.meta).toHaveText("")
+    p:SetTitle(nil, "m")
+    expect(p.title).toHaveText("")
+    expect(p.meta).toHaveText("m")
+    -- an untitled panel: SetTitle and PlaceHead do nothing
+    local plainPanel = make()
+    plainPanel:SetTitle("x", "y")
+    plainPanel:PlaceHead()
+end
+
+@test("the header's right side: close, then the key chip, then the meta")
+local function headRight()
+    local p = make({ title = "Bags", meta = "12 free", keybind = "B", closable = true })
+    local closeB, key = p.close :: Button, p.key :: any
+    expect(p.headRight).toBe(closeB)
+    expect(pointOf(key)).toEqual({ point = "RIGHT", relativeTo = closeB, relativePoint = "LEFT", x = -S["space-4"], y = 0 })
+    expect(pointOf(p.meta)).toEqual({ point = "RIGHT", relativeTo = key, relativePoint = "LEFT", x = -S["space-3"], y = 0 })
+    expect(key.text).toHaveText("B")
+    local k = make({ title = "T", keybind = "K" })
+    expect(k.headRight).toBe(k.key)
+    local c = make({ title = "T", closable = true })
+    expect(pointOf(c.meta)).toEqual({ point = "RIGHT", relativeTo = c.close, relativePoint = "LEFT", x = -S["space-4"], y = 0 })
+end
+
+@test("the close button hides the panel, or calls onClose")
+local function closes()
+    local p = make({ title = "T", closable = true })
+    mock.click(p.close)
+    expect(p).never.toBeShown()
+    local s = mock.spy(function(_p: Panel) end)
+    local q = make({ title = "T", closable = true, onClose = s })
+    mock.click(q.close)
+    expect(s).toHaveBeenCalledWith(q)
+    expect(q).toBeShown()
+end
+
+@test("a theme that changes the header's line lays titled panels and section headers out again")
+local function themeRelayout()
+    local p = make({ title = "T", width = 300 })
+    local h = sectionHeader(host(), "Label")
+    T.type.header.lineHeight = HEADER_LINE + 10
+    themeChanged()
+    expect(y(p.divider)).toBe(-(S["space-5"] + HEADER_LINE + 10 + S["space-4"]))
+    expect(y(p.body)).toBe(-p:BodyTop())
+    expect(h:GetHeight()).toBeCloseTo(HEADER_LINE + 10, 3)
+end
+
+@test("in combat that relayout waits for its end")
+local function themeInCombat()
+    local p = make({ title = "T", width = 300 })
+    local before = y(p.divider)
+    mock.player:enterCombat()
+    T.type.header.lineHeight = HEADER_LINE + 4
+    themeChanged()
+    expect(y(p.divider)).toBe(before)
+    mock.player:leaveCombat()
+    expect(y(p.divider)).toBe(before - 4)
+end
+
+--------------------------------------------------------------------------------
+-- scrollArea
+--------------------------------------------------------------------------------
+
+local function area(bar: number?): ScrollArea
+    local s = scrollArea(host(), bar)
+    s:SetPoint("TOPLEFT")
+    s:SetSize(200, 100)
+    return s
+end
+
+@test("the wheel scrolls 48 a notch, within the content")
+local function wheel()
+    local s = area()
+    expect(s:GetScrollChild()).toBe(s.child)
+    expect(s.track).toBeNil()
+    s.child:SetSize(200, 300)
+    mock.wheel(s, -1)
+    expect(s:GetVerticalScroll()).toBe(48)
+    mock.wheel(s, -10)
+    expect(s:GetVerticalScroll()).toBe(200)
+    mock.wheel(s, 1)
+    expect(s:GetVerticalScroll()).toBe(152)
+    mock.wheel(s, 10)
+    expect(s:GetVerticalScroll()).toBe(0)
+end
+
+@test("content that got shorter pulls the scroll back a frame later")
+local function settles()
+    local s = area()
+    s.child:SetSize(200, 300)
+    mock.wheel(s, -10)
+    s.child:SetHeight(150)
+    expect(s:GetVerticalScroll()).toBe(200)
+    mock.advanceFrames(2)
+    expect(s:GetVerticalScroll()).toBe(50)
+end
+
+@test("the scrollbar shows while the content overflows, its thumb the visible part")
+local function bar()
+    local s = area(6)
+    local track, thumb = s.track :: Texture, s.thumb :: Texture
+    expect(tokenOf(track)).toBe("gilt-faint")
+    expect(tokenOf(thumb)).toBe("ink-muted")
+    expect(pointOf(track)).toEqual({ point = "TOPLEFT", relativeTo = s, relativePoint = "TOPRIGHT", x = 6, y = 0 })
+    expect(track).never.toBeShown()
+    expect(s.grip).never.toBeShown()
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    expect(track).toBeShown()
+    expect(thumb).toBeShown()
+    expect(s.grip).toBeShown()
+    expect(thumb:GetHeight()).toBeCloseTo(math.max(24, 100 * 100 / 400), 3)
+    mock.wheel(s, -10)
+    expect(s:GetVerticalScroll()).toBe(300)
+    -- the client runs OnVerticalScroll from SetVerticalScroll; the VM may
+    -- not (see the probe below), so it is run here as the client would
+    mock.script(s, "OnVerticalScroll", 300)
+    expect(y(thumb)).toBeCloseTo(-(100 - thumb:GetHeight()), 3)
+    -- hover lights the thumb
+    mock.hover(s.grip)
+    expect(tokenOf(thumb)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(thumb)).toBe("ink-muted")
+end
+
+@test("pressing the track jumps the thumb there; dragging follows until release")
+local function drag()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    local track, thumb = s.track :: Texture, s.thumb :: Texture
+    local scale = track:GetEffectiveScale()
+    local top = track:GetTop() :: number
+    local cursorY = (top - 50) * scale
+    mock.fake("GetCursorPosition", function(): (number, number) return 0, cursorY end)
+    local down = true
+    mock.fake("IsMouseButtonDown", function(_b: string?): boolean return down end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s.dragging).toBe(true)
+    expect(s.grab).toBe(thumb:GetHeight() / 2)
+    local range = 100 - thumb:GetHeight()
+    expect(s:GetVerticalScroll()).toBeCloseTo(300 * (50 - thumb:GetHeight() / 2) / range, 3)
+    -- the cursor moves down to the bottom: the scroll follows, clamped
+    cursorY = (top - 500) * scale
+    mock.advanceFrames(1)
+    expect(s:GetVerticalScroll()).toBe(300)
+    -- the button let go outside: dragging stops
+    down = false
+    mock.advanceFrames(1)
+    expect(s.dragging).toBe(false)
+    cursorY = top * scale
+    mock.advanceFrames(1)
+    expect(s:GetVerticalScroll()).toBe(300)
+end
+
+@test("pressing on the thumb keeps the spot grabbed; the release ends the drag")
+local function grabThumb()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    local thumb = s.thumb :: Texture
+    local scale = (s.track :: Texture):GetEffectiveScale()
+    local thumbTop = thumb:GetTop() :: number
+    mock.fake("GetCursorPosition", function(): (number, number) return 0, (thumbTop - 5) * scale end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s.grab).toBeCloseTo(5, 3)
+    expect(s:GetVerticalScroll()).toBeCloseTo(0, 3)
+    mock.script(s.grip, "OnMouseUp", "LeftButton")
+    expect(s.dragging).toBe(false)
+end
+
+@test("a press with nothing to scroll, or an unplaced thumb, does nothing")
+local function dragNothing()
+    local s = area(6)
+    mock.advanceFrames(1)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s:GetVerticalScroll()).toBe(0)
+    local loose = scrollArea(host(), 4)
+    mock.script(loose.grip, "OnMouseDown", "LeftButton")
+    expect(loose.dragging).toBeNil()
+end
+
+@test("content that no longer overflows, or a view shorter than the thumb, isn't dragged")
+local function dragNoRoom()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    s.child:SetHeight(50) -- the thumb keeps its place, hidden
+    mock.advanceFrames(2)
+    mock.fake("GetCursorPosition", function(): (number, number) return 0, 0 end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s:GetVerticalScroll()).toBe(0)
+    local short = area(6)
+    short:SetHeight(20) -- the thumb's 24px minimum fills it
+    short.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    mock.script(short.grip, "OnMouseDown", "LeftButton")
+    expect(short:GetVerticalScroll()).toBe(0)
+end
+
+@test("a press above the thumb grabs its middle")
+local function pressAbove()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    mock.wheel(s, -10)
+    mock.script(s, "OnVerticalScroll", 300)
+    local thumb = s.thumb :: Texture
+    local scale = (s.track :: Texture):GetEffectiveScale()
+    local top = (s.track :: Texture):GetTop() :: number
+    mock.fake("GetCursorPosition", function(): (number, number) return 0, (top - 2) * scale end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s.grab).toBeCloseTo(thumb:GetHeight() / 2, 3)
+    expect(s:GetVerticalScroll()).toBe(0)
+end
+
+@test("several size changes in a frame settle once")
+local function settleOnce()
+    local s = area()
+    s.child:SetSize(200, 300)
+    mock.wheel(s, -10)
+    s.child:SetHeight(150)
+    s:SetHeight(120)
+    mock.advanceFrames(2)
+    expect(s:GetVerticalScroll()).toBe(30)
+end
+
+--------------------------------------------------------------------------------
+-- makeModal
+--------------------------------------------------------------------------------
+
+local function modal(): Frame
+    local f = makeModal(CreateFrame("Frame", nil, host()))
+    f:SetSize(100, 100)
+    made[#made + 1] = f
+    return f
+end
+
+@test("a modal: centred on the dialog layer, hidden; showing brings the shade")
+local function modals()
+    local f = modal()
+    expect(f).never.toBeShown()
+    expect(f:GetFrameStrata()).toBe("DIALOG")
+    expect(f:IsToplevel()).toBe(true)
+    expect((pointOf(f) :: any).y).toBe(40)
+    f:Show()
+    expect(shade).toBeShown()
+    expect((shade :: any).owner).toBe(f)
+    expect(f:GetFrameLevel() >= 10).toBe(true)
+    expect((f :: any).suuMotion.enter).toBeTruthy()
+    -- Show again: still attached
+    f:Show()
+    expect((shade :: any).owner).toBe(f)
+    f:Hide()
+    expect(shade).never.toBeShown()
+    expect((shade :: any).owner).toBeNil()
+end
+
+@test("Esc closes a modal; other keys go on to the game")
+local function modalKeys()
+    local f = modal()
+    f:Show()
+    mock.script(f, "OnKeyDown", "A")
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    expect(f).toBeShown()
+    mock.script(f, "OnKeyDown", "ESCAPE")
+    expect(f:GetPropagateKeyboardInput()).toBe(false)
+    expect(f).never.toBeShown()
+end
+
+@test("a click on the shade closes its modal")
+local function shadeClick()
+    local f = modal()
+    f:Show()
+    mock.click(shade)
+    expect(f).never.toBeShown()
+    -- a shade without an owner does nothing
+    mock.script(shade, "OnClick", "LeftButton")
+end
+
+@test("a modal hidden while another owns the shade leaves it")
+local function shadeOwner()
+    local a, b = modal(), modal()
+    a:Show()
+    b:Show()
+    expect((shade :: any).owner).toBe(b)
+    a:Hide()
+    expect(shade).toBeShown()
+    b:Hide()
+    expect(shade).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- confirm
+--------------------------------------------------------------------------------
+
+-- the confirm dialog's own fields
+local function ask(opts: ConfirmOptions): any
+    local p: any = confirm(opts)
+    made[#made + 1] = p
+    return p
+end
+
+@test("confirm: title, text, OK and Cancel; OK confirms and closes")
+local function confirmOk()
+    local yes = mock.spy(function(_t: string?) end)
+    local no = mock.spy(function() end)
+    local p = ask({ title = "Replace?", text = "It goes.", confirm = "Replace", onConfirm = yes, onCancel = no })
+    expect(p).toBeShown()
+    expect(shade).toBeShown()
+    expect(p.title).toHaveText("Replace?")
+    expect(p.text).toHaveText("It goes.")
+    expect(p.ok.label).toHaveText("Replace")
+    expect(p.cancel.label).toHaveText("Cancel")
+    expect(p.cancel).toBeShown()
+    expect(p.group).never.toBeShown()
+    expect(p:GetHeight()).toBeCloseTo(170, 3)
+    expect(p.ok:IsEnabled()).toBe(true)
+    mock.click(p.ok)
+    expect(yes).toHaveBeenCalledWith(nil)
+    expect(no).never.toHaveBeenCalled()
+    expect(p).never.toBeShown()
+end
+
+@test("Cancel, Esc or the shade cancel")
+local function confirmCancel()
+    local no = mock.spy(function() end)
+    local p = ask({ onCancel = no })
+    expect(p.title).toHaveText("Are you sure?")
+    expect(p.ok.label).toHaveText("OK")
+    mock.click(p.cancel)
+    expect(no).toHaveBeenCalledTimes(1)
+    ask({ onCancel = no })
+    mock.script(p, "OnKeyDown", "ESCAPE")
+    expect(no).toHaveBeenCalledTimes(2)
+    ask({ onCancel = no })
+    mock.click(shade)
+    expect(no).toHaveBeenCalledTimes(3)
+    -- no callbacks: fine
+    ask({})
+    mock.click(p.ok)
+    ask({})
+    mock.click(p.cancel)
+end
+
+@test("cancel = false: OK alone")
+local function okAlone()
+    local p = ask({ text = "Can't do that.", cancel = false })
+    expect(p.cancel).never.toBeShown()
+    local q = ask({ cancel = "Keep" })
+    expect(q.cancel).toBeShown()
+    expect(q.cancel.label).toHaveText("Keep")
+end
+
+@test("a new question cancels the one still open")
+local function replaces()
+    local no = mock.spy(function() end)
+    ask({ onCancel = no })
+    local yes = mock.spy(function(_t: string?) end)
+    local p = ask({ onConfirm = yes })
+    expect(no).toHaveBeenCalledTimes(1)
+    mock.click(p.ok)
+    expect(yes).toHaveBeenCalledTimes(1)
+end
+
+@test("a word to type: OK only once it's typed (any case), Enter then confirms")
+local function typeToConfirm()
+    local yes = mock.spy(function(_t: string?) end)
+    local p = ask({ text = "Unlearn all?", typeToConfirm = "unlearn", onConfirm = yes })
+    expect(p.group).toBeShown()
+    expect(p.prompt).toHaveText('Type "UNLEARN" to confirm.')
+    expect(p.field.edit:HasFocus()).toBe(true)
+    expect(p.ok:IsEnabled()).toBe(false)
+    expect(p:GetHeight()).toBeCloseTo(170 + p.group:GetHeight() + 12, 3)
+    expect(p.group:GetHeight()).toBeCloseTo(T.type.caption.lineHeight + 6 + 30, 3)
+    mock.typeText(p.field.edit, "unlear")
+    mock.pressKey("ENTER") -- not yet the word
+    expect(yes).never.toHaveBeenCalled()
+    expect(p).toBeShown()
+    p.field.edit:SetFocus()
+    mock.typeText(p.field.edit, "n")
+    expect(p.ok:IsEnabled()).toBe(true)
+    mock.pressKey("ENTER")
+    expect(yes).toHaveBeenCalledWith(nil)
+    expect(p).never.toBeShown()
+    expect(p.field.edit:HasFocus()).toBe(false)
+end
+
+@test("enterConfirms = false: Enter keeps the field, only the button confirms")
+local function enterStays()
+    local yes = mock.spy(function(_t: string?) end)
+    local p = ask({ typeToConfirm = "YES", enterConfirms = false, onConfirm = yes })
+    mock.typeText(p.field.edit, "yes")
+    mock.pressKey("ENTER")
+    expect(yes).never.toHaveBeenCalled()
+    expect(p.field.edit:HasFocus()).toBe(true)
+    mock.click(p.ok)
+    expect(yes).toHaveBeenCalledTimes(1)
+end
+
+@test("a text to enter: its label and placeholder, OK once there is some, trimmed")
+local function input()
+    local yes = mock.spy(function(_t: string?) end)
+    local p = ask({ title = "Name", input = { label = "Build name", placeholder = "My build" }, onConfirm = yes })
+    expect(p.prompt).toHaveText("Build name")
+    expect(p.field.placeholder).toHaveText("My build")
+    expect(p.ok:IsEnabled()).toBe(false)
+    mock.typeText(p.field.edit, "  ")
+    expect(p.ok:IsEnabled()).toBe(false)
+    mock.pressKey("ENTER")
+    expect(yes).never.toHaveBeenCalled()
+    p.field.edit:SetFocus()
+    mock.typeText(p.field.edit, "Raid ")
+    expect(p.ok:IsEnabled()).toBe(true)
+    mock.click(p.ok)
+    expect(yes).toHaveBeenCalledWith("Raid")
+    -- with a value: OK at once; no label: an empty prompt
+    local q = ask({ input = { value = "Old" } })
+    expect(q.field:GetValue()).toBe("Old")
+    expect(q.ok:IsEnabled()).toBe(true)
+    expect(q.prompt).toHaveText("")
+    expect(q.field.placeholder).toHaveText("")
+end
+
+--------------------------------------------------------------------------------
+-- sectionHeader
+--------------------------------------------------------------------------------
+
+@test("a section header: its label, a fading rule, the meta at the right")
+local function section()
+    local h = sectionHeader(host(), "Party", "5 of 5")
+    expect(h).toHaveSize(380, HEADER_LINE)
+    expect(h.label).toHaveText("Party")
+    expect(tokenOf(h.label)).toBe("gilt-text")
+    expect(h.meta).toHaveText("5 of 5")
+    local x, yy = h.label:GetShadowOffset()
+    expect({ x, yy }).toEqual({ 0, -1 })
+    expect(pointOf(h.rule)).toEqual({ point = "LEFT", relativeTo = h.label, relativePoint = "RIGHT", x = S["space-4"], y = 0 })
+    expect(pointOf(h.rule, 2)).toEqual({ point = "RIGHT", relativeTo = h.meta, relativePoint = "LEFT", x = -S["space-4"], y = 0 })
+    h:SetLabel("Raid", "")
+    expect(pointOf(h.rule, 2)).toEqual({ point = "RIGHT", relativeTo = h, relativePoint = "RIGHT", x = 0, y = 0 })
+    h:SetLabel(nil, nil)
+    expect(h.label).toHaveText("")
+    local w = sectionHeader(host(), nil, nil, 200)
+    expect(w:GetWidth()).toBeCloseTo(200, 3)
+end
+
+--------------------------------------------------------------------------------
+-- windowFrame
+--------------------------------------------------------------------------------
+
+local function win(opts: WindowOptions): WindowFrame
+    local w = windowFrame(host(), opts)
+    w:SetPoint("CENTER")
+    return w
+end
+
+local function tab(w: WindowFrame, i: number): any
+    return (w.tabButtons :: Button[])[i]
+end
+
+@test("a window: a movable, closable panel on the high layer, its content scrolling")
+local function window()
+    local w = win({ title = "Gallery", width = 500, height = 400 })
+    expect(w:GetFrameStrata()).toBe("HIGH")
+    expect(w:IsMovable()).toBe(true)
+    expect(w.close).toBeTruthy()
+    expect(w.ornTL).toBeTruthy()
+    expect(tokenOf(w.bg)).toBe("surface-glass")
+    expect(w.footer).toBeNil()
+    expect(w.tabRow).toBeNil()
+    expect(w.scroll:GetScrollChild()).toBe(w.content)
+    expect(pointOf(w.body)).toEqual({ point = "BOTTOMRIGHT", relativeTo = w, relativePoint = "BOTTOMRIGHT", x = -S["space-5"], y = S["space-5"] })
+    expect(y(w.body, 2)).toBe(-w:BodyTop())
+    mock.click(w.close)
+    expect(w).never.toBeShown()
+    w:Show()
+    expect((w :: any).suuMotion.enter).toBeTruthy()
+end
+
+@test("a named window closes with Esc (UISpecialFrames)")
+local function named()
+    local w = win({ name = "SuuUITestWindow", title = "T", width = 300, height = 200 })
+    expect(w:GetName()).toBe("SuuUITestWindow")
+    local found = false
+    for _, n in ipairs(UISpecialFrames) do if n == "SuuUITestWindow" then found = true end end
+    expect(found).toBe(true)
+end
+
+@test("its content scrolls 40 a notch and is as wide as the view")
+local function content()
+    local w = win({ title = "T", width = 400, height = 300 })
+    w.content:SetHeight(1000)
+    mock.advanceFrames(1)
+    -- the view's size (OnSizeChanged once its anchors resolve; run here as
+    -- the client would, see the probe below)
+    mock.script(w.scroll, "OnSizeChanged", 376, 200)
+    expect(w.content:GetWidth()).toBe(376)
+    mock.wheel(w.scroll, -1)
+    expect(w.scroll:GetVerticalScroll()).toBe(40)
+    mock.wheel(w.scroll, -100)
+    expect(w.scroll:GetVerticalScroll()).toBe(1000 - w.scroll:GetHeight())
+    mock.wheel(w.scroll, 100)
+    expect(w.scroll:GetVerticalScroll()).toBe(0)
+end
+
+@test("a footer sits above the bottom under a rule; the content ends above it")
+local function footer()
+    local w = win({ title = "T", width = 400, height = 300, footer = true })
+    local footH = 30 + S["space-4"] * 2
+    local f = w.footer :: Frame
+    expect(f:GetHeight()).toBeCloseTo(footH, 3)
+    expect(pointOf(f)).toEqual({ point = "BOTTOMLEFT", relativeTo = w, relativePoint = "BOTTOMLEFT", x = S["space-5"], y = 0 })
+    expect(y(w.body)).toBe(S["space-5"] + footH - S["space-5"] + S["space-4"])
+end
+
+@test("tabs: laid out under the head, SetTab chooses one and calls onTab")
+local function tabs()
+    local s = mock.spy(function(_k: any) end)
+    local w = win({ title = "Merchant", width = 500, height = 400, onTab = s,
+        tabs = { { key = "buy", label = "Merchant" }, { key = "back", label = "Buyback" } } })
+    local a, b = tab(w, 1), tab(w, 2)
+    expect(#(w.tabButtons :: Button[])).toBe(2)
+    local wa = measureText("header", "Merchant") + 2 * S["space-4"]
+    expect(a:GetWidth()).toBeCloseTo(wa, 3)
+    expect((pointOf(b) :: any).x).toBe(wa + S["space-2"])
+    expect({ b.markLeft, b.markWidth }).toEqual({ wa + S["space-2"], measureText("header", "Buyback") + 2 * S["space-4"] })
+    expect(y(w.tabRow)).toBe(-w:BodyTop())
+    expect(y(w.body, 2)).toBe(-(w:BodyTop() + 28 + S["space-4"]))
+    expect(tokenOf(a.label)).toBe("ink-muted")
+    w:SetTab("back")
+    expect(w.tab).toBe("back")
+    expect(s).toHaveBeenCalledWith("back")
+    expect(tokenOf(b.label)).toBe("gilt-text")
+    expect((w.tabMarker :: any).chosen).toBe(b)
+    mock.click(a)
+    expect(w.tab).toBe("buy")
+    expect(tokenOf(a.label)).toBe("gilt-text")
+    expect(tokenOf(b.label)).toBe("ink-muted")
+end
+
+@test("hover inks a tab that isn't chosen")
+local function tabHover()
+    local w = win({ title = "T", width = 500, height = 300,
+        tabs = { { key = 1, label = "One" }, { key = 2, label = "Two" } } })
+    w:SetTab(1)
+    mock.hover(tab(w, 2))
+    expect(tokenOf(tab(w, 2).label)).toBe("ink")
+    mock.hover(tab(w, 1))
+    expect(tokenOf(tab(w, 1).label)).toBe("gilt-text")
+    expect(tokenOf(tab(w, 2).label)).toBe("ink-muted")
+    mock.hover(nil)
+    expect(tokenOf(tab(w, 1).label)).toBe("gilt-text")
+end
+
+@test("a disabled tab: faint, a cover takes its click and says why")
+local function tabDisabled()
+    local open = false
+    local w = win({ title = "T", width = 500, height = 300, tabs = {
+        { key = 1, label = "One" },
+        { key = 2, label = "Two", disabled = true, reason = "Not yet" },
+        { key = 3, label = "Three", disabled = function(): any return not open end },
+    } })
+    w:SetTab(1)
+    local two, three = tab(w, 2), tab(w, 3)
+    expect(tokenOf(two.label)).toBe("ink-faint")
+    expect(two.label:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    expect(two.cover).toBeShown()
+    expect(three.cover).toBeShown()
+    mock.hover(two.cover)
+    expect(shown).toHaveBeenCalledWith(two.cover, { title = "Two", description = "Not yet" })
+    mock.hover(nil)
+    expect(hidden).toHaveBeenCalled()
+    -- chosen while disabled: not shown as chosen
+    w:SetTab(2)
+    expect((w.tabMarker :: any).chosen).toBeNil()
+    open = true
+    w:DrawTabs()
+    expect(three.cover).never.toBeShown()
+    expect(tokenOf(three.label)).toBe("ink-muted")
+    expect(three.label:GetAlpha()).toBe(1)
+end
+
+@test("a theme change lays the tabs out again")
+local function tabsTheme()
+    local w = win({ title = "T", width = 500, height = 300, tabs = { { key = 1, label = "One" } } })
+    T.type.header.lineHeight = HEADER_LINE + 6
+    themeChanged()
+    expect(y(w.tabRow)).toBe(-w:BodyTop())
+    expect(y(w.body, 2)).toBe(-(w:BodyTop() + 28 + S["space-4"]))
+end
+
+@test("with reduced motion a window just shows")
+local function windowReduced()
+    reduceMotion(true)
+    local w = win({ title = "T", width = 300, height = 200 })
+    w:Hide()
+    w:Show()
+    expect(w:GetAlpha()).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- VM probes (what the client does, checked against the emulator)
+--------------------------------------------------------------------------------
+
+@test("VM probe: SetVerticalScroll runs OnVerticalScroll")
+@skip("VM suspicion: the emulator's SetVerticalScroll doesn't run OnVerticalScroll (the client does); see Docs/test-notes/ui-primitives.md")
+local function probeVerticalScroll()
+    local s = area()
+    s.child:SetSize(200, 400)
+    local runs = 0
+    s:HookScript("OnVerticalScroll", function() runs += 1 end)
+    s:SetVerticalScroll(50)
+    mock.advanceFrames(1)
+    expect(runs).toBe(1)
+end
+
+@test("VM probe: a frame sized by its anchors gets OnSizeChanged")
+@skip("VM suspicion: the emulator runs OnSizeChanged only for SetSize/SetWidth/SetHeight, not for a size that follows anchors; see Docs/test-notes/ui-primitives.md")
+local function probeAnchoredSize()
+    local holder = CreateFrame("Frame", nil, host())
+    holder:SetPoint("TOPLEFT")
+    holder:SetSize(100, 100)
+    local inner = CreateFrame("Frame", nil, holder)
+    local sizes: number[] = {}
+    inner:SetScript("OnSizeChanged", function(_f: Frame, w: number) sizes[#sizes + 1] = w end)
+    inner:SetAllPoints()
+    mock.advanceFrames(1)
+    holder:SetWidth(150)
+    mock.advanceFrames(1)
+    expect(sizes).toEqual({ 100, 150 })
+end

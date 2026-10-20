@@ -1,0 +1,373 @@
+-- UI/Pickers: AnchorPicker (the 3x3 grid), AnchorButton (its popover, the
+-- tooltip, a click outside), SwatchRow and ToggleChips: built, clicked,
+-- hovered, their values and callbacks, and disabled.
+
+import test, expect, afterEach, beforeAll, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as tooltip from "/UI/Tooltip"
+import measureText from "/UI/Text"
+import anchorPicker, anchorButton, swatchRow, toggleChips, AnchorPicker, AnchorButton, AnchorPopover, SwatchRow,
+    ToggleChips, AnchorButtonOptions, ChipOption from "/UI/Pickers"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf from "./PrimitivesHelpers"
+
+local S = T.space
+local DISABLED = T.opacity["opacity-disabled"]
+local parent: Frame? = nil
+local shown = mock.spy(function(_owner: any, _data: any) end)
+local hidden = mock.spy(function() end)
+
+@beforeAll
+local function fakeTooltips()
+    mock.module(tooltip, { showTooltip = shown, hideTooltip = hidden })
+end
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(600, 300)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function host(): Frame
+    return parent :: Frame
+end
+
+local function dot(p: AnchorPicker, point: string): Texture
+    return (p.cells[point] :: any).dot
+end
+
+--------------------------------------------------------------------------------
+-- AnchorPicker
+--------------------------------------------------------------------------------
+
+@test("the grid: nine cells, TOPRIGHT chosen by default")
+local function pickerBuild()
+    local p = anchorPicker(host())
+    expect(p).toHaveSize(68, 68)
+    local n = 0
+    for _ in pairs(p.cells) do n += 1 end
+    expect(n).toBe(9)
+    expect(p.value).toBe("TOPRIGHT")
+    expect(dot(p, "TOPRIGHT")).toHaveSize(10, 10)
+    expect(tokenOf(dot(p, "TOPRIGHT"))).toBe("arcane")
+    expect(dot(p, "CENTER")).toHaveSize(6, 6)
+    expect(tokenOf(dot(p, "CENTER"))).toBe("ink-muted")
+    expect(pointOf(p.cells.BOTTOMRIGHT)).toEqual({ point = "TOPLEFT", relativeTo = p, relativePoint = "TOPLEFT", x = 44, y = -44 })
+end
+
+@test("a click picks a point and calls onChange")
+local function pickerClick()
+    local s = mock.spy(function(_p: string) end)
+    local p = anchorPicker(host(), { value = "LEFT", onChange = s })
+    mock.click(p.cells.BOTTOM)
+    expect(p.value).toBe("BOTTOM")
+    expect(s).toHaveBeenCalledWith("BOTTOM")
+    expect(dot(p, "BOTTOM")).toHaveSize(10, 10)
+    expect(dot(p, "LEFT")).toHaveSize(6, 6)
+    local quiet = anchorPicker(host())
+    mock.click(quiet.cells.TOP)
+    expect(quiet.value).toBe("TOP")
+end
+
+@test("a disabled grid is dimmed and ignores clicks")
+local function pickerDisabled()
+    local s = mock.spy(function(_p: string) end)
+    local p = anchorPicker(host(), { onChange = s })
+    p:SetDisabled(true)
+    expect(p:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    mock.click(p.cells.TOP)
+    expect(p.value).toBe("TOPRIGHT")
+    expect(s).never.toHaveBeenCalled()
+    p:SetDisabled(false)
+    expect(p:GetAlpha()).toBe(1)
+end
+
+@test("each cell's tooltip names its point")
+local function pickerTooltip()
+    local p = anchorPicker(host())
+    mock.hover(p.cells.CENTER)
+    expect(shown).toHaveBeenCalledWith(p.cells.CENTER, { title = "Centre" })
+    mock.hover(nil)
+    expect(hidden).toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- AnchorButton
+--------------------------------------------------------------------------------
+
+local function ab(opts: AnchorButtonOptions?): AnchorButton
+    local b = anchorButton(host(), opts)
+    b:SetPoint("TOPLEFT")
+    return b
+end
+
+@test("the button: nine small points, CENTER lit by default")
+local function buttonBuild()
+    local b = ab()
+    expect(b).toHaveSize(30, 30)
+    expect(b.value).toBe("CENTER")
+    expect(b.dots.CENTER).toHaveSize(6, 6)
+    expect(tokenOf(b.dots.CENTER)).toBe("arcane")
+    expect(b.dots.TOPLEFT).toHaveSize(4, 4)
+    expect(tokenOf(b.dots.TOPLEFT)).toBe("ink-faint")
+    expect(pointOf(b.dots.TOPLEFT)).toEqual({ point = "CENTER", relativeTo = b, relativePoint = "CENTER", x = -8, y = 8 })
+    expect(b:IsOpen()).toBe(false)
+    expect(b:PopoverHasMouse()).toBe(false)
+    expect(b.pop).toBeNil()
+end
+
+@test("a click opens the grid under it; another closes it")
+local function buttonOpen()
+    local b = ab({ value = "TOP" })
+    mock.hover(b)
+    mock.click(b)
+    expect(b:IsOpen()).toBe(true)
+    local pop = b.pop :: AnchorPopover
+    local picker = b.picker :: AnchorPicker
+    expect(pop).toBeShown()
+    expect(pop:GetFrameStrata()).toBe("FULLSCREEN_DIALOG")
+    expect(picker.value).toBe("TOP")
+    expect(pop.note).never.toBeShown()
+    expect(pop:GetHeight()).toBeCloseTo(S["space-5"] * 2 + picker:GetHeight(), 3)
+    expect(pop:GetWidth()).toBeCloseTo(196, 3)
+    expect(pointOf(pop)).toEqual({ point = "TOPLEFT", relativeTo = b, relativePoint = "BOTTOMLEFT", x = 0, y = -S["space-1"] })
+    expect(tokenOf(b.border.top)).toBe("arcane")
+    mock.click(b)
+    expect(b:IsOpen()).toBe(false)
+    expect(tokenOf(b.border.top)).toBe("gilt")
+    -- opened again: the same popover
+    mock.click(b)
+    expect(b.pop).toBe(pop)
+end
+
+@test("a note shows under the grid")
+local function buttonNote()
+    local b = ab({ note = "Where the bar grows from" })
+    b:Open()
+    local pop = b.pop :: AnchorPopover
+    expect(pop.note).toBeShown()
+    expect(pop.note).toHaveText("Where the bar grows from")
+    expect(pop:GetHeight()).toBeCloseTo(S["space-5"] * 2 + (b.picker :: AnchorPicker):GetHeight() + S["space-4"] + pop.note:GetStringHeight(), 3)
+end
+
+@test("a pick closes the popover, lights the point and calls onChange")
+local function buttonPick()
+    local s = mock.spy(function(_p: string) end)
+    local b = ab({ onChange = s })
+    b:Open()
+    mock.click((b.picker :: AnchorPicker).cells.BOTTOMLEFT)
+    expect(b:IsOpen()).toBe(false)
+    expect(b.value).toBe("BOTTOMLEFT")
+    expect(tokenOf(b.dots.BOTTOMLEFT)).toBe("arcane")
+    expect(s).toHaveBeenCalledWith("BOTTOMLEFT")
+    -- the grid follows SetValue
+    b:SetValue("RIGHT")
+    expect((b.picker :: AnchorPicker).value).toBe("RIGHT")
+    local quiet = ab()
+    quiet:Open()
+    mock.click((quiet.picker :: AnchorPicker).cells.TOP)
+    expect(quiet.value).toBe("TOP")
+end
+
+@test("its tooltip names the point, and says more through opts.tooltip")
+local function buttonTooltip()
+    local b = ab({ value = "TOPLEFT" })
+    mock.hover(b)
+    expect(shown).toHaveBeenCalledWith(b, { title = "Anchor: Top left" })
+    expect(tokenOf(b.border.top)).toBe("gilt")
+    -- changed under the mouse: told again
+    b:SetValue("BOTTOM")
+    expect(shown).toHaveBeenCalledWith(b, { title = "Anchor: Bottom" })
+    mock.hover(nil)
+    expect(tokenOf(b.border.top)).toBe("gilt-line")
+    expect(hidden).toHaveBeenCalled()
+    local c = ab({ tooltip = function(point: string): { [string]: any }? return { description = "at " .. point } end })
+    expect(c:Tooltip()).toEqual({ title = "Anchor: Centre", description = "at CENTER" })
+    local d = ab({ tooltip = function(_p: string): { [string]: any }? return { title = "Mine" } end })
+    expect(d:Tooltip()).toEqual({ title = "Mine" })
+    local e = ab({ tooltip = function(_p: string): { [string]: any }? return nil end, value = "ODD" })
+    expect(e:Tooltip()).toEqual({ title = "Anchor: ODD" })
+end
+
+@test("a value set while hidden shows no tooltip")
+local function hiddenValue()
+    local b = ab()
+    b:Hide()
+    b:SetValue("TOP")
+    expect(b.value).toBe("TOP")
+    expect(shown).never.toHaveBeenCalled()
+end
+
+@test("leaving while open keeps the arcane edge")
+local function buttonLeaveOpen()
+    local b = ab()
+    mock.hover(b)
+    mock.click(b)
+    mock.hover(nil)
+    expect(tokenOf(b.border.top)).toBe("arcane")
+    b:Close()
+    expect(tokenOf(b.border.top)).toBe("gilt-line")
+end
+
+@test("a click outside the button and its popover closes it")
+local function clickOutside()
+    local b = ab()
+    b:Open()
+    mock.hover(b.pop)
+    expect(b:PopoverHasMouse()).toBe(true)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(b:IsOpen()).toBe(true)
+    mock.hover(b)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(b:IsOpen()).toBe(true)
+    mock.hover(nil)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(b:IsOpen()).toBe(false)
+    -- closed another way, then a click: forgotten
+    b:Open()
+    b:Close()
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(b:IsOpen()).toBe(false)
+end
+
+@test("hiding the button closes its popover")
+local function hideCloses()
+    local b = ab()
+    b:Open()
+    b:Hide()
+    expect(b:IsOpen()).toBe(false)
+end
+
+@test("a disabled button closes, won't open, and still says why")
+local function buttonDisabled()
+    local b = ab()
+    b:Open()
+    b:SetDisabled(true)
+    expect(b:IsOpen()).toBe(false)
+    expect(b:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    b:Open()
+    expect(b:IsOpen()).toBe(false)
+    mock.hover(b)
+    expect(tokenOf(b.border.top)).toBe("gilt-line")
+    expect(shown).toHaveBeenCalled()
+    b:SetDisabled(false)
+    expect(b:GetAlpha()).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- SwatchRow
+--------------------------------------------------------------------------------
+
+local SWATCHES: ChipOption[] = { { value = "fel", label = "Green" }, { value = "arcane", label = "Blue" }, { value = "ember", label = "Red" } }
+
+local function ring(r: SwatchRow, i: number): Frame
+    return (r.swatches[i] :: any).ring
+end
+
+@test("a swatch row: token colours, the chosen one ringed")
+local function swatchBuild()
+    local r = swatchRow(host(), { options = SWATCHES, value = "arcane" })
+    expect(#r.swatches).toBe(3)
+    expect(r).toHaveSize(3 * 20 + 2 * S["space-2"], 20)
+    expect(ring(r, 1)).never.toBeShown()
+    expect(ring(r, 2)).toBeShown()
+    local regions = { r.swatches[1]:GetRegions() }
+    expect(tokenOf(regions[1])).toBe("fel")
+    local empty = swatchRow(host(), { options = {} })
+    expect(empty).toHaveSize(1, 20)
+    expect(empty.value).toBeNil()
+end
+
+@test("a click chooses a colour; its name is the tooltip")
+local function swatchClick()
+    local s = mock.spy(function(_t: string) end)
+    local r = swatchRow(host(), { options = SWATCHES, onChange = s })
+    mock.click(r.swatches[3])
+    expect(r.value).toBe("ember")
+    expect(ring(r, 3)).toBeShown()
+    expect(s).toHaveBeenCalledWith("ember")
+    mock.hover(r.swatches[1])
+    expect(shown).toHaveBeenCalledWith(r.swatches[1], { title = "Green" })
+    mock.hover(nil)
+    expect(hidden).toHaveBeenCalled()
+    local quiet = swatchRow(host(), { options = SWATCHES })
+    mock.click(quiet.swatches[1])
+    expect(quiet.value).toBe("fel")
+end
+
+@test("a disabled swatch row ignores clicks")
+local function swatchDisabled()
+    local r = swatchRow(host(), { options = SWATCHES, value = "fel" })
+    r:SetDisabled(true)
+    expect(r:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    mock.click(r.swatches[2])
+    expect(r.value).toBe("fel")
+end
+
+--------------------------------------------------------------------------------
+-- ToggleChips
+--------------------------------------------------------------------------------
+
+local CHIPS: ChipOption[] = { { value = "a", label = "Alpha" }, { value = "b", label = "B" }, { value = "c", label = "Gamma ray" } }
+
+local function chipOn(c: ToggleChips, i: number): boolean
+    return (c.chips[i] :: any).bg:IsShown()
+end
+
+@test("toggle chips: sized to their labels, at least 40 wide; the value lit")
+local function chipsBuild()
+    local c = toggleChips(host(), { options = CHIPS, value = { "c", "a" } })
+    expect(#c.chips).toBe(3)
+    expect(c.chips[1]).toHaveSize(math.max(40, measureText("label", "Alpha") + S["space-5"] * 2), 26)
+    expect(c.chips[2]:GetWidth()).toBeCloseTo(math.max(40, measureText("label", "B") + S["space-5"] * 2), 3)
+    expect(chipOn(c, 1)).toBe(true)
+    expect(chipOn(c, 2)).toBe(false)
+    expect(tokenOf((c.chips[1] :: any).label)).toBe("arcane")
+    expect(tokenOf((c.chips[2] :: any).label)).toBe("ink-muted")
+    expect((c.chips[1] :: any).edgeOn).toBeShown()
+    -- the chips' order, not the value's
+    expect(c:GetValue()).toEqual({ "a", "c" })
+    local total = 0
+    for _, b in ipairs(c.chips) do total += b:GetWidth() end
+    expect(c:GetWidth()).toBeCloseTo(total + 2 * S["space-2"], 3)
+    local empty = toggleChips(host(), { options = {} })
+    expect(empty).toHaveSize(1, 26)
+    expect(empty:GetValue()).toEqual({})
+end
+
+@test("a click turns a chip on or off and reports every chip that's on")
+local function chipsClick()
+    local s = mock.spy(function(_v: any[]) end)
+    local c = toggleChips(host(), { options = CHIPS, onChange = s })
+    expect(c:GetValue()).toEqual({})
+    mock.click(c.chips[2])
+    expect(s).toHaveBeenCalledWith({ "b" })
+    mock.click(c.chips[1])
+    expect(s).toHaveBeenCalledWith({ "a", "b" })
+    mock.click(c.chips[2])
+    expect(s).toHaveBeenCalledWith({ "a" })
+    expect(chipOn(c, 2)).toBe(false)
+    c:SetValue(nil)
+    expect(c:GetValue()).toEqual({})
+    local quiet = toggleChips(host(), { options = CHIPS })
+    mock.click(quiet.chips[3])
+    expect(quiet:GetValue()).toEqual({ "c" })
+end
+
+@test("disabled chips ignore clicks")
+local function chipsDisabled()
+    local c = toggleChips(host(), { options = CHIPS, value = { "a" } })
+    c:SetDisabled(true)
+    expect(c:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    mock.click(c.chips[2])
+    expect(c:GetValue()).toEqual({ "a" })
+end
