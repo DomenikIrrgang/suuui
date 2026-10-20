@@ -166,8 +166,13 @@ local function bindings()
     SetBinding("SHIFT-F1", "MULTIACTIONBAR4BUTTON1")
     SetBinding("F2", "MULTIACTIONBAR4BUTTON1")
     SetBinding("F3", "MULTIACTIONBAR4BUTTON12")
+    -- (SetBinding tells UPDATE_BINDINGS, as the client does: every bar
+    -- binds again; this bar's own calls are counted)
+    clicks = {}
     b:UpdateBindings()
-    expect(#clicks).toBe(3)
+    local mine = 0
+    for _, c in ipairs(clicks) do if c:find("=" .. b.name, 1, true) then mine += 1 end end
+    expect(mine).toBe(3)
     expect(clicks).toContain("F3=" .. b.name .. "Button12")
     local h = b.buttons[1].hotkeyText
     expect(h == "SF1" or h == "F2").toBe(true)
@@ -186,12 +191,17 @@ end
 
 @test("a hidden bar gives its keys back; SetShown maps to always/hidden")
 local function hidden()
+    -- (every bar binds again on UPDATE_BINDINGS: only this bar's calls count)
     local clicks = 0
-    mock.fake("SetOverrideBindingClick", function(_: Frame, _: boolean, _: string, _: string, _: string) clicks = clicks + 1 end)
+    local header: Frame? = nil
+    mock.fake("SetOverrideBindingClick", function(owner: Frame, _: boolean, _: string, _: string, _: string)
+        if owner == header then clicks = clicks + 1 end
+    end)
     local cleared = mock.spy(function(_: Frame) end)
     mock.fake("ClearOverrideBindings", cleared)
     SetBinding("F4", "MULTIACTIONBAR4BUTTON2")
     local b = bar({ binding = "MULTIACTIONBAR4BUTTON" })
+    header = b.header
     clicks = 0
     b:SetShown(false)
     expect(b.hidden).toBe(true)
@@ -329,7 +339,7 @@ local function slotChanged()
     expect(first.hasAction).toBe(false)
     mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
     expect(first.hasAction).toBe(true)
-    expect(first.art:GetTexture()).toBe(136243)
+    expect(first.art:GetTextureFileID()).toBe(136243)
     mock.setAction(BASE + 1, { type = "spell", id = 133, texture = 136243 })
     expect(b.buttons[2].hasAction).toBe(true)
     first.hasAction = false

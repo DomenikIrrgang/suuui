@@ -100,6 +100,11 @@ local function hasCommand(name: string): boolean
 end
 
 -- The /suu modules line of a module.
+-- Where `/suu modules` says a module comes from: "built in" for SuuUI's own
+-- (one registered from SuuUI's test files too: wowlua names them as the
+-- addon's files), else its addon.
+local function shown(m: Module): string return m.builtIn and "built in" or m.source end
+
 local function line(m: Module): string?
     local prefix = "  " .. m.id .. "  "
     for _, l in ipairs(printedBy(function() mock.slash("/suu modules") end)) do
@@ -541,7 +546,7 @@ local function initFails()
     expect(calls).toEqual({ init = 1, enable = 0, disable = 0 })
     expect(errored).toHaveBeenCalledWith("SUUUI_MODULE_ERRORED", m.id)
     expect((faultWith("modules-err-init") :: fault.Entry).source).toBe("ZZ Init Fails")
-    expect(line(m)).toBe(("  %s  ZZ Init Fails  |cffff9a80errored|r  - %s  (OnInitialize failed)"):format(m.id, m.source))
+    expect(line(m)).toBe(("  %s  ZZ Init Fails  |cffff9a80errored|r  - %s  (OnInitialize failed)"):format(m.id, shown(m)))
     fixed = true
     mock.slash("/suu enable " .. m.id)
     expect(m.state).toBe("enabled")
@@ -589,7 +594,7 @@ local function reloadToToggle()
     expect(m.state).toBe("enabled")
     expect(m.pendingReload).toBe(true)
     expect(calls.disable).toBe(0)
-    expect(line(m)).toBe(("  %s  ZZ Reload  |cff3fd0ffon|r |cffffb23f(off after /reload)|r  - %s"):format(m.id, m.source))
+    expect(line(m)).toBe(("  %s  ZZ Reload  |cff3fd0ffon|r |cffffb23f(off after /reload)|r  - %s"):format(m.id, shown(m)))
     m:Set("enabled", true)
     expect(m.pendingReload).toBeNil()
     local out = printedBy(function() mock.slash("/suu disable " .. m.id) end)
@@ -597,13 +602,13 @@ local function reloadToToggle()
     m:Set("enabled", true)
     -- on already, nothing waiting: just its line
     expect(printedBy(function() mock.slash("/suu enable " .. m.id) end))
-        .toEqual({ ("  %s  ZZ Reload  |cff3fd0ffon|r  - %s"):format(m.id, m.source) })
+        .toEqual({ ("  %s  ZZ Reload  |cff3fd0ffon|r  - %s"):format(m.id, shown(m)) })
     local offAtLoad = modules.register({ id = nextId(), name = "ZZ Reload Off", reloadToToggle = true, enabledByDefault = false })
     expect(offAtLoad.state).toBe("disabled")
     offAtLoad:Set("enabled", true)
     expect(offAtLoad.pendingReload).toBe(true)
     expect(line(offAtLoad)).toBe(("  %s  ZZ Reload Off  |cffa39b8boff|r |cffffb23f(on after /reload)|r  - %s")
-        :format(offAtLoad.id, offAtLoad.source))
+        :format(offAtLoad.id, shown(offAtLoad)))
 end
 
 @test("reloadToToggle and errored: retries only after a reload")
@@ -614,7 +619,7 @@ local function reloadErrored()
     local out = printedBy(function() mock.slash("/suu enable " .. m.id) end)
     expect(out[1]).toBe(P .. "ZZ Reload Err tries again after a /reload.")
     expect(out[2]).toBe(("  %s  ZZ Reload Err  |cffff9a80errored|r |cffffb23f(retries after /reload)|r  - %s  (OnEnable failed)")
-        :format(m.id, m.source))
+        :format(m.id, shown(m)))
     expect(m.pendingReload).toBe(true)
     -- the setting off and on again: still a retry at the next load
     m:Set("enabled", false)
@@ -632,7 +637,7 @@ local function replaces()
     expect(replaced2.state).toBe("disabled")
     expect(replaced2.replacedBy).toBe("ZZ By Two")
     expect(calls2.init).toBe(0)
-    expect(line(replaced2)).toBe(("  zzmrep2  ZZ Replaced Two  |cffa39b8breplaced by ZZ By Two|r  - %s"):format(replaced2.source))
+    expect(line(replaced2)).toBe(("  zzmrep2  ZZ Replaced Two  |cffa39b8breplaced by ZZ By Two|r  - %s"):format(shown(replaced2)))
     -- its setting does nothing this session
     replaced2:Set("enabled", false)
     replaced2:Set("enabled", true)
@@ -669,8 +674,8 @@ local function modulesCommand()
     local out = printedBy(function() mock.slash("/suu modules") end)
     expect(out[1]).toBe(P .. ("%d modules, API %s:"):format(#modules.all(), modules.API_VERSION))
     expect(#out).toBe(#modules.all() + 1)
-    expect(out).toContain(("  zzmnormal  ZZ Normal  |cff3fd0ffon|r  - %s"):format(normal.source))
-    expect(out).toContain(("  zzmoff  ZZ Off  |cffa39b8boff|r  - %s"):format(off.source))
+    expect(out).toContain(("  zzmnormal  ZZ Normal  |cff3fd0ffon|r  - %s"):format(shown(normal)))
+    expect(out).toContain(("  zzmoff  ZZ Off  |cffa39b8boff|r  - %s"):format(shown(off)))
     local builtIn = modules.register({ id = nextId(), name = "ZZ Built", addon = "SuuUI" })
     expect(line(builtIn)).toBe(("  %s  ZZ Built  |cff3fd0ffon|r  - built in"):format(builtIn.id))
 end
@@ -682,7 +687,7 @@ local function toggleCommands()
     local m = modules.register({ id = nextId(), name = "ZZ Toggle" })
     local out = printedBy(function() mock.slash("/suu disable zz toggle") end)
     expect(m.state).toBe("disabled")
-    expect(out).toEqual({ ("  %s  ZZ Toggle  |cffa39b8boff|r  - %s"):format(m.id, m.source) })
+    expect(out).toEqual({ ("  %s  ZZ Toggle  |cffa39b8boff|r  - %s"):format(m.id, shown(m)) })
     mock.player:enterCombat()
     out = printedBy(function() mock.slash("/suu enable " .. m.id) end)
     expect(out[1]).toBe(P .. "ZZ Toggle turns on when combat ends.")
