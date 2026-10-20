@@ -1,0 +1,459 @@
+-- UI/Legacy: the points (the account's and this character's, what's not
+-- applied yet), the challenge cards (rows, bars, "All n challenges") and a
+-- category's full list (panels two to a row or full width, rows done, by
+-- count or by steps, opening a challenge's steps and its achievement steps
+-- in turn, the way back), the reward track (stops, reached, collected, the
+-- next reward) and a theme change.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import SuuUI from "/Core/API"
+import legacyPoints, legacyChallenges, legacyTrack, LEGACY_CARD_H, LEGACY_TRACK_H from "/UI/Legacy"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf from "./WorldHelpers"
+
+local S = T.space
+
+local parent: Frame? = nil
+
+local function host(w: number?, h: number?): Frame
+    parent = newParent(w or 900, h or 600)
+    return parent :: Frame
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+-- A text without its colour codes.
+local function plain(s: string?): string
+    return ((s or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+--------------------------------------------------------------------------------
+-- The points
+--------------------------------------------------------------------------------
+
+@test("the points: the account's earned of total, this character's spent of its cap")
+local function points()
+    local p = legacyPoints(host())
+    expect(p.account.caption).toHaveText("Legacy points · account")
+    expect(p.char.caption).toHaveText("Spent on this character")
+    expect(p.char).toBeAnchoredTo(p.account, "TOPLEFT", "TOPRIGHT")
+    expect(p:GetHeight()).toBe(T.type.caption.lineHeight + 1 + 24)
+    p:SetPoints({ earned = 16, total = 81, spent = 9, cap = 16, character = "Tamsin" })
+    expect(p.account.big:GetText()).toBe("16")
+    expect(p.account.rest:GetText()).toBe(" of 81 earned")
+    expect(p.char.caption).toHaveText("Spent on Tamsin")
+    expect(p.char.big:GetText()).toBe("9")
+    expect(p.char.rest:GetText()).toBe(" of 16")
+    local w = math.max(p.account.caption:GetUnboundedStringWidth(),
+        p.account.big:GetUnboundedStringWidth() + p.account.rest:GetUnboundedStringWidth())
+    expect(p.account:GetWidth()).toBe(math.ceil(w) + 2)
+    -- points not applied yet, in arcane
+    p:SetPoints({ earned = 16, total = 81, spent = 9, cap = 16, pending = 2 })
+    local rest = p.char.rest:GetText() :: string
+    expect(plain(rest)).toBe(" of 16 · 2 not applied")
+    expect(rest:find((T.color :: { [string]: any }).arcane.hex, 1, true) ~= nil).toBe(true)
+    -- nothing known: zeros
+    p:SetPoints(nil)
+    expect(p.account.big:GetText()).toBe("0")
+    expect(p.char.caption).toHaveText("Spent on this character")
+end
+
+@test("the points without the account's: this character's alone, at the left")
+local function charOnly()
+    local p = legacyPoints(host(), { account = false })
+    expect(p.account).never.toBeShown()
+    expect(p.char).toBeAnchoredTo(p, "TOPLEFT", "TOPLEFT")
+end
+
+--------------------------------------------------------------------------------
+-- Challenges: the cards
+--------------------------------------------------------------------------------
+
+local function items(n: number, done: number?): { [string]: any }[]
+    local list: { [string]: any }[] = {}
+    for i = 1, n do
+        list[i] = { name = "Challenge " .. i, done = i <= (done or 0), progress = i .. "/10", points = i }
+    end
+    return list
+end
+
+local function challenges(): any
+    local c = legacyChallenges(host())
+    c:SetAllPoints()
+    return c
+end
+
+@test("the cards: a category's done of total, its closest challenges, All n challenges when there are more")
+local function cards()
+    local c = challenges()
+    c:SetCategories({
+        { name = "Exploration", done = 3, total = 12, items = items(7, 1) },
+        { name = "Professions", done = 0, total = 2, items = items(2) },
+        { name = "Dungeons", done = 5, total = 5 },
+    })
+    local a, b, d = c.cards[1], c.cards[2], c.cards[3]
+    expect(a.name).toHaveText("Exploration")
+    expect(a.count).toHaveText("3/12")
+    expect(a.all).toHaveText("All 12 challenges")
+    local r1, r2 = a.rows[1], a.rows[2]
+    expect(r1.check).toBeShown()
+    expect(r1.bullet).never.toBeShown()
+    expect(tokenOf(r1.name)).toBe("ink-muted")
+    expect(r2.bullet).toBeShown()
+    expect(r2.name).toHaveText("Challenge 2")
+    expect(r2.progress).toHaveText("2/10")
+    expect(r2.worth).toHaveText("+2")
+    expect(a.rows[6]).toBeNil()
+    -- all of them shown: no All line
+    expect(b.all).toHaveText("")
+    expect(b.rows[3]).toBeNil()
+    -- none listed
+    expect(d.rows[1]).toBeNil()
+    expect(d.all).toHaveText("All 5 challenges")
+    -- three to a row, each a third of the width
+    local w = c:GetWidth()
+    local cw = math.floor((w - S["space-5"] * 2) / 3)
+    expect(a:GetWidth()).toBe(cw)
+    expect(a:GetHeight()).toBe(LEGACY_CARD_H)
+    local _, _, _, x3 = d:GetPoint(1)
+    expect(x3).toBe(2 * (cw + S["space-5"]))
+    -- the bar: as far as done of total; none at zero
+    expect(a.fill:GetWidth()).toBeCloseTo((cw - S["space-4"] * 2) * 3 / 12)
+    expect(b.fill).never.toBeShown()
+    expect(d.fill:GetWidth()).toBeCloseTo(cw - S["space-4"] * 2)
+    -- fewer categories, fewer items: hidden
+    c:SetCategories({ { name = "Exploration", done = 0, total = 1, items = { { name = "x" } } } })
+    expect(b).never.toBeShown()
+    expect(a.rows[2]).never.toBeShown()
+    expect(a.rows[1].worth).toHaveText("")
+    expect(a.rows[1].progress).toHaveText("")
+    c:SetCategories(nil)
+    expect(a).never.toBeShown()
+end
+
+@test("a card row's hover to its challenge's onEnter and onLeave; a card gilds on hover")
+local function cardHover()
+    local c = challenges()
+    local entered, left = mock.spy(function(_o: any) end), mock.spy()
+    c:SetCategories({ { name = "Exploration", done = 0, total = 2, items = {
+        { name = "A", onEnter = entered, onLeave = left }, { name = "B" } } } })
+    local card = c.cards[1]
+    mock.hover(card.rows[1])
+    expect(entered).toHaveBeenCalledWith(card.rows[1])
+    mock.hover(card.rows[2])
+    expect(left).toHaveBeenCalledTimes(1)
+    mock.hover(card)
+    expect(card.border.top ~= nil).toBe(true)
+    expect(tokenOf(card.border.top)).toBe("gilt-line")
+    mock.hover(nil)
+    expect(tokenOf(card.border.top)).toBe("gilt-faint")
+end
+
+@test("Layout without a width: nothing yet")
+local function noWidth()
+    local c = legacyChallenges(UIParent)
+    c:SetCategories({ { name = "A", done = 1, total = 2 } })
+    expect(c.cards[1]:GetWidth()).toBe(0)
+    c:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Challenges: a category's full list
+--------------------------------------------------------------------------------
+
+local function category(): { [string]: any }
+    local stepsOf = function(): { [string]: any }[]
+        return {
+            { text = "Elwynn Forest", done = true },
+            { text = "Westfall", count = { 2, 5 } },
+            { id = "deep", text = "Deepest delves", stepsN = 2, stepsDone = 1, steps = function(): { [string]: any }[]
+                return { { text = "The Stockade", done = true }, { text = "The Deadmines" } }
+            end },
+        }
+    end
+    return {
+        name = "Exploration", done = 2, total = 9,
+        items = items(3),
+        groups = {
+            { name = "Zones", done = 1, items = {
+                { id = "z1", name = "Explore Elwynn", done = true, points = 5 },
+                { id = "z2", name = "Explore Westfall", count = { 3, 10 }, points = 5 },
+            } },
+            { name = "", done = 0, items = { { id = "q1", name = "A quest line" } } },
+            { name = "Achievements", done = 0, items = {
+                { id = "big", name = "World explorer", stepsN = 3, stepsDone = 1, steps = stepsOf, points = 20 },
+            } },
+            { name = "Small", done = 0, items = { { id = "s1", name = "One" } } },
+        },
+    }
+end
+
+@test("a card opens its list: the bar with the way back, panels two to a row, a wide one full width")
+local function open()
+    local c = challenges()
+    c:SetCategories({ category() })
+    mock.click(c.cards[1])
+    expect(c.openIndex).toBe(1)
+    expect(c.grid).never.toBeShown()
+    expect(c.detail).toBeShown()
+    expect(c.detailTitle).toHaveText("Exploration")
+    expect(c.detailCount).toHaveText("2/9")
+    expect(c.detailBar.fraction).toBeCloseTo(2 / 9)
+    local zones, unnamed, ach, small = c.panels[1], c.panels[2], c.panels[3], c.panels[4]
+    expect(zones.name).toHaveText("Zones")
+    expect(zones.count).toHaveText("1/2")
+    expect(unnamed.name).toHaveText("Exploration")
+    -- two small ones side by side; the one with steps full width
+    local W = c.scroll.child:GetWidth()
+    local half = math.floor((W - S["space-5"]) / 2)
+    expect(zones:GetWidth()).toBe(half)
+    local _, _, _, xUnnamed, yUnnamed = unnamed:GetPoint(1)
+    expect(xUnnamed).toBe(half + S["space-5"])
+    expect(yUnnamed).toBe(0)
+    expect(ach:GetWidth()).toBe(W)
+    expect(small:GetWidth()).toBe(half)
+    -- back to the cards
+    mock.click(c.back)
+    expect(c.openIndex).toBeNil()
+    expect(c.grid).toBeShown()
+    expect(c.detail).never.toBeShown()
+end
+
+@test("the list's rows: done muted with a check, by count with a bar, by steps with a chevron")
+local function rows()
+    local c = challenges()
+    c:SetCategories({ category() })
+    c:Open(1)
+    local done, counted = c.panels[1].rows[1], c.panels[1].rows[2]
+    expect(done.check).toBeShown()
+    expect(tokenOf(done.name)).toBe("ink-muted")
+    expect(tokenOf(done.worth)).toBe("ink-muted")
+    expect(done.progress).toHaveText("")
+    expect(done.bar).never.toBeShown()
+    expect(counted.bullet).toBeShown()
+    expect(counted.progress).toHaveText("3/10")
+    expect(counted.bar).toBeShown()
+    expect(counted.bar.fraction).toBeCloseTo(0.3)
+    expect(counted.worth).toHaveText("+5")
+    expect(tokenOf(counted.worth)).toBe("gilt-text")
+    local plainRow = c.panels[2].rows[1]
+    expect(plainRow.progress).toHaveText("")
+    expect(plainRow.bar).never.toBeShown()
+    expect(plainRow.worth).toHaveText("")
+    local stepped = c.panels[3].rows[1]
+    expect(stepped.chevron).toBeShown()
+    expect(stepped.chevron:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronRight.tga")
+    expect(stepped.bullet).never.toBeShown()
+    expect(stepped.progress).toHaveText("1/3")
+    expect(stepped.bar.fraction).toBeCloseTo(1 / 3)
+end
+
+@test("a challenge with steps opens: its steps in columns, an achievement step opening further")
+local function steps()
+    local c = challenges()
+    c:SetCategories({ category() })
+    c:Open(1)
+    local p = c.panels[3]
+    local row = p.rows[1]
+    local before = p:GetHeight()
+    -- hover: the row lit (it opens), its callbacks
+    mock.hover(row)
+    expect(row.hover).toBeShown()
+    mock.hover(nil)
+    expect(row.hover).never.toBeShown()
+    mock.click(row)
+    expect(c.expanded.big).toBe(true)
+    expect(row.chevron:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronDown.tga")
+    expect(p:GetHeight() > before).toBe(true)
+    local s1, s2 = p.steps[1], p.steps[2]
+    expect(s1).toBeShown()
+    expect(s1.check).toBeShown()
+    expect(s1.ring).never.toBeShown()
+    expect(tokenOf(s1.text)).toBe("ink-muted")
+    expect(s1.text).toHaveText("Elwynn Forest")
+    expect(s2.ring).toBeShown()
+    expect(plain(s2.text:GetText())).toBe("Westfall  2/5")
+    -- the achievement step: a row of its own, closed
+    local sub = p.subrows[1]
+    expect(sub).toBeShown()
+    expect(sub.name).toHaveText("Deepest delves")
+    expect(sub.progress).toHaveText("1/2")
+    expect(p.steps[3]).toBeNil()
+    mock.click(sub)
+    expect(c.expanded.deep).toBe(true)
+    expect(p.steps[3]).toBeShown()
+    expect(p.steps[3].text).toHaveText("The Stockade")
+    expect(p.steps[4].text).toHaveText("The Deadmines")
+    -- closed again: its steps hidden
+    mock.click(row)
+    expect(p.steps[1]).never.toBeShown()
+    expect(p.subrows[1]).never.toBeShown()
+    -- a row without steps takes no click
+    local plainRow = c.panels[2].rows[1]
+    mock.click(plainRow)
+    expect(c.expanded.q1).toBeNil()
+end
+
+@test("a refresh keeps the open list and its scroll; a category gone closes it; Open of nothing closes")
+local function refresh()
+    local c = challenges()
+    local big = category()
+    for i = 1, 6 do
+        big.groups[#big.groups + 1] = { name = "Group " .. i, done = 0, items = items(6) }
+    end
+    c:SetCategories({ big })
+    c:Open(1)
+    c.scroll:SetVerticalScroll(40)
+    c:SetCategories({ big })
+    expect(c.openIndex).toBe(1)
+    expect(c.scroll:GetVerticalScroll()).toBe(40)
+    c:Open(1)
+    expect(c.scroll:GetVerticalScroll()).toBe(0)
+    -- fewer groups: the panels left over hidden
+    c:SetCategories({ category() })
+    expect(c.panels[6]).never.toBeShown()
+    c:SetCategories({})
+    expect(c.openIndex).toBeNil()
+    expect(c.grid).toBeShown()
+    c:Open(3)
+    expect(c.detail).never.toBeShown()
+end
+
+@test("the way back: its label beside the chevron, a pixel down while pressed")
+local function back()
+    local c = challenges()
+    c:SetCategories({ category() })
+    c:Open(1)
+    local b = c.back
+    expect(tokenOf(b.chevron)).toBe("gilt-text")
+    mock.script(b, "OnMouseDown", "LeftButton")
+    local _, _, _, x, y = b.label:GetPoint(1)
+    expect(x).toBe(7)
+    expect(y).toBe(-1)
+    mock.script(b, "OnMouseUp", "LeftButton")
+    local _, _, _, _, y2 = b.label:GetPoint(1)
+    expect(y2).toBe(0)
+    -- disabled: it stays
+    b:Disable()
+    mock.script(b, "OnMouseDown", "LeftButton")
+    local _, _, _, _, y3 = b.label:GetPoint(1)
+    expect(y3).toBe(0)
+end
+
+@test("a detail row's hover to its challenge's callbacks")
+local function detailHover()
+    local c = challenges()
+    local entered, left = mock.spy(function(_o: any) end), mock.spy()
+    c:SetCategories({ { name = "A", done = 0, total = 1, groups = {
+        { name = "G", done = 0, items = { { id = "x", name = "X", onEnter = entered, onLeave = left } } } } } })
+    c:Open(1)
+    local r = c.panels[1].rows[1]
+    mock.hover(r)
+    expect(entered).toHaveBeenCalledWith(r)
+    expect(r.hover).never.toBeShown()
+    mock.hover(nil)
+    expect(left).toHaveBeenCalledTimes(1)
+    -- an empty group: its bar at zero
+    c:SetCategories({ { name = "A", done = 0, total = 0, groups = { { name = "G", done = 0, items = {} } } } })
+    c:Open(1)
+    expect(c.panels[1].bar.fraction).toBe(0)
+    expect(c.detailBar.fraction).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- The reward track
+--------------------------------------------------------------------------------
+
+@test("the track: the account's points, the bar's fill, a stop per reward, reached, collected, the next")
+local function track()
+    local t = legacyTrack(host(1000, 100))
+    expect(t:GetHeight()).toBe(LEGACY_TRACK_H)
+    t:SetAllPoints()
+    local entered, left = mock.spy(function(_o: any) end), mock.spy()
+    t:SetTrack({ earned = 30, total = 81, max = 60, next = "Next: Riding Crop at 40",
+        stops = {
+            { at = 10, icon = 1, quality = "rare", collected = true, onEnter = entered, onLeave = left },
+            { at = 40, icon = 2 },
+            { at = 60, icon = 3 },
+        } })
+    expect(t.points.caption).toHaveText("Legacy · account")
+    expect(t.points.big:GetText()).toBe("30")
+    expect(t.points.rest:GetText()).toBe(" of 81 earned")
+    local inner = t:GetWidth() - (150 + 12) - 12 - 4
+    expect(t.bar:GetWidth()).toBeCloseTo(inner)
+    expect(t.fill:GetWidth()).toBeCloseTo(inner * 0.5)
+    local a, b, c = t.stops[1], t.stops[2], t.stops[3]
+    expect(a.slot.skin.item).toEqual({ icon = 1, quality = "rare", dim = false })
+    expect(tokenOf(a.mark)).toBe("gilt")
+    expect(tokenOf(a.at)).toBe("gilt-text")
+    expect(a.at).toHaveText("10")
+    expect(a.check).toBeShown()
+    expect(b.slot.skin.item.dim).toBe(true)
+    expect(tokenOf(b.mark)).toBe("gilt-line")
+    expect(tokenOf(b.at)).toBe("ink-muted")
+    expect(b.check).never.toBeShown()
+    local _, _, _, xc = c:GetPoint(1)
+    expect(xc).toBeCloseTo(150 + 12 + inner)
+    expect(t.next).toHaveText("Next: Riding Crop at 40")
+    mock.hover(a.slot)
+    expect(entered).toHaveBeenCalledWith(a.slot)
+    mock.hover(b.slot)
+    expect(left).toHaveBeenCalledTimes(1)
+    mock.hover(nil)
+    -- fewer stops, nothing earned: hidden, no fill
+    t:SetTrack({ stops = { { icon = 1 } } })
+    expect(b).never.toBeShown()
+    expect(t.fill).never.toBeShown()
+    expect(t.points.big:GetText()).toBe("0")
+    expect(a.at).toHaveText("0")
+    expect(t.next).toHaveText("")
+end
+
+@test("the track before it has a width: laid out for 800; drawn again when sized")
+local function trackWidth()
+    local t = legacyTrack(UIParent)
+    -- (anchored: a frame without points gets no OnSizeChanged)
+    t:SetPoint("TOPLEFT")
+    t:SetTrack(nil)
+    expect(t.bar:GetWidth()).toBeCloseTo(800 - 162 - 12 - 4)
+    t:SetWidth(600)
+    mock.advanceFrames(1)
+    expect(t.bar:GetWidth()).toBeCloseTo(600 - 162 - 12 - 4)
+    t:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- A theme change
+--------------------------------------------------------------------------------
+
+@test("a theme change: the public heights, points measured again, challenges and the track laid out")
+local function theme()
+    local h = host()
+    local p = legacyPoints(h)
+    p:SetPoints({ earned = 1 })
+    local bare = legacyPoints(h)
+    local c = legacyChallenges(h)
+    c:SetAllPoints()
+    c:SetCategories({ category() })
+    c:Open(1)
+    local t = legacyTrack(h)
+    t:SetTrack({ stops = { { at = 1 } } })
+    local open = mock.spy(function(_s: any, _i: number, _k: boolean?) end)
+    mock.stub(c, "Open", open)
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(open).toHaveBeenCalledWith(c, 1, true)
+    expect((SuuUI.UI :: any).LEGACY_CARD_H).toBe(LEGACY_CARD_H)
+    expect((SuuUI.UI :: any).LEGACY_TRACK_H).toBe(LEGACY_TRACK_H)
+    expect(p.account.big:GetText()).toBe("1")
+    expect(bare.data).toBeNil()
+    expect(t.stops[1]:GetHeight()).toBe(LEGACY_TRACK_H)
+end

@@ -1,0 +1,743 @@
+-- UI/RaidPlanner: the window drawn from its data (status, setups and the
+-- palette, the groups' slot cards and buff chips, raid-wide coverage, open
+-- slots, players without a slot, the footer's buttons), drawing only when
+-- shown, renaming a setup in place, every callback, dragging (specs, roles,
+-- classes, players; the ghost and the drop target's highlight), the slot
+-- editor and the moves panel, and a theme change.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import raidPlanner from "/UI/RaidPlanner"
+import * as tooltipModule from "/UI/Tooltip"
+import expectNoErrors from "../../helpers"
+import tokenOf, borderToken, alphaOf from "./WorldHelpers"
+
+local S = T.space
+
+local planner: any = nil
+
+local function make(): any
+    planner = raidPlanner(UIParent)
+    return planner
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if planner then planner:Hide() end
+    planner = nil
+    expectNoErrors()
+end
+
+local MAGE = "MAGE"
+local function slot(id: string, over: { [string]: any }?): { [string]: any }
+    local s: { [string]: any } = { id = id, req = "Any damage", who = "Tamsin", class = MAGE, spec = "Frost",
+        icon = 135846, state = "filled", player = "Tamsin" }
+    for k, v in pairs(over or {}) do s[k] = v end
+    return s
+end
+
+local function data(over: { [string]: any }?): { [string]: any }
+    local d: { [string]: any } = {
+        meta = "Molten Core · 40", size = 40, note = "Fill slots places who fits",
+        stats = { { n = 38, label = "in raid" }, { n = 2, label = "open", warn = true } },
+        setups = {
+            { id = "mc", name = "Molten Core", meta = "40 · 8 groups", loaded = true, changed = true },
+            { id = "ony", name = "Onyxia", meta = "40 · 8 groups" },
+        },
+        palette = {
+            { class = MAGE, name = "Mage", specs = {
+                { spec = "Arcane", label = "Arc", role = "DAMAGER", icon = 135932 },
+                { spec = "Fire", label = "Fire", role = "DAMAGER", icon = 135810, name = "Fire" },
+            } },
+        },
+        groups = {
+            { n = 1, kind = "melee", canAdd = true, slots = {
+                slot("s1", { pinned = true, tip = "Pinned by you" }),
+                { id = "s2", req = "Any damage", who = "Brannoc", class = "WARRIOR", spec = "?", state = "provisional", player = "Brannoc" },
+                { id = "s3", req = "Tank", state = "open", iconClass = "WARRIOR" },
+                slot("s4", { state = "conflict" }),
+                { id = "s5", req = "Any healer", who = "Tamsin", class = MAGE, state = "away" },
+            }, chips = {
+                { text = "Battle Shout", tone = "ok", tip = "From Brannoc" },
+                { text = "Trueshot Aura", tone = "warn" },
+                { text = "Mana Spring", tone = "open" },
+            } },
+            { n = 2, slots = { slot("s6") } },
+        },
+        raidWide = {
+            { label = "Arcane Intellect", n = 2, tip = { description = "From two mages" } },
+            { label = "Fire Resistance", detail = "Nobody brings it", warn = true },
+        },
+        raidWideMeta = "2 tracked",
+        open = { { label = "Group 1 · Tank", detail = "Any warrior" } },
+        unplaced = { { name = "Sedric", class = "ROGUE", known = false, detail = "No spec yet" } },
+        hint = "Drag a spec onto a slot",
+        fill = { shown = true, enabled = false, reason = "Every slot is filled" },
+        inspect = { shown = true, label = "Inspect (2)", enabled = true },
+        arrange = { enabled = true },
+    }
+    for k, v in pairs(over or {}) do d[k] = v end
+    return d
+end
+
+local function shown(list: any[]): any[]
+    local out: any[] = {}
+    for _, f in ipairs(list) do if f:IsShown() then out[#out + 1] = f end end
+    return out
+end
+
+local function drawn(d: { [string]: any }?): any
+    local w = make()
+    w:Show()
+    w:SetData(d or data())
+    return w
+end
+
+--------------------------------------------------------------------------------
+-- Drawing
+--------------------------------------------------------------------------------
+
+@test("SetData while hidden waits for the window to show")
+local function waits()
+    local w = make()
+    local draws = mock.spy()
+    mock.stub(w, "Draw", draws)
+    w:SetData(data())
+    expect(w.dirty).toBe(true)
+    expect(draws).never.toHaveBeenCalled()
+    w:Show()
+    expect(draws).toHaveBeenCalledTimes(1)
+    expect(w.dirty).toBeNil()
+    w:Hide(); w:Show()
+    expect(draws).toHaveBeenCalledTimes(1)
+end
+
+@test("the title and status: the counts (a warning amber), the note")
+local function status()
+    local w = drawn()
+    expect(w.title).toHaveText("Raid planner")
+    expect(w.meta).toHaveText("Molten Core · 40")
+    local stats = shown(w.stats)
+    expect(#stats).toBe(2)
+    expect(stats[1].n).toHaveText("38")
+    expect(stats[1].label).toHaveText("in raid")
+    expect(tokenOf(stats[1].n)).toBe("ink")
+    expect(tokenOf(stats[2].n)).toBe("amber")
+    expect(w.note).toHaveText("Fill slots places who fits")
+    -- nothing: no stats, no meta
+    w:SetData({})
+    expect(#shown(w.stats)).toBe(0)
+    expect(w.meta).toHaveText("")
+end
+
+@test("setups: loaded filled and edged, a diamond for unsaved changes; clicks and the menu")
+local function setups()
+    local w = drawn()
+    expect(w.setupsHead.label).toHaveText("Setups")
+    expect(w.setupsHead.meta).toHaveText("2")
+    expect(w.sizes.value).toBe(40)
+    local rows = shown(w.setupRows)
+    local mc, ony = rows[1], rows[2]
+    expect(mc.name).toHaveText("Molten Core")
+    expect(mc.meta).toHaveText("40 · 8 groups")
+    expect(mc.fill).toBeShown()
+    expect(mc.edge.top).toBeShown()
+    expect(mc.changed).toBeShown()
+    expect(ony.fill).never.toBeShown()
+    expect(ony.changed).never.toBeShown()
+    -- hover lights an unloaded one at half
+    mock.hover(ony)
+    expect(ony.fill).toBeShown()
+    expect(ony.fill:GetAlpha()).toBeCloseTo(0.5, 2)
+    mock.hover(mc)
+    expect(ony.fill).never.toBeShown()
+    expect(mc.fill).toBeShown()
+    mock.hover(nil)
+    expect(mc.fill:GetAlpha()).toBe(1)
+    local picked = mock.spy(function(_id: any) end)
+    local menu = mock.spy(function(_id: any, _o: any) end)
+    mock.click(ony)
+    mock.click(ony, "RightButton")
+    w.onSetup, w.onSetupMenu = picked, menu
+    mock.click(ony)
+    mock.click(ony, "RightButton")
+    expect(picked).toHaveBeenCalledWith("ony")
+    expect(menu).toHaveBeenCalledWith("ony", ony)
+    -- a row without an id: nothing
+    ony.id = nil
+    mock.click(ony)
+    expect(picked).toHaveBeenCalledTimes(1)
+end
+
+@test("the left's controls: size, New setup, Save, Save as new, Duplicate, Delete")
+local function leftControls()
+    local w = drawn()
+    local calls: string[] = {}
+    local function note(name: string): () -> () return function() calls[#calls + 1] = name end end
+    for _, b in ipairs(w.tools) do mock.click(b) end
+    mock.click(w.newRow)
+    w.onSave, w.onSaveAsNew, w.onDuplicate, w.onDelete = note("save"), note("saveAsNew"), note("duplicate"), note("delete")
+    local newSetup = mock.spy(function(_o: any) end)
+    local size = mock.spy(function(_v: any) end)
+    w.onNew, w.onSize = newSetup, size
+    for _, b in ipairs(w.tools) do mock.click(b) end
+    expect(calls).toEqual({ "save", "saveAsNew", "duplicate", "delete" })
+    mock.click(w.newRow)
+    expect(newSetup).toHaveBeenCalledWith(w.newRow)
+    mock.hover(w.newRow)
+    expect(tokenOf(w.newRow.label)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(w.newRow.label)).toBe("ink-muted")
+    w.sizes.onChange(20)
+    expect(size).toHaveBeenCalledWith(20)
+    w.onSize = nil
+    w.sizes.onChange(10)
+end
+
+@test("the palette: the roles, then each class with its specs; chips light on hover")
+local function palette()
+    local w = drawn()
+    expect(w.paletteHead.label).toHaveText("Slot palette")
+    local roles = w.roleChips
+    expect(roles[1].label).toHaveText("Any tank")
+    expect(roles[1].glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\shield.tga")
+    expect(roles[2].glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\plus.tga")
+    local row = shown(w.palRows)[1]
+    expect(row.name.label).toHaveText("Mage")
+    expect(tokenOf(row.name.label)).toBe("class-mage")
+    expect(tokenOf(row.diamond)).toBe("class-mage")
+    expect(row.name.text).toBe("Any mage")
+    local arcane, fire, third = row.specs[1], row.specs[2], row.specs[3]
+    expect(arcane.label).toHaveText("Arc")
+    expect(arcane.glyph:GetTextureFileID()).toBe(135932)
+    expect(arcane.text).toBe("Mage · Arc")
+    expect(fire.text).toBe("Mage · Fire")
+    expect(third).never.toBeShown()
+    mock.hover(arcane)
+    expect(borderToken(arcane.edge)).toBe("gilt")
+    expect(tokenOf(arcane.label)).toBe("ink")
+    mock.hover(nil)
+    expect(borderToken(arcane.edge)).toBe("gilt-faint")
+    -- fewer classes: the rows left over hidden
+    w:SetData(data({ palette = {} }))
+    expect(#shown(w.palRows)).toBe(0)
+end
+
+@test("a group: its title, kind, Add slot, buff chips by tone, wrapping")
+local function group()
+    local w = drawn()
+    local groups = shown(w.groupFrames)
+    expect(#groups).toBe(2)
+    local g1, g2 = groups[1], groups[2]
+    expect(g1.title).toHaveText("Group 1")
+    expect(g1.kind).toHaveText("melee")
+    expect(g1.add).toBeShown()
+    expect(g1.add.where).toEqual({ group = 1 })
+    expect(g2.add).never.toBeShown()
+    expect(g2.rule).never.toBeShown()
+    expect(g1.rule).toBeShown()
+    local chips = shown(g1.chips)
+    expect(chips[1].text).toHaveText("Battle Shout")
+    expect(borderToken(chips[1].edge)).toBe("gilt-faint")
+    expect(tokenOf(chips[2].text)).toBe("amber")
+    expect(borderToken(chips[3].edge)).toBe("amber")
+    expect(alphaOf(chips[3].edge.top)).toBeCloseTo(0.7, 2)
+    -- the groups of a row as tall as the tallest
+    expect(g1:GetHeight()).toBe(g2:GetHeight())
+    -- a chip's tooltip
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.hover(chips[1])
+    expect(show).toHaveBeenCalledWith(chips[1], { title = "Battle Shout", description = "From Brannoc" })
+    mock.hover(chips[2])
+    expect(show).toHaveBeenCalledTimes(1)
+    -- many chips wrap onto another line
+    local many: { [string]: any }[] = {}
+    for i = 1, 12 do many[i] = { text = "Buff number " .. i, tone = "ok" } end
+    w:SetData(data({ groups = { { n = 1, slots = {}, chips = many } } }))
+    local wrapped = shown(shown(w.groupFrames)[1].chips)
+    local _, _, _, _, yFirst = wrapped[1]:GetPoint(1)
+    local _, _, _, _, yLast = wrapped[12]:GetPoint(1)
+    expect(yLast < yFirst).toBe(true)
+    -- five groups: two rows
+    w:SetData(data({ groups = { { n = 1 }, { n = 2 }, { n = 3 }, { n = 4 }, { n = 5 } } }))
+    local five = shown(w.groupFrames)
+    expect(#five).toBe(5)
+    local _, _, _, x5, y5 = five[5]:GetPoint(1)
+    expect(x5).toBe(0)
+    expect(y5 < 0).toBe(true)
+end
+
+@test("slot cards by state: filled, provisional's dotted ?, open asks dimmed, conflict and away")
+local function cards()
+    local w = drawn()
+    local g = shown(w.groupFrames)[1]
+    local filled, prov, open, conflict, away = g.cards[1], g.cards[2], g.cards[3], g.cards[4], g.cards[5]
+    expect(filled.who).toHaveText("Tamsin")
+    expect(tokenOf(filled.who)).toBe("class-mage")
+    expect(filled.spec).toHaveText("Frost")
+    expect(filled.req).toHaveText("Any damage")
+    expect(tokenOf(filled.req)).toBe("ink-faint")
+    expect(filled.pin).toBeShown()
+    expect(filled.fill).toBeShown()
+    expect(filled.edge.top).never.toBeShown()
+    expect(filled.icon.art:GetTextureFileID()).toBe(135846)
+    expect(filled.icon.state).toBe("rest")
+    expect(filled.where).toEqual({ slot = "s1" })
+    -- provisional: the class's tile, faded; the ? in ink, dotted
+    expect(prov.spec).toHaveText("?")
+    expect(tokenOf(prov.spec)).toBe("ink")
+    expect(prov.dots[1]).toBeShown()
+    expect(prov.icon.art:GetAlpha()).toBeCloseTo(0.6, 2)
+    expect(filled.dots[1]).never.toBeShown()
+    -- open: Open in amber, dimmed, an amber edge at 0.7, no fill
+    expect(open.who).toHaveText("Open")
+    expect(tokenOf(open.who)).toBe("amber")
+    expect(open.icon.state).toBe("dim")
+    expect(open.fill).never.toBeShown()
+    expect(open.edge.top).toBeShown()
+    expect(borderToken(open.edge)).toBe("amber")
+    expect(tokenOf(open.req)).toBe("ink-muted")
+    -- conflict: the edge and the ask in amber
+    expect(conflict.edge.top).toBeShown()
+    expect(tokenOf(conflict.req)).toBe("amber")
+    -- away: muted
+    expect(tokenOf(away.who)).toBe("ink-muted")
+    -- fewer slots: the cards left over hidden
+    w:SetData(data({ groups = { { n = 1, slots = { slot("x") } } } }))
+    expect(g.cards[2]).never.toBeShown()
+end
+
+@test("a card: hover gilds a filled one and shows the slot's tip; click to onSlot")
+local function cardInput()
+    local w = drawn()
+    local g = shown(w.groupFrames)[1]
+    local filled, open = g.cards[1], g.cards[3]
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.stub(tooltipModule, "hideTooltip", function() end)
+    mock.hover(filled)
+    expect(filled.edge.top).toBeShown()
+    expect(borderToken(filled.edge)).toBe("gilt-line")
+    expect(show).toHaveBeenCalledWith(filled, { title = "Tamsin", subtitle = "Any damage", description = "Pinned by you" })
+    mock.hover(open)
+    expect(filled.edge.top).never.toBeShown()
+    expect(show).toHaveBeenCalledWith(open, { title = "Tank" })
+    expect(borderToken(open.edge)).toBe("amber")
+    local clicked = mock.spy(function(_id: any, _o: any, _b: string) end)
+    mock.click(filled)
+    w.onSlot = clicked
+    mock.click(filled, "RightButton")
+    expect(clicked).toHaveBeenCalledWith("s1", filled, "RightButton")
+    -- a card without a slot: nothing
+    filled.slot = nil
+    mock.click(filled)
+    mock.hover(nil)
+    mock.hover(filled)
+    expect(clicked).toHaveBeenCalledTimes(1)
+end
+
+@test("Add slot: a click to onAdd with its group; hover lighter")
+local function addSlot()
+    local w = drawn()
+    local add = shown(w.groupFrames)[1].add
+    local added = mock.spy(function(_n: number, _o: any) end)
+    mock.click(add)
+    w.onAdd = added
+    mock.click(add)
+    expect(added).toHaveBeenCalledWith(1, add)
+    mock.hover(add)
+    expect(tokenOf(add.label)).toBe("ink-muted")
+    mock.hover(nil)
+    expect(tokenOf(add.label)).toBe("ink-faint")
+end
+
+@test("raid-wide: rows with counts, a warned one amber, its detail; the empty text")
+local function raidWide()
+    local w = drawn()
+    expect(w.raidHead.label).toHaveText("Raid-wide")
+    expect(w.raidHead.meta).toHaveText("2 tracked")
+    local rows = shown(w.raidRows)
+    local ai, fr = rows[1], rows[2]
+    expect(ai.label).toHaveText("Arcane Intellect")
+    expect(ai.n).toHaveText("2")
+    expect(ai.rule).never.toBeShown()
+    expect(ai.detail).never.toBeShown()
+    expect(tokenOf(ai.mark)).toBe("ink-muted")
+    expect(fr.rule).toBeShown()
+    expect(tokenOf(fr.label)).toBe("amber")
+    expect(tokenOf(fr.mark)).toBe("amber")
+    expect(fr.detail).toBeShown()
+    expect(fr.detail).toHaveText("Nobody brings it")
+    expect(fr.n).toHaveText("")
+    expect(w.raidEmpty).never.toBeShown()
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.hover(ai)
+    expect(show).toHaveBeenCalledWith(ai, { title = "Arcane Intellect", description = "From two mages" })
+    mock.hover(fr)
+    expect(show).toHaveBeenCalledTimes(1)
+    -- none tracked: the empty text, the default or the module's
+    w:SetData(data({ raidWide = {}, raidWideMeta = false }))
+    expect(w.raidEmpty).toBeShown()
+    expect(w.raidEmpty).toHaveText("Nothing raid-wide is tracked (Settings › Raid planner).")
+    w:SetData(data({ raidWide = {}, raidWideEmpty = "Nothing here" }))
+    expect(w.raidEmpty).toHaveText("Nothing here")
+end
+
+@test("open slots: amber rows, or None; players without a slot by class, their details")
+local function rightColumn()
+    local w = drawn()
+    expect(w.openHead.meta).toHaveText("1")
+    local open = shown(w.openRows)[1]
+    expect(open.label).toHaveText("Group 1 · Tank")
+    expect(tokenOf(open.label)).toBe("amber")
+    expect(w.openEmpty).never.toBeShown()
+    expect(w.unplacedHead.meta).toHaveText("1")
+    local person = shown(w.personRows)[1]
+    expect(person.name).toHaveText("Sedric")
+    expect(tokenOf(person.name)).toBe("class-rogue")
+    expect(person.detail).toHaveText("No spec yet")
+    expect(person.rule).never.toBeShown()
+    expect(w.unplacedZone.empty).never.toBeShown()
+    expect(w.unplacedZone.where).toEqual({ unplaced = true })
+    local clicked = mock.spy(function(_n: any, _o: any, _b: string) end)
+    mock.click(person, "RightButton")
+    w.onPerson = clicked
+    mock.click(person, "RightButton")
+    expect(clicked).toHaveBeenCalledWith("Sedric", person, "RightButton")
+    -- none of either
+    w:SetData(data({ open = {}, unplaced = {}, unplacedMeta = "everyone placed" }))
+    expect(w.openEmpty).toBeShown()
+    expect(w.unplacedZone.empty).toBeShown()
+    expect(w.unplacedHead.meta).toHaveText("everyone placed")
+    -- an unknown class: ink
+    w:SetData(data({ unplaced = { { name = "Odd", class = "NOPE" }, { name = "Two" } } }))
+    local rows = shown(w.personRows)
+    expect(tokenOf(rows[1].name)).toBe("ink")
+    expect(rows[2].rule).toBeShown()
+end
+
+@test("the footer: the hint; Fill, Inspect and Arrange by their state; a reason as the tooltip")
+local function footer()
+    local w = drawn()
+    expect(w.hint).toHaveText("Drag a spec onto a slot")
+    expect(w.fill).toBeShown()
+    expect(w.fill:IsEnabled()).toBe(false)
+    expect(w.fill.tooltip).toEqual({ title = "Fill slots", description = "Every slot is filled" })
+    expect(w.inspect.label).toHaveText("Inspect (2)")
+    expect(w.inspect:IsEnabled()).toBe(true)
+    expect(w.inspect.tooltip).toBeNil()
+    expect(w.inspect).toBeAnchoredTo(w.arrange, "RIGHT", "LEFT")
+    expect(w.fill).toBeAnchoredTo(w.inspect, "RIGHT", "LEFT")
+    -- Inspect hidden: Fill beside Arrange
+    w:SetData(data({ inspect = { shown = false } }))
+    expect(w.inspect).never.toBeShown()
+    expect(w.fill).toBeAnchoredTo(w.arrange, "RIGHT", "LEFT")
+    -- none given: off but shown
+    w:SetData(data({ arrange = false, fill = false, inspect = false }))
+    expect(w.arrange:IsEnabled()).toBe(false)
+    local calls: string[] = {}
+    w:SetData(data({ fill = { enabled = true }, inspect = { enabled = true }, arrange = { enabled = true } }))
+    mock.click(w.fill); mock.click(w.inspect); mock.click(w.arrange)
+    w.onFill = function() calls[#calls + 1] = "fill" end
+    w.onInspect = function() calls[#calls + 1] = "inspect" end
+    w.onArrange = function() calls[#calls + 1] = "arrange" end
+    mock.click(w.fill); mock.click(w.inspect); mock.click(w.arrange)
+    expect(calls).toEqual({ "fill", "inspect", "arrange" })
+end
+
+@test("the content as tall as the longest column")
+local function height()
+    local w = drawn()
+    expect(w.content:GetHeight() > 20 + S["space-5"]).toBe(true)
+    w:SetData({})
+    expect(w.content:GetHeight() > 0).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Renaming
+--------------------------------------------------------------------------------
+
+@test("Rename: the field over the row, focused, the name hidden; Enter to onRename")
+local function rename()
+    local w = drawn()
+    local renamed = mock.spy(function(_id: any, _t: string) end)
+    w.onRename = renamed
+    w:Rename("ony")
+    local row = shown(w.setupRows)[2]
+    local f = w.renameField
+    expect(f).toBeShown()
+    expect(row.name).never.toBeShown()
+    expect(row.meta).toHaveText("Renaming · Enter to keep")
+    expect(f.id).toBe("ony")
+    expect(f.edit:HasFocus()).toBe(true)
+    expect(f.edit:GetText()).toBe("Onyxia")
+    -- drawn again while typing: what is typed kept
+    mock.typeText(f.edit, " 2")
+    w:Draw()
+    expect(f.edit:GetText()).toBe("Onyxia 2")
+    mock.pressKey("ENTER")
+    expect(renamed).toHaveBeenCalledWith("ony", "Onyxia 2")
+    expect(w.renaming).toBeNil()
+    -- the focus lost: renaming ends the next frame
+    w:Rename("mc")
+    f.edit:ClearFocus()
+    mock.advanceTime(0.1)
+    expect(w.renaming).toBeNil()
+    expect(f).never.toBeShown()
+    -- Enter without onRename, or without an id: nothing breaks
+    w.onRename = nil
+    w:Rename("mc")
+    mock.pressKey("ENTER")
+    f.id = nil
+    f.onChange("x")
+end
+
+--------------------------------------------------------------------------------
+-- Dragging
+--------------------------------------------------------------------------------
+
+-- Drags `from` and drops it on `to` (nil: over nothing), the mouse over it.
+local function dragOnto(from: any, to: any?)
+    mock.script(from, "OnDragStart", "LeftButton")
+    mock.hover(to)
+    mock.advanceFrames(1)
+    mock.script(from, "OnDragStop")
+    mock.hover(nil)
+end
+
+@test("a spec dragged onto a slot: the ghost with its icon and colour, the slot lit, onDrop")
+local function dragSpec()
+    local w = drawn()
+    local dropped = mock.spy(function(_w: any, _t: any) end)
+    w.onDrop = dropped
+    local spec = shown(w.palRows)[1].specs[1]
+    local target = shown(w.groupFrames)[1].cards[3]
+    mock.script(spec, "OnDragStart", "LeftButton")
+    expect(w.dragging).toEqual({ spec = { class = MAGE, spec = "Arcane", role = "DAMAGER" } })
+    local gh = w.ghost
+    expect(gh).toBeShown()
+    expect(gh.text).toHaveText("Mage · Arc")
+    expect(tokenOf(gh.text)).toBe("class-mage")
+    expect(gh.icon).toBeShown()
+    -- while dragging, a card's own hover does nothing
+    mock.hover(target)
+    expect(borderToken(target.edge)).toBe("amber")
+    mock.advanceFrames(1)
+    expect(target.dropHover).toBe(true)
+    expect(tokenOf(target.fill)).toBe("arcane-soft")
+    expect(borderToken(target.edge)).toBe("arcane")
+    expect(tokenOf(target.who)).toBe("ink")
+    -- onto another target: the first one's light goes
+    local add = shown(w.groupFrames)[1].add
+    mock.hover(add)
+    mock.advanceFrames(1)
+    expect(target.dropHover).toBe(false)
+    expect(add.fill).toBeShown()
+    expect(borderToken(add.edge)).toBe("arcane")
+    mock.hover(add)
+    expect(tokenOf(add.label)).toBe("ink")
+    mock.hover(target)
+    mock.advanceFrames(1)
+    mock.script(spec, "OnDragStop")
+    expect(gh).never.toBeShown()
+    expect(w.dragging).toBeNil()
+    expect(dropped).toHaveBeenCalledWith({ spec = { class = MAGE, spec = "Arcane", role = "DAMAGER" } }, { slot = "s3" })
+end
+
+@test("roles, classes and players dragged; a drop on nothing, or without onDrop")
+local function dragOthers()
+    local w = drawn()
+    local dropped = mock.spy(function(_w: any, _t: any) end)
+    w.onDrop = dropped
+    local g = shown(w.groupFrames)[1]
+    -- a role onto Add slot: no icon on the ghost
+    dragOnto(w.roleChips[1], g.add)
+    expect(dropped).toHaveBeenCalledWith({ spec = { role = "TANK" } }, { group = 1 })
+    expect(w.ghost.icon).never.toBeShown()
+    -- a class onto a slot
+    dragOnto(shown(w.palRows)[1].name, g.cards[2])
+    expect(dropped).toHaveBeenCalledWith({ spec = { class = MAGE } }, { slot = "s2" })
+    -- a placed player onto Without a slot
+    dragOnto(g.cards[1], w.unplacedZone)
+    expect(dropped).toHaveBeenCalledWith({ player = "Tamsin", from = "s1" }, { unplaced = true })
+    -- someone without a slot onto a card
+    dragOnto(shown(w.personRows)[1], g.cards[4])
+    expect(dropped).toHaveBeenCalledWith({ player = "Sedric" }, { slot = "s4" })
+    -- an open card carries nothing: no drag
+    mock.script(g.cards[3], "OnDragStart", "LeftButton")
+    expect(w.dragging).toBeNil()
+    -- dropped over nothing
+    dragOnto(w.roleChips[2], nil)
+    expect(dropped).toHaveBeenCalledTimes(4)
+    w.onDrop = nil
+    dragOnto(w.roleChips[2], g.add)
+end
+
+@test("hidden while dragging: the drag stops, the editor and moves close")
+local function hiddenMidDrag()
+    local w = drawn()
+    w:EditSlot({ id = "s1" }, nil)
+    w:ShowMoves({ moves = {} }, nil)
+    mock.script(w.roleChips[1], "OnDragStart", "LeftButton")
+    w:Hide()
+    expect(w.dragging).toBeNil()
+    expect(w.editor).never.toBeShown()
+    expect(w.movesPanel).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The slot editor
+--------------------------------------------------------------------------------
+
+local CLASSES: { [string]: any }[] = { { value = "any", label = "Any class" }, { value = MAGE, label = "Mage" } }
+local SPECS: { [string]: any }[] = { { value = "any", label = "Any" }, { value = "Frost", label = "Frost" } }
+
+@test("EditSlot: the slot's title, its class, spec, role, label and who; beside its card")
+local function editor()
+    local w = drawn()
+    local card = w:CardFor("s1")
+    expect(card).toBe(shown(w.groupFrames)[1].cards[1])
+    expect(w:CardFor("nope")).toBeNil()
+    w:EditSlot({ id = "s1", title = "Group 1 · Slot 1", meta = "filled", class = MAGE, spec = "Frost", role = "DAMAGER",
+        label = "Sheep", who = "Tamsin", classes = CLASSES, specs = SPECS,
+        whoOptions = { { value = "any", label = "Anyone who fits" }, { value = "Tamsin", label = "Tamsin" } } }, card)
+    local p = w.editor
+    expect(p).toBeShown()
+    expect(p.title).toHaveText("Group 1 · Slot 1")
+    expect(p.meta).toHaveText("filled")
+    expect(p.class.value).toBe(MAGE)
+    expect(p.specs[MAGE].value).toBe("Frost")
+    expect(p.specs[MAGE].disabled).toBe(false)
+    expect(p.role.value).toBe("DAMAGER")
+    expect(p.label.edit:GetText()).toBe("Sheep")
+    expect(p.who.value).toBe("Tamsin")
+    expect(w:EditingSlot()).toBe("s1")
+    local _, rel = p:GetPoint(1)
+    expect(rel).toBe(card)
+    -- another slot without a class: the any-spec switch, disabled; defaults
+    w:EditSlot({ id = "s3" }, nil)
+    expect(p.title).toHaveText("Slot")
+    expect(p.class.value).toBe("any")
+    expect(p.specs.any.disabled).toBe(true)
+    expect(p.specs[MAGE]).never.toBeShown()
+    expect(p.who.value).toBe("any")
+    expect(w:EditingSlot()).toBe("s3")
+    w:CloseEditor()
+    expect(w:EditingSlot()).toBeNil()
+    -- shown again without a card: where it was
+    w:EditSlot({ id = "s3" }, nil)
+    expect(p).toBeShown()
+end
+
+@test("the editor's changes to onSlotChange: class, spec, role, label, who; Remove and Done")
+local function editorChanges()
+    local w = drawn()
+    local changes = mock.spy(function(_id: any, _c: any) end)
+    local removed = mock.spy(function(_id: any) end)
+    w:EditSlot({ id = "s1", class = MAGE, classes = CLASSES, specs = SPECS }, nil)
+    local p = w.editor
+    p.class.onChange(MAGE)
+    w.onSlotChange, w.onSlotRemove = changes, removed
+    p.class.onChange("any")
+    expect(changes).toHaveBeenCalledWith("s1", { class = false })
+    p.class.onChange(MAGE)
+    expect(changes).toHaveBeenCalledWith("s1", { class = MAGE })
+    p.specs[MAGE].onChange("Frost")
+    expect(changes).toHaveBeenCalledWith("s1", { spec = "Frost" })
+    p.specs[MAGE].onChange("any")
+    expect(changes).toHaveBeenCalledWith("s1", { spec = false })
+    p.role.onChange("TANK")
+    expect(changes).toHaveBeenCalledWith("s1", { role = "TANK" })
+    p.role.onChange("any")
+    expect(changes).toHaveBeenCalledWith("s1", { role = false })
+    p.label.onChange("  Main tank ")
+    expect(changes).toHaveBeenCalledWith("s1", { label = "Main tank" })
+    p.label.onChange(nil)
+    expect(changes).toHaveBeenCalledWith("s1", { label = "" })
+    p.who.onChange("Tamsin")
+    expect(changes).toHaveBeenCalledWith("s1", { pin = "Tamsin" })
+    p.who.onChange("any")
+    expect(changes).toHaveBeenCalledWith("s1", { pin = false })
+    mock.click(p.done)
+    expect(p).never.toBeShown()
+    w:EditSlot({ id = "s1" }, nil)
+    mock.click(p.remove)
+    expect(p).never.toBeShown()
+    expect(removed).toHaveBeenCalledWith("s1")
+    -- without onSlotRemove, or once the def is gone: nothing
+    w.onSlotRemove, w.onSlotChange = nil, nil
+    w:EditSlot({ id = "s1" }, nil)
+    mock.click(p.remove)
+    p.def = nil
+    p.role.onChange("TANK")
+    p.specs.any.onChange("x")
+end
+
+@test("the editor's label kept while it's being typed in")
+local function editorTyping()
+    local w = drawn()
+    w:EditSlot({ id = "s1", label = "Sheep" }, nil)
+    local p = w.editor
+    mock.typeText(p.label.edit, "!")
+    w:EditSlot({ id = "s1", label = "Other" }, nil)
+    expect(p.label.edit:GetText()).toBe("Sheep!")
+    -- closing it drops the focus
+    p:Hide()
+    expect(p.label.edit:HasFocus()).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Arrange groups
+--------------------------------------------------------------------------------
+
+@test("ShowMoves: each move from group to group, the note, Move n players; confirm or cancel")
+local function moves()
+    local w = drawn()
+    local confirmed = mock.spy()
+    w:ShowMoves({ moves = {
+        { name = "Tamsin", class = MAGE, icon = 135846, known = true, from = 3, to = 1 },
+        { name = "Brannoc", class = "WARRIOR", from = 2, to = 4 },
+    }, note = "Healers spread over the groups." }, confirmed)
+    local p = w.movesPanel
+    expect(p).toBeShown()
+    expect(p.meta).toHaveText("2 moves")
+    local rows = shown(p.rows)
+    expect(rows[1].name).toHaveText("Tamsin")
+    expect(tokenOf(rows[1].name)).toBe("class-mage")
+    expect(rows[1].from).toHaveText("group 3 → 1")
+    expect(p.note).toHaveText("Healers spread over the groups.")
+    expect(p.go.label).toHaveText("Move 2 players")
+    mock.click(p.go)
+    expect(p).never.toBeShown()
+    expect(confirmed).toHaveBeenCalledTimes(1)
+    -- one move, a meta of its own; cancel
+    w:ShowMoves({ moves = { { name = "Tamsin" } } }, confirmed)
+    expect(p.meta).toHaveText("1 move")
+    expect(p.go.label).toHaveText("Move 1 player")
+    expect(rows[1].from).toHaveText("group 0 → 0")
+    expect(rows[2]).never.toBeShown()
+    mock.click(p.cancel)
+    expect(p).never.toBeShown()
+    expect(confirmed).toHaveBeenCalledTimes(1)
+    w:ShowMoves({ meta = "nothing to move" }, nil)
+    expect(p.meta).toHaveText("nothing to move")
+    mock.click(p.go)
+end
+
+--------------------------------------------------------------------------------
+-- A theme change
+--------------------------------------------------------------------------------
+
+@test("a theme change draws a shown planner with data again; not a hidden one")
+@cases({ { true }, { false } })
+local function theme(visible: boolean)
+    local w = make()
+    w:SetData(data())
+    if visible then w:Show() end
+    local draws = mock.spy()
+    mock.stub(w, "Draw", draws)
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(draws).toHaveBeenCalledTimes(visible and 1 or 0)
+end
