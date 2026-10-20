@@ -27,17 +27,44 @@ import * as fault from "/Core/Fault"
 import * as events from "/Core/Events"
 import * as motion from "/Core/Motion"
 import * as extend from "/Core/Extend"
-import actionButton, shortKey from "/UI/ActionButton"
+import actionButton, shortKey, ActionButton from "/UI/ActionButton"
 import setVisibility from "/UI/Visibility"
 
 const S = T.space
 
 const BUTTONS = 12
 
-local Bar = {}
+-- A bar actionBar makes (a table, its frame the header).
+export interface ActionBar
+    name: string
+    slot: number
+    binding?: string
+    paging?: string
+    onPage?: (bar: ActionBar, page: number) -> ()
+    columns: number
+    gap: number
+    count?: number
+    size?: number
+    page?: number
+    hidden?: boolean
+    hotkeysShown?: boolean
+    header: Frame
+    buttons: ActionButton[]
+    function Page(): number
+    function UpdatePage()
+    function SetHotkeysShown(shown: any)
+    function SetShowEmpty(shown: any)
+    function UpdateBindings()
+    function SetVisibility(mode: string)
+    function SetShown(shown: any)
+    function UpdateLock()
+    function Layout(columns: number?, gap: number?, count: number?, size: number?)
+end
+
+local Bar: ActionBar = {} :: any
 mixins.ActionBar = Bar
-local bars: any[] = {}                           -- every bar made
-local bySlot: { [number]: { [any]: boolean } } = {} -- [slot] = { [button] = true }
+local bars: ActionBar[] = {}                     -- every bar made
+local bySlot: { [number]: { [ActionButton]: boolean } } = {} -- [slot] = { [button] = true }
 
 --------------------------------------------------------------------------------
 -- Paging (Forever)
@@ -81,12 +108,12 @@ local function rangeOff(slot: number)
 end
 
 -- Enabling a range check sends no first state: read it once.
-local function rangeNow(b: any)
+local function rangeNow(b: ActionButton)
     local r = b.slot and b.hasAction and IsActionInRange(b.slot)
     b:SetOutOfRange(not isSecret(r) and r == false)
 end
 
-local function onSlotChanged(b: any, old: number?, new: number?)
+local function onSlotChanged(b: ActionButton, old: number?, new: number?)
     if old then
         local was = bySlot[old]
         if was then was[b] = nil end
@@ -100,13 +127,13 @@ local function onSlotChanged(b: any, old: number?, new: number?)
     end
 end
 
-local function eachButton(fn: (b: any) -> ())
+local function eachButton(fn: (b: ActionButton) -> ())
     for _, bar in ipairs(bars) do
         for _, b in ipairs(bar.buttons) do fn(b) end
     end
 end
 
-local function eachInSlot(slot: number, fn: (b: any) -> ())
+local function eachInSlot(slot: number, fn: (b: ActionButton) -> ())
     for b in pairs(bySlot[slot] or {}) do fn(b) end
 end
 
@@ -151,7 +178,7 @@ function Bar:UpdateBindings()
         ClearOverrideBindings(self.header)
         if self.hidden then return end
         for i, b in ipairs(self.buttons) do
-            local keys = { GetBindingKey(self.binding .. i) }
+            local keys = { GetBindingKey((self.binding :: string) .. i) }
             if i <= (self.count or #self.buttons) then
                 for _, key in ipairs(keys) do
                     SetOverrideBindingClick(self.header, false, key, b:GetName(), "LeftButton")
@@ -187,15 +214,16 @@ end
 function Bar:Layout(columns: number?, gap: number?, count: number?, size: number?)
     self.columns = columns or self.columns
     self.gap = gap or self.gap
-    self.count = math.max(1, math.min(count or self.count or #self.buttons, #self.buttons))
-    self.size = size or self.size or self.buttons[1]:GetWidth()
-    local cols = math.min(self.columns, self.count)
-    local rows = math.ceil(self.count / cols)
-    local px, g = self.size, self.gap
+    local n = math.max(1, math.min(count or self.count or #self.buttons, #self.buttons))
+    local px: number = size or self.size or self.buttons[1]:GetWidth()
+    self.count, self.size = n, px
+    local cols = math.min(self.columns, n)
+    local rows = math.ceil(n / cols)
+    local g = self.gap
     combat.run("actionbar:layout:" .. self.name, function()
         for i, b in ipairs(self.buttons) do
             b:Resize(px)
-            local shown = i <= self.count
+            local shown = i <= (self.count :: number) -- (set above; read when it runs)
             b:SetShown(shown)
             if shown then
                 local c, r = (i - 1) % cols, math.floor((i - 1) / cols)
@@ -225,7 +253,7 @@ const CLICK_PRE = [[
 ]]
 
 export function actionBar(parent: Frame, opts: { [string]: any }): any
-    local bar: any = setmetatable({}, { __index = Bar })
+    local bar: ActionBar = setmetatable({}, { __index = Bar }) :: any
     bar.name = opts.name
     bar.slot = opts.slot or 1
     bar.binding = opts.binding
@@ -240,7 +268,7 @@ export function actionBar(parent: Frame, opts: { [string]: any }): any
     bar.buttons = {}
 
     for i = 1, math.min(opts.count or BUTTONS, BUTTONS) do
-        local b = actionButton(h, opts.name .. "Button" .. i, opts.size)
+        local b: ActionButton = actionButton(h, opts.name .. "Button" .. i, opts.size)
         b.onSlotChanged = onSlotChanged
         if opts.binding then
             b.bindCommand = opts.binding .. i
@@ -302,10 +330,10 @@ end
 -- (often several of each in one frame), and each pass reads every button's
 -- cooldown as a new table from the game: 18 KB a pass, most of the action
 -- bars' garbage (/suu probe garbage, 2026-10-18).
-local PASSES: { [string]: (b: any) -> () } = {
-    cooldown = function(b: any) b:UpdateCooldown() end,
-    usable = function(b: any) b:UpdateUsable() end,
-    active = function(b: any) b:UpdateActive() end,
+local PASSES: { [string]: (b: ActionButton) -> () } = {
+    cooldown = function(b: ActionButton) b:UpdateCooldown() end,
+    usable = function(b: ActionButton) b:UpdateUsable() end,
+    active = function(b: ActionButton) b:UpdateActive() end,
 }
 local due: { [string]: boolean } = {}
 local flusher = CreateFrame("Frame")

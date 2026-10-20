@@ -1,0 +1,90 @@
+-- UI/Stage: the model stage's art (light, glow, shadow, vignette, frame,
+-- the card's shade), centring on a model with its controls, and the tint
+-- that follows the theme.
+
+import test, expect, afterEach from "wowlua:test"
+import * as draw from "/UI/Draw"
+import modelStage, ModelStage, ModelStageOptions from "/UI/Stage"
+import tokens as T from "/Core/Tokens"
+import expectNoErrors, newParent from "../../helpers"
+import paintOf, pointOf, near, setToken, restoreTokens from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function make(opts: ModelStageOptions?): ModelStage
+    parent = newParent(800, 600)
+    return modelStage(parent :: Frame, opts)
+end
+
+@afterEach
+local function cleanup()
+    restoreTokens()
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function y(r: Region): number
+    return (pointOf(r) :: any).y
+end
+
+@test("the stage's art on its frame, the floor 40 up by default")
+local function build()
+    local s = make()
+    expect(s).toBe(parent)
+    expect(s.light:GetBlendMode()).toBe("ADD")
+    expect(s.pool:GetBlendMode()).toBe("ADD")
+    expect(s.pool).toHaveSize(420, 90)
+    expect(s.shadow).toHaveSize(340, 56)
+    expect(y(s.pool)).toBe(28)
+    expect(y(s.shadow)).toBe(44)
+    expect(pointOf(s.light)).toEqual({ point = "TOPLEFT", relativeTo = s, relativePoint = "TOPLEFT", x = 120, y = 120 })
+    expect(s.shade).toBeNil()
+    -- base, light, floor, pool, shadow, four vignette edges and the frame's four lines
+    expect(#{ s:GetRegions() }).toBe(13)
+end
+
+@test("a floor and a card shade")
+local function options()
+    local s = make({ floor = 100, shade = 340 })
+    expect(y(s.pool)).toBe(88)
+    expect(y(s.shadow)).toBe(104)
+    local shade = s.shade :: Texture
+    expect(shade:GetWidth()).toBe(340)
+    expect(shade:GetDrawLayer()).toBe("BORDER")
+end
+
+@test("CentreOn moves the light, glow and shadow, and the controls")
+local function centres()
+    local s = make()
+    s:CentreOn(50)
+    expect(pointOf(s.light)).toEqual({ point = "TOPLEFT", relativeTo = s, relativePoint = "TOPLEFT", x = 170, y = 120 })
+    expect(pointOf(s.light, 2)).toEqual({ point = "BOTTOMRIGHT", relativeTo = s, relativePoint = "TOPRIGHT", x = -70, y = -260 })
+    expect(pointOf(s.pool)).toEqual({ point = "BOTTOM", relativeTo = s, relativePoint = "BOTTOM", x = 50, y = 28 })
+    expect(pointOf(s.shadow)).toEqual({ point = "BOTTOM", relativeTo = s, relativePoint = "BOTTOM", x = 50, y = 44 })
+    local ctl = CreateFrame("Frame", nil, s)
+    s.ctl = ctl
+    s:CentreOn(-20)
+    expect(pointOf(ctl)).toEqual({ point = "BOTTOM", relativeTo = s, relativePoint = "BOTTOM", x = -20, y = T.space["space-4"] })
+end
+
+@test("Tint lights the stage faintly in a token's colour, following the theme")
+local function tints()
+    local s = make()
+    s:Tint("arcane")
+    expect(s.stageTint).toBe("arcane")
+    expect((paintOf(s.light) :: any).kind).toBe("fn")
+    local r, g, b = draw.rgba("arcane")
+    local lr, lg, lb = s.light:GetVertexColor()
+    expect(near(lr, r * 0.09) and near(lg, g * 0.09) and near(lb, b * 0.09)).toBe(true)
+    local pr = s.pool:GetVertexColor()
+    expect(near(pr, r * 0.08)).toBe(true)
+    setToken("arcane", 1, 1, 1)
+    draw.repaint()
+    lr = s.light:GetVertexColor()
+    expect(near(lr, 0.09)).toBe(true)
+    s:Tint("ember")
+    local er = draw.rgba("ember")
+    pr = s.pool:GetVertexColor()
+    expect(near(pr, er * 0.08)).toBe(true)
+end

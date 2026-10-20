@@ -1,0 +1,356 @@
+-- Core/Extend: instances of SuuUI's kinds, what modules run on them (each,
+-- hook, override), menus and additions, and taking it all off again.
+--
+-- SuuUI's own instances of a kind exist too (the addon is running), so the
+-- functions here act only on this file's objects, and hooks use a method
+-- name SuuUI's objects don't have.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as extend from "/Core/Extend"
+import * as events from "/Core/Events"
+import * as fault from "/Core/Fault"
+
+const OWNER = { name = "Extend Test" }
+const OTHER = { name = "Extend Test Other" }
+const LISTENER = { name = "Extend Test Listener" }
+
+-- An object with a method that records its calls.
+type Thing = { calls: number[], CoreATestPaint: (self: Thing, x: number) -> (string, string, string, string, string), [string]: any }
+
+local function paint(self: Thing, x: number): (string, string, string, string, string)
+    self.calls[#self.calls + 1] = x
+    return "r1", "r2", "r3", "r4", "r5"
+end
+
+local function newThing(): Thing
+    return { calls = {}, CoreATestPaint = paint }
+end
+
+-- this file's objects (kept referenced: instances are weak)
+local mine: { [any]: boolean } = {}
+local function track<T>(obj: T): T
+    mine[obj] = true
+    return obj
+end
+
+@afterEach
+local function cleanup()
+    extend.unregister(OWNER)
+    extend.unregister(OTHER)
+    events.offAll(LISTENER)
+    mock.slash("/suu errors clear")
+end
+
+local function faultWith(text: string): fault.Entry?
+    for _, e in ipairs(fault.entries()) do
+        if e.message:find(text, 1, true) then return e end
+    end
+    return nil
+end
+
+local function mineOf(list: any[]): any[]
+    local out: any[] = {}
+    for _, o in ipairs(list) do if mine[o] then out[#out + 1] = o end end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Instances
+--------------------------------------------------------------------------------
+
+@test("KINDS lists the kinds")
+local function kinds()
+    expect(extend.KINDS).toEqual({
+        "unitframe", "nameplate", "castbar", "auracontainer", "actionbar", "actionbutton",
+        "window", "inventory", "tracker", "cooldowns", "meter", "micromenu", "notification",
+    })
+end
+
+@test("add: info with kind and order; once per object; unknown kinds refused")
+local function add()
+    local a, b = track(newThing()), track(newThing())
+    local given: extend.Info = { role = "player" }
+    local ia = extend.add("meter", a, given) :: extend.Info
+    expect(ia == given).toBe(true)
+    expect(ia.kind).toBe("meter")
+    expect(ia.role).toBe("player")
+    local ib = extend.add("meter", b) :: extend.Info
+    expect(ib.seq > ia.seq).toBe(true)
+    expect(extend.add("meter", a)).toBeNil()
+    expect(extend.info(a) == ia).toBe(true)
+    expect(extend.info({})).toBeNil()
+    expect(function() extend.add("bogus", {}) end).toThrow("unknown kind \"bogus\"")
+    expect(function() extend.list("bogus") end).toThrow("unknown kind \"bogus\"")
+end
+
+@test("list: a kind's instances in the order they were made")
+local function list()
+    local x, y, z = track(newThing()), track(newThing()), track(newThing())
+    extend.add("tracker", y)
+    extend.add("tracker", x)
+    extend.add("tracker", z)
+    expect(mineOf(extend.list("tracker"))).toEqual({ y, x, z })
+end
+
+@test("tag: more fields on an instance, never its kind or order")
+local function tag()
+    local t = track(newThing())
+    local i = extend.add("castbar", t) :: extend.Info
+    local seq = i.seq
+    extend.tag(t, { module = "castbar", kind = "other", seq = -1 })
+    expect(i.module).toBe("castbar")
+    expect(i.kind).toBe("castbar")
+    expect(i.seq).toBe(seq)
+    -- an object that isn't an instance: nothing happens
+    extend.tag({}, { module = "x" })
+end
+
+--------------------------------------------------------------------------------
+-- each
+--------------------------------------------------------------------------------
+
+@test("each: runs now on every instance, and on each new one at the end of its frame")
+local function each()
+    local early = track(newThing())
+    extend.add("notification", early, { n = 1 })
+    local seen: any[] = {}
+    local infos: extend.Info[] = {}
+    extend.each("notification", function(obj: any, info: extend.Info)
+        if not mine[obj] then return end
+        seen[#seen + 1] = obj
+        infos[#infos + 1] = info
+    end, nil, OWNER)
+    expect(seen).toEqual({ early })
+    expect(infos[1].n).toBe(1)
+    local later = track(newThing())
+    extend.add("notification", later)
+    extend.tag(later, { placed = true })
+    expect(#seen).toBe(1)
+    mock.nextFrame()
+    expect(#seen).toBe(2)
+    expect(seen[2] == later).toBe(true)
+    -- tagged before its each ran
+    expect(infos[2].placed).toBe(true)
+    mock.nextFrame()
+    expect(#seen).toBe(2)
+end
+
+@test("each: an error is reported under the owner, the others still run")
+local function eachError()
+    local t = track(newThing())
+    extend.add("inventory", t)
+    local ran = false
+    extend.each("inventory", function(obj: any) if mine[obj] then error("extend-err-each") end end, nil, OWNER)
+    extend.each("inventory", function(obj: any) if mine[obj] then ran = true end end, nil, OTHER)
+    expect(ran).toBe(true)
+    local e = faultWith("extend-err-each")
+    expect(e and e.source).toBe("Extend Test")
+    expect(function() extend.each("inventory", nil :: any, nil, OWNER) end).toThrow("a function is required")
+    expect(function() extend.each("bogus", function() end, nil, OWNER) end).toThrow("unknown kind")
+end
+
+@test("unregister: undo runs on every instance of the kind; each stops for new ones")
+local function undo()
+    local t = track(newThing())
+    extend.add("window", t)
+    local undone: any[] = {}
+    local applied = 0
+    extend.each("window", function(obj: any) if mine[obj] then applied += 1 end end,
+        function(obj: any, info: extend.Info) if mine[obj] then undone[#undone + 1] = info.kind end end, OWNER)
+    expect(applied).toBe(1)
+    extend.unregister(OWNER)
+    expect(undone).toEqual({ "window" })
+    extend.add("window", track(newThing()))
+    mock.nextFrame()
+    expect(applied).toBe(1)
+end
+
+@test("unregister: an each without undo just stops; another owner's stays")
+local function keepsOthers()
+    local applied: string[] = {}
+    extend.each("cooldowns", function(obj: any) if mine[obj] then applied[#applied + 1] = "mine" end end, nil, OWNER)
+    extend.each("cooldowns", function(obj: any) if mine[obj] then applied[#applied + 1] = "other" end end, nil, OTHER)
+    extend.unregister(OWNER)
+    extend.add("cooldowns", track(newThing()))
+    mock.nextFrame()
+    expect(applied).toEqual({ "other" })
+end
+
+--------------------------------------------------------------------------------
+-- hook and override
+--------------------------------------------------------------------------------
+
+@test("hook: runs after the method with its arguments; the method's results kept (four)")
+local function hook()
+    local t = track(newThing())
+    extend.add("meter", t)
+    local after = mock.spy(function(_: any, _x: number) end)
+    extend.hook("meter", "CoreATestPaint", after, OWNER)
+    local a, b, c, d, e = t:CoreATestPaint(7)
+    expect({ a, b, c, d }).toEqual({ "r1", "r2", "r3", "r4" })
+    expect(e).toBeNil()
+    expect(t.calls).toEqual({ 7 })
+    expect(after).toHaveBeenCalledWith(t, 7)
+    -- off again: the instance's own function is back
+    extend.unregister(OWNER)
+    expect(rawget(t, "CoreATestPaint") == paint).toBe(true)
+end
+
+@test("hook: an instance made later gets the hooks at once")
+local function hookLater()
+    local after = mock.spy(function(_: any, _x: number) end)
+    extend.hook("actionbar", "CoreATestPaint", after, OWNER)
+    local t = track(newThing())
+    extend.add("actionbar", t)
+    t:CoreATestPaint(1)
+    expect(after).toHaveBeenCalledTimes(1)
+end
+
+@test("hook: a failing hook is reported; the method and the other hooks still run")
+local function hookError()
+    local t = track(newThing())
+    extend.add("micromenu", t)
+    local second = mock.spy(function(_: any, _x: number) end)
+    extend.hook("micromenu", "CoreATestPaint", function() error("extend-err-hook") end, OWNER)
+    extend.hook("micromenu", "CoreATestPaint", second, OTHER)
+    expect((t:CoreATestPaint(3))).toBe("r1")
+    expect(second).toHaveBeenCalledTimes(1)
+    expect((faultWith("extend-err-hook") :: fault.Entry).source).toBe("Extend Test")
+    -- one owner's off: the other's hook stays
+    extend.unregister(OWNER)
+    t:CoreATestPaint(4)
+    expect(second).toHaveBeenCalledTimes(2)
+    expect(t.calls).toEqual({ 3, 4 })
+end
+
+@test("override: replaces the method and gets the original; hooks run after it")
+local function override()
+    local t = track(newThing())
+    extend.add("auracontainer", t)
+    local order: string[] = {}
+    extend.override("auracontainer", "CoreATestPaint", function(self: Thing, original: any, x: number): string
+        order[#order + 1] = "override"
+        original(self, x * 10)
+        return "mine"
+    end, OWNER)
+    extend.hook("auracontainer", "CoreATestPaint", function() order[#order + 1] = "hook" end, OWNER)
+    expect((t:CoreATestPaint(2))).toBe("mine")
+    expect(t.calls).toEqual({ 20 })
+    expect(order).toEqual({ "override", "hook" })
+end
+
+@test("override: overrides stack in the order added, each getting the one before")
+local function stacked()
+    local t = track(newThing())
+    extend.add("unitframe", t)
+    extend.override("unitframe", "CoreATestPaint", function(self: Thing, original: any, x: number): any
+        return original(self, x + 1)
+    end, OWNER)
+    extend.override("unitframe", "CoreATestPaint", function(self: Thing, original: any, x: number): any
+        return original(self, x * 2)
+    end, OTHER)
+    t:CoreATestPaint(5)
+    -- the last added runs first: (5 * 2) + 1
+    expect(t.calls).toEqual({ 11 })
+end
+
+@test("override: one that fails falls back to what it replaced")
+local function overrideError()
+    local t = track(newThing())
+    extend.add("nameplate", t)
+    extend.override("nameplate", "CoreATestPaint", function() error("extend-err-override") end, OWNER)
+    local a, b = t:CoreATestPaint(9)
+    expect(a).toBe("r1")
+    expect(b).toBe("r2")
+    expect(t.calls).toEqual({ 9 })
+    expect((faultWith("extend-err-override") :: fault.Entry).source).toBe("Extend Test")
+end
+
+@test("a method from the metatable: hooked on the instance, and cleared again after")
+local function fromMetatable()
+    local Class = { CoreATestPaint = paint }
+    local t = track(setmetatable({ calls = {} }, { __index = Class }) :: Thing)
+    extend.add("actionbutton", t)
+    local after = mock.spy(function(_: any, _x: number) end)
+    extend.hook("actionbutton", "CoreATestPaint", after, OWNER)
+    expect(rawget(t, "CoreATestPaint") ~= nil).toBe(true)
+    t:CoreATestPaint(1)
+    expect(after).toHaveBeenCalledTimes(1)
+    extend.unregister(OWNER)
+    expect(rawget(t, "CoreATestPaint")).toBeNil()
+    t:CoreATestPaint(2)
+    expect(t.calls).toEqual({ 1, 2 })
+end
+
+@test("a hook on a method the instance lacks: nothing happens")
+local function missingMethod()
+    local t = track({ calls = {} })
+    extend.add("castbar", t)
+    extend.hook("castbar", "CoreATestNothing", function() end, OWNER)
+    expect(rawget(t, "CoreATestNothing")).toBeNil()
+    extend.unregister(OWNER)
+    expect(rawget(t, "CoreATestNothing")).toBeNil()
+end
+
+@test("hook and override need a method name and a function")
+local function hookArgs()
+    expect(function() extend.hook("meter", 5 :: any, function() end, OWNER) end).toThrow("a method name is required")
+    expect(function() extend.override("meter", "X", nil :: any, OWNER) end).toThrow("a function is required")
+    expect(function() extend.hook("bogus", "X", function() end, OWNER) end).toThrow("unknown kind")
+end
+
+--------------------------------------------------------------------------------
+-- Menus and additions
+--------------------------------------------------------------------------------
+
+@test("menus: each extender gets the menu and the context, in order; errors isolated")
+local function menus()
+    local seen: string[] = {}
+    extend.extendMenu("coreatest.menu", function(menu: any, context: any)
+        seen[#seen + 1] = menu.title .. ":" .. tostring(context.unit)
+    end, OWNER)
+    extend.extendMenu("coreatest.menu", function() error("extend-err-menu") end, OTHER)
+    extend.extendMenu("coreatest.menu", function(menu: any)
+        menu.items[#menu.items + 1] = { label = "Added" }
+    end, OTHER)
+    local menu = { title = "T", items = {} :: any[] }
+    extend.applyMenu("coreatest.menu", menu, { unit = "target" })
+    expect(seen).toEqual({ "T:target" })
+    expect(menu.items).toEqual({ { label = "Added" } })
+    expect((faultWith("extend-err-menu") :: fault.Entry).source).toBe("Extend Test Other")
+    -- no context: an empty one
+    extend.applyMenu("coreatest.menu", menu)
+    expect(seen[2]).toBe("T:nil")
+    -- no id, or one nobody extends: nothing
+    extend.applyMenu(nil, menu)
+    extend.applyMenu("coreatest.none", menu)
+    expect(#seen).toBe(2)
+    -- an owner's off: its extensions go
+    extend.unregister(OWNER)
+    extend.applyMenu("coreatest.menu", menu, {})
+    expect(#seen).toBe(2)
+    expect(#menu.items).toBe(3)
+    expect(function() extend.extendMenu(5 :: any, function() end, OWNER) end).toThrow("a menu id and a function")
+end
+
+@test("additions: in the order added, each change announced; an owner's off removes its own")
+local function additions()
+    local heard = mock.spy(function(_: string, ...: any) end)
+    events.on("SUUUI_ADDITIONS_CHANGED", heard, LISTENER)
+    expect(extend.additions("coreatest.list")).toEqual({})
+    extend.addTo("coreatest.list", "a", OWNER)
+    extend.addTo("coreatest.list", "b", OTHER)
+    extend.addTo("coreatest.list", "c", OWNER)
+    extend.addTo("coreatest.second", "x", OTHER)
+    expect(extend.additions("coreatest.list")).toEqual({ "a", "b", "c" })
+    expect(heard).toHaveBeenCalledTimes(4)
+    expect(heard).toHaveBeenCalledWith("SUUUI_ADDITIONS_CHANGED", "coreatest.list")
+    extend.unregister(OWNER)
+    expect(extend.additions("coreatest.list")).toEqual({ "b" })
+    expect(extend.additions("coreatest.second")).toEqual({ "x" })
+    -- announced only for the list that changed
+    expect(heard).toHaveBeenCalledTimes(5)
+    extend.unregister(OWNER)
+    expect(heard).toHaveBeenCalledTimes(5)
+end

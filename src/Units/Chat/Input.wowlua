@@ -1,0 +1,116 @@
+-- Units/Chat/Input.wowlua
+-- The chat input's history as data (Units/Chat): the line the input holds
+-- as a command that sends it again, your own line from a chat event, which
+-- commands are protected, and where Up and Down go in the list. What it
+-- reads of the world (the input's attributes, your GUID, IsSecureCmd)
+-- comes in as arguments.
+
+import * as lines from "./Lines"
+
+local plain = lines.plain
+
+export const HISTORY_KEEP = 50
+
+-- the input's chat type → the command that sends there
+export const TYPE_CMD: { [string]: string } = {
+    SAY = "/s", YELL = "/y", EMOTE = "/e", PARTY = "/p", RAID = "/raid", RAID_WARNING = "/rw",
+    INSTANCE_CHAT = "/i", GUILD = "/g", OFFICER = "/o",
+}
+-- your own line's chat event → the command that sends there
+export const SENT: { [string]: string } = {
+    CHAT_MSG_SAY = "/s", CHAT_MSG_YELL = "/y", CHAT_MSG_EMOTE = "/e",
+    CHAT_MSG_PARTY = "/p", CHAT_MSG_PARTY_LEADER = "/p",
+    CHAT_MSG_RAID = "/raid", CHAT_MSG_RAID_LEADER = "/raid", CHAT_MSG_RAID_WARNING = "/rw",
+    CHAT_MSG_INSTANCE_CHAT = "/i", CHAT_MSG_INSTANCE_CHAT_LEADER = "/i",
+    CHAT_MSG_GUILD = "/g", CHAT_MSG_OFFICER = "/o",
+    CHAT_MSG_CHANNEL = "channel", CHAT_MSG_WHISPER_INFORM = "/w",
+}
+
+-- What the input holds as a line to keep: a command as typed, a message
+-- with the command for where it goes. `attribute(key)`: the input's
+-- attribute (chatType, tellTarget, channelTarget).
+export function typedLine(text: unknown, attribute: (key: string) -> unknown): string?
+    if not plain(text) or type(text) ~= "string" then return nil end
+    local line = strtrim(text)
+    if line == "" then return nil end
+    if line:sub(1, 1) == "/" then return line end
+    local chatType = attribute("chatType")
+    if not plain(chatType) then return nil end
+    if chatType == "WHISPER" or chatType == "BN_WHISPER" then
+        local target = attribute("tellTarget")
+        if plain(target) and type(target) == "string" and target ~= "" then return "/w " .. target .. " " .. line end
+        return nil
+    end
+    if chatType == "CHANNEL" then
+        local channel = attribute("channelTarget")
+        if plain(channel) and channel then return "/" .. tostring(channel) .. " " .. line end
+        return nil
+    end
+    local cmd = type(chatType) == "string" and TYPE_CMD[chatType] or nil
+    return cmd and (cmd .. " " .. line) or nil
+end
+
+-- Your own line from a chat event, as the command that sends it again
+-- (`me`: your GUID).
+export function sentLine(event: string, text: unknown, sender: unknown, channelNumber: unknown, guid: unknown,
+                         me: unknown = UnitGUID("player")): string?
+    local cmd = SENT[event]
+    if not cmd or not plain(text) or type(text) ~= "string" or text == "" then return nil end
+    if event == "CHAT_MSG_WHISPER_INFORM" then
+        if not plain(sender) or type(sender) ~= "string" or sender == "" then return nil end
+        return "/w " .. sender .. " " .. text
+    end
+    if not (plain(guid) and plain(me) and guid == me) then return nil end
+    if cmd == "channel" then
+        if not plain(channelNumber) or type(channelNumber) ~= "number" or channelNumber <= 0 then return nil end
+        cmd = "/" .. channelNumber
+    end
+    return cmd .. " " .. text
+end
+
+-- The newest line into the list (not twice in a row), the oldest out past
+-- `keep`. Returns whether it went in.
+export function push(list: string[], line: string, keep: number = HISTORY_KEEP): boolean
+    if list[#list] == line then return false end
+    list[#list + 1] = line
+    while #list > keep do table.remove(list, 1) end
+    return true
+end
+
+-- A protected command (/cast, /target, /focus …): blocked in combat when
+-- SuuUI typed it in.
+local PROTECTED: { [string]: boolean } = {}
+for _, c in ipairs({ "cast", "castsequence", "castrandom", "use", "userandom", "target", "tar", "targetexact",
+                     "targetenemy", "targetfriend", "targetparty", "targetraid", "targetlasttarget", "targetlastenemy",
+                     "targetlastfriend", "cleartarget", "focus", "clearfocus", "assist", "click", "stopcasting",
+                     "stopattack", "startattack", "petattack", "petfollow", "petstay", "petpassive", "petdefensive",
+                     "petaggressive", "petassist", "equip", "equipslot", "equipset", "cancelaura", "cancelform",
+                     "dismount", "stopmacro", "changeactionbar", "swapactionbar", "worldmarker", "clearworldmarker" }) do
+    PROTECTED["/" .. c] = true
+end
+
+-- `isSecure`: the client's IsSecureCmd (the live one by default; false:
+-- none, SuuUI's own list decides).
+export function isProtectedLine(line: string, isSecure: any = IsSecureCmd): boolean
+    local cmd = line:match("^(/%S+)")
+    if not cmd then return false end
+    cmd = cmd:lower()
+    if isSecure then
+        local ok, secure = pcall(isSecure, cmd)
+        if ok and plain(secure) then return secure and true or false end
+    end
+    return PROTECTED[cmd] or false
+end
+
+-- Where Up (-1) or Down (1) goes from `index` in the history (#list + 1:
+-- the empty input past the newest); in combat it passes over protected
+-- commands. nil: nowhere further.
+export function recallIndex(list: string[], index: number, step: number, inCombat: boolean, isSecure: any = IsSecureCmd)
+    : number?
+    local to = index + step
+    if inCombat then
+        while list[to] and isProtectedLine(list[to], isSecure) do to = to + step end
+    end
+    if to < 1 or to > #list + 1 then return nil end
+    return to
+end

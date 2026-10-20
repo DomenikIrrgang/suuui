@@ -1,0 +1,277 @@
+-- UI/LevelUp: the level-up card: its coins and rank lines, the spell grid
+-- (one column, two, at most ten), the more line, the cost, hovering a spell,
+-- clicks, IsHovered and a theme change.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import measureText from "/UI/Text"
+import * as tooltip from "/UI/Tooltip"
+import levelUp from "/UI/LevelUp"
+import internal coins, rankLine from "/UI/LevelUp"
+import expectNoErrors, newParent from "../../helpers"
+import themeChanged from "./WindowsHelpers"
+
+local function hex(token: string): string return (T.color :: { [string]: any })[token].hex end
+local function c(token: string, s: string): string return "|cff" .. hex(token) .. s .. "|r" end
+
+local showSpy = mock.spy()
+local spellSpy = mock.spy()
+local hideSpy = mock.spy()
+mock.module(tooltip, {
+    showTooltip = function(owner: any, data: any) showSpy(owner, data) end,
+    spellTooltip = function(owner: any, spellID: number, extra: any, anchor: any) spellSpy(owner, spellID, extra, anchor) end,
+    hideTooltip = function() hideSpy() end,
+})
+
+local parent: Frame? = nil
+
+local function make()
+    parent = newParent()
+    return levelUp(parent)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    mock.resetSpies()
+    expectNoErrors()
+end
+
+type Spell = { [string]: any }
+
+local function spells(n: number): Spell[]
+    local out: Spell[] = {}
+    for i = 1, n do out[i] = { icon = 100 + i, name = "Spell " .. i, rank = i } end
+    return out
+end
+
+@test("coins: gold, silver and copper in their colours; zero ones left out")
+@cases({
+    { 0, "c:0" }, { 5, "c:5" }, { 100, "s:1" }, { 10000, "g:1" }, { 10203, "g:1 s:2 c:3" },
+    { 10003, "g:1 s:0 c:3" }, { 10200, "g:1 s:2" }, { -40, "c:0" }, { 99.9, "c:99" },
+})
+local function coinTexts(amount: number, want: string)
+    local tokens: { [string]: string } = { g = "coin-gold", s = "coin-silver", c = "coin-copper" }
+    local parts: string[] = {}
+    for unit, v in want:gmatch("(%a):(%d+)") do parts[#parts + 1] = c(assert(tokens[unit]), v .. unit) end
+    expect(coins(amount)).toBe(table.concat(parts, " "))
+end
+
+@test("coins: a missing or non-number amount is 0c")
+local function coinsNil()
+    expect(coins(nil)).toBe(c("coin-copper", "0c"))
+    expect(coins("x")).toBe(c("coin-copper", "0c"))
+end
+
+@test("rankLine: rank, New and a note joined by a faint dot")
+local function ranks()
+    local dot = c("ink-faint", " · ")
+    expect(rankLine({ rank = 3 })).toBe(c("ink-muted", "Rank 3"))
+    expect(rankLine({ isNew = true })).toBe(c("arcane", "New"))
+    expect(rankLine({ rank = 1, isNew = true })).toBe(c("ink-muted", "Rank 1") .. dot .. c("arcane", "New"))
+    expect(rankLine({ rank = 2, note = "Level 18" })).toBe(c("ink-muted", "Rank 2") .. dot .. c("ink-faint", "Level 18"))
+    expect(rankLine({})).toBe("")
+end
+
+@test("a new card: empty, the training line, notice-w wide")
+local function fresh()
+    local card = make()
+    expect(card.title:GetText()).toBe("")
+    expect(card.more).never.toBeShown()
+    expect(card.label).toHaveText("Train all at your class trainer · ")
+    expect(card.cost:GetText()).toBe(c("coin-copper", "0c"))
+    -- the foot is the widest line
+    expect(card:GetWidth()).toBe(math.max(draw.size("notice-w"), card.foot:GetWidth() - 2 + 28 * 2))
+    expect(#card.rows).toBe(0)
+    expect(card:IsMouseEnabled()).toBe(true)
+end
+
+@test("SetLevelUp(nil) is an empty card")
+local function nilData()
+    local card = make()
+    card:SetLevelUp({ title = "Level 20", spells = spells(2) })
+    card:SetLevelUp(nil)
+    expect(card.title:GetText()).toBe("")
+    expect(card.rows[1]).never.toBeShown()
+    expect(card.rows[2]).never.toBeShown()
+end
+
+@test("up to four spells: one column, each row an icon, name and rank line")
+local function oneColumn()
+    local card = make()
+    local list = spells(4)
+    list[2].isNew = true
+    list[3].icon = nil
+    card:SetLevelUp({ title = "Level 20", detail = "You learned 4 spells", spells = list, cost = 1250 })
+    expect(card.title).toHaveText("Level 20")
+    expect(card.detail).toHaveText("You learned 4 spells")
+    expect(card.cost:GetText()).toBe(c("coin-silver", "12s") .. " " .. c("coin-copper", "50c"))
+    local iconPx = draw.size("icon-lg")
+    local first = card.rows[1]
+    expect(first.name).toHaveText("Spell 1")
+    expect(first.rank:GetText()).toBe(rankLine(list[1]))
+    expect(first.spell).toBe(list[1])
+    -- a missing icon: the question mark
+    expect(card.rows[3].icon.art:GetTexture()).toBe(134400)
+    expect(card.rows[1].icon.art:GetTexture()).toBe(101)
+    -- one column: every row at the same x, iconPx + space-4 apart
+    local _, _, _, x1, y1 = card.rows[1]:GetPoint(1)
+    local _, _, _, x4, y4 = card.rows[4]:GetPoint(1)
+    expect(x4).toBe(x1)
+    expect(y1 - y4).toBe(3 * (iconPx + T.space["space-4"]))
+    expect(card.rows[1]:GetHeight()).toBe(iconPx)
+end
+
+@test("five spells or more: two columns, left to right")
+local function twoColumns()
+    local card = make()
+    card:SetLevelUp({ title = "Level 20", spells = spells(5) })
+    local _, _, _, x1, y1 = card.rows[1]:GetPoint(1)
+    local _, _, _, x2, y2 = card.rows[2]:GetPoint(1)
+    local _, _, _, x3, y3 = card.rows[3]:GetPoint(1)
+    expect(y2).toBe(y1)
+    expect(x2 > x1).toBe(true)
+    expect(x3).toBe(x1)
+    expect(y3 < y1).toBe(true)
+end
+
+@test("at most ten rows; fewer spells later hide the rest")
+local function maxRows()
+    local card = make()
+    card:SetLevelUp({ title = "Level 20", spells = spells(12) })
+    expect(#card.rows).toBe(10)
+    for i = 1, 10 do expect(card.rows[i]).toBeShown() end
+    card:SetLevelUp({ title = "Level 21", spells = spells(3) })
+    expect(card.rows[3]).toBeShown()
+    expect(card.rows[4]).never.toBeShown()
+    expect(card.rows[10]).never.toBeShown()
+end
+
+@test("the more line shows when given, and makes the card taller")
+local function moreLine()
+    local card = make()
+    card:SetLevelUp({ title = "Level 20", spells = spells(2) })
+    local h = card:GetHeight()
+    card:SetLevelUp({ title = "Level 20", spells = spells(2), more = "+ 3 more" })
+    expect(card.more).toBeShown()
+    expect(card.more).toHaveText("+ 3 more")
+    expect(card:GetHeight()).toBe(h + T.type.caption.lineHeight + T.space["space-4"])
+    card:SetLevelUp({ title = "Level 20", spells = spells(2), more = "" })
+    expect(card.more).never.toBeShown()
+    expect(card:GetHeight()).toBe(h)
+end
+
+@test("a long title widens the card past notice-w")
+local function wide()
+    local card = make()
+    local title = "Level 20 — a title much longer than the notice width allows for sure"
+    card:SetLevelUp({ title = title })
+    expect(card:GetWidth()).toBe(math.max(draw.size("notice-w"), math.ceil(measureText("alert", title)) + 28 * 2))
+end
+
+@test("hovering a spell with spellID: the game's spell tooltip with its meta")
+local function hoverSpellID()
+    local card = make()
+    card:SetLevelUp({ title = "L", spells = { { name = "Smite", spellID = 585, meta = "Costs 1s" } } })
+    local r = card.rows[1]
+    mock.hover(r)
+    expect(spellSpy).toHaveBeenCalledWith(r, 585, "Costs 1s", nil)
+    expect(showSpy).never.toHaveBeenCalled()
+end
+
+@test("hovering a spell without spellID: SuuUI's tooltip")
+local function hoverOwn()
+    local card = make()
+    card:SetLevelUp({ title = "L", spells = { { name = "Smite", rank = 2, text = "Smites.", meta = "1s" }, { name = "Heal" } } })
+    mock.hover(card.rows[1])
+    expect(showSpy).toHaveBeenCalledWith(card.rows[1], { title = "Smite", subtitle = "Rank 2", description = "Smites.", meta = "1s" })
+    mock.hover(card.rows[2])
+    expect(showSpy).toHaveBeenCalledWith(card.rows[2], { title = "Heal" })
+    -- leaving: both tooltips hidden
+    mock.hover(nil)
+    expect(hideSpy).toHaveBeenCalled()
+end
+
+@test("a row without a spell shows nothing")
+local function hoverEmpty()
+    local card = make()
+    card:SetLevelUp({ title = "L", spells = spells(1) })
+    card.rows[1].spell = nil
+    mock.hover(card.rows[1])
+    expect(showSpy).never.toHaveBeenCalled()
+    expect(spellSpy).never.toHaveBeenCalled()
+end
+
+@test("a click on the card or a spell calls onClick")
+local function clicks()
+    local card = make()
+    card:SetLevelUp({ title = "L", spells = spells(1) })
+    mock.click(card)
+    mock.click(card.rows[1])
+    local onClick = mock.spy()
+    card.onClick = onClick
+    mock.click(card)
+    mock.click(card.rows[1])
+    expect(onClick).toHaveBeenCalledTimes(2)
+end
+
+@test("IsHovered: the card or one of its spells under the mouse")
+local function hovered()
+    local card = make()
+    card:SetLevelUp({ title = "L", spells = spells(1) })
+    expect(card:IsHovered()).toBe(false)
+    mock.hover(card)
+    expect(card:IsHovered()).toBe(true)
+    mock.hover(card.rows[1])
+    expect(card:IsHovered()).toBe(true)
+    mock.hover(parent)
+    expect(card:IsHovered()).toBe(false)
+end
+
+@test("IsHovered: not while the camera turns, nor when hidden")
+local function notHovered()
+    local card = make()
+    mock.hover(card)
+    mock.fake("IsMouselooking", function() return true end)
+    expect(card:IsHovered()).toBe(false)
+    mock.fake("IsMouselooking", function() return false end)
+    expect(card:IsHovered()).toBe(true)
+    card:Hide()
+    expect(card:IsHovered()).toBe(false)
+end
+
+@test("hiding the card hides the game tooltip it owns, not another's")
+local function hideOwnTooltip()
+    local card = make()
+    card:SetLevelUp({ title = "L", spells = spells(1) })
+    GameTooltip:SetOwner(card.rows[1], "ANCHOR_RIGHT")
+    GameTooltip:AddLine("x")
+    GameTooltip:Show()
+    card:Hide()
+    expect(hideSpy).toHaveBeenCalled()
+    expect(GameTooltip).never.toBeShown()
+    card:Show()
+    GameTooltip:SetOwner(UIParent, "ANCHOR_RIGHT")
+    GameTooltip:AddLine("y")
+    GameTooltip:Show()
+    card:Hide()
+    expect(GameTooltip).toBeShown()
+    GameTooltip:Hide()
+end
+
+@test("a theme change places the head and lays the card out again")
+local function theme()
+    local card = make()
+    local data = { title = "Level 20", spells = spells(2) }
+    card:SetLevelUp(data)
+    local place, set = mock.spy(), mock.spy()
+    mock.stub(card, "PlaceHead", place)
+    mock.stub(card, "SetLevelUp", set)
+    themeChanged()
+    expect(place).toHaveBeenCalledTimes(1)
+    expect(set).toHaveBeenCalledWith(card, data)
+end

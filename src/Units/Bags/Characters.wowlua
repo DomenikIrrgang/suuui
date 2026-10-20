@@ -1,0 +1,214 @@
+-- Units/Bags/Characters.wowlua
+-- The Bags module's saved characters (see "Every character's bags and bank"
+-- in Units/Bags.wowlua) as data: the picker's order and labels, item counts
+-- for tooltips, the "All characters" search, the banner over a saved copy,
+-- the foot's note, and the texts they use. Pure logic over the saved
+-- entries; the module reads the bags and draws.
+
+import SuuUI from "/Core/API"
+
+local T = SuuUI.Tokens
+
+export const QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local DIAMOND = "Interface\\AddOns\\SuuUI\\Media\\Textures\\ChatDiamond.tga"
+
+-- A saved slot ({ icon, count, quality, link }) and a saved bags or bank.
+export type SavedItem = { t: any, c: number, q: number, l?: string }
+export type Snapshot = { slots: (SavedItem | false)[], size: number, free: number, seen: number }
+-- A saved character: its key, its entry, and whether it is you.
+export type Character = { key: string, d: any, me: boolean }
+-- How many of an item a character has, and where.
+export type Counts = { c: Character, total: number, bags: number, bank: number, equipped: number }
+-- One found item of "All characters": where it is ({ c, where, count }).
+export type Place = { c: Character, where: string, count: number }
+export type Result = {
+    icon: any, quality: string, label: string, link: string, count: number, at: Place[],
+    places?: string, lines?: string[],
+}
+
+-- "1,234,567"
+export function thousands(n: number): string
+    local s = tostring(n)
+    while true do
+        local k
+        s, k = s:gsub("^(%d+)(%d%d%d)", "%1,%2")
+        if k == 0 then break end
+    end
+    return s
+end
+
+-- "just now", "12 min ago", "3 hours ago", "yesterday", "9 days ago"
+export function ago(t: any, now: number = time()): string
+    if type(t) ~= "number" then return "a while ago" end
+    local s = math.max(0, now - t)
+    if s < 60 then return "just now" end
+    if s < 3600 then return ("%d min ago"):format(s / 60) end
+    if s < 86400 then
+        local h = math.floor(s / 3600)
+        return h == 1 and "an hour ago" or ("%d hours ago"):format(h)
+    end
+    local d = math.floor(s / 86400)
+    return d == 1 and "yesterday" or ("%d days ago"):format(d)
+end
+
+-- "1g 20s 5c" for the bank slot's price (every coin there is).
+export function coinText(copper: number?): string
+    copper = copper or 0
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local out = {}
+    if g > 0 then out[#out + 1] = g .. "g" end
+    if s > 0 then out[#out + 1] = s .. "s" end
+    if c > 0 or #out == 0 then out[#out + 1] = c .. "c" end
+    return table.concat(out, " ")
+end
+
+-- "1g 20s", zero coins at the end left out (Sell junk's tooltip).
+export function coins(copper: number): string
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local parts = {}
+    if g > 0 then parts[#parts + 1] = g .. "g" end
+    if s > 0 or (g > 0 and c > 0) then parts[#parts + 1] = s .. "s" end
+    if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
+    return table.concat(parts, " ")
+end
+
+-- Sell junk's tooltip text for n grey items worth `copper`.
+export function junkText(n: number, copper: number): string
+    return ("Sells your %d grey item%s for %s. Each is checked again just before it sells."):format(n, n == 1 and "" or "s", coins(copper))
+end
+
+-- An item link's name ("[Linen Cloth]" → "Linen Cloth").
+export function nameOf(link: any): string?
+    return type(link) == "string" and link:match("%[(.-)%]") or nil
+end
+
+-- A class's diamond in its colour, for chat-like lines ("" for none).
+export function classDiamond(class: string?): string
+    local c = class and T.color["class-" .. class:lower()]
+    if not c then return "" end
+    return ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t "):format(DIAMOND, c[1] * 255, c[2] * 255, c[3] * 255)
+end
+
+-- Saved characters, you first, then by name (another character only once
+-- its bags were saved).
+export function sortCharacters(all: { [string]: any }, me: string?): Character[]
+    local list: Character[] = {}
+    for key, d in pairs(all) do
+        if key == me or d.bags then list[#list + 1] = { key = key, d = d, me = key == me } end
+    end
+    table.sort(list, function(a: Character, b: Character)
+        if a.me ~= b.me then return a.me end
+        return (a.d.name or a.key) < (b.d.name or b.key)
+    end)
+    return list
+end
+
+-- "Name · 60", "Name-Realm · 60" for another realm.
+export function charLabel(c: Character, myRealm: string): string
+    local name = c.d.name or c.key
+    if c.d.realm and c.d.realm ~= myRealm then name = name .. "-" .. c.d.realm end
+    return c.d.level and (name .. " · " .. c.d.level) or name
+end
+
+-- How many of item `id` each character has, in their order (those with any).
+export function countsFor(chars: Character[], id: number): Counts[]
+    local out: Counts[] = {}
+    local key = tostring(id)
+    for _, c in ipairs(chars) do
+        local n: Counts = { c = c, total = 0, bags = 0, bank = 0, equipped = 0 }
+        for _, where in ipairs({ "bags", "bank" }) do
+            local box = c.d[where]
+            for _, e in ipairs(box and box.slots or {}) do
+                if e and e.l and e.l:match("item:(%d+)") == key then
+                    n[where] = n[where] + (e.c or 1)
+                end
+            end
+        end
+        for _, link in ipairs(c.d.equipped or {}) do
+            if link:match("item:(%d+)") == key then n.equipped = n.equipped + 1 end
+        end
+        n.total = n.bags + n.bank + n.equipped
+        if n.total > 0 then out[#out + 1] = n end
+    end
+    return out
+end
+
+-- "All characters": every item whose name holds `query` (lower case) on the
+-- characters' bags and bank, most first; each with its places as a line
+-- (`places`, with class diamonds) and as tooltip lines (`lines`).
+export function searchResults(chars: Character[], query: string): Result[]
+    local found: { [string]: Result }, order: Result[] = {}, {}
+    for _, c in ipairs(chars) do
+        for _, where in ipairs({ "bags", "bank" }) do
+            local box = c.d[where]
+            for _, e in ipairs(box and box.slots or {}) do
+                local name = e and nameOf(e.l)
+                if name and name:lower():find(query, 1, true) then
+                    local id = e.l:match("item:(%d+)") or name
+                    local r = found[id]
+                    if not r then
+                        r = { icon = e.t, quality = QUALITY[e.q] or "common", label = name, link = e.l, count = 0, at = {} }
+                        found[id] = r
+                        order[#order + 1] = r
+                    end
+                    r.count = r.count + (e.c or 1)
+                    local at = r.at[#r.at]
+                    if not (at and at.c == c and at.where == where) then
+                        at = { c = c, where = where, count = 0 }
+                        r.at[#r.at + 1] = at
+                    end
+                    at.count = at.count + (e.c or 1)
+                end
+            end
+        end
+    end
+    table.sort(order, function(a: Result, b: Result)
+        if a.count ~= b.count then return a.count > b.count end
+        return a.label < b.label
+    end)
+    for _, r in ipairs(order) do
+        local parts, lines = {}, {}
+        for _, at in ipairs(r.at) do
+            local text = ("%s · %s ×%d"):format(at.c.d.name or at.c.key, at.where == "bank" and "Bank" or "Bags", at.count)
+            parts[#parts + 1] = classDiamond(at.c.d.class) .. text
+            lines[#lines + 1] = text
+        end
+        r.places = table.concat(parts, "   ")
+        r.lines = lines
+    end
+    return order
+end
+
+-- The line over a saved copy: whose, as of when, or why there is none yet.
+-- `d` the character's entry, `box` its bags or bank (nil: none saved).
+export function savedBanner(who: string, me: string?, view: string, d: any, box: any, now: number = time()): string
+    local where = view == "bank" and "bank" or "bags"
+    if who == me then
+        return box and ("Your bank as of your last visit (%s) · read only"):format(ago(box.seen, now))
+            or "Your bank shows here once you have visited a banker"
+    end
+    local name = d and d.name or who
+    return box and ("%s's %s as of %s · read only"):format(name, where, ago(box.seen or d.seen, now))
+        or ("%s's %s show here once %s has opened them"):format(name, where, name)
+end
+
+-- The foot: its note and the money of whoever is shown. `more`: results the
+-- search left out (0 when it shows none); `reagentFree`: the reagent bag's
+-- free slots while your own bags show with one (else nil).
+export function foot(chars: Character[], who: string?, myMoney: number, more: number, reagentFree: number?): (string?, number?)
+    local gold, money = 0, nil
+    for _, c in ipairs(chars) do
+        local m = c.me and myMoney or c.d.money or 0
+        gold = gold + math.floor(m / 10000)
+        if c.key == who then money = m end
+    end
+    local note
+    if more > 0 then
+        note = ("%d more: narrow the search"):format(more)
+    elseif reagentFree then
+        note = ("Reagent bag: %d free"):format(reagentFree)
+    elseif #chars > 1 then
+        note = ("%d characters · %sg in all"):format(#chars, thousands(gold))
+    end
+    return note, money
+end

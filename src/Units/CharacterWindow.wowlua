@@ -100,6 +100,14 @@ local function alphaRegions(f: any, keep: any?)
     end
 end
 
+-- "Level 21 · Undead · Paladin" (an unknown level: "?").
+local function identityLine(level: any, race: any, className: any): string
+    local parts: any[] = { "Level " .. (level or "?") }
+    if race then parts[#parts + 1] = race end
+    if className then parts[#parts + 1] = className end
+    return table.concat(parts, " · ")
+end
+
 -- "◆ Suther   Level 21 · Undead · Paladin", over the left pane.
 function M:BuildIdentity()
     local host = _G.CharacterFrameLeftPaneHost
@@ -137,12 +145,7 @@ function M:UpdateIdentity()
     local token = class and not isSecret(class) and "class-" .. (class :: string):lower()
     if token and T.color[token] then UI.Paint(id.diamond, token) end
     id.name:SetValue(SuuUI.FullName("player") or "")
-    local parts: any[] = { "Level " .. (UnitLevel("player") or "?") }
-    local race = UnitRace("player")
-    if race then parts[#parts + 1] = race end
-    local className = UnitClass("player")
-    if className then parts[#parts + 1] = className end
-    id.line:SetValue(table.concat(parts, " · "))
+    id.line:SetValue(identityLine(UnitLevel("player"), UnitRace("player"), (UnitClass("player"))))
 end
 
 -- An equipment slot in SuuUI's look; its border follows what Blizzard shows.
@@ -397,27 +400,40 @@ function M:WearBar(b: any)
     self.wear[b] = o
 end
 
+-- A slot's bar for its piece (nil: none): { fill = token or nil (broken:
+-- all ember, no fill), width (px of `barW`), pct = text or nil, pctColor }.
+local function wearView(p: any, gearBars: string?, barW: any): { [string]: any }?
+    if not (p ~= nil and (gearBars == "always" or p.state ~= "fine")) then return nil end
+    local w = (plain(barW) and barW > 0) and barW or 30
+    local broken = p.state == "broken"
+    return {
+        broken = broken,
+        fill = not broken and (p.state == "damaged" and "amber" or "ink-muted") or nil,
+        width = not broken and math.max(1, w * p.percent / 100) or nil,
+        pct = p.state ~= "fine" and (p.percent .. "%") or nil,
+        pctColor = broken and "ember-text" or "amber",
+    }
+end
+
 function M:UpdateWear()
     if not self.wear then return end
     for b, o in pairs(self.wear) do
         local p, d = self:WearOf(b:GetID())
-        local shown = p ~= nil and (d.parts.gearBars == "always" or p.state ~= "fine")
-        o:SetShown(shown)
-        if shown then
-            local w = o.bar:GetWidth()
-            w = (plain(w) and w > 0) and w or 30
-            if p.state == "broken" then
+        local v = wearView(p, p and d.parts.gearBars, p and o.bar:GetWidth())
+        o:SetShown(v ~= nil)
+        if v then
+            if v.broken then
                 UI.PaintFill(o.bg, "ember")
                 o.fill:Hide()
             else
                 UI.PaintFill(o.bg, "on-signal", 0.7)
-                UI.PaintFill(o.fill, p.state == "damaged" and "amber" or "ink-muted")
-                o.fill:SetWidth(math.max(1, w * p.percent / 100))
+                UI.PaintFill(o.fill, v.fill)
+                o.fill:SetWidth(v.width)
                 o.fill:Show()
             end
-            o.pct:SetColor(p.state == "broken" and "ember-text" or "amber")
-            o.pct:SetValue(p.percent .. "%")
-            o.pct:SetShown(p.state ~= "fine")
+            o.pct:SetColor(v.pctColor)
+            o.pct:SetValue((p :: any).percent .. "%")
+            o.pct:SetShown(v.pct ~= nil)
         end
     end
     self:UpdateWearBlock()
@@ -472,6 +488,19 @@ function M:LayoutWearBlock()
     return y
 end
 
+-- The block's Lowest, Damaged and Average values for a reading.
+local function wearRows(d: { [string]: any }): (string, string, string)
+    local function c(token: string, text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
+    local low = d.lowest
+    local lowest = low.label .. " · " .. (low.state == "broken" and c("ember-text", "Broken")
+        or low.state == "damaged" and c("amber", low.percent .. "%") or (low.percent .. "%"))
+    local worn = {}
+    for _, p in ipairs(d.pieces) do
+        if p.state == "damaged" then worn[#worn + 1] = p.label .. " " .. p.percent .. "%" end
+    end
+    return lowest, #worn > 0 and c("amber", table.concat(worn, " · ")) or c("ink-faint", "None"), (d.average or 0) .. "%"
+end
+
 function M:UpdateWearBlock()
     local blk = self.wearBlock
     local box = blk and _G.CharacterStatsPaneScrollBox.ScrollBox
@@ -485,25 +514,26 @@ function M:UpdateWearBlock()
     local h = self:LayoutWearBlock()
     box:SetPoint("BOTTOMRIGHT", -30, 8 + h + S["space-4"])
     blk:Show()
-    local function c(token: string, text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
-    local low = d.lowest
-    blk.rows[1].value:SetValue(low.label .. " · " .. (low.state == "broken" and c("ember-text", "Broken")
-        or low.state == "damaged" and c("amber", low.percent .. "%") or (low.percent .. "%")))
-    local worn = {}
-    for _, p in ipairs(d.pieces) do
-        if p.state == "damaged" then worn[#worn + 1] = p.label .. " " .. p.percent .. "%" end
-    end
-    blk.rows[2].value:SetValue(#worn > 0 and c("amber", table.concat(worn, " · ")) or c("ink-faint", "None"))
-    blk.rows[3].value:SetValue((d.average or 0) .. "%")
+    local lowest, damaged, average = wearRows(d)
+    blk.rows[1].value:SetValue(lowest)
+    blk.rows[2].value:SetValue(damaged)
+    blk.rows[3].value:SetValue(average)
 end
 
 --------------------------------------------------------------------------------
 -- Stats: a StatList
 --------------------------------------------------------------------------------
 
-local function isWhite(r: number?, g: number, b: number): boolean? return r and r > 0.9 and g > 0.9 and b > 0.9 end
 local function isGreen(r: number?, g: number, b: number): boolean? return r and g > 0.7 and r < 0.5 and b < 0.5 end
 local function isRed(r: number?, g: number, b: number): boolean? return r and r > 0.8 and g < 0.4 and b < 0.4 end
+
+-- A stat value's colour from Blizzard's: green (a bonus) fel, red (a
+-- malus) ember, the rest ink.
+local function statColor(r: number?, g: number, b: number): string
+    if isGreen(r, g, b) then return "fel" end
+    if isRed(r, g, b) then return "ember-text" end
+    return "ink"
+end
 
 -- A row of the stats pane: a category head (one text, a banner) or a stat
 -- (its label left, its value right).
@@ -576,9 +606,7 @@ function M:SkinStatRow(row: any)
     if value and value ~= label then
         local r, g, b = value:GetTextColor()
         SuuUI.Fonts.Apply(value, "numeric")
-        if isGreen(r, g, b) then UI.Paint(value, "fel")
-        elseif isRed(r, g, b) then UI.Paint(value, "ember-text")
-        else UI.Paint(value, "ink") end
+        UI.Paint(value, statColor(r, g, b))
         value:SetShadowOffset(0, 0)
     end
 end

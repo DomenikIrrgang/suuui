@@ -1,0 +1,52 @@
+-- Units/WorldMap/Overlays.wowlua
+-- The map's overlays you haven't explored, cut into the textures the game
+-- draws explored ones with (Blizzard_SharedMapDataProviders, read
+-- 2026-10-15): each overlay { width, height, offsetX, offsetY, file, … }
+-- (SuuUI.MapOverlays, its files row by row) in tiles of the map art's
+-- tile size, the last row and column cut to what's left and read from a
+-- file of the next power of two. Apart from the map's frames, so it's
+-- tested on its own; Units/WorldMap draws the tiles.
+
+-- One texture: its file, size in px, the share of the file it shows (u,
+-- v), and its place from the art's top left (x right, y down).
+export type Tile = { file: any, w: number, h: number, u: number, v: number, x: number, y: number }
+
+-- The tiles of every overlay not in `explored` (the game's
+-- C_MapExplorationInfo.GetExploredMapTextures).
+export function unexploredTiles(overlays: any[][], explored: { [string]: any }[], tileW: number, tileH: number): Tile[]
+    local seen: { [string]: boolean } = {}
+    for _, e in ipairs(explored) do
+        seen[e.textureWidth .. "," .. e.textureHeight .. "," .. e.offsetX .. "," .. e.offsetY] = true
+    end
+    local out: Tile[] = {}
+    for _, o in ipairs(overlays) do
+        local w, h, ox, oy = o[1], o[2], o[3], o[4]
+        if not seen[w .. "," .. h .. "," .. ox .. "," .. oy] then
+            local wide, tall = math.ceil(w / tileW), math.ceil(h / tileH)
+            for j = 1, tall do
+                local pixH, fileH = tileH, tileH
+                if j == tall then
+                    pixH = h % tileH
+                    if pixH == 0 then pixH = tileH end
+                    fileH = 16
+                    while fileH < pixH do fileH = fileH * 2 end
+                end
+                for k = 1, wide do
+                    local file = o[4 + (j - 1) * wide + k]
+                    if file then
+                        local pixW, fileW = tileW, tileW
+                        if k == wide then
+                            pixW = w % tileW
+                            if pixW == 0 then pixW = tileW end
+                            fileW = 16
+                            while fileW < pixW do fileW = fileW * 2 end
+                        end
+                        out[#out + 1] = { file = file, w = pixW, h = pixH, u = pixW / fileW, v = pixH / fileH,
+                                          x = ox + tileW * (k - 1), y = oy + tileH * (j - 1) }
+                    end
+                end
+            end
+        end
+    end
+    return out
+end

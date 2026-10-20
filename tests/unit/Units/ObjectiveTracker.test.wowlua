@@ -1,0 +1,49 @@
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/ObjectiveTracker"
+import internal M as N from "/Units/NpcDialogue"
+import errorsSoFar from "../../helpers"
+
+@test("explore")
+local function explore()
+    local log: string[] = {}
+    local function p(...: any) local t: string[] = {} for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end log[#log + 1] = table.concat(t, " ") end
+    p("tracker", M:IsEnabled(), M.frame, M.tracker, "npc", N:IsEnabled(), N.root)
+    local npc = mock.spawnUnit({ name = "Marshal Dughan", level = 30, reaction = "friendly", distance = 3 })
+    mock.defineQuest(9001, { title = "Wolves Across the Border", text = "Kill wolves, $N.", objective = "Kill 5 wolves.", giver = npc,
+        level = 5, xp = 450, money = 75, header = "Elwynn Forest",
+        objectives = { { text = "Prowler slain", required = 5 } } })
+    mock.player:interact(npc)
+    mock.advanceTime(0.5)
+    mock.advanceFrames(3)
+    p("questframe", QuestFrame:IsShown(), N.questView, N.root:IsShown(), N:View())
+    p("title", GetTitleText(), GetQuestText(), GetObjectiveText(), GetRewardXP(), GetRewardMoney())
+    p("speech", N.speech.text:GetText(), N.plate.name:GetText())
+    AcceptQuest()
+    mock.advanceTime(0.5)
+    mock.advanceFrames(3)
+    p("log", C_QuestLog.GetNumQuestLogEntries(), C_QuestLog.GetNumQuestWatches(), C_QuestLog.GetLogIndexForQuestID(9001))
+    local idx = C_QuestLog.GetLogIndexForQuestID(9001)
+    if idx then
+        local info = C_QuestLog.GetInfo(idx)
+        p("info", info and info.title, info and info.level, info and info.difficultyLevel, info and info.isHeader)
+        local o = C_QuestLog.GetQuestObjectives(9001)
+        p("obj", o and o[1] and o[1].text, o and o[1] and o[1].finished)
+    end
+    p("q", #M:TrackedQuests(), M.quests and #M.quests)
+    local ok, e = pcall(C_QuestLog.GetDistanceSqToQuest, 9001) p("dist", ok, e)
+    ok, e = pcall(GetQuestDifficultyColor, 5) p("diff", ok, e and e.font)
+    ok, e = pcall(GetQuestLogSpecialItemInfo, 1) p("special", ok, e)
+    ok, e = pcall(C_TradeSkillUI.GetRecipesTracked, false) p("recipes", ok, e)
+    ok, e = pcall(C_SuperTrack.GetSuperTrackedQuestID) p("super", ok, e)
+    ok, e = pcall(C_QuestLog.GetQuestWatchType, 9001) p("wt", ok, e)
+    p("gossip", GossipFrame, QuestFrameGreetingPanel, QuestFrameDetailPanel)
+    local g = mock.spawnUnit({ name = "Innkeeper", reaction = "friendly", distance = 3 })
+    mock.defineGossip(g, { text = "Welcome!", options = { { name = "Make this inn your home.", icon = 132052, gossipOptionID = 1 } } })
+    mock.player:interact(g)
+    mock.advanceTime(0.5)
+    mock.advanceFrames(3)
+    p("gossipshown", GossipFrame:IsShown(), N:View(), N.root:IsShown(), N.speech.text:GetText(), N.answerList and #N.answerList)
+    p("errs", #errorsSoFar(), errorsSoFar()[1])
+    expect(log).toEqual({})
+end

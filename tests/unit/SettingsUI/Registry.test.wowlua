@@ -1,0 +1,169 @@
+-- tests/unit/SettingsUI/Registry.test.wowlua
+-- SettingsUI/Registry: registering sections, their order, merged sections,
+-- the section of an owner, unregistering.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as registry from "/SettingsUI/Registry"
+import * as events from "/Core/Events"
+
+local OWNER = { name = "registry test" }
+local OTHER = { name = "registry test, another" }
+
+local function noop(_: any) end
+
+@afterEach
+local function cleanUp()
+    registry.unregister(OWNER)
+    registry.unregister(OTHER)
+    events.offAll(OWNER)
+end
+
+local function ids(list: registry.Section[]): string[]
+    local out: string[] = {}
+    for _, s in ipairs(list) do out[#out + 1] = s.id end
+    return out
+end
+
+-- The ids of the listed sections that start with `prefix`, in order.
+local function listed(prefix: string): string[]
+    local out: string[] = {}
+    for _, id in ipairs(ids(registry.list())) do
+        if id:sub(1, #prefix) == prefix then out[#out + 1] = id end
+    end
+    return out
+end
+
+@test("the categories, in the nav's order")
+local function categories()
+    expect(registry.categories).toEqual({ "Frames", "Insights", "World", "General", "Plugins" })
+end
+
+@test("a section is registered with its fields and defaults")
+local function registerDefaults()
+    local preview = function(_: any): any return nil end
+    local s = registry.register({ id = "rt-a", groups = {}, preview = preview, previewTitle = "P", previewNote = "N" }, OWNER)
+    expect(s.id).toBe("rt-a")
+    expect(s.label).toBe("rt-a")         -- the id when there is no label
+    expect(s.category).toBe("Plugins")   -- no category
+    expect(s.order).toBe(100)
+    expect(s.owner).toBe(OWNER)
+    expect(s.preview).toBe(preview)
+    expect(s.previewTitle).toBe("P")
+    expect(s.previewNote).toBe("N")
+    expect(registry.get("rt-a")).toBe(s)
+    local b = registry.register({ id = "rt-b", label = "B", category = "Nonsense", order = 5, namespace = "ns",
+        build = noop, merge = "rt-a" }, OWNER)
+    expect(b.category).toBe("Plugins")   -- not a category
+    expect(b.order).toBe(5)
+    expect(b.namespace).toBe("ns")
+    expect(b.build).toBe(noop)
+    expect(b.merge).toBe("rt-a")
+end
+
+@test("registering and unregistering tell the window")
+local function emits()
+    local heard = mock.spy()
+    events.on("SUUUI_SETTINGS_SECTIONS_CHANGED", function() heard() end, OWNER)
+    registry.register({ id = "rt-e", groups = {} }, OWNER)
+    expect(heard).toHaveBeenCalledTimes(1)
+    registry.unregister(OWNER)
+    expect(heard).toHaveBeenCalledTimes(2)
+    -- nothing of that owner left: nothing to tell
+    registry.unregister(OWNER)
+    expect(heard).toHaveBeenCalledTimes(2)
+end
+
+@test("a section needs a table with an id, a free id, and groups or build")
+local function registerErrors()
+    expect(function() registry.register(nil :: any, OWNER) end).toThrow("a section needs an id")
+    expect(function() registry.register({ label = "x", groups = {} }, OWNER) end).toThrow("a section needs an id")
+    expect(function() registry.register({ id = 5, groups = {} }, OWNER) end).toThrow("a section needs an id")
+    expect(function() registry.register({ id = "appearance", groups = {} }, OWNER) end)
+        .toThrow("the section id appearance is taken")
+    expect(function() registry.register({ id = "rt-x" }, OWNER) end).toThrow("needs groups or a build function")
+    expect(registry.get("rt-x")).toBeNil()
+end
+
+@test("SuuUI's own sections are there")
+local function ownSections()
+    for _, id in ipairs({ "appearance", "motion", "profiles", "modules" }) do
+        expect(registry.get(id) ~= nil).toBe(true)
+    end
+    expect(registry.get("rt-none")).toBeNil()
+end
+
+@test("the list: by category, then order, then label")
+local function listOrder()
+    registry.register({ id = "rt-3", label = "C", category = "Plugins", order = 1, groups = {} }, OWNER)
+    registry.register({ id = "rt-1", label = "Z", category = "Frames", order = 999, groups = {} }, OWNER)
+    registry.register({ id = "rt-4", label = "B", category = "Plugins", order = 2, groups = {} }, OWNER)
+    registry.register({ id = "rt-5", label = "A", category = "Plugins", order = 2, groups = {} }, OWNER)
+    registry.register({ id = "rt-2", label = "M", category = "General", order = 1, groups = {} }, OWNER)
+    expect(listed("rt-")).toEqual({ "rt-1", "rt-2", "rt-3", "rt-5", "rt-4" })
+    -- and the whole list keeps the categories together
+    local last = 0
+    local index: { [string]: number } = {}
+    for i, c in ipairs(registry.categories) do index[c] = i end
+    for _, s in ipairs(registry.list()) do
+        local at = index[s.category] or 0
+        expect(at >= last).toBe(true)
+        last = at
+    end
+end
+
+@test("a merged section shows on its target, not on its own")
+local function merging()
+    local target = registry.register({ id = "rt-target", label = "Target", groups = {} }, OWNER)
+    local m2 = registry.register({ id = "rt-m2", label = "Two", order = 2, groups = {}, merge = "rt-target" }, OTHER)
+    local m1 = registry.register({ id = "rt-m1", label = "One", order = 1, groups = {}, merge = "rt-target" }, OTHER)
+    expect(registry.mergedInto(m1)).toBe(target)
+    expect(registry.mergedInto(target)).toBeNil()
+    expect(listed("rt-")).toEqual({ "rt-target" })
+    expect(ids(registry.merged("rt-target"))).toEqual({ "rt-m1", "rt-m2" })
+    expect(registry.merged("rt-m1")).toEqual({})
+    -- the target goes: the merged ones are listed on their own
+    registry.unregister(OWNER)
+    expect(registry.mergedInto(m2)).toBeNil()
+    expect(listed("rt-")).toEqual({ "rt-m1", "rt-m2" })
+    expect(registry.merged("rt-target")).toEqual({})
+end
+
+@test("a merge into a missing, merged or the same section doesn't count")
+local function mergeOdd()
+    local own = registry.register({ id = "rt-self", groups = {}, merge = "rt-self" }, OWNER)
+    expect(registry.mergedInto(own)).toBeNil()
+    local missing = registry.register({ id = "rt-missing", groups = {}, merge = "rt-nowhere" }, OWNER)
+    expect(registry.mergedInto(missing)).toBeNil()
+    -- a chain: c into b, b into a; b shows on a, c is listed on its own
+    registry.register({ id = "rt-ca", groups = {} }, OWNER)
+    local b = registry.register({ id = "rt-cb", groups = {}, merge = "rt-ca" }, OWNER)
+    local c = registry.register({ id = "rt-cc", groups = {}, merge = "rt-cb" }, OWNER)
+    expect(registry.mergedInto(b)).toBe(registry.get("rt-ca"))
+    expect(registry.mergedInto(c)).toBeNil()
+    expect(listed("rt-")).toEqual({ "rt-ca", "rt-cc", "rt-missing", "rt-self" })
+    expect(registry.merged("rt-cb")).toEqual({})
+    expect(registry.merged("rt-self")).toEqual({})
+end
+
+@test("an owner's section: its own namespace first, else the first listed")
+local function forOwner()
+    registry.register({ id = "rt-o2", label = "B", order = 2, namespace = "two", groups = {} }, OWNER)
+    registry.register({ id = "rt-o1", label = "A", order = 1, namespace = "one", groups = {} }, OWNER)
+    expect((registry.forOwner(OWNER, "two") :: registry.Section).id).toBe("rt-o2")
+    expect((registry.forOwner(OWNER, "three") :: registry.Section).id).toBe("rt-o1")
+    expect((registry.forOwner(OWNER, nil) :: registry.Section).id).toBe("rt-o1")
+    expect(registry.forOwner(OTHER, "two")).toBeNil()
+end
+
+@test("unregister takes only that owner's sections")
+local function unregisterOwner()
+    registry.register({ id = "rt-u1", groups = {} }, OWNER)
+    registry.register({ id = "rt-u2", groups = {} }, OTHER)
+    registry.unregister(OWNER)
+    expect(registry.get("rt-u1")).toBeNil()
+    expect(registry.get("rt-u2") ~= nil).toBe(true)
+    -- the id is free again
+    registry.register({ id = "rt-u1", groups = {} }, OWNER)
+    expect(registry.get("rt-u1") ~= nil).toBe(true)
+end

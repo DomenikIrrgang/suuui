@@ -55,10 +55,10 @@ local GAMES = { App = "the Battle.net app", BSAp = "Battle.net mobile", WTCG = "
                 Pro = "Overwatch", S2 = "StarCraft II", S1 = "StarCraft", D3 = "Diablo III", Fen = "Diablo IV",
                 ANBS = "Diablo Immortal", VIPR = "Call of Duty", W3 = "Warcraft III", GRY = "Warcraft Rumble" }
 
--- "3 days ago" from a time() stamp.
-local function ago(stamp: any): string?
+-- "3 days ago" from a time() stamp (`now`: the clock's).
+local function ago(stamp: any, now: number?): string?
     if not plain(stamp) or not stamp or stamp == 0 then return nil end
-    local s = math.max(0, time() - stamp)
+    local s = math.max(0, (now or time()) - stamp)
     if s < 3600 then return "less than an hour ago" end
     if s < 86400 then local h = math.floor(s / 3600); return h .. (h == 1 and " hour ago" or " hours ago") end
     local d = math.floor(s / 86400)
@@ -71,6 +71,73 @@ end
 -- The game's data
 --------------------------------------------------------------------------------
 
+-- A Battle.net friend's row (C_BattleNet.GetFriendAccountInfo's info);
+-- `faction`: yours.
+local function bnetRow(info: any, faction: string?): Row
+    local game = info.gameAccountInfo or {}
+    local isOnline = game.isOnline and true or false
+    local row: Row = { key = "bn:" .. tostring(info.bnetAccountID), bnet = true, bnetID = info.bnetAccountID,
+                  name = info.accountName or info.battleTag or "?", sort = (plain(info.battleTag) and info.battleTag or ""):lower(),
+                  online = isOnline, note = plain(info.note) and info.note ~= "" and info.note or nil,
+                  away = info.isAFK or game.isGameAFK, busy = info.isDND or game.isGameBusy, whisper = isOnline }
+    if isOnline and game.clientProgram == (BNET_CLIENT_WOW or "WoW") and plain(game.characterName) and game.characterName then
+        row.character = game.characterName
+        row.color = classColor(game.className)
+        local where = {}
+        if game.characterLevel and game.characterLevel > 0 then where[#where + 1] = "Level " .. game.characterLevel end
+        if plain(game.className) and game.className then where[#where + 1] = game.className end
+        local zone = plain(game.areaName) and game.areaName or nil
+        local detail = table.concat(where, " ")
+        row.detail = zone and zone ~= "" and (detail .. " · " .. zone) or detail
+        if game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID then
+            -- by their game account, as the game's friends list does
+            -- (by name and realm the game didn't find them: the realm
+            -- is the server's own name; found in game); on your side.
+            -- No realm check: Forever's realms are rulesets, and a
+            -- realm ID that differs still groups (asked 2026-10-18:
+            -- "the realm doesn't match" for a friend you could invite)
+            if not (plain(game.factionName) and game.factionName == faction) then
+                row.why = "They're in the other faction."
+            else
+                row.invite, row.gameAccountID = true, game.gameAccountID
+            end
+        else
+            row.why = "They're playing another version of World of Warcraft."
+            row.detail = "Playing World of Warcraft"
+        end
+    elseif isOnline then
+        row.detail = "Playing " .. (GAMES[game.clientProgram or ""] or "on Battle.net")
+        row.why = "They aren't in World of Warcraft Forever."
+    else
+        local when = ago(info.lastOnlineTime)
+        row.detail = when and ("Last online " .. when) or "Offline"
+        row.why = "They're offline."
+    end
+    return row
+end
+
+-- A character friend's row (C_FriendList.GetFriendInfoByIndex's info).
+local function characterRow(f: any): Row
+    local isOnline = f.connected and true or false
+    local row: Row = { key = "c:" .. f.name, name = f.name, sort = f.name:lower(), online = isOnline,
+                  color = classColor(f.className), note = plain(f.notes) and f.notes ~= "" and f.notes or nil,
+                  away = f.afk, busy = f.dnd, whisper = isOnline, invite = isOnline, inviteName = f.name }
+    if isOnline then
+        local detail = (f.level and f.level > 0 and ("Level " .. f.level .. " ") or "") .. (f.className or "")
+        row.detail = (plain(f.area) and f.area and f.area ~= "") and (detail .. " · " .. f.area) or detail
+    else
+        row.detail = "Offline"
+        row.why = "They're offline."
+    end
+    return row
+end
+
+-- Online first, then by name.
+local function friendOrder(a: Row, b: Row): boolean
+    if a.online ~= b.online then return a.online end
+    return a.sort < b.sort
+end
+
 function M:Friends()
     local out: Row[], online = {}, 0
     -- Battle.net friends (their account name is protected text the game
@@ -78,46 +145,8 @@ function M:Friends()
     for i = 1, (call(BNGetNumFriends)) or 0 do
         local info = C_BattleNet and C_BattleNet.GetFriendAccountInfo and call(C_BattleNet.GetFriendAccountInfo, i)
         if info then
-            local game = info.gameAccountInfo or {}
-            local isOnline = game.isOnline and true or false
-            local row: Row = { key = "bn:" .. tostring(info.bnetAccountID), bnet = true, bnetID = info.bnetAccountID,
-                          name = info.accountName or info.battleTag or "?", sort = (plain(info.battleTag) and info.battleTag or ""):lower(),
-                          online = isOnline, note = plain(info.note) and info.note ~= "" and info.note or nil,
-                          away = info.isAFK or game.isGameAFK, busy = info.isDND or game.isGameBusy, whisper = isOnline }
-            if isOnline and game.clientProgram == (BNET_CLIENT_WOW or "WoW") and plain(game.characterName) and game.characterName then
-                row.character = game.characterName
-                row.color = classColor(game.className)
-                local where = {}
-                if game.characterLevel and game.characterLevel > 0 then where[#where + 1] = "Level " .. game.characterLevel end
-                if plain(game.className) and game.className then where[#where + 1] = game.className end
-                local zone = plain(game.areaName) and game.areaName or nil
-                local detail = table.concat(where, " ")
-                row.detail = zone and zone ~= "" and (detail .. " · " .. zone) or detail
-                if game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID then
-                    -- by their game account, as the game's friends list does
-                    -- (by name and realm the game didn't find them: the realm
-                    -- is the server's own name; found in game); on your side.
-                    -- No realm check: Forever's realms are rulesets, and a
-                    -- realm ID that differs still groups (asked 2026-10-18:
-                    -- "the realm doesn't match" for a friend you could invite)
-                    if not (plain(game.factionName) and game.factionName == UnitFactionGroup("player")) then
-                        row.why = "They're in the other faction."
-                    else
-                        row.invite, row.gameAccountID = true, game.gameAccountID
-                    end
-                else
-                    row.why = "They're playing another version of World of Warcraft."
-                    row.detail = "Playing World of Warcraft"
-                end
-            elseif isOnline then
-                row.detail = "Playing " .. (GAMES[game.clientProgram or ""] or "on Battle.net")
-                row.why = "They aren't in World of Warcraft Forever."
-            else
-                local when = ago(info.lastOnlineTime)
-                row.detail = when and ("Last online " .. when) or "Offline"
-                row.why = "They're offline."
-            end
-            if isOnline then online = online + 1 end
+            local row = bnetRow(info, UnitFactionGroup("player"))
+            if row.online then online = online + 1 end
             out[#out + 1] = row
         end
     end
@@ -126,25 +155,12 @@ function M:Friends()
     for i = 1, (fl and call(fl.GetNumFriends)) or 0 do
         local f = call(fl.GetFriendInfoByIndex, i)
         if f and plain(f.name) and f.name then
-            local isOnline = f.connected and true or false
-            local row: Row = { key = "c:" .. f.name, name = f.name, sort = f.name:lower(), online = isOnline,
-                          color = classColor(f.className), note = plain(f.notes) and f.notes ~= "" and f.notes or nil,
-                          away = f.afk, busy = f.dnd, whisper = isOnline, invite = isOnline, inviteName = f.name }
-            if isOnline then
-                local detail = (f.level and f.level > 0 and ("Level " .. f.level .. " ") or "") .. (f.className or "")
-                row.detail = (plain(f.area) and f.area and f.area ~= "") and (detail .. " · " .. f.area) or detail
-                online = online + 1
-            else
-                row.detail = "Offline"
-                row.why = "They're offline."
-            end
+            local row = characterRow(f)
+            if row.online then online = online + 1 end
             out[#out + 1] = row
         end
     end
-    table.sort(out, function(a: Row, b: Row): boolean
-        if a.online ~= b.online then return a.online end
-        return a.sort < b.sort
-    end)
+    table.sort(out, friendOrder)
     return out, online
 end
 
@@ -491,6 +507,20 @@ function M:Lockouts()
     return out
 end
 
+-- A lockout's progress ("3 / 8") and its detail line (difficulty, reset,
+-- extended).
+local function lockoutProgress(l: Row): string
+    return (l.bosses and l.bosses > 0) and (l.done .. " / " .. l.bosses) or ""
+end
+
+local function lockoutDetail(l: Row): string
+    local detail = {}
+    if plain(l.difficulty) and l.difficulty and l.difficulty ~= "" then detail[#detail + 1] = l.difficulty end
+    if l.reset and l.reset > 0 then detail[#detail + 1] = "resets in " .. (SecondsToTime and SecondsToTime(l.reset, true) or (math.ceil(l.reset / 3600) .. " h")) end
+    if l.extended then detail[#detail + 1] = "extended" end
+    return table.concat(detail, " · ")
+end
+
 function M:DrawLockouts()
     local p = self.lockoutPanel
     if not (p and p:IsShown()) then return end
@@ -515,12 +545,8 @@ function M:DrawLockouts()
         r:SetPoint("TOPLEFT", p.body, "TOPLEFT", 0, -y)
         r:SetPoint("RIGHT", p.body, "RIGHT")
         r.name:SetValue(l.name)
-        r.progress:SetValue((l.bosses and l.bosses > 0) and (l.done .. " / " .. l.bosses) or "")
-        local detail = {}
-        if plain(l.difficulty) and l.difficulty and l.difficulty ~= "" then detail[#detail + 1] = l.difficulty end
-        if l.reset and l.reset > 0 then detail[#detail + 1] = "resets in " .. (SecondsToTime and SecondsToTime(l.reset, true) or (math.ceil(l.reset / 3600) .. " h")) end
-        if l.extended then detail[#detail + 1] = "extended" end
-        r.detail:SetValue(table.concat(detail, " · "))
+        r.progress:SetValue(lockoutProgress(l))
+        r.detail:SetValue(lockoutDetail(l))
         r:Show()
         y = y + r:GetHeight() + T.space["space-4"]
     end

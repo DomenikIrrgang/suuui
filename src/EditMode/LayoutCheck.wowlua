@@ -31,9 +31,10 @@ local ANCHOR_ONLY: { [string]: boolean } = { ["tooltips.position"] = true, ["bag
                       ["loot.position"] = true }
 local SLACK = 2 -- px of touching that doesn't count
 
--- The root's size on a screen of pw × ph pixels with your scale setting.
-local function rootSize(pw: number, ph: number): (number, number)
-    local s: number = settings.get("ui", "scale")
+-- The root's size on a screen of pw × ph pixels with a scale setting (yours
+-- unless given).
+local function rootSize(pw: number, ph: number, scale: number?): (number, number)
+    local s: number = scale or settings.get("ui", "scale")
     if s == 0 then s = ph <= 1440 and 1 or math.floor(ph / 1440 * 4 + 0.5) / 4 end
     return pw / s, ph / s
 end
@@ -59,9 +60,11 @@ local function overlap(a: Rect, b: Rect): (number?, number?)
     return nil, nil
 end
 
-export function run()
+-- The frames the check places: shown, placed by their own anchor, real
+-- places (not anchors), with a size; their size in root units.
+local function framesOf(list: editMode.MoverInfo[]): Placed[]
     local frames: Placed[] = {}
-    for _, m in ipairs(editMode.movers()) do
+    for _, m in ipairs(list) do
         local id = m.namespace .. "." .. m.key
         local pos: { [string]: any } = settings.get(m.namespace, m.key)
         if m.enabled and not m.custom and not pos.hidden and not ANCHOR_ONLY[id] then
@@ -73,33 +76,44 @@ export function run()
             if w > 1 and h > 1 then frames[#frames + 1] = { id = id, label = m.label, pos = pos, w = w, h = h } end
         end
     end
+    return frames
+end
+
+-- What is wrong on a W × H root: frames leaving it, then frames overlapping.
+local function issuesOn(frames: Placed[], W: number, H: number): string[]
+    local issues: string[] = {}
+    local rects: Rect[] = {}
+    for _, f in ipairs(frames) do
+        local l, b, w, h = place(f.pos, f.w, f.h, W, H)
+        local r: Rect = { f = f, l = l, b = b, w = w, h = h }
+        rects[#rects + 1] = r
+        local out: string[] = {}
+        if l < -1 then out[#out + 1] = ("%d px past the left"):format(-l + 0.5) end
+        if b < -1 then out[#out + 1] = ("%d px below the bottom"):format(-b + 0.5) end
+        if l + w > W + 1 then out[#out + 1] = ("%d px past the right"):format(l + w - W + 0.5) end
+        if b + h > H + 1 then out[#out + 1] = ("%d px above the top"):format(b + h - H + 0.5) end
+        if #out > 0 then issues[#issues + 1] = f.label .. " leaves the screen: " .. table.concat(out, ", ") end
+    end
+    for i = 1, #rects do
+        for j = i + 1, #rects do
+            local a, c = rects[i], rects[j]
+            if APART[a.f.id] ~= c.f.id then
+                local x, y = overlap(a, c)
+                if x then issues[#issues + 1] = ("%s and %s overlap (%d × %d px)"):format(a.f.label, c.f.label, x, y) end
+            end
+        end
+    end
+    return issues
+end
+
+export function run()
+    local frames = framesOf(editMode.movers())
     local report = { at = date("%Y-%m-%d %H:%M:%S"), screens = {} :: { [string]: any } }
     DB.probe.layoutCheck = report
     local total = 0
     for _, sc in ipairs(SCREENS) do
         local W, H = rootSize(sc[2], sc[3])
-        local issues: string[] = {}
-        local rects: Rect[] = {}
-        for _, f in ipairs(frames) do
-            local l, b, w, h = place(f.pos, f.w, f.h, W, H)
-            local r: Rect = { f = f, l = l, b = b, w = w, h = h }
-            rects[#rects + 1] = r
-            local out: string[] = {}
-            if l < -1 then out[#out + 1] = ("%d px past the left"):format(-l + 0.5) end
-            if b < -1 then out[#out + 1] = ("%d px below the bottom"):format(-b + 0.5) end
-            if l + w > W + 1 then out[#out + 1] = ("%d px past the right"):format(l + w - W + 0.5) end
-            if b + h > H + 1 then out[#out + 1] = ("%d px above the top"):format(b + h - H + 0.5) end
-            if #out > 0 then issues[#issues + 1] = f.label .. " leaves the screen: " .. table.concat(out, ", ") end
-        end
-        for i = 1, #rects do
-            for j = i + 1, #rects do
-                local a, c = rects[i], rects[j]
-                if APART[a.f.id] ~= c.f.id then
-                    local x, y = overlap(a, c)
-                    if x then issues[#issues + 1] = ("%s and %s overlap (%d × %d px)"):format(a.f.label, c.f.label, x, y) end
-                end
-            end
-        end
+        local issues = issuesOn(frames, W, H)
         report.screens[sc[1] :: string] = { root = ("%d × %d"):format(W + 0.5, H + 0.5), issues = issues }
         total = total + #issues
         print(("%s (%d × %d): %s"):format(sc[1], W + 0.5, H + 0.5, #issues == 0 and "fits" or (#issues .. (#issues == 1 and " issue" or " issues"))))

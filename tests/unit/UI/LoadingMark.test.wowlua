@@ -1,0 +1,104 @@
+-- UI/LoadingMark: the emblem's size with and without wings, Start (the
+-- assembly, then the facets' loop 0.8 s in), Stop, and reduced motion.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import loadingMark, LoadingMark, LoadingMarkOptions from "/UI/LoadingMark"
+import expectNoErrors, newParent from "../../helpers"
+import reduceMotion from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function make(opts: LoadingMarkOptions?): LoadingMark
+    parent = newParent()
+    return loadingMark(parent :: Frame, opts)
+end
+
+local function playing(groups: AnimationGroup[]): number
+    local n = 0
+    for _, g in ipairs(groups) do if g:IsPlaying() then n += 1 end end
+    return n
+end
+
+@afterEach
+local function cleanup()
+    reduceMotion(false)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+@test("a new mark: 60 px with wings, 4 by 1.2 times that, hidden")
+local function defaults()
+    local m = make()
+    expect(m).toHaveSize(240, 72)
+    expect(m).never.toBeShown()
+    expect(#m.facets).toBe(4)
+    expect(#m.wingParts).toBe(4)
+    expect(#m.intro).toBe(5)
+    expect(#m.loops).toBe(4)
+    for _, t in ipairs(m.facets) do expect(t:GetAlpha()).toBe(0) end
+end
+
+@test("without wings it is size by size")
+local function noWings()
+    local m = make({ size = 30, wings = false })
+    expect(m).toHaveSize(30, 30)
+    expect(#m.wingParts).toBe(0)
+    expect(#m.intro).toBe(1)
+end
+
+@test("Start shows it and assembles, then loops the facets from 0.8 s")
+local function starts()
+    local m = make({ size = 100 })
+    expect(m).toHaveSize(400, 120)
+    m:Start()
+    expect(m).toBeShown()
+    expect(playing(m.intro)).toBe(5)
+    expect(playing(m.loops)).toBe(0)
+    for _, part in ipairs(m.wingParts) do expect(part:GetAlpha()).toBe(0) end
+    expect(m.loopTimer).toBeTruthy()
+    mock.advanceTime(0.81)
+    expect(m.loopTimer).toBeNil()
+    expect(playing(m.loops)).toBe(4)
+end
+
+@test("Stop hides it at once, stops everything and drops the waiting loop")
+local function stops()
+    local m = make()
+    m:Start()
+    m:Stop()
+    expect(m).never.toBeShown()
+    expect(m.loopTimer).toBeNil()
+    expect(playing(m.intro)).toBe(0)
+    for _, part in ipairs(m.wingParts) do expect(part:GetAlpha()).toBe(1) end
+    for _, t in ipairs(m.facets) do expect(t:GetAlpha()).toBe(0) end
+    mock.advanceTime(1)
+    expect(playing(m.loops)).toBe(0)
+    -- and once the loop runs
+    m:Start()
+    mock.advanceTime(1)
+    m:Stop()
+    expect(playing(m.loops)).toBe(0)
+end
+
+@test("Start again starts over")
+local function restart()
+    local m = make()
+    m:Start()
+    local first = m.loopTimer
+    m:Start()
+    expect(m.loopTimer).never.toBe(first)
+    expect(playing(m.intro)).toBe(5)
+end
+
+@test("with reduced motion it shows still")
+local function reduced()
+    reduceMotion(true)
+    local m = make()
+    m:Start()
+    expect(m).toBeShown()
+    expect(playing(m.intro)).toBe(0)
+    expect(m.loopTimer).toBeNil()
+    for _, part in ipairs(m.wingParts) do expect(part:GetAlpha()).toBe(1) end
+end

@@ -1,0 +1,708 @@
+-- tests/unit/UI/TalentBuilds.test.wowlua
+-- UI/TalentBuilds: the order check, ranks to steps, SuuUI's share text and
+-- the game's talent string. Pure functions on made-up trees.
+
+import test, expect, cases from "wowlua:test"
+import * as tb from "/UI/TalentBuilds"
+import * as serialize from "/Core/Serialize"
+
+type Node = tb.TalentNode
+type Tree = tb.TalentTreeData
+
+-- A tree from a list of nodes (its order the list's).
+local function tree(nodes: Node[], treeID: number?): Tree
+    local byID: { [number]: Node } = {}
+    local order: number[] = {}
+    for i, n in ipairs(nodes) do
+        byID[n.id] = n
+        order[i] = n.id
+    end
+    return { treeID = treeID or 1, order = order, byID = byID }
+end
+
+-- A node of a tree (there for sure).
+local function nodeOf(t: Tree, id: number): Node
+    local n = t.byID[id]
+    assert(n, "no node " .. id)
+    return n
+end
+
+-- The tree most tests use:
+--   Alpha 100 (5 ranks, row 0), Beta 101 (1 rank, row 0),
+--   Gamma 102 (3 ranks, row 1, needs Alpha at 5/5),
+--   Delta 103 (1 rank, row 2, needs Alpha and Beta full),
+--   Eps 104 (2 ranks, row 1, needs Alpha or Beta full),
+--   Zeta 105 (a choice, row 0 of the second tree)
+local function sample(): Tree
+    return tree({
+        { id = 100, max = 5, row = 0, col = 0, treeIndex = 1, name = "Alpha" },
+        { id = 101, max = 1, row = 0, col = 1, treeIndex = 1, name = "Beta" },
+        { id = 102, max = 3, row = 1, col = 0, treeIndex = 1, name = "Gamma", requires = { 100 } },
+        { id = 103, max = 1, row = 2, col = 1, treeIndex = 1, name = "Delta", requires = { 100, 101 }, requiresAll = true },
+        { id = 104, max = 2, row = 1, col = 2, treeIndex = 1, name = "Eps", requires = { 100, 101 } },
+        { id = 105, max = 1, row = 0, col = 0, treeIndex = 2, name = "Zeta", choice = true, entryIDs = { 9001, 9002 } },
+    })
+end
+
+-- `n` ranks of each node, in this order: { { node, n }, … } -> steps
+local function steps(runs: { number }[]): tb.TalentStep[]
+    local out: tb.TalentStep[] = {}
+    for _, r in ipairs(runs) do
+        for _ = 1, r[2] do out[#out + 1] = { node = r[1] } end
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Constants
+--------------------------------------------------------------------------------
+
+@test("a row opens every 5 points; a build holds 51")
+local function constants()
+    expect(tb.TALENT_ROW_POINTS).toBe(5)
+    expect(tb.TALENT_MAX_POINTS).toBe(51)
+end
+
+--------------------------------------------------------------------------------
+-- talentOrderCheck
+--------------------------------------------------------------------------------
+
+@test("an empty order is fine")
+local function orderEmpty()
+    local ok, at, why = tb.talentOrderCheck({}, sample())
+    expect(ok).toBe(true)
+    expect(at).toBeNil()
+    expect(why).toBeNil()
+end
+
+@test("a valid order passes: rows, arrows (all and any) in turn")
+local function orderValid()
+    local t = sample()
+    expect(tb.talentOrderCheck(steps({ { 100, 5 }, { 101, 1 }, { 102, 3 }, { 104, 2 }, { 103, 1 } }), t)).toBe(true)
+    -- any one of Eps's arrows: Beta alone at full rank, then 4 points for row 1
+    expect(tb.talentOrderCheck(steps({ { 101, 1 }, { 105, 1 }, { 100, 3 }, { 104, 2 } }), t)).toBe(true)
+end
+
+@test("more ranks than the talent has")
+local function orderTooManyRanks()
+    local ok, at, why = tb.talentOrderCheck(steps({ { 100, 6 } }), sample())
+    expect(ok).toBe(false)
+    expect(at).toBe(6)
+    expect(why).toBe("Alpha has only 5 ranks; step 6 would be rank 6.")
+    local _, at2, why2 = tb.talentOrderCheck(steps({ { 101, 2 } }), sample())
+    expect(at2).toBe(2)
+    expect(why2).toBe("Beta has only 1 rank; step 2 would be rank 2.")
+end
+
+@test("a row before its points are spent (is / are)")
+local function orderRowLocked()
+    local _, at, why = tb.talentOrderCheck(steps({ { 102, 1 } }), sample())
+    expect(at).toBe(1)
+    expect(why).toBe("Gamma needs 5 points spent before it; at step 1 only 0 are.")
+    local _, at2, why2 = tb.talentOrderCheck(steps({ { 100, 1 }, { 103, 1 } }), sample())
+    expect(at2).toBe(2)
+    expect(why2).toBe("Delta needs 10 points spent before it; at step 2 only 1 is.")
+end
+
+@test("an arrow's talent not at full rank yet")
+local function orderArrowMissing()
+    local t = sample()
+    -- Gamma: one arrow from Alpha (4/5 after 5 points)
+    local _, at, why = tb.talentOrderCheck(steps({ { 100, 4 }, { 101, 1 }, { 102, 1 } }), t)
+    expect(at).toBe(6)
+    expect(why).toBe("Gamma needs Alpha at 5/5 before it; at step 6 it has 4.")
+    -- Delta needs both: Beta is missing (the first one missing is named)
+    local _, at2, why2 = tb.talentOrderCheck(steps({ { 100, 5 }, { 105, 1 }, { 102, 3 }, { 104, 1 }, { 103, 1 } }), t)
+    expect(at2).toBe(11)
+    expect(why2).toBe("Delta needs Beta at 1/1 before it; at step 11 it has 0.")
+    -- Eps needs either: neither is full, the first is named
+    local _, at3, why3 = tb.talentOrderCheck(steps({ { 100, 4 }, { 105, 1 }, { 104, 1 } }), t)
+    expect(at3).toBe(6)
+    expect(why3).toBe("Eps needs Alpha at 5/5 before it; at step 6 it has 4.")
+end
+
+@test("both arrows of an all-of talent missing: the first is named")
+local function orderAllBothMissing()
+    local t = sample()
+    local why = tb.talentStepProblem(t, nodeOf(t, 103), { [100] = 4 }, 10)
+    expect(why).toBe("Delta needs Alpha at 5/5 before it; at step 11 it has 4.")
+end
+
+@test("a step on a talent the tree doesn't have")
+local function orderUnknown()
+    local ok, at, why = tb.talentOrderCheck({ { node = 100 }, { node = 999 } }, sample())
+    expect(ok).toBe(false)
+    expect(at).toBe(2)
+    expect(why).toBe("Step 2 isn't a talent of this tree any more.")
+end
+
+@test("more than 51 steps")
+local function orderTooLong()
+    local s: tb.TalentStep[] = {}
+    for i = 1, 52 do s[i] = { node = 100 } end
+    local ok, at, why = tb.talentOrderCheck(s, sample())
+    expect(ok).toBe(false)
+    expect(at).toBe(52)
+    expect(why).toBe("A build holds 51 points at most.")
+end
+
+@test("a node without name, max or row: one rank, row 0, named ?")
+local function orderDefaults()
+    local t = tree({ { id = 1 }, { id = 2, row = 1, requires = { 1 } } })
+    expect(tb.talentOrderCheck({ { node = 1 } }, t)).toBe(true)
+    local _, _, why = tb.talentOrderCheck({ { node = 1 }, { node = 1 } }, t)
+    expect(why).toBe("? has only 1 rank; step 2 would be rank 2.")
+    local _, _, why2 = tb.talentOrderCheck({ { node = 2 } }, t)
+    expect(why2).toBe("? needs 5 points spent before it; at step 1 only 0 are.")
+end
+
+@test("an arrow from an unnamed talent")
+local function orderArrowUnnamed()
+    local t = tree({ { id = 1, max = 2 }, { id = 2, name = "B", requires = { 1 } } })
+    local _, _, why = tb.talentOrderCheck({ { node = 2 } }, t)
+    expect(why).toBe("B needs ? at 2/2 before it; at step 1 it has 0.")
+end
+
+@test("an empty arrow list needs nothing")
+local function orderNoArrows()
+    local t = tree({ { id = 1, requires = {} }, { id = 2, requires = {}, requiresAll = true } })
+    expect(tb.talentOrderCheck({ { node = 1 }, { node = 2 } }, t)).toBe(true)
+end
+
+@test("an arrow from a talent the tree doesn't have is no obstacle")
+local function orderArrowFromUnknown()
+    -- (the tree changed under a build: an arrow whose start is gone isn't
+    -- reported; there is nothing to name)
+    local any = tree({ { id = 1, requires = { 99 } } })
+    expect(tb.talentOrderCheck({ { node = 1 } }, any)).toBe(true)
+    local all = tree({ { id = 1, requires = { 99 }, requiresAll = true } })
+    expect(tb.talentOrderCheck({ { node = 1 } }, all)).toBe(true)
+    -- one known start among unknown ones: that one counts
+    local mixed = tree({ { id = 2, name = "P" }, { id = 1, name = "C", requires = { 99, 2 }, requiresAll = true } })
+    local _, _, why = tb.talentOrderCheck({ { node = 1 } }, mixed)
+    expect(why).toBe("C needs P at 1/1 before it; at step 1 it has 0.")
+end
+
+--------------------------------------------------------------------------------
+-- talentNextProblem / talentStepProblem
+--------------------------------------------------------------------------------
+
+@test("the next rank: fine, or why not")
+local function nextProblem()
+    local t = sample()
+    expect(tb.talentNextProblem({}, t, 100)).toBeNil()
+    expect(tb.talentNextProblem({}, t, 102)).toBe("Gamma needs 5 points spent before it; at step 1 only 0 are.")
+    expect(tb.talentNextProblem(steps({ { 100, 5 } }), t, 100)).toBe("Alpha has only 5 ranks; step 6 would be rank 6.")
+    expect(tb.talentNextProblem(steps({ { 100, 5 } }), t, 102)).toBeNil()
+    expect(tb.talentNextProblem({}, t, 999)).toBe("Not a talent of this tree.")
+end
+
+@test("the next rank of a full build")
+local function nextFull()
+    local s: tb.TalentStep[] = {}
+    for i = 1, 51 do s[i] = { node = 999 } end
+    expect(tb.talentNextProblem(s, sample(), 100)).toBe("A build holds 51 points at most.")
+    table.remove(s)
+    expect(tb.talentNextProblem(s, sample(), 100)).toBeNil()
+end
+
+@test("one more rank with counts and points spent")
+local function stepProblem()
+    local t = sample()
+    expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 5 }, 5)).toBeNil()
+    expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 5 }, 4))
+        .toBe("Gamma needs 5 points spent before it; at step 5 only 4 are.")
+    expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 5, [102] = 3 }, 8))
+        .toBe("Gamma has only 3 ranks; step 9 would be rank 4.")
+    expect(tb.talentStepProblem(t, nodeOf(t, 104), { [101] = 1 }, 5)).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- talentStepsFromRanks
+--------------------------------------------------------------------------------
+
+@test("ranks become steps top to bottom, a talent's ranks together")
+local function fromRanks()
+    local t = sample()
+    local s, all = tb.talentStepsFromRanks({ [103] = 1, [104] = 2, [102] = 3, [101] = 1, [100] = 5 }, t)
+    expect(all).toBe(true)
+    expect(s).toEqual(steps({ { 100, 5 }, { 101, 1 }, { 102, 3 }, { 104, 2 }, { 103, 1 } }))
+    expect(tb.talentOrderCheck(s, t)).toBe(true)
+end
+
+@test("ranks: unknown talents and zero ranks are left out, too many cut to the max")
+local function fromRanksClean()
+    local s, all = tb.talentStepsFromRanks({ [100] = 9, [999] = 3, [101] = 0 }, sample())
+    expect(all).toBe(true)
+    expect(s).toEqual(steps({ { 100, 5 } }))
+end
+
+@test("ranks of a talent without a max are taken as they are")
+local function fromRanksNoMax()
+    local s = tb.talentStepsFromRanks({ [7] = 3 }, tree({ { id = 7 } }))
+    expect(#s).toBe(3)
+end
+
+@test("ranks: the sort by row, then tree, then column, then ID")
+local function fromRanksSort()
+    local t = tree({
+        { id = 5, row = 0, col = 2, treeIndex = 1 },
+        { id = 4, row = 0, col = 1, treeIndex = 1 },
+        { id = 3, row = 0, col = 0, treeIndex = 2 },
+        { id = 2 },                     -- row 0, tree 0, column 0
+        { id = 1 },
+        { id = 6, row = 1, max = 1 },
+    })
+    local s = tb.talentStepsFromRanks({ [1] = 1, [2] = 1, [3] = 1, [4] = 1, [5] = 1, [6] = 1 }, t)
+    local ids: number[] = {}
+    for i, x in ipairs(s) do ids[i] = x.node end
+    expect(ids).toEqual({ 1, 2, 4, 5, 3, 6 })
+end
+
+@test("ranks: a talent waits for the arrow into it, then the walk starts again")
+local function fromRanksArrowLater()
+    -- Child sorts first (tree 0) but needs Parent at full rank
+    local t = tree({
+        { id = 10, max = 2, treeIndex = 1, name = "Parent" },
+        { id = 20, max = 1, treeIndex = 0, name = "Child", requires = { 10 } },
+        { id = 30, max = 1, treeIndex = 0, col = 1, name = "Other" },
+    })
+    local s, all = tb.talentStepsFromRanks({ [10] = 2, [20] = 1, [30] = 1 }, t)
+    expect(all).toBe(true)
+    expect(s).toEqual(steps({ { 30, 1 }, { 10, 2 }, { 20, 1 } }))
+end
+
+@test("ranks the rows and arrows never allow come last, and say so")
+local function fromRanksImpossible()
+    local s, all = tb.talentStepsFromRanks({ [102] = 2, [101] = 1 }, sample())
+    expect(all).toBe(false)
+    expect(s).toEqual(steps({ { 101, 1 }, { 102, 2 } }))
+end
+
+@test("ranks carry their choice's entry")
+local function fromRanksEntries()
+    local s = tb.talentStepsFromRanks({ [105] = 1, [100] = 1 }, sample(), { [105] = 9002 })
+    expect(s).toEqual({ { node = 100 }, { node = 105, entry = 9002 } })
+end
+
+@test("ranks over 51 points stop at 51, and terminate (a node left placeable)")
+local function fromRanksOverCap()
+    local nodes: Node[] = {}
+    local ranks: { [number]: number } = {}
+    for i = 1, 11 do
+        nodes[i] = { id = i, max = 5, col = i }
+        ranks[i] = 5
+    end
+    local s, all = tb.talentStepsFromRanks(ranks, tree(nodes))
+    expect(#s).toBe(51)
+    expect(all).toBe(false)
+    expect(s[51].node).toBe(11)
+    expect(tb.talentOrderCheck(s, tree(nodes))).toBe(true)
+end
+
+@test("ranks over the cap when the rest can't be placed either")
+local function fromRanksOverCapBlocked()
+    local nodes: Node[] = {}
+    local ranks: { [number]: number } = {}
+    for i = 1, 11 do
+        nodes[i] = { id = i, max = 5, col = i }
+        ranks[i] = 5
+    end
+    nodes[12] = { id = 12, max = 1, row = 9 }
+    ranks[12] = 1
+    local s, all = tb.talentStepsFromRanks(ranks, tree(nodes))
+    expect(#s).toBe(51)
+    expect(all).toBe(false)
+end
+
+@test("no ranks: no steps")
+local function fromRanksNone()
+    local s, all = tb.talentStepsFromRanks({}, sample())
+    expect(s).toEqual({})
+    expect(all).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- SuuUI's share text
+--------------------------------------------------------------------------------
+
+local function entryIndexOf(t: Tree): (s: tb.TalentStep) -> number?
+    return function(s: tb.TalentStep): number?
+        local n = t.byID[s.node]
+        for i, id in ipairs(n and n.entryIDs or {}) do if id == s.entry then return i end end
+        return nil
+    end
+end
+
+@test("a build round trips: name, class, tree, steps and choices")
+local function shareRoundTrip()
+    local t = sample()
+    local s = steps({ { 100, 5 }, { 101, 1 } })
+    s[#s + 1] = { node = 105, entry = 9002 }
+    s[#s + 1] = { node = 102 }
+    local text, err = tb.encodeTalentBuild({ name = "Raid build", classID = 7, treeID = 512, steps = s }, entryIndexOf(t))
+    expect(err).toBeNil()
+    expect((text :: string):sub(1, 9)).toBe("SuuUI:T1:")
+    local b, why = tb.decodeTalentBuild(text)
+    expect(why).toBeNil()
+    local d = b :: tb.DecodedBuild
+    expect(d.name).toBe("Raid build")
+    expect(d.classID).toBe(7)
+    expect(d.treeID).toBe(512)
+    expect(#d.steps).toBe(8)
+    expect(d.steps[1]).toEqual({ node = 100 })
+    expect(d.steps[7]).toEqual({ node = 105, entryIndex = 2 })
+    expect(d.steps[8]).toEqual({ node = 102 })
+end
+
+@test("the share text's bytes, as the format says")
+local function shareBytes()
+    local text = tb.encodeTalentBuild({ name = "A", classID = 2, treeID = 258,
+        steps = { { node = 70000 }, { node = 70003, entry = 1 } } }, function(): number? return 3 end) :: string
+    local raw = serialize.fromBase64(text:sub(10)) :: string
+    local payload = raw:sub(1, -3)
+    expect({ payload:byte(1, -1) }).toEqual({
+        2,            -- class
+        1, 2,         -- tree 258
+        1, 65,        -- "A"
+        2,            -- two steps
+        1, 17, 112,   -- the lowest node, 70000
+        0, 0,         -- +0
+        128, 3, 3,    -- +3, a choice: entry 3
+    })
+    local sum = serialize.fletcher16(payload)
+    expect(raw:sub(-2)).toBe(string.char(math.floor(sum / 256), sum % 256))
+end
+
+@test("an empty build: no name, no steps, no IDs")
+local function shareEmpty()
+    local text = tb.encodeTalentBuild({}) :: string
+    local b = tb.decodeTalentBuild(text) :: tb.DecodedBuild
+    expect(b).toEqual({ name = "", classID = 0, treeID = 0, steps = {} })
+end
+
+@test("a step without an entry, or no entryIndex, is a plain step")
+local function shareNoEntry()
+    local s = { { node = 105, entry = 9001 }, { node = 101 } }
+    local plain = tb.decodeTalentBuild(tb.encodeTalentBuild({ steps = s })) :: tb.DecodedBuild
+    expect(plain.steps).toEqual({ { node = 105 }, { node = 101 } })
+    -- entryIndex answers nil: plain too
+    local none = tb.decodeTalentBuild(tb.encodeTalentBuild({ steps = s }, function(): number? return nil end)) :: tb.DecodedBuild
+    expect(none.steps).toEqual({ { node = 105 }, { node = 101 } })
+end
+
+@test("the name: cut to 48 bytes without splitting a character")
+local function shareNameCut()
+    local long = string.rep("a", 60)
+    local b = tb.decodeTalentBuild(tb.encodeTalentBuild({ name = long })) :: tb.DecodedBuild
+    expect(b.name).toBe(string.rep("a", 48))
+    -- 47 letters and a two-byte é: the é would be split, so it goes
+    local accented = string.rep("a", 47) .. "é" .. "b"
+    local b2 = tb.decodeTalentBuild(tb.encodeTalentBuild({ name = accented })) :: tb.DecodedBuild
+    expect(b2.name).toBe(string.rep("a", 47))
+    -- 46 letters and é: exactly 48 bytes, kept
+    local fits = string.rep("a", 46) .. "é" .. "b"
+    local b3 = tb.decodeTalentBuild(tb.encodeTalentBuild({ name = fits })) :: tb.DecodedBuild
+    expect(b3.name).toBe(string.rep("a", 46) .. "é")
+    -- three-byte characters (€): 16 of them are 48 bytes
+    local euros = string.rep("€", 20)
+    local b4 = tb.decodeTalentBuild(tb.encodeTalentBuild({ name = euros })) :: tb.DecodedBuild
+    expect(b4.name).toBe(string.rep("€", 16))
+    -- nothing but continuation bytes: nothing is left
+    local broken = string.rep(string.char(0x80), 50)
+    local b5 = tb.decodeTalentBuild(tb.encodeTalentBuild({ name = broken })) :: tb.DecodedBuild
+    expect(b5.name).toBe("")
+end
+
+@test("talents too far apart can't be shared")
+local function shareTooFar()
+    local text, why = tb.encodeTalentBuild({ steps = { { node = 1 }, { node = 32769 } } })
+    expect(text).toBeNil()
+    expect(why).toBe("These talents are too far apart to share.")
+    -- 32767 apart still fits
+    local ok = tb.encodeTalentBuild({ steps = { { node = 1 }, { node = 32768 } } })
+    local b = tb.decodeTalentBuild(ok) :: tb.DecodedBuild
+    expect(b.steps).toEqual({ { node = 1 }, { node = 32768 } })
+end
+
+@test("the class wraps to a byte; whitespace in the pasted text is ignored")
+local function shareWrapAndSpaces()
+    local text = tb.encodeTalentBuild({ classID = 258, steps = { { node = 5 } } }) :: string
+    local spaced = text:sub(1, 12) .. " \n\t" .. text:sub(13) .. "  "
+    local b = tb.decodeTalentBuild(spaced) :: tb.DecodedBuild
+    expect(b.classID).toBe(2)
+    expect(b.steps).toEqual({ { node = 5 } })
+end
+
+@test("51 steps round trip")
+local function shareFull()
+    local s: tb.TalentStep[] = {}
+    for i = 1, 51 do s[i] = { node = 1000 + i * 7 } end
+    local b = tb.decodeTalentBuild(tb.encodeTalentBuild({ name = "x", steps = s })) :: tb.DecodedBuild
+    expect(#b.steps).toBe(51)
+    expect(b.steps[51]).toEqual({ node = 1357 })
+end
+
+-- A share text around a raw payload (a correct checksum), for malformed ones.
+local function wrap(payload: string): string
+    local sum = serialize.fletcher16(payload)
+    return "SuuUI:T1:" .. serialize.base64(payload .. string.char(math.floor(sum / 256), sum % 256))
+end
+
+@test("decode: not a build, or not all of it")
+@cases({
+    { "", "This isn't a SuuUI talent build." },
+    { "SuuUI:T2:AAAA", "This isn't a SuuUI talent build." },
+    { "hello", "This isn't a SuuUI talent build." },
+    { "SuuUI:T1:", "The text is incomplete; copy all of it." },
+    { "SuuUI:T1:AAA", "The text is incomplete; copy all of it." },     -- not whole base64
+    { "SuuUI:T1:AA!A", "The text is incomplete; copy all of it." },    -- not base64
+    { "SuuUI:T1:AAAAAAAA", "The text is incomplete; copy all of it." }, -- 6 bytes
+})
+local function decodeBad(text: string, why: string)
+    local b, err = tb.decodeTalentBuild(text)
+    expect(b).toBeNil()
+    expect(err).toBe(why)
+end
+
+@test("decode: nil is not a build")
+local function decodeNil()
+    local b, err = tb.decodeTalentBuild(nil)
+    expect(b).toBeNil()
+    expect(err).toBe("This isn't a SuuUI talent build.")
+end
+
+@test("decode: a damaged checksum")
+local function decodeChecksum()
+    local text = tb.encodeTalentBuild({ name = "Build", steps = { { node = 10 } } }) :: string
+    local raw = serialize.fromBase64(text:sub(10)) :: string
+    local flipped = raw:sub(1, 2) .. string.char(((raw:byte(3) or 0) + 1) % 256) .. raw:sub(4)
+    local b, why = tb.decodeTalentBuild("SuuUI:T1:" .. serialize.base64(flipped))
+    expect(b).toBeNil()
+    expect(why).toBe("The text is damaged or incomplete; copy all of it.")
+end
+
+@test("decode: payloads that end too soon or run on")
+@cases({
+    -- class, tree, a name of 200 bytes that isn't there: no count
+    { string.char(1, 0, 1, 200, 65, 66, 67, 68), "The text is damaged." },
+    -- class, tree, no name, 1 step, base, but no step bytes
+    { string.char(1, 0, 1, 0, 1, 0, 0, 5), "The text is damaged." },
+    -- one step with only one of its two bytes
+    { string.char(1, 0, 1, 0, 1, 0, 0, 5, 0), "The text is damaged." },
+    -- a choice step without its entry byte
+    { string.char(1, 0, 1, 0, 1, 0, 0, 5, 128, 0), "The text is damaged." },
+    -- one byte more than the steps
+    { string.char(1, 0, 1, 0, 1, 0, 0, 5, 0, 0, 9), "The text has extra data at the end." },
+})
+local function decodeMalformed(payload: string, why: string)
+    local b, err = tb.decodeTalentBuild(wrap(payload))
+    expect(b).toBeNil()
+    expect(err).toBe(why)
+end
+
+@test("decode: a hand-made payload")
+local function decodeHandMade()
+    local b = tb.decodeTalentBuild(wrap(string.char(9, 1, 0, 2, 72, 105, 2, 0, 0, 5, 0, 0, 128, 1, 0))) :: tb.DecodedBuild
+    expect(b).toEqual({ name = "Hi", classID = 9, treeID = 256,
+        steps = { { node = 5 }, { node = 6, entryIndex = 0 } } })
+end
+
+--------------------------------------------------------------------------------
+-- The game's talent string
+--------------------------------------------------------------------------------
+
+@test("the string's bits: version, spec, hash, then each node low bit first")
+local function gameBits()
+    local t = tree({ { id = 10, max = 1 } })
+    -- version 1 (bit 0), 151 zero bits, then selected, purchased, not
+    -- partial, no choice: 156 bits, 26 characters exactly
+    local text = tb.writeGameTalentString(1, 0, nil, t, { [10] = 1 })
+    expect(text).toBe("B" .. string.rep("A", 24) .. "M")
+end
+
+@test("the header reads back")
+local function gameHeader()
+    local hash: number[] = {}
+    for i = 1, 16 do hash[i] = i * 15 end
+    local text = tb.writeGameTalentString(2, 263, hash, sample(), {})
+    local version, specID, h = tb.readGameTalentHeader(text)
+    expect(version).toBe(2)
+    expect(specID).toBe(263)
+    expect(h).toEqual(hash)
+    -- whitespace is ignored
+    local v2 = tb.readGameTalentHeader("  " .. text:sub(1, 10) .. "\n" .. text:sub(11))
+    expect(v2).toBe(2)
+end
+
+@test("the header of something else: nil")
+@cases({ { "" }, { "AAAA" }, { "not a talent string at all, has spaces and !" } })
+local function gameHeaderBad(text: string)
+    local version, specID, hash = tb.readGameTalentHeader(text)
+    expect(version).toBeNil()
+    expect(specID).toBeNil()
+    expect(hash).toBeNil()
+end
+
+@test("the header of nil: nil")
+local function gameHeaderNil()
+    expect(tb.readGameTalentHeader(nil)).toBeNil()
+end
+
+@test("a string round trips: full, partial and chosen ranks")
+local function gameRoundTrip()
+    local t = sample()
+    local hash: number[] = {}
+    for i = 1, 16 do hash[i] = 255 - i end
+    local ranks = { [100] = 5, [101] = 1, [102] = 2, [104] = 1, [105] = 1 }
+    local text = tb.writeGameTalentString(1, 262, hash, t, ranks, { [105] = 2, [100] = 1 })
+    local read, why = tb.readGameTalentString(text, t)
+    expect(why).toBeNil()
+    local g = read :: tb.GameTalents
+    expect(g.version).toBe(1)
+    expect(g.specID).toBe(262)
+    expect(g.hash).toEqual(hash)
+    expect(g.ranks).toEqual(ranks)
+    -- only a choice node writes its entry
+    expect(g.entries).toEqual({ [105] = 2 })
+    -- and written again it is the same text
+    expect(tb.writeGameTalentString(g.version, g.specID, g.hash, t, g.ranks, g.entries)).toBe(text)
+end
+
+@test("write: missing version, spec and hash are zeros; no ranks: every node unselected")
+local function gameWriteDefaults()
+    local t = sample()
+    local text = tb.writeGameTalentString(nil, nil, nil, t, {})
+    -- 152 + 6 bits: 27 characters (the last one partly used)
+    expect(#text).toBe(27)
+    expect(text).toBe(string.rep("A", 27))
+    local g = tb.readGameTalentString(text, t) :: tb.GameTalents
+    expect(g.version).toBe(0)
+    expect(g.specID).toBe(0)
+    expect(g.ranks).toEqual({})
+    expect(g.entries).toEqual({})
+end
+
+@test("write: a node the tree lacks, or a choice without entries, is written plainly")
+local function gameWriteOdd()
+    local t = sample()
+    t.order = { 100, 999, 105 }
+    local text = tb.writeGameTalentString(1, 1, nil, t, { [999] = 3, [105] = 1 })
+    local g = tb.readGameTalentString(text, t) :: tb.GameTalents
+    expect(g.ranks).toEqual({ [105] = 1 })
+    expect(g.entries).toEqual({})
+end
+
+@test("write: a tree without an order writes the header only")
+local function gameWriteNoOrder()
+    local t: Tree = { byID = {} }
+    local text = tb.writeGameTalentString(1, 2, nil, t, { [1] = 1 })
+    expect(#text).toBe(26) -- 152 bits: 25 characters and 2 bits
+    local g = tb.readGameTalentString(text, t) :: tb.GameTalents
+    expect(g.ranks).toEqual({})
+end
+
+@test("read: a partial rank of a node the tree lacks is taken as written")
+local function gameReadPartialUnknown()
+    local writer = tree({ { id = 50, max = 5 } })
+    local text = tb.writeGameTalentString(1, 1, nil, writer, { [50] = 3 })
+    local reader: Tree = { order = { 50 }, byID = {} }
+    local g = tb.readGameTalentString(text, reader) :: tb.GameTalents
+    expect(g.ranks).toEqual({ [50] = 3 })
+end
+
+@test("read: a full rank of a node the tree lacks doesn't match")
+local function gameReadFullUnknown()
+    local writer = tree({ { id = 50, max = 5 } })
+    local text = tb.writeGameTalentString(1, 1, nil, writer, { [50] = 5 })
+    local reader: Tree = { order = { 50 }, byID = {} }
+    local g, why = tb.readGameTalentString(text, reader)
+    expect(g).toBeNil()
+    expect(why).toBe("The string doesn't match this class's talents.")
+end
+
+@test("read: a full rank of a node without max is 1")
+local function gameReadNoMax()
+    local t = tree({ { id = 50 } })
+    local g = tb.readGameTalentString(tb.writeGameTalentString(1, 1, nil, t, { [50] = 1 }), t) :: tb.GameTalents
+    expect(g.ranks).toEqual({ [50] = 1 })
+end
+
+-- Hand-made bit strings: the header, then `bits` ("1100…"), as the game's
+-- base64 (6 bits a character, low bit first).
+local CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local function bitsText(bits: string): string
+    local all = string.rep("0", 152) .. bits
+    local out: string[] = {}
+    for i = 1, #all, 6 do
+        local v = 0
+        for j = 0, 5 do
+            if all:sub(i + j, i + j) == "1" then v = v + 2 ^ j end
+        end
+        out[#out + 1] = CHARS:sub(v + 1, v + 1)
+    end
+    return table.concat(out)
+end
+
+@test("read: selected but not purchased is no rank")
+local function gameReadNotPurchased()
+    local t = tree({ { id = 1, max = 2 }, { id = 2, max = 1 } })
+    -- node 1: selected, not purchased; node 2: selected, purchased, full
+    local g = tb.readGameTalentString(bitsText("10" .. "1100"), t) :: tb.GameTalents
+    expect(g.ranks).toEqual({ [2] = 1 })
+end
+
+@test("read: a string that ends inside the nodes")
+@cases({
+    -- (152 header bits and these: whole characters, 4 or 10 bits)
+    { "0000" },        -- four nodes not selected; the fifth's bit isn't there
+    { "0001" },        -- selected, no purchased bit
+    { "0011" },        -- purchased, no partial bit
+    { "1111" },        -- partial, its 6 rank bits cut short
+    { "0110" },        -- not partial, no choice bit
+    { "1101" },        -- a choice, no index
+    { "0000011011" },  -- a choice, its 2 index bits cut short
+})
+local function gameReadShort(bits: string)
+    local nodes: Node[] = {}
+    for i = 1, 10 do nodes[i] = { id = i, max = 3, choice = true } end
+    local g, why = tb.readGameTalentString(bitsText(bits), tree(nodes))
+    expect(g).toBeNil()
+    expect(why).toBe("The string is incomplete; copy all of it.")
+end
+
+@test("read: not a talent string")
+@cases({ { "" }, { "AAAA" }, { "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" } })
+local function gameReadNotString(text: string)
+    local g, why = tb.readGameTalentString(text, sample())
+    expect(g).toBeNil()
+    expect(why).toBe("This isn't a talent string.")
+end
+
+@test("read: nil is not a talent string")
+local function gameReadNil()
+    local g, why = tb.readGameTalentString(nil, sample())
+    expect(g).toBeNil()
+    expect(why).toBe("This isn't a talent string.")
+end
+
+@test("read: whitespace in the pasted string is ignored")
+local function gameReadSpaces()
+    local t = sample()
+    local text = tb.writeGameTalentString(1, 5, nil, t, { [100] = 2 })
+    local g = tb.readGameTalentString(" " .. text:sub(1, 5) .. "\n\t" .. text:sub(6) .. " ", t) :: tb.GameTalents
+    expect(g.ranks).toEqual({ [100] = 2 })
+end
+
+@test("game string to steps: read, then placed as the rows allow")
+local function gameToSteps()
+    local t = sample()
+    local text = tb.writeGameTalentString(1, 5, nil, t, { [100] = 5, [101] = 1, [102] = 3, [103] = 1, [105] = 1 }, { [105] = 1 })
+    local g = tb.readGameTalentString(text, t) :: tb.GameTalents
+    local entries: { [number]: number } = {}
+    for id, index in pairs(g.entries) do entries[id] = (nodeOf(t, id).entryIDs :: number[])[index] end
+    local s, all = tb.talentStepsFromRanks(g.ranks, t, entries)
+    expect(all).toBe(true)
+    expect(tb.talentOrderCheck(s, t)).toBe(true)
+    expect(s[7]).toEqual({ node = 105, entry = 9001 })
+end

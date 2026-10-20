@@ -1,0 +1,260 @@
+-- Units/CooldownManager/Migrations: each settings migration on made-up
+-- stored values, then all of them on an old profile as it loads
+-- (tests/profiles/cooldowns-migrations.json: the list-wide Missing settings,
+-- an essential size over the range, lists from before setups, a shaman's
+-- fixed Shields icon, a warrior's Battle Shout reminder).
+
+import test, expect, config from "wowlua:test"
+import SuuUI from "/Core/API"
+import * as DB from "/Core/DB"
+import * as migrations from "/Units/CooldownManager/Migrations"
+import expectNoErrors from "../../../helpers"
+
+config({ profile = "cooldowns-migrations" })
+
+type Values = { [string]: any }
+
+--------------------------------------------------------------------------------
+-- essentialSize-30-52
+--------------------------------------------------------------------------------
+
+@test("essential size: moved into 30-52, other values left")
+local function essentialSize()
+    local v: Values = { essentialSize = 20 }
+    migrations.essentialSize(v)
+    expect(v.essentialSize).toBe(30)
+    v.essentialSize = 60
+    migrations.essentialSize(v)
+    expect(v.essentialSize).toBe(52)
+    v.essentialSize = 44
+    migrations.essentialSize(v)
+    expect(v.essentialSize).toBe(44)
+    local none: Values = {}
+    migrations.essentialSize(none)
+    expect(none.essentialSize).toBeNil()
+    local wrong: Values = { essentialSize = "big" }
+    migrations.essentialSize(wrong)
+    expect(wrong.essentialSize).toBe("big")
+end
+
+--------------------------------------------------------------------------------
+-- slot-uids
+--------------------------------------------------------------------------------
+
+@test("slot uids: shared slots and collections in setups and the old lists")
+local function slotUids()
+    local v: Values = {
+        setups = {
+            WARRIOR = {
+                ["3"] = { lists = { buffs = { { name = "A" }, { group = true }, { collection = true }, { group = true, uid = "keep" } } } },
+                ["1"] = "not a setup",
+                ["2"] = { lists = "not lists" },
+            },
+            DRUID = "not specs",
+        },
+        lists = { utility = { { group = true } }, essential = "not a list", procs = { "not an entry" } },
+    }
+    migrations.slotUids(v)
+    local buffs = v.setups.WARRIOR["3"].lists.buffs
+    expect(buffs[1].uid).toBeNil()
+    expect(buffs[2].uid).toBe("mWARRIOR3buffs2")
+    expect(buffs[3].uid).toBe("mWARRIOR3buffs3")
+    expect(buffs[4].uid).toBe("keep")
+    expect(v.lists.utility[1].uid).toBe("mutility1")
+end
+
+@test("slot uids: nothing to give")
+local function slotUidsNothing()
+    local v: Values = { setups = "broken" }
+    migrations.slotUids(v)
+    expect(v).toEqual({ setups = "broken" })
+    local empty: Values = {}
+    migrations.slotUids(empty)
+    expect(empty).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- missing-per-entry
+--------------------------------------------------------------------------------
+
+@test("missing per entry: the list-wide choice onto entries without their own")
+local function missingPerEntry()
+    local v: Values = {
+        missingBuffs = "remind", missingDebuffs = "hide",
+        setups = { WARRIOR = {
+            ["3"] = { lists = {
+                buffs = { { name = "A" }, { name = "B", missing = "warn" }, { collection = true, entries = { { name = "C" }, "junk" } }, "junk" },
+                debuffs = { { name = "D" } },
+                procs = { { name = "P" } },
+            } },
+            ["1"] = "not a setup",
+        }, DRUID = "not specs" },
+        lists = { buffs = { { name = "Old" } } },
+    }
+    migrations.missingPerEntry(v)
+    expect(v.missingBuffs).toBeNil()
+    expect(v.missingDebuffs).toBeNil()
+    local l = v.setups.WARRIOR["3"].lists
+    expect(l.buffs[1].missing).toBe("remind")
+    expect(l.buffs[2].missing).toBe("warn")
+    expect(l.buffs[3].missing).toBeNil()
+    expect(l.buffs[3].entries[1].missing).toBe("remind")
+    expect(l.debuffs[1].missing).toBe("hide")
+    expect(l.procs[1].missing).toBeNil()
+    expect(v.lists.buffs[1].missing).toBe("remind")
+end
+
+@test("missing per entry: no old choice changes nothing")
+local function missingPerEntryNone()
+    local v: Values = { setups = { WARRIOR = { ["3"] = { lists = { buffs = { { name = "A" } }, debuffs = "junk" } } } }, lists = "junk" }
+    migrations.missingPerEntry(v)
+    expect(v.setups.WARRIOR["3"].lists.buffs[1].missing).toBeNil()
+    -- a list that isn't a table, and a missing value that isn't a string
+    local w: Values = { missingBuffs = true, missingDebuffs = "hide", lists = { buffs = { { name = "A" } }, debuffs = "junk" } }
+    migrations.missingPerEntry(w)
+    expect(w.lists.buffs[1].missing).toBeNil()
+    local empty: Values = { setups = "junk" }
+    migrations.missingPerEntry(empty)
+    expect(empty).toEqual({ setups = "junk" })
+end
+
+--------------------------------------------------------------------------------
+-- shaman-shields-auto
+--------------------------------------------------------------------------------
+
+local function shields(icon: number?): Values
+    return { group = true, name = "Shields", fixedIcon = true, icon = icon,
+             members = { { name = "Lightning Shield", ids = { 324 }, icon = 324 }, { name = "Water Shield", ids = { 52127 }, icon = 52127 } } }
+end
+
+@test("shaman shields: not fixed any more; Water Shield's art leads")
+local function shamanShields()
+    local v: Values = { setups = { SHAMAN = {
+        ["3"] = { lists = { buffs = { shields(52127), { collection = true, entries = { shields(324) } }, "junk" } } },
+        ["2"] = "junk",
+        ["1"] = { lists = "junk" },
+    } } }
+    migrations.shamanShieldsAuto(v)
+    local buffs = v.setups.SHAMAN["3"].lists.buffs
+    expect(buffs[1].fixedIcon).toBeNil()
+    expect(buffs[1].members[1].name).toBe("Water Shield")
+    expect(buffs[2].entries[1].fixedIcon).toBeNil()
+    expect(buffs[2].entries[1].members[1].name).toBe("Lightning Shield")
+end
+
+@test("shaman shields: another slot is left as it is")
+local function shamanOtherSlots()
+    local renamed = shields(52127)
+    renamed.name = "Other"
+    local three = shields(52127)
+    table.insert(three.members, { name = "Earth Shield", ids = { 974 } })
+    local swapped = shields(52127)
+    swapped.members[1], swapped.members[2] = swapped.members[2], swapped.members[1]
+    local unfixed = shields(52127)
+    unfixed.fixedIcon = nil
+    local v: Values = { setups = { SHAMAN = { ["3"] = { lists = { buffs = { renamed, three, swapped, unfixed } } } } } }
+    migrations.shamanShieldsAuto(v)
+    expect(renamed.fixedIcon).toBe(true)
+    expect(three.fixedIcon).toBe(true)
+    expect(swapped.fixedIcon).toBe(true)
+    expect(unfixed.members[1].name).toBe("Lightning Shield")
+end
+
+@test("shaman shields: no shaman setups")
+local function shamanNone()
+    local v: Values = { setups = { WARRIOR = {} } }
+    migrations.shamanShieldsAuto(v)
+    expect(v).toEqual({ setups = { WARRIOR = {} } })
+    local junk: Values = { setups = "junk" }
+    migrations.shamanShieldsAuto(junk)
+    local bad: Values = { setups = { SHAMAN = "junk" } }
+    migrations.shamanShieldsAuto(bad)
+    expect(bad.setups.SHAMAN).toBe("junk")
+    local noBuffs: Values = { setups = { SHAMAN = { ["1"] = { lists = { buffs = "junk" } } } } }
+    migrations.shamanShieldsAuto(noBuffs)
+    expect(noBuffs.setups.SHAMAN["1"].lists.buffs).toBe("junk")
+end
+
+--------------------------------------------------------------------------------
+-- short-buffs-warn
+--------------------------------------------------------------------------------
+
+@test("short buffs: the reminders of Shields, Battle Shout and Inner Fire warn")
+local function shortBuffs()
+    expect(migrations.SHORT_BUFFS).toEqual({ SHAMAN = "Shields", WARRIOR = "Battle Shout", PRIEST = "Inner Fire" })
+    local v: Values = { setups = {
+        WARRIOR = { ["3"] = { lists = { buffs = {
+            { name = "Battle Shout", missing = "remind" },
+            { name = "Battle Shout", missing = "grey" },
+            { name = "Bloodrage", missing = "remind" },
+            { collection = true, entries = { { name = "Battle Shout", missing = "remind" } } },
+            "junk",
+        } } }, ["1"] = "junk", ["2"] = { lists = "junk" } },
+        PRIEST = { ["1"] = { lists = { buffs = { { name = "Inner Fire", missing = "remind" } } } } },
+        -- another class's buff of that name isn't one of these
+        MAGE = { ["1"] = { lists = { buffs = { { name = "Battle Shout", missing = "remind" } } } } },
+        SHAMAN = "junk",
+    } }
+    migrations.shortBuffsWarn(v)
+    local buffs = v.setups.WARRIOR["3"].lists.buffs
+    expect(buffs[1].missing).toBe("warn")
+    expect(buffs[2].missing).toBe("grey")
+    expect(buffs[3].missing).toBe("remind")
+    expect(buffs[4].entries[1].missing).toBe("warn")
+    expect(v.setups.PRIEST["1"].lists.buffs[1].missing).toBe("warn")
+    expect(v.setups.MAGE["1"].lists.buffs[1].missing).toBe("remind")
+end
+
+@test("short buffs: no setups")
+local function shortBuffsNone()
+    local v: Values = {}
+    migrations.shortBuffsWarn(v)
+    expect(v).toEqual({})
+    local w: Values = { setups = { WARRIOR = { ["3"] = { lists = { buffs = "junk" } } } } }
+    migrations.shortBuffsWarn(w)
+    expect(w.setups.WARRIOR["3"].lists.buffs).toBe("junk")
+end
+
+--------------------------------------------------------------------------------
+-- An old profile, as it loads
+--------------------------------------------------------------------------------
+
+@test("an old profile loads migrated, once")
+local function oldProfile()
+    local p = DB.db.profiles["Player - Realm"]
+    for _, id in ipairs({ "essentialSize-30-52", "slot-uids", "missing-per-entry", "shaman-shields-auto", "short-buffs-warn" }) do
+        expect(p.__migrated["cooldowns/" .. id]).toBe(true)
+    end
+    local stored = p.cooldowns
+    expect(stored.missingBuffs).toBeNil()
+    expect(stored.missingDebuffs).toBeNil()
+    local M = assert(SuuUI.GetModule("cooldowns"))
+    expect(M:Get("essentialSize")).toBe(52)
+    -- the shaman's Shields: automatic, Water Shield first (its art was fixed)
+    local sh = M:Peek("setups").SHAMAN.r.lists.buffs[1]
+    expect(sh.fixedIcon).toBeNil()
+    expect(sh.members[1].name).toBe("Water Shield")
+    -- the warrior's: Battle Shout warns (it had its own reminder), the
+    -- collection got a uid, its entry the old list-wide reminder
+    local wa = M:Peek("setups").WARRIOR.a.lists.buffs
+    expect(wa[1].missing).toBe("warn")
+    expect(wa[2].uid).toBe("mWARRIORabuffs2")
+    expect(wa[2].entries[1].missing).toBe("remind")
+    expectNoErrors()
+end
+
+@test("the lists from before setups became the active spec's setup")
+local function oldLists()
+    local M = assert(SuuUI.GetModule("cooldowns"))
+    expect(M.spec).toBe(3)
+    expect(M:Get("lists")).toEqual({})
+    expect(M:Get("preset")).toBe("")
+    local s = M:Peek("setups").WARRIOR["3"]
+    expect(s.preset).toBe("arms")
+    expect(s.lists.buffs[1].uid).toBe("mbuffs1")
+    expect(s.lists.buffs[1].missing).toBe("remind")
+    expect(s.lists.buffs[2].missing).toBe("remind")
+    expect(s.lists.debuffs[1].missing).toBe("target")
+    expect(s.lists.debuffs[2].missing).toBe("hide")
+    expect(M:PresetId(3)).toBe("arms")
+end

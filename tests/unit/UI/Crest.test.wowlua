@@ -1,0 +1,199 @@
+-- UI/Crest: the rare and elite crest's looks per classification and
+-- variant (made once, swapped), secret classifications, the wing's plain
+-- fallback, and the elite dragon's art and placement with its breast jewel.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import crest, Crest, dragonArt, placeDragon, DragonArt from "/UI/Crest"
+import expectNoErrors, newParent from "../../helpers"
+import paintOf, tokenOf, pointOf from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function make(variant: string?): Crest
+    parent = newParent()
+    return crest(parent :: Frame, variant)
+end
+
+local function shownParts(c: Crest, kind: string): number
+    local n = 0
+    for _, t in ipairs(c:Look(kind)) do if t:IsShown() then n += 1 end end
+    return n
+end
+
+@afterEach
+local function cleanup()
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- crest
+--------------------------------------------------------------------------------
+
+@test("a new crest is a hidden frame variant over its parent")
+local function defaults()
+    local c = make()
+    expect(c.variant).toBe("frame")
+    expect(c).never.toBeShown()
+    expect(c).toHaveSize(1, 1)
+    expect(c:GetFrameLevel()).toBe((parent :: Frame):GetFrameLevel() + 8)
+    expect(c.kind).toBeNil()
+end
+
+@test("each classification shows its look; others hide the crest")
+@cases({
+    -- two wings and a jewel (gilt: two diamonds, silver or both: three)
+    { "frame", "elite", 4 }, { "frame", "rare", 5 }, { "frame", "rareelite", 5 },
+    -- two long wings and three gilt jewels
+    { "frame", "worldboss", 8 },
+    -- a jewel and one wing (a world boss: a second jewel)
+    { "plate", "elite", 3 }, { "plate", "rare", 4 }, { "plate", "rareelite", 4 },
+    { "plate", "worldboss", 5 },
+})
+local function looks(variant: string, kind: string, parts: number)
+    local c = make(variant)
+    c:SetClassification(kind)
+    expect(c.kind).toBe(kind)
+    expect(c).toBeShown()
+    expect(#c:Look(kind)).toBe(parts)
+    expect(shownParts(c, kind)).toBe(parts)
+end
+
+@test("the metals: gilt for elite and world boss, ink for rare")
+local function metals()
+    local c = make()
+    c:SetClassification("elite")
+    local elite = c:Look("elite")
+    expect((paintOf(elite[1]) :: any).token).toBe("gilt")
+    local r = c:Look("rare")
+    expect((paintOf(r[1]) :: any).token).toBe("ink")
+    -- the rare's silver jewel: an ink ring on surface-sunk
+    expect(tokenOf(r[#r])).toBe("surface-sunk")
+    -- a rare elite's jewel is gilt ringed in silver
+    local re = c:Look("rareelite")
+    expect(tokenOf(re[#re])).toBe("gilt")
+    expect(tokenOf(re[#re - 1])).toBe("surface-sunk")
+    -- the wings fade toward their tips
+    local wing = paintOf(elite[1]) :: any
+    expect({ wing.kind, wing.alpha, wing.alpha2 }).toEqual({ "gradient", 0, 1 })
+    local right = paintOf(elite[2]) :: any
+    expect({ right.alpha, right.alpha2 }).toEqual({ 1, 0 })
+end
+
+@test("a look is made once and swapped for the next")
+local function swaps()
+    local c = make()
+    c:SetClassification("elite")
+    local elite = c:Look("elite")
+    expect(c:Look("elite")).toBe(elite)
+    c:SetClassification("rare")
+    expect(shownParts(c, "elite")).toBe(0)
+    expect(shownParts(c, "rare")).toBe(#c:Look("rare"))
+    c:SetClassification("rare") -- the same: nothing
+    expect(c.kind).toBe("rare")
+    c:SetClassification("normal")
+    expect(c.kind).toBeNil()
+    expect(c).never.toBeShown()
+    expect(shownParts(c, "rare")).toBe(0)
+    c:SetClassification(nil)
+    expect(c).never.toBeShown()
+end
+
+@test("a secret classification hides the crest")
+local function secret()
+    local c = make()
+    c:SetClassification("elite")
+    c:SetClassification(mock.secret("elite"))
+    expect(c.kind).toBeNil()
+    expect(c).never.toBeShown()
+end
+
+@test("a wing whose gradient fails is painted plain")
+local function wingFallback()
+    local c = make()
+    mock.fake("CreateColor", function(...: any): any error("no gradients") end)
+    c:SetClassification("elite")
+    local wing = c:Look("elite")[1]
+    expect((paintOf(wing) :: any).kind).toBe("vertex")
+    expect(tokenOf(wing)).toBe("gilt")
+end
+
+--------------------------------------------------------------------------------
+-- the dragon
+--------------------------------------------------------------------------------
+
+@test("dragonArt picks the art by classification and boss")
+local function arts()
+    expect(dragonArt(nil, false)).toBeNil()
+    expect(dragonArt("normal", false)).toBeNil()
+    expect(dragonArt("trivial", nil)).toBeNil()
+    expect(dragonArt(mock.secret("elite"), false)).toBeNil()
+    local elite = dragonArt("elite", false) :: DragonArt
+    expect(elite[1]).toBe("UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold")
+    local boss = dragonArt("worldboss", false) :: DragonArt
+    expect(boss[1]).toBe("UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged")
+    expect(dragonArt("elite", true)).toBe(boss)
+    expect(dragonArt("normal", true)).toBe(boss)
+    -- a secret boss flag counts as no
+    expect(dragonArt("elite", mock.secret(true))).toBe(elite)
+    local rare = dragonArt("rare", false) :: DragonArt
+    expect(rare[1]).toBe("UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged")
+    expect(rare.jewel).toBeNil()
+    local re = dragonArt("rareelite", false) :: DragonArt
+    expect({ re[1], re[2], re[3], re[4], re[5] }).toEqual({ rare[1], rare[2], rare[3], rare[4], rare[5] })
+    expect(re.jewel).toBe(true)
+end
+
+@test("placeDragon sizes and places the art from the bar's height")
+local function places()
+    parent = newParent()
+    local p = parent :: Frame
+    local bar = CreateFrame("Frame", nil, p)
+    bar:SetSize(200, 29)
+    bar:SetPoint("CENTER")
+    local t = p:CreateTexture()
+    local art = dragonArt("worldboss", false) :: DragonArt
+    placeDragon(t, art, bar, 29)
+    local s = 29 / 58
+    expect(t:GetAtlas()).toBe(art[1])
+    expect(t:GetWidth()).toBeCloseTo(110 * s, 4)
+    expect(t:GetHeight()).toBeCloseTo(90 * s, 4)
+    local pt = pointOf(t) :: any
+    expect({ pt.point, pt.relativeTo, pt.relativePoint }).toEqual({ "TOPRIGHT", bar, "TOPRIGHT" })
+    expect(pt.x).toBeCloseTo((11 + 26) * s, 4)
+    expect(pt.y).toBeCloseTo((-4 + 19) * s, 4)
+    expect(t).toBeShown()
+    expect((t :: any).suuJewel).toBeNil()
+    placeDragon(t, nil, bar, 29)
+    expect(t).never.toBeShown()
+    placeDragon(t, art, bar, 29)
+    placeDragon(t, false, bar, 29)
+    expect(t).never.toBeShown()
+end
+
+@test("a rare elite's dragon wears the breast jewel, made once")
+local function breastJewel()
+    parent = newParent()
+    local p = parent :: Frame
+    local bar = CreateFrame("Frame", nil, p)
+    bar:SetSize(200, 64)
+    local t = p:CreateTexture()
+    placeDragon(t, dragonArt("rareelite", false), bar, 64)
+    local j = (t :: any).suuJewel :: Frame
+    expect(j).toBeShown()
+    expect(j:GetParent()).toBe(p)
+    expect(j:GetScale()).toBe(2)
+    expect(j:GetFrameLevel()).toBe(p:GetFrameLevel() + 1)
+    local pt = pointOf(j) :: any
+    expect({ pt.point, pt.relativeTo, pt.relativePoint }).toEqual({ "CENTER", t, "TOPRIGHT" })
+    expect(pt.x).toBeCloseTo(-31 * (64 / 58) / 2, 4)
+    placeDragon(t, dragonArt("rareelite", false), bar, 64)
+    expect((t :: any).suuJewel).toBe(j)
+    -- another art hides it
+    placeDragon(t, dragonArt("rare", false), bar, 64)
+    expect(j).never.toBeShown()
+    placeDragon(t, nil, bar, 64)
+    expect(j).never.toBeShown()
+end

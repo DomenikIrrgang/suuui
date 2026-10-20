@@ -41,6 +41,159 @@ import * as inputs from "/UI/Inputs"
 import * as uiSelect from "/UI/Select"
 import * as panel from "/UI/Panel"
 import * as tooltip from "/UI/Tooltip"
+import Text from "/UI/Text"
+import SuuButton from "/UI/Controls"
+import TextField, Checkbox from "/UI/Inputs"
+import Select, SelectOption from "/UI/Select"
+import ScrollArea from "/UI/Panel"
+
+-- A group or a player looking (see the header for the fields).
+export type BrowseRow = {
+    key?: any,
+    entry?: any,
+    isPlayer?: boolean,
+    activity?: string,
+    level?: string,
+    newPlayerFriendly?: boolean,
+    reason?: string,
+    match?: boolean,
+    leader?: string,
+    class?: string,
+    who?: string,
+    playstyle?: string,
+    post?: string,
+    slots?: string[],
+    rolesTip?: string,
+    mine?: { [string]: boolean },
+    offered?: { [string]: boolean },
+    members?: number[],
+    sources?: string[],
+    age?: string,
+    canInvite?: boolean,
+}
+
+export type BrowseTool = { age?: number, stale?: boolean, searching?: boolean, loading?: boolean }
+
+export type BrowseData = {
+    groups?: BrowseRow[],
+    players?: BrowseRow[],
+    collapsed?: { [string]: boolean },
+    tool?: BrowseTool,
+    category?: any,
+    categories?: SelectOption[],
+    activities?: any[],
+    activityOptions?: SelectOption[],
+    search?: string,
+    fits?: boolean,
+    show?: string,
+}
+
+-- What a change in the bar reports (one field each time).
+export type BrowseFilter = { category?: any, activities?: any[], search?: string, fits?: boolean, show?: any }
+
+export interface RoleIcon extends Frame
+    bg: Texture
+    edge: draw.Border
+    glyph: Texture
+    dot: Texture
+    function Set(kind: string, mine: boolean?)
+end
+
+export interface SourceBadge extends Frame
+    text: Text
+    function SetLabel(s: string)
+end
+
+export interface GlyphButton extends SuuButton
+    glyph: Texture
+end
+
+export interface LevelChip extends Frame
+    text: Text
+end
+
+export interface SlotsHit extends Frame
+    tip?: string
+end
+
+export interface BrowseRowFrame extends Button
+    data?: BrowseRow
+    match: Texture
+    edge: Texture
+    hover: Texture
+    rule: Texture
+    lead: Texture
+    activity: Text
+    levelChip: LevelChip
+    sprout: Texture
+    reason: Text
+    leader: Text
+    who: Text
+    post: Text
+    invite: GlyphButton
+    whisper: GlyphButton
+    age: Text
+    badges: SourceBadge[]
+    slots: RoleIcon[]
+    count: Text
+    rolesLabel: Text
+    slotsHit: SlotsHit
+end
+
+export interface SectionHead extends Button
+    text: Text
+    count: Text
+    glyph: Texture
+    note: Text
+    rule: Frame
+    label: string
+end
+
+export interface SkeletonRow extends Frame
+    a: Texture
+    b: Texture
+    b2: Texture
+    c: Texture
+    rule: Texture
+end
+
+export interface BrowseEmpty extends Frame
+    glyph: Texture
+    title: Text
+    text: Text
+    clear: SuuButton
+    refresh: SuuButton
+end
+
+export interface GroupFinderBrowse extends Frame
+    data?: BrowseData
+    rows: BrowseRowFrame[]
+    heads: { [string]: SectionHead }
+    skeletons: SkeletonRow[]
+    category: Select
+    activity: Select
+    search: TextField
+    fits: Checkbox
+    show: Select
+    refreshQuiet: SuuButton
+    refreshPrimary: SuuButton
+    refresh: SuuButton
+    staleText: Text
+    hourglass: Texture
+    box: Frame
+    list: ScrollArea
+    loadNote: Text
+    empty: BrowseEmpty
+    onRefresh?: () -> ()
+    onFilter?: (changes: BrowseFilter) -> ()
+    onWhisper?: (row: BrowseRow) -> ()
+    onInvite?: (row: BrowseRow) -> ()
+    onToggle?: (key: string) -> ()
+    onClear?: () -> ()
+    function SetData(d: BrowseData)
+    function LayoutBar()
+    function Draw()
+end
 
 local S = T.space
 
@@ -60,8 +213,8 @@ local ICON = 18
 -- A role icon (design component RoleIcon): filled (offered), has (a member
 -- with it: greyed, ink-faint in gilt-faint, no fill), needed (a dim edge),
 -- your role (arcane), a member with no role (a greyed diamond), open (hollow).
-local function roleIcon(parent: Frame)
-    local f = CreateFrame("Frame", nil, parent)
+local function roleIcon(parent: Frame): RoleIcon
+    local f: RoleIcon = CreateFrame("Frame", nil, parent) :: any
     f:SetSize(ICON, ICON)
     f.bg = draw.fill(f, "surface-raised")
     f.bg:SetAllPoints()
@@ -83,8 +236,9 @@ local function roleIcon(parent: Frame)
         if has then
             -- what the group has: greyed
             self.bg:Hide()
-            if ROLE_TEX[has] then
-                self.glyph:SetTexture(ROLE_TEX[has])
+            local tex = ROLE_TEX[has]
+            if tex then
+                self.glyph:SetTexture(tex)
                 draw.paint(self.glyph, "ink-faint")
                 self.edge:SetColor("gilt-faint")
             else
@@ -93,7 +247,7 @@ local function roleIcon(parent: Frame)
                 self.dot:Show()
             end
         elseif ROLE_TEX[role] then
-            self.glyph:SetTexture(ROLE_TEX[role])
+            self.glyph:SetTexture(ROLE_TEX[role] :: string)
             if need then
                 self.bg:Hide()
                 self.edge:SetColor(mine and "arcane" or "ink-faint")
@@ -112,8 +266,8 @@ local function roleIcon(parent: Frame)
 end
 
 -- A source badge (design component SourceBadge): "Tool" or the channel.
-local function badge(parent: Frame)
-    local b = CreateFrame("Frame", nil, parent)
+local function badge(parent: Frame): SourceBadge
+    local b: SourceBadge = CreateFrame("Frame", nil, parent) :: any
     b:SetHeight(16)
     draw.fill(b, "surface-raised"):SetAllPoints()
     draw.border(b, "gilt-line")
@@ -131,9 +285,9 @@ end
 --------------------------------------------------------------------------------
 
 -- A quiet 24px button with a glyph (Whisper, Invite); its word in a tooltip.
-local function iconButton(parent: Frame, glyph: string, title: string, description: string, onClick: () -> ())
+local function iconButton(parent: Frame, glyph: string, title: string, description: string, onClick: () -> ()): GlyphButton
     local btn = controls.button(parent, { text = "", width = 24, onClick = onClick,
-        tooltip = { title = title, description = description } })
+        tooltip = { title = title, description = description } }) :: GlyphButton
     btn:SetHeight(24)
     btn.glyph = btn:CreateTexture(nil, "ARTWORK")
     btn.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
@@ -143,8 +297,8 @@ local function iconButton(parent: Frame, glyph: string, title: string, descripti
     return btn
 end
 
-local function makeRow(b: any)
-    local r = CreateFrame("Button", nil, b.list.child)
+local function makeRow(b: GroupFinderBrowse): BrowseRowFrame
+    local r: BrowseRowFrame = CreateFrame("Button", nil, b.list.child) :: any
     r:SetHeight(ROW_H)
     r.match = draw.fill(r, "arcane-soft", "BACKGROUND")
     r.match:SetAllPoints()
@@ -166,7 +320,7 @@ local function makeRow(b: any)
     -- line 1
     r.activity = uiText.text(r, "label", "ink")
     r.activity:SetPoint("TOPLEFT", r, "LEFT", S["space-4"] + 20 + S["space-4"], 18)
-    r.levelChip = CreateFrame("Frame", nil, r)
+    r.levelChip = CreateFrame("Frame", nil, r) :: any
     r.levelChip:SetHeight(14)
     draw.fill(r.levelChip, "surface-sunk"):SetAllPoints()
     draw.border(r.levelChip, "gilt-faint")
@@ -188,10 +342,10 @@ local function makeRow(b: any)
     -- Whisper and Invite as 24px glyph buttons (asked for in game: words
     -- took too much room), the word on hover
     r.invite = iconButton(r, "plus", "Invite", "Invite this player to your group",
-        function() if b.onInvite and r.data then b.onInvite(r.data) end end)
+        function() local d = r.data; if b.onInvite and d then b.onInvite(d) end end)
     r.invite:SetPoint("RIGHT", -S["space-4"], 0)
     r.whisper = iconButton(r, "chat", "Whisper", "An empty whisper to them",
-        function() if b.onWhisper and r.data then b.onWhisper(r.data) end end)
+        function() local d = r.data; if b.onWhisper and d then b.onWhisper(d) end end)
     -- always where it is on a player's row, so the column lines up
     r.whisper:SetPoint("RIGHT", r.invite, "LEFT", -S["space-3"], 0)
     r.age = uiText.text(r, "caption", "ink-faint")
@@ -200,15 +354,15 @@ local function makeRow(b: any)
     r.badges, r.slots = {}, {}
     r.count = uiText.text(r, "numeric", "ink-muted")
     r.rolesLabel = uiText.text(r, "caption", "ink-muted")
-    r.slotsHit = CreateFrame("Frame", nil, r)
+    r.slotsHit = CreateFrame("Frame", nil, r) :: any
     r.slotsHit:SetFrameLevel(r:GetFrameLevel() + 5)
-    r.slotsHit:SetScript("OnEnter", function(self)
+    r.slotsHit:SetScript("OnEnter", function(self: SlotsHit)
         r.hover:Show()
         tooltip.showTooltip(self, { title = "Roles", description = self.tip })
     end)
     r.slotsHit:SetScript("OnLeave", function() r.hover:Hide(); tooltip.hideTooltip() end)
     r.slotsHit:Hide()
-    r:SetScript("OnEnter", function(self)
+    r:SetScript("OnEnter", function(self: BrowseRowFrame)
         self.hover:Show()
         local d = self.data
         if d and d.post and d.post ~= "" then
@@ -218,11 +372,11 @@ local function makeRow(b: any)
             GameTooltip:Show()
         end
     end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide(); GameTooltip:Hide() end)
+    r:SetScript("OnLeave", function(self: BrowseRowFrame) self.hover:Hide(); GameTooltip:Hide() end)
     return r
 end
 
-local function drawRow(b: any, r: any, d: any, y: number, width: number)
+local function drawRow(b: GroupFinderBrowse, r: BrowseRowFrame, d: BrowseRow, y: number, width: number)
     r.data = d
     r:ClearAllPoints()
     r:SetPoint("TOPLEFT", b.list.child, "TOPLEFT", 0, -y)
@@ -282,11 +436,12 @@ local function drawRow(b: any, r: any, d: any, y: number, width: number)
     -- the source badges, then the text
     local anchor = r.age
     -- a group's size ("3/5"), after its slots, in a column of its own
-    local members = not d.isPlayer and d.members
-    local counted = members and members[1] and members[2] and true or false
+    local members = (not d.isPlayer) and d.members or nil
+    local have, max = members and members[1], members and members[2]
+    local counted = (have and max) and true or false
     r.count:SetShown(counted)
-    if counted then
-        r.count:SetValue(members[1] .. "/" .. members[2])
+    if have and max then
+        r.count:SetValue(have .. "/" .. max)
         r.count:SetWidth(34)
         r.count:SetJustifyH("RIGHT")
         r.count:ClearAllPoints()
@@ -321,16 +476,17 @@ local function drawRow(b: any, r: any, d: any, y: number, width: number)
     r.rolesLabel:SetPoint("RIGHT", anchor, "LEFT", -S["space-3"], 0)
     if r.rolesLabel:GetText() ~= "" then anchor = r.rolesLabel end
     -- where it was seen
-    for i = #(d.sources or {}), 1, -1 do
+    local sources = d.sources or {}
+    for i = #sources, 1, -1 do
         local bd = r.badges[i] or badge(r)
         r.badges[i] = bd
-        bd:SetLabel(d.sources[i])
+        bd:SetLabel(sources[i])
         bd:ClearAllPoints()
-        bd:SetPoint("RIGHT", anchor, "LEFT", i == #d.sources and -S["space-5"] or -S["space-3"], 0)
+        bd:SetPoint("RIGHT", anchor, "LEFT", i == #sources and -S["space-5"] or -S["space-3"], 0)
         bd:Show()
         anchor = bd
     end
-    for i = #(d.sources or {}) + 1, #r.badges do r.badges[i]:Hide() end
+    for i = #sources + 1, #r.badges do r.badges[i]:Hide() end
     -- the text stops before the right side
     r.post:SetPoint("RIGHT", anchor, "LEFT", -S["space-4"], 0)
     r.post:SetWordWrap(false)
@@ -341,10 +497,10 @@ end
 -- The page
 --------------------------------------------------------------------------------
 
-local B = {}
+local B: GroupFinderBrowse = {} :: any
 
-local function sectionHead(b: any, key: string, label: string)
-    local h = CreateFrame("Button", nil, b.list.child)
+local function sectionHead(b: GroupFinderBrowse, key: string, label: string): SectionHead
+    local h: SectionHead = CreateFrame("Button", nil, b.list.child) :: any
     h:SetHeight(HEAD_H)
     h.text = uiText.text(h, "header", "gilt-text")
     h.text:SetPoint("LEFT", S["space-4"], 0)
@@ -367,8 +523,8 @@ end
 
 -- Skeleton rows stand in for the tool's while it searches the first time:
 -- a square, two lines, a block at the right, in surface-raised.
-local function makeSkeleton(b: any)
-    local r = CreateFrame("Frame", nil, b.list.child)
+local function makeSkeleton(b: GroupFinderBrowse): SkeletonRow
+    local r: SkeletonRow = CreateFrame("Frame", nil, b.list.child) :: any
     r:SetHeight(ROW_H)
     r.a = draw.fill(r, "surface-raised")
     r.a:SetSize(14, 14)
@@ -389,7 +545,17 @@ local function makeSkeleton(b: any)
     return r
 end
 
-function B:SetData(d: any)
+-- What the bar says about the tool's results: searching, never searched, or
+-- how old (and whether stale).
+local function toolText(tool: BrowseTool): string
+    if tool.searching then return "Searching the tool…" end
+    local age = tool.age
+    if not age then return "Tool not searched yet" end
+    local m = math.floor(age / 60)
+    return "Tool results " .. (m < 1 and "just now" or (m .. "m old")) .. (tool.stale and " · stale" or "")
+end
+
+function B:SetData(d: BrowseData)
     self.data = d
     -- the bar
     self.category:SetOptions(d.categories or {})
@@ -401,14 +567,7 @@ function B:SetData(d: any)
     self.show:SetValue(d.show or "both")
     -- the tool's age
     local tool = d.tool or {}
-    local text
-    if tool.searching then text = "Searching the tool…"
-    elseif not tool.age then text = "Tool not searched yet"
-    else
-        local m = math.floor(tool.age / 60)
-        text = "Tool results " .. (m < 1 and "just now" or (m .. "m old")) .. (tool.stale and " · stale" or "")
-    end
-    self.staleText:SetValue(text)
+    self.staleText:SetValue(toolText(tool))
     self.staleText:SetColor(tool.stale and "amber" or "ink-muted")
     draw.paint(self.hourglass, tool.stale and "amber" or "ink-muted")
     -- stale: Refresh is the suggested action
@@ -427,15 +586,14 @@ end
 local BAR_BASIS = { category = 150, activity = 190, search = 170, show = 120 }
 local BAR_MIN = { category = 80, activity = 90, search = 56, show = 80 }
 
-function B:LayoutBar()
-    local width = self:GetWidth()
-    if not width or width <= 1 then return end
-    local g = S["space-3"]
-    local textW = math.ceil(uiText.measureText("caption", self.staleText:GetText() or ""))
-    local fresh = 12 + g + textW
-    local fixed = self.refresh:GetWidth() + self.fits:GetWidth() + g * 8
-    local w = {}
-    for k, v in pairs(BAR_BASIS) do w[k] = v end
+export type BarWidths = { category: number, activity: number, search: number, show: number }
+
+-- The bar's widths in `width`: `fixed` for what never shrinks (Refresh, the
+-- checkbox, the gaps), `fresh` for the tool's age (hourglass, gap, text).
+-- Returns the four widths and the room left for the age.
+local function barWidths(width: number, fixed: number, fresh: number): (BarWidths, number)
+    local w: BarWidths = { category = BAR_BASIS.category, activity = BAR_BASIS.activity,
+                           search = BAR_BASIS.search, show = BAR_BASIS.show }
     local over = fixed + fresh + w.category + w.activity + w.search + w.show - width
     if over > 0 then
         local cut = math.min(over, w.search - BAR_MIN.search)
@@ -451,6 +609,15 @@ function B:LayoutBar()
         end
     end
     if over > 0 then fresh = math.max(12, fresh - over) end
+    return w, fresh
+end
+
+function B:LayoutBar()
+    local width = self:GetWidth()
+    if not width or width <= 1 then return end
+    local g = S["space-3"]
+    local textW = math.ceil(uiText.measureText("caption", self.staleText:GetText() or ""))
+    local w, fresh = barWidths(width, self.refresh:GetWidth() + self.fits:GetWidth() + g * 8, 12 + g + textW)
     self.category:SetWidth(w.category)
     self.activity:SetWidth(w.activity)
     self.search:SetWidth(w.search)
@@ -472,7 +639,7 @@ function B:Draw()
     local used, skels = 0, 0
     for _, key in ipairs({ "groups", "players" }) do
         local rows = d[key] or {}
-        local h = self.heads[key]
+        local h = self.heads[key] :: SectionHead
         h:SetShown(not none)
         if not none then
             h:ClearAllPoints()
@@ -521,12 +688,12 @@ function B:Draw()
     self.empty:SetShown(none)
 end
 
-export function groupFinderBrowse(parent: Frame)
-    local b = CreateFrame("Frame", nil, parent)
+export function groupFinderBrowse(parent: Frame): GroupFinderBrowse
+    local b: GroupFinderBrowse = CreateFrame("Frame", nil, parent) :: any
     Mixin(b, B)
     b.rows, b.heads, b.skeletons = {}, {}, {}
     -- the bar
-    local function changed(t: { [string]: any }) if b.onFilter then b.onFilter(t) end end
+    local function changed(t: BrowseFilter) if b.onFilter then b.onFilter(t) end end
     local g = S["space-3"]
     b.category = uiSelect.select(b, { width = 150, placeholder = "Category",
         onChange = function(v: any) changed({ category = v }) end })
@@ -583,7 +750,7 @@ export function groupFinderBrowse(parent: Frame)
     b.loadNote = uiText.text(b.list.child, "caption", "ink-muted")
     b.loadNote:SetValue("Searching the tool… Chat posts show up as they’re written.")
     -- nothing to show: a faint search glyph, what happened, Clear filters and Refresh
-    local e = CreateFrame("Frame", nil, b.box)
+    local e: BrowseEmpty = CreateFrame("Frame", nil, b.box) :: any
     e:SetSize(360, 140)
     e:SetPoint("CENTER")
     e.glyph = e:CreateTexture(nil, "ARTWORK")

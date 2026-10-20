@@ -1,0 +1,34 @@
+-- Core/DB: SuuUIDB and SuuUIProbe through wowlua:saved. This file drives the
+-- lifecycle itself, to see the tables before and after they load.
+
+import test, expect, config from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as DB from "/Core/DB"
+
+config({ lifecycle = "manual" })
+
+@test("before the SavedVariables load: not loaded, and the tables refuse reads")
+local function beforeLoad()
+    expect(DB.loaded()).toBe(false)
+    expect(function() return DB.db.profiles end).toThrow()
+    expect(function() return DB.probe.anything end).toThrow()
+end
+
+@test("at load: the client's saved data, kept as SuuUI left it")
+local function atLoad()
+    _G.SuuUIDB = { custom = { 1, 2 }, account = { colorVision = "none" } }
+    _G.SuuUIProbe = { probes = { a = true } }
+    mock.login()
+    expect(DB.loaded()).toBe(true)
+    expect(DB.db.custom).toEqual({ 1, 2 })
+    expect(DB.probe.probes).toEqual({ a = true })
+    -- the globals are these tables, so the client saves what SuuUI writes
+    expect(_G.SuuUIDB == DB.db).toBe(true)
+    expect(_G.SuuUIProbe == DB.probe).toBe(true)
+    DB.db.written = "yes"
+    expect(_G.SuuUIDB.written).toBe("yes")
+    -- saved adds only its version key; no defaults are filled in
+    expect(DB.db.__version).toBe(1)
+    expect(DB.probe.__version).toBe(1)
+    expect(DB.probe.profiles).toBeNil()
+end

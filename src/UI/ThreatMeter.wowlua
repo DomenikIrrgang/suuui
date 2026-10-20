@@ -31,8 +31,8 @@ import tokens as T from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
-import stateBadge from "/UI/Controls"
+import text, Text from "/UI/Text"
+import stateBadge, StateBadge from "/UI/Controls"
 
 const S = T.space
 const COLORS = T.color :: { [string]: any }
@@ -45,6 +45,42 @@ local ROLE_ICON: { [string]: string } = {
     DAMAGER = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleDamage.tga",
 }
 const CLASS_ICONS = "Interface\\TargetingFrame\\UI-Classes-Circles"
+
+-- One row of the list (see the top). Name, % and raw may be secret.
+export type ThreatEntry = { name?: any, class?: string, role?: string, status?: any, percent?: any, raw?: any, you?: boolean }
+-- SetRows' options (see the top).
+export type ThreatOptions = { show?: string, byState?: boolean, marker?: string, raw?: boolean, nameColor?: string }
+
+-- A row of the meter.
+export interface ThreatRow extends Frame
+    bar: StatusBar
+    edge: draw.Border
+    glow: draw.SoftEdge
+    rank: Text
+    mark: Texture
+    name: Text
+    pct: Text
+    raw: Text
+    badge: StateBadge
+    sub: Text
+    function Set(r: ThreatEntry, rank: number?, opts: ThreatOptions)
+end
+
+-- The meter threatMeter makes.
+export interface ThreatMeter extends Frame
+    maxRows: number
+    innerW: number
+    title: Text
+    target: Text
+    body: Frame
+    rows: ThreatRow[]
+    pinLine: Texture
+    note: Text
+    empty: Text
+    function SetTarget(name: any)
+    function SetMaxRows(n: number?)
+    function SetRows(list: ThreatEntry[]?, options: ThreatOptions?)
+end
 
 local function holder(role: any): boolean return role == "TANK" or role == "PET" end
 -- a readable number (a secret one is never compared)
@@ -81,9 +117,9 @@ end
 -- Rows
 --------------------------------------------------------------------------------
 
-local Row = {}
+local Row: ThreatRow = {} :: any
 
-function Row:Set(r: any, rank: number?, opts: any)
+function Row:Set(r: ThreatEntry, rank: number?, opts: ThreatOptions)
     local tone, word = stateOf(r)
     -- the edge: your row ink; a state's colour over it
     self.edge:SetColor(tone == "danger" and "ember" or tone == "warning" and "amber" or r.you and "ink" or "gilt-hairline")
@@ -112,7 +148,8 @@ function Row:Set(r: any, rank: number?, opts: any)
         self.mark:SetSize(11, 11)
     elseif marker == "class" and r.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[r.class] then
         self.mark:SetTexture(CLASS_ICONS)
-        self.mark:SetTexCoord(unpack(CLASS_ICON_TCOORDS[r.class]))
+        local tc: number[] = CLASS_ICON_TCOORDS[r.class]
+        self.mark:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
         self.mark:SetSize(16, 16)
     else
         marker = nil
@@ -124,8 +161,9 @@ function Row:Set(r: any, rank: number?, opts: any)
         x = x + self.mark:GetWidth() + S["space-3"] - (marker == "role" and 0 or S["space-1"])
     end
     self.name:SetValue(r.name or "")
-    local classColor = opts.nameColor ~= "ink" and r.class and COLORS["class-" .. r.class:lower()]
-    self.name:SetColor(classColor and ("class-" .. r.class:lower()) or "ink")
+    local class = r.class
+    local classColor = opts.nameColor ~= "ink" and class and COLORS["class-" .. class:lower()]
+    self.name:SetColor(classColor and class and ("class-" .. class:lower()) or "ink")
     -- the right end (fixed widths: a secret % can't be measured): the %,
     -- the raw threat before it, then the badge or "Tanking", then the name
     if known then
@@ -160,9 +198,9 @@ function Row:Set(r: any, rank: number?, opts: any)
     self:Show()
 end
 
-local function buildRow(m: any): any
+local function buildRow(m: ThreatMeter): ThreatRow
     local h = draw.size("meter-row")
-    local f = CreateFrame("Frame", nil, m.body)
+    local f: ThreatRow = CreateFrame("Frame", nil, m.body) :: any
     Mixin(f, Row)
     f:SetSize(m.innerW, h)
     draw.fill(f, "surface-sunk", "BACKGROUND"):SetAllPoints()
@@ -203,7 +241,7 @@ end
 -- The meter
 --------------------------------------------------------------------------------
 
-local Meter = {}
+local Meter: ThreatMeter = {} :: any
 mixins.ThreatMeter = Meter
 
 function Meter:SetTarget(name: any)
@@ -223,11 +261,11 @@ function Meter:SetMaxRows(n: number?)
     for i = self.maxRows + 1, #self.rows do self.rows[i]:Hide() end
 end
 
-local function STATUS_RANK(r: any): number return readable(r.status) and r.status or -1 end
+local function STATUS_RANK(r: ThreatEntry): number return readable(r.status) and r.status or -1 end
 
-type Entry = { r: any, i: number }
+type Entry = { r: ThreatEntry, i: number }
 
-function Meter:SetRows(list: any[]?, options: any)
+function Meter:SetRows(list: ThreatEntry[]?, options: ThreatOptions?)
     local opts = options or {}
     local show = opts.show or "group"
     local rows: Entry[] = {}
@@ -287,7 +325,7 @@ end
 
 export function threatMeter(parent: Frame, options: { [string]: any }?): any
     local opts: { [string]: any } = options or {}
-    local f = CreateFrame("Frame", nil, parent)
+    local f: ThreatMeter = CreateFrame("Frame", nil, parent) :: any
     Mixin(f, Meter)
     f.maxRows = math.max(2, opts.rows or 8)
     local w = draw.size("meter-w")

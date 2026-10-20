@@ -1,0 +1,1726 @@
+-- Units/Talents: the Talents page and window, talent builds.
+-- The trees come from a stand-in for C_Traits (TraitWorld): three trees of
+-- three talents each, node IDs 11-13 (Arms), 21-23 (Fury), 31-33
+-- (Protection); 12 needs 11 by an arrow and sits a row lower. The class is
+-- the recorded warrior's (tree 1117); the paladin's tree (1100) is the
+-- other class.
+
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import type Module from "/Core/Modules"
+import * as events from "/Core/Events"
+import internal clusterNodes, gridCell, talentedPoints, stepLevel, splitOf, nextStep, plural, copySteps, charKey from "/Units/Talents"
+import * as world from "./TraitWorld"
+import expectNoErrors from "../../helpers"
+
+const M: Module = assert(SuuUI.GetModule("talents"))
+const WARRIOR_TREE = 1117
+const PALADIN_TREE = 1100
+const CONFIG = 100
+const VIEW = Constants.TraitConsts.VIEW_TRAIT_CONFIG_ID
+const INSPECT = Constants.TraitConsts.INSPECT_TRAIT_CONFIG_ID
+
+type Step = { node: number, entry?: number }
+
+-- A page as Render and Fill drive it, recording what they set.
+type FakePage = {
+    visible: boolean,
+    data: any,
+    specs: any,
+    specView: any,
+    builds: any,
+    order: any,
+    drawn: any,
+    orderLines: any,
+    IsVisible: (self: FakePage) -> boolean,
+    SetSpecs: (self: FakePage, list: any, view: any?) -> (),
+    SetBuilds: (self: FakePage, b: any) -> (),
+    SetOrder: (self: FakePage, o: any) -> (),
+    SetData: (self: FakePage, d: any) -> (),
+    MarkNode: (self: FakePage, id: number?) -> (),
+}
+
+local function fakePage(visible: boolean): FakePage
+    local p: FakePage = {
+        visible = visible, data = nil, specs = nil, specView = nil, builds = nil, order = nil, drawn = nil, orderLines = nil,
+        IsVisible = function(self: FakePage): boolean return self.visible end,
+        SetSpecs = function(self: FakePage, list: any, view: any?) self.specs, self.specView = list, view end,
+        SetBuilds = function(self: FakePage, b: any) self.builds = b end,
+        SetOrder = function(self: FakePage, o: any) self.order = o; self.orderLines = o end,
+        SetData = function(self: FakePage, d: any) self.drawn = d end,
+        MarkNode = function(_: FakePage, _: number?) end,
+    }
+    return p
+end
+
+local w: world.World
+local savedPages: { windowPage: any, page: any } = { windowPage = nil, page = nil }
+local heard: { [string]: number } = {}
+local listener = {}
+
+local function store(): { [any]: any }
+    return SuuUI.AccountData("talentbuilds")
+end
+
+local function newWorld(): world.World
+    local a = world.threeTrees(WARRIOR_TREE, { "Arms", "Fury", "Protection" })
+    local p = world.threeTrees(PALADIN_TREE, { "Holy", "Protection", "Retribution" })
+    -- the paladin's node IDs apart from the warrior's
+    for _, n in ipairs(p.nodes) do
+        n.id = n.id + 100
+        for _, e in ipairs(n.edges or {}) do e.targetNode = e.targetNode + 100 end
+    end
+    local nw = world.new(CONFIG, { a, p })
+    nw.configs[VIEW] = PALADIN_TREE
+    nw.configs[INSPECT] = WARRIOR_TREE
+    return nw
+end
+
+local function wt(): world.Tree return assert(w.trees[WARRIOR_TREE]) end
+local function pt(): world.Tree return assert(w.trees[PALADIN_TREE]) end
+
+local function nodeIn(data: any, id: number): any
+    for _, t in ipairs(data.trees) do
+        for _, n in ipairs(t.nodes) do if n.id == id then return n end end
+    end
+    return nil
+end
+
+local function steps(...: number): Step[]
+    local out: Step[] = {}
+    for i = 1, select("#", ...) do out[i] = { node = (select(i, ...)) } end
+    return out
+end
+
+@beforeEach
+local function setup()
+    w = newWorld()
+    world.install(w)
+    local d = store()
+    d.builds, d.active, d.reset, d.nextID = {}, {}, {}, 1
+    M.draft, M.buildView, M.planning, M.viewing = nil, nil, false, nil
+    M.buildTrees, M.learned, M.learnedFor, M.data = nil, nil, nil, nil
+    M.inspectUnit, M.inspectData, M.wipeAt, M.talented, M.unseenStaged = nil, nil, nil, nil, nil
+    savedPages.windowPage, savedPages.page = M.windowPage, M.page
+    heard = {}
+    for _, e in ipairs({ "SUUUI_TALENT_BUILD_CHANGED", "SUUUI_TALENTS_SHOWN" }) do
+        events.on(e, function(name: string) heard[name] = (heard[name] or 0) + 1 end, listener)
+    end
+end
+
+@afterEach
+local function teardown()
+    events.off("SUUUI_TALENT_BUILD_CHANGED", listener)
+    events.off("SUUUI_TALENTS_SHOWN", listener)
+    M.windowPage, M.page = savedPages.windowPage, savedPages.page
+    if M.window and M.window:IsShown() then M.window:Hide() end
+    for _, key in ipairs({ "mismatch", "newBuild", "share" }) do
+        local p = M[key]
+        if p then p:Hide() end
+    end
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    -- what a render queued runs with the fakes still in place
+    mock.advanceTime(0.1)
+end
+
+--------------------------------------------------------------------------------
+-- Pure pieces
+--------------------------------------------------------------------------------
+
+@test("clusterNodes sorts the nodes and starts a tree past the gap")
+local function clusters()
+    local nodes: any[] = {
+        { x = 3000, y = 0 }, { x = 0, y = 600 }, { x = 0, y = 0 }, { x = 600, y = 0 }, { x = 2200, y = 0 },
+    }
+    local c = clusterNodes(nodes)
+    expect(#c).toBe(2)
+    expect(#c[1].nodes).toBe(3)
+    expect(c[1].nodes[1].y).toBe(0)
+    expect(c[1].nodes[2].y).toBe(600)
+    expect(c[1].minX).toBe(0)
+    expect(c[1].maxX).toBe(600)
+    -- 2200 is 1600 past 600: another tree; 3000 is only 800 past 2200
+    expect(#c[2].nodes).toBe(2)
+    expect(c[2].minX).toBe(2200)
+    expect(c[2].maxX).toBe(3000)
+    expect(#clusterNodes({})).toBe(0)
+end
+
+@test("gridCell places columns from the left, or so the rightmost is column 3")
+@cases({
+    { 0, 0, 0, 1800, 0, 0, 0 },
+    { 1800, 1200, 0, 1800, 0, 3, 2 },
+    { 0, 0, 0, 600, 0, 2, 0 },
+    { 600, 0, 0, 600, 0, 3, 0 },
+    { 900, 300, 0, 1800, 0, 2, 1 },
+    { 5000, -600, 0, 1800, 0, 3, 0 },
+})
+local function grid(x: number, y: number, minX: number, maxX: number, minY: number, col: number, row: number)
+    local c, r = gridCell(x, y, minX, maxX, minY)
+    expect(c).toBe(col)
+    expect(r).toBe(row)
+end
+
+@test("talentedPoints: the currency over one a level from 10, 0 to 5")
+@cases({ { 5, 1, 5 }, { 5, 9, 5 }, { 6, 10, 5 }, { 3, 12, 0 }, { 8, 8, 5 }, { 7, 11, 5 }, { 2, 10, 1 } })
+local function talented(max: number, level: number, want: number)
+    expect(talentedPoints(max, level)).toBe(want)
+end
+
+@test("stepLevel: Talented's points from level 5, then one a level from 10")
+@cases({ { 1, 5, 5 }, { 5, 5, 9 }, { 6, 5, 10 }, { 1, 0, 10 }, { 3, 2, 10 }, { 51, 5, 55 } })
+local function levels(i: number, t: number, want: number)
+    expect(stepLevel(i, t)).toBe(want)
+end
+
+@test("plural, copySteps and charKey")
+local function small()
+    expect(plural(1, "point", "points")).toBe("point")
+    expect(plural(0, "point", "points")).toBe("points")
+    local s: Step[] = { { node = 1, entry = 5 }, { node = 2 } }
+    local c = copySteps(s)
+    expect(c).toEqual({ { node = 1, entry = 5 }, { node = 2 } })
+    expect(c[1] == s[1]).toBe(false)
+    expect(copySteps(nil)).toEqual({})
+    local guid: any = UnitGUID("player") -- (the player's own: never secret)
+    expect(charKey()).toBe(guid)
+    mock.fake("UnitGUID", function(): any return mock.secret("Player-1") end)
+    local name: any = UnitName("player")
+    expect(charKey()).toBe(name .. "-" .. GetRealmName())
+end
+
+@test("nextStep: the first step past the ranks you have")
+local function next1()
+    local s = steps(11, 13, 13, 21)
+    local i, r = nextStep(s, {})
+    expect(i).toBe(1)
+    expect(r).toBe(1)
+    i, r = nextStep(s, { [11] = 1, [13] = 1 })
+    expect(i).toBe(3)
+    expect(r).toBe(2)
+    i = nextStep(s, { [11] = 1, [13] = 2, [21] = 1 })
+    expect(i).toBeNil()
+end
+
+@test("splitOf: a build's points per tree")
+local function split()
+    local tree = M:BuildTree("WARRIOR")
+    expect(splitOf(tree, steps(11, 13, 13, 21))).toBe("3 / 1 / 0")
+    expect(splitOf(tree, steps(999))).toBe("0 / 0 / 0")
+    expect(splitOf(nil, steps(11))).toBe("")
+end
+
+--------------------------------------------------------------------------------
+-- The game's data
+--------------------------------------------------------------------------------
+
+@test("SpecGroups: one group unless the game says two; secrets read as one")
+local function specGroups()
+    expect({ M:SpecGroups() }).toEqual({ 1, 1 })
+    mock.fake("GetNumSpecGroups", function(): number return 2 end)
+    mock.fake("C_SpecializationInfo.GetActiveSpecGroup", function(): number return 2 end)
+    expect({ M:SpecGroups() }).toEqual({ 2, 2 })
+    mock.fake("GetNumSpecGroups", function(): any return mock.secret(2) end)
+    mock.fake("C_SpecializationInfo.GetActiveSpecGroup", function(): any error("no") end)
+    expect({ M:SpecGroups() }).toEqual({ 1, 1 })
+end
+
+@test("ConfigID: the active config, or the viewed talent group's")
+local function configID()
+    expect(M:ConfigID()).toBe(CONFIG)
+    mock.fake("GetNumSpecGroups", function(): number return 2 end)
+    mock.fake("C_SpecializationInfo.GetCombatConfigIDForSpecGroup", function(g: number): number return 200 + g end)
+    M.viewing = 2
+    expect(M:ConfigID()).toBe(202)
+    M.viewing = 1
+    expect(M:ConfigID()).toBe(CONFIG)
+    M.viewing = 2
+    mock.fake("C_SpecializationInfo.GetCombatConfigIDForSpecGroup", function(): any return nil end)
+    expect(M:ConfigID()).toBe(CONFIG)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return mock.secret(5) end)
+    expect(M:ConfigID()).toBeNil()
+end
+
+@test("Collect: three trees laid out, their points, arrows and the points to spend")
+local function collect()
+    wt().nodes[1].rank = 1
+    wt().spent = { [501] = 4 }
+    local d = assert(M:Collect())
+    expect(d.configID).toBe(CONFIG)
+    expect(d.treeID).toBe(WARRIOR_TREE)
+    expect(#d.trees).toBe(3)
+    expect(d.trees[1].name).toBe("Arms")
+    expect(d.trees[1].icon).toBe(2001)
+    expect(d.trees[1].groupID).toBe(501)
+    -- the game's count (4) over the ranks seen (1)
+    expect(d.trees[1].points).toBe(4)
+    expect(d.trees[2].points).toBe(0)
+    local one, two, three = nodeIn(d, 11), nodeIn(d, 12), nodeIn(d, 13)
+    expect(one.rank).toBe(1)
+    expect(one.pending).toBe(0)
+    expect(one.col).toBe(2)
+    expect(one.row).toBe(0)
+    expect(two.row).toBe(1)
+    expect(three.col).toBe(3)
+    expect(one.name).toBe("Arms One")
+    expect(one.icon).toBe(1011)
+    expect(one.entryID).toBe(110)
+    expect(one.canPurchase).toBe(true)
+    expect(two.open).toBe(false)
+    expect(two.meetsEdges).toBe(false)
+    expect(#d.trees[1].links).toBe(1)
+    expect(d.trees[1].links[1].met).toBe(true)
+    expect(two.requires[1]).toBe(one)
+    expect(d.available).toBe(5)
+    expect(d.pending).toBe(0)
+    expect(d.staged).toBe(false)
+    expect(M.unseenStaged).toBeNil()
+end
+
+@test("Collect: planned ranks are pending over what was learned before")
+local function collectPlanned()
+    assert(M:Collect())
+    w.staged[13] = 1
+    local d = assert(M:Collect())
+    expect(d.staged).toBe(true)
+    expect(nodeIn(d, 13).rank).toBe(0)
+    expect(nodeIn(d, 13).pending).toBe(1)
+    expect(d.pending).toBe(1)
+    expect(d.trees[1].points).toBe(1)
+    -- another config first seen while planned: the learned rank is the active one
+    M.learnedFor = 999
+    M.learned = {}
+    d = assert(M:Collect())
+    expect(nodeIn(d, 13).rank).toBe(1)
+end
+
+@test("Collect: staged changes the ranks don't show still count one")
+local function collectUnseen()
+    w.forceStaged = true
+    local d = assert(M:Collect())
+    expect(d.pending).toBe(1)
+    expect(M.unseenStaged).toBe(true)
+end
+
+@test("Collect: nothing without a config, a tree or nodes; hidden and empty nodes left out")
+local function collectNothing()
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return nil end)
+    expect(M:Collect()).toBeNil()
+    expect(M:Collect(12345)).toBeNil()
+    for _, n in ipairs(wt().nodes) do n.visible = false end
+    expect(M:Collect(CONFIG)).toBeNil()
+    for _, n in ipairs(wt().nodes) do n.visible = true; n.noEntry = true end
+    wt().nodes[1].noEntry = false
+    wt().groups = {}
+    local d = assert(M:Collect(CONFIG))
+    expect(#d.trees).toBe(1)
+    expect(d.trees[1].name).toBe("Tree 1")
+    expect(d.trees[1].groupID).toBeNil()
+end
+
+@test("Collect: a talent without its own name takes the spell's")
+local function collectSpellName()
+    wt().nodes[1].spellName = true
+    mock.defineSpell(11, { name = "Spell Eleven", iconID = 777 })
+    local d = assert(M:Collect())
+    expect(nodeIn(d, 11).name).toBe("Spell Eleven")
+    expect(nodeIn(d, 11).icon).toBe(777)
+end
+
+@test("Requires: the tree's points, else the talent above it")
+local function requires()
+    w.conditions[7] = { isMet = false, spentAmountRequired = 5 }
+    w.conditions[8] = { isMet = true, spentAmountRequired = 10 }
+    wt().nodes[2].conditions = { 8, 7 }
+    local d = assert(M:Collect())
+    local two = nodeIn(d, 12)
+    expect(M:Requires(d.configID, two)).toBe("Requires 5 points in Arms")
+    w.conditions[7].isMet = true
+    expect(M:Requires(d.configID, two)).toBe("Requires 1 point in Arms One")
+    nodeIn(d, 11).rank = 1
+    expect(M:Requires(d.configID, two)).toBeNil()
+    -- a two-rank talent above
+    two.requires = { nodeIn(d, 13) }
+    expect(M:Requires(d.configID, two)).toBe("Requires 2 points in Arms Three")
+    expect(M:Requires(d.configID, nodeIn(d, 11))).toBeNil()
+end
+
+@test("Editable: not in combat, not when the game says no, not another talent group")
+local function editable()
+    expect(M:Editable()).toBe(true)
+    mock.fake("C_ClassTalents.CanChangeTalents", function(): (boolean, string) return false, "At a trainer only." end)
+    expect({ M:Editable() }).toEqual({ false, "At a trainer only." })
+    mock.fake("C_ClassTalents.CanChangeTalents", function(): (boolean, any) return false, mock.secret("x") end)
+    expect({ M:Editable() }).toEqual({ false })
+    mock.fake("C_ClassTalents.CanChangeTalents", function(): boolean return true end)
+    M.viewing = 2
+    expect({ M:Editable() }).toEqual({ false, "Activate this specialization to change its talents." })
+    M.viewing = nil
+    mock.player:enterCombat()
+    expect({ M:Editable() }).toEqual({ false, "Talents can't change in combat." })
+    mock.player:leaveCombat()
+end
+
+@test("Inspecting: the spells window's inspected unit, else nil")
+local function inspecting()
+    local f: any = _G.PlayerSpellsFrame
+    expect(M:Inspecting()).toBeNil()
+    mock.stub(f, "IsInspecting", function(): boolean return true end)
+    mock.stub(f, "GetInspectUnit", function(): string return "party1" end)
+    expect(M:Inspecting()).toBe("party1")
+    mock.stub(f, "GetInspectUnit", function(): string error("gone") end)
+    expect(M:Inspecting()).toBe("target")
+    mock.stub(f, "IsInspecting", function(): boolean error("gone") end)
+    expect(M:Inspecting()).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Planning on your talents
+--------------------------------------------------------------------------------
+
+@test("Purchase, Refund, Undo and Apply go through the game's staging")
+local function staging()
+    M.data = assert(M:Collect())
+    local one = nodeIn(M.data, 11)
+    one.canSpend = false
+    M:Purchase(one)
+    expect(w.purchases).toBe(0)
+    one.canSpend = true
+    M:Purchase(one)
+    expect(w.staged[11]).toBe(1)
+    -- Render without pages keeps the data
+    M.data = assert(M:Collect())
+    expect(M.data.pending).toBe(1)
+    M:Refund(nodeIn(M.data, 13)) -- nothing planned there
+    expect(w.staged[11]).toBe(1)
+    M:Refund(nodeIn(M.data, 11))
+    expect(w.staged[11]).toBeNil()
+    -- Undo: only with something planned
+    M.data = assert(M:Collect())
+    M:Undo()
+    w.staged[13] = 1
+    M.data = assert(M:Collect())
+    M:Undo()
+    expect(w.staged[13]).toBeNil()
+    -- Apply
+    w.staged[13] = 2
+    M.data = assert(M:Collect())
+    M:Apply()
+    expect(w.commits).toBe(1)
+    expect(wt().nodes[3].rank).toBe(2)
+    mock.advanceTime(0.1)
+    expectNoErrors()
+end
+
+@test("Apply says so when the game refuses; nothing in combat or without data")
+local function applyRefused()
+    M.data = nil
+    M:Apply()
+    M:Undo()
+    M:Refund({ pending = 1 })
+    M:Purchase({ canSpend = true })
+    expect(w.commits).toBe(0)
+    w.staged[13] = 1
+    M.data = assert(M:Collect())
+    w.commitResult = false
+    M:Apply()
+    expect(w.commits).toBe(1)
+    local printed = mock.printed()
+    expect(printed[#printed]).toContain("The talents couldn't be applied.")
+    mock.player:enterCombat()
+    M:Apply()
+    M:Refund(nodeIn(M.data, 13))
+    expect(w.commits).toBe(1)
+    expect(w.staged[13]).toBe(1)
+    mock.player:leaveCombat()
+    -- the inspected config is never bought into
+    M.data = assert(M:Collect(INSPECT))
+    local one = nodeIn(M.data, 11)
+    one.canSpend = true
+    M:Purchase(one)
+    expect(w.purchases).toBe(0)
+end
+
+@test("Apply without the class commit uses C_Traits.CommitConfig")
+local function applyTraits()
+    local ct: any = C_ClassTalents
+    local commit = ct.CommitConfig
+    ct.CommitConfig = nil
+    w.staged[11] = 1
+    M.data = assert(M:Collect())
+    M:Apply()
+    ct.CommitConfig = commit
+    expect(w.commits).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- The page
+--------------------------------------------------------------------------------
+
+@test("Pages: the visible ones; Render does nothing without one")
+local function pages()
+    local a, b = fakePage(true), fakePage(false)
+    M.windowPage, M.page = a, b
+    expect(M:Pages()).toEqual({ a })
+    a.visible = false
+    expect(#M:Pages()).toBe(0)
+    M.data = "unchanged"
+    M:Render()
+    expect(M.data).toBe("unchanged")
+end
+
+@test("Fill: your talents on the spells window's page")
+local function fillSpells()
+    local p = fakePage(true)
+    M.windowPage, M.page = fakePage(false), p
+    wt().nodes[1].rank = 1
+    wt().nodes[1].canPurchase = false
+    M:Render()
+    local d = p.drawn
+    expect(p.data).toBe(M.data)
+    expect(p.specs).toBeNil()
+    expect(d.name).toBe("Arms")
+    expect(#d.trees).toBe(3)
+    expect(d.available).toBe(5)
+    expect(d.editable).toBe(true)
+    expect(d.readOnly).toBe(false)
+    expect(d.hint).toBe("Click a talent to plan a point; nothing changes until you apply.")
+    expect(d.back).toBeNil()
+    local two, three = nodeIn(M.data, 12), nodeIn(M.data, 13)
+    expect(two.locked).toBe(true)
+    expect(three.canSpend).toBe(true)
+    expect(nodeIn(M.data, 11).canSpend).toBe(false)
+    expect(three.next).toBe(false)
+    -- no points anywhere: the class's name; nothing to spend
+    wt().nodes[1].rank = 0
+    wt().available = 0
+    M:Render()
+    expect(p.drawn.name).toBe((UnitClass("player")))
+    expect(nodeIn(M.data, 13).canSpend).toBe(false)
+end
+
+@test("Fill: no talents yet, two talent groups, not editable")
+local function fillStates()
+    local p = fakePage(true)
+    M.windowPage, M.page = fakePage(false), p
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return nil end)
+    M:Render()
+    expect(p.drawn).toEqual({ hint = "No talents to show yet." })
+    world.install(w)
+    mock.fake("GetNumSpecGroups", function(): number return 2 end)
+    M:Render()
+    expect(p.specs).toEqual({
+        { label = "Primary", name = "", active = true },
+        { label = "Secondary", name = "", active = false },
+    })
+    expect(p.specView).toBe(1)
+    mock.player:enterCombat()
+    M:Render()
+    expect(p.drawn.editable).toBe(false)
+    expect(p.drawn.hint).toBe("Talents can't change in combat.")
+    mock.player:leaveCombat()
+end
+
+@test("Fill: another player's talents on the spells window, read only")
+local function fillInspected()
+    local p = fakePage(true)
+    M.windowPage, M.page = fakePage(false), p
+    local f: any = _G.PlayerSpellsFrame
+    local other = mock.spawnUnit({ name = "Tamsin", level = 42, class = "WARRIOR", player = true, reaction = "friendly" })
+    mock.player:target(other)
+    mock.stub(f, "IsInspecting", function(): boolean return true end)
+    mock.stub(f, "GetInspectUnit", function(): string return "target" end)
+    M:Render()
+    local d = p.drawn
+    expect(d.readOnly).toBe(true)
+    expect(d.editable).toBe(false)
+    expect(d.head.name).toBe("Tamsin")
+    expect(d.head.class).toBe("WARRIOR")
+    expect(d.head.line).toBe("Level 42 Warrior")
+    expect(d.hint).toBe("Viewing Tamsin's talents. Nothing here can be changed.")
+    expect(d.back).toBeNil()
+    -- theirs haven't arrived: the hint says so
+    w.configs[INSPECT] = nil
+    M:Render()
+    expect(p.drawn).toEqual({ hint = "Their talents haven't arrived yet." })
+    mock.player:target(nil)
+end
+
+@test("Render on the window: another player's talents stay when the inspect ends")
+local function renderWindowInspect()
+    local p = fakePage(true)
+    M.windowPage, M.page = p, fakePage(false)
+    local other = mock.spawnUnit({ name = "Bram", level = 0, class = "WARRIOR", player = true, reaction = "friendly" })
+    mock.player:target(other)
+    M.inspectUnit = "target"
+    M:Render()
+    expect(p.drawn.back).toBe("Back to inspect")
+    expect(p.drawn.head.line).toBe("Level ?? Warrior")
+    expect(p.builds).toBeNil()
+    local theirs = M.inspectData
+    expect(theirs.configID).toBe(INSPECT)
+    w.configs[INSPECT] = nil
+    M:Render()
+    expect(M.inspectData).toBe(theirs)
+    mock.player:target(nil)
+end
+
+@test("Fill on the window: your builds' picker, no build shown")
+local function fillWindow()
+    local p = fakePage(true)
+    M.windowPage, M.page = p, fakePage(false)
+    M:Render()
+    expect(p.builds.value).toBe("")
+    expect(p.order).toBeNil()
+    expect(p.drawn.readOnly).toBe(false)
+end
+
+@test("Fill on the window: the active build's order and its next talent ringed")
+local function fillActiveBuild()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    M:SetActive(id)
+    M.buildView = id
+    wt().nodes[1].rank = 1
+    local p = fakePage(true)
+    M.windowPage, M.page = p, fakePage(false)
+    M:Render()
+    expect(p.builds.value).toBe(id)
+    expect(p.builds.badge).toBe("Active")
+    expect(#p.order).toBe(2)
+    expect(p.order[1].state).toBe("learned")
+    expect(p.order[2].state).toBe("next")
+    expect(nodeIn(M.data, 13).next).toBe(true)
+    expect(nodeIn(M.data, 11).next).toBe(false)
+end
+
+@test("QueueRender renders once on the next frame, while enabled")
+local function queue()
+    local p = fakePage(true)
+    M.windowPage, M.page = fakePage(false), p
+    M:QueueRender()
+    M:QueueRender()
+    expect(p.drawn).toBeNil()
+    mock.advanceTime(0.05)
+    expect(p.drawn).never.toBeNil()
+    expect(M.renderQueued).toBeNil()
+end
+
+@test("ShowTip: the game's tooltip with what a talent still needs")
+local function showTip()
+    local d = assert(M:Collect())
+    local seen: any = nil
+    mock.stub(SuuUI.UI, "TraitTooltip", function(_: any, configID: number, nodeID: number, opts: any)
+        seen = { configID = configID, nodeID = nodeID, opts = opts }
+    end)
+    M.data = nil
+    M:ShowTip(UIParent, nodeIn(d, 12))
+    expect(seen).toBeNil()
+    M:ShowTip(UIParent, nodeIn(d, 12), d)
+    expect(seen.nodeID).toBe(12)
+    expect(seen.opts.needs).toEqual({ "Requires 1 point in Arms One" })
+    expect(seen.opts.treeName).toBe("Arms")
+    expect(seen.opts.blocked).toBeNil()
+    mock.player:enterCombat()
+    M:ShowTip(UIParent, nodeIn(d, 11), d)
+    expect(seen.opts.blocked).toBe("Talents can't change in combat.")
+    mock.player:leaveCombat()
+    local theirs = assert(M:Collect(INSPECT))
+    M:ShowTip(UIParent, nodeIn(theirs, 11), theirs)
+    expect(seen.opts.blocked).toBeNil()
+    expect(seen.configID).toBe(INSPECT)
+end
+
+--------------------------------------------------------------------------------
+-- Talent builds
+--------------------------------------------------------------------------------
+
+@test("Classes: every class with a tree, sorted by name, cached")
+local function classes()
+    local c = M:Classes()
+    expect(c.WARRIOR.treeID).toBe(WARRIOR_TREE)
+    expect(c.PALADIN.treeID).toBe(PALADIN_TREE)
+    expect(c.list[1].file).toBe("PALADIN")
+    expect(c.list[2].file).toBe("WARRIOR")
+    expect(M:Classes()).toBe(c)
+end
+
+@test("BuildTree: your class's tree from your talents, cached")
+local function buildTreeOwn()
+    local t = assert(M:BuildTree("WARRIOR"))
+    expect(t.configID).toBe(CONFIG)
+    expect(t.treeID).toBe(WARRIOR_TREE)
+    expect(#t.trees).toBe(3)
+    expect(t.trees[1].name).toBe("Arms")
+    expect(#t.trees[1].links).toBe(1)
+    expect(t.byID[12].requires).toEqual({ 11 })
+    expect(t.byID[12].requiresAll).toBeNil()
+    expect(t.byID[12].row).toBe(1)
+    expect(t.byID[13].treeName).toBe("Arms")
+    expect(t.byID[21].treeIndex).toBe(2)
+    expect(t.byID[11].choice).toBe(false)
+    expect(t.order).toEqual({ 11, 12, 13, 21, 22, 23, 31, 32, 33 })
+    expect(M:BuildTree("WARRIOR")).toBe(t)
+    expect(M:BuildTree("DRUID")).toBeNil()
+end
+
+@test("BuildTree: arrows that are required, drawn only, or across trees")
+local function buildTreeEdges()
+    local nodes = wt().nodes
+    nodes[1].edges = { { targetNode = 12, type = Enum.TraitEdgeType.RequiredForAvailability }, { targetNode = 13, type = Enum.TraitEdgeType.VisualOnly },
+        { targetNode = 21 } }
+    nodes[3].choice = true
+    local t = assert(M:BuildTree("WARRIOR"))
+    expect(t.byID[12].requiresAll).toBe(true)
+    expect(t.byID[13].requires).toEqual({})
+    expect(t.byID[21].requires).toEqual({ 11 })
+    expect(#t.trees[1].links).toBe(1)
+    expect(t.byID[13].choice).toBe(true)
+    expect(t.byID[13].entryIDs).toEqual({ 130, 131 })
+end
+
+@test("BuildTree: another class's through the view loadout, else nothing")
+local function buildTreeOther()
+    local viewed: any = nil
+    mock.fake("C_ClassTalents.InitializeViewLoadout", function(specID: number, level: number) viewed = { specID, level } end)
+    mock.fake("C_ClassTalents.ViewLoadout", function(): boolean return true end)
+    local t = assert(M:BuildTree("PALADIN"))
+    expect(viewed[2]).toBe(60)
+    expect(viewed[1]).toBe(M:Classes().PALADIN.specID)
+    expect(t.configID).toBe(VIEW)
+    expect(t.trees[1].name).toBe("Holy")
+    expect(t.byID[111].name).toBe("Holy One")
+    -- the tree unreadable both ways
+    M.buildTrees = nil
+    for _, n in ipairs(pt().nodes) do n.visible = false end
+    expect(M:BuildTree("PALADIN")).toBeNil()
+end
+
+@test("Talented and StepLevel follow the currency and your level")
+local function talentedLevels()
+    expect(M:Talented()).toBe(5)
+    expect(M:StepLevel(1)).toBe(5)
+    expect(M:StepLevel(6)).toBe(10)
+    -- at 60 (or without the currency) the last answer stays
+    mock.fake("UnitLevel", function(): number return 60 end)
+    wt().maxQuantity = 1
+    expect(M:Talented()).toBe(5)
+    M.talented = nil
+    expect(M:Talented()).toBe(0)
+    mock.fake("UnitLevel", function(): number return 12 end)
+    wt().maxQuantity = 6
+    expect(M:Talented()).toBe(3)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return nil end)
+    expect(M:Talented()).toBe(3)
+end
+
+@test("AddBuild, Builds, NewID, SetActive and ActiveID")
+local function addBuild()
+    expect(M:AddBuild("x", "DRUID", {})).toBeNil()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    expect(id).toBe("b1")
+    local b = M:Builds()[id]
+    expect(b.name).toBe("Arms")
+    expect(b.class).toBe("WARRIOR")
+    expect(b.classID).toBe(1)
+    expect(b.treeID).toBe(WARRIOR_TREE)
+    expect(b.split).toBe("2 / 0 / 0")
+    expect(b.updated).toBe(time())
+    expect(heard.SUUUI_TALENT_BUILD_CHANGED).toBe(1)
+    expect(M:NewID()).toBe("b2")
+    expect(M:ActiveID()).toBeNil()
+    M:SetActive(id)
+    expect(M:ActiveID()).toBe(id)
+    expect(M:ActiveID(1)).toBe(id)
+    expect(M:ActiveID(2)).toBeNil()
+    M:SetActive("b9", 2)
+    expect(M:ActiveID(2)).toBe("b9")
+    M.viewing = 2
+    expect(M:ActiveID()).toBe("b9")
+    expect(store().active[charKey()]).toEqual({ id, "b9" })
+end
+
+@test("Viewed, Planning and Draft")
+local function viewedPlanning()
+    expect(M:Viewed()).toBeNil()
+    expect(M:Planning()).toBe(false)
+    expect(M:Draft()).toBeNil()
+    local mine = assert(M:AddBuild("Arms", "WARRIOR", steps(11)))
+    local theirs = assert(M:AddBuild("Holy", "PALADIN", {}))
+    M.buildView = ""
+    expect(M:Viewed()).toBeNil()
+    M.buildView = mine
+    expect(M:Viewed()).toBe(M:Builds()[mine])
+    -- yours, not active: planning; active: only when asked
+    expect(M:Planning()).toBe(true)
+    M:SetActive(mine)
+    expect(M:Planning()).toBe(false)
+    M.planning = true
+    expect(M:Planning()).toBe(true)
+    M.inspectUnit = "target"
+    expect(M:Planning()).toBe(false)
+    M.inspectUnit = nil
+    M.buildView = theirs
+    expect(M:Planning()).toBe(true)
+    -- the draft: a copy until saved
+    M.buildView = mine
+    local d = M:Draft()
+    expect(d.id).toBe(mine)
+    expect(d.dirty).toBe(false)
+    expect(d.steps).toEqual(steps(11))
+    expect(d.steps == M:Builds()[mine].steps).toBe(false)
+    expect(M:Draft()).toBe(d)
+    expect(M:Viewed()).toBe(d)
+end
+
+@test("Draft: a tree that changed keeps the steps that still fit")
+local function draftTrim()
+    local id = assert(M:AddBuild("Old", "WARRIOR", {}))
+    M:Builds()[id].steps = steps(11, 13, 999, 21)
+    M.buildView = id
+    local d = M:Draft()
+    expect(d.steps).toEqual(steps(11, 13))
+    expect(d.dirty).toBe(true)
+    expect(d.problem).toBe("Step 3 isn't a talent of this tree any more.")
+end
+
+@test("SaveDraft and DiscardDraft")
+local function saveDiscard()
+    M:SaveDraft()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M.buildView = id
+    local d = M:Draft()
+    d.steps = steps(11, 21)
+    d.name = "Renamed"
+    d.dirty = true
+    heard = {}
+    M:SaveDraft()
+    local b = M:Builds()[id]
+    expect(b.name).toBe("Renamed")
+    expect(b.steps).toEqual(steps(11, 21))
+    expect(b.split).toBe("1 / 1 / 0")
+    expect(d.dirty).toBe(false)
+    expect(heard.SUUUI_TALENT_BUILD_CHANGED).toBe(1)
+    M:DiscardDraft()
+    expect(M.draft).toBeNil()
+    -- a draft of a build deleted meanwhile: nothing to save into
+    d = M:Draft()
+    store().builds[id] = nil
+    M:SaveDraft()
+    expect(store().builds[id]).toBeNil()
+end
+
+@test("Leave asks first when the draft has changes")
+local function leave()
+    local asked: any = nil
+    mock.stub(SuuUI.UI, "Confirm", function(def: any) asked = def end)
+    local went = 0
+    M:Leave(function() went = went + 1 end)
+    expect(went).toBe(1)
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M.buildView = id
+    M:Draft().dirty = true
+    M:Leave(function() went = went + 1 end)
+    expect(went).toBe(1)
+    expect(asked.title).toBe("Discard changes?")
+    expect(asked.text).toBe("Your changes to Arms aren't saved.")
+    asked.onConfirm()
+    expect(went).toBe(2)
+    expect(M.draft).toBeNil()
+    -- a clean draft goes without asking
+    M:Draft()
+    M:Leave(function() went = went + 1 end)
+    expect(went).toBe(3)
+    expect(M.draft).toBeNil()
+end
+
+@test("ShowBuild shows a build, not planning")
+local function showBuild()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M.planning = true
+    M:ShowBuild(id)
+    expect(M.buildView).toBe(id)
+    expect(M.planning).toBe(false)
+    M:ShowBuild(nil)
+    expect(M.buildView).toBeNil()
+end
+
+@test("DeleteBuild forgets it everywhere")
+local function deleteBuild()
+    local dismissed: any[] = {}
+    mock.stub(SuuUI, "DismissNotification", function(id: any) dismissed[#dismissed + 1] = id end)
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    local keep = assert(M:AddBuild("Fury", "WARRIOR", {}))
+    M:SetActive(id, 1)
+    M:SetActive(keep, 2)
+    store().reset[charKey()] = { [1] = id }
+    M.buildView = id
+    M:Draft()
+    M:DeleteBuild(id)
+    expect(M:Builds()[id]).toBeNil()
+    expect(M:Builds()[keep]).never.toBeNil()
+    expect(M:ActiveID(1)).toBeNil()
+    expect(M:ActiveID(2)).toBe(keep)
+    expect(store().reset[charKey()][1]).toBeNil()
+    expect(M.draft).toBeNil()
+    expect(M.buildView).toBeNil()
+    expect(dismissed).toEqual({ "suu:talentbuild:reset" })
+end
+
+@test("OrderLines: runs of a talent's ranks with their levels and states")
+local function orderLines()
+    local tree = M:BuildTree("WARRIOR")
+    local s = steps(11, 13, 13, 21, 13)
+    local lines = M:OrderLines(s, tree)
+    expect(#lines).toBe(4)
+    expect(lines[1]).toEqual({ node = 11, from = 1, to = 1, count = 1, state = nil, levels = "5", name = "Arms One", icon = 1011, ranks = "" })
+    expect(lines[2].levels).toBe("6–7")
+    expect(lines[2].ranks).toBe("1–2")
+    expect(lines[2].count).toBe(2)
+    expect(lines[4].ranks).toBe("3")
+    -- learned and next
+    lines = M:OrderLines(s, tree, { [11] = 1, [13] = 1 }, 3)
+    expect(lines[1].state).toBe("learned")
+    expect(lines[2].state).toBe("next")
+    expect(lines[3].state).toBeNil()
+    -- an unknown talent
+    lines = M:OrderLines(steps(999), nil)
+    expect(lines[1].name).toBe("?")
+    expect(lines[1].ranks).toBe("")
+end
+
+@test("NextTalent: your active build's next step on your talents")
+local function nextTalent()
+    expect(M:NextTalent()).toBeNil()
+    local other = assert(M:AddBuild("Holy", "PALADIN", steps(111)))
+    M:SetActive(other)
+    expect(M:NextTalent()).toBeNil()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    M:SetActive(id)
+    wt().nodes[1].rank = 1
+    local n = M:NextTalent()
+    expect(n).toEqual({ node = 13, name = "Arms Three", icon = 1013, rank = 1, max = 2, treeName = "Arms", build = "Arms", index = 2 })
+    -- through the service
+    expect(SuuUI.TalentBuildNext()).toEqual(n)
+    wt().nodes[3].rank = 2
+    expect(M:NextTalent()).toBeNil()
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return nil end)
+    expect(M:NextTalent(1, nil)).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- The picker
+--------------------------------------------------------------------------------
+
+@test("PickerOptions: your class's builds by name, then other classes'")
+local function pickerOptions()
+    local out = M:PickerOptions()
+    expect(out[1]).toEqual({ value = "", label = "Your talents", note = "no build" })
+    expect(out[2]).toEqual({ heading = "Warrior" })
+    expect(out[3]).toEqual({ value = "__none", label = "No builds yet", disabled = true })
+    expect(#out).toBe(3)
+    local b = assert(M:AddBuild("beta", "WARRIOR", steps(11)))
+    local a = assert(M:AddBuild("Alpha", "WARRIOR", {}))
+    local h = assert(M:AddBuild("Holy", "PALADIN", {}))
+    store().builds.bx = { id = "bx", name = "Lost", class = "DRUID" }
+    M:SetActive(b)
+    out = M:PickerOptions()
+    expect(out[3].value).toBe(a)
+    expect(out[4].value).toBe(b)
+    expect(out[4].note).toBe("1 / 0 / 0 · Active")
+    expect(out[4].diamond).toBe("class-warrior")
+    expect(out[5]).toEqual({ heading = "Other classes" })
+    -- by class name: DRUID (no class: its file) before Paladin
+    expect(out[6].value).toBe("bx")
+    expect(out[6].note).toBe(" · ")
+    expect(out[7].value).toBe(h)
+    expect(out[7].note).toBe("Paladin · 0 / 0 / 0")
+end
+
+@test("PickerFoot: new, import, and copy with a build shown")
+local function pickerFoot()
+    local news, shares: any[] = 0, {}
+    mock.stub(M, "AskNewBuild", function() news = news + 1 end)
+    mock.stub(M, "ShowShare", function(_: any, mode: string) shares[#shares + 1] = mode end)
+    local foot = M:PickerFoot()
+    expect(#foot).toBe(2)
+    foot[1].onClick()
+    foot[2].onClick()
+    M.buildView = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    foot = M:PickerFoot()
+    expect(foot[3].label).toBe("Copy this build as text")
+    foot[3].onClick()
+    expect(news).toBe(1)
+    expect(shares).toEqual({ "import", "copy" })
+end
+
+@test("HeadButtons: Plan, Use build, Your talents, Delete, Rename")
+local function headButtons()
+    expect(M:HeadButtons(nil, false)).toEqual({})
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    local b = M:Builds()[id]
+    local out = M:HeadButtons(b, false)
+    expect(out[1].label).toBe("Plan")
+    out[1].onClick()
+    expect(M.planning).toBe(true)
+    -- planning a build not active
+    out = M:HeadButtons(b, true)
+    expect(out[1].label).toBe("Use build")
+    expect(out[1].disabled).toBeNil()
+    expect(out[1].reason).toBe("Follow it on this character: what fits is planned, Apply learns it.")
+    local used: string? = nil
+    mock.stub(M, "UseBuild", function(_: any, which: string) used = which end)
+    out[1].onClick()
+    expect(used).toBe(id)
+    M.buildView = id
+    M:Draft().dirty = true
+    out = M:HeadButtons(b, true)
+    expect(out[1].disabled).toBe(true)
+    expect(out[1].reason).toBe("Save it first.")
+    M.draft = nil
+    -- the active one: back to your talents
+    M:SetActive(id)
+    M.planning = true
+    out = M:HeadButtons(b, true)
+    expect(out[1].label).toBe("Your talents")
+    out[1].onClick()
+    expect(M.planning).toBe(false)
+    -- Delete and Rename ask first
+    local asked: any = nil
+    mock.stub(SuuUI.UI, "Confirm", function(def: any) asked = def end)
+    expect(out[2].label).toBe("Delete")
+    out[2].onClick()
+    expect(asked.title).toBe("Delete Arms?")
+    expect(out[3].label).toBe("Rename")
+    out[3].onClick()
+    expect(asked.input.value).toBe("Arms")
+    M:Draft()
+    asked.onConfirm("Bladestorm")
+    expect(M:Builds()[id].name).toBe("Bladestorm")
+    expect(M.draft.name).toBe("Bladestorm")
+    out[2].onClick()
+    asked.onConfirm()
+    expect(M:Builds()[id]).toBeNil()
+    -- renaming a build gone meanwhile changes nothing
+    out[3].onClick()
+    asked.onConfirm("x")
+    expect(M:Builds()[id]).toBeNil()
+    -- another class's: Delete and Rename only
+    local h = assert(M:AddBuild("Holy", "PALADIN", {}))
+    out = M:HeadButtons(M:Builds()[h], true)
+    expect(out[1].label).toBe("Delete")
+    expect(#out).toBe(2)
+end
+
+@test("Picker: the head's picker for the build shown")
+local function picker()
+    local p = M:Picker(nil, false)
+    expect(p.value).toBe("")
+    expect(p.diamond).toBeNil()
+    expect(p.badge).toBeNil()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M:SetActive(id)
+    p = M:Picker(M:Builds()[id], false)
+    expect(p.value).toBe(id)
+    expect(p.diamond).toBe("class-warrior")
+    expect(p.badge).toBe("Active")
+    p.onChange("__none")
+    expect(M.buildView).toBeNil()
+    p.onChange(id)
+    expect(M.buildView).toBe(id)
+    p.onChange("")
+    expect(M.buildView).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Planning a build
+--------------------------------------------------------------------------------
+
+@test("FillPlan: the build's ranks on its class's trees")
+local function fillPlan()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    M.buildView = id
+    local p = fakePage(true)
+    M.windowPage, M.page = p, fakePage(false)
+    M:Render()
+    local d = p.drawn
+    expect(#d.trees).toBe(3)
+    expect(d.trees[1].points).toBe(2)
+    local one = d.trees[1].nodes[1]
+    expect(one.id).toBe(11)
+    expect(one.rank).toBe(1)
+    expect(one.build).toBe(true)
+    -- 11 is full: another rank of it can't come
+    expect(one.canSpend).toBe(false)
+    expect(one.problem).toBe("Arms One has only 1 rank; step 3 would be rank 2.")
+    local two = d.trees[1].nodes[2]
+    expect(two.locked).toBe(true)
+    expect(d.trees[1].links[1].met).toBe(true)
+    expect(d.available).toBe(49)
+    expect(d.unspent).toContain("49")
+    expect(d.unspent).toContain("points left")
+    expect(d.status).toBe("Click adds the next step, right-click takes the last back · drag a line to move it")
+    expect(d.actions.primary.enabled).toBe(false)
+    expect(#p.order).toBe(2)
+    expect(p.builds.buttons[1].label).toBe("Use build")
+    expect(M.planTree).toBe(M:BuildTree("WARRIOR"))
+    -- changed: Save and Discard
+    M.draft.dirty = true
+    M:Render()
+    expect(p.drawn.status).toBe("Not saved yet · click adds the next step, right-click takes the last back")
+    expect(p.drawn.statusColor).toBe("arcane")
+    expect(p.drawn.actions.primary.enabled).toBe(true)
+    p.drawn.actions.primary.onClick()
+    expect(M.draft.dirty).toBe(false)
+    M.draft.dirty = true
+    M:Render()
+    p.drawn.actions.secondary.onClick()
+    expect(M.draft).toBe(nil)
+    -- a problem
+    M:Draft().problem = "Step 3 isn't a talent of this tree any more."
+    M:Render()
+    expect(p.drawn.status).toBe("Needs a look: Step 3 isn't a talent of this tree any more.")
+    expect(p.drawn.statusColor).toBe("ember")
+end
+
+@test("FillPlan: a class whose talents can't be read")
+local function fillPlanNoTree()
+    local id = assert(M:AddBuild("Holy", "PALADIN", {}))
+    M.buildView = id
+    for _, n in ipairs(pt().nodes) do n.visible = false end
+    M.buildTrees = nil
+    local p = fakePage(true)
+    M.windowPage, M.page = p, fakePage(false)
+    M:Render()
+    expect(p.drawn).toEqual({ hint = "This class's talents can't be read right now." })
+    expect(p.order).toBeNil()
+    expect(p.builds.value).toBe(id)
+end
+
+@test("PlanAdd adds the next step or says why not")
+local function planAdd()
+    M:PlanAdd({ id = 11 })
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M.buildView = id
+    M:PlanAdd({ id = 11, entryID = 110 })
+    expect(M.draft.steps).toEqual(steps(11))
+    expect(M.draft.dirty).toBe(true)
+    M:PlanAdd({ id = 11 })
+    expect(#M.draft.steps).toBe(1)
+    local msgs: string[] = {}
+    mock.stub(UIErrorsFrame, "AddMessage", function(_: any, text: string) msgs[#msgs + 1] = text end)
+    M:PlanAdd({ id = 12 })
+    expect(msgs[1]).toBe("Arms Two needs 5 points spent before it; at step 2 only 1 is.")
+    -- a choice keeps its entry
+    wt().nodes[3].choice = true
+    M.buildTrees = nil
+    M:PlanAdd({ id = 13, entryID = 131 })
+    expect(M.draft.steps[2]).toEqual({ node = 13, entry = 131 })
+end
+
+@test("PlanRemove takes a talent's last step back, if the order allows")
+local function planRemove()
+    M:PlanRemove({ id = 11 })
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 21, 23, 12)))
+    M.buildView = id
+    M:PlanRemove({ id = 33 })
+    expect(#M.draft.steps).toBe(6)
+    expect(M.draft.dirty).toBe(false)
+    local asked: any = nil
+    mock.stub(SuuUI.UI, "Confirm", function(def: any) asked = def end)
+    M:PlanRemove({ id = 11 })
+    expect(asked.title).toBe("That rank can't go")
+    expect(#M.draft.steps).toBe(6)
+    M:PlanRemove({ id = 13 })
+    expect(asked.title).toBe("That rank can't go")
+    M:PlanRemove({ id = 12 })
+    expect(M.draft.steps).toEqual(steps(11, 13, 13, 21, 23))
+    M:PlanRemove({ id = 13 })
+    expect(M.draft.steps).toEqual(steps(11, 13, 21, 23))
+    expect(M.draft.dirty).toBe(true)
+end
+
+@test("MoveLine moves a run of steps, saving at once on your active build")
+local function moveLine()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 21)))
+    M.buildView = id
+    local p = fakePage(true)
+    M.windowPage, M.page = p, fakePage(false)
+    M:Render()
+    M:MoveLine(p, 9, 1)
+    -- Fury's talent to the front (planning: the draft)
+    M:MoveLine(p, 3, 1)
+    expect(M.draft.steps).toEqual(steps(21, 11, 13, 13))
+    expect(M.draft.dirty).toBe(true)
+    -- the run of 13 to the end
+    M:Render()
+    M:MoveLine(p, 3, 4)
+    expect(M.draft.steps).toEqual(steps(21, 11, 13, 13))
+    M:MoveLine(p, 3, #p.orderLines + 1)
+    expect(M.draft.steps).toEqual(steps(21, 11, 13, 13))
+    M:MoveLine(p, 2, #p.orderLines + 1)
+    expect(M.draft.steps).toEqual(steps(21, 13, 13, 11))
+    -- not allowed: 12 in front of what it needs
+    M.draft = nil
+    store().builds[id].steps = steps(11, 13, 13, 21, 23, 12)
+    M:Render()
+    local asked: any = nil
+    mock.stub(SuuUI.UI, "Confirm", function(def: any) asked = def end)
+    M:MoveLine(p, 5, 1)
+    expect(asked.title).toBe("Arms Two can't go there")
+    asked.onConfirm()
+    asked.onCancel()
+    expect(M.draft.steps).toEqual(steps(11, 13, 13, 21, 23, 12))
+    -- your active build shown on your talents: saved at once
+    M.draft = nil
+    M:SetActive(id)
+    M:Render()
+    heard = {}
+    M:MoveLine(p, 4, 1)
+    expect(store().builds[id].steps).toEqual(steps(23, 11, 13, 13, 21, 12))
+    expect(heard.SUUUI_TALENT_BUILD_CHANGED).toBe(1)
+    -- a class that can't be read: nothing
+    M.buildTrees = {}
+    M.classes = nil
+    mock.fake("GetClassInfo", function(): any return nil end)
+    M:MoveLine(p, 1, 2)
+    M.classes = nil
+end
+
+-- GameTooltip's left texts, line by line.
+local function tipLines(): string[]
+    local out: string[] = {}
+    for i = 1, GameTooltip:NumLines() do
+        local fs: any = _G["GameTooltipTextLeft" .. i] -- (Blizzard's line globals: undeclared)
+        out[#out + 1] = fs:GetText() or ""
+    end
+    return out
+end
+
+@test("ShowPlanTip: this build's rank, its steps and levels")
+local function showPlanTip()
+    M:ShowPlanTip(UIParent, { name = "x" })
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    M.buildView = id
+    M:Draft()
+    M:ShowPlanTip(UIParent, { id = 13, name = "Arms Three", rank = 2, max = 2, entryID = 130, problem = "Full." })
+    expect(GameTooltip:IsShown()).toBe(true)
+    local texts = tipLines()
+    expect(texts[1]).toBe("Arms Three")
+    expect(texts[2]).toBe("Rank 2/2 in this build")
+    expect(texts).toContain("Steps 2–3 · levels 6–7")
+    expect(texts).toContain("Full.")
+    expect(texts).toContain("Right-click takes its last step back")
+    M:ShowPlanTip(UIParent, { id = 21, name = "Fury One", rank = 0, max = 1 })
+    texts = tipLines()
+    expect(texts).toContain("Click: step 4, level 8")
+    M:ShowPlanTip(UIParent, { id = 11, name = "Arms One", rank = 1, max = 1 })
+    texts = tipLines()
+    expect(texts).toContain("Step 1 · level 5")
+    GameTooltip:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Using a build
+--------------------------------------------------------------------------------
+
+@test("Fit: the steps that fit your points, the talents in the way")
+local function fit()
+    local nodes = wt().nodes
+    nodes[1].rank = 1
+    nodes[4].rank = 1 -- 21: not in the build
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 23, 12)))
+    local data = assert(M:Collect())
+    local fits, conflicts, learned = M:Fit(M:Builds()[id], data)
+    -- 11 learned; 13, 13, 23 fit; 12 needs 5 spent (it has 4 then): stops
+    expect(fits).toEqual(steps(13, 13, 23))
+    expect(conflicts).toEqual({ { node = 21, name = "Fury One", treeName = "Fury", ranks = 1 } })
+    expect(learned[11]).toBe(1)
+    -- out of points
+    data.available = 1
+    fits = M:Fit(M:Builds()[id], data)
+    expect(fits).toEqual(steps(13))
+end
+
+@test("StageFits plans the fits, after rolling back what was planned")
+local function stageFits()
+    local data = assert(M:Collect())
+    expect(M:StageFits(steps(11, 13), data)).toBe(2)
+    expect(w.staged).toEqual({ [11] = 1, [13] = 1 })
+    data.staged = true
+    expect(M:StageFits(steps(21), data)).toBe(1)
+    expect(w.staged).toEqual({ [21] = 1 })
+    w.purchaseResult = false
+    expect(M:StageFits(steps(23), data)).toBe(0)
+end
+
+@test("UseBuild: what fits is planned, the build active")
+local function useBuild()
+    M:UseBuild("nope")
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    local dismissed: any[] = {}
+    mock.stub(SuuUI, "DismissNotification", function(n: any) dismissed[#dismissed + 1] = n end)
+    M:UseBuild(id)
+    expect(M:ActiveID()).toBe(id)
+    expect(M.buildView).toBe(id)
+    expect(M.planning).toBe(false)
+    expect(w.staged).toEqual({ [11] = 1, [13] = 1 })
+    expect(dismissed).toEqual({ "suu:talentbuild:planned", "suu:talentbuild:reset" })
+    expect(store().reset[charKey()][1]).toBeNil()
+end
+
+@test("UseBuild: not now (combat, the game) says why")
+local function useBuildBlocked()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11)))
+    local asked: any = nil
+    mock.stub(SuuUI.UI, "Confirm", function(def: any) asked = def end)
+    mock.player:enterCombat()
+    M:UseBuild(id)
+    expect(asked.title).toBe("Arms can't be used now")
+    expect(asked.text).toBe("Talents can't change in combat.")
+    mock.player:leaveCombat()
+    mock.fake("C_ClassTalents.CanChangeTalents", function(): boolean return false end)
+    M:UseBuild(id)
+    expect(asked.text).toBe("Talents can't change right now.")
+    expect(M:ActiveID()).toBeNil()
+    -- no talents to read
+    mock.fake("C_ClassTalents.CanChangeTalents", function(): boolean return true end)
+    mock.fake("C_Traits.GetConfigInfo", function(): any return nil end)
+    M:UseBuild(id)
+    expect(M:ActiveID()).toBeNil()
+end
+
+@test("UseBuild with talents in the way: asked first, then a reset waits")
+local function useBuildMismatch()
+    wt().nodes[4].rank = 1
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    local notes: any[] = {}
+    mock.stub(SuuUI, "Notify", function(def: any) notes[#notes + 1] = def end)
+    M:UseBuild(id)
+    local p = M.mismatch
+    expect(p).toBeShown()
+    expect(M:ActiveID()).toBeNil()
+    expect(p.use).toHaveText("Use, plan the 3 that fit")
+    local texts: string[] = {}
+    for _, l in ipairs(p.lines) do if l:IsShown() then texts[#texts + 1] = l:GetText() end end
+    expect(texts).toEqual({
+        "Fits now", "Arms One, rank 1 · Arms", "Arms Three, ranks 1–2 · Arms",
+        "Not in this build", "Fury One, 1 rank · Fury",
+        "These stay until a trainer resets your talents. Once you do, the whole build is planned for you to apply.",
+    })
+    mock.click(p.use)
+    expect(p).never.toBeShown()
+    expect(M:ActiveID()).toBe(id)
+    expect(store().reset[charKey()][1]).toBe(id)
+    expect(notes[1].id).toBe("suu:talentbuild:reset")
+    expect(notes[1].title).toBe("Reset at a trainer to use Arms")
+    expect(notes[1].body).toBe("1 talent aren't in it. Any warrior trainer can reset them.")
+    -- again, nothing fits: Cancel
+    wt().available = 0
+    w.staged = {}
+    M:UseBuild(id)
+    expect(p.use).toHaveText("Use it")
+    texts = {}
+    for _, l in ipairs(p.lines) do if l:IsShown() then texts[#texts + 1] = l:GetText() end end
+    expect(texts[2]).toBe("Nothing yet: the talents in the way come first.")
+    mock.click(p.cancel)
+    expect(p).never.toBeShown()
+end
+
+@test("NotifyReset names the cost when the trainer offered it")
+local function notifyReset()
+    local notes: any[] = {}
+    mock.stub(SuuUI, "Notify", function(def: any) notes[#notes + 1] = def end)
+    M:NotifyReset({ name = nil }, 2, 10000)
+    expect(notes[1].title).toBe("Reset at a trainer to use your build")
+    expect(notes[1].body).toContain("2 talents aren't in it. Any warrior trainer can reset them (")
+    expect(notes[1]["until"]).toBe("Goes when you reset, or pick another build")
+end
+
+@test("CheckReset: after a trainer's reset the whole build is planned")
+local function checkReset()
+    local notes: any[] = {}
+    local dismissed: any[] = {}
+    mock.stub(SuuUI, "Notify", function(def: any) notes[#notes + 1] = def end)
+    mock.stub(SuuUI, "DismissNotification", function(n: any) dismissed[#dismissed + 1] = n end)
+    M:CheckReset()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    M:SetActive(id)
+    store().reset[charKey()] = { [1] = id }
+    -- still a talent learned: waits
+    wt().nodes[4].rank = 1
+    M:CheckReset()
+    expect(store().reset[charKey()][1]).toBe(id)
+    -- in combat: waits
+    wt().nodes[4].rank = 0
+    mock.player:enterCombat()
+    M:CheckReset()
+    mock.player:leaveCombat()
+    expect(#notes).toBe(0)
+    -- planned before the reset, the reset just offered: rolled back first
+    w.staged[21] = 1
+    M.wipeAt = GetTime()
+    M:CheckReset()
+    expect(store().reset[charKey()][1]).toBeNil()
+    expect(w.staged).toEqual({ [11] = 1, [13] = 1 })
+    expect(dismissed).toEqual({ "suu:talentbuild:reset" })
+    expect(notes[1].title).toBe("Arms is planned")
+    expect(notes[1].body).toBe("2 points in its order. Nothing is learned until you apply.")
+    -- its buttons
+    notes[1].actions[1].onClick()
+    expect(w.commits).toBe(1)
+    expect(dismissed[2]).toBe("suu:talentbuild:planned")
+    notes[1].actions[2].onClick()
+    expect(M.window).toBeShown()
+    notes[1].actions[2].onClick()
+    M.window:Hide()
+end
+
+@test("CheckReset: a build no longer active stops waiting; staged changes wait")
+local function checkResetStale()
+    local dismissed: any[] = {}
+    mock.stub(SuuUI, "DismissNotification", function(n: any) dismissed[#dismissed + 1] = n end)
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    store().reset[charKey()] = { [1] = id }
+    M:CheckReset()
+    expect(store().reset[charKey()][1]).toBeNil()
+    expect(dismissed).toEqual({ "suu:talentbuild:reset" })
+    store().reset[charKey()] = { [1] = "gone" }
+    M:CheckReset()
+    expect(store().reset[charKey()][1]).toBeNil()
+    -- planned (not by the reset): waits
+    M:SetActive(id)
+    store().reset[charKey()] = { [1] = id }
+    w.staged[21] = 1
+    M:CheckReset()
+    expect(store().reset[charKey()][1]).toBe(id)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return nil end)
+    M:CheckReset()
+    expect(store().reset[charKey()][1]).toBe(id)
+end
+
+--------------------------------------------------------------------------------
+-- New build and sharing
+--------------------------------------------------------------------------------
+
+@test("AskNewBuild: a name and a class make a build to plan")
+local function askNewBuild()
+    M:AskNewBuild()
+    local p = M.newBuild
+    expect(p).toBeShown()
+    -- no name: nothing
+    mock.click(p.create)
+    expect(p).toBeShown()
+    mock.typeText(p.name.edit, "Levelling")
+    mock.click(p.create)
+    expect(p).never.toBeShown()
+    local id = M.buildView
+    expect(M:Builds()[id].name).toBe("Levelling")
+    expect(M:Builds()[id].class).toBe("WARRIOR")
+    expect(M.planning).toBe(true)
+    expect(M.window).toBeShown()
+    M:AskNewBuild()
+    expect(p.name.edit:GetText()).toBe("")
+    mock.click(p.cancel)
+    expect(p).never.toBeShown()
+end
+
+@test("ShareText and GameString write a build out")
+local function shareTexts()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    local b = M:Builds()[id]
+    local text = assert(M:ShareText(b))
+    expect(text:sub(1, 6)).toBe("SuuUI:")
+    local back = assert(SuuUI.UI.DecodeTalentBuild(text))
+    expect(back.name).toBe("Arms")
+    expect(#back.steps).toBe(2)
+    mock.fake("C_Traits.GetLoadoutSerializationVersion", function(): number return 2 end)
+    mock.fake("C_Traits.GetTreeHash", function(): number[]
+        local h: number[] = {}
+        for i = 1, 16 do h[i] = i end
+        return h
+    end)
+    local game = M:GameString(b)
+    expect(type(game)).toBe("string")
+    mock.fake("C_Traits.GetTreeHash", function(): any return nil end)
+    expect(M:GameString(b)).toBeNil()
+    expect(M:GameString({ class = "DRUID", steps = {} })).toBeNil()
+end
+
+@test("ReadPasted: SuuUI's text, the game's string, or why not")
+local function readPasted()
+    expect(M:ReadPasted(nil)).toBeNil()
+    expect(M:ReadPasted("   ")).toBeNil()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    local text = assert(M:ShareText(M:Builds()[id]))
+    local found = assert(M:ReadPasted(text))
+    expect(found.name).toBe("Arms")
+    expect(found.class).toBe("WARRIOR")
+    expect(found.steps).toEqual({ { node = 11 }, { node = 13 } })
+    expect(found.note).toBeNil()
+    -- a bad order: a note
+    local bad = assert(SuuUI.UI.EncodeTalentBuild({ name = "", classID = 1, treeID = WARRIOR_TREE, steps = steps(12) }))
+    found = assert(M:ReadPasted(bad))
+    expect(found.name).toBe("Shared build")
+    expect(found.note).toContain("Needs a look: ")
+    -- another tree version
+    local other = assert(SuuUI.UI.EncodeTalentBuild({ name = "x", classID = 1, treeID = 9, steps = steps(11) }))
+    expect(assert(M:ReadPasted(other)).note).toBe("Made for another version of the talents.")
+    -- a class without talents here
+    local druid = assert(SuuUI.UI.EncodeTalentBuild({ name = "x", classID = 11, treeID = 9, steps = {} }))
+    expect({ M:ReadPasted(druid) }).toEqual({ nil, "That class has no talents here." })
+    local _, why = M:ReadPasted("SuuUI:garbage")
+    expect(type(why)).toBe("string")
+    expect({ M:ReadPasted("hello") }).toEqual({ nil, "This isn't SuuUI's text or the game's talent string." })
+end
+
+@test("ReadPasted: the game's own talent string")
+local function readPastedGame()
+    mock.fake("C_Traits.GetLoadoutSerializationVersion", function(): number return 2 end)
+    mock.fake("C_Traits.GetTreeHash", function(): number[]
+        local h: number[] = {}
+        for i = 1, 16 do h[i] = 0 end
+        return h
+    end)
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    local game = assert(M:GameString(M:Builds()[id]))
+    local found = assert(M:ReadPasted(game))
+    expect(found.name).toBe("Imported build")
+    expect(found.fromGame).toBe(true)
+    expect(found.class).toBe("WARRIOR")
+    expect(#found.steps).toBe(3)
+    expect(found.note).toBeNil()
+end
+
+@test("BuildSummary: points, per tree, levels")
+local function buildSummary()
+    expect(M:BuildSummary("WARRIOR", steps(11, 13, 21))).toBe("3 points · Arms 2, Fury 1, Protection 0 · levels 5–7, in order")
+    expect(M:BuildSummary("WARRIOR", {})).toBe("0 points · Arms 0, Fury 0, Protection 0")
+    expect(M:BuildSummary("DRUID", steps(1))).toBe("1 point · levels 5–5, in order")
+end
+
+@test("ShowShare: Copy shows the texts; Import previews and saves")
+local function showShare()
+    -- nothing shown: Import
+    M:ShowShare("copy")
+    local p = M.share
+    expect(p).toBeShown()
+    expect(p.mode).toBe("import")
+    expect(p.ok:IsEnabled()).toBe(false)
+    expect(p.previewLine).toHaveText("What you paste shows here before it's saved.")
+    -- a pasted text
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    local text = assert(M:ShareText(M:Builds()[id]))
+    M:PreviewPaste(text)
+    expect(p.ok:IsEnabled()).toBe(true)
+    expect(p.previewName).toHaveText("Arms")
+    expect(p.previewClass).toHaveText("Warrior")
+    expect(p.previewLine).toHaveText("2 points · Arms 2, Fury 0, Protection 0 · levels 5–6, in order")
+    M:PreviewPaste("nonsense")
+    expect(p.previewLine).toHaveText("This isn't SuuUI's text or the game's talent string.")
+    expect(p.ok:IsEnabled()).toBe(false)
+    mock.click(p.ok)
+    expect(p).toBeShown()
+    M:PreviewPaste(text)
+    mock.click(p.ok)
+    expect(p).never.toBeShown()
+    expect(M:Builds()[M.buildView].name).toBe("Arms")
+    expect(M.buildView).never.toBe(id)
+    expect(M.planning).toBe(true)
+    -- Copy: the build shown
+    M:ShowShare("copy")
+    expect(p.mode).toBe("copy")
+    expect(p.text.edit:GetText()).toBe(text)
+    expect(p.game).never.toBeShown()
+    mock.advanceTime(0.05)
+    -- the copy fields stay as written
+    p.text.edit:SetText("changed")
+    p.reselect()
+    expect(p.text.edit:GetText()).toBe(text)
+    mock.click(p.ok)
+    expect(p).never.toBeShown()
+    -- the switch
+    M:ShowShare("import")
+    expect(p.mode).toBe("import")
+    mock.click(p.cancel)
+end
+
+@test("PreviewPaste: the game's string notes what can't come along")
+local function previewGame()
+    mock.fake("C_Traits.GetLoadoutSerializationVersion", function(): number return 2 end)
+    mock.fake("C_Traits.GetTreeHash", function(): number[]
+        local h: number[] = {}
+        for i = 1, 16 do h[i] = 0 end
+        return h
+    end)
+    M:PreviewPaste("x")
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11)))
+    M.buildView = id
+    M:ShowShare("copy")
+    local p = M.share
+    expect(p.game).toBeShown()
+    local game = p.game.edit:GetText()
+    M:ShowShare("import")
+    M:PreviewPaste(game)
+    expect(p.previewNote:GetText()).toContain("From the game's string the order can't come along")
+    mock.click(p.cancel)
+end
+
+--------------------------------------------------------------------------------
+-- The window
+--------------------------------------------------------------------------------
+
+@test("The window: Toggle, its size, your active build on show, Esc")
+local function window()
+    local f = M.window
+    expect(f).never.toBeShown()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M:SetActive(id)
+    expect(SuuUI.ToggleTalents()).toBe(true)
+    expect(f).toBeShown()
+    expect(SuuUI.TalentsShown()).toBe(true)
+    expect(heard.SUUUI_TALENTS_SHOWN).toBe(1)
+    expect(M.buildView).toBe(id)
+    expect(f:GetWidth()).toBe(SuuUI.UI.TALENT_TREE_W + 40 + SuuUI.UI.TALENT_ORDER_W)
+    M:Toggle()
+    expect(f).never.toBeShown()
+    expect(SuuUI.TalentsShown()).toBe(false)
+    -- a plan with changes stays open
+    M.buildView = id
+    M:Draft().dirty = true
+    M:Toggle()
+    expect(M.draft).never.toBeNil()
+    M:Toggle()
+    -- the height with two talent groups
+    mock.fake("GetNumSpecGroups", function(): number return 2 end)
+    expect(M:WindowHeight()).toBe(44 + 426 + 16 + 42)
+    M.inspectUnit = "target"
+    expect(M:WindowHeight()).toBe(44 + 426 + 16)
+    M.inspectUnit = nil
+end
+
+@test("The window: another player's talents, the title, back to yours")
+local function windowInspect()
+    local other = mock.spawnUnit({ name = "Bram", level = 30, class = "WARRIOR", player = true, reaction = "friendly" })
+    mock.player:target(other)
+    M:ShowInspect(nil)
+    expect(M.window).never.toBeShown()
+    expect(SuuUI.ShowTalentsOf("target")).toBe(true)
+    expect(M.window).toBeShown()
+    expect(M.inspectUnit).toBe("target")
+    expect(M.chrome.title).toHaveText("Talents · Bram")
+    -- shown already: drawn again
+    M:ShowInspect("target")
+    expect(M.window).toBeShown()
+    -- the key: back to yours
+    M:Toggle()
+    expect(M.window).toBeShown()
+    expect(M.inspectUnit).toBeNil()
+    expect(M.chrome.title).toHaveText("Talents")
+    M:SetInspect(nil)
+    M.window:Hide()
+    mock.player:target(nil)
+end
+
+@test("The window's page: its callbacks reach the module")
+local function wire()
+    local page = M.windowPage
+    local calls: string[] = {}
+    for _, name in ipairs({ "PlanAdd", "Purchase", "PlanRemove", "Refund", "ShowPlanTip", "ShowTip", "Apply", "Undo", "MoveLine" }) do
+        mock.stub(M, name, function() calls[#calls + 1] = name end)
+    end
+    page.onClick({ build = true })
+    page.onClick({})
+    page.onRemove({ build = true })
+    page.onRemove({})
+    page.onEnter(UIParent, { build = true })
+    page.onEnter(UIParent, {})
+    page.onApply()
+    page.onUndo()
+    page.onOrderMove(1, 2)
+    expect(calls).toEqual({ "PlanAdd", "Purchase", "PlanRemove", "Refund", "ShowPlanTip", "ShowTip", "Apply", "Undo", "MoveLine" })
+    page.onLeave()
+    page.onOrderEnter({ node = 11 })
+    page.onOrderLeave()
+    -- another talent group
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M:SetActive(id, 2)
+    page.onSpec(2)
+    expect(M.viewing).toBe(2)
+    expect(M.buildView).toBe(id)
+    local active: number? = nil
+    mock.fake("C_SpecializationInfo.SetActiveSpecGroup", function(g: number) active = g end)
+    page.onActivate()
+    expect(active).toBe(2)
+    M.viewing = nil
+    active = nil
+    page.onActivate()
+    expect(active).toBeNil()
+    M.window:Show()
+    page.onBack()
+    expect(M.window).never.toBeShown()
+end
+
+@test("BindKeys binds the talents key to SuuUI's window, out of combat")
+local function bindKeys()
+    local bound: string[] = {}
+    mock.fake("GetBindingKey", function(): string return "N" end)
+    mock.fake("SetOverrideBindingClick", function(_: any, _: boolean, key: string, button: string) bound[#bound + 1] = key .. ">" .. button end)
+    M:BindKeys()
+    expect(bound).toEqual({ "N>SuuUITalentsToggle" })
+    mock.player:enterCombat()
+    M:BindKeys()
+    expect(M.bindAfterCombat).toBe(true)
+    mock.player:leaveCombat()
+    expect(M.bindAfterCombat).toBeNil()
+    expect(#bound).toBe(2)
+    -- the toggle button
+    local toggle: any = _G.SuuUITalentsToggle
+    mock.click(toggle)
+    expect(M.window).toBeShown()
+    mock.click(toggle)
+    expect(M.window).never.toBeShown()
+end
+
+@test("Size and Restore: the spells window at the tab's size and back")
+local function sizeRestore()
+    local f: any = _G.PlayerSpellsFrame
+    local h, wd = f:GetHeight(), f:GetWidth()
+    M.blizzHeight, M.blizzWidth = nil, nil
+    f:SetSize(900, 700)
+    M:Size()
+    expect(f:GetWidth()).toBe(SuuUI.UI.TALENT_TREE_W + 40)
+    expect(f:GetHeight()).toBe(44 + 426 + 16)
+    expect(M.blizzHeight).toBe(700)
+    M:Size()
+    M:Restore()
+    expect(f:GetWidth()).toBe(900)
+    expect(f:GetHeight()).toBe(700)
+    expect(M.blizzHeight).toBeNil()
+    M:Restore()
+    f:SetSize(wd, h)
+end
+
+@test("Events: a trainer's reset offer prices the notice; talent changes say so")
+local function gameEvents()
+    local notes: any[] = {}
+    mock.stub(SuuUI, "Notify", function(def: any) notes[#notes + 1] = def end)
+    wt().nodes[4].rank = 1
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11)))
+    M:SetActive(id)
+    store().reset[charKey()] = { [1] = id }
+    mock.fireEvent("CONFIRM_TALENT_WIPE", 50000, 1)
+    expect(M.wipeAt).toBe(GetTime())
+    expect(notes[1].body).toContain("1 talent aren't in it")
+    heard = {}
+    mock.fireEvent("PLAYER_TALENT_UPDATE")
+    expect(heard.SUUUI_TALENT_BUILD_CHANGED).toBe(1)
+    -- a build waiting for a reset looks again half a second later
+    wt().nodes[4].rank = 0
+    mock.advanceTime(0.6)
+    expect(store().reset[charKey()][1]).toBeNil()
+    mock.fireEvent("INSPECT_READY", UnitGUID("player"))
+    mock.fireEvent("UPDATE_BINDINGS")
+    mock.advanceTime(0.1)
+    expectNoErrors()
+end

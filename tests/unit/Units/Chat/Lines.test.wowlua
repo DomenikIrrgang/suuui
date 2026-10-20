@@ -1,0 +1,275 @@
+-- Units/Chat/Lines: the chat's lines as text (formatting, plain text,
+-- dimming, the kept chat's form, the divider's rules, whisper lines).
+
+import test, cases, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as lines from "/Units/Chat/Lines"
+import isSecret from "wowlua:secret"
+
+local T = SuuUI.Tokens
+
+local function hex(class: string): string return T.color["class-" .. class:lower()].hex end
+
+local VERBS: lines.Verb[] = {
+    { tail = " says: ", tag = "" }, { tail = " yells: ", tag = "Yell" }, { tail = " whispers: ", tag = "From" },
+}
+
+-- options with every look on, Mage for every name; `seen` records the
+-- classOf calls
+local function options(seen: string[]?, over: { [string]: any }?): lines.FormatOptions
+    local o: lines.FormatOptions = {
+        diamonds = true, short = true, colored = true, stamp = nil, verbs = VERBS,
+        classOf = function(name: string?, lineID: string?): string?
+            if seen then seen[#seen + 1] = tostring(name) .. "/" .. tostring(lineID) end
+            if name == "Nobody" then return nil end
+            return "MAGE"
+        end,
+    }
+    for k, v in pairs(over or {}) do (o :: any)[k] = v end
+    return o
+end
+
+@test("plain: there and not a secret")
+local function plainValues()
+    expect(lines.plain(nil)).toBe(false)
+    expect(lines.plain(mock.secret("x"))).toBe(false)
+    expect(lines.plain("x")).toBe(true)
+    expect(lines.plain(false)).toBe(true)
+end
+
+@test("a verb from Blizzard's format")
+local function verbs()
+    expect(lines.verb("%s says: ", "")).toEqual({ tail = " says: ", tag = "" })
+    expect(lines.verb("%s yells: ", "Yell")).toEqual({ tail = " yells: ", tag = "Yell" })
+    expect(lines.verb("says", "")).toBeNil()
+    expect(lines.verb(nil, "")).toBeNil()
+    expect(lines.verb(12, "")).toBeNil()
+end
+
+@test("colour codes stripped")
+local function stripColour()
+    expect(lines.stripColour("|cffff0000red|r and |cff00ff00green|r")).toBe("red and green")
+    expect(lines.stripColour("none")).toBe("none")
+end
+
+@test("Blizzard's timestamp format as a pattern")
+local function stampPatterns()
+    expect(lines.stampPatternOf(nil)).toBeNil()
+    expect(lines.stampPatternOf("")).toBeNil()
+    expect(lines.stampPatternOf("none")).toBeNil()
+    expect(lines.stampPatternOf(mock.secret("%H:%M "))).toBeNil()
+    expect(lines.stampPatternOf(5)).toBeNil()
+    expect(lines.stampPatternOf("%H:%M ")).toBe("%d+%:%d+ ")
+    -- the same format again: the same pattern (kept)
+    expect(lines.stampPatternOf("%H:%M ")).toBe("%d+%:%d+ ")
+    expect(lines.stampPatternOf("[%I:%M %p] ")).toBe("%[%d+%:%d+ [AaPp]%.?[Mm]%.?%] ")
+    -- a % at the very end is a character of its own
+    expect(lines.stampPatternOf("%H%")).toBe("%d+%%")
+end
+
+@test("Blizzard's timestamp stripped from a line's start")
+local function stripStamp()
+    local p = lines.stampPatternOf("%H:%M ") :: string
+    expect(lines.stripStamp("12:34 hello", nil)).toBe("12:34 hello")
+    expect(lines.stripStamp("12:34 hello", p)).toBe("hello")
+    expect(lines.stripStamp("|cff888888" .. "12:34 |rhello", p)).toBe("hello")
+    expect(lines.stripStamp("|cff888888hello|r", p)).toBe("|cff888888hello|r")
+    expect(lines.stripStamp("hello 12:34 ", p)).toBe("hello 12:34 ")
+end
+
+@test("the class diamond in the class's colour")
+local function chips()
+    expect(lines.chip(nil)).toBe("")
+    expect(lines.chip("NOTACLASS")).toBe("")
+    local c = T.color["class-mage"]
+    local want = ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t"):format(lines.DIAMOND,
+        math.floor(c[1] * 255 + 0.5), math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5))
+    expect(lines.chip("MAGE")).toBe(want)
+    expect(lines.chip("mage")).toBe(want)
+end
+
+@test("a secret or non-string line comes back as it is")
+local function formatUnreadable()
+    local s = mock.secret("|Hplayer:A|h[A]|h says: x")
+    expect(isSecret(lines.formatLine(s, 1, false, nil, options()))).toBe(true)
+    expect(lines.formatLine(42, 1, false, nil, options())).toBe(42)
+    expect(lines.formatLine(nil, 1, false, nil, options())).toBeNil()
+end
+
+@test("say: the verb goes, the name gets its diamond (a copy link) and class colour")
+local function formatSay()
+    local seen: string[] = {}
+    local classes: lines.Classes = {}
+    local out = lines.formatLine("|Hplayer:Bob:12|h[Bob]|h says: hi", 7, false, classes, options(seen))
+    expect(out).toBe("|Haddon:suuui:copy:7|h" .. lines.chip("MAGE") .. "|h|Hplayer:Bob:12|h|cff" .. hex("MAGE")
+        .. "Bob|r|h: hi")
+    expect(seen).toEqual({ "Bob/12" })
+    expect(classes).toEqual({ "MAGE" })
+end
+
+@test("a kept class is used again (classOf not asked); a kept false means none")
+local function formatKeptClasses()
+    local seen: string[] = {}
+    local classes: lines.Classes = { "WARRIOR", false }
+    local out = lines.formatLine("|Hplayer:A|h[A]|h and |Hplayer:B|h[B]|h", nil, false, classes, options(seen))
+    expect(out).toBe(lines.chip("WARRIOR") .. "|Hplayer:A|h|cff" .. hex("WARRIOR") .. "A|r|h and |Hplayer:B|hB|h")
+    expect(seen).toEqual({})
+end
+
+@test("a line from an earlier session asks for the class without its line id")
+local function formatOld()
+    local seen: string[] = {}
+    lines.formatLine("|Hplayer:Bob:12|h[Bob]|h says: hi", nil, true, nil, options(seen))
+    lines.formatLine("|Hplayer:Ann|h[Ann]|h says: hi", nil, false, nil, options(seen))
+    expect(seen).toEqual({ "Bob/nil", "Ann/nil" })
+end
+
+@test("yell and whisper become tags before the name; without a known verb the line stays")
+local function formatVerbs()
+    local o = options(nil, { diamonds = false, colored = false })
+    expect(lines.formatLine("|Hplayer:Bob|h[Bob]|h yells: HI", nil, false, nil, o)).toBe("Yell |Hplayer:Bob|hBob|h: HI")
+    expect(lines.formatLine("|Hplayer:Bob|h[Bob]|h whispers: psst", nil, false, nil, o))
+        .toBe("From |Hplayer:Bob|hBob|h: psst")
+    expect(lines.formatLine("|Hplayer:Bob|h[Bob]|h waves.", nil, false, nil, o)).toBe("|Hplayer:Bob|hBob|h waves.")
+    expect(lines.formatLine("No one here", nil, false, nil, o)).toBe("No one here")
+end
+
+@test("neither diamonds nor class colours: classOf is never asked, nothing kept")
+local function formatNoClasses()
+    local seen: string[] = {}
+    local classes: lines.Classes = {}
+    local o = options(seen, { diamonds = false, colored = false })
+    expect(lines.formatLine("|Hplayer:Bob|h[|cffaabbccBob|r]|h says: x", 1, false, classes, o))
+        .toBe("|Hplayer:Bob|hBob|h: x")
+    expect(seen).toEqual({})
+    expect(classes).toEqual({})
+end
+
+@test("diamonds only: the name keeps the line's colour; no class found: no diamond")
+local function formatDiamondsOnly()
+    local o = options(nil, { colored = false })
+    expect(lines.formatLine("|Hplayer:Bob|h[Bob]|h says: x", nil, false, nil, o))
+        .toBe(lines.chip("MAGE") .. "|Hplayer:Bob|hBob|h: x")
+    local classes: lines.Classes = {}
+    expect(lines.formatLine("|Hplayer:Nobody|h[Nobody]|h says: x", 3, false, classes, o))
+        .toBe("|Hplayer:Nobody|hNobody|h: x")
+    expect(classes).toEqual({ false })
+end
+
+@test("class colours only: no diamond")
+local function formatColourOnly()
+    local o = options(nil, { diamonds = false })
+    expect(lines.formatLine("|Hplayer:Bob|h[Bob]|h says: x", 5, false, nil, o))
+        .toBe("|Hplayer:Bob|h|cff" .. hex("MAGE") .. "Bob|r|h: x")
+end
+
+@test("channels: short tags without brackets or zone; long ones kept with short off")
+local function formatChannels()
+    local o = options(nil, { diamonds = false, colored = false })
+    local line = "|Hchannel:channel:2|h[2. Trade - City]|h |Hplayer:Bob|h[Bob]|h: wts"
+    expect(lines.formatLine(line, nil, false, nil, o)).toBe("|Hchannel:channel:2|h2. Trade|h |Hplayer:Bob|hBob|h: wts")
+    local long = options(nil, { diamonds = false, colored = false, short = false })
+    expect(lines.formatLine(line, nil, false, nil, long))
+        .toBe("|Hchannel:channel:2|h[2. Trade - City]|h |Hplayer:Bob|hBob|h: wts")
+end
+
+@test("Battle.net names lose their brackets; Blizzard's stamp goes when given")
+local function formatBNetAndStamp()
+    local o = options(nil, { diamonds = false, colored = false, stamp = lines.stampPatternOf("%H:%M ") })
+    expect(lines.formatLine("12:00 |HBNplayer:K1:2|h[|Kq1|k]|h: yo", nil, false, nil, o)).toBe("|HBNplayer:K1:2|h|Kq1|k|h: yo")
+end
+
+@test("a line as plain text")
+local function plainLine()
+    local line = "  |cff888888" .. "12:00|r  |Haddon:suuui:copy:1|h|Tx.tga:0|t|h|Hplayer:Bob|h|cffffffffBob|r|h: "
+        .. "|A:atlas:0:0|a|Hitem:1|h[Sword]|h"
+    expect(lines.plainLine(line)).toBe("12:00  Bob: [Sword]")
+end
+
+@test("colours as hex and back")
+local function colourHex()
+    expect(lines.rgbHex(1, 0.5, 0)).toBe("ff8000")
+    expect(lines.rgbHex(2, -1, 0)).toBe("ff0000")
+    expect(lines.rgbHex(nil, 0, 0)).toBeNil()
+    expect(lines.rgbHex(mock.secret(1), 0, 0)).toBeNil()
+    expect(lines.rgbHex("1", 0, 0)).toBeNil()
+    expect(lines.rgbHex(1, "0", 0)).toBeNil()
+    expect({ lines.hexRGB("ff0033") }).toEqual({ 1, 0, 0x33 / 255 })
+    expect(lines.hexRGB("ff00")).toBeNil()
+    expect(lines.hexRGB(nil)).toBeNil()
+    expect(lines.hexRGB("gg0000")).toBeNil()
+end
+
+@test("a line as kept: readable text and time only")
+local function keptLine()
+    expect(lines.keptLine("hi", 1, 1, 1, 100)).toEqual({ text = "hi", at = 100, rgb = "ffffff" })
+    expect(lines.keptLine("hi", nil, nil, nil, 100)).toEqual({ text = "hi", at = 100 })
+    expect(lines.keptLine("", 1, 1, 1, 100)).toBeNil()
+    expect(lines.keptLine(nil, 1, 1, 1, 100)).toBeNil()
+    expect(lines.keptLine(mock.secret("hi"), 1, 1, 1, 100)).toBeNil()
+    expect(lines.keptLine(5, 1, 1, 1, 100)).toBeNil()
+    expect(lines.keptLine("|Kq1|k: hi", 1, 1, 1, 100)).toBeNil()
+    expect(lines.keptLine("hi", 1, 1, 1, mock.secret(100))).toBeNil()
+    expect(lines.keptLine("hi", 1, 1, 1, "100")).toBeNil()
+end
+
+@test("an earlier line dimmed: its colour codes and the diamond's colour")
+local function dimmed()
+    expect(lines.dimmed("|cff804020x|r", 0.5)).toBe("|cff402010x|r")
+    local chip = ("|T%s:0:0:0:0:32:32:0:32:0:32:200:100:50|t"):format(lines.DIAMOND)
+    expect(lines.dimmed(chip, 0.5)).toBe(("|T%s:0:0:0:0:32:32:0:32:0:32:100:50:25|t"):format(lines.DIAMOND))
+    expect(lines.dimmed("plain", 0.5)).toBe("plain")
+end
+
+@test("how long ago")
+@cases({ { 0, "just now" }, { 89, "just now" }, { 90, "2 min ago" }, { 3599, "60 min ago" }, { 3600, "1 h ago" },
+         { 47 * 3600, "47 h ago" }, { 48 * 3600, "2 days ago" }, { 10 * 86400, "10 days ago" } })
+local function ago(seconds: number, text: string)
+    expect(lines.ago(seconds)).toBe(text)
+end
+
+@test("the divider's rule: six steps, fading the way it runs")
+local function rule()
+    local function parts(s: string): { w: number, r: number }[]
+        local out: { w: number, r: number }[] = {}
+        for w, r in s:gmatch("|T[^:]+:1:(%d+):0:0:8:8:0:8:0:8:(%d+):%d+:%d+|t") do
+            out[#out + 1] = { w = tonumber(w) :: number, r = tonumber(r) :: number }
+        end
+        return out
+    end
+    local up = parts(lines.rule(62, true))
+    expect(#up).toBe(6)
+    expect(up[1].w).toBe(10)
+    expect(up[6].w).toBe(12)
+    expect(up[1].r <= up[6].r).toBe(true)
+    local down = parts(lines.rule(62, false))
+    expect(down[1].r >= down[6].r).toBe(true)
+    -- narrower than six: only the last step has width
+    expect(#parts(lines.rule(4, true))).toBe(1)
+    expect(lines.rule(0, true)).toBe("")
+end
+
+@test("same colour as a chat type's")
+local function sameColor()
+    local info = { r = 1, g = 0.5, b = 0 }
+    expect(lines.sameColor(info, 1, 0.505, 0)).toBe(true)
+    expect(lines.sameColor(info, 1, 0.6, 0)).toBe(false)
+    expect(lines.sameColor(nil, 1, 0.5, 0)).toBeFalsy()
+    expect(lines.sameColor(info, "1", 0.5, 0)).toBe(false)
+end
+
+@test("whisper lines: by their event, else by the whisper colours")
+local function whisperLines()
+    local types = { WHISPER = { r = 1, g = 0.5, b = 1 }, BN_WHISPER_INFORM = { r = 0, g = 1, b = 1 } }
+    expect(lines.isWhisperLine(0, 0, 0, "CHAT_MSG_WHISPER", types)).toBe(true)
+    expect(lines.isWhisperLine(1, 0.5, 1, "CHAT_MSG_SAY", types)).toBe(false)
+    expect(lines.isWhisperLine(1, 0.5, 1, nil, types)).toBe(true)
+    expect(lines.isWhisperLine(0, 1, 1, mock.secret("CHAT_MSG_SAY"), types)).toBe(true)
+    expect(lines.isWhisperLine(mock.secret(1), 0.5, 1, nil, types)).toBe(false)
+    expect(lines.isWhisperLine(0.2, 0.2, 0.2, nil, types)).toBe(false)
+    expect(lines.isWhisperLine(1, 0.5, 1, nil, {})).toBe(false)
+    -- the live ChatTypeInfo by default
+    local w = ChatTypeInfo.WHISPER
+    expect(lines.isWhisperLine(w.r, w.g, w.b, nil)).toBe(true)
+end

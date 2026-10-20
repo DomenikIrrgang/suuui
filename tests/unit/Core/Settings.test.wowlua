@@ -1,0 +1,814 @@
+-- Core/Settings: the registry, reading and writing, watchers and vetoes,
+-- migrations, profiles, characters' data and the chat commands.
+--
+-- This file drives the lifecycle itself: the first test runs before the
+-- saved settings load, the second logs in with a prepared SuuUIDB, and the
+-- rest run logged in (the tests of a file run in order).
+
+import test, expect, config, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as fault from "/Core/Fault"
+import * as DB from "/Core/DB"
+import internal parse, show, splitPath, bind from "/Core/Settings"
+
+config({ lifecycle = "manual" })
+
+const P = "|cff9fd3c7SuuUI|r "
+const LISTENER = { name = "Settings Test Listener" }
+const W1 = "Settings Test W1"
+const W2 = "Settings Test W2"
+const VETO = "Settings Test Veto"
+const profiles = settings.profiles
+
+type Heard = (value: any, namespace: string, key: string) -> ()
+type Message = (name: string, ...any) -> ()
+
+-- Registered before the saved settings load, as a module's file does.
+settings.register("zzsa", { flag = false, num = 1, text = "a", list = { 1, 2 } })
+settings.register("zzsb", { level = 5, old = "x" })
+settings.migrate("zzsb", "toNumber", function(values: settings.Values)
+    if type(values.level) == "string" then values.level = tonumber(values.level) end
+end)
+settings.veto("zzsa", "num", function(new: any): (boolean?, string?)
+    if new > 100 then return false, "too big" end
+    return true, nil
+end, "Settings Test Load Veto")
+local readyHeard = 0
+events.on("SUUUI_SETTINGS_READY", function() readyHeard += 1 end, "Settings Test Ready")
+
+@afterEach
+local function cleanup()
+    events.offAll(LISTENER)
+    for _, o in ipairs({ W1, W2, VETO }) do settings.unwatch(o) end
+    if not settings.ready() then return end
+    if profiles.current() ~= "Main" then profiles.use("Main") end
+    settings.reset("zzsa")
+    settings.reset("zzsb")
+    settings.set("core", "debug", false)
+    for _, n in ipairs(profiles.list()) do
+        if n:lower():find("^zz") then profiles.delete(n) end
+    end
+    DB.db.roleProfiles = nil
+    mock.slash("/suu errors clear")
+end
+
+local function printedBy(fn: () -> ()): string[]
+    local before = #mock.printed()
+    fn()
+    local all = mock.printed()
+    local out: string[] = {}
+    for i = before + 1, #all do out[#out + 1] = all[i] end
+    return out
+end
+
+local function watcher(): Heard
+    return mock.spy(function(_: any, _ns: string, _key: string) end)
+end
+
+local function listen(name: string): Message
+    local heard = mock.spy(function(_: string, ...: any) end)
+    events.on(name, heard, LISTENER)
+    return heard
+end
+
+local function faultWith(text: string): fault.Entry?
+    for _, e in ipairs(fault.entries()) do
+        if e.message:find(text, 1, true) then return e end
+    end
+    return nil
+end
+
+local function saved(name: string): { [string]: any }
+    return DB.db.profiles[name]
+end
+
+--------------------------------------------------------------------------------
+-- Loading
+--------------------------------------------------------------------------------
+
+@test("before the saved settings load: defaults read, nothing written")
+local function beforeLoad()
+    expect(settings.ready()).toBe(false)
+    expect(settings.get("zzsa", "num")).toBe(1)
+    expect(settings.peek("zzsa", "num")).toBe(1)
+    expect(settings.isDefault("zzsa", "num")).toBe(true)
+    expect(function() settings.set("zzsa", "num", 2) end).toThrow("saved settings have not loaded yet")
+    expect(profiles.current()).toBeNil()
+    expect(profiles.list()).toEqual({})
+    expect(profiles.roleProfile("TANK")).toBeNil()
+    expect(profiles.chosenRole()).toBe("auto")
+    expect(profiles.lastRole()).toBeNil()
+    expect(settings.account("colorVision")).toBeNil()
+    expect(settings.getCharKey()).toBeNil()
+    expect(function() settings.charData("zzsa") end).toThrow("saved settings have not loaded yet")
+    expect(function() profiles.find("x") end).toThrow("saved settings have not loaded yet")
+    local out = printedBy(function()
+        settings.debug("hidden")
+        mock.slash("/suu get")
+        mock.slash("/suu set zzsa.num 2")
+        mock.slash("/suu reset all")
+        mock.slash("/suu profile")
+    end)
+    local notYet = P .. "Settings haven't loaded yet."
+    expect(out).toEqual({ notYet, notYet, notYet, notYet })
+end
+
+@test("at load: this character's profile, every profile migrated, the current one screened")
+local function atLoad()
+    local key = (UnitName("player") :: string) .. " - " .. GetRealmName()
+    _G.SuuUIDB = {
+        profiles = {
+            Main = { zzsa = { num = 500, text = 7 }, zzsb = { level = "9" } },
+            Other = { zzsb = { level = "3", old = "x" } },
+            Empty = {},
+            Broken = "not a table",
+        },
+        chars = { [key] = "Main" },
+    }
+    mock.login()
+    expect(settings.ready()).toBe(true)
+    expect(readyHeard).toBe(1)
+    expect(settings.getCharKey()).toBe(key)
+    expect(profiles.current()).toBe("Main")
+    -- migrated, in every profile, once
+    expect(settings.get("zzsb", "level")).toBe(9)
+    expect(saved("Main").zzsb).toEqual({ level = 9 })
+    expect(saved("Main").__migrated["zzsb/toNumber"]).toBe(true)
+    -- what a migration leaves at its default isn't stored
+    expect(saved("Other").zzsb).toEqual({ level = 3 })
+    expect(saved("Other").__migrated["zzsb/toNumber"]).toBe(true)
+    -- nothing to migrate counts as done
+    expect(saved("Empty").__migrated["zzsb/toNumber"]).toBe(true)
+    expect(DB.db.profiles.Broken).toBe("not a table")
+    -- a value the veto refuses is dropped, so the default applies
+    expect(saved("Main").zzsa.num).toBeNil()
+    expect(settings.get("zzsa", "num")).toBe(1)
+    -- a value of the wrong type stays stored but is ignored
+    expect(saved("Main").zzsa.text).toBe(7)
+    expect(settings.get("zzsa", "text")).toBe("a")
+    expect(settings.isDefault("zzsa", "text")).toBe(true)
+    DB.db.profiles.Broken = nil
+    saved("Main").zzsa = nil
+end
+
+@test("at load: a character mapped to a missing profile gets its own")
+local function missingMapped()
+    local key = settings.getCharKey() :: string
+    DB.db.chars[key] = "Gone"
+    bind()
+    expect(profiles.current()).toBe(key)
+    expect(type(saved(key))).toBe("table")
+    DB.db.chars[key] = "Main"
+    bind()
+    expect(profiles.current()).toBe("Main")
+    DB.db.profiles[key] = nil
+end
+
+--------------------------------------------------------------------------------
+-- Registry and reading
+--------------------------------------------------------------------------------
+
+@test("register: a string namespace, once, with string keys")
+local function register()
+    expect(function() settings.register(5 :: any, {}) end).toThrow("the namespace must be a string")
+    expect(function() settings.register("zzsa", {}) end).toThrow("namespace zzsa is already registered")
+    expect(function() settings.register("zzbadkeys", { [1] = true } :: any) end).toThrow("defaults need string keys")
+    expect(settings.has("zzbadkeys")).toBe(false)
+end
+
+@test("register keeps a copy of the defaults")
+local function registerCopies()
+    local defs = { items = { 1 } }
+    settings.register("zzcopied", defs)
+    defs.items[1] = 2
+    expect(settings.get("zzcopied", "items")).toEqual({ 1 })
+end
+
+@test("get gives a copy of a table; peek the value itself")
+local function getCopy()
+    local a = settings.get("zzsa", "list")
+    a[1] = 99
+    expect(settings.get("zzsa", "list")).toEqual({ 1, 2 })
+    expect(settings.peek("zzsa", "list") == settings.peek("zzsa", "list")).toBe(true)
+    expect(settings.get("zzsa", "list") == settings.get("zzsa", "list")).toBe(false)
+end
+
+@test("unknown namespaces and keys are errors")
+local function unknown()
+    expect(function() settings.get("zznope", "x") end).toThrow("unknown namespace \"zznope\"")
+    expect(function() settings.get("zzsa", "nope") end).toThrow("zzsa has no setting \"nope\"")
+    expect(function() settings.isDefault("zzsa", "nope") end).toThrow("zzsa has no setting \"nope\"")
+    expect(function() settings.set("zzsa", "nope", 1) end).toThrow("zzsa has no setting \"nope\"")
+end
+
+@test("has, defaultOf, list")
+local function registry()
+    expect(settings.has("zzsa")).toBe(true)
+    expect(settings.has("zzsa", "num")).toBe(true)
+    expect(settings.has("zzsa", "nope")).toBe(false)
+    expect(settings.has("zznope")).toBe(false)
+    local d = settings.defaultOf("zzsa", "list")
+    d[1] = 5
+    expect(settings.defaultOf("zzsa", "list")).toEqual({ 1, 2 })
+    settings.set("zzsa", "num", 3)
+    expect(settings.defaultOf("zzsa", "num")).toBe(1)
+    local found: settings.Listing? = nil
+    local prev = ""
+    local sorted = true
+    for _, l in ipairs(settings.list()) do
+        if l.namespace == "zzsa" then found = l end
+        if l.namespace < prev then sorted = false end
+        prev = l.namespace
+    end
+    expect(sorted).toBe(true)
+    expect(found).toEqual({ namespace = "zzsa", keys = { "flag", "list", "num", "text" } })
+end
+
+--------------------------------------------------------------------------------
+-- Writing, watchers and vetoes
+--------------------------------------------------------------------------------
+
+@test("set: stored only when it differs from the default; watchers and the bus told")
+local function set()
+    local heard = watcher()
+    local changed = listen("SUUUI_SETTING_CHANGED")
+    settings.watch("zzsa", "num", heard, W1)
+    expect(settings.set("zzsa", "num", 5)).toBe(true)
+    expect(settings.get("zzsa", "num")).toBe(5)
+    expect(settings.isDefault("zzsa", "num")).toBe(false)
+    expect(saved("Main").zzsa).toEqual({ num = 5 })
+    expect(heard).toHaveBeenCalledWith(5, "zzsa", "num")
+    expect(changed).toHaveBeenCalledWith("SUUUI_SETTING_CHANGED", "zzsa", "num")
+    -- the same value again: nothing happens
+    expect(settings.set("zzsa", "num", 5)).toBe(true)
+    expect(heard).toHaveBeenCalledTimes(1)
+    -- back to the default: the key and the empty namespace go
+    settings.set("zzsa", "num", 1)
+    expect(saved("Main").zzsa).toBeNil()
+    expect(heard).toHaveBeenCalledTimes(2)
+end
+
+@test("set: a table is stored as a copy, and watchers get copies")
+local function setTable()
+    local got: any[] = {}
+    settings.watch("zzsa", "list", function(v: any) got[#got + 1] = v end, W1)
+    local mine = { 3 }
+    settings.set("zzsa", "list", mine)
+    mine[1] = 4
+    expect(settings.get("zzsa", "list")).toEqual({ 3 })
+    got[1][1] = 9
+    expect(settings.get("zzsa", "list")).toEqual({ 3 })
+    -- one key removed from a stored namespace keeps the others
+    settings.set("zzsa", "flag", true)
+    settings.set("zzsa", "list", { 1, 2 })
+    expect(saved("Main").zzsa).toEqual({ flag = true })
+end
+
+@test("set: a value of another type than the default's is an error")
+local function setType()
+    expect(function() settings.set("zzsa", "num", "5") end).toThrow("zzsa.num takes a number, not a string")
+end
+
+@test("veto: refuses with a reason; the value stays and nobody is told")
+local function veto()
+    local heard = watcher()
+    settings.watch("zzsa", "num", heard, W1)
+    local seen: any[] = {}
+    settings.veto("zzsa", "num", function(new: any, old: any): (boolean?, string?)
+        seen[#seen + 1] = { new, old }
+        if new == 13 then return false, nil end
+        return true, nil
+    end, VETO)
+    local ok, why = settings.set("zzsa", "num", 500)
+    expect(ok).toBe(false)
+    expect(why).toBe("too big")
+    ok, why = settings.set("zzsa", "num", 13)
+    expect(ok).toBe(false)
+    expect(why).toBeNil()
+    expect(settings.get("zzsa", "num")).toBe(1)
+    expect(heard).never.toHaveBeenCalled()
+    expect(settings.set("zzsa", "num", 7)).toBe(true)
+    expect(seen[#seen]).toEqual({ 7, 1 })
+end
+
+@test("veto: one that errors is reported and doesn't refuse")
+local function vetoError()
+    settings.veto("zzsa", "flag", function(): (boolean?, string?) error("settings-err-veto") end, VETO)
+    expect(settings.set("zzsa", "flag", true)).toBe(true)
+    expect(settings.get("zzsa", "flag")).toBe(true)
+    expect((faultWith("settings-err-veto") :: fault.Entry).source).toBe(VETO)
+end
+
+@test("watch and veto need a known setting, a function and an owner")
+local function watchArgs()
+    expect(function() settings.watch("zzsa", "nope", function() end, W1) end).toThrow("zzsa has no setting \"nope\"")
+    expect(function() settings.watch("zzsa", "num", nil :: any, W1) end).toThrow("a function and an owner are required")
+    expect(function() settings.veto("zzsa", "num", function(): (boolean?, string?) return true, nil end, nil) end)
+        .toThrow("a function and an owner are required")
+end
+
+@test("a watcher that changes the setting: the others hear only the newest value")
+local function supersede()
+    local second: any[] = {}
+    local changed = listen("SUUUI_SETTING_CHANGED")
+    settings.watch("zzsa", "num", function(v: any)
+        if v > 10 then settings.set("zzsa", "num", 10) end
+    end, W1)
+    settings.watch("zzsa", "num", function(v: any) second[#second + 1] = v end, W2)
+    settings.set("zzsa", "num", 50)
+    expect(settings.get("zzsa", "num")).toBe(10)
+    expect(second).toEqual({ 10 })
+    expect(changed).toHaveBeenCalledTimes(1)
+end
+
+@test("a watcher's error is reported; the next watcher still hears")
+local function watcherError()
+    local heard = watcher()
+    settings.watch("zzsa", "text", function() error("settings-err-watch") end, W1)
+    settings.watch("zzsa", "text", heard, W2)
+    settings.set("zzsa", "text", "b")
+    expect(heard).toHaveBeenCalledWith("b", "zzsa", "text")
+    expect((faultWith("settings-err-watch") :: fault.Entry).source).toBe(W1)
+end
+
+@test("unwatch: the owner's watchers and vetoes go, also mid-notification")
+local function unwatch()
+    local heard = watcher()
+    settings.watch("zzsa", "num", function() settings.unwatch(W2) end, W1)
+    settings.watch("zzsa", "num", heard, W2)
+    settings.veto("zzsa", "num", function(): (boolean?, string?) return false, "no" end, W2)
+    -- W2's veto refuses the first time
+    expect((settings.set("zzsa", "num", 2))).toBe(false)
+    settings.unwatch(W1)
+    settings.watch("zzsa", "num", function() settings.unwatch(W2) end, W1)
+    settings.unwatch(W2)
+    settings.watch("zzsa", "num", function() settings.unwatch(W2) end, W1)
+    settings.watch("zzsa", "num", heard, W2)
+    expect(settings.set("zzsa", "num", 2)).toBe(true)
+    -- removed by the first watcher during this notification: not called
+    expect(heard).never.toHaveBeenCalled()
+    settings.unwatch(W1)
+    settings.watch("zzsa", "num", heard, W2)
+    settings.unwatch(W2)
+    settings.set("zzsa", "num", 3)
+    expect(heard).never.toHaveBeenCalled()
+end
+
+@test("reset: one setting, a namespace, or everything")
+local function reset()
+    settings.set("zzsa", "num", 4)
+    settings.set("zzsa", "flag", true)
+    settings.set("zzsb", "old", "y")
+    expect(settings.reset("zzsa", "num")).toBe(true)
+    expect(settings.get("zzsa", "num")).toBe(1)
+    expect(settings.get("zzsa", "flag")).toBe(true)
+    expect(settings.reset("zzsa")).toBe(true)
+    expect(settings.get("zzsa", "flag")).toBe(false)
+    expect(settings.get("zzsb", "old")).toBe("y")
+    expect(settings.reset()).toBe(true)
+    expect(settings.get("zzsb", "old")).toBe("x")
+    expect(function() settings.reset("zznope") end).toThrow("unknown namespace \"zznope\"")
+    expect(function() settings.reset("zzsa", "nope") end).toThrow("zzsa has no setting \"nope\"")
+end
+
+--------------------------------------------------------------------------------
+-- Migrations registered after load
+--------------------------------------------------------------------------------
+
+@test("migrate after load: every profile now; the current one's watchers hear the changes")
+local function lateMigration()
+    settings.register("zzsc", { size = 1, label = "n" })
+    saved("Main").zzsc = { width = 4 }
+    saved("Other").zzsc = { width = 1 }
+    local heard = watcher()
+    settings.watch("zzsc", "size", heard, W1)
+    settings.watch("zzsc", "label", heard, W1)
+    settings.migrate("zzsc", "rename", function(values: settings.Values)
+        values.size, values.width = values.width, nil
+    end)
+    expect(settings.get("zzsc", "size")).toBe(4)
+    expect(heard).toHaveBeenCalledWith(4, "zzsc", "size")
+    expect(heard).toHaveBeenCalledTimes(1)
+    expect(saved("Other").zzsc).toBeNil()
+    expect(saved("Other").__migrated["zzsc/rename"]).toBe(true)
+    expect(saved("Empty").__migrated["zzsc/rename"]).toBe(true)
+    -- once per profile: a profile that has had it isn't migrated again
+    saved("Other").zzsc = { width = 8 }
+    profiles.use("Other")
+    expect(settings.get("zzsc", "size")).toBe(1)
+    expect(saved("Other").zzsc).toEqual({ width = 8 })
+    profiles.use("Main")
+    saved("Other").zzsc = nil
+    saved("Main").zzsc = nil
+end
+
+@test("migrate after load: what a veto refuses afterwards is dropped from the current profile")
+local function lateMigrationScreened()
+    settings.register("zzse", { n = 1 })
+    settings.veto("zzse", "n", function(new: any): (boolean?, string?) return new < 100, nil end, VETO)
+    saved("Main").zzse = { m = 500 }
+    settings.migrate("zzse", "m to n", function(values: settings.Values)
+        values.n, values.m = values.m, nil
+    end, "Zzse Owner")
+    expect(saved("Main").zzse).toBeNil()
+    expect(settings.get("zzse", "n")).toBe(1)
+end
+
+@test("a migration that errors is reported under its owner and runs again next time")
+local function migrationError()
+    settings.register("zzsd", { v = 1 })
+    saved("Main").zzsd = { v = 2 }
+    settings.migrate("zzsd", "fails", function() error("settings-err-migration") end, "Migration Owner")
+    expect(saved("Main").__migrated["zzsd/fails"]).toBeNil()
+    expect(saved("Main").zzsd).toEqual({ v = 2 })
+    expect((faultWith("settings-err-migration") :: fault.Entry).source).toBe("Migration Owner")
+    -- the owner defaults to the namespace
+    settings.migrate("zzsd", "fails too", function() error("settings-err-migration-2") end)
+    expect((faultWith("settings-err-migration-2") :: fault.Entry).source).toBe("zzsd")
+    saved("Main").zzsd = nil
+end
+
+@test("migrate: a known namespace, an id and a function, each id once")
+local function migrateArgs()
+    expect(function() settings.migrate("zznope", "x", function() end) end).toThrow("unknown namespace \"zznope\"")
+    expect(function() settings.migrate("zzsb", "", function() end) end).toThrow("a migration needs an id and a function")
+    expect(function() settings.migrate("zzsb", "x", nil :: any) end).toThrow("a migration needs an id and a function")
+    expect(function() settings.migrate("zzsb", "toNumber", function() end) end).toThrow("migration zzsb/toNumber is already registered")
+end
+
+--------------------------------------------------------------------------------
+-- Profiles
+--------------------------------------------------------------------------------
+
+@test("find: the exact name, any letter case, or the start of one name")
+local function find()
+    profiles.create("ZzAlpha")
+    profiles.create("ZzAlps")
+    profiles.create("ZzBeta")
+    expect(profiles.find("ZzAlpha")).toBe("ZzAlpha")
+    expect(profiles.find("  zzbeta ")).toBe("ZzBeta")
+    expect(profiles.find("zzb")).toBe("ZzBeta")
+    expect(profiles.find("zzalpha")).toBe("ZzAlpha")
+    local none, why = profiles.find("zzal")
+    expect(none).toBeNil()
+    expect(why).toBe("\"zzal\" could mean ZzAlpha or ZzAlps.")
+    local all = table.concat(profiles.list(), ", ")
+    none, why = profiles.find("nothing")
+    expect(none).toBeNil()
+    expect(why).toBe("There is no profile called \"nothing\". Profiles: " .. all .. ".")
+    none, why = profiles.find(nil)
+    expect(why).toBe("There is no profile called \"\". Profiles: " .. all .. ".")
+end
+
+@test("list: every profile, sorted")
+local function list()
+    expect(profiles.list()).toEqual({ "Empty", "Main", "Other" })
+end
+
+@test("create: a copy of the current profile, or of another; names unique in any case")
+local function create()
+    local changed = listen("SUUUI_PROFILES_CHANGED")
+    settings.set("zzsa", "num", 7)
+    expect(profiles.create("ZzCopy")).toBe(true)
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(saved("ZzCopy").zzsa).toEqual({ num = 7 })
+    expect(saved("ZzCopy").zzsa == saved("Main").zzsa).toBe(false)
+    expect(profiles.create(" ZzFrom ", "other")).toBe(true)
+    expect(saved("ZzFrom").zzsb).toEqual({ level = 3 })
+    local ok, why = profiles.create("ZzBad", "nothing")
+    expect(ok).toBe(false)
+    expect((why :: string):sub(1, 30)).toBe("There is no profile called \"no")
+    ok, why = profiles.create("main")
+    expect(ok).toBe(false)
+    expect(why).toBe("A profile called Main already exists.")
+    ok, why = profiles.create("   ")
+    expect(why).toBe("A profile needs a name.")
+    ok, why = profiles.create(nil)
+    expect(why).toBe("A profile needs a name.")
+    expect(changed).toHaveBeenCalledTimes(2)
+end
+
+@test("use: switches, screens and migrates the target, tells the changed settings' watchers")
+local function use()
+    profiles.create("ZzTarget")
+    saved("ZzTarget").zzsa = { num = 500, flag = true }
+    local flag, num = watcher(), watcher()
+    settings.watch("zzsa", "flag", flag, W1)
+    settings.watch("zzsa", "num", num, W1)
+    local changed = listen("SUUUI_PROFILE_CHANGED")
+    expect(profiles.use("zztarget")).toBe(true)
+    expect(profiles.current()).toBe("ZzTarget")
+    expect(DB.db.chars[settings.getCharKey() :: string]).toBe("ZzTarget")
+    expect(flag).toHaveBeenCalledWith(true, "zzsa", "flag")
+    expect(num).never.toHaveBeenCalled()
+    expect(saved("ZzTarget").zzsa).toEqual({ flag = true })
+    expect(changed).toHaveBeenCalledWith("SUUUI_PROFILE_CHANGED", "ZzTarget")
+    -- the one in use: nothing to do
+    expect(profiles.use("ZzTarget")).toBe(true)
+    expect(changed).toHaveBeenCalledTimes(1)
+    local ok, why = profiles.use("nothing")
+    expect(ok).toBe(false)
+    expect(why ~= nil).toBe(true)
+end
+
+@test("delete: not the one in use; its characters and roles are unmapped")
+local function delete()
+    local ok, why = profiles.delete("main")
+    expect(ok).toBe(false)
+    expect(why).toBe("You are using Main; switch to another profile first.")
+    ok, why = profiles.delete("nothing")
+    expect(ok).toBe(false)
+    profiles.create("ZzGone")
+    profiles.create("ZzKept")
+    profiles.setRoleProfile("TANK", "ZzGone")
+    profiles.setRoleProfile("HEALER", "ZzKept")
+    DB.db.chars["Alt - Realm"] = "ZzGone"
+    local listChanged, roleChanged = listen("SUUUI_PROFILES_CHANGED"), listen("SUUUI_ROLE_PROFILES_CHANGED")
+    expect(profiles.delete("zzgone")).toBe(true)
+    expect(DB.db.profiles.ZzGone).toBeNil()
+    expect(DB.db.roleProfiles).toEqual({ HEALER = "ZzKept" })
+    expect(DB.db.chars["Alt - Realm"]).toBeNil()
+    expect(listChanged).toHaveBeenCalledTimes(1)
+    expect(roleChanged).toHaveBeenCalledTimes(1)
+    -- no role mapped to it: no role change
+    DB.db.roleProfiles = nil
+    profiles.create("ZzPlain")
+    expect(profiles.delete("ZzPlain")).toBe(true)
+    expect(roleChanged).toHaveBeenCalledTimes(1)
+end
+
+@test("copyFrom: the current profile gets another's values (screened); the watchers hear")
+local function copyFrom()
+    profiles.create("ZzSource")
+    saved("ZzSource").zzsa = { flag = true, num = 500 }
+    settings.set("zzsa", "text", "mine")
+    local flag, text = watcher(), watcher()
+    settings.watch("zzsa", "flag", flag, W1)
+    settings.watch("zzsa", "text", text, W1)
+    local changed = listen("SUUUI_PROFILE_CHANGED")
+    expect(profiles.copyFrom("zzsource")).toBe(true)
+    expect(profiles.current()).toBe("Main")
+    expect(settings.get("zzsa", "flag")).toBe(true)
+    expect(settings.get("zzsa", "text")).toBe("a")
+    expect(settings.get("zzsa", "num")).toBe(1)
+    expect(flag).toHaveBeenCalledWith(true, "zzsa", "flag")
+    expect(text).toHaveBeenCalledWith("a", "zzsa", "text")
+    expect(changed).toHaveBeenCalledWith("SUUUI_PROFILE_CHANGED", "Main")
+    -- the source keeps its own data
+    expect(saved("ZzSource").zzsa).toEqual({ flag = true, num = 500 })
+    expect(profiles.copyFrom("Main")).toBe(true)
+    local ok = profiles.copyFrom("nothing")
+    expect(ok).toBe(false)
+end
+
+@test("setValues: through set in the profile in use, stored in another, created when missing")
+local function setValues()
+    local ok, res = profiles.setValues("", {})
+    expect(ok).toBe(false)
+    expect(res).toBe("A profile needs a name.")
+    local heard = watcher()
+    settings.watch("zzsa", "num", heard, W1)
+    local changed = listen("SUUUI_PROFILES_CHANGED")
+    settings.set("zzsa", "text", "t")
+    ok, res = profiles.setValues("main", {
+        { "zzsa", "num", 9 }, { "zzsa", "nope", 1 }, { "zznope", "x", 1 }, { "zzsa", "text", nil },
+    })
+    expect(ok).toBe(true)
+    expect(res).toBe("Main")
+    expect(heard).toHaveBeenCalledWith(9, "zzsa", "num")
+    expect(settings.get("zzsa", "text")).toBe("a")
+    -- another profile: created from the current one, values stored
+    ok, res = profiles.setValues("ZzVals", { { "zzsa", "flag", true } })
+    expect(res).toBe("ZzVals")
+    expect(saved("ZzVals").zzsa).toEqual({ num = 9, flag = true })
+    profiles.setValues("zzvals", { { "zzsa", "num", 1 }, { "zzsa", "flag", nil }, { "zzsb", "level", 5 } })
+    expect(saved("ZzVals").zzsa).toBeNil()
+    expect(saved("ZzVals").zzsb).toBeNil()
+    -- not in use: no watcher ran for it
+    expect(heard).toHaveBeenCalledTimes(1)
+    expect(changed).toHaveBeenCalledTimes(4)
+    -- the start of a name isn't that profile: a new one
+    ok, res = profiles.setValues("zzv", {})
+    expect(res).toBe("zzv")
+end
+
+@test("profiles by role: only profiles that exist")
+local function roles()
+    local changed = listen("SUUUI_ROLE_PROFILES_CHANGED")
+    profiles.create("ZzTank")
+    expect(profiles.setRoleProfile("TANK", "ZzTank")).toBe(true)
+    expect(profiles.roleProfile("TANK")).toBe("ZzTank")
+    profiles.setRoleProfile("HEALER", "Missing")
+    expect(profiles.roleProfile("HEALER")).toBeNil()
+    expect(DB.db.roleProfiles.HEALER).toBeNil()
+    profiles.setRoleProfile("TANK", nil)
+    expect(profiles.roleProfile("TANK")).toBeNil()
+    DB.db.roleProfiles.DAMAGER = "Vanished"
+    expect(profiles.roleProfile("DAMAGER")).toBeNil()
+    expect(changed).toHaveBeenCalledTimes(3)
+end
+
+@test("this character's chosen and last role")
+local function charRoles()
+    local changed = listen("SUUUI_ROLE_PROFILES_CHANGED")
+    local key = settings.getCharKey() :: string
+    expect(profiles.chosenRole()).toBe("auto")
+    profiles.setChosenRole("TANK")
+    expect(profiles.chosenRole()).toBe("TANK")
+    profiles.setChosenRole("auto")
+    expect(DB.db.charRoles[key]).toBeNil()
+    expect(changed).toHaveBeenCalledTimes(2)
+    local before = profiles.lastRole()
+    profiles.setLastRole("HEALER")
+    expect(profiles.lastRole()).toBe("HEALER")
+    expect(DB.db.lastRoles[key]).toBe("HEALER")
+    if before then profiles.setLastRole(before) else DB.db.lastRoles[key] = nil end
+end
+
+@test("export: a copy of a profile's stored values")
+local function export()
+    settings.set("zzsa", "num", 4)
+    local e = profiles.export() :: settings.Exported
+    expect(e.name).toBe("Main")
+    expect(e.data.zzsa).toEqual({ num = 4 })
+    expect(e.data == saved("Main")).toBe(false)
+    expect((profiles.export("other") :: settings.Exported).name).toBe("Other")
+    local none, why = profiles.export("nothing")
+    expect(none).toBeNil()
+    expect(why ~= nil).toBe(true)
+end
+
+@test("import: plain data only, migrated, wrong types dropped, unknown plugins kept; switches to it")
+local function import()
+    local data: { [any]: any } = {
+        zzsa = { num = "bad", flag = true, [5] = 1 },
+        zzsb = { level = "6" },
+        zzsc = { size = {} }, -- registered by an earlier test: wrong type, emptied
+        plugin = { x = { 1 } },
+        [3] = { y = 1 },
+        junk = "str",
+    }
+    expect(profiles.import("ZzImported", data)).toBe(true)
+    expect(profiles.current()).toBe("ZzImported")
+    local p = saved("ZzImported")
+    expect(p.zzsa).toEqual({ flag = true })
+    expect(p.zzsb).toEqual({ level = 6 })
+    expect(p.zzsc).toBeNil()
+    expect(p.plugin).toEqual({ x = { 1 } })
+    expect(p.junk).toBeNil()
+    expect(p[3]).toBeNil()
+    expect(p.__migrated["zzsb/toNumber"]).toBe(true)
+    expect(settings.get("zzsa", "flag")).toBe(true)
+    expect(profiles.import("ZzNothing", "not a table")).toBe(true)
+    expect(saved("ZzNothing").zzsa).toBeNil()
+    local ok, why = profiles.import("main", {})
+    expect(ok).toBe(false)
+    expect(why).toBe("A profile called Main already exists.")
+end
+
+--------------------------------------------------------------------------------
+-- Characters' data and account-wide values
+--------------------------------------------------------------------------------
+
+@test("charData: this character's table per module, the same each time")
+local function charData()
+    local key = settings.getCharKey() :: string
+    local mine = settings.charData("zzsa")
+    mine.x = 1
+    expect(settings.charData("zzsa") == mine).toBe(true)
+    DB.db.charData["Alt - Realm"] = { zzsa = { y = 2 }, other = {} }
+    DB.db.charData.Odd = "junk"
+    local all = settings.allCharData("zzsa")
+    expect(all[key] == mine).toBe(true)
+    expect(all["Alt - Realm"]).toEqual({ y = 2 })
+    expect(all.Odd).toBeNil()
+    -- forgetting: never this character's, nor one that has none
+    expect(settings.forgetCharData("zzsa", key)).toBe(false)
+    expect(settings.forgetCharData("zzsa", "Nobody")).toBe(false)
+    expect(settings.forgetCharData("zzsa", "Odd")).toBe(false)
+    expect(settings.forgetCharData("zzsa", "Alt - Realm")).toBe(true)
+    expect(DB.db.charData["Alt - Realm"]).toEqual({ other = {} })
+    expect(settings.forgetCharData("other", "Alt - Realm")).toBe(true)
+    expect(DB.db.charData["Alt - Realm"]).toBeNil()
+    DB.db.charData.Odd = nil
+    DB.db.charData[key].zzsa = nil
+end
+
+@test("account-wide values")
+local function account()
+    expect(settings.account("zztest")).toBeNil()
+    settings.setAccount("zztest", 5)
+    expect(settings.account("zztest")).toBe(5)
+    settings.setAccount("zztest", nil)
+    expect(settings.account("zztest")).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- debug lines
+--------------------------------------------------------------------------------
+
+@test("debug: printed only while core.debug is on, which says so")
+local function debug()
+    local on = printedBy(function() settings.set("core", "debug", true) end)
+    expect(on).toContain(P .. "Debug lines on.")
+    expect(printedBy(function() settings.debug("x", 1) end)).toEqual({ P .. "|cffa39b8b[debug]|r x 1" })
+    local off = printedBy(function() settings.set("core", "debug", false) end)
+    expect(off).toContain(P .. "Debug lines off.")
+    expect(printedBy(function() settings.debug("x") end)).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- Chat commands
+--------------------------------------------------------------------------------
+
+@test("parse: a typed value from text, by the default's type")
+local function parses()
+    for _, word in ipairs({ "true", "ON", "yes", "1" }) do expect((parse(word, false))).toBe(true) end
+    for _, word in ipairs({ "false", "Off", "no", "0" }) do expect((parse(word, true))).toBe(false) end
+    local v, err = parse("maybe", true)
+    expect(v).toBeNil()
+    expect(err).toBe("expected on or off")
+    expect((parse("2.5", 1))).toBe(2.5)
+    v, err = parse("lots", 1)
+    expect(err).toBe("expected a number")
+    expect((parse("words here", "x"))).toBe("words here")
+    v, err = parse("x", {})
+    expect(err).toBe("this setting can only be changed in the settings window")
+    expect(show({})).toBe("(table)")
+    expect(show(false)).toBe("false")
+    expect({ splitPath("a.b.c") }).toEqual({ "a", "b.c" })
+    expect(splitPath("abc")).toBeNil()
+end
+
+@test("/suu get: every setting with the profile, or one")
+local function getCommand()
+    settings.set("zzsa", "num", 5)
+    local all = printedBy(function() mock.slash("/suu get") end)
+    expect(all[1]).toBe(P .. "Profile: Main")
+    expect(all).toContain("  zzsa.num = 5  (changed)")
+    expect(all).toContain("  zzsa.flag = false")
+    expect(all).toContain("  zzsa.list = (table)")
+    expect(printedBy(function() mock.slash("/suu get zzsa.num") end)).toEqual({ P .. "zzsa.num = 5  (changed)" })
+    expect(printedBy(function() mock.slash("/suu get zzsa.text") end)).toEqual({ P .. "zzsa.text = a" })
+    expect(printedBy(function() mock.slash("/suu get zzsa.nope") end)).toEqual({ P .. "No setting called zzsa.nope." })
+    expect(printedBy(function() mock.slash("/suu get zzsa") end)).toEqual({ P .. "No setting called zzsa." })
+    expect(printedBy(function() mock.slash("/suu get zznope.x") end)).toEqual({ P .. "No setting called zznope.x." })
+end
+
+@test("/suu set: parses by type, sets, says what happened")
+local function setCommand()
+    expect(printedBy(function() mock.slash("/suu set zzsa.flag on") end)).toEqual({ P .. "zzsa.flag = true" })
+    expect(settings.get("zzsa", "flag")).toBe(true)
+    expect(printedBy(function() mock.slash("/suu set zzsa.text two words") end)).toEqual({ P .. "zzsa.text = two words" })
+    expect(printedBy(function() mock.slash("/suu set zzsa.num lots") end)).toEqual({ P .. "zzsa.num: expected a number." })
+    expect(printedBy(function() mock.slash("/suu set zzsa.list 1") end))
+        .toEqual({ P .. "zzsa.list: this setting can only be changed in the settings window." })
+    expect(printedBy(function() mock.slash("/suu set zzsa.num 500") end)).toEqual({ P .. "zzsa.num wasn't changed: too big" })
+    settings.veto("zzsa", "num", function(): (boolean?, string?) return false, nil end, VETO)
+    expect(printedBy(function() mock.slash("/suu set zzsa.num 5") end)).toEqual({ P .. "zzsa.num wasn't changed: refused" })
+    local usage = { P .. "Usage: /suu set <namespace.key> <value>. /suu get lists them." }
+    expect(printedBy(function() mock.slash("/suu set zzsa.num") end)).toEqual(usage)
+    expect(printedBy(function() mock.slash("/suu set zzsa 5") end)).toEqual(usage)
+    expect(printedBy(function() mock.slash("/suu set zzsa.nope 5") end)).toEqual(usage)
+    expect(printedBy(function() mock.slash("/suu set") end)).toEqual(usage)
+end
+
+@test("/suu reset: a setting, a namespace, or all")
+local function resetCommand()
+    settings.set("zzsa", "num", 5)
+    settings.set("zzsa", "flag", true)
+    expect(printedBy(function() mock.slash("/suu reset zzsa.num") end)).toEqual({ P .. "zzsa.num is back to its default." })
+    expect(settings.get("zzsa", "num")).toBe(1)
+    expect(printedBy(function() mock.slash("/suu reset zzsa") end)).toEqual({ P .. "zzsa is back to its default." })
+    expect(settings.get("zzsa", "flag")).toBe(false)
+    settings.set("zzsb", "level", 2)
+    expect(printedBy(function() mock.slash("/suu reset all") end))
+        .toContain(P .. "Every setting in Main is back to its default.")
+    expect(settings.get("zzsb", "level")).toBe(5)
+    local usage = { P .. "Usage: /suu reset <namespace.key> | <namespace> | all" }
+    expect(printedBy(function() mock.slash("/suu reset zznope") end)).toEqual(usage)
+    expect(printedBy(function() mock.slash("/suu reset zzsa.nope") end)).toEqual(usage)
+end
+
+@test("/suu profile: list, use, new, delete")
+local function profileCommand()
+    local listing = printedBy(function() mock.slash("/suu profile") end)
+    expect(listing).toEqual({ P .. "Profile: Main", "  Empty", "  Main  (current)", "  Other" })
+    local made = printedBy(function() mock.slash("/suu profile new ZzCmd") end)
+    expect(made[1]).toBe(P .. "Profile: ZzCmd")
+    expect(profiles.current()).toBe("ZzCmd")
+    local used = printedBy(function() mock.slash("/suu profile use main") end)
+    expect(used[1]).toBe(P .. "Profile: Main")
+    local deleted = printedBy(function() mock.slash("/suu profile delete zzcmd") end)
+    expect(deleted[1]).toBe(P .. "Deleted ZzCmd.")
+    expect(deleted[2]).toBe(P .. "Profile: Main")
+    expect(printedBy(function() mock.slash("/suu profile delete main") end))
+        .toEqual({ P .. "You are using Main; switch to another profile first." })
+    expect(printedBy(function() mock.slash("/suu profile new main") end))
+        .toEqual({ P .. "A profile called Main already exists." })
+    local usage = { P .. "Usage: /suu profile [use|new|delete <name>]" }
+    expect(printedBy(function() mock.slash("/suu profile list") end)).toEqual(usage)
+    expect(printedBy(function() mock.slash("/suu profile rename a") end)).toEqual(usage)
+end

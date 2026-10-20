@@ -1,0 +1,661 @@
+-- Units/Addons: SuuUI's AddOns window (the list, suites and their modules,
+-- status chips, memory and CPU, the changes and the secure reload button).
+
+import test, expect, cases, beforeAll, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as events from "/Core/Events"
+import internal M, plain, call, memory, splitIcon, bare, STATUS from "/Units/Addons"
+import type Addon from "/Units/Addons"
+import expectNoErrors from "../../helpers"
+
+-- The client's addons: SuuUI (1, loaded), then the ones defined here.
+--   2 Suite        a SuuUI plugin with a game icon, a suite
+--   3 Suite_Mod    its module (load on demand), needs Suite
+--   4 Suite_Other  another of its modules
+--   5 Gadget       an addon with an atlas icon and an icon in its title
+--   6 Broken       needs an addon that isn't there
+const DEPS: { [string]: string[] } = {
+    Suite = { "SuuUI" },
+    Suite_Mod = { "Suite" },
+    Suite_Other = { "Suite", "Gadget" },
+    Broken = { "Missing" },
+}
+
+-- The player's GUID (typed possibly secret; it never is here).
+local function me(): string return UnitGUID("player") :: any end
+
+@beforeAll
+local function world()
+    mock.defineAddon("Suite", { metadata = { Version = "1.0", Author = "Me", Notes = "A suite.",
+        IconTexture = "Interface\\Icons\\INV_Misc_QuestionMark" } })
+    mock.defineAddon("Suite_Mod", { metadata = { Title = "Suite Module" }, loadOnDemand = true })
+    mock.defineAddon("Suite_Other", { metadata = { Title = "Suite Other" } })
+    mock.defineAddon("Gadget", { metadata = { Title = "|T12345:16|t Gadget", IconAtlas = "unused-atlas", Version = "" } })
+    mock.defineAddon("Broken", { metadata = { IconAtlas = "some-atlas" } })
+end
+
+-- C_AddOns.GetAddOnDependencies by name, as a .toc's Dependencies would.
+local function fakeDeps()
+    mock.fake("C_AddOns.GetAddOnDependencies", function(i: number): ...string
+        local name = C_AddOns.GetAddOnInfo(i)
+        return unpack(DEPS[name :: string] or {})
+    end)
+end
+
+local function rowFor(name: string): any
+    for _, r in ipairs(M.rows) do
+        if r:IsShown() and r.addon and r.addon.name == name then return r end
+    end
+    return nil
+end
+
+local function shownNames(): string[]
+    local out: string[] = {}
+    for _, r in ipairs(M.rows) do
+        if r:IsShown() then out[#out + 1] = r.addon.name end
+    end
+    return out
+end
+
+@beforeEach
+local function fresh()
+    fakeDeps()
+    M.perChar = nil
+    M.open = nil
+    M.folded = {}
+    M.search:SetValue("")
+end
+
+@afterEach
+local function clean()
+    M.window:Hide()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    C_AddOns.ResetAddOns()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+@test("plain: neither nil nor secret")
+local function plainHelper()
+    expect(plain(nil)).toBe(false)
+    expect(plain(mock.secret("x"))).toBe(false)
+    expect(plain(0)).toBe(true)
+    expect(plain(false)).toBe(true)
+end
+
+@test("call: only functions, their results, nothing when they fail")
+local function callHelper()
+    expect(call(nil)).toBeNil()
+    expect(call(5)).toBeNil()
+    expect(select("#", call(function(): (number, number) return 1, 2 end))).toBe(8)
+    expect(call(function(a: number, b: number): number return a + b end, 2, 3)).toBe(5)
+    expect(call(function() error("boom") end)).toBeNil()
+end
+
+@test("memory: KB and MB, nothing for none")
+@cases({ { nil, nil }, { 0, nil }, { -3, nil }, { 340.4, "340 KB" }, { 340.6, "341 KB" }, { 1024, "1.0 MB" }, { 2560, "2.5 MB" } })
+local function memoryText(kb: number?, out: string?)
+    expect(memory(kb)).toBe(out)
+end
+
+@test("memory: a secret amount is none")
+local function memorySecret()
+    expect(memory(mock.secret(500))).toBeNil()
+end
+
+@test("splitIcon: a leading |T icon comes out (a file ID as a number)")
+local function splitIcons()
+    local text, icon = splitIcon("|TInterface\\Icons\\Foo:16:16|t  My Addon")
+    expect(text).toBe("My Addon")
+    expect(icon).toBe("Interface\\Icons\\Foo")
+    text, icon = splitIcon(" |T12345:0|tNumbered")
+    expect(text).toBe("Numbered")
+    expect(icon).toBe(12345)
+    text, icon = splitIcon("Plain |TInterface\\X:0|t")
+    expect(text).toBe("Plain |TInterface\\X:0|t")
+    expect(icon).toBeNil()
+end
+
+@test("bare: colour codes, textures and atlases out")
+local function bareText()
+    expect((bare("|cff112233Red|r |TInterface\\X:0|tName|Aatlas:0|a!"))).toBe("Red Name!")
+    expect((bare(nil))).toBe("")
+end
+
+--------------------------------------------------------------------------------
+-- Data
+--------------------------------------------------------------------------------
+
+@test("is on at login: the window built and hidden, the game's list hooked")
+local function builtAtLogin()
+    expect(M:IsEnabled()).toBe(true)
+    expect(M.window).toBe(_G.SuuUIAddonsWindow)
+    expect(M.window).never.toBeShown()
+    expect(M.hooked).toBe(true)
+end
+
+@test("Character: this one's GUID per character, nil for all")
+local function character()
+    M.perChar = true
+    expect(M:Character()).toBe(me())
+    M.perChar = false
+    expect(M:Character()).toBeNil()
+end
+
+@test("Collect: suites with their modules after them, icons, notes, SuuUI's plugins")
+local function collect()
+    local list: Addon[] = M:Collect()
+    local names: string[] = {}
+    for _, e in ipairs(list) do names[#names + 1] = e.name end
+    expect(names).toEqual({ "SuuUI", "Suite", "Suite_Mod", "Suite_Other", "Gadget", "Broken" })
+    local suite, mod, gadget, broken = M.byName.Suite, M.byName.Suite_Mod, M.byName.Gadget, M.byName.Broken
+    expect(suite.suuui).toBe(true)
+    expect(M.byName.SuuUI.suuui).toBe(true)
+    expect(suite.icon).toBe("Interface\\Icons\\INV_Misc_QuestionMark")
+    expect(suite.notes).toBe("A suite.")
+    expect(#(suite.children :: Addon[])).toBe(2)
+    expect(mod.parent).toBe(suite)
+    expect(mod.title).toBe("Suite Module")
+    expect(mod.icon).toBeNil()
+    -- the title's icon wins over the metadata's
+    expect(gadget.title).toBe("Gadget")
+    expect(gadget.icon).toBe(12345)
+    expect(gadget.suuui).toBe(false)
+    -- an atlas icon; a dependency whose name it doesn't start with: no suite
+    expect(broken.icon).toEqual({ atlas = "some-atlas" })
+    expect(broken.parent).toBeNil()
+end
+
+@test("Collect: an addon whose name reads secret is left out; no title: its name")
+local function collectSecret()
+    local real = C_AddOns.GetAddOnInfo
+    mock.fake("C_AddOns.GetAddOnInfo", function(i: any): ...any
+        if i == 6 then return mock.secret("Broken") end
+        if i == 4 then
+            local name = real(i)
+            return name, ""
+        end
+        return real(i)
+    end)
+    M:Collect()
+    expect(M.byName.Broken).toBeNil()
+    expect(M.byName.Suite_Other.title).toBe("Suite_Other")
+end
+
+@test("Collect: no addon API answers: an empty list")
+local function collectNone()
+    mock.fake("C_AddOns.GetNumAddOns", function() error("gone") end)
+    expect(M:Collect()).toEqual({})
+end
+
+@test("Status: loaded, out of date, missing dependency, disabled, load on demand, not loaded")
+local function status()
+    M:Collect()
+    M.perChar = true
+    local by = M.byName
+    expect(M:Status(by.SuuUI)).toBe("loaded")
+    expect(M:Status(by.Suite)).toBe("waiting")
+    expect(M:Status(by.Suite_Mod)).toBe("lod")
+    C_AddOns.DisableAddOn("Suite", me())
+    expect(M:Status(by.Suite)).toBe("disabled")
+    C_AddOns.EnableAddOn("Suite", me())
+    local reason = "INTERFACE_VERSION"
+    mock.fake("C_AddOns.IsAddOnLoadable", function(): (boolean, string) return false, reason end)
+    expect(M:Status(by.Suite)).toBe("outdated")
+    for _, r in ipairs({ "MISSING", "DEP_MISSING", "DEP_DISABLED", "DEP_INTERFACE_VERSION" }) do
+        reason = r
+        expect(M:Status(by.Suite)).toBe("dependency")
+    end
+    C_AddOns.DisableAddOn("Suite", me())
+    expect(M:Status(by.Suite)).toBe("disabled")
+end
+
+@test("Snapshot and Changes: each addon toggled and the version check count")
+local function changes()
+    M.addons = M:Collect()
+    M.perChar = true
+    M:Snapshot()
+    expect(M:Changes()).toBe(0)
+    C_AddOns.DisableAddOn("Suite", me())
+    expect(M:Changes()).toBe(1)
+    C_AddOns.SetAddonVersionCheck(not C_AddOns.IsAddonVersionCheckEnabled())
+    expect(M:Changes()).toBe(2)
+    C_AddOns.EnableAddOn("Suite", me())
+    C_AddOns.SetAddonVersionCheck(M.startCheck)
+    expect(M:Changes()).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- The window
+--------------------------------------------------------------------------------
+
+@test("Open: every addon a row, modules indented under their suite, the foot unchanged")
+local function opens()
+    M:Open()
+    expect(M.window).toBeShown()
+    expect(M.perChar).toBe(true)
+    expect(M.who.value).toBe("me")
+    expect(shownNames()).toEqual({ "SuuUI", "Suite", "Suite_Mod", "Suite_Other", "Gadget", "Broken" })
+    expect(M.none).never.toBeShown()
+    local suite, mod = rowFor("Suite"), rowFor("Suite_Mod")
+    expect(suite.title).toHaveText("Suite")
+    expect(suite.sub).toHaveText("2 modules · 1.0")
+    expect(suite.fold).toBeShown()
+    expect(suite.indent).never.toBeShown()
+    expect(mod.indent).toBeShown()
+    expect(mod.fold).never.toBeShown()
+    expect(mod.chip.text).toHaveText("Load on demand")
+    expect(rowFor("SuuUI").chip.text).toHaveText("Loaded")
+    expect(suite.chip.text).toHaveText("Not loaded")
+    expect(suite.pending).toHaveText("")
+    expect(suite.edge).never.toBeShown()
+    expect(suite.line:GetHeight()).toBe(36)
+    expect(mod.line:GetHeight()).toBe(30)
+    expect(M.changes).toHaveText("Changes apply after a reload")
+    expect(M.close).toBeShown()
+    expect(M.apply).never.toBeShown()
+end
+
+@test("row icons: a game icon cropped, a title's icon, an atlas, SuuUI's own, none")
+local function icons()
+    M:Open()
+    local suite, gadget, broken, suu, mod = rowFor("Suite"), rowFor("Gadget"), rowFor("Broken"), rowFor("SuuUI"), rowFor("Suite_Mod")
+    expect(suite.icon:GetTexture()).toBe("Interface\\Icons\\INV_Misc_QuestionMark")
+    expect({ suite.icon:GetTexCoord() }).toEqual({ 0.08, 0.08, 0.08, 0.92, 0.92, 0.08, 0.92, 0.92 })
+    expect(gadget.icon:GetTexture()).toBe(12345)
+    expect(gadget.icon).toBeShown()
+    expect(broken.icon:GetAtlas()).toBe("some-atlas")
+    expect(suu.icon:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Mark")
+    -- Suite_Mod: no icon of its own, and not a SuuUI plugin (it needs Suite only)
+    expect(mod.icon).never.toBeShown()
+end
+
+@test("SuuUI's emblem on a plugin without an icon of its own")
+local function emblem()
+    DEPS.Suite_Mod = { "Suite", "SuuUI" }
+    M:Open()
+    DEPS.Suite_Mod = { "Suite" }
+    local mod = rowFor("Suite_Mod")
+    expect(mod.icon).toBeShown()
+    expect(mod.icon:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\markDiamond")
+end
+
+@test("a toggle disables an addon: Disables on reload, the edge, the count, Reload to apply")
+local function toggleOff()
+    M:Open()
+    local suite = rowFor("Suite")
+    mock.click(suite.toggle)
+    expect(C_AddOns.GetAddOnEnableState("Suite", me())).toBe(0)
+    suite = rowFor("Suite")
+    expect(suite.pending).toHaveText("Disables on reload")
+    expect(suite.edge).toBeShown()
+    expect(suite.chip.text).toHaveText("Disabled")
+    expect(M.changes).toHaveText("1 change · they apply after a reload")
+    expect(M.apply).toBeShown()
+    expect(M.close).never.toBeShown()
+    -- the secure /reload button over it, out of combat
+    local over = M.reloadOver
+    expect(over).toBeShown()
+    expect(over:GetAttribute("type1")).toBe("macro")
+    expect(over:GetAttribute("macrotext1")).toBe("/reload")
+    expect(over:GetFrameStrata()).toBe("DIALOG")
+    expect(M.apply.tooltip).toBeNil()
+    -- back on: no change
+    mock.click(rowFor("Suite").toggle)
+    expect(M.changes).toHaveText("Changes apply after a reload")
+    expect(over).never.toBeShown()
+end
+
+@test("two changes count as changes; an enabled one says Enables on reload")
+local function toggleOn()
+    C_AddOns.DisableAddOn("Gadget", me())
+    M:Open()
+    mock.click(rowFor("Gadget").toggle)
+    mock.click(rowFor("Broken").toggle)
+    expect(rowFor("Gadget").pending).toHaveText("Enables on reload")
+    expect(M.changes).toHaveText("2 changes · they apply after a reload")
+end
+
+@test("SetEnabled without an addon does nothing")
+local function setEnabledNil()
+    M:Open()
+    M:SetEnabled(nil, false)
+    expect(M:Changes()).toBe(0)
+end
+
+@test("all characters: the toggles act for every character")
+local function allCharacters()
+    M:Open()
+    M.who.onChange("all")
+    expect(M.perChar).toBe(false)
+    expect(M:Character()).toBeNil()
+    mock.click(rowFor("Gadget").toggle)
+    expect(C_AddOns.GetAddOnEnableState("Gadget", nil)).toBe(0)
+    -- opened again: the choice stays
+    M.window:Hide()
+    M.perChar = false
+    M:Open()
+    expect(M.who.value).toBe("all")
+end
+
+-- The bar's buttons by their text.
+local function barButton(text: string): any
+    for _, c in ipairs({ M.who:GetParent():GetChildren() }) do
+        local b: any = c
+        if b.GetText and b:GetText() == text then return b end
+        if b.label and b.label.GetText and b.label:GetText() == text then return b end
+    end
+    return nil
+end
+
+@test("Disable all keeps SuuUI on; Enable all")
+local function allButtons()
+    M:Open()
+    local disableAll = mock.spy()
+    local enable = mock.spy()
+    mock.fake("C_AddOns.DisableAllAddOns", disableAll)
+    mock.fake("C_AddOns.EnableAddOn", enable)
+    mock.click(barButton("Disable all"))
+    expect(disableAll).toHaveBeenCalledWith(me())
+    expect(enable).toHaveBeenCalledWith("SuuUI", me())
+    local enableAll = mock.spy()
+    mock.fake("C_AddOns.EnableAllAddOns", enableAll)
+    mock.click(barButton("Enable all"))
+    expect(enableAll).toHaveBeenCalledWith(me())
+end
+
+@test("the search: names and bare titles; a match shows its suite; nothing matches")
+local function search()
+    M:Open()
+    mock.typeText(M.search.edit, "other")
+    expect(shownNames()).toEqual({ "Suite", "Suite_Other" })
+    M.search.edit:ClearFocus()
+    M.search:SetValue("GADGET")
+    M:Draw()
+    expect(shownNames()).toEqual({ "Gadget" })
+    M.search:SetValue("zzz")
+    M:Draw()
+    expect(shownNames()).toEqual({})
+    expect(M.none).toBeShown()
+end
+
+@test("a suite folds its modules away (and opens again); a search shows them anyway")
+local function fold()
+    M:Open()
+    mock.click(rowFor("Suite").fold)
+    expect(M.folded.Suite).toBe(true)
+    expect(shownNames()).toEqual({ "SuuUI", "Suite", "Gadget", "Broken" })
+    expect(rowFor("Suite").fold.glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronRight")
+    M.search:SetValue("mod")
+    M:Draw()
+    expect(shownNames()).toEqual({ "Suite", "Suite_Mod" })
+    M.search:SetValue("")
+    M:Draw()
+    mock.click(rowFor("Suite").fold)
+    expect(#shownNames()).toBe(6)
+end
+
+@test("a row opens to its notes, author, memory and needs (a missing one in ember); again closes")
+local function details()
+    mock.fake("GetAddOnMemoryUsage", function(i: number): number return i == 2 and 2048 or 0 end)
+    M:Open()
+    local suite = rowFor("Suite")
+    mock.click(suite.line)
+    suite = rowFor("Suite")
+    expect(M.open).toBe("Suite")
+    expect(suite.detail).toBeShown()
+    expect(suite.bg).toBeShown()
+    expect(suite.notes).toHaveText("A suite.")
+    expect(suite.facts:GetText()).toContain("Me")
+    expect(suite.facts:GetText()).toContain("2.0 MB")
+    expect(suite.deps:GetText()).toContain("SuuUI")
+    expect(suite.mem).toHaveText("")
+    expect(suite:GetHeight()).toBeCloseTo(36 + suite.detail:GetHeight() + 1)
+    -- leaving the open row keeps its highlight
+    mock.hover(suite.line)
+    mock.hover(nil)
+    expect(suite.bg).toBeShown()
+    -- a row without notes, author or memory, its dependency missing
+    mock.click(rowFor("Broken").line)
+    local broken = rowFor("Broken")
+    expect(broken.notes).toHaveText("No notes.")
+    expect(broken.facts).toHaveText("")
+    expect(broken.deps:GetText()).toContain("Missing · missing")
+    expect(rowFor("Suite").detail).never.toBeShown()
+    -- a row without dependencies: no Needs line
+    mock.click(rowFor("SuuUI").line)
+    expect(rowFor("SuuUI").deps).toHaveText("")
+    mock.click(rowFor("SuuUI").line)
+    expect(M.open).toBeNil()
+    expect(rowFor("SuuUI"):GetHeight()).toBe(37)
+end
+
+@test("hovering a closed row lights it; leaving puts it out")
+local function hoverRow()
+    M:Open()
+    local gadget = rowFor("Gadget")
+    mock.hover(gadget.line)
+    expect(gadget.bg).toBeShown()
+    mock.hover(nil)
+    expect(gadget.bg).never.toBeShown()
+end
+
+@test("Load out of date addons: the version check off and on")
+local function outdated()
+    M:Open()
+    local before = C_AddOns.IsAddonVersionCheckEnabled()
+    M.outdated.onChange(before)
+    expect(C_AddOns.IsAddonVersionCheckEnabled()).toBe(not before)
+    expect(M.outdated.value).toBe(before)
+    expect(M:Changes()).toBe(1)
+end
+
+@test("closed without Reload: the changes are undone, the version check put back")
+local function closeUndoes()
+    M:Open()
+    local reset = mock.spy()
+    mock.fake("C_AddOns.ResetAddOns", reset)
+    local before = C_AddOns.IsAddonVersionCheckEnabled()
+    C_AddOns.SetAddonVersionCheck(not before)
+    M.window:Hide()
+    expect(reset).toHaveBeenCalledTimes(1)
+    expect(C_AddOns.IsAddonVersionCheckEnabled()).toBe(before)
+end
+
+@test("Cancel and Close hide the window")
+local function cancelClose()
+    M:Open()
+    mock.click(M.close)
+    expect(M.window).never.toBeShown()
+    M:Open()
+    mock.click(rowFor("Gadget").toggle)
+    local foot = M.window.footer
+    local cancel: any = nil
+    for _, c in ipairs({ foot:GetChildren() }) do
+        local b: any = c
+        if b ~= M.apply and b ~= M.close and b.GetObjectType and b:GetObjectType() == "Button" then cancel = b end
+    end
+    mock.click(cancel)
+    expect(M.window).never.toBeShown()
+end
+
+@test("the reload's click saves first, and closing then keeps the changes")
+local function reloadSaves()
+    M:Open()
+    mock.click(rowFor("Gadget").toggle)
+    local save, reset = mock.spy(), mock.spy()
+    mock.fake("C_AddOns.SaveAddOns", save)
+    mock.fake("C_AddOns.ResetAddOns", reset)
+    -- (the macro itself would reload: only its PreClick here)
+    mock.script(M.reloadOver, "PreClick", "LeftButton", true)
+    expect(M.saving).toBe(true)
+    expect(save).toHaveBeenCalledTimes(1)
+    M.window:Hide()
+    expect(reset).never.toHaveBeenCalled()
+end
+
+@test("the reload button passes hover to Reload to apply")
+local function reloadHover()
+    M:Open()
+    mock.click(rowFor("Gadget").toggle)
+    local enter, leave = mock.spy(), mock.spy()
+    mock.stub(M.apply :: table, "GetScript", function(_: any, name: string): any
+        return name == "OnEnter" and enter or leave
+    end)
+    mock.script(M.reloadOver, "OnEnter")
+    mock.script(M.reloadOver, "OnLeave")
+    expect(enter).toHaveBeenCalledWith(M.apply)
+    expect(leave).toHaveBeenCalledWith(M.apply)
+end
+
+@test("a change made in combat: Reload to apply waits for the fight's end")
+local function combatChange()
+    -- (no secure button yet: a fresh state)
+    local old = M.reloadOver
+    if old then old:Hide() end
+    M.reloadOver = nil
+    M:Open()
+    mock.player:enterCombat()
+    mock.click(rowFor("Gadget").toggle)
+    expect(M.apply).toBeShown()
+    expect(M.reloadOver).toBeNil()
+    expect(M.apply:IsEnabled()).toBe(false)
+    expect(M.apply.tooltip).toEqual({ title = "Reload to apply", description = "After the fight." })
+    mock.player:leaveCombat()
+    expect(M.reloadOver).toBeShown()
+    expect(M.apply:IsEnabled()).toBe(true)
+end
+
+@test("PlaceReload without a button and nothing to apply: none made")
+local function placeNothing()
+    local old = M.reloadOver
+    M.reloadOver = nil
+    M:Open()
+    M:PlaceReload()
+    expect(M.reloadOver).toBeNil()
+    M.reloadOver = old
+end
+
+--------------------------------------------------------------------------------
+-- Memory and CPU
+--------------------------------------------------------------------------------
+
+@test("DrawPerf: the memory total, how many are on, no CPU without the profiler")
+local function perfNoCPU()
+    mock.fake("GetAddOnMemoryUsage", function(i: number): any
+        if i == 1 then return 1500 end
+        if i == 2 then return mock.secret(10) end
+        return 100
+    end)
+    mock.fake("C_AddOnProfiler.IsEnabled", function(): boolean return false end)
+    M:Open()
+    expect(M.memText).toHaveText("1.9 MB")
+    expect(M.cpuText).toHaveText("—")
+    expect(M.topText).toHaveText("—")
+    expect(M.countText).toHaveText("6 addons · 6 enabled")
+    expect(rowFor("Gadget").mem).toHaveText("100 KB")
+end
+
+@test("DrawPerf: the addons' share of the CPU and the busiest one")
+local function perfCPU()
+    mock.fake("GetAddOnMemoryUsage", function(): number return 0 end)
+    mock.fake("C_AddOnProfiler.IsEnabled", function(): boolean return true end)
+    mock.fake("C_AddOnProfiler.GetApplicationMetric", function(): number return 200 end)
+    mock.fake("C_AddOnProfiler.GetOverallMetric", function(): number return 50 end)
+    mock.fake("C_AddOnProfiler.GetAddOnMetric", function(name: string): any
+        if name == "Gadget" then return 30 end
+        if name == "Suite" then return mock.secret(99) end
+        return 5
+    end)
+    M:Open()
+    expect(M.memText).toHaveText("0 KB")
+    expect(M.cpuText).toHaveText("25.0%")
+    expect(M.topText).toHaveText("Gadget")
+end
+
+@test("DrawPerf: an application time of 0 gives no CPU share")
+local function perfZero()
+    mock.fake("C_AddOnProfiler.IsEnabled", function(): boolean return true end)
+    mock.fake("C_AddOnProfiler.GetApplicationMetric", function(): number return 0 end)
+    mock.fake("C_AddOnProfiler.GetOverallMetric", function(): number return 50 end)
+    mock.fake("C_AddOnProfiler.GetAddOnMetric", function(): number return 0 end)
+    M:Open()
+    expect(M.cpuText).toHaveText("—")
+    expect(M.topText).toHaveText("—")
+end
+
+@test("every 15 seconds while it shows: memory and CPU again; not while hidden")
+local function ticks()
+    M:Open()
+    local perf = mock.stub(M :: table, "DrawPerf")
+    mock.advanceTime(15)
+    expect(perf).toHaveBeenCalledTimes(1)
+    M.window:Hide()
+    mock.advanceTime(15)
+    expect(perf).toHaveBeenCalledTimes(1)
+end
+
+@test("combat starting or ending redraws an open window only")
+local function regen()
+    local draw = mock.stub(M :: table, "Draw")
+    mock.player:enterCombat()
+    mock.player:leaveCombat()
+    expect(draw).never.toHaveBeenCalled()
+    M.window:Show()
+    mock.player:enterCombat()
+    mock.player:leaveCombat()
+    expect(draw).toHaveBeenCalledTimes(2)
+end
+
+@test("a theme change: the numbers' face again, the open window redrawn")
+local function theme()
+    local perf = mock.stub(M :: table, "DrawPerf")
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(perf).never.toHaveBeenCalled()
+    M.window:Show()
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(perf).toHaveBeenCalledTimes(1)
+    local _, size = M.memText:GetFont()
+    expect(size).toBe(16)
+end
+
+@test("Draw with the window hidden does nothing")
+local function drawHidden()
+    M.window:Hide()
+    local changes = mock.stub(M :: table, "Changes")
+    M:Draw()
+    expect(changes).never.toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- In place of the game's list
+--------------------------------------------------------------------------------
+
+@test("the game's AddOn list opening opens this window instead")
+local function replacesGameList()
+    local list = _G.AddonList
+    ShowUIPanel(list)
+    expect(list).never.toBeShown()
+    expect(M.window).toBeShown()
+end
+
+@test("turned off (after a reload): the game's list stays, the window hides")
+local function disabled()
+    M:Open()
+    M:OnDisable()
+    expect(M.window).never.toBeShown()
+    mock.stub(M :: table, "IsEnabled", function(): boolean return false end)
+    local open = mock.stub(M :: table, "Open")
+    _G.AddonList:Show()
+    expect(open).never.toHaveBeenCalled()
+    _G.AddonList:Hide()
+end
+
+@test("the status chips' texts")
+local function chips()
+    expect(STATUS.outdated[1]).toBe("Out of date")
+    expect(STATUS.dependency[1]).toBe("Missing dependency")
+end

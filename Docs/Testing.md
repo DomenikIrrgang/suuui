@@ -57,6 +57,13 @@ to pass. One test file per source file, named after it.
 | Errors | `expectNoErrors()` from `tests/helpers`; `mock.errors()` alone misses what Fault catches |
 | Several cases | `@cases({ { in, out }, … })` |
 
+**Strict typing:** test files are checked in strict mode like `src/` (the
+manifest's `check.mode`). No `--!nocheck`, `--!basic` or `@nocheck`; every
+parameter of a named function is annotated; locals that start empty are
+typed; module objects, components and data get their real exported types.
+`:: any` only for genuinely dynamic values (a stand-in API, a field the
+declarations lack), kept local and narrow.
+
 Tests in one file share one VM: undo what a test changes (settings,
 fakes are undone for you, frames you built: hide them) or give each test
 what it needs in `@beforeEach`.

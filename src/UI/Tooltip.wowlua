@@ -279,21 +279,25 @@ local function addExtra(tooltip: any, lines: any[])
     for _, line in ipairs(lines) do tooltip:AddLine(line, 1, 1, 1, true) end
 end
 
+-- The spell post-call: the pending lines on GameTooltip when it draws that
+-- spell for that owner.
+local function spellPostCall(tooltip: any, data: any)
+    local p = pending
+    if tooltip ~= GameTooltip or not p then return end
+    local id = data and data.id
+    if issecretvalue and issecretvalue(id) then return end
+    if id == p.id and tooltip:GetOwner() == p.owner then
+        addExtra(tooltip, p.lines)
+        p.added = true
+    end
+end
+
 local hooked: boolean | "post" = false
 local function hookSpellTips()
     if hooked then return end
     hooked = true
     if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType and Enum.TooltipDataType.Spell then
-        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, function(tooltip: any, data: any)
-            local p = pending
-            if tooltip ~= GameTooltip or not p then return end
-            local id = data and data.id
-            if issecretvalue and issecretvalue(id) then return end
-            if id == p.id and tooltip:GetOwner() == p.owner then
-                addExtra(tooltip, p.lines)
-                p.added = true
-            end
-        end)
+        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, spellPostCall)
         hooked = "post"
     end
     hookScript(GameTooltip, "OnHide", function() pending = nil end)

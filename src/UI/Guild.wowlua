@@ -32,6 +32,92 @@ import * as controls from "/UI/Controls"
 import * as inputs from "/UI/Inputs"
 import * as panel from "/UI/Panel"
 import * as tooltip from "/UI/Tooltip"
+import Text from "/UI/Text"
+import SuuButton from "/UI/Controls"
+import TextField, Checkbox from "/UI/Inputs"
+import ScrollArea from "/UI/Panel"
+
+export type GuildMember = {
+    key?: any,
+    name?: string,
+    class?: string,      -- the class file ("MAGE")
+    className?: string,
+    level?: number,
+    zone?: string,
+    rank?: string,
+    rankIndex?: number,
+    note?: string,
+    officerNote?: string,
+    online?: boolean,
+    away?: boolean,
+    busy?: boolean,
+    lastOnline?: string,
+}
+
+-- What a foot button may do: on, or off and why.
+export type GuildAction = { enabled?: boolean, why?: string }
+
+export type RosterData = {
+    online?: number,
+    total?: number,
+    showOffline?: boolean,
+    sort?: string,
+    members?: GuildMember[],
+    selected?: any,
+    actions?: { [string]: GuildAction },
+}
+
+export type RosterColumn = { x: number, w: number }
+
+export interface RosterRow extends Button
+    member?: GuildMember
+    sel: Texture
+    edge: Texture
+    hover: Texture
+    diamond: Texture
+    classIcon: Texture
+    cells: Text[]
+    badge: RosterBadge
+end
+
+export interface RosterBadge extends Frame
+    text: Text
+end
+
+export interface RosterHead extends Button
+    text: Text
+end
+
+-- A foot button: why it's off, for its tooltip.
+export interface RosterButton extends SuuButton
+    reason?: string
+end
+
+export interface GuildRoster extends Frame
+    data?: RosterData
+    rows: RosterRow[]
+    heads: RosterHead[]
+    buttons: { [string]: RosterButton }
+    search: TextField
+    offline: Checkbox
+    count: Text
+    guildInvite: RosterButton
+    box: Frame
+    headRow: Frame
+    list: ScrollArea
+    empty: Text
+    selectedMember?: GuildMember
+    onSearch?: (text: string) -> ()
+    onShowOffline?: (on: boolean) -> ()
+    onSort?: (column: string) -> ()
+    onSelect?: (key: any) -> ()
+    onAction?: (name: string, member: GuildMember?) -> ()
+    onMenu?: (member: GuildMember, owner: RosterRow) -> ()
+    onRowEnter?: (row: RosterRow, member: GuildMember) -> ()
+    onRowLeave?: (row: RosterRow) -> ()
+    function SetData(d: RosterData)
+    function Draw()
+end
 
 local S = T.space
 
@@ -50,15 +136,15 @@ local COLUMNS = {
     { key = "note", label = "Note", width = 0.26 },
 }
 
-local G = {}
+local G: GuildRoster = {} :: any
 
 -- Each column's x and width for a row `w` wide.
-local function columnsFor(w: number)
+local function columnsFor(w: number): RosterColumn[]
     local fixed = 0
     for _, c in ipairs(COLUMNS) do if c.fixed then fixed = fixed + c.fixed end end
     local gaps = S["space-4"] * (#COLUMNS - 1)
     local room = math.max(0, w - fixed - gaps - S["space-5"] * 2)
-    local out, x = {}, S["space-5"]
+    local out: RosterColumn[], x = {}, S["space-5"]
     for i, c in ipairs(COLUMNS) do
         local cw = c.fixed or math.floor(room * c.width)
         out[i] = { x = x, w = cw }
@@ -67,8 +153,8 @@ local function columnsFor(w: number)
     return out
 end
 
-local function makeRow(g: any)
-    local r = CreateFrame("Button", nil, g.list.child)
+local function makeRow(g: GuildRoster): RosterRow
+    local r: RosterRow = CreateFrame("Button", nil, g.list.child) :: any
     r:SetHeight(ROW_H)
     r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     r.sel = draw.fill(r, "arcane-soft", "BACKGROUND")
@@ -89,42 +175,44 @@ local function makeRow(g: any)
         t:SetJustifyH(c.align or "LEFT")
         r.cells[i] = t
     end
-    r.badge = CreateFrame("Frame", nil, r)
+    r.badge = CreateFrame("Frame", nil, r) :: any
     r.badge:SetHeight(14)
     draw.fill(r.badge, "surface-raised"):SetAllPoints()
     draw.border(r.badge, "gilt-line")
     r.badge.text = uiText.text(r.badge, "micro", "ink-muted")
     r.badge.text:SetPoint("CENTER")
-    r:SetScript("OnEnter", function(self)
+    r:SetScript("OnEnter", function(self: RosterRow)
         self.hover:Show()
-        if g.onRowEnter and self.member then g.onRowEnter(self, self.member) end
         local m = self.member
+        if g.onRowEnter and m then g.onRowEnter(self, m) end
         if m and m.officerNote and m.officerNote ~= "" then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip_SetTitle(GameTooltip, m.name)
+            GameTooltip_SetTitle(GameTooltip, m.name or "")
             if m.note and m.note ~= "" then GameTooltip_AddNormalLine(GameTooltip, "Note: " .. m.note) end
             GameTooltip_AddNormalLine(GameTooltip, "Officer note: " .. m.officerNote)
             GameTooltip:Show()
         end
     end)
-    r:SetScript("OnLeave", function(self)
+    r:SetScript("OnLeave", function(self: RosterRow)
         self.hover:Hide()
         GameTooltip:Hide()
         if g.onRowLeave then g.onRowLeave(self) end
     end)
-    r:SetScript("OnClick", function(self, button)
-        if not self.member then return end
-        if g.onSelect then g.onSelect(self.member.key) end
-        if button == "RightButton" and g.onMenu then g.onMenu(self.member, self) end
+    r:SetScript("OnClick", function(self: RosterRow, button: string)
+        local m = self.member
+        if not m then return end
+        if g.onSelect then g.onSelect(m.key) end
+        if button == "RightButton" and g.onMenu then g.onMenu(m, self) end
     end)
-    r:SetScript("OnDoubleClick", function(self)
-        if self.member and self.member.online and g.onAction then g.onAction("whisper", self.member) end
+    r:SetScript("OnDoubleClick", function(self: RosterRow)
+        local m = self.member
+        if m and m.online and g.onAction then g.onAction("whisper", m) end
     end)
     return r
 end
 
 function G:Draw()
-    local d = self.data or {}
+    local d: RosterData = self.data or {}
     local child = self.list.child
     local w = math.max(1, self.list:GetWidth())
     child:SetWidth(w)
@@ -138,7 +226,7 @@ function G:Draw()
         h.text:SetColor(on and "gilt-text" or "ink-muted")
         h.text:SetJustifyH(COLUMNS[i].align or "LEFT")
     end
-    local y, selected = 0, nil
+    local y, selected = 0, nil :: GuildMember?
     for n, m in ipairs(d.members or {}) do
         local r = self.rows[n] or makeRow(self)
         self.rows[n] = r
@@ -174,7 +262,7 @@ function G:Draw()
                     r.classIcon:SetTexCoord(0, 1, 0, 1)
                 elseif coords then
                     r.classIcon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
-                    r.classIcon:SetTexCoord(unpack(coords))
+                    r.classIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
                 end
                 r.classIcon:SetShown((atlas or coords) and true or false)
                 r.classIcon:SetDesaturated(not m.online)
@@ -213,25 +301,25 @@ function G:Draw()
     self.selectedMember = selected
 end
 
-function G:SetData(d: any)
+function G:SetData(d: RosterData)
     self.data = d
     self.count:SetValue((d.online or 0) .. " online · " .. (d.total or 0) .. (d.total == 1 and " member" or " members"))
     self.offline:SetValue(d.showOffline and true or false)
     self:Draw()
 end
 
-local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ())
-    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick })
+local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ()): RosterButton
+    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick }) :: RosterButton
     b:SetHeight(FOOT_H)
-    b:HookScript("OnEnter", function(self)
+    b:HookScript("OnEnter", function(self: RosterButton)
         if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = text, description = self.reason }) end
     end)
     b:HookScript("OnLeave", function() tooltip.hideTooltip() end)
     return b
 end
 
-export function guildRoster(parent: Frame)
-    local g = CreateFrame("Frame", nil, parent)
+export function guildRoster(parent: Frame): GuildRoster
+    local g: GuildRoster = CreateFrame("Frame", nil, parent) :: any
     Mixin(g, G)
     g.rows, g.heads, g.buttons = {}, {}, {}
     -- the top: search, Show offline, the count
@@ -256,7 +344,7 @@ export function guildRoster(parent: Frame)
             b.border:SetColor("ember")
             b.label:SetColor("ember-text")
             -- back to ember after a hover (the button's own OnLeave sets gilt-line)
-            b:HookScript("OnLeave", function(self) self.border:SetColor("ember") end)
+            b:HookScript("OnLeave", function(self: RosterButton) self.border:SetColor("ember") end)
         end
         if prev then b:SetPoint("RIGHT", prev, "LEFT", -S["space-3"], 0) else b:SetPoint("BOTTOMRIGHT") end
         g.buttons[key] = b
@@ -277,14 +365,14 @@ export function guildRoster(parent: Frame)
     rule:SetPoint("TOPLEFT", g.headRow, "BOTTOMLEFT")
     rule:SetPoint("TOPRIGHT", g.headRow, "BOTTOMRIGHT")
     for i, c in ipairs(COLUMNS) do
-        local h = CreateFrame("Button", nil, g.headRow)
+        local h: RosterHead = CreateFrame("Button", nil, g.headRow) :: any
         h:SetHeight(HEAD_ROW_H)
         h.text = uiText.text(h, "caption", "ink-muted")
         h.text:SetAllPoints()
         h.text:SetValue(c.label)
         h:SetScript("OnClick", function() if g.onSort then g.onSort(c.key) end end)
-        h:SetScript("OnEnter", function(self) self.text:SetColor("ink") end)
-        h:SetScript("OnLeave", function(self)
+        h:SetScript("OnEnter", function(self: RosterHead) self.text:SetColor("ink") end)
+        h:SetScript("OnLeave", function(self: RosterHead)
             local on = ((g.data and g.data.sort) or "rank") == c.key
             self.text:SetColor(on and "gilt-text" or "ink-muted")
         end)
@@ -311,21 +399,50 @@ end
 --   i.onEdit("info")
 --------------------------------------------------------------------------------
 
-local I = {}
+export type GuildRank = { name?: string, count?: number }
+export type GuildInfoData = { info?: string, canEditInfo?: boolean, ranks?: GuildRank[] }
+
+export interface InfoBlock extends Frame
+    head: Text
+    edit: SuuButton
+    text: Text
+end
+
+export interface RankRow extends Frame
+    name: Text
+    count: Text
+end
+
+export interface RanksBox extends Frame
+    head: Text
+end
+
+export interface GuildInfo extends Frame
+    data?: GuildInfoData
+    rankRows: RankRow[]
+    info: InfoBlock
+    ranks: RanksBox
+    onEdit?: (key: string) -> ()
+    function SetData(d: GuildInfoData)
+    function Layout()
+end
+
+local I: GuildInfo = {} :: any
 
 -- the live pages, drawn again when the theme changes (colour codes in
 -- their text, sizes from the text styles)
-local infos, logs, banners = {}, {}, {}
-for _, set in ipairs({ infos, logs, banners }) do setmetatable(set, { __mode = "k" }) end
+local infos: { [GuildInfo]: boolean } = setmetatable({}, { __mode = "k" })
+local logs: { [GuildLog]: boolean } = setmetatable({}, { __mode = "k" })
+local banners: { [GuildMotdBanner]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- Edit level with the heading
-local function placeEdit(b: any)
+local function placeEdit(b: InfoBlock)
     b.edit:SetPoint("RIGHT", b, "TOPRIGHT", -S["space-4"], -(S["space-5"] + T.type.header.lineHeight / 2))
 end
 
-function I:SetData(d: any)
+function I:SetData(d: GuildInfoData)
     self.data = d
-    local function block(b: any, text: string?, can: boolean?, empty: string)
+    local function block(b: InfoBlock, text: string?, can: boolean?, empty: string)
         b.text:SetValue((text and text ~= "") and text or ("|cff" .. T.color["ink-faint"].hex .. empty .. "|r"))
         b.edit:SetShown(can and true or false)
     end
@@ -334,7 +451,7 @@ function I:SetData(d: any)
     for i, r in ipairs(d.ranks or {}) do
         local row = self.rankRows[i]
         if not row then
-            row = CreateFrame("Frame", nil, self.ranks)
+            row = CreateFrame("Frame", nil, self.ranks) :: RankRow
             row.name = uiText.text(row, "body", "ink")
             row.name:SetPoint("LEFT")
             row.count = uiText.text(row, "numeric", "ink-muted")
@@ -369,8 +486,8 @@ function I:Layout()
     self.ranks:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT")
 end
 
-local function infoBlock(i: any, title: string, key: string)
-    local b = CreateFrame("Frame", nil, i)
+local function infoBlock(i: GuildInfo, title: string, key: string): InfoBlock
+    local b: InfoBlock = CreateFrame("Frame", nil, i) :: any
     draw.fill(b, "surface-sunk"):SetAllPoints()
     draw.border(b, "gilt-faint")
     b.head = uiText.text(b, "header", "gilt-text")
@@ -386,16 +503,16 @@ local function infoBlock(i: any, title: string, key: string)
     return b
 end
 
-export function guildInfo(parent: Frame)
-    local i = CreateFrame("Frame", nil, parent)
+export function guildInfo(parent: Frame): GuildInfo
+    local i: GuildInfo = CreateFrame("Frame", nil, parent) :: any
     Mixin(i, I)
     i.rankRows = {}
     i.info = infoBlock(i, "Guild information", "info")
-    i.ranks = CreateFrame("Frame", nil, i)
+    i.ranks = CreateFrame("Frame", nil, i) :: any
     i.ranks.head = uiText.text(i.ranks, "header", "gilt-text")
     i.ranks.head:SetPoint("TOPLEFT")
     i.ranks.head:SetValue("Ranks")
-    i:SetScript("OnSizeChanged", function(self) if self.data then self:Layout() end end)
+    i:SetScript("OnSizeChanged", function(self: GuildInfo) if self.data then self:Layout() end end)
     infos[i] = true
     return i
 end
@@ -408,9 +525,26 @@ end
 --   l:SetData({ lines = { { text, when } } })
 --------------------------------------------------------------------------------
 
-local L = {}
+export type GuildLogLine = { text?: string, when?: string }
+export type GuildLogData = { lines?: GuildLogLine[] }
 
-function L:SetData(d: any)
+export interface LogRow extends Frame
+    when: Text
+    text: Text
+    rule: Texture
+end
+
+export interface GuildLog extends Frame
+    data?: GuildLogData
+    rows: LogRow[]
+    list: ScrollArea
+    empty: Text
+    function SetData(d: GuildLogData)
+end
+
+local L: GuildLog = {} :: any
+
+function L:SetData(d: GuildLogData)
     self.data = d
     local child = self.list.child
     child:SetWidth(math.max(1, self.list:GetWidth()))
@@ -418,7 +552,7 @@ function L:SetData(d: any)
     for i, line in ipairs(d.lines or {}) do
         local r = self.rows[i]
         if not r then
-            r = CreateFrame("Frame", nil, child)
+            r = CreateFrame("Frame", nil, child) :: LogRow
             r.when = uiText.text(r, "caption", "ink-faint")
             r.when:SetPoint("RIGHT", -S["space-4"], 0)
             r.text = uiText.text(r, "body", "ink")
@@ -445,8 +579,8 @@ function L:SetData(d: any)
     child:SetHeight(math.max(1, y))
 end
 
-export function guildLog(parent: Frame)
-    local l = CreateFrame("Frame", nil, parent)
+export function guildLog(parent: Frame): GuildLog
+    local l: GuildLog = CreateFrame("Frame", nil, parent) :: any
     Mixin(l, L)
     l.rows = {}
     draw.fill(l, "surface-sunk"):SetAllPoints()
@@ -478,15 +612,30 @@ end
 --------------------------------------------------------------------------------
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
-local MB = {}
+export type MotdData = { text?: string, canEdit?: boolean }
 
-function MB:SetData(d: any)
+export interface GuildMotdBanner extends Frame
+    data?: MotdData
+    has: boolean
+    pin: Texture
+    head: Text
+    message: FontString
+    edit: SuuButton
+    onEdit?: () -> ()
+    function SetData(d: MotdData?)
+    function Layout()
+    function Height(): number
+end
+
+local MB: GuildMotdBanner = {} :: any
+
+function MB:SetData(d: MotdData?)
     self.data = d
     local text = d and d.text
     local has = type(text) == "string" and text ~= ""
     self.has = has
     self:SetShown(has)
-    if not has then return end
+    if not (d and has) then return end
     self.edit:SetShown(d.canEdit and true or false)
     self.message:SetText(text)
     self:Layout()
@@ -506,12 +655,12 @@ function MB:Layout()
     if math.abs(self:GetHeight() - h) > 0.5 then self:SetHeight(h) end
 end
 
-function MB:Height()
+function MB:Height(): number
     return self.has and self:GetHeight() or 0
 end
 
-export function guildMotdBanner(parent: Frame)
-    local b = CreateFrame("Frame", nil, parent)
+export function guildMotdBanner(parent: Frame): GuildMotdBanner
+    local b: GuildMotdBanner = CreateFrame("Frame", nil, parent) :: any
     Mixin(b, MB)
     b:SetHeight(2 * S["space-4"] + T.type.body.lineHeight)
     draw.fill(b, "surface-raised"):SetAllPoints()
@@ -540,11 +689,13 @@ export function guildMotdBanner(parent: Frame)
     b.edit:SetPoint("RIGHT", -S["space-5"], 0)
     b:SetScript("OnSizeChanged", function() b:Layout() end)
     -- cut short: the whole message on hover
-    b:SetScript("OnEnter", function(self)
-        if not (self.has and self.message:IsTruncated()) then return end
-        GameTooltip:SetOwner(self.message, "ANCHOR_BOTTOMLEFT", 0, 0)
+    b:SetScript("OnEnter", function(self: GuildMotdBanner)
+        local d = self.data
+        if not (d and self.has and self.message:IsTruncated()) then return end
+        -- (the message, a font string: the declarations take only frames)
+        GameTooltip:SetOwner(self.message :: any, "ANCHOR_BOTTOMLEFT", 0, 0)
         GameTooltip_SetTitle(GameTooltip, "Message of the day")
-        GameTooltip_AddNormalLine(GameTooltip, self.data.text, true)
+        GameTooltip_AddNormalLine(GameTooltip, d.text or "", true)
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)

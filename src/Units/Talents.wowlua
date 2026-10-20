@@ -90,6 +90,30 @@ local function talentOf(configID: number, info: any)
     return { entryID = entryID, spellID = spellID, name = name or "?", icon = icon }
 end
 
+-- The trees: the nodes sorted left to right (then top to bottom), columns
+-- more than TREE_GAP apart starting a new one (as Blizzard draws the group
+-- headers); each { nodes, minX, maxX }.
+local function clusterNodes(nodes: any[]): any[]
+    table.sort(nodes, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.y < b.y end)
+    local clusters, last = {}, nil
+    for _, n in ipairs(nodes) do
+        if not last or n.x - last > TREE_GAP then clusters[#clusters + 1] = { nodes = {} } end
+        local c = clusters[#clusters]
+        c.nodes[#c.nodes + 1] = n
+        c.minX = math.min(c.minX or n.x, n.x)
+        c.maxX = math.max(c.maxX or n.x, n.x)
+        last = n.x
+    end
+    return clusters
+end
+
+-- A node's cell in its tree's 4 columns (from the leftmost, or so the
+-- rightmost is column 3) and its row from the top (`minY`).
+local function gridCell(x: number, y: number, minX: number, maxX: number, minY: number): (number, number)
+    local base = math.min(minX, maxX - 3 * STEP)
+    return math.max(0, math.min(3, math.floor((x - base) / STEP + 0.5))), math.max(0, math.floor((y - minY) / STEP + 0.5))
+end
+
 -- The game's spells window showing another player's talents ("View
 -- Talents" on inspect: the same window in inspect mode); their unit, else nil.
 -- Seen in game, 2026-10-17: the page over it showed your own talents there.
@@ -151,18 +175,7 @@ function M:Collect(configID: number?)
         end
     end
     if #nodes == 0 then return nil end
-    -- the trees: columns more than TREE_GAP apart start a new one (left to
-    -- right, as Blizzard draws the group headers)
-    table.sort(nodes, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.y < b.y end)
-    local clusters, last = {}, nil
-    for _, n in ipairs(nodes) do
-        if not last or n.x - last > TREE_GAP then clusters[#clusters + 1] = { nodes = {} } end
-        local c = clusters[#clusters]
-        c.nodes[#c.nodes + 1] = n
-        c.minX = math.min(c.minX or n.x, n.x)
-        c.maxX = math.max(c.maxX or n.x, n.x)
-        last = n.x
-    end
+    local clusters = clusterNodes(nodes)
     -- their names and points: the tree's groups, in order
     local displays = call(C_Traits.GetGroupDisplayInfoByTreeID, treeID) or {}
     local groupIDs = {}
@@ -174,15 +187,12 @@ function M:Collect(configID: number?)
     end
     local trees = {}
     for i, c in ipairs(clusters) do
-        -- the 4 columns: from the leftmost, or so the rightmost is column 3
-        local base = math.min(c.minX, c.maxX - 3 * STEP)
         local display = displays[i]
         local t = { name = display and display.displayName or ("Tree " .. i), icon = display and display.icon,
             groupID = display and display.groupID, nodes = {}, links = {} }
         local points = 0
         for _, n in ipairs(c.nodes) do
-            n.col = math.max(0, math.min(3, math.floor((n.x - base) / STEP + 0.5)))
-            n.row = math.max(0, math.floor((n.y - minY) / STEP + 0.5))
+            n.col, n.row = gridCell(n.x, n.y, c.minX, c.maxX, minY)
             n.tree = t
             t.nodes[#t.nodes + 1] = n
             points = points + n.rank + n.pending
@@ -530,23 +540,13 @@ function M:BuildTree(file: string)
     end
     if not configID then return nil end
     -- the trees, as Collect splits them
-    table.sort(nodes, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.y < b.y end)
-    local clusters, last = {}, nil
-    for _, n in ipairs(nodes) do
-        if not last or n.x - last > TREE_GAP then clusters[#clusters + 1] = { nodes = {}, links = {} } end
-        local c = clusters[#clusters]
-        c.nodes[#c.nodes + 1] = n
-        c.minX = math.min(c.minX or n.x, n.x)
-        c.maxX = math.max(c.maxX or n.x, n.x)
-        last = n.x
-    end
+    local clusters = clusterNodes(nodes)
+    for _, c in ipairs(clusters) do c.links = {} end
     local displays = call(C_Traits.GetGroupDisplayInfoByTreeID, class.treeID) or {}
     for i, c in ipairs(clusters) do
-        local base = math.min(c.minX, c.maxX - 3 * STEP)
         c.name = displays[i] and displays[i].displayName or ("Tree " .. i)
         for _, n in ipairs(c.nodes) do
-            n.col = math.max(0, math.min(3, math.floor((n.x - base) / STEP + 0.5)))
-            n.row = math.max(0, math.floor((n.y - minY) / STEP + 0.5))
+            n.col, n.row = gridCell(n.x, n.y, c.minX, c.maxX, minY)
             n.treeIndex, n.treeName = i, c.name
         end
     end
@@ -583,7 +583,18 @@ local function splitOf(tree: any, steps: any)
 end
 
 -- Legacy's Talented gives points before level 10: what the currency holds
--- over one a level from 10 (0 to 5).
+-- (`max`) over one a level from 10, at `level` (0 to 5).
+local function talentedPoints(max: number, level: number): number
+    return math.max(0, math.min(TALENTED_MAX, max - math.max(0, level - 9)))
+end
+
+-- The level that brings step i, with `talented` points from Talented (one
+-- a level from 5, then one a level from 10).
+local function stepLevel(i: number, talented: number): number
+    if i <= talented then return 4 + i end
+    return 9 + i - talented
+end
+
 function M:Talented()
     local configID = call(C_ClassTalents.GetActiveConfigID)
     local info = plain(configID) and configID and call(C_Traits.GetConfigInfo, configID)
@@ -592,15 +603,13 @@ function M:Talented()
     local max = c and c[1] and plain(c[1].maxQuantity) and c[1].maxQuantity
     local level = UnitLevel("player") or 1
     if not max or level >= 60 then return self.talented or 0 end
-    self.talented = math.max(0, math.min(TALENTED_MAX, max - math.max(0, level - 9)))
+    self.talented = talentedPoints(max, level)
     return self.talented
 end
 
 -- The level that brings step i.
 function M:StepLevel(i: number): number
-    local t = self:Talented()
-    if i <= t then return 4 + i end
-    return 9 + i - t
+    return stepLevel(i, self:Talented())
 end
 
 -- The build the window shows, its draft (being planned) or as saved.

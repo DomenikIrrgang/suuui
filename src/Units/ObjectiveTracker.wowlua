@@ -56,7 +56,7 @@ local M = SuuUI.RegisterModule({
 
 local WIDTH = 260
 -- a tracked quest or recipe as the tracker draws it, a zone's sort keys
-type Quest = { [string]: any }
+export type Quest = { [string]: any }
 local isSecret = issecretvalue or function() return false end
 local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 local ITEM = UI.Size("icon-md")
@@ -170,25 +170,11 @@ local function hereNames()
     return here
 end
 
--- Your tracked quests by zone: the zone you're in first, then the zones by
--- their nearest quest, then the rest (another continent, nothing to point
--- at) in quest log order; inside a zone the nearest first.
-function M:TrackedQuests(): Quest[]
-    local list: Quest[] = {}
-    local n = C_QuestLog.GetNumQuestWatches()
-    if not plain(n) then return list end
-    for i = 1, n do
-        local id = C_QuestLog.GetQuestIDForQuestWatchIndex(i)
-        if plain(id) and id then
-            local q = questOf(id)
-            if q then
-                q.zone = zoneOf(id, q.logIndex)
-                q.distance = distanceOf(id)
-                list[#list + 1] = q
-            end
-        end
-    end
-    local here = hereNames()
+-- The quests by zone: the zone you're in (`here`, by name) first, then the
+-- zones by their nearest quest, then the rest (another continent, nothing
+-- to point at) in quest log order; inside a zone the nearest first. Sorts
+-- `list` in place (each quest: zone, distance, logIndex).
+export function sortQuests(list: Quest[], here: { [string]: boolean })
     local zones: { [string]: any } = {}
     for _, q in ipairs(list) do
         local key = q.zone or ""
@@ -212,6 +198,25 @@ function M:TrackedQuests(): Quest[]
         if da ~= db then return da < db end
         return a.logIndex < b.logIndex
     end)
+end
+
+-- Your tracked quests, sorted by zone (sortQuests).
+function M:TrackedQuests(): Quest[]
+    local list: Quest[] = {}
+    local n = C_QuestLog.GetNumQuestWatches()
+    if not plain(n) then return list end
+    for i = 1, n do
+        local id = C_QuestLog.GetQuestIDForQuestWatchIndex(i)
+        if plain(id) and id then
+            local q = questOf(id)
+            if q then
+                q.zone = zoneOf(id, q.logIndex)
+                q.distance = distanceOf(id)
+                list[#list + 1] = q
+            end
+        end
+    end
+    sortQuests(list, hereNames())
     return list
 end
 

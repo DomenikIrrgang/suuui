@@ -1,0 +1,292 @@
+-- tests/unit/EditMode/LayoutCheck.test.wowlua
+-- EditMode/LayoutCheck: the root's size per screen, a frame's rectangle from
+-- its anchor, overlaps, which frames are checked, and the report /suu
+-- layoutcheck prints and saves.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as settings from "/Core/Settings"
+import * as DB from "/Core/DB"
+import root from "/Core/Root"
+import * as editMode from "/EditMode/EditMode"
+import * as layoutCheck from "/EditMode/LayoutCheck"
+import printedSince, hasLine from "../SettingsUI/UiSettingsHelpers"
+import internal rootSize, place, overlap, framesOf, issuesOn, Placed, Rect from "/EditMode/LayoutCheck"
+
+settings.register("lctest", {
+    a = { point = "CENTER", x = 0, y = 0 },
+    b = { point = "TOPLEFT", x = 0, y = 0 },
+    hidden = { point = "CENTER", x = 0, y = 0, hidden = true },
+})
+
+@afterEach
+local function cleanUp()
+    settings.reset("ui", "scale")
+    settings.reset("lctest")
+end
+
+local function frameOf(w: number, h: number, parent: Frame?): Frame
+    local f = CreateFrame("Frame", nil, parent or root)
+    f:SetSize(w, h)
+    return f
+end
+
+local function info(frame: Frame, key: string, label: string, enabled: boolean?, custom: boolean?): editMode.MoverInfo
+    return { frame = frame, namespace = "lctest", key = key, label = label,
+        enabled = enabled ~= false, custom = custom == true }
+end
+
+local function placed(id: string, label: string, pos: { [string]: any }, w: number, h: number): Placed
+    return { id = id, label = label, pos = pos, w = w, h = h }
+end
+
+--------------------------------------------------------------------------------
+-- The root's size
+--------------------------------------------------------------------------------
+
+@test("automatic scale: 1 up to 1440p, then in quarter steps")
+@cases({
+    { 1920, 1080, 1920, 1080 },
+    { 2560, 1440, 2560, 1440 },
+    { 3840, 2160, 2560, 1440 },     -- 1.5
+    { 3440, 1440, 3440, 1440 },
+    { 2880, 1800, 2304, 1440 },     -- 1.25
+})
+local function rootAuto(pw: number, ph: number, w: number, h: number)
+    local W, H = rootSize(pw, ph, 0)
+    expect(W).toBeCloseTo(w)
+    expect(H).toBeCloseTo(h)
+end
+
+@test("a fixed scale divides the screen")
+local function rootFixed()
+    local W, H = rootSize(1920, 1080, 2)
+    expect(W).toBe(960)
+    expect(H).toBe(540)
+end
+
+@test("the scale setting is read when none is given")
+local function rootFromSetting()
+    expect(rootSize(1920, 1080)).toBe(1920)
+    settings.set("ui", "scale", 0.5)
+    local W, H = rootSize(1920, 1080)
+    expect(W).toBe(3840)
+    expect(H).toBe(2160)
+end
+
+--------------------------------------------------------------------------------
+-- A frame's rectangle
+--------------------------------------------------------------------------------
+
+@test("a rectangle from each of the nine anchors")
+@cases({
+    { "CENTER", 10, 20, 460, 250 },
+    { "TOPLEFT", 10, -20, 10, 440 },
+    { "TOP", 0, 0, 450, 460 },
+    { "TOPRIGHT", -10, 0, 890, 460 },
+    { "LEFT", 5, 0, 5, 230 },
+    { "RIGHT", 0, 0, 900, 230 },
+    { "BOTTOMLEFT", 1, 2, 1, 2 },
+    { "BOTTOM", 0, 3, 450, 3 },
+    { "BOTTOMRIGHT", 0, 0, 900, 0 },
+})
+local function placeAnchors(point: string, x: number, y: number, l: number, b: number)
+    local L, B, w, h = place({ point = point, x = x, y = y }, 100, 40, 1000, 500)
+    expect(L).toBe(l)
+    expect(B).toBe(b)
+    expect(w).toBe(100)
+    expect(h).toBe(40)
+end
+
+@test("a position without point or offsets is the centre")
+local function placeDefaults()
+    local l, b = place({}, 100, 40, 1000, 500)
+    expect(l).toBe(450)
+    expect(b).toBe(230)
+end
+
+--------------------------------------------------------------------------------
+-- Overlaps
+--------------------------------------------------------------------------------
+
+local function rect(l: number, b: number, w: number, h: number): Rect
+    return { f = placed("x", "x", {}, w, h), l = l, b = b, w = w, h = h }
+end
+
+@test("an overlap's size, rounded")
+local function overlapSize()
+    local x, y = overlap(rect(0, 0, 100, 100), rect(50.4, 60, 100, 100))
+    expect(x).toBe(50)
+    expect(y).toBe(40)
+end
+
+@test("touching by 2 px or less, or apart, isn't an overlap")
+@cases({
+    { 98, 0 },     -- 2 px across
+    { 0, 98 },     -- 2 px up
+    { 200, 0 },    -- apart
+    { 0, -150 },
+})
+local function overlapNone(l: number, b: number)
+    local x, y = overlap(rect(0, 0, 100, 100), rect(l, b, 100, 100))
+    expect(x).toBeNil()
+    expect(y).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- What is checked
+--------------------------------------------------------------------------------
+
+@test("the frames checked: enabled, own place, shown, a real place, with a size")
+local function framesChecked()
+    local big = frameOf(200, 50)
+    local list = {
+        info(big, "a", "Big"),
+        info(frameOf(200, 50), "a", "Off", false),
+        info(frameOf(200, 50), "a", "Custom", true, true),
+        info(frameOf(200, 50), "hidden", "Hidden"),
+        info(frameOf(1, 50), "a", "Thin"),
+        info(frameOf(50, 1), "b", "Flat"),
+    }
+    local frames = framesOf(list)
+    expect(#frames).toBe(1)
+    expect(frames[1]).toEqual({ id = "lctest.a", label = "Big", w = 200, h = 50,
+        pos = { point = "CENTER", x = 0, y = 0 } })
+end
+
+@test("an anchor-only place (the tooltip's) isn't checked")
+local function framesAnchorOnly()
+    expect(settings.has("tooltips", "position")).toBe(true)
+    local m: editMode.MoverInfo = { frame = frameOf(200, 50), namespace = "tooltips", key = "position",
+        label = "Tooltips", enabled = true, custom = false }
+    expect(framesOf({ m })).toEqual({})
+end
+
+@test("a frame's size in root units: its scale against the root's")
+local function framesScaled()
+    local f = frameOf(100, 40)
+    f:SetScale(2)
+    local frames = framesOf({ info(f, "a", "Scaled") })
+    expect(frames[1].w).toBeCloseTo(200)
+    expect(frames[1].h).toBeCloseTo(80)
+end
+
+@test("a frame without a size has none")
+local function framesNoSize()
+    local f = CreateFrame("Frame", nil, root)
+    expect(framesOf({ info(f, "a", "None") })).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- Issues
+--------------------------------------------------------------------------------
+
+@test("a frame leaving each edge")
+local function issuesEdges()
+    local frames = {
+        placed("t.l", "Left", { point = "LEFT", x = -20 }, 100, 40),
+        placed("t.r", "Right", { point = "TOPRIGHT", x = 30.4, y = 10 }, 100, 40),
+        placed("t.b", "Low", { point = "BOTTOM", y = -5 }, 100, 40),
+    }
+    expect(issuesOn(frames, 1000, 500)).toEqual({
+        "Left leaves the screen: 20 px past the left",
+        "Right leaves the screen: 30 px past the right, 10 px above the top",
+        "Low leaves the screen: 5 px below the bottom",
+    })
+end
+
+@test("a frame 1 px over an edge is fine")
+local function issuesOnePx()
+    local frames = { placed("t.l", "Left", { point = "TOPLEFT", x = -1, y = 1 }, 100, 40) }
+    expect(issuesOn(frames, 1000, 500)).toEqual({})
+end
+
+@test("overlapping frames, in pairs")
+local function issuesOverlap()
+    local frames = {
+        placed("t.a", "A", { point = "CENTER" }, 100, 100),
+        placed("t.b", "B", { point = "CENTER", x = 50 }, 100, 100),
+        placed("t.c", "C", { point = "TOPLEFT" }, 10, 10),
+    }
+    expect(issuesOn(frames, 1000, 500)).toEqual({ "A and B overlap (50 × 100 px)" })
+end
+
+@test("party and raid frames, and the flight timer and the timeline, never show together")
+local function issuesApart()
+    local frames = {
+        placed("party.position", "Party", { point = "CENTER" }, 100, 100),
+        placed("raid.position", "Raid", { point = "CENTER" }, 100, 100),
+        placed("flightmap.timerPosition", "Flight", { point = "TOP" }, 100, 100),
+        placed("timeline.position", "Timeline", { point = "TOP" }, 100, 100),
+    }
+    expect(issuesOn(frames, 1000, 500)).toEqual({})
+    -- the party frames and the timeline still can
+    frames[4].pos = { point = "CENTER" }
+    expect(issuesOn(frames, 1000, 500)).toEqual({
+        "Party and Timeline overlap (100 × 100 px)",
+        "Raid and Timeline overlap (100 × 100 px)",
+    })
+end
+
+--------------------------------------------------------------------------------
+-- The report
+--------------------------------------------------------------------------------
+
+@test("run: every screen, its issues, saved to SuuUIProbe")
+local function runReport()
+    -- the check sees two frames: one centred, one past the right at 1080p
+    local wide = frameOf(300, 40)
+    local small = frameOf(40, 40)
+    settings.set("lctest", "b", { point = "LEFT", x = 1900, y = 0 })
+    mock.module(editMode, { movers = function(): editMode.MoverInfo[]
+        return { info(wide, "a", "Wide"), info(small, "b", "Small") }
+    end })
+    local from = #mock.printed()
+    layoutCheck.run()
+    local lines = printedSince(from)
+    expect(hasLine(lines, "1080p (1920 × 1080): 1 issue")).toBe(true)
+    expect(hasLine(lines, "  Small leaves the screen: 20 px past the right")).toBe(true)
+    expect(hasLine(lines, "1440p (2560 × 1440): fits")).toBe(true)
+    expect(hasLine(lines, "4K (2560 × 1440): fits")).toBe(true)
+    expect(hasLine(lines, "3440 × 1440 (3440 × 1440): fits")).toBe(true)
+    expect(hasLine(lines, "Your layout fits every screen size")).toBe(false)
+    expect(hasLine(lines, "Layout check: /reload to save the report.")).toBe(true)
+    local report = DB.probe.layoutCheck
+    expect(type(report.at)).toBe("string")
+    expect(report.screens["1080p"]).toEqual({ root = "1920 × 1080",
+        issues = { "Small leaves the screen: 20 px past the right" } })
+    expect(report.screens["4K"]).toEqual({ root = "2560 × 1440", issues = {} })
+end
+
+@test("run: two issues, and a layout that fits")
+local function runFits()
+    local a, b = frameOf(100, 100), frameOf(100, 100)
+    mock.module(editMode, { movers = function(): editMode.MoverInfo[]
+        return { info(a, "a", "A"), info(b, "b", "B") }
+    end })
+    settings.set("lctest", "b", { point = "CENTER", x = 10, y = 0 })
+    settings.set("ui", "scale", 2)
+    local from = #mock.printed()
+    layoutCheck.run()
+    expect(hasLine(printedSince(from), "1080p (960 × 540): 1 issue")).toBe(true)
+    settings.set("lctest", "b", { point = "TOPLEFT", x = 0, y = 0 })
+    from = #mock.printed()
+    layoutCheck.run()
+    local lines = printedSince(from)
+    expect(hasLine(lines, "1080p (960 × 540): fits")).toBe(true)
+    expect(hasLine(lines, "Your layout fits every screen size, nothing overlapping.")).toBe(true)
+    -- two issues
+    settings.set("lctest", "b", { point = "CENTER", x = 1000, y = 0 })
+    settings.set("lctest", "a", { point = "CENTER", x = 1000, y = 0 })
+    from = #mock.printed()
+    layoutCheck.run()
+    expect(hasLine(printedSince(from), "1080p (960 × 540): 3 issues")).toBe(true)
+end
+
+@test("/suu layoutcheck runs it")
+local function command()
+    mock.module(editMode, { movers = function(): editMode.MoverInfo[] return {} end })
+    local from = #mock.printed()
+    mock.slash("/suu layoutcheck")
+    expect(hasLine(printedSince(from), "Your layout fits every screen size, nothing overlapping.")).toBe(true)
+end

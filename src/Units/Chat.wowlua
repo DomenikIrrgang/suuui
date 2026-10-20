@@ -25,6 +25,12 @@ import SuuUI from "/Core/API"
 import isSecret from "wowlua:secret"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+-- the text work (lines, the search, the input's history, the tabs' order)
+-- in modules of their own beside this one
+import * as chatLines from "./Chat/Lines"
+import * as chatSearch from "./Chat/Search"
+import * as chatInput from "./Chat/Input"
+import * as chatTabs from "./Chat/Tabs"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -52,8 +58,7 @@ local M = SuuUI.RegisterModule({
 })
 
 -- a value that's there and readable
-type Readable = string | number | boolean | table | (...any) -> ...any
-local function plain(v: unknown): v is Readable return v ~= nil and not isSecret(v) end
+local plain = chatLines.plain
 local BODY_FONT = "Interface\\AddOns\\SuuUI\\Media\\Fonts\\Figtree-Regular.ttf"
 local PAD_X, PAD_TOP, PAD_BOTTOM = S["space-5"], S["space-2"], S["space-5"]
 local TABS_H, INPUT_H, GAP = 24, 30, S["space-3"]
@@ -66,7 +71,7 @@ local WAKE = { "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT
     "CHAT_MSG_BN_WHISPER", "CHAT_MSG_BN_WHISPER_INFORM", "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER" }
 
 -- The names' classes in a line, in the order they come (false: none found).
-type Classes = { [number]: string | false }
+type Classes = chatLines.Classes
 -- A line in a mirror, kept to draw again (with or without the time, in a
 -- new theme). `text` and r, g, b are Blizzard's and may be secret.
 type Line = {
@@ -76,12 +81,10 @@ type Line = {
 -- A whisper line kept for a whisper window (and across logouts).
 type Whisper = { who: string, text: string, r: any, g: any, b: any, at: number, old?: boolean, shown?: Line }
 -- A line as saved in the kept chat.
-type Saved = { text: string, at: number, rgb: string?, who?: string }
+type Saved = chatLines.Saved
 -- A kept line for the search: Blizzard's text, the line as shown, where from.
-type KeptEntry = {
-    src: string, line: Line, r: any, g: any, b: any, where: string, whisper?: boolean, n: number, kind?: string,
-}
-type Found = { key: string, who: string?, lines: KeptEntry[] }
+type KeptEntry = chatSearch.KeptEntry
+type Found = chatSearch.Found
 
 local hidden = CreateFrame("Frame")
 
@@ -184,7 +187,7 @@ end
 -- The log's rectangle in UIParent units, from the panel (SuuUI's own frame).
 function M:LogRect()
     local p = self.panel
-    local l, b, w, h = p:GetLeft(), p:GetBottom(), p:GetWidth(), p:GetHeight()
+    local l, b, w = p:GetLeft(), p:GetBottom(), p:GetWidth()
     if not (l and b) then return nil end
     local k = p:GetEffectiveScale() / UIParent:GetEffectiveScale()
     local left = (l + PAD_X) * k
@@ -258,7 +261,6 @@ function M:SkinFrame(cf: any)
     if not ok then self.pendingSkin = true end
     self:Mirror(cf)
     -- the edit box (temporary windows' too: restyled only, never hooked)
-    local id = cf:GetID()
     local eb = _G[name .. "EditBox"]
     if eb then
         for _, part in ipairs({ "Left", "Mid", "Right", "FocusLeft", "FocusMid", "FocusRight" }) do
@@ -433,7 +435,7 @@ local function linkEnter(frame: any, link: unknown)
     end
 end
 
-function M:MirrorFrame(cf: any): any
+function M:MirrorFrame(_cf: any): any
     local m = CreateFrame("ScrollingMessageFrame", nil, self.panel.log)
     m:SetAllPoints()
     m:SetJustifyH("LEFT")
@@ -462,25 +464,22 @@ end
 -- goes in whole. The combat log's lines are left as Blizzard writes them.
 --------------------------------------------------------------------------------
 
-local DIAMOND = "Interface\\AddOns\\SuuUI\\Media\\Textures\\ChatDiamond.tga"
+local DIAMOND = chatLines.DIAMOND
 local classByName = {}
-
-local function tail(fmt: unknown): string?
-    return type(fmt) == "string" and fmt:match("^%%s(.+)$") or nil
-end
 
 -- what follows the author in Blizzard's line → the tag the design puts first
 -- ("" for none)
-local VERBS
-local function verbs()
+local VERBS: chatLines.Verb[]?
+local function verbs(): chatLines.Verb[]
     if VERBS then return VERBS end
-    VERBS = {}
-    local function add(fmt: unknown, tag: string) local t = tail(fmt); if t then VERBS[#VERBS + 1] = { tail = t, tag = tag } end end
+    local list: chatLines.Verb[] = {}
+    VERBS = list
+    local function add(fmt: unknown, tag: string) local v = chatLines.verb(fmt, tag); if v then list[#list + 1] = v end end
     add(_G.CHAT_SAY_GET, "")
     add(_G.CHAT_YELL_GET, _G.CHAT_MSG_YELL or "Yell")
     add(_G.CHAT_WHISPER_GET, "From")
     add(_G.CHAT_BN_WHISPER_GET, "From")
-    return VERBS
+    return list
 end
 
 local function classOf(name: string?, lineID: string?): string?
@@ -503,107 +502,26 @@ local function classOf(name: string?, lineID: string?): string?
     return nil
 end
 
-local function chip(class: string?): string
-    local c = class and T.color["class-" .. class:lower()]
-    if not c then return "" end
-    return ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t"):format(DIAMOND,
-        math.floor(c[1] * 255 + 0.5), math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5))
-end
-
-local function stripColour(s: string): string
-    return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
-end
-
 -- Blizzard's own timestamp (its option in Social) as a pattern for the
 -- start of a line: its date format with the numbers as wildcards.
-local stampFormat, stampPattern
-local function blizzardStamp()
-    local fmt = GetCVar and GetCVar("showTimestamps")
-    if not plain(fmt) or type(fmt) ~= "string" or fmt == "" or fmt == "none" then return nil end
-    if fmt ~= stampFormat then
-        stampFormat = fmt
-        local out = {}
-        local i = 1
-        while i <= #fmt do
-            local c = fmt:sub(i, i)
-            if c == "%" and i < #fmt then
-                local k = fmt:sub(i + 1, i + 1)
-                out[#out + 1] = (k == "p") and "[AaPp]%.?[Mm]%.?" or "%d+"
-                i = i + 2
-            else
-                out[#out + 1] = c:gsub("%p", "%%%0")
-                i = i + 1
-            end
-        end
-        stampPattern = table.concat(out)
-    end
-    return stampPattern
-end
-
-local function stripBlizzardStamp(text: string): string
-    local pattern = blizzardStamp()
-    if not pattern then return text end
-    local rest = text:match("^" .. pattern .. "(.*)$")
-    if rest then return rest end
-    -- coloured
-    local colour = text:match("^|c%x%x%x%x%x%x%x%x")
-    if colour then
-        rest = text:sub(11):match("^" .. pattern .. "|r(.*)$")
-        if rest then return rest end
-    end
-    return text
+local function blizzardStamp(): string?
+    return chatLines.stampPatternOf(GetCVar and GetCVar("showTimestamps"))
 end
 
 -- Blizzard's finished line → the design's (without the time). `old`: a
 -- line kept from an earlier session (its line ids mean nothing now).
 -- `classes`: the names' classes in the order they come, filled the first
 -- time and read when the line is formatted again (a theme's new colours),
--- so a name keeps the class it was shown with.
+-- so a name keeps the class it was shown with. (Units/Chat/Lines does the
+-- text; this gives it the settings and the world's answers.)
 function M:FormatLine(text: any, id: number?, old: boolean?, classes: Classes?): any
     if not plain(text) or type(text) ~= "string" then return text end
-    local diamonds, short = self:Get("classDiamonds"), self:Get("shortChannels")
-    local colored = self:Get("classNames")
-    -- SuuUI shows the time: Blizzard's own goes
-    if self:Get("timestamps") then text = stripBlizzardStamp(text) end
-    -- channel tags: no brackets, numbered ones without the zone
-    if short then
-        text = text:gsub("(|Hchannel:[^|]*|h)%[(.-)%](|h)", function(open, label, close)
-            return open .. label:gsub("%s+%-%s+.*$", "") .. close
-        end)
-    end
-    -- the say/yell/whisper verb after the first name → a tag before it
-    local head, link, rest = text:match("^(.-)(|Hplayer:.-|h.-|h)(.*)$")
-    if link then
-        for _, v in ipairs(verbs()) do
-            if rest:sub(1, #v.tail) == v.tail then
-                text = head .. (v.tag ~= "" and (v.tag .. " ") or "") .. link .. ": " .. rest:sub(#v.tail + 1)
-                break
-            end
-        end
-    end
-    -- names: no brackets, the class diamond first, the name in its class
-    -- colour (or the line's)
-    local k = 0
-    text = text:gsub("|Hplayer:([^|]*)|h%[(.-)%]|h", function(data, shown)
-        local name, lineID = data:match("^([^:]+):?(%d*)")
-        k = k + 1
-        local class
-        if classes and classes[k] ~= nil then
-            class = classes[k] or nil
-        else
-            class = (diamonds or colored) and classOf(name, (not old and lineID ~= "") and lineID or nil)
-            if classes and (diamonds or colored) then classes[k] = class or false end
-        end
-        local mark = diamonds and chip(class) or ""
-        -- the diamond copies the line (asked 2026-10-18)
-        if mark ~= "" and id then mark = "|Haddon:suuui:copy:" .. id .. "|h" .. mark .. "|h" end
-        local c = colored and class and T.color["class-" .. class:lower()]
-        local label = stripColour(shown)
-        if c then label = "|cff" .. c.hex .. label .. "|r" end
-        return mark .. "|Hplayer:" .. data .. "|h" .. label .. "|h"
-    end)
-    text = text:gsub("(|HBNplayer:[^|]*|h)%[(.-)%](|h)", "%1%2%3")
-    return text
+    return chatLines.formatLine(text, id, old, classes, {
+        diamonds = self:Get("classDiamonds"), short = self:Get("shortChannels"), colored = self:Get("classNames"),
+        -- SuuUI shows the time: Blizzard's own goes
+        stamp = self:Get("timestamps") and blizzardStamp() or nil,
+        verbs = verbs(), classOf = classOf,
+    })
 end
 
 -- Lines by their ID, for the diamond's copy (gone with their mirror's
@@ -611,14 +529,7 @@ end
 local lineSeq = 0
 local linesByID = setmetatable({}, { __mode = "v" })
 
--- A line as plain text: its time, tag, name and message, links as their
--- labels, without colours, icons or the diamond.
-local function plainLine(text: string): string
-    text = text:gsub("|T.-|t", ""):gsub("|A.-|a", "")
-    text = text:gsub("|H.-|h(.-)|h", "%1")
-    text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-    return (text:gsub("^%s+", ""))
-end
+local plainLine = chatLines.plainLine
 
 function M:CopyLine(id: number?)
     local line = id and linesByID[id]
@@ -706,23 +617,7 @@ end
 -- Whisper lines (to and from), kept for a whisper window opened later (and,
 -- with Kept chat, across logouts).
 local WHISPER_KEEP = 300
-local WHISPER_TYPES = { "WHISPER", "WHISPER_INFORM", "BN_WHISPER", "BN_WHISPER_INFORM" }
-
-local function sameColor(info: any, r: any, g: any, b: any): boolean
-    return info and type(r) == "number" and type(g) == "number" and type(b) == "number"
-        and math.abs(info.r - r) < 0.01 and math.abs(info.g - g) < 0.01 and math.abs(info.b - b) < 0.01
-end
-
-local function isWhisperLine(r: any, g: any, b: any, event: unknown): boolean
-    if type(event) == "string" and not isSecret(event) then
-        return event:find("WHISPER", 1, true) ~= nil
-    end
-    if isSecret(r) or isSecret(g) or isSecret(b) then return false end
-    for _, t in ipairs(WHISPER_TYPES) do
-        if sameColor(ChatTypeInfo and ChatTypeInfo[t], r, g, b) then return true end
-    end
-    return false
-end
+local isWhisperLine = chatLines.isWhisperLine
 
 function M:KeepWhisper(text: any, r: any, g: any, b: any, event: unknown)
     if isSecret(text) or type(text) ~= "string" or not isWhisperLine(r, g, b, event) then return end
@@ -814,61 +709,9 @@ end
 -- blocked) they do nothing.
 --------------------------------------------------------------------------------
 
-local HISTORY_KEEP = 50
--- the input's chat type → the command that sends there
-local TYPE_CMD = {
-    SAY = "/s", YELL = "/y", EMOTE = "/e", PARTY = "/p", RAID = "/raid", RAID_WARNING = "/rw",
-    INSTANCE_CHAT = "/i", GUILD = "/g", OFFICER = "/o",
-}
--- your own line's chat event → the command that sends there
-local SENT = {
-    CHAT_MSG_SAY = "/s", CHAT_MSG_YELL = "/y", CHAT_MSG_EMOTE = "/e",
-    CHAT_MSG_PARTY = "/p", CHAT_MSG_PARTY_LEADER = "/p",
-    CHAT_MSG_RAID = "/raid", CHAT_MSG_RAID_LEADER = "/raid", CHAT_MSG_RAID_WARNING = "/rw",
-    CHAT_MSG_INSTANCE_CHAT = "/i", CHAT_MSG_INSTANCE_CHAT_LEADER = "/i",
-    CHAT_MSG_GUILD = "/g", CHAT_MSG_OFFICER = "/o",
-    CHAT_MSG_CHANNEL = "channel", CHAT_MSG_WHISPER_INFORM = "/w",
-}
-
--- What the input holds as a line to keep: a command as typed, a message
--- with the command for where it goes.
+-- What the input holds as a line to keep (Units/Chat/Input reads it).
 local function typedLine(eb: any): string?
-    local text = eb:GetText()
-    if not plain(text) or type(text) ~= "string" then return nil end
-    text = strtrim(text)
-    if text == "" then return nil end
-    if text:sub(1, 1) == "/" then return text end
-    local chatType = eb:GetAttribute("chatType")
-    if not plain(chatType) then return nil end
-    if chatType == "WHISPER" or chatType == "BN_WHISPER" then
-        local target = eb:GetAttribute("tellTarget")
-        if plain(target) and type(target) == "string" and target ~= "" then return "/w " .. target .. " " .. text end
-        return nil
-    end
-    if chatType == "CHANNEL" then
-        local channel = eb:GetAttribute("channelTarget")
-        if plain(channel) and channel then return "/" .. tostring(channel) .. " " .. text end
-        return nil
-    end
-    local cmd = TYPE_CMD[chatType]
-    return cmd and (cmd .. " " .. text) or nil
-end
-
--- Your own line from a chat event, as the command that sends it again.
-local function sentLine(event: string, text: unknown, sender: unknown, channelNumber: unknown, guid: unknown): string?
-    local cmd = SENT[event]
-    if not cmd or not plain(text) or type(text) ~= "string" or text == "" then return nil end
-    if event == "CHAT_MSG_WHISPER_INFORM" then
-        if not plain(sender) or type(sender) ~= "string" or sender == "" then return nil end
-        return "/w " .. sender .. " " .. text
-    end
-    local me = UnitGUID("player")
-    if not (plain(guid) and plain(me) and guid == me) then return nil end
-    if cmd == "channel" then
-        if not plain(channelNumber) or type(channelNumber) ~= "number" or channelNumber <= 0 then return nil end
-        cmd = "/" .. channelNumber
-    end
-    return cmd .. " " .. text
+    return chatInput.typedLine(eb:GetText(), function(key: string): unknown return eb:GetAttribute(key) end)
 end
 
 function M:History()
@@ -878,34 +721,8 @@ function M:History()
 end
 
 function M:AddHistory(line: string)
-    local list = self:History()
-    if list[#list] == line then return end
-    list[#list + 1] = line
-    while #list > HISTORY_KEEP do table.remove(list, 1) end
+    if not chatInput.push(self:History(), line) then return end
     self.recall = nil
-end
-
--- A protected command (/cast, /target, /focus …): blocked in combat when
--- SuuUI typed it in.
-local PROTECTED = {}
-for _, c in ipairs({ "cast", "castsequence", "castrandom", "use", "userandom", "target", "tar", "targetexact",
-                     "targetenemy", "targetfriend", "targetparty", "targetraid", "targetlasttarget", "targetlastenemy",
-                     "targetlastfriend", "cleartarget", "focus", "clearfocus", "assist", "click", "stopcasting",
-                     "stopattack", "startattack", "petattack", "petfollow", "petstay", "petpassive", "petdefensive",
-                     "petaggressive", "petassist", "equip", "equipslot", "equipset", "cancelaura", "cancelform",
-                     "dismount", "stopmacro", "changeactionbar", "swapactionbar", "worldmarker", "clearworldmarker" }) do
-    PROTECTED["/" .. c] = true
-end
-
-local function isProtectedLine(line: string): boolean
-    local cmd = line:match("^(/%S+)")
-    if not cmd then return false end
-    cmd = cmd:lower()
-    if IsSecureCmd then
-        local ok, secure = pcall(IsSecureCmd, cmd)
-        if ok and plain(secure) then return secure and true or false end
-    end
-    return PROTECTED[cmd] or false
 end
 
 local function chatLockdown()
@@ -930,11 +747,9 @@ function M:Recall(eb: any, step: number)
         r = { eb = eb, index = #list + 1 }
         self.recall = r
     end
-    local index = r.index + step
-    if InCombatLockdown() then
-        while list[index] and isProtectedLine(list[index]) do index = index + step end
-    end
-    if index < 1 or index > #list + 1 then return end
+    -- in combat past protected commands
+    local index = chatInput.recallIndex(list, r.index, step, InCombatLockdown() and true or false)
+    if not index then return end
     r.index = index
     eb:SetText(list[index] or "")
     eb:SetCursorPosition(#eb:GetText())
@@ -962,11 +777,11 @@ end
 
 function M:WatchSent()
     local valid = C_EventUtils and C_EventUtils.IsEventValid
-    for event in pairs(SENT) do
+    for event in pairs(chatInput.SENT) do
         if not valid or valid(event) then
             self:OnGameEvent(event, function(_, text, sender, _, _, _, _, _, channelNumber, _, _, _, guid)
                 if self.keyCapture then return end
-                local line = sentLine(event, text, sender, channelNumber, guid)
+                local line = chatInput.sentLine(event, text, sender, channelNumber, guid)
                 if line then self:AddHistory(line) end
             end)
         end
@@ -1281,14 +1096,7 @@ local EDIT_PAD = 4        -- edit mode's wider padding (6 px a side, not 4)
 local SLIDE = T.duration["dur-fast"]
 
 -- A window's key in the saved order: its window ID, or a whisper's player.
-local function tabKey(cf: any): string?
-    if cf.isTemporary then
-        local t = cf.chatTarget
-        if plain(t) and type(t) == "string" and t ~= "" then return "w:" .. t end
-        return nil
-    end
-    return "id:" .. cf:GetID()
-end
+local function tabKey(cf: any): string? return chatTabs.tabKey(cf) end
 
 -- The windows in this character's order: the kept ones first as kept, then
 -- the rest in the starting order (a new whisper tab at the end).
@@ -1296,34 +1104,12 @@ function M:OrderedWindows()
     local windows = self:Windows()
     local kept = self:CharData().tabOrder
     if type(kept) ~= "table" then return windows end
-    local order = kept :: any[]
-    local byKey, out, used = {}, {}, {}
-    for _, cf in ipairs(windows) do
-        local k = tabKey(cf)
-        if k then byKey[k] = cf end
-    end
-    -- a whisper keeps its place only while its tab is open
-    for i = #order, 1, -1 do
-        local k = order[i]
-        if type(k) ~= "string" or (k:sub(1, 2) == "w:" and not byKey[k]) then table.remove(order, i) end
-    end
-    for _, k in ipairs(order) do
-        local cf = byKey[k]
-        if cf and not used[cf] then used[cf] = true; out[#out + 1] = cf end
-    end
-    for _, cf in ipairs(windows) do
-        if not used[cf] then out[#out + 1] = cf end
-    end
-    return out
+    -- (a whisper keeps its place only while its tab is open)
+    return chatTabs.ordered(windows, kept :: any[], tabKey)
 end
 
 function M:SaveTabOrder(list: any[])
-    local keys = {}
-    for _, cf in ipairs(list) do
-        local k = tabKey(cf)
-        if k then keys[#keys + 1] = k end
-    end
-    self:CharData().tabOrder = keys
+    self:CharData().tabOrder = chatTabs.keysOf(list, tabKey)
 end
 
 function M:HasTabOrder()
@@ -1356,7 +1142,6 @@ end
 
 -- A dashed outline around `frame` (3 px dashes, 2 px gaps, one physical pixel
 -- thick, inside its edge).
-local DASH, GAP_DASH = 3, 2
 local function dashedOutline(frame: any): any
     local o = { frame = frame, parts = {}, color = "gilt-line" }
     function o:Layout(w: number, h: number)
@@ -1375,17 +1160,7 @@ local function dashedOutline(frame: any): any
             t:SetSize(dw, dh)
             t:Show()
         end
-        local step = DASH + GAP_DASH
-        for x = 0, w - 1, step do
-            local dw = math.min(DASH, w - x)
-            dash(x, 0, dw, px)
-            dash(x, h - px, dw, px)
-        end
-        for y = step, h - step, step do
-            local dh = math.min(DASH, h - y)
-            dash(0, y, px, dh)
-            dash(w - px, y, px, dh)
-        end
+        for _, d in ipairs(chatTabs.dashes(w, h, px)) do dash(d.x, d.y, d.w, d.h) end
         for i = n + 1, #self.parts do self.parts[i]:Hide() end
         self.w, self.h = w, h
     end
@@ -1442,7 +1217,7 @@ end
 -- Placing and sliding the tabs
 --------------------------------------------------------------------------------
 
-local function smooth(t: number): number return t * t * (3 - 2 * t) end
+local smooth = chatTabs.smooth
 
 function M:SetTab(b: any, x: number, y: number)
     local p = self.panel
@@ -1630,11 +1405,12 @@ function M:MoveDrag(cx: number)
     local x = math.max(0, math.min(d.maxX, cx - d.grab))
     -- its place: after every other tab whose middle it has passed
     local centre = x + b:GetWidth() / 2
-    local index = 1
+    local mids: (number | false)[] = {}
     for i, cf in ipairs(d.others) do
         local o = p.tabFor[cf]
-        if o and (o.slide and o.slide.tx or o.x or 0) + o:GetWidth() / 2 < centre then index = i + 1 end
+        mids[i] = o and (o.slide and o.slide.tx or o.x or 0) + o:GetWidth() / 2 or false
     end
+    local index = chatTabs.dropIndex(mids, centre)
     if index ~= d.index or not d.slotX then
         d.index = index
         self:LayoutDrag(index)
@@ -1706,43 +1482,12 @@ end
 
 local KEEP_LINES, KEEP_WHISPERS = 100, 200
 local DIM = T.opacity["opacity-ooc"]
-local WHITE = "Interface\\Buttons\\WHITE8X8"
 
 -- the lines' width (the panel's, less its padding)
 local function logWidth() return UI.Size("chat-w") - PAD_X * 2 end
 
-local function rgbHex(r: unknown, g: unknown, b: unknown): string?
-    if not (plain(r) and plain(g) and plain(b)) then return nil end
-    if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then return nil end
-    local function c(v: number): number return math.max(0, math.min(255, math.floor(v * 255 + 0.5))) end
-    return ("%02x%02x%02x"):format(c(r), c(g), c(b))
-end
-
-local function hexRGB(hex: unknown): (number?, number?, number?)
-    if type(hex) ~= "string" or not hex:match("^%x%x%x%x%x%x$") then return nil end
-    return (tonumber(hex:sub(1, 2), 16) or 0) / 255, (tonumber(hex:sub(3, 4), 16) or 0) / 255,
-        (tonumber(hex:sub(5, 6), 16) or 0) / 255
-end
-
--- A line as saved, or nil for one that mustn't be.
-local function keptLine(text: unknown, r: any, g: any, b: any, at: unknown): Saved?
-    if not plain(text) or type(text) ~= "string" or text == "" or text:find("|K", 1, true) then return nil end
-    if not plain(at) or type(at) ~= "number" then return nil end
-    return { text = text, at = at, rgb = rgbHex(r, g, b) }
-end
-
--- An earlier line dimmed: its colours (and the class diamond's) at
--- opacity-ooc over the dark ground (a line can't have an alpha of its own).
-local DIAMOND_COLOURED = "(|T" .. DIAMOND:gsub("%p", "%%%0") .. "[^|]-):(%d+):(%d+):(%d+)|t"
-local function dimByte(v: any): number return math.floor((tonumber(v) or 0) * DIM + 0.5) end
-local function dimmed(text: string): string
-    text = text:gsub("|c(%x%x)(%x%x)(%x%x)(%x%x)", function(a, r, g, b)
-        return ("|c%s%02x%02x%02x"):format(a, dimByte(tonumber(r, 16)), dimByte(tonumber(g, 16)), dimByte(tonumber(b, 16)))
-    end)
-    return (text:gsub(DIAMOND_COLOURED, function(head, r, g, b)
-        return ("%s:%d:%d:%d|t"):format(head, dimByte(r), dimByte(g), dimByte(b))
-    end))
-end
+local hexRGB, keptLine, ago, rule = chatLines.hexRGB, chatLines.keptLine, chatLines.ago, chatLines.rule
+local function dimmed(text: string): string return chatLines.dimmed(text, DIM) end
 
 -- Widths in the lines' font (texture codes and all).
 local bodyMeasure
@@ -1754,29 +1499,6 @@ local function measureBody(text: string, size: number): number
     bodyMeasure:SetFont(BODY_FONT, size, "")
     bodyMeasure:SetText(text)
     return bodyMeasure:GetUnboundedStringWidth()
-end
-
-local function ago(seconds: number): string
-    if seconds < 90 then return "just now" end
-    if seconds < 3600 then return math.floor(seconds / 60 + 0.5) .. " min ago" end
-    if seconds < 48 * 3600 then return math.floor(seconds / 3600 + 0.5) .. " h ago" end
-    return math.floor(seconds / 86400 + 0.5) .. " days ago"
-end
-
--- The divider's gilt-line rule, fading out towards its far end: in steps,
--- each darker towards the glass (a texture in a line can't fade).
-local function rule(width: number, rising: boolean): string
-    local c, steps, out = T.color["gilt-line"], 6, {}
-    local each = math.floor(width / steps)
-    for i = 1, steps do
-        local k = (rising and i or (steps + 1 - i)) / steps * c[4] * 255
-        local w = (i == steps) and (width - each * (steps - 1)) or each
-        if w > 0 then
-            out[#out + 1] = ("|T%s:1:%d:0:0:8:8:0:8:0:8:%d:%d:%d|t"):format(WHITE, w,
-                math.floor(c[1] * k + 0.5), math.floor(c[2] * k + 0.5), math.floor(c[3] * k + 0.5))
-        end
-    end
-    return table.concat(out)
 end
 
 -- "Earlier · logged out 2 h ago" between gilt jewels, the rules filling the
@@ -1973,109 +1695,12 @@ local CHIPS = {
     { value = "all", label = "All tabs" }, { value = "whisper", label = "Whispers" },
     { value = "party", label = "Party" }, { value = "guild", label = "Guild" }, { value = "trade", label = "Trade" },
 }
-local KIND_TYPES = {
-    whisper = { "WHISPER", "WHISPER_INFORM" }, party = { "PARTY", "PARTY_LEADER" }, guild = { "GUILD", "OFFICER" },
-}
-local KIND_LABEL = { whisper = "Whispers", party = "Party", guild = "Guild" }
-
--- A line's numbered channel ("2. Trade"), if it's in one.
-local function channelOf(src: string): string?
-    local label = src:match("|Hchannel:[^|]*|h%[?([^%]|]*)")
-    return label and label:gsub("%s+%-%s+.*$", "") or nil
-end
-
--- Whisper, party, guild or trade (Blizzard colours each chat type its own way).
-local function lineKind(src: string, r: any, g: any, b: any): string?
-    for kind, types in pairs(KIND_TYPES) do
-        for _, t in ipairs(types) do
-            if sameColor(ChatTypeInfo and ChatTypeInfo[t], r, g, b) then return kind end
-        end
-    end
-    local channel = channelOf(src)
-    if channel and channel:lower():find("trade", 1, true) then return "trade" end
-    return nil
-end
-
--- The text as shown (escape codes out), with the byte in the line of each
--- byte shown, and for one inside a link's label that link's start.
-local function visible(text: string): (string, number[], (number?)[])
-    local shown, at, links = {}, {}, {}
-    local i, n, link = 1, #text, nil
-    local function put(c: string, pos: number) shown[#shown + 1] = c; at[#at + 1] = pos; links[#links + 1] = link end
-    while i <= n do
-        local c = text:sub(i, i)
-        if c == "|" then
-            local k = text:sub(i + 1, i + 1)
-            if k == "c" then
-                if text:sub(i + 2, i + 2) == "n" then i = (text:find(":", i + 3, true) or n) + 1 else i = i + 10 end
-            elseif k == "r" then
-                i = i + 2
-            elseif k == "h" then
-                link = nil
-                i = i + 2
-            elseif k == "H" then
-                link = i
-                i = (text:find("|h", i + 2, true) or n) + 2
-            elseif k == "T" or k == "A" or k == "K" then
-                i = (text:find("|" .. k:lower(), i + 2, true) or n) + 2
-            elseif k == "|" then
-                put("|", i)
-                i = i + 2
-            else
-                put(c, i)
-                i = i + 1
-            end
-        else
-            put(c, i)
-            i = i + 1
-        end
-    end
-    return table.concat(shown), at, links
-end
-
--- A line too long to show its match: the time, tag and name kept, the
--- message from two words before the match (a link whole).
-local function snippet(text: string, shown: string, at: number[], links: (number?)[], s: number): string?
-    local body = text:find("|h: ", 1, true)
-    if not body then return nil end
-    body = body + 4
-    local first
-    for k = 1, #at do
-        if at[k] >= body then first = k break end
-    end
-    if not first or s <= first then return nil end
-    local c, spaces = s, 0
-    for k = s - 1, first, -1 do
-        if shown:byte(k) == 32 then
-            spaces = spaces + 1
-            if spaces == 2 then break end
-        end
-        c = k
-    end
-    if c <= first then return nil end
-    local from = at[c]
-    local link = links[c]
-    if link then
-        from = link
-        if text:sub(from - 10, from - 1):match("^|c%x%x%x%x%x%x%x%x$") then from = from - 10 end
-    end
-    if from <= body then return nil end
-    return text:sub(1, body - 1) .. "… " .. text:sub(from)
-end
-
--- Where the match sits in a line (x from its start, x to its end), or nil;
--- past the time ("21:20  ": the search is in the line, not its time).
-local TIME_SHOWN = 8
+local KIND_LABEL = chatSearch.KIND_LABEL
+local snippet = chatSearch.snippet
+-- Where the match sits in a line (Units/Chat/Search), measured in the
+-- lines' font at `size`.
 local function matchSpan(text: string, q: string, size: number): (number?, number?, string?, number[]?, (number?)[]?, number?)
-    local shown, at, links = visible(text)
-    local s, e = shown:lower():find(q, TIME_SHOWN, true)
-    if not (s and e) then return nil end
-    local function upto(byte: number, k: number): number
-        local part = text:sub(1, byte)
-        if links[k] then part = part .. "|h" end
-        return measureBody(part, size)
-    end
-    return upto(at[s] - 1, s), upto(at[e], e), shown, at, links, s
+    return chatSearch.matchSpan(text, q, function(part: string): number return measureBody(part, size) end)
 end
 
 -- The chips side by side, each as wide as its label (measured again when
@@ -2200,32 +1825,7 @@ end
 -- The lines with `q` (lower case) in them, in `scope`, by player: { key,
 -- who, lines }, the newest player first; and how many lines.
 function M:FindLines(q: string, scope: string): (Found[], number)
-    local groups, byKey, total = {}, {}, 0
-    for _, e in ipairs(self:KeptLines()) do
-        local line = e.line
-        line.plainText = line.plainText or plainLine(line.text):lower()
-        if line.plainText:find(q, 1, true) then
-            e.kind = e.whisper and "whisper" or lineKind(e.src, e.r, e.g, e.b)
-            if scope == "all" or scope == e.kind then
-                local who = e.src:match("|Hplayer:([^:|]+)")
-                local key = who and who:lower():match("^([^%-]+)") or ""
-                local group = byKey[key]
-                if not group then
-                    group = { key = key, who = who, lines = {} }
-                    byKey[key] = group
-                    groups[#groups + 1] = group
-                end
-                group.lines[#group.lines + 1] = e
-                total = total + 1
-            end
-        end
-    end
-    return groups, total
-end
-
--- Where a single line came from: "Whispers", "Party", "2. Trade" or its tab.
-local function whereOf(e: KeptEntry): string
-    return KIND_LABEL[e.kind] or channelOf(e.src) or e.where
+    return chatSearch.findLines(self:KeptLines(), q, scope)
 end
 
 local function isMe(key: string): boolean
@@ -2354,9 +1954,8 @@ function M:RunSearch()
     end
     local groups, total = {}, 0
     if #q >= 2 then groups, total = self:FindLines(q, s.scope) end
-    s.count:SetValue(#q >= 2 and (total == 1 and "1 line" or (total .. " lines")) or "")
-    s.note:SetValue(#q < 2 and "A player's name or a word: every tab and whisper kept."
-        or (total == 0 and "Nothing kept matches." or ""))
+    s.count:SetValue(chatSearch.countText(q, total))
+    s.note:SetValue(chatSearch.noteText(q, total))
     local width = logWidth() - 8
     local size = fontSize(ChatFrame1)
     local rowH = math.ceil(size) + 5
@@ -2378,8 +1977,7 @@ function M:RunSearch()
         h.name:SetValue(name or "Other lines")
         h.name:SetColor(token or (name and "ink" or "gilt-text"))
         local n = #group.lines
-        h.count:SetValue(n == 1 and ("1 line · " .. whereOf(group.lines[1]))
-            or (n .. " lines · last " .. date("%H:%M", group.lines[1].line.at)))
+        h.count:SetValue(chatSearch.groupCount(group))
         h.who = group.who
         h.whisper:SetShown(group.who ~= nil and not isMe(group.key) and FCF_OpenTemporaryWindow ~= nil)
         h:ClearAllPoints()

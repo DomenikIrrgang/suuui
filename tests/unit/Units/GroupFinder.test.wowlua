@@ -1,0 +1,935 @@
+-- Units/GroupFinder: the Group Finder module over the game's window. The
+-- library (SuuUI.LFG) is faked through its own table: its entries, listing,
+-- interest and tool answers are stubbed per test; the module's pages are
+-- read back from what they were given (`page.data`).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as settings from "/Core/Settings"
+import type Module from "/Core/Modules"
+import * as logic from "/Units/GroupFinder/Logic"
+import errorsSoFar, newParent from "../../helpers"
+
+type Entry = logic.Entry
+type Def = { [string]: any }
+
+const ID = "groupfinder"
+local M: Module = assert(SuuUI.GetModule(ID))
+local LFG = SuuUI.LFG
+
+local NAMES: { [string]: string } = { ["dungeon:rfk"] = "Razorfen Kraul", ["dungeon:sfk"] = "Shadowfang Keep",
+    ["dungeon:wc"] = "Wailing Caverns", ["zone:wetlands"] = "Wetlands" }
+
+-- the library's answers, set per test
+local entries: Entry[] = {}
+local listing: Def? = nil
+local interest: Def = {}
+local reasons: { [string]: string[] } = {}
+local toolAge: number? = nil
+local now = 1000
+local notes: Def[] = {}
+local dismissed: string[] = {}
+local refreshed: (number?)[] = {}
+local whispered: Entry[] = {}
+local invited: Entry[] = {}
+
+local function entry(t: Def): Entry
+    t.key = t.key or "Kessra"
+    t.activities = t.activities or {}
+    t.quests = t.quests or {}
+    t.roles = t.roles or {}
+    t.roles.needed = t.roles.needed or {}
+    t.roles.offered = t.roles.offered or {}
+    t.sources = t.sources or {}
+    t.text = t.text or ""
+    return t
+end
+
+@beforeEach
+local function fakeLibrary()
+    entries, listing, reasons, toolAge, now = {}, nil, {}, nil, 1000
+    interest = { level = 30, roles = { healer = true }, listed = {}, quests = {} }
+    notes, dismissed, refreshed, whispered, invited = {}, {}, {}, {}, {}
+    mock.stub(LFG.Catalogue, "Name", function(key: string): string return NAMES[key] or key end)
+    mock.stub(LFG.Catalogue, "Expand", function(key: string): string[] return { key } end)
+    mock.stub(LFG.Catalogue, "Get", function(key: string): Def?
+        if key == "dungeon:rfk" then return { key = key, kind = "dungeon", level = { 25, 35 } } end
+        return nil
+    end)
+    mock.stub(LFG.Catalogue, "All", function(kind: string?): Def[]
+        if kind == "dungeon" then return { { key = "dungeon:sfk" }, { key = "dungeon:rfk" } } end
+        if kind == "zone" then return { { key = "zone:wetlands" } } end
+        return {}
+    end)
+    mock.stub(LFG, "Entries", function(_: Def?): Entry[] return entries end)
+    mock.stub(LFG, "Entry", function(key: string): Entry?
+        for _, e in ipairs(entries) do if e.key == key then return e end end
+        return nil
+    end)
+    mock.stub(LFG, "Listing", function(): Def? return listing end)
+    mock.stub(LFG, "Interest", function(): Def return interest end)
+    mock.stub(LFG, "MatchReasons", function(e: Entry, _: Def?): string[] return reasons[e.key] or {} end)
+    mock.stub(LFG, "Now", function(): number return now end)
+    mock.stub(LFG, "CanInvite", function(e: Entry): boolean return e.sources.tool ~= nil end)
+    mock.stub(LFG, "ToolAge", function(_: number?): number? return toolAge end)
+    mock.stub(LFG, "Refresh", function(category: number?): boolean refreshed[#refreshed + 1] = category; return true end)
+    mock.stub(LFG, "Watches", function(): { [string]: boolean } return {} end)
+    mock.stub(LFG, "Delist", function(): (boolean?, any) return true end)
+    mock.stub(LFG, "Whisper", function(e: any) whispered[#whispered + 1] = e end)
+    mock.stub(LFG, "Invite", function(e: any) invited[#invited + 1] = e end)
+    mock.stub(SuuUI, "Notify", function(def: Def): any notes[#notes + 1] = def; return def.id end)
+    mock.stub(SuuUI, "DismissNotification", function(id: any) dismissed[#dismissed + 1] = id end)
+    M.held, M.noted, M.search, M.searching, M.editing, M.adEdited, M.adText = nil, nil, nil, nil, nil, nil, nil
+    M.lastPost, M.listedAt, M.lastListing, M.delistedByYou = nil, nil, nil, nil
+end
+
+@afterEach
+local function undo()
+    for _, key in ipairs({ "category", "activities", "fits", "show", "collapsed", "adChannel", "notify", "channels",
+                           "joinLFG", "chatExpiry", "extraLanguages", "staleAfter" }) do
+        settings.reset(ID, key)
+    end
+    if mock.player then mock.player:leaveCombat() end
+    local f = _G.LFGParentFrame
+    if f and f:IsShown() then HideUIPanel(f) end
+end
+
+--------------------------------------------------------------------------------
+-- Rows and the Browse page's data
+--------------------------------------------------------------------------------
+
+@test("Row: a group from the tool and chat: names, reason, sources, age, spots, who, post")
+local function rowGroup()
+    mock.fake("GetGeneralPlaystyleString", function(p: number): string return p == 2 and "Learning" or "" end)
+    local e = entry({ key = "Kessra", intent = "group", activities = { "dungeon:rfk", "dungeon:sfk", "dungeon:wc" },
+        members = { 3, 5 }, level = { 29 }, leader = { name = "Kessra", class = "MAGE", level = 31 },
+        roles = { needed = { healer = 1 } },
+        sources = { tool = { age = 30, seenAt = 990, newPlayerFriendly = true, playstyle = 2 },
+                    chat = { channel = "SAY", text = "LFM heal RFK", lastPost = 900 } } })
+    reasons.Kessra = { "zone", "role" }
+    local row = M:Row(e, interest)
+    expect(row.activity).toBe("Razorfen Kraul, Shadowfang Keep, +1")
+    expect(row.level).toBe("29+")
+    expect(row.reason).toBe("Needs your role")
+    expect(row.match).toBe(true)
+    expect(row.sources).toEqual({ "Tool", "Say" })
+    expect(row.age).toBe("now") -- 30 + (1000 - 990)
+    expect(row.slots).toEqual({ "has:none", "has:none", "has:none", "need:healer", "open" })
+    expect(row.rolesTip).toBe("Has: 3 without a role\nNeeds: 1 Healer")
+    expect(row.who).toBe("Lvl 31 " .. LOCALIZED_CLASS_NAMES_MALE["MAGE"])
+    expect(row.post).toBe("LFM heal RFK")
+    expect(row.playstyle).toBe("Learning")
+    expect(row.newPlayerFriendly).toBe(true)
+    expect(row.canInvite).toBe(true)
+    expect(row.isPlayer).toBe(false)
+    expect(row.leader).toBe("Kessra")
+end
+
+@test("Row: a player from chat: offered roles, chat age, a quest for a name, the key for a leader")
+local function rowPlayer()
+    mock.fake("C_QuestLog.GetTitleForQuestID", function(_: number): string? return nil end)
+    now = 1000 + 600
+    local e = entry({ key = "Morrow", intent = "player", quests = { 42 }, roles = { offered = { tank = true, damage = true } },
+        sources = { chat = { channel = "YELL", text = "", lastPost = 1000 } }, text = "listing comment" })
+    local row = M:Row(e, interest)
+    expect(row.activity).toBe("Quest 42")
+    expect(row.slots).toEqual({ "tank", "damage" })
+    expect(row.sources).toEqual({ "Yell" })
+    expect(row.age).toBe("10m")
+    expect(row.leader).toBe("Morrow")
+    expect(row.who).toBeNil()
+    expect(row.post).toBeNil() -- the chat post is empty
+    expect(row.reason).toBeNil()
+    expect(row.match).toBe(false)
+    expect(row.isPlayer).toBe(true)
+    expect(row.rolesTip).toBeNil()
+    expect(row.level).toBeNil()
+end
+
+@test("Row: the listing's comment when there's no chat post; a secret one left out; the level alone as who")
+local function rowComment()
+    local e = entry({ intent = "group", leader = { name = "A", level = 12 }, text = "tool comment", sources = { tool = {} } })
+    local row = M:Row(e, { roles = {} })
+    expect(row.post).toBe("tool comment")
+    expect(row.who).toBe("Lvl 12 ")
+    expect(row.age).toBe("")
+    local s = entry({ intent = "group", text = mock.secret("hidden"), sources = { tool = { playstyle = 1 } } })
+    mock.fake("GetGeneralPlaystyleString", function(_: number): string return "" end)
+    expect(M:Row(s, { roles = {} }).post).toBeNil()
+    expect(M:Row(s, { roles = {} }).playstyle).toBeNil()
+end
+
+@test("Data: entries by intent, matches first then newest, the filter, the category's options and tool state")
+local function data()
+    local old = entry({ key = "Old", intent = "group", activities = { "dungeon:rfk" }, lastSeen = 1 })
+    local new = entry({ key = "New", intent = "group", activities = { "dungeon:sfk" }, lastSeen = 5 })
+    local hit = entry({ key = "Hit", intent = "group", activities = { "dungeon:wc" }, lastSeen = 0 })
+    local p = entry({ key = "P", intent = "player", activities = { "dungeon:rfk" } })
+    entries = { old, new, hit, p }
+    reasons.Hit = { "activity" }
+    local filter: Def? = nil
+    mock.stub(LFG, "Entries", function(f: Def?): Entry[] filter = f; return entries end)
+    toolAge = 400
+    M.search = "rfk"
+    M.searching = true
+    local d = M:Data()
+    local keys: string[] = {}
+    for i, r in ipairs(d.groups) do keys[i] = r.key end
+    expect(keys).toEqual({ "Hit", "New", "Old" })
+    expect(#d.players).toBe(1)
+    expect(filter).toEqual({ minConfidence = 0, notYou = false, search = "rfk" })
+    expect(d.tool).toEqual({ age = 400, stale = true, searching = true, loading = false })
+    expect(d.category).toBe("all")
+    expect(#d.categories).toBe(6)
+    -- every kind's activities, by name
+    expect(d.activityOptions).toEqual({ { value = "dungeon:rfk", label = "Razorfen Kraul" },
+        { value = "dungeon:sfk", label = "Shadowfang Keep" }, { value = "zone:wetlands", label = "Wetlands" } })
+    expect(d.search).toBe("rfk")
+    expect(d.show).toBe("both")
+end
+
+@test("Data: a category's kinds and chosen activities go to the filter; show and fits narrow the rows")
+local function dataFiltered()
+    local filter: Def? = nil
+    mock.stub(LFG, "Entries", function(f: Def?): Entry[] filter = f; return entries end)
+    entries = {
+        entry({ key = "Fits", intent = "group", activities = { "dungeon:rfk" }, roles = { needed = { healer = 1 } } }),
+        entry({ key = "NotMyRole", intent = "group", activities = { "dungeon:rfk" }, roles = { needed = { tank = 1 } } }),
+        entry({ key = "TooHigh", intent = "group", activities = { "x" }, level = { 60 } }),
+        entry({ key = "Player", intent = "player", activities = { "dungeon:rfk" } }),
+    }
+    M:Set("category", "zone")
+    M:Set("activities", { "zone:wetlands" })
+    M:Set("fits", true)
+    M:Set("show", "group")
+    local d = M:Data()
+    expect(filter and filter.kinds).toEqual({ zone = true, quest = true })
+    expect(filter and filter.activities).toEqual({ ["zone:wetlands"] = true })
+    expect(#d.groups).toBe(1)
+    expect(d.groups[1].key).toBe("Fits")
+    expect(#d.players).toBe(0)
+    expect(d.activityOptions).toEqual({ { value = "zone:wetlands", label = "Wetlands" } })
+    expect(d.tool.loading).toBeFalsy()
+    -- loading: searching with no result yet
+    M.searching = true
+    toolAge = nil
+    expect(M:Data().tool).toEqual({ searching = true, loading = true })
+    -- an unknown category reads as All
+    settings.set(ID, "category", "nope")
+    expect(M:Data().category).toBe("all")
+end
+
+--------------------------------------------------------------------------------
+-- The window
+--------------------------------------------------------------------------------
+
+local function openBrowse()
+    local f = assert(_G.LFGParentFrame)
+    ShowUIPanel(f)
+    _G.LFGBrowseFrame:Show()
+    if _G.LFGListingFrame then _G.LFGListingFrame:Hide() end
+    if _G.LFGWhoListFrame then _G.LFGWhoListFrame:Hide() end
+    M:Follow()
+end
+
+@test("the window: Browse over the game's page, the cover with it; opening searches the tool")
+local function window()
+    expect(M.browse).toBeTruthy()
+    toolAge = nil
+    openBrowse()
+    expect(refreshed).toEqual({ 2 })
+    expect(M.browse).toBeShown()
+    expect(M.cover).toBeShown()
+    expect(_G.LFGBrowseFrame:GetAlpha()).toBe(0)
+    expect(M.browse.data).toBeTruthy()
+    HideUIPanel(_G.LFGParentFrame)
+    expect(M.browse:IsVisible()).toBe(false)
+    expect(errorsSoFar()).toEqual({})
+end
+
+@test("SearchOnOpen: not again within a minute of the last search")
+local function searchOnOpen()
+    toolAge = 30
+    M:SearchOnOpen()
+    expect(refreshed).toEqual({})
+    toolAge = 61
+    M:Set("category", "custom")
+    M:SearchOnOpen()
+    expect(refreshed).toEqual({ 120 })
+    expect(M.searching).toBe(true)
+end
+
+@test("Render and QueueRender: the page's data once, 0.2 s later; nothing while hidden")
+local function render()
+    openBrowse()
+    M.browse.data = nil
+    M:QueueRender()
+    M:QueueRender()
+    expect(M.browse.data).toBeNil()
+    mock.advanceTime(0.25)
+    expect(M.browse.data).toBeTruthy()
+    HideUIPanel(_G.LFGParentFrame)
+    M.browse.data = nil
+    M:Render()
+    expect(M.browse.data).toBeNil()
+end
+
+@test("the Browse page's controls: filter, refresh, clear, whisper, invite, collapse")
+local function controls()
+    openBrowse()
+    local b = M.browse
+    b.onFilter({ category = "raid" })
+    expect(M:Get("category")).toBe("raid")
+    expect(M:Get("activities")).toEqual({})
+    b.onFilter({ activities = { "raid:mc" }, fits = 1, show = "player", search = "mc" })
+    expect(M:Get("activities")).toEqual({ "raid:mc" })
+    expect(M:Get("fits")).toBe(true)
+    expect(M:Get("show")).toBe("player")
+    expect(M.search).toBe("mc")
+    b.onFilter({ fits = false })
+    expect(M:Get("fits")).toBe(false)
+    mock.stub(LFG, "Refresh", function(_: number?): boolean return false end)
+    b.onRefresh()
+    expect(M.searching).toBeNil()
+    mock.stub(LFG, "Refresh", function(_: number?): boolean return true end)
+    b.onRefresh()
+    expect(M.searching).toBe(true)
+    b.onClear()
+    expect(M:Get("category")).toBe("all")
+    expect(M:Get("show")).toBe("both")
+    expect(M.search).toBeNil()
+    local row = { entry = entry({}) }
+    b.onWhisper(row)
+    b.onInvite(row)
+    expect(whispered[1]).toBe(row.entry)
+    expect(invited[1]).toBe(row.entry)
+    b.onToggle("groups")
+    expect(M:Get("collapsed").groups).toBe(true)
+    b.onToggle("groups")
+    expect(M:Get("collapsed").groups).toBe(false)
+    mock.advanceTime(0.3)
+end
+
+@test("Follow: My listing over the game's panel while listed, the panel back for Update")
+local function myListing()
+    listing = { activities = { "dungeon:rfk" }, roles = { healer = true }, duration = 1800, comment = "hi" }
+    local f = assert(_G.LFGParentFrame)
+    ShowUIPanel(f)
+    _G.LFGBrowseFrame:Hide()
+    _G.LFGListingFrame:Show()
+    M:Follow()
+    expect(M.listed).toBeShown()
+    expect(_G.LFGListingFrame:GetAlpha()).toBe(0)
+    expect(M.cover).toBeShown()
+    local d = M.listed.data
+    expect(d.listing.activities).toEqual({ "Razorfen Kraul" })
+    expect(d.listing.roles).toEqual({ "healer" })
+    expect(d.listing.left).toBe("30m")
+    expect(d.listing.comment).toBe("hi")
+    expect(d.listing.voice).toBe("None")
+    expect(d.ad.channel).toBe("General")
+    expect(#d.ad.channels).toBe(5)
+    expect(d.ad.max).toBe(255)
+    -- Update: the game's panel back until it hides or the listing changes
+    M.listed.onUpdate()
+    expect(M.editing).toBe(true)
+    expect(M.listed:IsShown()).toBe(false)
+    expect(_G.LFGListingFrame:GetAlpha()).toBe(1)
+    _G.LFGListingFrame:Hide()
+    expect(M.editing).toBeNil()
+    -- not listed: no page
+    listing = nil
+    _G.LFGListingFrame:Show()
+    expect(M.listed:IsShown()).toBe(false)
+end
+
+@test("RenderListed: playstyle, category, how long listed, the ad written for you until you edit it")
+local function renderListed()
+    mock.fake("GetGeneralPlaystyleString", function(_: number): string return "Serious" end)
+    mock.fake("C_LFGList.GetLfgCategoryInfo", function(_: number): Def return { name = "Dungeons" } end)
+    listing = { activities = { "dungeon:sfk" }, roles = { tank = true }, playstyle = 3, category = 2, comment = mock.secret("x") }
+    M.listedAt = now - 125
+    local f = assert(_G.LFGParentFrame)
+    ShowUIPanel(f)
+    _G.LFGListingFrame:Show()
+    M:Follow()
+    local d = M.listed.data
+    expect(d.listing.playstyle).toBe("Serious")
+    expect(d.listing.category).toBe("Dungeons")
+    expect(d.listing.listedFor).toBe("2m")
+    expect(d.listing.comment).toBeNil()
+    expect(d.ad.text).toBe(M:AdFromListing(listing))
+    -- the voice chat's label, when the game has one
+    local g: any = _G
+    local savedVoice = g.LFGVoiceChat
+    g.LFGVoiceChat = { VoiceModeLabels = { [2] = "Party voice" } }
+    local l = assert(listing)
+    l.voiceMode = 2
+    M:RenderListed()
+    expect(M.listed.data.listing.voice).toBe("Party voice")
+    g.LFGVoiceChat = savedVoice
+    -- your own words stay; Rewrite writes it again
+    M.listed.onText("my ad")
+    M:RenderListed()
+    expect(M.listed.data.ad.text).toBe("my ad")
+    M.listed.onRewrite()
+    expect(M.listed.data.ad.text).toBe(M:AdFromListing(listing))
+    M.listed.onChannel("Trade")
+    expect(M:Get("adChannel")).toBe("Trade")
+    expect(M.listed.data.ad.channel).toBe("Trade")
+    M.listed.onDelist()
+    -- gone meanwhile: nothing drawn
+    listing = nil
+    M.listed.data = nil
+    M:RenderListed()
+    expect(M.listed.data).toBeNil()
+end
+
+@test("AdFromListing: empty without a listing, else the ad for who you are now")
+local function adFromListing()
+    expect(M:AdFromListing(nil)).toBe("")
+    local l = { activities = { "dungeon:rfk" }, roles = { damage = true } }
+    expect(M:AdFromListing(l)).toBe(logic.adText(l, logic.adContext()))
+end
+
+@test("PostAd: Say directly, a channel by its number, not joined: told; blank: nothing")
+local function postAd()
+    local sent: any[][] = {}
+    mock.fake("C_ChatInfo.SendChatMessage", function(...: any) sent[#sent + 1] = { ... } end)
+    mock.fake("GetChannelList", function(): ...any return 1, "General - Durotar", false end)
+    mock.fake("GetChannelName", function(_: string): number return 0 end)
+    M:PostAd("Say", "   ")
+    M:PostAd("Say", nil)
+    expect(#sent).toBe(0)
+    M:PostAd("Say", "LFG RFK")
+    expect(sent[1]).toEqual({ "LFG RFK", "SAY" })
+    expect(M.lastPost).toBe(GetTime())
+    M:PostAd("General", "LFG RFK")
+    expect(sent[2]).toEqual({ "LFG RFK", "CHANNEL", nil, 1 })
+    M:PostAd("Trade", "LFG RFK")
+    expect(#sent).toBe(2)
+    local printed = mock.printed()
+    expect(printed[#printed]).toContain("You're not in Trade; join it to post there.")
+    -- the page's Post goes the same way
+    M.listed.onPost("Say", "again")
+    expect(#sent).toBe(3)
+end
+
+--------------------------------------------------------------------------------
+-- Who
+--------------------------------------------------------------------------------
+
+@test("ReadWho: the results (secret names left out), capped when the server had more")
+local function readWho()
+    mock.fake("C_FriendList.GetNumWhoResults", function(): (number, number) return 3, 50 end)
+    mock.fake("C_FriendList.GetWhoInfo", function(i: number): Def?
+        if i == 2 then return { fullName = mock.secret("x") } end
+        return { fullName = "P" .. i, level = 10 + i, raceStr = "Orc", filename = "WARRIOR", classStr = "Warrior",
+                 fullGuildName = "G", area = "Durotar" }
+    end)
+    M.whoQuery = "orc"
+    M:ReadWho()
+    expect(M.whoData.state).toBe("results")
+    expect(M.whoData.query).toBe("orc")
+    expect(M.whoData.total).toBe(50)
+    expect(M.whoData.capped).toBe(true)
+    expect(M.whoData.results).toEqual({
+        { name = "P1", level = 11, race = "Orc", class = "WARRIOR", className = "Warrior", guild = "G", zone = "Durotar" },
+        { name = "P3", level = 13, race = "Orc", class = "WARRIOR", className = "Warrior", guild = "G", zone = "Durotar" } })
+    -- none; and a failed read keeps what was there
+    mock.fake("C_FriendList.GetNumWhoResults", function(): (number, number?) return 0, nil end)
+    M.whoQuery = nil
+    M:ReadWho()
+    expect(M.whoData).toEqual({ state = "none", query = "", total = 0, capped = false, results = {} })
+    mock.fake("C_FriendList.GetNumWhoResults", function(): any error("no") end)
+    M:ReadWho()
+    expect(M.whoData.state).toBe("none")
+end
+
+@test("Who: the page over the game's, its search box off; the list from WHO_LIST_UPDATE; the actions")
+local function who()
+    local f = assert(_G.LFGParentFrame)
+    ShowUIPanel(f)
+    _G.LFGBrowseFrame:Hide()
+    _G.LFGListingFrame:Hide()
+    M.whoData = nil
+    _G.LFGWhoListFrame:Show()
+    expect(M.who).toBeShown()
+    expect(M.who.data).toEqual({ state = "idle" })
+    expect(_G.LFGWhoListFrame:GetAlpha()).toBe(0)
+    mock.fake("C_FriendList.GetNumWhoResults", function(): (number, number) return 1, 1 end)
+    mock.fake("C_FriendList.GetWhoInfo", function(_: number): Def return { fullName = "Zug", level = 5 } end)
+    mock.fireEvent("WHO_LIST_UPDATE")
+    expect(M.who.data.results[1].name).toBe("Zug")
+    -- the search goes out with the game's filters
+    local sentWho: any[] = {}
+    mock.fake("C_FriendList.SetWhoToUi", function(_: boolean) end)
+    mock.fake("C_FriendList.SendWho", function(...: any) sentWho = { ... } end)
+    M.who.onSearch("zug")
+    expect(M.whoQuery).toBe("zug")
+    expect(sentWho[1]).toBe("zug")
+    M.who.onSearch(nil)
+    expect(sentWho[1]).toBe("")
+    -- the row's actions
+    local tells: string[] = {}
+    mock.stub(ChatFrameUtil, "SendTell", function(name: string) tells[#tells + 1] = name end)
+    M.who.onWhisper({ name = "Zug" })
+    expect(tells).toEqual({ "Zug" })
+    local invited: string[] = {}
+    mock.fake("C_PartyInfo.InviteUnit", function(name: string) invited[#invited + 1] = name end)
+    M.who.onInvite({ name = "Zug" })
+    expect(invited).toEqual({ "Zug" })
+    mock.stub(SuuUI, "AddFriend", function(name: any): boolean return name == "Zug" end)
+    M.who.onAddFriend({ name = "Zug" })
+    local printed = mock.printed()
+    expect(printed[#printed]).toContain("Friend request sent to Zug.")
+    M.who.onAddFriend({ name = "Nope" })
+    expect(mock.printed()[#mock.printed()]).toContain("Friend request sent to Zug.")
+    local menu: any[] = {}
+    mock.fake("FriendsFrame_ShowDropdown", function(...: any) menu = { ... } end)
+    M.who.onMenu({ name = "Zug" })
+    expect(menu).toEqual({ "Zug", 1 })
+    -- the game's filter menu, opened under our button (once restyled)
+    local dd = _G.LFGWhoListFrame.FilterDropdown
+    if dd then
+        local opened = mock.stub(dd, "OpenMenu", function() end)
+        M.who.onFilter(M.who.filter)
+        M.who.onFilter(M.who.filter)
+        expect(opened).toHaveBeenCalledTimes(2)
+        expect(M.whoDropdownSkinned).toBe(true)
+    end
+    _G.LFGWhoListFrame:Hide()
+    expect(M.who:IsShown()).toBe(false)
+    expect(_G.LFGWhoListFrame:GetAlpha()).toBe(1)
+end
+
+@test("Who's filter: nothing without the game's dropdown; a dropdown without OpenMenu is clicked")
+local function whoFilterFallbacks()
+    local page = assert(_G.LFGWhoListFrame)
+    local real = page.FilterDropdown
+    page.FilterDropdown = nil
+    M.who.onFilter(M.who.filter)
+    local clicked = mock.spy()
+    page.FilterDropdown = { ClearAllPoints = function() end, SetPoint = function() end, SetSize = function() end, Click = clicked }
+    M.whoDropdownSkinned = true
+    M.who.onFilter(M.who.filter)
+    expect(clicked).toHaveBeenCalled()
+    page.FilterDropdown = real
+end
+
+--------------------------------------------------------------------------------
+-- The library's settings
+--------------------------------------------------------------------------------
+
+@test("Configure: channels (Say and Yell as the chat's), languages, expiry, LookingForGroup")
+local function configure()
+    local got: Def? = nil
+    mock.stub(LFG, "Configure", function(t: Def?) got = t end)
+    M:Set("channels", { "Trade", "Say", "Yell" })
+    expect(got and got.channels).toEqual({ Trade = true, SAY = true, YELL = true })
+    M:Set("extraLanguages", { "deDE" })
+    expect(got and got.extraLanguages).toEqual({ deDE = true })
+    M:Set("joinLFG", false)
+    expect(got and got.joinLookingForGroup).toBe(false)
+    expect(got and got.hideLookingForGroup).toBe(false)
+    M:Set("chatExpiry", 120)
+    expect(got and got.chatExpiry).toBe(120)
+    expect(got and got.staleAfter).toBe(300)
+end
+
+@test("the settings section: every row builds; the slider reads and writes minutes")
+local function settingsSection()
+    local parent = newParent(600, 400)
+    local section = M:SettingsSection()
+    expect(section.id).toBe("groupfinder")
+    for _, g in ipairs(section.groups) do
+        for _, row in ipairs(g.rows) do
+            if row.build then expect(row.build(parent, function() end)).toBeTruthy() end
+            if row.get then
+                expect(row.get()).toBe(5)
+                row.set(3)
+                expect(M:Get("chatExpiry")).toBe(180)
+                expect(row.isDefault()).toBe(false)
+                row.reset()
+                expect(row.isDefault()).toBe(true)
+            end
+        end
+    end
+    -- Also read without language modules: a plain line
+    local lang = LFG.Lang
+    local saved = lang.modules
+    lang.modules = {}
+    for _, g in ipairs(M:SettingsSection().groups) do
+        for _, row in ipairs(g.rows) do
+            if row.key == "extraLanguages" then
+                local plain = row.build(parent, function() end)
+                expect(plain.text:GetText()).toBe("No other language modules yet.")
+                plain:SetValue("ignored")
+            end
+        end
+    end
+    -- with a Latin-script module: its chip
+    lang.modules = { deDE = {} }
+    for _, g in ipairs(M:SettingsSection().groups) do
+        for _, row in ipairs(g.rows) do
+            if row.key == "extraLanguages" then expect(row.build(parent, function() end)).toBeTruthy() end
+        end
+    end
+    lang.modules = saved
+    -- the preview: two notes, built once
+    local p1 = M:SettingsPreview(parent)
+    expect(M:SettingsPreview(parent)).toBe(p1)
+    -- the theme: the plain texts fit again
+    M:Emit("SUUUI_THEME_CHANGED")
+    parent:Hide()
+    expect(errorsSoFar()).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- Notes
+--------------------------------------------------------------------------------
+
+@test("Allowed: the tool when wanted; chat when wanted and sure enough")
+local function allowed()
+    local tool = entry({ sources = { tool = {} } })
+    local chat = entry({ sources = { chat = { confidence = 0.6 } } })
+    local chatEntry = entry({ sources = { chat = {} }, confidence = 0.8 })
+    expect(M:Allowed(tool, { tool = true })).toBe(true)
+    expect(M:Allowed(tool, { tool = false, chat = true })).toBe(false)
+    expect(M:Allowed(chat, { chat = true, conf = 50 })).toBe(true)
+    expect(M:Allowed(chat, { chat = true, conf = 70 })).toBe(false)
+    expect(M:Allowed(chat, { chat = true })).toBe(true)
+    expect(M:Allowed(chatEntry, { chat = true, conf = 80 })).toBe(true)
+    expect(M:Allowed(entry({ sources = { chat = {} } }), { chat = true, conf = 1 })).toBe(false)
+    expect(M:Allowed(chat, { chat = false })).toBe(false)
+end
+
+@test("Note: off: nothing; on: shown with its sound; held in combat and instances, the latest five")
+local function note()
+    local sounds = mock.stub(SuuUI.UI, "TrackerSound", function(_: string) end)
+    local built = 0
+    local function build(): Def? built = built + 1; return { id = "n" .. built } end
+    local n = M:Get("notify")
+    n.role.on = false
+    M:Set("notify", n)
+    M:Note("role", build)
+    M:Note("nope", build)
+    expect(built).toBe(0)
+    M:Note("player", build)
+    expect(notes[1].id).toBe("n1")
+    expect(sounds).toHaveBeenCalledWith("chime")
+    M:Note("fresh", build)
+    expect(sounds).toHaveBeenCalledTimes(1)
+    -- nothing to show
+    M:Note("fresh", function(): Def? return nil end)
+    expect(#notes).toBe(2)
+    -- in combat: held
+    mock.player:enterCombat()
+    for _ = 1, 7 do M:Note("fresh", build) end
+    expect(#notes).toBe(2)
+    expect(#M.held).toBe(5)
+    -- runout shows in combat? no: combat false; delisted neither
+    mock.player:leaveCombat()
+    expect(M.held).toBeNil()
+    expect(#notes).toBe(7)
+    -- in an instance: held unless the kind says otherwise
+    mock.enterInstance("party")
+    M:Note("fresh", build)
+    expect(#notes).toBe(7)
+    M:Note("runout", build)
+    expect(#notes).toBe(8)
+    -- out again (the game's loading screen fires PLAYER_ENTERING_WORLD, which
+    -- flushes; the emulator's leaveInstance doesn't, and a PLAYER_ENTERING_WORLD
+    -- fired by hand trips Blizzard's arena frames: Docs/test-notes/units-social.md)
+    mock.leaveInstance()
+    expect(#notes).toBe(8)
+    M:FlushHeld()
+    expect(#notes).toBe(9)
+    M:FlushHeld()
+    expect(#notes).toBe(9)
+end
+
+@test("OnMatch: one note for the most telling reason the settings allow, not again within 5 minutes, never your own")
+local function onMatch()
+    local e = entry({ key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, members = { 3, 5 },
+        roles = { needed = { healer = 1 } }, leader = { name = "Kessra", class = "MAGE", level = 31 }, sources = { tool = {} } })
+    entries = { e }
+    M:OnMatch(entry({ key = "Me", you = true }), { "role" })
+    expect(#notes).toBe(0)
+    M:OnMatch(e, { "zone", "role" })
+    expect(#notes).toBe(1)
+    expect(notes[1].category).toBe("Your role is needed")
+    M:OnMatch(e, { "role" })
+    expect(#notes).toBe(1)
+    now = now + 301
+    -- role off: the next reason
+    local n = M:Get("notify")
+    n.role.on = false
+    M:Set("notify", n)
+    M:OnMatch(e, { "zone", "role" })
+    expect(notes[2].category).toBe("In your zone")
+    -- nothing allowed: no note, not marked
+    now = now + 301
+    M:OnMatch(e, { "boss" })
+    expect(#notes).toBe(2)
+    -- gone by the time it would show: nothing
+    now = now + 301
+    entries = {}
+    M:OnMatch(e, { "zone" })
+    expect(#notes).toBe(2)
+end
+
+@test("MatchNote: each kind's title, body, icon and actions")
+local function matchNotes()
+    mock.fake("GetGeneralPlaystyleString", function(_: number): string return "Learning" end)
+    mock.fake("C_QuestLog.GetTitleForQuestID", function(_: number): string? return "Blood Shards" end)
+    mock.fake("GetRealZoneText", function(): string return "The Barrens" end)
+    mock.stub(LFG, "Social", function(name: any): string? return name == "Kessra" and "guild" or (name == "Morrow" and "friend" or nil) end)
+    local mage = LOCALIZED_CLASS_NAMES_MALE["MAGE"]
+    local g = entry({ key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, members = { 3, 5 }, level = { 29 },
+        quests = { 5 }, leader = { name = "Kessra", class = "MAGE", level = 31 }, roles = { needed = { healer = 1, tank = 2 } },
+        sources = { tool = { playstyle = 1 }, chat = { channel = "SAY", text = "LFM" } } })
+    local role = M:MatchNote("role", g)
+    expect(role.id).toBe("lfg:Kessra")
+    expect(role.title).toBe("Kessra needs a healer for Razorfen Kraul")
+    expect(role.body).toBe("3/5 · Lvl 31 " .. mage .. " · Learning · 29+")
+    expect(role.duration).toBe(12)
+    expect(role.icon.texture).toContain("RoleHealer")
+    expect(role.actions[1].variant).toBe("primary")
+    expect(role.source).toEqual({ tool = true, channel = "Say", text = "LFM" })
+    role.actions[1].onClick()
+    expect(whispered[#whispered]).toBe(g)
+    -- your role not among its needs: "your role", the class icon
+    interest.roles = { damage = true }
+    local other = M:MatchNote("role", g)
+    expect(other.title).toBe("Kessra needs your role for Razorfen Kraul")
+    expect(other.icon.coords).toEqual(CLASS_ICON_TCOORDS["MAGE"])
+    local fresh = M:MatchNote("fresh", g)
+    expect(fresh.title).toBe("A group for Razorfen Kraul")
+    expect(fresh.body).toBe("Kessra · 3/5 · needs 2 tanks and a healer · Learning")
+    expect(fresh.actions).toBeNil()
+    expect(M:MatchNote("quest", g).title).toBe("A group for Blood Shards")
+    expect(M:MatchNote("quest", g).body).toBe("Razorfen Kraul · Kessra · 3/5 · a quest in your log")
+    expect(M:MatchNote("zone", g).title).toBe("A group in The Barrens")
+    expect(M:MatchNote("boss", g).title).toBe("A raid forming for Razorfen Kraul")
+    expect(M:MatchNote("boss", g).body).toBe("Kessra · 3 of 5")
+    expect(M:MatchNote("friends", g).title).toBe("Kessra’s group for Razorfen Kraul")
+    expect(M:MatchNote("friends", g).body).toBe("Guild · Lvl 31 " .. mage .. " · needs 2 tanks and a healer · Learning")
+    -- a player looking, from chat, no activity
+    local p = entry({ key = "Morrow", intent = "player", roles = { offered = { damage = true } },
+        sources = { chat = { channel = "LookingForGroup", text = "lfg" } } })
+    expect(M:MatchNote("quest", p).title).toBe("Morrow is looking for a quest")
+    expect(M:MatchNote("zone", p).title).toBe("Morrow is looking for a group here")
+    expect(M:MatchNote("friends", p).title).toBe("Morrow is looking for a group")
+    expect(M:MatchNote("friends", p).body).toBe("Friend · offers damage")
+    expect(M:MatchNote("fresh", p).title).toBe("A group for your activity")
+    expect(M:MatchNote("boss", p).title).toBe("A raid forming for a world boss")
+    expect(M:MatchNote("role", p).title).toBe("Morrow needs your role for a group")
+    local player = M:MatchNote("player", p)
+    expect(player.kind).toBe("sticky")
+    expect(player.duration).toBeNil()
+    expect(player.title).toBe("Morrow wants your activity")
+    expect(player.body).toBe("offers damage")
+    expect(#player.actions).toBe(1)
+    -- from the tool: Invite, which dismisses the note
+    p.sources.tool = {}
+    local inv = M:MatchNote("player", p)
+    expect(inv.actions[2].label).toBe("Invite")
+    inv.actions[2].onClick()
+    expect(invited[#invited]).toBe(p)
+    expect(dismissed).toEqual({ "lfg:Morrow" })
+    -- no quest at all, no zone text, no social tie
+    mock.fake("GetRealZoneText", function(): any return nil end)
+    local bare = entry({ key = "X", intent = "group" })
+    expect(M:MatchNote("quest", bare).title).toBe("A group for a quest in your log")
+    expect(M:MatchNote("zone", bare).title).toBe("A group in your zone")
+    expect(M:MatchNote("friends", bare).title).toBe("X’s group for an activity")
+    expect(M:MatchNote("friends", bare).body).toBe("")
+    expect(M:MatchNote("other", bare).title).toBeNil()
+end
+
+@test("OnContacted: reposted, full or gone; nothing when off or not allowed")
+local function contacted()
+    mock.stub(LFG, "ContactedAt", function(key: string?): number? return key == "Kessra" and now - 180 or nil end)
+    local g = entry({ key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, members = { 4, 5 },
+        roles = { needed = { healer = 1 } }, leader = { name = "Kessra" }, sources = { tool = {} } })
+    M:OnContacted(g, "reposted")
+    local d = notes[1]
+    expect(d.id).toBe("lfg:contacted:Kessra")
+    expect(d.title).toBe("Kessra posted again, still needing a healer")
+    expect(d.body).toBe("Razorfen Kraul · 4/5 · you whispered 3m ago")
+    d.actions[1].onClick()
+    expect(whispered[#whispered]).toBe(g)
+    M:OnContacted(g, "full")
+    expect(notes[2].title).toBe("Kessra’s group for Razorfen Kraul is full")
+    expect(notes[2].body).toBe("You whispered Kessra 3m ago.")
+    M:OnContacted(g, "gone")
+    expect(notes[3].title).toBe("Kessra delisted Razorfen Kraul")
+    expect(notes[3].source).toBeNil()
+    -- from chat, never whispered, no activity
+    local c = entry({ key = "Y", sources = { chat = { confidence = 0.9 } } })
+    M:OnContacted(c, "gone")
+    expect(notes[4].title).toBe("Y stopped posting for the group")
+    expect(notes[4].body).toBeNil()
+    M:OnContacted(c, "full")
+    expect(notes[5].title).toBe("Y’s group for its activity is full")
+    M:OnContacted(c, "reposted")
+    expect(notes[6].title).toBe("Y posted again")
+    expect(notes[6].body).toBe("")
+    -- not allowed (unsure chat), and off
+    M:OnContacted(entry({ sources = { chat = { confidence = 0.1 } } }), "full")
+    local n = M:Get("notify")
+    n.contacted.on = false
+    M:Set("notify", n)
+    M:OnContacted(g, "full")
+    expect(#notes).toBe(6)
+end
+
+@test("OnStale: only with a listing or a watch; Delist and Refresh dismiss it")
+local function stale()
+    M:OnStale(2, 600)
+    expect(#notes).toBe(0)
+    mock.stub(LFG, "Watches", function(): { [string]: boolean } return { ["dungeon:rfk"] = true } end)
+    M:OnStale(2, nil)
+    expect(notes[1].title).toBe("The tool hasn’t searched yet")
+    expect(notes[1].body).toBe("Chat stays live; the tool only searches on your click.")
+    expect(#notes[1].actions).toBe(1)
+    listing = { activities = { "dungeon:rfk", "dungeon:sfk" } }
+    M:OnStale(2, 600)
+    local d = notes[2]
+    expect(d.title).toBe("Tool results are 10 minutes old")
+    expect(d.body).toBe("You’re listed for Razorfen Kraul and 1 more. Chat stays live; the tool only searches on your click.")
+    local delist = mock.stub(LFG, "Delist", function(): (boolean?, any) return true end)
+    d.actions[1].onClick()
+    expect(delist).toHaveBeenCalled()
+    d.actions[2].onClick()
+    expect(refreshed).toEqual({ 2 })
+    expect(M.searching).toBe(true)
+    mock.stub(LFG, "Refresh", function(_: number?): boolean return false end)
+    M.searching = nil
+    d.actions[2].onClick()
+    expect(M.searching).toBeNil()
+    expect(dismissed).toEqual({ "lfg:stale", "lfg:stale", "lfg:stale" })
+end
+
+@test("OnExpiring: minutes left, the listing's names, Delist and Open listing (not in combat)")
+local function expiring()
+    M:OnExpiring(90)
+    expect(#notes).toBe(0)
+    listing = { activities = { "dungeon:rfk", "dungeon:sfk" } }
+    M:OnExpiring(90)
+    local d = notes[1]
+    expect(d.title).toBe("Your listing runs out in 2 minutes")
+    expect(d.body).toBe("Razorfen Kraul · Shadowfang Keep")
+    expect(d.remaining).toBe(90)
+    M:OnExpiring(10)
+    expect(notes[2].title).toBe("Your listing runs out in 1 minute")
+    d.actions[1].onClick()
+    expect(dismissed).toEqual({ "lfg:runout" })
+    expect(d.actions[2].macro()).toBe("/click LFDMicroButton\n/click LFGParentFrameTab1")
+    d.actions[2].onClick()
+    expect(dismissed).toEqual({ "lfg:runout", "lfg:runout" })
+    mock.player:enterCombat()
+    d.actions[2].onClick()
+    expect(#dismissed).toBe(2)
+    local printed = mock.printed()
+    expect(printed[#printed]).toContain("The listing opens out of combat.")
+end
+
+@test("OnListingChanged and OnDelisted: how long, for what; not when you delisted yourself")
+local function delisted()
+    M:OnListingChanged(nil)
+    expect(M.listedAt).toBeNil()
+    local l = { activities = { "dungeon:rfk", "dungeon:sfk" } }
+    M:OnListingChanged(l)
+    expect(M.listedAt).toBe(now)
+    now = now + 600
+    M:OnListingChanged(l)
+    expect(M.listedAt).toBe(1000)
+    M:OnDelisted()
+    expect(dismissed).toEqual({ "lfg:runout", "lfg:stale" })
+    expect(notes[1].title).toBe("Your listing has ended")
+    expect(notes[1].body).toBe("Listed 10 minutes for Razorfen Kraul and Shadowfang Keep.")
+    expect(M.listedAt).toBeNil()
+    -- never listed (that we saw): no body; a watch keeps the stale note
+    mock.stub(LFG, "Watches", function(): { [string]: boolean } return { x = true } end)
+    M:OnDelisted()
+    expect(notes[2].body).toBeNil()
+    expect(dismissed).toEqual({ "lfg:runout", "lfg:stale", "lfg:runout" })
+    -- your own Unlist (the game's RemoveListing): quiet
+    mock.fake("C_LFGList.RemoveListing", function() end)
+    M.delistedByYou = GetTime()
+    M:OnListingChanged(l)
+    M:OnDelisted()
+    expect(#notes).toBe(2)
+end
+
+@test("the game's RemoveListing marks your own delisting")
+local function removeListingHook()
+    M.delistedByYou = nil
+    pcall(C_LFGList.RemoveListing)
+    expect(M.delistedByYou).toBe(GetTime())
+end
+
+@test("the library's events reach the notes and the pages")
+local function libraryEvents()
+    local g = entry({ key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, roles = { needed = { healer = 1 } },
+        leader = { name = "Kessra" }, sources = { tool = {} } })
+    entries = { g }
+    LFG.Fire("Match", g, { "role" })
+    expect(#notes).toBe(1)
+    LFG.Fire("Contacted", g, "full")
+    expect(#notes).toBe(2)
+    listing = { activities = { "dungeon:rfk" } }
+    LFG.Fire("ToolStale", 2, 600)
+    expect(#notes).toBe(3)
+    LFG.Fire("ToolSearched")
+    expect(dismissed[#dismissed]).toBe("lfg:stale")
+    LFG.Fire("ListingExpiring", 120)
+    expect(#notes).toBe(4)
+    LFG.Fire("ListingChanged", listing)
+    expect(M.lastListing).toBe(listing)
+    LFG.Fire("Delisted")
+    expect(notes[#notes].title).toBe("Your listing has ended")
+    M.searching = true
+    LFG.Fire("ToolSearchFailed")
+    expect(M.searching).toBeNil()
+    LFG.Fire("EntryAdded", g)
+    mock.advanceTime(16)
+    expect(errorsSoFar()).toEqual({})
+end
+
+@test("/suu lfgnotes: one note of each kind, none of them whispering anyone")
+local function testNotes()
+    mock.slash("/suu lfgnotes")
+    expect(#notes).toBe(7)
+    local ids: string[] = {}
+    for i, d in ipairs(notes) do ids[i] = d.id end
+    expect(ids).toEqual({ "lfg:Kessra:role", "lfg:Brannoc:fresh", "lfg:Dorran:zone", "lfg:Morrow:friends", "lfg:Morrow:player",
+                          "lfg:test:stale", "lfg:test:delisted" })
+    for _, d in ipairs(notes) do
+        for _, a in ipairs(d.actions or {}) do a.onClick() end
+    end
+    expect(#whispered).toBe(0)
+    expect(#dismissed).toBe(6)
+end
+
+@test("StartNotes runs once; OnDisable stops the library")
+local function lifecycle()
+    expect(M.notesOn).toBe(true)
+    M:StartNotes()
+    local stop = mock.stub(LFG, "Stop", function() end)
+    assert(M.OnDisable)(M)
+    expect(stop).toHaveBeenCalled()
+    -- the 15 s tick redraws what shows
+    openBrowse()
+    M.browse.data = nil
+    mock.advanceTime(15)
+    expect(M.browse.data).toBeTruthy()
+    -- a Blizzard addon loading: Build again, which does nothing once built
+    local browse = M.browse
+    mock.fireEvent("ADDON_LOADED", "Blizzard_Nothing", false)
+    expect(M.browse).toBe(browse)
+    expect(errorsSoFar()).toEqual({})
+end

@@ -1,0 +1,284 @@
+-- UI/MapPin: one mark on the world map, drawn from its data.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import mapPin, MapPin, MapPinData from "/UI/MapPin"
+import Text from "/UI/Text"
+import * as draw from "/UI/Draw"
+import * as events from "/Core/Events"
+import expectNoErrors, newParent from "../../helpers"
+
+local parent: Frame? = nil
+
+local function pin(data: MapPinData?): MapPin
+    local f = newParent()
+    parent = f
+    local p = mapPin(f)
+    if data then p:SetData(data) end
+    return p
+end
+
+local function colour(region: Texture | Text): number[]
+    if region:GetObjectType() == "FontString" then return { (region :: Text):GetTextColor() } end
+    return { (region :: Texture):GetVertexColor() }
+end
+
+local function token(name: string): number[]
+    return { draw.rgba(name) }
+end
+
+local function near(a: number[], b: number[])
+    for i = 1, 4 do expect(a[i]).toBeCloseTo(b[i], 3) end
+end
+
+@afterEach
+local function cleanUp()
+    if parent then (parent :: Frame):Hide(); parent = nil end
+end
+
+@test("a new pin is a 26 px disc with a gilt edge and an empty character")
+local function defaults()
+    local p = pin()
+    expect(p:GetObjectType()).toBe("Button")
+    expect(p:PinSize()).toBe(26)
+    expect(p).toHaveSize(26, 26)
+    expect(p.edge).toHaveSize(26, 26)
+    expect(p.fill).toHaveSize(24, 24)
+    near(colour(p.edge), token("gilt-line"))
+    near(colour(p.fill), token("surface"))
+    expect(p.char).toBeShown()
+    expect(p.char).toHaveText("")
+    expect(p.glyph).never.toBeShown()
+    for k = 1, 4 do expect(p.arcs[k]).never.toBeShown() end
+    expect(p.ringOuter).never.toBeShown()
+    expect(p.ringGap).never.toBeShown()
+    expect(p.glow).never.toBeShown()
+    expect(p.outline).never.toBeShown()
+    expect(p.bar).never.toBeShown()
+    expect(p.barEdge).never.toBeShown()
+    expect(p.countTab).never.toBeShown()
+    expect(p.hl).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("a small pin is 21 px with a 14 px glyph")
+local function small()
+    local p = pin({ small = true, glyph = "anvil", edgeWidth = 2 })
+    expect(p:PinSize()).toBe(21)
+    expect(p).toHaveSize(21, 21)
+    expect(p.fill).toHaveSize(17, 17)
+    expect(p.glyph).toHaveSize(14, 14)
+    expectNoErrors()
+end
+
+@test("a glyph shows its texture in its colour and hides the character")
+local function glyph()
+    local p = pin({ glyph = "anvil", color = "gilt" })
+    expect(p.glyph).toBeShown()
+    expect(p.char).never.toBeShown()
+    expect(p.glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\anvil.tga")
+    expect(p.glyph).toHaveSize(17, 17)
+    near(colour(p.glyph), token("gilt"))
+    expect(p.spin:IsPlaying()).toBe(false)
+    -- the colour by default: ink
+    p:SetData({ glyph = "anvil" })
+    near(colour(p.glyph), token("ink"))
+    expectNoErrors()
+end
+
+@test("a spinning glyph turns, and stops when the data says so")
+local function spin()
+    local p = pin({ glyph = "portal", spin = true })
+    expect(p.spin:IsPlaying()).toBe(true)
+    -- again: keeps playing (not restarted)
+    p:SetData({ glyph = "portal", spin = true })
+    expect(p.spin:IsPlaying()).toBe(true)
+    p:SetData({ glyph = "portal" })
+    expect(p.spin:IsPlaying()).toBe(false)
+    p:SetData({ glyph = "portal", spin = true })
+    p:SetData({ char = "!" })
+    expect(p.spin:IsPlaying()).toBe(false)
+    expectNoErrors()
+end
+
+@test("a character shows in its colour")
+local function char()
+    local p = pin({ char = "?", color = "gilt" })
+    expect(p.char).toHaveText("?")
+    expect(p.char).toBeShown()
+    expect(p.glyph).never.toBeShown()
+    near(colour(p.char), token("gilt"))
+    p:SetData({ char = "!" })
+    near(colour(p.char), token("ink"))
+    expectNoErrors()
+end
+
+@test("the character's font follows the theme")
+local function charFont()
+    local p = pin({ char = "!" })
+    local font = _G.SuuUIMapPinChar :: Font
+    expect(font).never.toBeNil()
+    expect(p.char:GetFontObject()).toBe(font)
+    local _, height = font:GetFont()
+    expect(height).toBe(16)
+    -- a second pin shares the font
+    local q = mapPin(p:GetParent() :: Frame)
+    expect(q.char:GetFontObject()).toBe(font)
+    events.emit("SUUUI_THEME_CHANGED")
+    local _, after = font:GetFont()
+    expect(after).toBe(16)
+    expectNoErrors()
+end
+
+@test("a second ring: the ring's colour, then a gap of surface")
+local function ring()
+    local p = pin({ ring = "gilt" })
+    expect(p.ringOuter).toBeShown()
+    expect(p.ringGap).toBeShown()
+    expect(p.ringOuter).toHaveSize(32, 32)
+    expect(p.ringGap).toHaveSize(29, 29)
+    near(colour(p.ringOuter), token("gilt"))
+    near(colour(p.ringGap), token("surface"))
+    p:SetData({})
+    expect(p.ringOuter).never.toBeShown()
+    expect(p.ringGap).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("a glow around the pin")
+local function glow()
+    local p = pin({ glow = "gilt" })
+    expect(p.glow).toBeShown()
+    expect(p.glow).toHaveSize(42, 42)
+    expect(p.glow:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga")
+    near(colour(p.glow), token("gilt"))
+    p:SetData({})
+    expect(p.glow).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("an outline of surface outside the edge")
+local function outline()
+    local p = pin({ outline = true, small = true })
+    expect(p.outline).toBeShown()
+    expect(p.outline).toHaveSize(23, 23)
+    near(colour(p.outline), token("surface"))
+    p:SetData({ outline = false })
+    expect(p.outline).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("the edge in its token, 2 px wide")
+local function edge()
+    local p = pin({ edge = "gilt", edgeWidth = 2 })
+    near(colour(p.edge), token("gilt"))
+    expect(p.fill).toHaveSize(22, 22)
+    expectNoErrors()
+end
+
+@test("a split edge: one arc per item, clockwise from the top, the edge in surface")
+@cases({ { 2 }, { 3 }, { 4 } })
+local function arcs(n: number)
+    local items: string[] = {}
+    local all = { "gilt", "ink", "ember", "fel" }
+    for k = 1, n do items[k] = all[k] end
+    local p = pin({ arcs = items })
+    near(colour(p.edge), token("surface"))
+    for k = 1, 4 do
+        local t = p.arcs[k]
+        if k <= n then
+            expect(t).toBeShown()
+            expect(t:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\RingArc" .. n .. ".tga")
+            expect(t).toHaveSize(26, 26)
+            near(colour(t), token(all[k]))
+            expect(t:GetRotation()).toBeCloseTo(-(k - 1) * 2 * math.pi / n, 4)
+        else
+            expect(t).never.toBeShown()
+        end
+    end
+    expectNoErrors()
+end
+
+@test("one arc or five: a plain edge, or four arcs at most")
+local function arcLimits()
+    local p = pin({ arcs = { "gilt" }, edge = "ink" })
+    near(colour(p.edge), token("ink"))
+    for k = 1, 4 do expect(p.arcs[k]).never.toBeShown() end
+    p:SetData({ arcs = { "gilt", "ink", "ember", "fel", "gilt" } })
+    for k = 1, 4 do expect(p.arcs[k]).toBeShown() end
+    expect(p.arcs[1]:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\RingArc4.tga")
+    -- back to none: all hidden
+    p:SetData({})
+    for k = 1, 4 do expect(p.arcs[k]).never.toBeShown() end
+    expectNoErrors()
+end
+
+@test("a bar under the pin, outlined in surface")
+local function bar()
+    local p = pin({ bar = "gilt" })
+    expect(p.bar).toBeShown()
+    expect(p.barEdge).toBeShown()
+    expect(p.bar).toHaveSize(16, 4)
+    expect(p.barEdge).toHaveSize(18, 6)
+    expect(p.bar).toBeAnchoredTo(p, "TOP", "BOTTOM")
+    p:SetData({})
+    expect(p.bar).never.toBeShown()
+    expect(p.barEdge).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("a merged pin's count on a tab at its lower right")
+@cases({ { 2, "2", 26, 9 }, { 99, "99", 26, 9 }, { 100, "99+", 26, 9 }, { 5, "5", 21, 8 } })
+local function count(n: number, shown: string, size: number, off: number)
+    local p = pin({ count = n, small = size == 21 })
+    expect(p.countTab).toBeShown()
+    expect(p.countText).toHaveText(shown)
+    local point, rel, relPoint, x, y = p.countTab:GetPoint(1)
+    expect(point).toBe("CENTER")
+    expect(rel).toBe(p)
+    expect(relPoint).toBe("CENTER")
+    expect(x).toBe(off)
+    expect(y).toBe(-off)
+    expect(p.countTab:GetHeight()).toBe(11)
+    expect(p.countTab:GetWidth()).toBe(math.ceil(p.countText:GetUnboundedStringWidth()) + 4)
+    -- one: no tab
+    p:SetData({ count = 1 })
+    expect(p.countTab).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("highlight: a ring at full opacity, dim fades, nil goes back")
+local function highlight()
+    local p = pin({ small = true })
+    p:SetBaseAlpha(0.5)
+    expect(p:GetAlpha()).toBeCloseTo(0.5, 2)
+    p:SetHighlight(true)
+    expect(p.hl).toBeShown()
+    expect(p.hl).toHaveSize(27, 27)
+    expect(p:GetAlpha()).toBe(1)
+    p:SetHighlight("dim")
+    expect(p.hl).never.toBeShown()
+    expect(p:GetAlpha()).toBeCloseTo(0.15, 2)
+    p:SetHighlight(nil)
+    expect(p.hl).never.toBeShown()
+    expect(p:GetAlpha()).toBeCloseTo(0.5, 2)
+    expectNoErrors()
+end
+
+@test("highlight without a base opacity: fully opaque as usual")
+local function highlightNoBase()
+    local p = pin()
+    p:SetHighlight("dim")
+    expect(p:GetAlpha()).toBeCloseTo(0.3, 1)
+    p:SetHighlight(false)
+    expect(p:GetAlpha()).toBe(1)
+    expectNoErrors()
+end
+
+@test("the highlight ring is painted ink")
+local function highlightColour()
+    local p = pin()
+    near(colour(p.hl), token("ink"))
+    mock.advanceFrames(1)
+    expectNoErrors()
+end

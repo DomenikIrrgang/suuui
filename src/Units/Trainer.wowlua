@@ -36,7 +36,6 @@ local WIDTH, HEIGHT = 380, 560
 local ROW_H, HEAD_H = 47, 28
 local TYPES = { { value = "available", label = "Available" }, { value = "unavailable", label = "Unavailable" }, { value = "used", label = "Used" } }
 
-local function tint(token: string, text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
 
 local function isPetTrainer()
     return C_Trainer and C_Trainer.GetTrainerType and Enum.TrainerType and C_Trainer.GetTrainerType() == Enum.TrainerType.Pet
@@ -120,6 +119,20 @@ local function yourProfessions()
     return out
 end
 
+-- The cheapest first while the money lasts: what of `list` (sorted by cost
+-- in place) `money` pays for together, and what that costs.
+local function pickAffordable(list: Service[], money: number): ({ Service }, number)
+    table.sort(list, function(a, b) return a.cost < b.cost end)
+    local out: Service[], total = {}, 0
+    for _, e in ipairs(list) do
+        if total + e.cost <= money then
+            out[#out + 1] = e
+            total = total + e.cost
+        end
+    end
+    return out, total
+end
+
 -- Everything you can learn now and afford together (asked 2026-10-18): the
 -- cheapest first while the money lasts. Never a profession you don't have
 -- yet (that one asks, one at a time); a profession trainer marks its own
@@ -139,15 +152,7 @@ function M:TrainAllList()
             if not e.profession or (line and mine[line]) then list[#list + 1] = e end
         end
     end
-    table.sort(list, function(a, b) return a.cost < b.cost end)
-    local out, total = {}, 0
-    for _, e in ipairs(list) do
-        if total + e.cost <= money then
-            out[#out + 1] = e
-            total = total + e.cost
-        end
-    end
-    return out, total
+    return pickAffordable(list, money)
 end
 
 -- Learns them one at a time: the trainer's list changes after each one, so
@@ -341,6 +346,42 @@ local function npcTitle()
     if type(text) == "string" and not isSecret(text) and not text:find("^Level") then return text end
 end
 
+-- The services as the list shows them: the profession's next rank (`step`)
+-- first, then the uncategorized, and with `categorize` the rest under their
+-- categories (sorted by name). A service without a category takes its
+-- spellbook line by name, else by icon (`schoolOf`, `schoolOfIcon`).
+type Group = { name: string, rows: Service[] }
+local function arrange(services: Service[], step: number?, categorize: boolean, schoolOf: { [string]: string },
+                       schoolOfIcon: { [any]: string }): (Service[], Group[])
+    local list: Service[], groups: Group[], byName: { [string]: Group } = {}, {}, {}
+    for _, e in ipairs(services) do
+        e.category = e.category or schoolOf[e.name] or (e.texture and schoolOfIcon[e.texture])
+        if e.index == step then
+            table.insert(list, 1, e)
+        elseif categorize and e.category then
+            local g = byName[e.category]
+            if not g then
+                g = { name = e.category, rows = {} }
+                byName[e.category] = g
+                groups[#groups + 1] = g
+            end
+            g.rows[#g.rows + 1] = e
+        else
+            list[#list + 1] = e
+        end
+    end
+    table.sort(groups, function(a, b) return a.name < b.name end)
+    return list, groups
+end
+
+-- Train all's tooltip: the first six names, how many more; or why nothing.
+local function trainAllText(all: Service[]): string
+    local names: string[] = {}
+    for i = 1, math.min(6, #all) do names[i] = all[i].name end
+    return #all > 0 and (table.concat(names, ", ") .. (#all > 6 and (" and " .. (#all - 6) .. " more") or ""))
+        or "Nothing you can learn and afford right now."
+end
+
 function M:Refresh()
     local w = self.window
     if not (w and w:IsShown() and self.open) then return end
@@ -385,28 +426,12 @@ function M:Refresh()
             if sp.icon and sp.school then schoolOfIcon[sp.icon] = schoolOfIcon[sp.icon] or sp.school end
         end
     end
-    local list, groups, byName = {}, {}, {}
-    local step = call(GetTrainerServiceStepIndex)
+    local services: Service[] = {}
     for i = 1, (call(GetNumTrainerServices) or 0) do
         local e = service(i)
-        if e then
-            e.category = e.category or schoolOf[e.name] or (e.texture and schoolOfIcon[e.texture])
-            if i == step then
-                table.insert(list, 1, e)
-            elseif categorize and e.category then
-                local g = byName[e.category]
-                if not g then
-                    g = { name = e.category, rows = {} }
-                    byName[e.category] = g
-                    groups[#groups + 1] = g
-                end
-                g.rows[#g.rows + 1] = e
-            else
-                list[#list + 1] = e
-            end
-        end
+        if e then services[#services + 1] = e end
     end
-    table.sort(groups, function(a, b) return a.name < b.name end)
+    local list, groups = arrange(services, call(GetTrainerServiceStepIndex), categorize and true or false, schoolOf, schoolOfIcon)
     -- uncategorized first (as the game does), then each category
     local c = self.list.child
     local y, nh, nr = 0, 0, 0
@@ -450,11 +475,7 @@ function M:Refresh()
     self.train.tooltip = (not ok) and { title = "Train", description = self.selected and why or "Choose what to learn." } or nil
     local all = self:TrainAllList()
     self.trainAll:SetEnabledState(#all > 0)
-    local names = {}
-    for i = 1, math.min(6, #all) do names[i] = all[i].name end
-    self.trainAll.tooltip = { title = "Train all",
-        description = #all > 0 and (table.concat(names, ", ") .. (#all > 6 and (" and " .. (#all - 6) .. " more") or ""))
-            or "Nothing you can learn and afford right now." }
+    self.trainAll.tooltip = { title = "Train all", description = trainAllText(all) }
 end
 
 function M:QueueRefresh()

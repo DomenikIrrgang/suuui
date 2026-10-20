@@ -106,6 +106,32 @@ function M:BuildRow(parent: Frame): any
     return r
 end
 
+-- The two tabs share the list's width (by their labels' widths; a long
+-- name gets the short labels).
+function M:FitTabs(who: string | Secret<string>)
+    local function fit(labels: (string | Secret<string>)[]): boolean
+        local inner = LIST_W - 6 - 2
+        local text = 0
+        for i, b in ipairs(self.tabs.buttons) do
+            b.label:SetValue(labels[i])
+            text = text + UI.MeasureText("label", labels[i])
+        end
+        local pad = (inner - text) / #self.tabs.buttons
+        if pad < 2 * S["space-3"] then return false end
+        local x = 3
+        for i, b in ipairs(self.tabs.buttons) do
+            b:SetWidth(UI.MeasureText("label", labels[i]) + pad)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", x, -3)
+            x = x + b:GetWidth() + 2
+        end
+        return true
+    end
+    if not fit({ "General Macros", who .. " Specific Macros" }) and not fit({ "General", who }) then
+        fit({ "General", "Character" })
+    end
+end
+
 function M:Build()
     local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMacroWindow", title = "Macros", width = WIDTH, height = HEIGHT,
         footer = true, onClose = function(win: any) win:Hide() end })
@@ -133,29 +159,7 @@ function M:Build()
             self:Refresh()
         end })
     self.tabs:SetPoint("TOPLEFT")
-    -- the two tabs share the list's width (by their labels' widths; a long
-    -- name gets the short labels)
-    local function fit(labels: (string | Secret<string>)[]): boolean
-        local inner = LIST_W - 6 - 2
-        local text = 0
-        for i, b in ipairs(self.tabs.buttons) do
-            b.label:SetValue(labels[i])
-            text = text + UI.MeasureText("label", labels[i])
-        end
-        local pad = (inner - text) / #self.tabs.buttons
-        if pad < 2 * S["space-3"] then return false end
-        local x = 3
-        for i, b in ipairs(self.tabs.buttons) do
-            b:SetWidth(UI.MeasureText("label", labels[i]) + pad)
-            b:ClearAllPoints()
-            b:SetPoint("TOPLEFT", x, -3)
-            x = x + b:GetWidth() + 2
-        end
-        return true
-    end
-    if not fit({ "General Macros", who .. " Specific Macros" }) and not fit({ "General", who }) then
-        fit({ "General", "Character" })
-    end
+    self:FitTabs(who)
     self.tabs.marker:Aim()
     self.tabs:SetWidth(LIST_W)
     self.count = UI.Text(left, "caption", "ink-muted")
@@ -356,9 +360,10 @@ function M:Dirty()
     return self.nameField:GetValue() ~= m.name or self.body:GetText() ~= m.body or self.icon ~= m.icon
 end
 
--- What can be done now, and why not.
-function M:DrawState()
-    local combat = InCombatLockdown()
+-- What can be done now, and why not. `combat`: in combat already (the
+-- game's PLAYER_REGEN_DISABLED comes before its lockdown begins).
+function M:DrawState(combat: boolean?)
+    combat = combat or InCombatLockdown()
     local m = self.loaded
     self.band:SetShown(combat)
     self.idRow:ClearAllPoints()
@@ -687,7 +692,7 @@ function M:OnEnable()
     self:OnGameEvent("UPDATE_MACROS", function() self:Refresh() end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
         self:ClosePicker()
-        if self.window:IsShown() then self:DrawState() end
+        if self.window:IsShown() then self:DrawState(true) end
     end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if self.window:IsShown() then self:DrawState() end

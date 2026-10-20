@@ -1,0 +1,254 @@
+-- Units/CooldownManager/Conditions: when an entry shows, as data and in
+-- words.
+
+import test, expect, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as Conditions from "/Units/CooldownManager/Conditions"
+
+local function cond(t: string, extra: { [string]: any }?): { [string]: any }
+    local c: { [string]: any } = { type = t }
+    for k, v in pairs(extra or {}) do c[k] = v end
+    return c
+end
+
+local function values(options: any[]): any[]
+    local out: any[] = {}
+    for _, o in ipairs(options) do out[#out + 1] = o.value end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Data
+--------------------------------------------------------------------------------
+
+@test("the choices")
+local function choices()
+    expect(#Conditions.CLASSES).toBe(9)
+    expect(values(Conditions.ROLES)).toEqual({ "TANK", "HEALER", "DAMAGER" })
+    expect(values(Conditions.INSTANCES)).toEqual({ "none", "party", "raid", "pvp" })
+    expect(values(Conditions.TARGETS)).toEqual({ "boss", "elite", "player", "normal" })
+    expect(values(Conditions.CONDITION_TYPES)).toEqual({ "group", "classes", "role", "stance", "combat", "instance", "target", "talent" })
+    -- every class's stances and forms, once
+    local n = 0
+    for _, list in pairs(Conditions.STANCES) do n = n + #list end
+    expect(#Conditions.ALL_STANCES).toBe(n)
+    expect(n).toBe(11)
+end
+
+@test("newCondition: each type with a first choice")
+@cases({
+    { "group", "WARRIOR", { type = "group", value = "group" } },
+    { "classes", "PRIEST", { type = "classes", classes = { "PRIEST" } } },
+    { "role", "WARRIOR", { type = "role", roles = { "TANK" } } },
+    { "stance", "WARRIOR", { type = "stance", stances = { "battle" } } },
+    { "stance", "DRUID", { type = "stance", stances = { "caster" } } },
+    { "stance", "MAGE", { type = "stance", stances = {} } },
+    { "instance", "WARRIOR", { type = "instance", kinds = { "party" } } },
+    { "target", "WARRIOR", { type = "target", kinds = { "boss" } } },
+    { "talent", "WARRIOR", { type = "talent", talents = {} } },
+    { "combat", "WARRIOR", { type = "combat" } },
+    { "anything else", "WARRIOR", { type = "combat" } },
+})
+local function newCondition(kind: string, class: string, out: { [string]: any })
+    expect(Conditions.newCondition(kind, class)).toEqual(out)
+end
+
+@test("conditionTypes: stance only for a class with one, or a stance already chosen")
+local function conditionTypes()
+    expect(values(Conditions.conditionTypes(nil, "WARRIOR"))).toContain("stance")
+    expect(values(Conditions.conditionTypes(nil, "MAGE"))).never.toContain("stance")
+    expect(#Conditions.conditionTypes(nil, "MAGE")).toBe(7)
+    expect(values(Conditions.conditionTypes("stance", "MAGE"))).toContain("stance")
+    expect(values(Conditions.conditionTypes("combat", "MAGE"))).never.toContain("stance")
+end
+
+@test("firstUnusedType")
+local function firstUnused()
+    expect(Conditions.firstUnusedType({}, "WARRIOR")).toBe("group")
+    expect(Conditions.firstUnusedType({ cond("group"), cond("classes") }, "WARRIOR")).toBe("role")
+    expect(Conditions.firstUnusedType({ cond("group"), cond("classes"), cond("role") }, "MAGE")).toBe("combat")
+    expect(Conditions.firstUnusedType({ cond("group"), cond("classes"), cond("role"), cond("combat") }, "MAGE")).toBe("instance")
+    local all: { [string]: any }[] = {}
+    for _, t in ipairs(Conditions.CONDITION_TYPES) do all[#all + 1] = cond(t.value) end
+    expect(Conditions.firstUnusedType(all, "WARRIOR")).toBe("combat")
+end
+
+--------------------------------------------------------------------------------
+-- Editing
+--------------------------------------------------------------------------------
+
+@test("editWhen: a copy, match all by default, none left: no when")
+local function editWhen()
+    local e: { [string]: any } = { name = "A" }
+    Conditions.editWhen(e, function(w: any) table.insert(w.conditions, cond("combat")) end)
+    expect(e.when).toEqual({ match = "all", conditions = { { type = "combat" } } })
+    local before = e.when
+    Conditions.editWhen(e, function(w: any) w.match = "any" end)
+    expect(e.when.match).toBe("any")
+    expect(before.match).toBe("all")
+    Conditions.editWhen(e, function(w: any) table.remove(w.conditions, 1) end)
+    expect(e.when).toBeNil()
+    -- nothing added: still none
+    Conditions.editWhen(e, function() end)
+    expect(e.when).toBeNil()
+end
+
+@test("changeType: a new condition of the type, its Not kept")
+local function changeType()
+    local w = { conditions = { cond("combat", { ["not"] = true }), cond("group", { value = "raid" }) } }
+    Conditions.changeType(w, 1, "role", "WARRIOR")
+    expect(w.conditions[1]).toEqual({ type = "role", roles = { "TANK" }, ["not"] = true })
+    -- the same type: unchanged
+    Conditions.changeType(w, 2, "group", "WARRIOR")
+    expect(w.conditions[2]).toEqual({ type = "group", value = "raid" })
+    -- no such condition
+    Conditions.changeType(w, 3, "group", "WARRIOR")
+    expect(#w.conditions).toBe(2)
+end
+
+@test("addTalent and removeTalent")
+local function talents()
+    local c: { [string]: any } = cond("talent")
+    Conditions.addTalent(c, 12294)
+    Conditions.addTalent(c, 12294)
+    Conditions.addTalent(c, 100)
+    expect(c.talents).toEqual({ 12294, 100 })
+    Conditions.removeTalent(c, 12294)
+    expect(c.talents).toEqual({ 100 })
+    Conditions.removeTalent(c, 5)
+    expect(c.talents).toEqual({ 100 })
+    local none: { [string]: any } = cond("talent")
+    Conditions.removeTalent(none, 1)
+    expect(none.talents).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Words
+--------------------------------------------------------------------------------
+
+@test("anyOf")
+@cases({ { {}, nil }, { { "a" }, "a" }, { { "a", "b" }, "a or b" }, { { "a", "b", "c" }, "a, b or c" } })
+local function anyOf(words: string[], out: string?)
+    expect(Conditions.anyOf(words)).toBe(out)
+end
+
+@test("picked: the options' words, else the value in lower case")
+local function picked()
+    expect(Conditions.picked({ "TANK", "WIZARD" }, Conditions.ROLES, "label")).toEqual({ "Tank", "wizard" })
+    expect(Conditions.picked(nil, Conditions.ROLES, "label")).toEqual({})
+end
+
+@test("talentName: the spell's name, else its ID")
+local function talentName()
+    mock.defineSpell(990001, { name = "Deep Wounds" })
+    expect(Conditions.talentName(990001)).toBe("Deep Wounds")
+    expect(Conditions.talentName(990002)).toBe("ID 990002")
+    mock.fake("C_Spell.GetSpellName", function() return mock.secret("Hidden") end)
+    expect(Conditions.talentName(990001)).toBe("ID 990001")
+end
+
+@test("conditionPhrase")
+@cases({
+    { { type = "group", value = "solo" }, false, false, "while solo" },
+    { { type = "group", value = "solo" }, false, true, "solo" },
+    { { type = "group", value = "solo", ["not"] = true }, false, false, "in a group or raid" },
+    { { type = "group", value = "group" }, false, false, "in a group" },
+    { { type = "group", value = "raid" }, false, false, "in a raid" },
+    { { type = "group", value = "raid", ["not"] = true }, false, false, "not in a raid" },
+    { { type = "classes", classes = {} }, false, false, nil },
+    { { type = "classes" }, false, false, nil },
+    { { type = "classes", classes = { "DRUID" } }, false, false, "with a druid in your group" },
+    { { type = "classes", classes = { "DRUID", "WARLOCK" } }, true, false, "with a druid or warlock in it" },
+    { { type = "classes", classes = { "DRUID" }, ["not"] = true }, false, true, "without a druid" },
+    { { type = "classes", classes = { "WARRIOR" }, others = true }, false, false, "with another warrior in your group" },
+    { { type = "classes", classes = { "WARRIOR" }, others = true, ["not"] = true }, false, true, "without another warrior" },
+    { { type = "classes", classes = { "DRUID" }, others = true }, false, true, "with a druid besides you" },
+    { { type = "classes", classes = { "DRUID", "WARRIOR" }, others = true, ["not"] = true }, false, true, "without a druid or warrior besides you" },
+    { { type = "role", roles = {} }, false, false, nil },
+    { { type = "role", roles = { "TANK", "DAMAGER" } }, false, false, "while you play a tank or damage" },
+    { { type = "role", roles = { "HEALER" }, ["not"] = true }, false, false, "unless you play a healer" },
+    { { type = "role", roles = { "HEALER" }, ["not"] = true }, false, true, "not healer" },
+    { { type = "role", roles = { "TANK" } }, false, true, "tank" },
+    { { type = "stance", stances = {} }, false, false, nil },
+    { { type = "stance", stances = { "defensive" } }, false, false, "in Defensive Stance" },
+    { { type = "stance", stances = { "bear", "cat" }, ["not"] = true }, false, false, "outside Bear Form or Cat Form" },
+    { { type = "stance", stances = { "defensive" } }, false, true, "Defensive" },
+    { { type = "stance", stances = { "defensive" }, ["not"] = true }, false, true, "not Defensive" },
+    { { type = "combat" }, false, false, "in combat" },
+    { { type = "combat", ["not"] = true }, false, true, "out of combat" },
+    { { type = "instance", kinds = {} }, false, false, nil },
+    { { type = "instance", kinds = { "party", "raid" } }, false, false, "in a dungeon or a raid" },
+    { { type = "instance", kinds = { "none" }, ["not"] = true }, false, true, "outside the open world" },
+    { { type = "target", kinds = {} }, false, false, nil },
+    { { type = "target", kinds = { "boss" } }, false, false, "while your target is a boss" },
+    { { type = "target", kinds = { "elite", "player" }, ["not"] = true }, false, false, "unless your target is an elite or a player" },
+    { { type = "target", kinds = { "boss" } }, false, true, "target a boss" },
+    { { type = "target", kinds = { "normal" }, ["not"] = true }, false, true, "target not a normal enemy" },
+    { { type = "talent", talents = {} }, false, false, nil },
+    { { type = "talent" }, false, false, nil },
+    { { type = "unknown" }, false, false, nil },
+})
+local function conditionPhrase(c: { [string]: any }, inGroup: boolean, short: boolean, out: string?)
+    expect(Conditions.conditionPhrase(c, inGroup, short, "WARRIOR")).toBe(out)
+end
+
+@test("conditionPhrase: talents by name")
+local function talentPhrase()
+    mock.defineSpell(990011, { name = "Tactical Mastery" })
+    mock.defineSpell(990012, { name = "Impale" })
+    expect(Conditions.conditionPhrase(cond("talent", { talents = { 990011, 990012 } }), false, false, "WARRIOR")).toBe("with Tactical Mastery or Impale")
+    expect(Conditions.conditionPhrase(cond("talent", { talents = { 990013 }, ["not"] = true }), false, false, "WARRIOR")).toBe("without ID 990013")
+end
+
+@test("phrases: a group condition makes classes say 'in it'")
+local function phrasesInGroup()
+    local when = { conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "MAGE" } }) } }
+    expect(Conditions.phrases(when, false, "WARRIOR")).toEqual({ "in a raid", "with a mage in it" })
+    -- solo or not-in-a-group doesn't
+    when.conditions[1] = cond("group", { value = "solo" })
+    expect(Conditions.phrases(when, false, "WARRIOR")[2]).toBe("with a mage in your group")
+    when.conditions[1] = cond("group", { value = "raid", ["not"] = true })
+    expect(Conditions.phrases(when, false, "WARRIOR")[2]).toBe("with a mage in your group")
+    expect(Conditions.phrases(nil, false, "WARRIOR")).toEqual({})
+    expect(Conditions.phrases({}, true, "WARRIOR")).toEqual({})
+end
+
+@test("conditionSentence")
+local function sentence()
+    expect(Conditions.conditionSentence("Faerie Fire", nil, "DRUID")).toBe("Always shows.")
+    expect(Conditions.conditionSentence("Faerie Fire", { conditions = {} }, "DRUID")).toBe("Always shows.")
+    local when = { match = "all", conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "DRUID", "WARLOCK" } }), cond("combat", { ["not"] = true }) } }
+    expect(Conditions.conditionSentence("Faerie Fire", when, "DRUID")).toBe("Faerie Fire shows in a raid, with a druid or warlock in it, out of combat.")
+    expect(Conditions.conditionSentence(nil, when, "DRUID")).toBe("Shows in a raid, with a druid or warlock in it, out of combat.")
+    when.match = "any"
+    expect(Conditions.conditionSentence("X", when, "DRUID")).toBe("X shows when any of these holds: in a raid; with a druid or warlock in it; out of combat.")
+    expect(Conditions.conditionSentence("X", { match = "any", conditions = { cond("combat") } }, "DRUID")).toBe("X shows when in combat.")
+end
+
+@test("conditionWords")
+local function words()
+    expect(Conditions.conditionWords(nil, "WARRIOR")).toBeNil()
+    local when = { conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "WARLOCK" } }) } }
+    expect(Conditions.conditionWords(when, "WARRIOR")).toBe("in a raid · with a warlock")
+    when.match = "any"
+    expect(Conditions.conditionWords(when, "WARRIOR")).toBe("in a raid or with a warlock")
+end
+
+@test("talentOptions: by tree under its spec's name, then by name, without those chosen")
+local function talentOptions()
+    local list = {
+        { id = 1, name = "Zeal", tree = 2, spec = "Fury" },
+        { id = 2, name = "Anger", tree = 2, spec = "Fury" },
+        { id = 3, name = "Deep Wounds", tree = 1 },
+        { id = 4, name = "Loose", tree = "Odd" },
+        { id = 5, name = "Nowhere" },
+        { id = 6, name = "Chosen", tree = 1 },
+    }
+    local out = Conditions.talentOptions(list, { 6 })
+    local seen: string[] = {}
+    for _, o in ipairs(out) do seen[#seen + 1] = o.heading and ("# " .. o.heading) or o.label end
+    expect(seen).toEqual({ "# Tree 1", "Deep Wounds", "# Fury", "Anger", "Zeal", "# Odd", "Loose", "# Other", "Nowhere" })
+    expect(out[2].value).toBe(3)
+    expect(#Conditions.talentOptions({}, nil)).toBe(0)
+    expect(#Conditions.talentOptions(list, nil)).toBe(10)
+end

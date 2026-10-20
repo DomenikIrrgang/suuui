@@ -17,7 +17,9 @@
 import SuuUI from "/Core/API"
 import * as secret from "wowlua:secret"
 import after from "wowlua:timer"
-import equal from "wowlua:table"
+import * as Lists from "./CooldownManager/Lists"
+import * as Conditions from "./CooldownManager/Conditions"
+import * as migrations from "./CooldownManager/Migrations"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -59,157 +61,26 @@ local M = SuuUI.RegisterModule({
     },
 })
 
--- Essential size became 30-52px (the design's 40 by default): a size you set
--- stays, moved into the range if it was outside.
-M:Migrate("essentialSize-30-52", function(values)
-    local v = values.essentialSize
-    if type(v) == "number" then values.essentialSize = math.max(30, math.min(52, v)) end
-end)
+M:Migrate("essentialSize-30-52", migrations.essentialSize)
+M:Migrate("slot-uids", migrations.slotUids)
+M:Migrate("missing-per-entry", migrations.missingPerEntry)
+M:Migrate("shaman-shields-auto", migrations.shamanShieldsAuto)
+M:Migrate("short-buffs-warn", migrations.shortBuffsWarn)
 
--- Shared slots (groups) saved before every one had a uid get one, so the
--- editor can follow them through moves and renames.
-M:Migrate("slot-uids", function(values)
-    local function give(lists: any, tag: string)
-        if type(lists) ~= "table" then return end
-        for key, list in pairs(lists) do
-            if type(list) == "table" then
-                for i, e in ipairs(list :: any[]) do
-                    if type(e) == "table" and (e.group or e.collection) and not e.uid then e.uid = tag .. key .. i end
-                end
-            end
-        end
-    end
-    if type(values.setups) == "table" then
-        for class, specs in pairs(values.setups) do
-            if type(specs) == "table" then
-                for spec, s in pairs(specs) do
-                    if type(s) == "table" then give(s.lists, "m" .. tostring(class) .. tostring(spec)) end
-                end
-            end
-        end
-    end
-    give(values.lists, "m")
-end)
-
--- "When missing" is each entry's own now: the list-wide Missing buffs and
--- Missing debuffs settings are gone. A choice made there goes onto every buff
--- or debuff that had none of its own (the defaults equal the old ones, so
--- untouched setups don't change).
-M:Migrate("missing-per-entry", function(values)
-    local old = { buffs = values.missingBuffs, debuffs = values.missingDebuffs }
-    values.missingBuffs, values.missingDebuffs = nil, nil
-    local function set(e: any, mode: any)
-        if type(e) ~= "table" then return end
-        if e.collection then
-            for _, x in ipairs(e.entries or {}) do set(x, mode) end
-        elseif e.missing == nil then
-            e.missing = mode
-        end
-    end
-    local function apply(lists: any)
-        if type(lists) ~= "table" then return end
-        for key, mode in pairs(old) do
-            if type(mode) == "string" and type(lists[key]) == "table" then
-                for _, e in ipairs(lists[key]) do set(e, mode) end
-            end
-        end
-    end
-    if type(values.setups) == "table" then
-        for _, specs in pairs(values.setups) do
-            if type(specs) == "table" then
-                for _, s in pairs(specs) do
-                    if type(s) == "table" then apply(s.lists) end
-                end
-            end
-        end
-    end
-    apply(values.lists)
-end)
-
--- The shaman presets' Shields slot had a fixed icon, so Restoration's
--- reminder showed Water Shield before it was learned. It picks the first
--- member you know now, the spec's shield leading: a saved copy of it follows
--- (one with the two shields, Water Shield's art fixed: Water Shield first).
-M:Migrate("shaman-shields-auto", function(values)
-    local function fix(list: any)
-        for _, e in ipairs((type(list) == "table" and list or {}) :: any[]) do
-            if type(e) == "table" and e.collection then fix(e.entries) end
-            local m = type(e) == "table" and e.group and e.fixedIcon and e.name == "Shields" and e.members
-            if type(m) == "table" and #m == 2 and m[1].name == "Lightning Shield" and m[2].name == "Water Shield" then
-                e.fixedIcon = nil
-                if e.icon == m[2].icon then m[1], m[2] = m[2], m[1] end
-            end
-        end
-    end
-    local specs = type(values.setups) == "table" and values.setups.SHAMAN
-    if type(specs) ~= "table" then return end
-    for _, s in pairs(specs) do
-        if type(s) == "table" and type(s.lists) == "table" then fix(s.lists.buffs) end
-    end
-end)
-
--- Buffs of 3 minutes or less, or used up by charges, are fixed slots that
--- warn while missing (their time and stacks while up), no longer reminders:
--- the presets' shaman Shields, Battle Shout and Inner Fire, saved copies too.
-local SHORT_BUFFS = { SHAMAN = "Shields", WARRIOR = "Battle Shout", PRIEST = "Inner Fire" }
-M:Migrate("short-buffs-warn", function(values)
-    local function fix(list: any, name: string)
-        for _, e in ipairs((type(list) == "table" and list or {}) :: any[]) do
-            if type(e) == "table" and e.collection then fix(e.entries, name) end
-            if type(e) == "table" and e.name == name and e.missing == "remind" then e.missing = "warn" end
-        end
-    end
-    if type(values.setups) ~= "table" then return end
-    for class, name in pairs(SHORT_BUFFS) do
-        for _, s in pairs(type(values.setups[class]) == "table" and values.setups[class] or {}) do
-            if type(s) == "table" and type(s.lists) == "table" then fix(s.lists.buffs, name) end
-        end
-    end
-end)
-
-local LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
 -- (a local predicate: the imported secret.isSecret doesn't narrow in this
 -- project, see Docs/port-notes/units-cooldowns.md)
 local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 local _, classFile = UnitClass("player")
 local CLASS: string = secret.known(classFile, "")
 
-local function presets()
+local function presets(): any[]
     return SuuUI.CooldownPresets and SuuUI.CooldownPresets() or {}
 end
 
-local function findPreset(id: any)
-    for _, p in ipairs(presets()) do if p.id == id then return p end end
-end
-
--- A copy of a preset's lists, so editing them never touches the preset.
-local function deepCopy(t: any): any
-    if type(t) ~= "table" then return t end
-    local out = {}
-    for k, v in pairs(t) do out[k] = deepCopy(v) end
-    return out
-end
-
--- Shared slots and collections get a uid the editor follows them by (fold
--- state, the Behaviour panel, matching the preset's in Changes): the same
--- one for every copy of a preset, the shared slots in a collection after it.
-local function copyLists(p: any)
-    local out = {}
-    for _, key in ipairs(LIST_KEYS) do
-        out[key] = {}
-        for i, e in ipairs(p.lists[key] or {}) do
-            local c = deepCopy(e)
-            if c.group or c.collection or c.enchant then c.uid = c.uid or (p.id .. key .. i) end
-            if c.collection then
-                for j, x in ipairs(c.entries or {}) do
-                    if x.group or x.enchant then x.uid = x.uid or (c.uid .. "." .. j) end
-                end
-            end
-            out[key][#out[key] + 1] = c
-        end
-    end
-    return out
-end
+local function findPreset(id: any) return Lists.findPreset(presets(), id) end
+local function specPreset(spec: number?) return Lists.specPreset(presets(), spec) end
+local function specName(spec: number) return Lists.specName(presets(), spec) end
+local copy, copyLists = Lists.copy, Lists.copyLists
 
 --------------------------------------------------------------------------------
 -- Spec: the talent tree with the most points (0: none spent)
@@ -230,38 +101,13 @@ local function treePoints()
             end
         end
     end
-    if #nodes == 0 then return { 0, 0, 0 }, 0 end
-    local lo, hi = math.huge, -math.huge
-    for _, n in ipairs(nodes) do lo, hi = math.min(lo, n.x), math.max(hi, n.x) end
-    local third = (hi - lo) / 3
-    local pts, total = { 0, 0, 0 }, 0
-    for _, n in ipairs(nodes) do
-        local r = isSecret(n.ranks) and 0 or (n.ranks or 0)
-        local tree = (n.x < lo + third and 1) or (n.x < lo + 2 * third and 2) or 3
-        pts[tree] = pts[tree] + r
-        total = total + r
-    end
-    return pts, total
+    return Lists.pointsByTree(nodes)
 end
 
 function M:DetectSpec()
     local ok, pts, total = pcall(treePoints)
     if not ok then return 0, { 0, 0, 0 } end
-    if total == 0 then return 0, pts end
-    local best = 1
-    for t = 2, 3 do if pts[t] > pts[best] then best = t end end
-    return best, pts
-end
-
--- A spec's starting preset (the first of its tree) and its name.
-local function specPreset(spec: number?)
-    for _, p in ipairs(presets()) do if (p.tree or 0) == spec then return p end end
-end
-
-local function specName(spec: number)
-    if spec == 0 then return "Unspecced" end
-    local p = specPreset(spec)
-    return p and (p.name:gsub("%s*%b()", "")) or ("Tree " .. spec)
+    return Lists.bestTree(pts, total), pts
 end
 
 --------------------------------------------------------------------------------
@@ -273,7 +119,7 @@ function M:EditSpec() return self.editSpec or self.spec or 0 end
 local function setupKey(spec: number?) return tostring(spec or 0) end
 
 function M:SaveSetup(spec: number?, setup: any)
-    local all = deepCopy(self:Peek("setups"))
+    local all = copy(self:Peek("setups"))
     all[CLASS] = all[CLASS] or {}
     all[CLASS][setupKey(spec)] = setup
     self:Set("setups", all)
@@ -296,7 +142,7 @@ function M:Lists(spec: number?) return self:Setup(spec).lists end
 function M:PresetId(spec: number?) return self:Setup(spec).preset end
 
 function M:SetLists(lists: any, spec: number?)
-    local s = deepCopy(self:Setup(spec))
+    local s = copy(self:Setup(spec))
     s.lists = lists
     self:SaveSetup(spec, s)
 end
@@ -316,7 +162,7 @@ function M:MigrateLists()
         local all = self:Peek("setups")
         local key = setupKey(self.spec)
         if findPreset(oldPreset) and not (all[CLASS] and all[CLASS][key]) then
-            self:SaveSetup(self.spec, { preset = oldPreset, lists = deepCopy(old) })
+            self:SaveSetup(self.spec, { preset = oldPreset, lists = copy(old) })
         end
         self:Set("lists", {})
         self:Set("preset", "")
@@ -343,7 +189,7 @@ function M:Apply()
         procHighlight = self:Get("procHighlight"),
     })
     -- the tracker keeps them: its own copy of this spec's
-    t:SetLists(deepCopy(self:Lists(self.spec)))
+    t:SetLists(copy(self:Lists(self.spec)))
     self:ApplyVisibility()
 end
 
@@ -463,21 +309,7 @@ end
 -- The list editor (step 1.7b-2): every entry of every list, per spell
 --------------------------------------------------------------------------------
 
-local LIST_INFO = {
-    essential = { label = "Essential", kind = "cooldown", note = "Your rotation and big cooldowns, the larger row." },
-    utility = { label = "Utility", kind = "cooldown", note = "Interrupts, defensives, movement." },
-    buffs = { label = "Buffs on you", kind = "aura", note = "From anyone, unless only yours." },
-    debuffs = { label = "Your debuffs on the target", kind = "aura", note = "Only yours." },
-    procs = { label = "Procs", kind = "aura", note = "Shown only while up." },
-}
-local TABS = { cooldowns = { "essential", "utility" }, auras = { "buffs", "debuffs", "procs" } }
-
-local function copy(t: any): any
-    if type(t) ~= "table" then return t end
-    local out = {}
-    for k, v in pairs(t) do out[k] = copy(v) end
-    return out
-end
+local LIST_KEYS, LIST_INFO, TABS = Lists.LIST_KEYS, Lists.LIST_INFO, Lists.TABS
 
 -- Change the lists through a copy, so the setting sees a new value.
 local function mutate(fn: (lists: any) -> ())
@@ -498,158 +330,31 @@ end
 -- deep). The editor names an entry by its path: { key, i } in the list, j
 -- inside a collection, m a shared slot's member.
 
--- A path to an entry: { key, i } in a list, j inside a collection, m a
--- shared slot's member.
-type Path = { key: string, i: number, j?: number, m?: number }
+-- (Lists.wowlua has the entries' shape)
+type Path = Lists.Path
 
 local function newUid() return tostring(time()) .. math.random(1000, 9999) end
 
--- A weapon enchant entry (buffs only): { enchant = "main"|"off"|"ranged",
--- name, uid }, whatever is on that weapon (the tracker's own slot; no
--- spells). It goes by its uid, as its name follows the weapon.
-local ENCHANT_NAME = { main = "Main-hand enchant", off = "Off-hand enchant", ranged = "Ranged enchant" }
-local ENCHANT_INV = { main = 16, off = 17, ranged = 18 }
+local ENCHANT_NAME, ENCHANT_INV = Lists.ENCHANT_NAME, Lists.ENCHANT_INV
 local function enchantArt(e: any)
     local info = UI.WeaponEnchant(e.enchant)
     return info and info.icon or GetInventoryItemTexture("player", ENCHANT_INV[e.enchant] or 16) or 134400
 end
 
--- The container a path points into (a list, a collection's entries or a
--- shared slot's members), the index in it, and the shared slot it's in.
-local function locate(l: any, p: Path)
-    local t, i = l[p.key], p.i
-    if t and p.j then t, i = t[p.i] and t[p.i].entries, p.j end
-    if t and p.m then
-        local slot = t[i]
-        if not (slot and slot.group) then return nil end
-        return slot.members, p.m, slot
-    end
-    return t, i
-end
-
-local function entryAt(l: any, p: Path)
-    local t, i = locate(l, p)
-    return t and t[i]
-end
-
-local function samePath(a: Path, b: Path): boolean
-    return a.key == b.key and a.i == b.i and a.j == b.j and a.m == b.m
-end
-
--- fn(entry, path) for every entry of a list: collections and what they
--- hold, shared slots and their members.
-local function walk(list: any, key: string, fn: (e: any, p: Path) -> ())
-    local function one(e: any, p: Path)
-        fn(e, p)
-        if e.group then
-            for m, x in ipairs(e.members or {}) do fn(x, { key = key, i = p.i, j = p.j, m = m }) end
-        end
-    end
-    for i, e in ipairs(list or {}) do
-        one(e, { key = key, i = i })
-        if e.collection then
-            for j, x in ipairs(e.entries or {}) do one(x, { key = key, i = i, j = j }) end
-        end
-    end
-end
-
--- A shared slot's IDs: every member's, once, sorted; its icon stays one of
--- them (or a member's own icon). A fixed icon whose member left is no longer
--- fixed.
-local function regroup(e: any)
-    local seen, ids, art = {}, {}, {}
-    for _, m in ipairs(e.members or {}) do
-        for _, id in ipairs(m.ids or {}) do
-            if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
-        end
-        if m.icon then art[m.icon] = true end
-    end
-    table.sort(ids)
-    e.ids = ids
-    if e.icon and not (seen[e.icon] or art[e.icon]) then e.icon, e.fixedIcon = nil, nil end
-    if not e.icon and e.members and e.members[1] then e.icon = e.members[1].ids[1] end
-end
-
-local SOURCE_LABEL = { mine = "only yours", others = "only others'", any = "anyone" }
--- Whose aura a list counts unless an entry says otherwise (the tracker's
--- defaults): buffs from anyone, your debuffs and procs only yours.
-local LIST_SOURCE = { buffs = "any", debuffs = "mine", procs = "mine" }
-local function entrySource(e: any, key: string)
-    return e.source or (e.group and "mine") or (e.mine and "mine") or LIST_SOURCE[key] or "mine"
-end
+local locate, entryAt, walk, regroup = Lists.locate, Lists.entryAt, Lists.walk, Lists.regroup
+local SOURCE_LABEL, LIST_SOURCE, entrySource = Lists.SOURCE_LABEL, Lists.LIST_SOURCE, Lists.entrySource
 
 --------------------------------------------------------------------------------
--- Conditions: when an entry shows at all
+-- Conditions: when an entry shows at all (Conditions.wowlua), for your class
 --------------------------------------------------------------------------------
--- when = { match = "all" | "any", conditions = { cond, … } } on any entry (a
--- shared slot's member in aura lists only); no when, or no conditions:
--- always. Each cond is { type, ["not"] = true? } plus its type's values:
---   group     value = "solo" | "group" | "raid"
---   classes   classes = { "DRUID", … }, others = true?  (anyone in your
---             group, you included; others: anyone but you)
---   role      roles = { "TANK", "HEALER", "DAMAGER" }
---   stance    stances = { keys of your class's STANCES }
---   combat    (in combat; not: out of combat)
---   instance  kinds = { "none", "party", "raid", "pvp" }
---   target    kinds = { "boss", "elite", "player", "normal" }
---   talent    talents = { spellID, … }  (you have learned any of them)
--- The tracker checks them; the editor writes them and says them in words.
 
-local CLASSES = {
-    { value = "DRUID", label = "Druid" }, { value = "HUNTER", label = "Hunter" }, { value = "MAGE", label = "Mage" },
-    { value = "PALADIN", label = "Paladin" }, { value = "PRIEST", label = "Priest" }, { value = "ROGUE", label = "Rogue" },
-    { value = "SHAMAN", label = "Shaman" }, { value = "WARLOCK", label = "Warlock" }, { value = "WARRIOR", label = "Warrior" },
-}
-local ROLES = { { value = "TANK", label = "Tank" }, { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "Damage" } }
--- Stances and forms per class: the chip, and the name in a sentence.
-local STANCES = {
-    WARRIOR = { { value = "battle", label = "Battle", name = "Battle Stance" }, { value = "defensive", label = "Defensive", name = "Defensive Stance" },
-                { value = "berserker", label = "Berserker", name = "Berserker Stance" } },
-    DRUID = { { value = "caster", label = "Caster", name = "caster form" }, { value = "bear", label = "Bear", name = "Bear Form" },
-              { value = "cat", label = "Cat", name = "Cat Form" }, { value = "moonkin", label = "Moonkin", name = "Moonkin Form" },
-              { value = "travel", label = "Travel", name = "Travel Form" }, { value = "aquatic", label = "Aquatic", name = "Aquatic Form" } },
-    ROGUE = { { value = "stealth", label = "Stealth", name = "Stealth" } },
-    PRIEST = { { value = "shadowform", label = "Shadowform", name = "Shadowform" } },
-}
-local INSTANCES = { { value = "none", label = "Open world", name = "the open world" }, { value = "party", label = "Dungeon", name = "a dungeon" },
-                    { value = "raid", label = "Raid", name = "a raid" }, { value = "pvp", label = "Battleground", name = "a battleground" } }
-local TARGETS = { { value = "boss", label = "Boss", name = "a boss" }, { value = "elite", label = "Elite", name = "an elite" },
-                  { value = "player", label = "Player", name = "a player" }, { value = "normal", label = "Normal", name = "a normal enemy" } }
-local CONDITION_TYPES = {
-    { value = "group", label = "In a group or raid" }, { value = "classes", label = "Class in your group" },
-    { value = "role", label = "Your role" }, { value = "stance", label = "Your stance / form" },
-    { value = "combat", label = "In combat" }, { value = "instance", label = "Instance" }, { value = "target", label = "Target is" },
-    { value = "talent", label = "Your talents" },
-}
-
--- A new condition of a type, with a first choice made.
-local function newCondition(kind: string)
-    if kind == "group" then return { type = "group", value = "group" } end
-    if kind == "classes" then return { type = "classes", classes = { CLASS } } end
-    if kind == "role" then return { type = "role", roles = { "TANK" } } end
-    if kind == "stance" then return { type = "stance", stances = { STANCES[CLASS] and STANCES[CLASS][1].value } } end
-    if kind == "instance" then return { type = "instance", kinds = { "party" } } end
-    if kind == "target" then return { type = "target", kinds = { "boss" } } end
-    if kind == "talent" then return { type = "talent", talents = {} } end
-    return { type = "combat" }
-end
-
--- "a, b or c"
-local function anyOf(words: string[])
-    if #words <= 1 then return words[1] end
-    return table.concat(words, ", ", 1, #words - 1) .. " or " .. words[#words]
-end
-
--- The words for a condition's choices: `field` names them in a sentence.
-local function picked(values: any, options: any[], field: string): string[]
-    local by, out = {}, {}
-    for _, o in ipairs(options) do by[o.value] = o end
-    for _, v in ipairs(values or {}) do
-        local o = by[v]
-        out[#out + 1] = o and o[field] or tostring(v):lower()
-    end
-    return out
-end
+local CLASSES, ROLES, STANCES, INSTANCES, TARGETS = Conditions.CLASSES, Conditions.ROLES, Conditions.STANCES,
+    Conditions.INSTANCES, Conditions.TARGETS
+local talentName = Conditions.talentName
+local function newCondition(kind: string) return Conditions.newCondition(kind, CLASS) end
+local function conditionSentence(subject: string?, when: any): string return Conditions.conditionSentence(subject, when, CLASS) end
+local function conditionWords(when: any): string? return Conditions.conditionWords(when, CLASS) end
+local function conditionTypes(current: string?) return Conditions.conditionTypes(current, CLASS) end
 
 -- A class's talents, learned or not, sorted by name: { id = spellID, name,
 -- tree } each. Any class's from the generated list (SuuUI.ClassTalents);
@@ -701,129 +406,6 @@ local function classTalents(class: string)
     return {}
 end
 
-local function talentName(id: number)
-    local name = C_Spell.GetSpellName(id)
-    return (name and not isSecret(name)) and name or ("ID " .. tostring(id))
-end
-
-local function stanceOptions()
-    local all = {}
-    for _, list in pairs(STANCES) do for _, o in ipairs(list) do all[#all + 1] = o end end
-    return all
-end
-local ALL_STANCES = stanceOptions()
-
--- One condition as a phrase ("in a raid", "with a druid or warlock in your
--- group"), or nil while it has nothing chosen. `short`: the row summary's
--- words ("with a warlock", "Defensive").
-local function conditionPhrase(c: any, inGroup: boolean, short: boolean?): string?
-    local no = c["not"]
-    if c.type == "group" then
-        if c.value == "solo" then return no and "in a group or raid" or (short and "solo" or "while solo") end
-        return (no and "not " or "") .. "in a " .. (c.value == "raid" and "raid" or "group")
-    elseif c.type == "classes" then
-        local names = {}
-        for _, v in ipairs(c.classes or {}) do names[#names + 1] = tostring(v):lower() end
-        if #names == 0 then return nil end
-        local who
-        if c.others then
-            -- not you: "another paladin", or "a druid or paladin besides you"
-            if #names == 1 and c.classes[1] == CLASS then
-                who = (no and "without another " or "with another ") .. names[1]
-            else
-                who = (no and "without a " or "with a ") .. anyOf(names) .. " besides you"
-            end
-        else
-            who = (no and "without a " or "with a ") .. anyOf(names)
-        end
-        return short and who or (who .. (inGroup and " in it" or " in your group"))
-    elseif c.type == "role" then
-        local roles = picked(c.roles, ROLES, "label")
-        if #roles == 0 then return nil end
-        for i, r in ipairs(roles) do roles[i] = r:lower() end
-        if short then return (no and "not " or "") .. anyOf(roles) end
-        for i, r in ipairs(roles) do roles[i] = r == "damage" and r or ("a " .. r) end
-        return (no and "unless you play " or "while you play ") .. anyOf(roles)
-    elseif c.type == "stance" then
-        local names = picked(c.stances, ALL_STANCES, short and "label" or "name")
-        if #names == 0 then return nil end
-        if short then return (no and "not " or "") .. anyOf(names) end
-        return (no and "outside " or "in ") .. anyOf(names)
-    elseif c.type == "combat" then
-        return no and "out of combat" or "in combat"
-    elseif c.type == "instance" then
-        local names = picked(c.kinds, INSTANCES, "name")
-        if #names == 0 then return nil end
-        return (no and "outside " or "in ") .. anyOf(names)
-    elseif c.type == "target" then
-        local names = picked(c.kinds, TARGETS, "name")
-        if #names == 0 then return nil end
-        if short then return (no and "target not " or "target ") .. anyOf(names) end
-        return (no and "unless your target is " or "while your target is ") .. anyOf(names)
-    elseif c.type == "talent" then
-        local names = {}
-        for _, id in ipairs(c.talents or {}) do names[#names + 1] = talentName(id) end
-        if #names == 0 then return nil end
-        return (no and "without " or "with ") .. anyOf(names)
-    end
-end
-
-local function phrases(when: any, short: boolean?): string[]
-    local conds = when and when.conditions or {}
-    local inGroup = false
-    for _, c in ipairs(conds) do
-        if c.type == "group" and not c["not"] and c.value ~= "solo" then inGroup = true end
-    end
-    local out = {}
-    for _, c in ipairs(conds) do out[#out + 1] = conditionPhrase(c, inGroup, short) end
-    return out
-end
-
--- The conditions as one sentence: "Faerie Fire shows in a raid, with a druid
--- or warlock in it, out of combat." With none: "Always shows."
-local function conditionSentence(subject: string?, when: any): string
-    local list = phrases(when)
-    if #list == 0 then return "Always shows." end
-    local lead = subject and (subject .. " shows ") or "Shows "
-    if when.match == "any" then
-        return lead .. "when " .. (#list > 1 and ("any of these holds: " .. table.concat(list, "; ")) or list[1]) .. "."
-    end
-    return lead .. table.concat(list, ", ") .. "."
-end
-
--- The conditions in a row's summary: "in a raid · with a warlock", or with
--- Any of these, "in a raid or with a warlock".
-local function conditionWords(when: any): string?
-    local list = phrases(when, true)
-    if #list == 0 then return nil end
-    if when.match == "any" then return anyOf(list) end
-    return table.concat(list, " · ")
-end
-
--- What the Behaviour panel sets on an entry (its Reset clears them all).
-local BEHAVIOUR_KEYS = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "effectIDs", "effectName",
-                         "missing", "size", "glow", "digits", "stacks", "expiring", "soundAppear", "soundStack", "soundDrop", "when", "fixedIcon",
-                         "warnCombat" }
--- What else makes an entry differ from the preset's: shown or not, and a
--- shared slot's own settings and members (their whose and when included).
-local ENTRY_KEYS = { "name", "hidden", "ids", "max", "icon", "members", "enchant" }
--- A collection's own settings.
-local COLLECTION_KEYS = { "name", "when", "hidden" }
-
--- deep equality (wowlua:table's: the same keys with equal values)
-local same = equal
-
--- Whether an entry differs from the preset's entry of the same name.
-local function changed(e: any, base: any, key: string): boolean
-    if entrySource(e, key) ~= entrySource(base, key) then return true end
-    for _, list in ipairs({ BEHAVIOUR_KEYS, ENTRY_KEYS }) do
-        for _, k in ipairs(list) do
-            if not same(e[k], base[k]) then return true end
-        end
-    end
-    return false
-end
-
 -- How many entries differ from the preset the lists are based on: added,
 -- removed, changed (shown, behaviour, a shared slot's settings), or moved
 -- into or out of a collection. A collection counts once for itself (added,
@@ -833,52 +415,7 @@ function M:Changes()
     local spec = self:EditSpec()
     local p = findPreset(self:PresetId(spec))
     if not p then return 0 end
-    local lists, n = self:Lists(spec), 0
-    for _, key in ipairs(LIST_KEYS) do
-        local base, cols = {}, {}
-        for i, e in ipairs(p.lists[key] or {}) do
-            if e.collection then
-                local uid = e.uid or (p.id .. key .. i)
-                cols[#cols + 1] = { e = e, uid = uid }
-                for _, x in ipairs(e.entries or {}) do base[x.name] = { e = x, parent = uid } end
-            else
-                base[e.name] = { e = e }
-            end
-        end
-        local seen, used = {}, {}
-        local function entry(e: any, parent: any)
-            local b = base[e.name]
-            seen[e.name] = true
-            if not b or b.parent ~= parent or changed(e, b.e, key) then n = n + 1 end
-        end
-        for _, e in ipairs(lists[key] or {}) do
-            if e.collection then
-                local match
-                for _, c in ipairs(cols) do
-                    if not used[c] and c.uid == e.uid then match = c; break end
-                end
-                if not match then
-                    for _, c in ipairs(cols) do
-                        if not used[c] and c.e.name == e.name then match = c; break end
-                    end
-                end
-                local differs = not match
-                if match then
-                    used[match] = true
-                    for _, k in ipairs(COLLECTION_KEYS) do
-                        if not same(e[k], match.e[k]) then differs = true end
-                    end
-                end
-                if differs then n = n + 1 end
-                for _, x in ipairs(e.entries or {}) do entry(x, match and match.uid or e.uid) end
-            else
-                entry(e, nil)
-            end
-        end
-        for name in pairs(base) do if not seen[name] then n = n + 1 end end
-        for _, c in ipairs(cols) do if not used[c] then n = n + 1 end end
-    end
-    return n
+    return Lists.countChanges(p, self:Lists(spec))
 end
 
 -- The rank of an entry you know, as the spellbook names it.
@@ -986,19 +523,8 @@ local RECENT_MAX = 12
 local function remember(kind: string, name: any, id: any)
     if isSecret(name) or isSecret(id) or not name or not id then return end
     local all = M:Get("recent")
-    local mine = all[CLASS] and all[CLASS][kind] or {}
-    for i = 1, math.min(3, #mine) do
-        if mine[i].name == name then return end
-    end
-    local list = { { name = name, ids = { id } } }
-    for _, r in ipairs(mine) do
-        if r.name == name then
-            for _, other in ipairs(r.ids) do if other ~= id then table.insert(list[1].ids, other) end end
-        elseif #list < RECENT_MAX then
-            list[#list + 1] = r
-        end
-    end
-    table.sort(list[1].ids)
+    local list = Lists.pushRecent(all[CLASS] and all[CLASS][kind] or {}, name, id, RECENT_MAX)
+    if not list then return end
     all = copy(all)
     all[CLASS] = all[CLASS] or {}
     all[CLASS][kind] = list
@@ -1014,26 +540,17 @@ end
 -- names not yet in the list are added (newest first), in one write per scan.
 local function rememberAuras()
     if InCombatLockdown() then return end
-    local mine = recent("aura")
-    local seen, fresh = {}, {}
-    for _, r in ipairs(mine) do seen[r.name] = true end
+    local scanned: any[] = {}
     for _, scan in ipairs({ { "player", "HELPFUL" }, { "target", "HARMFUL|PLAYER" } }) do
         for i = 1, 40 do
             local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, scan[1], i, scan[2])
             if not ok or isSecret(a) or not a or isSecret(a.spellId) then break end
             local name = a.name
-            if not isSecret(name) and name and not seen[name] then
-                seen[name] = true
-                fresh[#fresh + 1] = { name = name, ids = { a.spellId } }
-            end
+            scanned[#scanned + 1] = { name = not isSecret(name) and name or nil, id = a.spellId }
         end
     end
-    if #fresh == 0 then return end
-    for _, r in ipairs(mine) do
-        if #fresh >= RECENT_MAX then break end
-        fresh[#fresh + 1] = r
-    end
-    while #fresh > RECENT_MAX do table.remove(fresh) end
+    local fresh = Lists.mergeRecent(recent("aura"), scanned, RECENT_MAX)
+    if not fresh then return end
     local all = copy(M:Get("recent"))
     all[CLASS] = all[CLASS] or {}
     all[CLASS].aura = fresh
@@ -1113,8 +630,6 @@ local ROW_H, GAP, WIDTH = 30, 4, 560
 -- Nesting: each level steps in INDENT, and a rail runs down from the row it
 -- belongs to, under that row's fold chevron (RAIL_X from its left edge).
 local INDENT, RAIL_X = 34, 25
--- what "+ Shared slot" and "+ Collection" are named until you rename them
-local NEW_SLOT, NEW_COLLECTION = "New shared slot", "New collection"
 
 -- While an aura isn't up, each entry's own choice (there's no list-wide
 -- one): buffs grey and debuffs "with a target" unless set.
@@ -1131,8 +646,7 @@ local MISSING_DEBUFF = {
     { value = "warn", label = "Warn" },
     { value = "remind", label = "Remind" },
 }
-local MISSING_DEFAULT = { buffs = "grey", debuffs = "target", procs = "hide" }
-local MISSING_LABEL = { hide = "hide", grey = "grey", target = "with a target", warn = "warn", remind = "remind" }
+local MISSING_DEFAULT, MISSING_LABEL = Lists.MISSING_DEFAULT, Lists.MISSING_LABEL
 
 -- The grip at a row's left edge: two columns of three dots.
 local function grip(parent: Frame)
@@ -1252,97 +766,8 @@ end
 -- Moving entries: into and out of collections and shared slots
 --------------------------------------------------------------------------------
 
--- An entry as a shared slot's member: its name and IDs, and in an aura list
--- whose it counts (only where it differs from the slot's) and its condition.
--- Its looks are the slot's.
-local function asMember(e: any, key: string, fromSlot: any, slot: any, slotKey: string)
-    local m = { name = e.name, ids = copy(e.ids) }
-    if LIST_INFO[slotKey].kind == "aura" then
-        local src = fromSlot and (e.source or entrySource(fromSlot, key)) or entrySource(e, key)
-        if src ~= entrySource(slot, slotKey) then m.source = src end
-        m.when = copy(e.when)
-    end
-    return m
-end
-
--- A member leaving its shared slot, as a single entry that counts the same
--- auras (whose it was, written down where the list counts otherwise).
-local function asSingle(m: any, slotKey: string, slot: any, key: string)
-    local e = { name = m.name, ids = copy(m.ids) }
-    if LIST_INFO[key].kind == "aura" then
-        local src = m.source or entrySource(slot, slotKey)
-        if src ~= LIST_SOURCE[key] then e.source = src end
-        e.when = copy(m.when)
-    end
-    return e
-end
-
--- Moves the entry at `from` to the position `to` (an index past the end
--- puts it last), turning it into a member or back as it enters or leaves a
--- shared slot.
-local function moveEntry(l: any, from: Path, to: Path)
-    local srcT, srcI, srcSlot = locate(l, from)
-    local dstT, dstI, dstSlot = locate(l, to)
-    if not (srcT and srcI and srcT[srcI] and dstT and dstI) then return end
-    local e = table.remove(srcT, srcI)
-    if srcT == dstT and dstI > srcI then dstI = dstI - 1 end
-    if dstSlot and dstSlot ~= srcSlot then
-        e = asMember(e, from.key, srcSlot, dstSlot, to.key)
-    elseif srcSlot and not dstSlot then
-        e = asSingle(e, from.key, srcSlot, to.key)
-    end
-    table.insert(dstT, math.min(dstI, #dstT + 1), e)
-    if srcSlot then regroup(srcSlot) end
-    if dstSlot and dstSlot ~= srcSlot then regroup(dstSlot) end
-end
-
--- "Make 'A + B' a shared slot": the slot takes A's place with A and B as its
--- members, A's whose (aura lists, one at a time) and A's looks.
-local function combine(l: any, ontoPath: Path, fromPath: Path, uid: string, names: any[])
-    local aT, aI = locate(l, ontoPath)
-    local bT, bI, bSlot = locate(l, fromPath)
-    local a, b = aT and aT[aI], bT and bT[bI]
-    if not (a and b) or a == b or a.name ~= names[1] or b.name ~= names[2] then return end
-    local key = ontoPath.key
-    local slot = { group = true, uid = uid, name = a.name .. " + " .. b.name, members = {}, hidden = a.hidden }
-    if LIST_INFO[key].kind == "aura" then slot.source, slot.max = entrySource(a, key), 1 end
-    -- (an aura's conditions stay with it as a member; a cooldown slot's
-    -- members have none, so A's become the slot's)
-    local cooldown = LIST_INFO[key].kind == "cooldown"
-    for _, k in ipairs(BEHAVIOUR_KEYS) do
-        if k ~= "when" or cooldown then slot[k] = copy(a[k]) end
-    end
-    slot.members[1] = asMember(a, key, nil, slot, key)
-    slot.members[2] = asMember(b, fromPath.key, bSlot, slot, key)
-    table.remove(bT, bI)
-    if bSlot then regroup(bSlot) end
-    for n, x in ipairs(aT) do
-        if x == a then aT[n] = slot; break end
-    end
-    regroup(slot)
-end
-
--- Whether a dragged row may land on a target: a collection only between the
--- list's own rows, a shared slot anywhere but in another slot, a single
--- entry (or a member) anywhere, onto a single entry (a new shared slot) too.
-local function accepts(from: any, to: any): boolean
-    local kind = from.kind
-    local plain = kind == "entry" or kind == "member"
-    -- a weapon enchant: only to another place in Buffs on you (or a
-    -- collection there), never into a shared slot
-    if from.enchant then
-        return to.path.key == "buffs" and not to.path.m and (to.onto == nil or to.onto == "collection")
-    end
-    if to.onto == "entry" then return plain and not samePath(from.path, to.path) end
-    if to.onto == "slot" then
-        local p = from.path
-        return plain and not (p.m and samePath({ key = p.key, i = p.i, j = p.j }, to.path))
-    end
-    if to.onto == "collection" then return kind ~= "collection" end
-    if to.path.m then return plain end
-    if to.path.j then return kind ~= "collection" end
-    return true
-end
+-- (Lists.wowlua: asMember, asSingle, moveEntry, combine, accepts)
+local combine, accepts = Lists.combine, Lists.accepts
 
 --------------------------------------------------------------------------------
 -- Rows
@@ -1402,10 +827,7 @@ local function buildEntryRow(parent: any)
     r.remove:SetPoint("RIGHT")
     r.move = UI.Select(r, { width = 104, placeholder = "Move to…", onChange = function(to: any)
         if not to then return end
-        mutate(function(l)
-            local e = table.remove(l[r.key], r.path.i)
-            if e then table.insert(l[to], e) end
-        end)
+        mutate(function(l) Lists.moveToList(l, r.key, r.path.i, to) end)
     end })
     r.behaviour = UI.Button(r, { text = "Behaviour", width = 96, onClick = function() parent:OpenBehaviour(r.path) end })
     r.shown = UI.Toggle(r, { onChange = function(v: any)
@@ -1592,17 +1014,11 @@ local function buildEditor(parent: Frame)
             a.newSlot = UI.Button(a, { text = "+ Shared slot", onClick = function()
                 local uid = newUid()
                 f.fold[uid] = true -- open, so its "+ Add to" shows
-                mutate(function(l)
-                    local slot = { group = true, uid = uid, name = NEW_SLOT, members = {}, ids = {} }
-                    if LIST_INFO[a.key].kind == "aura" then slot.source, slot.max = LIST_SOURCE[a.key], 1 end
-                    table.insert(l[a.key], slot)
-                end)
+                mutate(function(l) table.insert(l[a.key], Lists.newSlot(a.key, uid)) end)
             end })
             a.newSlot:SetPoint("LEFT", a.select, "RIGHT", 8, 0)
             a.newCollection = UI.Button(a, { text = "+ Collection", onClick = function()
-                mutate(function(l)
-                    table.insert(l[a.key], { collection = true, uid = newUid(), name = NEW_COLLECTION, entries = {} })
-                end)
+                mutate(function(l) table.insert(l[a.key], Lists.newCollection(newUid())) end)
             end })
             a.newCollection:SetPoint("LEFT", a.newSlot, "RIGHT", 8, 0)
             f.adds[i] = a
@@ -1619,17 +1035,7 @@ local function buildEditor(parent: Frame)
             a.select = UI.Select(a, { width = 280, lookup = spellLookup, onChange = function(value: any)
                 local e = value and entryFor(value, a.byName, a.groups)
                 if not e then return end
-                mutate(function(l)
-                    local box = entryAt(l, a.path)
-                    if box and box.collection then
-                        box.entries = box.entries or {}
-                        table.insert(box.entries, e)
-                    elseif box and box.group and not e.enchant then
-                        box.members = box.members or {}
-                        table.insert(box.members, { name = e.name, ids = e.ids })
-                        regroup(box)
-                    end
-                end)
+                mutate(function(l) Lists.addInto(l, a.path, e) end)
             end })
             a.select:SetPoint("LEFT")
             f.addTos[n] = a
@@ -1810,26 +1216,15 @@ local function buildEditor(parent: Frame)
                 end })
             return
         end
-        local dest = to.path
-        if to.onto == "slot" then
-            dest = { key = dest.key, i = dest.i, j = dest.j, m = math.huge }
-        elseif to.onto == "collection" then
-            dest = { key = dest.key, i = dest.i, j = math.huge }
-        end
-        mutate(function(l) moveEntry(l, from.path, dest) end)
+        local dest = Lists.dropPath(to)
+        mutate(function(l) Lists.moveEntry(l, from.path, dest) end)
     end
 
     function f:RemoveAt(path: Path)
-        mutate(function(l)
-            local t, i, slot = locate(l, path)
-            if t and t[i] then
-                table.remove(t, i)
-                if slot then regroup(slot) end
-            end
-        end)
+        mutate(function(l) Lists.removeAt(l, path) end)
     end
 
-    local function foldKey(e: any, p: Path) return e.uid or (p.key .. p.i .. "." .. (p.j or "")) end
+    local foldKey = Lists.foldKey
 
     function f:IsOpen(e: any, p: Path)
         local v = self.fold[foldKey(e, p)]
@@ -1987,19 +1382,7 @@ local function buildEditor(parent: Frame)
     -- by uid (shared slots and collections have one; a member goes by its
     -- slot's), else at its path while that is still the same spell; nil
     -- once it's gone.
-    local function findEntry(l: any)
-        local b = f.behaviour
-        local uid = b.slotUid or b.uid
-        if uid then
-            local at
-            walk(l[b.key], b.key, function(e, p) if e.uid == uid and not p.m then at = p end end)
-            if not at then return nil end
-            b.path = b.slotUid and { key = at.key, i = at.i, j = at.j, m = b.path.m } or at
-        end
-        local t, i, slot = locate(l, b.path)
-        local e = t and t[i]
-        if e and (b.uid or e.name == b.entryName) then return e, slot end
-    end
+    local function findEntry(l: any) return Lists.findEntry(l, f.behaviour) end
 
     local function mutateEntry(fn: (e: any, slot: any) -> ())
         mutate(function(l)
@@ -2021,28 +1404,13 @@ local function buildEditor(parent: Frame)
 
     -- Changes the entry's conditions; with none left it has no `when`.
     local function mutateWhen(fn: (w: any) -> ())
-        mutateEntry(function(e)
-            local w = copy(e.when) or {}
-            w.match, w.conditions = w.match or "all", w.conditions or {}
-            fn(w)
-            e.when = #w.conditions > 0 and w or nil
-        end)
+        mutateEntry(function(e) Conditions.editWhen(e, fn) end)
     end
 
     local function setCondition(i: number, fn: (c: any, w: any) -> ())
         mutateWhen(function(w)
             if w.conditions[i] then fn(w.conditions[i], w) end
         end)
-    end
-
-    -- The types the Select offers: stance / form only for a class with one
-    -- (or a condition that already is one, from another class's setup).
-    local function conditionTypes(current: string?)
-        local out = {}
-        for _, t in ipairs(CONDITION_TYPES) do
-            if t.value ~= "stance" or STANCES[CLASS] or current == "stance" then out[#out + 1] = t end
-        end
-        return out
     end
 
     local function buildConditionRow(parent: Frame)
@@ -2063,12 +1431,7 @@ local function buildEditor(parent: Frame)
         end)
         r.type = UI.Select(r, { width = 196, onChange = function(v: any)
             if not v then return end
-            setCondition(r.index, function(c, w)
-                if c.type == v then return end
-                local new = newCondition(v)
-                new["not"] = c["not"]
-                w.conditions[r.index] = new
-            end)
+            mutateWhen(function(w) Conditions.changeType(w, r.index, v, CLASS) end)
         end })
         r.type:SetPoint("LEFT", r.notButton, "RIGHT", 8, 0)
         r.remove = glyphButton(r, "remove", function()
@@ -2121,37 +1484,13 @@ local function buildEditor(parent: Frame)
         r.addTalent = UI.Select(r, { width = 300, placeholder = "+ Add talent…", lookup = spellLookup, onChange = function(v: any)
             local id = tonumber(v) or (type(v) == "string" and tonumber(v:match("^id:(%d+)$")))
             if not id then return end
-            setCondition(r.index, function(c)
-                c.talents = c.talents or {}
-                for _, x in ipairs(c.talents) do if x == id then return end end
-                c.talents[#c.talents + 1] = id
-            end)
+            setCondition(r.index, function(c) Conditions.addTalent(c, id) end)
         end })
         -- the chosen class's talents, without those already chosen
         function r:TalentOptions()
-            local have, options = {}, {}
-            for _, id in ipairs(self.cond and self.cond.talents or {}) do have[id] = true end
             -- by tree, left to right, each under its spec's name (Data/Talents.lua;
             -- else the tree's number), then by name
-            local list = {}
-            for _, t in ipairs(classTalents(self.talentClass)) do
-                if not have[t.id] then list[#list + 1] = t end
-            end
-            table.sort(list, function(x, y)
-                local a, b = tonumber(x.tree) or 9, tonumber(y.tree) or 9
-                if a ~= b then return a < b end
-                return x.name < y.name
-            end)
-            local heading
-            for _, t in ipairs(list) do
-                local tree = t.spec or (t.tree and (type(t.tree) == "number" and ("Tree " .. t.tree) or tostring(t.tree))) or "Other"
-                if tree ~= heading then
-                    heading = tree
-                    options[#options + 1] = { heading = tree }
-                end
-                options[#options + 1] = { value = t.id, label = t.name, icon = C_Spell.GetSpellTexture(t.id) }
-            end
-            self.addTalent:SetOptions(options)
+            self.addTalent:SetOptions(Conditions.talentOptions(classTalents(self.talentClass), self.cond and self.cond.talents))
             self.addTalent:SetValue(nil)
         end
         r.controls = { r.group, r.classesA, r.classesB, r.classesOthers, r.roles, r.instance, r.target, r.plain, r.stances,
@@ -2171,11 +1510,7 @@ local function buildEditor(parent: Frame)
         t.name:SetPoint("LEFT", t.icon, "RIGHT", 8, 0)
         t.name:SetFixedWidth(240)
         t.remove = glyphButton(t, "remove", function()
-            setCondition(r.index, function(c)
-                for i, x in ipairs(c.talents or {}) do
-                    if x == t.id then table.remove(c.talents, i); break end
-                end
-            end)
+            setCondition(r.index, function(c) Conditions.removeTalent(c, t.id) end)
         end)
         t.remove:SetPoint("RIGHT")
         r.talentRows[n] = t
@@ -2262,14 +1597,7 @@ local function buildEditor(parent: Frame)
         cs.rows = {}
         b.addCondition = UI.Button(cs, { text = "+ Add condition", onClick = function()
             -- the first type not used yet
-            mutateWhen(function(w)
-                local used, pick = {}, "combat"
-                for _, c in ipairs(w.conditions) do used[c.type] = true end
-                for _, t in ipairs(conditionTypes()) do
-                    if not used[t.value] then pick = t.value; break end
-                end
-                table.insert(w.conditions, newCondition(pick))
-            end)
+            mutateWhen(function(w) table.insert(w.conditions, newCondition(Conditions.firstUnusedType(w.conditions, CLASS))) end)
         end })
         b.condSentence = UI.Text(cs, "body", "ink")
         b.condSentence:SetWordWrap(true)
@@ -2553,16 +1881,7 @@ local function buildEditor(parent: Frame)
 
         b.reset = UI.Button(b.inner, { text = "Reset", width = 90, onClick = function()
             local ctx = f.behaviour.ctx
-            mutateEntry(function(e)
-                if ctx == "member" then
-                    e.source, e.when = nil, nil
-                elseif ctx == "collection" then
-                    e.when = nil
-                else
-                    if ctx == "single" then e.source, e.mine = nil, nil end
-                    for _, k in ipairs(BEHAVIOUR_KEYS) do e[k] = nil end
-                end
-            end)
+            mutateEntry(function(e) Lists.resetBehaviour(e, ctx) end)
         end })
         b.done = UI.Button(b.inner, { text = "Done", variant = "primary", width = 90, onClick = function() b:Hide() end })
         return b

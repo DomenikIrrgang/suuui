@@ -1,0 +1,209 @@
+-- tests/unit/Units/TraitWorld.wowlua
+-- A small stand-in for the game's trait trees (C_Traits, C_ClassTalents) for
+-- the Talents and Legacy tests: trees of a few nodes whose every answer the
+-- test sets, with the game's staging (PurchaseRank, RefundRank,
+-- RollbackConfig, CommitConfig) kept here.
+--
+--   local w = world.new({ configID = 100, trees = { … } })
+--   world.install(w)          -- fakes the API (undone after the test)
+
+import * as mock from "wowlua:mock"
+
+export type Node = {
+    id: number,
+    x: number,
+    y: number,
+    max: number,
+    name: string,
+    rank?: number,              -- learned
+    canPurchase?: boolean,
+    available?: boolean,        -- isAvailable (default true)
+    meetsEdges?: boolean,       -- meetsEdgeRequirements (default true)
+    edges?: { targetNode: number, type?: number }[],
+    conditions?: number[],
+    visible?: boolean,          -- false: hidden
+    choice?: boolean,           -- a Selection node (two entries)
+    flags?: number,
+    noEntry?: boolean,          -- no entry at all
+    spellName?: boolean,        -- its name from C_Spell (spellID = id)
+}
+
+export type Tree = {
+    id: number,
+    nodes: Node[],
+    groups?: { groupID: number, displayName: string, icon?: number }[],
+    spent?: { [number]: number }, -- by group
+    available?: number,
+    maxQuantity?: number,
+    spentInTree?: number,
+}
+
+export type World = {
+    configID: number,
+    trees: { [number]: Tree },         -- by tree ID
+    configs: { [number]: number },     -- config ID -> its tree ID
+    staged: { [number]: number },      -- node -> planned ranks
+    conditions: { [number]: { isMet: boolean, spentAmountRequired: number } },
+    purchases: number,
+    commits: number,
+    commitResult: boolean,
+    purchaseResult: boolean,
+    forceStaged: boolean,              -- staged changes the nodes don't show
+}
+
+export function new(configID: number, trees: Tree[]): World
+    local w: World = { configID = configID, trees = {}, configs = {}, staged = {}, conditions = {},
+        purchases = 0, commits = 0, commitResult = true, purchaseResult = true, forceStaged = false }
+    for i, t in ipairs(trees) do
+        w.trees[t.id] = t
+        if i == 1 then w.configs[configID] = t.id end
+    end
+    return w
+end
+
+local function nodeOf(w: World, treeID: number, nodeID: number): Node?
+    local t = w.trees[treeID]
+    if not t then return nil end
+    for _, n in ipairs(t.nodes) do if n.id == nodeID then return n end end
+    return nil
+end
+
+local function treeOfNode(w: World, nodeID: number): number?
+    for id, t in pairs(w.trees) do
+        for _, n in ipairs(t.nodes) do if n.id == nodeID then return id end end
+    end
+    return nil
+end
+
+local function hasStaged(w: World): boolean
+    return w.forceStaged or next(w.staged) ~= nil
+end
+
+local SELECTION = Enum.TraitNodeType and Enum.TraitNodeType.Selection or 2
+
+export function install(w: World)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): number return w.configID end)
+    mock.fake("C_Traits.GetConfigInfo", function(configID: number): any
+        local tree = w.configs[configID]
+        return tree and { ID = configID, treeIDs = { tree } } or nil
+    end)
+    mock.fake("C_Traits.GetConfigIDByTreeID", function(treeID: number): number?
+        for cfg, t in pairs(w.configs) do if t == treeID then return cfg end end
+        return w.trees[treeID] and w.configID or nil
+    end)
+    mock.fake("C_Traits.GetTreeNodes", function(treeID: number): number[]
+        local out: number[] = {}
+        local t = w.trees[treeID]
+        for _, n in ipairs(t and t.nodes or {}) do out[#out + 1] = n.id end
+        return out
+    end)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, nodeID: number): any
+        local treeID = treeOfNode(w, nodeID)
+        local n = treeID and nodeOf(w, treeID, nodeID)
+        if not n then return nil end
+        local rank = n.rank or 0
+        local planned = w.staged[nodeID] or 0
+        local edges: any[] = {}
+        for _, e in ipairs(n.edges or {}) do edges[#edges + 1] = { targetNode = e.targetNode, type = e.type or 2 } end
+        return {
+            ID = nodeID, posX = n.x, posY = n.y, maxRanks = n.max,
+            currentRank = rank + planned, activeRank = rank + planned,
+            canPurchaseRank = n.canPurchase, canRefundRank = planned > 0,
+            isAvailable = n.available ~= false, meetsEdgeRequirements = n.meetsEdges ~= false,
+            conditionIDs = n.conditions or {}, visibleEdges = edges, groupIDs = {},
+            entryIDs = n.noEntry and {} or (n.choice and { nodeID * 10, nodeID * 10 + 1 } or { nodeID * 10 }),
+            isVisible = n.visible ~= false, flags = n.flags or 0,
+            type = n.choice and SELECTION or 0,
+        }
+    end)
+    mock.fake("C_Traits.GetEntryInfo", function(_: number, entryID: number): any
+        return { definitionID = entryID }
+    end)
+    mock.fake("C_Traits.GetDefinitionInfo", function(definitionID: number): any
+        local nodeID = math.floor(definitionID / 10)
+        local treeID = treeOfNode(w, nodeID)
+        local n = treeID and nodeOf(w, treeID, nodeID)
+        if not n then return nil end
+        if n.spellName then return { spellID = nodeID } end
+        return { spellID = nodeID, overrideName = n.name, overrideIcon = 1000 + nodeID }
+    end)
+    mock.fake("C_Traits.GetGroupDisplayInfoByTreeID", function(treeID: number): any
+        local t = w.trees[treeID]
+        return t and t.groups or {}
+    end)
+    mock.fake("C_Traits.GetGroupCurrencyInfo", function(_: number, groupIDs: number[]): any
+        local out: any[] = {}
+        local t = w.trees[w.configs[w.configID]]
+        for _, g in ipairs(groupIDs) do
+            local spent = t and t.spent and t.spent[g]
+            out[#out + 1] = { traitNodeGroupID = g, currencyInfos = spent and { { spent = spent } } or {} }
+        end
+        return out
+    end)
+    mock.fake("C_Traits.GetTreeCurrencyInfo", function(_: number, treeID: number): any
+        local t = w.trees[treeID]
+        if not t then return {} end
+        local spent = 0
+        for id, r in pairs(w.staged) do if treeOfNode(w, id) == treeID then spent = spent + r end end
+        return { { quantity = (t.available or 0) - spent, maxQuantity = t.maxQuantity, spent = t.spentInTree,
+            spentInTree = t.spentInTree } }
+    end)
+    mock.fake("C_Traits.ConfigHasStagedChanges", function(): boolean return hasStaged(w) end)
+    mock.fake("C_Traits.GetConditionInfo", function(_: number, condID: number): any
+        return w.conditions[condID]
+    end)
+    mock.fake("C_Traits.PurchaseRank", function(_: number, nodeID: number): boolean
+        w.purchases = w.purchases + 1
+        if not w.purchaseResult then return false end
+        w.staged[nodeID] = (w.staged[nodeID] or 0) + 1
+        return true
+    end)
+    mock.fake("C_Traits.RefundRank", function(_: number, nodeID: number): boolean
+        local r = w.staged[nodeID]
+        if not r then return false end
+        w.staged[nodeID] = r > 1 and r - 1 or nil
+        return true
+    end)
+    mock.fake("C_Traits.RollbackConfig", function(): boolean
+        w.staged = {}
+        w.forceStaged = false
+        return true
+    end)
+    local function commit(): boolean
+        w.commits = w.commits + 1
+        if not w.commitResult then return false end
+        for id, r in pairs(w.staged) do
+            local treeID = treeOfNode(w, id)
+            local n = treeID and nodeOf(w, treeID, id)
+            if n then
+                n.rank = (n.rank or 0) + r
+                local t = assert(w.trees[treeID :: number])
+                t.available = (t.available or 0) - r
+            end
+        end
+        w.staged = {}
+        return true
+    end
+    mock.fake("C_ClassTalents.CommitConfig", commit)
+    mock.fake("C_Traits.CommitConfig", commit)
+end
+
+-- A tree of three columns of talents per tree, `count` trees 1800 apart:
+-- per tree a top talent (x, 0), one under it (+600 y) needing it by an
+-- arrow, a two-rank talent beside the top one (+600 x). Node IDs: tree k
+-- (1-based) has 10k+1, 10k+2, 10k+3.
+export function threeTrees(treeID: number, names: string[]): Tree
+    local nodes: Node[] = {}
+    local groups: { groupID: number, displayName: string, icon?: number }[] = {}
+    for k, name in ipairs(names) do
+        local x = (k - 1) * 3000
+        local base = 10 * k
+        nodes[#nodes + 1] = { id = base + 1, x = x, y = 0, max = 1, name = name .. " One", canPurchase = true,
+            edges = { { targetNode = base + 2 } } }
+        nodes[#nodes + 1] = { id = base + 2, x = x, y = 600, max = 2, name = name .. " Two", canPurchase = false,
+            available = false, meetsEdges = false }
+        nodes[#nodes + 1] = { id = base + 3, x = x + 600, y = 0, max = 2, name = name .. " Three", canPurchase = true }
+        groups[#groups + 1] = { groupID = 500 + k, displayName = name, icon = 2000 + k }
+    end
+    return { id = treeID, nodes = nodes, groups = groups, available = 5, maxQuantity = 5 }
+end

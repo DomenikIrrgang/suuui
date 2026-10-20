@@ -1,0 +1,313 @@
+-- Units/Bags/Sort.wowlua
+-- The Bags module's sort plans (see "Sorting" in Units/Bags.wowlua): the
+-- orders, what an item is as a sort sees it, which bag an item fits, the part
+-- stacks put together, where each item belongs and one wave of moves. Pure
+-- logic over a list of slots (only itemOf reads the game's item data); the
+-- module reads the bags, sends the moves and waits for them.
+
+import * as secret from "wowlua:secret"
+
+local isSecret = secret.isSecret
+-- a value that is there and not secret (narrows: no longer nil or Secret)
+type Plain = string | number | boolean | table
+local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
+
+export const WAVE = 6            -- moves sent at once, on separate slots
+export const WAVE_TIMEOUT = 4    -- s for a wave's moves to land
+export const MAX_WAVES = 300
+export const STACK_ROUNDS = 8
+
+-- By type: the best quality first, conjured items after even the grey ones
+-- (they don't last); within a quality by item class (Enum.ItemClass order:
+-- what you use, bags, weapons, gems, armour, reagents, ..., trade goods,
+-- recipes, quest items, keys), gear by where it's worn, the rest by
+-- subclass; then the highest item level, the dearest to sell, the name, and
+-- an item's part stacks before its full ones.
+local SLOT_ORDER: { [string]: number } = {}
+for i, loc in ipairs({ "INVTYPE_AMMO", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_BODY",
+    "INVTYPE_CHEST INVTYPE_ROBE", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET", "INVTYPE_WRIST", "INVTYPE_HAND",
+    "INVTYPE_FINGER", "INVTYPE_TRINKET", "INVTYPE_CLOAK", "INVTYPE_WEAPON", "INVTYPE_SHIELD", "INVTYPE_2HWEAPON",
+    "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE", "INVTYPE_RANGED", "INVTYPE_THROWN",
+    "INVTYPE_RANGEDRIGHT", "INVTYPE_RELIC", "INVTYPE_TABARD" }) do
+    for l in loc:gmatch("%S+") do SLOT_ORDER[l] = i end
+end
+
+-- An item as a sort sees it (its count and quality, the rest read once per
+-- link), a slot it covers, and a move.
+export type SortItem = {
+    count: number, quality?: number, id: any, link?: string, name?: string, level?: number, maxStack?: number,
+    equipLoc?: string, price?: number, conjured?: boolean, classID?: number, subclassID?: number, reagent?: boolean,
+    family?: number,
+}
+export type SortKey = (a: SortItem) -> any
+-- a bag's family: 0 any item, "reagent" the reagent bag, else the bag's family bits
+export type Family = number | "reagent"
+export type SortSlot = { bag: number, slot: number, family: Family, item?: SortItem, locked?: boolean }
+-- the slots of a bag of a family, by their place in the list of slots
+export type Positions = { family: Family, [number]: number }
+export type Move = { from: SortSlot, to: SortSlot }
+-- Where each item belongs: target[i] for slots[i] (nil: empty).
+export type Target = { [number]: SortItem }
+-- What PlanStacks remembers between rounds: each item's part stacks last
+-- round, and the items that don't stack.
+export type StackState = { partials: { [any]: number }, noStack: { [any]: boolean } }
+
+local function isGear(a: SortItem): boolean return a.classID == 2 or a.classID == 4 end
+
+-- The parts an order compares, each ascending (a minus for highest first).
+local KEY = {
+    rank = function(a: SortItem) return a.conjured and 1 or -(a.quality or 0) end,
+    classID = function(a: SortItem) return a.classID or 99 end,
+    slot = function(a: SortItem) return isGear(a) and (SLOT_ORDER[a.equipLoc] or -1) or 0 end,
+    kind = function(a: SortItem) return isGear(a) and 0 or (a.subclassID or 99) end,
+    price = function(a: SortItem) return -(a.price or 0) end,
+    fewer = function(a: SortItem) return a.count end,
+    class = function(a: SortItem) return a.classID or 99 end,
+    sub = function(a: SortItem) return a.subclassID or 99 end,
+    equip = function(a: SortItem) return SLOT_ORDER[a.equipLoc] or 99 end,
+    quality = function(a: SortItem) return -(a.quality or 0) end,
+    level = function(a: SortItem) return -(a.level or 0) end,
+    name = function(a: SortItem) return a.name or "" end,
+    id = function(a: SortItem) return a.id end,
+    link = function(a: SortItem) return a.link or "" end,
+    count = function(a: SortItem) return -a.count end,
+}
+
+local BY_TYPE: SortKey[] = { KEY.rank, KEY.classID, KEY.slot, KEY.kind, KEY.level, KEY.price, KEY.name, KEY.id, KEY.link, KEY.fewer }
+local ORDERS: { [string]: SortKey[] } = {
+    type = BY_TYPE,
+    quality = { KEY.quality, KEY.class, KEY.sub, KEY.equip, KEY.level, KEY.name, KEY.id, KEY.link, KEY.count },
+    level = { KEY.level, KEY.class, KEY.sub, KEY.equip, KEY.quality, KEY.name, KEY.id, KEY.link, KEY.count },
+    name = { KEY.name, KEY.quality, KEY.id, KEY.link, KEY.count },
+}
+
+export type SortOption = { value: string, label: string }
+export const SORT_OPTIONS: SortOption[] = {
+    { value = "type", label = "By type" },
+    { value = "quality", label = "By quality" },
+    { value = "level", label = "By item level" },
+    { value = "name", label = "By name" },
+    { value = "game", label = "The game's sort" },
+}
+
+-- An order's label ("By type" for one it doesn't know).
+export function sortLabel(order: any): string
+    local label = "By type"
+    for _, o in ipairs(SORT_OPTIONS) do if o.value == order then label = o.label end end
+    return label
+end
+
+-- The keys of an order by name (by type for one it doesn't know).
+export function orderKeys(order: string): SortKey[]
+    return ORDERS[order] or BY_TYPE
+end
+
+-- Whether a goes before b in the order of `keys` (equal: false).
+export function before(a: SortItem, b: SortItem, keys: SortKey[]): boolean
+    for _, k in ipairs(keys) do
+        local x, y = k(a), k(b)
+        if x ~= y then return x < y end
+    end
+    return false
+end
+
+-- Made by a spell and gone in time (mage food, healthstones, mana gems):
+-- the game's tooltip says "Conjured Item".
+export function conjured(id: any): boolean
+    local get = C_TooltipInfo and C_TooltipInfo.GetItemByID
+    local ok, data = pcall(get or error, id)
+    if not ok or type(data) ~= "table" or type(data.lines) ~= "table" then return false end
+    local mark = ITEM_CONJURED or "Conjured Item"
+    for _, line in ipairs(data.lines) do
+        local t = line.leftText
+        if plain(t) and t == mark then return true end
+    end
+    return false
+end
+
+-- What an item is, read once per link (the game may not have it loaded yet:
+-- then what GetItemInfoInstant knows, and it's asked for).
+local itemCache: { [any]: any } = {}
+export function itemOf(info: any): SortItem
+    local id, link = info.itemID, info.hyperlink
+    local key = plain(link) and link or id
+    local d = itemCache[key]
+    if not d then
+        d = { id = id, link = plain(link) and link or nil }
+        local name, _, quality, level, _, _, _, maxStack, equipLoc, _, price, classID, subclassID, _, _, _, reagent =
+            C_Item.GetItemInfo(d.link or id)
+        if name then
+            d.name, d.quality, d.level, d.maxStack, d.equipLoc = name, quality, level, maxStack, equipLoc
+            d.price, d.conjured = plain(price) and price or 0, conjured(id)
+            d.classID, d.subclassID, d.reagent = classID, subclassID, reagent and true or false
+            if d.link and C_Item.GetDetailedItemLevelInfo then
+                local ok, effective = pcall(C_Item.GetDetailedItemLevelInfo, d.link)
+                if ok and plain(effective) and type(effective) == "number" then d.level = effective end
+            end
+            itemCache[key] = d
+        else
+            local _, _, _, loc, _, cls, sub = C_Item.GetItemInfoInstant(id)
+            d.equipLoc, d.classID, d.subclassID = loc, cls, sub
+            if C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
+        end
+        if C_Item.GetItemFamily then
+            local ok, fam = pcall(C_Item.GetItemFamily, id)
+            if ok and plain(fam) then d.family = fam end
+        end
+    end
+    local count = plain(info.stackCount) and info.stackCount or 1
+    local quality = d.quality
+    if quality == nil and plain(info.quality) then quality = info.quality end
+    return setmetatable({ count = count, quality = quality }, { __index = d })
+end
+
+-- Whether an item may go into a bag of this family (0: any; "reagent": the
+-- reagent bag, crafting reagents only; else the bag's family bits). Bags
+-- themselves only into ordinary bags.
+export function fits(item: SortItem, family: Family): boolean
+    if family == 0 then return true end
+    if item.classID == 1 then return false end
+    if family == "reagent" then return item.reagent == true end
+    return item.family ~= nil and bit.band(item.family, family) ~= 0
+end
+
+-- The same item and count in two slots (both empty: the same too).
+export function same(a: SortItem?, b: SortItem?): boolean
+    if a == nil or b == nil then return a == b end
+    return a.id == b.id and a.count == b.count and a.link == b.link
+end
+
+-- Part stacks of one item put together: for each item, its last part stack
+-- onto its first (one pair per item per wave).
+export function planStacks(slots: SortSlot[], st: StackState): Move[]
+    local first, moves = {}, {}
+    for i, s in ipairs(slots) do
+        local it = s.item
+        if it and not s.locked and (it.maxStack or 1) > 1 and it.count < (it.maxStack or 1) then
+            local g = first[it.id]
+            if not g then first[it.id] = { i } else g[#g + 1] = i end
+        end
+    end
+    -- an item whose part stacks were no fewer after a round doesn't stack
+    -- (two of one item that differ): left as they are
+    for id, g in pairs(first) do
+        if #g > 1 then
+            local had = st.partials[id]
+            if had and #g >= had then st.noStack[id] = true end
+            st.partials[id] = #g
+            if not st.noStack[id] and #moves < WAVE then moves[#moves + 1] = { from = slots[g[#g]], to = slots[g[1]] } end
+        end
+    end
+    return moves
+end
+
+-- Where each item belongs: target[i] for slots[i] (nil: empty). The bags of
+-- a family (the reagent bag, profession bags) take the items that fit them
+-- first; the rest go into the ordinary bags. toEnd: the items gather at the
+-- end, mirrored (the first item in the order in the last slot), the empty
+-- slots before them. Nil: not everything fits.
+export function sortTarget(slots: SortSlot[], order: string, toEnd: boolean): Target?
+    local items: SortItem[] = {}
+    for _, s in ipairs(slots) do if s.item then items[#items + 1] = s.item end end
+    local keys = orderKeys(order)
+    table.sort(items, function(a: SortItem, b: SortItem) return before(a, b, keys) end)
+    local target: Target = {}
+    local function place(positions: Positions | number[], list: SortItem[])
+        for i, item in ipairs(list) do
+            target[positions[toEnd and (#positions - i + 1) or i] :: number] = item
+        end
+    end
+    -- the special bags, each in turn (found by bag ID in a table of their own:
+    -- in `special` itself, bag IDs 1-4 collided with its list slots)
+    local special: Positions[], general: number[] = {}, {}
+    local byBag: { [number]: Positions } = {}
+    for i, s in ipairs(slots) do
+        if s.family == 0 then
+            general[#general + 1] = i
+        else
+            local list = byBag[s.bag]
+            if not list then
+                list = { family = s.family } :: Positions
+                byBag[s.bag] = list
+                special[#special + 1] = list
+            end
+            list[#list + 1] = i
+        end
+    end
+    for _, positions in ipairs(special) do
+        local taken: SortItem[], rest: SortItem[] = {}, {}
+        for _, item in ipairs(items) do
+            if #taken < #positions and fits(item, positions.family) then taken[#taken + 1] = item
+            else rest[#rest + 1] = item end
+        end
+        place(positions, taken)
+        items = rest
+    end
+    if #items > #general then return nil end
+    place(general, items)
+    return target
+end
+
+-- One wave of moves on separate slots: each puts an item where it belongs,
+-- taking it from a slot where it doesn't. What is in the way goes to that
+-- slot, so it must be allowed there; else first to an empty slot it may go
+-- to. Returns the moves and how many slots are still wrong.
+export function planWave(slots: SortSlot[], target: Target): (Move[], number)
+    local cur, touched, moves = {}, {}, {}
+    local wrong = 0
+    for i, s in ipairs(slots) do
+        cur[i] = s.item
+        if not same(s.item, target[i]) then wrong = wrong + 1 end
+    end
+    for p = 1, #slots do
+        if #moves >= WAVE then break end
+        local want = target[p]
+        if want and not touched[p] and not slots[p].locked and not same(cur[p], want) then
+            local from
+            for i = 1, #slots do
+                if i ~= p and not touched[i] and not slots[i].locked and same(cur[i], want) and not same(cur[i], target[i])
+                    and (cur[p] == nil or fits(cur[p], slots[i].family)) then
+                    from = i
+                    break
+                end
+            end
+            if from then
+                moves[#moves + 1] = { from = slots[from], to = slots[p] }
+                touched[from], touched[p] = true, true
+                cur[from], cur[p] = cur[p], cur[from]
+            elseif cur[p] then
+                for e = 1, #slots do
+                    if e ~= p and not touched[e] and not slots[e].locked and cur[e] == nil and fits(cur[p], slots[e].family) then
+                        moves[#moves + 1] = { from = slots[p], to = slots[e] }
+                        touched[e], touched[p] = true, true
+                        cur[e], cur[p] = cur[p], nil
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return moves, wrong
+end
+
+-- A wave on its way, each frame: "wait" (not yet), "next" (its slots are
+-- free again and the bags have updated: plan the next), "finish" (the
+-- game's sort: the bags are quiet, or long enough), "timeout" (no answer).
+export type Wave = { at: number, moves: Move[], updated?: boolean }
+export function waveState(wave: Wave, now: number, game: boolean, lastUpdate: number?,
+                          isLocked: (s: SortSlot) -> boolean): string
+    if game then
+        local quiet = now - (lastUpdate or wave.at)
+        if now - wave.at > 8 or (now - wave.at > 0.6 and quiet > 0.5) then return "finish" end
+        return "wait"
+    end
+    if now - wave.at > WAVE_TIMEOUT then return "timeout" end
+    if now - wave.at < 0.05 then return "wait" end
+    for _, m in ipairs(wave.moves) do
+        if isLocked(m.from) or isLocked(m.to) then return "wait" end
+    end
+    -- the bags' contents follow the locks; nothing sent: just a moment
+    if #wave.moves > 0 and not wave.updated and now - wave.at < 1 then return "wait" end
+    if #wave.moves == 0 and now - wave.at < 0.2 then return "wait" end
+    return "next"
+end

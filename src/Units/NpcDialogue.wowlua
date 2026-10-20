@@ -68,8 +68,8 @@ local ANIM_TALK, ANIM_IDLE = 60, 0
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
 -- an answer pill's and a card's description (see DrawPills, DrawCards)
-type Answer = { [string]: any }
-type Card = { [string]: any }
+export type Answer = { [string]: any }
+export type Card = { [string]: any }
 local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 -- the game's gossip icons as SuuUI glyphs (the icon itself where unknown)
@@ -620,16 +620,22 @@ function M:View()
     return nil
 end
 
-function M:Draw()
-    local view = self:View()
-    if not view then self.root:Hide() return end
-    if not self.root:IsShown() then self:PlaceBar() end
-    self.root:Show()
-    self:HideUI(true)
-    self:DrawSpeaker()
-    local width = self.talk:GetWidth()
+-- What a view says: their line, your answers, a quest's head, what they
+-- ask, the cards and what comes with them.
+export type Content = {
+    text: string,
+    answers: Answer[],
+    ask?: string,
+    items?: Card[],
+    caption?: string,
+    gains?: { [string]: any },
+    need?: boolean,      -- the cards are items to hand over
+    title?: string,      -- a quest's title
+    level?: any,         -- and its level
+}
 
-    local text, answers, ask = "", {}, nil
+function M:Content(view: string): Content
+    local text, answers: Answer[], ask: string? = "", {}, nil
     local items, caption, gains, need
     local qtitle, qlevel
     if view == "gossip" then
@@ -715,6 +721,23 @@ function M:Draw()
             end },
         }
     end
+
+    return { text = text, answers = answers, ask = ask, items = items, caption = caption, gains = gains, need = need,
+             title = qtitle, level = qlevel }
+end
+
+function M:Draw()
+    local view = self:View()
+    if not view then self.root:Hide() return end
+    if not self.root:IsShown() then self:PlaceBar() end
+    self.root:Show()
+    self:HideUI(true)
+    self:DrawSpeaker()
+    local width = self.talk:GetWidth()
+    local c = self:Content(view)
+    local text, answers, ask = c.text, c.answers, c.ask
+    local items, caption, gains, need = c.items, c.caption, c.gains, c.need
+    local qtitle, qlevel = c.title, c.level
 
     -- lay it out, top to bottom
     local y = 0

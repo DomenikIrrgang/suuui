@@ -1,0 +1,440 @@
+-- UI/Layout: stacks and grids. What they place where, the container's size,
+-- the next-frame flush (deepest first, nested containers settling), the
+-- children that report their own changes, texts and secret sizes, and a
+-- protected container in combat.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import stack, grid, Layout from "/UI/Layout"
+import text from "/UI/Text"
+import expectNoErrors, newParent from "../../helpers"
+import pointOf from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function host(): Frame
+    parent = newParent()
+    local c = CreateFrame("Frame", nil, parent)
+    c:SetPoint("TOPLEFT")
+    c:SetSize(1, 1)
+    return c
+end
+
+local function box(p: Frame, w: number, h: number): Frame
+    local f = CreateFrame("Frame", nil, p)
+    f:SetSize(w, h)
+    return f
+end
+
+-- where a child sits: its TOPLEFT offsets from the container
+local function at(f: any): number[]
+    local pt = pointOf(f) :: any
+    return { pt.x, pt.y }
+end
+
+@afterEach
+local function cleanup()
+    if mock.player then mock.player:leaveCombat() end
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- stacks
+--------------------------------------------------------------------------------
+
+@test("a vertical stack places its children top down and fits the container")
+local function verticalStack()
+    local c = host()
+    local l = stack(c, { gap = 4, padding = 10 })
+    expect(l.direction).toBe("vertical")
+    expect(l.align).toBe("start")
+    expect(l.autoSize).toBe(true)
+    local a, b = box(c, 50, 20), box(c, 80, 30)
+    expect(l:Add(a)).toBe(a)
+    l:Add(b)
+    expect(a.layout).toBe(l)
+    -- nothing moves until the next frame
+    expect(c:GetHeight()).toBe(1)
+    mock.advanceFrames(1)
+    expect(at(a)).toEqual({ 10, -10 })
+    expect(at(b)).toEqual({ 10, -34 })
+    expect(c).toHaveSize(100, 74)
+    expect(a.suuLayoutW).toBe(50)
+    expect(b.suuLayoutH).toBe(30)
+end
+
+@test("a horizontal stack places its children left to right")
+local function horizontalStack()
+    local c = host()
+    local l = stack(c, { direction = "horizontal", gap = 2 })
+    local a, b = box(c, 50, 20), box(c, 80, 30)
+    l:Add(a)
+    l:Add(b)
+    mock.advanceFrames(1)
+    expect(at(a)).toEqual({ 0, 0 })
+    expect(at(b)).toEqual({ 52, 0 })
+    expect(c).toHaveSize(132, 30)
+end
+
+@test("padding as a list or by side")
+@cases({ { "list" }, { "named" } })
+local function paddings(kind: string)
+    local c = host()
+    local pad: any = kind == "list" and { 1, 2, 3, 4 } or { left = 1, right = 2, top = 3, bottom = 4 }
+    local l = stack(c, { padding = pad })
+    expect(l.padding).toEqual({ left = 1, right = 2, top = 3, bottom = 4 })
+    local a = box(c, 10, 10)
+    l:Add(a)
+    mock.advanceFrames(1)
+    expect(at(a)).toEqual({ 1, -3 })
+    expect(c).toHaveSize(13, 17)
+end
+
+@test("a missing side of a padding table is 0")
+local function partialPadding()
+    local c = host()
+    local l = stack(c, { padding = { top = 5 } })
+    expect(l.padding).toEqual({ left = 0, right = 0, top = 5, bottom = 0 })
+end
+
+@test("cross-axis alignment: start, center, end and stretch")
+@cases({ { "start", 0 }, { "center", 15 }, { "end", 30 } })
+local function aligned(align: string, x: number)
+    local c = host()
+    local l = stack(c, { align = align })
+    local wide, narrow = box(c, 50, 10), box(c, 20, 10)
+    l:Add(wide)
+    l:Add(narrow)
+    mock.advanceFrames(1)
+    expect(at(narrow)).toEqual({ x, -10 })
+end
+
+@test("a horizontal stack aligns on the height")
+local function alignedHorizontal()
+    local c = host()
+    local l = stack(c, { direction = "horizontal", align = "center" })
+    local tall, short = box(c, 10, 40), box(c, 10, 20)
+    l:Add(tall)
+    l:Add(short)
+    mock.advanceFrames(1)
+    expect(at(short)).toEqual({ 10, -10 })
+end
+
+@test("stretch anchors both sides of each child")
+local function stretched()
+    local c = host()
+    local l = stack(c, { align = "stretch", padding = 4 })
+    expect(l.stretches).toBe(true)
+    local a = box(c, 20, 10)
+    l:Add(a)
+    mock.advanceFrames(1)
+    expect(pointOf(a, 2)).toEqual({ point = "TOPRIGHT", relativeTo = c, relativePoint = "TOPRIGHT", x = -4, y = -4 })
+    local h = host()
+    local hl = stack(h, { direction = "horizontal", align = "stretch" })
+    local b = box(h, 20, 10)
+    hl:Add(b)
+    mock.advanceFrames(1)
+    expect(pointOf(b, 2)).toEqual({ point = "BOTTOMLEFT", relativeTo = h, relativePoint = "BOTTOMLEFT", x = 0, y = 0 })
+end
+
+@test("with a fixed cross size, alignment uses the container's size")
+local function fixedCross()
+    local c = host()
+    c:SetSize(100, 1)
+    local l = stack(c, { align = "end", autoSize = "height", padding = 5 })
+    local a = box(c, 20, 10)
+    l:Add(a)
+    mock.advanceFrames(1)
+    expect(at(a)).toEqual({ 75, -5 })
+    expect(c).toHaveSize(100, 20)
+    local h = host()
+    h:SetSize(1, 50)
+    local hl = stack(h, { direction = "horizontal", align = "center", autoSize = "width" })
+    local b = box(h, 20, 10)
+    hl:Add(b)
+    mock.advanceFrames(1)
+    expect(at(b)).toEqual({ 0, -20 })
+    expect(h).toHaveSize(20, 50)
+end
+
+@test("autoSize false leaves the container alone")
+local function noAutoSize()
+    local c = host()
+    c:SetSize(7, 7)
+    local l = stack(c, { autoSize = false })
+    l:Add(box(c, 50, 50))
+    mock.advanceFrames(1)
+    expect(c).toHaveSize(7, 7)
+end
+
+@test("gapBefore replaces the gap before one child")
+local function gapBefore()
+    local c = host()
+    local l = stack(c, { gap = 4 })
+    local a, b, d = box(c, 10, 10), box(c, 10, 10), box(c, 10, 10)
+    l:Add(a, { gapBefore = 99 }) -- the first child has no gap before it
+    l:Add(b, { gapBefore = 20 })
+    l:Add(d)
+    mock.advanceFrames(1)
+    expect(at(a)).toEqual({ 0, 0 })
+    expect(at(b)).toEqual({ 0, -30 })
+    expect(at(d)).toEqual({ 0, -44 })
+end
+
+@test("hidden children take no room; showing one lays out again")
+local function hiddenChildren()
+    local c = host()
+    local l = stack(c)
+    local a, b = box(c, 10, 10), box(c, 10, 15)
+    l:Add(a)
+    l:Add(b)
+    a:Hide()
+    mock.advanceFrames(1)
+    expect(at(b)).toEqual({ 0, 0 })
+    expect(c:GetHeight()).toBe(15)
+    a:Show()
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(25)
+    b:Hide()
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(10)
+end
+
+@test("a child that changes size lays the stack out again")
+local function childResized()
+    local c = host()
+    local l = stack(c)
+    local a = box(c, 10, 10)
+    l:Add(a)
+    mock.advanceFrames(1)
+    a:SetHeight(40)
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(40)
+end
+
+@test("a frame added twice is hooked once")
+local function hookedOnce()
+    local c = host()
+    local l = stack(c)
+    local a = box(c, 10, 10)
+    l:Add(a)
+    l:Remove(a)
+    l:Add(a)
+    expect(a.suuLayoutHooked).toBe(true)
+    mock.advanceFrames(1)
+    expect(#l.children).toBe(1)
+end
+
+@test("the echo of a size the layout caused is ignored; a secret size too")
+local function echoes()
+    local c = host()
+    local l = stack(c, { align = "stretch" })
+    local a = box(c, 10, 10)
+    l:Add(a)
+    mock.advanceFrames(1)
+    local s = mock.stub(l, "Invalidate")
+    -- a stretched vertical stack: the width is the container's, the height is the echo
+    mock.script(a, "OnSizeChanged", 77, 10)
+    -- a secret size can't be compared
+    mock.script(a, "OnSizeChanged", mock.secret(5), mock.secret(5))
+    expect(s).never.toHaveBeenCalled()
+    mock.script(a, "OnSizeChanged", 10, 11)
+    expect(s).toHaveBeenCalledTimes(1)
+end
+
+@test("in a horizontal stretched stack the width is the echo")
+local function echoesHorizontal()
+    local c = host()
+    local l = stack(c, { direction = "horizontal", align = "stretch" })
+    local a = box(c, 10, 10)
+    l:Add(a)
+    mock.advanceFrames(1)
+    local s = mock.stub(l, "Invalidate")
+    mock.script(a, "OnSizeChanged", 10, 99)
+    expect(s).never.toHaveBeenCalled()
+    mock.script(a, "OnSizeChanged", 12, 99)
+    expect(s).toHaveBeenCalledTimes(1)
+end
+
+@test("a child's own GetLayoutSize wins over its frame size")
+local function ownSize()
+    local c = host()
+    local l = stack(c)
+    local a: any = box(c, 10, 10)
+    a.GetLayoutSize = function(_: any): (number, number) return 33, 44 end
+    l:Add(a)
+    mock.advanceFrames(1)
+    expect(c).toHaveSize(33, 44)
+end
+
+@test("a text is measured by its string, or its fixed width")
+local function texts()
+    local c = host()
+    local l = stack(c)
+    local t = text(c, "body")
+    t:SetValue("Some words")
+    l:Add(t)
+    mock.advanceFrames(1)
+    expect(c:GetWidth()).toBe(t:GetUnboundedStringWidth())
+    expect(c:GetHeight()).toBe(t:GetStringHeight())
+    t:SetFixedWidth(300)
+    mock.advanceFrames(1)
+    expect(c:GetWidth()).toBe(300)
+end
+
+@test("a secret text size counts as 0")
+local function secretText()
+    local c = host()
+    local l = stack(c, { direction = "horizontal" })
+    -- a stand-in text whose sizes read back secret (an enemy's name in combat)
+    local placed: any[] = {}
+    local fake: any = {
+        IsObjectType = function(_: any, _t: string): boolean return false end,
+        GetObjectType = function(_: any): string return "FontString" end,
+        IsShown = function(_: any): boolean return true end,
+        GetUnboundedStringWidth = function(_: any): any return mock.secret(50) end,
+        GetStringHeight = function(_: any): any return mock.secret(12) end,
+        ClearAllPoints = function(_: any) end,
+        SetPoint = function(_: any, ...: any) placed[#placed + 1] = { ... } end,
+    }
+    l:Add(fake)
+    l:Add(box(c, 10, 10))
+    mock.advanceFrames(1)
+    expect(c).toHaveSize(10, 10)
+    expect(#placed).toBe(1)
+end
+
+@test("Remove and Clear let children go and lay out again")
+local function removeAndClear()
+    local c = host()
+    local l = stack(c)
+    local a, b = box(c, 10, 10), box(c, 10, 20)
+    l:Add(a)
+    l:Add(b)
+    l:Remove(a)
+    expect(a.layout).toBeNil()
+    l:Remove(a) -- not in it: nothing
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(20)
+    l:Clear()
+    expect(b.layout).toBeNil()
+    expect(#l.children).toBe(0)
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(0)
+end
+
+@test("nested layouts settle in one flush, the inner one first")
+local function nested()
+    local outerHost = host()
+    local outer = stack(outerHost, { gap = 5 })
+    local inner = CreateFrame("Frame", nil, outerHost)
+    inner:SetSize(1, 1)
+    local il = stack(inner)
+    expect(il.depth > outer.depth).toBe(true)
+    local other = box(outerHost, 10, 10)
+    outer:Add(inner)
+    outer:Add(other)
+    il:Add(box(inner, 40, 25))
+    mock.advanceFrames(1)
+    expect(inner).toHaveSize(40, 25)
+    expect(at(other)).toEqual({ 0, -30 })
+    expect(outerHost).toHaveSize(40, 35)
+    -- the inner content grows: both settle again
+    il:Add(box(inner, 60, 5))
+    mock.advanceFrames(1)
+    expect(outerHost).toHaveSize(60, 45)
+end
+
+@test("ApplyNow lays out at once")
+local function applyNow()
+    local c = host()
+    local l = stack(c)
+    l:Add(box(c, 10, 12))
+    l:ApplyNow()
+    expect(c:GetHeight()).toBe(12)
+end
+
+@test("a protected container waits for the end of combat")
+local function protectedInCombat()
+    local c = host()
+    mock.protect(c, true)
+    local l = stack(c)
+    l:Add(box(c, 10, 12))
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(1)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(12)
+    mock.protect(c, false)
+end
+
+@test("an unprotected container lays out in combat")
+local function unprotectedInCombat()
+    local c = host()
+    local l = stack(c)
+    l:Add(box(c, 10, 12))
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(c:GetHeight()).toBe(12)
+end
+
+--------------------------------------------------------------------------------
+-- grids
+--------------------------------------------------------------------------------
+
+@test("a grid fills rows of fixed cells")
+local function grids()
+    local c = host()
+    local g = grid(c, { columns = 3, cellWidth = 20, cellHeight = 10, gap = 2, padding = 1 })
+    local cells: Frame[] = {}
+    for i = 1, 5 do cells[i] = g:Add(box(c, 5, 5)) end
+    mock.advanceFrames(1)
+    expect(at(cells[1])).toEqual({ 1, -1 })
+    expect(at(cells[3])).toEqual({ 45, -1 })
+    expect(at(cells[4])).toEqual({ 1, -13 })
+    expect(cells[5].suuLayoutW).toBe(5)
+    expect(c).toHaveSize(3 * 20 + 2 * 2 + 2, 2 * 10 + 2 + 2)
+end
+
+@test("a grid's defaults: one column of 32px squares")
+local function gridDefaults()
+    local c = host()
+    local g = grid(c)
+    expect(g.columns).toBe(1)
+    expect(g.cellWidth).toBe(32)
+    expect(g.cellHeight).toBe(32)
+    expect(grid(c, { cellWidth = 20 }).cellHeight).toBe(20)
+    local a, b = g:Add(box(c, 5, 5)), g:Add(box(c, 5, 5))
+    mock.advanceFrames(1)
+    expect(at(b)).toEqual({ 0, -32 })
+    expect(c).toHaveSize(32, 64)
+    expect(a.layout).toBe(g)
+end
+
+@test("a grid with fewer children than columns is as wide as they are; empty is 0")
+local function gridNarrow()
+    local c = host()
+    local g = grid(c, { columns = 4, cellWidth = 10, gap = 3 })
+    local a = g:Add(box(c, 5, 5))
+    g:Add(box(c, 5, 5))
+    local hidden = g:Add(box(c, 5, 5))
+    hidden:Hide()
+    mock.advanceFrames(1)
+    expect(c).toHaveSize(23, 10)
+    g:Clear()
+    mock.advanceFrames(1)
+    expect(c).toHaveSize(0, 0)
+    expect(a.layout).toBeNil()
+end
+
+@test("Layout objects keep the options they were made with")
+local function keepsOptions()
+    local c = host()
+    local l: Layout = stack(c, { direction = "horizontal", gap = 3, autoSize = "width" })
+    expect(l.gap).toBe(3)
+    expect(l.autoSize).toBe("width")
+    expect(l.container).toBe(c)
+end

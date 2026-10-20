@@ -1,0 +1,156 @@
+-- Units/WorldMap/Tips.wowlua
+-- The world map pins' tooltips: one pin's card, a merged pin's list (one
+-- line per name, "Mailbox ×2"), and with Shift over a quest pin what each
+-- quest asks of you (its objectives, the game's placeholders filled in).
+-- Apart from the map's frames, so it's tested on its own.
+
+import SuuUI from "/Core/API"
+import questName from "/Units/WorldMap/Quests"
+import type Group from "/Units/WorldMap/Arrange"
+
+local T = SuuUI.Tokens
+local S = T.space
+
+-- (the secret test first: a secret isn't compared, not even with nil)
+local function plain(v: unknown): v is string | number | boolean | table
+    return not issecretvalue(v) and v ~= nil
+end
+
+-- A quest's objectives text with the game's placeholders filled in: $N
+-- your name, $C your class, $R your race, $Gmale:female; by your sex.
+export function fillText(text: string): string
+    local name = UnitName("player")
+    local class = UnitClass("player")
+    local race = UnitRace("player")
+    -- (a secret sex reads as not female)
+    local sex = UnitSex("player")
+    local female = not issecretvalue(sex) and sex == 3
+    text = text:gsub("%$[Gg]%s*([^:;]*):([^;]*);", function(m, f) return female and f or m end)
+    return (text:gsub("%$(%a)", function(c)
+        c = c:upper()
+        if c == "N" then return plain(name) and name or "you" end
+        if c == "C" then return plain(class) and class or "adventurer" end
+        if c == "R" then return plain(race) and race or "adventurer" end
+    end))
+end
+
+-- The quests a pin's group holds (givers' and item drops'), once each.
+export function groupQuests(g: Group): number[]
+    local ids: number[], seen: { [number]: boolean } = {}, {}
+    for _, it in ipairs(g.items) do
+        for _, id in ipairs(it.quests or {}) do
+            if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
+        end
+    end
+    return ids
+end
+
+-- Shift on a quest pin (asked 2026-10-18): what each quest asks of you,
+-- from the quest data's objectives text, added under what the tooltip
+-- already says (nothing goes; a drop's source stays): one quest's as its
+-- description, several each under its name.
+local MAX_OBJECTIVES = 6
+-- space before each entry of a tooltip that lists several, and before its
+-- first (under the title)
+local ENTRY_GAP = S["space-5"]
+local FIRST_GAP = S["space-4"]
+local MAP_TIP_W = 360
+export function addObjectives(tip: { [string]: any }, ids: number[]): { [string]: any }
+    local starts = SuuUI.QuestStarts and SuuUI.QuestStarts() or {}
+    local texts = starts.objectives or {}
+    local muted = "|cff" .. T.color["ink-muted"].hex
+    local function text(id: number): string
+        return muted .. (texts[id] and fillText(texts[id]) or "The quest data doesn't say what this quest asks.") .. "|r"
+    end
+    if #ids == 1 and not tip.lines then
+        tip.description = text(ids[1])
+        return tip
+    end
+    -- each objective under its own quest: the title's first, then after
+    -- each line that names a quest (a giver's others, a merged pin's)
+    local out = {}
+    if tip.titleQuest then out[1] = { text(tip.titleQuest), gap = tip.subtitle and nil or FIRST_GAP } end
+    local shown = 0
+    for _, l in ipairs(tip.lines or {}) do
+        out[#out + 1] = l
+        if l.quest then
+            out[#out + 1] = { text(l.quest) }
+        elseif l.quests then
+            for k, id in ipairs(l.quests) do
+                if k > 1 then
+                    local q = starts.quests and starts.quests[id]
+                    out[#out + 1] = { questName(q, id), gap = S["space-2"] }
+                end
+                shown = shown + 1
+                if shown > MAX_OBJECTIVES * 2 then break end
+                out[#out + 1] = { text(id) }
+            end
+        end
+    end
+    tip.lines = out
+    return tip
+end
+
+export function tipBase(g: Group, hint: string?): { [string]: any }
+    local first = g.items[1]
+    if g.distinct == 1 and first.tip then return first.tip() end
+    if g.distinct == 1 then
+        local lines = {}
+        if first.more and #first.more > 0 then
+            for _, l in ipairs(first.more) do lines[#lines + 1] = l end
+        end
+        local detail = first.detail
+        -- a vendor who also repairs reads "Repair" when its title doesn't say
+        if first.kindName and first.small and detail and not detail:lower():find(first.kindName:lower(), 1, true) then
+            detail = detail .. " · " .. first.kindName
+        elseif first.kindName and first.small and not detail then
+            detail = first.kindName
+        end
+        return { title = first.name, titleColor = first.difficulty and ("quest-" .. first.difficulty) or nil,
+                 subtitle = detail, lines = #lines > 0 and lines or nil, meta = hint, titleQuest = first.quests and first.quests[1] }
+    end
+    -- one line per name: the same NPC's spawn points, mailboxes, a chest
+    -- kind read once with how many ("Mailbox ×2"; found in game)
+    local seen, order = {}, {}
+    for _, it in ipairs(g.items) do
+        local key = (it.name or "?") .. "\0" .. (it.detail or "")
+        if not seen[key] then
+            seen[key] = { name = it.name or "?", detail = it.listDetail or it.detail or "", n = 0, uids = {}, teaches = it.teaches,
+                          quests = it.quests }
+            order[#order + 1] = seen[key]
+        end
+        -- (one NPC's spawn points once: "Mailbox ×2" is two mailboxes)
+        local e = seen[key]
+        if not (it.uid and e.uids[it.uid]) then e.n = e.n + 1 end
+        if it.uid then e.uids[it.uid] = true end
+    end
+    -- one line each, the title after the name in muted ink (two columns
+    -- overlapped once titles ran long; found in game)
+    local muted = "|cff" .. T.color["ink-muted"].hex
+    local lines = {}
+    for i, e in ipairs(order) do
+        if i > 12 then lines[#lines + 1] = { ("and %d more"):format(#order - 12) } break end
+        local name = e.name .. (e.n > 1 and (" ×" .. e.n) or "")
+        -- a gap before each next one: which lines are whose (asked 2026-10-18)
+        lines[#lines + 1] = { e.detail ~= "" and (name .. "  " .. muted .. e.detail .. "|r") or name,
+                              gap = i > 1 and ENTRY_GAP or FIRST_GAP, quests = e.quests }
+        -- a weapon master's weapons under his name
+        if e.teaches then lines[#lines + 1] = { muted .. "Teaches " .. e.teaches .. "|r" } end
+    end
+    -- all one name: the title says it all
+    if #order == 1 and order[1].detail == "" then lines = nil end
+    local kind = first.kindName or (first.repeatable and "Repeatable quests") or (first.key == "available" and "Quests to pick up")
+        or first.detail or ""
+    return { title = kind .. " · " .. g.distinct, lines = lines, meta = "Click to zoom in" .. (hint and (" · " .. hint) or "") }
+
+end
+
+export function tipFor(g: Group): { [string]: any }
+    local ids = groupQuests(g)
+    local tip = tipBase(g, #ids > 0 and not IsShiftKeyDown() and "Shift: what to do" or nil)
+    -- the map's tooltips a bit wider (objectives and lists wrapped early; asked)
+    tip.maxWidth = MAP_TIP_W
+    if #ids == 0 then return tip end
+    if IsShiftKeyDown() then addObjectives(tip, ids) end
+    return tip
+end

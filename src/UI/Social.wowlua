@@ -31,6 +31,96 @@ import * as inputs from "/UI/Inputs"
 import * as uiSelect from "/UI/Select"
 import * as panel from "/UI/Panel"
 import * as tooltip from "/UI/Tooltip"
+import Text from "/UI/Text"
+import SuuButton from "/UI/Controls"
+import Segmented from "/UI/Inputs"
+import Select from "/UI/Select"
+import ScrollArea from "/UI/Panel"
+
+export type Friend = {
+    key?: any,
+    bnet?: boolean,
+    name?: string,
+    character?: string,
+    color?: string,      -- a class colour token ("class-mage")
+    online?: boolean,
+    detail?: string,
+    note?: string,
+    away?: boolean,
+    busy?: boolean,
+    whisper?: boolean,
+    invite?: boolean,
+    why?: string,
+}
+
+export type ContactsData = {
+    view?: string,       -- "friends" or "ignored"
+    status?: string,     -- "available", "away" or "busy"
+    me?: string,
+    online?: number,
+    total?: number,
+    friends?: Friend[],
+    ignored?: string[],
+    selected?: any,
+}
+
+export interface StatusBadge extends Frame
+    text: Text
+end
+
+export interface ContactRow extends Button
+    row?: Friend
+    ignoredName?: string
+    sel: Texture
+    edge: Texture
+    hover: Texture
+    diamond: Texture
+    glyph: Texture
+    name: Text
+    detail: Text
+    away: StatusBadge
+    unignore: SuuButton
+end
+
+export interface ListHead extends Frame
+    text: Text
+    rule: Frame
+end
+
+-- A foot or head button: why it's off, for its tooltip.
+export interface ReasonButton extends SuuButton
+    reason?: string
+    text: string
+end
+
+export interface Contacts extends Frame
+    data?: ContactsData
+    rows: ContactRow[]
+    heads: ListHead[]
+    meDot: Texture
+    me: Text
+    views: Segmented
+    count: Text
+    status: Select
+    add: ReasonButton
+    invite: ReasonButton
+    whisper: ReasonButton
+    box: Frame
+    list: ScrollArea
+    empty: Text
+    selectedRow?: Friend
+    onView?: (view: any) -> ()
+    onStatus?: (status: any) -> ()
+    onSelect?: (key: any) -> ()
+    onWhisper?: (row: Friend) -> ()
+    onInvite?: (row: Friend) -> ()
+    onAdd?: () -> ()
+    onIgnore?: () -> ()
+    onUnignore?: (name: string) -> ()
+    onMenu?: (row: Friend, owner: ContactRow) -> ()
+    function SetData(d: ContactsData)
+    function Draw()
+end
 
 local S = T.space
 
@@ -41,20 +131,21 @@ local function headH() return T.type.caption.lineHeight + S["space-3"] end
 local TOP_H = 30
 local FOOT_H = 26
 
-local C = {}
+local C: Contacts = {} :: any
 
 -- the live pages, drawn again when the theme changes (colour codes in
 -- their text, sizes from the text styles)
-local contactPages, peopleLists, raidPages = {}, {}, {}
-for _, set in ipairs({ contactPages, peopleLists, raidPages }) do setmetatable(set, { __mode = "k" }) end
+local contactPages: { [Contacts]: boolean } = setmetatable({}, { __mode = "k" })
+local peopleLists: { [PeopleList]: boolean } = setmetatable({}, { __mode = "k" })
+local raidPages: { [RaidGroups]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- the diamond at the name's middle
-local function placeDiamond(r: any)
+local function placeDiamond(r: ContactRow | PeopleRow)
     r.diamond:SetPoint("CENTER", r, "TOPLEFT", S["space-5"], -(S["space-3"] + T.type.label.lineHeight / 2))
 end
 
-local function badge(parent: Frame)
-    local b = CreateFrame("Frame", nil, parent)
+local function badge(parent: Frame): StatusBadge
+    local b: StatusBadge = CreateFrame("Frame", nil, parent) :: any
     b:SetHeight(16)
     draw.fill(b, "surface-raised"):SetAllPoints()
     draw.border(b, "gilt-line")
@@ -63,8 +154,8 @@ local function badge(parent: Frame)
     return b
 end
 
-local function makeRow(c: any)
-    local r = CreateFrame("Button", nil, c.list.child)
+local function makeRow(c: Contacts): ContactRow
+    local r: ContactRow = CreateFrame("Button", nil, c.list.child) :: any
     r:SetHeight(ROW_H)
     r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     r.sel = draw.fill(r, "arcane-soft", "BACKGROUND")
@@ -94,24 +185,27 @@ local function makeRow(c: any)
     r.away:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
     -- ignored: Unignore on the row
     r.unignore = controls.button(r, { text = "Unignore", variant = "quiet", onClick = function()
-        if r.ignoredName and c.onUnignore then c.onUnignore(r.ignoredName) end
+        local name = r.ignoredName
+        if name and c.onUnignore then c.onUnignore(name) end
     end })
     r.unignore:SetPoint("RIGHT", -S["space-4"], 0)
-    r:SetScript("OnEnter", function(self) self.hover:Show() end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self, button)
-        if not self.row then return end
-        if c.onSelect then c.onSelect(self.row.key) end
-        if button == "RightButton" and c.onMenu then c.onMenu(self.row, self) end
+    r:SetScript("OnEnter", function(self: ContactRow) self.hover:Show() end)
+    r:SetScript("OnLeave", function(self: ContactRow) self.hover:Hide() end)
+    r:SetScript("OnClick", function(self: ContactRow, button: string)
+        local row = self.row
+        if not row then return end
+        if c.onSelect then c.onSelect(row.key) end
+        if button == "RightButton" and c.onMenu then c.onMenu(row, self) end
     end)
-    r:SetScript("OnDoubleClick", function(self)
-        if self.row and self.row.whisper and c.onWhisper then c.onWhisper(self.row) end
+    r:SetScript("OnDoubleClick", function(self: ContactRow)
+        local row = self.row
+        if row and row.whisper and c.onWhisper then c.onWhisper(row) end
     end)
     return r
 end
 
-local function makeHead(c: any)
-    local h = CreateFrame("Frame", nil, c.list.child)
+local function makeHead(c: Contacts | PeopleList): ListHead
+    local h: ListHead = CreateFrame("Frame", nil, c.list.child) :: any
     h:SetHeight(headH())
     h.text = uiText.text(h, "caption", "gilt-text")
     h.text:SetPoint("BOTTOMLEFT", S["space-4"], S["space-1"])
@@ -122,7 +216,7 @@ local function makeHead(c: any)
 end
 
 function C:Draw()
-    local d = self.data or {}
+    local d: ContactsData = self.data or {}
     local view = d.view or "friends"
     local child = self.list.child
     child:SetWidth(math.max(1, self.list:GetWidth()))
@@ -139,7 +233,7 @@ function C:Draw()
         h:Show()
         y = y + headH() + S["space-1"]
     end
-    local function row()
+    local function row(): ContactRow
         nRow = nRow + 1
         local r = self.rows[nRow] or makeRow(self)
         self.rows[nRow] = r
@@ -151,17 +245,17 @@ function C:Draw()
         y = y + ROW_H
         return r
     end
-    local selected
+    local selected: Friend? = nil
     if view == "friends" then
-        local online, offline = {}, {}
+        local online: Friend[], offline: Friend[] = {}, {}
         for _, f in ipairs(d.friends or {}) do
             if f.online then online[#online + 1] = f else offline[#offline + 1] = f end
         end
-        for gi, group in ipairs({ { "Online", online }, { "Offline", offline } }) do
-            if #group[2] > 0 then
+        for gi, group in ipairs({ { label = "Online", list = online }, { label = "Offline", list = offline } }) do
+            if #group.list > 0 then
                 if gi == 2 and #online > 0 then y = y + S["space-3"] end
-                head(group[1] .. " · " .. #group[2])
-                for _, f in ipairs(group[2] :: any) do
+                head(group.label .. " · " .. #group.list)
+                for _, f in ipairs(group.list) do
                     local r = row()
                     r.row, r.ignoredName = f, nil
                     r.unignore:Hide()
@@ -197,8 +291,9 @@ function C:Draw()
         end
         self.empty:SetValue("No friends yet: Add friend, bottom left.")
     else
-        if #(d.ignored or {}) > 0 then head("Ignored · " .. #d.ignored) end
-        for _, name in ipairs(d.ignored or {}) do
+        local ignored = d.ignored or {}
+        if #ignored > 0 then head("Ignored · " .. #ignored) end
+        for _, name in ipairs(ignored) do
             local r = row()
             r.row, r.ignoredName = nil, name
             r.diamond:Show()
@@ -224,22 +319,29 @@ function C:Draw()
     self.whisper:SetShown(friends)
     self.invite:SetShown(friends)
     if friends then
-        self.whisper:SetEnabledState(selected ~= nil and selected.whisper and true or false)
-        self.whisper.reason = not selected and "Choose a friend first." or (not selected.whisper and "They're offline.") or nil
-        self.invite:SetEnabledState(selected ~= nil and selected.invite and true or false)
-        self.invite.reason = not selected and "Choose a friend first." or (not selected.invite and (selected.why or "They can't be invited.")) or nil
+        if selected then
+            self.whisper:SetEnabledState(selected.whisper and true or false)
+            self.whisper.reason = (not selected.whisper) and "They're offline." or nil
+            self.invite:SetEnabledState(selected.invite and true or false)
+            self.invite.reason = (not selected.invite) and (selected.why or "They can't be invited.") or nil
+        else
+            self.whisper:SetEnabledState(false)
+            self.whisper.reason = "Choose a friend first."
+            self.invite:SetEnabledState(false)
+            self.invite.reason = "Choose a friend first."
+        end
     end
     self.selectedRow = selected
 end
 
 local STATUS_COLOR = { available = "arcane", away = "amber", busy = "ember" }
 
-function C:SetData(d: any)
+function C:SetData(d: ContactsData)
     self.data = d
     -- you: your BattleTag (its number faint) and your status
     local me = d.me or ""
     local name, number = me:match("^(.-)(#%d+)$")
-    self.me:SetValue(name and (name .. "|cff" .. T.color["ink-faint"].hex .. number .. "|r") or me)
+    self.me:SetValue((name and number) and (name .. "|cff" .. T.color["ink-faint"].hex .. number .. "|r") or me)
     draw.paint(self.meDot, STATUS_COLOR[d.status or "available"] or "arcane")
     self.views:SetValue(d.view or "friends")
     self.count:SetValue((d.online or 0) .. " of " .. (d.total or 0) .. " online")
@@ -248,17 +350,17 @@ function C:SetData(d: any)
     self:Draw()
 end
 
-local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ())
-    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick })
-    b:HookScript("OnEnter", function(self)
+local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ()): ReasonButton
+    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick }) :: ReasonButton
+    b:HookScript("OnEnter", function(self: ReasonButton)
         if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = text, description = self.reason }) end
     end)
     b:HookScript("OnLeave", function() tooltip.hideTooltip() end)
     return b
 end
 
-export function contacts(parent: Frame)
-    local c = CreateFrame("Frame", nil, parent)
+export function contacts(parent: Frame): Contacts
+    local c: Contacts = CreateFrame("Frame", nil, parent) :: any
     Mixin(c, C)
     c.rows, c.heads = {}, {}
     -- the top: Friends / Ignored, how many are online, your status
@@ -333,10 +435,90 @@ local ROLE_ICON = {
 local SLOT_H = 22
 local function groupLabelH() return T.type.caption.lineHeight + S["space-2"] end
 
-local R = {}
+export type RaidMember = {
+    index?: number,
+    name?: string,
+    class?: string,
+    className?: string,
+    level?: number,
+    zone?: string,
+    role?: string,       -- "TANK", "HEALER" or "DAMAGER"
+    group?: number,
+    leader?: boolean,
+    assistant?: boolean,
+    online?: boolean,
+    dead?: boolean,
+    you?: boolean,
+}
 
-local function slot(r: any, g: number, i: number)
-    local b = CreateFrame("Button", nil, r.groups[g])
+export type RaidData = {
+    inRaid?: boolean,
+    inParty?: boolean,
+    canLead?: boolean,
+    reason?: string,
+    size?: number,
+    plan?: boolean,
+    members?: RaidMember[],
+}
+
+export interface RaidSlot extends Button
+    group: number
+    pos: number
+    member?: RaidMember
+    fill: Texture
+    edge: draw.Border
+    role: Texture
+    name: Text
+    rank: Texture
+end
+
+export interface RaidGhost extends Frame
+    role: Texture
+    name: Text
+end
+
+export interface RaidGroupFrame extends Frame
+    label: Text
+end
+
+export interface RaidGroups extends Frame
+    data?: RaidData
+    count: Text
+    info: ReasonButton
+    roles: ReasonButton
+    ready: ReasonButton
+    plan: ReasonButton
+    groups: RaidGroupFrame[]
+    slots: RaidSlot[][]
+    notIn: Text
+    convert: SuuButton
+    ghost?: RaidGhost
+    overSlot?: RaidSlot
+    dragging?: RaidSlot
+    dragMember?: RaidMember
+    headH?: number
+    onReadyCheck?: () -> ()
+    onRoleCheck?: () -> ()
+    onRaidInfo?: () -> ()
+    onConvert?: () -> ()
+    onPlan?: () -> ()
+    onMove?: (index: number?, group: number) -> ()
+    onSwap?: (index: number?, otherIndex: number?) -> ()
+    onMember?: (member: RaidMember, button: string, owner: RaidSlot) -> ()
+    function SetData(d: RaidData)
+    function Draw()
+    function SlotUnderCursor(): RaidSlot?
+    function StartGhost(m: RaidMember)
+    function StopGhost(): RaidSlot?
+    function PlaceSlots()
+    function LayoutHead()
+    function Layout()
+end
+
+local R: RaidGroups = {} :: any
+
+local function slot(r: RaidGroups, g: number, i: number): RaidSlot
+    local b: RaidSlot = CreateFrame("Button", nil, r.groups[g]) :: any
     b:SetHeight(SLOT_H)
     b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     b:RegisterForDrag("LeftButton")
@@ -354,12 +536,12 @@ local function slot(r: any, g: number, i: number)
     b.rank = b:CreateTexture(nil, "ARTWORK")
     b.rank:SetSize(12, 12)
     b.rank:SetPoint("RIGHT", -S["space-3"], 0)
-    b:SetScript("OnEnter", function(self)
+    b:SetScript("OnEnter", function(self: RaidSlot)
         if r.dragging and r.dragging ~= self then self.edge:SetColor("arcane") end
-        if self.member then
+        local m = self.member
+        if m then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip_SetTitle(GameTooltip, self.member.name)
-            local m = self.member
+            GameTooltip_SetTitle(GameTooltip, m.name or "")
             local line = (m.level and m.level > 0 and ("Level " .. m.level .. " ") or "") .. (m.className or "")
             if line ~= "" then GameTooltip_AddNormalLine(GameTooltip, line) end
             if m.zone and m.zone ~= "" then GameTooltip_AddNormalLine(GameTooltip, m.zone) end
@@ -367,31 +549,35 @@ local function slot(r: any, g: number, i: number)
             GameTooltip:Show()
         end
     end)
-    b:SetScript("OnLeave", function(self)
-        self.edge:SetColor(self.member and (self.member.you and "ink" or "gilt-hairline") or "gilt-faint")
+    b:SetScript("OnLeave", function(self: RaidSlot)
+        local m = self.member
+        self.edge:SetColor(m and (m.you and "ink" or "gilt-hairline") or "gilt-faint")
         GameTooltip:Hide()
     end)
-    b:SetScript("OnClick", function(self, button)
-        if self.member and r.onMember then r.onMember(self.member, button, self) end
+    b:SetScript("OnClick", function(self: RaidSlot, button: string)
+        local m = self.member
+        if m and r.onMember then r.onMember(m, button, self) end
     end)
     -- dragging: the member kept from the start (a roster update can redraw
     -- the slots meanwhile: their member was gone at the drop, found in
     -- game), a card following the cursor, the slot under it in arcane
-    b:SetScript("OnDragStart", function(self)
-        if not (self.member and r.data and r.data.canLead) or InCombatLockdown() then return end
-        r.dragging, r.dragMember = self, self.member
+    b:SetScript("OnDragStart", function(self: RaidSlot)
+        local m, data = self.member, r.data
+        if not (m and data and data.canLead) or InCombatLockdown() then return end
+        r.dragging, r.dragMember = self, m
         self:SetAlpha(0.5)
-        r:StartGhost(self.member)
+        r:StartGhost(m)
     end)
-    b:SetScript("OnDragStop", function(self)
+    b:SetScript("OnDragStop", function(self: RaidSlot)
         self:SetAlpha(1)
         local member = r.dragMember
         local to = r:StopGhost()
         r.dragging, r.dragMember = nil, nil
         if not member then return end
         if not (to and to.group and to.pos) or to.member == member then r:Draw() return end
-        if to.member then
-            if r.onSwap then r.onSwap(member.index, to.member.index) end
+        local other = to.member
+        if other then
+            if r.onSwap then r.onSwap(member.index, other.index) end
         elseif r.onMove then
             r.onMove(member.index, to.group)
         end
@@ -400,7 +586,7 @@ local function slot(r: any, g: number, i: number)
 end
 
 -- The slot of this page under the cursor, if any.
-function R:SlotUnderCursor()
+function R:SlotUnderCursor(): RaidSlot?
     for g = 1, 8 do
         for i = 1, 5 do
             local b = self.slots[g][i]
@@ -409,10 +595,10 @@ function R:SlotUnderCursor()
     end
 end
 
-function R:StartGhost(m: any)
+function R:StartGhost(m: RaidMember)
     local gh = self.ghost
     if not gh then
-        gh = CreateFrame("Frame", nil, UIParent)
+        gh = CreateFrame("Frame", nil, UIParent) :: RaidGhost
         gh:SetFrameStrata("TOOLTIP")
         gh:SetSize(160, SLOT_H)
         draw.fill(gh, "surface-raised"):SetAllPoints()
@@ -422,23 +608,28 @@ function R:StartGhost(m: any)
         gh.role:SetPoint("LEFT", S["space-3"], 0)
         gh.name = uiText.text(gh, "label", "ink")
         gh.name:SetPoint("LEFT", gh.role, "RIGHT", S["space-3"], 0)
-        gh:SetScript("OnUpdate", function(f)
+        gh:SetScript("OnUpdate", function(f: RaidGhost)
             local scale = f:GetEffectiveScale()
             local x, y = GetCursorPosition()
             f:ClearAllPoints()
             f:SetPoint("LEFT", UIParent, "BOTTOMLEFT", x / scale + 12, y / scale)
             -- where they'd go
             local over = self:SlotUnderCursor()
-            if over ~= self.overSlot then
-                if self.overSlot then self.overSlot.edge:SetColor(self.overSlot.member and (self.overSlot.member.you and "ink" or "gilt-hairline") or "gilt-faint") end
+            local was = self.overSlot
+            if over ~= was then
+                if was then
+                    local wm = was.member
+                    was.edge:SetColor(wm and (wm.you and "ink" or "gilt-hairline") or "gilt-faint")
+                end
                 if over and over ~= self.dragging then over.edge:SetColor("arcane") end
                 self.overSlot = over
             end
         end)
         self.ghost = gh
     end
-    gh.role:SetShown(ROLE_ICON[m.role or ""] ~= nil)
-    if ROLE_ICON[m.role or ""] then gh.role:SetTexture(ROLE_ICON[m.role]) end
+    local icon = ROLE_ICON[m.role or ""]
+    gh.role:SetShown(icon ~= nil)
+    if icon then gh.role:SetTexture(icon) end
     gh.name:SetValue(m.name or "")
     gh.name:SetColor(m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or "ink")
     gh:SetWidth(math.max(120, math.ceil(gh.name:GetUnboundedStringWidth()) + 12 + S["space-3"] * 3))
@@ -446,18 +637,21 @@ function R:StartGhost(m: any)
 end
 
 -- The ghost away; the slot it was over (the drop's target).
-function R:StopGhost()
+function R:StopGhost(): RaidSlot?
     local over = self:SlotUnderCursor()
-    if self.ghost then self.ghost:Hide() end
-    if self.overSlot then
-        self.overSlot.edge:SetColor(self.overSlot.member and (self.overSlot.member.you and "ink" or "gilt-hairline") or "gilt-faint")
+    local gh = self.ghost
+    if gh then gh:Hide() end
+    local was = self.overSlot
+    if was then
+        local wm = was.member
+        was.edge:SetColor(wm and (wm.you and "ink" or "gilt-hairline") or "gilt-faint")
         self.overSlot = nil
     end
     return over
 end
 
 function R:Draw()
-    local d = self.data or {}
+    local d: RaidData = self.data or {}
     local inRaid = d.inRaid
     self.notIn:SetShown(not inRaid)
     self.convert:SetShown(not inRaid and d.inParty and true or false)
@@ -472,10 +666,11 @@ function R:Draw()
     self.info:Show()
     self.plan:SetShown(d.plan and true or false)
     local n = 0
-    local byGroup = {}
+    local byGroup: { [any]: RaidMember[] } = {}
     for _, m in ipairs(d.members or {}) do
-        byGroup[m.group] = byGroup[m.group] or {}
-        table.insert(byGroup[m.group], m)
+        local list = byGroup[m.group] or {}
+        byGroup[m.group] = list
+        table.insert(list, m)
         n = n + 1
     end
     self.count:SetValue(n .. " of " .. (d.size or 40))
@@ -489,9 +684,10 @@ function R:Draw()
             b.member = m
             if m then
                 b.fill:Show()
-                b.role:SetShown(ROLE_ICON[m.role or ""] ~= nil)
-                if ROLE_ICON[m.role or ""] then
-                    b.role:SetTexture(ROLE_ICON[m.role])
+                local icon = ROLE_ICON[m.role or ""]
+                b.role:SetShown(icon ~= nil)
+                if icon then
+                    b.role:SetTexture(icon)
                     draw.paint(b.role, m.role == "DAMAGER" and "ink-muted" or "ink")
                 end
                 b.name:SetValue(m.name or "")
@@ -513,7 +709,7 @@ function R:Draw()
     end
 end
 
-function R:SetData(d: any)
+function R:SetData(d: RaidData)
     self.data = d
     self:Draw()
 end
@@ -535,7 +731,7 @@ end
 -- its own, and the groups move down.
 function R:LayoutHead()
     local inRaid = self.data and self.data.inRaid
-    local list = { self.info }
+    local list: ReasonButton[] = { self.info }
     if inRaid then list[#list + 1] = self.roles; list[#list + 1] = self.ready end
     if self.plan:IsShown() then list[#list + 1] = self.plan end
     local countW = inRaid and math.ceil(uiText.measureText("header", self.count:GetText() or "")) + S["space-5"] or 0
@@ -548,7 +744,7 @@ function R:LayoutHead()
     local pad, gap = S["space-5"], S["space-3"]
     if w > 0 and countW + width(pad, gap) > w then pad, gap = S["space-3"], S["space-2"] end
     local below = inRaid and w > 0 and countW + width(pad, gap) > w
-    local prev
+    local prev: ReasonButton? = nil
     for _, b in ipairs(list) do
         -- kept as the button's own width (it measures itself again on show)
         b.fixedWidth = math.ceil(uiText.measureText("label", b.text)) + pad * 2
@@ -583,18 +779,18 @@ function R:Layout()
     end
 end
 
-local function headButton(parent: Frame, text: string, variant: string, onClick: () -> ())
-    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick })
+local function headButton(parent: Frame, text: string, variant: string, onClick: () -> ()): ReasonButton
+    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick }) :: ReasonButton
     b.text = text
-    b:HookScript("OnEnter", function(self)
+    b:HookScript("OnEnter", function(self: ReasonButton)
         if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = text, description = self.reason }) end
     end)
     b:HookScript("OnLeave", function() tooltip.hideTooltip() end)
     return b
 end
 
-export function raidGroups(parent: Frame)
-    local r = CreateFrame("Frame", nil, parent)
+export function raidGroups(parent: Frame): RaidGroups
+    local r: RaidGroups = CreateFrame("Frame", nil, parent) :: any
     Mixin(r, R)
     r.count = uiText.text(r, "header", "gilt-text")
     r.count:SetPoint("TOPLEFT", 0, -6)
@@ -606,7 +802,7 @@ export function raidGroups(parent: Frame)
     r.plan:Hide()
     r.groups, r.slots = {}, {}
     for g = 1, 8 do
-        local f = CreateFrame("Frame", nil, r)
+        local f: RaidGroupFrame = CreateFrame("Frame", nil, r) :: any
         draw.fill(f, "surface-sunk"):SetAllPoints()
         f.label = uiText.text(f, "caption", "gilt-text")
         f.label:SetPoint("TOPLEFT", S["space-3"], -S["space-1"])
@@ -630,7 +826,7 @@ export function raidGroups(parent: Frame)
     r.convert = controls.button(r, { text = "Convert to raid", variant = "primary",
         onClick = function() if r.onConvert then r.onConvert() end end })
     r.convert:SetPoint("TOPLEFT", r.notIn, "BOTTOMLEFT", 0, -S["space-5"])
-    r:SetScript("OnSizeChanged", function(self) self:LayoutHead(); self:Layout() end)
+    r:SetScript("OnSizeChanged", function(self: RaidGroups) self:LayoutHead(); self:Layout() end)
     r:LayoutHead()
     raidPages[r] = true
     return r
@@ -649,10 +845,48 @@ end
 --   l.onMenu(row, owner)
 --------------------------------------------------------------------------------
 
-local PL = {}
+export type PeopleAction = { label: string, variant?: string, disabled?: boolean, onClick?: (row: PeopleRowData) -> () }
 
-local function plRow(l: any)
-    local r = CreateFrame("Button", nil, l.list.child)
+export type PeopleRowData = {
+    key?: any,
+    name?: string,
+    color?: string,
+    glyph?: boolean,
+    online?: boolean,
+    detail?: string,
+    note?: string,
+    pinned?: boolean,
+    actions?: PeopleAction[],
+}
+
+export type PeopleData = { title?: string, empty?: string, rows?: PeopleRowData[] }
+
+export interface PeopleRow extends Button
+    row?: PeopleRowData
+    hover: Texture
+    diamond: Texture
+    glyph: Texture
+    pin: Texture
+    name: Text
+    detail: Text
+    buttons: { [string]: SuuButton[] }
+end
+
+export interface PeopleList extends Frame
+    data?: PeopleData
+    rows: PeopleRow[]
+    list: ScrollArea
+    head: ListHead
+    empty: Text
+    onMenu?: (row: PeopleRowData, owner: PeopleRow) -> ()
+    function SetData(d: PeopleData)
+    function Draw()
+end
+
+local PL: PeopleList = {} :: any
+
+local function plRow(l: PeopleList): PeopleRow
+    local r: PeopleRow = CreateFrame("Button", nil, l.list.child) :: any
     r:SetHeight(ROW_H)
     r:RegisterForClicks("RightButtonUp")
     r.hover = draw.fill(r, "gilt-faint", "BACKGROUND")
@@ -676,24 +910,28 @@ local function plRow(l: any)
     r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
     r.detail:SetJustifyH("LEFT")
     r.buttons = {}
-    r:SetScript("OnEnter", function(self) self.hover:Show() end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self) if self.row and l.onMenu then l.onMenu(self.row, self) end end)
+    r:SetScript("OnEnter", function(self: PeopleRow) self.hover:Show() end)
+    r:SetScript("OnLeave", function(self: PeopleRow) self.hover:Hide() end)
+    r:SetScript("OnClick", function(self: PeopleRow)
+        local row = self.row
+        if row and l.onMenu then l.onMenu(row, self) end
+    end)
     return r
 end
 
-local function plButton(r: any, i: number, variant: string)
-    r.buttons[variant] = r.buttons[variant] or {}
-    local b = r.buttons[variant][i]
+local function plButton(r: PeopleRow, i: number, variant: string): SuuButton
+    local pool = r.buttons[variant] or {}
+    r.buttons[variant] = pool
+    local b = pool[i]
     if not b then
         b = controls.button(r, { text = "", variant = variant })
-        r.buttons[variant][i] = b
+        pool[i] = b
     end
     return b
 end
 
 function PL:Draw()
-    local d = self.data or {}
+    local d: PeopleData = self.data or {}
     local child = self.list.child
     child:SetWidth(math.max(1, self.list:GetWidth()))
     local rows = d.rows or {}
@@ -723,16 +961,19 @@ function PL:Draw()
         r.detail:SetValue(detail)
         -- its buttons, right-aligned
         for _, pool in pairs(r.buttons) do for _, b in ipairs(pool) do b:Hide() end end
-        local x, used = 0, {}
+        local x: number, used: { [string]: number } = 0, {}
         local actions = row.actions or {}
         for k = #actions, 1, -1 do
             local a = actions[k]
             local variant = a.variant or "quiet"
             used[variant] = (used[variant] or 0) + 1
-            local b = plButton(r, used[variant], variant)
+            local b = plButton(r, used[variant] :: number, variant)
             b:SetLabel(a.label)
             b:SetEnabledState(not a.disabled)
-            b:SetScript("OnClick", function() if a.onClick and not a.disabled then a.onClick(row) end end)
+            b:SetScript("OnClick", function()
+                local onClick = a.onClick
+                if onClick and not a.disabled then onClick(row) end
+            end)
             b:ClearAllPoints()
             b:SetPoint("RIGHT", r, "RIGHT", -(S["space-4"] + x), 0)
             b:Show()
@@ -749,13 +990,13 @@ function PL:Draw()
     child:SetHeight(math.max(1, y))
 end
 
-function PL:SetData(d: any)
+function PL:SetData(d: PeopleData)
     self.data = d
     self:Draw()
 end
 
-export function peopleList(parent: Frame)
-    local l = CreateFrame("Frame", nil, parent)
+export function peopleList(parent: Frame): PeopleList
+    local l: PeopleList = CreateFrame("Frame", nil, parent) :: any
     Mixin(l, PL)
     l.rows = {}
     draw.fill(l, "surface-sunk"):SetAllPoints()

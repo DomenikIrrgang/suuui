@@ -1,0 +1,423 @@
+-- UI/Tooltip: SuuUI's tooltip frame (its content and width), the shared
+-- tooltip (hover intent, hide, refresh, attach), Blizzard's tooltips in
+-- SuuUI's look, and the spell tooltip with SuuUI's lines under it.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import root as suuRoot from "/Core/Root"
+import * as motion from "/Core/Motion"
+import tooltipFrame, showTooltip, hideTooltip, refreshTooltip, attachTooltip, skinTooltip, isTooltipSkinned, spellTooltip from "/UI/Tooltip"
+import internal current, spellPostCall from "/UI/Tooltip"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, themeChanged from "./WindowsHelpers"
+
+local S = T.space
+local PAD = S["space-5"]
+
+local fadeSpy = mock.spy()
+-- (other modules fade their frames meanwhile: only SuuUI tooltips count)
+mock.module(motion, { fadeIn = function(frame: any, duration: number?)
+    if (frame :: any).stackFrame then fadeSpy(frame, duration) end
+end })
+
+local parent: Frame? = nil
+
+local function make()
+    parent = newParent()
+    return tooltipFrame(parent)
+end
+
+-- The shared tooltip: SuuUI's tooltip frame on the root, on the TOOLTIP layer.
+local function shared(): any
+    for _, c in ipairs({ suuRoot:GetChildren() }) do
+        local f = c :: any
+        if f.stackFrame and f:GetFrameStrata() == "TOOLTIP" then return f end
+    end
+    return nil
+end
+
+@afterEach
+local function cleanup()
+    hideTooltip()
+    GameTooltip:Hide()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    mock.resetSpies()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- tooltipFrame
+--------------------------------------------------------------------------------
+
+@test("a title alone: at least 120 wide plus padding, the title in its colour")
+local function titleOnly()
+    local t = make()
+    t:SetContent({ title = "Hi" })
+    expect(t.heading).toHaveText("Hi")
+    expect(tokenOf(t.heading)).toBe("ink")
+    expect(t.sub).never.toBeShown()
+    expect(t.desc).never.toBeShown()
+    expect(t.status).never.toBeShown()
+    expect(t:GetWidth()).toBe(120 + PAD * 2)
+    expect(t:GetHeight()).toBe(t.stackFrame:GetHeight() + PAD * 2)
+    -- the title wraps inside the inner width
+    expect(t.heading:GetWidth()).toBe(120)
+    expect(t.heading:CanWordWrap()).toBe(true)
+end
+
+@test("an empty content: an empty title")
+local function emptyContent()
+    local t = make()
+    t:SetContent({})
+    expect(t.heading:GetText()).toBe("")
+end
+
+@test("a title colour, subtitle, description and meta")
+local function everything()
+    local t = make()
+    t:SetContent({ title = "Shield Wall", titleColor = "quality-epic", subtitle = "Warrior · Protection",
+        description = "Reduces all damage taken by 75% for 10 sec.", meta = "Ready in 21m" })
+    expect(tokenOf(t.heading)).toBe("quality-epic")
+    expect(t.sub).toBeShown()
+    expect(t.sub).toHaveText("Warrior · Protection")
+    expect(t.desc).toBeShown()
+    expect(t.desc).toHaveText("Reduces all damage taken by 75% for 10 sec.")
+    expect(t.status).toBeShown()
+    expect(t.status).toHaveText("Ready in 21m")
+    local inner = t:GetWidth() - PAD * 2
+    expect(t.desc:GetWidth()).toBe(inner)
+    expect(t.status:GetWidth()).toBe(inner)
+end
+
+@test("the width stops at 280, or at maxWidth")
+local function maxWidths()
+    local t = make()
+    local long = string.rep("A very long meta line ", 10)
+    t:SetContent({ title = "T", meta = long })
+    expect(t:GetWidth()).toBe(280)
+    t:SetContent({ title = "T", meta = long, maxWidth = 360 })
+    expect(t:GetWidth()).toBe(360)
+end
+
+@test("with maxWidth, a description counts toward the width")
+local function descWidth()
+    local t = make()
+    local desc = string.rep("word ", 30)
+    t:SetContent({ title = "T", description = desc })
+    -- without: the title's width (the description wraps under it)
+    expect(t:GetWidth()).toBe(120 + PAD * 2)
+    t:SetContent({ title = "T", description = desc, maxWidth = 360 })
+    expect(t:GetWidth()).toBe(360)
+end
+
+@test("lines: left and right, wrapping when there is no right; rows reused")
+local function lines()
+    local t = make()
+    t:SetContent({ title = "T", subtitle = "S", lines = { { "Instant", "30 min cooldown" }, { "Requires a shield" }, { "Next", gap = 8 } } })
+    expect(#t.rows).toBe(3)
+    local r1, r2 = t.rows[1], t.rows[2]
+    expect(r1).toBeShown()
+    expect(r1.left).toHaveText("Instant")
+    expect(r1.right).toHaveText("30 min cooldown")
+    expect(r1.left:CanWordWrap()).toBe(false)
+    expect(r2.right:GetText()).toBe("")
+    expect(r2.left:CanWordWrap()).toBe(true)
+    expect(r2.left:GetWidth()).toBe(t:GetWidth() - PAD * 2)
+    -- the gaps: after the subtitle, and a line's own
+    expect(r1.layoutOpts.gapBefore).toBe(S["space-2"] + S["space-1"])
+    expect(t.rows[3].layoutOpts.gapBefore).toBe(8)
+    -- fewer lines: the rest hidden
+    t:SetContent({ title = "T", lines = { { "One" } } })
+    expect(t.rows[1]).toBeShown()
+    expect(t.rows[2]).never.toBeShown()
+    expect(t.rows[3]).never.toBeShown()
+    -- the first line without a subtitle has no extra gap
+    expect(t.rows[1].layoutOpts.gapBefore).toBeNil()
+end
+
+@test("a line with a missing left side is empty")
+local function emptyLeft()
+    local t = make()
+    t:SetContent({ title = "T", lines = { { nil, "right" } } })
+    expect(t.rows[1].left:GetText()).toBe("")
+    expect(t.rows[1].right).toHaveText("right")
+end
+
+@test("a theme change lays out the shown tooltips with content")
+local function theme()
+    local t = make()
+    local hidden = tooltipFrame(parent)
+    local fresh = tooltipFrame(parent)
+    t:SetContent({ title = "T" })
+    hidden:SetContent({ title = "H" })
+    hidden:Hide()
+    local spyT, spyH, spyF = mock.spy(), mock.spy(), mock.spy()
+    mock.stub(t, "SetContent", spyT)
+    mock.stub(hidden, "SetContent", spyH)
+    mock.stub(fresh, "SetContent", spyF)
+    themeChanged()
+    expect(spyT).toHaveBeenCalledWith(t, { title = "T" })
+    expect(spyH).never.toHaveBeenCalled()
+    expect(spyF).never.toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- The shared tooltip
+--------------------------------------------------------------------------------
+
+@test("showTooltip shows after the hover intent, above the owner's right")
+local function shows()
+    parent = newParent()
+    local owner = CreateFrame("Frame", nil, parent)
+    owner:SetSize(20, 20)
+    owner:SetPoint("CENTER")
+    showTooltip(owner, { title = "Hello" })
+    local tip = shared()
+    if tip then expect(tip).never.toBeShown() end
+    mock.advanceTime(0.05)
+    tip = shared()
+    if tip then expect(tip).never.toBeShown() end
+    mock.advanceTime(0.1)
+    tip = shared()
+    expect(tip).toBeShown()
+    expect(tip.heading).toHaveText("Hello")
+    expect(tip:GetParent()).toBe(suuRoot)
+    -- (SetIgnoreParentAlpha(true) is not checked: the emulated client's
+    -- IsIgnoringParentAlpha answers false after it; see the notes)
+    expect(tip:IsClampedToScreen()).toBe(true)
+    expect(tip).toBeAnchoredTo(owner, "BOTTOMLEFT", "TOPRIGHT")
+    expect(fadeSpy).toHaveBeenCalledWith(tip, T.duration["dur-fast"])
+    expect(current.owner).toBe(owner)
+    hideTooltip()
+    expect(tip).never.toBeShown()
+    expect(current.owner).toBeNil()
+    expect(current.data).toBeNil()
+end
+
+@test("data as a function of the owner")
+local function dataFunction()
+    parent = newParent()
+    local data = mock.spy(function(o: any): any return { title = "From fn" } end)
+    showTooltip(parent, data)
+    mock.advanceTime(0.2)
+    expect(data).toHaveBeenCalledWith(parent)
+    expect(shared().heading).toHaveText("From fn")
+end
+
+@test("hiding before the intent ends: it never shows")
+local function cancelled()
+    parent = newParent()
+    showTooltip(parent, { title = "Never" })
+    hideTooltip()
+    mock.advanceTime(0.5)
+    local tip = shared()
+    if tip then expect(tip).never.toBeShown() end
+    expect(fadeSpy).never.toHaveBeenCalled()
+end
+
+@test("an owner hidden meanwhile: nothing shows")
+local function ownerGone()
+    parent = newParent()
+    local owner = CreateFrame("Frame", nil, parent)
+    showTooltip(owner, { title = "Gone" })
+    owner:Hide()
+    mock.advanceTime(0.5)
+    expect(current.owner).toBeNil()
+    expect(fadeSpy).never.toHaveBeenCalled()
+end
+
+@test("a second showTooltip replaces the first")
+local function replaced()
+    parent = newParent()
+    local a = CreateFrame("Frame", nil, parent)
+    local b = CreateFrame("Frame", nil, parent)
+    showTooltip(a, { title = "A" })
+    mock.advanceTime(0.05)
+    showTooltip(b, { title = "B" })
+    mock.advanceTime(0.2)
+    expect(current.owner).toBe(b)
+    expect(shared().heading).toHaveText("B")
+    expect(fadeSpy).toHaveBeenCalledTimes(1)
+end
+
+@test("refreshTooltip asks a function again, for its own owner only")
+local function refresh()
+    parent = newParent()
+    local other = CreateFrame("Frame", nil, parent)
+    local n = 0
+    local data = function(o: any): any n = n + 1; return { title = "Call " .. n } end
+    -- nothing shown yet: nothing
+    refreshTooltip(parent)
+    showTooltip(parent, data)
+    refreshTooltip(parent) -- not yet shown
+    expect(n).toBe(0)
+    mock.advanceTime(0.2)
+    expect(shared().heading).toHaveText("Call 1")
+    refreshTooltip(other)
+    expect(n).toBe(1)
+    refreshTooltip(parent)
+    expect(shared().heading).toHaveText("Call 2")
+    -- a table: nothing to ask
+    showTooltip(parent, { title = "Table" })
+    mock.advanceTime(0.2)
+    refreshTooltip(parent)
+    expect(shared().heading).toHaveText("Table")
+end
+
+@test("attachTooltip: shown while the mouse is over the frame")
+local function attach()
+    parent = newParent()
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetSize(10, 10)
+    f:SetPoint("CENTER")
+    f:EnableMouse(true)
+    attachTooltip(f, { title = "Attached" })
+    mock.hover(f)
+    mock.advanceTime(0.2)
+    expect(shared()).toBeShown()
+    expect(shared().heading).toHaveText("Attached")
+    mock.hover(nil)
+    expect(shared()).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Blizzard's tooltips
+--------------------------------------------------------------------------------
+
+@test("SuuUI's Tooltips module has GameTooltip skinned, kept through each show")
+local function gameTooltip()
+    expect(isTooltipSkinned(GameTooltip)).toBe(true)
+    expect(skinTooltip(GameTooltip)).toBeNil()
+    GameTooltip:SetOwner(UIParent, "ANCHOR_CURSOR")
+    GameTooltip:AddLine("Line")
+    GameTooltip:Show()
+    -- SharedTooltip_SetBackdropStyle ran on show: the NineSlice hidden again
+    expect(GameTooltip.NineSlice:GetAlpha()).toBe(0)
+end
+
+@test("skinTooltip on a new tooltip: glass, an edge, the corner diamond; once")
+local function skinNew()
+    local tip = CreateFrame("GameTooltip", "SuuUITestTooltip", UIParent, "GameTooltipTemplate") :: any
+    expect(isTooltipSkinned(tip)).toBe(false)
+    local art = skinTooltip(tip)
+    expect(art).never.toBeNil()
+    local a = art :: any
+    expect(tokenOf(a.bg)).toBe("surface-glass")
+    expect(tokenOf(a.border.top)).toBe("gilt-line")
+    expect(tokenOf(a.ornament)).toBe("gilt")
+    expect(a.ornament).toBeAnchoredTo(tip, "CENTER", "TOPLEFT")
+    expect(isTooltipSkinned(tip)).toBe(true)
+    expect(tip.NineSlice:GetAlpha()).toBe(0)
+    expect(skinTooltip(tip)).toBeNil()
+    -- Blizzard's backdrop style puts its art back: hidden again
+    tip.NineSlice:SetAlpha(1)
+    SharedTooltip_SetBackdropStyle(tip, (_G :: any).GAME_TOOLTIP_BACKDROP_STYLE_DEFAULT)
+    expect(tip.NineSlice:GetAlpha()).toBe(0)
+end
+
+@test("skinTooltip(nil) does nothing; a tooltip without a NineSlice is fine")
+local function skinOdd()
+    expect(skinTooltip(nil)).toBeNil()
+    parent = newParent()
+    local plain = CreateFrame("Frame", nil, parent)
+    expect(skinTooltip(plain)).never.toBeNil()
+    -- an unskinned tooltip's style is left alone
+    local tip = CreateFrame("GameTooltip", "SuuUITestTooltip2", UIParent, "GameTooltipTemplate") :: any
+    SharedTooltip_SetBackdropStyle(tip, (_G :: any).GAME_TOOLTIP_BACKDROP_STYLE_DEFAULT)
+    expect(tip.NineSlice:GetAlpha()).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- spellTooltip
+--------------------------------------------------------------------------------
+
+mock.defineSpell(90001, { name = "Test Smite", description = "Smites a foe.", known = true })
+
+local function lineText(i: number): string?
+    local fs = _G["GameTooltipTextLeft" .. i] :: FontString?
+    return fs and fs:GetText()
+end
+
+local function lastLine(): string?
+    return lineText(GameTooltip:NumLines())
+end
+
+local function countLines(text: string): number
+    local n = 0
+    for i = 1, GameTooltip:NumLines() do
+        local fs = _G["GameTooltipTextLeft" .. i] :: FontString?
+        if fs and fs:GetText() == text then n = n + 1 end
+    end
+    return n
+end
+
+@test("spellTooltip: the spell, then the extra line once, owned and shown")
+@cases({ { "text" }, { "list" } })
+local function spellExtra(kind: string)
+    parent = newParent()
+    local extra: any = kind == "text" and "Costs 1s" or { "Costs 1s" }
+    spellTooltip(parent, 90001, extra)
+    expect(GameTooltip).toBeShown()
+    expect(GameTooltip:GetOwner()).toBe(parent)
+    expect(lineText(1)).toBe("Test Smite")
+    expect(lastLine()).toBe("Costs 1s")
+    expect(countLines("Costs 1s")).toBe(1)
+end
+
+@test("spellTooltip: several lines, none, and the anchor")
+local function spellLines()
+    parent = newParent()
+    spellTooltip(parent, 90001, { "One", "Two" }, "ANCHOR_LEFT")
+    expect(countLines("One")).toBe(1)
+    expect(lastLine()).toBe("Two")
+    expect(GameTooltip:GetAnchorType()).toBe("ANCHOR_LEFT")
+    spellTooltip(parent, 90001, nil)
+    expect(lastLine()).never.toBe("Two")
+    expect(GameTooltip:GetAnchorType()).toBe("ANCHOR_RIGHT")
+end
+
+@test("the game redrawing the spell keeps the lines (the post-call)")
+local function redraw()
+    parent = newParent()
+    spellTooltip(parent, 90001, "Costs 1s")
+    -- the spell's data arrived: the game sets the tooltip up again
+    GameTooltip:SetSpellByID(90001)
+    expect(lastLine()).toBe("Costs 1s")
+    expect(countLines("Costs 1s")).toBe(1)
+end
+
+@test("hiding GameTooltip forgets the pending lines")
+local function forget()
+    parent = newParent()
+    spellTooltip(parent, 90001, "Costs 1s")
+    GameTooltip:Hide()
+    GameTooltip:SetOwner(parent, "ANCHOR_RIGHT")
+    GameTooltip:SetSpellByID(90001)
+    expect(countLines("Costs 1s")).toBe(0)
+end
+
+@test("the post-call: only GameTooltip, the pending spell and owner, a readable id")
+local function postCall()
+    parent = newParent()
+    local tip = mock.spy()
+    local fakeTip: any = { AddLine = function(_: any, line: string) tip(line) end, GetOwner = function() return parent end }
+    -- nothing pending: nothing
+    spellPostCall(GameTooltip, { id = 90001 })
+    spellTooltip(parent, 90001, "Extra")
+    local before = countLines("Extra")
+    -- another tooltip
+    spellPostCall(fakeTip, { id = 90001 })
+    expect(tip).never.toHaveBeenCalled()
+    -- another spell, no data, a secret id
+    spellPostCall(GameTooltip, { id = 1 })
+    spellPostCall(GameTooltip, nil)
+    spellPostCall(GameTooltip, { id = mock.secret(90001) })
+    expect(countLines("Extra")).toBe(before)
+    -- another owner
+    mock.stub(GameTooltip :: any, "GetOwner", function() return UIParent end)
+    spellPostCall(GameTooltip, { id = 90001 })
+    expect(countLines("Extra")).toBe(before)
+end

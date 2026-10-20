@@ -23,6 +23,7 @@ import SuuUI from "/Core/API"
 import * as secret from "wowlua:secret"
 import after, every from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+import * as logic from "./GroupFinder/Logic"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 -- read untyped: this module's entries are `{ [string]: any }`; typing them
@@ -94,76 +95,6 @@ local REASON_ORDER = { "role", "player", "quest", "friend", "activity", "zone", 
 -- Entries to rows
 --------------------------------------------------------------------------------
 
-local function ago(seconds: number?): string
-    if not seconds then return "" end
-    seconds = math.max(0, seconds)
-    if seconds < 60 then return "now" end
-    if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
-    return math.floor(seconds / 3600) .. "h"
-end
-
-local ROLE_WORD = { tank = "Tank", healer = "Healer", damage = "Damage" }
-
--- A group's spots (design: RoleSlots, capped with your role first): what it
--- has, greyed (its members by the role each chose, then members with no
--- role; chat gives only a count), what it needs (tank, healer, damage, your
--- roles first, no more than its free spots: the game's needed roles aren't
--- capped and roles aren't enforced), then open spots. Groups above 10: no
--- member slots ("12/40" says it). Also the hover text: all it has and needs.
-local function groupSlots(e: Entry, mine: { [string]: any }): (string[], string)
-    local slots: string[] = {}
-    local have = e.members and e.members[1] or 0
-    local max = e.members and e.members[2]
-    local small = not max or max <= 10
-    local has = e.roles.has
-    local shown = 0
-    if small then
-        for _, role in ipairs({ "tank", "healer", "damage", "none" }) do
-            for _ = 1, has and has[role] or 0 do slots[#slots + 1] = "has:" .. role; shown = shown + 1 end
-        end
-        for _ = shown + 1, have do slots[#slots + 1] = "has:none" end
-    end
-    local needed: string[] = {}
-    local function add(role: string)
-        local n = e.roles.needed[role]
-        n = (type(n) == "number" and n) or (n and 1) or 0
-        for _ = 1, n do needed[#needed + 1] = role end
-    end
-    for _, role in ipairs({ "tank", "healer", "damage" }) do if mine[role] then add(role) end end
-    for _, role in ipairs({ "tank", "healer", "damage" }) do if not mine[role] then add(role) end end
-    local free = max and math.max(0, max - have)
-    local fit = free and math.min(#needed, free) or #needed
-    for i = 1, fit do slots[#slots + 1] = "need:" .. needed[i] end
-    if max and small then
-        for _ = 1, free - fit do slots[#slots + 1] = "open" end
-    end
-    -- the hover text
-    local function list(counts: { [string]: number }): string
-        local out: string[] = {}
-        for _, role in ipairs({ "tank", "healer", "damage" }) do
-            local n = counts[role] or 0
-            if n > 0 then out[#out + 1] = n .. " " .. ROLE_WORD[role] end
-        end
-        local none = counts.none or 0
-        if none > 0 then out[#out + 1] = none .. " without a role" end
-        return table.concat(out, ", ")
-    end
-    local hasCounts: { [string]: number } = {}
-    if has then for k, v in pairs(has) do hasCounts[k] = v end else hasCounts.none = have end
-    local needCounts: { [string]: number } = {}
-    for _, role in ipairs(needed) do needCounts[role] = (needCounts[role] or 0) + 1 end
-    local tip: string[] = {}
-    if have > 0 then tip[#tip + 1] = "Has: " .. list(hasCounts) end
-    if #needed > 0 then tip[#tip + 1] = "Needs: " .. list(needCounts) end
-    if free and #needed > free then
-        tip[#tip + 1] = ("%d free %s: any of these"):format(free, free == 1 and "spot" or "spots")
-    end
-    return slots, table.concat(tip, "\n")
-end
-
-local function className(file: string?): string?
-    return file and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[file] or nil
-end
 
 function M:Row(e: Entry, interest: { [string]: any }): Row
     local names: string[] = {}
@@ -185,11 +116,11 @@ function M:Row(e: Entry, interest: { [string]: any }): Row
     local age = tool and tool.age and (tool.age + (now - (tool.seenAt or now))) or (chat and (now - chat.lastPost))
     local sources: string[] = {}
     if tool then sources[#sources + 1] = "Tool" end
-    if chat then sources[#sources + 1] = chat.channel == "SAY" and "Say" or (chat.channel == "YELL" and "Yell" or chat.channel) end
+    if chat then sources[#sources + 1] = logic.channelName(chat.channel) end
     -- roles: a group's spots, or what a player offers
     local slots: string[], rolesTip: string? = {}, nil
     if e.intent == "group" then
-        slots, rolesTip = groupSlots(e, interest.roles or {})
+        slots, rolesTip = logic.groupSlots(e, interest.roles or {})
     else
         for _, role in ipairs({ "tank", "healer", "damage" }) do
             if e.roles.offered[role] then slots[#slots + 1] = role end
@@ -197,11 +128,11 @@ function M:Row(e: Entry, interest: { [string]: any }): Row
     end
     local who
     local lvl = e.leader and e.leader.level
-    local cls = className(e.leader and e.leader.class)
+    local cls = logic.className(e.leader and e.leader.class)
     if lvl or cls then who = (lvl and ("Lvl " .. lvl .. " ") or "") .. (cls or "") end
     -- the chat post, else the listing's comment
     local post = chat and chat.text or e.text
-    if post == "" or secret.isSecret(post) then post = nil end
+    if secret.isSecret(post) or post == "" then post = nil end
     local playstyle
     if tool and tool.playstyle and GetGeneralPlaystyleString then
         local ok, s = pcall(GetGeneralPlaystyleString, tool.playstyle)
@@ -213,25 +144,11 @@ function M:Row(e: Entry, interest: { [string]: any }): Row
         newPlayerFriendly = tool and tool.newPlayerFriendly, reason = reason, match = reason ~= nil,
         leader = e.leader and e.leader.name or e.key, class = e.leader and e.leader.class, who = who,
         playstyle = playstyle, post = post,
-        slots = slots, rolesTip = rolesTip ~= "" and rolesTip or nil, mine = interest.roles, members = e.members, sources = sources, age = ago(age),
+        slots = slots, rolesTip = rolesTip ~= "" and rolesTip or nil, mine = interest.roles, members = e.members, sources = sources, age = logic.ago(age),
         canInvite = LFG.CanInvite(e),
     }
 end
 
--- The level that fits: an activity's range around yours.
-local function fits(e: Entry, interest: { [string]: any }): boolean
-    local lvl = interest.level or 0
-    for _, key in ipairs(e.activities) do
-        for _, k in ipairs(LFG.Catalogue.Expand(key)) do
-            local a = LFG.Catalogue.Get(k)
-            local range = a and a.level
-            if range and range[2] and lvl >= (range[1] or 0) - 3 and lvl <= range[2] + 3 then return true end
-            if a and not range then return true end
-        end
-    end
-    if e.level and e.level[1] then return math.abs(e.level[1] - lvl) <= 6 end
-    return #e.activities == 0
-end
 
 function M:Data()
     local interest = LFG.Interest()
@@ -244,25 +161,15 @@ function M:Data()
     local groups: Row[], players: Row[] = {}, {}
     for _, e in ipairs(LFG.Entries(filter)) do
         local ok = true
-        if self:Get("fits") then
-            ok = fits(e, interest)
-            if ok and e.intent == "group" and next(e.roles.needed) then
-                ok = false
-                for role in pairs(e.roles.needed) do if interest.roles[role] then ok = true end end
-            end
-        end
+        if self:Get("fits") then ok = logic.fitsMe(e, interest) end
         if ok and (show == "both" or show == e.intent) then
             local row = self:Row(e, interest)
             if e.intent == "player" then players[#players + 1] = row else groups[#groups + 1] = row end
         end
     end
     -- matches first, then the newest
-    local function order(a: Row, b: Row): boolean
-        if a.match ~= b.match then return a.match end
-        return (a.entry.lastSeen or 0) > (b.entry.lastSeen or 0)
-    end
-    table.sort(groups, order)
-    table.sort(players, order)
+    table.sort(groups, logic.rowOrder)
+    table.sort(players, logic.rowOrder)
     -- the activities this category has, for the filter
     local options: { [string]: any }[] = {}
     for _, kind in ipairs({ "dungeon", "raid", "zone", "boss", "custom" }) do
@@ -367,73 +274,17 @@ end
 -- My listing and the ad
 --------------------------------------------------------------------------------
 
-local function joinWith(list: string[], last: string): string
-    if #list <= 1 then return list[1] or "" end
-    return table.concat(list, ", ", 1, #list - 1) .. " " .. last .. " " .. list[#list]
-end
-
-local function minutesText(seconds: number?): string?
-    if not seconds then return nil end
-    local m = math.floor(seconds / 60)
-    if m < 1 then return "a moment" end
-    if m < 60 then return m .. "m" end
-    return math.floor(m / 60) .. "h " .. (m % 60) .. "m"
-end
 
 -- Your listing as one chat line, in English: what you're after, for what,
 -- and your details. A group asks for the roles a 1 / 1 / 3 group still
 -- lacks by its members' roles; alone, the roles you offer and who you are.
 function M:AdFromListing(listing: Entry?): string
     if not listing then return "" end
-    local names: string[] = {}
-    for _, key in ipairs(listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
-    local acts = joinWith(names, "or")
-    local text
-    if IsInGroup() then
-        local have = { TANK = 0, HEALER = 0, DAMAGER = 0 }
-        local units: string[] = { "player" }
-        for i = 1, (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0) do units[#units + 1] = "party" .. i end
-        for _, u in ipairs(units) do
-            local r = secret.known(UnitGroupRolesAssigned(u), "NONE")
-            if have[r] then have[r] = have[r] + 1 end
-        end
-        local need: string[] = {}
-        if have.TANK < 1 then need[#need + 1] = "Tank" end
-        if have.HEALER < 1 then need[#need + 1] = "Healer" end
-        local dps = math.max(0, 3 - have.DAMAGER)
-        if dps > 0 then need[#need + 1] = dps .. " DPS" end
-        text = ("LFM %sfor %s (%d/5)."):format(#need > 0 and (joinWith(need, "and") .. " ") or "", acts, #units)
-    else
-        local roles: string[] = {}
-        local r = listing.roles or {}
-        if r.tank then roles[#roles + 1] = "Tank" end
-        if r.healer then roles[#roles + 1] = "Healer" end
-        if r.damage then roles[#roles + 1] = "DPS" end
-        local _, class = UnitClass("player")
-        class = secret.known(class, "")
-        local cname = class and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class]
-        text = ("LFG %s(%d %s) for %s."):format(#roles > 0 and (joinWith(roles, "or") .. " ") or "", UnitLevel("player"),
-            (cname or ""):lower(), acts)
-    end
-    local comment = listing.comment
-    if type(comment) == "string" and comment ~= "" and not secret.isSecret(comment) then
-        text = text .. " " .. comment
-    end
-    return text
+    return logic.adText(listing, logic.adContext())
 end
 
 local AD_CHANNELS = { "LookingForGroup", "General", "Trade", "Say", "Yell" }
 
--- A channel's number by its name ("General" is "General - Orgrimmar").
-local function channelId(name: string): number?
-    local list = { GetChannelList() }
-    for i = 1, #list, 3 do
-        local id, n = list[i], list[i + 1]
-        if type(n) == "string" and (n == name or n:find("^" .. name .. " %-")) then return id end
-    end
-    local id = GetChannelName(name)
-    return (type(id) == "number" and id > 0) and id or nil
-end
 
 -- The ad goes out from the Post click (the game sends public chat only
 -- from a click).
@@ -443,7 +294,7 @@ function M:PostAd(channel: string, text: string?)
     if channel == "Say" then
         send(text, "SAY")
     else
-        local id = channelId(channel)
+        local id = logic.channelId(channel)
         if not id then
             self:Print(("You're not in %s; join it to post there."):format(channel))
             return
@@ -480,11 +331,11 @@ function M:RenderListed()
     local channels: { value: string, label: string }[] = {}
     for _, c in ipairs(AD_CHANNELS) do channels[#channels + 1] = { value = c, label = c } end
     self.listed:SetData({
-        listing = { listedFor = minutesText(self.listedAt and (LFG.Now() - self.listedAt)),
-                    left = minutesText(listing.duration), category = category, activities = names, roles = roles,
+        listing = { listedFor = logic.minutesText(self.listedAt and (LFG.Now() - self.listedAt)),
+                    left = logic.minutesText(listing.duration), category = category, activities = names, roles = roles,
                     playstyle = playstyle, comment = comment, voice = voice or "None" },
         ad = { text = self.adText or "", channel = self:Get("adChannel"), channels = channels,
-               lastPost = self.lastPost and minutesText(GetTime() - self.lastPost) or nil, max = 255 },
+               lastPost = self.lastPost and logic.minutesText(GetTime() - self.lastPost) or nil, max = 255 },
     })
 end
 
@@ -856,75 +707,10 @@ end
 
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local ROLE_TEX = { tank = TEX .. "RoleTank.tga", healer = TEX .. "RoleHealer.tga", damage = TEX .. "RoleDamage.tga" }
-local A_ROLE = { tank = "a tank", healer = "a healer", damage = "a damage dealer" }
 -- a match's reasons, most telling first, and the kind of note each makes
 local NOTE_ORDER = { "role", "player", "quest", "friend", "activity", "zone", "boss" }
 local NOTE_KIND = { role = "role", player = "player", quest = "quest", friend = "friends", activity = "fresh", zone = "zone", boss = "boss" }
 local AGAIN = 300 -- the same group never notifies twice within this
-
-local function joinAnd(list: string[]): string
-    if #list <= 1 then return list[1] or "" end
-    return table.concat(list, ", ", 1, #list - 1) .. " and " .. list[#list]
-end
-
-local function activityText(e: Entry): string
-    local names: string[] = {}
-    for i, key in ipairs(e.activities) do
-        if i > 2 then names[#names + 1] = "+" .. (#e.activities - 2) break end
-        names[#names + 1] = LFG.Catalogue.Name(key)
-    end
-    return table.concat(names, ", ")
-end
-
-local function questTitle(e: Entry): string?
-    local id = e.quests[1]
-    local t = id and C_QuestLog and C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(id)
-    return t or (id and ("Quest " .. id)) or nil
-end
-
--- "needs a healer and 2 damage"
-local function needsText(e: Entry): string?
-    local out: string[] = {}
-    for _, role in ipairs({ "tank", "healer", "damage" }) do
-        local n = e.roles.needed[role]
-        n = (type(n) == "number" and n) or (n and 1) or 0
-        if n == 1 then out[#out + 1] = A_ROLE[role]
-        elseif n > 1 then out[#out + 1] = n .. (role == "damage" and " damage" or (" " .. role .. "s")) end
-    end
-    return #out > 0 and ("needs " .. joinAnd(out)) or nil
-end
-
-local function offersText(e: Entry): string?
-    local out: string[] = {}
-    for _, role in ipairs({ "tank", "healer", "damage" }) do
-        if e.roles.offered[role] then out[#out + 1] = role end
-    end
-    return #out > 0 and ("offers " .. table.concat(out, " or ")) or nil
-end
-
-local function lines(...: any): string
-    local out: string[] = {}
-    for i = 1, select("#", ...) do
-        local v = select(i, ...)
-        if v and v ~= "" then out[#out + 1] = v end
-    end
-    return table.concat(out, " · ")
-end
-
--- Where it came from: the tool and/or the channel, the post as written.
-local function sourceOf(e: Entry): { [string]: any }
-    local tool, chat = e.sources.tool, e.sources.chat
-    local channel = chat and (chat.channel == "SAY" and "Say" or (chat.channel == "YELL" and "Yell" or chat.channel))
-    local text = chat and chat.text
-    if text and secret.isSecret(text) then text = nil end
-    return { tool = tool and true or nil, channel = channel, text = text }
-end
-
-local function classIcon(class: string?): { [string]: any }?
-    local coords = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
-    if not coords then return nil end
-    return { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes", coords = coords }
-end
 
 -- May this kind show for this entry (its sources, the parser's confidence)?
 function M:Allowed(e: Entry, cfg: { [string]: any }): boolean
@@ -1001,53 +787,53 @@ function M:MatchNote(kind: string, e: Entry): { [string]: any }
     end
     local size = e.members and e.members[2] and (e.members[1] .. "/" .. e.members[2]) or nil
     local level = e.level and e.level[1] and (e.level[1] .. "+") or nil
-    local act = activityText(e)
+    local act = logic.activityText(e)
     local whisper: { [string]: any } = { label = "Whisper", icon = "chat", onClick = function() LFG.Whisper(e) end }
-    local d: { [string]: any } = { id = "lfg:" .. e.key, kind = "timed", duration = 8, source = sourceOf(e),
-                icon = classIcon(cls) or { glyph = "people" } }
+    local d: { [string]: any } = { id = "lfg:" .. e.key, kind = "timed", duration = 8, source = logic.sourceOf(e),
+                icon = logic.classIcon(cls) or { glyph = "people" } }
     if kind == "role" then
         local mine = (LFG.Interest().roles) or {}
         local role
         for _, r in ipairs({ "tank", "healer", "damage" }) do if mine[r] and e.roles.needed[r] then role = r break end end
         d.duration, d.category = 12, "Your role is needed"
         d.icon = role and { texture = ROLE_TEX[role], coords = { 0, 1, 0, 1 } } or d.icon
-        d.title = ("%s needs %s for %s"):format(leader, A_ROLE[role] or "your role", act ~= "" and act or "a group")
-        d.body = lines(size, who, playstyle, level)
+        d.title = ("%s needs %s for %s"):format(leader, logic.aRole(role) or "your role", act ~= "" and act or "a group")
+        d.body = logic.lines(size, who, playstyle, level)
         whisper.variant = "primary"
         d.actions = { whisper }
     elseif kind == "fresh" then
         d.category, d.icon = "New group for your activity", { glyph = "door" }
         d.title = "A group for " .. (act ~= "" and act or "your activity")
-        d.body = lines(leader, size, needsText(e), playstyle)
+        d.body = logic.lines(leader, size, logic.needsText(e), playstyle)
     elseif kind == "quest" then
-        local q = questTitle(e)
+        local q = logic.questTitle(e)
         d.category, d.icon = "Quest group", { glyph = "scroll" }
         d.title = e.intent == "player" and (leader .. " is looking for " .. (q or "a quest")) or ("A group for " .. (q or "a quest in your log"))
-        d.body = lines(act, leader, size, "a quest in your log")
+        d.body = logic.lines(act, leader, size, "a quest in your log")
         d.actions = { whisper }
     elseif kind == "zone" then
         local zone = GetRealZoneText and GetRealZoneText()
         d.category, d.icon = "In your zone", { glyph = "map" }
         d.title = e.intent == "player" and (leader .. " is looking for a group here") or ("A group in " .. (type(zone) == "string" and zone or "your zone"))
-        d.body = lines(leader, who, size)
+        d.body = logic.lines(leader, who, size)
         d.actions = { whisper }
     elseif kind == "boss" then
         d.category, d.icon = "World boss or event", { glyph = "skull" }
         d.title = "A raid forming for " .. (act ~= "" and act or "a world boss")
-        d.body = lines(leader, e.members and e.members[2] and (e.members[1] .. " of " .. e.members[2]) or nil)
+        d.body = logic.lines(leader, e.members and e.members[2] and (e.members[1] .. " of " .. e.members[2]) or nil)
         d.actions = { whisper }
     elseif kind == "friends" then
         local social = LFG.Social and LFG.Social(leader)
         d.category = "Friends and guild"
         d.title = e.intent == "player" and (leader .. " is looking for " .. (act ~= "" and act or "a group"))
             or (leader .. "’s group for " .. (act ~= "" and act or "an activity"))
-        d.body = lines(social == "guild" and "Guild" or (social == "friend" and "Friend" or nil), who,
-            e.intent == "player" and offersText(e) or needsText(e), playstyle)
+        d.body = logic.lines(social == "guild" and "Guild" or (social == "friend" and "Friend" or nil), who,
+            e.intent == "player" and logic.offersText(e) or logic.needsText(e), playstyle)
         d.actions = { whisper }
     elseif kind == "player" then
         d.kind, d.duration, d.category = "sticky", nil, "A player for your group"
         d.title = leader .. " wants " .. (act ~= "" and act or "your activity")
-        d.body = lines(who, offersText(e))
+        d.body = logic.lines(who, logic.offersText(e))
         d.actions = { whisper }
         if LFG.CanInvite(e) then
             d.actions[2] = { label = "Invite", variant = "primary", icon = "plus", onClick = function(_card: any) LFG.Invite(e); SuuUI.DismissNotification(d.id) end }
@@ -1062,16 +848,16 @@ function M:OnContacted(e: Entry, what: string)
     if not (cfg and cfg.on and self:Allowed(e, cfg)) then return end
     self:Note("contacted", function()
         local leader = e.leader and e.leader.name or e.key
-        local act = activityText(e)
+        local act = logic.activityText(e)
         local at = LFG.ContactedAt and LFG.ContactedAt(e.key)
         local ago = at and math.max(1, math.floor((LFG.Now() - at) / 60)) .. "m ago"
         local d: { [string]: any } = { id = "lfg:contacted:" .. e.key, kind = "timed", category = "A group you contacted",
-                    icon = classIcon(e.leader and e.leader.class) or { glyph = "people" }, source = sourceOf(e) }
+                    icon = logic.classIcon(e.leader and e.leader.class) or { glyph = "people" }, source = logic.sourceOf(e) }
         if what == "reposted" then
-            local need = needsText(e)
+            local need = logic.needsText(e)
             d.duration = 10
             d.title = leader .. " posted again" .. (need and (", still " .. (need:gsub("^needs", "needing"))) or "")
-            d.body = lines(act, e.members and e.members[2] and (e.members[1] .. "/" .. e.members[2]) or nil, ago and ("you whispered " .. ago))
+            d.body = logic.lines(act, e.members and e.members[2] and (e.members[1] .. "/" .. e.members[2]) or nil, ago and ("you whispered " .. ago))
             d.actions = { { label = "Whisper", icon = "chat", variant = "primary", onClick = function() LFG.Whisper(e) end } }
         elseif what == "full" then
             d.duration = 6
@@ -1086,15 +872,6 @@ function M:OnContacted(e: Entry, what: string)
         end
         return d
     end)
-end
-
--- What you're listed for, in words ("Shadowfang Keep and 2 more").
-local function listedText(listing: Entry?, all: boolean?): string
-    local names: string[] = {}
-    for _, key in ipairs(listing and listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
-    if all then return joinAnd(names) end
-    if #names > 1 then return names[1] .. " and " .. (#names - 1) .. " more" end
-    return names[1] or "your activity"
 end
 
 function M:OnStale(category: number?, age: number?)
@@ -1114,19 +891,10 @@ function M:OnStale(category: number?, age: number?)
         return { id = "lfg:stale", kind = "until", tone = "warning", category = "Results are stale",
                  icon = { glyph = "hourglass" },
                  title = minutes and ("Tool results are " .. minutes .. " minutes old") or "The tool hasn’t searched yet",
-                 body = (listing and ("You’re listed for " .. listedText(listing) .. ". ") or "")
+                 body = (listing and ("You’re listed for " .. logic.listedText(listing) .. ". ") or "")
                      .. "Chat stays live; the tool only searches on your click.",
                  ["until"] = "Goes when you refresh", actions = actions }
     end)
-end
-
--- Opening the game's Group Finder at its listing panel is a secure click
--- (opened from addon code, the panel's listing would be refused): the
--- micro menu's button when it's closed, then the listing tab.
-local function openListingMacro()
-    local f = _G.LFGParentFrame
-    if f and f:IsShown() then return "/click LFGParentFrameTab1" end
-    return "/click LFDMicroButton\n/click LFGParentFrameTab1"
 end
 
 function M:OnExpiring(seconds: number)
@@ -1137,14 +905,14 @@ function M:OnExpiring(seconds: number)
         return { id = "lfg:runout", kind = "action", duration = seconds, remaining = seconds,
                  category = "Your listing runs out soon", icon = { glyph = "hourglass" },
                  title = ("Your listing runs out in %d %s"):format(minutes, minutes == 1 and "minute" or "minutes"),
-                 body = lines(table.concat((function()
+                 body = logic.lines(table.concat((function()
                      local t: string[] = {}
                      for _, key in ipairs(listing.activities or {}) do t[#t + 1] = LFG.Catalogue.Name(key) end
                      return t
                  end)(), " · ")),
                  actions = {
                      { label = "Delist", icon = "close", onClick = function() LFG.Delist(); SuuUI.DismissNotification("lfg:runout") end },
-                     { label = "Open listing", variant = "primary", icon = "scroll", macro = openListingMacro, onClick = function()
+                     { label = "Open listing", variant = "primary", icon = "scroll", macro = logic.openListingMacro, onClick = function()
                          if InCombatLockdown() then
                              self:Print("The listing opens out of combat.")
                          else
@@ -1174,7 +942,7 @@ function M:OnDelisted()
         return { id = "lfg:delisted", kind = "sticky", category = "You were delisted", icon = { glyph = "close" },
                  title = "Your listing has ended",
                  body = listing and (("Listed %s for %s."):format(minutes and (minutes .. " minutes") or "a while",
-                     listedText(listing, true))) or nil }
+                     logic.listedText(listing, true))) or nil }
     end)
 end
 

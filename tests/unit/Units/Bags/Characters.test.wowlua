@@ -1,0 +1,211 @@
+-- Units/Bags/Characters: the saved characters' picker, counts, search,
+-- banner and foot, and the texts they use.
+
+import test, expect, cases from "wowlua:test"
+import SuuUI from "/Core/API"
+import * as chars from "/Units/Bags/Characters"
+
+type Character = chars.Character
+
+local NOW = 1700000000
+
+local function link(id: number, name: string): string
+    return ("|cffffffff|Hitem:%d::::::::60:::::|h[%s]|h|r"):format(id, name)
+end
+
+local function box(slots: any[], seen: number?): chars.Snapshot
+    return { slots = slots, size = #slots, free = 0, seen = seen or NOW }
+end
+
+--------------------------------------------------------------------------------
+-- Texts
+--------------------------------------------------------------------------------
+
+@test("thousands")
+@cases({ { 0, "0" }, { 999, "999" }, { 1000, "1,000" }, { 1234567, "1,234,567" } })
+local function thousands(n: number, text: string)
+    expect(chars.thousands(n)).toBe(text)
+end
+
+@test("how long ago")
+@cases({ { 0, "just now" }, { 59, "just now" }, { 60, "1 min ago" }, { 3599, "59 min ago" }, { 3600, "an hour ago" },
+         { 7200, "2 hours ago" }, { 86400, "yesterday" }, { 9 * 86400, "9 days ago" }, { -500, "just now" } })
+local function ago(seconds: number, text: string)
+    expect(chars.ago(NOW - seconds, NOW)).toBe(text)
+end
+
+@test("how long ago: no time saved, and the clock by default")
+local function agoOther()
+    expect(chars.ago(nil, NOW)).toBe("a while ago")
+    expect(chars.ago("yesterday", NOW)).toBe("a while ago")
+    expect(chars.ago(time())).toBe("just now")
+end
+
+@test("the bank slot's price: every coin there is")
+@cases({ { 0, "0c" }, { 10203, "1g 2s 3c" }, { 10000, "1g" }, { 10003, "1g 3c" }, { 250, "2s 50c" } })
+local function coinText(copper: number, text: string)
+    expect(chars.coinText(copper)).toBe(text)
+end
+
+@test("the bank slot's price: none")
+local function coinTextNil()
+    expect(chars.coinText(nil)).toBe("0c")
+end
+
+@test("Sell junk's coins: silver kept between gold and copper")
+@cases({ { 0, "0c" }, { 10003, "1g 0s 3c" }, { 10000, "1g" }, { 10200, "1g 2s" }, { 150, "1s 50c" }, { 7, "7c" } })
+local function coins(copper: number, text: string)
+    expect(chars.coins(copper)).toBe(text)
+end
+
+@test("Sell junk's tooltip")
+local function junkText()
+    expect(chars.junkText(1, 7)).toBe("Sells your 1 grey item for 7c. Each is checked again just before it sells.")
+    expect(chars.junkText(3, 10200)).toBe("Sells your 3 grey items for 1g 2s. Each is checked again just before it sells.")
+end
+
+@test("an item link's name")
+local function nameOf()
+    expect(chars.nameOf(link(2589, "Linen Cloth"))).toBe("Linen Cloth")
+    expect(chars.nameOf("item:2589")).toBeNil()
+    expect(chars.nameOf(nil)).toBeNil()
+    expect(chars.nameOf(42)).toBeNil()
+end
+
+@test("a class's diamond")
+local function classDiamond()
+    expect(chars.classDiamond(nil)).toBe("")
+    expect(chars.classDiamond("NOBODY")).toBe("")
+    local c = assert(SuuUI.Tokens.color["class-mage"])
+    local text = chars.classDiamond("MAGE")
+    expect(text:find("ChatDiamond.tga", 1, true) ~= nil).toBe(true)
+    expect(text).toBe(("|TInterface\\AddOns\\SuuUI\\Media\\Textures\\ChatDiamond.tga:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t ")
+        :format(c[1] * 255, c[2] * 255, c[3] * 255))
+end
+
+--------------------------------------------------------------------------------
+-- The picker
+--------------------------------------------------------------------------------
+
+@test("you first, then the others with saved bags, by name")
+local function sortCharacters()
+    local all: { [string]: any } = {
+        ["me-R"] = { name = "Zed" },
+        ["b-R"] = { name = "Bryn", bags = box({}) },
+        ["a-R"] = { bags = box({}) },
+        ["c-R"] = { name = "Cael" }, -- nothing saved: left out
+    }
+    local list = chars.sortCharacters(all, "me-R")
+    local keys: string[] = {}
+    for i, c in ipairs(list) do keys[i] = c.key end
+    expect(keys).toEqual({ "me-R", "a-R", "b-R" })
+    expect(list[1].me).toBe(true)
+    expect(list[2].me).toBe(false)
+    expect(#chars.sortCharacters({}, nil)).toBe(0)
+end
+
+@test("a character's label")
+local function charLabel()
+    local c: Character = { key = "k", d = { name = "Bryn", realm = "Home", level = 60 }, me = false }
+    expect(chars.charLabel(c, "Home")).toBe("Bryn · 60")
+    expect(chars.charLabel(c, "Away")).toBe("Bryn-Home · 60")
+    expect(chars.charLabel({ key = "k", d = {}, me = false }, "Home")).toBe("k")
+end
+
+--------------------------------------------------------------------------------
+-- Counts and the search
+--------------------------------------------------------------------------------
+
+local function twoCharacters(): Character[]
+    local me: Character = { key = "me", me = true, d = {
+        name = "Ann", class = "MAGE",
+        bags = box({ { t = 1, c = 5, q = 1, l = link(2589, "Linen Cloth") }, false, { t = 1, c = 3, q = 1, l = link(2589, "Linen Cloth") },
+                     { t = 2, c = 1, q = 3, l = link(9000, "Blue Ring") }, { t = 3, c = 2, q = 1 } }),
+        bank = box({ { t = 1, l = link(2589, "Linen Cloth"), q = 1, c = 0 } }),
+        equipped = { link(9000, "Blue Ring") },
+    } }
+    me.d.bank.slots[1].c = nil -- a count not saved: one
+    local other: Character = { key = "bo", me = false, d = {
+        name = "Bo",
+        bags = box({ { t = 1, c = 20, q = 9, l = link(2589, "Linen Cloth") }, { t = 4, c = 1, q = 0, l = "[Odd Thing]" } }),
+    } }
+    return { me, other }
+end
+
+@test("how many of an item each character has, and where")
+local function countsFor()
+    local list = twoCharacters()
+    local counts = chars.countsFor(list, 2589)
+    expect(#counts).toBe(2)
+    expect(counts[1].c).toBe(list[1])
+    expect({ counts[1].bags, counts[1].bank, counts[1].equipped, counts[1].total }).toEqual({ 8, 1, 0, 9 })
+    expect({ counts[2].bags, counts[2].total }).toEqual({ 20, 20 })
+    local ring = chars.countsFor(list, 9000)
+    expect(#ring).toBe(1)
+    expect({ ring[1].bags, ring[1].equipped, ring[1].total }).toEqual({ 1, 1, 2 })
+    expect(#chars.countsFor(list, 1)).toBe(0)
+end
+
+@test("All characters: found items, most first, with where they are")
+local function searchResults()
+    local list = twoCharacters()
+    local found = chars.searchResults(list, "")
+    local labels: string[] = {}
+    for i, r in ipairs(found) do labels[i] = r.label .. " " .. r.count end
+    expect(labels).toEqual({ "Linen Cloth 29", "Blue Ring 1", "Odd Thing 1" })
+    local cloth = found[1]
+    expect(cloth.quality).toBe("common")
+    expect(cloth.lines).toEqual({ "Ann · Bags ×8", "Ann · Bank ×1", "Bo · Bags ×20" })
+    expect(cloth.places).toBe(chars.classDiamond("MAGE") .. "Ann · Bags ×8   " .. chars.classDiamond("MAGE") .. "Ann · Bank ×1   Bo · Bags ×20")
+    expect(found[2].quality).toBe("rare")
+    expect(found[3].quality).toBe("poor")
+    -- a query, and a link without an item ID (its name keys it)
+    local ring = chars.searchResults(list, "ring")
+    expect(#ring).toBe(1)
+    expect(ring[1].label).toBe("Blue Ring")
+    expect(#chars.searchResults(list, "nothing like it")).toBe(0)
+end
+
+@test("a character without a name is named by its key")
+local function searchByKey()
+    local c: Character = { key = "x-R", me = false, d = { bags = box({ { t = 1, c = 1, q = 1, l = link(1, "Stone") } }) } }
+    expect(chars.searchResults({ c }, "stone")[1].lines).toEqual({ "x-R · Bags ×1" })
+end
+
+--------------------------------------------------------------------------------
+-- The banner and the foot
+--------------------------------------------------------------------------------
+
+@test("the banner over a saved copy")
+local function savedBanner()
+    local b = box({}, NOW - 7200)
+    expect(chars.savedBanner("me", "me", "bank", {}, b, NOW)).toBe("Your bank as of your last visit (2 hours ago) · read only")
+    expect(chars.savedBanner("me", "me", "bank", {}, nil, NOW)).toBe("Your bank shows here once you have visited a banker")
+    local d = { name = "Bo", seen = NOW - 86400 }
+    expect(chars.savedBanner("bo", "me", "bags", d, b, NOW)).toBe("Bo's bags as of 2 hours ago · read only")
+    expect(chars.savedBanner("bo", "me", "bank", d, { slots = {}, size = 0, free = 0 }, NOW)).toBe("Bo's bank as of yesterday · read only")
+    expect(chars.savedBanner("bo", "me", "bank", d, nil, NOW)).toBe("Bo's bank show here once Bo has opened them")
+    expect(chars.savedBanner("bo-R", "me", "bags", nil, nil, NOW)).toBe("bo-R's bags show here once bo-R has opened them")
+    expect(chars.savedBanner("bo", "me", "bags", d, b) ~= "").toBe(true)
+end
+
+@test("the foot: what the search left out, the reagent bag, or everyone's gold")
+local function foot()
+    local list: Character[] = {
+        { key = "me", me = true, d = { money = 1 } },
+        { key = "bo", me = false, d = { money = 12345678 } },
+        { key = "cy", me = false, d = {} },
+    }
+    local note, money = chars.foot(list, "me", 25000, 3, nil)
+    expect(note).toBe("3 more: narrow the search")
+    expect(money).toBe(25000)
+    note, money = chars.foot(list, "bo", 25000, 0, 4)
+    expect(note).toBe("Reagent bag: 4 free")
+    expect(money).toBe(12345678)
+    note, money = chars.foot(list, "cy", 25000, 0, nil)
+    expect(note).toBe("3 characters · 1,236g in all")
+    expect(money).toBe(0)
+    note, money = chars.foot({ list[1] }, "nobody", 0, 0, nil)
+    expect(note).toBeNil()
+    expect(money).toBeNil()
+end

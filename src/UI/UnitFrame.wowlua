@@ -142,10 +142,11 @@ end
 -- Health as a short number: 412, 8.5k, 12k, 1.2m. A secret value goes to
 -- the game's AbbreviateNumbers, which returns a secret string the text can
 -- still show (or the value itself, shown with %d).
-local function shortNumber(v: any): any
+-- (abbreviate: the game's AbbreviateNumbers, a parameter for tests)
+local function shortNumber(v: any, abbreviate: any = AbbreviateNumbers): any
     if isSecret(v) then
         -- the answer is secret too: never tested, only returned
-        local ok, text = pcall(AbbreviateNumbers, v)
+        local ok, text = pcall(abbreviate, v)
         if ok then return text end
         local ok2, plain = pcall(string.format, "%d", v)
         return ok2 and plain or v
@@ -488,16 +489,23 @@ local DIFFICULTY_FONTS: string[][] = {
     { "VeryDifficult", "quest-very-difficult" }, { "Impossible", "quest-impossible" },
     { "Difficult", "quest-difficult" }, { "Standard", "quest-standard" }, { "Trivial", "quest-trivial" },
 }
-export function levelColor(level: any): string
+-- getColor: the game's GetQuestDifficultyColor (a parameter for tests; nil
+-- where the client has none). Its fonts are named "QuestDifficulty_<word>",
+-- so the word is matched at the end (the prefix holds "Difficult" too).
+local function difficultyColor(level: any, getColor: any): string
     if level == nil or isSecret(level) or level <= 0 then return "quest-impossible" end
-    if not GetQuestDifficultyColor then return "quest-standard" end
-    local ok, c = pcall(GetQuestDifficultyColor, level)
+    if not getColor then return "quest-standard" end
+    local ok, c = pcall(getColor, level)
     local font = ok and type(c) == "table" and c.font
     if type(font) ~= "string" then return "quest-standard" end
     for _, d in ipairs(DIFFICULTY_FONTS) do
-        if font:find(d[1], 1, true) then return d[2] end
+        if font:sub(-#d[1]) == d[1] then return d[2] end
     end
     return "quest-standard"
+end
+
+export function levelColor(level: any): string
+    return difficultyColor(level, GetQuestDifficultyColor)
 end
 
 local function metaText(A: any, u: string): string
@@ -894,16 +902,17 @@ end
 
 -- Whether a group member is in your own raid group (in a party, or for a
 -- party token in a raid: yes). Read out of combat; an unreadable answer is yes.
-local function inYourGroup(unit: string): boolean
-    if not IsInRaid() then return true end
+-- (A: where the group is read from, the game's functions; a parameter for tests)
+local function inYourGroup(unit: string, A: any = _G): boolean
+    if not A.IsInRaid() then return true end
     local idx = tonumber(unit:match("^raid(%d+)$"))
     if not idx then return true end
-    local _, _, sub = GetRaidRosterInfo(idx)
-    for i = 1, GetNumGroupMembers() do
-        local me = UnitIsUnit("raid" .. i, "player")
+    local _, _, sub = A.GetRaidRosterInfo(idx)
+    for i = 1, A.GetNumGroupMembers() do
+        local me = A.UnitIsUnit("raid" .. i, "player")
         if issecretvalue and issecretvalue(me) then return true end
         if me then
-            local _, _, mine = GetRaidRosterInfo(i)
+            local _, _, mine = A.GetRaidRosterInfo(i)
             return sub == nil or mine == nil or sub == mine
         end
     end
@@ -986,13 +995,17 @@ end
 -- … }; nil: every size). A party (or no group) is "5"; a raid the smallest
 -- of 10, 20, 40 it fits in.
 export const GROUP_TIERS: string[] = { "5", "10", "20", "40" }
-export function groupTier(count: number?): string
-    if not count and not IsInRaid() then return "5" end
-    local n = count or (GetNumGroupMembers and GetNumGroupMembers() or 0)
-    if n <= 5 and not IsInRaid() then return "5" end
+-- (A: where the group is read from, the game's functions; a parameter for tests)
+local function groupTierIn(count: number?, A: any): string
+    if not count and not A.IsInRaid() then return "5" end
+    local n = count or (A.GetNumGroupMembers and A.GetNumGroupMembers() or 0)
+    if n <= 5 and not A.IsInRaid() then return "5" end
     if n <= 10 then return "10" end
     if n <= 20 then return "20" end
     return "40"
+end
+export function groupTier(count: number?): string
+    return groupTierIn(count, _G)
 end
 
 -- The indicators of `list` active at group size `tier`.

@@ -18,16 +18,67 @@
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
-import icon from "/UI/Icon"
+import text, Text from "/UI/Text"
+import icon, Icon from "/UI/Icon"
 import * as controls from "/UI/Controls"
 
 local S = T.space
 
--- one ability on the timeline
-type Event = { id: any, label: string?, endsAt: number?, paused: number?, icon: any, badge: { tone: string, text: string }? }
+--- One ability on the timeline.
+export type TimelineEvent = { id: any, label?: string, endsAt?: number, paused?: number, icon?: any, badge?: { tone: string, text: string } }
+type Event = TimelineEvent
 -- an event and the seconds left until it
 type Timed = { e: Event, r: number }
+
+--- One ability on the track: its icon, time, name and badge.
+export interface TrackEvent extends Frame
+    icon: Icon
+    ring: draw.Border
+    time: Text
+    name: Text
+    badge: controls.StateBadge
+    align: string?
+    id: any
+end
+
+--- One row of the list.
+export interface ListRow extends Frame
+    icon: Icon
+    name: Text
+    time: Text
+    badge: controls.StateBadge
+    track: Texture
+    drain: Texture
+end
+
+--- The list's glass panel.
+export interface TimelineList extends Frame
+    title: Text
+    meta: Text
+    rule: Texture
+end
+
+--- What encounterTimeline makes.
+export interface EncounterTimeline extends Frame
+    window: number
+    soonAt: number
+    variant: string
+    events: TimelineEvent[]
+    -- the track
+    track: Frame?
+    ticks: Texture[]
+    endLabel: Text
+    later: Text
+    evs: TrackEvent[]
+    -- the list
+    list: TimelineList?
+    rows: ListRow[]
+    listTop: number
+    function Layout()
+    function SetEvents(list: TimelineEvent[]?)
+    function SetMeta(meta: string?)
+    function SetVariant(variant: string?)
+end
 
 local EV_W = 92
 local TRACK_H = 70
@@ -49,8 +100,8 @@ end
 -- Track
 --------------------------------------------------------------------------------
 
-local function trackEvent(t: any): any
-    local f = CreateFrame("Frame", nil, t.track)
+local function trackEvent(t: EncounterTimeline): TrackEvent
+    local f: TrackEvent = CreateFrame("Frame", nil, t.track) :: any
     f:SetSize(EV_W, TRACK_H)
     f.icon = icon(f, "icon-md")
     f.ring = draw.border(f.icon, { 0, 0, 0, 0.7 }, { width = 2, inset = -2 })
@@ -65,26 +116,30 @@ local function trackEvent(t: any): any
 end
 
 -- start / mid / end: centred under its icon, or held inside the line's ends
-local function alignEvent(f: any, align: string)
+type Align = { point: FramePoint, below: FramePoint, justify: "LEFT" | "RIGHT" | "CENTER" }
+local ALIGN: { [string]: Align } = {
+    start = { point = "TOPLEFT", below = "BOTTOMLEFT", justify = "LEFT" },
+    ["end"] = { point = "TOPRIGHT", below = "BOTTOMRIGHT", justify = "RIGHT" },
+    mid = { point = "TOP", below = "BOTTOM", justify = "CENTER" },
+}
+local function alignEvent(f: TrackEvent, align: string)
     f.icon:ClearAllPoints()
     f.time:ClearAllPoints()
     f.name:ClearAllPoints()
     f.badge:ClearAllPoints()
-    local point = align == "start" and "TOPLEFT" or align == "end" and "TOPRIGHT" or "TOP"
-    local justify = align == "start" and "LEFT" or align == "end" and "RIGHT" or "CENTER"
-    local iconX = align == "start" and 0 or align == "end" and 0 or 0
-    f.icon:SetPoint(point, iconX, -(LINE_Y + 1 - draw.size("icon-md") / 2))
-    local below = align == "start" and "BOTTOMLEFT" or align == "end" and "BOTTOMRIGHT" or "BOTTOM"
+    local a = ALIGN[align] or ALIGN.mid :: Align
+    local point, below = a.point, a.below
+    f.icon:SetPoint(point, 0, -(LINE_Y + 1 - draw.size("icon-md") / 2))
     f.time:SetPoint(point, f.icon, below, 0, -2)
-    f.time:SetJustifyH(justify)
+    f.time:SetJustifyH(a.justify)
     f.name:SetPoint(point, f.time, below, 0, -1)
-    f.name:SetJustifyH(justify)
+    f.name:SetJustifyH(a.justify)
     f.badge:SetPoint(point, f.name, below, 0, -2)
 end
 
-local function layoutTrack(t: any, now: number)
+local function layoutTrack(t: EncounterTimeline, now: number)
     local win, soonAt = t.window, t.soonAt
-    local w = t.track:GetWidth()
+    local w = (t.track :: Frame):GetWidth()
     local inWin: Timed[], later: Timed[] = {}, {}
     for _, e in ipairs(t.events) do
         local r = remainingOf(e, now)
@@ -102,9 +157,7 @@ local function layoutTrack(t: any, now: number)
         if f.align ~= align then alignEvent(f, align); f.align = align end
         local px = math.floor(frac * w + 0.5)
         f:ClearAllPoints()
-        if align == "start" then f:SetPoint("TOPLEFT", t.track, "TOPLEFT", px - 12, 0)
-        elseif align == "end" then f:SetPoint("TOPRIGHT", t.track, "TOPLEFT", px + 12, 0)
-        else f:SetPoint("TOP", t.track, "TOPLEFT", px, 0) end
+        f:SetPoint("TOP", t.track, "TOPLEFT", px, 0)
         if f.id ~= x.e.id then
             f.id = x.e.id
             f.icon:SetArt(x.e.icon or 134400)
@@ -130,7 +183,7 @@ local function layoutTrack(t: any, now: number)
     end
 end
 
-local function buildTrack(t: any)
+local function buildTrack(t: EncounterTimeline)
     local track = CreateFrame("Frame", nil, t)
     track:SetPoint("TOPLEFT")
     track:SetSize(draw.size("timeline-w"), TRACK_H)
@@ -169,8 +222,8 @@ end
 
 local LIST_W, ROW_H = 280, 30
 
-local function listRow(t: any, i: number): any
-    local r = CreateFrame("Frame", nil, t.list)
+local function listRow(t: EncounterTimeline, i: number): ListRow
+    local r: ListRow = CreateFrame("Frame", nil, t.list) :: any
     r:SetSize(LIST_W - S["space-5"] * 2, ROW_H)
     r.icon = icon(r, "icon-md")
     r.icon:SetPoint("LEFT", 0, 2)
@@ -193,7 +246,7 @@ local function listRow(t: any, i: number): any
     return r
 end
 
-local function layoutList(t: any, now: number)
+local function layoutList(t: EncounterTimeline, now: number)
     local list: Timed[] = {}
     for _, e in ipairs(t.events) do list[#list + 1] = { e = e, r = remainingOf(e, now) } end
     table.sort(list, function(a: Timed, b: Timed): boolean return a.r < b.r end)
@@ -217,16 +270,17 @@ local function layoutList(t: any, now: number)
         y = y + ROW_H + S["space-3"]
     end
     for i = #list + 1, #t.rows do t.rows[i]:Hide() end
-    t.list:SetHeight(math.max(t.listTop + S["space-5"], y - S["space-3"] + S["space-5"]))
-    t:SetHeight(t.list:GetHeight())
+    local panel = t.list :: TimelineList
+    panel:SetHeight(math.max(t.listTop + S["space-5"], y - S["space-3"] + S["space-5"]))
+    t:SetHeight(panel:GetHeight())
 end
 
 -- the rule under the title, and the rows under it, by the header's line
 -- height (again when a theme changes it)
-local lists: { [any]: boolean } = setmetatable({}, { __mode = "k" })
-local function placeRule(t: any)
+local lists: { [EncounterTimeline]: boolean } = setmetatable({}, { __mode = "k" })
+local function placeRule(t: EncounterTimeline)
     local y = S["space-4"] * 2 + T.type.header.lineHeight
-    local rule = t.list.rule
+    local rule = (t.list :: TimelineList).rule
     rule:ClearAllPoints()
     rule:SetPoint("TOPLEFT", 1, -y)
     rule:SetPoint("TOPRIGHT", -1, -y)
@@ -240,8 +294,8 @@ events.on("SUUUI_THEME_CHANGED", function()
     end
 end, "Timeline")
 
-local function buildList(t: any)
-    local p = CreateFrame("Frame", nil, t)
+local function buildList(t: EncounterTimeline)
+    local p: TimelineList = CreateFrame("Frame", nil, t) :: any
     p:SetPoint("TOPLEFT")
     p:SetWidth(LIST_W)
     draw.fill(p, "surface-glass", "BACKGROUND"):SetAllPoints()
@@ -267,17 +321,17 @@ end
 -- The timeline
 --------------------------------------------------------------------------------
 
-local Timeline: { [string]: any } = {}
+local Timeline: EncounterTimeline = {} :: any
 
 function Timeline:Layout()
     local now = GetTime()
     if self.variant == "list" then layoutList(self, now) else layoutTrack(self, now) end
 end
 
-function Timeline:SetEvents(list: any[]?)
+function Timeline:SetEvents(list: TimelineEvent[]?)
     self.events = list or {}
     self:Layout()
-    self:SetScript("OnUpdate", #self.events > 0 and function(s: any) s:Layout() end or nil)
+    self:SetScript("OnUpdate", #self.events > 0 and function() self:Layout() end or nil)
 end
 
 function Timeline:SetMeta(meta: string?)
@@ -298,9 +352,9 @@ function Timeline:SetVariant(variant: string?)
     self:Layout()
 end
 
-export function encounterTimeline(parent: any, options: { [string]: any }?): any
-    local opts: { [string]: any } = options or {}
-    local t = CreateFrame("Frame", nil, parent)
+export function encounterTimeline(parent: Frame, options: { variant?: string, window?: number, soonAt?: number }?): EncounterTimeline
+    local opts = options or {}
+    local t: EncounterTimeline = CreateFrame("Frame", nil, parent) :: any
     Mixin(t, Timeline)
     t.window, t.soonAt = opts.window or 30, opts.soonAt or 5
     t.events = {}

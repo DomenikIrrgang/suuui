@@ -1,0 +1,350 @@
+-- Units/GroupFinder/Logic: the Group Finder's words, spots and filters,
+-- without its frames. The library's catalogue is held still (names and
+-- level ranges by key) so the texts don't depend on the client's data.
+
+import test, expect, beforeEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as logic from "/Units/GroupFinder/Logic"
+
+type Entry = logic.Entry
+
+local NAMES: { [string]: string } = {
+    ["dungeon:rfk"] = "Razorfen Kraul", ["dungeon:sfk"] = "Shadowfang Keep", ["dungeon:wc"] = "Wailing Caverns",
+    ["dungeon:dm"] = "Deadmines", ["zone:wetlands"] = "Wetlands",
+}
+local LEVELS: { [string]: number[] } = { ["dungeon:rfk"] = { 25, 35 }, ["dungeon:sfk"] = { 18, 25 }, ["dungeon:wc"] = { 15, 25 } }
+
+-- The catalogue by the tables above; "dungeon:sm" an umbrella of two,
+-- "custom:x" an activity without a level range, anything else unknown.
+@beforeEach
+local function holdCatalogue()
+    local cat = SuuUI.LFG.Catalogue
+    mock.stub(cat, "Name", function(key: string): string return NAMES[key] or key end)
+    mock.stub(cat, "Expand", function(key: string): string[]
+        if key == "dungeon:sm" then return { "dungeon:wc", "dungeon:rfk" } end
+        return { key }
+    end)
+    mock.stub(cat, "Get", function(key: string): { [string]: any }?
+        if LEVELS[key] then return { key = key, kind = "dungeon", level = LEVELS[key] } end
+        if key == "custom:x" then return { key = key, kind = "custom" } end
+        if key == "dungeon:open" then return { key = key, kind = "dungeon", level = { 10 } } end
+        return nil
+    end)
+end
+
+-- An entry with the fields the library always fills.
+local function entry(t: { [string]: any }): Entry
+    t.key = t.key or "Kessra"
+    t.activities = t.activities or {}
+    t.quests = t.quests or {}
+    t.roles = t.roles or {}
+    t.roles.needed = t.roles.needed or {}
+    t.roles.offered = t.roles.offered or {}
+    t.sources = t.sources or {}
+    t.text = t.text or ""
+    return t
+end
+
+@test("ago: now, minutes, hours, never below zero, empty for nil")
+@cases({ { nil, "" }, { 0, "now" }, { -30, "now" }, { 59, "now" }, { 60, "1m" }, { 3599, "59m" }, { 3600, "1h" }, { 7300, "2h" } })
+local function agoText(seconds: number?, want: string)
+    expect(logic.ago(seconds)).toBe(want)
+end
+
+@test("minutesText: a moment, minutes, hours and minutes, nil for nil")
+@cases({ { 0, "a moment" }, { 59, "a moment" }, { 60, "1m" }, { 3599, "59m" }, { 3600, "1h 0m" }, { 3900 + 60, "1h 6m" } })
+local function minutes(seconds: number, want: string)
+    expect(logic.minutesText(seconds)).toBe(want)
+end
+
+@test("minutesText of nil is nil")
+local function minutesNil()
+    expect(logic.minutesText(nil)).toBeNil()
+end
+
+@test("joinWith and joinAnd: none, one, two, three")
+local function joins()
+    expect(logic.joinWith({}, "or")).toBe("")
+    expect(logic.joinWith({ "a" }, "or")).toBe("a")
+    expect(logic.joinWith({ "a", "b" }, "or")).toBe("a or b")
+    expect(logic.joinWith({ "a", "b", "c" }, "or")).toBe("a, b or c")
+    expect(logic.joinAnd({ "a", "b", "c" })).toBe("a, b and c")
+    expect(logic.joinAnd({})).toBe("")
+end
+
+@test("lines keeps what says something")
+local function linesJoin()
+    expect(logic.lines("a", nil, "", "b", false, "c")).toBe("a · b · c")
+    expect(logic.lines()).toBe("")
+end
+
+@test("className: a class file's name, nil for nil or unknown")
+local function classNames()
+    expect(logic.className("MAGE")).toBe(LOCALIZED_CLASS_NAMES_MALE["MAGE"])
+    expect(logic.className(nil)).toBeNil()
+    expect(logic.className("NOPE")).toBeNil()
+end
+
+@test("channelName: Say and Yell spelt out, others as they are")
+local function channelNames()
+    expect(logic.channelName("SAY")).toBe("Say")
+    expect(logic.channelName("YELL")).toBe("Yell")
+    expect(logic.channelName("Trade")).toBe("Trade")
+    expect(logic.channelName(nil)).toBeNil()
+end
+
+@test("aRole: the article form, nil for nil or unknown")
+local function aRoles()
+    expect(logic.aRole("tank")).toBe("a tank")
+    expect(logic.aRole("healer")).toBe("a healer")
+    expect(logic.aRole("damage")).toBe("a damage dealer")
+    expect(logic.aRole(nil)).toBeNil()
+    expect(logic.aRole("pet")).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- A group's spots
+--------------------------------------------------------------------------------
+
+@test("groupSlots: members by role, the rest without one, needs (yours first), open spots")
+local function slotsSmall()
+    local e = entry({ members = { 3, 5 }, roles = { has = { tank = 1, damage = 1 }, needed = { healer = 1, damage = 1 } } })
+    local slots, tip = logic.groupSlots(e, { damage = true })
+    expect(slots).toEqual({ "has:tank", "has:damage", "has:none", "need:damage", "need:healer" })
+    expect(tip).toBe("Has: 1 Tank, 1 Damage\nNeeds: 1 Healer, 1 Damage")
+end
+
+@test("groupSlots: no role counts from chat: every member without a role; open spots fill up")
+local function slotsChat()
+    local e = entry({ members = { 2, 5 }, roles = { needed = { tank = true } } })
+    local slots, tip = logic.groupSlots(e, {})
+    expect(slots).toEqual({ "has:none", "has:none", "need:tank", "open", "open" })
+    expect(tip).toBe("Has: 2 without a role\nNeeds: 1 Tank")
+end
+
+@test("groupSlots: more needed than free spots: capped, and the tip says any of these")
+local function slotsCapped()
+    local e = entry({ members = { 4, 5 }, roles = { needed = { tank = 1, healer = 1, damage = 2 } } })
+    local slots, tip = logic.groupSlots(e, { healer = true })
+    expect(slots).toEqual({ "has:none", "has:none", "has:none", "has:none", "need:healer" })
+    expect(tip).toBe("Has: 4 without a role\nNeeds: 1 Tank, 1 Healer, 2 Damage\n1 free spot: any of these")
+    local e2 = entry({ members = { 3, 5 }, roles = { needed = { tank = 1, healer = 1, damage = 2 } } })
+    local _, tip2 = logic.groupSlots(e2, {})
+    expect(tip2).toBe("Has: 3 without a role\nNeeds: 1 Tank, 1 Healer, 2 Damage\n2 free spots: any of these")
+end
+
+@test("groupSlots: a raid shows no member slots, only what it needs")
+local function slotsRaid()
+    local e = entry({ members = { 12, 40 }, roles = { has = { tank = 2 }, needed = { healer = 3 } } })
+    local slots, tip = logic.groupSlots(e, {})
+    expect(slots).toEqual({ "need:healer", "need:healer", "need:healer" })
+    expect(tip).toBe("Has: 2 Tank\nNeeds: 3 Healer")
+end
+
+@test("groupSlots: no size known: needs only, no open spots; nothing at all: empty tip")
+local function slotsNoSize()
+    local slots, tip = logic.groupSlots(entry({ roles = { needed = { damage = 2 } } }), {})
+    expect(slots).toEqual({ "need:damage", "need:damage" })
+    expect(tip).toBe("Needs: 2 Damage")
+    local none, empty = logic.groupSlots(entry({}), {})
+    expect(none).toEqual({})
+    expect(empty).toBe("")
+end
+
+@test("groupSlots: a full group needs nothing more shown")
+local function slotsFull()
+    local slots = logic.groupSlots(entry({ members = { 5, 5 }, roles = { has = { none = 5 }, needed = { tank = 1 } } }), {})
+    expect(slots).toEqual({ "has:none", "has:none", "has:none", "has:none", "has:none" })
+end
+
+--------------------------------------------------------------------------------
+-- Fits me
+--------------------------------------------------------------------------------
+
+@test("fits: an activity's range give or take 3 levels")
+@cases({ { 22, true }, { 37, true }, { 38, true }, { 21, false }, { 39, false } })
+local function fitsRange(level: number, want: boolean)
+    expect(logic.fits(entry({ activities = { "dungeon:rfk" } }), { level = level })).toBe(want)
+end
+
+@test("fits: an umbrella fits by any part; an activity with no range always fits")
+local function fitsUmbrella()
+    expect(logic.fits(entry({ activities = { "dungeon:sm" } }), { level = 14 })).toBe(true)
+    expect(logic.fits(entry({ activities = { "dungeon:sm" } }), { level = 60 })).toBe(false)
+    expect(logic.fits(entry({ activities = { "custom:x" } }), { level = 1 })).toBe(true)
+end
+
+@test("fits: unknown activities fall back to the entry's level (6 either way), else no activity at all fits")
+local function fitsFallback()
+    expect(logic.fits(entry({ activities = { "unknown" }, level = { 30 } }), { level = 36 })).toBe(true)
+    expect(logic.fits(entry({ activities = { "unknown" }, level = { 30 } }), { level = 37 })).toBe(false)
+    expect(logic.fits(entry({ activities = { "unknown" } }), { level = 30 })).toBe(false)
+    expect(logic.fits(entry({}), {})).toBe(true)
+    -- a range without its top: not a fit by range, falls through
+    expect(logic.fits(entry({ activities = { "dungeon:open" } }), { level = 10 })).toBe(false)
+end
+
+@test("fitsMe: a group naming its needs must need one of your roles")
+local function fitsMeRoles()
+    local g = entry({ intent = "group", activities = { "dungeon:rfk" }, roles = { needed = { healer = 1 } } })
+    expect(logic.fitsMe(g, { level = 30, roles = { healer = true } })).toBe(true)
+    expect(logic.fitsMe(g, { level = 30, roles = { tank = true } })).toBe(false)
+    expect(logic.fitsMe(g, { level = 60, roles = { healer = true } })).toBe(false)
+    local open = entry({ intent = "group", activities = { "dungeon:rfk" } })
+    expect(logic.fitsMe(open, { level = 30, roles = {} })).toBe(true)
+    local player = entry({ intent = "player", activities = { "dungeon:rfk" }, roles = { needed = { tank = 1 } } })
+    expect(logic.fitsMe(player, { level = 30, roles = {} })).toBe(true)
+end
+
+@test("rowOrder: matches first, then the newest, missing times as 0")
+local function order()
+    local rows: { [string]: any }[] = {
+        { key = "old", match = false, entry = { lastSeen = 1 } },
+        { key = "new", match = false, entry = { lastSeen = 5 } },
+        { key = "match", match = true, entry = { lastSeen = 0 } },
+        { key = "never", match = false, entry = {} },
+    }
+    table.sort(rows, logic.rowOrder)
+    local keys: string[] = {}
+    for i, r in ipairs(rows) do keys[i] = r.key end
+    expect(keys).toEqual({ "match", "new", "old", "never" })
+end
+
+--------------------------------------------------------------------------------
+-- Texts
+--------------------------------------------------------------------------------
+
+@test("activityText: two names, then +N")
+local function activities()
+    expect(logic.activityText(entry({}))).toBe("")
+    expect(logic.activityText(entry({ activities = { "dungeon:rfk" } }))).toBe("Razorfen Kraul")
+    expect(logic.activityText(entry({ activities = { "dungeon:rfk", "dungeon:sfk" } }))).toBe("Razorfen Kraul, Shadowfang Keep")
+    expect(logic.activityText(entry({ activities = { "dungeon:rfk", "dungeon:sfk", "dungeon:wc", "dungeon:dm" } })))
+        .toBe("Razorfen Kraul, Shadowfang Keep, +2")
+end
+
+@test("questTitle: the game's title, else Quest N, nil without a quest")
+local function quests()
+    mock.fake("C_QuestLog.GetTitleForQuestID", function(id: number): string? return id == 7 and "The Missing Diplomat" or nil end)
+    expect(logic.questTitle(entry({ quests = { 7 } }))).toBe("The Missing Diplomat")
+    expect(logic.questTitle(entry({ quests = { 8 } }))).toBe("Quest 8")
+    expect(logic.questTitle(entry({}))).toBeNil()
+end
+
+@test("needsText: one as a/an, more as a count, true as one")
+local function needs()
+    expect(logic.needsText(entry({}))).toBeNil()
+    expect(logic.needsText(entry({ roles = { needed = { healer = 1 } } }))).toBe("needs a healer")
+    expect(logic.needsText(entry({ roles = { needed = { tank = true, healer = 2, damage = 3 } } })))
+        .toBe("needs a tank, 2 healers and 3 damage")
+    expect(logic.needsText(entry({ roles = { needed = { tank = 2, damage = 1 } } }))).toBe("needs 2 tanks and a damage dealer")
+    expect(logic.needsText(entry({ roles = { needed = { tank = 0 } } }))).toBeNil()
+end
+
+@test("offersText: the roles offered, joined by or")
+local function offers()
+    expect(logic.offersText(entry({}))).toBeNil()
+    expect(logic.offersText(entry({ roles = { offered = { damage = true } } }))).toBe("offers damage")
+    expect(logic.offersText(entry({ roles = { offered = { tank = true, healer = true, damage = true } } })))
+        .toBe("offers tank or healer or damage")
+end
+
+@test("sourceOf: the tool, the channel spelt out, the post unless secret")
+local function sources()
+    expect(logic.sourceOf(entry({ sources = { tool = {} } }))).toEqual({ tool = true })
+    expect(logic.sourceOf(entry({ sources = { chat = { channel = "SAY", text = "lfg" } } })))
+        .toEqual({ channel = "Say", text = "lfg" })
+    expect(logic.sourceOf(entry({ sources = { tool = {}, chat = { channel = "YELL", text = mock.secret("x") } } })))
+        .toEqual({ tool = true, channel = "Yell" })
+    expect(logic.sourceOf(entry({}))).toEqual({})
+end
+
+@test("classIcon: the class's corner of the sheet, nil without one")
+local function icons()
+    local icon = logic.classIcon("MAGE")
+    expect(icon and icon.texture).toBe("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
+    expect(icon and icon.coords).toEqual(CLASS_ICON_TCOORDS["MAGE"])
+    expect(logic.classIcon(nil)).toBeNil()
+    expect(logic.classIcon("NOPE")).toBeNil()
+end
+
+@test("listedText: one name, the first and how many more, all of them, or your activity")
+local function listed()
+    expect(logic.listedText(nil)).toBe("your activity")
+    expect(logic.listedText({ activities = {} })).toBe("your activity")
+    expect(logic.listedText({ activities = { "dungeon:sfk" } })).toBe("Shadowfang Keep")
+    expect(logic.listedText({ activities = { "dungeon:sfk", "dungeon:dm", "dungeon:wc" } })).toBe("Shadowfang Keep and 2 more")
+    expect(logic.listedText({ activities = { "dungeon:sfk", "dungeon:dm", "dungeon:wc" } }, true))
+        .toBe("Shadowfang Keep, Deadmines and Wailing Caverns")
+end
+
+@test("openListingMacro: the micro button first while the window is closed")
+local function macro()
+    local f = assert(_G.LFGParentFrame)
+    mock.stub(f, "IsShown", function(): boolean return false end)
+    expect(logic.openListingMacro()).toBe("/click LFDMicroButton\n/click LFGParentFrameTab1")
+    mock.stub(f, "IsShown", function(): boolean return true end)
+    expect(logic.openListingMacro()).toBe("/click LFGParentFrameTab1")
+end
+
+--------------------------------------------------------------------------------
+-- The ad
+--------------------------------------------------------------------------------
+
+@test("adText: alone, the roles you offer and who you are, the comment after")
+local function adAlone()
+    local ctx: logic.AdContext = { inGroup = false, roles = {}, level = 27, class = "PRIEST" }
+    expect(logic.adText({ activities = { "dungeon:rfk", "dungeon:sfk" }, roles = { healer = true, damage = true }, comment = "chill run" }, ctx))
+        .toBe("LFG Healer or DPS (27 priest) for Razorfen Kraul or Shadowfang Keep. chill run")
+    expect(logic.adText({ activities = { "dungeon:rfk" }, roles = { tank = true } }, ctx)).toBe("LFG Tank (27 priest) for Razorfen Kraul.")
+    -- no roles, no class known, an empty or secret comment left out
+    local bare: logic.AdContext = { inGroup = false, roles = {}, level = 10 }
+    expect(logic.adText({ activities = { "dungeon:wc" }, comment = "" }, bare)).toBe("LFG (10 ) for Wailing Caverns.")
+    expect(logic.adText({ activities = { "dungeon:wc" }, comment = mock.secret("x") }, bare)).toBe("LFG (10 ) for Wailing Caverns.")
+end
+
+@test("adText: in a group, the roles a 1/1/3 group still lacks and its size")
+local function adGroup()
+    local listing = { activities = { "dungeon:dm" } }
+    expect(logic.adText(listing, { inGroup = true, roles = { "TANK", "NONE" }, level = 20 }))
+        .toBe("LFM Healer and 3 DPS for Deadmines (2/5).")
+    expect(logic.adText(listing, { inGroup = true, roles = { "TANK", "HEALER", "DAMAGER", "DAMAGER" }, level = 20 }))
+        .toBe("LFM 1 DPS for Deadmines (4/5).")
+    expect(logic.adText(listing, { inGroup = true, roles = { "TANK", "HEALER", "DAMAGER", "DAMAGER", "DAMAGER" }, level = 20 }))
+        .toBe("LFM for Deadmines (5/5).")
+    expect(logic.adText(listing, { inGroup = true, roles = { "DAMAGER", "NONE" }, level = 20 }))
+        .toBe("LFM Tank, Healer and 2 DPS for Deadmines (2/5).")
+end
+
+@test("adText of no listing is empty")
+local function adNone()
+    expect(logic.adText(nil, { inGroup = false, roles = {}, level = 1 })).toBe("")
+end
+
+@test("adContext: alone, your level and class; in a group, each member's role")
+local function context()
+    local alone = logic.adContext()
+    expect(alone.inGroup).toBe(false)
+    expect(alone.level).toBe(UnitLevel("player"))
+    expect(alone.class).toBe((select(2, UnitClass("player"))))
+    local mate = mock.spawnUnit({ name = "Brannoc", player = true, class = "WARRIOR", role = "TANK" })
+    mock.group:add(mate)
+    mock.player:setRole("HEALER")
+    local grouped = logic.adContext()
+    expect(grouped.inGroup).toBe(true)
+    expect(grouped.roles).toEqual({ "HEALER", "TANK" })
+end
+
+@test("channelId: by name or 'Name - Zone' in the list, else the game's number, else nil")
+local function channels()
+    local list: any[] = { 1, "General - Orgrimmar", false, 2, "Trade - City", false, 4, "LookingForGroup", false }
+    expect(logic.channelId("General", list)).toBe(1)
+    expect(logic.channelId("LookingForGroup", list)).toBe(4)
+    mock.fake("GetChannelName", function(name: string): number return name == "Custom" and 7 or 0 end)
+    expect(logic.channelId("Custom", list)).toBe(7)
+    expect(logic.channelId("Nowhere", list)).toBeNil()
+    -- the live list by default
+    mock.fake("GetChannelList", function(): ...any return 3, "Say - Here", false end)
+    expect(logic.channelId("Say")).toBe(3)
+end

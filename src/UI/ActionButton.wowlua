@@ -46,7 +46,66 @@ local function cooldownFlags(info: SpellCooldownInfo | Secret<SpellCooldownInfo>
     return known(info.isActive, false), known(info.isOnGCD, false)
 end
 
-local AB = {}
+-- A button actionButton makes (bars add their own fields: bindCommand,
+-- bindLabel, tooltipNote, onSlotChanged, showEmpty).
+export interface ActionButton extends Button
+    face: Frame
+    art: Texture
+    veil: Texture
+    cooldown: Cooldown
+    over: Frame
+    border: draw.Border
+    ring: draw.Border
+    flash: Texture
+    hotkey: FontString
+    count: FontString
+    hotkeyText: string
+    hotkeyShown: boolean
+    slot?: number
+    hasAction?: boolean
+    active?: boolean
+    hover?: boolean
+    grid?: boolean
+    showEmpty?: boolean
+    unusable?: boolean
+    outOfRange?: boolean
+    coolingDown?: boolean
+    onGCD?: boolean
+    confirming?: boolean
+    recheck?: boolean
+    cooldownSpell?: number
+    dashes?: Texture[]
+    autocastOn?: boolean
+    textSize?: number
+    tooltipNote?: string
+    bindCommand?: string
+    bindLabel?: string
+    onSlotChanged?: (b: ActionButton, old: number?, new: number?) -> ()
+    function SetHotkey(text: string?)
+    function SetHotkeyShown(shown: any)
+    function UpdateHotkey()
+    function UpdateBorder()
+    function SetSlot(slot: number?)
+    function Update()
+    function SetGrid(on: any)
+    function UpdateEmpty()
+    function UpdateCount()
+    function ShowCooldown(active: boolean, gcd: boolean, duration: any)
+    function UpdateCooldown()
+    function ShowSpellCooldown(spellID: number?)
+    function ShowUsable(unusable: any)
+    function ShowActive(on: any)
+    function Resize(px: number)
+    function ShowAutocast(on: any)
+    function ShowTooltip()
+    function UpdateUsable()
+    function UpdateActive()
+    function SetOutOfRange(out: any)
+    function UpdateArt()
+    function SetTextSize(px: number?)
+end
+
+local AB: ActionButton = {} :: any
 mixins.ActionButton = AB
 
 --------------------------------------------------------------------------------
@@ -129,7 +188,7 @@ end
 function AB:UpdateCount()
     -- The display count may be secret: it goes to SetText untouched.
     local text = self.hasAction and C_ActionBar and C_ActionBar.GetActionDisplayCount
-        and C_ActionBar.GetActionDisplayCount(self.slot) or ""
+        and C_ActionBar.GetActionDisplayCount(self.slot :: number) or ""
     self.count:SetText(text)
 end
 
@@ -202,8 +261,9 @@ function AB:ShowUsable(unusable: any)
 end
 
 function AB:ShowActive(on: any)
-    self.active = on and true or false
-    self.ring:SetShown(self.active)
+    local active = on and true or false
+    self.active = active
+    self.ring:SetShown(active)
     self:UpdateBorder()
 end
 
@@ -221,12 +281,14 @@ end
 -- Pet abilities the pet uses by itself: a dashed ink ring inside the border.
 function AB:ShowAutocast(on: any)
     self.autocastOn = on and true or false
-    if not self.dashes then
+    local dashes = self.dashes
+    if not dashes then
         if not on then return end
-        self.dashes = {}
+        local made: Texture[] = {}
+        dashes, self.dashes = made, made
         local inset, dash, step = 2, 2, 4
         local size = self:GetWidth() - inset * 2
-        local function add(horizontal: boolean, offset: number, edge: string)
+        local function add(horizontal: boolean, offset: number, edge: "TOPLEFT" | "BOTTOMLEFT" | "TOPRIGHT")
             for pos = 0, size - dash, step do
                 local t = self.over:CreateTexture(nil, "OVERLAY", nil, 2)
                 draw.paintFill(t, "ink")
@@ -237,7 +299,7 @@ function AB:ShowAutocast(on: any)
                     t:SetSize(1, dash)
                     t:SetPoint(edge, self, edge == "TOPLEFT" and "TOPLEFT" or "TOPRIGHT", offset, -(inset + pos))
                 end
-                self.dashes[#self.dashes + 1] = t
+                made[#made + 1] = t
             end
         end
         add(true, -inset, "TOPLEFT")
@@ -245,7 +307,7 @@ function AB:ShowAutocast(on: any)
         add(false, inset, "TOPLEFT")
         add(false, -inset, "TOPRIGHT")
     end
-    for _, t in ipairs(self.dashes) do t:SetShown(on and true or false) end
+    for _, t in ipairs(dashes) do t:SetShown(on and true or false) end
 end
 
 function AB:ShowTooltip()
@@ -259,7 +321,7 @@ function AB:UpdateUsable()
     end
     local usable, noMana
     if C_ActionBar and C_ActionBar.IsUsableAction then
-        usable, noMana = C_ActionBar.IsUsableAction(self.slot)
+        usable, noMana = C_ActionBar.IsUsableAction(self.slot :: number)
     else
         usable, noMana = IsUsableAction(self.slot)
     end
@@ -303,7 +365,8 @@ local KEY_SHORT: string[][] = {
     { "MOUSEWHEELUP", "WU" }, { "MOUSEWHEELDOWN", "WD" }, { "MIDDLEMOUSE", "M3" },
     { "BUTTON", "M" }, { "NUMPADPLUS", "N+" }, { "NUMPADMINUS", "N-" },
     { "NUMPADMULTIPLY", "N*" }, { "NUMPADDIVIDE", "N/" }, { "NUMPADDECIMAL", "N." },
-    { "NUMPAD", "N" }, { "SPACE", "Sp" }, { "BACKSPACE", "Bs" }, { "CAPSLOCK", "Cp" },
+    -- (BACKSPACE before SPACE: it holds it, and came out "BACKSp")
+    { "NUMPAD", "N" }, { "BACKSPACE", "Bs" }, { "SPACE", "Sp" }, { "CAPSLOCK", "Cp" },
     { "PAGEUP", "PU" }, { "PAGEDOWN", "PD" }, { "INSERT", "Ins" }, { "DELETE", "Del" },
     { "HOME", "Hm" }, { "END", "End" }, { "ESCAPE", "Esc" }, { "ENTER", "Ent" }, { "TAB", "Tab" },
 }
@@ -368,7 +431,7 @@ end, "ActionButton")
 
 export function actionButton(parent: Frame, name: string?, size: any): any
     local px = draw.size(size or "action")
-    local b = CreateFrame("Button", name, parent, "SecureActionButtonTemplate")
+    local b: ActionButton = CreateFrame("Button", name, parent, "SecureActionButtonTemplate") :: any
     Mixin(b, AB)
     actionButtons[#actionButtons + 1] = b
     b:SetSize(px, px)

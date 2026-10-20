@@ -410,13 +410,32 @@ end
 -- Drawing
 --------------------------------------------------------------------------------
 
-function M:DrawOutfits()
-    local options = {}
-    for _, id in ipairs(call(TC.GetCustomSets) or {}) do
-        local name = call(TC.GetCustomSetInfo, id)
+-- The saved outfits as the select's options, by name (`nameOf`: an
+-- outfit's name, or nil/secret: "Outfit <id>").
+local function outfitOptions(ids: number[], nameOf: (id: number) -> any): { value: number, label: string }[]
+    local options: { value: number, label: string }[] = {}
+    for _, id in ipairs(ids) do
+        local name = nameOf(id)
         options[#options + 1] = { value = id, label = plain(name) and name or ("Outfit " .. id) }
     end
-    table.sort(options, function(a, b) return a.label:lower() < b.label:lower() end)
+    table.sort(options, function(a: { value: number, label: string }, b: { value: number, label: string }): boolean
+        return a.label:lower() < b.label:lower()
+    end)
+    return options
+end
+
+-- Why Save is off (nil: on): the chosen outfit unchanged, or no room for
+-- a new one.
+local function saveWhy(chosen: any, dirty: boolean, full: boolean): string?
+    if chosen and not dirty then return "Nothing changed." end
+    if not chosen and full then return "You have as many outfits as the game keeps; delete one first." end
+    return nil
+end
+
+local function countText(n: number): string return n == 1 and "1 piece" or (n .. " pieces") end
+
+function M:DrawOutfits()
+    local options = outfitOptions(call(TC.GetCustomSets) or {}, function(id: number): any return (call(TC.GetCustomSetInfo, id)) end)
     self.outfit:SetOptions(options)
     local known = false
     for _, o in ipairs(options) do if o.value == self.chosen then known = true end end
@@ -425,11 +444,9 @@ function M:DrawOutfits()
     -- changed: "Unsaved outfit", Save on
     self.outfit:SetValue((self.chosen and not dirty) and self.chosen or nil)
     local full = #options >= (call(TC.GetNumMaxCustomSets) or 999)
-    local saveWhy
-    if self.chosen and not dirty then saveWhy = "Nothing changed."
-    elseif not self.chosen and full then saveWhy = "You have as many outfits as the game keeps; delete one first." end
-    self.save:SetEnabledState(saveWhy == nil)
-    self.save.tooltip = { title = self.chosen and "Save" or "Save as a new outfit", description = saveWhy
+    local why = saveWhy(self.chosen, dirty, full)
+    self.save:SetEnabledState(why == nil)
+    self.save.tooltip = { title = self.chosen and "Save" or "Save as a new outfit", description = why
         or (self.chosen and ("Save the changes to " .. (call(TC.GetCustomSetInfo, self.chosen) or "it") .. ".") or "Name it and keep it.") }
     self.delete:SetEnabledState(self.chosen ~= nil)
     self.delete.tooltip = { title = "Delete", description = self.chosen and ("Delete " .. (call(TC.GetCustomSetInfo, self.chosen) or "it") .. ".")
@@ -467,7 +484,7 @@ function M:DrawPieces()
     for i = used + 1, #self.rows do self.rows[i]:Hide() end
     c:SetHeight(math.max(1, y))
     list.head:SetValue("Trying on")
-    list.count:SetValue(used == 1 and "1 piece" or (used .. " pieces"))
+    list.count:SetValue(countText(used))
     list.empty:SetShown(used == 0)
 end
 

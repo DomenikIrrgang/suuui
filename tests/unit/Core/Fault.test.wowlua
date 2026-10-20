@@ -1,0 +1,311 @@
+-- Core/Fault: reporting (one line per distinct error), guarded calls,
+-- timing, the standard library's errors, /suu errors and blocked actions.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as errors from "wowlua:errors"
+import * as fault from "/Core/Fault"
+import * as DB from "/Core/DB"
+import * as taintProbe from "/Diagnostics/TaintProbe"
+import version from "/Core/Init"
+
+const PREFIX = "|cff9fd3c7SuuUI|r "
+
+-- What taintProbe.scan gives in these tests (replaced for the whole file).
+local scanResult: () -> any = function(): any return {} end
+mock.module(taintProbe, { scan = function(): string[] return scanResult() end })
+
+@afterEach
+local function cleanup()
+    fault.setTiming(false)
+    mock.slash("/suu errors clear")
+    DB.db.blocked = nil
+    scanResult = function(): any return {} end
+end
+
+local function printedBy(fn: () -> ()): string[]
+    local before = #mock.printed()
+    fn()
+    local all = mock.printed()
+    local out: string[] = {}
+    for i = before + 1, #all do out[#out + 1] = all[i] end
+    return out
+end
+
+local function last(): fault.Entry
+    local list = fault.entries()
+    return list[#list]
+end
+
+--------------------------------------------------------------------------------
+-- report
+--------------------------------------------------------------------------------
+
+@test("report: one entry, one chat line, kept in the saved variables")
+local function reports()
+    local out = printedBy(function() fault.report("Bags", "fault-one\nsecond line", "the stack") end)
+    expect(#fault.entries()).toBe(1)
+    local e = last()
+    expect(e.source).toBe("Bags")
+    expect(e.message).toBe("fault-one")
+    expect(e.stack).toBe("the stack")
+    expect(e.count).toBe(1)
+    expect(e.time:match("^%d%d:%d%d:%d%d$") ~= nil).toBe(true)
+    expect(out).toEqual({ PREFIX .. "|cffff9a80Bags hit an error and was skipped:|r fault-one  (/suu errors)" })
+    local saved: any[] = DB.db.errors
+    expect(#saved).toBe(1)
+    expect(saved[1].source).toBe("Bags")
+    expect(saved[1].message).toBe("fault-one")
+    expect(saved[1].stack).toBe("the stack")
+    expect(saved[1].version).toBe(version)
+end
+
+@test("report: the same error again counts, quietly; another source is another entry")
+local function dedupes()
+    fault.report("Bags", "fault-same")
+    local out = printedBy(function() fault.report("Bags", "fault-same\nother detail") end)
+    expect(out).toEqual({})
+    expect(#fault.entries()).toBe(1)
+    expect(last().count).toBe(2)
+    expect(#(DB.db.errors :: any[])).toBe(1)
+    fault.report("Chat", "fault-same")
+    expect(#fault.entries()).toBe(2)
+end
+
+@test("report: no source is SuuUI's; any message is shown as text")
+local function defaults()
+    fault.report(nil, 42)
+    expect(last().source).toBe("SuuUI")
+    expect(last().message).toBe("42")
+    expect(last().stack).toBeNil()
+end
+
+@test("report: the newest 50 are kept, and a dropped one is new again")
+local function keepsFifty()
+    for i = 1, 51 do fault.report("Many", "fault-many-" .. i) end
+    local list = fault.entries()
+    expect(#list).toBe(50)
+    expect(list[1].message).toBe("fault-many-2")
+    fault.report("Many", "fault-many-1")
+    expect(last().message).toBe("fault-many-1")
+    expect(last().count).toBe(1)
+    -- the saved log keeps the newest 30
+    local saved: any[] = DB.db.errors
+    expect(#saved).toBe(30)
+    expect(saved[30].message).toBe("fault-many-1")
+end
+
+--------------------------------------------------------------------------------
+-- call
+--------------------------------------------------------------------------------
+
+@test("call: true and fn's results; its arguments passed on")
+local function callOk()
+    local function f(a: number, b: number): (number, nil, string) return a + b, nil, "x" end
+    local ok, sum, gap, x = fault.call("Test", f, 2, 3)
+    expect(ok).toBe(true)
+    expect(sum).toBe(5)
+    expect(gap).toBeNil()
+    expect(x).toBe("x")
+    expect(select("#", fault.call("Test", f, 1, 1))).toBe(4)
+    expect(#fault.entries()).toBe(0)
+end
+
+@test("call: false alone on an error, reported under the source with a stack")
+local function callError()
+    local n = select("#", fault.call("Call Test", function() error("fault-call-err") end))
+    expect(n).toBe(1)
+    expect((fault.call("Call Test", function() error("fault-call-err") end))).toBe(false)
+    local e = last()
+    expect(e.source).toBe("Call Test")
+    expect(e.message:find("fault-call-err", 1, true) ~= nil).toBe(true)
+    expect(type(e.stack)).toBe("string")
+    expect(e.count).toBe(2)
+end
+
+--------------------------------------------------------------------------------
+-- timing
+--------------------------------------------------------------------------------
+
+@test("timing: off by default; on counts each source's own time, nested calls taken out")
+local function timing()
+    local on, spent = fault.timingState()
+    expect(on).toBe(false)
+    fault.setTiming(true)
+    on, spent = fault.timingState()
+    expect(on).toBe(true)
+    expect(spent).toEqual({})
+    fault.call("Outer", function()
+        mock.spend(5)
+        fault.call("Inner", function() mock.spend(20) end)
+        mock.spend(5)
+    end)
+    fault.call("Inner", function() mock.spend(30) end)
+    local outer, inner = spent.Outer :: fault.Spent, spent.Inner :: fault.Spent
+    expect(outer.calls).toBe(1)
+    expect(outer.ms).toBeCloseTo(10, 0)
+    expect(outer.peak).toBeCloseTo(10, 0)
+    expect(inner.calls).toBe(2)
+    expect(inner.ms).toBeCloseTo(50, 0)
+    expect(inner.peak).toBeCloseTo(30, 0)
+    expect(outer.kb >= 0 and inner.kb >= 0).toBe(true)
+end
+
+@test("timing: an error is still reported and timed")
+local function timedError()
+    fault.setTiming(true)
+    local ok = fault.call("Timed Error", function() mock.spend(3); error("fault-timed-err") end)
+    expect(ok).toBe(false)
+    local _, spent = fault.timingState()
+    expect((spent["Timed Error"] :: fault.Spent).calls).toBe(1)
+    expect(last().source).toBe("Timed Error")
+end
+
+@test("timing: turned off or on again inside a call, that call adds nothing")
+local function toggledInside()
+    fault.setTiming(true)
+    local ok, v = fault.call("Toggler", function(): string
+        fault.setTiming(false)
+        return "off"
+    end)
+    expect(ok).toBe(true)
+    expect(v).toBe("off")
+    local on, spent = fault.timingState()
+    expect(on).toBe(false)
+    expect(spent.Toggler).toBeNil()
+    fault.setTiming(true)
+    ok, v = fault.call("Toggler", function(): string
+        fault.setTiming(true) -- from zero again
+        return "again"
+    end)
+    expect(v).toBe("again")
+    on, spent = fault.timingState()
+    expect(spent.Toggler).toBeNil()
+    -- turning it on again clears what was counted
+    fault.call("Counted", function() end)
+    fault.setTiming(true)
+    on, spent = fault.timingState()
+    expect(spent).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- the standard library's errors
+--------------------------------------------------------------------------------
+
+@test("an error wowlua:errors reports is kept too, as SuuUI's, without the addon prefix")
+local function stdlibErrors()
+    errors.report("fault-stdlib-err")
+    local seen = mock.errors()
+    expect(seen[#seen]:find("fault-stdlib-err", 1, true) ~= nil).toBe(true)
+    expect(last().source).toBe("SuuUI")
+    expect(last().message).toBe("fault-stdlib-err")
+end
+
+--------------------------------------------------------------------------------
+-- /suu errors
+--------------------------------------------------------------------------------
+
+@test("/suu errors: none yet")
+local function listNone()
+    local out = printedBy(function() mock.slash("/suu errors") end)
+    expect(out).toEqual({ PREFIX .. "No errors this session." })
+end
+
+@test("/suu errors: each with its count; full adds the stacks")
+local function listSome()
+    fault.report("Bags", "fault-list-a", "stack-a")
+    fault.report("Bags", "fault-list-a")
+    fault.report("Chat", "fault-list-b")
+    local t1, t2 = fault.entries()[1].time, fault.entries()[2].time
+    local out = printedBy(function() mock.slash("/suu errors") end)
+    expect(out).toEqual({
+        PREFIX .. t1 .. "  Bags: fault-list-a (x2)",
+        PREFIX .. t2 .. "  Chat: fault-list-b",
+        "  /suu errors full adds the stacks.",
+    })
+    local full = printedBy(function() mock.slash("/suu errors full") end)
+    expect(full).toEqual({
+        PREFIX .. t1 .. "  Bags: fault-list-a (x2)",
+        "stack-a",
+        PREFIX .. t2 .. "  Chat: fault-list-b",
+    })
+end
+
+@test("/suu errors clear: the list and the saved log")
+local function clear()
+    fault.report("Bags", "fault-clear")
+    local out = printedBy(function() mock.slash("/suu errors clear") end)
+    expect(out).toEqual({ PREFIX .. "Errors cleared." })
+    expect(#fault.entries()).toBe(0)
+    expect(DB.db.errors).toBeNil()
+    -- cleared means forgotten: the same error is new again
+    fault.report("Bags", "fault-clear")
+    expect(last().count).toBe(1)
+end
+
+@test("/suu errors test: a deliberate error, and the next listener still runs")
+local function deliberate()
+    local out = printedBy(function() mock.slash("/suu errors test") end)
+    expect(last().source).toBe("Fault test")
+    expect(last().message:find("a deliberate test error", 1, true) ~= nil).toBe(true)
+    expect(out).toContain(PREFIX .. "The next listener still ran.")
+    -- its listeners are gone again
+    local again = printedBy(function() mock.slash("/suu errors test") end)
+    expect(last().count).toBe(2)
+    expect(#again).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- Blocked actions
+--------------------------------------------------------------------------------
+
+@test("a protected call blocked for SuuUI: reported as Taint, with what addon code wrote")
+local function blockedMine()
+    scanResult = function(): any return { "PlayerFrame.x", "ActionButton1.y" } end
+    mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "CastSpellByName")
+    local e = last()
+    expect(e.source).toBe("Taint")
+    expect(e.message).toBe("Blocked in combat: CastSpellByName")
+    local stack = e.stack :: string
+    expect(stack:find("\nWritten by addon code: PlayerFrame.x; ActionButton1.y", 1, true) ~= nil).toBe(true)
+    mock.fireEvent("ADDON_ACTION_FORBIDDEN", "SuuUI", "PickupSpell")
+    expect(last().message).toBe("Forbidden: PickupSpell")
+end
+
+@test("blocked for SuuUI: at most 40 written places; none when the scan fails or finds none")
+local function blockedScan()
+    local many: string[] = {}
+    for i = 1, 45 do many[i] = "w" .. i end
+    scanResult = function(): any return many end
+    mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncMany")
+    local stack = last().stack :: string
+    expect(stack:find("; w40", 1, true) ~= nil).toBe(true)
+    expect(stack:find("; w41", 1, true)).toBeNil()
+    scanResult = function(): any error("scan failed") end
+    mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncErr")
+    expect(last().message).toBe("Blocked in combat: FuncErr")
+    expect((last().stack :: string):find("Written by addon code", 1, true)).toBeNil()
+    scanResult = function(): any return "nothing" end
+    mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncOdd")
+    expect((last().stack :: string):find("Written by addon code", 1, true)).toBeNil()
+end
+
+@test("blocked for another addon: kept quietly in the saved variables, the newest 30")
+local function blockedOther()
+    mock.fireEvent("ADDON_ACTION_FORBIDDEN", "OtherAddon", "TargetUnit")
+    expect(#fault.entries()).toBe(0)
+    local saved: any[] = DB.db.blocked
+    expect(#saved).toBe(1)
+    expect(saved[1].event).toBe("ADDON_ACTION_FORBIDDEN")
+    expect(saved[1].addon).toBe("OtherAddon")
+    expect(saved[1].func).toBe("TargetUnit")
+    expect(saved[1].combat).toBe(false)
+    expect(type(saved[1].stack)).toBe("string")
+    mock.player:enterCombat()
+    for i = 1, 31 do mock.fireEvent("ADDON_ACTION_BLOCKED", "OtherAddon", "F" .. i) end
+    mock.player:leaveCombat()
+    saved = DB.db.blocked
+    expect(#saved).toBe(30)
+    expect(saved[30].func).toBe("F31")
+    expect(saved[30].combat).toBe(true)
+end

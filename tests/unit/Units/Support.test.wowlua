@@ -1,0 +1,212 @@
+-- Units/Support: SuuUI's Support window around a Browser frame (toolbar,
+-- loading mark, unavailable state), opened instead of the game's HelpFrame.
+
+import test, expect, cases, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M, call from "/Units/Support"
+import expectNoErrors from "../../helpers"
+
+@beforeEach
+local function closed()
+    M.window:Hide()
+    M:Loaded()
+end
+
+@afterEach
+local function clean()
+    M.window:Hide()
+    expectNoErrors()
+end
+
+@test("is on at login with its window built and hidden")
+local function builtAtLogin()
+    expect(M:IsEnabled()).toBe(true)
+    expect(M.window).toBe(_G.SuuUISupportWindow)
+    expect(M.window).never.toBeShown()
+    expect(M.browser).toBeTruthy()
+    expect(M.hooked).toBe(true)
+end
+
+@test("call: only functions, and nothing when they fail")
+local function callHelper()
+    expect(call(nil)).toBeNil()
+    expect(call("x")).toBeNil()
+    expect(call(function(a: number): number return a * 2 end, 4)).toBe(8)
+    expect(call(function() error("boom") end)).toBeNil()
+end
+
+@test("Open shows the window loading the knowledge base")
+local function opens()
+    local home = mock.spy()
+    mock.stub(M.browser, "NavigateHome", home)
+    M:Open()
+    expect(M.window).toBeShown()
+    expect(M.over).toBeShown()
+    expect(M.over.mark).toBeShown()
+    expect(M.over.note).toHaveText("Loading support…")
+    expect(M.over.title).never.toBeShown()
+    expect(M.over.retry).never.toBeShown()
+    expect(M.where).toHaveText("Loading…")
+    expect(M.loadingSince).toBe(GetTime())
+    expect(home).toHaveBeenCalledWith(M.browser, "KnowledgeBase")
+end
+
+@test("the mark gives way after 12 seconds when the page never says it's done")
+local function loadLimit()
+    M:Open()
+    mock.advanceTime(11.5)
+    expect(M.over).toBeShown()
+    mock.advanceTime(1)
+    expect(M.over).never.toBeShown()
+    expect(M.where).toHaveText("Blizzard support")
+    expect(M.loadingSince).toBeNil()
+end
+
+@test("a newer load keeps the older one's limit from ending it")
+local function newerLoad()
+    M:Load("NavigateReload")
+    mock.advanceTime(6)
+    M:Load("NavigateReload")
+    mock.advanceTime(7) -- the first limit passed
+    expect(M.over).toBeShown()
+    mock.advanceTime(6) -- the second's
+    expect(M.over).never.toBeShown()
+end
+
+@test("the browser's done-loading ends the loading; other updates don't")
+local function doneLoading()
+    M:Open()
+    mock.script(M.browser, "OnButtonUpdate", "enableback")
+    expect(M.over).toBeShown()
+    mock.script(M.browser, "OnButtonUpdate", "doneloading")
+    expect(M.over).never.toBeShown()
+    expect(M.where).toHaveText("Blizzard support")
+end
+
+@test("the browser's error shows the unavailable state with Retry")
+local function browserError()
+    M:Open()
+    mock.script(M.browser, "OnError")
+    expect(M.over).toBeShown()
+    expect(M.over.mark).never.toBeShown()
+    expect(M.over.note).never.toBeShown()
+    expect(M.over.title).toHaveText("Support is unavailable right now")
+    expect(M.over.text).toHaveText("The support page didn't load. Check your connection and try again in a moment.")
+    expect(M.over.retry).toBeShown()
+    expect(M.where).toHaveText("")
+    expect(M.loadingSince).toBeNil()
+    -- Retry loads the knowledge base again
+    local home = mock.spy()
+    mock.stub(M.browser, "NavigateHome", home)
+    mock.click(M.over.retry)
+    expect(home).toHaveBeenCalledWith(M.browser, "KnowledgeBase")
+    expect(M.over.retry).never.toBeShown()
+    expect(M.over.mark).toBeShown()
+end
+
+@test("the game's browser failure events while the window shows")
+@cases({ { "SIMPLE_BROWSER_WEB_PROXY_FAILED" }, { "SIMPLE_BROWSER_WEB_ERROR" } })
+local function failureEvents(event: string)
+    local function fire()
+        if event == "SIMPLE_BROWSER_WEB_ERROR" then mock.fireEvent(event, 1) else mock.fireEvent(event) end
+    end
+    -- hidden: nothing happens
+    M.over:Hide()
+    fire()
+    expect(M.over).never.toBeShown()
+    M:Open()
+    fire()
+    expect(M.over.retry).toBeShown()
+    expect(M.over.title).toHaveText("Support is unavailable right now")
+end
+
+@test("the toolbar: back and forward call the browser, reload and home load")
+local function toolbar()
+    M.window:Show()
+    local back, forward, reload, home = mock.spy(), mock.spy(), mock.spy(), mock.spy()
+    mock.stub(M.browser, "NavigateBack", back)
+    mock.stub(M.browser, "NavigateForward", forward)
+    mock.stub(M.browser, "NavigateReload", reload)
+    mock.stub(M.browser, "NavigateHome", home)
+    mock.click(M.back)
+    expect(back).toHaveBeenCalledTimes(1)
+    expect(M.over).never.toBeShown() -- back and forward don't show the mark
+    mock.click(M.forward)
+    expect(forward).toHaveBeenCalledTimes(1)
+    mock.click(M.reload)
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(M.over).toBeShown()
+    mock.click(M.home)
+    expect(home).toHaveBeenCalledWith(M.browser, "KnowledgeBase")
+end
+
+@test("Call skips a method the browser lacks, and a missing browser")
+local function callMissing()
+    M:Call("NoSuchMethod", 1)
+    local b = M.browser
+    M.browser = nil
+    M:Call("NavigateBack")
+    M.browser = b
+end
+
+@test("without a browser a load is the unavailable state at once")
+local function noBrowser()
+    local b = M.browser
+    M.browser = nil
+    M:Open()
+    M.browser = b
+    expect(M.over.retry).toBeShown()
+    expect(M.loadingSince).toBeNil()
+end
+
+@test("Toggle opens and closes")
+local function toggles()
+    M:Toggle()
+    expect(M.window).toBeShown()
+    expect(M.over).toBeShown()
+    M:Toggle()
+    expect(M.window).never.toBeShown()
+end
+
+@test("the browser's own keys and links")
+local function browserScripts()
+    local focus = mock.spy()
+    mock.stub(M.browser, "ClearFocus", focus)
+    mock.script(M.browser, "OnEscapePressed")
+    expect(focus).toHaveBeenCalledTimes(1)
+    -- closing the window clears the browser's focus too
+    M:Open()
+    M.window:Hide()
+    expect(focus).toHaveBeenCalledTimes(2)
+    -- a link out of the game: the game's question, the address without its query
+    local show = mock.spy()
+    mock.stub(_G, "StaticPopup_Show", show)
+    mock.script(M.browser, "OnExternalLink", "https://example.com/a?b=c")
+    expect(show).toHaveBeenCalledWith("EXTERNAL_LINK", "https://example.com/a", nil,
+        { url = "https://example.com/a?b=c", browser = M.browser })
+end
+
+@test("the game's HelpFrame opens this window instead")
+local function helpFrame()
+    local help: Frame = _G.HelpFrame
+    help:Show()
+    expect(help).never.toBeShown()
+    expect(M.window).toBeShown()
+    -- turned off (until the reload): the game's frame stays
+    M.window:Hide()
+    mock.stub(M, "IsEnabled", function(): boolean return false end)
+    help:Show()
+    expect(M.window).never.toBeShown()
+    help:Hide()
+end
+
+-- last: OnEnable again adds its event handlers a second time
+@test("OnDisable hides the window; OnEnable again builds nothing new")
+local function disableEnable()
+    M:Open()
+    M:OnDisable()
+    expect(M.window).never.toBeShown()
+    local w = M.window
+    M:OnEnable()
+    expect(M.window).toBe(w)
+end

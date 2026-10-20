@@ -35,6 +35,19 @@ local M = SuuUI.RegisterModule({
 local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 local PREFIX = "SuuUI"
+
+-- The game's functions this file reads about the group and your spells,
+-- taken once as it loads (as the release build's cached globals are).
+-- Tests replace them here: a replacement in _G would taint Blizzard's own
+-- code that reads it (docs: Docs/test-notes/units-group.md).
+local game = {
+    UnitClass = UnitClass, IsPlayerSpell = IsPlayerSpell,
+    GetSpellInfo = C_Spell.GetSpellInfo, GetSpellCooldown = C_Spell.GetSpellCooldown, GetSpellName = C_Spell.GetSpellName,
+    IsInRaid = IsInRaid, IsInGroup = IsInGroup, IsInInstance = IsInInstance,
+    UnitExists = UnitExists, UnitIsUnit = UnitIsUnit,
+    UnitIsGroupLeader = UnitIsGroupLeader, UnitIsGroupAssistant = UnitIsGroupAssistant,
+    SendAddonMessage = C_ChatInfo.SendAddonMessage,
+}
 local HEARTBEAT = 30
 
 -- The cooldowns a group plans around, per class (the first rank you know).
@@ -52,7 +65,7 @@ local MAJOR = {
 
 -- your own class is never secret
 local function playerClass(): string
-    local _, class = UnitClass("player")
+    local _, class = game.UnitClass("player")
     return class :: string
 end
 
@@ -66,10 +79,10 @@ function M:ReadOwn()
     if InCombatLockdown() then return nil end
     local out = {}
     for _, name in ipairs(MAJOR[playerClass()] or {}) do
-        local info = C_Spell.GetSpellInfo(name)
+        local info = game.GetSpellInfo(name)
         local id = info and info.spellID
-        if readable(id) and IsPlayerSpell(id) then
-            local cd = C_Spell.GetSpellCooldown(id)
+        if readable(id) and game.IsPlayerSpell(id) then
+            local cd = game.GetSpellCooldown(id)
             local left = 0
             if cd and not isSecret(cd) and readable(cd.startTime) and readable(cd.duration) and cd.duration > 1.5 then
                 left = math.max(0, cd.startTime + cd.duration - GetTime())
@@ -85,23 +98,41 @@ end
 --------------------------------------------------------------------------------
 
 local function channel()
-    if UI.Flag(IsInRaid()) then return "RAID" end
-    if UI.Flag(IsInGroup()) then return "PARTY" end
+    if UI.Flag(game.IsInRaid()) then return "RAID" end
+    if UI.Flag(game.IsInGroup()) then return "PARTY" end
 end
 
 function M:Send(text: string)
     local ch = channel()
     if not ch or InCombatLockdown() then return end
-    local ok, result = pcall(C_ChatInfo.SendAddonMessage, PREFIX, text, ch)
+    local ok, result = pcall(game.SendAddonMessage, PREFIX, text, ch)
     self.lastSend = { at = date("%H:%M:%S"), ok = ok, result = isSecret(result) and "secret" or tostring(result), text = text:sub(1, 40) }
+end
+
+-- The share message for cooldowns { { id, left } }: "RDY\t<id>:<left>,…"
+-- (seconds rounded).
+local function encodeShare(own: { id: number, left: number }[]): string
+    local parts = {}
+    for _, c in ipairs(own) do parts[#parts + 1] = ("%d:%d"):format(c.id, math.floor(c.left + 0.5)) end
+    return "RDY\t" .. table.concat(parts, ",")
+end
+
+-- A share message's cooldowns as { id, endsAt } (from `now`); nil when the
+-- text isn't one.
+local function decodeShare(text: string, now: number): { id: number?, endsAt: number }[]?
+    local payload = text:match("^RDY\t(.*)$")
+    if not payload then return nil end
+    local spells = {}
+    for id, left in payload:gmatch("(%d+):(%d+)") do
+        spells[#spells + 1] = { id = tonumber(id), endsAt = now + (tonumber(left) or 0) }
+    end
+    return spells
 end
 
 function M:Share()
     local own = self:ReadOwn()
     if not own then return end
-    local parts = {}
-    for _, c in ipairs(own) do parts[#parts + 1] = ("%d:%d"):format(c.id, math.floor(c.left + 0.5)) end
-    self:Send("RDY\t" .. table.concat(parts, ","))
+    self:Send(encodeShare(own))
 end
 
 -- One share soon (a burst of cooldown events makes one message).
@@ -124,13 +155,9 @@ function M:OnMessage(prefix: any, text: any, _: any, sender: any)
         self:ShareSoon()
         return
     end
-    local payload = text:match("^RDY\t(.*)$")
-    if not payload then return end
     local now = GetTime()
-    local spells = {}
-    for id, left in payload:gmatch("(%d+):(%d+)") do
-        spells[#spells + 1] = { id = tonumber(id), endsAt = now + (tonumber(left) or 0) }
-    end
+    local spells = decodeShare(text, now)
+    if not spells then return end
     self.heard = self.heard or {}
     self.heard[who] = { at = now, spells = spells }
     self:Update()
@@ -145,22 +172,30 @@ type Member = { name: string, class: (string | Secret<string>)?, you?: boolean }
 local function roster(): Member[]
     local out: Member[] = { { name = playerName(), class = playerClass(), you = true } }
     local function add(unit: string)
-        if UnitExists(unit) and not UI.Flag(UnitIsUnit(unit, "player")) then
+        if game.UnitExists(unit) and not UI.Flag(game.UnitIsUnit(unit, "player")) then
             -- the whole name, as their messages carry it (Forever's surnames)
             local name = SuuUI.FullName(unit)
             if not isSecret(name) and name then name = Ambiguate(name, "short") end
-            local _, class = UnitClass(unit)
+            local _, class = game.UnitClass(unit)
             if not isSecret(name) and name then
                 out[#out + 1] = { name = name, class = (not isSecret(class)) and class or nil }
             end
         end
     end
-    if UI.Flag(IsInRaid()) then
+    if UI.Flag(game.IsInRaid()) then
         for i = 1, 40 do add("raid" .. i) end
     else
         for i = 1, 4 do add("party" .. i) end
     end
     return out
+end
+
+-- The panel's order: ready first, then the soonest, then group order.
+local function rowBefore(a: { endsAt?: number, order: number }, b: { endsAt?: number, order: number }): boolean
+    local la, lb = a.endsAt or 0, b.endsAt or 0
+    if (la == 0) ~= (lb == 0) then return la == 0 end
+    if la ~= lb then return la < lb end
+    return a.order < b.order
 end
 
 function M:Rows()
@@ -173,33 +208,34 @@ function M:Rows()
     for order, p in ipairs(roster()) do
         local spells = p.you and self.own or (self.heard and self.heard[p.name] and self.heard[p.name].spells)
         for _, c in ipairs(spells or {}) do
-            local name = C_Spell.GetSpellName(c.id)
+            local name = game.GetSpellName(c.id)
             rows[#rows + 1] = { icon = C_Spell.GetSpellTexture(c.id), spell = name or "?", who = p.name, class = p.class,
                 endsAt = (c.endsAt and c.endsAt > now) and c.endsAt or nil, order = order }
         end
     end
-    -- ready first, then the soonest, then group order
-    table.sort(rows, function(a, b)
-        local la, lb = a.endsAt or 0, b.endsAt or 0
-        if (la == 0) ~= (lb == 0) then return la == 0 end
-        if la ~= lb then return la < lb end
-        return a.order < b.order
-    end)
+    table.sort(rows, rowBefore)
     return rows
 end
 
-local function canCheck()
-    return UI.Flag(IsInGroup()) and (UI.Flag(UnitIsGroupLeader("player")) or UI.Flag(UnitIsGroupAssistant("player")))
+-- Whether the "shows" setting wants the panel: in a group, in a dungeon
+-- or raid's instance (`kind`: IsInInstance's), or always.
+local function wanted(shows: string, inGroup: boolean, kind: string?): boolean
+    return shows == "always"
+        or (shows == "group" and inGroup)
+        or (shows == "instance" and inGroup and (kind == "party" or kind == "raid"))
 end
 
-function M:Update()
+local function canCheck()
+    return UI.Flag(game.IsInGroup()) and (UI.Flag(game.UnitIsGroupLeader("player")) or UI.Flag(game.UnitIsGroupAssistant("player")))
+end
+
+-- `fighting`: a fight is starting (PLAYER_REGEN_DISABLED comes before
+-- InCombatLockdown turns true).
+function M:Update(fighting: boolean?)
     if not self.panel then return end
-    local shows = self:Get("shows")
-    local _, kind = IsInInstance()
-    local where = shows == "always"
-        or (shows == "group" and UI.Flag(IsInGroup()))
-        or (shows == "instance" and UI.Flag(IsInGroup()) and (kind == "party" or kind == "raid"))
-    local shown = where and not self:Get("position").hidden and not InCombatLockdown() and not self.encounter
+    local _, kind = game.IsInInstance()
+    local where = wanted(self:Get("shows"), UI.Flag(game.IsInGroup()), kind)
+    local shown = where and not self:Get("position").hidden and not InCombatLockdown() and not fighting and not self.encounter
     if shown then
         local rows = self:Rows()
         self.panel:SetRows(rows)
@@ -265,7 +301,7 @@ function M:OnEnable()
     self:OnGameEvent("SPELL_UPDATE_COOLDOWN", function()
         if not InCombatLockdown() and channel() then self:ShareSoon() end
     end)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Update() end)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Update(true) end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         after(1, function() if self:IsEnabled() then self:Update(); self:ShareSoon() end end)
     end)

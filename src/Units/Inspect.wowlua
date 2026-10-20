@@ -75,6 +75,48 @@ local function rankName(unit: string, rank: number): string
     return PVP_RANK_NUMBER_AND_TITLE and PVP_RANK_NUMBER_AND_TITLE:format(rank, name) or name
 end
 
+-- "Level 21 · Undead · Paladin" (a secret or unknown level: "??"; a
+-- secret race or class left out).
+local function identityLine(level: any, race: any, className: any): string
+    local parts = { "Level " .. ((plain(level) and level > 0) and level or "??") }
+    if plain(race) then parts[#parts + 1] = race end
+    if plain(className) then parts[#parts + 1] = className end
+    return table.concat(parts, " · ")
+end
+
+-- Their item's level against yours: the chip's text and colour ("▲3",
+-- gilt; "▼2", ember), nil when they're the same or yours is unknown.
+local function deltaChip(level: number, mine: number?): (string?, string?)
+    local d = mine and level - mine or 0
+    if d == 0 then return nil, nil end
+    return (d > 0 and "▲" or "▼") .. math.abs(d), d > 0 and "gilt-text" or "ember-text"
+end
+
+-- The rank points' text and the bar's fill: "1200 / 5000" toward the
+-- next rank, else the points alone.
+local function rankPoints(points: any, nextAt: any): (string, number)
+    points, nextAt = plain(points) and points or 0, (plain(nextAt) and nextAt > 0) and nextAt or 0
+    if nextAt > 0 then return points .. " / " .. nextAt, math.min(1, points / nextAt) end
+    return tostring(points), 0
+end
+
+-- "Horde · 42 members" under the guild's name (the game's own formats).
+local function guildLine(faction: any, members: any): string
+    local line = plain(faction) and INSPECT_GUILD_FACTION and INSPECT_GUILD_FACTION:format(faction) or ""
+    if plain(members) and members > 0 and INSPECT_GUILD_NUM_MEMBERS then
+        line = line .. (line ~= "" and " · " or "") .. INSPECT_GUILD_NUM_MEMBERS:format(members)
+    end
+    return line
+end
+
+-- Why View Talents is off (nil: it's on).
+local function talentsWhy(loading: boolean, moduleOn: boolean, hasData: boolean): string?
+    if loading then return "Waiting for their gear." end
+    if not moduleOn then return "SuuUI's Talents module is off." end
+    if not hasData then return "Their talents aren't available." end
+    return nil
+end
+
 --------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
@@ -329,11 +371,10 @@ function M:DrawSlot(b: any)
     local level = itemLevel(GetInventoryItemLink(unit, b.slotID))
     if level then b.level:SetValue(level) end
     if self.compare and level then
-        local mine = itemLevel(GetInventoryItemLink("player", b.slotID))
-        local d = mine and level - mine or 0
-        if d ~= 0 then
-            b.delta.text:SetValue((d > 0 and "▲" or "▼") .. math.abs(d))
-            b.delta.text:SetColor(d > 0 and "gilt-text" or "ember-text")
+        local text, color = deltaChip(level, itemLevel(GetInventoryItemLink("player", b.slotID)))
+        if text then
+            b.delta.text:SetValue(text)
+            b.delta.text:SetColor(color)
             b.delta:SetWidth(UI.MeasureText("micro", b.delta.text:GetText() or "") + 6)
             b.delta:Show()
         end
@@ -352,14 +393,7 @@ function M:Draw()
         self.idRow.name:SetColor(token)
     end
     self.idRow.name:SetValue(plain(name) and name or "")
-    local parts = {}
-    local level = UnitLevel(unit)
-    parts[#parts + 1] = "Level " .. ((plain(level) and level > 0) and level or "??")
-    local race = UnitRace(unit)
-    if plain(race) then parts[#parts + 1] = race end
-    local className = UnitClass(unit)
-    if plain(className) then parts[#parts + 1] = className end
-    self.idRow.line:SetValue(table.concat(parts, " · "))
+    self.idRow.line:SetValue(identityLine(UnitLevel(unit), UnitRace(unit), (UnitClass(unit))))
     local _, members, guildName = call(C_PaperDollInfo.GetInspectGuildInfo, unit)
     if self.loading or not plain(guildName) or guildName == "" then guildName = nil end
     self.idRow.guild:SetValue(guildName and ("<" .. guildName .. ">") or "")
@@ -400,9 +434,9 @@ function M:Draw()
     end
     local pvp = self.pvp
     pvp.rank:SetValue(rankName(unit, plain(rank) and rank or 0))
-    points, nextAt = plain(points) and points or 0, (plain(nextAt) and nextAt > 0) and nextAt or 0
-    pvp.points:SetValue(nextAt > 0 and (points .. " / " .. nextAt) or tostring(points))
-    pvp.bar:SetValueNow(nextAt > 0 and math.min(1, points / nextAt) or 0)
+    local pointsText, fill = rankPoints(points, nextAt)
+    pvp.points:SetValue(pointsText)
+    pvp.bar:SetValueNow(fill)
     pvp.today:SetValue(plain(today) and today or 0)
     pvp.lifetime:SetValue(plain(lifetime) and lifetime or 0)
     -- guild
@@ -410,19 +444,13 @@ function M:Draw()
     g.icon:SetShown(guildName ~= nil)
     g.name:SetValue(guildName or "")
     local _, faction = UnitFactionGroup(unit)
-    local line = plain(faction) and INSPECT_GUILD_FACTION and INSPECT_GUILD_FACTION:format(faction) or ""
-    if plain(members) and members > 0 and INSPECT_GUILD_NUM_MEMBERS then
-        line = line .. (line ~= "" and " · " or "") .. INSPECT_GUILD_NUM_MEMBERS:format(members)
-    end
-    g.line:SetValue(guildName and line or "")
+    g.line:SetValue(guildName and guildLine(faction, members) or "")
     g.none:SetShown(guildName == nil and not self.loading)
     -- the buttons wait for the gear
     self.dressButton:SetEnabledState(not self.loading)
     local module = SuuUI.GetModule("talents")
-    local why
-    if self.loading then why = "Waiting for their gear."
-    elseif not (module and module:IsEnabled()) then why = "SuuUI's Talents module is off."
-    elseif not call(C_Traits.HasValidInspectData) then why = "Their talents aren't available." end
+    local on = (module and module:IsEnabled()) and true or false
+    local why = talentsWhy(self.loading and true or false, on, (not self.loading and on and call(C_Traits.HasValidInspectData)) and true or false)
     self.talentsButton:SetEnabledState(why == nil)
     self.talentsButton.tooltip = why and { title = "View Talents", description = why } or nil
 end

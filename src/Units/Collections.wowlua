@@ -347,8 +347,8 @@ end
 M.toyCooldown = toyCooldown
 
 -- "Ready in 41 min", "Ready in 1 h 5 min", "Ready in 30 s"
-local function readyIn(start: number, duration: number): string
-    local left = math.max(0, start + duration - GetTime())
+local function readyIn(start: number, duration: number, now: number?): string
+    local left = math.max(0, start + duration - (now or GetTime()))
     if left >= 3600 then return ("Ready in %d h %d min"):format(math.floor(left / 3600), math.floor(left % 3600 / 60)) end
     if left >= 60 then return ("Ready in %d min"):format(math.ceil(left / 60)) end
     return ("Ready in %d s"):format(math.ceil(left))
@@ -790,15 +790,11 @@ end
 -- What the strip shows: the tab's entries through the search and filters
 --------------------------------------------------------------------------------
 
-function M:Entries()
-    local all
-    if self.tab == "wardrobe" then all = self:WardrobeEntries()
-    elseif self.tab == "toys" then all = self:Toys()
-    else all = self:Mounts() end
-    local tools = self.tools
-    local search = (tools.search.edit:GetText() or ""):lower()
-    local have, list = tools.have.value or "all", tools.list.value or "all"
-    local out = {}
+-- The entries a search (lower case) and the filters keep: have "all",
+-- "have", "missing"; list "all", "fav", "recent" (newest first, what you
+-- had before SuuUI last).
+local function filterEntries(all: Entry[], search: string, have: string, list: string): Entry[]
+    local out: Entry[] = {}
     for _, e in ipairs(all) do
         local ok = (search == "" or e.name:lower():find(search, 1, true))
             and (have == "all" or (have == "have") == (e.collected and true or false))
@@ -815,7 +811,17 @@ function M:Entries()
             return a.name < b.name
         end)
     end
-    return out, all
+    return out
+end
+
+function M:Entries()
+    local all
+    if self.tab == "wardrobe" then all = self:WardrobeEntries()
+    elseif self.tab == "toys" then all = self:Toys()
+    else all = self:Mounts() end
+    local tools = self.tools
+    local search = (tools.search.edit:GetText() or ""):lower()
+    return filterEntries(all, search, tools.have.value or "all", tools.list.value or "all"), all
 end
 
 -- The cells across the grid's width (18 a row, the space shared out between).
@@ -1096,6 +1102,15 @@ function M:ToggleFavourite()
     end
 end
 
+-- The stage's action: its label and why it's off (nil: on).
+local function actionLabel(mounted: boolean, e: Entry?): (string, string?)
+    if mounted then return "Dismiss", nil end
+    if not e then return "Summon", "Choose a mount." end
+    if not e.collected then return "Summon", "You don't have this mount yet." end
+    if not e.usable then return "Summon", "You can't ride this mount here." end
+    return "Summon", nil
+end
+
 -- Summon or Dismiss: the secure button's job, set out of combat (in one it
 -- waits; its look says why).
 function M:DrawAction()
@@ -1106,11 +1121,7 @@ function M:DrawAction()
         return
     end
     local mounted = IsMounted and IsMounted() or false
-    local label, why = "Summon", nil
-    if mounted then label = "Dismiss"
-    elseif not e then why = "Choose a mount."
-    elseif not e.collected then why = "You don't have this mount yet."
-    elseif not e.usable then why = "You can't ride this mount here." end
+    local label, why = actionLabel(mounted, e)
     act.look.label:SetValue(label)
     act.look:SetEnabledState(why == nil)
     act.why = why
@@ -1693,6 +1704,14 @@ function M:DrawCardState(c: any)
     UI.PaintFill(c.bg, c.hover and "surface-raised" or "surface-sunk")
 end
 
+-- Why a toy's Use is off (nil: on).
+local function toyWhy(e: Entry, start: number, duration: number): string?
+    if not e.collected then return "You don't have this toy yet." end
+    if duration > 0 then return readyIn(start, duration) .. "." end
+    if e.usable == false then return "You can't use this toy here." end
+    return nil
+end
+
 -- A card's cooldown, its foot line and its Use.
 function M:DrawCardCooldown(c: any)
     local e = c.entry
@@ -1708,10 +1727,7 @@ function M:DrawCardCooldown(c: any)
         c.src:SetValue(self:SourceLine(e.source, "toy", nil))
         c.src:SetColor(e.collected and "ink-muted" or "ink")
     end
-    local why
-    if not e.collected then why = "You don't have this toy yet."
-    elseif duration > 0 then why = readyIn(start, duration) .. "."
-    elseif e.usable == false then why = "You can't use this toy here." end
+    local why = toyWhy(e, start, duration)
     c.act.look:SetEnabledState(why == nil)
     c.act.why = why
 end

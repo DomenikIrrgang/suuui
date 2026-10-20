@@ -1,0 +1,650 @@
+-- Units/Convergences: the convergences learned from Skysight casts, shared
+-- by addon message, on the minimap. The world's positions are a stand-in:
+-- map 2521 (and 2522 beside it) on continent 1 at 1000 yards a map width,
+-- map 7000 on continent 2; continent map 1 shows the world at half scale.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import type Module from "/Core/Modules"
+import * as events from "/Core/Events"
+import internal worldOf, yards, makeRoom, clean, message, fromMe, day, blessing, groupChannel, shareReason, SECTION, MAX_SPOTS from "/Units/Convergences"
+import expectNoErrors from "../../helpers"
+
+const M: Module = assert(SuuUI.GetModule("convergences"))
+const SKYSIGHT = 1259686
+const BLESSING = 1270893
+
+type Spot = { map: number, x: number, y: number, by?: string, at?: number, from?: string, confirmed?: boolean, seed?: boolean }
+
+local changes = 0
+local listener = {}
+local notes: any[] = {}
+
+local CONTINENT: { [number]: number } = { [2521] = 1, [2522] = 1, [7000] = 2 }
+
+-- Map positions as world positions (yards) and back.
+local function fakeWorld()
+    mock.fake("C_Map.GetWorldPosFromMapPos", function(map: number, pos: any): (number?, any)
+        local c = CONTINENT[map]
+        if not c then return nil, nil end
+        local x, y = pos:GetXY()
+        local shift = map == 2522 and 1000 or 0
+        return c, CreateVector2D(y * 1000, x * 1000 + shift)
+    end)
+    mock.fake("C_Map.GetMapPosFromWorldPos", function(continent: number, pos: any, map: number): (number?, any)
+        local n, w = pos:GetXY()
+        if map == 1 and continent == 1 then return 1, CreateVector2D(w / 2000, n / 2000) end
+        if map == 3 then return 3, CreateVector2D(5, 5) end
+        return nil, nil
+    end)
+end
+
+local function skyborne(on: boolean)
+    mock.fake("UnitRace", function(): (string, string, number) return "Skyborne", "Skyborne", on and 95 or 1 end)
+    mock.fake("IsPlayerSpell", function(): boolean return false end)
+end
+
+local function blessed(expires: number?, duration: number?)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(id: number): any
+        if id ~= BLESSING or not expires then return nil end
+        return { spellId = BLESSING, expirationTime = expires, duration = duration or 900 }
+    end)
+end
+
+local function inGroup(party: boolean, guild: boolean)
+    mock.fake("IsInGroup", function(category: number?): boolean return party and category == nil end)
+    mock.fake("IsInRaid", function(): boolean return false end)
+    mock.fake("IsInGuild", function(): boolean return guild end)
+end
+
+@beforeEach
+local function setup()
+    local d = SuuUI.AccountData("convergences")
+    d.spots, d.seeded = nil, nil
+    M.pending, M.blessed, M.taken = nil, nil, nil
+    changes = 0
+    notes = {}
+    events.on("SUUUI_CONVERGENCES_CHANGED", function() changes = changes + 1 end, listener)
+    mock.stub(SuuUI, "Notify", function(def: any) notes[#notes + 1] = def end)
+    fakeWorld()
+    skyborne(true)
+    blessed(nil)
+    inGroup(false, false)
+end
+
+@afterEach
+local function teardown()
+    events.off("SUUUI_CONVERGENCES_CHANGED", listener)
+    M:Set("send", true)
+    M:Set("receive", true)
+    M:Set("minimap", true)
+    if InCombatLockdown() then mock.player:leaveCombat() end
+end
+
+--------------------------------------------------------------------------------
+-- The spots
+--------------------------------------------------------------------------------
+
+@test("Spots: seeded once with SuuUI's own")
+local function seeded()
+    local spots = M:Spots()
+    expect(#spots).toBe(1)
+    expect(spots[1]).toEqual({ map = 2521, x = 0.4828, y = 0.2062, seed = true, confirmed = true })
+    table.remove(spots, 1)
+    expect(#M:Spots()).toBe(0)
+end
+
+@test("IsSkyborne: by race or by Skysight; Shown needs the module on")
+local function isSkyborne()
+    expect(M:IsSkyborne()).toBe(true)
+    expect(M:Shown()).toBe(true)
+    skyborne(false)
+    expect(M:IsSkyborne()).toBe(false)
+    expect(M:Shown()).toBe(false)
+    mock.fake("IsPlayerSpell", function(id: number): boolean return id == SKYSIGHT end)
+    expect(M:IsSkyborne()).toBe(true)
+    mock.fake("IsPlayerSpell", function(): any return mock.secret(true) end)
+    expect(M:IsSkyborne()).toBe(false)
+    mock.fake("UnitRace", function(): (string, string, any) return "x", "x", mock.secret(95) end)
+    mock.fake("IsPlayerSpell", function(): boolean error("no") end)
+    expect(M:IsSkyborne()).toBe(false)
+end
+
+@test("worldOf: a spot's world place, cached; nil off the world")
+local function world()
+    local a: Spot = { map = 2521, x = 0.5, y = 0.25 }
+    local w = worldOf(a)
+    expect(w).toEqual({ 1, 250, 500 })
+    expect(worldOf(a)).toBe(w)
+    expect(worldOf({ map = 1234, x = 0, y = 0 })).toBeNil()
+    mock.fake("C_Map.GetWorldPosFromMapPos", function(): any error("no") end)
+    expect(worldOf({ map = 2521, x = 0, y = 0 })).toBeNil()
+    mock.fake("C_Map.GetWorldPosFromMapPos", function(): (number, any) return 1, CreateVector2D(mock.secret(1), 2) end)
+    expect(worldOf({ map = 2521, x = 0, y = 0 })).toBeNil()
+end
+
+@test("yards: across the world, or on one map by its size")
+local function distance()
+    expect(yards({ map = 2521, x = 0.5, y = 0.5 }, { map = 2521, x = 0.53, y = 0.54 })).toBeCloseTo(50, 3)
+    expect(yards({ map = 2521, x = 0.5, y = 0.5 }, { map = 2522, x = 0.5, y = 0.5 })).toBeCloseTo(1000, 3)
+    expect(yards({ map = 2521, x = 0.5, y = 0.5 }, { map = 7000, x = 0.5, y = 0.5 })).toBeNil()
+    -- no world places: the map's size
+    mock.fake("C_Map.GetMapWorldSize", function(map: number): (number, number) return map == 50 and 1000 or 0, 500 end)
+    expect(yards({ map = 50, x = 0.1, y = 0.1 }, { map = 50, x = 0.13, y = 0.18 })).toBeCloseTo(50, 3)
+    expect(yards({ map = 50, x = 0.1, y = 0.1 }, { map = 51, x = 0.1, y = 0.1 })).toBeNil()
+    expect(yards({ map = 52, x = 0.1, y = 0.1 }, { map = 52, x = 0.1, y = 0.1 })).toBeNil()
+end
+
+@test("Near: a known spot within 40 yards")
+local function near()
+    local seed = M:Spots()[1]
+    expect(M:Near({ map = 2521, x = 0.4828 + 0.02, y = 0.2062 })).toBe(seed)
+    expect(M:Near({ map = 2521, x = 0.4828 + 0.05, y = 0.2062 })).toBeNil()
+end
+
+@test("Add makes room: an unconfirmed shared one goes first, else the oldest not seeded")
+local function room()
+    local list: Spot[] = {}
+    makeRoom(list)
+    expect(#list).toBe(0)
+    for i = 1, MAX_SPOTS do list[i] = { map = 1, x = 0, y = 0, at = i } end
+    list[1].seed = true
+    list[5].from = "Bram"
+    list[5].confirmed = true
+    list[7].from = "Tamsin"
+    makeRoom(list)
+    expect(#list).toBe(MAX_SPOTS - 1)
+    expect(list[7].at).toBe(8)
+    makeRoom(list)
+    expect(#list).toBe(MAX_SPOTS - 1)
+    list[#list + 1] = { map = 1, x = 0, y = 0, at = 999 }
+    makeRoom(list)
+    expect(list[2].at).toBe(3)
+    expect(list[1].seed).toBe(true)
+    -- through Add
+    local spots = M:Spots()
+    for i = 2, MAX_SPOTS do spots[i] = { map = 1, x = 0, y = 0, at = i } end
+    M:Add({ map = 2, x = 0, y = 0 })
+    expect(#M:Spots()).toBe(MAX_SPOTS)
+    expect(M:Spots()[2].at).toBe(3)
+    expect(changes).toBe(1)
+end
+
+@test("PlaceOn: a spot on its own map or another")
+local function placeOn()
+    local s: Spot = { map = 2521, x = 0.4, y = 0.6 }
+    expect({ M:PlaceOn(s, 2521) }).toEqual({ 0.4, 0.6 })
+    local x, y = M:PlaceOn(s, 1)
+    expect(x).toBeCloseTo(0.2, 3)
+    expect(y).toBeCloseTo(0.3, 3)
+    expect(M:PlaceOn(s, 2)).toBeNil()
+    expect(M:PlaceOn(s, 3)).toBeNil()
+    expect(M:PlaceOn({ map = 1234, x = 0, y = 0 }, 1)).toBeNil()
+end
+
+@test("MapName and Where")
+local function mapName()
+    mock.fake("C_Map.GetMapInfo", function(map: number): any return map == 2521 and { name = "Zephra's Isle" } or nil end)
+    expect(M:MapName(2521)).toBe("Zephra's Isle")
+    expect(M:MapName(nil)).toBeNil()
+    expect(M:MapName(5)).toBeNil()
+    expect(M:Where({ map = 2521, x = 0.4828, y = 0.2062 })).toBe("Zephra's Isle 48.3, 20.6")
+    expect(M:Where({ map = 5, x = 0.1, y = 0.2 })).toBe(" 10.0, 20.0")
+end
+
+--------------------------------------------------------------------------------
+-- The blessing
+--------------------------------------------------------------------------------
+
+@test("blessing: the aura, nil without it, false when it can't be read")
+local function readTheBlessing()
+    expect(blessing()).toBeNil()
+    blessed(GetTime() + 600)
+    expect(blessing().duration).toBe(900)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): any error("no") end)
+    expect(blessing()).toBe(false)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): any return { expirationTime = mock.secret(5), duration = 900 } end)
+    expect(blessing()).toBe(false)
+    blessed(nil)
+    mock.player:enterCombat()
+    expect(blessing()).toBe(false)
+    mock.player:leaveCombat()
+end
+
+@test("Blessed, BlessingLeft and the aura's changes")
+local function blessedState()
+    expect(M:Blessed()).toBe(false)
+    expect(M:BlessingLeft()).toBeNil()
+    blessed(GetTime() + 600)
+    expect(M:BlessingLeft()).toBeCloseTo(600, 3)
+    mock.fireUnitEvent("UNIT_AURA", "player", { isFullUpdate = true })
+    expect(M:Blessed()).toBe(true)
+    expect(changes).toBe(1)
+    mock.fireUnitEvent("UNIT_AURA", "player", { isFullUpdate = true })
+    expect(changes).toBe(1)
+    blessed(0)
+    expect(M:BlessingLeft()).toBeNil()
+    blessed(nil)
+    mock.fireUnitEvent("UNIT_AURA", "player", { isFullUpdate = true })
+    expect(M:Blessed()).toBe(false)
+    -- in combat the last known stays
+    M.blessed = true
+    mock.player:enterCombat()
+    mock.fireUnitEvent("UNIT_AURA", "player", { isFullUpdate = true })
+    expect(M:Blessed()).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceTime(0.6)
+    expect(M:Blessed()).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Learning
+--------------------------------------------------------------------------------
+
+local function standAt(map: any, x: any, y: any)
+    mock.fake("C_Map.GetBestMapForUnit", function(): any return map end)
+    mock.fake("C_Map.GetPlayerMapPosition", function(): any
+        if x == nil then return nil end
+        return CreateVector2D(x, y)
+    end)
+end
+
+@test("A Skysight cast at a new convergence: found, saved, sent, told")
+local function castFinds()
+    standAt(2521, 0.7, 0.7)
+    inGroup(true, true)
+    local sent: any[] = {}
+    mock.fake("C_ChatInfo.SendAddonMessage", function(prefix: string, text: string, channel: string)
+        sent[#sent + 1] = { prefix, text, channel }
+    end)
+    mock.fake("C_Map.GetMapInfo", function(): any return { name = "Zephra's Isle" } end)
+    mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", SKYSIGHT)
+    expect(M.pending.map).toBe(2521)
+    blessed(GetTime() + 900, 900)
+    mock.advanceTime(0.6)
+    expect(M.pending).toBeNil()
+    local spots = M:Spots()
+    expect(#spots).toBe(2)
+    local s = spots[2]
+    expect(s.map).toBe(2521)
+    expect(s.confirmed).toBe(true)
+    expect(s.by).toBe((UnitName("player")))
+    expect(#sent).toBe(2)
+    expect(sent[1][1]).toBe("SuuUI")
+    expect(sent[1][3]).toBe("PARTY")
+    expect(sent[2][3]).toBe("GUILD")
+    expect(sent[1][2]).toBe(message(s))
+    expect(notes[1].title).toBe("Convergence of Elements found")
+    expect(notes[1].body).toBe("Zephra's Isle 70.0, 70.0. Saved for all your characters.")
+    expectNoErrors()
+end
+
+@test("A cast at a known one confirms it; elsewhere or another spell nothing")
+local function castKnown()
+    local seed = M:Spots()[1]
+    seed.confirmed = false
+    standAt(2521, 0.4828, 0.2062)
+    mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 12345)
+    expect(M.pending).toBeNil()
+    M:OnCast()
+    blessed(GetTime() + 900, 900)
+    mock.advanceTime(0.6)
+    expect(seed.confirmed).toBe(true)
+    expect(#M:Spots()).toBe(1)
+    expect(changes).toBe(1)
+    -- known and confirmed: sent again, nothing changes
+    M:AtConvergence({ map = 2521, x = 0.4828, y = 0.2062 })
+    expect(changes).toBe(1)
+    -- the short blessing (not begun at the cast): no convergence
+    standAt(2521, 0.9, 0.9)
+    M:OnCast()
+    blessed(GetTime() + 30, 900)
+    mock.advanceTime(0.6)
+    expect(#M:Spots()).toBe(1)
+    -- no blessing at all
+    M:OnCast()
+    blessed(nil)
+    mock.advanceTime(0.6)
+    expect(#M:Spots()).toBe(1)
+end
+
+@test("OnCast: nowhere readable, nothing kept")
+local function castNowhere()
+    standAt(mock.secret(2521), 0.5, 0.5)
+    M:OnCast()
+    expect(M.pending).toBeNil()
+    standAt(2521, nil, nil)
+    M:OnCast()
+    expect(M.pending).toBeNil()
+    standAt(2521, mock.secret(0.5), 0.5)
+    M:OnCast()
+    expect(M.pending).toBeNil()
+end
+
+@test("Resolve: in combat it waits for the end; too old it's dropped")
+local function resolveLater()
+    M:Resolve()
+    standAt(2521, 0.8, 0.1)
+    mock.player:enterCombat()
+    M:OnCast()
+    mock.advanceTime(0.6)
+    expect(M.pending).never.toBeNil()
+    local cast = M.pending.cast
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): any
+        return { expirationTime = cast + 900, duration = 900 }
+    end)
+    mock.player:leaveCombat()
+    mock.advanceTime(0.6)
+    expect(M.pending).toBeNil()
+    expect(#M:Spots()).toBe(2)
+    -- 20 minutes on: forgotten
+    M.pending = { map = 2521, x = 0.1, y = 0.1, cast = GetTime() - 1300 }
+    M:Resolve()
+    expect(M.pending).toBeNil()
+end
+
+@test("A new convergence for a character that isn't Skyborne: saved, not told")
+local function notSkyborne()
+    skyborne(false)
+    M:AtConvergence({ map = 2521, x = 0.1, y = 0.9 })
+    expect(#M:Spots()).toBe(2)
+    expect(#notes).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- Sharing
+--------------------------------------------------------------------------------
+
+@test("Channels: instance, raid or party, and the guild")
+local function channels()
+    expect(M:Channels()).toEqual({})
+    expect(groupChannel()).toBeNil()
+    inGroup(true, true)
+    expect(M:Channels()).toEqual({ "PARTY", "GUILD" })
+    mock.fake("IsInRaid", function(): boolean return true end)
+    expect(groupChannel()).toBe("RAID")
+    mock.fake("IsInGroup", function(category: number?): boolean return category ~= nil end)
+    expect(groupChannel()).toBe("INSTANCE_CHAT")
+    mock.fake("IsInGroup", function(): any return mock.secret(true) end)
+    mock.fake("IsInRaid", function(): boolean return false end)
+    expect(groupChannel()).toBeNil()
+end
+
+@test("clean and message: one line, nothing to break it")
+local function texts()
+    expect(clean("a\tb\nc|d\re")).toBe("a b c d e")
+    expect(clean(nil)).toBe("")
+    expect(#clean(("x"):rep(60))).toBe(40)
+    expect(message({ map = 2521, x = 0.48281, y = 0.2, by = "Suu", at = 1700000000 })).toBe("CONV\t1\t2521\t0.4828\t0.2000\tSuu\t1700000000")
+    expect(message({ map = 1, x = 0, y = 1 })).toBe("CONV\t1\t1\t0.0000\t1.0000\t\t0")
+end
+
+@test("Send: off by the setting, nothing without a channel")
+local function sendSetting()
+    local sent = mock.fake("C_ChatInfo.SendAddonMessage", function() end)
+    local spot = M:Spots()[1]
+    M:Send(spot)
+    expect(sent).never.toHaveBeenCalled()
+    inGroup(false, true)
+    M:Set("send", false)
+    M:Send(spot)
+    expect(sent).never.toHaveBeenCalled()
+    M:Set("send", true)
+    M:Send(spot)
+    expect(sent).toHaveBeenCalledTimes(1)
+    -- a failing send is quiet
+    mock.fake("C_ChatInfo.SendAddonMessage", function() error("throttled") end)
+    M:Send(spot)
+    expectNoErrors()
+end
+
+@test("ShareAll: every spot, a few a second")
+local function shareAll()
+    local sent = mock.fake("C_ChatInfo.SendAddonMessage", function() end)
+    M:ShareAll()
+    mock.advanceTime(1)
+    expect(sent).never.toHaveBeenCalled()
+    M:Add({ map = 2521, x = 0.9, y = 0.9, at = 1 })
+    M:Add({ map = 2521, x = 0.1, y = 0.1, at = 2 })
+    inGroup(false, true)
+    M:ShareAll()
+    mock.advanceTime(0.01)
+    expect(sent).toHaveBeenCalledTimes(1)
+    mock.advanceTime(0.6)
+    expect(sent).toHaveBeenCalledTimes(3)
+end
+
+@test("fromMe: your name, with or without the realm")
+local function mine()
+    mock.fake("UnitFullName", function(): (string, string) return "Suu", "Realm" end)
+    expect(fromMe("Suu")).toBe(true)
+    expect(fromMe("Suu-Realm")).toBe(true)
+    expect(fromMe("Suu Realm")).toBe(true)
+    expect(fromMe("Bram")).toBe(false)
+end
+
+local function receive(text: string, sender: string?)
+    M:OnMessage("SuuUI", text, "GUILD", sender or "Bram Stoker")
+end
+
+@test("OnMessage: a shared spot is checked, saved and told")
+local function onMessage()
+    mock.fake("C_Map.GetMapInfo", function(map: number): any return map == 2521 and { name = "Zephra's Isle" } or nil end)
+    receive("CONV\t1\t2521\t0.9000\t0.9000\tTam|sin\t1700000000")
+    local s = M:Spots()[2]
+    expect(s).toEqual({ map = 2521, x = 0.9, y = 0.9, at = 1700000000, by = "Tam sin", from = "Bram Stoker" })
+    expect(notes[1].body).toBe("Zephra's Isle 90.0, 90.0. Shared by Bram Stoker, saved for all your characters.")
+    -- a time from the future or the past: now; no finder
+    receive("CONV\t1\t2521\t0.1000\t0.9000\t\t99999999999")
+    s = M:Spots()[3]
+    expect(s.at).toBe(time())
+    expect(s.by).toBeNil()
+    receive("CONV\t1\t2521\t0.1000\t0.5000")
+    expect(M:Spots()[4].at).toBe(time())
+    -- near one already known: nothing
+    receive("CONV\t1\t2521\t0.9001\t0.9000\tX\t0")
+    expect(#M:Spots()).toBe(4)
+    expectNoErrors()
+end
+
+@test("OnMessage: what isn't a spot is dropped")
+local function onMessageBad()
+    mock.fake("C_Map.GetMapInfo", function(map: number): any return map == 2521 and { name = "Zephra's Isle" } or nil end)
+    mock.fake("UnitFullName", function(): (string, string) return "Suu", "Realm" end)
+    M:OnMessage("Other", "CONV\t1\t2521\t0.5\t0.5", "GUILD", "Bram")
+    M:OnMessage("SuuUI", mock.secret("CONV\t1\t2521\t0.5\t0.5"), "GUILD", "Bram")
+    M:OnMessage("SuuUI", "CONV\t1\t2521\t0.5\t0.5", "GUILD", mock.secret("Bram"))
+    M:OnMessage("SuuUI", 5, "GUILD", "Bram")
+    receive("XXXX\t1\t2521\t0.5\t0.5")
+    receive("CONV\t2\t2521\t0.5\t0.5")
+    receive("CONV\t1\t2521\t0.5\t0.5", "Suu")
+    receive("CONV\t1\t2521.5\t0.5\t0.5")
+    receive("CONV\t1\t0\t0.5\t0.5")
+    receive("CONV\t1\t100000\t0.5\t0.5")
+    receive("CONV\t1\tabc\t0.5\t0.5")
+    receive("CONV\t1\t2521\t1.5\t0.5")
+    receive("CONV\t1\t2521\t0.5\t-0.1")
+    receive("CONV\t1\t2521\t-1\t0.5")
+    receive("CONV\t1\t2521\t0.5\t2")
+    receive("CONV\t1\t2521\t0.5")
+    receive("CONV\t1\t3000\t0.5\t0.5")
+    M:Set("receive", false)
+    receive("CONV\t1\t2521\t0.5\t0.5")
+    expect(#M:Spots()).toBe(1)
+    expect(#notes).toBe(0)
+end
+
+@test("OnMessage: one sender's spots a session are capped; not told when not Skyborne")
+local function onMessageCap()
+    mock.fake("C_Map.GetMapInfo", function(): any return { name = "Isle" } end)
+    skyborne(false)
+    -- a grid 100 yards apart
+    for i = 1, 35 do
+        receive(("CONV\t1\t2521\t%.4f\t%.4f\tX\t0"):format((i % 10) / 10 + 0.05, math.floor(i / 10) / 10 + 0.05), "Spammer")
+    end
+    expect(#M:Spots()).toBe(31)
+    expect(M.taken.Spammer).toBe(30)
+    expect(#notes).toBe(0)
+end
+
+@test("A real addon message reaches it")
+local function realMessage()
+    mock.fake("C_Map.GetMapInfo", function(): any return { name = "Isle" } end)
+    mock.receiveAddonMessage("SuuUI", "CONV\t1\t2521\t0.3000\t0.3000\tX\t0", "GUILD", "Bram Stoker")
+    mock.advanceFrames(2)
+    expect(#M:Spots()).toBe(2)
+end
+
+--------------------------------------------------------------------------------
+-- The look
+--------------------------------------------------------------------------------
+
+@test("PinLook glows while you lack the blessing")
+local function pinLook()
+    expect(M:PinLook()).toEqual({ glyph = "tornado", color = "arcane", edge = "arcane", glow = "arcane-glow" })
+    M.blessed = true
+    expect(M:PinLook().glow).toBeNil()
+end
+
+@test("Tip: the blessing, who found it, who shared it")
+local function tip()
+    mock.fake("C_Map.GetMapInfo", function(): any return { name = "Isle" } end)
+    local t = M:Tip({ map = 2521, x = 0.5, y = 0.25, seed = true })
+    expect(t.title).toBe("Convergence of Elements")
+    expect(t.subtitle).toBe("Isle · 50.0, 25.0")
+    expect(t.lines[1]).toEqual({ "Elemental Blessing", "not active" })
+    expect(t.lines[3][2]).toBe("SuuUI's data")
+    expect(t.meta).toBe("Use Skysight here for the long blessing")
+    blessed(GetTime() + 125)
+    t = M:Tip({ map = 2521, x = 0.5, y = 0.25, by = "Bram", at = 1700000000, from = "Tam" })
+    expect(t.lines[1][2]).toBe("3 min left")
+    expect(t.lines[3][2]).toBe("Bram, " .. day(1700000000))
+    expect(t.lines[4][1]).toContain("Shared by Tam")
+    expect(t.meta).toBeNil()
+    t = M:Tip({ map = 2521, x = 0.5, y = 0.25, by = "Bram", from = "Tam", confirmed = true })
+    expect(t.lines[3][2]).toBe("Bram")
+    expect(#t.lines).toBe(3)
+    t = M:Tip({ map = 2521, x = 0.5, y = 0.25 })
+    expect(#t.lines).toBe(2)
+end
+
+@test("day: the day and month")
+local function dayText()
+    expect(day(1700000000)).toBe(("%d %s"):format(tonumber(date("%d", 1700000000)), date("%b", 1700000000)))
+end
+
+--------------------------------------------------------------------------------
+-- The minimap
+--------------------------------------------------------------------------------
+
+local function onMinimap(radius: any, rotate: boolean)
+    mock.fake("UnitPosition", function(): (any, any, any, any) return 250, 500, 0, 1 end)
+    mock.fake("C_Minimap.GetViewRadius", function(): any return radius end)
+    mock.fake("GetCVar", function(name: string): string? return name == "rotateMinimap" and (rotate and "1" or "0") or nil end)
+    mock.fake("GetPlayerFacing", function(): number return math.pi / 2 end)
+end
+
+@test("MinimapPlaces: the spots in range, turned with a rotating minimap")
+local function places()
+    onMinimap(100, false)
+    local spots = M:Spots()
+    spots[1] = { map = 2521, x = 0.53, y = 0.25 }   -- 30 yards west... east
+    spots[2] = { map = 2521, x = 0.5, y = 0.2 }     -- 50 yards north
+    spots[3] = { map = 2521, x = 0.9, y = 0.9 }     -- far
+    spots[4] = { map = 7000, x = 0.5, y = 0.25 }    -- another continent
+    local half = Minimap:GetWidth() / 2
+    local out = M:MinimapPlaces()
+    expect(#out).toBe(2)
+    expect(out[1].spot).toBe(spots[1])
+    expect(out[1].x).toBeCloseTo(-30 / 100 * half, 3)
+    expect(out[1].y).toBeCloseTo(0, 3)
+    expect(out[2].y).toBeCloseTo(-50 / 100 * half, 3)
+    onMinimap(100, true)
+    out = M:MinimapPlaces()
+    expect(out[1].x).toBeCloseTo(0, 3)
+    expect(math.abs(out[1].y)).toBeCloseTo(30 / 100 * half, 3)
+    onMinimap(0, false)
+    expect(M:MinimapPlaces()).toEqual({})
+    onMinimap(mock.secret(100), false)
+    expect(M:MinimapPlaces()).toEqual({})
+    mock.fake("UnitPosition", function(): any error("restricted") end)
+    expect(M:MinimapPlaces()).toEqual({})
+end
+
+@test("The minimap layer: pins where the spots are, hidden by the setting")
+local function minimapLayer()
+    onMinimap(100, false)
+    M:Spots()[1] = { map = 2521, x = 0.53, y = 0.25 }
+    M:Spots()[2] = { map = 2521, x = 0.5, y = 0.2 }
+    M:UpdateMinimap()
+    local layer = M.mmLayer
+    expect(layer).toBeShown()
+    expect(#layer.pins).toBe(2)
+    expect(layer.pins[1]).toBeShown()
+    expect(layer.pins[1].glow).toBeShown()
+    -- one spot gone, the blessing on
+    table.remove(M:Spots(), 2)
+    M.blessed = true
+    M:PlaceMinimapPins()
+    expect(layer.pins[2]).never.toBeShown()
+    expect(layer.pins[1].glow).never.toBeShown()
+    -- the tooltip
+    local shown: any = nil
+    mock.stub(SuuUI.UI, "ShowTooltip", function(_: any, fn: any) shown = fn() end)
+    mock.hover(layer.pins[1])
+    expect(shown.title).toBe("Convergence of Elements")
+    mock.hover(nil)
+    -- placed again every tenth of a second
+    M:Spots()[2] = { map = 2521, x = 0.5, y = 0.2 }
+    mock.advanceFrames(10)
+    expect(layer.pins[2]).toBeShown()
+    -- the setting
+    M:Set("minimap", false)
+    expect(layer).never.toBeShown()
+    M:PlaceMinimapPins()
+    M:Set("minimap", true)
+    expect(layer).toBeShown()
+    skyborne(false)
+    M:UpdateMinimap()
+    expect(layer).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Settings and lifecycle
+--------------------------------------------------------------------------------
+
+@test("Settings: Share all needs a group or guild; the minimap row Skyborne")
+local function settingsRows()
+    expect({ shareReason() }).toEqual({ true, "You're in no group or guild." })
+    inGroup(false, true)
+    expect(shareReason()).toBeNil()
+    local rows = SECTION.groups[1].rows
+    expect(rows[1].disabled()).toBeNil()
+    skyborne(false)
+    expect({ rows[1].disabled() }).toEqual({ true, "Only Skyborne characters see the convergences." })
+    local share = SECTION.groups[2].rows[3]
+    local describe: any = share.description -- (a text or a function: the row's declared type has the text)
+    expect(describe()).toBe("Sends every convergence you know (1) to your group and guild.")
+    local sent = mock.fake("C_ChatInfo.SendAddonMessage", function() end)
+    share.onClick()
+    mock.advanceTime(0.1)
+    expect(sent).toHaveBeenCalledTimes(1)
+end
+
+@test("Turned off and on: no pending cast, the layer hidden, told")
+local function offOn()
+    onMinimap(100, false)
+    M:UpdateMinimap()
+    M.pending = { map = 1, x = 0, y = 0, cast = GetTime() }
+    mock.slash("/suu disable convergences")
+    expect(M.pending).toBeNil()
+    expect(M.mmLayer).never.toBeShown()
+    expect(M:Shown()).toBe(false)
+    expect(changes).toBe(1)
+    mock.slash("/suu enable convergences")
+    mock.advanceTime(1.1)
+    expect(M:IsEnabled()).toBe(true)
+    expect(M.mmLayer).toBeShown()
+    expectNoErrors()
+end

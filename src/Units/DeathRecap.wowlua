@@ -186,30 +186,36 @@ function M:SizeHead()
     self.head:SetSize(WIDTH - S["space-5"] * 2, T.type.caption.lineHeight + T.type.label.lineHeight + T.type.caption.lineHeight)
 end
 
--- The recap of `id` (nil: your last death).
-function M:ShowRecap(id: number?)
-    if not self.window then self:Build() end
-    local w = self.window
-    local api = C_DeathRecap
-    local ok, events = pcall(api.GetRecapEvents, id)
-    for _, r in ipairs(self.rows) do r:Hide() end
-    clearLine(self.line)
-    local secret = ok and issecrettable and issecrettable(events :: any)
-    if secret or not ok or type(events) ~= "table" or #events == 0 then
-        self.head:Hide()
-        self.line:Hide()
-        self.empty:SetValue(secret and "The recap is secret until combat ends." or "No recap for this death. The game recorded no hits for it.")
-        self.empty:Show()
-        self:Fit(T.type.body.lineHeight * 2)
-        w:Show()
-        return
-    end
-    self.empty:Hide()
-    self.head:Show()
-    self.line:Show()
-    local okMax, maxHP = pcall(api.GetRecapMaxHealth, id)
-    if not (okMax and readable(maxHP) and maxHP > 0) then maxHP = nil end
+-- One hit as its row shows it.
+export type RecapRow = {
+    time: string,       -- "−2.4 s", "0 s", "" (no time)
+    spell: string,
+    icon: any,
+    spellID?: number,   -- for the spell's own tooltip (not a melee swing)
+    by: string,         -- caster · absorbed · resisted · blocked
+    amount: string,     -- "−1,956"
+    flag: string,       -- critical · overkill
+    hp?: number,        -- health after it
+    killing: boolean,
+}
 
+-- A step of the health line: health `hp` from `from` to `to` seconds
+-- before death.
+export type RecapStep = { from: number, to: number, hp: number }
+
+-- What the recap shows of a death, from the game's events (newest first,
+-- as C_DeathRecap gives them) and the maximum health (nil: unknown).
+export type Recap = {
+    count: number,
+    span?: number,      -- seconds from the first hit to death
+    head: { spell: string, by: string, detail: string, health: string, span: string },
+    rows: RecapRow[],
+    -- the health line, when the maximum and a time span are known
+    steps?: RecapStep[],
+    marks?: { t: number, text: string }[],
+}
+
+export function recapOf(events: any[], maxHP: number?): Recap
     -- newest first: the hits oldest first, and the time each came before death
     local list, deathAt = {}, nil
     for i = #events, 1, -1 do list[#list + 1] = events[i] end
@@ -234,10 +240,6 @@ function M:ShowRecap(id: number?)
     local startHP = readable(first.currentHP) and first.currentHP or maxHP
 
     -- the head: the killing blow, its school, critical, overkill
-    local h = self.head
-    local name = spellOf(last)
-    h.spell:SetValue(name)
-    h.by:SetValue(text(last.sourceName) and not last.hideCaster and ("· " .. last.sourceName) or "")
     local bits = {}
     if readable(last.amount) then
         local school = SCHOOL[last.school]
@@ -245,28 +247,26 @@ function M:ShowRecap(id: number?)
     end
     if last.critical == true then bits[#bits + 1] = "critical" end
     if readable(last.overkill) and last.overkill > 0 then bits[#bits + 1] = group3(last.overkill) .. " overkill" end
-    h.detail:SetValue(table.concat(bits, " · "))
     local span = before(first)
-    h.health:SetValue(startHP and (group3(startHP) .. " health to 0") or "")
-    h.span:SetValue(("%s%d hit%s"):format(span and ("in %.1f s, "):format(span) or "", #list, #list == 1 and "" or "s"))
+    local r: Recap = {
+        count = #list,
+        span = span,
+        head = {
+            spell = (spellOf(last)),
+            by = text(last.sourceName) and not last.hideCaster and ("· " .. last.sourceName) or "",
+            detail = table.concat(bits, " · "),
+            health = startHP and (group3(startHP) .. " health to 0") or "",
+            span = ("%s%d hit%s"):format(span and ("in %.1f s, "):format(span) or "", #list, #list == 1 and "" or "s"),
+        },
+        rows = {},
+    }
 
     -- the health line: from the first hit to death, health after each hit
     -- until the next (the start: the health before the first)
-    local line = self.line
-    local lineW = line:GetWidth() - 2
     if maxHP and span and span > 0 then
-        local function x(t: number): number return 1 + (1 - t / span) * lineW end
-        local n = 0
+        local steps: RecapStep[] = {}
         local function step(fromT: number, toT: number, hp: any)
-            if not readable(hp) then return end
-            n = n + 1
-            local s = piece(line.steps, n, function() return UI.Fill(line, "unit-fill", "ARTWORK") end)
-            UI.PaintFill(s, hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill")
-            s:ClearAllPoints()
-            local left, right = x(fromT), x(toT)
-            s:SetPoint("BOTTOMLEFT", line, "BOTTOMLEFT", left, 1)
-            s:SetSize(math.max(1, right - left), math.max(0.01, (LINE_H - 2) * math.max(0, hp) / maxHP))
-            if hp <= 0 then s:Hide() end
+            if readable(hp) then steps[#steps + 1] = { from = fromT, to = toT, hp = hp } end
         end
         -- before the first hit, a sliver at full
         step(span, span * 0.98, startHP or maxHP)
@@ -276,40 +276,112 @@ function M:ShowRecap(id: number?)
             step(t, nextT, after[i])
         end
         -- the time marks: every two seconds back from death
+        local marks = {}
         for k = 0, math.floor(span / 2) do
-            local m = piece(line.marks, k + 1, function()
+            marks[#marks + 1] = { t = k * 2, text = k == 0 and "0 s" or ("−%d s"):format(k * 2) }
+        end
+        r.steps, r.marks = steps, marks
+    end
+
+    -- the hits, oldest first; the killing blow last
+    for i, e in ipairs(list) do
+        local spell, icon = spellOf(e)
+        local t = before(e)
+        local by = {}
+        if text(e.sourceName) and not e.hideCaster then by[1] = e.sourceName end
+        for _, x in ipairs(extras(e)) do by[#by + 1] = x end
+        local flag = {}
+        if e.critical == true then flag[#flag + 1] = "critical" end
+        if readable(e.overkill) and e.overkill > 0 then flag[#flag + 1] = group3(e.overkill) .. " overkill" end
+        r.rows[i] = {
+            time = t and (t < 0.05 and "0 s" or ("−%.1f s"):format(t)) or "",
+            spell = spell,
+            icon = icon,
+            spellID = readable(e.spellId) and e.spellId > 0 and e.event ~= "SWING_DAMAGE" and e.spellId or nil,
+            by = table.concat(by, " · "),
+            amount = readable(e.amount) and ("−" .. group3(e.amount)) or "",
+            flag = table.concat(flag, " · "),
+            hp = after[i],
+            killing = i == #list,
+        }
+    end
+    return r
+end
+
+-- The recap of `id` (nil: your last death).
+function M:ShowRecap(id: number?)
+    if not self.window then self:Build() end
+    local w = self.window
+    local api = C_DeathRecap
+    local ok, events = pcall(api.GetRecapEvents, id)
+    for _, r in ipairs(self.rows) do r:Hide() end
+    clearLine(self.line)
+    local secret = ok and issecrettable and issecrettable(events :: any)
+    if secret or not ok or type(events) ~= "table" or #events == 0 then
+        self.head:Hide()
+        self.line:Hide()
+        self.empty:SetValue(secret and "The recap is secret until combat ends." or "No recap for this death. The game recorded no hits for it.")
+        self.empty:Show()
+        self:Fit(T.type.body.lineHeight * 2)
+        w:Show()
+        return
+    end
+    self.empty:Hide()
+    self.head:Show()
+    self.line:Show()
+    local okMax, maxHP = pcall(api.GetRecapMaxHealth, id)
+    if not (okMax and readable(maxHP) and maxHP > 0) then maxHP = nil end
+    local recap = recapOf(events, maxHP)
+
+    local h = self.head
+    h.spell:SetValue(recap.head.spell)
+    h.by:SetValue(recap.head.by)
+    h.detail:SetValue(recap.head.detail)
+    h.health:SetValue(recap.head.health)
+    h.span:SetValue(recap.head.span)
+
+    -- the health line
+    local line = self.line
+    local lineW = line:GetWidth() - 2
+    local steps, marks, span = recap.steps, recap.marks, recap.span
+    if maxHP and span and steps and marks then
+        local function x(t: number): number return 1 + (1 - t / span) * lineW end
+        for n, st in ipairs(steps) do
+            local hp = st.hp
+            local s = piece(line.steps, n, function() return UI.Fill(line, "unit-fill", "ARTWORK") end)
+            UI.PaintFill(s, hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill")
+            s:ClearAllPoints()
+            local left, right = x(st.from), x(st.to)
+            s:SetPoint("BOTTOMLEFT", line, "BOTTOMLEFT", left, 1)
+            s:SetSize(math.max(1, right - left), math.max(0.01, (LINE_H - 2) * math.max(0, hp) / maxHP))
+            if hp <= 0 then s:Hide() end
+        end
+        for k, mk in ipairs(marks) do
+            local m = piece(line.marks, k, function()
                 local f = UI.Text(line, "caption", "ink-faint")
                 return f
             end)
             m:ClearAllPoints()
-            m:SetPoint("TOP", line, "BOTTOMLEFT", x(k * 2), -2)
-            m:SetValue(k == 0 and "0 s" or ("−%d s"):format(k * 2))
+            m:SetPoint("TOP", line, "BOTTOMLEFT", x(mk.t), -2)
+            m:SetValue(mk.text)
         end
     end
 
     -- the hits, oldest first; the killing blow last, in ember
     local y = line:GetHeight() + S["space-6"] + h:GetHeight() + S["space-4"]
-    for i, e in ipairs(list) do
+    for i, it in ipairs(recap.rows) do
         local r = row(self, i)
-        local spell, icon = spellOf(e)
-        local killing = i == #list
-        local t = before(e)
-        r.time:SetValue(t and (t < 0.05 and "0 s" or ("−%.1f s"):format(t)) or "")
-        r.icon:SetArt(icon or 134400)
-        r.name:SetValue(spell)
-        r.spellID = readable(e.spellId) and e.spellId > 0 and e.event ~= "SWING_DAMAGE" and e.spellId or nil
+        local killing = it.killing
+        r.time:SetValue(it.time)
+        r.icon:SetArt(it.icon or 134400)
+        r.name:SetValue(it.spell)
+        r.spellID = it.spellID
         r.name:SetColor(killing and "ember-text" or "ink")
-        local by = {}
-        if text(e.sourceName) and not e.hideCaster then by[1] = e.sourceName end
-        for _, x in ipairs(extras(e)) do by[#by + 1] = x end
-        r.by:SetValue(table.concat(by, " · "))
-        r.amount:SetValue(readable(e.amount) and ("−" .. group3(e.amount)) or "")
+        r.by:SetValue(it.by)
+        r.amount:SetValue(it.amount)
         r.amount:SetColor(killing and "ember-text" or "ink")
-        local flag = {}
-        if e.critical == true then flag[#flag + 1] = "critical" end
-        if readable(e.overkill) and e.overkill > 0 then flag[#flag + 1] = group3(e.overkill) .. " overkill" end
-        r.flag:SetValue(table.concat(flag, " · "))
-        local hp = after[i]
+        r.flag:SetValue(it.flag)
+        local hp = it.hp
         r.hp:SetValue(hp and group3(hp) or "")
         if hp and maxHP then
             UI.PaintFill(r.hpFill, hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill")

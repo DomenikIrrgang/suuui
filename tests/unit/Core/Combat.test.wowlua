@@ -1,0 +1,108 @@
+-- Core/Combat: the keyed combat queue.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as combat from "/Core/Combat"
+import * as fault from "/Core/Fault"
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.slash("/suu errors clear")
+end
+
+-- The fault entry whose message has `text`, if any.
+local function faultWith(text: string): fault.Entry?
+    for _, e in ipairs(fault.entries()) do
+        if e.message:find(text, 1, true) then return e end
+    end
+    return nil
+end
+
+@test("out of combat: runs at once")
+local function runsNow()
+    local ran = mock.spy(function() end)
+    combat.run("coreatest:now", ran, "Test")
+    expect(ran).toHaveBeenCalledTimes(1)
+    expect(combat.pendingCount()).toBe(0)
+end
+
+@test("an error is reported under the source, else under the key")
+local function errorsReported()
+    combat.run("coreatest:err1", function() error("combat-err-one") end, "Combat Test")
+    combat.run("coreatest:err2", function() error("combat-err-two") end)
+    local one, two = faultWith("combat-err-one"), faultWith("combat-err-two")
+    expect(one and one.source).toBe("Combat Test")
+    expect(two and two.source).toBe("coreatest:err2")
+end
+
+@test("in combat: waits for the end of combat, then runs in the order queued")
+local function waits()
+    local order: string[] = {}
+    mock.player:enterCombat()
+    expect(InCombatLockdown()).toBe(true)
+    combat.run("coreatest:a", function() order[#order + 1] = "a" end, "Test")
+    combat.run("coreatest:b", function() order[#order + 1] = "b" end, "Test")
+    expect(order).toEqual({})
+    expect(combat.pendingCount()).toBe(2)
+    mock.player:leaveCombat()
+    expect(order).toEqual({ "a", "b" })
+    expect(combat.pendingCount()).toBe(0)
+end
+
+@test("the same key again: the latest function runs, once, in the first one's place")
+local function replaces()
+    local order: string[] = {}
+    local key = {} -- any value is a key
+    mock.player:enterCombat()
+    combat.run(key, function() order[#order + 1] = "first" end, "Test")
+    combat.run("coreatest:other", function() order[#order + 1] = "other" end, "Test")
+    combat.run(key, function() order[#order + 1] = "latest" end, "Latest source")
+    expect(combat.pendingCount()).toBe(2)
+    mock.player:leaveCombat()
+    expect(order).toEqual({ "latest", "other" })
+end
+
+@test("a queued job's error is reported under the latest request's source")
+local function queuedError()
+    mock.player:enterCombat()
+    combat.run("coreatest:qerr", function() end, "First")
+    combat.run("coreatest:qerr", function() error("combat-err-queued") end, "Second")
+    mock.player:leaveCombat()
+    local e = faultWith("combat-err-queued")
+    expect(e and e.source).toBe("Second")
+    expect(combat.pendingCount()).toBe(0)
+end
+
+@test("combat starting again mid-flush: the rest waits for the next end")
+local function restart()
+    local order: string[] = {}
+    mock.player:enterCombat()
+    combat.run("coreatest:r1", function()
+        order[#order + 1] = "r1"
+        mock.player:enterCombat()
+    end, "Test")
+    combat.run("coreatest:r2", function() order[#order + 1] = "r2" end, "Test")
+    mock.player:leaveCombat()
+    expect(order).toEqual({ "r1" })
+    expect(combat.pendingCount()).toBe(1)
+    -- a new request for the waiting key still replaces it
+    combat.run("coreatest:r2", function() order[#order + 1] = "r2 latest" end, "Test")
+    expect(combat.pendingCount()).toBe(1)
+    mock.player:leaveCombat()
+    expect(order).toEqual({ "r1", "r2 latest" })
+    expect(combat.pendingCount()).toBe(0)
+end
+
+@test("a key that ran can be queued again")
+local function again()
+    local runs = 0
+    mock.player:enterCombat()
+    combat.run("coreatest:again", function() runs += 1 end, "Test")
+    mock.player:leaveCombat()
+    mock.player:enterCombat()
+    combat.run("coreatest:again", function() runs += 1 end, "Test")
+    expect(combat.pendingCount()).toBe(1)
+    mock.player:leaveCombat()
+    expect(runs).toBe(2)
+end

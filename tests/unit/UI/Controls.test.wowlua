@@ -1,0 +1,290 @@
+-- UI/Controls: Button (variants, sizing to the label and icon, hover,
+-- press, disabled with its tooltip, clicks, theme remeasure) and StateBadge
+-- (tones, width, the fade on first show, theme remeasure).
+
+import test, expect, afterEach, beforeAll, beforeEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as tooltip from "/UI/Tooltip"
+import button, stateBadge, SuuButton, StateBadge, ButtonOptions from "/UI/Controls"
+import measureText from "/UI/Text"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf, themeChanged, reduceMotion from "./PrimitivesHelpers"
+
+local S = T.space
+local parent: Frame? = nil
+local shown = mock.spy(function(_owner: any, _data: any) end)
+local hidden = mock.spy(function() end)
+
+@beforeAll
+local function fakeTooltips()
+    mock.module(tooltip, { showTooltip = shown, hideTooltip = hidden })
+end
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    reduceMotion(false)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function make(opts: ButtonOptions?): SuuButton
+    parent = parent or newParent()
+    return button(parent :: Frame, opts or {})
+end
+
+local function labelY(b: SuuButton): number
+    return (pointOf(b.label) :: any).y
+end
+
+--------------------------------------------------------------------------------
+-- Button
+--------------------------------------------------------------------------------
+
+@test("a quiet button: raised surface, gilt-line border, ink label, sized to it")
+local function quiet()
+    local b = make({ text = "Ready check" })
+    expect(b.variant).toBe("quiet")
+    expect(b:GetHeight()).toBe(30)
+    expect(tokenOf(b.bg)).toBe("surface-raised")
+    expect(tokenOf(b.border.top)).toBe("gilt-line")
+    expect(tokenOf(b.label)).toBe("ink")
+    expect(b.label).toHaveText("Ready check")
+    expect(b:GetWidth()).toBe(measureText("label", "Ready check") + S["space-5"] * 2)
+    expect(b.glow).toBeNil()
+    expect(b:IsEnabled()).toBe(true)
+    expect(b:GetAlpha()).toBe(1)
+end
+
+@test("a button with no options is an empty quiet one")
+local function noOptions()
+    parent = newParent()
+    local b = button(parent :: Frame)
+    expect(b.label).toHaveText("")
+    expect(b:GetWidth()).toBe(S["space-5"] * 2)
+end
+
+@test("a primary button: arcane fill and border, on-signal label, a hidden glow")
+local function primary()
+    local b = make({ text = "Go", variant = "primary" })
+    expect(tokenOf(b.bg)).toBe("arcane")
+    expect(tokenOf(b.border.top)).toBe("arcane")
+    expect(tokenOf(b.label)).toBe("on-signal")
+    expect((b.glow :: any).holder).never.toBeShown()
+end
+
+@test("hover: a quiet border turns gilt, a primary one glows")
+local function hover()
+    local q = make({ text = "Q" })
+    mock.hover(q)
+    expect(tokenOf(q.border.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(q.border.top)).toBe("gilt-line")
+    local p = make({ text = "P", variant = "primary" })
+    mock.hover(p)
+    expect((p.glow :: any).holder).toBeShown()
+    mock.hover(nil)
+    expect((p.glow :: any).holder).never.toBeShown()
+    expect(shown).never.toHaveBeenCalled()
+end
+
+@test("a tooltip shows on hover and goes on leave")
+local function tooltips()
+    local data = { title = "Reset", description = "All of it" }
+    local b = make({ text = "Reset", tooltip = data })
+    mock.hover(b)
+    expect(shown).toHaveBeenCalledWith(b, data)
+    mock.hover(nil)
+    expect(hidden).toHaveBeenCalledTimes(1)
+end
+
+@test("a disabled button is dimmed, takes no click, and still says why")
+local function disabled()
+    local clicks = mock.spy(function(_b: SuuButton) end)
+    local data = { title = "Why", description = "Because" }
+    local b = make({ text = "No", disabled = true, onClick = clicks, tooltip = data })
+    expect(b:IsEnabled()).toBe(false)
+    expect(b:GetAlpha()).toBe(T.opacity["opacity-disabled"])
+    mock.click(b)
+    expect(clicks).never.toHaveBeenCalled()
+    mock.hover(b)
+    expect(tokenOf(b.border.top)).toBe("gilt-line")
+    expect(shown).toHaveBeenCalledWith(b, data)
+    -- the label doesn't move on a press either
+    mock.script(b, "OnMouseDown", "LeftButton")
+    expect(labelY(b)).toBe(0)
+    b:SetEnabledState(true)
+    expect(b:GetAlpha()).toBe(1)
+    mock.click(b)
+    expect(clicks).toHaveBeenCalledWith(b)
+end
+
+@test("a disabled primary button doesn't glow on hover")
+local function disabledPrimary()
+    local b = make({ text = "No", variant = "primary", disabled = true })
+    mock.hover(b)
+    expect((b.glow :: any).holder).never.toBeShown()
+end
+
+@test("a click calls onClick with the button; without one, nothing")
+local function clicks()
+    local s = mock.spy(function(_b: SuuButton) end)
+    local b = make({ text = "Go", onClick = s })
+    mock.click(b)
+    expect(s).toHaveBeenCalledTimes(1)
+    local plain = make({ text = "Plain" })
+    mock.click(plain)
+end
+
+@test("a press moves the label 1px down, the release back")
+local function press()
+    local b = make({ text = "Press" })
+    mock.script(b, "OnMouseDown", "LeftButton")
+    expect(labelY(b)).toBe(-1)
+    mock.script(b, "OnMouseUp", "LeftButton")
+    expect(labelY(b)).toBe(0)
+end
+
+@test("a fixed width stays; SetLabel remeasures the others")
+local function widths()
+    local fixed = make({ text = "A", width = 110 })
+    fixed:SetLabel("A much longer label than that")
+    expect(fixed:GetWidth()).toBe(110)
+    local b = make({ text = "A" })
+    b:SetLabel("Longer label")
+    expect(b.label).toHaveText("Longer label")
+    expect(b:GetWidth()).toBe(measureText("label", "Longer label") + S["space-5"] * 2)
+end
+
+@test("an icon sits left of the label, which moves over; nil takes it away")
+local function icons()
+    local b = make({ text = "Reset", icon = "reset" })
+    local icon = b.icon :: Texture
+    expect(icon).toBeShown()
+    expect(icon:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\reset.tga")
+    expect(tokenOf(icon)).toBe("ink-muted")
+    local shift = (12 + S["space-3"]) / 2
+    expect(b.shift).toBe(shift)
+    expect((pointOf(b.label) :: any).x).toBe(shift)
+    expect(b:GetWidth()).toBe(measureText("label", "Reset") + S["space-5"] * 2 + 12 + S["space-3"])
+    mock.script(b, "OnMouseDown", "LeftButton")
+    expect((pointOf(b.label) :: any).x).toBe(shift)
+    b:SetIcon("close")
+    expect(b.icon).toBe(icon)
+    expect(icon:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\close.tga")
+    b:SetIcon(nil)
+    expect(icon).never.toBeShown()
+    expect(b.shift).toBe(0)
+    expect(b:GetWidth()).toBe(measureText("label", "Reset") + S["space-5"] * 2)
+end
+
+@test("a primary button's icon is on-signal; SetIcon(nil) without one does nothing")
+local function primaryIcon()
+    local b = make({ text = "Go", variant = "primary", icon = "plus" })
+    expect(tokenOf(b.icon)).toBe("on-signal")
+    local plain = make({ text = "Plain" })
+    plain:SetIcon(nil)
+    expect(plain.icon).toBeNil()
+end
+
+@test("showing a button measures it again")
+local function remeasureOnShow()
+    local b = make({ text = "Show me" })
+    b:Hide()
+    b:SetWidth(5)
+    b:Show()
+    expect(b:GetWidth()).toBe(measureText("label", "Show me") + S["space-5"] * 2)
+end
+
+@test("a theme change measures every button again")
+local function themeButtons()
+    local b = make({ text = "Theme" })
+    b:SetWidth(5)
+    themeChanged()
+    expect(b:GetWidth()).toBe(measureText("label", "Theme") + S["space-5"] * 2)
+end
+
+--------------------------------------------------------------------------------
+-- StateBadge
+--------------------------------------------------------------------------------
+
+local function badge(tone: string?, value: string?): StateBadge
+    parent = parent or newParent()
+    return stateBadge(parent :: Frame, tone, value)
+end
+
+@test("each tone's fill; on-signal label without an edge")
+@cases({
+    { "danger", "ember" }, { "warning", "amber" }, { "magic", "dispel-magic" }, { "curse", "dispel-curse" },
+    { "poison", "dispel-poison" }, { "disease", "dispel-disease" }, { "ward", "ward" }, { "info", "gilt-text" },
+})
+local function tones(tone: string, fill: string)
+    local b = badge(tone, "Aggro")
+    expect(b.tone).toBe(tone)
+    expect(tokenOf(b.bg)).toBe(fill)
+    expect(tokenOf(b.label)).toBe("on-signal")
+    expect(b.edge.top).never.toBeShown()
+    expect(b.label).toHaveText("Aggro")
+end
+
+@test("neutral, unknown or no tone: a raised fill with an edge and ink")
+@cases({ { "neutral" }, { "sparkly" }, { nil } })
+local function neutral(tone: string?)
+    local b = badge(tone, "Idle")
+    expect(b.tone).toBe("neutral")
+    expect(tokenOf(b.bg)).toBe("surface-raised")
+    expect(tokenOf(b.label)).toBe("ink")
+    expect(b.edge.top).toBeShown()
+end
+
+@test("a badge is as wide as its text plus 10, the badge line high")
+local function badgeSize()
+    local b = badge("danger", "Interrupt")
+    local w = measureText("badge", "Interrupt") + 10
+    expect(b.knownWidth).toBe(w)
+    expect(b).toHaveSize(w, T.type.badge.lineHeight)
+    b:SetState("ward", "Shield")
+    expect(b.text).toBe("Shield")
+    expect(b:GetWidth()).toBe(measureText("badge", "Shield") + 10)
+    local empty = badge("danger")
+    expect(empty.text).toBe("")
+    expect(empty:GetWidth()).toBe(10)
+end
+
+@test("a badge fades in when it first shows, not on a change while shown")
+local function badgeFade()
+    local b = badge("danger", "A")
+    local g = (b :: any).suuMotion.fadeIn
+    expect(g:IsPlaying()).toBe(true)
+    g:Stop()
+    b:SetState("warning", "B")
+    expect(g:IsPlaying()).toBe(false)
+    b:Hide()
+    b:SetState("danger", "C")
+    expect(g:IsPlaying()).toBe(true)
+end
+
+@test("with reduced motion a badge just shows")
+local function badgeReduced()
+    reduceMotion(true)
+    local b = badge("danger", "A")
+    expect((b :: any).suuMotion).toBeNil()
+    expect(b:GetAlpha()).toBe(1)
+end
+
+@test("a theme change measures every badge again")
+local function themeBadges()
+    local b = badge("danger", "Theme")
+    b:SetSize(1, 1)
+    b.knownWidth = 1
+    themeChanged()
+    expect(b.knownWidth).toBe(measureText("badge", "Theme") + 10)
+    expect(b).toHaveSize(b.knownWidth, T.type.badge.lineHeight)
+end

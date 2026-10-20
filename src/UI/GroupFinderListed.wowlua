@@ -28,6 +28,81 @@ import * as draw from "/UI/Draw"
 import * as uiText from "/UI/Text"
 import * as controls from "/UI/Controls"
 import * as uiSelect from "/UI/Select"
+import Text from "/UI/Text"
+import SuuButton from "/UI/Controls"
+import Select, SelectOption from "/UI/Select"
+
+export type ListedFacts = {
+    listedFor?: string,
+    left?: string,
+    category?: string,
+    activities?: string[],
+    roles?: string[],
+    playstyle?: string,
+    comment?: string,
+    voice?: string,
+}
+
+export type ListedAd = {
+    text?: string,
+    channel?: string,
+    channels?: SelectOption[],
+    lastPost?: string,
+    max?: number,
+}
+
+export type ListedData = { listing?: ListedFacts, ad?: ListedAd }
+
+-- One fact: its term and its text.
+export type ListedFact = { dt: Text, dd: Text }
+
+export interface ListedRoleIcon extends Frame
+    glyph: Texture
+end
+
+export interface ListedCard extends Frame
+    dot: Texture
+    title: Text
+    time: Text
+    facts: ListedFact[]
+    roleIcons: ListedRoleIcon[]
+    rule: Texture
+    update: SuuButton
+    delist: SuuButton
+end
+
+export interface AdCard extends Frame
+    glyph: Texture
+    title: Text
+    intro: Text
+    channelLabel: Text
+    channel: Select
+    field: Frame
+    fieldEdge: draw.Border
+    edit: EditBox
+    rewrite: SuuButton
+    count: Text
+    rule: Texture
+    last: Text
+    post: SuuButton
+end
+
+export interface GroupFinderListed extends Frame
+    data?: ListedData
+    listing: ListedCard
+    ad: AdCard
+    listingH: number
+    adH?: number
+    onDelist?: () -> ()
+    onUpdate?: () -> ()
+    onChannel?: (value: any) -> ()
+    onText?: (text: string) -> ()
+    onRewrite?: () -> ()
+    onPost?: (channel: string?, text: string) -> ()
+    function SetData(d: ListedData)
+    function Count()
+    function Place()
+end
 
 local S = T.space
 
@@ -43,39 +118,37 @@ local BTN_H = 26
 local FIELD_LINES = 5
 local LINE_H = 18
 
-local P = {}
+local P: GroupFinderListed = {} :: any
 
 -- the live pages, placed and drawn again when the theme changes
-local pages = setmetatable({}, { __mode = "k" })
+local pages: { [GroupFinderListed]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- A sunk card: surface-sunk in a gilt-faint edge.
-local function card(parent: Frame)
+local function card(parent: Frame): Frame
     local c = CreateFrame("Frame", nil, parent)
     draw.fill(c, "surface-sunk"):SetAllPoints()
     draw.border(c, "gilt-faint")
     return c
 end
 
-local function rule(parent: Frame)
+local function rule(parent: Frame): Texture
     local t = draw.fill(parent, "gilt-faint", "ARTWORK")
     t:SetHeight(1)
     return t
 end
 
 -- One fact: the term at the left (96), its text beside it.
-local function fact(c: Frame)
-    local f = {}
-    f.dt = uiText.text(c, "caption", "ink-muted")
+local function fact(c: Frame): ListedFact
+    local f: ListedFact = { dt = uiText.text(c, "caption", "ink-muted"), dd = uiText.text(c, "body", "ink") }
     f.dt:SetJustifyH("LEFT")
-    f.dd = uiText.text(c, "body", "ink")
     f.dd:SetJustifyH("LEFT")
     f.dd:SetWordWrap(true)
     return f
 end
 
-function P:SetData(d: any)
+function P:SetData(d: ListedData)
     self.data = d
-    local L = d.listing or {}
+    local L: ListedFacts = d.listing or {}
     local c = self.listing
     c.time:SetValue("for " .. (L.listedFor or "a moment") .. (L.left and (" · runs out in " .. L.left) or ""))
     local width = c:GetWidth() - PAD * 2 - DT_W - GAP
@@ -140,7 +213,7 @@ function P:SetData(d: any)
     self.ad:SetHeight(h)
 
     -- the ad
-    local A = d.ad or {}
+    local A: ListedAd = d.ad or {}
     local a = self.ad
     a.channel:SetOptions(A.channels or {})
     a.channel:SetValue(A.channel)
@@ -191,12 +264,12 @@ function P:Place()
     a:SetHeight(self.adH)
 end
 
-export function groupFinderListed(parent: Frame)
-    local p = CreateFrame("Frame", nil, parent)
+export function groupFinderListed(parent: Frame): GroupFinderListed
+    local p: GroupFinderListed = CreateFrame("Frame", nil, parent) :: any
     Mixin(p, P)
 
     -- your listing
-    local c = card(p)
+    local c = card(p) :: ListedCard
     c:SetPoint("TOPLEFT")
     c:SetPoint("RIGHT", p, "CENTER", -S["space-6"] / 2, 0)
     c.dot = draw.diamond(c, 6, "arcane")
@@ -207,7 +280,7 @@ export function groupFinderListed(parent: Frame)
     for i = 1, 5 do c.facts[i] = fact(c) end
     c.roleIcons = {}
     for i = 1, 3 do
-        local ic = CreateFrame("Frame", nil, c)
+        local ic: ListedRoleIcon = CreateFrame("Frame", nil, c) :: any
         ic:SetSize(18, 18)
         draw.fill(ic, "surface-raised"):SetAllPoints()
         draw.border(ic, "gilt-line")
@@ -230,7 +303,7 @@ export function groupFinderListed(parent: Frame)
     p.listing = c
 
     -- the ad
-    local a = card(p)
+    local a = card(p) :: AdCard
     a:SetPoint("TOPRIGHT")
     a:SetPoint("LEFT", p, "CENTER", S["space-6"] / 2, 0)
     a.glyph = a:CreateTexture(nil, "ARTWORK")

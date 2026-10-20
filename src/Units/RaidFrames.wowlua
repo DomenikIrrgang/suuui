@@ -329,39 +329,64 @@ end
 -- Layout and options (out of combat)
 --------------------------------------------------------------------------------
 
+-- The layout's numbers: frame width and height, the gap between frames and
+-- between groups, groups side by side (columns), rows or columns.
+type Grid = { w: number, h: number, gap: number, groupGap: number, perBand: number, rows: boolean }
+
+-- Group g's top left in the grid (x right, y down, from the top left).
+local function groupOrigin(g: number, grid: Grid): (number, number)
+    if grid.rows then return 0, (g - 1) * (grid.h + grid.groupGap) end
+    local col, band = (g - 1) % grid.perBand, math.floor((g - 1) / grid.perBand)
+    return col * (grid.w + grid.groupGap), band * (5 * grid.h + 4 * grid.gap + grid.groupGap * 2)
+end
+
+-- A frame's top left in its group: slot 0 first (raid order or by role).
+local function slotOffset(slot: number, grid: Grid): (number, number)
+    if grid.rows then return slot * (grid.w + grid.gap), 0 end
+    return 0, slot * (grid.h + grid.gap)
+end
+
+-- The holder's size for eight groups. Rows: as tall as eight groups at
+-- `tall` (heightLarge) whatever the raid's size.
+local function holderSize(grid: Grid, tall: number): (number, number)
+    if grid.rows then
+        return 5 * grid.w + 4 * grid.gap, GROUPS * tall + (GROUPS - 1) * grid.groupGap
+    end
+    local bands = math.ceil(GROUPS / grid.perBand)
+    return grid.perBand * grid.w + (grid.perBand - 1) * grid.groupGap, bands * (5 * grid.h + 4 * grid.gap) + (bands - 1) * grid.groupGap * 2
+end
+
+-- The settings' grid at bar height h.
+local function gridAt(h: number): Grid
+    return { w = M:Get("width"), h = h, gap = M:Get("gap"), groupGap = M:Get("groupGap"),
+        perBand = math.max(1, M:Get("perBand")), rows = M:Get("arrangement") == "rows" }
+end
+
 function M:Layout()
-    local w, h, gap, groupGap = self:Get("width"), barHeight(), self:Get("gap"), self:Get("groupGap")
-    local rows = self:Get("arrangement") == "rows"
-    local perBand = math.max(1, self:Get("perBand"))
+    local w, h, gap = self:Get("width"), barHeight(), self:Get("gap")
+    local grid = gridAt(h)
     for g, hd in ipairs(self.headers) do
         hd:SetAttribute("unitWidth", w)
         hd:SetAttribute("unitHeight", h)
         hd:ClearAllPoints()
-        if rows then
+        if grid.rows then
             hd:SetAttribute("point", "LEFT")
             hd:SetAttribute("xOffset", gap)
             hd:SetAttribute("yOffset", 0)
-            hd:SetPoint("TOPLEFT", self.holder, "TOPLEFT", 0, -(g - 1) * (h + groupGap))
         else
             hd:SetAttribute("point", "TOP")
             hd:SetAttribute("xOffset", 0)
             hd:SetAttribute("yOffset", -gap)
-            local col, band = (g - 1) % perBand, math.floor((g - 1) / perBand)
-            hd:SetPoint("TOPLEFT", self.holder, "TOPLEFT", col * (w + groupGap), -band * (5 * h + 4 * gap + groupGap * 2))
         end
+        local x, y = groupOrigin(g, grid)
+        hd:SetPoint("TOPLEFT", self.holder, "TOPLEFT", x, -y)
     end
-    if rows then
-        -- as tall as eight groups of a full raid (heightLarge) whatever the
-        -- raid's size: the rows hang from its top, so the top edge stays put
-        -- (the healer layout sits between the player and target frames, tops
-        -- level) and it ends above the dock's stance and pet bars (seen in
-        -- game: sized for eight rows at the 20-player height it reached them)
-        local tall = self:Get("heightLarge")
-        self.holder:SetSize(5 * w + 4 * gap, GROUPS * tall + (GROUPS - 1) * groupGap)
-    else
-        local bands = math.ceil(GROUPS / perBand)
-        self.holder:SetSize(perBand * w + (perBand - 1) * groupGap, bands * (5 * h + 4 * gap) + (bands - 1) * groupGap * 2)
-    end
+    -- rows: as tall as eight groups of a full raid (heightLarge) whatever
+    -- the raid's size: the rows hang from its top, so the top edge stays put
+    -- (the healer layout sits between the player and target frames, tops
+    -- level) and it ends above the dock's stance and pet bars (seen in
+    -- game: sized for eight rows at the 20-player height it reached them)
+    self.holder:SetSize(holderSize(grid, self:Get("heightLarge")))
     for _, f in ipairs(self.buttons) do
         f.opts.reserveRight = auraReserve(h)
         f:Resize(w, h)
@@ -623,10 +648,9 @@ end
 
 function M:DrawSet(set: any)
     local count = set.count or self.previewSize or 20
-    local w, gap, groupGap = self:Get("width"), self:Get("gap"), self:Get("groupGap")
+    local w = self:Get("width")
     local h = count > 20 and self:Get("heightLarge") or self:Get("height")
-    local rows = self:Get("arrangement") == "rows"
-    local perBand = math.max(1, self:Get("perBand"))
+    local grid = gridAt(h)
     local groups = math.ceil(count / 5)
     local size, far = iconSize(h), self:Get("rangeAlpha")
     local badges = self:Get("debuffBadges")
@@ -655,13 +679,9 @@ function M:DrawSet(set: any)
             f:Hide()
         else
             local g, slot = math.floor((i - 1) / 5) + 1, slotOf[i]
-            local x, y
-            if rows then
-                x, y = slot * (w + gap), (g - 1) * (h + groupGap)
-            else
-                local col, band = (g - 1) % perBand, math.floor((g - 1) / perBand)
-                x, y = col * (w + groupGap), band * (5 * h + 4 * gap + groupGap * 2) + slot * (h + gap)
-            end
+            local gx, gy = groupOrigin(g, grid)
+            local sx, sy = slotOffset(slot, grid)
+            local x, y = gx + sx, gy + sy
             f:ClearAllPoints()
             f:SetPoint("TOPLEFT", set.view, "TOPLEFT", x, -y)
             maxX, maxY = math.max(maxX, x + w), math.max(maxY, y + h)

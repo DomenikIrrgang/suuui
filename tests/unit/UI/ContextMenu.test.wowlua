@@ -1,0 +1,259 @@
+-- UI/ContextMenu: the right-click menu: its title, rows, rules and width,
+-- opening at the cursor, picking, disabled rows, closing (outside click,
+-- Esc, closeContextMenu), plugins' entries, and the MenuUtil-style builder.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as extend from "/Core/Extend"
+import * as tooltip from "/UI/Tooltip"
+import measureText from "/UI/Text"
+import contextMenu, contextMenuFrom, closeContextMenu from "/UI/ContextMenu"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf from "./WindowsHelpers"
+
+local S = T.space
+local PAD = S["space-5"]
+local ROW_H = 24
+
+local hideSpy = mock.spy()
+mock.module(tooltip, { hideTooltip = function() hideSpy() end })
+
+local parent: Frame? = nil
+
+@afterEach
+local function cleanup()
+    closeContextMenu()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    mock.resetSpies()
+    extend.unregister("ContextMenuTest")
+    expectNoErrors()
+end
+
+-- The screen-wide catcher under the menu: the button whose click is close.
+local function catcher(): Button?
+    for _, c in ipairs({ UIParent:GetChildren() }) do
+        local f = c :: any
+        if not f:IsForbidden() and f:GetObjectType() == "Button" and f:GetScript("OnClick") == closeContextMenu then return f end
+    end
+    return nil
+end
+
+local function open(opts: { [string]: any }?)
+    parent = parent or newParent()
+    return contextMenu(parent, opts)
+end
+
+@test("closeContextMenu before any menu was made does nothing")
+local function closeEarly()
+    closeContextMenu()
+end
+
+@test("a menu with a title and rows: placed top down, sized to fit")
+local function titled()
+    local focus = mock.spy()
+    local m = open({ title = "The Ashmaw Den", items = {
+        { label = "Focus", onClick = focus }, { separator = true },
+        { label = "Stop tracking", disabled = true } } })
+    expect(m).toBeShown()
+    expect(m:GetFrameStrata()).toBe("FULLSCREEN_DIALOG")
+    expect(m.title).toBeShown()
+    expect(m.title).toHaveText("The Ashmaw Den")
+    local r1, r2 = m.rows[1], m.rows[2]
+    expect(r1.label).toHaveText("Focus")
+    expect(tokenOf(r1.label)).toBe("ink")
+    expect(r2.label).toHaveText("Stop tracking")
+    expect(tokenOf(r2.label)).toBe("ink-faint")
+    expect(m.rules[1]).toBeShown()
+    expect(tokenOf(m.rules[1])).toBe("gilt-faint")
+    -- y: the title line, then a row, a rule with space-2 around it, a row
+    local top = PAD + T.type["unit-name-lg"].lineHeight + S["space-3"]
+    local inset = PAD - S["space-3"]
+    local _, _, _, x1, y1 = r1:GetPoint(1)
+    expect(x1).toBe(inset)
+    expect(y1).toBe(-top)
+    local _, _, _, _, yRule = m.rules[1]:GetPoint(1)
+    expect(yRule).toBe(-(top + ROW_H + S["space-2"]))
+    local _, _, _, _, y2 = r2:GetPoint(1)
+    expect(y2).toBe(-(top + ROW_H + S["space-2"] * 2 + 1))
+    expect(m:GetHeight()).toBeCloseTo(top + ROW_H * 2 + S["space-2"] * 2 + 1 + PAD - S["space-2"])
+    expect(m:GetWidth()).toBe(160)
+    expect(catcher()).toBeShown()
+end
+
+@test("a long title or label widens the menu")
+local function wide()
+    local title = "A title that is far longer than one hundred and sixty"
+    local m = open({ title = title, items = {} })
+    expect(m:GetWidth()).toBe(math.ceil(measureText("unit-name-lg", title)) + PAD * 2)
+    local label = "A label that is also much longer than the smallest menu"
+    m = open({ items = { { label = label } } })
+    expect(m:GetWidth()).toBeCloseTo(math.ceil(measureText("body", label)) + S["space-4"] * 2 + PAD * 2 - S["space-3"] * 2)
+end
+
+@test("no title, no items: an empty menu, title hidden")
+local function bare()
+    local m = open(nil)
+    expect(m.title).never.toBeShown()
+    expect(m:GetWidth()).toBe(160)
+    expect(m:GetHeight()).toBe(PAD + PAD - S["space-2"])
+end
+
+@test("a missing label is empty")
+local function noLabel()
+    local m = open({ items = { {} } })
+    expect(m.rows[1].label:GetText()).toBe("")
+end
+
+@test("opening again reuses rows and rules and hides the rest")
+local function reuse()
+    local m = open({ items = { { label = "A" }, { separator = true }, { label = "B" }, { separator = true }, { label = "C" } } })
+    local first = m.rows[1]
+    m = open({ items = { { label = "Only" } } })
+    expect(m.rows[1]).toBe(first)
+    expect(m.rows[2]).never.toBeShown()
+    expect(m.rows[3]).never.toBeShown()
+    expect(m.rules[1]).never.toBeShown()
+    expect(m.rules[2]).never.toBeShown()
+end
+
+@test("it opens at the cursor and hides the tooltips")
+local function atCursor()
+    mock.fake("GetCursorPosition", function() return 400, 300 end)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_CURSOR")
+    GameTooltip:AddLine("x")
+    GameTooltip:Show()
+    local m = open({ items = { { label = "A" } } })
+    local scale = m:GetEffectiveScale()
+    local point, rel, relPoint, x, y = m:GetPoint(1)
+    expect(point).toBe("TOPLEFT")
+    expect(rel).toBe(UIParent)
+    expect(relPoint).toBe("BOTTOMLEFT")
+    expect(x).toBeCloseTo(400 / scale + 2)
+    expect(y).toBeCloseTo(300 / scale - 2)
+    expect(GameTooltip).never.toBeShown()
+    expect(hideSpy).toHaveBeenCalled()
+end
+
+@test("picking a row closes the menu, then runs it")
+local function picking()
+    local order: string[] = {}
+    local m: any = nil
+    m = open({ items = { { label = "Go", onClick = function() order[#order + 1] = m:IsShown() and "open" or "closed" end } } })
+    mock.click(m.rows[1])
+    expect(order).toEqual({ "closed" })
+    expect(m).never.toBeShown()
+    expect(catcher()).never.toBeShown()
+end
+
+@test("a row without onClick only closes")
+local function noOnClick()
+    local m = open({ items = { { label = "Nothing" } } })
+    mock.click(m.rows[1])
+    expect(m).never.toBeShown()
+end
+
+@test("a disabled row: no hover, a click does nothing")
+local function disabled()
+    local onClick = mock.spy()
+    local m = open({ items = { { label = "No", disabled = true, onClick = onClick } } })
+    mock.hover(m.rows[1])
+    expect(m.rows[1].hover).never.toBeShown()
+    mock.click(m.rows[1])
+    expect(onClick).never.toHaveBeenCalled()
+    expect(m).toBeShown()
+end
+
+@test("hovering an enabled row shows its band, leaving hides it")
+local function hovering()
+    local m = open({ items = { { label = "Yes" } } })
+    mock.hover(m.rows[1])
+    expect(m.rows[1].hover).toBeShown()
+    expect(tokenOf(m.rows[1].hover)).toBe("arcane-soft")
+    mock.hover(nil)
+    expect(m.rows[1].hover).never.toBeShown()
+    -- opening again starts without the band
+    mock.hover(m.rows[1])
+    m = open({ items = { { label = "Yes" } } })
+    expect(m.rows[1].hover).never.toBeShown()
+end
+
+@test("a click outside closes it")
+local function outside()
+    local m = open({ items = { { label = "A" } } })
+    mock.click(catcher() :: any)
+    expect(m).never.toBeShown()
+    expect(catcher()).never.toBeShown()
+end
+
+@test("Esc closes it and is kept; other keys pass on")
+local function escape()
+    local m = open({ items = { { label = "A" } } })
+    mock.script(m, "OnKeyDown", "A")
+    expect(m:GetPropagateKeyboardInput()).toBe(true)
+    expect(m).toBeShown()
+    mock.script(m, "OnKeyDown", "ESCAPE")
+    expect(m:GetPropagateKeyboardInput()).toBe(false)
+    expect(m).never.toBeShown()
+end
+
+@test("in combat the keys are left alone")
+local function combatKeys()
+    local m = open({ items = { { label = "A" } } })
+    mock.player:enterCombat()
+    mock.script(m, "OnKeyDown", "ESCAPE")
+    expect(m).toBeShown()
+    mock.player:leaveCombat()
+end
+
+@test("with an id, plugins' entries join with the context")
+local function plugins()
+    local seen = mock.spy()
+    extend.extendMenu("test-menu", function(menu: any, context: any)
+        seen(context)
+        menu.items[#menu.items + 1] = { label = "From a plugin" }
+    end, "ContextMenuTest")
+    local m = open({ id = "test-menu", context = { unit = "target" }, items = { { label = "Own" } } })
+    expect(seen).toHaveBeenCalledWith({ unit = "target" })
+    expect(m.rows[2].label).toHaveText("From a plugin")
+    -- another id: not
+    m = open({ id = "other-menu", items = { { label = "Own" } } })
+    expect(m.rows[2]).never.toBeShown()
+end
+
+@test("contextMenuFrom: the game's builder calls make the same menu")
+local function builder()
+    local a, b = mock.spy(), mock.spy()
+    parent = newParent()
+    local m = contextMenuFrom(parent, function(owner: any, root: any)
+        expect(owner).toBe(parent)
+        root:CreateTitle("Title")
+        root:CreateTitle("Second title: ignored")
+        root:CreateButton("A", a)
+        root:CreateDivider()
+        local btn = root:CreateButton("B", b)
+        btn:SetEnabled(false)
+        local c = root:CreateButton("C")
+        c:SetEnabled(true)
+    end)
+    expect(m.title).toHaveText("Title")
+    expect(m.rows[1].label).toHaveText("A")
+    expect(m.rules[1]).toBeShown()
+    expect(tokenOf(m.rows[2].label)).toBe("ink-faint")
+    expect(tokenOf(m.rows[3].label)).toBe("ink")
+    mock.click(m.rows[2])
+    expect(b).never.toHaveBeenCalled()
+    mock.click(m.rows[1])
+    expect(a).toHaveBeenCalledTimes(1)
+end
+
+@test("contextMenuFrom passes its id and context on")
+local function builderId()
+    local seen = mock.spy()
+    extend.extendMenu("test-built", function(_: any, context: any) seen(context) end, "ContextMenuTest")
+    parent = newParent()
+    contextMenuFrom(parent, function(_: any, root: any) root:CreateButton("A") end, "test-built", "ctx")
+    expect(seen).toHaveBeenCalledWith("ctx")
+end

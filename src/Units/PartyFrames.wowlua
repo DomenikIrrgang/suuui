@@ -412,6 +412,21 @@ end
 -- Layout and options (out of combat)
 --------------------------------------------------------------------------------
 
+-- The holder's size for `count` frames of w by h, `gap` apart, going
+-- "right" (a row) or up or down (a column).
+local function holderSize(count: number, dir: string, w: number, h: number, gap: number): (number, number)
+    if dir == "right" then return count * w + (count - 1) * gap, h end
+    return w, count * h + (count - 1) * gap
+end
+
+-- Where the frame in `slot` (0-based) goes in its holder: its point and
+-- offsets ("up" grows from the bottom).
+local function slotPoint(slot: number, dir: string, w: number, h: number, gap: number): (string, number, number)
+    if dir == "right" then return "TOPLEFT", slot * (w + gap), 0 end
+    if dir == "down" then return "TOPLEFT", 0, -slot * (h + gap) end
+    return "BOTTOMLEFT", 0, slot * (h + gap)
+end
+
 -- Places a set of frames (the real ones, or the preview's) in their holder.
 function M:LayoutFrames(frames: any[], holder: any)
     local w, h, gap = self:Get("width"), self:Get("height"), self:Get("gap")
@@ -423,23 +438,14 @@ function M:LayoutFrames(frames: any[], holder: any)
     local size = inside and math.max(8, h - 6) or h
     local first = self:Get("showSelf") and 1 or 2
     local count = n - first + 1
-    if dir == "right" then
-        holder:SetSize(count * w + (count - 1) * gap, h)
-    else
-        holder:SetSize(w, count * h + (count - 1) * gap)
-    end
+    holder:SetSize(holderSize(count, dir, w, h, gap))
     for i, f in ipairs(frames) do
         f:Resize(w, h)
         f:ClearAllPoints()
         local slot = i - first -- 0-based; the player's slot is -1 when hidden
         if slot >= 0 then
-            if dir == "right" then
-                f:SetPoint("TOPLEFT", holder, "TOPLEFT", slot * (w + gap), 0)
-            elseif dir == "down" then
-                f:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, -slot * (h + gap))
-            else
-                f:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT", 0, slot * (h + gap))
-            end
+            local point, x, y = slotPoint(slot, dir, w, h, gap)
+            f:SetPoint(point, holder, point, x, y)
         else
             f:SetPoint("TOPLEFT", holder, "TOPLEFT")
         end

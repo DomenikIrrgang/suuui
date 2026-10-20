@@ -1,0 +1,215 @@
+-- Core/Events: SuuUI's bus over wowlua:events: the name first, an owner
+-- always, removal by name and owner, errors under the owner's name.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as events from "/Core/Events"
+import * as fault from "/Core/Fault"
+
+const A = { name = "Events Test A" }
+const B = { name = "Events Test B" }
+
+type Heard = (name: string, ...any) -> ()
+
+@afterEach
+local function cleanup()
+    events.offAll(A)
+    events.offAll(B)
+    events.offAll("Events Test")
+    mock.slash("/suu errors clear")
+end
+
+local function listener(): Heard
+    return mock.spy(function(_: string, ...: any) end)
+end
+
+local function faultWith(text: string): fault.Entry?
+    for _, e in ipairs(fault.entries()) do
+        if e.message:find(text, 1, true) then return e end
+    end
+    return nil
+end
+
+--------------------------------------------------------------------------------
+-- SuuUI messages
+--------------------------------------------------------------------------------
+
+@test("on/emit: each listener gets the name first, then the arguments")
+local function nameFirst()
+    local heard = listener()
+    events.on("SUUUI_COREATEST_A", heard, A)
+    events.emit("SUUUI_COREATEST_A", 1, "two", true)
+    expect(heard).toHaveBeenCalledTimes(1)
+    expect(heard).toHaveBeenCalledWith("SUUUI_COREATEST_A", 1, "two", true)
+    -- another message doesn't reach it
+    events.emit("SUUUI_COREATEST_B")
+    expect(heard).toHaveBeenCalledTimes(1)
+end
+
+@test("listeners run in the order they were added")
+local function order()
+    local seen: string[] = {}
+    events.on("SUUUI_COREATEST_ORDER", function() seen[#seen + 1] = "first" end, A)
+    events.on("SUUUI_COREATEST_ORDER", function() seen[#seen + 1] = "second" end, B)
+    events.on("SUUUI_COREATEST_ORDER", function() seen[#seen + 1] = "third" end, A)
+    events.emit("SUUUI_COREATEST_ORDER")
+    expect(seen).toEqual({ "first", "second", "third" })
+end
+
+@test("a callback and an owner are required")
+local function required()
+    expect(function() events.on("SUUUI_COREATEST_A", "fn" :: any, A) end).toThrow("callback must be a function")
+    expect(function() events.on("SUUUI_COREATEST_A", function() end, nil) end).toThrow("an owner is required")
+    expect(function() events.onGame("PLAYER_MONEY", function() end, nil) end).toThrow("an owner is required")
+    expect(function() events.onUnit("UNIT_HEALTH", "player", 5 :: any, A) end).toThrow("callback must be a function")
+end
+
+@test("an error is reported under the owner's name and the next listener still runs")
+local function isolated()
+    local after = listener()
+    events.on("SUUUI_COREATEST_ERR", function() error("events-err-table") end, A)
+    events.on("SUUUI_COREATEST_ERR", function() error("events-err-string") end, "Events Test")
+    events.on("SUUUI_COREATEST_ERR", after, B)
+    events.emit("SUUUI_COREATEST_ERR")
+    expect(after).toHaveBeenCalledTimes(1)
+    local one, two = faultWith("events-err-table"), faultWith("events-err-string")
+    expect(one and one.source).toBe("Events Test A")
+    expect(two and two.source).toBe("Events Test")
+end
+
+@test("off: removes the owner's listeners of that name only")
+local function off()
+    local a1, a2, b1 = listener(), listener(), listener()
+    events.on("SUUUI_COREATEST_OFF", a1, A)
+    events.on("SUUUI_COREATEST_OFF", a1, A) -- twice: both go
+    events.on("SUUUI_COREATEST_OTHER", a2, A)
+    events.on("SUUUI_COREATEST_OFF", b1, B)
+    events.off("SUUUI_COREATEST_OFF", A)
+    events.emit("SUUUI_COREATEST_OFF")
+    events.emit("SUUUI_COREATEST_OTHER")
+    expect(a1).never.toHaveBeenCalled()
+    expect(a2).toHaveBeenCalledTimes(1)
+    expect(b1).toHaveBeenCalledTimes(1)
+    -- nothing registered: nothing happens
+    events.off("SUUUI_COREATEST_NOTHING", A)
+end
+
+@test("offAll: removes everything of the owner; a nil owner removes nothing")
+local function offAll()
+    local a1, a2, b1 = listener(), listener(), listener()
+    events.on("SUUUI_COREATEST_ALL1", a1, A)
+    events.onGame("PLAYER_MONEY", a2, A)
+    events.on("SUUUI_COREATEST_ALL1", b1, B)
+    events.offAll(nil)
+    events.emit("SUUUI_COREATEST_ALL1")
+    expect(a1).toHaveBeenCalledTimes(1)
+    events.offAll(A)
+    events.emit("SUUUI_COREATEST_ALL1")
+    mock.fireEvent("PLAYER_MONEY")
+    expect(a1).toHaveBeenCalledTimes(1)
+    expect(a2).never.toHaveBeenCalled()
+    expect(b1).toHaveBeenCalledTimes(2)
+end
+
+@test("a listener removed during a dispatch isn't called from then on")
+local function removedDuringDispatch()
+    local b1 = listener()
+    events.on("SUUUI_COREATEST_DURING", function() events.off("SUUUI_COREATEST_DURING", B) end, A)
+    events.on("SUUUI_COREATEST_DURING", b1, B)
+    events.emit("SUUUI_COREATEST_DURING")
+    expect(b1).never.toHaveBeenCalled()
+end
+
+@test("a listener removing itself during a dispatch: the rest still run")
+local function selfRemoval()
+    local b1 = listener()
+    local calls = 0
+    events.on("SUUUI_COREATEST_SELF", function()
+        calls += 1
+        events.offAll(A)
+    end, A)
+    events.on("SUUUI_COREATEST_SELF", b1, B)
+    events.emit("SUUUI_COREATEST_SELF")
+    events.emit("SUUUI_COREATEST_SELF")
+    expect(calls).toBe(1)
+    expect(b1).toHaveBeenCalledTimes(2)
+end
+
+@test("a listener added during a dispatch hears the next one")
+local function addedDuringDispatch()
+    local late = listener()
+    local added = false
+    events.on("SUUUI_COREATEST_ADD", function()
+        if added then return end
+        added = true
+        events.on("SUUUI_COREATEST_ADD", late, B)
+    end, A)
+    events.emit("SUUUI_COREATEST_ADD", 1)
+    expect(late).never.toHaveBeenCalled()
+    events.emit("SUUUI_COREATEST_ADD", 2)
+    expect(late).toHaveBeenCalledWith("SUUUI_COREATEST_ADD", 2)
+end
+
+--------------------------------------------------------------------------------
+-- Game events
+--------------------------------------------------------------------------------
+
+@test("onGame: a game event, its name first")
+local function onGame()
+    local heard = listener()
+    events.onGame("PLAYER_MONEY", heard, A)
+    mock.player:setMoney(12345)
+    expect(heard).toHaveBeenCalledWith("PLAYER_MONEY")
+    events.off("PLAYER_MONEY", A)
+    mock.player:setMoney(54321)
+    expect(heard).toHaveBeenCalledTimes(1)
+end
+
+@test("onUnit: one unit; other units never wake it")
+local function oneUnit()
+    local heard = listener()
+    events.onUnit("UNIT_HEALTH", "player", heard, A)
+    mock.fireUnitEvent("UNIT_HEALTH", "player")
+    expect(heard).toHaveBeenCalledWith("UNIT_HEALTH", "player")
+    local hogger = mock.spawnUnit({ name = "Hogger", level = 11, reaction = "hostile", health = 666 })
+    mock.player:target(hogger)
+    mock.fireUnitEvent("UNIT_HEALTH", "target")
+    expect(heard).toHaveBeenCalledTimes(1)
+    mock.player:target(nil)
+end
+
+@test("onUnit: a list longer than two units gets a registration per pair")
+local function manyUnits()
+    local heard = listener()
+    local hogger = mock.spawnUnit({ name = "Hogger", level = 11, reaction = "hostile" })
+    local boar = mock.spawnUnit({ name = "Boar", level = 9, reaction = "hostile" })
+    mock.player:target(hogger)
+    mock.player:focus(boar)
+    events.onUnit("UNIT_HEALTH", { "player", "target", "focus" }, heard, A)
+    mock.fireUnitEvent("UNIT_HEALTH", "player")
+    mock.fireUnitEvent("UNIT_HEALTH", "target")
+    mock.fireUnitEvent("UNIT_HEALTH", "focus")
+    expect(heard).toHaveBeenCalledTimes(3)
+    expect(heard).toHaveBeenCalledWith("UNIT_HEALTH", "focus")
+    -- off removes every pair's registration
+    events.off("UNIT_HEALTH", A)
+    mock.fireUnitEvent("UNIT_HEALTH", "player")
+    mock.fireUnitEvent("UNIT_HEALTH", "focus")
+    expect(heard).toHaveBeenCalledTimes(3)
+    mock.player:target(nil)
+    mock.player:focus(nil)
+end
+
+@test("onUnit: a unit or a list of units is required")
+local function unitsRequired()
+    expect(function() events.onUnit("UNIT_HEALTH", {}, function() end, A) end).toThrow("a unit or a list of units is required")
+    expect(function() events.onUnit("UNIT_HEALTH", 5 :: any, function() end, A) end).toThrow("a unit or a list of units is required")
+end
+
+@test("onUnit: an error goes under the owner's name")
+local function unitError()
+    events.onUnit("UNIT_HEALTH", { "player" }, function() error("events-err-unit") end, B)
+    mock.fireUnitEvent("UNIT_HEALTH", "player")
+    local e = faultWith("events-err-unit")
+    expect(e and e.source).toBe("Events Test B")
+end

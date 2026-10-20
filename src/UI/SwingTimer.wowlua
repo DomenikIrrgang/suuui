@@ -29,7 +29,7 @@ import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as motion from "/Core/Motion"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
+import text, Text from "/UI/Text"
 
 const S = T.space
 
@@ -51,7 +51,66 @@ const HATCH = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Hatch.tga"
 const CAST = 0.5   -- Auto Shot's stand-still cast, seconds
 const GRACE = 0.35 -- a shot this late still counts as on time
 
-local ST = {}
+-- The ranged row's stand-still window.
+export interface SwingWindow extends Frame
+    hatch: Texture
+    edge: Texture
+end
+
+-- One row: a weapon's swing.
+export interface SwingRow extends Frame
+    bar: StatusBar
+    spark: Texture
+    border: draw.Border
+    flash: Texture
+    digits: Text
+    duration: any -- the engine's duration object
+    window?: SwingWindow
+    canSwing?: boolean
+    live?: boolean
+    endsAt?: number
+    length?: number
+    flashAt?: number
+    delayed?: boolean
+end
+
+-- The queued on-next-swing attack's icon.
+export interface SwingQueued extends Frame
+    art: Texture
+end
+
+-- The timer swingTimer makes.
+export interface SwingTimer extends Frame
+    barW: number
+    -- the rows by Enum.PlayerSwingType, and each by name
+    rows: { [any]: SwingRow }
+    mainHand: SwingRow
+    offHand: SwingRow
+    ranged: SwingRow
+    window: SwingWindow -- the ranged row's
+    queued: SwingQueued
+    autoShotWindow: boolean
+    onNoAutoShotCast?: () -> ()
+    active?: boolean
+    nextSwing?: number[]
+    shooting?: boolean
+    moving?: boolean
+    movingSince?: number
+    stoppedAt?: number
+    onTimeWhileMoving?: number
+    function UpdateRows()
+    function SetDelayed(r: SwingRow, delayed: boolean)
+    function SetBarWidth(w: number)
+    function SetAutoShotWindow(on: any)
+    function LearnAutoShot(r: SwingRow, now: number)
+    function Swing(length: any, kind: any)
+    function Tick()
+    function UpdateQueued()
+    function Activate()
+    function Deactivate()
+end
+
+local ST: SwingTimer = {} :: any
 
 --------------------------------------------------------------------------------
 -- Rows
@@ -59,8 +118,8 @@ local ST = {}
 
 -- The stand-still window at the end of the ranged bar: a hatch with a 1px
 -- left edge, ink at rest, amber while you move inside it.
-local function buildWindow(r: any)
-    local w = CreateFrame("Frame", nil, r)
+local function buildWindow(r: SwingRow): SwingWindow
+    local w: SwingWindow = CreateFrame("Frame", nil, r) :: any
     w:SetPoint("TOPRIGHT", -1, -1)
     w:SetPoint("BOTTOMRIGHT", -1, 1)
     w:SetFrameLevel(r.bar:GetFrameLevel() + 1)
@@ -75,10 +134,11 @@ local function buildWindow(r: any)
     w.edge:SetWidth(1)
     w:Hide()
     r.window = w
+    return w
 end
 
-local function buildRow(t: any, height: number): any
-    local r = CreateFrame("Frame", nil, t)
+local function buildRow(t: SwingTimer, height: number): SwingRow
+    local r: SwingRow = CreateFrame("Frame", nil, t) :: any
     r:SetSize(t.barW, height)
     draw.fill(r, "surface-sunk"):SetAllPoints()
     local inner = CreateFrame("Frame", nil, r)
@@ -122,27 +182,28 @@ end
 
 export function swingTimer(parent: Frame, options: { [string]: any }?): any
     local opts: { [string]: any } = options or {}
-    local t = CreateFrame("Frame", opts.name, parent)
+    local t: SwingTimer = CreateFrame("Frame", opts.name, parent) :: any
     Mixin(t, ST)
     t.barW = draw.size(opts.width or 340)
     local mh, oh, gap = draw.size("swing"), draw.size("swing-oh"), S["space-2"]
     t:SetSize(t.barW, mh + gap + oh)
+    t.mainHand, t.offHand, t.ranged = buildRow(t, mh), buildRow(t, oh), buildRow(t, mh)
     t.rows = {
-        [SWING.MainHand] = buildRow(t, mh),
-        [SWING.OffHand] = buildRow(t, oh),
-        [SWING.Ranged] = buildRow(t, mh),
+        [SWING.MainHand] = t.mainHand,
+        [SWING.OffHand] = t.offHand,
+        [SWING.Ranged] = t.ranged,
     }
-    buildWindow(t.rows[SWING.Ranged])
+    t.window = buildWindow(t.ranged)
     t.autoShotWindow = opts.autoShotWindow ~= false
     t.onNoAutoShotCast = opts.onNoAutoShotCast
-    t.rows[SWING.MainHand]:SetPoint("TOPLEFT")
-    t.rows[SWING.Ranged]:SetPoint("TOPLEFT")
-    t.rows[SWING.OffHand]:SetPoint("TOPLEFT", 0, -(mh + gap))
+    t.mainHand:SetPoint("TOPLEFT")
+    t.ranged:SetPoint("TOPLEFT")
+    t.offHand:SetPoint("TOPLEFT", 0, -(mh + gap))
 
     -- the queued attack, hanging off the main hand's right end
-    t.queued = CreateFrame("Frame", nil, t)
+    t.queued = CreateFrame("Frame", nil, t) :: any
     t.queued:SetSize(QUEUE, QUEUE)
-    t.queued:SetPoint("LEFT", t.rows[SWING.MainHand], "RIGHT", S["space-2"], 0)
+    t.queued:SetPoint("LEFT", t.mainHand, "RIGHT", S["space-2"], 0)
     t.queued.art = t.queued:CreateTexture(nil, "ARTWORK")
     t.queued.art:SetPoint("TOPLEFT", 1, -1)
     t.queued.art:SetPoint("BOTTOMRIGHT", -1, 1)
@@ -172,22 +233,23 @@ function ST:UpdateRows()
         local can = canSwing(kind)
         if can ~= nil then r.canSwing = can end
     end
-    local shooting = self.rows[SWING.Ranged].live
-    self.rows[SWING.MainHand]:SetShown(not shooting)
-    self.rows[SWING.Ranged]:SetShown(shooting and true or false)
-    self.rows[SWING.OffHand]:SetShown(self.rows[SWING.OffHand].canSwing and not shooting and true or false)
-    self.rows[SWING.MainHand].digits:SetShown(not shooting)
-    self.rows[SWING.Ranged].digits:SetShown(shooting and true or false)
-    self.rows[SWING.OffHand].digits:SetShown(self.rows[SWING.OffHand]:IsShown())
+    local shooting = self.ranged.live
+    self.mainHand:SetShown(not shooting)
+    self.ranged:SetShown(shooting and true or false)
+    self.offHand:SetShown(self.offHand.canSwing and not shooting and true or false)
+    self.mainHand.digits:SetShown(not shooting)
+    self.ranged.digits:SetShown(shooting and true or false)
+    self.offHand.digits:SetShown(self.offHand:IsShown())
 end
 
 -- Delayed (moving inside the window) or at rest: colours of the ranged row.
-function ST:SetDelayed(r: any, delayed: boolean)
+function ST:SetDelayed(r: SwingRow, delayed: boolean)
     if r.delayed == delayed then return end
     r.delayed = delayed
     local token = delayed and "amber" or "ink-muted"
-    draw.paint(r.window.hatch, token, delayed and 0.6 or 0.2)
-    draw.paintFill(r.window.edge, token)
+    local w = r.window :: SwingWindow -- (only the ranged row is ever delayed)
+    draw.paint(w.hatch, token, delayed and 0.6 or 0.2)
+    draw.paintFill(w.edge, token)
     r.border:SetColor(delayed and "amber" or "gilt-hairline")
     draw.paintFill(r.spark, delayed and "amber" or "ink")
     r.digits:SetColor(delayed and "amber" or "ink")
@@ -199,24 +261,24 @@ function ST:SetBarWidth(w: number)
     for kind, r in pairs(self.rows) do
         r:SetWidth(self.barW)
         -- a shot in flight keeps its window's share of the new width
-        if kind == SWING.Ranged and r.window:IsShown() and r.endsAt and r.length then
-            r.window:SetWidth(math.max(2, (self.barW - 2) * math.min(1, CAST / r.length)))
+        local length = r.length
+        if kind == SWING.Ranged and self.window:IsShown() and r.endsAt and length then
+            self.window:SetWidth(math.max(2, (self.barW - 2) * math.min(1, CAST / length)))
         end
     end
 end
 
 function ST:SetAutoShotWindow(on: any)
     self.autoShotWindow = on and true or false
-    local r = self.rows[SWING.Ranged]
     if not self.autoShotWindow then
-        r.window:Hide()
-        self:SetDelayed(r, false)
+        self.window:Hide()
+        self:SetDelayed(self.ranged, false)
     end
 end
 
 -- A shot just landed: did it come on time although you ran through the whole
 -- window? Twice in a row means this client has no stand-still cast.
-function ST:LearnAutoShot(r: any, now: number)
+function ST:LearnAutoShot(r: SwingRow, now: number)
     if not (self.autoShotWindow and r.live and r.endsAt) then return end
     local ranThrough = self.movingSince and self.movingSince <= r.endsAt - CAST
     if not ranThrough then return end
@@ -239,8 +301,8 @@ function ST:Swing(length: any, kind: any)
     if kind == SWING.Ranged then
         self:LearnAutoShot(r, now)
         if self.autoShotWindow then
-            r.window:SetWidth(math.max(2, (self.barW - 2) * math.min(1, CAST / length)))
-            r.window:Show()
+            self.window:SetWidth(math.max(2, (self.barW - 2) * math.min(1, CAST / length)))
+            self.window:Show()
         end
         self:SetDelayed(r, false)
     end
@@ -263,27 +325,29 @@ function ST:Tick()
     for kind, r in pairs(self.rows) do
         if r.live and kind == SWING.Ranged and self.autoShotWindow and self.shooting then
             -- Auto Shot: moving inside the window holds the shot.
-            local left = r.endsAt - now
-            local delayed = self.moving and left <= CAST
+            local endsAt = r.endsAt :: number -- (a live row has its end)
+            local left = endsAt - now
+            local delayed = (self.moving and left <= CAST) and true or false
             self:SetDelayed(r, delayed)
             if delayed then
                 r.digits:SetValue("Moving")
             elseif left > 0 then
                 r.digits:SetValue(("%.1f"):format(left))
-            elseif not self.moving and now - math.max(r.endsAt, (self.stoppedAt or 0) + CAST) > GRACE then
+            elseif not self.moving and now - math.max(endsAt, (self.stoppedAt or 0) + CAST) > GRACE then
                 -- standing still past the cast and still no shot: Auto Shot ended
                 r.live = false
-                r.window:Hide()
+                self.window:Hide()
                 r:SetAlpha(T.opacity["opacity-oor"])
                 r.digits:SetValue("–")
                 r.bar:SetValue(0)
                 self:UpdateRows()
             end
         elseif r.live then
-            local left = r.endsAt - now
+            local left = (r.endsAt :: number) - now
             if left <= 0 then
                 r.live = false
-                if r.window then r.window:Hide(); self:SetDelayed(r, false) end
+                local w = r.window
+                if w then w:Hide(); self:SetDelayed(r, false) end
                 r:SetAlpha(T.opacity["opacity-oor"])
                 r.digits:SetValue("–")
                 r.bar:SetValue(0)
@@ -310,13 +374,13 @@ function ST:UpdateQueued()
         end
     end
     if found then
-        self.queued.art:SetTexture(C_Spell.GetSpellTexture(found))
+        self.queued.art:SetTexture((C_Spell.GetSpellTexture(found)))
         if not self.queued:IsShown() then motion.pop(self.queued) end
     end
     self.queued:SetShown(found ~= nil)
-    local digits = self.rows[SWING.MainHand].digits
+    local digits = self.mainHand.digits
     digits:ClearAllPoints()
-    digits:SetPoint("LEFT", self.rows[SWING.MainHand], "RIGHT", S["space-2"] + (found and (QUEUE + S["space-2"]) or 0), 0)
+    digits:SetPoint("LEFT", self.mainHand, "RIGHT", S["space-2"] + (found and (QUEUE + S["space-2"]) or 0), 0)
 end
 
 --------------------------------------------------------------------------------

@@ -1,0 +1,344 @@
+-- Units/Alerts: one alert at a time, in combat only; urgency decides which
+-- shows, the replaced one comes back; the level-up card in the alert's place.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, URGENCY, SECTION from "/Units/Alerts"
+import newParent, expectNoErrors from "../../helpers"
+
+local sound: any
+
+@beforeEach
+local function fresh()
+    M.testing = nil
+    M.under = nil
+    M:Hide(nil, true)
+    M.frame:Hide()
+    M.frame:SetAlpha(1)
+    if M.fading then M.fading:Cancel(); M.fading = nil end
+    sound = mock.spy()
+    mock.stub(SuuUI.UI, "TrackerSound", sound)
+    mock.player:enterCombat()
+end
+
+@afterEach
+local function clean()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    M.testing = nil
+    M:Hide(nil, true)
+    expectNoErrors()
+end
+
+@test("is on at login and provides the alerts service")
+local function onAtLogin()
+    expect(M:IsEnabled()).toBe(true)
+    expect(M.frame).toBe(_G.SuuUIAlerts)
+    expect(M.frame.suuManagedShow).toBe(true)
+    expect(URGENCY.danger > URGENCY.warning and URGENCY.warning > URGENCY.info).toBe(true)
+end
+
+@test("an alert shows in combat through SuuUI.ShowAlert")
+local function showsInCombat()
+    SuuUI.ShowAlert("aggro", "danger", "You have drawn aggro", "Lava Surger")
+    expect(M.frame).toBeShown()
+    expect(M.alert).toBeShown()
+    expect(M.card).never.toBeShown()
+    expect(M.alert.title).toHaveText("You have drawn aggro")
+    expect(M.alert.detail).toHaveText("Lava Surger")
+    expect(M.current).toBe("aggro")
+    expect(M.tone).toBe("danger")
+    expect(M.frame:GetAlpha()).toBe(1)
+    -- danger plays the warning sound once
+    expect(sound).toHaveBeenCalledWith("warning")
+    SuuUI.ShowAlert("aggro", "danger", "You have drawn aggro", "Lava Surger · again")
+    expect(sound).toHaveBeenCalledTimes(1)
+    expect(M.alert.detail).toHaveText("Lava Surger · again")
+end
+
+@test("a detail as a format with arguments, secret ones too")
+local function formatted()
+    SuuUI.ShowAlert("pull", "warning", "About to pull", "%s over %d%%", "Brannoc", 110)
+    expect(M.alert.detail).toHaveText("Brannoc over 110%")
+    expect(M.last.n).toBe(5)
+    SuuUI.ShowAlert("pull", "warning", "About to pull", "%s", mock.secret("Brannoc"))
+    expect(M.alert).toBeShown()
+    expect(sound).never.toHaveBeenCalled() -- not danger
+end
+
+@test("no sound when the setting is off")
+local function soundOff()
+    M:Set("sound", false)
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    M:Reset("sound")
+    expect(M.frame).toBeShown()
+    expect(sound).never.toHaveBeenCalled()
+end
+
+@test("out of combat nothing shows, unless the key may")
+local function outOfCombat()
+    mock.player:leaveCombat()
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    expect(M.frame).never.toBeShown()
+    expect(M.current).toBeNil()
+    SuuUI.AllowAlertOutOfCombat("unit:pull")
+    expect(M.anytime["unit:pull"]).toBe(true)
+    SuuUI.ShowAlert("unit:pull", "info", "Pull in 5", "4 of 5 ready")
+    expect(M.frame).toBeShown()
+    expect(M.alert.title).toHaveText("Pull in 5")
+end
+
+@test("Allowed: no frame, no alert")
+local function noFrame()
+    local f = M.frame
+    M.frame = nil
+    expect(M:Allowed("x", "danger")).toBe(false)
+    M.frame = f
+    expect(M:Allowed("x", "danger")).toBe(true)
+end
+
+@test("a less urgent alert waits; a more urgent one replaces and gives it back")
+local function urgency()
+    SuuUI.ShowAlert("pull", "warning", "About to pull")
+    SuuUI.ShowAlert("hint", "info", "A hint") -- less urgent: refused
+    expect(M.current).toBe("pull")
+    expect(M.alert.title).toHaveText("About to pull")
+    SuuUI.ShowAlert("aggro", "danger", "Aggro", "%s", "Lava Surger")
+    expect(M.current).toBe("aggro")
+    expect(M.under.key).toBe("pull")
+    -- the danger goes: the warning comes back
+    SuuUI.HideAlert("aggro")
+    expect(M.current).toBe("pull")
+    expect(M.alert.title).toHaveText("About to pull")
+    expect(M.frame).toBeShown()
+    expect(M.under).toBeNil()
+end
+
+@test("an owner hiding the one underneath keeps it from coming back")
+local function hiddenUnder()
+    SuuUI.ShowAlert("pull", "warning", "About to pull")
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    SuuUI.HideAlert("pull") -- not the current one: only forgotten
+    expect(M.current).toBe("aggro")
+    expect(M.under).toBeNil()
+    SuuUI.HideAlert("other") -- neither: nothing changes
+    expect(M.current).toBe("aggro")
+    SuuUI.HideAlert("aggro")
+    expect(M.current).toBeNil()
+    expect(M.frame).never.toBeShown()
+end
+
+@test("the same key shown again takes the place of the one under it")
+local function sameKeyUnder()
+    SuuUI.ShowAlert("pull", "warning", "About to pull")
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    -- the one under shown again (urgency refuses it), then the under one
+    -- itself becomes current: under is dropped
+    M.current = nil
+    SuuUI.ShowAlert("pull", "warning", "About to pull again")
+    expect(M.under).toBeNil()
+end
+
+@test("the position's hidden flag keeps the frame hidden")
+local function positionHidden()
+    local pos = M:Get("position")
+    M:Set("position", { point = pos.point, x = pos.x, y = pos.y, hidden = true })
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    expect(M.current).toBe("aggro")
+    expect(M.frame).never.toBeShown()
+    expect(sound).never.toHaveBeenCalled()
+    M:Reset("position")
+end
+
+@test("the level-up card in the alert's place, faded out on Hide")
+local function levelUp()
+    SuuUI.ShowLevelUp("level", { title = "Level 12", detail = "New spells", spells = {} })
+    expect(M.card).toBeShown()
+    expect(M.alert).never.toBeShown()
+    expect(M.tone).toBe("info")
+    expect(M.last.kind).toBe("card")
+    SuuUI.HideAlert("level")
+    -- fading out: still shown until the fade's end
+    expect(M.frame).toBeShown()
+    expect(M.fading).toBeTruthy()
+    mock.advanceFrames(30)
+    expect(M.frame).never.toBeShown()
+    expect(M.fading).toBeNil()
+end
+
+@test("an alert during the card's fade is back at full at once")
+local function fadeCancelled()
+    SuuUI.ShowLevelUp("level", { title = "Level 12" })
+    SuuUI.HideAlert("level")
+    expect(M.fading).toBeTruthy()
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    expect(M.fading).toBeNil()
+    expect(M.frame:GetAlpha()).toBe(1)
+    mock.advanceTime(1)
+    expect(M.frame).toBeShown()
+end
+
+@test("a second fade replaces the first; a new alert keeps the frame at the end")
+local function fadeTwice()
+    SuuUI.ShowLevelUp("level", { title = "Level 12" })
+    M:Hide("level")
+    local first = M.fading
+    -- shown again and hidden again while fading: the old fade cancelled
+    M.current, M.tone = "level", "info"
+    M.fading = first
+    M:Hide("level")
+    expect(M.fading).never.toBe(first)
+    -- a fade ending while something else is current leaves the frame alone
+    M.current = "other"
+    mock.advanceTime(1)
+    expect(M.frame).toBeShown()
+    M.current = nil
+end
+
+@test("the card under the mouse waits until the mouse has been away a second")
+local function holding()
+    local hovered = true
+    mock.stub(M.card, "IsHovered", function(): boolean return hovered end)
+    SuuUI.ShowLevelUp("level", { title = "Level 12" })
+    SuuUI.HideAlert("level")
+    expect(M.holding).toBeTruthy()
+    expect(M.card).toBeShown()
+    SuuUI.HideAlert("level") -- already holding: nothing new
+    mock.advanceTime(2)
+    expect(M.current).toBe("level")
+    hovered = false
+    mock.advanceTime(0.5)
+    expect(M.current).toBe("level")
+    mock.advanceTime(0.7)
+    expect(M.current).toBeNil()
+    expect(M.holding).toBeNil()
+end
+
+@test("holding ends when another alert takes the place")
+local function holdingReplaced()
+    mock.stub(M.card, "IsHovered", function(): boolean return true end)
+    SuuUI.ShowLevelUp("level", { title = "Level 12" })
+    SuuUI.HideAlert("level")
+    local h = M.holding
+    expect(h).toBeTruthy()
+    -- something else current (Present stops holding itself; here directly)
+    M.current = "aggro"
+    mock.advanceTime(0.3)
+    expect(M.holding).toBeNil()
+    M.current = nil
+end
+
+@test("a click on the card takes it away at once")
+local function cardClick()
+    mock.stub(M.card, "IsHovered", function(): boolean return true end)
+    SuuUI.ShowLevelUp("level", { title = "Level 12" })
+    M.card.onClick()
+    expect(M.current).toBeNil()
+    expect(M.holding).toBeNil()
+    -- nothing showing: the click does nothing
+    M.card.onClick()
+end
+
+@test("a card replaced by a more urgent alert comes back as a card")
+local function cardUnder()
+    SuuUI.ShowLevelUp("level", { title = "Level 12" })
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    expect(M.alert).toBeShown()
+    expect(M.under.kind).toBe("card")
+    SuuUI.HideAlert("aggro")
+    expect(M.current).toBe("level")
+    expect(M.card).toBeShown()
+    expect(M.alert).never.toBeShown()
+end
+
+@test("combat ending clears the alerts, unless testing")
+local function combatEnds()
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    mock.player:leaveCombat()
+    expect(M.current).toBeNil()
+    expect(M.frame).never.toBeShown()
+    M.testing = true
+    M:Show("t", "info", "Test")
+    mock.player:enterCombat()
+    mock.player:leaveCombat()
+    expect(M.current).toBe("t")
+end
+
+@test("Test shows the three tones in turn, out of combat too")
+local function testButton()
+    mock.player:leaveCombat()
+    M:Test()
+    expect(M.testing).toBe(true)
+    mock.advanceTime(0.01)
+    expect(M.tone).toBe("danger")
+    expect(M.frame).toBeShown()
+    mock.advanceTime(4)
+    expect(M.tone).toBe("warning")
+    mock.advanceTime(4)
+    expect(M.tone).toBe("info")
+    mock.advanceTime(4)
+    expect(M.testing).toBeNil()
+    expect(M.current).toBeNil()
+end
+
+@test("Test's later steps skip while the module is off")
+local function testWhileOff()
+    mock.player:leaveCombat()
+    M:Test()
+    mock.advanceTime(0.01)
+    mock.stub(M, "IsEnabled", function(): boolean return false end)
+    M:Hide(nil, true)
+    mock.advanceTime(4)
+    expect(M.current).toBeNil()
+    mock.advanceTime(8.1)
+    expect(M.testing).toBeNil()
+end
+
+@test("the settings' preview: three alerts, built once")
+local function preview()
+    local p = newParent()
+    local v = M:PreviewView(p)
+    expect(v:GetParent()).toBe(p)
+    expect(select("#", v:GetChildren())).toBe(3)
+    expect(v:GetWidth() > 0 and v:GetHeight() > 0).toBe(true)
+    local q = newParent()
+    expect(M:PreviewView(q)).toBe(v)
+    expect(v:GetParent()).toBe(q)
+    p:Hide(); q:Hide()
+end
+
+@test("the settings section's preview and its Try it button")
+local function section()
+    local p = newParent()
+    expect(SECTION.preview(p)).toBe(M:PreviewView(p))
+    local test = mock.spy()
+    mock.stub(M, "Test", test)
+    SECTION.groups[1].rows[2].onClick()
+    expect(test).toHaveBeenCalledTimes(1)
+    p:Hide()
+end
+
+-- last: the module turned off and on again
+@test("turned off: the alert goes and the service with it; on again: back")
+local function offAndOn()
+    SuuUI.ShowAlert("aggro", "danger", "Aggro")
+    expect(M.current).toBe("aggro")
+    -- (a module turns off and on out of combat)
+    mock.player:leaveCombat()
+    SuuUI.AllowAlertOutOfCombat("offon")
+    SuuUI.ShowAlert("offon", "danger", "Aggro")
+    expect(M.current).toBe("offon")
+    mock.slash("/suu disable alerts")
+    expect(M:IsEnabled()).toBe(false)
+    expect(M.current).toBeNil()
+    expect(M.frame).never.toBeShown()
+    SuuUI.ShowAlert("aggro", "danger", "Aggro") -- no service: nothing
+    expect(M.current).toBeNil()
+    local f = M.frame
+    mock.slash("/suu enable alerts")
+    expect(M:IsEnabled()).toBe(true)
+    expect(M.frame).toBe(f)
+    -- the keys allowed out of combat come back with the service
+    SuuUI.ShowAlert("offon", "danger", "Aggro")
+    expect(M.current).toBe("offon")
+end

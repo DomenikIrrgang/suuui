@@ -197,6 +197,28 @@ end
 -- (names and the like can't break the message: no tabs or newlines)
 local function clean(s: any): string return (tostring(s or ""):gsub("[\t\n\r|]", " ")) end
 
+-- The addon message that shares a mark (its name cleaned already):
+-- "MARK\t<map>\t<x>\t<y>\t<symbol>\t<name>", x and y to four places.
+local function encodeMark(mark: Mark, name: string): string
+    return ("MARK\t%d\t%.4f\t%.4f\t%s\t%s"):format(mark.map, mark.x, mark.y, mark.symbol, name)
+end
+
+-- A MARK message's fields (map, x, y, symbol, name); nil when it isn't one
+-- or its place is off the map.
+local function decodeMark(text: string): (number?, number?, number?, string?, string?)
+    local tag, map, x, y, symbol, name = strsplit("\t", text)
+    if tag ~= "MARK" then return end
+    local m, mx, my = tonumber(map), tonumber(x), tonumber(y)
+    if not (m and mx and my and mx >= 0 and mx <= 1 and my >= 0 and my <= 1) then return end
+    return m, mx, my, symbol, name
+end
+
+-- Whether a sender is you: "Name", "Name-Realm" or "Name Realm" (found
+-- with /suu probe marks).
+local function isOwnSender(sender: string, name: string, realm: string?): boolean
+    return sender == name or (realm and (sender == name .. "-" .. realm or sender == name .. " " .. realm)) and true or false
+end
+
 -- From a click only: the game sends chat from a click.
 function M:Post(id: any): boolean
     local mark = self:Get(id)
@@ -209,7 +231,7 @@ function M:Post(id: any): boolean
     pcall(send, text, channel)
     -- the mark itself to group members with SuuUI
     if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-        local msg = ("MARK\t%d\t%.4f\t%.4f\t%s\t%s"):format(mark.map, mark.x, mark.y, mark.symbol, name)
+        local msg = encodeMark(mark, name)
         pcall(C_ChatInfo.SendAddonMessage, PREFIX, msg, channel)
     end
     return true
@@ -224,16 +246,14 @@ end
 -- one posted again (same place, same sender) only updates its name.
 function M:OnMessage(prefix: any, text: any, channel: any, sender: any)
     if prefix ~= PREFIX or not plain(text) or not plain(sender) then return end
-    local tag, map, x, y, symbol, name = strsplit("\t", text)
-    if tag ~= "MARK" then return end
-    map, x, y = tonumber(map), tonumber(x), tonumber(y)
-    if not (map and x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1) then return end
+    local map, x, y, symbol, name = decodeMark(text)
+    if not (map and x and y) then return end
     -- your own post coming back (the sender comes as "Name Surname" or
     -- "Name-Realm": found with /suu probe marks)
     -- (your own name and realm are never secret)
     local fullName, fullRealm = UnitFullName("player")
     local name0, realm = fullName :: string, fullRealm :: string
-    if sender == name0 or (realm and (sender == name0 .. "-" .. realm or sender == name0 .. " " .. realm)) then return end
+    if isOwnSender(sender, name0, realm) then return end
     local who = sender
     for _, m in ipairs(self:Marks()) do
         if m.from == who and m.map == map and math.abs(m.x - x) < 0.0005 and math.abs(m.y - y) < 0.0005 then
@@ -273,6 +293,26 @@ local function worldOf(mark: Mark)
     return w or nil
 end
 
+-- A spot `east` and `up` (north) yards from you on a minimap showing
+-- `yards` from its middle to its edge, `half` px wide from the middle,
+-- turned by `turn` radians: { x, y (px from the middle), edge (out of
+-- range: on the ring), angle (radians, 0 = up), yards (the distance) }.
+local function minimapPlace(east: number, up: number, yards: number, half: number, turn: number): { [string]: any }
+    if turn ~= 0 then
+        local c, sn = math.cos(turn), math.sin(turn)
+        east, up = east * c - up * sn, east * sn + up * c
+    end
+    local dist = math.sqrt(east * east + up * up)
+    local px, py = east / yards * half, up / yards * half
+    local reach = half * EDGE_REACH
+    local edge = math.sqrt(px * px + py * py) > reach
+    if edge then
+        local k = reach / math.sqrt(px * px + py * py)
+        px, py = px * k, py * k
+    end
+    return { x = px, y = py, edge = edge, angle = math.atan2(east, up), yards = dist }
+end
+
 -- Where each mark goes on the minimap: { mark, x, y (px from the middle),
 -- edge (true: out of range, on the ring), angle (radians, 0 = up, the way
 -- to it) }.
@@ -294,20 +334,9 @@ function M:MinimapPlaces()
         local w = worldOf(mark)
         if w and w[1] == instance then
             -- east and north of you, in yards
-            local east, up = west - w[3], w[2] - north
-            if turn ~= 0 then
-                local c, sn = math.cos(turn), math.sin(turn)
-                east, up = east * c - up * sn, east * sn + up * c
-            end
-            local dist = math.sqrt(east * east + up * up)
-            local px, py = east / yards * half, up / yards * half
-            local reach = half * EDGE_REACH
-            local edge = math.sqrt(px * px + py * py) > reach
-            if edge then
-                local k = reach / math.sqrt(px * px + py * py)
-                px, py = px * k, py * k
-            end
-            out[#out + 1] = { mark = mark, x = px, y = py, edge = edge, angle = math.atan2(east, up), yards = dist }
+            local p = minimapPlace(west - w[3], w[2] - north, yards, half, turn)
+            p.mark = mark
+            out[#out + 1] = p
         end
     end
     return out

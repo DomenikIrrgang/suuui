@@ -42,6 +42,8 @@
 import SuuUI from "/Core/API"
 import isSecret from "wowlua:secret"
 import hookScript from "wowlua:hooks"
+-- the matching (what's typed against the catalog) in a module of its own
+import * as match from "./ChatCommands/Match"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -69,23 +71,18 @@ local function call(fn: any, ...: any): ...any
 end
 type Color = number[] & { hex: string }
 local colors: { [string]: Color } = T.color
-local function tint(token: string, text: string): string return "|cff" .. (colors[token] :: Color).hex .. text .. "|r" end
+local tint = match.tint
 
 -- A command in the catalog.
-type Item = {
-    cmd: string, aliases: string[], names: string[], key?: string, cat: string, src: string,
-    desc?: string, arg?: string, usage?: string, rank: number, chatType?: boolean,
-}
+type Item = match.Item
 -- What a row in the command list shows (a catalog item, or one of /suu's commands).
-type Shown = { cmd: string, aliases: string[], desc?: string, src: string }
-type Match = { item: Item, score: number, alias?: string }
+type Shown = match.Shown
+type Match = match.Match
 -- A suggestion after a command: a name, a channel.
 type Row = { value: string, color?: string, diamond?: boolean, note?: string, right?: string, online?: boolean }
 type Group = { title: string, rows: Row[] }
-type SubCommand = { name: string, help: string, args: string[]? }
-type Query = {
-    mode: string, typed: string, item?: Item, kind?: string, prefix?: string, sub?: SubCommand,
-}
+type SubCommand = match.SubCommand
+type Query = match.Query
 -- A row in the drawn list, in order (Up and Down step through them).
 type Entry = { put: string, frame: any, y: number, h: number }
 
@@ -100,16 +97,7 @@ local TOPIC_COLS = 3
 -- The commands
 --------------------------------------------------------------------------------
 
-local CATEGORIES = {
-    { value = "all", label = "All" }, { value = "chat", label = "Chat" }, { value = "group", label = "Group" },
-    { value = "emote", label = "Emotes" }, { value = "suuui", label = "SuuUI" }, { value = "addon", label = "Addons" },
-}
--- under All, the groups in this order (the game's commands that are neither
--- chat nor group show there only)
-local ALL_ORDER = { "group", "chat", "game", "suuui", "addon", "emote" }
-local LABEL = { chat = "Chat", group = "Group", game = "Game", suuui = "SuuUI", addon = "Addons", emote = "Emotes" }
-local NOUN = { all = "command", chat = "chat command", group = "group command", emote = "emote", suuui = "SuuUI command",
-               addon = "addon command" }
+local CATEGORIES, ALL_ORDER, LABEL, NOUN = match.CATEGORIES, match.ALL_ORDER, match.LABEL, match.NOUN
 
 -- The game's commands SuuUI describes, by the key the game registers them
 -- under, in the order they're listed within a category. main: the name
@@ -344,33 +332,6 @@ function M:Catalog()
     return self.catalog
 end
 
--- How far apart two words are (edits), for "Closest".
-local function distance(a: string, b: string): number
-    local la, lb = #a, #b
-    if math.abs(la - lb) > 3 then return 99 end
-    local prev: number[], cur: number[] = {}, {}
-    for j = 0, lb do prev[j] = j end
-    for i = 1, la do
-        cur[0] = i
-        local ca = a:byte(i)
-        for j = 1, lb do
-            local cost = ca == b:byte(j) and 0 or 1
-            cur[j] = math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
-        end
-        prev, cur = cur, prev
-    end
-    return prev[lb]
-end
-
--- Which of an item's names starts with what's typed: 1 its main name, 2 an
--- alias, nil none.
-local function matchOf(item: Item, typed: string): (number?, string?)
-    if item.cmd:sub(1, #typed) == typed then return 1 end
-    for _, a in ipairs(item.aliases) do
-        if a:sub(1, #typed) == typed then return 2, a end
-    end
-end
-
 --------------------------------------------------------------------------------
 -- What goes after a command
 --------------------------------------------------------------------------------
@@ -506,29 +467,8 @@ end
 -- What the input's text asks for: { mode = "commands", typed } or
 -- { mode = "args", item, prefix, typed, kind } or nil (no palette).
 function M:Parse(text: unknown): Query?
-    if type(text) ~= "string" or text:sub(1, 1) ~= "/" then return nil end
-    local cmd, rest = text:match("^(/%S*)(.*)$")
-    if not (cmd and rest) then return nil end
-    cmd = cmd:lower()
-    if rest == "" then return { mode = "commands", typed = cmd } end
-    if not self:Get("args") then return nil end
-    self:Catalog()
-    local item = self.byName[cmd]
-    if not (item and item.arg) or item.chatType then return nil end
-    local arg = rest:gsub("^%s+", "")
-    if item.arg == "suu" then
-        local sub, after = arg:match("^(%S*)(.*)$")
-        if not (sub and after) then return nil end
-        if after == "" then return { mode = "args", item = item, kind = "suu", prefix = cmd .. " ", typed = sub } end
-        local found
-        for _, c in ipairs(SuuUI.Commands()) do if c.name == sub:lower() then found = c end end
-        if not (found and found.args) then return nil end
-        local word = after:gsub("^%s+", "")
-        if word:find("%s") then return nil end
-        return { mode = "args", item = item, kind = "words", sub = found, prefix = cmd .. " " .. found.name .. " ",
-                 typed = word }
-    end
-    return { mode = "args", item = item, kind = item.arg, prefix = cmd .. " ", typed = arg }
+    return match.parse(text, self:Get("args") and true or false,
+        function(): { [string]: Item } self:Catalog(); return self.byName end, SuuUI.Commands)
 end
 
 --------------------------------------------------------------------------------
@@ -780,32 +720,14 @@ function M:MakeTopic(parent: Frame): any
     return r
 end
 
--- What's typed in gilt where a name starts with it.
-local function hit(name: string, typed: string): string
-    if typed ~= "" and #typed > 1 and name:sub(1, #typed) == typed then
-        return tint("gilt-text", name:sub(1, #typed)) .. name:sub(#typed + 1)
-    end
-    return name
-end
-
-local function aliasText(item: Shown, typed: string): string
-    local out: string[] = {}
-    for i, a in ipairs(item.aliases) do
-        if i > 2 then break end
-        out[#out + 1] = hit(a, typed)
-    end
-    return table.concat(out, " ")
-end
+local hit, aliasText = match.hit, match.aliasText
 
 --------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
 
 function M:Category(): string
-    local d = self:CharData()
-    local c = d.category or "all"
-    if c == "emote" and not self:Get("emotes") then c = "all" end
-    return c
+    return match.category(self:CharData().category, self:Get("emotes") and true or false)
 end
 
 function M:SetCategory(c: string)
@@ -816,62 +738,17 @@ end
 
 -- Shift-Tab: the category after (round the end).
 function M:StepCategory(step: number)
-    local list: string[] = {}
-    for _, c in ipairs(CATEGORIES) do
-        if c.value ~= "emote" or self:Get("emotes") then list[#list + 1] = c.value end
-    end
-    local at = 1
-    for i, v in ipairs(list) do if v == self:Category() then at = i end end
-    self:SetCategory(list[(at - 1 + step) % #list + 1])
+    self:SetCategory(match.stepCategory(self:Category(), step, self:Get("emotes") and true or false))
 end
 
 -- The commands that start with `typed`: by category, and in all.
 function M:Matches(typed: string): ({ [string]: Match[] }, number)
-    local byCat: { [string]: Match[] }, total = {}, 0
-    local emotes = self:Get("emotes")
-    for _, item in ipairs(self:Catalog()) do
-        if emotes or item.cat ~= "emote" then
-            local m, alias = matchOf(item, typed)
-            if m then
-                local list = byCat[item.cat]
-                if not list then
-                    list = {}
-                    byCat[item.cat] = list
-                end
-                list[#list + 1] = { item = item, score = m, alias = alias }
-                total = total + 1
-            end
-        end
-    end
-    -- a command whose own name fits before one that fits by an alias
-    for _, list in pairs(byCat) do
-        table.sort(list, function(a: Match, b: Match): boolean
-            if a.score ~= b.score then return a.score < b.score end
-            if a.item.rank ~= b.item.rank then return a.item.rank < b.item.rank end
-            return a.item.cmd < b.item.cmd
-        end)
-    end
-    return byCat, total
+    return match.matches(self:Catalog(), typed, self:Get("emotes") and true or false)
 end
 
 -- The closest commands to a typed word nothing starts with.
 function M:Closest(typed: string): Match[]
-    local best: { item: Item, d: number }[] = {}
-    local emotes = self:Get("emotes")
-    for _, item in ipairs(self:Catalog()) do
-        if emotes or item.cat ~= "emote" then
-            local d = 99
-            for _, n in ipairs(item.names) do d = math.min(d, distance(typed, n)) end
-            if d <= 3 then best[#best + 1] = { item = item, d = d } end
-        end
-    end
-    table.sort(best, function(a: { item: Item, d: number }, b: { item: Item, d: number }): boolean
-        if a.d ~= b.d then return a.d < b.d end
-        return a.item.rank < b.item.rank
-    end)
-    local out: Match[] = {}
-    for i = 1, math.min(3, #best) do out[i] = { item = best[i].item, score = 1 } end
-    return out
+    return match.closest(self:Catalog(), typed, self:Get("emotes") and true or false)
 end
 
 function M:BeginDraw()
@@ -924,22 +801,7 @@ function M:DrawCommandList(list: Match[], typed: string, most: number?)
 end
 
 -- "In Chat: /reply, /raid, /rw · Emotes: 7"
-local function elsewhere(byCat: { [string]: Match[] }, except: string): string
-    local parts: string[] = {}
-    for _, c in ipairs(ALL_ORDER) do
-        local list = byCat[c]
-        if c ~= except and list and #list > 0 then
-            if c == "emote" then
-                parts[#parts + 1] = LABEL[c] .. ": " .. #list
-            else
-                local names: string[] = {}
-                for i = 1, math.min(3, #list) do names[i] = list[i].item.cmd end
-                parts[#parts + 1] = "In " .. LABEL[c] .. ": " .. table.concat(names, ", ") .. (#list > 3 and " …" or "")
-            end
-        end
-    end
-    return table.concat(parts, " · ")
-end
+local elsewhere = match.elsewhere
 
 function M:DrawCommands(typed: string): string[][]
     local cat = self:Category()
@@ -983,11 +845,7 @@ function M:DrawCommands(typed: string): string[][]
             keys = { { "Tab", "take " .. first.item.cmd }, { "Shift Tab", "category" } }
         end
     end
-    if not self:Get("tab") then
-        for i = #keys, 1, -1 do
-            if keys[i][1] == "Tab" or keys[i][1] == "↑↓" then table.remove(keys, i) end
-        end
-    end
+    if not self:Get("tab") then match.withoutTab(keys) end
     return keys
 end
 

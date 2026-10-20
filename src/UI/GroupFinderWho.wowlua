@@ -23,6 +23,83 @@ import * as uiText from "/UI/Text"
 import * as controls from "/UI/Controls"
 import * as inputs from "/UI/Inputs"
 import * as panel from "/UI/Panel"
+import Text from "/UI/Text"
+import SuuButton from "/UI/Controls"
+import TextField, Glyph from "/UI/Inputs"
+import ScrollArea from "/UI/Panel"
+
+-- A player the server found.
+export type WhoResult = {
+    name?: string,
+    level?: number,
+    race?: string,
+    class?: string,      -- the class file ("MAGE")
+    className?: string,
+    guild?: string,
+    zone?: string,
+}
+
+export type WhoData = {
+    state: string,       -- "idle" (before a search), "results" or "none"
+    query?: string,
+    total?: number,
+    capped?: boolean,
+    results?: WhoResult[],
+}
+
+export interface WhoRow extends Button
+    index: number
+    data?: WhoResult
+    selected: Texture
+    edge: Texture
+    hover: Texture
+    dia: Texture
+    name: Text
+    level: Text
+    race: Text
+    class: Text
+    guild: Text
+    zone: Text
+end
+
+-- Filter: a quiet button with a chevron after its word.
+export interface WhoFilterButton extends SuuButton
+    chev: Glyph
+end
+
+export interface WhoEmpty extends Frame
+    glyph: Texture
+    title: Text
+    text: Text
+end
+
+export interface GroupFinderWho extends Frame
+    data?: WhoData
+    lastResults?: WhoResult[]
+    selected?: number
+    rows: WhoRow[]
+    heads: { [string]: Text }
+    query: TextField
+    search: SuuButton
+    filter: WhoFilterButton
+    count: Text
+    box: Frame
+    headRow: Frame
+    list: ScrollArea
+    empty: WhoEmpty
+    addFriend: SuuButton
+    whisper: SuuButton
+    invite: SuuButton
+    onSearch?: (text: string) -> ()
+    onFilter?: (button: SuuButton) -> ()
+    onAddFriend?: (row: WhoResult) -> ()
+    onWhisper?: (row: WhoResult) -> ()
+    onInvite?: (row: WhoResult) -> ()
+    onMenu?: (row: WhoResult) -> ()
+    function SetData(d: WhoData)
+    function Draw()
+    function Chosen(): WhoResult?
+end
 
 local S = T.space
 
@@ -38,19 +115,21 @@ local SHARES = { name = 24, race = 14, class = 14, guild = 26, zone = 26 }
 local ORDER = { "name", "level", "race", "class", "guild", "zone" }
 local LABEL = { name = "Name", level = "Level", race = "Race", class = "Class", guild = "Guild", zone = "Zone" }
 
-local W = {}
+local W: GroupFinderWho = {} :: any
 
 -- Each column's x and width in a row this wide.
 -- the left: room for the class diamond before the name (the diamond sat on
 -- the box's edge, found in game)
 local LEFT = S["space-4"] + 6 + S["space-4"]
 
-local function columns(width: number)
+export type WhoColumn = { x: number, w: number }
+
+local function columns(width: number): { [string]: WhoColumn }
     local gap = S["space-4"]
     local inner = width - LEFT - S["space-4"] - gap * 5 - S["space-4"] - LEVEL_W
     local total = 0
     for _, v in pairs(SHARES) do total = total + v end
-    local out, x = {}, LEFT
+    local out: { [string]: WhoColumn }, x = {}, LEFT
     for _, key in ipairs(ORDER) do
         local w = key == "level" and LEVEL_W or math.floor(inner * SHARES[key] / total)
         out[key] = { x = x, w = w }
@@ -60,15 +139,15 @@ local function columns(width: number)
     return out
 end
 
-local function cell(parent: Frame, style: string, color: string)
+local function cell(parent: Frame, style: string, color: string): Text
     local fs = uiText.text(parent, style, color)
     fs:SetWordWrap(false)
     fs:SetJustifyH("LEFT")
     return fs
 end
 
-local function makeRow(w: any)
-    local r = CreateFrame("Button", nil, w.list.child)
+local function makeRow(w: GroupFinderWho): WhoRow
+    local r: WhoRow = CreateFrame("Button", nil, w.list.child) :: any
     r:SetHeight(ROW_H)
     r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     r.selected = draw.fill(r, "arcane-soft", "BACKGROUND")
@@ -88,12 +167,13 @@ local function makeRow(w: any)
     r.class = cell(r, "caption", "ink")
     r.guild = cell(r, "caption", "ink")
     r.zone = cell(r, "caption", "ink")
-    r:SetScript("OnEnter", function(self) self.hover:Show() end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self, button)
-        if not self.data then return end
+    r:SetScript("OnEnter", function(self: WhoRow) self.hover:Show() end)
+    r:SetScript("OnLeave", function(self: WhoRow) self.hover:Hide() end)
+    r:SetScript("OnClick", function(self: WhoRow, button: string)
+        local data = self.data
+        if not data then return end
         if button == "RightButton" then
-            if w.onMenu then w.onMenu(self.data) end
+            if w.onMenu then w.onMenu(data) end
         else
             w.selected = self.index
             w:Draw()
@@ -102,30 +182,33 @@ local function makeRow(w: any)
     return r
 end
 
-function W:SetData(d: any)
+-- What the bar says at the right: "24 players found" ("· showing the first
+-- 50" when the server caps it); nothing before a search.
+local function countText(d: WhoData): string
+    if d.state == "idle" then return "" end
+    local n = d.total or #(d.results or {})
+    return n .. (n == 1 and " player found" or " players found") .. ((d.capped or n > 50) and " · showing the first 50" or "")
+end
+
+function W:SetData(d: WhoData)
     self.data = d
     -- a new search: nothing chosen
     if d.results ~= self.lastResults then self.selected = nil end
     self.lastResults = d.results
-    local count
-    if d.state ~= "idle" then
-        local n = d.total or #(d.results or {})
-        count = n .. (n == 1 and " player found" or " players found") .. ((d.capped or n > 50) and " · showing the first 50" or "")
-    end
-    self.count:SetValue(count or "")
+    self.count:SetValue(countText(d))
     self:Draw()
 end
 
 function W:Draw()
-    local d = self.data or { state = "idle" }
+    local d: WhoData = self.data or { state = "idle" }
     local width = math.max(1, self.list:GetWidth())
     self.list.child:SetWidth(width)
     local cols = columns(self.box:GetWidth())
     for _, key in ipairs(ORDER) do
-        local h = self.heads[key]
+        local h, c = self.heads[key] :: Text, cols[key] :: WhoColumn
         h:ClearAllPoints()
-        h:SetPoint("LEFT", self.headRow, "LEFT", cols[key].x, 0)
-        h:SetWidth(cols[key].w)
+        h:SetPoint("LEFT", self.headRow, "LEFT", c.x, 0)
+        h:SetWidth(c.w)
     end
     local rows = d.state == "results" and d.results or {}
     for i, row in ipairs(rows) do
@@ -142,10 +225,11 @@ function W:Draw()
         draw.paint(r.dia, token)
         r.dia:ClearAllPoints()
         r.dia:SetPoint("CENTER", r, "LEFT", S["space-4"] + 3, 0)
-        local function place(fs: any, key: string, text: string?)
+        local function place(fs: Text, key: string, text: string?)
+            local c = cols[key] :: WhoColumn
             fs:ClearAllPoints()
-            fs:SetPoint("LEFT", r, "LEFT", cols[key].x, 0)
-            fs:SetWidth(cols[key].w)
+            fs:SetPoint("LEFT", r, "LEFT", c.x, 0)
+            fs:SetWidth(c.w)
             fs:SetValue(text or "")
         end
         place(r.name, "name", row.name)
@@ -177,13 +261,14 @@ function W:Draw()
     end
 end
 
-function W:Chosen()
+function W:Chosen(): WhoResult?
     local d = self.data
-    return d and d.state == "results" and self.selected and d.results[self.selected] or nil
+    if not (d and d.state == "results" and self.selected and d.results) then return nil end
+    return d.results[self.selected]
 end
 
-export function groupFinderWho(parent: Frame)
-    local w = CreateFrame("Frame", nil, parent)
+export function groupFinderWho(parent: Frame): GroupFinderWho
+    local w: GroupFinderWho = CreateFrame("Frame", nil, parent) :: any
     Mixin(w, W)
     w.rows, w.heads = {}, {}
     -- the bar
@@ -197,7 +282,7 @@ export function groupFinderWho(parent: Frame)
     -- Filter: the glyph, the word, a chevron, laid out left to right (the
     -- word centred between them overlapped the chevron, found in game)
     w.filter = controls.button(w, { text = "Filter", width = 1,
-        onClick = function(self: any) if w.onFilter then w.onFilter(self) end end })
+        onClick = function(self: SuuButton) if w.onFilter then w.onFilter(self) end end }) :: WhoFilterButton
     w.filter:SetHeight(BAR_H)
     w.filter:SetPoint("LEFT", w.search, "RIGHT", S["space-4"], 0)
     local fg = w.filter:CreateTexture(nil, "ARTWORK")
@@ -243,7 +328,7 @@ export function groupFinderWho(parent: Frame)
     w.list:SetPoint("BOTTOMRIGHT", -S["space-2"], S["space-2"])
     w.list:HookScript("OnSizeChanged", function() w:Draw() end)
     -- empty
-    local e = CreateFrame("Frame", nil, w.box)
+    local e: WhoEmpty = CreateFrame("Frame", nil, w.box) :: any
     e:SetSize(380, 100)
     e:SetPoint("CENTER", 0, -HEAD_H / 2)
     e.glyph = e:CreateTexture(nil, "ARTWORK")
@@ -259,14 +344,19 @@ export function groupFinderWho(parent: Frame)
     e.text:SetPoint("TOP", e.title, "BOTTOM", 0, -S["space-3"])
     w.empty = e
     -- the foot
-    local function act(name: string) return function() local c = w:Chosen(); if c and w[name] then w[name](c) end end end
-    w.addFriend = controls.button(w, { text = "Add friend", icon = "userPlus", onClick = act("onAddFriend") })
+    local function act(get: () -> ((row: WhoResult) -> ())?): () -> ()
+        return function()
+            local c, fn = w:Chosen(), get()
+            if c and fn then fn(c) end
+        end
+    end
+    w.addFriend = controls.button(w, { text = "Add friend", icon = "userPlus", onClick = act(function() return w.onAddFriend end) })
     w.addFriend:SetHeight(FOOT_H)
     w.addFriend:SetPoint("BOTTOMLEFT")
-    w.invite = controls.button(w, { text = "Invite", variant = "primary", icon = "plus", onClick = act("onInvite") })
+    w.invite = controls.button(w, { text = "Invite", variant = "primary", icon = "plus", onClick = act(function() return w.onInvite end) })
     w.invite:SetHeight(FOOT_H)
     w.invite:SetPoint("BOTTOMRIGHT")
-    w.whisper = controls.button(w, { text = "Whisper", icon = "chat", onClick = act("onWhisper") })
+    w.whisper = controls.button(w, { text = "Whisper", icon = "chat", onClick = act(function() return w.onWhisper end) })
     w.whisper:SetHeight(FOOT_H)
     w.whisper:SetPoint("RIGHT", w.invite, "LEFT", -S["space-3"], 0)
     -- disabled, they still say why
