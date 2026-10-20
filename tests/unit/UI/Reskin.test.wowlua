@@ -1,0 +1,1084 @@
+-- UI/Reskin: Blizzard's parts in SuuUI's look, on Blizzard's own templates
+-- (MinimalScrollBar, ColoredProgressBarTemplate, WowStyle1DropdownTemplate,
+-- UIPanelButtonTemplate, InputBoxTemplate, SearchBoxTemplate,
+-- UICheckButtonTemplate, SelectorButtonTemplate, WowScrollBoxList,
+-- ScrollingFontTemplate, the game's menus, its StaticPopups): each piece, the
+-- text colours, and a whole pass over a frame. The hooks stay post-hooks:
+-- Blizzard's own methods still run (checked where a piece hooks one).
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import reskin, reskinScrollBar, reskinStatusBar, reskinFillBar, reskinDropdown, reskinMenu, reskinIconButton,
+    reskinCheckButton, reskinButton, reskinEditBox, reskinCollapseButton, reskinScrollBox, reskinDialog, reskinPopup from "/UI/Reskin"
+import internal ask, matchesAny, textColor, sameColor, isPanelButton, menus, rowMenu from "/UI/Reskin"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, themeChanged from "./WindowsHelpers"
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+
+local parent: Frame? = nil
+
+local function host(): Frame
+    local p = parent
+    if not p then
+        p = newParent(400, 300)
+        parent = p
+    end
+    return p
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    local manager = Menu.GetManager()
+    local open = manager:GetOpenMenu()
+    if open then manager:CloseMenus() end
+    if parent then parent:Hide() end
+    parent = nil
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+local function texturesOf(f: any): any[]
+    local out: any[] = {}
+    for _, r in ipairs({ f:GetRegions() }) do
+        if (r :: any):GetObjectType() == "Texture" then out[#out + 1] = r end
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+@test("ask: a method's results, nil when missing or erroring")
+local function asking()
+    local t: any = { Get = function(_: any, a: number) return a, a + 1 end, Bad = function() error("no") end, Field = 3 }
+    expect({ ask(t, "Get", 1) }).toEqual({ 1, 2 })
+    expect(ask(t, "Missing")).toBeNil()
+    expect(ask(t, "Field")).toBeNil()
+    expect(ask(t, "Bad")).toBeNil()
+end
+
+@test("matchesAny: any of the patterns")
+local function matching()
+    expect(matchesAny("ui-collapseexpand-bar", { "scrollline", "collapseexpand" })).toBe(true)
+    expect(matchesAny("other", { "scrollline" })).toBe(false)
+    expect(matchesAny("x", {})).toBe(false)
+end
+
+@test("textColor: Blizzard's text colours as SuuUI tokens")
+@cases({
+    { 1, 0.82, 0, "ink" },        -- NORMAL_FONT_COLOR (yellow)
+    { 1, 1, 1, "ink" },           -- HIGHLIGHT_FONT_COLOR (white)
+    { 0.1, 1, 0.1, "fel" },       -- GREEN_FONT_COLOR
+    { 1, 0.1, 0.1, "ember-text" }, -- RED_FONT_COLOR
+    { 0.5, 0.5, 0.5, "ink-muted" }, -- GRAY_FONT_COLOR
+    { 0.64, 0.21, 0.93, "kept" },  -- a quality's purple
+})
+local function colours(r: number, g: number, b: number, want: string)
+    expect(textColor(r, g, b) ?? "kept").toBe(want)
+end
+
+@test("textColor: no colour reads as ink")
+local function noColour()
+    expect(textColor(nil, nil, nil)).toBe("ink")
+end
+
+@test("sameColor: a token's colour within a hundredth")
+local function same()
+    local r, g, b = draw.rgba("ink")
+    expect(sameColor("ink", r, g, b)).toBe(true)
+    expect(sameColor("ink", r + 0.005, g, b)).toBe(true)
+    expect(sameColor("ink", r + 0.05, g, b)).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- The scrollbar
+--------------------------------------------------------------------------------
+
+@test("reskinScrollBar: Blizzard's minimal bar as a 2px gilt-line thumb")
+local function scrollBar()
+    local bar = CreateFrame("EventFrame", nil, host(), "MinimalScrollBar") :: any
+    reskinScrollBar(bar)
+    expect(bar.suuReskinned).toBe(true)
+    for _, t in ipairs(texturesOf(bar.Track)) do expect(t:GetAlpha()).toBe(0) end
+    expect(bar.Back:GetAlpha()).toBe(0)
+    expect(bar.Forward:GetAlpha()).toBe(0)
+    local thumb = bar.Track.Thumb
+    local line: any = nil
+    for _, t in ipairs(texturesOf(thumb)) do
+        if tokenOf(t) == "gilt-line" then line = t else expect(t:GetAlpha()).toBe(0) end
+    end
+    expect(line).never.toBeNil()
+    expect(line:GetWidth()).toBe(2)
+    -- hovered: gilt and wider
+    mock.script(thumb, "OnEnter")
+    expect(tokenOf(line)).toBe("gilt")
+    expect(line:GetWidth()).toBe(4)
+    mock.script(thumb, "OnLeave")
+    expect(tokenOf(line)).toBe("gilt-line")
+    expect(line:GetWidth()).toBe(2)
+    -- again: nothing more
+    local n = #texturesOf(thumb)
+    reskinScrollBar(bar)
+    expect(#texturesOf(thumb)).toBe(n)
+    reskinScrollBar(nil)
+end
+
+@test("reskinScrollBar: a bar without a track or a thumb")
+local function scrollBarBare()
+    local bare = CreateFrame("Frame", nil, host()) :: any
+    reskinScrollBar(bare)
+    expect(bare.suuReskinned).toBe(true)
+    local noThumb = CreateFrame("Frame", nil, host()) :: any
+    noThumb.Track = CreateFrame("Frame", nil, noThumb)
+    noThumb.Track:CreateTexture()
+    reskinScrollBar(noThumb)
+    expect(texturesOf(noThumb.Track)[1]:GetAlpha()).toBe(0)
+    -- a thumb that is a texture (no scripts): no hover
+    local texThumb = CreateFrame("Frame", nil, host()) :: any
+    texThumb.Track = CreateFrame("Frame", nil, texThumb)
+    texThumb.Track.Thumb = CreateFrame("Frame", nil, texThumb.Track)
+    texThumb.Track.Thumb.HookScript = nil
+    reskinScrollBar(texThumb)
+end
+
+--------------------------------------------------------------------------------
+-- Status bars
+--------------------------------------------------------------------------------
+
+local function statusBar(atlas: string?): any
+    local bar = CreateFrame("StatusBar", nil, host()) :: any
+    bar:SetSize(120, 12)
+    bar:SetPoint("CENTER")
+    local bg = bar:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bar.bg = bg
+    bar:SetStatusBarTexture(WHITE)
+    if atlas then bar:GetStatusBarTexture():SetAtlas(atlas) end
+    bar:SetMinMaxValues(0, 100)
+    bar:SetValue(40)
+    bar.text = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    bar.text:SetText("40 / 100")
+    return bar
+end
+
+@test("reskinStatusBar: a flat fill in its atlas's colour on a track, the text centred")
+@cases({ { "ui-character-stat-bar-green", "rep-friendly" }, { "stat-bar-red", "rep-hostile" }, { "stat-bar-purple", "arcane" },
+    { "some-other-bar", "progress-fill" } })
+local function statusBars(atlas: string, token: string)
+    local bar = statusBar(atlas)
+    reskinStatusBar(bar)
+    local fill = bar:GetStatusBarTexture()
+    expect(bar.suuAtlas).toBe(atlas)
+    expect(fill:GetTexture()).toBe(WHITE)
+    expect(tokenOf(fill)).toBe(token)
+    expect(bar.bg:GetAlpha()).toBe(0)
+    expect(bar.suuTrack).never.toBeNil()
+    expect(tokenOf(bar.text)).toBe("ink")
+    expect(bar.text).toBeAnchoredTo(bar.suuTrack, "LEFT", "LEFT")
+end
+
+@test("reskinStatusBar: Blizzard setting the fill again: flat again, Blizzard's call kept")
+local function statusBarAgain()
+    local bar = statusBar("stat-bar-green")
+    reskinStatusBar(bar)
+    local fill = bar:GetStatusBarTexture()
+    fill:SetAtlas("stat-bar-red")
+    expect(fill:GetTexture()).toBe(WHITE)
+    expect(bar.suuAtlas).toBe("stat-bar-red")
+    expect(tokenOf(fill)).toBe("rep-hostile")
+    bar:SetStatusBarTexture(WHITE)
+    expect(tokenOf(bar:GetStatusBarTexture())).toBe("rep-hostile")
+    -- again: one track, the hook once
+    local track = bar.suuTrack
+    reskinStatusBar(bar)
+    expect(bar.suuTrack).toBe(track)
+    reskinStatusBar(nil)
+end
+
+@test("reskinStatusBar: a bar without a fill gets a track of its own height")
+local function statusBarNoFill()
+    local bar = CreateFrame("StatusBar", nil, host()) :: any
+    bar:SetSize(100, 10)
+    reskinStatusBar(bar)
+    expect(bar.suuTrack:GetHeight()).toBe(10)
+    expect(bar.suuFillHooked).toBeNil()
+end
+
+@test("reskinStatusBar: a mask on the fill is taken off")
+local function statusBarMask()
+    local bar = statusBar(nil)
+    local mask = bar:CreateMaskTexture()
+    bar:GetStatusBarTexture():AddMaskTexture(mask)
+    reskinStatusBar(bar)
+    expect(bar:GetStatusBarTexture():GetNumMaskTextures()).toBe(0)
+end
+
+@test("reskinFillBar: Blizzard's coloured progress bar, its share kept on resize")
+local function fillBar()
+    local bar = CreateFrame("Frame", nil, host(), "ColoredProgressBarTemplate") :: any
+    bar:SetPoint("CENTER")
+    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.Green)
+    bar:SetFillPercent(0.5)
+    bar:SetText("3,210 / 6,000")
+    reskinFillBar(bar)
+    expect(bar.suuFillBar).toBe(true)
+    expect(bar.Fill:GetTexture()).toBe(WHITE)
+    expect(bar.suuAtlasWord).toBe("green")
+    expect(sameColor("rep-friendly", bar.Fill:GetVertexColor())).toBe(true)
+    expect(bar.suuPercent).toBe(0.5)
+    expect(bar.Fill:GetWidth()).toBeCloseTo(0.5 * bar.FillArea:GetWidth())
+    expect(bar.suuTrack:GetHeight()).toBeCloseTo(math.max(6, math.min(14, 15)))
+    expect(tokenOf(bar.Text)).toBe("ink")
+    expect(bar.Text).toBeAnchoredTo(bar.suuTrack, "LEFT", "LEFT")
+    -- Blizzard sets the share (its own method still runs) and the colour
+    bar:SetFillPercent(0.25)
+    expect(bar.suuPercent).toBe(0.25)
+    expect(bar.Fill:GetWidth()).toBeCloseTo(0.25 * bar.FillArea:GetWidth())
+    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.Red)
+    expect(bar.Fill:GetTexture()).toBe(WHITE)
+    expect(sameColor("rep-hostile", bar.Fill:GetVertexColor())).toBe(true)
+    -- a tint of Blizzard's own on a word SuuUI has no colour for: kept
+    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.White)
+    bar.Fill:SetVertexColor(0.2, 0.4, 0.6)
+    expect(bar.suuAtlasWord).toBe("white")
+    -- the width: a share of nothing hides the fill (the emulated client
+    -- sends the FillArea no OnSizeChanged when its parent's width moves
+    -- it: sent here as the client does; see the notes)
+    bar:SetWidth(12)
+    mock.script(bar.FillArea, "OnSizeChanged", bar.FillArea:GetWidth(), bar.FillArea:GetHeight())
+    expect(bar.Fill:GetAlpha()).toBe(0)
+    bar:SetWidth(200)
+    mock.script(bar.FillArea, "OnSizeChanged", bar.FillArea:GetWidth(), bar.FillArea:GetHeight())
+    expect(bar.Fill:GetAlpha()).toBe(1)
+    expect(bar.Fill:GetWidth()).toBeCloseTo(0.25 * 188)
+    -- again: the same track
+    local track = bar.suuTrack
+    reskinFillBar(bar)
+    expect(bar.suuTrack).toBe(track)
+    -- a theme change tints again
+    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.Blue)
+    bar.Fill:SetVertexColor(1, 1, 1)
+    themeChanged()
+    expect(sameColor("progress-fill", bar.Fill:GetVertexColor())).toBe(true)
+end
+
+@test("reskinFillBar: nothing without a Fill; no share without SetFillPercent")
+local function fillBarOdd()
+    reskinFillBar(nil)
+    local plain = CreateFrame("Frame", nil, host()) :: any
+    reskinFillBar(plain)
+    expect(plain.suuFillBar).toBeNil()
+    local own = CreateFrame("Frame", nil, host()) :: any
+    own.Fill = own:CreateTexture()
+    own.Fill:SetAtlas("skills-stat-bar-blue")
+    own:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    reskinFillBar(own)
+    expect(own.suuFillBar).toBe(true)
+    expect(own.suuSizeFill).toBeNil()
+    expect(own.suuAtlasWord).toBe("blue")
+    -- no atlas: no word, no tint
+    local blank = CreateFrame("Frame", nil, host()) :: any
+    blank.Fill = blank:CreateTexture()
+    reskinFillBar(blank)
+    expect(blank.suuAtlasWord).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Dropdowns and menus
+--------------------------------------------------------------------------------
+
+local function dropdown(): any
+    local d = CreateFrame("DropdownButton", nil, host(), "WowStyle1DropdownTemplate") :: any
+    d:SetPoint("CENTER")
+    d:SetWidth(140)
+    local chosen = 1
+    d:SetupMenu(function(_: any, root: any)
+        root:CreateTitle("Sort")
+        root:CreateRadio("By name", function() return chosen == 1 end, function() chosen = 1 end)
+        root:CreateRadio("By level", function() return chosen == 2 end, function() chosen = 2 end)
+        root:CreateDivider()
+        root:CreateButton("Reset", function() end)
+    end)
+    return d
+end
+
+@test("reskinDropdown: a sunk field, a chevron, label ink; gilt edge on hover")
+local function dropdowns()
+    local d = dropdown()
+    reskinDropdown(d)
+    expect(d.suuDropdown).toBe(true)
+    expect(d.Arrow:GetAlpha()).toBe(0)
+    expect(d.Background:GetAlpha()).toBe(0)
+    expect(tokenOf(d.Text)).toBe("ink")
+    local chev, bg: any = nil, nil
+    for _, t in ipairs(texturesOf(d)) do
+        if t:GetTexture() == GLYPHS .. "chevronDown.tga" then chev = t end
+        if tokenOf(t) == "surface-sunk" then bg = t end
+    end
+    expect(chev).never.toBeNil()
+    expect(bg).never.toBeNil()
+    mock.hover(d)
+    local edge = 0
+    for _, t in ipairs(texturesOf(d)) do if tokenOf(t) == "gilt" then edge = edge + 1 end end
+    expect(edge).toBe(4)
+    mock.hover(nil)
+    reskinDropdown(d)
+    reskinDropdown(nil)
+end
+
+@test("reskinDropdown with a glyph: an icon-only dropdown, its edge on hover")
+local function glyphDropdown()
+    local d = dropdown()
+    reskinDropdown(d, { glyph = "filter" })
+    expect(d.Text:GetAlpha()).toBe(0)
+    local glyph: any = nil
+    for _, t in ipairs(texturesOf(d)) do
+        if t:GetTexture() == GLYPHS .. "filter.tga" then glyph = t end
+    end
+    expect(glyph).never.toBeNil()
+    expect(tokenOf(glyph)).toBe("ink-muted")
+    mock.hover(d)
+    expect(tokenOf(glyph)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(glyph)).toBe("ink-muted")
+end
+
+-- The rows of the open menu (its buttons), and their texts.
+local function rowMenuOf(row: any): any
+    return rowMenu[row]
+end
+
+local function openMenu(): any
+    return Menu.GetManager():GetOpenMenu()
+end
+
+local function menuTexts(menu: any): any[]
+    local out: any[] = {}
+    local function walk(f: any)
+        for _, r in ipairs({ f:GetRegions() }) do
+            if (r :: any):GetObjectType() == "FontString" then out[#out + 1] = r end
+        end
+        for _, c in ipairs({ f:GetChildren() }) do walk(c) end
+    end
+    walk(menu)
+    return out
+end
+
+@test("a reskinned dropdown's menu opens in SuuUI's look; undone when it closes")
+local function dropdownMenu()
+    local d = dropdown()
+    reskinDropdown(d)
+    mock.click(d)
+    local menu = openMenu()
+    expect(menu).never.toBeNil()
+    mock.advanceFrames(1)
+    local texts = menuTexts(menu)
+    expect(#texts > 0).toBe(true)
+    local anyInk = false
+    for _, fs in ipairs(texts) do
+        local r, g, b = fs:GetTextColor()
+        if sameColor("ink", r, g, b) then anyInk = true end
+    end
+    expect(anyInk).toBe(true)
+    -- the chosen radio: an arcane check
+    local marks = 0
+    for _, c in ipairs({ menu:GetChildren() }) do
+        for _, t in ipairs(texturesOf(c)) do
+            if t:GetTexture() == GLYPHS .. "check.tga" and t:IsShown() then marks = marks + 1 end
+        end
+    end
+    expect(marks).toBe(1)
+    Menu.GetManager():CloseMenus()
+    expect(openMenu()).toBeNil()
+end
+
+local subDesc: any = nil
+
+@test("reskinMenu: a context menu as glass, rows hovered on arcane-soft, all undone on close")
+local function contextMenus()
+    local owner = host()
+    -- a menu opened and closed before: the game's rows come back from its
+    -- pool with their scripts set again (SuuUI's hover hooks gone: bug,
+    -- fixed; they are hooked again)
+    MenuUtil.CreateContextMenu(owner, function(_: any, root: any) root:CreateButton("First", function() end) end)
+    reskinMenu(openMenu())
+    Menu.GetManager():CloseMenus()
+    mock.advanceFrames(1)
+    local clicked = mock.spy()
+    MenuUtil.CreateContextMenu(owner, function(_: any, root: any)
+        root:CreateTitle("Tamsin Ashford")
+        root:CreateButton("Whisper", function() clicked() end)
+        root:CreateCheckbox("Ignore", function() return true end, function() end)
+        local sub = root:CreateButton("More")
+        subDesc = sub
+        sub:CreateButton("Inner", function() end)
+    end)
+    local menu = openMenu()
+    expect(menu).never.toBeNil()
+    local texts = menuTexts(menu)
+    local before: any[] = {}
+    for i, fs in ipairs(texts) do before[i] = { fs:GetTextColor() } end
+    reskinMenu(menu)
+    reskinMenu(menu) -- a second pass starts from the game's look again
+    local inked = 0
+    for _, fs in ipairs(texts) do if sameColor("ink", fs:GetTextColor()) then inked = inked + 1 end end
+    expect(inked > 0).toBe(true)
+    local rows: any[] = {}
+    for _, c in ipairs({ menu:GetChildren() }) do
+        if (c :: any):GetObjectType() == "Button" then rows[#rows + 1] = c end
+    end
+    expect(#rows >= 3).toBe(true)
+    -- hovering a row: the arcane-soft band under it
+    local st = assert(menus[menu])
+    mock.script(rows[1], "OnEnter")
+    expect(st.hover).toBeShown()
+    mock.script(rows[1], "OnLeave")
+    expect(st.hover).never.toBeShown()
+    -- the submenu opened from it: restyled too
+    local more: any, whisper: any = nil, nil
+    for _, r in ipairs(rows) do
+        for _, fs in ipairs(menuTexts(r)) do
+            if fs:GetText() == "More" then more = r end
+            if fs:GetText() == "Whisper" then whisper = r end
+        end
+    end
+    expect(more).never.toBeNil()
+    -- (opened as the game does on hover; a hover in the emulated client
+    -- didn't open it, see the notes)
+    subDesc:ForceOpenSubmenu()
+    mock.advanceFrames(2)
+    local subs = 0
+    for sub, other in pairs(menus) do if sub ~= menu and other.active then subs = subs + 1 end end
+    expect(subs).toBe(1)
+    -- a choice that refreshes the menu: marked again a frame later
+    if menu.ReinitializeAll then
+        menu:ReinitializeAll()
+        mock.advanceFrames(1)
+        expect(st.active).toBe(true)
+    end
+    -- clicks stay the game's
+    mock.click(whisper)
+    expect(clicked).toHaveBeenCalledTimes(1)
+    Menu.GetManager():CloseMenus()
+    mock.advanceFrames(2)
+    expect(openMenu()).toBeNil()
+    -- undone: the game's colours back on its shared rows
+    for i, fs in ipairs(texts) do expect({ fs:GetTextColor() }).toEqual(before[i]) end
+    reskinMenu(nil)
+end
+
+@test("reskinMenu on a menu's parts: a tick, a submenu arrow, text in a child, a scrolling list, a spacer")
+local function menuParts()
+    -- a stand-in with the parts the game's menu frames have (probed
+    -- 2026-10-14: common-dropdown textures, rows with a radio or check)
+    local menu = CreateFrame("Frame", nil, host()) :: any
+    menu:SetSize(160, 200)
+    menu:SetPoint("CENTER")
+    local bg = menu:CreateTexture()
+    bg:SetAtlas("common-dropdown-bg")
+    local function row(p: any, y: number, label: string?): any
+        local r = CreateFrame("Button", nil, p) :: any
+        r:SetSize(150, 20)
+        r:SetPoint("TOPLEFT", 5, y)
+        if label then
+            local fs = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            fs:SetText(label)
+            fs:SetPoint("LEFT")
+        end
+        return r
+    end
+    local chosen = row(menu, -10, "By name")
+    local tick = chosen:CreateTexture()
+    tick:SetAtlas("common-dropdown-icon-radialbutton")
+    local tickOn = chosen:CreateTexture()
+    tickOn:SetAtlas("common-dropdown-tick")
+    local hl = chosen:CreateTexture(nil, "HIGHLIGHT")
+    local hidden = chosen:CreateTexture()
+    hidden:Hide()
+    local plainTick = row(menu, -30, "Unticked")
+    local off = plainTick:CreateTexture()
+    off:SetAtlas("common-dropdown-icon-checkmark")
+    off:Hide()
+    local nested = row(menu, -50, nil)
+    local inner = CreateFrame("Frame", nil, nested)
+    inner:SetAllPoints()
+    local innerText = inner:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    innerText:SetText("Text in a child")
+    local sub = row(menu, -70, "More")
+    sub.arrow = sub:CreateTexture()
+    sub.arrow:SetPoint("RIGHT")
+    local markless = row(menu, -90, "Plain")
+    local ownTick = markless:CreateTexture()
+    ownTick:SetAtlas("common-dropdown-icon-checkmark-yellow")
+    local spacer = row(menu, -110, nil)
+    -- a scrolling list: its rows in the box's target
+    menu.ScrollBox = CreateFrame("Frame", nil, menu)
+    menu.ScrollBox:SetAllPoints()
+    menu.ScrollBox.ScrollTarget = CreateFrame("Frame", nil, menu.ScrollBox)
+    menu.ScrollBox.ScrollTarget:SetAllPoints()
+    local scrolled = row(menu.ScrollBox.ScrollTarget, -130, "Scrolled")
+    local reinit = mock.spy()
+    menu.ReinitializeAll = function() reinit() end
+    reskinMenu(menu)
+    local st = assert(menus[menu])
+    expect(st.active).toBe(true)
+    expect(bg:GetAlpha()).toBe(0)
+    expect(tick:GetAlpha()).toBe(0)
+    expect(tickOn:GetAlpha()).toBe(0)
+    expect(hl:GetAlpha()).toBe(0)
+    -- the chosen row's check, SuuUI's, on Blizzard's tick
+    expect(st.nMarks).toBe(2)
+    expect(st.marks[1]).toBeShown()
+    expect(st.marks[1]).toBeAnchoredTo(tickOn, "CENTER", "CENTER")
+    -- the submenu's arrow: SuuUI's chevron
+    expect(sub.arrow:GetAlpha()).toBe(0)
+    expect(st.nChevrons).toBe(1)
+    expect(st.chevrons[1]:GetTexture()).toBe(GLYPHS .. "chevronRight.tga")
+    -- the scrolled row is a row too
+    expect(rowMenuOf(scrolled)).toBe(st)
+    -- the panel: from the top to the last row with words (the scrolled one),
+    -- as far below it as the first row is below the top
+    expect(st.panel).toBeAnchoredTo(scrolled, "BOTTOM", "BOTTOM")
+    -- refreshed by a choice: again a frame later
+    menu:ReinitializeAll()
+    expect(reinit).toHaveBeenCalledTimes(1)
+    mock.advanceFrames(1)
+    expect(st.active).toBe(true)
+    -- hidden: undone
+    menu:Hide()
+    expect(st.active).toBe(false)
+    expect(bg:GetAlpha()).toBe(1)
+    expect(st.panel).never.toBeShown()
+    expect(st.marks[1]).never.toBeShown()
+    expect(st.chevrons[1]).never.toBeShown()
+    -- refreshed while hidden: nothing
+    menu:ReinitializeAll()
+    mock.advanceFrames(1)
+    expect(st.active).toBe(false)
+    expect(spacer).toBeShown()
+    expect(nested).toBeShown()
+end
+
+@test("reskinMenu: a menu whose last row runs below it covers all of it")
+local function menuOverflow()
+    local menu = CreateFrame("Frame", nil, host()) :: any
+    menu:SetSize(160, 40)
+    menu:SetPoint("CENTER")
+    local r = CreateFrame("Button", nil, menu)
+    r:SetSize(150, 20)
+    r:SetPoint("TOPLEFT", 5, -60)
+    local fs = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    fs:SetText("Below")
+    reskinMenu(menu)
+    local st = assert(menus[menu])
+    expect(st.panel).toBeAnchoredTo(menu, "TOPLEFT", "TOPLEFT")
+    expect(st.panel).toBeAnchoredTo(menu, "BOTTOMRIGHT", "BOTTOMRIGHT")
+    menu:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Buttons, boxes and fields
+--------------------------------------------------------------------------------
+
+@test("reskinIconButton: Blizzard's selector button as a well, gilt on hover, arcane when selected")
+local function iconButton()
+    local b = CreateFrame("Button", nil, host(), "SelectorButtonTemplate") :: any
+    b:SetPoint("CENTER")
+    b.Icon:SetTexture(134400)
+    reskinIconButton(b)
+    local st = b.suuIcon
+    expect(st).never.toBeNil()
+    expect(b.Icon:GetAlpha()).toBe(1)
+    expect(b:GetHighlightTexture():GetAlpha()).toBe(0)
+    expect(tokenOf(st.edge.top)).toBe("gilt-hairline")
+    mock.hover(b)
+    expect(tokenOf(st.edge.top)).toBe("gilt")
+    mock.hover(nil)
+    b.SelectedTexture:Show()
+    expect(tokenOf(st.edge.top)).toBe("arcane")
+    b.SelectedTexture:SetShown(false)
+    expect(tokenOf(st.edge.top)).toBe("gilt-hairline")
+    -- again: the same state, the art hidden again
+    reskinIconButton(b)
+    expect(b.suuIcon).toBe(st)
+    reskinIconButton(nil)
+end
+
+@test("reskinIconButton: a button with neither icon nor selected texture")
+local function iconButtonBare()
+    local b = CreateFrame("Button", nil, host()) :: any
+    b:CreateTexture()
+    reskinIconButton(b)
+    expect(tokenOf(b.suuIcon.edge.top)).toBe("gilt-hairline")
+end
+
+@test("reskinCheckButton: a 16px box, the arcane check following Blizzard's state")
+local function checkButton()
+    local b = CreateFrame("CheckButton", nil, host(), "UICheckButtonTemplate") :: any
+    b:SetPoint("CENTER")
+    reskinCheckButton(b)
+    local st = b.suuCheck
+    expect(st.box).toHaveSize(16, 16)
+    expect(b:GetNormalTexture():GetAlpha()).toBe(0)
+    local check: any = nil
+    for _, t in ipairs(texturesOf(st.box)) do if t:GetTexture() == GLYPHS .. "check.tga" then check = t end end
+    expect(check).never.toBeShown()
+    b:SetChecked(true)
+    expect(check).toBeShown()
+    mock.click(b)
+    expect(b:GetChecked()).toBe(false)
+    expect(check).never.toBeShown()
+    b:Hide()
+    b:SetChecked(true)
+    b:Show()
+    expect(check).toBeShown()
+    reskinCheckButton(b)
+    expect(b.suuCheck).toBe(st)
+    reskinCheckButton(nil)
+end
+
+@test("reskinButton: Blizzard's panel button quiet; dimmed while disabled")
+local function panelButton()
+    local b = CreateFrame("Button", nil, host(), "UIPanelButtonTemplate") :: any
+    b:SetSize(100, 22)
+    b:SetText("Accept")
+    reskinButton(b)
+    expect(b.Left:GetAlpha()).toBe(0)
+    expect(b.Middle:GetAlpha()).toBe(0)
+    expect(tokenOf(b:GetFontString())).toBe("ink")
+    expect(b:GetAlpha()).toBe(1)
+    b:Disable()
+    expect(b:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    b:Enable()
+    expect(b:GetAlpha()).toBe(1)
+    b:SetEnabled(false)
+    expect(b:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    b:SetEnabled(true)
+    mock.hover(b)
+    local gilt = 0
+    for _, t in ipairs(texturesOf(b)) do if tokenOf(t) == "gilt" then gilt = gilt + 1 end end
+    expect(gilt).toBe(4)
+    mock.hover(nil)
+    reskinButton(b)
+    reskinButton(nil)
+end
+
+@test("reskinButton: a red button's atlas art away")
+local function redButton()
+    local b = CreateFrame("Button", nil, host()) :: any
+    local art = b:CreateTexture()
+    art:SetAtlas("128-redbutton-up")
+    reskinButton(b)
+    expect(art:GetAlpha()).toBe(0)
+end
+
+@test("reskinEditBox: Blizzard's input box sunk, an arcane edge while typing")
+local function editBox()
+    local e = CreateFrame("EditBox", "SuuUITestEdit", host(), "InputBoxTemplate") :: any
+    e:SetSize(120, 20)
+    e:SetPoint("CENTER")
+    e:SetAutoFocus(false)
+    reskinEditBox(e)
+    expect(e.suuEdit).toBe(true)
+    expect(e.Left:GetAlpha()).toBe(0)
+    expect(tokenOf(e)).toBe("ink")
+    local edge: any[] = {}
+    local function scan(f: any)
+        for _, c in ipairs({ f:GetChildren() }) do
+            for _, t in ipairs(texturesOf(c)) do if tokenOf(t) == "gilt-line" or tokenOf(t) == "arcane" then edge[#edge + 1] = t end end
+        end
+    end
+    scan(e)
+    expect(#edge).toBe(4)
+    mock.typeText(e, "x")
+    expect(tokenOf(edge[1])).toBe("arcane")
+    e:ClearFocus()
+    expect(tokenOf(edge[1])).toBe("gilt-line")
+    reskinEditBox(e)
+    reskinEditBox(nil)
+end
+
+@test("reskinEditBox: a search box: the field itself, its hint inset")
+local function searchBox()
+    local e = CreateFrame("EditBox", nil, host(), "SearchBoxTemplate") :: any
+    e:SetSize(120, 20)
+    reskinEditBox(e)
+    expect(e.Instructions.suuSkip).toBe(true)
+    expect(tokenOf(e.Instructions)).toBe("ink-muted")
+    expect(e.Instructions).toBeAnchoredTo(e, "LEFT", "LEFT")
+    local l, r = e:GetTextInsets()
+    expect(l).toBe(T.space["space-3"])
+    expect(r).toBe(T.space["space-5"])
+end
+
+@test("reskinEditBox: a box with a backdrop child")
+local function editBoxChild()
+    local e = CreateFrame("EditBox", nil, host()) :: any
+    local child = CreateFrame("Frame", nil, e) :: any
+    child.NineSlice = CreateFrame("Frame", nil, child)
+    local art = child:CreateTexture()
+    e.NineSlice = CreateFrame("Frame", nil, e)
+    reskinEditBox(e)
+    expect(child.NineSlice:GetAlpha()).toBe(0)
+    expect(art:GetAlpha()).toBe(0)
+    expect(e.NineSlice:GetAlpha()).toBe(0)
+end
+
+@test("reskinCollapseButton: SuuUI's minus or plus, following Blizzard's texture")
+local function collapseButton()
+    local b = CreateFrame("Button", nil, host()) :: any
+    b:SetSize(16, 16)
+    b:SetNormalTexture("Interface\\Buttons\\UI-MinusButton-Up")
+    b:SetPushedTexture("Interface\\Buttons\\UI-MinusButton-Down")
+    -- Blizzard's own click (set before SuuUI hooks it): the texture changed
+    -- without a hooked method, so only the redraw after the click sees it
+    b:SetScript("OnClick", function(self: any) self:GetNormalTexture():SetAtlas("ui-hud-minus") end)
+    reskinCollapseButton(b)
+    local glyph: any = nil
+    for _, t in ipairs(texturesOf(b)) do if tokenOf(t) == "gilt-text" then glyph = t end end
+    expect(glyph:GetTexture()).toBe(GLYPHS .. "minus.tga")
+    expect(b:GetNormalTexture():GetAlpha()).toBe(0)
+    b:SetNormalTexture("Interface\\Buttons\\UI-PlusButton-Up")
+    expect(glyph:GetTexture()).toBe(GLYPHS .. "plus.tga")
+    b:SetNormalAtlas("campaign-questlog-collapse-expanded")
+    expect(glyph:GetTexture()).toBe(GLYPHS .. "minus.tga")
+    b:SetNormalAtlas("ui-questtrackerbutton-expand")
+    expect(glyph:GetTexture()).toBe(GLYPHS .. "plus.tga")
+    -- a click: drawn again a frame later
+    mock.click(b)
+    mock.advanceFrames(1)
+    expect(glyph:GetTexture()).toBe(GLYPHS .. "minus.tga")
+    reskinCollapseButton(b)
+    reskinCollapseButton(nil)
+end
+
+@test("isPanelButton: Left/Middle/Right art, a button atlas, a panel button texture")
+local function panelButtons()
+    local p = host()
+    local a = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+    expect(isPanelButton(a) and true or false).toBe(true)
+    local b = CreateFrame("Button", nil, p) :: any
+    b:CreateTexture():SetAtlas("common-button-square-gray-up")
+    expect(isPanelButton(b) and true or false).toBe(true)
+    local c = CreateFrame("Button", nil, p) :: any
+    c:CreateTexture():SetAtlas("ui-list-button-minus")
+    expect(isPanelButton(c)).toBe(false)
+    local d = CreateFrame("Button", nil, p) :: any
+    d:SetNormalTexture("Interface\\Buttons\\UI-Panel-Button-Up")
+    expect(isPanelButton(d) and true or false).toBe(true)
+    local e = CreateFrame("Button", nil, p) :: any
+    e:SetNormalTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    expect(isPanelButton(e) and true or false).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- A pass over a frame
+--------------------------------------------------------------------------------
+
+@test("reskin: textures by atlas, texts by colour and size, a category row's head")
+local function passTextures()
+    local f = CreateFrame("Frame", nil, host()) :: any
+    f:SetSize(200, 100)
+    local hide = f:CreateTexture()
+    hide:SetAtlas("Options_List_Active-scrollline")
+    local check = f:CreateTexture()
+    check:SetAtlas("common-icon-checkmark")
+    local minimal = f:CreateTexture()
+    minimal:SetAtlas("checkmark-minimal")
+    local plus = f:CreateTexture()
+    plus:SetAtlas("ui-hud-minus")
+    local sel = f:CreateTexture(nil, "ARTWORK")
+    sel:SetAtlas("pvpqueue-button-select")
+    local hl = f:CreateTexture(nil, "HIGHLIGHT")
+    local hover = f:CreateTexture()
+    hover:SetAtlas("talents-hover")
+    local plain = f:CreateTexture()
+    local function fs(font: string, r: number, g: number, b: number, text: string): any
+        local s = f:CreateFontString(nil, "OVERLAY", font)
+        s:SetTextColor(r, g, b)
+        s:SetText(text)
+        return s
+    end
+    local yellow = fs("GameFontNormal", 1, 0.82, 0, "Strength")
+    local grey = fs("GameFontNormalSmall", 0.5, 0.5, 0.5, "small grey")
+    local purple = fs("GameFontNormal", 0.64, 0.21, 0.93, "Epic thing")
+    local big = fs("GameFontNormalLarge", 1, 1, 1, "Title")
+    local long = fs("GameFontNormalLarge", 1, 1, 1, string.rep("long text ", 6))
+    local number = fs("NumberFontNormal", 1, 1, 1, "42")
+    reskin(f)
+    expect(hide:GetAlpha()).toBe(0)
+    expect(check.suuMoved).toBe(true)
+    expect(check).toHaveSize(12, 12)
+    expect(minimal.suuMoved).toBeNil()
+    expect(tokenOf(plus)).toBe("gilt-text")
+    expect(plus:IsDesaturated()).toBe(true)
+    expect(tokenOf(sel)).toBe("arcane-soft")
+    expect(select(1, sel:GetDrawLayer())).toBe("BACKGROUND")
+    expect(tokenOf(hl)).toBe("surface-raised")
+    expect(hl:GetAlpha()).toBeCloseTo(0.6, 2)
+    expect(tokenOf(hover)).toBe("surface-raised")
+    expect(tokenOf(plain)).toBeNil()
+    expect(tokenOf(yellow)).toBe("ink")
+    expect(tokenOf(grey)).toBe("ink-muted")
+    expect(tokenOf(purple)).toBeNil()
+    expect({ purple:GetTextColor() }).toEqual({ purple:GetTextColor() })
+    expect(tokenOf(big)).toBe("gilt-text")
+    expect(tokenOf(long)).toBe("ink")
+    expect(tokenOf(number)).toBe("ink")
+    -- a second pass keeps a coloured text's token
+    reskin(f)
+    expect(tokenOf(yellow)).toBe("ink")
+    expect(check.suuMoved).toBe(true)
+    reskin(nil)
+end
+
+@test("reskin: a text with a secret value is not measured")
+local function passSecret()
+    local f = CreateFrame("Frame", nil, host()) :: any
+    local s = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    s:SetText(mock.secret("A name"))
+    reskin(f)
+    expect(tokenOf(s)).toBe("ink")
+end
+
+@test("reskin: a category row: its name a header, a rule under it")
+local function categoryRow()
+    local f = CreateFrame("Frame", nil, host()) :: any
+    f:SetSize(200, 20)
+    local bar = f:CreateTexture()
+    bar:SetAtlas("Options_ListExpand_Right-collapseexpand")
+    local name = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    name:SetText("Classic")
+    reskin(f)
+    expect(tokenOf(name)).toBe("gilt-text")
+    expect(f.suuHeadRule).never.toBeNil()
+    expect(tokenOf(f.suuHeadRule)).toBe("gilt-faint")
+    local rule = f.suuHeadRule
+    reskin(f)
+    expect(f.suuHeadRule).toBe(rule)
+end
+
+@test("reskin: the parts inside a frame, by kind; SuuUI's own frames left out")
+local function passChildren()
+    local f = CreateFrame("Frame", nil, host()) :: any
+    f:SetSize(300, 200)
+    local status = CreateFrame("StatusBar", nil, f) :: any
+    status:SetStatusBarTexture(WHITE)
+    local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate") :: any
+    local noCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate") :: any
+    noCheck.suuNoCheck = true
+    local eb = CreateFrame("EditBox", nil, f, "InputBoxTemplate") :: any
+    eb:SetAutoFocus(false)
+    local dd = CreateFrame("DropdownButton", nil, f, "WowStyle1DropdownTemplate") :: any
+    local fill = CreateFrame("Frame", nil, f, "ColoredProgressBarTemplate") :: any
+    local ownFill = CreateFrame("Frame", nil, f) :: any
+    ownFill.Fill = ownFill:CreateTexture()
+    ownFill.Fill:SetAtlas("ui-stat-bar-blue")
+    local collapse = CreateFrame("Button", nil, f) :: any
+    f.CollapseButton = collapse
+    collapse:SetNormalTexture("Interface\\Buttons\\UI-MinusButton-Up")
+    local panel = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") :: any
+    local noButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") :: any
+    noButton.suuNoButton = true
+    local scroll = CreateFrame("EventFrame", nil, f, "MinimalScrollBar") :: any
+    local own = CreateFrame("Frame", nil, f) :: any
+    own.suuOwn = true
+    local ownText = own:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    ownText:SetTextColor(1, 0.82, 0)
+    local arrowButton = CreateFrame("Button", nil, f) :: any
+    arrowButton.Arrow = arrowButton:CreateTexture()
+    arrowButton.Text = arrowButton:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    reskin(f)
+    expect(status.suuTrack).never.toBeNil()
+    expect(cb.suuCheck).never.toBeNil()
+    expect(noCheck.suuCheck).toBeNil()
+    expect(eb.suuEdit).toBe(true)
+    expect(dd.suuDropdown).toBe(true)
+    expect(arrowButton.suuDropdown).toBe(true)
+    expect(fill.suuFillBar).toBe(true)
+    expect(ownFill.suuFillBar).toBe(true)
+    expect(collapse.suuCollapse).never.toBeNil()
+    expect(collapse:GetParentKey()).toBe("CollapseButton")
+    expect(panel.suuButton).never.toBeNil()
+    expect(noButton.suuButton).toBeNil()
+    expect(scroll.suuReskinned).toBe(true)
+    expect(tokenOf(ownText)).toBeNil()
+    -- again: the buttons drawn again
+    panel:Disable()
+    reskin(f)
+    expect(panel:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+end
+
+@test("reskin: seven levels deep at most")
+local function depth()
+    local f = CreateFrame("Frame", nil, host()) :: any
+    local cur = f
+    local texts: any[] = {}
+    for i = 1, 8 do
+        cur = CreateFrame("Frame", nil, cur)
+        local s = cur:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        s:SetTextColor(1, 0.82, 0)
+        texts[i] = s
+    end
+    reskin(f)
+    expect(tokenOf(texts[6])).toBe("ink")
+    expect(tokenOf(texts[7])).toBeNil()
+end
+
+@test("reskinScrollBox: Blizzard's list, its rows now and after each update")
+local function scrollBox()
+    local p = host()
+    local box = CreateFrame("Frame", nil, p, "WowScrollBoxList") :: any
+    box:SetSize(200, 200)
+    box:SetPoint("CENTER")
+    local bar = CreateFrame("EventFrame", nil, p, "MinimalScrollBar")
+    local view = CreateScrollBoxListLinearView()
+    view:SetElementExtent(20)
+    view:SetElementInitializer("Button", function(row: any, data: any)
+        row.label = row.label or row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.label:SetAllPoints()
+        row.label:SetTextColor(1, 0.82, 0)
+        row.label:SetText(data.name)
+    end)
+    ScrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+    local provider = CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } })
+    box:SetDataProvider(provider)
+    reskinScrollBox(box)
+    expect(box.suuReskinBox).toBe(true)
+    local seen = 0
+    box:ForEachFrame(function(row: any)
+        seen = seen + 1
+        expect(tokenOf(row.label)).toBe("ink")
+    end)
+    expect(seen).toBe(2)
+    -- an update: the new rows too
+    provider:Insert({ name = "Gamma" })
+    mock.advanceFrames(2)
+    box:ForEachFrame(function(row: any) expect(tokenOf(row.label)).toBe("ink") end)
+    -- shown again: a frame later
+    box:Hide()
+    box:Show()
+    mock.advanceFrames(1)
+    reskinScrollBox(box)
+    reskinScrollBox(nil)
+end
+
+@test("reskinScrollBox: a box without ForEachFrame walks its target's children")
+local function scrollBoxPlain()
+    local box = CreateFrame("Frame", nil, host()) :: any
+    box.ScrollTarget = CreateFrame("Frame", nil, box)
+    local row = CreateFrame("Frame", nil, box.ScrollTarget)
+    local bar = row:CreateTexture()
+    bar:SetAtlas("Options_ListExpand_Right-collapseexpand")
+    local s = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    s:SetText("Category")
+    box.Shadows = CreateFrame("Frame", nil, box)
+    reskinScrollBox(box)
+    expect(tokenOf(s)).toBe("gilt-text")
+    expect(box.Shadows:GetAlpha()).toBe(0)
+end
+
+@test("a pass over a frame with a ScrollBox reskins the box's rows")
+local function passScrollBox()
+    local f = CreateFrame("Frame", nil, host()) :: any
+    local box = CreateFrame("Frame", nil, f, "WowScrollBoxList") :: any
+    box:Init(CreateScrollBoxListLinearView())
+    reskin(f)
+    expect(box.suuReskinBox).toBe(true)
+end
+
+@test("Blizzard's scrolling text: measured again a frame after the pass and each text")
+local function scrollingFont()
+    -- (the character window's side pane holds one, its font named)
+    local pane = CreateFrame("Frame", nil, host(), "CharacterFrameSidePaneTemplate") :: any
+    pane:SetSize(220, 200)
+    pane:SetPoint("CENTER")
+    local f = pane.Description
+    f:SetHeight(60)
+    f:SetText("A description long enough to wrap onto a few lines in the box.")
+    reskin(f)
+    mock.advanceFrames(2)
+    local container = f:GetFontStringContainer()
+    expect(container:GetHeight()).toBeCloseTo(f:GetFontString():GetStringHeight())
+    f:SetText("Shorter")
+    mock.advanceFrames(2)
+    expect(container:GetHeight()).toBeCloseTo(f:GetFontString():GetStringHeight())
+    -- a second pass: one hook
+    reskin(f)
+    expect(f.suuScrollingFont).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Dialogs and popups
+--------------------------------------------------------------------------------
+
+@test("reskinDialog: Blizzard's small dialog as a SuuUI panel; its close as the cross")
+local function dialogPanel()
+    local f = CreateFrame("Frame", "SuuUITestDialog", host(), "BasicFrameTemplate") :: any
+    f:SetSize(300, 200)
+    f:SetPoint("CENTER")
+    f.TitleText:SetText("Guild Information")
+    local box = CreateFrame("Frame", nil, f) :: any
+    box:SetSize(260, 120)
+    box:SetPoint("CENTER")
+    box.NineSlice = CreateFrame("Frame", nil, box)
+    local edit = CreateFrame("EditBox", nil, CreateFrame("ScrollFrame", nil, box)) :: any
+    edit:SetAutoFocus(false)
+    local small = CreateFrame("Frame", nil, f) :: any
+    small:SetSize(20, 20)
+    reskinDialog(f)
+    expect(f.suuDialog).toBe(true)
+    expect(f.TitleBg:GetAlpha()).toBe(0)
+    expect(tokenOf(f.TitleText)).toBe("gilt-text")
+    expect(f.TitleText.suuSkip).toBe(true)
+    expect(f.CloseButton).toHaveSize(22, 22)
+    expect(f.CloseButton).toBeAnchoredTo(f, "TOPRIGHT", "TOPRIGHT")
+    expect(box.suuBox).toBe(true)
+    expect(box.NineSlice:GetAlpha()).toBe(0)
+    expect(edit.suuEdit).toBe(true)
+    expect(tokenOf(edit)).toBe("ink")
+    expect(small.suuBox).toBeNil()
+    mock.hover(f.CloseButton)
+    mock.hover(nil)
+    -- again: the pass only; the close still Blizzard's
+    reskinDialog(f)
+    mock.click(f.CloseButton)
+    expect(f).never.toBeShown()
+    reskinDialog(nil)
+end
+
+local POPUP = "SUUUI_TEST_POPUP"
+
+@test("reskinPopup: the shared popup in SuuUI's look while it shows; undone after")
+local function popup()
+    local accepted = mock.spy()
+    StaticPopupDialogs[POPUP] = { text = "Set the note for %s", button1 = ACCEPT, button2 = CANCEL, hasEditBox = true,
+        OnAccept = function() accepted() end, timeout = 0, whileDead = true, hideOnEscape = true }
+    local dialog = StaticPopup_Show(POPUP, "Tamsin Ashford") :: any
+    expect(dialog).never.toBeNil()
+    local text = dialog.Text
+    local r0, g0, b0 = text:GetTextColor()
+    reskinPopup(dialog)
+    expect(sameColor("ink", text:GetTextColor())).toBe(true)
+    reskinPopup(dialog) -- again while shown: from the game's look
+    expect(sameColor("ink", text:GetTextColor())).toBe(true)
+    local container = dialog.ButtonContainer
+    local accept = (container and container.Button1) or dialog.button1
+    expect(sameColor("on-signal", accept:GetFontString():GetTextColor())).toBe(true)
+    local cancel = (container and container.Button2) or dialog.button2
+    mock.hover(cancel)
+    mock.hover(nil)
+    mock.click(accept)
+    expect(accepted).toHaveBeenCalledTimes(1)
+    expect(dialog).never.toBeShown()
+    -- hidden: the game's look again
+    local r, g, b = text:GetTextColor()
+    expect({ r, g, b }).toEqual({ r0, g0, b0 })
+    reskinPopup(nil)
+end

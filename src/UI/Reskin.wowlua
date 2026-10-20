@@ -35,7 +35,7 @@ local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-local isSecret: (v: any) -> boolean = issecretvalue or function() return false end
+local isSecret: (v: any) -> boolean = issecretvalue or function() return false end -- wowlua: coverage ignore (a client without secret values)
 
 local HIDE: string[] = { "collapseexpand", "scrollline", "insideframe", "stat%-bar%-bg", "stat%-bg", "%-info%-.*%-bg",
                "stattab", "button%-list%-header", "common%-search%-border", "plunderstorm" }
@@ -324,6 +324,18 @@ local menus: { [any]: State } = setmetatable({}, { __mode = "k" })
 local rowMenu: { [any]: State } = setmetatable({}, { __mode = "k" }) -- a row: the menu state it belongs to now
 local hooked: { [any]: boolean } = setmetatable({}, { __mode = "k" })
 
+-- A hook on a script of one of the game's pooled frames (its menus, menu
+-- rows, popups) that lasts: the game sets those scripts again whenever it
+-- reuses the frame (Menu.lua: SetScript("OnEnter", …) on each row it
+-- lays out, SetScript("OnHide", …) on each menu it opens), and SetScript
+-- drops the hooks on a script; the hook goes on again right after.
+local function lastingHookScript(f: any, script: string, fn: (...any) -> ())
+    hookScript(f, script, fn)
+    hook(f, "SetScript", function(self: any, name: any)
+        if name == script then hookScript(self, script, fn) end
+    end)
+end
+
 local function restoreMenu(st: State)
     for i = #st.undo, 1, -1 do pcall(st.undo[i]) end
     st.undo = {}
@@ -403,9 +415,11 @@ local function menuRow(st: State, row: any)
     -- SuuUI's hover and mark: on its own panel behind the rows (the game
     -- forbids new textures on its menu rows)
     rowMenu[row] = st
+    -- (lasting: the game sets a reused row's scripts again; the hover band
+    -- showed on a row's first menu only)
     if not hooked[row] then
         hooked[row] = true
-        hookScript(row, "OnEnter", function(self: any)
+        lastingHookScript(row, "OnEnter", function(self: any)
             local owner = rowMenu[self]
             if owner and owner.active then
                 owner.hover:ClearAllPoints()
@@ -413,7 +427,7 @@ local function menuRow(st: State, row: any)
                 owner.hover:Show()
             end
         end)
-        hookScript(row, "OnLeave", function(self: any)
+        lastingHookScript(row, "OnLeave", function(self: any)
             local owner = rowMenu[self]
             if owner then owner.hover:Hide() end
         end)
@@ -472,7 +486,9 @@ export function reskinMenu(menu: any)
         st.hover:Hide()
         st.panel = panel
         menus[menu] = st
-        hookScript(menu, "OnHide", function() if st.active then restoreMenu(st) end end)
+        -- (lasting: the game sets a menu frame's OnHide again each time it
+        -- opens one; the look stayed on its shared frames)
+        lastingHookScript(menu, "OnHide", function() if st.active then restoreMenu(st) end end)
         -- a choice that refreshes the menu (a sort order) sets its rows up
         -- again: marked again
         if menu.ReinitializeAll then
@@ -1122,7 +1138,8 @@ export function reskinPopup(dialog: any)
         draw.diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
         st.skins[dialog] = panel
         popups[dialog] = st
-        hookScript(dialog, "OnHide", function() if st.active then restorePopup(st) end end)
+        -- (lasting: the game sets a popup's OnHide while it waits on events)
+        lastingHookScript(dialog, "OnHide", function() if st.active then restorePopup(st) end end)
     end
     if st.active then restorePopup(st) end
     st.active = true

@@ -1,0 +1,698 @@
+-- UI/Notification: a card's parts (icon, head, body, source, item, roles,
+-- warning, confirm, until, actions, drain), presence cards, the time, and
+-- the stack (order, combat, more, dismiss all, notes hidden, reuse, theme).
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as extend from "/Core/Extend"
+import * as tooltip from "/UI/Tooltip"
+import notification, notificationStack from "/UI/Notification"
+import internal clock from "/UI/Notification"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, themeChanged from "./WindowsHelpers"
+
+local S = T.space
+local WIDTH = T.size["notice-w"]
+local PAD = S["space-4"]
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+
+local showSpy = mock.spy()
+local hideSpy = mock.spy()
+mock.module(tooltip, {
+    showTooltip = function(owner: any, data: any) showSpy(owner, data) end,
+    hideTooltip = function() hideSpy() end,
+})
+
+local parent: Frame? = nil
+
+local function make()
+    parent = parent or newParent()
+    return notification(parent)
+end
+
+local function stack(max: number?)
+    parent = parent or newParent()
+    return notificationStack(parent, max and { max = max } or nil)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    mock.resetSpies()
+    expectNoErrors()
+end
+
+-- The shown buttons of a card's actions row, right to left.
+local function shownButtons(n: any): any[]
+    local out: any[] = {}
+    for _, pool in pairs(n.buttons) do
+        for _, b in ipairs(pool) do if b:IsShown() then out[#out + 1] = b end end
+    end
+    return out
+end
+
+@test("clock: seconds, then minutes and seconds")
+@cases({ { 0, "0" }, { 9.4, "9" }, { 9.6, "10" }, { 59, "59" }, { 60, "1:00" }, { 125, "2:05" }, { -3, "0" } })
+local function clocks(s: number, want: string)
+    expect(clock(s)).toBe(want)
+end
+
+@test("a new card: notice-w wide, registered for plugins")
+local function fresh()
+    local n = make()
+    expect(n:GetWidth()).toBe(WIDTH)
+    expect(extend.list("notification")).toContain(n)
+    expect(n:IsMouseEnabled()).toBe(true)
+end
+
+@test("a plain timed note: icon, category over title, close button, the drain")
+local function timed()
+    local n = make()
+    local h = n:SetData({ category = "Loot", title = "You received an item", duration = 10, remaining = 5 })
+    expect(h).toBe(n:GetHeight())
+    expect(n.category).toBeShown()
+    expect(n.category).toHaveText("Loot")
+    expect(n.title).toHaveText("You received an item")
+    expect(n.close).toBeShown()
+    -- timed: no time in the head, the drain in gilt-line, half gone
+    expect(n.time).never.toBeShown()
+    expect(n.drain).toBeShown()
+    expect(tokenOf(n.drain)).toBe("gilt-line")
+    expect(n.drain:GetWidth()).toBeCloseTo((WIDTH - 2) * 0.5)
+    expect(tokenOf(n.border.top)).toBe("gilt-line")
+    -- the default icon: the bell
+    expect(n.iconArt:GetTexture()).toBe(GLYPHS .. "bell.tga")
+    expect(n.bodyRow).never.toBeShown()
+    expect(n.actionsRow).never.toBeShown()
+    expect(n:GetHeight()).toBe(PAD + math.max(24, T.type.caption.lineHeight + T.type.label.lineHeight) + PAD)
+end
+
+@test("tones: the edge in amber or ember")
+@cases({ { "warning", "amber" }, { "danger", "ember" }, { "other", "gilt-line" } })
+local function tones(tone: string, edge: string)
+    local n = make()
+    n:SetData({ title = "T", tone = tone })
+    expect(tokenOf(n.border.top)).toBe(edge)
+end
+
+@test("no category: hidden, the title alone in the head")
+local function noCategory()
+    local n = make()
+    n:SetData({ title = "Only a title", category = "" })
+    expect(n.category).never.toBeShown()
+    n:SetData({})
+    expect(n.title:GetText()).toBe("")
+    expect(n.category).never.toBeShown()
+end
+
+@test("closable: sticky and timed by default, never an action; the close calls onClose")
+local function closable()
+    local n = make()
+    n:SetData({ kind = "sticky", title = "T" })
+    expect(n.close).toBeShown()
+    n:SetData({ kind = "action", title = "T" })
+    expect(n.close).never.toBeShown()
+    n:SetData({ kind = "action", title = "T", closable = true })
+    expect(n.close).toBeShown()
+    local onClose = mock.spy()
+    n:SetData({ kind = "timed", title = "T", closable = false, onClose = onClose })
+    expect(n.close).never.toBeShown()
+    n:SetData({ kind = "sticky", title = "T", onClose = onClose })
+    mock.click(n.close)
+    expect(onClose).toHaveBeenCalledWith(n)
+    -- without onClose: nothing
+    n:SetData({ kind = "sticky", title = "T" })
+    mock.click(n.close)
+end
+
+@test("a request's time: shown, amber and the drain amber under soonAt")
+local function requestTime()
+    local n = make()
+    n:SetData({ kind = "action", title = "Ready check", duration = 30, remaining = 25 })
+    expect(n.time).toBeShown()
+    expect(n.time).toHaveText("25")
+    expect(tokenOf(n.time)).toBe("ink-muted")
+    expect(tokenOf(n.drain)).toBe("ink-muted")
+    n:SetRemaining(8)
+    expect(n.time).toHaveText("8")
+    expect(tokenOf(n.time)).toBe("amber")
+    expect(tokenOf(n.drain)).toBe("amber")
+    expect(n.data.remaining).toBe(8)
+    -- soonAt moves the line; the time placed left of a close button
+    n:SetData({ kind = "action", title = "T", duration = 120, remaining = 90, soonAt = 100, closable = true })
+    expect(n.time).toHaveText("1:30")
+    expect(tokenOf(n.time)).toBe("amber")
+    expect(n.time).toBeAnchoredTo(n.close, "RIGHT", "LEFT")
+end
+
+@test("SetRemaining: nothing without data or a duration; clamped to the bar")
+local function remaining()
+    local n = make()
+    n:SetRemaining(5)
+    n:SetData({ title = "T" })
+    n:SetRemaining(5)
+    expect(n.data.remaining).toBeNil()
+    n:SetData({ title = "T", duration = 10, remaining = 10 })
+    n:SetRemaining(20)
+    expect(n.drain:GetWidth()).toBeCloseTo(WIDTH - 2)
+    n:SetRemaining(-1)
+    expect(n.drain:GetWidth()).toBeCloseTo(0.01)
+end
+
+@test("SetTitle changes the title only")
+local function setTitle()
+    local n = make()
+    n:SetData({ title = "Logging out in 20 s" })
+    n:SetTitle("Logging out in 12 s")
+    expect(n.title).toHaveText("Logging out in 12 s")
+    n:SetTitle(nil)
+    expect(n.title:GetText()).toBe("")
+end
+
+@test("SetIcon: a glyph in a colour, a texture cropped or with coords")
+local function icons()
+    local n = make()
+    n:SetIcon({ glyph = "hourglass", color = "amber" })
+    expect(n.iconArt:GetTexture()).toBe(GLYPHS .. "hourglass.tga")
+    expect(tokenOf(n.iconArt)).toBe("amber")
+    n:SetIcon({ glyph = "people" })
+    expect(tokenOf(n.iconArt)).toBe("ink")
+    n:SetIcon({ texture = 134400 })
+    expect(n.iconArt:GetTexture()).toBe(134400)
+    expect({ n.iconArt:GetTexCoord() }).toEqual({ 0.08, 0.08, 0.08, 0.92, 0.92, 0.08, 0.92, 0.92 })
+    n:SetIcon({ texture = 134400, coords = { 0, 0.25, 0, 0.25 } })
+    expect({ n.iconArt:GetTexCoord() }).toEqual({ 0, 0, 0, 0.25, 0.25, 0, 0.25, 0.25 })
+    n:SetIcon(nil)
+    expect(n.iconArt:GetTexture()).toBe(GLYPHS .. "bell.tga")
+end
+
+@test("the icon's tooltip: shown on hover, GameTooltip hidden on leave")
+local function iconTooltip()
+    local n = make()
+    local tip = mock.spy()
+    n:SetData({ title = "T", icon = { texture = 1, tooltip = tip } })
+    mock.hover(n.icon)
+    expect(tip).toHaveBeenCalledWith(n.icon)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_CURSOR")
+    GameTooltip:AddLine("x")
+    GameTooltip:Show()
+    mock.hover(nil)
+    expect(GameTooltip).never.toBeShown()
+    -- without one: nothing either way
+    n:SetData({ title = "T" })
+    GameTooltip:SetOwner(UIParent, "ANCHOR_CURSOR")
+    GameTooltip:AddLine("x")
+    GameTooltip:Show()
+    mock.hover(n.icon)
+    mock.hover(nil)
+    expect(GameTooltip).toBeShown()
+    GameTooltip:Hide()
+end
+
+@test("the body: wrapped caption, its tooltip on hover when given")
+local function body()
+    local n = make()
+    n:SetData({ title = "T", body = "Brannoc and Edda are still choosing", bodyTooltip = { title = "Choosing", description = "Brannoc" } })
+    expect(n.bodyRow).toBeShown()
+    expect(n.body).toHaveText("Brannoc and Edda are still choosing")
+    expect(n.bodyRow:IsMouseEnabled()).toBe(true)
+    mock.hover(n.bodyRow)
+    expect(showSpy).toHaveBeenCalledWith(n.bodyRow, { title = "Choosing", description = "Brannoc" })
+    mock.hover(nil)
+    expect(hideSpy).toHaveBeenCalled()
+    n:SetData({ title = "T", body = "No tooltip" })
+    expect(n.bodyRow:IsMouseEnabled()).toBe(false)
+    mock.resetSpies()
+    mock.script(n.bodyRow, "OnEnter")
+    expect(showSpy).never.toHaveBeenCalled()
+    n:SetData({ title = "T", body = "" })
+    expect(n.bodyRow).never.toBeShown()
+end
+
+@test("the source: badges, the post in quotes, its whole on hover when cut")
+local function source()
+    local n = make()
+    n:SetData({ title = "T", source = { tool = true, channel = "LookingForGroup", text = "LF tank for the Den" } })
+    expect(n.sourceRow).toBeShown()
+    expect(n.badges[1]).toBeShown()
+    expect(n.badges[1].text).toHaveText("Tool")
+    expect(n.badges[2].text).toHaveText("LookingForGroup")
+    expect(n.quote).toHaveText("“LF tank for the Den”")
+    expect(n.sourceRow.post).toBe("LF tank for the Den")
+    expect(n.sourceRow:IsMouseEnabled()).toBe(true)
+    local _, _, _, _, y = n.quote:GetPoint(1)
+    expect(y).toBe(-(16 + S["space-3"]))
+    -- hovering: only a cut post shows its whole
+    mock.stub(n.quote, "IsTruncated", function() return false end)
+    mock.hover(n.sourceRow)
+    expect(showSpy).never.toHaveBeenCalled()
+    mock.hover(nil)
+    mock.stub(n.quote, "IsTruncated", function() return true end)
+    mock.hover(n.sourceRow)
+    expect(showSpy).toHaveBeenCalledWith(n.sourceRow, { description = "LF tank for the Den" })
+    mock.hover(nil)
+    expect(hideSpy).toHaveBeenCalled()
+end
+
+@test("the source: a channel alone, a post alone, nothing at all")
+local function sourceParts()
+    local n = make()
+    n:SetData({ title = "T", source = { tool = true, channel = "Trade" } })
+    n:SetData({ title = "T", source = { channel = "General" } })
+    expect(n.badges[1].text).toHaveText("General")
+    expect(n.badges[2]).never.toBeShown()
+    expect(n.quote).never.toBeShown()
+    expect(n.sourceRow.post).toBeNil()
+    expect(n.sourceRow:IsMouseEnabled()).toBe(false)
+    n:SetData({ title = "T", source = { text = "Just a post" } })
+    expect(n.badges[1]).never.toBeShown()
+    local _, _, _, _, y = n.quote:GetPoint(1)
+    expect(y).toBe(0)
+    n:SetData({ title = "T", source = { text = "" } })
+    expect(n.sourceRow).never.toBeShown()
+end
+
+@test("the item: its icon, quality edge and name; none without quality in ink")
+local function item()
+    local n = make()
+    n:SetData({ title = "T", item = { icon = 134400, label = "Ember Fang", quality = "epic" } })
+    expect(n.itemRow).toBeShown()
+    expect(n.itemLabel).toHaveText("Ember Fang")
+    expect(tokenOf(n.itemLabel)).toBe("quality-epic")
+    n:SetData({ title = "T", item = { icon = 1 } })
+    expect(tokenOf(n.itemLabel)).toBe("ink")
+    expect(n.itemLabel:GetText()).toBe("")
+    n:SetData({ title = "T" })
+    expect(n.itemRow).never.toBeShown()
+end
+
+@test("hosted roles and a warning under them")
+local function rolesWarning()
+    local n = make()
+    n:SetData({ title = "T", host = { roles = 3 }, warning = "This takes you out of your queue" })
+    expect(n.rolesRow).toBeShown()
+    expect(n.rolesRow:GetHeight()).toBe(36 + S["space-2"] + T.type.caption.lineHeight)
+    expect(n.warningRow).toBeShown()
+    expect(n.warningText).toHaveText("This takes you out of your queue")
+    n:SetData({ title = "T", host = { roles = 0 }, warning = "" })
+    expect(n.rolesRow).never.toBeShown()
+    expect(n.warningRow).never.toBeShown()
+end
+
+@test("the confirm field and what makes it go")
+local function confirmUntil()
+    local n = make()
+    n:SetData({ title = "Delete?", confirmText = "DELETE", ["until"] = "Goes when you repair" })
+    expect(n.confirmRow).toBeShown()
+    expect(n.confirmLabel).toHaveText("Type DELETE to confirm")
+    expect(n.confirmRow:GetHeight()).toBe(T.type.caption.lineHeight + S["space-2"] + 30)
+    expect(n.untilRow).toBeShown()
+    expect(n.untilText).toHaveText("Goes when you repair")
+    n:SetData({ title = "T" })
+    expect(n.confirmRow).never.toBeShown()
+    expect(n.untilRow).never.toBeShown()
+end
+
+@test("hosted buttons: the row kept, none of the card's own")
+local function hostedButtons()
+    local n = make()
+    n:SetData({ title = "T", actions = { { label = "Mine" } } })
+    n:SetData({ title = "T", host = { buttons = 2 }, actions = { { label = "Ignored" } } })
+    expect(n.actionsRow).toBeShown()
+    expect(n.actionsRow:GetHeight()).toBe(26)
+    expect(#shownButtons(n)).toBe(0)
+end
+
+@test("actions: right-aligned, in their looks, clicked with the card")
+local function actions()
+    local n = make()
+    local accept, decline = mock.spy(), mock.spy()
+    n:SetData({ kind = "action", title = "Invite", actions = {
+        { label = "Decline", onClick = decline },
+        { label = "Accept", variant = "primary", onClick = accept, icon = "check" },
+    } })
+    expect(n.actionsRow).toBeShown()
+    local primary = n.buttons.primary[2]
+    local quiet = n.buttons.quiet[1]
+    expect(primary.label).toHaveText("Accept")
+    expect(tokenOf(primary.label)).toBe("on-signal")
+    expect(primary.icon).toBeShown()
+    expect(quiet.label).toHaveText("Decline")
+    expect(tokenOf(quiet.label)).toBe("ink")
+    expect(tokenOf(quiet.border.top)).toBe("gilt-line")
+    -- the last action on the right edge, the first left of it
+    local _, _, _, x = primary:GetPoint(1)
+    expect(x).toBe(0)
+    local _, _, _, x1 = quiet:GetPoint(1)
+    expect(x1).toBeCloseTo(-(primary:GetWidth() + S["space-3"]))
+    mock.click(primary)
+    expect(accept).toHaveBeenCalledWith(n)
+    mock.click(quiet)
+    expect(decline).toHaveBeenCalledWith(n)
+end
+
+@test("a danger action: ember edge and text, back to ember after a hover")
+local function dangerAction()
+    local n = make()
+    n:SetData({ title = "T", actions = { { label = "Delete", variant = "danger" } } })
+    local b = n.buttons.danger[1]
+    expect(tokenOf(b.border.top)).toBe("ember")
+    expect(tokenOf(b.label)).toBe("ember-text")
+    mock.hover(b)
+    mock.hover(nil)
+    expect(tokenOf(b.border.top)).toBe("ember")
+    -- no onClick: nothing
+    mock.click(b)
+end
+
+@test("a pressed action stays arcane; counts after the label; disabled ones")
+local function pressedCounts()
+    local n = make()
+    local onClick = mock.spy()
+    n:SetData({ kind = "roll", title = "Ember Fang", actions = {
+        { label = "Need", count = 2, pressed = true, disabled = true },
+        { label = "Greed", count = 0, disabled = true, onClick = onClick, tooltip = { title = "Can't" } },
+    } })
+    local need, greed = n.buttons.quiet[1], n.buttons.quiet[2]
+    expect(need.label:GetText()).toBe("Need  |cff" .. T.color["ink-muted"].hex .. "2|r")
+    expect(greed.label:GetText()).toBe("Greed  |cff" .. T.color["ink-faint"].hex .. "0|r")
+    expect(need.pressed).toBe(true)
+    expect(need.pressedBg).toBeShown()
+    expect(tokenOf(need.border.top)).toBe("arcane")
+    expect(tokenOf(need.label)).toBe("arcane")
+    -- pressed stays clickable-looking; a disabled one is off
+    expect(need:IsEnabled()).toBe(true)
+    expect(greed:IsEnabled()).toBe(false)
+    expect(greed.tooltip).toEqual({ title = "Can't" })
+    mock.hover(need)
+    mock.hover(nil)
+    expect(tokenOf(need.border.top)).toBe("arcane")
+    -- a disabled action never runs
+    mock.script(greed, "OnClick", "LeftButton")
+    expect(onClick).never.toHaveBeenCalled()
+    -- next time unpressed: the look goes back
+    n:SetData({ kind = "roll", title = "Ember Fang", actions = { { label = "Need" } } })
+    expect(need.pressedBg).never.toBeShown()
+    expect(tokenOf(need.border.top)).toBe("gilt-line")
+    expect(greed).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Presence
+--------------------------------------------------------------------------------
+
+@test("one person online: their icon, name and tag, detail, Whisper and Invite")
+local function onlineOne()
+    local n = make()
+    local whisper, invite = mock.spy(), mock.spy()
+    n:SetData({ title = "ignored", presence = { online = true, source = "Battle.net", invite = invite, people = {
+        { name = "Tamsin", color = "class-mage", tag = "#1234", detail = "Tamsin · World of Warcraft Forever", whisper = whisper,
+          icon = { texture = 626001, coords = { 0, 0.25, 0, 0.25 } } } } } })
+    expect(n.status).toBeShown()
+    expect(tokenOf(n.status)).toBe("arcane")
+    expect(n.category).toHaveText("Online · Battle.net")
+    expect(n.title:GetText()).toBe("Tamsin|cff" .. T.color["ink-faint"].hex .. "#1234|r")
+    expect(tokenOf(n.title)).toBe("class-mage")
+    expect(n.iconArt:GetTexture()).toBe(626001)
+    expect(n.bodyRow).toBeShown()
+    expect(n.body).toHaveText("Tamsin · World of Warcraft Forever")
+    expect(n.source).never.toBeShown()
+    expect(n.close).toBeShown()
+    expect(n.time).never.toBeShown()
+    local q = n.buttons.quiet
+    expect(q[1].label).toHaveText("Whisper")
+    expect(q[2].label).toHaveText("Invite")
+    mock.click(q[1])
+    expect(whisper).toHaveBeenCalledTimes(1)
+    mock.click(q[2])
+    expect(invite).toHaveBeenCalledTimes(1)
+    -- a click on the card whispers the one person
+    mock.script(n, "OnMouseUp", "LeftButton")
+    expect(whisper).toHaveBeenCalledTimes(2)
+    mock.script(n, "OnMouseUp", "RightButton")
+    expect(whisper).toHaveBeenCalledTimes(2)
+end
+
+@test("one person online without detail, whisper or invite: the head alone")
+local function onlineBare()
+    local n = make()
+    n:SetData({ presence = { online = true, people = { { name = "Brannoc" } } } })
+    expect(n.category).toHaveText("Online · ")
+    expect(tokenOf(n.title)).toBe("ink")
+    expect(n.title).toHaveText("Brannoc")
+    expect(n.iconArt:GetTexture()).toBe(GLYPHS .. "people.tga")
+    expect(n.bodyRow).never.toBeShown()
+    expect(n.actionsRow).never.toBeShown()
+    -- no whisper: a click on the card does nothing
+    mock.script(n, "OnMouseUp", "LeftButton")
+    expect(n:GetHeight()).toBe(PAD + math.max(24, T.type.caption.lineHeight + T.type.label.lineHeight) + PAD)
+end
+
+@test("several online: a count, each name whispering them, wrapping")
+local function onlineMany()
+    local n = make()
+    local people: { [string]: any }[] = {}
+    local whispers: any[] = {}
+    for i = 1, 8 do
+        whispers[i] = mock.spy()
+        people[i] = { name = "Guildmember" .. i, color = i == 1 and "class-priest" or nil, whisper = whispers[i] }
+    end
+    people[8].whisper = nil
+    n:SetData({ presence = { online = true, source = "Ashen Vow", plural = "guild members", glyph = "shield", people = people } })
+    expect(n.title).toHaveText("8 guild members came online")
+    expect(tokenOf(n.title)).toBe("ink")
+    expect(n.iconArt:GetTexture()).toBe(GLYPHS .. "shield.tga")
+    expect(n.actionsRow).never.toBeShown()
+    expect(n.namesRow).toBeShown()
+    expect(n.names[1].text).toHaveText("Guildmember1,")
+    expect(n.names[8].text).toHaveText("Guildmember8")
+    expect(tokenOf(n.names[1].text)).toBe("class-priest")
+    expect(tokenOf(n.names[2].text)).toBe("ink")
+    -- wrapped onto more than one line
+    local _, _, _, _, yLast = n.names[8]:GetPoint(1)
+    expect(yLast < 0).toBe(true)
+    mock.click(n.names[3])
+    expect(whispers[3]).toHaveBeenCalledTimes(1)
+    mock.click(n.names[8])
+    mock.hover(n.names[2])
+    expect(n.names[2].text:GetAlpha()).toBeCloseTo(0.75, 2)
+    mock.hover(nil)
+    expect(n.names[2].text:GetAlpha()).toBe(1)
+    -- the card itself: no one person to whisper
+    expect(n.onCardClick).toBeNil()
+    -- fewer names later: the rest hidden; "people" by default
+    n:SetData({ presence = { online = true, people = { { name = "A" }, { name = "B" } } } })
+    expect(n.title).toHaveText("2 people came online")
+    expect(n.names[3]).never.toBeShown()
+end
+
+@test("offline: one quiet line, two names and how many more, where from")
+@cases({ { 1, "Tamsin went offline" }, { 2, "Tamsin, Brannoc went offline" }, { 4, "Tamsin, Brannoc and 2 more went offline" } })
+local function offline(count: number, want: string)
+    local n = make()
+    local names = { "Tamsin", "Brannoc", "Edda", "Orrin" }
+    local people: { [string]: any }[] = {}
+    for i = 1, count do people[i] = { name = names[i] } end
+    n:SetData({ presence = { online = false, source = "Friend", people = people } })
+    expect(n.title).toHaveText(want)
+    expect(tokenOf(n.title)).toBe("ink-muted")
+    expect(tokenOf(n.status)).toBe("ink-faint")
+    expect(n.icon).never.toBeShown()
+    expect(n.close).never.toBeShown()
+    expect(n.category).never.toBeShown()
+    expect(n.source).toBeShown()
+    expect(n.source).toHaveText("Friend")
+    expect(n:GetHeight()).toBe(PAD * 2 + T.type.label.lineHeight)
+    -- back to a normal note: its parts again
+    n:SetData({ title = "Normal", category = "C" })
+    expect(n.icon).toBeShown()
+    expect(n.status).never.toBeShown()
+    expect(n.source).never.toBeShown()
+    expect(tokenOf(n.title)).toBe("ink")
+end
+
+@test("offline without a source; a presence note with a drain")
+local function offlineNoSource()
+    local n = make()
+    n:SetData({ presence = { online = false, people = { { name = "A" } } } })
+    expect(n.source:GetText()).toBe("")
+    n:SetData({ duration = 10, remaining = 4, presence = { online = true, people = { { name = "A" } } } })
+    expect(n.drain).toBeShown()
+    expect(n.drain:GetWidth()).toBeCloseTo((WIDTH - 2) * 0.4)
+end
+
+@test("a theme change lays out a lone card again; a stack's cards through the stack")
+local function themeLone()
+    local n = make()
+    local data = { title = "T" }
+    n:SetData(data)
+    local blank = notification(parent)
+    local set, setBlank = mock.spy(), mock.spy()
+    mock.stub(n, "SetData", set)
+    mock.stub(blank, "SetData", setBlank)
+    themeChanged()
+    expect(set).toHaveBeenCalledWith(n, data)
+    expect(setBlank).never.toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- The stack
+--------------------------------------------------------------------------------
+
+local function ids(s: any): string[]
+    -- the shown cards' ids, top to bottom
+    local list: { id: string, y: number }[] = {}
+    for id, card in pairs(s.cards) do
+        if card:IsShown() then
+            local _, _, _, _, y = card:GetPoint(1)
+            list[#list + 1] = { id = id, y = y }
+        end
+    end
+    table.sort(list, function(a: { id: string, y: number }, b: { id: string, y: number }): boolean return a.y > b.y end)
+    local out: string[] = {}
+    for i, e in ipairs(list) do out[i] = e.id end
+    return out
+end
+
+@test("a new stack: notice-w wide, five at most, the foot hidden")
+local function freshStack()
+    local s = stack()
+    expect(s:GetWidth()).toBe(WIDTH)
+    expect(s.max).toBe(5)
+    expect(s.foot).never.toBeShown()
+    local named = notificationStack(parent, { name = "SuuUITestStack" })
+    expect(_G["SuuUITestStack"]).toBe(named)
+end
+
+@test("requests first, then conditions, notes, timed ones; in order within")
+local function order()
+    local s = stack(10)
+    s:SetItems({
+        { id = "t1", title = "timed 1" },
+        { id = "s1", kind = "sticky", title = "sticky" },
+        { id = "u1", kind = "until", title = "until" },
+        { id = "a1", kind = "action", title = "action" },
+        { id = "r1", kind = "roll", title = "roll" },
+        { id = "x1", kind = "odd", title = "unknown kind" },
+    })
+    expect(ids(s)).toEqual({ "a1", "r1", "u1", "s1", "t1", "x1" })
+    expect(s:CardFor("a1"):GetFrameStrata()).toBe("DIALOG")
+    expect(s:CardFor("a1").request).toBe(true)
+    expect(s:CardFor("t1"):GetFrameStrata()).toBe(s:GetFrameStrata())
+    expect(s:CardFor("nope")).toBeNil()
+end
+
+@test("at most max cards; +N more expands them")
+local function more()
+    local s = stack(2)
+    local items: { [string]: any }[] = {}
+    for i = 1, 4 do items[i] = { id = "n" .. i, title = "Note " .. i } end
+    local onExpand = mock.spy()
+    s.onExpand = onExpand
+    s:SetItems(items)
+    expect(#ids(s)).toBe(2)
+    expect(s.foot).toBeShown()
+    expect(s.moreLink).toBeShown()
+    expect(s.moreLink.label).toHaveText("+2 more")
+    expect(s.moreLink:GetWidth()).toBe(math.ceil(s.moreLink.label:GetUnboundedStringWidth()))
+    mock.click(s.moreLink)
+    expect(s.expanded).toBe(true)
+    expect(onExpand).toHaveBeenCalledTimes(1)
+    s:SetItems(items)
+    expect(#ids(s)).toBe(4)
+    expect(s.moreLink).never.toBeShown()
+    -- without onExpand: only expands
+    s.onExpand = nil
+    mock.script(s.moreLink, "OnClick", "LeftButton")
+end
+
+@test("in combat only requests and conditions; the rest wait, said in the foot")
+local function combat()
+    local s = stack()
+    s:SetItems({ { id = "a", kind = "action" }, { id = "u", kind = "until" }, { id = "s", kind = "sticky" }, { id = "t" } }, true)
+    expect(ids(s)).toEqual({ "a", "u" })
+    expect(s.heldText).toBeShown()
+    expect(s.heldText).toHaveText("2 waiting for the end of combat")
+    expect(s.foot).toBeShown()
+    expect(s.clearLink).never.toBeShown()
+    -- the more link before the held text, left to right
+    s:SetItems({ { id = "a", kind = "action" }, { id = "b", kind = "action" }, { id = "t" } }, true)
+end
+
+@test("two notes or more: Dismiss all")
+local function dismissAll()
+    local s = stack()
+    local onClearAll = mock.spy()
+    s.onClearAll = onClearAll
+    s:SetItems({ { id = "s1", kind = "sticky" } })
+    expect(s.clearLink).never.toBeShown()
+    expect(s.foot).never.toBeShown()
+    s:SetItems({ { id = "s1", kind = "sticky" }, { id = "s2", kind = "sticky" } })
+    expect(s.clearLink).toBeShown()
+    expect(s.foot).toBeShown()
+    mock.click(s.clearLink)
+    expect(onClearAll).toHaveBeenCalledTimes(1)
+    mock.hover(s.clearLink)
+    expect(tokenOf(s.clearLink.label)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(s.clearLink.label)).toBe("gilt-text")
+    s.onClearAll = nil
+    mock.click(s.clearLink)
+end
+
+@test("cards leaving go to the spares and come back for new ids")
+local function spares()
+    local s = stack()
+    s:SetItems({ { id = "a" }, { id = "b" } })
+    local a = s:CardFor("a")
+    s:SetItems({ { id = "b" } })
+    expect(a).never.toBeShown()
+    expect(a.data).toBeNil()
+    expect(s:CardFor("a")).toBeNil()
+    expect(s.spare).toContain(a)
+    s:SetItems({ { id = "b" }, { id = "c" } })
+    expect(s:CardFor("c")).toBe(a)
+    expect(#s.spare).toBe(0)
+    s:SetItems(nil)
+    expect(#ids(s)).toBe(0)
+    expect(s:GetHeight()).toBe(1)
+end
+
+@test("notes hidden under a window; requests stay; the foot fades")
+local function notesHidden()
+    local s = stack()
+    s:SetItems({ { id = "a", kind = "action" }, { id = "s1", kind = "sticky" }, { id = "s2", kind = "sticky" } })
+    s:SetNotesHidden(true)
+    expect(s:CardFor("a")).toBeShown()
+    expect(s:CardFor("s1")).never.toBeShown()
+    expect(s.foot:GetAlpha()).toBe(0)
+    -- new items while hidden: notes stay hidden
+    s:SetItems({ { id = "a", kind = "action" }, { id = "s3", kind = "sticky" } })
+    expect(s:CardFor("s3")).never.toBeShown()
+    s:SetNotesHidden(true)
+    s:SetNotesHidden(false)
+    expect(s:CardFor("s3")).toBeShown()
+    expect(s.foot:GetAlpha()).toBe(1)
+end
+
+@test("a theme change lays a stack out again with its items")
+local function themeStack()
+    local s = stack()
+    local items = { { id = "a" } }
+    s:SetItems(items, false)
+    local set = mock.spy()
+    mock.stub(s, "SetItems", set)
+    local empty = notificationStack(parent)
+    local setEmpty = mock.spy()
+    mock.stub(empty, "SetItems", setEmpty)
+    local cardSet = mock.spy()
+    mock.stub(s:CardFor("a"), "SetData", cardSet)
+    themeChanged()
+    expect(set).toHaveBeenCalledWith(s, items, false)
+    expect(setEmpty).never.toHaveBeenCalled()
+    -- a stack's card is laid out by its stack, not alone
+    expect(cardSet).never.toHaveBeenCalled()
+end
