@@ -105,7 +105,10 @@ end
 
 local TONE = { info = "ink-muted", ok = "fel", error = "ember-text" }
 
-function M:Note(text: string?, tone: string?)
+-- `waiting`: a note for what the house is asked (Searching…), cleared when
+-- its results come; any other stays until the next note.
+function M:Note(text: string?, tone: string?, waiting: boolean?)
+    self.waiting = waiting or nil
     if not self.note then return end
     self.note:SetValue(text or "")
     self.note:SetColor(TONE[tone or "info"])
@@ -236,7 +239,7 @@ function M:Search(text: string?)
                    filters = self:QueryFilters(), itemClassFilters = self.catFilters or {} }
     self.results = {}
     self.searched = true
-    self:Note("Searching…")
+    self:Note("Searching…", nil, true)
     local ok, err = pcall(AH.SendBrowseQuery, self.query)
     if not ok then self:Note("The search didn't go out: " .. tostring(err), "error") end
     self:Refresh()
@@ -247,7 +250,7 @@ function M:Favorites()
     self.results = {}
     self.searched = true
     self.query = { searchString = "★" }
-    self:Note("Your favourites…")
+    self:Note("Your favourites…", nil, true)
     call(AH.SearchForFavorites, sorts())
     self:Refresh()
 end
@@ -565,7 +568,7 @@ function M:OpenItem(key: any)
     self.view = info.isCommodity and "commodity" or "item"
     self.itemKey, self.chosen, self.offers, self.auctions = key, nil, {}, {}
     self.itemView.qty:SetValue("1")
-    self:Note(info.isCommodity and "Asking for the offers…" or "Asking for the auctions…")
+    self:Note(info.isCommodity and "Asking for the offers…" or "Asking for the auctions…", nil, true)
     call(AH.SendSearchQuery, key, sorts(), true)
     self:Refresh()
 end
@@ -597,7 +600,10 @@ function M:DrawItemView()
             local who
             if o.containsOwnerItem then who = "|cff" .. T.color["arcane"].hex .. "Yours|r"
             elseif o.owners and o.owners[1] and (o.totalNumberOfOwners or 0) <= 1 then who = o.owners[1]
-            else who = (o.totalNumberOfOwners or 0) .. " sellers" end
+            else
+                local n = o.totalNumberOfOwners or 0
+                who = n == 1 and "1 seller" or (n .. " sellers")
+            end
             rows[#rows + 1] = { o.unitPrice or 0, tostring(o.quantity or 0), who }
         end
     else
@@ -663,6 +669,8 @@ function M:DrawItemView()
         row.onEnter = nil
         row:SetScript("OnClick", function(btn)
             if commodity then return end
+            -- another auction: its own least bid, not the one typed for the last
+            if self.chosen ~= btn.index then v.bid:Clear() end
             self.chosen = btn.index
             self:DrawItemFoot()
             self:DrawItemView()
@@ -913,7 +921,8 @@ function M:Scan()
             self:Note("The scan didn't come back; try again later.", "error")
         end
     end)
-    self:DrawScan()
+    -- the whole page: the scan takes the results' place
+    self:Refresh()
 end
 
 function M:EndScan()
@@ -1212,7 +1221,6 @@ function M:DrawSell()
     local loc = sell.loc
     local valid = loc and loc:IsValid()
     if loc and not valid then sell.loc, loc = nil, nil end
-    local link = loc and C_Item.GetItemLink(loc)
     sell.slot.skin:SetItem(loc and { icon = C_Item.GetItemIcon(loc), quality = QUALITY[C_Item.GetItemQuality(loc) or 1] or "common",
         count = call(AH.GetAvailablePostCount, loc) } or nil)
     sell.name:SetValue(loc and (C_Item.GetItemName(loc) or "?") or "Drop an item here, or choose one from your items")
@@ -1594,6 +1602,7 @@ function M:DrawAuctions()
             local row = auctionRow(t, i, b, outbid and "Outbid" or "Highest bid", outbid and "ember-text" or "fel",
                 timeLeft(nil, b.timeLeft), mine[b.auctionID] or b.bidAmount, b.buyoutAmount or "none", a.chosen == b.auctionID)
             row:SetScript("OnClick", function()
+                if a.chosen ~= b.auctionID then a.bid:Clear() end
                 a.chosen = b.auctionID
                 local min = b.minBid or b.bidAmount or 0
                 if (a.bid:GetCopper() or 0) < min then a.bid:SetCopper(min) end
@@ -1850,7 +1859,7 @@ function M:OnEnable()
                          "ITEM_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_ADDED", "COMMODITY_SEARCH_RESULTS_UPDATED",
                          "COMMODITY_SEARCH_RESULTS_ADDED", "PLAYER_MONEY", "AUCTION_HOUSE_FAVORITES_UPDATED" }) do
         self:OnGameEvent(e, function()
-            if e:find("RESULTS") then self:Note("") end
+            if e:find("RESULTS") and self.waiting then self:Note("") end
             self:QueueRefresh()
         end)
     end
@@ -1887,6 +1896,7 @@ function M:OnEnable()
     self:OnGameEvent("AUCTION_HOUSE_POST_ERROR", function()
         self.posting = nil
         self:Note("Couldn't post.", "error")
+        self:DrawSell() -- Post again
     end)
     -- the sell search: what the chosen item goes for now
     for _, e in ipairs({ "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_ADDED" }) do
