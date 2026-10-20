@@ -1,0 +1,56 @@
+-- SettingsUI/GameMenu: the "SuuUI settings" button under the game menu,
+-- made when the menu first shows, hidden in combat, opening the window.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as settingsWindow from "/SettingsUI/Window"
+import _ from "/SettingsUI/GameMenu"
+import expectNoErrors from "../../helpers"
+
+local menu = (_G :: any).GameMenuFrame
+
+-- The button under the menu (its only SuuUI child with that label).
+local function button(): any
+    for _, c in ipairs({ menu:GetChildren() }) do
+        local b: any = c
+        local label = b.label
+        if type(label) == "table" and label.GetText and label:GetText() == "SuuUI settings" then return b end
+    end
+    return nil
+end
+
+@afterEach
+local function cleanup()
+    if menu:IsShown() then HideUIPanel(menu) end
+    expectNoErrors()
+end
+
+@test("the menu shown: the button under it, made once")
+local function shown()
+    ShowUIPanel(menu)
+    local b = button()
+    expect(b ~= nil).toBe(true)
+    expect(b).toBeShown()
+    expect(b).toBeAnchoredTo(menu, "TOP", "BOTTOM")
+    HideUIPanel(menu)
+    ShowUIPanel(menu)
+    expect(button()).toBe(b)
+end
+
+@test("a click: the menu closed, the settings window opened")
+local function click()
+    local open = mock.stub(settingsWindow, "open", function() end)
+    ShowUIPanel(menu)
+    mock.click(button())
+    expect(menu:IsShown()).toBe(false)
+    expect(open).toHaveBeenCalledTimes(1)
+end
+
+@test("in combat: the menu without the button")
+local function combat()
+    mock.player:enterCombat()
+    menu:Show()
+    expect(button()).never.toBeShown()
+    menu:Hide()
+    mock.player:leaveCombat()
+end

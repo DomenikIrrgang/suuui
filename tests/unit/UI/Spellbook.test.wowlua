@@ -1,0 +1,327 @@
+-- UI/Spellbook: the schools (the open one, spells to train, hover, click),
+-- the head (to train here, in all, what it costs, as room allows), the
+-- switches, the spells' cells by status, the columns' width, rows fitted to
+-- the page, the pager, the cells' hover and drag, and the cooldown sweep.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import spellbook from "/UI/Spellbook"
+import measureText from "/UI/Text"
+import * as tooltipModule from "/UI/Tooltip"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf from "./WorldHelpers"
+
+local S = T.space
+
+local parent: Frame? = nil
+
+local function make(opts: { [string]: any }?, w: number?, h: number?): any
+    parent = newParent(w or 720, h or 520)
+    local b = spellbook(parent, opts)
+    b:SetAllPoints()
+    return b
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function plain(s: string?): string
+    return ((s or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+local function spells(n: number): { [string]: any }[]
+    local list: { [string]: any }[] = {}
+    for i = 1, n do list[i] = { label = "Spell " .. i, sub = "Rank " .. i, icon = 1000 + i, status = "learned" } end
+    return list
+end
+
+--------------------------------------------------------------------------------
+-- Schools
+--------------------------------------------------------------------------------
+
+@test("the schools: an icon each, the open one bright and marked, a dot on one with spells to train")
+local function schools()
+    local b = make({ edgeInset = 20 })
+    b:SetSchools({
+        { label = "General", icon = 1, active = true },
+        { label = "Fire", icon = 2, trainable = 2 },
+        { label = "Frost", icon = 3, trainable = 0 },
+    })
+    local g, fire, frost = b.tabs[1], b.tabs[2], b.tabs[3]
+    expect(g:GetAlpha()).toBe(1)
+    expect(fire:GetAlpha()).toBeCloseTo(0.6, 2)
+    expect(fire.dot).toBeShown()
+    expect(fire.ring).toBeShown()
+    expect(frost.dot).never.toBeShown()
+    expect(b.schoolMarker.chosen).toBe(g)
+    expect(fire.icon.art:GetTextureFileID()).toBe(2)
+    local _, _, _, x, y = frost:GetPoint(1)
+    expect(x).toBe((40 - 20) / 2)
+    expect(y).toBe(-2 * (32 + S["space-3"]))
+    -- hover: bright, its tooltip; away: back to its alpha
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.stub(tooltipModule, "hideTooltip", function() end)
+    mock.hover(fire)
+    expect(fire:GetAlpha()).toBe(1)
+    expect(show).toHaveBeenCalledWith(fire, { title = "Fire", description = "2 spells to train" })
+    mock.hover(frost)
+    expect(fire:GetAlpha()).toBeCloseTo(0.6, 2)
+    expect(show).toHaveBeenCalledWith(frost, { title = "Frost" })
+    mock.hover(nil)
+    -- one to train
+    b:SetSchools({ { label = "General", icon = 1, active = true }, { label = "Fire", icon = 2, trainable = 1 } })
+    mock.hover(fire)
+    expect(show).toHaveBeenCalledWith(fire, { title = "Fire", description = "1 spell to train" })
+    mock.hover(g)
+    expect(g:GetAlpha()).toBe(1)
+    mock.hover(nil)
+    expect(g:GetAlpha()).toBe(1)
+    expect(frost).never.toBeShown()
+    -- a click to onSchool with its index
+    local picked = mock.spy(function(_i: number) end)
+    mock.click(fire)
+    b.onSchool = picked
+    mock.click(fire)
+    expect(picked).toHaveBeenCalledWith(2)
+end
+
+--------------------------------------------------------------------------------
+-- The head
+--------------------------------------------------------------------------------
+
+@test("the head: the school's name and its spells to train")
+local function head()
+    local b = make()
+    b:SetHead("Fire", 2)
+    expect(b.title).toHaveText("Fire")
+    expect(b.toTrain).toHaveText("2 spells to train")
+    b:SetHead("Fire", 1)
+    expect(b.toTrain).toHaveText("1 spell to train")
+    b:SetHead(nil, nil)
+    expect(b.title).toHaveText("")
+    expect(b.toTrain).toHaveText("")
+end
+
+@test("the head with every school's: here and in all, what it costs, the longest form that fits")
+@cases({
+    { 2, 2, "2 spells to train · 3g 20s" },
+    { 1, 3, "1 spell to train · 3 in all · 3g 20s" },
+    { 0, 3, "3 spells to train in other schools · 3g 20s" },
+})
+local function headAll(here: number, count: number, shown: string)
+    local b = make({}, 1200)
+    b:SetHead("Fire", here, { count = count, cost = 32000 })
+    expect(plain(b.toTrain:GetText())).toBe(shown)
+    expect(b.toTrain.value).toBeNil()
+end
+
+@test("the head's cost: digits in ink, the units in coin colours; ember when you can't afford it")
+local function cost()
+    local b = make({}, 1200)
+    b:SetHead("Fire", 1, { count = 1, cost = 10005 })
+    local text = b.toTrain:GetText() :: string
+    expect(plain(text)).toBe("1 spell to train · 1g 0s 5c")
+    local colors = T.color :: { [string]: any }
+    expect(text:find(colors["coin-gold"].hex, 1, true) ~= nil).toBe(true)
+    b:SetHead("Fire", 1, { count = 1, cost = 5, short = true })
+    text = b.toTrain:GetText() :: string
+    expect(plain(text)).toBe("1 spell to train · 5c")
+    expect(text:find(colors["ember-text"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(colors["coin-copper"].hex, 1, true)).toBeNil()
+    b:SetHead("Fire", 1, { count = 1 })
+    expect(plain(b.toTrain:GetText())).toBe("1 spell to train · 0c")
+end
+
+@test("a narrow head: the shorter forms")
+@cases({
+    { 1, 3, "3 to train in all · 3g 20s" },
+    { 2, 2, "2 to train · 3g 20s" },
+    { 0, 3, "3 to train elsewhere · 3g 20s" },
+})
+local function narrow(here: number, count: number, shown: string)
+    local b = make({}, 300)
+    b:SetHead("Fire", here, { count = count, cost = 32000 })
+    expect(plain(b.toTrain:GetText())).toBe(shown)
+end
+
+--------------------------------------------------------------------------------
+-- Switches and the pager
+--------------------------------------------------------------------------------
+
+@test("the switches: set from the owner, a change to onSwitch")
+local function switches()
+    local b = make()
+    b:SetSwitches(true, false)
+    expect(b.unlearned.value).toBe(true)
+    expect(b.allRanks.value).toBe(false)
+    local switched = mock.spy(function(_k: string, _on: any) end)
+    b.unlearned.onChange(false)
+    b.onSwitch = switched
+    b.unlearned.onChange(false)
+    b.allRanks.onChange(true)
+    expect(switched).toHaveBeenCalledWith("unlearned", false)
+    expect(switched).toHaveBeenCalledWith("allRanks", true)
+end
+
+@test("the pager: Page n of m, the arrows as far as they go, onPage")
+local function pager()
+    local b = make()
+    b:SetPage(1, 3)
+    expect(b.pageText).toHaveText("Page 1 of 3")
+    expect(b.prev:IsEnabled()).toBe(false)
+    expect(b.next:IsEnabled()).toBe(true)
+    b:SetPage(3, 3)
+    expect(b.prev:IsEnabled()).toBe(true)
+    expect(b.next:IsEnabled()).toBe(false)
+    b:SetPage(1, 0)
+    expect(b.pageText).toHaveText("Page 1 of 1")
+    local paged = mock.spy(function(_d: number) end)
+    b:SetPage(2, 3)
+    mock.click(b.next)
+    b.onPage = paged
+    mock.click(b.next)
+    mock.click(b.prev)
+    expect(paged).toHaveBeenCalledWith(1)
+    expect(paged).toHaveBeenCalledWith(-1)
+end
+
+--------------------------------------------------------------------------------
+-- The spells
+--------------------------------------------------------------------------------
+
+@test("cells by status: learned, passive, trainable in arcane with its rank, future muted")
+local function cells()
+    local b = make()
+    b:SetSpells({
+        { label = "Fireball", sub = "Rank 3", icon = 135812, status = "learned" },
+        { label = "Molten Armor", sub = "Passive", icon = 1, status = "passive", rank = 1 },
+        { label = "Fireball", sub = "Train now · 6g 50s", icon = 135812, status = "trainable", rank = 4 },
+        { label = "Pyroblast", sub = "Level 40", icon = 2, status = "future" },
+        { label = "Scorch", icon = 3 },
+    })
+    local learned, passive, trainable, future, plainCell = b.cells[1], b.cells[2], b.cells[3], b.cells[4], b.cells[5]
+    expect(learned.label).toHaveText("Fireball")
+    expect(learned.sub).toHaveText("Rank 3")
+    expect(learned.icon.state).toBe("rest")
+    expect(learned.icon.borderToken).toBe("gilt-hairline")
+    expect(tokenOf(learned.label)).toBe("ink")
+    expect(passive.label).toHaveText("Molten Armor")
+    expect(plain(trainable.label:GetText())).toBe("Fireball  Rank 4")
+    expect(trainable.icon.state).toBe("dim")
+    expect(trainable.icon.borderToken).toBe("arcane")
+    expect(tokenOf(trainable.sub)).toBe("arcane")
+    expect(future.icon.state).toBe("dim")
+    expect(tokenOf(future.label)).toBe("ink-muted")
+    expect(plainCell.sub).toHaveText("")
+    expect(tokenOf(plainCell.label)).toBe("ink")
+    expect(learned.button:GetAttribute("type")).toBeNil()
+    -- the rest of the page hidden
+    expect(b.cells[6]).never.toBeShown()
+    expect(#b.cells).toBe(12)
+end
+
+@test("two columns as wide as the longest name, the pair centred; the owner's widest across pages")
+local function columns()
+    local b = make()
+    b:SetSpells(spells(3))
+    local widest = math.max(measureText("label", "Spell 1"), measureText("caption", "Rank 1"))
+    local colW = 36 + S["space-4"] + math.ceil(widest) + S["space-3"]
+    expect(b.cells[1]:GetWidth()).toBe(colW)
+    local _, _, _, x2 = b.cells[2]:GetPoint(1)
+    expect(x2).toBe(colW + S["space-6"])
+    local _, _, _, _, y3 = b.cells[3]:GetPoint(1)
+    expect(y3).toBe(-(36 + S["space-4"]))
+    local used = 2 * colW + S["space-6"]
+    local _, _, _, gx = b.grid:GetPoint(1)
+    expect(gx).toBe((b.main:GetWidth() - used) / 2)
+    b:SetWidest(150)
+    b:SetSpells(spells(1))
+    expect(b.cells[1]:GetWidth()).toBe(36 + S["space-4"] + 150 + S["space-3"])
+    -- never wider than half the page
+    b:SetWidest(5000)
+    b:SetSpells(spells(1))
+    expect(b.cells[1]:GetWidth()).toBe((b.main:GetWidth() - S["space-6"]) / 2)
+    b:SetWidest(nil)
+end
+
+@test("FitRows: as many rows as the page holds; not in combat; none without a height")
+local function fitRows()
+    local b = make({ rows = 6 }, 720, 400)
+    local h = b.main:GetHeight()
+    local room = h - (30 + S["space-4"]) - b.foot:GetHeight() - S["space-4"]
+    local rows = math.max(1, math.floor((room + S["space-4"]) / (36 + S["space-4"])))
+    expect(b:FitRows()).toBe(rows)
+    expect(b.rows).toBe(rows)
+    expect(b.grid:GetHeight()).toBe(rows * 36 + (rows - 1) * S["space-4"])
+    -- a page that held more: the cells past it hidden
+    b.rows = 8
+    b:SetSpells(spells(16))
+    b:FitRows()
+    b:SetSpells(spells(16))
+    expect(b.cells[16]).never.toBeShown()
+    mock.player:enterCombat()
+    b.rows = 2
+    expect(b:FitRows()).toBe(2)
+    mock.player:leaveCombat()
+    local loose = spellbook(UIParent, nil)
+    expect(loose:FitRows()).toBe(6)
+    loose:Hide()
+end
+
+@test("a cell's hover gilds it and calls onEnter; away it's drawn again, onLeave; a drag to onDragStart")
+local function cellInput()
+    local b = make()
+    b:SetSpells({ { label = "Fireball", icon = 1, status = "trainable", rank = 2 } })
+    local c = b.cells[1]
+    local entered = mock.spy(function(_i: number, _c: any) end)
+    local left = mock.spy(function(_i: number, _c: any) end)
+    local dragged = mock.spy(function(_i: number, _c: any) end)
+    mock.hover(c.button)
+    expect(c.icon.borderToken).toBe("gilt")
+    mock.hover(nil)
+    expect(c.icon.borderToken).toBe("arcane")
+    b.onEnter, b.onLeave, b.onDragStart = entered, left, dragged
+    mock.hover(c.button)
+    mock.hover(nil)
+    expect(entered).toHaveBeenCalledWith(1, c)
+    expect(left).toHaveBeenCalledWith(1, c)
+    mock.script(c.button, "OnDragStart", "LeftButton")
+    expect(dragged).toHaveBeenCalledWith(1, c)
+    b.onDragStart = nil
+    mock.script(c.button, "OnDragStart", "LeftButton")
+    -- a cell without a spell: drawn as it was
+    c.spell = nil
+    b:DrawCell(c)
+end
+
+@test("the cooldown: the duration's sweep, no digits for the global one; cleared; a cell not made")
+local function cooldown()
+    local b = make()
+    b:SetSpells(spells(1))
+    local cd = b.cells[1].cooldown
+    local set = mock.stub(cd, "SetCooldownFromDurationObject", function(_s: any, _d: any) end)
+    local digits = mock.stub(cd, "SetHideCountdownNumbers", function(_s: any, _h: boolean) end)
+    local clear = mock.stub(cd, "Clear", function(_s: any) end)
+    local duration = { duration = true }
+    b:SetCooldown(1, true, true, duration)
+    expect(set).toHaveBeenCalledWith(cd, duration)
+    expect(digits).toHaveBeenCalledWith(cd, true)
+    b:SetCooldown(1, true, false, duration)
+    expect(digits).toHaveBeenCalledWith(cd, false)
+    b:SetCooldown(1, false, false, nil)
+    expect(clear).toHaveBeenCalledTimes(1)
+    b:SetCooldown(40, true, false, duration)
+    expect(set).toHaveBeenCalledTimes(2)
+    -- its end to onCooldownDone
+    local done = mock.spy()
+    mock.script(cd, "OnCooldownDone")
+    b.onCooldownDone = done
+    mock.script(cd, "OnCooldownDone")
+    expect(done).toHaveBeenCalledTimes(1)
+end
