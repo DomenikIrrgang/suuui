@@ -1,0 +1,138 @@
+-- Core/RolePresets: a profile per role with its layout, put in its role's
+-- place under Profiles › By role; plugins' values per role.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as rolePresets from "/Core/RolePresets"
+import * as settings from "/Core/Settings"
+import * as extend from "/Core/Extend"
+import expectNoErrors from "../../helpers"
+
+local profiles = settings.profiles
+
+local function stored(profileName: string): { [string]: any }
+    local exported = assert(profiles.export(profileName))
+    return exported.data
+end
+
+@afterEach
+local function cleanUp()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, role in ipairs(rolePresets.ROLES) do
+        profiles.setRoleProfile(role, nil)
+        local name = profiles.find(rolePresets.NAME[role])
+        if name then profiles.delete(name) end
+    end
+    local other = profiles.find("SuuHealer2")
+    if other then profiles.delete(other) end
+end
+
+@test("three roles, each with its profile's name and a layout")
+local function roles()
+    expect(rolePresets.ROLES).toEqual({ "TANK", "HEALER", "DAMAGER" })
+    expect(rolePresets.NAME).toEqual({ TANK = "SuuTank", HEALER = "SuuHeal", DAMAGER = "SuuDps" })
+    expect(rolePresets.LAYOUT.TANK).toEqual({})
+    expect(rolePresets.LAYOUT.DAMAGER).toEqual({})
+    local healer = assert(rolePresets.LAYOUT.HEALER)
+    expect(assert(healer.party).position).toEqual({ point = "BOTTOM", x = 0, y = 306 })
+    expect(assert(healer.swingtimer).position).toEqual({ point = "BOTTOM", x = 0, y = 271, hidden = true })
+    expect(assert(healer.raid).position.y).toBe(332 - (8 * 20 + 7 * 4))
+end
+
+@test("exists: only a profile of exactly the preset's name (any letter case)")
+local function exists()
+    expect(rolePresets.exists("TANK")).toBe(false)
+    expect(rolePresets.exists("WIZARD")).toBe(false)
+    -- a profile whose name only starts with the preset's isn't it
+    expect(profiles.create("SuuHealer2")).toBe(true)
+    expect(rolePresets.exists("HEALER")).toBe(false)
+    expect(profiles.create("suutank")).toBe(true)
+    expect(rolePresets.exists("TANK")).toBe(true)
+end
+
+@test("applying a preset makes its profile and puts it in the role's place")
+local function apply()
+    local before = profiles.current()
+    expect(rolePresets.apply("TANK")).toBe(true)
+    expect(rolePresets.exists("TANK")).toBe(true)
+    expect(profiles.roleProfile("TANK")).toBe("SuuTank")
+    -- the profile in use doesn't change
+    expect(profiles.current()).toBe(before)
+    expectNoErrors()
+end
+
+@test("the healer preset stores its layout; values at their default aren't stored")
+local function healer()
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    local data = stored("SuuHeal")
+    expect(data.party.width).toBe(120)
+    expect(data.party.direction).toBe("right")
+    expect(data.unitframes.playerPosition).toEqual({ point = "BOTTOM", x = -474, y = 300 })
+    expect(data.raid.arrangement).toBe("rows")
+end
+
+@test("applying again puts the layout back")
+local function again()
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    -- a player's edit of the preset's profile
+    profiles.setValues("SuuHeal", { { "party", "width", 161 } })
+    expect(stored("SuuHeal").party.width).toBe(161)
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    expect(stored("SuuHeal").party.width).toBe(120)
+end
+
+@test("a preset of the profile in use applies through the settings at once")
+local function inUse()
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    local before = assert(profiles.current())
+    expect(profiles.use("SuuHeal")).toBe(true)
+    settings.set("party", "width", 150)
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    expect(settings.get("party", "width")).toBe(120)
+    expect(profiles.use(before)).toBe(true)
+end
+
+@test("not in combat, and not for a role that isn't one")
+local function refused()
+    local ok, why = rolePresets.apply("WIZARD")
+    expect(ok).toBe(false)
+    expect(why).toBe("No such role.")
+    mock.player:enterCombat()
+    ok, why = rolePresets.apply("TANK")
+    expect(ok).toBe(false)
+    expect(why).toBe("After the fight.")
+    expect(rolePresets.exists("TANK")).toBe(false)
+end
+
+@test("a plugin's values for the role are stored; another role's keys go to their default")
+local function additions()
+    mock.stub(extend, "additions", function(listName: string): any[]
+        expect(listName).toBe("rolepresets")
+        return {
+            { role = "HEALER", namespace = "ui", values = { reducedMotion = true } },
+            { role = "TANK", namespace = "ui", values = { reducedMotion = false, hideIssueReporter = false } },
+            { role = "TANK", namespace = "ui", values = { hideIssueReporter = false } },
+            -- an addition without values
+            { role = "DAMAGER", namespace = "ui" },
+        }
+    end)
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    local healer = stored("SuuHeal")
+    expect(healer.ui.reducedMotion).toBe(true)
+    expect(healer.ui.hideIssueReporter).toBeNil()
+    expect(rolePresets.apply("TANK")).toBe(true)
+    local tank = stored("SuuTank")
+    expect(tank.ui.hideIssueReporter).toBe(false)
+    expect(tank.ui.reducedMotion).toBeNil()
+end
+
+@test("a preset whose values can't be stored says why")
+local function cannotStore()
+    mock.stub(profiles, "setValues", function(_: string?, _: { [number]: any }[]): (boolean, string?)
+        return false, "A profile needs a name."
+    end)
+    local ok, why = rolePresets.apply("DAMAGER")
+    expect(ok).toBe(false)
+    expect(why).toBe("A profile needs a name.")
+    expect(profiles.roleProfile("DAMAGER")).toBeNil()
+end

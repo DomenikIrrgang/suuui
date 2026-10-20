@@ -534,6 +534,8 @@ API.UI.StanceBar = classBars.stanceBar
 API.UI.TotemBar = classBars.totemBar -- 0.17: TotemBar(parent, { name, label, onLayout }) -> a shaman's totem bar: SetButtonSize(px), SetEnabled(on), header
 API.UI.DurationTextBinding = auras.durationTextBinding -- 0.17: DurationTextBinding(fontString[, expiringSeconds]) -> b:SetDuration(d), b:SetEnabled(on)
 API.UI.CooldownTracker = cooldownTracker.cooldownTracker
+-- (documented in Docs/API.md since 0.9, but until now only in Raw.UI)
+API.UI.CooldownConditionMet = cooldownTracker.cooldownConditionMet
 API.UI.ResourceBar = resourceBar.resourceBar -- 0.17: your power, combo points and a druid's mana in forms
 API.UI.WeaponEnchant = weaponEnchants.weaponEnchant -- 0.17: WeaponEnchant(slot) -> the temporary enchant on that weapon, or nil
 API.UI.WeaponEnchantable = weaponEnchants.weaponEnchantable -- 0.17: WeaponEnchantable(slot) -> a weapon is in that slot
@@ -610,8 +612,10 @@ function API.OpenRecipe(recipeID: number): any
     if p and p.OpenRecipe then return p.OpenRecipe(recipeID) end
     -- C_TradeSkillUI.OpenRecipe is protected (blocked from an addon): the
     -- recipe's profession opened instead
-    local line, _, parent = C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe
-        and C_TradeSkillUI.GetTradeSkillLineForRecipe(recipeID)
+    -- (called on its own line: `a and f()` keeps only f's first value, and
+    -- the parent line is its third)
+    if not (C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe) then return end
+    local line, _, parent = C_TradeSkillUI.GetTradeSkillLineForRecipe(recipeID)
     local skillLine = (parent and parent ~= 0) and parent or line
     if skillLine and C_TradeSkillUI.OpenTradeSkill then pcall(C_TradeSkillUI.OpenTradeSkill, skillLine) end
 end
@@ -769,8 +773,8 @@ API.UI.ReskinCollapseButton = reskin.reskinCollapseButton
 function API.AddFriend(name: any): boolean
     if type(name) ~= "string" or name == "" then return false end
     local fl, bn = C_FriendList, C_BattleNet
-    local okL, legacy = pcall(function() return fl and fl.IsLegacyFriendSystemEnabled and fl.IsLegacyFriendSystemEnabled() end)
-    if not (okL and legacy) and bn and bn.SendTitleFriendInviteByName then
+    local okL, legacyOn = pcall(function() return fl and fl.IsLegacyFriendSystemEnabled and fl.IsLegacyFriendSystemEnabled() end)
+    if not (okL and legacyOn) and bn and bn.SendTitleFriendInviteByName then
         if pcall(bn.SendTitleFriendInviteByName, name) then return true end
     end
     return fl and fl.AddFriend and pcall(fl.AddFriend, name) or false

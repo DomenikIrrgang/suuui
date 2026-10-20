@@ -1,0 +1,328 @@
+-- Core/Perf: "/suu perf", each module's time and allocations from
+-- fault.call's timing, SuuUI's memory, the game's profiler, a dev build's
+-- profiler; the report in chat and in SuuUIProbe.perf.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as perf from "/Core/Perf"
+import internal ns from "/Core/Perf"
+import * as fault from "/Core/Fault"
+import type Spent from "/Core/Fault"
+import * as DB from "/Core/DB"
+import expectNoErrors from "../../helpers"
+
+-- What printed since `from` (the chat lines, prefix and all).
+local function printedSince(from: number): string[]
+    local all = mock.printed()
+    local out: string[] = {}
+    for i = from + 1, #all do out[#out + 1] = all[i] end
+    return out
+end
+
+local function hasLine(lines: string[], text: string): boolean
+    for _, l in ipairs(lines) do
+        if l:find(text, 1, true) then return true end
+    end
+    return false
+end
+
+-- fault's timing as if these sources had run.
+local function spent(rows: { [string]: Spent })
+    mock.stub(fault, "timingState", function(): (boolean, { [string]: Spent }) return true, rows end)
+end
+
+-- (the sampler's one-second ticks are waited for with 1.05 s: a tick due
+-- exactly at the end of an advanceTime(1) can fall just after it, depending
+-- on the clock's value: Docs/test-notes/core-b.md)
+local function memoryKB(kb: number)
+    mock.fake("GetAddOnMemoryUsage", function(_: string): number return kb end)
+end
+
+@afterEach
+local function stop()
+    mock.slash("/suu perf stop")
+    fault.setTiming(false)
+end
+
+@test("the report lists modules by time, the slowest first, with calls, peak and allocation")
+local function rows()
+    spent({
+        Bags = { ms = 30, calls = 3, peak = 12.5, kb = 2048 },
+        Chat = { ms = 50, calls = 10, peak = 9, kb = 0.4 },
+        Auras = { ms = 5, calls = 100, peak = 0.2, kb = 300 },
+    })
+    memoryKB(5120)
+    local from = #mock.printed()
+    local out = perf.report()
+    expect(out.total).toBe(85)
+    expect(out.seconds).toBe(1)
+    expect(out.modules).toEqual({
+        "Chat: 50.0 ms (50.000 ms/s), 10 calls, slowest 9.00 ms, 0 KB allocated",
+        "Bags: 30.0 ms (30.000 ms/s), 3 calls, slowest 12.50 ms, 2.0 MB allocated",
+        "Auras: 5.0 ms (5.000 ms/s), 100 calls, slowest 0.20 ms, 300 KB allocated",
+    })
+    -- the garbage makers: 1 KB or more, most first
+    expect(out.allocated).toEqual({ "Bags 2048 KB (2048.0 KB/s)", "Auras 300 KB (300.0 KB/s)" })
+    expect(out.allocatedKB).toBe(2348)
+    expect(out.memory).toBe("5.0 MB")
+    expect(out.memoryAtStart).toBeNil()
+    expect(out.allocatedAll).toBeNil()
+    expect(type(out.at)).toBe("string")
+    expect(DB.probe.perf).toBe(out)
+    local lines = printedSince(from)
+    expect(hasLine(lines, "Perf over 1 s: 85.0 ms in all (85.00 ms a second).")).toBe(true)
+    expect(hasLine(lines, "  Chat: 50.0 ms")).toBe(true)
+    expect(hasLine(lines, "Allocated: 2.3 MB (2348.4 KB a second); most: Bags 2048 KB (2048.0 KB/s), Auras 300 KB (300.0 KB/s)")).toBe(true)
+    expect(hasLine(lines, "Memory (all of SuuUI): 5.0 MB")).toBe(true)
+    expectNoErrors()
+end
+
+@test("only the top twelve go to the chat; all of them to SuuUIProbe.perf")
+local function top()
+    local rowsOf: { [string]: Spent } = {}
+    for i = 1, 15 do rowsOf["M" .. i] = { ms = i, calls = 1, peak = i, kb = i } end
+    spent(rowsOf)
+    local from = #mock.printed()
+    local out = perf.report()
+    expect(#out.modules).toBe(15)
+    expect(#out.allocated).toBe(12)
+    local lines = printedSince(from)
+    expect(hasLine(lines, "  … 3 more in SuuUIProbe.perf")).toBe(true)
+    expect(hasLine(lines, "  M15: ")).toBe(true)
+    expect(hasLine(lines, "  M3: ")).toBe(false)
+end
+
+@test("without the client's memory numbers the report leaves memory out")
+local function noMemory()
+    spent({})
+    mock.fake("GetAddOnMemoryUsage", function(_: string): number error("unavailable") end)
+    local updates = mock.fake("UpdateAddOnMemoryUsage", function() end)
+    local out = perf.report()
+    expect(out.memory).toBeNil()
+    expect(updates).toHaveBeenCalled()
+    local api = _G.UpdateAddOnMemoryUsage
+    _G.UpdateAddOnMemoryUsage = nil
+    memoryKB(1024)
+    expect(perf.report().memory).toBe("1.0 MB")
+    _G.UpdateAddOnMemoryUsage = api
+end
+
+@test("the game's profiler, when it runs: SuuUI's share of the frame")
+local function share()
+    spent({})
+    local enumAll: { [string]: any } = Enum :: any
+    local metrics = enumAll.AddOnProfilerMetric
+    local saved = _G.C_AddOnProfiler
+    -- a stand-in profiler, its parts swapped per case
+    local profiler: { [string]: any } = {}
+    local function reset()
+        enumAll.AddOnProfilerMetric = { RecentAverageTime = 7 }
+        profiler.IsEnabled = function(): boolean return true end
+        profiler.GetAddOnMetric = function(addon: string, metric: number): number?
+            expect(addon).toBe("SuuUI")
+            expect(metric).toBe(7)
+            return 0.5
+        end
+        profiler.GetApplicationMetric = function(_: number): number? return 4 end
+        _G.C_AddOnProfiler = profiler
+    end
+    local function shareNow(): string? return perf.report().share end
+    local answers: { [string]: string | boolean } = {}
+    local function case(name: string, change: () -> ())
+        reset()
+        change()
+        answers[name] = shareNow() or false
+    end
+    case("running", function() end)
+    case("off", function() profiler.IsEnabled = function(): boolean return false end end)
+    case("no IsEnabled", function() profiler.IsEnabled = nil end)
+    case("no profiler", function() _G.C_AddOnProfiler = nil end)
+    case("no metric enum", function() enumAll.AddOnProfilerMetric = nil end)
+    case("no metric", function() enumAll.AddOnProfilerMetric = {} end)
+    case("addon metric fails", function() profiler.GetAddOnMetric = function(_: string, _: number): number? error("x") end end)
+    case("app metric fails", function() profiler.GetApplicationMetric = function(_: number): number? error("x") end end)
+    case("no addon metric", function() profiler.GetAddOnMetric = function(_: string, _: number): number? return nil end end)
+    case("no app metric", function() profiler.GetApplicationMetric = function(_: number): number? return nil end end)
+    case("app metric 0", function() profiler.GetApplicationMetric = function(_: number): number? return 0 end end)
+    _G.C_AddOnProfiler = saved
+    enumAll.AddOnProfilerMetric = metrics
+    expect(answers).toEqual({
+        running = "0.50 ms a frame, 12.5% of the frame", off = false, ["no IsEnabled"] = false, ["no profiler"] = false,
+        ["no metric enum"] = false, ["no metric"] = false, ["addon metric fails"] = false, ["app metric fails"] = false,
+        ["no addon metric"] = false, ["no app metric"] = false, ["app metric 0"] = false,
+    })
+end
+
+@test("a memory reading of nothing leaves memory out")
+local function memoryNil()
+    spent({})
+    mock.fake("GetAddOnMemoryUsage", function(_: string): number? return nil end)
+    expect(perf.report().memory).toBeNil()
+end
+
+@test("a source without an allocation count counts 0 KB")
+local function noKB()
+    local row: { [string]: any } = { ms = 1, calls = 1, peak = 1 }
+    spent({ Old = row :: any })
+    expect(perf.report().modules).toEqual({ "Old: 1.0 ms (1.000 ms/s), 1 calls, slowest 1.00 ms, 0 KB allocated" })
+end
+
+-- A dev build's runtime (wowlua dev): its profiler's and monitor's stats.
+-- (a stand-in runtime: the addon table seen untyped)
+local function devRuntime(wl: { [string]: any }?, fn: () -> ())
+    local addonTable: { [string]: any } = ns :: any
+    local saved = addonTable.__wowlua
+    addonTable.__wowlua = wl
+    local ok, err = pcall(fn)
+    addonTable.__wowlua = saved
+    if not ok then error(err, 0) end
+end
+
+@test("a dev build's busiest functions, scripts, timers and events go to SuuUIProbe.perf.dev")
+local function dev()
+    spent({})
+    local wl = {
+        prof = { stats = {
+            ["a.lua:f"] = { calls = 10, self = 1.5, total = 3, location = "a.lua:3" },
+            ["b.lua:g"] = { calls = 99, self = 0.5 },
+            ["c.lua:h"] = {},
+        } },
+        mon = {
+            scripts = { OnUpdate = { count = 600, total = 12, detail = "SuuUIRoot" }, OnEvent = { count = 5 } },
+            timers = { tick = { count = 3, total = 0.1 } },
+            events = { UNIT_AURA = { count = 40, total = 2 } },
+        },
+    }
+    devRuntime(wl, function()
+        local out = perf.report()
+        expect(out.dev.byCalls).toEqual({
+            "b.lua:g: 99 calls, self 0.5 ms, total 0.0 ms",
+            "a.lua:f: 10 calls, self 1.5 ms, total 3.0 ms (a.lua:3)",
+            "c.lua:h: 0 calls, self 0.0 ms, total 0.0 ms",
+        })
+        expect(out.dev.bySelf[1]).toBe("a.lua:f: 10 calls, self 1.5 ms, total 3.0 ms (a.lua:3)")
+        expect(out.dev.scripts).toEqual({ "OnUpdate: 600, 12.0 ms (SuuUIRoot)", "OnEvent: 5, 0.0 ms" })
+        expect(out.dev.timers).toEqual({ "tick: 3, 0.1 ms" })
+        expect(out.dev.events).toEqual({ "UNIT_AURA: 40, 2.0 ms" })
+    end)
+    -- a profiler without a monitor
+    devRuntime({ prof = { stats = {} } }, function()
+        local out = perf.report()
+        expect(out.dev.byCalls).toEqual({})
+        expect(out.dev.scripts).toBeNil()
+    end)
+    -- a monitor with scripts only; a hit without a count
+    devRuntime({ prof = { stats = {} }, mon = { scripts = { OnShow = {} } } }, function()
+        local out = perf.report()
+        expect(out.dev.scripts).toEqual({ "OnShow: 0, 0.0 ms" })
+        expect(out.dev.timers).toEqual({})
+    end)
+    -- no profiler stats, no profiler, no runtime: no dev section
+    devRuntime({ prof = {} }, function()
+        expect(perf.report().dev).toBeNil()
+    end)
+    devRuntime({}, function()
+        expect(perf.report().dev).toBeNil()
+    end)
+    devRuntime(nil, function()
+        expect(perf.report().dev).toBeNil()
+    end)
+end
+
+@test("/suu perf starts measuring, again reports, stop reports and ends")
+local function command()
+    memoryKB(1000)
+    local from = #mock.printed()
+    mock.slash("/suu perf")
+    expect((fault.timingState())).toBe(true)
+    expect(hasLine(printedSince(from), "Perf: measuring.")).toBe(true)
+    -- the sampler: rises add up, a fall is a collection
+    memoryKB(1100)
+    mock.advanceTime(1.05)
+    memoryKB(1050)
+    mock.advanceTime(1.05)
+    memoryKB(1250)
+    mock.advanceTime(1.05)
+    from = #mock.printed()
+    mock.slash("/suu perf")
+    local out = DB.probe.perf
+    expect(out.allocatedAll).toBe("0.3 MB (95.2 KB a second), 1 collections")
+    expect(out.memoryAtStart).toBe("1.0 MB")
+    expect(out.seconds).toBe(3)
+    expect(hasLine(printedSince(from), "Allocated by all of SuuUI (frame scripts too): 0.3 MB")).toBe(true)
+    expect(hasLine(printedSince(from), "(1.0 MB at the start)")).toBe(true)
+    from = #mock.printed()
+    mock.slash("/suu perf stop")
+    local lines = printedSince(from)
+    expect(hasLine(lines, "Perf over")).toBe(true)
+    expect(hasLine(lines, "Perf: stopped.")).toBe(true)
+    expect((fault.timingState())).toBe(false)
+    -- stopped: the sampler is gone
+    from = #mock.printed()
+    mock.advanceTime(2)
+    expect(printedSince(from)).toEqual({})
+    expectNoErrors()
+end
+
+@test("/suu perf stop while not measuring only says so")
+local function stopIdle()
+    local from = #mock.printed()
+    mock.slash("/suu perf stop")
+    local lines = printedSince(from)
+    expect(hasLine(lines, "Perf over")).toBe(false)
+    expect(hasLine(lines, "Perf: stopped.")).toBe(true)
+end
+
+@test("starting without a dev build's runtime, or one without resets")
+local function startPlain()
+    memoryKB(1000)
+    devRuntime(nil, function() mock.slash("/suu perf") end)
+    mock.slash("/suu perf stop")
+    devRuntime({ prof = {}, mon = {} }, function() mock.slash("/suu perf") end)
+    expect((fault.timingState())).toBe(true)
+    expectNoErrors()
+end
+
+@test("without a memory reading at the start the sampler waits for none")
+local function noStartMemory()
+    mock.fake("GetAddOnMemoryUsage", function(_: string): number error("unavailable") end)
+    mock.slash("/suu perf")
+    memoryKB(1200)
+    mock.advanceTime(2)
+    mock.slash("/suu perf")
+    expect(DB.probe.perf.allocatedAll).toBe("0.0 MB (0.0 KB a second), 0 collections")
+    expect(DB.probe.perf.memoryAtStart).toBeNil()
+end
+
+@test("the sampler skips a second without a memory reading")
+local function samplerGap()
+    memoryKB(1000)
+    mock.slash("/suu perf")
+    mock.fake("GetAddOnMemoryUsage", function(_: string): number error("unavailable") end)
+    mock.advanceTime(1.05)
+    memoryKB(1200)
+    mock.advanceTime(1.05)
+    mock.slash("/suu perf")
+    expect(DB.probe.perf.allocatedAll).toBe("0.2 MB (95.2 KB a second), 0 collections")
+end
+
+@test("starting again after timing was turned off elsewhere restarts the sampler; a dev build's counters reset")
+local function restart()
+    memoryKB(1000)
+    mock.slash("/suu perf")
+    fault.setTiming(false)
+    local resets: string[] = {}
+    devRuntime({
+        prof = { reset = function() resets[#resets + 1] = "prof" end, stats = {} },
+        mon = { reset = function() resets[#resets + 1] = "mon" end },
+    }, function()
+        mock.slash("/suu perf")
+    end)
+    expect(resets).toEqual({ "prof", "mon" })
+    memoryKB(1300)
+    mock.advanceTime(1.05)
+    mock.slash("/suu perf")
+    -- one sampler: the rise counted once
+    expect(DB.probe.perf.allocatedAll).toBe("0.3 MB (285.7 KB a second), 0 collections")
+    expectNoErrors()
+end

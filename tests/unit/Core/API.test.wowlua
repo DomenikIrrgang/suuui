@@ -1,0 +1,742 @@
+-- Core/API: the global SuuUI. Every name Docs/API.md documents is there, and
+-- the API's own functions behave; the components and core modules it
+-- re-exports are tested in their own files.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import tokens as T from "/Core/Tokens"
+import * as services from "/Core/Services"
+import * as events from "/Core/Events"
+import * as settings from "/Core/Settings"
+import * as themes from "/Core/Themes"
+import * as vision from "/Core/Vision"
+import * as roles from "/Core/Roles"
+import * as rolePresets from "/Core/RolePresets"
+import * as modules from "/Core/Modules"
+import * as pixel from "/Core/Pixel"
+import * as fonts from "/Core/Fonts"
+import * as motion from "/Core/Motion"
+import * as anchors from "/Core/Anchors"
+import * as blizzard from "/Core/Blizzard"
+import * as window from "/SettingsUI/Window"
+import * as registry from "/SettingsUI/Registry"
+import * as editMode from "/EditMode/EditMode"
+import * as socialProbe from "/Diagnostics/SocialProbe"
+import * as cooldownTracker from "/UI/CooldownTracker"
+import root from "/Core/Root"
+import version from "/Core/Init"
+import questStarts from "/Data/QuestStarts"
+import auraCatalog from "/Data/AuraCatalog"
+import classTalents from "/Data/Talents"
+import recipeSources from "/Data/RecipeSources"
+import expectNoErrors from "../../helpers"
+
+-- The API read by a name held in a string (the list below).
+local api: { [string]: any } = SuuUI :: any
+
+local function at(path: string): any
+    local v: any = api
+    for part in path:gmatch("[^%.]+") do
+        if type(v) ~= "table" then return nil end
+        v = v[part]
+    end
+    return v
+end
+
+-- Every SuuUI.* name Docs/API.md documents (and the UI components it lists
+-- by name), as of API 0.17.
+const DOCUMENTED: string[] = {
+    "API_VERSION", "version", "APIAtLeast", "RegisterModule", "GetModule", "Commands", "ListModules",
+    "AccountData", "AddFriend", "AddInstance", "Additions", "AllowAlertOutOfCombat", "ApplyRolePreset", "AuraCatalog",
+    "ClassTalents", "CollectionSources", "CollectionsShown", "ColorVision", "ColorVisionColor", "ColorVisionModes",
+    "CooldownPresets", "Defensives", "DismissNotification", "Durability", "ExpectRecipe", "FlightPaths", "FlightRoutes",
+    "FullName", "GetAnchor", "HideAlert", "InstanceInfo", "InstanceLevels", "Instances", "IsSuppressed", "KINDS",
+    "MapOverlays", "MapPlaces", "Notify", "OpenRecipe", "OpenSettings", "ProbeShowsBlizzardSocial", "ProfessionOpener",
+    "PublishAnchor", "QuestStarts", "RaidCatalog", "RecipeSources", "RegisterMover", "RegisterSettings", "RegisterTheme",
+    "RestoreBlizzard", "Role", "RolePresetName", "Root", "Service", "SetColorVision", "ShowAlert", "ShowLevelUp",
+    "ShownRecipe", "ShowTalentsOf", "ShowWelcome", "Spec", "SuppressBlizzard", "TagInstance", "TalentBuildNext",
+    "TalentsShown", "ToggleBags", "ToggleCollections", "ToggleSettings", "ToggleTalents", "Tokens", "Tokens.color",
+    "Tokens.type", "TrainerSpellIDs", "TrainerSpells",
+    "EditMode.Enter", "EditMode.Exit", "EditMode.Toggle", "EditMode.IsActive", "EditMode.Refresh", "EditMode.Rect",
+    "EditMode.AnchorFor", "EditMode.GroupPreview", "EditMode.SetGroupPreview",
+    "Fonts.Get", "Fonts.Apply", "KeybindMode.Enter", "KeybindMode.Exit", "KeybindMode.Toggle", "KeybindMode.IsActive",
+    "Layout.Stack", "Layout.Grid", "Motion.FadeIn", "Motion.Enter", "Motion.Pop", "Motion.Stop", "Motion.AlphaTo",
+    "Motion.Reduced", "Pixel.Size", "Pixel.Snap", "Pixel.PerfectScale",
+    "Raw.UI", "Raw.Mixins", "Raw.Module", "Raw.ns",
+    "LFG", "LFG.Catalogue", "LFG.config", "LFG.Configure", "LFG.ContactedAt", "LFG.Entries", "LFG.Interest",
+    "LFG.IsHiddenChannel", "LFG.Lang.Register", "LFG.Languages", "LFG.Listing", "LFG.Now", "LFG.On",
+    "LFG.Parser.Parse", "LFG.Refresh", "LFG.Start", "LFG.Whisper",
+}
+
+const DOCUMENTED_UI: string[] = {
+    "ActionBar", "ActionBarPaging", "ActionButton", "Alert", "AnchorButton", "AnchorPicker", "AuraContainer", "Bind",
+    "Border", "Button", "CastBar", "CenterWindow", "Checkbox", "CloseButton", "CloseContextMenu", "Confirm", "Contacts",
+    "ContextMenu", "ContextMenuFrom", "CooldownConditionMet", "CooldownTracker", "Crest", "Cross", "DAMAGE_METER_TYPES",
+    "DamageMeter", "DEBUFF_TYPES", "DecodeTalentBuild", "Diamond", "DragonArt", "DurationTextBinding", "EncodeTalentBuild",
+    "EncounterTimeline", "Fill", "FilterMenu", "Flag", "GROUP_TIERS", "GroupDefensives", "GroupFinderBrowse",
+    "GroupFinderListed", "GroupFinderWho", "GroupIndicators", "GroupTier", "GuildControl", "GuildInfo", "GuildLog",
+    "GuildMotdBanner", "GuildRoster", "Hairline", "HideTooltip", "INDICATOR_POINTS", "Icon", "IndicatorsFor", "Inventory",
+    "IsCoveredByWindow", "IsTooltipSkinned", "ItemSlot", "LEGACY_CARD_H", "LEGACY_TRACK_H", "LegacyChallenges",
+    "LegacyPoints", "LegacyTrack", "LevelColor", "LevelUp", "LoadingMark", "LootWindow", "MakeModal", "MapPin",
+    "MeasureText", "MicroMenu", "ModelStage", "Money", "MoneyInput", "Notification", "NotificationStack", "NumberField",
+    "ObjectiveTracker", "Paint", "PaintFill", "PaintGradient", "Panel", "PeopleList", "PetBar", "PROFESSION_FILTER_DEFAULTS",
+    "Professions", "PROFESSIONS_H", "PROFESSIONS_W", "RaidGroups", "RaidMarker", "RaidPlanner", "ReadGameTalentHeader",
+    "ReadGameTalentString", "Readiness", "RefreshTooltip", "Reskin", "ReskinButton", "ReskinCheckButton",
+    "ReskinCollapseButton", "ReskinDialog", "ReskinDropdown", "ReskinEditBox", "ReskinFillBar", "ReskinIconButton",
+    "ReskinMenu", "ReskinPopup", "ReskinScrollBar", "ReskinScrollBox", "ReskinStatusBar", "ResourceBar", "RestedSign",
+    "RGBA", "ScrollArea", "SectionHeader", "Segmented", "Select", "SetActionTextSize", "SetGroupDefensives",
+    "SetGroupIndicators", "SettingRow", "SettingsGroup", "SettingsMatrix", "SetVisibility", "Shadow", "ShortKey",
+    "ShowRaidMarker", "ShowTooltip", "Size", "SkinGroupFinderListing", "SkinItemSlot", "SkinTooltip", "SkinWindow",
+    "Slider", "SoftEdge", "Spellbook", "SpellTooltip", "StanceBar", "StateBadge", "StatusBar", "Stepper", "SwatchRow",
+    "SwingTimer", "TabMarker", "TALENT_MAX_POINTS", "TALENT_ORDER_W", "TALENT_ROW_POINTS", "TALENT_TREE_W",
+    "TalentNextProblem", "TalentOrderCheck", "TalentStepProblem", "TalentStepsFromRanks", "TalentTree", "Text",
+    "TextField", "ThreatMeter", "Toggle", "ToggleChips", "TooltipFrame", "TotemBar", "TRACKER_HEAD_H", "TrackerSound",
+    "TraitTooltip", "UnitFrame", "UnitFrameCurveValue", "UnitStandIn", "VISIBILITY_OPTIONS", "WeaponEnchant",
+    "WeaponEnchantable", "WeaponEnchantIcon", "WeaponEnchantSpell", "WINDOW_HEAD_H", "WindowFrame",
+    "WriteGameTalentString",
+}
+
+-- Services stood in for: services.get answers from this table.
+local standIns: { [string]: { [string]: any } } = {}
+local function withServices()
+    mock.stub(services, "get", function(name: string): { [string]: any }? return standIns[name] end)
+end
+
+@afterEach
+local function cleanUp()
+    standIns = {}
+    settings.setAccount("colorVision", nil)
+    settings.setAccount("theme", nil)
+    themes.apply()
+end
+
+--------------------------------------------------------------------------------
+-- What is there
+--------------------------------------------------------------------------------
+
+@test("the global SuuUI is the API")
+local function global()
+    expect(_G.SuuUI).toBe(SuuUI)
+end
+
+@test("every documented name is there")
+local function documented()
+    local missing: string[] = {}
+    for _, path in ipairs(DOCUMENTED) do
+        if at(path) == nil then missing[#missing + 1] = path end
+    end
+    for _, name in ipairs(DOCUMENTED_UI) do
+        if at("UI." .. name) == nil then missing[#missing + 1] = "UI." .. name end
+    end
+    expect(missing).toEqual({})
+end
+
+@test("every UI component is in Raw.UI too, under the same name")
+local function rawUI()
+    local raw: { [string]: any } = SuuUI.Raw.UI
+    local missing: string[] = {}
+    for name, v in pairs(SuuUI.UI :: { [string]: any }) do
+        if raw[name] ~= v then missing[#missing + 1] = name end
+    end
+    table.sort(missing)
+    expect(missing).toEqual({})
+    expect(raw.actionButtons).toBeTruthy()
+end
+
+@test("the version and the API version")
+local function versions()
+    expect(SuuUI.API_VERSION).toBe(modules.API_VERSION)
+    expect(SuuUI.API_VERSION).toBe("0.17.0")
+    expect(SuuUI.version).toBe(version)
+    expect(SuuUI.APIAtLeast("0.1")).toBe(true)
+    expect(SuuUI.APIAtLeast("0.99")).toBe(false)
+end
+
+@test("the core's parts are the core modules' own")
+local function parts()
+    expect(SuuUI.Root).toBe(root)
+    expect(SuuUI.Tokens).toBe(T)
+    expect(SuuUI.Pixel.Size).toBe(pixel.size)
+    expect(SuuUI.Pixel.Snap).toBe(pixel.snap)
+    expect(SuuUI.Pixel.PerfectScale).toBe(pixel.perfectScale)
+    expect(SuuUI.Fonts.Get).toBe(fonts.get)
+    expect(SuuUI.Fonts.Apply).toBe(fonts.apply)
+    expect(SuuUI.Motion.FadeIn).toBe(motion.fadeIn)
+    expect(SuuUI.Motion.AlphaTo).toBe(motion.alphaTo)
+    expect(SuuUI.Motion.Reduced).toBe(motion.reduced)
+    expect(SuuUI.PublishAnchor).toBe(anchors.publish)
+    expect(SuuUI.GetAnchor).toBe(anchors.get)
+    expect(SuuUI.SuppressBlizzard).toBe(blizzard.suppress)
+    expect(SuuUI.RestoreBlizzard).toBe(blizzard.restore)
+    expect(SuuUI.IsSuppressed).toBe(blizzard.isSuppressed)
+    expect(SuuUI.UI.CooldownConditionMet).toBe(cooldownTracker.cooldownConditionMet)
+    expect(SuuUI.Raw.Module).toBe(modules.get)
+    expect(type(SuuUI.Raw.ns)).toBe("table")
+    expect(type(SuuUI.Raw.Mixins)).toBe("table")
+end
+
+--------------------------------------------------------------------------------
+-- Modules
+--------------------------------------------------------------------------------
+
+@test("GetModule finds a module by id")
+local function getModule()
+    local first = modules.all()[1]
+    expect(SuuUI.GetModule(first.id)).toBe(first)
+    expect(SuuUI.GetModule("no-such-module")).toBeNil()
+end
+
+@test("ListModules is a snapshot of every module")
+local function listModules()
+    local list = SuuUI.ListModules()
+    local all = modules.all()
+    expect(#list).toBe(#all)
+    for i, m in ipairs(all) do
+        local row = list[i]
+        expect(row.id).toBe(m.id)
+        expect(row.name).toBe(m.name)
+        expect(row.state).toBe(m.state)
+        expect(row.builtIn).toBe(m.builtIn)
+    end
+    -- a copy: changing it changes nothing
+    list[1].state = "changed"
+    expect(all[1].state == "changed").toBe(false)
+end
+
+@test("Commands lists every /suu subcommand")
+local function commands()
+    local names: { [string]: boolean } = {}
+    for _, c in ipairs(SuuUI.Commands()) do names[c.name] = true end
+    expect(names.perf).toBe(true)
+    expect(names.pixel).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Delegating functions
+--------------------------------------------------------------------------------
+
+@test("RegisterTheme registers a theme")
+local function registerTheme()
+    SuuUI.RegisterTheme({ id = "api-test-theme", name = "API test" })
+    expect(assert(themes.get("api-test-theme")).name).toBe("API test")
+    expect(function() SuuUI.RegisterTheme({ id = "api-test-theme" }) end).toThrow("is taken")
+end
+
+@test("Role and Spec are Roles' current and spec")
+local function roleSpec()
+    mock.stub(roles, "current", function(): (string, string) return "HEALER", "assigned" end)
+    mock.stub(roles, "spec", function(): (number, number[]) return 2, { 1, 9, 0 } end)
+    local role, source = SuuUI.Role()
+    expect(role).toBe("HEALER")
+    expect(source).toBe("assigned")
+    local tree, pts = SuuUI.Spec()
+    expect(tree).toBe(2)
+    expect(pts).toEqual({ 1, 9, 0 })
+end
+
+@test("the settings window, settings sections and movers go to their modules")
+local function settingsWindow()
+    local opened = mock.stub(window, "open", function(_: string?) end)
+    local toggled = mock.stub(window, "toggle", function() end)
+    local section = {}
+    mock.stub(registry, "register", function(_: { [string]: any }, _: any): any return section end)
+    local mover = {}
+    mock.stub(editMode, "register", function(_: any, _: { [string]: any }, _: any?): any return mover end)
+    SuuUI.OpenSettings("general")
+    expect(opened).toHaveBeenCalledWith("general")
+    SuuUI.OpenSettings()
+    expect(opened).toHaveBeenCalledTimes(2)
+    SuuUI.ToggleSettings()
+    expect(toggled).toHaveBeenCalledTimes(1)
+    expect(SuuUI.RegisterSettings({ id = "x" })).toBe(section)
+    expect(SuuUI.RegisterMover(CreateFrame("Frame"), { namespace = "ui", key = "x" })).toBe(mover)
+end
+
+@test("ProbeShowsBlizzardSocial is the social probe's answer")
+local function socialProbeAnswer()
+    mock.stub(socialProbe, "showsBlizzardSocial", function(): boolean return true end)
+    expect(SuuUI.ProbeShowsBlizzardSocial()).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Services
+--------------------------------------------------------------------------------
+
+@test("with the modules off, the service functions do nothing and say so")
+local function servicesOff()
+    withServices()
+    local bags = mock.fake("ToggleAllBags", function() end)
+    expect(SuuUI.ToggleTalents()).toBe(false)
+    expect(SuuUI.ShowTalentsOf("target")).toBe(false)
+    expect(SuuUI.ToggleCollections("mounts")).toBe(false)
+    expect(SuuUI.CollectionsShown()).toBe(false)
+    expect(SuuUI.TalentsShown()).toBe(false)
+    expect(SuuUI.TalentBuildNext()).toBeNil()
+    expect(SuuUI.ShowWelcome()).toBe(false)
+    expect(SuuUI.ShownRecipe()).toBeNil()
+    expect(SuuUI.Notify({ title = "x" })).toBeNil()
+    expect(SuuUI.Durability()).toBeNil()
+    SuuUI.ExpectRecipe(1)
+    SuuUI.DismissNotification(1)
+    SuuUI.ShowAlert("k", "info", "Title", "Detail")
+    SuuUI.ShowLevelUp("k", {})
+    SuuUI.HideAlert("k")
+    -- the bags: Blizzard's
+    SuuUI.ToggleBags()
+    expect(bags).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("with a service there, the calls reach it")
+local function servicesOn()
+    withServices()
+    local s = mock.spy()
+    local toggleBags = mock.spy(function(): string return "bags" end)
+    standIns.talents = { Toggle = s, ShowInspect = s, IsShown = function(): boolean return true end,
+        NextTalent = function(): any return { name = "Next" } end }
+    standIns.collections = { Toggle = s, IsShown = function(): boolean return 1 :: any end }
+    standIns.welcome = { Show = s }
+    standIns.bags = { Toggle = toggleBags }
+    standIns.professions = { ExpectRecipe = s, ShownRecipe = function(): number return 77 end,
+        OpenRecipe = function(id: number): string return "opened " .. id end }
+    standIns.notifications = { Notify = function(_: any): string return "id-1" end, Dismiss = s }
+    standIns.alerts = { Show = s, ShowLevelUp = s, Hide = s }
+    standIns.durability = { Get = function(): any return { lowest = 40 } end }
+    expect(SuuUI.ToggleTalents()).toBe(true)
+    expect(SuuUI.ShowTalentsOf("target")).toBe(true)
+    expect(s).toHaveBeenCalledWith("target")
+    expect(SuuUI.ToggleCollections("toys")).toBe(true)
+    expect(s).toHaveBeenCalledWith("toys")
+    expect(SuuUI.CollectionsShown()).toBe(true)
+    expect(SuuUI.TalentsShown()).toBe(true)
+    expect(SuuUI.TalentBuildNext()).toEqual({ name = "Next" })
+    expect(SuuUI.ShowWelcome()).toBe(true)
+    expect(SuuUI.ToggleBags()).toBe("bags")
+    expect(SuuUI.OpenRecipe(12)).toBe("opened 12")
+    SuuUI.ExpectRecipe(13)
+    expect(s).toHaveBeenCalledWith(13)
+    expect(SuuUI.ShownRecipe()).toBe(77)
+    expect(SuuUI.Notify({ title = "Hi" })).toBe("id-1")
+    SuuUI.DismissNotification("id-1")
+    expect(s).toHaveBeenCalledWith("id-1")
+    SuuUI.ShowAlert("pull", "warning", "Pull", "in %d", 5)
+    expect(s).toHaveBeenCalledWith("pull", "warning", "Pull", "in %d", 5)
+    SuuUI.ShowLevelUp("lvl", { title = "Level 20" })
+    SuuUI.HideAlert("pull")
+    expect(s).toHaveBeenCalledWith("pull")
+    expect(SuuUI.Durability()).toEqual({ lowest = 40 })
+    -- answers that are false or nothing
+    standIns.collections.IsShown = function(): boolean return false end
+    standIns.talents.IsShown = function(): boolean return false end
+    standIns.professions.ShownRecipe = function(): number? return nil end
+    expect(SuuUI.CollectionsShown()).toBe(false)
+    expect(SuuUI.TalentsShown()).toBe(false)
+    expect(SuuUI.ShownRecipe()).toBeNil()
+end
+
+@test("a service without the function asked for is treated as off")
+local function partialService()
+    withServices()
+    standIns.talents = {}
+    standIns.collections = {}
+    standIns.welcome = {}
+    standIns.professions = {}
+    standIns.notifications = {}
+    standIns.alerts = {}
+    standIns.durability = {}
+    standIns.bags = {}
+    mock.fake("ToggleAllBags", function() end)
+    expect(SuuUI.ToggleTalents()).toBe(false)
+    expect(SuuUI.ShowTalentsOf("target")).toBe(false)
+    expect(SuuUI.TalentsShown()).toBe(false)
+    expect(SuuUI.TalentBuildNext()).toBeNil()
+    expect(SuuUI.ToggleCollections()).toBe(false)
+    expect(SuuUI.CollectionsShown()).toBe(false)
+    expect(SuuUI.ShowWelcome()).toBe(false)
+    expect(SuuUI.ShownRecipe()).toBeNil()
+    expect(SuuUI.Notify({})).toBeNil()
+    expect(SuuUI.Durability()).toBeNil()
+    SuuUI.ExpectRecipe(1)
+    SuuUI.DismissNotification(1)
+    SuuUI.ShowAlert("k")
+    SuuUI.ShowLevelUp("k", {})
+    SuuUI.HideAlert("k")
+    SuuUI.AllowAlertOutOfCombat("k")
+    SuuUI.ToggleBags()
+    expectNoErrors()
+end
+
+@test("keys allowed out of combat reach the alerts service, also one that comes later")
+local function anytime()
+    withServices()
+    SuuUI.AllowAlertOutOfCombat("api-pull")
+    local allowed: string[] = {}
+    standIns.alerts = { AllowOutOfCombat = function(key: string) allowed[#allowed + 1] = key end }
+    SuuUI.AllowAlertOutOfCombat("api-countdown")
+    expect(allowed).toEqual({ "api-countdown" })
+    -- another service changing: nothing
+    allowed = {}
+    events.emit("SUUUI_SERVICE_CHANGED", "bags")
+    expect(allowed).toEqual({})
+    -- a new alerts service: every key so far
+    events.emit("SUUUI_SERVICE_CHANGED", "alerts")
+    expect(allowed).toContain("api-countdown")
+    expect(allowed).toContain("api-pull")
+    -- one without AllowOutOfCombat
+    standIns.alerts = {}
+    events.emit("SUUUI_SERVICE_CHANGED", "alerts")
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Professions
+--------------------------------------------------------------------------------
+
+@test("OpenRecipe without SuuUI's window opens the recipe's profession (its parent line first)")
+local function openRecipeFallback()
+    withServices()
+    local opened = mock.fake("C_TradeSkillUI.OpenTradeSkill", function(_: number) end)
+    mock.fake("C_TradeSkillUI.GetTradeSkillLineForRecipe", function(recipe: number): (number, string, number)
+        if recipe == 1 then return 171, "Alchemy", 0 end
+        return 2550, "Classic Cooking", 185
+    end)
+    SuuUI.OpenRecipe(1)
+    expect(opened).toHaveBeenCalledWith(171)
+    SuuUI.OpenRecipe(2)
+    expect(opened).toHaveBeenCalledWith(185)
+end
+
+@test("OpenRecipe with nothing known about the recipe, or no API for it, opens nothing")
+local function openRecipeUnknown()
+    withServices()
+    local opened = mock.fake("C_TradeSkillUI.OpenTradeSkill", function(_: number) end)
+    mock.fake("C_TradeSkillUI.GetTradeSkillLineForRecipe", function(_: number): any return nil end)
+    SuuUI.OpenRecipe(3)
+    -- (the client's tables seen untyped, to take functions away)
+    local tradeSkill: { [string]: any } = C_TradeSkillUI :: any
+    local lineFor = tradeSkill.GetTradeSkillLineForRecipe
+    tradeSkill.GetTradeSkillLineForRecipe = nil
+    SuuUI.OpenRecipe(3)
+    tradeSkill.GetTradeSkillLineForRecipe = lineFor
+    local all: { [string]: any } = _G :: any
+    local saved = all.C_TradeSkillUI
+    all.C_TradeSkillUI = nil
+    SuuUI.OpenRecipe(3)
+    all.C_TradeSkillUI = saved
+    -- a professions service without OpenRecipe falls back; no OpenTradeSkill: nothing opens
+    standIns.professions = {}
+    mock.fake("C_TradeSkillUI.GetTradeSkillLineForRecipe", function(_: number): (number, string, number) return 171, "Alchemy", 0 end)
+    local open = tradeSkill.OpenTradeSkill
+    tradeSkill.OpenTradeSkill = nil
+    SuuUI.OpenRecipe(4)
+    tradeSkill.OpenTradeSkill = open
+    expect(opened).never.toHaveBeenCalled()
+    SuuUI.OpenRecipe(4)
+    expect(opened).toHaveBeenCalledWith(171)
+end
+
+type Spell = { id: number, passive?: boolean, crafts?: boolean }
+type Profession = { line: number, offset: number, spells: { [number]: Spell } }
+
+local function professions(lines: { [number]: Profession })
+    mock.fake("GetProfessions", function(): (number?, number?) return 1, 2 end)
+    mock.fake("GetProfessionInfo", function(index: number): (string, number, number, number, number, number, number)
+        local p = assert(lines[index])
+        local n = 0
+        for _ in pairs(p.spells) do n += 1 end
+        return "name", 0, 1, 300, n, p.offset, p.line
+    end)
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number, _: any): any
+        for _, p in pairs(lines) do
+            local s = p.spells[slot - p.offset]
+            if s then return { spellID = s.id, isPassive = s.passive == true } end
+        end
+        return nil
+    end)
+    mock.fake("C_TradeSkillUI.CanTradeSkillShowCraftingUI", function(id: number): boolean
+        for _, p in pairs(lines) do
+            for _, s in pairs(p.spells) do if s.id == id then return s.crafts ~= false end end
+        end
+        return false
+    end)
+end
+
+@test("ProfessionOpener: the profession's active spell that opens its window")
+local function opener()
+    professions({
+        [1] = { line = 186, offset = 10, spells = { [1] = { id = 2656, passive = true }, [2] = { id = 2575, crafts = false }, [3] = { id = 2656 + 1 } } },
+        [2] = { line = 393, offset = 20, spells = { [1] = { id = 8613 } } },
+    })
+    expect(SuuUI.ProfessionOpener(186)).toBe(2657)
+    expect(SuuUI.ProfessionOpener(393)).toBe(8613)
+    expect(SuuUI.ProfessionOpener(999)).toBeNil()
+end
+
+@test("ProfessionOpener copes with gaps in the client's answers")
+local function openerGaps()
+    mock.fake("GetProfessions", function(): (number?, number?) return 1, nil end)
+    mock.fake("GetProfessionInfo", function(_: number): (string, number, number, number, number?, number?, number)
+        return "name", 0, 1, 300, nil, nil, 186
+    end)
+    expect(SuuUI.ProfessionOpener(186)).toBeNil()
+    -- slots with no info, or info without a spell
+    local slot = 0
+    mock.fake("GetProfessionInfo", function(_: number): (string, number, number, number, number?, number?, number)
+        return "name", 0, 1, 300, 3, nil, 186
+    end)
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(_: number, _: any): any
+        slot += 1
+        if slot == 1 then return nil end
+        if slot == 2 then return { isPassive = false } end
+        return { spellID = 2580, isPassive = false }
+    end)
+    mock.fake("C_TradeSkillUI.CanTradeSkillShowCraftingUI", function(_: number): boolean return true end)
+    -- a client without the spell bank enum
+    local enumAll: { [string]: any } = Enum :: any
+    local banks = enumAll.SpellBookSpellBank
+    enumAll.SpellBookSpellBank = nil
+    local answer = SuuUI.ProfessionOpener(186)
+    enumAll.SpellBookSpellBank = banks
+    expect(answer).toBe(2580)
+end
+
+@test("ProfessionOpener without the client's profession API is nil")
+local function openerNoApi()
+    local answers: (number | boolean)[] = {}
+    for _, name in ipairs({ "GetProfessions", "C_SpellBook", "C_TradeSkillUI" }) do
+        local saved = _G[name]
+        _G[name] = nil
+        answers[#answers + 1] = SuuUI.ProfessionOpener(186) or false
+        _G[name] = saved
+    end
+    expect(answers).toEqual({ false, false, false })
+end
+
+--------------------------------------------------------------------------------
+-- Names and friends
+--------------------------------------------------------------------------------
+
+@test("FullName: the whole name, else UnitName's")
+local function fullName()
+    mock.fake("GetUnitName", function(unit: string, _: boolean): string return unit == "player" and "Tamsin Ashford" or "" end)
+    mock.fake("UnitName", function(_: string): (string, string?) return "Brannoc", "Ironhand" end)
+    expect(SuuUI.FullName()).toBe("Tamsin Ashford")
+    expect(SuuUI.FullName("target")).toBe("Brannoc")
+    local api2 = _G.GetUnitName
+    _G.GetUnitName = nil
+    local fallback = SuuUI.FullName("player")
+    local own = SuuUI.FullName()
+    _G.GetUnitName = api2
+    expect(fallback).toBe("Brannoc")
+    expect(own).toBe("Brannoc")
+end
+
+@test("AddFriend: Forever's title friend invite, else the classic list")
+local function addFriend()
+    local invites = mock.fake("C_BattleNet.SendTitleFriendInviteByName", function(_: string) end)
+    local legacy = false
+    mock.fake("C_FriendList.IsLegacyFriendSystemEnabled", function(): boolean return legacy end)
+    local added = mock.fake("C_FriendList.AddFriend", function(_: string) end)
+    expect(SuuUI.AddFriend("Tamsin Ashford")).toBe(true)
+    expect(invites).toHaveBeenCalledWith("Tamsin Ashford")
+    expect(added).never.toHaveBeenCalled()
+    -- the classic list on
+    legacy = true
+    expect(SuuUI.AddFriend("Brannoc")).toBe(true)
+    expect(added).toHaveBeenCalledWith("Brannoc")
+    -- the invite failing falls back to the list
+    legacy = false
+    mock.fake("C_BattleNet.SendTitleFriendInviteByName", function(_: string) error("refused") end)
+    expect(SuuUI.AddFriend("Kaelith")).toBe(true)
+    expect(added).toHaveBeenCalledWith("Kaelith")
+    -- the legacy flag unreadable: the invite is tried
+    mock.fake("C_FriendList.IsLegacyFriendSystemEnabled", function(): boolean error("unknown") end)
+    local inviteAgain = mock.fake("C_BattleNet.SendTitleFriendInviteByName", function(_: string) end)
+    expect(SuuUI.AddFriend("Ashmaw")).toBe(true)
+    expect(inviteAgain).toHaveBeenCalledWith("Ashmaw")
+    -- the list failing too
+    mock.fake("C_BattleNet.SendTitleFriendInviteByName", function(_: string) error("refused") end)
+    mock.fake("C_FriendList.AddFriend", function(_: string) error("refused") end)
+    expect(SuuUI.AddFriend("Kaelith")).toBe(false)
+end
+
+@test("AddFriend without the client's friend APIs")
+local function addFriendNoApi()
+    local all: { [string]: any } = _G :: any
+    local fl, bn = all.C_FriendList, all.C_BattleNet
+    local added = mock.fake("C_FriendList.AddFriend", function(_: string) end)
+    -- no Battle.net invite: the classic list
+    all.C_BattleNet = nil
+    local viaList = SuuUI.AddFriend("Kaelith")
+    all.C_BattleNet = { }
+    local viaListToo = SuuUI.AddFriend("Kaelith")
+    -- no legacy flag: the invite
+    all.C_BattleNet = { SendTitleFriendInviteByName = function(_: string) end }
+    all.C_FriendList = { AddFriend = fl.AddFriend }
+    local viaInvite = SuuUI.AddFriend("Brannoc")
+    -- nothing at all
+    all.C_BattleNet = nil
+    all.C_FriendList = nil
+    local nothing = SuuUI.AddFriend("Brannoc")
+    all.C_FriendList = {}
+    local noAdd = SuuUI.AddFriend("Brannoc")
+    all.C_FriendList, all.C_BattleNet = fl, bn
+    expect({ viaList, viaListToo, viaInvite, nothing, noAdd }).toEqual({ true, true, true, false, false })
+    expect(added).toHaveBeenCalledTimes(2)
+end
+
+@test("AddFriend needs a name")
+local function addFriendNoName()
+    expect(SuuUI.AddFriend(nil)).toBe(false)
+    expect(SuuUI.AddFriend("")).toBe(false)
+    expect(SuuUI.AddFriend(42)).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Data
+--------------------------------------------------------------------------------
+
+@test("the data accessors hand out SuuUI's data")
+local function data()
+    expect(SuuUI.QuestStarts()).toBe(questStarts)
+    expect(SuuUI.AuraCatalog()).toBe(auraCatalog)
+    expect(SuuUI.ClassTalents("MAGE")).toBe(classTalents.MAGE)
+    expect(SuuUI.ClassTalents("MONK")).toBeNil()
+    for id, sources in pairs(recipeSources) do
+        expect(SuuUI.RecipeSources(id)).toBe(sources)
+        break
+    end
+    expect(SuuUI.RecipeSources(-1)).toBeNil()
+    for _, fn in ipairs({ SuuUI.CooldownPresets, SuuUI.TrainerSpells, SuuUI.TrainerSpellIDs, SuuUI.Defensives,
+        SuuUI.RaidCatalog, SuuUI.MapPlaces, SuuUI.MapOverlays, SuuUI.InstanceLevels, SuuUI.FlightRoutes,
+        SuuUI.FlightPaths, SuuUI.CollectionSources } :: { () -> any }) do
+        expect(type(fn())).toBe("table")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Role presets, colour vision, account data
+--------------------------------------------------------------------------------
+
+@test("RolePresetName names a role's preset profile")
+local function presetName()
+    expect(SuuUI.RolePresetName("TANK")).toBe("SuuTank")
+    expect(SuuUI.RolePresetName("WIZARD")).toBeNil()
+end
+
+@test("ApplyRolePreset makes the preset; with switch the character uses it")
+local function applyPreset()
+    local before = assert(settings.profiles.current())
+    expect(SuuUI.ApplyRolePreset("DAMAGER")).toBe(true)
+    expect(settings.profiles.current()).toBe(before)
+    expect(SuuUI.ApplyRolePreset("DAMAGER", true)).toBe(true)
+    expect(settings.profiles.current()).toBe("SuuDps")
+    settings.profiles.use(before)
+    settings.profiles.setRoleProfile("DAMAGER", nil)
+    settings.profiles.delete("SuuDps")
+end
+
+@test("ApplyRolePreset says why it couldn't")
+local function applyPresetRefused()
+    local ok, why = SuuUI.ApplyRolePreset("WIZARD")
+    expect(ok).toBe(false)
+    expect(why).toBe("No such role.")
+    mock.stub(rolePresets, "apply", function(_: string): (boolean, string?) return true end)
+    mock.stub(settings.profiles, "find", function(_: string?): (string?, string?) return nil, "gone" end)
+    ok, why = SuuUI.ApplyRolePreset("TANK", true)
+    expect(ok).toBe(false)
+    expect(why).toBe("The preset's profile is missing.")
+end
+
+@test("ColorVisionModes lists the presets the design has values for")
+local function visionModes()
+    local modes = SuuUI.ColorVisionModes()
+    expect(#modes).toBe(3)
+    expect(modes[1]).toEqual({ id = "normal", label = "Normal", hint = vision.HINT.normal })
+    expect(modes[2].id).toBe("redgreen")
+    local presets = T.vision
+    T.vision = nil
+    local onlyNormal = SuuUI.ColorVisionModes()
+    T.vision = presets
+    expect(#onlyNormal).toBe(1)
+end
+
+@test("SetColorVision chooses the account's preset and applies it at once")
+local function setVision()
+    expect(SuuUI.ColorVision()).toBe("normal")
+    expect(SuuUI.SetColorVision("redgreen")).toBe(true)
+    local chosen, applied = SuuUI.ColorVision()
+    expect(chosen).toBe("redgreen")
+    expect(applied).toBe("redgreen")
+    expect(T.color.ember.hex).toBe("ec6b00")
+    expect(SuuUI.SetColorVision("normal")).toBe(true)
+    expect(settings.account("colorVision")).toBeNil()
+    expect(vision.appliedMode()).toBe("normal")
+    local ok, why = SuuUI.SetColorVision("purple")
+    expect(ok).toBe(false)
+    expect(why).toBe("No such colour vision preset.")
+end
+
+@test("SetColorVision refuses a preset the design has no values for")
+local function setVisionUnavailable()
+    local presets = T.vision
+    T.vision = { redgreen = {} }
+    local ok = SuuUI.SetColorVision("redgreen")
+    T.vision = presets
+    expect(ok).toBe(false)
+end
+
+@test("ColorVisionColor: a token as a preset draws it, whatever is applied")
+local function visionColor()
+    local design = { T.color.ember[1], T.color.ember[2], T.color.ember[3], T.color.ember[4] }
+    SuuUI.SetColorVision("blueyellow")
+    -- normal: the design's, though blue-yellow is applied
+    local r, g, b, a = SuuUI.ColorVisionColor("normal", "ember")
+    expect({ r, g, b, a }).toEqual(design)
+    -- a preset's: its values, alpha the design's
+    r, g, b, a = SuuUI.ColorVisionColor("redgreen", "ember")
+    expect({ r, g, b }).toEqual({ 0.9255, 0.4196, 0 })
+    expect(a).toBe(design[4])
+    -- a preset colour with its own alpha
+    local _, _, _, fa = SuuUI.ColorVisionColor("redgreen", "fel-incoming")
+    expect(fa).toBe(0.4)
+    -- a token the preset leaves alone: the design's
+    r = SuuUI.ColorVisionColor("redgreen", "gilt")
+    expect(r).toBe(T.color.gilt[1])
+    expect(function() SuuUI.ColorVisionColor("normal", "glitter") end).toThrow("SuuUI: unknown colour token glitter")
+end
+
+@test("ColorVisionColor without the presets gives the design's colour")
+local function visionColorNoPresets()
+    local presets = T.vision
+    T.vision = nil
+    local r = SuuUI.ColorVisionColor("redgreen", "ember")
+    T.vision = presets
+    expect(r).toBe(SuuUI.ColorVisionColor("normal", "ember"))
+end
+
+@test("ColorVisionColor for a colour without an alpha reads it as opaque")
+local function visionColorNoAlpha()
+    local presets = T.vision
+    T.vision = { redgreen = { ["glitter"] = { 1, 0, 1, hex = "ff00ff" } :: any } }
+    local _, _, _, a = SuuUI.ColorVisionColor("redgreen", "glitter")
+    T.vision = presets
+    expect(a).toBe(1)
+end
+
+@test("AccountData: a module's own account-wide table, made on first use")
+local function accountData()
+    local d = SuuUI.AccountData("apitest")
+    expect(d).toEqual({})
+    d.seen = true
+    expect(SuuUI.AccountData("apitest")).toBe(d)
+    expect(settings.account("data").apitest).toBe(d)
+    expect(SuuUI.AccountData("apitest-other")).never.toBe(d)
+    -- a broken saved value is replaced
+    local saved = settings.account("data")
+    settings.setAccount("data", "broken")
+    expect(SuuUI.AccountData("apitest")).toEqual({})
+    settings.setAccount("data", saved)
+    expect(function() SuuUI.AccountData(nil :: any) end).toThrow("SuuUI.AccountData: a namespace is required")
+end
