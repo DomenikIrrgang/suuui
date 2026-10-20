@@ -1,0 +1,526 @@
+-- UI/GroupFinder: the Browse page's bar, sections, rows and empty state.
+
+import test, cases, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import groupFinderBrowse, GroupFinderBrowse, BrowseData, BrowseRow, BrowseTool, BrowseFilter, RoleIcon, SectionHead from "/UI/GroupFinder"
+import SelectOption from "/UI/Select"
+import internal toolText, barWidths from "/UI/GroupFinder"
+import expectNoErrors from "../../helpers"
+import tokenOf, host, cleanup from "./SocialHelpers"
+
+@afterEach
+local function done() cleanup() end
+
+local function head(b: GroupFinderBrowse, key: string): SectionHead
+    return b.heads[key] :: SectionHead
+end
+
+local function page(width: number = 1000): GroupFinderBrowse
+    local b = groupFinderBrowse(host(width, 600))
+    b:SetAllPoints()
+    mock.advanceFrames(1)
+    return b
+end
+
+local CATEGORIES: SelectOption[] = { { value = "all", label = "All" }, { value = "dungeons", label = "Dungeons" } }
+
+local GROUP: BrowseRow = {
+    key = "g1", activity = "Shadowfang Keep", level = "18+", newPlayerFriendly = true, reason = "Needs your role",
+    match = true, leader = "Tamsin Ashford", class = "MAGE", who = "Lvl 31 Mage", playstyle = "Relaxed",
+    post = "LF healer SFK", slots = { "has:tank", "need:healer", "open" }, rolesTip = "Has a tank\nNeeds a healer",
+    mine = { healer = true }, members = { 3, 5 }, sources = { "Tool", "LookingForGroup" }, age = "2m",
+}
+
+local PLAYER: BrowseRow = {
+    key = "p1", isPlayer = true, activity = "Wetlands", leader = "Brannoc Ironhand", class = "WARRIOR",
+    who = "Lvl 24 Warrior", slots = { "tank", "damage" }, sources = { "General" }, age = "5m", canInvite = true,
+}
+
+local function data(extra: BrowseData?): BrowseData
+    local d: BrowseData = { groups = { GROUP }, players = { PLAYER }, categories = CATEGORIES, category = "all",
+        activityOptions = { { value = "sfk", label = "Shadowfang Keep" } :: SelectOption }, activities = {}, tool = { age = 30 } }
+    for k, v in pairs(extra or {}) do (d :: { [string]: any })[k] = v end
+    return d
+end
+
+--------------------------------------------------------------------------------
+-- Pure parts
+--------------------------------------------------------------------------------
+
+@test("toolText: searching, never searched, its age, stale")
+@cases({
+    { { searching = true, age = 600, stale = true }, "Searching the tool…" },
+    { {}, "Tool not searched yet" },
+    { { age = 0 }, "Tool results just now" },
+    { { age = 59 }, "Tool results just now" },
+    { { age = 60 }, "Tool results 1m old" },
+    { { age = 400, stale = true }, "Tool results 6m old · stale" },
+})
+local function tool(t: BrowseTool, out: string)
+    expect(toolText(t)).toBe(out)
+end
+
+@test("barWidths: room for everything keeps the design's widths")
+local function barWide()
+    local w, fresh = barWidths(2000, 200, 100)
+    expect(w).toEqual({ category = 150, activity = 190, search = 170, show = 120 })
+    expect(fresh).toBe(100)
+end
+
+@test("barWidths: Search gives way first, down to 56")
+local function barSearch()
+    -- 200 + 100 + 630 = 930 needed: 50 too many
+    local w, fresh = barWidths(880, 200, 100)
+    expect(w).toEqual({ category = 150, activity = 190, search = 120, show = 120 })
+    expect(fresh).toBe(100)
+end
+
+@test("barWidths: then the selects by what they can give; the age last")
+local function barSelects()
+    -- 930 needed in 756: Search to 56 (114), then 60 more over the
+    -- selects' room (70 + 100 + 40 = 210)
+    local w, fresh = barWidths(756, 200, 100)
+    expect(w.search).toBe(56)
+    expect(w.category).toBe(150 - math.floor(70 * 60 / 210 + 0.5))
+    expect(w.activity).toBe(190 - math.floor(100 * 60 / 210 + 0.5))
+    expect(w.show).toBe(120 - math.floor(40 * 60 / 210 + 0.5))
+    expect(fresh).toBe(100)
+    -- far too narrow: every select at its least, the age cut down to 12
+    local tight, f2 = barWidths(100, 200, 100)
+    expect(tight).toEqual({ category = 80, activity = 90, search = 56, show = 80 })
+    expect(f2).toBe(12)
+    -- a little too narrow after the selects: the age shrinks by the rest
+    local _, f3 = barWidths(200 + 100 + 306 - 30, 200, 100)
+    expect(f3).toBe(70)
+end
+
+--------------------------------------------------------------------------------
+-- The bar
+--------------------------------------------------------------------------------
+
+@test("the bar shows the filters it is given")
+local function bar()
+    local b = page()
+    b:SetData(data({ category = "dungeons", activities = { "sfk" }, search = "sfk", fits = true, show = "player" }))
+    expect(b.category.text).toHaveText("Dungeons")
+    expect(b.activity.value).toEqual({ "sfk" })
+    expect(b.search:GetValue()).toBe("sfk")
+    expect(b.fits.value).toBe(true)
+    expect(b.show.value).toBe("player")
+    -- defaults: no lists, "both"
+    b:SetData({})
+    expect(b.category.options).toEqual({})
+    expect(b.activity.value).toEqual({})
+    expect(b.search:GetValue()).toBe("")
+    expect(b.fits.value).toBe(false)
+    expect(b.show.value).toBe("both")
+    expectNoErrors()
+end
+
+@test("a search being typed is left alone")
+local function typing()
+    local b = page()
+    b:SetData(data())
+    mock.typeText(b.search.edit, "dead")
+    b:SetData(data({ search = "other" }))
+    expect(b.search:GetValue()).toBe("dead")
+    b.search.edit:ClearFocus()
+    b:SetData(data({ search = "other" }))
+    expect(b.search:GetValue()).toBe("other")
+end
+
+@test("the tool's age; stale makes Refresh the primary action")
+local function stale()
+    local b = page()
+    b:SetData(data({ tool = { age = 120 } }))
+    expect(b.staleText).toHaveText("Tool results 2m old")
+    expect(tokenOf(b.staleText)).toBe("ink-muted")
+    expect(tokenOf(b.hourglass)).toBe("ink-muted")
+    expect(b.refreshQuiet).toBeShown()
+    expect(b.refreshPrimary).never.toBeShown()
+    expect(b.refresh).toBe(b.refreshQuiet)
+    b:SetData(data({ tool = { age = 600, stale = true } }))
+    expect(b.staleText).toHaveText("Tool results 10m old · stale")
+    expect(tokenOf(b.staleText)).toBe("amber")
+    expect(tokenOf(b.hourglass)).toBe("amber")
+    expect(b.refreshPrimary).toBeShown()
+    expect(b.refreshQuiet).never.toBeShown()
+    expect(b.refresh).toBe(b.refreshPrimary)
+    -- searching: never primary
+    b:SetData(data({ tool = { age = 600, stale = true, searching = true } }))
+    expect(b.staleText).toHaveText("Searching the tool…")
+    expect(b.refreshQuiet).toBeShown()
+    -- no tool at all
+    b:SetData({})
+    expect(b.staleText).toHaveText("Tool not searched yet")
+    expectNoErrors()
+end
+
+@test("the bar's widths follow the page's; the age hides when there's no room")
+local function layout()
+    local b = page(2000)
+    local parent = b:GetParent() :: Frame
+    b:SetData(data())
+    expect(b.search:GetWidth()).toBe(170)
+    expect(b.staleText).toBeShown()
+    parent:SetWidth(500)
+    -- (the VM runs OnSizeChanged only for an explicit SetSize: see
+    -- Docs/test-notes/ui-primitives.md)
+    mock.script(b, "OnSizeChanged", 500, 600)
+    expect(b.search:GetWidth()).toBe(56)
+    expect(b.category:GetWidth()).toBe(80)
+    expect(b.staleText).never.toBeShown()
+    expect(b.staleText).toBeAnchoredTo(b.refresh, "RIGHT", "LEFT")
+    -- no size yet: nothing to lay out
+    local loose = groupFinderBrowse(host())
+    loose:SetData(data())
+    expect(loose.search:GetWidth()).toBe(170)
+    expectNoErrors()
+end
+
+@test("every bar control reports its change")
+local function filters()
+    local b = page()
+    local onFilter = mock.spy(function(_t: BrowseFilter) end)
+    b.onFilter = onFilter
+    b:SetData(data())
+    mock.click(b.fits)
+    expect(onFilter).toHaveBeenCalledWith({ fits = true })
+    mock.typeText(b.search.edit, "x")
+    expect(onFilter).toHaveBeenCalledWith({ search = "x" })
+    b.search.edit:ClearFocus()
+    -- the selects: open, pick
+    mock.click(b.show)
+    local list = b.show.list
+    expect(list ~= nil).toBe(true)
+    if list then mock.click(list.rows[2]) end
+    expect(onFilter).toHaveBeenCalledWith({ show = "group" })
+    mock.click(b.category)
+    local cl = b.category.list
+    if cl then mock.click(cl.rows[2]) end
+    expect(onFilter).toHaveBeenCalledWith({ category = "dungeons" })
+    mock.click(b.activity)
+    local al = b.activity.list
+    if al then
+        for _, r in ipairs(al.rows) do
+            if r:IsShown() then mock.click(r) break end
+        end
+    end
+    expect(onFilter).toHaveBeenCalledWith({ activities = { "sfk" } })
+    if al then al:Hide() end
+    -- without a listener: nothing
+    b.onFilter = nil
+    mock.click(b.fits)
+    expect(onFilter).toHaveBeenCalledTimes(5)
+    expectNoErrors()
+end
+
+@test("Refresh, quiet or primary, asks for a search")
+local function refresh()
+    local b = page()
+    local onRefresh = mock.spy()
+    b.onRefresh = onRefresh
+    b:SetData(data())
+    mock.click(b.refreshQuiet)
+    b:SetData(data({ tool = { age = 900, stale = true } }))
+    mock.click(b.refreshPrimary)
+    expect(onRefresh).toHaveBeenCalledTimes(2)
+    b.onRefresh = nil
+    mock.click(b.refreshPrimary)
+    expect(onRefresh).toHaveBeenCalledTimes(2)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The sections
+--------------------------------------------------------------------------------
+
+@test("two sections with their counts; a collapsed one shows no rows")
+local function sections()
+    local b = page()
+    b:SetData(data())
+    local g, p = head(b, "groups"), head(b, "players")
+    expect(g).toBeShown()
+    expect(g.text).toHaveText("Groups")
+    expect(g.count).toHaveText("1")
+    expect(p.text).toHaveText("Players")
+    expect(p.count).toHaveText("1")
+    expect(g.note).toHaveText("")
+    expect(g.glyph:GetTexture()).toContain("chevronDown")
+    expect(b.rows[1].data).toBe(GROUP)
+    expect(b.rows[2].data).toBe(PLAYER)
+    expect(b.empty).never.toBeShown()
+    expect(b.loadNote).never.toBeShown()
+    -- head 26, row 44, gap 6; twice
+    expect(b.list.child:GetHeight()).toBe(2 * (26 + 44 + 6))
+    b:SetData(data({ collapsed = { groups = true } }))
+    expect(g.glyph:GetTexture()).toContain("chevronRight")
+    expect(b.rows[1].data).toBe(PLAYER)
+    expect(b.rows[2]).never.toBeShown()
+    expect(b.list.child:GetHeight()).toBe(26 + 6 + 26 + 44 + 6)
+    expectNoErrors()
+end
+
+@test("a click on a section's head toggles it")
+local function toggle()
+    local b = page()
+    local onToggle = mock.spy(function(_k: string) end)
+    b.onToggle = onToggle
+    b:SetData(data())
+    mock.click(head(b, "players"))
+    expect(onToggle).toHaveBeenCalledWith("players")
+    b.onToggle = nil
+    mock.click(head(b, "groups"))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+end
+
+@test("the tool's first search: skeleton rows under what chat has")
+local function loading()
+    local b = page()
+    b:SetData(data({ groups = {}, players = {}, tool = { searching = true, loading = true } }))
+    expect(b.empty).never.toBeShown()
+    expect(head(b, "groups")).toBeShown()
+    expect(head(b, "groups").note).toHaveText("from chat so far")
+    expect(#b.skeletons).toBe(5)
+    for _, s in ipairs(b.skeletons) do expect(s).toBeShown() end
+    expect(b.loadNote).toBeShown()
+    expect(b.loadNote).toHaveText("Searching the tool… Chat posts show up as they’re written.")
+    -- the skeleton's lines: at least 40 and 36 wide
+    expect(b.skeletons[1].b:GetWidth() >= 40).toBe(true)
+    expect(b.skeletons[1].b2:GetWidth()).toBe(math.max(36, b.skeletons[1].b:GetWidth() - 4))
+    -- done: they go
+    b:SetData(data())
+    for _, s in ipairs(b.skeletons) do expect(s).never.toBeShown() end
+    expect(b.loadNote).never.toBeShown()
+    -- a collapsed section gets none
+    b:SetData(data({ collapsed = { groups = true, players = true }, tool = { loading = true } }))
+    for _, s in ipairs(b.skeletons) do expect(s).never.toBeShown() end
+    expectNoErrors()
+end
+
+@test("nothing to show: the empty state, Clear filters and Refresh")
+local function empty()
+    local b = page()
+    local onClear, onRefresh = mock.spy(), mock.spy()
+    b.onClear, b.onRefresh = onClear, onRefresh
+    b:SetData(data({ groups = {}, players = {} }))
+    expect(b.empty).toBeShown()
+    expect(b.empty.title).toHaveText("Nothing matches your filters")
+    expect(head(b, "groups")).never.toBeShown()
+    expect(head(b, "players")).never.toBeShown()
+    expect(b.list.child:GetHeight()).toBe(1)
+    mock.click(b.empty.clear)
+    mock.click(b.empty.refresh)
+    expect(onClear).toHaveBeenCalledTimes(1)
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    b.onClear = nil
+    mock.click(b.empty.clear)
+    expect(onClear).toHaveBeenCalledTimes(1)
+    -- no lists at all is empty too
+    b:SetData({})
+    expect(b.empty).toBeShown()
+    expectNoErrors()
+end
+
+@test("Draw before any data does nothing; a new list size draws again")
+local function redraw()
+    local parent = host()
+    local b = groupFinderBrowse(parent)
+    b:Draw()
+    expect(#b.rows).toBe(0)
+    b:SetAllPoints()
+    b:SetData(data())
+    local w = b.rows[1]:GetWidth()
+    parent:SetWidth(1400)
+    -- (the VM runs OnSizeChanged only for an explicit SetSize: see
+    -- Docs/test-notes/ui-primitives.md)
+    mock.script(b.list, "OnSizeChanged", b.list:GetWidth(), b.list:GetHeight())
+    expect(b.rows[1]:GetWidth() > w).toBe(true)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- A row
+--------------------------------------------------------------------------------
+
+@test("a group's row: crown, activity, level, sprout, reason, leader, post, count, slots, badges")
+local function groupRow()
+    local b = page()
+    b:SetData(data())
+    local r = b.rows[1]
+    expect(r.match).toBeShown()
+    expect(r.edge).toBeShown()
+    expect(r.lead:GetTexture()).toContain("crown")
+    expect(r.lead:GetWidth()).toBe(16)
+    expect(r.activity).toHaveText("Shadowfang Keep")
+    expect(r.levelChip).toBeShown()
+    expect(r.levelChip.text).toHaveText("18+")
+    expect(r.sprout).toBeShown()
+    expect(r.sprout).toBeAnchoredTo(r.levelChip, "LEFT", "RIGHT")
+    expect(r.reason).toHaveText("Needs your role")
+    expect(r.reason).toBeAnchoredTo(r.sprout, "LEFT", "RIGHT")
+    expect(r.leader).toHaveText("Tamsin Ashford")
+    expect(tokenOf(r.leader)).toBe("class-mage")
+    expect(r.who).toHaveText("Lvl 31 Mage")
+    expect(r.post).toHaveText("Relaxed  \"LF healer SFK\"")
+    expect(r.invite).never.toBeShown()
+    expect(r.age).toHaveText("2m")
+    expect(r.count).toBeShown()
+    expect(r.count).toHaveText("3/5")
+    expect(r.rolesLabel).toHaveText("")
+    expect(#r.slots).toBe(3)
+    expect(r.slotsHit).toBeShown()
+    expect(r.slotsHit.tip).toBe("Has a tank\nNeeds a healer")
+    expect(r.badges[1].text).toHaveText("Tool")
+    expect(r.badges[2].text).toHaveText("LookingForGroup")
+    expect(r.badges[1]).toBeShown()
+    expectNoErrors()
+end
+
+@test("a player's row: class icon, Roles:, Invite, no count")
+local function playerRow()
+    local b = page()
+    b:SetData(data())
+    local r = b.rows[2]
+    expect(r.match).never.toBeShown()
+    expect(r.levelChip).never.toBeShown()
+    expect(r.sprout).never.toBeShown()
+    expect(r.reason).toBeAnchoredTo(r.activity, "LEFT", "RIGHT")
+    expect(r.count).never.toBeShown()
+    expect(r.invite).toBeShown()
+    expect(r.rolesLabel).toHaveText("Roles:")
+    expect(r.slotsHit).never.toBeShown()
+    expect(r.post).toHaveText("")
+    expect(tokenOf(r.leader)).toBe("class-warrior")
+    if GetClassAtlas then
+        expect(r.lead:GetAtlas()).toBe(GetClassAtlas("WARRIOR"))
+    end
+    expect(r.lead:GetWidth()).toBe(20)
+    -- an unknown class: the game's atlas for it still, the name in ink;
+    -- no class: the people glyph
+    b:SetData(data({ groups = {}, players = { { isPlayer = true, leader = "Player", class = "NOPE" }, { isPlayer = true } } }))
+    if GetClassAtlas then expect(b.rows[1].lead:GetAtlas()).toBe(GetClassAtlas("NOPE")) end
+    expect(tokenOf(b.rows[1].leader)).toBe("ink")
+    expect(b.rows[2].lead:GetTexture()).toContain("people")
+    expect(b.rows[2].lead:GetWidth()).toBe(20)
+    expect(b.rows[2].activity).toHaveText("")
+    expect(b.rows[2].leader).toHaveText("")
+    expect(b.rows[2].rolesLabel).toHaveText("")
+    expect(b.rows[2].badges[1]).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("the post: play style, the post in quotes, or both")
+@cases({
+    { { playstyle = "Relaxed" }, "Relaxed" },
+    { { post = "lfg" }, "\"lfg\"" },
+    { { playstyle = "Focused", post = "lfg" }, "Focused  \"lfg\"" },
+    { { post = "" }, "" },
+    { {}, "" },
+})
+local function post(row: BrowseRow, out: string)
+    local b = page()
+    b:SetData(data({ groups = { row }, players = {} }))
+    expect(b.rows[1].post).toHaveText(out)
+end
+
+@test("a group's size needs both numbers")
+local function members()
+    local b = page()
+    b:SetData(data({ groups = { { members = { 3 } }, { members = { 2, 40 }, isPlayer = true } }, players = {} }))
+    expect(b.rows[1].count).never.toBeShown()
+    expect(b.rows[2].count).never.toBeShown()
+end
+
+@test("role icons: offered, a member's, needed (yours in arcane), open")
+local function roles()
+    local b = page()
+    b:SetData(data({ groups = { { slots = { "tank", "has:healer", "has:none", "member", "need:damage", "need:tank", "open" },
+        mine = { tank = true } } }, players = {} }))
+    local s = b.rows[1].slots
+    local function edge(i: RoleIcon): string? return tokenOf(i.edge.top) end
+    -- offered
+    expect(s[1].bg).toBeShown()
+    expect(s[1].glyph:GetTexture()).toContain("RoleTank")
+    expect(tokenOf(s[1].glyph)).toBe("ink")
+    expect(edge(s[1])).toBe("gilt-line")
+    expect(s[1].dot).never.toBeShown()
+    -- a member's: greyed, no fill
+    expect(s[2].bg).never.toBeShown()
+    expect(s[2].glyph:GetTexture()).toContain("RoleHealer")
+    expect(tokenOf(s[2].glyph)).toBe("ink-faint")
+    expect(edge(s[2])).toBe("gilt-faint")
+    -- a member without a role: the greyed diamond, no edge
+    for _, i in ipairs({ 3, 4 }) do
+        expect(s[i].glyph).never.toBeShown()
+        expect(s[i].dot).toBeShown()
+        expect(tokenOf(s[i].dot)).toBe("ink-faint")
+        expect(s[i].edge.top).never.toBeShown()
+    end
+    -- needed: a dim edge; yours arcane
+    expect(s[5].bg).never.toBeShown()
+    expect(edge(s[5])).toBe("ink-faint")
+    expect(tokenOf(s[5].glyph)).toBe("ink-muted")
+    expect(edge(s[6])).toBe("arcane")
+    expect(tokenOf(s[6].glyph)).toBe("arcane")
+    -- open
+    expect(s[7].glyph).never.toBeShown()
+    expect(s[7].bg).never.toBeShown()
+    expect(edge(s[7])).toBe("ink-faint")
+    -- fewer slots next time: the rest hide
+    b:SetData(data({ groups = { { slots = { "open" } } }, players = {} }))
+    expect(s[1]).toBeShown()
+    for i = 2, 7 do expect(s[i]).never.toBeShown() end
+    expect(b.rows[1].slotsHit).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("hovering: the whole post in a tooltip; the slots' hover text")
+local function hover()
+    local b = page()
+    b:SetData(data())
+    local r = b.rows[1]
+    mock.hover(r)
+    expect(r.hover).toBeShown()
+    expect(GameTooltip).toBeShown()
+    expect(GameTooltip).toHaveLines({ "Tamsin Ashford", "LF healer SFK" })
+    mock.hover(nil)
+    expect(r.hover).never.toBeShown()
+    expect(GameTooltip).never.toBeShown()
+    -- no post: no tooltip
+    mock.hover(b.rows[2])
+    expect(GameTooltip).never.toBeShown()
+    mock.hover(nil)
+    -- the slots
+    mock.hover(r.slotsHit)
+    expect(r.hover).toBeShown()
+    mock.hover(nil)
+    expect(r.hover).never.toBeShown()
+    -- a post without a leader
+    b:SetData(data({ groups = { { post = "hi" } }, players = {} }))
+    mock.hover(b.rows[1])
+    expect(GameTooltip).toHaveLines({ "", "hi" })
+    mock.hover(nil)
+    expectNoErrors()
+end
+
+@test("Whisper and Invite hand over the row")
+local function actions()
+    local b = page()
+    local onWhisper = mock.spy(function(_r: BrowseRow) end)
+    local onInvite = mock.spy(function(_r: BrowseRow) end)
+    b.onWhisper, b.onInvite = onWhisper, onInvite
+    b:SetData(data())
+    mock.click(b.rows[1].whisper)
+    mock.click(b.rows[2].invite)
+    expect(onWhisper).toHaveBeenCalledWith(GROUP)
+    expect(onInvite).toHaveBeenCalledWith(PLAYER)
+    -- nothing to hand over, or no one listening
+    b.rows[2].data = nil
+    mock.click(b.rows[2].invite)
+    expect(onInvite).toHaveBeenCalledTimes(1)
+    b.onWhisper, b.onInvite = nil, nil
+    mock.click(b.rows[1].whisper)
+    expect(onWhisper).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
