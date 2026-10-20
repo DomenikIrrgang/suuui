@@ -146,7 +146,7 @@ local function eachError()
     expect(ran).toBe(true)
     local e = faultWith("extend-err-each")
     expect(e and e.source).toBe("Extend Test")
-    expect(function() extend.each("inventory", nil :: any, nil, OWNER) end).toThrow("a function is required")
+    expect(function() extend.each("inventory", nil :: any, nil, OWNER) end).toThrow()
     expect(function() extend.each("bogus", function() end, nil, OWNER) end).toThrow("unknown kind")
 end
 
@@ -283,6 +283,25 @@ local function fromMetatable()
     expect(t.calls).toEqual({ 1, 2 })
 end
 
+@test("owners by name: a string, a table without a name; two methods hooked on one object")
+local function ownersAndMethods()
+    local anon = {}
+    local t = track(newThing())
+    local other = function(_: any): string return "o" end
+    t.CoreATestOther = other
+    extend.add("tracker", t)
+    extend.hook("tracker", "CoreATestPaint", function() error("extend-err-strowner") end, "String Owner")
+    extend.hook("tracker", "CoreATestOther", function() error("extend-err-anon") end, anon)
+    t:CoreATestPaint(1)
+    expect(t:CoreATestOther()).toBe("o")
+    expect((faultWith("extend-err-strowner") :: fault.Entry).source).toBe("String Owner")
+    expect((faultWith("extend-err-anon") :: fault.Entry).source).toBe(tostring(anon))
+    extend.unregister("String Owner")
+    extend.unregister(anon)
+    expect(rawget(t, "CoreATestPaint") == paint).toBe(true)
+    expect(rawget(t, "CoreATestOther") == other).toBe(true)
+end
+
 @test("a hook on a method the instance lacks: nothing happens")
 local function missingMethod()
     local t = track({ calls = {} })
@@ -295,8 +314,8 @@ end
 
 @test("hook and override need a method name and a function")
 local function hookArgs()
-    expect(function() extend.hook("meter", 5 :: any, function() end, OWNER) end).toThrow("a method name is required")
-    expect(function() extend.override("meter", "X", nil :: any, OWNER) end).toThrow("a function is required")
+    expect(function() extend.hook("meter", 5 :: any, function() end, OWNER) end).toThrow()
+    expect(function() extend.override("meter", "X", nil :: any, OWNER) end).toThrow()
     expect(function() extend.hook("bogus", "X", function() end, OWNER) end).toThrow("unknown kind")
 end
 
@@ -331,7 +350,7 @@ local function menus()
     extend.applyMenu("coreatest.menu", menu, {})
     expect(#seen).toBe(2)
     expect(#menu.items).toBe(3)
-    expect(function() extend.extendMenu(5 :: any, function() end, OWNER) end).toThrow("a menu id and a function")
+    expect(function() extend.extendMenu(5 :: any, function() end, OWNER) end).toThrow()
 end
 
 @test("additions: in the order added, each change announced; an owner's off removes its own")

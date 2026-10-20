@@ -27,8 +27,8 @@ import tokens as T from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
-import text, flag from "/UI/Text"
-import select as uiSelect from "/UI/Select"
+import text, flag, Text from "/UI/Text"
+import select as uiSelect, Select, SelectOption from "/UI/Select"
 import showTooltip, hideTooltip from "/UI/Tooltip"
 
 const S = T.space
@@ -64,6 +64,98 @@ local PER_SECOND: { [string]: boolean } = { dps = true, hps = true } -- per seco
 local COUNTS: { [string]: boolean } = { interrupts = true, dispels = true }
 local NO_PIN: { [string]: boolean } = { deaths = true, enemyDamageTaken = true }
 local ENEMIES: { [string]: boolean } = { enemyDamageTaken = true }
+
+-- A header button (more, back).
+export interface MeterHeadButton extends Button
+    edge: draw.Border
+    hover: Texture
+    art: Frame
+end
+
+-- An item of the "more" menu.
+export interface MeterMenuItem extends Button
+    hover: Texture
+    label: Text
+    line: Texture
+    enabled: boolean
+    action?: () -> ()
+end
+
+-- The menu behind "more".
+export interface MeterMenu extends Frame
+    items: MeterMenuItem[]
+end
+
+-- A row of the window (the bar is the row).
+export interface DamageRow extends Button
+    bar: StatusBar
+    edge: draw.Border
+    glow: draw.SoftEdge
+    rank: Text
+    icon: Texture
+    diamond: Texture
+    name: Text
+    sub: Text
+    share: Text
+    paren: Text
+    main: Text
+    hover: Texture
+    edgeColor?: string
+    open?: () -> ()
+    tip?: string
+end
+
+-- What a row shows (setRow; see there).
+export type MeterRowData = { [string]: any }
+
+-- Where the window is drilled into: a source's spells, or a death's recap.
+export type MeterDrill = { kind: string, row: MeterRowData, guid?: any, creature?: any, src?: any }
+
+-- The window's options (SetOptions).
+export type MeterView = { numbers: string, barColor: string, marker: string, nameColor: string, pinYou: boolean }
+
+-- The window damageMeter makes.
+export interface DamageMeter extends Frame
+    opts: { [string]: any }
+    api: any      -- C_DamageMeter or a stand-in
+    recapApi: any -- C_DeathRecap or a stand-in
+    view: MeterView
+    maxRows: number
+    type: string
+    session: any  -- "current", "overall" or a session ID
+    drill?: MeterDrill
+    canAdd?: boolean
+    sessionSig?: string
+    innerW: number
+    head: Frame
+    typeSelect: Select
+    sessionSelect: Select
+    menu: MeterMenu
+    catcher?: Button
+    more: MeterHeadButton
+    time: Text
+    back: MeterHeadButton
+    who: Text
+    what: Text
+    total: Text
+    body: Frame
+    rows: DamageRow[]
+    pinLine: Texture
+    note: Text
+    empty: Text
+    function SessionOptions(): SelectOption[]
+    function SetView(typeValue: string?, session: any)
+    function SetOptions(o: { [string]: any })
+    function SetCanAddWindow(on: any)
+    function SetMaxRows(n: number?)
+    function SourceRow(src: any, i: number, top: any, total: any, fight: boolean): MeterRowData
+    function ShowEmpty(line: string)
+    function RefreshList()
+    function RefreshSpells()
+    function RefreshRecap()
+    function RefreshHead()
+    function Refresh()
+end
 
 const MAIN_W = 40
 const PAREN_W = 48
@@ -150,8 +242,8 @@ local function backArrow(parent: Frame, color: string): Frame
 end
 
 -- A 24px square header button: transparent, a gilt-line edge on hover.
-local function headButton(parent: Frame, art: (parent: Frame, color: string) -> Frame, onClick: any, tip: string?): any
-    local b = CreateFrame("Button", nil, parent)
+local function headButton(parent: Frame, art: (parent: Frame, color: string) -> Frame, onClick: any, tip: string?): MeterHeadButton
+    local b: MeterHeadButton = CreateFrame("Button", nil, parent) :: any
     b:SetSize(24, 24)
     b.edge = draw.border(b, "gilt-line")
     b.edge:SetShown(false)
@@ -176,8 +268,8 @@ end
 -- The menu behind "more"
 --------------------------------------------------------------------------------
 
-local function buildMenu(w: any): any
-    local m = CreateFrame("Frame", nil, w)
+local function buildMenu(w: DamageMeter): MeterMenu
+    local m: MeterMenu = CreateFrame("Frame", nil, w) :: any
     m:SetFrameStrata("DIALOG")
     m:SetWidth(200)
     draw.fill(m, "surface", "BACKGROUND"):SetAllPoints()
@@ -186,18 +278,19 @@ local function buildMenu(w: any): any
     m.items = {}
     m:Hide()
     m:SetScript("OnHide", function() if w.catcher then w.catcher:Hide() end end)
-    w.catcher = CreateFrame("Button", nil, UIParent)
-    w.catcher:SetAllPoints(UIParent)
-    w.catcher:SetFrameStrata("DIALOG")
-    w.catcher:SetFrameLevel(1)
-    w.catcher:Hide()
-    w.catcher:RegisterForClicks("AnyDown")
-    w.catcher:SetScript("OnClick", function() m:Hide() end)
-    m:SetFrameLevel(w.catcher:GetFrameLevel() + 5)
+    local catcher = CreateFrame("Button", nil, UIParent)
+    w.catcher = catcher
+    catcher:SetAllPoints(UIParent)
+    catcher:SetFrameStrata("DIALOG")
+    catcher:SetFrameLevel(1)
+    catcher:Hide()
+    catcher:RegisterForClicks("AnyDown")
+    catcher:SetScript("OnClick", function() m:Hide() end)
+    m:SetFrameLevel(catcher:GetFrameLevel() + 5)
     return m
 end
 
-local function openMenu(w: any)
+local function openMenu(w: DamageMeter)
     local m = w.menu
     for _, it in ipairs(m.items) do it:Hide() end
     local list: { [string]: any }[] = {
@@ -211,7 +304,7 @@ local function openMenu(w: any)
     for i, o in ipairs(list) do
         local it = m.items[i]
         if not it then
-            it = CreateFrame("Button", nil, m)
+            it = CreateFrame("Button", nil, m) :: any
             it:SetHeight(26)
             it.hover = draw.fill(it, "surface-raised", "BACKGROUND")
             it.hover:SetAllPoints()
@@ -248,7 +341,7 @@ local function openMenu(w: any)
     m:SetHeight(y + S["space-2"])
     m:ClearAllPoints()
     m:SetPoint("TOPRIGHT", w.more, "BOTTOMRIGHT", 0, -S["space-1"])
-    w.catcher:Show()
+    ;(w.catcher :: Button):Show() -- (made with the menu)
     m:Show()
 end
 
@@ -281,15 +374,15 @@ local function drawFill(tex: any)
     tex:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
 end
 
-local function setFill(row: any, kind: string?)
+local function setFill(row: DamageRow, kind: string?)
     local tex = row.bar:GetStatusBarTexture()
     tex.fill = kind
     draw.bind(tex, drawFill)
 end
 
-local function buildRow(w: any, i: number): any
+local function buildRow(w: DamageMeter, i: number): DamageRow
     local h = draw.size("meter-row")
-    local r = CreateFrame("Button", nil, w.body)
+    local r: DamageRow = CreateFrame("Button", nil, w.body) :: any
     r:SetSize(w.innerW, h)
     r:RegisterForClicks("LeftButtonUp")
     draw.fill(r, "surface-sunk", "BACKGROUND"):SetAllPoints()
@@ -347,7 +440,7 @@ end
 -- One row. d: { rank, rankWide, mark = "class"|"diamond"|"spell"|nil, class,
 -- spellID, name, nameColor, sub, main, paren, share, fill, fillMax, fillLow,
 -- fillClass, you, danger, plain, open, tip, heal }
-local function setRow(r: any, d: any)
+local function setRow(r: DamageRow, d: MeterRowData)
     local x = S["space-2"]
     r.rank:SetVisible(d.rank ~= nil)
     if d.rank ~= nil then
@@ -366,7 +459,8 @@ local function setRow(r: any, d: any)
             r.icon:SetAtlas(atlas)
         elseif CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[d.class] then
             r.icon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
-            r.icon:SetTexCoord(unpack(CLASS_ICON_TCOORDS[d.class]))
+            local tc: number[] = CLASS_ICON_TCOORDS[d.class]
+            r.icon:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
         end
         r.icon:SetSize(16, 16)
         r.icon:ClearAllPoints()
@@ -442,8 +536,9 @@ local function setRow(r: any, d: any)
         r.bar:SetValue(0)
     end
     setFill(r, d.fillClass and ("class-" .. d.fillClass:lower()) or d.fillLow and "low" or nil)
-    r.edgeColor = d.danger and "ember" or (d.you and "ink") or "gilt-hairline"
-    r.edge:SetColor(r.edgeColor)
+    local edgeColor = d.danger and "ember" or (d.you and "ink") or "gilt-hairline"
+    r.edgeColor = edgeColor
+    r.edge:SetColor(edgeColor)
     r.glow:SetShown(d.danger and true or false)
     r.open, r.tip = d.open, d.tip
     r:Show()
@@ -453,7 +548,7 @@ end
 -- The window
 --------------------------------------------------------------------------------
 
-local Meter = {}
+local Meter: DamageMeter = {} :: any
 mixins.DamageMeter = Meter
 
 local function sessionArg(session: any): (any, number?)
@@ -487,8 +582,8 @@ local function inCombat(): boolean return InCombatLockdown() or flag(UnitAffecti
 
 -- The fight select's options: Current (its time), Overall, the past fights
 -- newest first.
-function Meter:SessionOptions(): { [string]: any }[]
-    local opts: { [string]: any }[] = {
+function Meter:SessionOptions(): SelectOption[]
+    local opts: SelectOption[] = {
         { value = "current", label = "Current", note = clock(self.api.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current)) },
         { value = "overall", label = "Overall" },
     }
@@ -498,7 +593,7 @@ function Meter:SessionOptions(): { [string]: any }[]
         for i = #list, math.max(1, #list - 19), -1 do
             local s = list[i]
             local name = plainString(s.name) and s.name or "Combat"
-            opts[#opts + 1] = { value = s.sessionID, label = name, note = clock(s.durationSeconds), duration = s.durationSeconds }
+            opts[#opts + 1] = { value = s.sessionID, label = name, note = clock(s.durationSeconds) }
         end
     end
     return opts
@@ -528,7 +623,7 @@ function Meter:SetMaxRows(n: number?)
 end
 
 -- The row data of one source in the list.
-function Meter:SourceRow(src: any, i: number, top: any, total: any, fight: boolean): any
+function Meter:SourceRow(src: any, i: number, top: any, total: any, fight: boolean): MeterRowData
     local v = self.view
     local typeValue = self.type
     local enemies, deaths = ENEMIES[typeValue], typeValue == "deaths"
@@ -644,7 +739,7 @@ end
 
 -- A source's spells.
 function Meter:RefreshSpells()
-    local drill = self.drill
+    local drill = self.drill :: MeterDrill -- (only drilled in)
     local typeValue = self.type
     local data = fetchSource(self.api, self.session, typeValue, drill.guid, drill.creature)
     local spells = data and data.combatSpells
@@ -694,7 +789,7 @@ end
 
 -- A death's last moments: oldest first, health after each hit as the bar.
 function Meter:RefreshRecap()
-    local src = self.drill.src
+    local src = (self.drill :: MeterDrill).src -- (only drilled in)
     local id = src.deathRecapID
     local ok, events = pcall(self.recapApi.GetRecapEvents, id)
     self.pinLine:Hide()
@@ -826,7 +921,7 @@ end
 
 export function damageMeter(parent: Frame, options: { [string]: any }?): any
     local opts: { [string]: any } = options or {}
-    local w = CreateFrame("Frame", nil, parent)
+    local w: DamageMeter = CreateFrame("Frame", nil, parent) :: any
     Mixin(w, Meter)
     w.opts = opts
     w.api, w.recapApi = opts.api or C_DamageMeter, opts.recapApi or C_DeathRecap

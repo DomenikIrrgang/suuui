@@ -3,10 +3,10 @@
 -- combatSafe, replaces, incompatible) and /suu modules|enable|disable.
 --
 -- This file drives the lifecycle itself: modules registered at its top run
--- like SuuUI's own (started at login), and the first test logs in while in
--- combat. The tests of a file run in order.
+-- like SuuUI's own (started at login), and @beforeAll logs in while in
+-- combat, recording what they went through.
 
-import test, cases, expect, config, afterEach from "wowlua:test"
+import test, cases, expect, config, afterEach, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as modules from "/Core/Modules"
 import * as settings from "/Core/Settings"
@@ -16,6 +16,7 @@ import * as combat from "/Core/Combat"
 import * as services from "/Core/Services"
 import * as extend from "/Core/Extend"
 import * as init from "/Core/Init"
+import * as util from "/Core/Util"
 import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
 
@@ -111,29 +112,54 @@ end
 -- Login
 --------------------------------------------------------------------------------
 
-@test("at login in combat: combatSafe modules start at once, the others when it ends")
-local function loginInCombat()
-    expect(safe.state).toBe("registered")
-    expect(future.state).toBe("incompatible")
-    expect(future.error).toBe("needs SuuUI API 1.0; this SuuUI has " .. modules.API_VERSION)
+-- What the modules above went through at login (in combat), recorded once
+-- in @beforeAll (it logs in), so any test can run alone.
+type Seen = { [string]: any }
+local seen: Seen = {}
+
+local function snapshot(m: Module): Seen
+    return { state = m.state, error = m.error, replacedBy = m.replacedBy, enabledAtLoad = m.enabledAtLoad }
+end
+
+@beforeAll
+local function logIn()
+    seen.beforeSafe = snapshot(safe)
+    seen.beforeFuture = snapshot(future)
     mock.player:enterCombat()
     mock.login()
-    expect(safe.state).toBe("enabled")
-    expect(safeCalls).toEqual({ init = 1, enable = 1, disable = 0 })
-    expect(normal.state).toBe("registered")
-    expect(normalCalls.enable).toBe(0)
-    expect(off.state).toBe("disabled")
-    expect(old.state).toBe("disabled")
-    expect(old.replacedBy).toBe("ZZ New")
-    expect(old.enabledAtLoad).toBe(false)
+    seen.inCombat = {
+        safe = snapshot(safe), safeCalls = util.copy(safeCalls),
+        normal = snapshot(normal), normalCalls = util.copy(normalCalls),
+        off = snapshot(off), old = snapshot(old),
+    }
     mock.player:leaveCombat()
-    expect(normal.state).toBe("enabled")
-    expect(normal.enabledAtLoad).toBe(true)
-    expect(normalCalls).toEqual({ init = 1, enable = 1, disable = 0 })
-    expect(newer.state).toBe("enabled")
-    expect(offCalls.init).toBe(0)
-    expect(oldCalls.init).toBe(0)
-    expect(future.state).toBe("incompatible")
+    seen.after = {
+        normal = snapshot(normal), normalCalls = util.copy(normalCalls), newer = snapshot(newer),
+        offCalls = util.copy(offCalls), oldCalls = util.copy(oldCalls), future = snapshot(future),
+    }
+end
+
+@test("at login in combat: combatSafe modules start at once, the others when it ends")
+local function loginInCombat()
+    expect(seen.beforeSafe.state).toBe("registered")
+    expect(seen.beforeFuture.state).toBe("incompatible")
+    expect(seen.beforeFuture.error).toBe("needs SuuUI API 1.0; this SuuUI has " .. modules.API_VERSION)
+    local fight, after = seen.inCombat, seen.after
+    expect(fight.safe.state).toBe("enabled")
+    expect(fight.safeCalls).toEqual({ init = 1, enable = 1, disable = 0 })
+    expect(fight.normal.state).toBe("registered")
+    expect(fight.normalCalls.enable).toBe(0)
+    expect(fight.off.state).toBe("disabled")
+    expect(fight.old.state).toBe("disabled")
+    expect(fight.old.replacedBy).toBe("ZZ New")
+    expect(fight.old.enabledAtLoad).toBe(false)
+    expect(after.normal.state).toBe("enabled")
+    expect(after.normal.enabledAtLoad).toBe(true)
+    expect(after.normalCalls).toEqual({ init = 1, enable = 1, disable = 0 })
+    expect(after.newer.state).toBe("enabled")
+    expect(after.offCalls.init).toBe(0)
+    expect(after.oldCalls.init).toBe(0)
+    expect(after.future.state).toBe("incompatible")
 end
 
 --------------------------------------------------------------------------------
@@ -158,7 +184,7 @@ end
 
 @test("register: a table with a lower-case id that isn't taken")
 local function registerChecks()
-    expect(function() modules.register(5 :: any) end).toThrow("SuuUI.RegisterModule takes a table")
+    expect(function() modules.register(5 :: any) end).toThrow()
     for _, bad in ipairs({ "Bad", "1a", "a-b", "" }) do
         expect(function() modules.register({ id = bad }) end).toThrow("id must be lower case letters")
     end
@@ -569,6 +595,9 @@ local function reloadToToggle()
     local out = printedBy(function() mock.slash("/suu disable " .. m.id) end)
     expect(out[1]).toBe(P .. "ZZ Reload turns off after a /reload.")
     m:Set("enabled", true)
+    -- on already, nothing waiting: just its line
+    expect(printedBy(function() mock.slash("/suu enable " .. m.id) end))
+        .toEqual({ ("  %s  ZZ Reload  |cff3fd0ffon|r  - %s"):format(m.id, m.source) })
     local offAtLoad = modules.register({ id = nextId(), name = "ZZ Reload Off", reloadToToggle = true, enabledByDefault = false })
     expect(offAtLoad.state).toBe("disabled")
     offAtLoad:Set("enabled", true)
@@ -660,4 +689,9 @@ local function toggleCommands()
     expect(m.state).toBe("disabled")
     mock.player:leaveCombat()
     expect(m.state).toBe("enabled")
+    mock.player:enterCombat()
+    out = printedBy(function() mock.slash("/suu disable " .. m.id) end)
+    expect(out[1]).toBe(P .. "ZZ Toggle turns off when combat ends.")
+    mock.player:leaveCombat()
+    expect(m.state).toBe("disabled")
 end

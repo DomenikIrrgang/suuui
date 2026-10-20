@@ -79,9 +79,15 @@ local BASE_COOLDOWN: { [number]: number } = {
 
 export type InterruptState = { spell: number?, bars: { [any]: boolean }, usedAt: number?, cooldown: number }
 export const interrupt = { spell = nil, bars = {}, usedAt = nil, cooldown = 0 } :: InterruptState
-local function isInterrupt(id: number): boolean
-    local _, playerClass = UnitClass("player")
-    local class = secret.known(playerClass, "")
+-- Your class's file name ("" while unknown).
+local function playerClass(): string
+    local _, c = UnitClass("player")
+    return secret.known(c, "")
+end
+
+-- (class: the player's by default; a parameter for tests)
+local function isInterrupt(id: number, class: string?): boolean
+    class = class or playerClass()
     for _, family in ipairs(INTERRUPTS[class] or {}) do
         for _, x in ipairs(family) do
             if x == id then return true end
@@ -95,9 +101,9 @@ local function known(id: number): boolean
 end
 
 -- The highest known rank of the first family you know (Pummel before Shield Bash).
-export function find()
-    local _, playerClass = UnitClass("player")
-    local class = secret.known(playerClass, "")
+-- (class: the player's by default; a parameter for tests)
+export function find(class: string?)
+    class = class or playerClass()
     interrupt.spell = nil
     for _, family in ipairs(INTERRUPTS[class] or {}) do
         for i = #family, 1, -1 do
@@ -120,9 +126,8 @@ end
 -- true (ready), false (cooling down) or nil (no interrupt known). The game's
 -- "on cooldown" also covers the global cooldown after any cast; when the
 -- interrupt's own cooldown is over, that is all it is, and it counts as ready.
-export function ready(): boolean?
-    if not interrupt.spell then return nil end
-    local cd = C_Spell.GetSpellCooldown(interrupt.spell)
+-- What the interrupt's cooldown (C_Spell.GetSpellCooldown's answer) says.
+local function readyFrom(cd: any): boolean?
     if not cd or isSecret(cd) or isSecret(cd.isActive) then return nil end
     if not cd.isActive then return true end
     if not interrupt.usedAt then
@@ -135,6 +140,11 @@ export function ready(): boolean?
         end
     end
     return remaining() <= 0
+end
+
+export function ready(): boolean?
+    if not interrupt.spell then return nil end
+    return readyFrom(C_Spell.GetSpellCooldown(interrupt.spell))
 end
 
 events.onUnit("UNIT_SPELLCAST_SUCCEEDED", "player", function(_, _, _, spellID)
@@ -422,13 +432,14 @@ end
 -- secret (probed 2026-10-18: in combat all three): never tested, only
 -- handed on, the class's colour to the text (its colour object's RGB and
 -- hex code take a secret class) and "is it you" to SetAlphaFromBoolean.
-local function spellTarget(unit: string): (any, any, any)
-    if not (UnitShouldDisplaySpellTargetName and UnitSpellTargetName) then return end
-    if not UnitShouldDisplaySpellTargetName(unit) then return end
-    local name = UnitSpellTargetName(unit)
+-- (A: the game's functions, a parameter for tests)
+local function spellTarget(unit: string, A: any = _G): (any, any, any)
+    if not (A.UnitShouldDisplaySpellTargetName and A.UnitSpellTargetName) then return end
+    if not A.UnitShouldDisplaySpellTargetName(unit) then return end
+    local name = A.UnitSpellTargetName(unit)
     if type(name) == "nil" then return end
-    local class = UnitSpellTargetClass and UnitSpellTargetClass(unit)
-    local you = PlayerIsSpellTarget and PlayerIsSpellTarget(unit)
+    local class = A.UnitSpellTargetClass and A.UnitSpellTargetClass(unit)
+    local you = A.PlayerIsSpellTarget and A.PlayerIsSpellTarget(unit)
     return name, class, you
 end
 
@@ -448,6 +459,12 @@ local function showYou(you: any, badge: any, line: any, youLine: any?)
     if not pcall(line.SetAlphaFromBoolean, line, you, 0, 1) then line:SetAlpha(1) end
 end
 
+-- The cast's target: name, class and "is it you" (any may be secret), or
+-- nothing (a method, so tests can stand in for the game's answer).
+function CB:SpellTarget(): (any, any, any)
+    return spellTarget(self.unit)
+end
+
 function CB:UpdateTarget()
     if not self.plate then
         -- "Spell › Target" in the spell name's fixed width, so the engine
@@ -455,7 +472,7 @@ function CB:UpdateTarget()
         local spell = self.spellName
         if type(spell) == "nil" then return end
         if self.targetShown then
-            local ok, name, class, you = pcall(spellTarget, self.unit)
+            local ok, name, class, you = pcall(self.SpellTarget, self)
             if ok and type(name) ~= "nil" then
                 self.spellYou:SetFormattedText("%s ›", spell)
                 showYou(you, self.you, self.spell, self.spellYou)
@@ -472,7 +489,7 @@ function CB:UpdateTarget()
     local t = self.target
     if not t then return end
     if self.targetShown == false then return t:Hide() end
-    local ok, name, class, you = pcall(spellTarget, self.unit)
+    local ok, name, class, you = pcall(self.SpellTarget, self)
     if not ok or type(name) == "nil" then return t:Hide() end
     t.name:SetText(name)
     t.name:SetColor("ink")
@@ -497,10 +514,15 @@ end
 -- Drawing
 --------------------------------------------------------------------------------
 
+-- Your interrupt's readiness (ready()); a method, so tests can stand in.
+function CB:KickReady(): boolean?
+    return ready()
+end
+
 function CB:UpdateKick()
     local k = self.kick
     if not k then return end
-    local isReady = ready()
+    local isReady = self:KickReady()
     k:SetShown(isReady ~= nil and self.kickShown ~= false and not self.neutral)
     -- unknown (secret in combat): its seconds go too, or every frame of the
     -- cast asked for the cooldown again

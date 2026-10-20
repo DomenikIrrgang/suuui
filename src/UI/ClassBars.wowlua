@@ -36,6 +36,10 @@ local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret
 
 const known = secret.known
 
+-- Where the game's form, pet, totem, spell and cursor functions are read
+-- from: the game's (a table, so tests can stand in for one).
+local G: { [string]: any } = setmetatable({}, { __index = function(_: any, k: string): any return _G[k] end })
+
 local CB = {}
 
 function CB:SetHotkeysShown(shown: any)
@@ -47,7 +51,7 @@ function CB:UpdateBindings()
     combat.run("classbar:bind:" .. self.name, function()
         ClearOverrideBindings(self.header)
         for i, b in ipairs(self.buttons) do
-            local keys = { GetBindingKey(self.binding .. i) }
+            local keys = { G.GetBindingKey(self.binding .. i) }
             if self.enabled then
                 for _, key in ipairs(keys) do
                     SetOverrideBindingClick(self.header, false, key, b:GetName(), "LeftButton")
@@ -117,7 +121,7 @@ end
 --------------------------------------------------------------------------------
 
 local function stanceUpdate(b: any)
-    local icon, active, castable, spellID = GetShapeshiftFormInfo(b.index)
+    local icon, active, castable, spellID = G.GetShapeshiftFormInfo(b.index)
     b.hasAction = icon ~= nil
     b.spellID = spellID
     if b.hasAction then
@@ -145,11 +149,11 @@ local Stance = setmetatable({}, { __index = CB })
 
 -- Which spell each button casts, and how many buttons: out of combat.
 function Stance:UpdateForms()
-    local n = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0
+    local n = G.GetNumShapeshiftForms and G.GetNumShapeshiftForms() or 0
     combat.run("classbar:forms:" .. self.name, function()
         for i, b in ipairs(self.buttons) do
-            local spellID = i <= n and select(4, GetShapeshiftFormInfo(i))
-            local name = spellID and C_Spell.GetSpellName(spellID)
+            local spellID = i <= n and select(4, G.GetShapeshiftFormInfo(i))
+            local name = spellID and G.C_Spell.GetSpellName(spellID)
             b:SetAttribute("type", name and "spell" or nil)
             b:SetAttribute("spell", name)
         end
@@ -192,7 +196,7 @@ end
 --------------------------------------------------------------------------------
 
 local function petUpdate(b: any)
-    local name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID, checksRange, inRange = GetPetActionInfo(b.index)
+    local name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID, checksRange, inRange = G.GetPetActionInfo(b.index)
     b.hasAction = name ~= nil
     b.petName, b.autoCastAllowed = name, autoCastAllowed
     if b.hasAction then
@@ -201,15 +205,15 @@ local function petUpdate(b: any)
         if spellID then
             b:ShowSpellCooldown(spellID)
         else
-            local start, duration = GetPetActionCooldown(b.index)
+            local start, duration = G.GetPetActionCooldown(b.index)
             local live = not isSecret(duration) and not isSecret(start) and duration and duration > 0
             if live then
-                b.petDuration = b.petDuration or C_DurationUtil.CreateDuration()
+                b.petDuration = b.petDuration or G.C_DurationUtil.CreateDuration()
                 b.petDuration:SetTimeFromStart(start, duration)
             end
             b:ShowCooldown(live and true or false, false, live and b.petDuration or nil)
         end
-        b:ShowUsable(GetPetActionSlotUsable and not known(GetPetActionSlotUsable(b.index), true) or false)
+        b:ShowUsable(G.GetPetActionSlotUsable and not known(G.GetPetActionSlotUsable(b.index), true) or false)
         b:ShowActive(uiText.flag(isActive))
         b:ShowAutocast(uiText.flag(autoCastEnabled))
         b:SetOutOfRange(uiText.flag(checksRange) and not known(inRange, true))
@@ -289,7 +293,7 @@ export function petBar(parent: Frame, opts: { [string]: any }): any
     bar:Layout(SLOTS)
     local function lock()
         combat.run("classbar:lock:" .. bar.name, function()
-            local locked = GetCVarBool("lockActionBars") and true or false
+            local locked = G.GetCVarBool("lockActionBars") and true or false
             for _, b in ipairs(bar.buttons) do b:SetAttribute("suu-locked", locked) end
         end, "Action bars")
     end
@@ -297,7 +301,7 @@ export function petBar(parent: Frame, opts: { [string]: any }): any
     events.onGame("CVAR_UPDATE", lock, bar)
     -- A pet ability on the cursor shows the empty slots it can go to.
     events.onGame("CURSOR_CHANGED", function()
-        local on = GetCursorInfo() == "petaction"
+        local on = G.GetCursorInfo() == "petaction"
         for _, b in ipairs(bar.buttons) do b:SetGrid(on) end
     end, bar)
 
@@ -370,16 +374,16 @@ local IMMEDIATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Im
 
 local function knows(spellID: number?): boolean
     if not spellID then return false end
-    if C_SpellBook and C_SpellBook.IsSpellInSpellBook then
-        local ok, yes = pcall(C_SpellBook.IsSpellInSpellBook, spellID, Enum.SpellBookSpellBank.Player, false)
+    if G.C_SpellBook and G.C_SpellBook.IsSpellInSpellBook then
+        local ok, yes = pcall(G.C_SpellBook.IsSpellInSpellBook, spellID, Enum.SpellBookSpellBank.Player, false)
         if ok then return yes and true or false end
     end
-    return IsPlayerSpell and IsPlayerSpell(spellID) or false
+    return G.IsPlayerSpell and G.IsPlayerSpell(spellID) or false
 end
 
 -- The totems you know for an element (the game's list for its slot).
 local function elementSpells(slot: number): number[]
-    local ok, list = pcall(function() return { GetMultiCastTotemSpells(slot) } end)
+    local ok, list = pcall(function() return { G.GetMultiCastTotemSpells(slot) } end)
     return ok and list or {}
 end
 
@@ -390,7 +394,7 @@ end
 
 -- The spell an element's slot holds in a set (readable in combat too).
 local function slotSpell(slot: number, page: number?): number?
-    local kind, id = GetActionInfo(slotAction(slot, page))
+    local kind, id = G.GetActionInfo(slotAction(slot, page))
     if kind == "spell" and id and not isSecret(id) then return id :: number end
 end
 
@@ -415,10 +419,10 @@ local function totemUpdate(b: any)
     b.hasAction = spellID ~= nil
     b.known = #elementSpells(b.element.slot) > 0
     if spellID then
-        b.art:SetTexture(C_Spell.GetSpellTexture(spellID))
+        b.art:SetTexture(G.C_Spell.GetSpellTexture(spellID))
         b.art:Show()
         b:ShowSpellCooldown(spellID)
-        local usable, noMana = C_Spell.IsSpellUsable(spellID)
+        local usable, noMana = G.C_Spell.IsSpellUsable(spellID)
         b:ShowUsable(not (known(usable, true) and not known(noMana, false)))
     else
         b.art:Hide()
@@ -488,7 +492,7 @@ end
 -- that goes down just after its button or Call was clicked is the chosen one.
 local function totemIsChosen(b: any): boolean
     local slot = b.element.slot
-    local ok, have, _, _, _, _, _, spellID = pcall(GetTotemInfo, slot)
+    local ok, have, _, _, _, _, _, spellID = pcall(G.GetTotemInfo, slot)
     if not ok or isSecret(have) or isSecret(spellID) then
         if b.castAt and GetTime() - b.castAt < 1 then b.chosen = true end
         return b.chosen ~= false
@@ -500,7 +504,7 @@ local function totemIsChosen(b: any): boolean
     end
     local chosen = slotSpell(slot, b.bar.page)
     b.chosen = not chosen or spellID == chosen
-        or (C_Spell.GetSpellName(spellID :: number) or 1) == (C_Spell.GetSpellName(chosen) or 2)
+        or (G.C_Spell.GetSpellName(spellID :: number) or 1) == (G.C_Spell.GetSpellName(chosen) or 2)
     return b.chosen
 end
 
@@ -511,7 +515,7 @@ function Totems:UpdateTimers()
     local any = false
     for _, b in ipairs(self.buttons) do
         local s = b.segment
-        local ok, d = pcall(GetTotemDuration, b.element.slot)
+        local ok, d = pcall(G.GetTotemDuration, b.element.slot)
         if ok and d then any = true end
         if ok and d and totemIsChosen(b) then
             pcall(s.drain.SetTimerDuration, s.drain, d, IMMEDIATE, DIR.RemainingTime)
@@ -568,7 +572,7 @@ function Totems:UpdateAll()
     local c = self.call
     if c.spellID then
         c.hasAction = true
-        c.art:SetTexture(C_Spell.GetSpellTexture(c.spellID))
+        c.art:SetTexture(G.C_Spell.GetSpellTexture(c.spellID))
         c.art:Show()
         c:ShowSpellCooldown(c.spellID)
     else
@@ -578,7 +582,7 @@ function Totems:UpdateAll()
     local r = self.recall
     r.hasAction = self.hasRecall and true or false
     if r.hasAction then
-        r.art:SetTexture(C_Spell.GetSpellTexture(RECALL))
+        r.art:SetTexture(G.C_Spell.GetSpellTexture(RECALL))
         r.art:Show()
         r:ShowSpellCooldown(RECALL)
     end
@@ -696,8 +700,8 @@ function Totems:OpenPicker(b: any)
         r:SetAttribute("type", "multispell")
         r:SetAttribute("action", slotAction(slot, self.page))
         r:SetAttribute("spell", id)
-        r.icon:SetTexture(C_Spell.GetSpellTexture(id))
-        r.label:SetValue(C_Spell.GetSpellName(id) or "")
+        r.icon:SetTexture(G.C_Spell.GetSpellTexture(id))
+        r.label:SetValue(G.C_Spell.GetSpellName(id) or "")
         r.check:SetShown(id == chosen)
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", 4, y)
@@ -796,8 +800,8 @@ function Totems:OpenSets()
                 p.rows[n] = r
             end
             r.page = page
-            r.icon:SetTexture(C_Spell.GetSpellTexture(id))
-            r.label:SetValue(C_Spell.GetSpellName(id) or "")
+            r.icon:SetTexture(G.C_Spell.GetSpellTexture(id))
+            r.label:SetValue(G.C_Spell.GetSpellName(id) or "")
             -- its four totems, earth to air, before the tick
             local x = -22
             for k = #ELEMENTS, 1, -1 do
@@ -805,7 +809,7 @@ function Totems:OpenSets()
                 local sid = slotSpell(ELEMENTS[k].slot, page)
                 t:ClearAllPoints()
                 t:SetPoint("RIGHT", x, 0)
-                t:SetTexture(sid and C_Spell.GetSpellTexture(sid) or nil)
+                t:SetTexture(sid and G.C_Spell.GetSpellTexture(sid) or nil)
                 t:SetShown(sid ~= nil)
                 x = x - 14
             end

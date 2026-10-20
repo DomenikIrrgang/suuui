@@ -1,0 +1,646 @@
+-- UI/CastBar: your interrupt (which, its cooldown, ready), the cast bar's
+-- build per size, its live setters, the cast's target, the kick, and the
+-- cast events with real mock units casting.
+
+import test, expect, skip, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as castBar from "/UI/CastBar"
+import * as events from "/Core/Events"
+import tokens as T from "/Core/Tokens"
+import internal isInterrupt, readyFrom, spellTarget, classColor, showYou from "/UI/CastBar"
+import internal paints from "/UI/Draw"
+import expectNoErrors, errorsSoFar, newParent from "../../helpers"
+
+const S = T.space
+
+local parent: Frame
+local bars: any[] = {}
+local units: mock.MockUnit[] = {}
+
+local function tokenOf(region: any): string?
+    local p = paints[region]
+    return p and p.token
+end
+
+local function bar(unit: string, opts: { [string]: any }?): any
+    local b = castBar.castBar(parent, unit, opts)
+    b:SetPoint("CENTER")
+    bars[#bars + 1] = b
+    return b
+end
+
+local function spawn(data: mock.UnitData): mock.MockUnit
+    local u = mock.spawnUnit(data)
+    units[#units + 1] = u
+    return u
+end
+
+local function wolf(): mock.MockUnit
+    local w = spawn({ name = "Wolf", level = 10, reaction = "hostile", health = 800, healthMax = 1000 })
+    mock.player:target(w)
+    return w
+end
+
+local function resetInterrupt()
+    castBar.interrupt.spell, castBar.interrupt.usedAt, castBar.interrupt.cooldown = nil, nil, 0
+end
+
+@beforeEach
+local function setUp()
+    parent = newParent(400, 300)
+    resetInterrupt()
+end
+
+@afterEach
+local function tearDown()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, b in ipairs(bars) do b:Deactivate() b:Hide() end
+    bars = {}
+    if #units > 0 then
+        mock.player:target(nil)
+        mock.player:focus(nil)
+        for _, u in ipairs(units) do u:despawn() end
+        units = {}
+    end
+    parent:Hide()
+    resetInterrupt()
+end
+
+--------------------------------------------------------------------------------
+-- Your interrupt
+--------------------------------------------------------------------------------
+
+@test("isInterrupt: your class's interrupts, every rank")
+local function interrupts()
+    expect(isInterrupt(6552, "WARRIOR")).toBe(true)
+    expect(isInterrupt(1672, "WARRIOR")).toBe(true)
+    expect(isInterrupt(1766, "WARRIOR")).toBe(false)
+    expect(isInterrupt(1766, "ROGUE")).toBe(true)
+    expect(isInterrupt(133, "NOBODY")).toBe(false)
+    expect(isInterrupt(6552)).toBe(true) -- the player: a warrior
+end
+
+@test("find: the highest known rank of the first family you know")
+local function findInterrupt()
+    castBar.find("WARRIOR")
+    expect(castBar.interrupt.spell).toBeNil()
+    mock.defineSpell(72, { name = "Shield Bash", known = true })
+    castBar.find("WARRIOR")
+    expect(castBar.interrupt.spell).toBe(72)
+    mock.defineSpell(6552, { name = "Pummel", known = true })
+    castBar.find()
+    expect(castBar.interrupt.spell).toBe(6552)
+    mock.defineSpell(6554, { name = "Pummel", known = true })
+    castBar.find("WARRIOR")
+    expect(castBar.interrupt.spell).toBe(6554)
+    castBar.find("NOBODY")
+    expect(castBar.interrupt.spell).toBeNil()
+end
+
+@test("remaining: seconds left from when you used it")
+local function remainingTime()
+    expect(castBar.remaining()).toBe(0)
+    castBar.interrupt.usedAt, castBar.interrupt.cooldown = GetTime(), 10
+    expect(castBar.remaining()).toBeCloseTo(10)
+    mock.advanceTime(4)
+    expect(castBar.remaining()).toBeCloseTo(6)
+    mock.advanceTime(10)
+    expect(castBar.remaining()).toBe(0)
+end
+
+@test("readyFrom: the cooldown's answer, the global cooldown counting as ready")
+local function readiness()
+    expect(readyFrom(nil)).toBeNil()
+    expect(readyFrom(mock.secret({ isActive = true }))).toBeNil()
+    expect(readyFrom({ isActive = mock.secret(true) })).toBeNil()
+    expect(readyFrom({ isActive = false })).toBe(true)
+    -- active, never seen used: a global cooldown is ready
+    expect(readyFrom({ isActive = true, startTime = GetTime(), duration = 1.5 })).toBe(true)
+    expect(castBar.interrupt.usedAt).toBeNil()
+    -- secret times can't stand in
+    expect(readyFrom({ isActive = true, startTime = mock.secret(GetTime()), duration = 10 })).toBe(true)
+    -- used before a reload: the cooldown's own start and length
+    expect(readyFrom({ isActive = true, startTime = GetTime(), duration = 10 })).toBe(false)
+    expect(castBar.interrupt.cooldown).toBe(10)
+    mock.advanceTime(11)
+    expect(readyFrom({ isActive = true, startTime = 0, duration = 10 })).toBe(true)
+end
+
+@test("ready: nil without an interrupt, else the game's cooldown")
+local function readyNow()
+    expect(castBar.ready()).toBeNil()
+    mock.defineSpell(6552, { name = "Pummel", known = true })
+    castBar.interrupt.spell = 6552
+    expect(castBar.ready()).toBe(true)
+end
+
+@test("your interrupt's cast starts its cooldown and redraws the kicks")
+local function interruptUsed()
+    mock.defineSpell(6552, { name = "Pummel", known = true })
+    castBar.interrupt.spell = 6552
+    local b = bar("target")
+    b:Activate()
+    local kick = mock.stub(b, "UpdateKick")
+    mock.player:castSpell(133, { castTime = 0 })
+    mock.advanceTime(0.1)
+    expect(castBar.interrupt.usedAt).toBeNil()
+    mock.player:castSpell(6552, { castTime = 0 })
+    mock.advanceTime(0.1)
+    expect(castBar.interrupt.usedAt ~= nil).toBe(true)
+    expect(castBar.interrupt.cooldown > 0).toBe(true)
+    expect(kick).toHaveBeenCalled()
+    mock.resetSpies()
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    expect(kick).toHaveBeenCalledTimes(1)
+    mock.fireEvent("SPELLS_CHANGED")
+    expect(isInterrupt(castBar.interrupt.spell :: number, "WARRIOR")).toBe(true)
+    expect(kick).toHaveBeenCalledTimes(2)
+end
+
+--------------------------------------------------------------------------------
+-- Pure parts
+--------------------------------------------------------------------------------
+
+@test("spellTarget: the name, class and 'you' while the client shows a target")
+local function spellTargets()
+    expect(spellTarget("target")).toBeNil() -- the game's: none shown
+    local shown, name: any = true, "Anna"
+    local A: { [string]: any } = {
+        UnitShouldDisplaySpellTargetName = function(_: string): boolean return shown end,
+        UnitSpellTargetName = function(_: string): any return name end,
+        UnitSpellTargetClass = function(_: string): string return "PRIEST" end,
+        PlayerIsSpellTarget = function(_: string): boolean return true end,
+    }
+    expect({ spellTarget("target", A) }).toEqual({ "Anna", "PRIEST", true })
+    A.UnitSpellTargetClass, A.PlayerIsSpellTarget = nil, nil
+    expect({ spellTarget("target", A) }).toEqual({ "Anna" })
+    name = nil
+    expect(spellTarget("target", A)).toBeNil()
+    shown = false
+    expect(spellTarget("target", A)).toBeNil()
+    expect(spellTarget("target", {})).toBeNil()
+end
+
+@test("classColor: a class's colour object, else nil")
+local function classColors()
+    expect(classColor(nil)).toBeNil()
+    expect(classColor("PRIEST") ~= nil).toBe(true)
+    expect(classColor("NOBODY")).toBeNil()
+end
+
+-- A region whose SetAlphaFromBoolean calls are recorded (the VM's does
+-- nothing: see the notes), or refused.
+local function region(refuse: boolean?): { [string]: any }
+    local r: { [string]: any } = { SetAlpha = mock.spy() }
+    r.SetAlphaFromBoolean = refuse and function() error("refused") end or mock.spy()
+    return r
+end
+
+@test("showYou: the badge by the answer, the line the other way round")
+local function you()
+    local badge, line, youLine = region(), region(), region()
+    showYou(true, badge, line, youLine)
+    expect(badge.SetAlphaFromBoolean).toHaveBeenCalledWith(badge, true, 1, 0)
+    expect(youLine.SetAlphaFromBoolean).toHaveBeenCalledWith(youLine, true, 1, 0)
+    expect(line.SetAlphaFromBoolean).toHaveBeenCalledWith(line, true, 0, 1)
+    showYou(nil, badge, line)
+    expect(badge.SetAlphaFromBoolean).toHaveBeenCalledWith(badge, false, 1, 0)
+    -- a secret answer handed on as it is (the matchers can't compare secrets)
+    local s = mock.secret(true)
+    local got: any = nil
+    local holder: { [string]: any } = { SetAlphaFromBoolean = function(_: any, v: any) got = v end }
+    showYou(s, holder, line)
+    expect(issecretvalue(got)).toBe(true)
+    -- refused: hidden, the line shown
+    local refusing = region(true)
+    showYou(true, refusing, refusing)
+    expect(refusing.SetAlpha).toHaveBeenCalledWith(refusing, 0)
+    expect(refusing.SetAlpha).toHaveBeenCalledWith(refusing, 1)
+end
+
+@skip("VM suspicion: SetAlphaFromBoolean leaves the alpha as it was (see Docs/test-notes/ui-units.md)")
+@test("SetAlphaFromBoolean sets the alpha the answer stands for")
+local function alphaFromBoolean()
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetAlphaFromBoolean(true, 0, 1)
+    expect(f:GetAlpha()).toBe(0)
+    f:SetAlphaFromBoolean(mock.secret(true), 1, 0.5)
+    expect(f:GetAlpha()).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- Building
+--------------------------------------------------------------------------------
+
+@test("an enemy's bar: icon, the arcane layer, the lock and the kick")
+local function enemyBar()
+    local b = bar("target", { name = "SuuUITestCastBar" })
+    expect(b:GetName()).toBe("SuuUITestCastBar")
+    expect(b:IsShown()).toBe(false)
+    expect({ b:GetSize() }).toEqual({ 300, T.size["cast-sm"] })
+    expect(b.icon ~= nil).toBe(true)
+    expect(b.arcane ~= nil).toBe(true)
+    expect(b.iconEdge ~= nil).toBe(true)
+    expect(b.lockHost ~= nil).toBe(true)
+    expect(b.kick ~= nil).toBe(true)
+    expect(b.targetShown).toBe(false)
+    expect(b.iconShown).toBe(true)
+    expect(b.kickShown).toBe(true)
+    local h = T.size["cast-sm"]
+    expect(b.spell:GetWidth()).toBe(300 - h - S["space-3"] * 2 - b.lockW - 70)
+end
+
+@test("your own bar: md, no arcane layer, lock or kick")
+local function playerBar()
+    local b = bar("player", { size = "md", width = 200, target = true })
+    expect(b:GetHeight()).toBe(T.size["cast"])
+    expect(b.arcane).toBeNil()
+    expect(b.kick).toBeNil()
+    expect(b.lockW).toBeNil()
+    expect(b.targetShown).toBe(true)
+    expect(tokenOf(b.fill:GetStatusBarTexture())).toBe("ghost")
+end
+
+@test("a plate's bar: the spell line under it, its icon leading, the lock inside")
+local function plateBar()
+    local b = bar("nameplate1", { size = "plate", width = 120, target = true })
+    local h = T.size["cast-plate"]
+    expect(b:GetHeight()).toBe(h + S["space-1"] + 13)
+    expect(b.icon).toBeNil()
+    expect(b.lineIcon ~= nil).toBe(true)
+    expect(b.lock ~= nil).toBe(true)
+    expect(b.lock:GetWidth()).toBe(math.max(8, h))
+    expect(b.target ~= nil).toBe(true)
+    expect(b.target:IsShown()).toBe(false)
+    expect(b.spellYou).toBeNil()
+    expect(b.targetShown).toBeNil()
+    -- without its target line
+    expect(bar("nameplate2", { size = "plate" }).target).toBeNil()
+end
+
+@test("icon = false, kick = false")
+local function bareBar()
+    local b = bar("focus", { icon = false, kick = false })
+    expect(b.icon).toBeNil()
+    expect(b.kick).toBeNil()
+    expect(b.iconShown).toBe(false)
+    expect(b.kickShown).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Live setters
+--------------------------------------------------------------------------------
+
+@test("SetIconShown and SetKickShown re-lay the bar and the name's room")
+local function iconAndKick()
+    local b = bar("target")
+    local h = T.size["cast-sm"]
+    b:SetIconShown(false)
+    expect(b.icon:IsShown()).toBe(false)
+    expect(b.iconEdge:IsShown()).toBe(false)
+    local _, _, _, x = b.bar:GetPoint(1)
+    expect(x).toBe(0)
+    expect(b.spell:GetWidth()).toBe(300 - S["space-3"] * 2 - b.lockW - 70)
+    b:SetKickShown(false)
+    expect(b.spell:GetWidth()).toBe(300 - S["space-3"] * 2 - b.lockW - 40)
+    b:SetIconShown(true)
+    expect(b.icon:IsShown()).toBe(true)
+    local _, _, _, x2 = b.bar:GetPoint(1)
+    expect(x2).toBe(h)
+    -- a bar without an icon stays without one
+    local c = bar("target", { icon = false })
+    c:SetIconShown(true)
+    expect(c.iconShown).toBe(false)
+end
+
+@test("SetBarWidth and SetBarHeight, live")
+local function sizes()
+    local b = bar("target")
+    b:SetBarWidth(250)
+    expect(b:GetWidth()).toBe(250)
+    b:SetBarHeight(30)
+    expect(b:GetHeight()).toBe(30)
+    expect({ b.icon:GetSize() }).toEqual({ 30, 30 })
+    expect(b.kick:GetHeight()).toBe(30)
+    expect(b.spell:GetWidth()).toBe(250 - 30 - S["space-3"] * 2 - b.lockW - 70)
+    local p = bar("nameplate1", { size = "plate", target = true })
+    p:SetBarHeight(4)
+    expect(p.bar:GetHeight()).toBe(4)
+    expect(p:GetHeight()).toBe(4 + S["space-1"] + 13)
+    expect(p.lock:GetWidth()).toBe(8)
+    p:SetBarWidth(150)
+    expect(p.target.name:GetWidth()).toBe(150 - p.lockW - 12)
+    local me = bar("player")
+    me:SetBarHeight(20)
+    expect(me:GetHeight()).toBe(20)
+end
+
+@test("SetNeutral: never 'you can stop it'")
+local function neutral()
+    local b = bar("target")
+    mock.stub(b, "KickReady", function(): boolean return true end)
+    b:SetNeutral(true)
+    expect(b.arcane:GetAlpha()).toBe(0)
+    expect(b.lockHost:GetAlpha()).toBe(0)
+    expect(b.kick:IsShown()).toBe(false)
+    b:SetNeutral(false)
+    expect(b.arcane:GetAlpha()).toBe(1)
+    expect(b.kick:IsShown()).toBe(true)
+    bar("player"):SetNeutral(true)
+end
+
+@test("UpdateKick: ready, cooling down, unknown, hidden")
+local function kickStates()
+    local b = bar("target")
+    local state: boolean? = true
+    mock.stub(b, "KickReady", function(): boolean? return state end)
+    b:UpdateKick()
+    expect(b.kick:IsShown()).toBe(true)
+    expect(tokenOf(b.kick.glyph)).toBe("arcane")
+    expect(b.kick.secs:IsShown()).toBe(false)
+    state = false
+    b:UpdateKick()
+    expect(tokenOf(b.kick.glyph)).toBe("ink-faint")
+    expect(b.kick.secs:IsShown()).toBe(true)
+    state = nil
+    b:UpdateKick()
+    expect(b.kick:IsShown()).toBe(false)
+    expect(b.kick.secs:IsShown()).toBe(false)
+    state = true
+    b:SetKickShown(false)
+    expect(b.kick:IsShown()).toBe(false)
+    -- no kick: nothing to draw
+    bar("player"):UpdateKick()
+end
+
+@test("KickReady: your interrupt's readiness")
+local function kickReady()
+    expect(bar("target"):KickReady()).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- The cast's target
+--------------------------------------------------------------------------------
+
+@test("off a plate: 'Spell › Target' in the target's class colour, or the spell")
+local function targetInline()
+    local b = bar("target", { target = true })
+    local name: any, class: any, isYou: any = "Anna", "PRIEST", false
+    mock.stub(b, "SpellTarget", function(): (any, any, any) return name, class, isYou end)
+    b:UpdateTarget() -- no cast: nothing
+    expect(b.spell:GetText()).toBeNil()
+    b.spellName = "Fireball"
+    b:UpdateTarget()
+    local hex = (C_ClassColor.GetClassColor("PRIEST") :: ColorMixin):GenerateHexColor()
+    expect(b.spell:GetText()).toBe(("Fireball › |c%sAnna|r"):format(hex))
+    expect(b.spellYou:GetText()).toBe("Fireball ›")
+    local youAlpha = mock.stub(b.you, "SetAlphaFromBoolean")
+    local lineAlpha = mock.stub(b.spell, "SetAlphaFromBoolean")
+    class = nil
+    b:UpdateTarget()
+    expect(b.spell:GetText()).toBe("Fireball › Anna")
+    isYou = true
+    b:UpdateTarget()
+    expect(youAlpha).toHaveBeenCalledWith(b.you, true, 1, 0)
+    expect(lineAlpha).toHaveBeenCalledWith(b.spell, true, 0, 1)
+    name = nil
+    b:UpdateTarget()
+    expect(b.spell:GetText()).toBe("Fireball")
+    expect(youAlpha).toHaveBeenCalledWith(b.you, false, 1, 0)
+    name = "Anna"
+    b:SetTargetShown(false)
+    b:UpdateTarget()
+    expect(b.spell:GetText()).toBe("Fireball")
+    -- mid-cast the change shows at once
+    b.duration = {}
+    b:SetTargetShown(true)
+    expect(b.spell:GetText()).toBe("Fireball › Anna")
+    b.duration = nil
+    -- the target refused: the spell alone
+    mock.stub(b, "SpellTarget", function(): (any, any, any) error("refused") end)
+    b:UpdateTarget()
+    expect(b.spell:GetText()).toBe("Fireball")
+end
+
+@test("on a plate: the target's line under the spell")
+local function targetLine()
+    local b = bar("nameplate1", { size = "plate", target = true })
+    local name: any = "Anna"
+    mock.stub(b, "SpellTarget", function(): (any, any, any) return name, "PRIEST", false end)
+    b:UpdateTarget()
+    expect(b.target:IsShown()).toBe(true)
+    expect(b.target.name:GetText()).toBe("Anna")
+    local r, g, bl = b.target.name:GetTextColor()
+    local cr, cg, cb = (C_ClassColor.GetClassColor("PRIEST") :: ColorMixin):GetRGB()
+    expect({ r, g, bl }).toEqual({ cr, cg, cb })
+    name = nil
+    b:UpdateTarget()
+    expect(b.target:IsShown()).toBe(false)
+    name = "Anna"
+    b:UpdateTarget()
+    b:SetTargetShown(false)
+    expect(b.target:IsShown()).toBe(false)
+    b:UpdateTarget()
+    expect(b.target:IsShown()).toBe(false)
+    -- no target line: nothing
+    bar("nameplate2", { size = "plate" }):UpdateTarget()
+end
+
+--------------------------------------------------------------------------------
+-- Casts
+--------------------------------------------------------------------------------
+
+@test("an enemy's cast: shown, the fill timed, the time ticking, then gone")
+local function enemyCast()
+    local w = wolf()
+    local b = bar("target")
+    b:Activate()
+    b:Activate() -- once
+    expect(b:IsShown()).toBe(false)
+    w:castSpell(133, { castTime = 2 })
+    expect(b:IsShown()).toBe(true)
+    expect(b.duration ~= nil).toBe(true)
+    expect(b.neutral).toBe(false)
+    expect(b.arcane:GetAlpha()).toBe(1)
+    expect(b.lockHost:GetAlpha()).toBe(0)
+    mock.advanceFrames(3)
+    expect(b.time.value).toBeNil()
+    mock.advanceTime(2.5)
+    mock.advanceFrames(2)
+    expect(b:IsShown()).toBe(false)
+    expectNoErrors()
+end
+
+@test("a cast that can't be interrupted shows the lock; the events flip it")
+local function lockedCast()
+    local w = wolf()
+    local b = bar("target")
+    b:Activate()
+    -- the cast's own flag is secret here (the engine's to apply)
+    w:castSpell(133, { castTime = 3, notInterruptible = true })
+    expect(b:IsShown()).toBe(true)
+    local arcane = mock.stub(b.arcane, "SetAlphaFromBoolean")
+    local lock = mock.stub(b.lockHost, "SetAlphaFromBoolean")
+    mock.fireUnitEvent("UNIT_SPELLCAST_INTERRUPTIBLE", "target")
+    expect(arcane).toHaveBeenCalledWith(b.arcane, false, 0, 1)
+    expect(lock).toHaveBeenCalledWith(b.lockHost, false, 1, 0)
+    mock.fireUnitEvent("UNIT_SPELLCAST_NOT_INTERRUPTIBLE", "target")
+    expect(arcane).toHaveBeenCalledWith(b.arcane, true, 0, 1)
+    expect(lock).toHaveBeenCalledWith(b.lockHost, true, 1, 0)
+    w:interruptCast()
+    mock.advanceFrames(1)
+    expect(b:IsShown()).toBe(false)
+end
+
+@test("a channel runs down; a friendly unit's cast stays neutral")
+local function channelAndFriend()
+    local friend = spawn({ name = "Anna", class = "PRIEST", player = true, reaction = "friendly" })
+    mock.player:target(friend)
+    local b = bar("target")
+    b:Activate()
+    friend:castSpell(15407, { castTime = 3, channel = true })
+    expect(b:IsShown()).toBe(true)
+    expect(b.neutral).toBe(true)
+    expect(b.arcane:GetAlpha()).toBe(0)
+    b:SetInterruptible(true)
+    expect(b.lockHost:GetAlpha()).toBe(0)
+end
+
+@test("Tick: a cast that stopped without its event takes the bar down")
+local function missedStop()
+    local w = wolf()
+    local b = bar("target")
+    b:Activate()
+    w:castSpell(133, { castTime = 5 })
+    b:Deactivate() -- deaf: the stop event goes unheard
+    b.duration = UnitCastingDuration("target")
+    b:Show()
+    w:interruptCast()
+    mock.advanceTime(0.5)
+    b:Tick()
+    expect(b:IsShown()).toBe(false)
+    expect(b.duration).toBeNil()
+end
+
+@test("Tick: the kick's seconds count down, then it is ready")
+local function kickSeconds()
+    local w = wolf()
+    local b = bar("target")
+    b:Activate()
+    local isReady = false
+    mock.stub(b, "KickReady", function(): boolean return isReady end)
+    castBar.interrupt.usedAt, castBar.interrupt.cooldown = GetTime(), 3
+    w:castSpell(133, { castTime = 5 })
+    expect(b.kick.secs:IsShown()).toBe(true)
+    b:Tick()
+    expect(b.kick.secs:GetText()).toBe("3")
+    mock.advanceTime(3.5)
+    isReady = true
+    b:Tick()
+    expect(b.kick.secs:IsShown()).toBe(false)
+end
+
+@test("Start without a cast stops; Refresh without a unit stops")
+local function startNothing()
+    local b = bar("target")
+    b:Show()
+    b:Start(false)
+    expect(b:IsShown()).toBe(false)
+    b:Show()
+    b:Refresh()
+    expect(b:IsShown()).toBe(false)
+    b:Tick() -- no cast: nothing
+    b:SetInterruptible(nil)
+    bar("player"):SetInterruptible(true)
+end
+
+@test("SetInterruptible: nil is interruptible; a secret answer goes to the engine")
+local function interruptible()
+    local b = bar("target")
+    local arcane = mock.stub(b.arcane, "SetAlphaFromBoolean")
+    local lock = mock.stub(b.lockHost, "SetAlphaFromBoolean")
+    b:SetInterruptible(nil)
+    expect(arcane).toHaveBeenCalledWith(b.arcane, false, 0, 1)
+    expect(lock).toHaveBeenCalledWith(b.lockHost, false, 1, 0)
+    local s = mock.secret(true)
+    local got: any[] = {}
+    mock.stub(b.arcane, "SetAlphaFromBoolean", function(_: any, v: any) got[1] = v end)
+    mock.stub(b.lockHost, "SetAlphaFromBoolean", function(_: any, v: any) got[2] = v end)
+    b:SetInterruptible(s)
+    expect(issecretvalue(got[1]) and issecretvalue(got[2])).toBe(true)
+end
+
+@test("Refresh picks up a cast or a channel already under way")
+local function refreshRunning()
+    local w = wolf()
+    w:castSpell(133, { castTime = 5 })
+    local b = bar("target")
+    local start = mock.stub(b, "Start")
+    b:Refresh()
+    expect(start).toHaveBeenCalledWith(b, false)
+    w:interruptCast()
+    mock.advanceTime(0.5)
+    w:castSpell(15407, { castTime = 3, channel = true })
+    b:Refresh()
+    expect(start).toHaveBeenCalledWith(b, true)
+end
+
+@test("focus and boss bars refresh on their changes; SetUnit re-points")
+local function unitEvents()
+    local f = bar("focus")
+    f:Activate()
+    local fr = mock.stub(f, "Refresh")
+    mock.fireEvent("PLAYER_FOCUS_CHANGED")
+    expect(fr).toHaveBeenCalledTimes(1)
+    local boss = bar("boss1")
+    boss:Activate()
+    local br = mock.stub(boss, "Refresh")
+    mock.fireEvent("INSTANCE_ENCOUNTER_ENGAGE_UNIT")
+    expect(br).toHaveBeenCalledTimes(1)
+    local t = bar("target")
+    t:Activate()
+    local tr = mock.stub(t, "Refresh")
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    expect(tr).toHaveBeenCalledTimes(1)
+    t:SetUnit("target") -- the same: a refresh
+    expect(tr).toHaveBeenCalledTimes(2)
+    t:SetUnit("focus")
+    expect(t.unit).toBe("focus")
+    expect(t.active).toBe(true)
+    expect(castBar.interrupt.bars[t]).toBe(true)
+    t:SetUnit(nil)
+    expect(t.active).toBe(false)
+    expect(castBar.interrupt.bars[t]).toBeNil()
+    local idle = bar("target")
+    idle:SetUnit("focus")
+    expect(idle.active).toBeFalsy()
+    idle:Deactivate() -- not active: nothing
+end
+
+@test("a unit event the client lacks is skipped")
+local function missingEvent()
+    local b = bar("target")
+    local real = events.onUnit
+    mock.stub(events, "onUnit", function(event: string, unit: any, fn: any, owner: any)
+        if event == "UNIT_SPELLCAST_DELAYED" then error("no such event") end
+        return real(event, unit, fn, owner)
+    end)
+    b:Activate()
+    expect(b.active).toBe(true)
+end
+
+@test("in combat: secret casts draw without errors")
+local function combatCast()
+    local before = #errorsSoFar()
+    local w = wolf()
+    local b = bar("target", { target = true })
+    local p = bar("target", { size = "plate", target = true })
+    b:Activate()
+    p:Activate()
+    mock.player:enterCombat()
+    w:castSpell(133, { castTime = 2, notInterruptible = true })
+    mock.advanceFrames(5)
+    mock.advanceTime(3)
+    expect(#errorsSoFar()).toBe(before)
+end
+

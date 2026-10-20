@@ -470,3 +470,59 @@ local function textSize()
     expect(b.textSize).toBe(12)
     expectNoErrors()
 end
+
+@test("clients without the newer action APIs; a cooldown that stays")
+local function olderClients()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    local api = C_ActionBar :: any -- remove functions the declarations type as present
+    local count, cd = api.GetActionDisplayCount, api.GetActionCooldown
+    api.GetActionDisplayCount, api.GetActionCooldown = nil, nil
+    b:Update()
+    api.GetActionDisplayCount, api.GetActionCooldown = count, cd
+    expect(b.count).toHaveText("")
+    expect(b.coolingDown).toBe(false)
+    -- a real cooldown read twice stays one
+    fakeActionCooldown(true, false)
+    b:UpdateCooldown()
+    b:UpdateCooldown()
+    expect(b.coolingDown).toBe(true)
+    -- a spell cooldown without a duration API
+    local spell = C_Spell :: any
+    local dur = spell.GetSpellCooldownDuration
+    spell.GetSpellCooldownDuration = nil
+    mock.fake("C_Spell.GetSpellCooldown", function(_: any): any return cooldownInfo(true, false) end)
+    b:ShowSpellCooldown(2457)
+    spell.GetSpellCooldownDuration = dur
+    expect(b.coolingDown).toBe(true)
+end
+
+@test("the countdown font follows the text size where the client has it")
+local function countdownFont()
+    local b = button()
+    local fonts: { string } = {}
+    mock.stub(b.cooldown :: any, "SetCountdownFont", function(_: any, name: string) fonts[#fonts + 1] = name end)
+    b:SetTextSize(13)
+    expect(fonts).toEqual({ "SuuUIActionDigits130" })
+end
+
+@test("tooltip: no note; leaving when another frame owns the tooltip")
+local function tooltipOwner()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    mock.stub(GameTooltip :: any, "SetAction", function(_: any, _: any) end)
+    mock.hover(b)
+    expect(GameTooltip:GetOwner()).toBe(b)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:Show()
+    mock.hover(nil)
+    expect(GameTooltip).toBeShown()
+    GameTooltip:Hide()
+    -- a forbidden tooltip is left alone
+    mock.stub(GameTooltip :: any, "IsForbidden", function(_: any): boolean return true end)
+    mock.hover(b)
+    expect(GameTooltip:GetOwner()).never.toBe(b)
+    mock.hover(nil)
+end

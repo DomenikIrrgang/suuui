@@ -1,24 +1,37 @@
 -- Core/DB: SuuUIDB and SuuUIProbe through wowlua:saved. This file drives the
--- lifecycle itself, to see the tables before and after they load.
+-- lifecycle itself: @beforeAll records the tables before they load, then
+-- logs in with prepared SavedVariables, so either test can run alone.
 
-import test, expect, config from "wowlua:test"
+import test, expect, config, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as DB from "/Core/DB"
 
 config({ lifecycle = "manual" })
 
+type Seen = { loaded: boolean, dbRead: boolean, probeRead: boolean }
+local before: Seen = { loaded = true, dbRead = true, probeRead = true }
+
+@beforeAll
+local function load()
+    before = {
+        loaded = DB.loaded(),
+        dbRead = (pcall(function() return DB.db.profiles end)),
+        probeRead = (pcall(function() return DB.probe.anything end)),
+    }
+    _G.SuuUIDB = { custom = { 1, 2 }, account = { colorVision = "none" } }
+    _G.SuuUIProbe = { probes = { a = true } }
+    mock.login()
+end
+
 @test("before the SavedVariables load: not loaded, and the tables refuse reads")
 local function beforeLoad()
-    expect(DB.loaded()).toBe(false)
-    expect(function() return DB.db.profiles end).toThrow()
-    expect(function() return DB.probe.anything end).toThrow()
+    expect(before.loaded).toBe(false)
+    expect(before.dbRead).toBe(false)
+    expect(before.probeRead).toBe(false)
 end
 
 @test("at load: the client's saved data, kept as SuuUI left it")
 local function atLoad()
-    _G.SuuUIDB = { custom = { 1, 2 }, account = { colorVision = "none" } }
-    _G.SuuUIProbe = { probes = { a = true } }
-    mock.login()
     expect(DB.loaded()).toBe(true)
     expect(DB.db.custom).toEqual({ 1, 2 })
     expect(DB.probe.probes).toEqual({ a = true })

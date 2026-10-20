@@ -1,0 +1,438 @@
+-- UI/WeaponEnchants: reading temporary weapon enchants (through a stand-in
+-- for the game's item, tooltip and inventory functions), what a scan
+-- announces, the casting spell's attribution, and the enchant icon.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as we from "/UI/WeaponEnchants"
+import * as events from "/Core/Events"
+import * as tooltip from "/UI/Tooltip"
+import tokens as T from "/Core/Tokens"
+import internal G, reset, read, tooltipName, itemName, scan, digits, longTime from "/UI/WeaponEnchants"
+import internal paints from "/UI/Draw"
+import newParent from "../../helpers"
+
+-- What the stand-in answers, by weapon slot (0 main, 1 off, 2 ranged) and
+-- inventory slot (16, 17, 18).
+type Fake = {
+    enchants: { [number]: any },
+    items: { [number]: number },
+    classes: { [number]: number },
+    links: { [number]: string },
+    textures: { [number]: number },
+    tips: { [number]: any },
+    spells: { [number]: string },
+}
+
+local parent: Frame
+local fake: Fake
+local heard = 0
+local listener: { [string]: any } = {}
+
+local function tokenOf(region: any): string?
+    local p = paints[region]
+    return p and p.token
+end
+
+local function enchant(seconds: number, extra: { [string]: any }?): { [string]: any }
+    local e: { [string]: any } = { hasEnchant = true, timeLeft = seconds * 1000, charges = 0, enchantID = 29, enchantIconID = 136086 }
+    for k, v in pairs(extra or {}) do e[k] = v end
+    return e
+end
+
+local function stand(f: Fake)
+    rawset(G, "C_Item", {
+        GetWeaponEnchantInfo = function(ws: number): any return f.enchants[ws] end,
+        GetItemInfoInstant = function(id: number): (number, nil, nil, nil, nil, number?) return id, nil, nil, nil, nil, f.classes[id] end,
+    })
+    rawset(G, "C_TooltipInfo", { GetInventoryItem = function(_: string, inv: number): any return f.tips[inv] end })
+    rawset(G, "C_Spell", { GetSpellName = function(id: number): string? return f.spells[id] end })
+    rawset(G, "GetInventoryItemID", function(_: string, inv: number): number? return f.items[inv] end)
+    rawset(G, "GetInventoryItemLink", function(_: string, inv: number): string? return f.links[inv] end)
+    rawset(G, "GetInventoryItemTexture", function(_: string, inv: number): number? return f.textures[inv] end)
+end
+
+@beforeEach
+local function setUp()
+    parent = newParent(300, 200)
+    fake = { enchants = {}, items = { [16] = 1001 }, classes = { [1001] = 2, [1002] = 2, [2001] = 4 },
+        links = { [16] = "|cffffffff|Hitem:1001::::::::1:::::::|h[Stone Hammer]|h|r" }, textures = { [16] = 135000 },
+        tips = {}, spells = { [8017] = "Rockbiter Weapon" } }
+    stand(fake)
+    reset()
+    heard = 0
+    events.on("SUUUI_WEAPON_ENCHANTS_CHANGED", function() heard += 1 end, listener)
+end
+
+@afterEach
+local function tearDown()
+    events.offAll(listener)
+    for _, k in ipairs({ "C_Item", "C_TooltipInfo", "C_Spell", "GetInventoryItemID", "GetInventoryItemLink", "GetInventoryItemTexture" }) do
+        rawset(G, k, nil)
+    end
+    reset()
+    parent:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Reading
+--------------------------------------------------------------------------------
+
+@test("read: the entry with time left; nothing readable is nothing")
+local function reading()
+    expect(read(0)).toBeNil()
+    fake.enchants[0] = { { hasEnchant = true, timeLeft = 0 }, enchant(60) }
+    expect(read(0).timeLeft).toBe(60000)
+    fake.enchants[0] = { mock.secret({}), { hasEnchant = mock.secret(true), timeLeft = 5 }, { hasEnchant = false, timeLeft = 9 }, 7 }
+    expect(read(0)).toBeNil()
+    fake.enchants[0] = mock.secret({ enchant(60) })
+    expect(read(0)).toBeNil()
+    fake.enchants[0] = "nope"
+    expect(read(0)).toBeNil()
+    rawset(G, "C_Item", { GetWeaponEnchantInfo = function(_: number): any error("refused") end })
+    expect(read(0)).toBeNil()
+    rawset(G, "C_Item", {})
+    expect(read(0)).toBeNil()
+end
+
+@test("tooltipName: the weapon tooltip's timed line, its rank and time cut off")
+local function tipNames()
+    expect(tooltipName(16)).toBeNil()
+    fake.tips[16] = { lines = { { leftText = "Stone Hammer" }, { leftText = mock.secret("x") }, { leftText = "Rockbiter 2 (60 min)" } } }
+    expect(tooltipName(16)).toBe("Rockbiter")
+    fake.tips[16] = { lines = { { leftText = "Instant Poison (30 min)" } } }
+    expect(tooltipName(16)).toBe("Instant Poison")
+    fake.tips[16] = { lines = { { leftText = "(5 sec)" } } }
+    expect(tooltipName(16)).toBeNil()
+    fake.tips[16] = { lines = "nope" }
+    expect(tooltipName(16)).toBeNil()
+    fake.tips[16] = mock.secret({})
+    expect(tooltipName(16)).toBeNil()
+    rawset(G, "C_TooltipInfo", {})
+    expect(tooltipName(16)).toBeNil()
+end
+
+@test("itemName: the name in the weapon's link")
+local function itemNames()
+    expect(itemName(16)).toBe("Stone Hammer")
+    expect(itemName(17)).toBeNil()
+end
+
+@test("digits and longTime: the buff format and the tooltip's")
+local function times()
+    expect(digits(41.2)).toBe("42")
+    expect(digits(90)).toBe("1:30")
+    expect(digits(599.5)).toBe("10:00")
+    expect(digits(1500)).toBe("25m")
+    expect(digits(7300)).toBe("2h")
+    expect(longTime(3900)).toBe("1 h 5 min")
+    expect(longTime(3120)).toBe("52 min")
+    expect(longTime(39.5)).toBe("40 sec")
+end
+
+@test("weaponEnchantable: a weapon in the slot, or an enchant on it")
+local function enchantable()
+    expect(we.weaponEnchantable("head")).toBe(false)
+    expect(we.weaponEnchantable("main")).toBe(true)
+    expect(we.weaponEnchantable("off")).toBe(false) -- empty
+    fake.items[17] = 2001 -- a shield
+    expect(we.weaponEnchantable("off")).toBe(false)
+    fake.items[17] = mock.secret(1002) :: any
+    expect(we.weaponEnchantable("off")).toBe(false)
+    fake.items[17] = nil :: any
+    fake.enchants[1] = { enchant(60) }
+    scan()
+    expect(we.weaponEnchantable("off")).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Scanning
+--------------------------------------------------------------------------------
+
+@test("scan: an enchant appears, is announced once, and a ticker looks each second")
+local function appears()
+    scan()
+    expect(we.weaponEnchant("main")).toBeNil()
+    expect(heard).toBe(1) -- the weapons themselves, first seen
+    fake.enchants[0] = { enchant(1800, { charges = 0 }) }
+    scan()
+    expect(heard).toBe(2)
+    local info = we.weaponEnchant("main") :: we.Info
+    expect(info.slot).toBe("main")
+    expect(info.enchantID).toBe(29)
+    expect(info.weaponID).toBe(1001)
+    expect(info.icon).toBe(136086)
+    expect(info.duration).toBe(1800)
+    expect(info.expires).toBeCloseTo(GetTime() + 1800)
+    expect(info.charges).toBe(0)
+    expect(info.name).toBeNil()
+    expect(info.weapon).toBe("Stone Hammer")
+    expect(info.spellID).toBeNil()
+    scan()
+    expect(heard).toBe(2) -- nothing changed
+    -- the ticker: its charges change a second later
+    fake.enchants[0] = { enchant(1799, { charges = 3 }) }
+    mock.advanceTime(1.05)
+    expect(heard).toBe(3)
+    expect((we.weaponEnchant("main") :: we.Info).charges).toBe(3)
+    expect((we.weaponEnchant("main") :: we.Info).duration).toBe(1800)
+    -- gone: announced, the ticker stops
+    fake.enchants[0] = nil
+    mock.advanceTime(1.05)
+    expect(heard).toBe(4)
+    expect(we.weaponEnchant("main")).toBeNil()
+    fake.enchants[0] = { enchant(60) }
+    mock.advanceTime(3)
+    expect(heard).toBe(4)
+end
+
+@test("scan: the tooltip's name, the weapon's art, a new enchant, put on again, another weapon")
+local function changes()
+    fake.tips[16] = { lines = { { leftText = "Rockbiter 2 (30 min)" } } }
+    fake.enchants[0] = { enchant(1000, { enchantIconID = 0, enchantID = mock.secret(5) }) }
+    scan()
+    local info = we.weaponEnchant("main") :: we.Info
+    expect(info.name).toBe("Rockbiter")
+    expect(info.icon).toBe(135000)
+    expect(info.enchantID).toBe(0)
+    local n = heard
+    -- the same enchant, more time than expected: put on again
+    fake.enchants[0] = { enchant(1500, { enchantIconID = 0, enchantID = mock.secret(5) }) }
+    scan()
+    expect(heard).toBe(n + 1)
+    expect((we.weaponEnchant("main") :: we.Info).duration).toBe(1500)
+    -- another enchant
+    fake.enchants[0] = { enchant(1400, { enchantID = 30 }) }
+    scan()
+    expect(heard).toBe(n + 2)
+    -- another weapon, the same enchant
+    fake.items[16] = 1002
+    scan()
+    expect(heard).toBe(n + 3)
+    expect((we.weaponEnchant("main") :: we.Info).weaponID).toBe(1002)
+    -- a secret weapon reads as none
+    fake.items[16] = mock.secret(1002) :: any
+    scan()
+    expect((we.weaponEnchant("main") :: we.Info).weaponID).toBeNil()
+end
+
+@test("the spell cast just before an enchant appeared names it")
+local function attributed()
+    mock.defineSpell(8017, { name = "Rockbiter Weapon" })
+    mock.player:castSpell(8017, { castTime = 0 })
+    mock.advanceTime(0.2)
+    fake.enchants[0] = { enchant(1800) }
+    mock.fireEvent("WEAPON_ENCHANT_CHANGED")
+    mock.advanceFrames(2) -- a look the next frame
+    expect(we.weaponEnchantSpell("main")).toBe(8017)
+    local info = we.weaponEnchant("main") :: we.Info
+    expect(info.name).toBe("Rockbiter Weapon")
+    expect(info.spellID).toBe(8017)
+    -- too long before: not this enchant's
+    mock.player:castSpell(133, { castTime = 0 })
+    mock.advanceTime(2)
+    fake.enchants[1] = { enchant(600) }
+    scan()
+    expect(we.weaponEnchantSpell("off")).toBeNil()
+end
+
+@test("equipment and inventory changes look again on the next frame")
+local function lookAgain()
+    fake.enchants[0] = { enchant(60) }
+    mock.fireUnitEvent("UNIT_INVENTORY_CHANGED", "player")
+    expect(we.weaponEnchant("main")).toBeNil()
+    mock.advanceFrames(2)
+    expect(we.weaponEnchant("main") ~= nil).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The icon
+--------------------------------------------------------------------------------
+
+local function icon(size: any?): any
+    local i = we.weaponEnchantIcon(parent, size)
+    i:SetPoint("CENTER")
+    return i
+end
+
+@test("the icon: its size, the tag per slot, no clicks")
+local function iconBuild()
+    local i = icon()
+    expect(i:GetWidth()).toBe(T.size["icon-lg"])
+    expect(i:IsMouseClickEnabled()).toBe(false)
+    i:SetSlot("off")
+    expect(i.tag.text:GetText()).toBe("OH")
+    i:SetSlot("nope")
+    expect(i.tag.text:GetText()).toBe("")
+    local small = icon("icon-md")
+    expect(small.drain:GetHeight()).toBe(2)
+end
+
+@test("Resize: the bar, the fade and the digits follow")
+local function resize()
+    local i = icon(24)
+    i:Resize(24) -- the same: nothing
+    i:Resize(40)
+    expect({ i:GetSize() }).toEqual({ 40, 40 })
+    expect(i.drain:GetHeight()).toBe(3)
+    expect(i.scrim:GetHeight()).toBe(24)
+    i:Resize(20)
+    expect(i.drain:GetHeight()).toBe(2)
+end
+
+@test("Refresh: the enchant's art, charges, digits and drain; ticking down")
+local function refreshShown()
+    fake.enchants[0] = { enchant(90, { charges = 4 }) }
+    scan()
+    local i = icon()
+    i:SetSlot("main")
+    expect(i:Refresh()).toBe(true)
+    expect(i.body:IsShown()).toBe(true)
+    expect(i.tag:IsShown()).toBe(true)
+    expect(i.stacks:GetText()).toBe("4")
+    expect(i.duration:GetText()).toBe("1:30")
+    expect(tokenOf(i.duration)).toBe("ink")
+    expect(i.drain:GetValue()).toBeCloseTo(1)
+    -- under a minute: amber and blinking
+    mock.advanceTime(40)
+    mock.advanceFrames(10)
+    expect(i.duration:GetText()).toBe("50")
+    expect(tokenOf(i.duration)).toBe("amber")
+    expect(i.blink:IsPlaying()).toBe(true)
+    -- put on again: back to ink
+    fake.enchants[0] = { enchant(1800) }
+    scan()
+    i:Refresh()
+    expect(tokenOf(i.duration)).toBe("ink")
+    expect(i.blink:IsPlaying()).toBe(false)
+    expect(i.stacks:GetText()).toBe("")
+end
+
+@test("Tick: an enchant that ran out looks again")
+local function ranOut()
+    fake.enchants[0] = { enchant(2) }
+    scan()
+    local i = icon()
+    i:SetSlot("main")
+    i:Refresh()
+    fake.enchants[0] = nil
+    mock.advanceTime(2.5)
+    i:Tick()
+    expect(i.info).toBeNil()
+    expect(we.weaponEnchant("main")).toBeNil()
+    i:Tick() -- nothing to tick
+end
+
+@test("missing: nothing, grey, or the pulsing ember edge")
+local function missing()
+    local i = icon()
+    i:SetSlot("main")
+    expect(i:Refresh()).toBe(false)
+    expect(i.body:IsShown()).toBe(false)
+    expect(i.tag:IsShown()).toBe(false)
+    i:SetMissing("grey")
+    i:Refresh()
+    expect(i.body:IsShown()).toBe(true)
+    expect(i.body:GetAlpha()).toBeCloseTo(T.opacity["opacity-oor"])
+    expect(i.art:IsDesaturated()).toBe(true)
+    expect(i.art:GetTexture()).toBe(135000) -- the weapon's
+    expect(i.warnEdge.parts[1]:IsShown()).toBe(false)
+    i:SetMissing("warn")
+    i:Refresh()
+    expect(i.body:GetAlpha()).toBeCloseTo(0.85)
+    expect(i.warnPulse:IsPlaying()).toBe(true)
+    i:SetMissing(nil)
+    i:Refresh()
+    expect(i.warnPulse:IsPlaying()).toBe(false)
+    -- the enchant it had this session, in grey
+    fake.enchants[0] = { enchant(60) }
+    scan()
+    fake.enchants[0] = nil
+    scan()
+    i:SetMissing("grey")
+    i:Refresh()
+    expect(i.art:GetTexture()).toBe(136086)
+    -- no slot at all: the question mark
+    local o = icon()
+    o:SetMissing("grey")
+    o:Refresh()
+    expect(o.art:GetTexture()).toBe(134400)
+end
+
+@test("SetTag: the corner tag only while the icon shows")
+local function tags()
+    local i = icon()
+    i:SetSlot("main")
+    i:SetTag(true)
+    expect(i.tag:IsShown()).toBe(true) -- the body shows until a refresh
+    i:Refresh()
+    i:SetTag(true)
+    expect(i.tag:IsShown()).toBe(false)
+    i:SetTag(false)
+    expect(i.showTag).toBe(false)
+end
+
+@test("SetPreview: a made-up enchant, 52m; nil goes back to the real one")
+local function previewIcon()
+    local i = icon()
+    i:SetSlot("main")
+    expect(i:SetPreview(136086)).toBe(true)
+    expect(i.duration:GetText()).toBe("52m")
+    expect(i.drain:GetValue()).toBeCloseTo(0.87)
+    expect(i:Refresh()).toBe(true) -- a preview stays
+    expect(i:SetPreview(nil)).toBe(false)
+    expect(i.body:IsShown()).toBe(false)
+end
+
+@test("the tooltip: time left and charges, or what puts it back")
+local function tips()
+    local shown = mock.stub(tooltip, "showTooltip")
+    local hidden = mock.stub(tooltip, "hideTooltip")
+    local i = icon()
+    i:SetSlot("main")
+    mock.hover(i)
+    local data: any = nil
+    shown = mock.stub(tooltip, "showTooltip", function(_: any, d: any) data = d end)
+    mock.hover(nil)
+    expect(hidden).toHaveBeenCalled()
+    mock.hover(i)
+    expect(data.title).toBe("Main hand enchant")
+    expect(data.subtitle).toBe("Main hand · Stone Hammer")
+    expect(data.lines).toEqual({ { "Not on the weapon" } })
+    expect(data.meta).toBeNil()
+    mock.hover(nil)
+    -- seen put on by a spell: what to cast
+    mock.defineSpell(8017, { name = "Rockbiter Weapon" })
+    mock.player:castSpell(8017, { castTime = 0 })
+    mock.advanceTime(0.1)
+    fake.enchants[0] = { enchant(3120, { charges = 2 }) }
+    scan()
+    i:Refresh()
+    mock.hover(i)
+    expect(data.title).toBe("Rockbiter Weapon")
+    expect(data.lines).toEqual({ { "Time left", "52 min" }, { "Charges", "2" } })
+    mock.hover(nil)
+    fake.enchants[0] = nil
+    scan()
+    mock.hover(i)
+    expect(data.title).toBe("Rockbiter Weapon")
+    expect(data.meta).toBe("Cast Rockbiter Weapon to put it back.")
+    mock.hover(nil)
+    -- an enchant without a name: the slot's; no weapon: the slot alone
+    fake.enchants[0] = { enchant(29.5) }
+    fake.links[16] = nil :: any
+    reset()
+    scan()
+    mock.hover(i)
+    expect(data.title).toBe("Main hand enchant")
+    expect(data.subtitle).toBe("Main hand")
+    expect(data.lines).toEqual({ { "Time left", "30 sec" } })
+    mock.hover(nil)
+    -- a preview, or no slot: none
+    mock.resetSpies()
+    i:SetPreview(136086)
+    mock.hover(i)
+    mock.hover(nil)
+    icon():Show()
+    expect(shown).never.toHaveBeenCalled()
+end

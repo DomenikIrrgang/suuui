@@ -1,0 +1,678 @@
+-- UI/ClassBars: the stance bar, the pet bar and the totem bar, driven
+-- through a stand-in for the game's form, pet, totem and spell functions
+-- (G: the level-1 warrior of the tests has no forms, pet or totems), with
+-- the secure parts (attributes, bindings, the state driver) left real.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as classBars from "/UI/ClassBars"
+import * as keybindMode from "/UI/KeybindMode"
+import * as events from "/Core/Events"
+import internal G, knows, elementSpells, slotAction, slotSpell, totemIsChosen from "/UI/ClassBars"
+import internal paints from "/UI/Draw"
+import expectNoErrors, newParent from "../../helpers"
+
+type Form = { icon: number?, active: any, castable: any, spellID: number }
+type PetAction = { name: string, texture: string, isToken: boolean, isActive: any, autoCastAllowed: any,
+    autoCastEnabled: any, spellID: number?, checksRange: any, inRange: any }
+
+-- What the stand-in answers.
+type Fake = {
+    forms: Form[],
+    pet: { [number]: PetAction },
+    petCooldown: { [number]: any[] },
+    petUsable: { [number]: any },
+    totemSpells: { [number]: number[] },
+    actions: { [number]: any },
+    totems: { [number]: any[] },
+    durations: { [number]: any },
+    known: { [number]: boolean },
+    names: { [number]: string },
+    usable: { [number]: any[] },
+    keys: { [string]: string },
+    cursor: string?,
+    locked: boolean,
+}
+
+local parent: Frame
+local fake: Fake
+local made: any[] = {}
+local GLOBALS: string[] = { "GetShapeshiftFormInfo", "GetNumShapeshiftForms", "GetPetActionInfo", "GetPetActionCooldown",
+    "GetPetActionSlotUsable", "GetMultiCastTotemSpells", "GetActionInfo", "GetTotemInfo", "GetTotemDuration", "C_SpellBook",
+    "IsPlayerSpell", "C_Spell", "GetBindingKey", "GetCursorInfo", "GetCVarBool" }
+
+local function tokenOf(region: any): string?
+    local p = paints[region]
+    return p and p.token
+end
+
+local function stand(f: Fake)
+    rawset(G, "GetNumShapeshiftForms", function(): number return #f.forms end)
+    rawset(G, "GetShapeshiftFormInfo", function(i: number): (number?, any, any, number?)
+        local x = f.forms[i]
+        if not x then return nil, false, false, nil end
+        return x.icon, x.active, x.castable, x.spellID
+    end)
+    rawset(G, "GetPetActionInfo", function(i: number): ...any
+        local a = f.pet[i]
+        if not a then return nil end
+        return a.name, a.texture, a.isToken, a.isActive, a.autoCastAllowed, a.autoCastEnabled, a.spellID, a.checksRange, a.inRange
+    end)
+    rawset(G, "GetPetActionCooldown", function(i: number): ...any return unpack(f.petCooldown[i] or { 0, 0 }) end)
+    rawset(G, "GetPetActionSlotUsable", function(i: number): any
+        local u = f.petUsable[i]
+        if u == nil then return true end
+        return u
+    end)
+    rawset(G, "GetMultiCastTotemSpells", function(slot: number): ...number return unpack(f.totemSpells[slot] or {}) end)
+    rawset(G, "GetActionInfo", function(action: number): ...any
+        local id = f.actions[action]
+        if id == nil then return nil end
+        return "spell", id
+    end)
+    rawset(G, "GetTotemInfo", function(slot: number): ...any return unpack(f.totems[slot] or { false }) end)
+    rawset(G, "GetTotemDuration", function(slot: number): any return f.durations[slot] end)
+    rawset(G, "C_SpellBook", { IsSpellInSpellBook = function(id: number, _: any, _: any): boolean return f.known[id] == true end })
+    rawset(G, "IsPlayerSpell", function(id: number): boolean return f.known[id] == true end)
+    rawset(G, "C_Spell", {
+        GetSpellName = function(id: number): string? return f.names[id] end,
+        GetSpellTexture = function(id: number): number return 130000 + id % 1000 end,
+        IsSpellUsable = function(id: number): (any, any) return unpack(f.usable[id] or { true, false }) end,
+    })
+    rawset(G, "GetBindingKey", function(cmd: string): string? return f.keys[cmd] end)
+    rawset(G, "GetCursorInfo", function(): string? return f.cursor end)
+    rawset(G, "GetCVarBool", function(_: string): boolean return f.locked end)
+end
+
+local function track(bar: any): any
+    made[#made + 1] = bar
+    bar.header:SetPoint("CENTER")
+    return bar
+end
+
+local function duration(seconds: number): any
+    local d = C_DurationUtil.CreateDuration()
+    d:SetTimeFromStart(GetTime(), seconds)
+    return d
+end
+
+@beforeEach
+local function setUp()
+    parent = newParent(500, 300)
+    fake = { forms = {}, pet = {}, petCooldown = {}, petUsable = {}, totemSpells = {}, actions = {}, totems = {}, durations = {},
+        known = {}, names = { [2457] = "Battle Stance", [71] = "Defensive Stance", [8075] = "Strength of Earth Totem",
+            [8071] = "Stoneskin Totem", [3599] = "Searing Totem", [66842] = "Call of the Elements", [66843] = "Call of the Ancestors" },
+        usable = {}, keys = {}, cursor = nil, locked = false }
+    stand(fake)
+end
+
+@afterEach
+local function tearDown()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, b in ipairs(made) do
+        events.offAll(b)
+        if b.ClosePicker then b:ClosePicker() end
+        if b.sets then b.sets:Hide() b.sets.catcher:Hide() end
+        UnregisterStateDriver(b.header, "visibility")
+        ClearOverrideBindings(b.header)
+        b.header:Hide()
+    end
+    made = {}
+    for _, k in ipairs(GLOBALS) do rawset(G, k, nil) end
+    parent:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Stance bar
+--------------------------------------------------------------------------------
+
+@test("the stance bar: as many buttons as you have forms, each casting its form")
+local function stances()
+    fake.forms = { { icon = 132349, active = true, castable = true, spellID = 2457 },
+                   { icon = 132341, active = false, castable = false, spellID = 71 } }
+    local laid = mock.spy()
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance", onLayout = function(b: any) laid(b) end }))
+    expect(bar.header:GetName()).toBe("SuuUITestStance")
+    expect(#bar.buttons).toBe(10)
+    expect(bar.header:IsShown()).toBe(true)
+    expect(bar.count).toBe(2)
+    expect(laid).toHaveBeenCalledWith(bar)
+    local b1, b2, b3 = bar.buttons[1], bar.buttons[2], bar.buttons[3]
+    expect(b1:GetAttribute("type")).toBe("spell")
+    expect(b1:GetAttribute("spell")).toBe("Battle Stance")
+    expect(b3:GetAttribute("type")).toBeNil()
+    expect({ b1:IsShown(), b2:IsShown(), b3:IsShown() }).toEqual({ true, true, false })
+    expect(b1.hasAction).toBe(true)
+    expect(b1.active).toBe(true)
+    expect(b2.unusable).toBe(true)
+    expect(b3.hasAction).toBe(false)
+    expect(b1.bindCommand).toBe("SHAPESHIFTBUTTON1")
+    expect(b1.bindLabel).toBe("SuuUITestStance button 1")
+    local px = b1:GetWidth()
+    expect(bar.header:GetWidth()).toBe(2 * px + 1 * 2) -- space-1 apart
+end
+
+@test("no forms: the bar hides; SetEnabled hides it too")
+local function noForms()
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance2", label = "Stances" }))
+    expect(bar.header:IsShown()).toBe(false)
+    expect(bar.buttons[1].bindLabel).toBe("Stances button 1")
+    expect(bar.header:GetWidth()).toBe(bar.buttons[1]:GetWidth()) -- one button's room at least
+    fake.forms = { { icon = 1, active = false, castable = true, spellID = 2457 } }
+    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+    expect(bar.header:IsShown()).toBe(true)
+    bar:SetEnabled(false)
+    expect(bar.header:IsShown()).toBe(false)
+    bar:SetEnabled(true)
+    expect(bar.header:IsShown()).toBe(true)
+end
+
+@test("the stance bar's events: forms, states, bindings")
+local function stanceEvents()
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance3" }))
+    local forms = mock.stub(bar, "UpdateForms")
+    local all = mock.stub(bar, "UpdateAll")
+    local binds = mock.stub(bar, "UpdateBindings")
+    mock.fireEvent("SPELLS_CHANGED")
+    expect(forms).toHaveBeenCalledTimes(1)
+    mock.fireEvent("UPDATE_SHAPESHIFT_FORM")
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    expect(all).toHaveBeenCalledTimes(2)
+    mock.fireEvent("UPDATE_BINDINGS")
+    expect(binds).toHaveBeenCalledTimes(1)
+end
+
+@test("hotkeys: the game's binding for each button, shown or not")
+local function hotkeys()
+    fake.forms = { { icon = 1, active = false, castable = true, spellID = 2457 } }
+    fake.keys = { SHAPESHIFTBUTTON1 = "SHIFT-1" }
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance4" }))
+    local b = bar.buttons[1]
+    expect(b.hotkeyText ~= "").toBe(true)
+    bar:SetHotkeysShown(false)
+    expect(b.hotkeyShown).toBe(false)
+    bar:SetHotkeysShown(1)
+    expect(b.hotkeyShown).toBe(true)
+    -- disabled: the keys are let go, the labels stay
+    bar.enabled = false
+    bar:UpdateBindings()
+    expect(b.hotkeyText ~= "").toBe(true)
+    expectNoErrors()
+end
+
+@test("SetShowEmpty, SetButtonSize")
+local function emptyAndSize()
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance5" }))
+    bar:SetShowEmpty(true)
+    expect(bar.buttons[1].showEmpty).toBe(true)
+    expect(bar.buttons[1].face:GetAlpha()).toBe(1)
+    bar:SetShowEmpty(nil)
+    expect(bar.buttons[1].face:GetAlpha()).toBe(0)
+    bar:SetButtonSize(24)
+    expect(bar.buttons[1]:GetWidth()).toBe(24)
+    expect(bar.header:GetHeight()).toBe(24)
+end
+
+@test("in combat the forms wait for its end")
+local function stanceCombat()
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance6" }))
+    mock.player:enterCombat()
+    fake.forms = { { icon = 1, active = false, castable = true, spellID = 2457 } }
+    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+    expect(bar.buttons[1]:GetAttribute("spell")).toBeFalsy()
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(bar.buttons[1]:GetAttribute("spell")).toBe("Battle Stance")
+end
+
+@test("a form's tooltip")
+local function stanceTip()
+    fake.forms = { { icon = 1, active = false, castable = true, spellID = 2457 } }
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance7" }))
+    local shapeshift = mock.stub(GameTooltip, "SetShapeshift")
+    bar.buttons[1]:ShowTooltip()
+    expect(shapeshift).toHaveBeenCalledWith(GameTooltip, 1)
+end
+
+--------------------------------------------------------------------------------
+-- Pet bar
+--------------------------------------------------------------------------------
+
+local function petAction(extra: { [string]: any }?): PetAction
+    local a: { [string]: any } = { name = "Bite", texture = "Interface\\Icons\\Ability_Racial_Cannibalize", isToken = false,
+        isActive = false, autoCastAllowed = false, autoCastEnabled = false, spellID = 17253, checksRange = false, inRange = true }
+    for k, v in pairs(extra or {}) do a[k] = v end
+    return a :: any
+end
+
+@test("the pet bar: ten pet actions, each drawn from the game's")
+local function pets()
+    fake.pet = {
+        [1] = petAction({ name = "PET_ACTION_ATTACK", texture = "PET_ATTACK_TEXTURE", isToken = true, spellID = false :: any, isActive = true }),
+        [2] = petAction({ autoCastAllowed = true, autoCastEnabled = true, checksRange = true, inRange = false }),
+        [3] = petAction({ spellID = false :: any }),
+        [4] = petAction({ spellID = false :: any }),
+    }
+    fake.petCooldown = { [3] = { GetTime(), 10 }, [4] = { mock.secret(GetTime()), 10 } }
+    fake.petUsable = { [2] = false }
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet" }))
+    local b = bar.buttons
+    expect(b[1]:GetAttribute("type")).toBe("pet")
+    expect(b[5]:GetAttribute("action")).toBe(5)
+    expect(b[1].hasAction).toBe(true)
+    expect(b[1].art:GetTexture()).toBe(_G.PET_ATTACK_TEXTURE)
+    expect(b[1].active).toBe(true)
+    expect(b[2].autocastOn).toBe(true)
+    expect(b[2].outOfRange).toBe(true)
+    expect(b[2].unusable).toBe(true)
+    expect(b[3].petDuration ~= nil).toBe(true)
+    expect(b[4].petDuration).toBeNil()
+    expect(b[5].hasAction).toBe(false)
+    expect(b[5].autocastOn).toBe(false)
+    -- right click toggles autocast where allowed
+    expect(b[2]:GetAttribute("type2")).toBe("macro")
+    expect(b[2]:GetAttribute("macrotext2")).toBe("/petautocasttoggle Bite")
+    expect(b[3]:GetAttribute("type2")).toBe("pet")
+    expect(b[5]:GetAttribute("macrotext2")).toBeNil()
+    expectNoErrors()
+end
+
+@test("a client without the usable check: every slot usable")
+local function noUsableCheck()
+    fake.pet = { [1] = petAction() }
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet2" }))
+    rawset(G, "GetPetActionSlotUsable", false)
+    bar:UpdateAll()
+    expect(bar.buttons[1].unusable).toBe(false)
+end
+
+@test("locked bars: dragging needs the pickup modifier; the CVar's changes follow")
+local function locked()
+    fake.locked = true
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet3" }))
+    expect(bar.buttons[1]:GetAttribute("suu-locked")).toBe(true)
+    fake.locked = false
+    mock.fireEvent("CVAR_UPDATE", "lockActionBars", "0")
+    expect(bar.buttons[1]:GetAttribute("suu-locked")).toBe(false)
+end
+
+@test("a pet ability on the cursor shows the empty slots")
+local function cursorGrid()
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet4" }))
+    fake.cursor = "petaction"
+    mock.fireEvent("CURSOR_CHANGED", false, 0, 0, 0)
+    expect(bar.buttons[1].grid).toBe(true)
+    fake.cursor = nil
+    mock.fireEvent("CURSOR_CHANGED", false, 0, 0, 0)
+    expect(bar.buttons[1].grid).toBe(false)
+end
+
+@test("shown by its state driver; keybind mode shows it; off hides it")
+local function petShown()
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet5" }))
+    expect(bar.header:IsShown()).toBe(false) -- no pet
+    mock.stub(keybindMode, "isActive", function(): boolean return true end)
+    events.emit("SUUUI_KEYBINDMODE_CHANGED")
+    expect(bar.header:IsShown()).toBe(true)
+    bar:SetEnabled(false)
+    expect(bar.header:IsShown()).toBe(false)
+end
+
+@test("the pet bar's events redraw it")
+local function petEvents()
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet6" }))
+    local all = mock.stub(bar, "UpdateAll")
+    local clicks = mock.stub(bar, "UpdateAutocastClicks")
+    local binds = mock.stub(bar, "UpdateBindings")
+    mock.fireEvent("PET_BAR_UPDATE")
+    expect(all).toHaveBeenCalledTimes(1)
+    expect(clicks).toHaveBeenCalledTimes(1)
+    mock.fireEvent("PET_BAR_UPDATE_COOLDOWN")
+    expect(all).toHaveBeenCalledTimes(2)
+    expect(clicks).toHaveBeenCalledTimes(1)
+    mock.fireUnitEvent("UNIT_PET", "player")
+    expect(all).toHaveBeenCalledTimes(3)
+    mock.fireEvent("UPDATE_BINDINGS")
+    expect(binds).toHaveBeenCalledTimes(1)
+end
+
+@test("a pet action's tooltip")
+local function petTip()
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet7" }))
+    local petTipSpy = mock.stub(GameTooltip, "SetPetAction")
+    bar.buttons[3]:ShowTooltip()
+    expect(petTipSpy).toHaveBeenCalledWith(GameTooltip, 3)
+end
+
+@test("a real hunter's pet: drawn without errors")
+local function realPet()
+    for _, k in ipairs(GLOBALS) do rawset(G, k, nil) end -- the game's own
+    local wolf = mock.spawnUnit({ name = "Wolf", level = 1, reaction = "friendly" })
+    local bar = track(classBars.petBar(parent, { name = "SuuUITestPet8" }))
+    mock.setPet(wolf, { hunter = true })
+    mock.advanceFrames(2)
+    mock.setPet(nil)
+    wolf:despawn()
+    expect(bar.header ~= nil).toBe(true)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Totem bar: helpers
+--------------------------------------------------------------------------------
+
+@test("slotAction and slotSpell: the game's totem actions per page")
+local function slots()
+    expect(slotAction(2)).toBe(134)
+    expect(slotAction(2, 3)).toBe(142)
+    fake.actions = { [134] = 8075, [133] = mock.secret(3599) }
+    expect(slotSpell(2)).toBe(8075)
+    expect(slotSpell(1)).toBeNil()
+    expect(slotSpell(3)).toBeNil()
+end
+
+@test("knows and elementSpells")
+local function knowing()
+    fake.known = { [66842] = true }
+    expect(knows(66842)).toBe(true)
+    expect(knows(66843)).toBe(false)
+    expect(knows(nil)).toBe(false)
+    rawset(G, "C_SpellBook", { IsSpellInSpellBook = function(): boolean error("refused") end })
+    expect(knows(66842)).toBe(true) -- IsPlayerSpell's answer
+    rawset(G, "C_SpellBook", false)
+    expect(knows(66843)).toBe(false)
+    rawset(G, "IsPlayerSpell", false)
+    expect(knows(66842)).toBe(false)
+    fake.totemSpells = { [2] = { 8075, 8071 } }
+    expect(elementSpells(2)).toEqual({ 8075, 8071 })
+    rawset(G, "GetMultiCastTotemSpells", function() error("none") end)
+    expect(elementSpells(2)).toEqual({})
+end
+
+@test("totemIsChosen: the totem down is the button's, by ID or name; in combat the kept answer")
+local function chosen()
+    local b: any = { element = { slot = 2 }, bar = { page = 1 } }
+    fake.actions = { [134] = 8075 }
+    expect(totemIsChosen(b)).toBe(true) -- nothing down
+    expect(b.chosen).toBeNil()
+    fake.totems[2] = { true, "Strength of Earth Totem", 0, 120, 1, 1, 8075 }
+    expect(totemIsChosen(b)).toBe(true)
+    fake.totems[2] = { true, "Stoneskin Totem", 0, 120, 1, 1, 8071 }
+    expect(totemIsChosen(b)).toBe(false)
+    -- another rank of the same totem
+    fake.names[99999] = "Strength of Earth Totem"
+    fake.totems[2] = { true, "x", 0, 120, 1, 1, 99999 }
+    expect(totemIsChosen(b)).toBe(true)
+    -- secret: what was known; a totem just after a click is the chosen one
+    fake.totems[2] = { mock.secret(true), "x", 0, 120, 1, 1, 8071 }
+    b.chosen = false
+    expect(totemIsChosen(b)).toBe(false)
+    b.castAt = GetTime()
+    expect(totemIsChosen(b)).toBe(true)
+    rawset(G, "GetTotemInfo", function() error("refused") end)
+    b.chosen = nil
+    b.castAt = nil
+    expect(totemIsChosen(b)).toBe(true)
+    -- no spell in the slot: any totem is fine
+    rawset(G, "GetTotemInfo", function(_: number): ...any return true, "x", 0, 1, 1, 1, 8071 end)
+    fake.actions = {}
+    expect(totemIsChosen(b)).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Totem bar
+--------------------------------------------------------------------------------
+
+local function shaman()
+    fake.totemSpells = { [1] = { 3599 }, [2] = { 8075, 8071 }, [3] = {}, [4] = {} }
+    fake.actions = { [133] = 3599, [134] = 8075, [137] = 3599 }
+    fake.known = { [66842] = true, [66843] = true, [36936] = true }
+end
+
+local function totems(opts: { [string]: any }?): any
+    local o: { [string]: any } = { name = "SuuUITestTotems" .. (#made + 1) }
+    for k, v in pairs(opts or {}) do o[k] = v end
+    return track(classBars.totemBar(parent, o))
+end
+
+@test("the totem bar: hidden until a totem is known")
+local function noTotems()
+    local bar = totems()
+    expect(bar.header:IsShown()).toBe(false)
+    expect(bar.anyKnown).toBe(false)
+    expect(#bar.buttons).toBe(4)
+    expect(bar.call:IsShown()).toBe(false)
+    expect(bar.rule:IsShown()).toBe(false)
+end
+
+@test("the totem bar: four elements casting the game's slot actions, Call and Recall after a hairline")
+local function totemBar()
+    shaman()
+    local laid = mock.spy()
+    local bar = totems({ onLayout = function(b: any) laid(b) end })
+    expect(bar.header:IsShown()).toBe(true)
+    local earth = bar.buttons[1] -- earth first
+    expect(earth.element.word).toBe("Earth")
+    expect(earth:GetAttribute("type1")).toBe("action")
+    expect(earth:GetAttribute("action")).toBe(134)
+    expect(earth:GetAttribute("type2")).toBe("destroytotem")
+    expect(earth:GetAttribute("totem-slot")).toBe(2)
+    expect(earth.hasAction).toBe(true)
+    expect(earth.spellID).toBe(8075)
+    expect(earth.empty:GetAlpha()).toBe(0)
+    local water = bar.buttons[3]
+    expect(water.hasAction).toBe(false)
+    expect(water.empty:GetAlpha()).toBe(1)
+    expect(bar.hasCall).toBe(true)
+    expect(bar.knownSets).toBe(2)
+    expect(bar.call:GetAttribute("spell")).toBe(66842)
+    expect(bar.call:IsShown()).toBe(true)
+    expect(bar.recall:IsShown()).toBe(true)
+    expect(bar.recall:GetAttribute("spell")).toBe(36936)
+    expect(bar.rule:IsShown()).toBe(true)
+    expect(laid).toHaveBeenCalled()
+    expect(earth.segment:GetWidth()).toBe(18)
+    -- unusable (no mana): dimmed
+    fake.usable[8075] = { false, true }
+    bar:UpdateAll()
+    expect(earth.unusable).toBe(true)
+    bar:SetButtonSize(24)
+    expect(earth:GetWidth()).toBe(24)
+    bar:SetEnabled(false)
+    expect(bar.header:IsShown()).toBe(false)
+end
+
+@test("pages: the chosen set while you know its Call, else the first")
+local function pages()
+    shaman()
+    local chosen = mock.spy()
+    local bar = totems({ page = 2, onPage = function(p: number) chosen(p) end })
+    expect(bar.page).toBe(2)
+    expect(bar.buttons[2]:GetAttribute("action")).toBe(137) -- fire on page 2
+    expect(bar.call:GetAttribute("spell")).toBe(66843)
+    bar:SetPage(3) -- unknown: back to the first
+    expect(chosen).toHaveBeenCalledWith(3)
+    expect(bar.page).toBe(1)
+    mock.player:enterCombat()
+    bar:SetPage(2)
+    expect(bar.page).toBe(1)
+end
+
+@test("timers: each element's drain and time while its own totem is down; Recall faint without one")
+local function timers()
+    shaman()
+    local bar = totems()
+    expect(bar.recall.unusable).toBe(true)
+    fake.durations[2] = duration(120)
+    fake.totems[2] = { true, "Strength of Earth Totem", GetTime(), 120, 1, 1, 8075 }
+    fake.durations[1] = duration(60)
+    fake.totems[1] = { true, "Flametongue Totem", GetTime(), 60, 1, 1, 8227 }
+    mock.fireEvent("PLAYER_TOTEM_UPDATE", 2)
+    local earth, fire = bar.buttons[1].segment, bar.buttons[2].segment
+    expect(earth.drain:IsShown()).toBe(true)
+    expect(earth.text:IsShown()).toBe(true)
+    expect(fire.drain:IsShown()).toBe(false) -- another totem than the button's
+    expect(bar.recall.unusable).toBe(false)
+    fake.durations = {}
+    mock.fireEvent("PLAYER_REGEN_ENABLED")
+    expect(earth.drain:IsShown()).toBe(false)
+    expect(bar.recall.unusable).toBe(true)
+end
+
+@test("the picker: an element's totems over its slot, the chosen one ticked")
+local function picker()
+    shaman()
+    local bar = totems()
+    local earth = bar.buttons[1]
+    bar:OpenPicker(earth)
+    local p = bar.picker
+    expect(p:IsShown()).toBe(true)
+    expect(p.title:GetText()).toBe("EARTH TOTEMS")
+    expect(#p.rows).toBe(2)
+    expect(p.rows[1]:GetAttribute("type")).toBe("multispell")
+    expect(p.rows[1]:GetAttribute("action")).toBe(134)
+    expect(p.rows[2]:GetAttribute("spell")).toBe(8071)
+    expect(p.rows[1].check:IsShown()).toBe(true)
+    expect(p.rows[2].check:IsShown()).toBe(false)
+    expect(earth.active).toBe(true) -- the slot being chosen for
+    mock.hover(p.rows[1])
+    expect(p.rows[1].hover:IsShown()).toBe(true)
+    mock.hover(nil)
+    expect(p.rows[1].hover:IsShown()).toBe(false)
+    -- a smaller list reuses the rows
+    bar:OpenPicker(bar.buttons[2])
+    expect(p.rows[2]:IsShown()).toBe(false)
+    -- a click elsewhere closes it
+    mock.click(p.catcher)
+    expect(p:IsShown()).toBe(false)
+    expect(earth.picking).toBe(false)
+    -- a choice closes it the next frame
+    bar:OpenPicker(earth)
+    mock.script(p.rows[2], "PostClick", "LeftButton", false)
+    mock.advanceFrames(2)
+    expect(p:IsShown()).toBe(false)
+    -- a fight closes it; in one it won't open
+    bar:OpenPicker(earth)
+    mock.player:enterCombat()
+    expect(p:IsShown()).toBe(false)
+    bar:OpenPicker(earth)
+    expect(p:IsShown()).toBe(false)
+    bar:ClosePicker()
+end
+
+@test("the sets: each Call you know with its four totems; choosing one switches the page")
+local function sets()
+    shaman()
+    local bar = totems()
+    bar:OpenSets()
+    local p = bar.sets
+    expect(p:IsShown()).toBe(true)
+    expect(#p.rows).toBe(2)
+    expect(p.rows[1].label:GetText()).toBe("Call of the Elements")
+    expect(p.rows[1].check:IsShown()).toBe(true)
+    expect(p.rows[2].check:IsShown()).toBe(false)
+    expect(p.rows[1].totems[1]:IsShown()).toBe(true) -- earth's
+    expect(p.rows[1].totems[3]:IsShown()).toBe(false) -- no water totem
+    mock.hover(p.rows[2])
+    expect(p.rows[2].hover:IsShown()).toBe(true)
+    mock.hover(nil)
+    mock.click(p.rows[2])
+    expect(p:IsShown()).toBe(false)
+    expect(bar.page).toBe(2)
+    -- again: rows reused; fewer known, the rest hidden
+    fake.known[66843] = nil
+    bar:OpenSets()
+    expect(p.rows[2]:IsShown()).toBe(false)
+    mock.click(p.catcher)
+    expect(p:IsShown()).toBe(false)
+    -- a fight closes it; in one it won't open
+    bar:OpenSets()
+    mock.player:enterCombat()
+    expect(p:IsShown()).toBe(false)
+    bar:OpenSets()
+    expect(p:IsShown()).toBe(false)
+end
+
+@test("the arrows: under a hovered slot with a choice, gone a moment after the mouse leaves")
+local function arrows()
+    shaman()
+    local bar = totems()
+    local earth, fire = bar.buttons[1], bar.buttons[2]
+    mock.hover(fire) -- one totem: no choice
+    expect(fire.arrow:IsShown()).toBe(false)
+    mock.hover(earth)
+    expect(earth.arrow:IsShown()).toBe(true)
+    mock.hover(earth.arrow)
+    mock.advanceTime(0.4)
+    expect(earth.arrow:IsShown()).toBe(true) -- on the arrow
+    mock.click(earth.arrow)
+    expect(bar.picker:IsShown()).toBe(true)
+    bar:ClosePicker()
+    mock.hover(nil)
+    mock.advanceTime(0.4)
+    expect(earth.arrow:IsShown()).toBe(false)
+    -- the Call button's: with more than one set
+    mock.hover(bar.call)
+    expect(bar.call.arrow:IsShown()).toBe(true)
+    mock.click(bar.call.arrow)
+    expect(bar.sets:IsShown()).toBe(true)
+    mock.hover(nil)
+    mock.advanceTime(0.4)
+    expect(bar.call.arrow:IsShown()).toBe(false)
+    -- in a fight: none
+    mock.player:enterCombat()
+    mock.hover(earth)
+    expect(earth.arrow:IsShown()).toBe(false)
+    mock.hover(nil)
+end
+
+@test("clicks mark when a totem was cast: the button's, or every one for Call")
+local function castMarks()
+    shaman()
+    local bar = totems()
+    local earth = bar.buttons[1]
+    mock.script(earth, "OnClick", "RightButton", false)
+    expect(earth.castAt).toBeNil()
+    mock.script(earth, "OnClick", "LeftButton", false)
+    expect(earth.castAt).toBe(GetTime())
+    earth.castAt = nil
+    mock.script(bar.call, "OnClick", "LeftButton", false)
+    expect(bar.buttons[4].castAt).toBe(GetTime())
+end
+
+@test("the totem bar's tooltips")
+local function totemTips()
+    shaman()
+    local bar = totems()
+    local byId = mock.stub(GameTooltip, "SetSpellByID")
+    local line = mock.stub(GameTooltip, "AddLine")
+    bar.buttons[1]:ShowTooltip()
+    expect(byId).toHaveBeenCalledWith(GameTooltip, 8075)
+    expect(line).toHaveBeenCalledTimes(1)
+    bar.buttons[3]:ShowTooltip() -- water: nothing known, nothing in it
+    expect(byId).toHaveBeenCalledTimes(1)
+    bar.call:ShowTooltip()
+    expect(byId).toHaveBeenCalledWith(GameTooltip, 66842)
+    expect(line).toHaveBeenCalledTimes(2)
+    bar.recall:ShowTooltip()
+    expect(byId).toHaveBeenCalledWith(GameTooltip, 36936)
+    bar.call.Update()
+    bar.recall.Update()
+    -- no Call known, one set at most: no lines
+    fake.known = {}
+    bar:Refresh()
+    bar.call:ShowTooltip()
+    expect(line).toHaveBeenCalledTimes(2)
+end
+
+@test("the totem bar's events")
+local function totemEvents()
+    shaman()
+    local bar = totems()
+    local refresh = mock.stub(bar, "Refresh")
+    local all = mock.stub(bar, "UpdateAll")
+    mock.fireEvent("SPELLS_CHANGED")
+    expect(refresh).toHaveBeenCalledTimes(1)
+    mock.fireEvent("ACTIONBAR_SLOT_CHANGED", 134)
+    expect(all).toHaveBeenCalledTimes(1)
+end

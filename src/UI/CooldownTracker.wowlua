@@ -130,7 +130,7 @@ import * as extend from "/Core/Extend"
 import * as roles from "/Core/Roles"
 import * as draw from "/UI/Draw"
 import flag from "/UI/Text"
-import icon from "/UI/Icon"
+import icon, Icon from "/UI/Icon"
 import auraContainer from "/UI/Auras"
 import weaponEnchantIcon, weaponEnchantable from "/UI/WeaponEnchants"
 
@@ -156,7 +156,95 @@ local REACTIVE: { [string]: boolean } = {
     ["Victory Rush"] = true,
 }
 
-local TR = {}
+-- A cooldown cell (TR:Cell fills it).
+export interface TrackerCell extends Frame
+    icon: Icon
+    cooldown: Cooldown
+    ring: draw.Border
+    flash: Texture
+    pulse: AnimationGroup
+    entry: any          -- the list entry (user data)
+    spellID: number
+    reactive: boolean
+    container?: any     -- the effect's aura container (UI/Auras)
+    onCooldown?: boolean
+    dirty?: boolean
+    wantShown?: boolean
+    whens?: any[]
+    condOK?: boolean
+    function Update(opts: any)
+end
+
+-- A side of the timers row's collection hairlines.
+export interface TrackerSeparators extends Frame
+    lines: Texture[]
+    used: number
+    withTarget?: boolean
+end
+
+-- What a build made, by row (cells; fixed slots, weapon enchants and
+-- reminders: frames of several kinds).
+export type TrackerBuilt = { essential: TrackerCell[], utility: TrackerCell[], buffs: any[], debuffs: any[],
+                             remindBuffs: any[], remindDebuffs: any[] }
+
+-- An engine group a live condition sets the max of.
+export type LiveGroup = { ac: any, key: string, max: number, applied: number, whens: any[] }
+
+-- The tracker cooldownTracker makes.
+export interface CooldownTracker extends Frame
+    divider: Texture
+    auraDivider: Texture
+    sepLeft: TrackerSeparators
+    sepRight: TrackerSeparators
+    driver: Frame
+    spare: { [string]: any[] }
+    taken: { key: string, thing: any }[]
+    built: TrackerBuilt
+    cells: TrackerCell[]
+    liveFrames: any[]
+    liveGroups: LiveGroup[]
+    leftFlow?: any
+    rightFlow?: any
+    lists?: any
+    opts?: any
+    footer?: Frame
+    rowH?: number
+    hasLeft?: boolean
+    hasRight?: boolean
+    rebuild?: boolean
+    dirty?: boolean
+    running?: boolean
+    everBuilt?: boolean
+    inFight?: boolean
+    knownSig?: string
+    condSig?: string
+    condPending?: boolean
+    function Take(key: string, make: () -> any): (any, boolean?)
+    function Aura(unit: string, opts: { [string]: any }): any
+    function Watch(thing: any, whens: any[]?)
+    function WatchGroups(ac: any, groups: any[])
+    function Cell(entry: any, spellID: number, size: number): TrackerCell
+    function Slot(entry: any, unit: string, parts: any[], size: number, base: { [string]: any }?): any
+    function Reminder(entry: any, unit: string, parts: any[], size: number): any
+    function Enchant(entry: any, size: number): any
+    function Clear()
+    function Build()
+    function Layout()
+    function UpdateMissing()
+    function UpdateReminders(noLayout: boolean?)
+    function UpdateEnchants(noLayout: boolean?)
+    function UpdateCooldowns(noLayout: boolean?): boolean
+    function UpdateLive(noLayout: boolean?)
+    function KnownSignature(): string
+    function ConditionSignature(): string
+    function SetLists(lists: any)
+    function SetFooter(frame: any)
+    function SetOptions(opts: any)
+    function Start()
+    function Stop()
+end
+
+local TR: CooldownTracker = {} :: any
 mixins.CooldownTracker = TR
 
 --------------------------------------------------------------------------------
@@ -231,7 +319,7 @@ events.on("SUUUI_THEME_CHANGED", function()
     for _, d in pairs(digitFonts) do setDigitFont(d) end
 end, "CooldownTracker")
 
-local Cell = {}
+local Cell: TrackerCell = {} :: any
 
 -- Per-entry looks (the Behaviour panel): edge colours and sounds.
 local EDGE: { [string]: string } = { ink = "ink", gilt = "gilt", muted = "ink-muted" }
@@ -370,8 +458,8 @@ function Cell:Update(opts: any)
 end
 
 -- A cell of one size, not yet holding a spell (TR:Cell fills it).
-local function newCell(parent: Frame, size: number): any
-    local f = CreateFrame("Frame", nil, parent)
+local function newCell(parent: Frame, size: number): TrackerCell
+    local f: TrackerCell = CreateFrame("Frame", nil, parent) :: any
     Mixin(f, Cell)
     f:SetSize(size, size)
     f.icon = icon(f, size)
@@ -1049,8 +1137,9 @@ function TR:Clear()
             -- a slot's own container goes with it
             if t.key:find("^slot|") and thing.container then thing.container:Release() end
         end
-        self.spare[t.key] = self.spare[t.key] or {}
-        table.insert(self.spare[t.key], thing)
+        local spares = self.spare[t.key] or {}
+        self.spare[t.key] = spares
+        table.insert(spares, thing)
     end
     self.taken = {}
     self.built = { essential = {}, utility = {}, buffs = {}, debuffs = {}, remindBuffs = {}, remindDebuffs = {} }
@@ -1212,10 +1301,11 @@ function TR:Build()
         self:WatchGroups(self.rightFlow, groups)
     end
     -- the timers row is as tall as its largest icon
-    self.rowH = aura
+    local rowH = aura
     for _, key in ipairs({ "buffs", "debuffs", "procs" }) do
-        for _, entry in ipairs(lists[key] or {}) do self.rowH = math.max(self.rowH, auraSize(entry)) end
+        for _, entry in ipairs(lists[key] or {}) do rowH = math.max(rowH, auraSize(entry)) end
     end
+    self.rowH = rowH
     self.hasLeft = #(lists.buffs or {}) + #(lists.procs or {}) > 0
     self.hasRight = #(lists.debuffs or {}) > 0
 
@@ -1675,7 +1765,7 @@ function TR:Stop()
 end
 
 export function cooldownTracker(parent: Frame, opts: { [string]: any }?): any
-    local t = CreateFrame("Frame", opts and opts.name, parent)
+    local t: CooldownTracker = CreateFrame("Frame", opts and opts.name, parent) :: any
     Mixin(t, TR)
     t:SetSize(1, 1)
     t.divider = draw.fill(t, "gilt-line", "ARTWORK")

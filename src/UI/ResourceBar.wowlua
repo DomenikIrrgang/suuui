@@ -11,6 +11,8 @@
 --   r:Start(), r:Stop()       -- events on and off; a new bar starts stopped
 --   r.onResize = fn(r)        -- its height changed (points or mana line came
 --                             -- or went, or the options)
+--   opts.api                  -- a stand-in for the game's Unit* functions
+--                             -- (tests); the game's by default
 --
 -- The game hides your power from addons (probed: UnitPower and
 -- UnitPowerPercent are secret in and out of combat, UnitPowerMax isn't):
@@ -78,12 +80,12 @@ local function inside(b: Region, f: Region)
 end
 
 -- Rogues always; druids while energy is their power (cat form).
-local function usesPoints(): boolean
-    local _, playerClass = UnitClass("player")
+local function usesPoints(A: any): boolean
+    local _, playerClass = A.UnitClass("player")
     local class = secret.known(playerClass, "")
     if class == "ROGUE" then return true end
     if class == "DRUID" then
-        local _, token = UnitPowerType("player")
+        local _, token = A.UnitPowerType("player")
         return token == "ENERGY"
     end
     return false
@@ -98,12 +100,13 @@ end
 
 -- What shows and how tall it is; tells onResize when the height changes.
 function RB:Refresh()
+    local A = self.api
     local o = self.opts
-    local _, playerClass = UnitClass("player")
+    local _, playerClass = A.UnitClass("player")
     local class = secret.known(playerClass, "")
-    local _, token = UnitPowerType("player")
+    local _, token = A.UnitPowerType("player")
     self.token = token
-    self.hasPoints = o.show == "both" and usesPoints()
+    self.hasPoints = o.show == "both" and usesPoints(A)
     self.hasMana = o.druidMana and class == "DRUID" and token ~= "MANA"
     local w, h = o.width or 340, o.height or 14
     local gap = S["space-1"]
@@ -148,9 +151,10 @@ function RB:Refresh()
 end
 
 function RB:UpdatePower()
-    local pType = UnitPowerType("player")
-    local max = amount(UnitPowerMax("player", pType))
-    local cur = amount(UnitPower("player", pType))
+    local A = self.api
+    local pType = A.UnitPowerType("player")
+    local max = amount(A.UnitPowerMax("player", pType))
+    local cur = amount(A.UnitPower("player", pType))
     self.fill:SetMinMaxValues(0, max)
     self.fill:SetValue(cur)
     -- amber under 25%: mana and energy only (rage starts every fight empty)
@@ -159,12 +163,12 @@ function RB:UpdatePower()
     if low then
         self.low:SetMinMaxValues(0, max)
         self.low:SetValue(cur)
-        self.low:SetAlpha(amount(UnitPowerPercent("player", pType, true, low)))
+        self.low:SetAlpha(amount(A.UnitPowerPercent("player", pType, true, low)))
     end
     -- the engine formats the hidden amount; SuuUI never reads it
     local mode = self.opts.number
     if mode == "pct" and CurveConstants then
-        self.text:SetFormattedText("%d%%", UnitPowerPercent("player", pType, true, CurveConstants.ScaleTo100))
+        self.text:SetFormattedText("%d%%", A.UnitPowerPercent("player", pType, true, CurveConstants.ScaleTo100))
         self.text.value = nil
     elseif mode == "value" then
         self.text:SetFormattedText("%d", cur)
@@ -173,21 +177,23 @@ function RB:UpdatePower()
 end
 
 function RB:UpdateMana()
+    local A = self.api
     if not self.hasMana then return end
     local mana = Enum.PowerType and Enum.PowerType.Mana or 0
-    self.manaFill:SetMinMaxValues(0, amount(UnitPowerMax("player", mana)))
-    self.manaFill:SetValue(amount(UnitPower("player", mana)))
+    self.manaFill:SetMinMaxValues(0, amount(A.UnitPowerMax("player", mana)))
+    self.manaFill:SetValue(amount(A.UnitPower("player", mana)))
 end
 
 -- The target's points; the row hides (keeping its place) without a hostile
 -- target.
 function RB:UpdatePoints()
+    local A = self.api
     if not self.hasPoints then return end
-    local target = UnitExists("target") and uiText.flag(UnitCanAttack("player", "target"))
+    local target = A.UnitExists("target") and uiText.flag(A.UnitCanAttack("player", "target"))
     self.points:SetAlpha(target and 1 or 0)
     if not target then return end
-    local n = GetComboPoints and GetComboPoints("player", "target")
-    if type(n) == "nil" then n = UnitPower("player", Enum.PowerType.ComboPoints) end
+    local n = A.GetComboPoints and A.GetComboPoints("player", "target")
+    if type(n) == "nil" then n = A.UnitPower("player", Enum.PowerType.ComboPoints) end
     local hidden = isSecret(n)
     local count = secret.known(n, 0)
     local full = not hidden and count >= POINTS
@@ -204,8 +210,9 @@ end
 -- Out of combat: as it is, at opacity-ooc, or invisible in its place. Edit
 -- mode always shows it.
 function RB:UpdateFade()
+    local A = self.api
     local ooc = self.opts.ooc
-    local fighting = self.inFight or uiText.flag(UnitAffectingCombat("player"))
+    local fighting = self.inFight or uiText.flag(A.UnitAffectingCombat("player"))
     local alpha = 1
     if not fighting and not editMode.isActive() then
         if ooc == "fade" then alpha = T.opacity["opacity-ooc"]
@@ -249,6 +256,7 @@ export function resourceBar(parent: Frame, opts: { [string]: any }?): any
     opts = opts or {}
     local r = CreateFrame("Frame", opts.name, parent)
     Mixin(r, RB)
+    r.api = opts.api or _G
     r.opts = { show = "both", number = "value", low = true, druidMana = true, ooc = "fade", points = "over",
                width = opts.width or 340, height = opts.height or 14 }
 

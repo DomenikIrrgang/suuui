@@ -353,3 +353,32 @@ local function events()
     expect(t.shooting).toBe(false)
     expectNoErrors()
 end
+
+@test("the remaining cases: off hand while shooting, Auto Shot without shooting, the queue")
+local function remaining()
+    local t = timer()
+    dualWield()
+    t:Swing(2, SWING.Ranged) -- not shooting: counts down like a swing
+    expect(t.offHand).never.toBeShown()
+    t:Tick()
+    expect(t.ranged.digits).toHaveText("2.0")
+    -- a secret or missing class: nothing queues
+    mock.fake("UnitClass", function(_: string): (any, any) return "x", mock.secret("WARRIOR") end)
+    t:Activate()
+    expect(t.nextSwing).toBeNil()
+    t:Deactivate()
+    mock.fake("UnitClass", function(_: string): (any, any) return "Warrior", "WARRIOR" end)
+    t:Activate()
+    -- shown already: no second pop
+    mock.fake("C_Spell.IsCurrentSpell", function(id: number): any return id == 78 end)
+    t:UpdateQueued()
+    t:UpdateQueued()
+    expect(t.queued).toBeShown()
+    -- a client without IsCurrentSpell
+    local api = C_Spell :: any -- remove a function the declarations type as present
+    local was = api.IsCurrentSpell
+    api.IsCurrentSpell = nil
+    t:UpdateQueued()
+    api.IsCurrentSpell = was
+    expect(t.queued).never.toBeShown()
+end

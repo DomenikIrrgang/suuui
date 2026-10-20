@@ -1,0 +1,307 @@
+-- UI/ResourceBar: your power bar, combo points and a druid's mana line,
+-- driven through a stand-in for the game's functions (opts.api: your power
+-- is secret on this client even out of combat), and the real player for
+-- the events and the secret paths.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as rb from "/UI/ResourceBar"
+import * as editMode from "/EditMode/EditMode"
+import * as events from "/Core/Events"
+import tokens as T from "/Core/Tokens"
+import internal paints from "/UI/Draw"
+import internal usesPoints from "/UI/ResourceBar"
+import errorsSoFar, newParent from "../../helpers"
+
+const S = T.space
+
+-- What the stand-in answers.
+type World = {
+    class: string, token: string, pType: number, power: any, max: any, pct: number,
+    target: boolean, hostile: any, combo: any, comboAPI: boolean, fighting: boolean,
+}
+
+local parent: Frame
+local made: any[] = {}
+
+local function tokenOf(region: any): string?
+    local p = paints[region]
+    return p and p.token
+end
+
+local function world(w: { [string]: any }?): World
+    local d: World = { class = "WARRIOR", token = "RAGE", pType = 1, power = 30, max = 100, pct = 30,
+        target = false, hostile = true, combo = 0, comboAPI = true, fighting = false }
+    for k, v in pairs(w or {}) do (d :: any)[k] = v end
+    return d
+end
+
+local function api(d: World): { [string]: any }
+    local a: { [string]: any } = {
+        UnitClass = function(_: string): (string, string) return d.class, d.class end,
+        UnitPowerType = function(_: string): (number, string) return d.pType, d.token end,
+        UnitPowerMax = function(_: string, _: number?): any return d.max end,
+        UnitPower = function(_: string, p: number?): any
+            if p == Enum.PowerType.ComboPoints then return d.combo end
+            return d.power
+        end,
+        UnitPowerPercent = function(_: string, _: number, _: boolean, curve: any): number
+            if curve == CurveConstants.ScaleTo100 then return d.pct end
+            return d.pct < 25 and 1 or 0
+        end,
+        UnitExists = function(_: string): boolean return d.target end,
+        UnitCanAttack = function(_: string, _: string): any return d.hostile end,
+        UnitAffectingCombat = function(_: string): boolean return d.fighting end,
+    }
+    if d.comboAPI then a.GetComboPoints = function(_: string, _: string): any return d.combo end end
+    return a
+end
+
+local function resource(d: World, opts: { [string]: any }?): any
+    local o: { [string]: any } = opts or {}
+    o.api = api(d)
+    local r = rb.resourceBar(parent, o)
+    r:SetPoint("CENTER")
+    made[#made + 1] = r
+    return r
+end
+
+@beforeEach
+local function setUp()
+    parent = newParent(500, 200)
+end
+
+@afterEach
+local function tearDown()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, r in ipairs(made) do r:Stop() r:Hide() end
+    made = {}
+    parent:Hide()
+end
+
+@test("a warrior: the rage bar alone, in rage's colour, faded out of combat")
+local function warrior()
+    local r = resource(world(), { width = 300, height = 12 })
+    expect(r:IsShown()).toBe(true)
+    expect({ r:GetSize() }).toEqual({ 300, 12 })
+    expect(r.points:IsShown()).toBe(false)
+    expect(r.mana:IsShown()).toBe(false)
+    expect(tokenOf(r.fill)).toBe("rage")
+    expect(r.fill:GetValue()).toBe(30)
+    expect(r.low:IsShown()).toBe(false) -- rage starts every fight empty
+    expect(r.text:GetText()).toBe("30")
+    expect(r:GetAlpha()).toBeCloseTo(T.opacity["opacity-ooc"])
+end
+
+@test("usesPoints: rogues, and druids in cat form")
+local function points()
+    expect(usesPoints(api(world({ class = "ROGUE" })))).toBe(true)
+    expect(usesPoints(api(world({ class = "DRUID", token = "ENERGY" })))).toBe(true)
+    expect(usesPoints(api(world({ class = "DRUID", token = "MANA" })))).toBe(false)
+    expect(usesPoints(api(world()))).toBe(false)
+end
+
+@test("a rogue: five segments over the bar, or under it")
+local function rogue()
+    local r = resource(world({ class = "ROGUE", token = "ENERGY", pType = 3 }), { width = 104 })
+    expect(r.points:IsShown()).toBe(true)
+    expect(r:GetHeight()).toBe(14 + S["space-1"] + 6)
+    local _, _, _, _, barY = r.bar:GetPoint(1)
+    local _, _, _, _, pointsY = r.points:GetPoint(1)
+    expect({ barY, pointsY }).toEqual({ 0, 14 + S["space-1"] })
+    local pw = (104 - 4 * S["space-1"]) / 5
+    expect(r.pips[1]:GetWidth()).toBeCloseTo(pw)
+    local _, _, _, x5 = r.pips[5]:GetPoint(1)
+    expect(x5).toBeCloseTo(4 * (pw + S["space-1"]))
+    r:SetOptions({ points = "under" })
+    local _, _, _, _, barY2 = r.bar:GetPoint(1)
+    local _, _, _, _, pointsY2 = r.points:GetPoint(1)
+    expect({ barY2, pointsY2 }).toEqual({ 6 + S["space-1"], 0 })
+    -- "power": the bar alone
+    r:SetOptions({ show = "power" })
+    expect(r.points:IsShown()).toBe(false)
+    expect(r:GetHeight()).toBe(14)
+end
+
+@test("a druid: the mana line under rage or energy, never in caster form")
+local function druid()
+    local d = world({ class = "DRUID", token = "ENERGY", pType = 3 })
+    local r = resource(d)
+    expect(r.mana:IsShown()).toBe(true)
+    expect(r.points:IsShown()).toBe(true)
+    expect(r:GetHeight()).toBe(4 + S["space-1"] + 14 + S["space-1"] + 6)
+    expect(r.manaFill:GetValue()).toBe(30)
+    r:SetOptions({ druidMana = false })
+    expect(r.mana:IsShown()).toBe(false)
+    d.token, d.pType = "MANA", 0
+    r:SetOptions({ druidMana = true })
+    expect(r.mana:IsShown()).toBe(false)
+    expect(r.points:IsShown()).toBe(false)
+    -- UpdateMana without the line: nothing
+    r:UpdateMana()
+end
+
+@test("show = off hides it; onResize only when the size changes")
+local function resize()
+    local r = resource(world())
+    local resized = mock.spy()
+    r.onResize = function(self: any) resized(self) end
+    r:SetOptions({ number = "value" })
+    expect(resized).never.toHaveBeenCalled()
+    r:SetOptions({ show = "off" })
+    expect(r:IsShown()).toBe(false)
+    expect(resized).toHaveBeenCalledTimes(1)
+    r:SetOptions({ show = "both", width = 200 })
+    expect(resized).toHaveBeenCalledTimes(2)
+    r:SetOptions({ height = 20 })
+    expect(resized).toHaveBeenCalledTimes(3)
+end
+
+@test("the number: the value, a percent, or none")
+local function numbers()
+    local d = world({ class = "MAGE", token = "MANA", pType = 0, power = 412, pct = 41 })
+    local r = resource(d)
+    expect(r.text:GetText()).toBe("412")
+    r:SetOptions({ number = "pct" })
+    expect(r.text:GetText()).toBe("41%")
+    expect(r.text.value).toBeNil()
+    r:SetOptions({ number = "none" })
+    expect(r.text:IsShown()).toBe(false)
+end
+
+@test("low: amber below 25% for mana and energy, off with low = false")
+local function low()
+    local d = world({ class = "MAGE", token = "MANA", pType = 0, power = 10, pct = 10 })
+    local r = resource(d)
+    expect(r.low:IsShown()).toBe(true)
+    expect(r.low:GetAlpha()).toBe(1)
+    expect(r.low:GetValue()).toBe(10)
+    d.pct = 60
+    r:UpdatePower()
+    expect(r.low:GetAlpha()).toBe(0)
+    r:SetOptions({ low = false })
+    expect(r.low:IsShown()).toBe(false)
+    local e = resource(world({ class = "ROGUE", token = "ENERGY", pType = 3, pct = 5 }))
+    expect(e.low:IsShown()).toBe(true)
+end
+
+@test("combo points: hidden without a hostile target, lit up to the count, arcane when full")
+local function combo()
+    local d = world({ class = "ROGUE", token = "ENERGY", pType = 3 })
+    local r = resource(d)
+    expect(r.points:GetAlpha()).toBe(0)
+    d.target, d.hostile = true, false
+    r:UpdatePoints()
+    expect(r.points:GetAlpha()).toBe(0)
+    d.hostile, d.combo = true, 3
+    r:UpdatePoints()
+    expect(r.points:GetAlpha()).toBe(1)
+    expect(r.pips[1].fill:GetValue()).toBe(1) -- each segment from i-1 to i
+    expect(r.pips[3].fill:GetValue()).toBe(3)
+    expect(tokenOf(r.pips[3].border.parts[1])).toBe("gilt-line")
+    expect(tokenOf(r.pips[4].border.parts[1])).toBe("gilt-hairline")
+    expect(tokenOf(r.pips[1].fill)).toBe("ink")
+    d.combo = 5
+    r:UpdatePoints()
+    expect(tokenOf(r.pips[1].fill)).toBe("arcane")
+    expect(tokenOf(r.pips[5].border.parts[1])).toBe("arcane")
+    expect(r.pips[1].glow ~= nil).toBe(true)
+    d.combo = 2
+    r:UpdatePoints()
+    expect(tokenOf(r.pips[1].fill)).toBe("ink")
+    -- no GetComboPoints: the power's count; a secret count lights itself
+    d.comboAPI, d.combo = false, mock.secret(4)
+    r.api = api(d)
+    r:UpdatePoints()
+    expect(tokenOf(r.pips[5].border.parts[1])).toBe("gilt-line")
+    -- a secret "can attack" reads as no
+    d.hostile = mock.secret(true)
+    r:UpdatePoints()
+    expect(r.points:GetAlpha()).toBe(0)
+end
+
+@test("the fade: in a fight, faded, hidden in place, or shown; edit mode always shows it")
+local function fade()
+    local d = world()
+    local r = resource(d)
+    expect(r:GetAlpha()).toBeCloseTo(T.opacity["opacity-ooc"])
+    r:SetOptions({ ooc = "hide" })
+    expect(r:GetAlpha()).toBe(0)
+    r:SetOptions({ ooc = "show" })
+    expect(r:GetAlpha()).toBe(1)
+    r:SetOptions({ ooc = "hide" })
+    d.fighting = true
+    r:UpdateFade()
+    expect(r:GetAlpha()).toBe(1)
+    d.fighting = false
+    r.inFight = true
+    r:UpdateFade()
+    expect(r:GetAlpha()).toBe(1)
+    r.inFight = false
+    mock.stub(editMode, "isActive", function(): boolean return true end)
+    r:UpdateFade()
+    expect(r:GetAlpha()).toBe(1)
+end
+
+@test("Start: power events by token, form changes, target, fights, edit mode; Stop")
+local function startStop()
+    local r = resource(world({ class = "DRUID", token = "ENERGY", pType = 3 }))
+    r:Start()
+    r:Start() -- once
+    local power = mock.stub(r, "UpdatePower")
+    local mana = mock.stub(r, "UpdateMana")
+    local pts = mock.stub(r, "UpdatePoints")
+    local refresh = mock.stub(r, "Refresh")
+    local fadeSpy = mock.stub(r, "UpdateFade")
+    mock.fireUnitEvent("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")
+    expect(pts).toHaveBeenCalledTimes(1)
+    mock.fireUnitEvent("UNIT_POWER_FREQUENT", "player", "MANA")
+    expect(mana).toHaveBeenCalledTimes(1)
+    mock.fireUnitEvent("UNIT_POWER_UPDATE", "player", "ENERGY")
+    expect(power).toHaveBeenCalledTimes(1)
+    mock.fireUnitEvent("UNIT_MAXPOWER", "player", "ENERGY")
+    expect(power).toHaveBeenCalledTimes(2)
+    expect(mana).toHaveBeenCalledTimes(2)
+    mock.fireUnitEvent("UNIT_DISPLAYPOWER", "player")
+    expect(refresh).toHaveBeenCalledTimes(1)
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    expect(pts).toHaveBeenCalledTimes(2)
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    mock.player:enterCombat()
+    expect(r.inFight).toBe(true)
+    mock.player:leaveCombat()
+    expect(r.inFight).toBe(false)
+    expect(fadeSpy).toHaveBeenCalledTimes(2)
+    events.emit("SUUUI_EDITMODE_CHANGED")
+    expect(fadeSpy).toHaveBeenCalledTimes(3)
+    r:Stop()
+    r:Stop() -- once
+    mock.resetSpies()
+    mock.fireUnitEvent("UNIT_POWER_UPDATE", "player", "ENERGY")
+    expect(power).never.toHaveBeenCalled()
+end
+
+@test("a mana user's MANA token updates the bar, not a mana line")
+local function manaToken()
+    local r = resource(world({ class = "MAGE", token = "MANA", pType = 0 }))
+    r:Start()
+    local power = mock.stub(r, "UpdatePower")
+    mock.fireUnitEvent("UNIT_POWER_UPDATE", "player", "MANA")
+    expect(power).toHaveBeenCalledTimes(1)
+end
+
+@test("the real player: secret power drawn without errors, in combat too")
+local function realPlayer()
+    local before = #errorsSoFar()
+    local r = rb.resourceBar(parent)
+    made[#made + 1] = r
+    r:SetOptions({ number = "pct" })
+    r:Start()
+    mock.player:setPower(40)
+    mock.player:enterCombat()
+    mock.player:setPower(20, { frequent = true })
+    r:SetOptions({ number = "value" })
+    mock.player:leaveCombat()
+    expect(#errorsSoFar()).toBe(before)
+end

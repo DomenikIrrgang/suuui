@@ -1,0 +1,168 @@
+-- UI/RestedSign: the "z Z Z" over a unit frame's corner, each look, still
+-- and drifting, the full moon, and fading in and out.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as rested from "/UI/RestedSign"
+import * as motion from "/Core/Motion"
+import tokens as T from "/Core/Tokens"
+import newParent from "../../helpers"
+
+local parent: Frame
+local host: Frame
+
+local function sign(): any
+    return rested.restedSign(host)
+end
+
+local function letterAlphas(s: any): number[]
+    local out: number[] = {}
+    for i, l in ipairs(s.letters) do out[i] = l:GetAlpha() end
+    return out
+end
+
+local function playing(s: any): boolean[]
+    local out: boolean[] = {}
+    for i, l in ipairs(s.letters) do out[i] = l.loop:IsPlaying() end
+    return out
+end
+
+@beforeEach
+local function setUp()
+    parent = newParent(400, 300)
+    host = CreateFrame("Frame", nil, parent)
+    host:SetSize(200, 40)
+    host:SetPoint("CENTER")
+end
+
+@afterEach
+local function tearDown()
+    parent:Hide()
+end
+
+@test("built hidden over the frame's corner, on its marker layer when it has one")
+local function build()
+    local s = sign()
+    expect(s:IsShown()).toBe(false)
+    expect(s:GetParent()).toBe(host)
+    expect(s:IsMouseEnabled()).toBe(false)
+    expect(#s.letters).toBe(3)
+    expect(s.letters[1].glyph:GetText()).toBe("z")
+    expect(s.letters[3].glyph:GetText()).toBe("Z")
+    expect(s.letters[1].moon:IsShown()).toBe(false)
+    local layered: any = CreateFrame("Frame", nil, parent)
+    layered.markerLayer = CreateFrame("Frame", nil, layered)
+    expect(rested.restedSign(layered):GetParent()).toBe(layered.markerLayer)
+end
+
+@test("earn: drifting, the three loops running")
+local function earn()
+    local s = sign()
+    s:SetLook("earn")
+    expect(s:IsShown()).toBe(true)
+    expect(s.animating).toBe(true)
+    expect(playing(s)).toEqual({ true, true, true })
+    expect(s.body:GetAlpha()).toBe(1)
+    -- the same look again: the loops go on
+    s:SetLook("earn")
+    expect(playing(s)).toEqual({ true, true, true })
+end
+
+@test("rest: still, at the letters' own alphas")
+local function rest()
+    local s = sign()
+    s:SetLook("earn")
+    s:SetLook("rest")
+    expect(s.animating).toBe(false)
+    expect(playing(s)).toEqual({ false, false, false })
+    local a = letterAlphas(s)
+    expect(a[1]).toBeCloseTo(0.55)
+    expect(a[2]).toBeCloseTo(0.8)
+    expect(a[3]).toBe(1)
+end
+
+@test("full: still, the first letter a full moon")
+local function full()
+    local s = sign()
+    s:SetLook("full")
+    expect(s.letters[1].moon:IsShown()).toBe(true)
+    expect(s.letters[1].shade:IsShown()).toBe(true)
+    expect(s.letters[1].glyph:IsShown()).toBe(false)
+    s:SetLook("rest")
+    expect(s.letters[1].moon:IsShown()).toBe(false)
+    expect(s.letters[1].glyph:IsShown()).toBe(true)
+end
+
+@test("carry: still at opacity-ooc")
+local function carry()
+    local s = sign()
+    s:SetLook("carry")
+    expect(s.body:GetAlpha()).toBeCloseTo(T.opacity["opacity-ooc"])
+    expect(s.animating).toBe(false)
+end
+
+@test("still, or reduced motion: earning stands still")
+local function stillEarn()
+    local s = sign()
+    s:SetLook("earn", { still = true })
+    expect(s.animating).toBe(false)
+    local r = sign()
+    mock.stub(motion, "reduced", function(): boolean return true end)
+    r:SetLook("earn")
+    expect(r.animating).toBe(false)
+end
+
+@test("fading in: over the given time, else at once")
+local function fadeIn()
+    local fadeSpy = mock.stub(motion, "fadeIn")
+    local stopSpy = mock.stub(motion, "stop")
+    local s = sign()
+    s:SetLook("earn", { fade = 0.5 })
+    expect(fadeSpy).toHaveBeenCalledWith(s, 0.5)
+    local t = sign()
+    t:SetLook("rest", { fade = 0 })
+    expect(stopSpy).toHaveBeenCalledWith(t)
+    -- a look change while shown doesn't fade again
+    mock.resetSpies()
+    s:SetLook("rest", { fade = 0.5 })
+    expect(fadeSpy).never.toHaveBeenCalled()
+end
+
+@test("going: faded out, then hidden and reset; at once without a fade")
+local function going()
+    local s = sign()
+    s:SetLook(nil) -- nothing shown: nothing
+    expect(s:IsShown()).toBe(false)
+    s:SetLook("earn")
+    s:SetLook(nil, { fade = 0.3 })
+    expect(s.look).toBeNil()
+    expect(s:IsShown()).toBe(true)
+    expect(s.out:IsPlaying()).toBe(true)
+    mock.advanceTime(0.5)
+    mock.advanceFrames(40)
+    expect(s:IsShown()).toBe(false)
+    expect(s:GetAlpha()).toBe(1)
+    expect(s.animating).toBe(false)
+    s:SetLook("rest")
+    s:SetLook(nil)
+    expect(s:IsShown()).toBe(false)
+    -- reduced motion: at once
+    s:SetLook("rest")
+    mock.stub(motion, "reduced", function(): boolean return true end)
+    s:SetLook(nil, { fade = 0.3 })
+    expect(s:IsShown()).toBe(false)
+end
+
+@test("shown again while drifting: the three start together")
+local function reshown()
+    local s = sign()
+    s:SetLook("earn")
+    local restart = mock.stub(s, "Restart")
+    host:Hide()
+    host:Show()
+    expect(restart).toHaveBeenCalledTimes(1)
+    s:SetLook("rest")
+    s:Hide()
+    s:Show()
+    expect(restart).toHaveBeenCalledTimes(1)
+end

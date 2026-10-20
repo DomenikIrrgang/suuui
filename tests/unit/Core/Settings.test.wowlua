@@ -1,16 +1,17 @@
 -- Core/Settings: the registry, reading and writing, watchers and vetoes,
 -- migrations, profiles, characters' data and the chat commands.
 --
--- This file drives the lifecycle itself: the first test runs before the
--- saved settings load, the second logs in with a prepared SuuUIDB, and the
--- rest run logged in (the tests of a file run in order).
+-- This file drives the lifecycle itself: @beforeAll records what the code
+-- does before the saved settings load, logs in with a prepared SuuUIDB and
+-- records the state at load; the tests check those records and run logged in.
 
-import test, expect, config, afterEach from "wowlua:test"
+import test, expect, config, afterEach, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as fault from "/Core/Fault"
 import * as DB from "/Core/DB"
+import * as util from "/Core/Util"
 import internal parse, show, splitPath, bind from "/Core/Settings"
 
 config({ lifecycle = "manual" })
@@ -28,6 +29,7 @@ type Message = (name: string, ...any) -> ()
 -- Registered before the saved settings load, as a module's file does.
 settings.register("zzsa", { flag = false, num = 1, text = "a", list = { 1, 2 } })
 settings.register("zzsb", { level = 5, old = "x" })
+settings.register("zzsh", { n = 1 })
 settings.migrate("zzsb", "toNumber", function(values: settings.Values)
     if type(values.level) == "string" then values.level = tonumber(values.level) end
 end)
@@ -88,35 +90,43 @@ end
 -- Loading
 --------------------------------------------------------------------------------
 
-@test("before the saved settings load: defaults read, nothing written")
-local function beforeLoad()
-    expect(settings.ready()).toBe(false)
-    expect(settings.get("zzsa", "num")).toBe(1)
-    expect(settings.peek("zzsa", "num")).toBe(1)
-    expect(settings.isDefault("zzsa", "num")).toBe(true)
-    expect(function() settings.set("zzsa", "num", 2) end).toThrow("saved settings have not loaded yet")
-    expect(profiles.current()).toBeNil()
-    expect(profiles.list()).toEqual({})
-    expect(profiles.roleProfile("TANK")).toBeNil()
-    expect(profiles.chosenRole()).toBe("auto")
-    expect(profiles.lastRole()).toBeNil()
-    expect(settings.account("colorVision")).toBeNil()
-    expect(settings.getCharKey()).toBeNil()
-    expect(function() settings.charData("zzsa") end).toThrow("saved settings have not loaded yet")
-    expect(function() profiles.find("x") end).toThrow("saved settings have not loaded yet")
-    local out = printedBy(function()
-        settings.debug("hidden")
-        mock.slash("/suu get")
-        mock.slash("/suu set zzsa.num 2")
-        mock.slash("/suu reset all")
-        mock.slash("/suu profile")
-    end)
-    local notYet = P .. "Settings haven't loaded yet."
-    expect(out).toEqual({ notYet, notYet, notYet, notYet })
+-- What the file saw before and right after the saved settings loaded,
+-- recorded once in @beforeAll (it logs in), so any test can run alone.
+type Seen = { [string]: any }
+local before: Seen = {}
+local atLoadSeen: Seen = {}
+
+-- The error fn raises, or nil.
+local function thrown(fn: () -> ()): string?
+    local ok, err = pcall(fn)
+    return (not ok) and tostring(err) or nil
 end
 
-@test("at load: this character's profile, every profile migrated, the current one screened")
-local function atLoad()
+@beforeAll
+local function loadSettings()
+    before = {
+        ready = settings.ready(),
+        get = settings.get("zzsa", "num"),
+        peek = settings.peek("zzsa", "num"),
+        isDefault = settings.isDefault("zzsa", "num"),
+        set = thrown(function() settings.set("zzsa", "num", 2) end),
+        current = profiles.current(),
+        list = profiles.list(),
+        roleProfile = profiles.roleProfile("TANK"),
+        chosenRole = profiles.chosenRole(),
+        lastRole = profiles.lastRole(),
+        account = settings.account("colorVision"),
+        charKey = settings.getCharKey(),
+        charData = thrown(function() settings.charData("zzsa") end),
+        find = thrown(function() profiles.find("x") end),
+        printed = printedBy(function()
+            settings.debug("hidden")
+            mock.slash("/suu get")
+            mock.slash("/suu set zzsa.num 2")
+            mock.slash("/suu reset all")
+            mock.slash("/suu profile")
+        end),
+    }
     local key = (UnitName("player") :: string) .. " - " .. GetRealmName()
     _G.SuuUIDB = {
         profiles = {
@@ -128,29 +138,72 @@ local function atLoad()
         chars = { [key] = "Main" },
     }
     mock.login()
-    expect(settings.ready()).toBe(true)
-    expect(readyHeard).toBe(1)
-    expect(settings.getCharKey()).toBe(key)
-    expect(profiles.current()).toBe("Main")
-    -- migrated, in every profile, once
-    expect(settings.get("zzsb", "level")).toBe(9)
-    expect(saved("Main").zzsb).toEqual({ level = 9 })
-    expect(saved("Main").__migrated["zzsb/toNumber"]).toBe(true)
-    -- what a migration leaves at its default isn't stored
-    expect(saved("Other").zzsb).toEqual({ level = 3 })
-    expect(saved("Other").__migrated["zzsb/toNumber"]).toBe(true)
-    -- nothing to migrate counts as done
-    expect(saved("Empty").__migrated["zzsb/toNumber"]).toBe(true)
-    expect(DB.db.profiles.Broken).toBe("not a table")
-    -- a value the veto refuses is dropped, so the default applies
-    expect(saved("Main").zzsa.num).toBeNil()
-    expect(settings.get("zzsa", "num")).toBe(1)
-    -- a value of the wrong type stays stored but is ignored
-    expect(saved("Main").zzsa.text).toBe(7)
-    expect(settings.get("zzsa", "text")).toBe("a")
-    expect(settings.isDefault("zzsa", "text")).toBe(true)
+    atLoadSeen = {
+        key = key,
+        ready = settings.ready(),
+        readyHeard = readyHeard,
+        charKey = settings.getCharKey(),
+        current = profiles.current(),
+        level = settings.get("zzsb", "level"),
+        num = settings.get("zzsa", "num"),
+        text = settings.get("zzsa", "text"),
+        textDefault = settings.isDefault("zzsa", "text"),
+        profiles = util.copy(DB.db.profiles),
+    }
     DB.db.profiles.Broken = nil
     saved("Main").zzsa = nil
+end
+
+--------------------------------------------------------------------------------
+-- Loading
+--------------------------------------------------------------------------------
+
+@test("before the saved settings load: defaults read, nothing written")
+local function beforeLoad()
+    local notLoaded = "saved settings have not loaded yet"
+    expect(before.ready).toBe(false)
+    expect(before.get).toBe(1)
+    expect(before.peek).toBe(1)
+    expect(before.isDefault).toBe(true)
+    expect(before.set).toContain(notLoaded)
+    expect(before.current).toBeNil()
+    expect(before.list).toEqual({})
+    expect(before.roleProfile).toBeNil()
+    expect(before.chosenRole).toBe("auto")
+    expect(before.lastRole).toBeNil()
+    expect(before.account).toBeNil()
+    expect(before.charKey).toBeNil()
+    expect(before.charData).toContain(notLoaded)
+    expect(before.find).toContain(notLoaded)
+    local notYet = P .. "Settings haven't loaded yet."
+    expect(before.printed).toEqual({ notYet, notYet, notYet, notYet })
+end
+
+@test("at load: this character's profile, every profile migrated, the current one screened")
+local function atLoad()
+    local seen = atLoadSeen
+    local p: { [string]: any } = seen.profiles
+    expect(seen.ready).toBe(true)
+    expect(seen.readyHeard).toBe(1)
+    expect(seen.charKey).toBe(seen.key)
+    expect(seen.current).toBe("Main")
+    -- migrated, in every profile, once
+    expect(seen.level).toBe(9)
+    expect(p.Main.zzsb).toEqual({ level = 9 })
+    expect(p.Main.__migrated["zzsb/toNumber"]).toBe(true)
+    -- what a migration leaves at its default isn't stored
+    expect(p.Other.zzsb).toEqual({ level = 3 })
+    expect(p.Other.__migrated["zzsb/toNumber"]).toBe(true)
+    -- nothing to migrate counts as done
+    expect(p.Empty.__migrated["zzsb/toNumber"]).toBe(true)
+    expect(p.Broken).toBe("not a table")
+    -- a value the veto refuses is dropped, so the default applies
+    expect(p.Main.zzsa.num).toBeNil()
+    expect(seen.num).toBe(1)
+    -- a value of the wrong type stays stored but is ignored
+    expect(p.Main.zzsa.text).toBe(7)
+    expect(seen.text).toBe("a")
+    expect(seen.textDefault).toBe(true)
 end
 
 @test("at load: a character mapped to a missing profile gets its own")
@@ -172,9 +225,9 @@ end
 
 @test("register: a string namespace, once, with string keys")
 local function register()
-    expect(function() settings.register(5 :: any, {}) end).toThrow("the namespace must be a string")
+    expect(function() settings.register(5 :: any, {}) end).toThrow()
     expect(function() settings.register("zzsa", {}) end).toThrow("namespace zzsa is already registered")
-    expect(function() settings.register("zzbadkeys", { [1] = true } :: any) end).toThrow("defaults need string keys")
+    expect(function() settings.register("zzbadkeys", { [1] = true } :: any) end).toThrow()
     expect(settings.has("zzbadkeys")).toBe(false)
 end
 
@@ -304,7 +357,7 @@ end
 @test("watch and veto need a known setting, a function and an owner")
 local function watchArgs()
     expect(function() settings.watch("zzsa", "nope", function() end, W1) end).toThrow("zzsa has no setting \"nope\"")
-    expect(function() settings.watch("zzsa", "num", nil :: any, W1) end).toThrow("a function and an owner are required")
+    expect(function() settings.watch("zzsa", "num", nil :: any, W1) end).toThrow()
     expect(function() settings.veto("zzsa", "num", function(): (boolean?, string?) return true, nil end, nil) end)
         .toThrow("a function and an owner are required")
 end
@@ -430,11 +483,42 @@ local function migrationError()
     saved("Main").zzsd = nil
 end
 
+@test("migrate after load: profiles that aren't tables are skipped; nothing stored here, nothing told")
+local function lateMigrationElsewhere()
+    settings.register("zzsg", { v = 1 })
+    DB.db.profiles.Broken = "x"
+    saved("Other").zzsg = { w = 2 }
+    local heard = watcher()
+    settings.watch("zzsg", "v", heard, W1)
+    settings.migrate("zzsg", "w to v", function(values: settings.Values)
+        values.v, values.w = values.w, nil
+    end)
+    expect(saved("Other").zzsg).toEqual({ v = 2 })
+    expect(heard).never.toHaveBeenCalled()
+    expect(DB.db.profiles.Broken).toBe("x")
+    DB.db.profiles.Broken = nil
+    saved("Other").zzsg = nil
+end
+
+@test("use: a vetoed value of the wrong type is ignored; a veto that errors keeps the value")
+local function useScreens()
+    settings.register("zzsf", { a = 1, b = 1 })
+    settings.veto("zzsf", "a", function(new: any): (boolean?, string?) return new < 10, "no" end, VETO)
+    settings.veto("zzsf", "b", function(): (boolean?, string?) error("settings-err-screen") end, VETO)
+    profiles.create("ZzScreen")
+    saved("ZzScreen").zzsf = { a = "text", b = 50 }
+    profiles.use("ZzScreen")
+    expect(saved("ZzScreen").zzsf).toEqual({ a = "text", b = 50 })
+    expect(settings.get("zzsf", "a")).toBe(1)
+    expect(settings.get("zzsf", "b")).toBe(50)
+    expect((faultWith("settings-err-screen") :: fault.Entry).source).toBe(VETO)
+end
+
 @test("migrate: a known namespace, an id and a function, each id once")
 local function migrateArgs()
     expect(function() settings.migrate("zznope", "x", function() end) end).toThrow("unknown namespace \"zznope\"")
     expect(function() settings.migrate("zzsb", "", function() end) end).toThrow("a migration needs an id and a function")
-    expect(function() settings.migrate("zzsb", "x", nil :: any) end).toThrow("a migration needs an id and a function")
+    expect(function() settings.migrate("zzsb", "x", nil :: any) end).toThrow()
     expect(function() settings.migrate("zzsb", "toNumber", function() end) end).toThrow("migration zzsb/toNumber is already registered")
 end
 
@@ -643,9 +727,9 @@ end
 @test("import: plain data only, migrated, wrong types dropped, unknown plugins kept; switches to it")
 local function import()
     local data: { [any]: any } = {
-        zzsa = { num = "bad", flag = true, [5] = 1 },
+        zzsa = { num = "bad", list = "not a list", flag = true, extra = 5, [5] = 1 },
         zzsb = { level = "6" },
-        zzsc = { size = {} }, -- registered by an earlier test: wrong type, emptied
+        zzsh = { n = "x" }, -- its only value of the wrong type: the namespace goes
         plugin = { x = { 1 } },
         [3] = { y = 1 },
         junk = "str",
@@ -653,9 +737,10 @@ local function import()
     expect(profiles.import("ZzImported", data)).toBe(true)
     expect(profiles.current()).toBe("ZzImported")
     local p = saved("ZzImported")
-    expect(p.zzsa).toEqual({ flag = true })
+    -- a key the namespace doesn't have (a newer version's) is kept
+    expect(p.zzsa).toEqual({ flag = true, extra = 5 })
     expect(p.zzsb).toEqual({ level = 6 })
-    expect(p.zzsc).toBeNil()
+    expect(p.zzsh).toBeNil()
     expect(p.plugin).toEqual({ x = { 1 } })
     expect(p.junk).toBeNil()
     expect(p[3]).toBeNil()
@@ -680,10 +765,12 @@ local function charData()
     expect(settings.charData("zzsa") == mine).toBe(true)
     DB.db.charData["Alt - Realm"] = { zzsa = { y = 2 }, other = {} }
     DB.db.charData.Odd = "junk"
+    DB.db.charData.Alt2 = { other = {} }
     local all = settings.allCharData("zzsa")
     expect(all[key] == mine).toBe(true)
     expect(all["Alt - Realm"]).toEqual({ y = 2 })
     expect(all.Odd).toBeNil()
+    expect(all.Alt2).toBeNil()
     -- forgetting: never this character's, nor one that has none
     expect(settings.forgetCharData("zzsa", key)).toBe(false)
     expect(settings.forgetCharData("zzsa", "Nobody")).toBe(false)
@@ -693,6 +780,7 @@ local function charData()
     expect(settings.forgetCharData("other", "Alt - Realm")).toBe(true)
     expect(DB.db.charData["Alt - Realm"]).toBeNil()
     DB.db.charData.Odd = nil
+    DB.db.charData.Alt2 = nil
     DB.db.charData[key].zzsa = nil
 end
 

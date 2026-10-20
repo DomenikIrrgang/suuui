@@ -72,13 +72,17 @@ local lastArt: { [string]: any } = {}    -- slot -> the art of the enchant it ha
 local weapons: { [string]: number? } = {}    -- slot -> the item in it, at the last look
 local lastCast: { id: number, at: number }?        -- { id, at }: the player's last successful cast
 
+-- Where the game's functions are read from: the game's (a table, so tests
+-- can stand in for one).
+local G: { [string]: any } = setmetatable({}, { __index = function(_: any, k: string): any return _G[k] end })
+
 local function plain(v: unknown): boolean return v ~= nil and not isSecret(v) end
 
 -- The temporary enchant in a weapon slot's list: the entry with time left
 -- (a permanent enchant has none).
 local function read(ws: number): any
-    if not (C_Item and C_Item.GetWeaponEnchantInfo) then return nil end
-    local ok, list = pcall(C_Item.GetWeaponEnchantInfo, ws)
+    if not (G.C_Item and G.C_Item.GetWeaponEnchantInfo) then return nil end
+    local ok, list = pcall(G.C_Item.GetWeaponEnchantInfo, ws)
     if not ok or isSecret(list) or type(list) ~= "table" then return nil end
     for _, e in pairs(list) do
         if type(e) == "table" and not isSecret(e) and plain(e.hasEnchant) and e.hasEnchant
@@ -90,8 +94,8 @@ end
 
 -- "Rockbiter 2 (60 min)" -> "Rockbiter": the weapon tooltip's timed line.
 local function tooltipName(inv: number): string?
-    if not (C_TooltipInfo and C_TooltipInfo.GetInventoryItem) then return nil end
-    local ok, data = pcall(C_TooltipInfo.GetInventoryItem, "player", inv)
+    if not (G.C_TooltipInfo and G.C_TooltipInfo.GetInventoryItem) then return nil end
+    local ok, data = pcall(G.C_TooltipInfo.GetInventoryItem, "player", inv)
     if not ok or isSecret(data) or type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
     for _, l in ipairs(data.lines) do
         local text = l.leftText
@@ -103,7 +107,7 @@ local function tooltipName(inv: number): string?
 end
 
 local function itemName(inv: number): string?
-    local link = GetInventoryItemLink("player", inv)
+    local link = G.GetInventoryItemLink("player", inv)
     return plain(link) and link and link:match("%[(.-)%]") or nil
 end
 
@@ -111,9 +115,9 @@ export function weaponEnchantable(slot: string): boolean
     local s = SLOTS[slot]
     if not s then return false end
     if state[slot] then return true end
-    local id = GetInventoryItemID("player", s.inv)
+    local id = G.GetInventoryItemID("player", s.inv)
     if not plain(id) or not id then return false end
-    local classID = select(6, C_Item.GetItemInfoInstant(id))
+    local classID = select(6, G.C_Item.GetItemInfoInstant(id))
     return classID == (Enum.ItemClass and Enum.ItemClass.Weapon or 2)
 end
 
@@ -123,6 +127,15 @@ export function weaponEnchantSpell(slot: string): number? return spellFor[slot] 
 local ticker: TickerHandle?
 local scan: () -> ()
 
+-- Forgets everything seen (tests: each starts from a session's beginning).
+local function reset()
+    for _, t in ipairs({ state, seen, spellFor, tipNames, lastArt, weapons } :: { [string]: any }[]) do
+        for k in pairs(t) do t[k] = nil end
+    end
+    lastCast = nil
+    if ticker then ticker:Cancel() ticker = nil end
+end
+
 -- Every weapon again; a change (an enchant on or off, another enchant, its
 -- charges, another weapon) is announced once.
 scan = function()
@@ -131,7 +144,7 @@ scan = function()
         local s = SLOTS[slot] :: Slot
         local e = read(s.ws)
         local old = state[slot]
-        local weapon = GetInventoryItemID("player", s.inv)
+        local weapon = G.GetInventoryItemID("player", s.inv)
         weapon = plain(weapon) and weapon or nil
         if e then
             any = true
@@ -151,10 +164,10 @@ scan = function()
             local key = slot .. ":" .. id
             if tipNames[key] == nil then tipNames[key] = tooltipName(s.inv) or false end
             local spell = spellFor[slot]
-            local spellName = spell and C_Spell.GetSpellName(spell)
+            local spellName = spell and G.C_Spell.GetSpellName(spell)
             local info = {
                 slot = slot, enchantID = id, weaponID = weapon,
-                icon = plain(e.enchantIconID) and e.enchantIconID ~= 0 and e.enchantIconID or GetInventoryItemTexture("player", s.inv),
+                icon = plain(e.enchantIconID) and e.enchantIconID ~= 0 and e.enchantIconID or G.GetInventoryItemTexture("player", s.inv),
                 expires = now + left, duration = math.max((seen[slot] :: Seen).duration, left),
                 charges = plain(e.charges) and e.charges or 0,
                 name = (plain(spellName) and spellName) or tipNames[key] or nil,
@@ -309,7 +322,7 @@ function Icon:Refresh()
     if self.missing then
         -- the enchant it had (this session), else the weapon, in grey
         local s = SLOTS[self.slot]
-        self.art:SetTexture(lastArt[self.slot] or (s and GetInventoryItemTexture("player", s.inv)) or 134400)
+        self.art:SetTexture(lastArt[self.slot] or (s and G.GetInventoryItemTexture("player", s.inv)) or 134400)
         self.art:SetDesaturated(true)
         self.body:SetAlpha(self.missing == "warn" and 0.85 or T.opacity["opacity-oor"])
         setWarn(self, self.missing == "warn")
@@ -362,7 +375,7 @@ local function showTip(self: any)
             meta = "Can't be removed from SuuUI: the game only lets you replace it." })
     else
         local spell = spellFor[slot]
-        local spellName = spell and C_Spell.GetSpellName(spell)
+        local spellName = spell and G.C_Spell.GetSpellName(spell)
         spellName = plain(spellName) and spellName or nil
         tooltip.showTooltip(self, { title = spellName or (s.label .. " enchant"), subtitle = sub,
             lines = { { "Not on the weapon" } },
