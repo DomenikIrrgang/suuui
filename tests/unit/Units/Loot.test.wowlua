@@ -1,0 +1,418 @@
+-- Units/Loot: SuuUI's loot window and group loot rolls. The window: what the
+-- corpse holds (items, money as copper, a money line it can't read), whose
+-- loot, beside the cursor or at its place, auto loot, taking, linking,
+-- tooltips, closing; Blizzard's frame off screen. The rolls: a card per roll
+-- in the notification stack (choices with counts and who, what you can't
+-- choose and why, who's still choosing), choosing, the game's loot lines
+-- (votes, numbers, the winner, all passed), the result, cancelled rolls,
+-- the test rolls, rolls already running after a reload. The client's loot
+-- and roll API is stubbed (the engine has no group loot); notifications are
+-- captured.
+
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as events from "/Core/Events"
+import * as registry from "/SettingsUI/Registry"
+import * as editMode from "/EditMode/EditMode"
+import unregisterCommands from "/Core/Init"
+import expectNoErrors, newParent from "../../helpers"
+import printedSince, printedCount, hasLine from "../SettingsUI/UiSettingsHelpers"
+
+local M: any = assert(SuuUI.GetModule("loot"))
+local G: any = _G
+local MONEY = (Enum.LootSlotType and Enum.LootSlotType.Money) or 2
+
+-- The corpse: { icon, name, count, quality, locked, kind, link } per slot.
+local corpse: { [string]: any }[] = {}
+local notes: { [string]: any } = {}
+
+local function fakeLoot()
+    mock.stub(G, "GetNumLootItems", function(): number return #corpse end)
+    mock.stub(G, "GetLootSlotInfo", function(slot: number): ...any
+        local s = corpse[slot]
+        return s.icon, s.name, s.count, nil, s.quality, s.locked
+    end)
+    mock.stub(G, "GetLootSlotType", function(slot: number): number return corpse[slot].kind or 1 end)
+    mock.stub(G, "GetLootSlotLink", function(slot: number): string? return corpse[slot].link end)
+end
+
+@beforeEach
+local function start()
+    corpse = {
+        { icon = 134367, name = "Worn Pelt", count = 2, quality = 1, link = "item:2318" },
+        { icon = 135033, name = "Dusk Mantle", count = 1, quality = 2, link = "item:4704" },
+        { icon = 133784, name = "42 Silver\n3 Copper", count = 0, kind = MONEY },
+    }
+    fakeLoot()
+    notes = {}
+    mock.stub(SuuUI, "Notify", function(n: any) notes[n.id] = n end)
+    mock.stub(SuuUI, "DismissNotification", function(id: string) notes[id] = nil end)
+end
+
+@afterEach
+local function cleanup()
+    if M.window:IsShown() then mock.fireEvent("LOOT_CLOSED") end
+    for id in pairs(M.rolls) do M.rolls[id] = nil end
+    M:Reset("atCursor")
+    M:Reset("position")
+    mock.advanceTime(40)
+    expectNoErrors()
+end
+
+local function win(): any return M.window end
+
+--------------------------------------------------------------------------------
+-- The loot window
+--------------------------------------------------------------------------------
+
+@test("what the corpse holds: items with their counts and qualities, money in copper")
+local function items()
+    local list = M:Items()
+    expect(#list).toBe(3)
+    expect(list[1]).toEqual({ index = 1, icon = 134367, label = "Worn Pelt", count = 2, quality = "common", locked = false })
+    expect(list[2].quality).toBe("uncommon")
+    expect(list[3].copper).toBe(4203)
+    expect(list[3].count).toBe(nil)
+    corpse[3].name = "A pouch\nof something"     -- money it can't read: the text in one line
+    expect(M:Items()[3].label).toBe("A pouch of something")
+    corpse[1].icon = nil                            -- an emptied slot
+    expect(#M:Items()).toBe(2)
+    mock.stub(G, "GetNumLootItems", function(): any return mock.secret(3) end)
+    expect(M:Items()).toEqual({})
+end
+
+@test("opened beside the cursor with the first item under it, or at its own place")
+local function placed()
+    mock.setCursorPosition(400, 300)
+    mock.fireEvent("LOOT_OPENED", false, false)
+    expect(win()).toBeShown()
+    local p, rel = win():GetPoint(1)
+    expect(p).toBe("TOPLEFT")
+    expect(rel).toBe(UIParent)
+    mock.fireEvent("LOOT_CLOSED")
+    expect(win()).never.toBeShown()
+    M:Set("atCursor", false)
+    mock.fireEvent("LOOT_OPENED", false, false)
+    expect((select(2, win():GetPoint(1)))).toBe(SuuUI.Root)
+end
+
+@test("whose loot: Fishing, the dead target, or nothing")
+@cases({ { "fishing", "Fishing" }, { "target", "Ember Hound" }, { "other", "" } })
+local function source(kind: string, shown: string)
+    mock.stub(G, "IsFishingLoot", function(): boolean return kind == "fishing" end)
+    local hound = mock.spawnUnit({ name = "Ember Hound", reaction = "hostile", guid = "Creature-0-0-0-0-123-0000000001" })
+    mock.player:target(hound)
+    mock.stub(G, "GetLootSourceInfo", function(_: number): any
+        return kind == "target" and UnitGUID("target") or "Creature-0-0-0-0-9-0000000009"
+    end)
+    local said: string? = nil
+    mock.stub(win(), "SetSource", function(_: any, s: string) said = s end)
+    mock.fireEvent("LOOT_OPENED", false, false)
+    expect(said).toBe(shown)
+end
+
+@test("auto loot: the window only for what stays behind; an empty corpse opens nothing")
+local function autoLoot()
+    mock.fireEvent("LOOT_OPENED", true, false)
+    expect(win()).never.toBeShown()
+    mock.advanceTime(0.31)
+    expect(win()).toBeShown()
+    mock.fireEvent("LOOT_CLOSED")
+    corpse = {}
+    mock.fireEvent("LOOT_OPENED", true, false)
+    mock.advanceTime(0.31)
+    expect(win()).never.toBeShown()
+end
+
+@test("a click takes the item; a modified click links it; a slot taken updates the list; ✕ closes the loot")
+local function taking()
+    mock.fireEvent("LOOT_OPENED", false, false)
+    local took = mock.stub(G, "LootSlot", function(_: number) end)
+    win().onClick(1)
+    expect(took).toHaveBeenCalledWith(1)
+    mock.stub(G, "IsModifiedClick", function(_: string?): boolean return true end)
+    local link = mock.stub(G, "HandleModifiedItemClick", function(_: string): boolean return true end)
+    win().onClick(2)
+    expect(link).toHaveBeenCalledWith("item:4704")
+    expect(took).toHaveBeenCalledTimes(1)
+    table.remove(corpse, 1)
+    local set = mock.spy(win().SetItems)
+    win().SetItems = set
+    mock.fireEvent("LOOT_SLOT_CLEARED", 1)
+    expect(set).toHaveBeenCalledTimes(1)
+    local close = mock.stub(G, "CloseLoot", function() end)
+    win().onClose()
+    expect(close).toHaveBeenCalledTimes(1)
+end
+
+@test("a row's tooltip: the item's, the currency's, none for money")
+local function tooltips()
+    mock.fireEvent("LOOT_OPENED", false, false)
+    local row = CreateFrame("Frame", nil, UIParent)
+    local item = mock.stub(GameTooltip, "SetLootItem", function(_: any, _: number) end)
+    win().onEnter(1, row)
+    expect(item).toHaveBeenCalledTimes(1)
+    win().onEnter(3, row)
+    expect(GameTooltip).never.toBeShown()
+    corpse[2].kind = (Enum.LootSlotType and Enum.LootSlotType.Currency) or 3
+    local currency = mock.stub(GameTooltip, "SetLootCurrency", function(_: any, _: number) end)
+    win().onEnter(2, row)
+    expect(currency).toHaveBeenCalledTimes(1)
+    win().onLeave()
+    expect(GameTooltip).never.toBeShown()
+end
+
+@test("Blizzard's loot frame stays out of sight, however the game places it")
+local function blizzardAway()
+    local f = G.LootFrame
+    expect(f:GetAlpha()).toBe(0)
+    f:ClearAllPoints()
+    f:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    expect((f:GetPoint(1))).toBe("BOTTOMRIGHT")
+    f:Hide()
+    f:Show()
+    expect(f:GetAlpha()).toBe(0)
+end
+
+@test("the settings preview: a made-up corpse")
+local function preview()
+    local s = registry.get("loot") :: registry.Section
+    local view = (s.preview :: (parent: any) -> any)(newParent(300, 300))
+    expect(view).toBe(M:PreviewView(newParent(300, 300)))
+end
+
+--------------------------------------------------------------------------------
+-- Rolls
+--------------------------------------------------------------------------------
+
+local ITEM_LINK = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle]|h|r"
+
+local function fakeRoll(opts: { [string]: any }?)
+    local o = opts or {}
+    mock.stub(G, "GetLootRollItemInfo", function(_: number): ...any
+        return 135033, "Dusk Mantle", 1, 2, o.bop or false, o.need ~= false, true, o.de or false,
+            o.reason or 0, 0, 0
+    end)
+    mock.stub(G, "GetLootRollItemLink", function(_: number): string return ITEM_LINK end)
+    mock.stub(G, "GetLootRollTimeLeft", function(_: number): any return o.left end)
+end
+
+local function card(id: number): any
+    local n = notes["suu:roll:" .. id]
+    assert(n, "no card for roll " .. id)
+    return n
+end
+
+local function action(n: any, label: string): any
+    for _, a in ipairs(n.actions) do if a.label == label then return a end end
+    return nil
+end
+
+local function line(fmt: string, ...: any): string return (fmt:format(...)) end
+
+@test("the game's formats as patterns: positional arguments, a percent sign, the history link gone")
+local function formats()
+    -- (the first loot line builds the patterns: a made-up disenchant format,
+    -- its arguments the other way round)
+    local real = G.LOOT_ROLL_DISENCHANT
+    G.LOOT_ROLL_DISENCHANT = "|HlootHistory:%d|h[Loot]|h: %3$s (100%%) disenchanted by %2$s"   -- (numbered, counted with the history link)
+    fakeRoll()
+    M:StartRoll(7, 60000)
+    M:OnLootLine("|HlootHistory:4|h[Loot]|h: " .. ITEM_LINK .. " (100%) disenchanted by Tamsin")
+    G.LOOT_ROLL_DISENCHANT = real
+    expect(action(card(7), "Disenchant")).toBe(nil)   -- (no disenchant here: the vote counts anyway)
+    expect(M.rolls[7].votes.disenchant).toEqual({ "Tamsin" })
+end
+
+@test("a roll: a card with Need, Greed and Pass, the time, the bind; Disenchant only when you can")
+local function rollCard()
+    fakeRoll({ bop = true, left = 45000 })
+    mock.fireEvent("START_LOOT_ROLL", 7, 60000, 0)
+    local n = card(7)
+    expect(n.title:find("Dusk Mantle", 1, true) ~= nil).toBe(true)
+    expect(n.body:find(G.ITEM_BIND_ON_PICKUP, 1, true) ~= nil).toBe(true)
+    expect(n.duration).toBe(60)
+    expect(n.remaining).toBe(45)
+    expect(action(n, "Need") ~= nil).toBe(true)
+    expect(action(n, "Disenchant")).toBe(nil)
+    fakeRoll({ de = true, need = false, reason = 1 })
+    M:StartRoll(8, nil)
+    local d = card(8)
+    expect(action(d, "Disenchant") ~= nil).toBe(true)
+    expect(action(d, "Need").disabled).toBe(true)
+    expect(action(d, "Need").tooltip.description).toBe(G.LOOT_ROLL_INELIGIBLE_REASON1)
+    expect(d.remaining <= 60).toBe(true)
+    M:StartRoll(mock.secret(9), nil)                -- unreadable: nothing
+    expect(notes["suu:roll:9"]).toBe(nil)
+end
+
+@test("choosing rolls on it, presses the choice and greys the rest")
+local function choosing()
+    fakeRoll()
+    M:StartRoll(7, 60000)
+    local rolled = mock.stub(G, "RollOnLoot", function(_: number, _: number) end)
+    action(card(7), "Greed").onClick()
+    expect(rolled).toHaveBeenCalledWith(7, G.LOOT_ROLL_TYPE_GREED or 2)
+    local n = card(7)
+    expect(action(n, "Greed").pressed).toBe(true)
+    expect(action(n, "Need").disabled).toBe(true)
+    action(n, "Need").onClick()                    -- chosen already
+    expect(rolled).toHaveBeenCalledTimes(1)
+end
+
+@test("the loot lines: votes counted (who on hover), changing a vote, your own, the numbers, the winner")
+local function lines()
+    fakeRoll()
+    M:StartRoll(7, 60000)
+    local me = (SuuUI.FullName("player") :: string):match("^([^%-]+)")
+    M:OnLootLine(line(G.LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    M:OnLootLine(line(G.LOOT_ROLL_GREED, 12, "Ashford", ITEM_LINK))
+    expect(action(card(7), "Need").count).toBe(1)
+    expect(action(card(7), "Need").tooltip.description:find("Tamsin", 1, true) ~= nil).toBe(true)
+    M:OnLootLine(line(G.LOOT_ROLL_PASSED, 12, "Ashford", ITEM_LINK))   -- changed their mind
+    expect(action(card(7), "Greed").count).toBe(0)
+    expect(action(card(7), "Pass").count).toBe(1)
+    M:OnLootLine(line(G.LOOT_ROLL_GREED_SELF, 12, ITEM_LINK))
+    expect(action(card(7), "Greed").pressed).toBe(true)
+    M:OnLootLine(line(G.LOOT_ROLL_PASSED_SELF, 12, ITEM_LINK))   -- yours, not a player called You
+    expect(action(card(7), "Pass").pressed).toBe(true)
+    expect(M.rolls[7].votes.pass[1] ~= "You").toBe(true)
+    M:OnLootLine(line(G.LOOT_ROLL_ROLLED_NEED, 12, 87, ITEM_LINK, "Tamsin"))
+    M:OnLootLine(line(G.LOOT_ROLL_ROLLED_GREED, 12, 42, ITEM_LINK, me))
+    mock.fireEvent("CANCEL_LOOT_ROLL", 7)
+    expect(notes["suu:roll:7"]).toBe(nil)
+    M:OnLootLine(line(G.LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    local r = notes["suu:rollresult:7"]
+    expect(r.title).toBe("Tamsin won Dusk Mantle")
+    expect(r.body).toBe("Need 87 · you rolled Greed 42")
+    M:OnLootLine(line(G.LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))  -- told once
+    -- a line without the history link (an older client's) reads the same
+    M:StartRoll(8, 60000)
+    M:OnLootLine("Tamsin has selected Need for: " .. ITEM_LINK)
+    expect(action(card(7 + 1), "Need").count).toBe(1)
+    M:OnLootLine("something else entirely")
+    M:OnLootLine(mock.secret("hidden"))
+end
+
+@test("you won; everyone passed; a line about an item no roll is for")
+local function results()
+    fakeRoll()
+    M:StartRoll(7, 60000)
+    M:EndRoll(7)
+    M:EndRoll(7)                                    -- once
+    M:OnLootLine(line(G.LOOT_ROLL_YOU_WON, 12, ITEM_LINK))
+    expect(notes["suu:rollresult:7"].title).toBe("You won Dusk Mantle")
+    M:StartRoll(8, 60000)
+    mock.fireEvent("CHAT_MSG_LOOT", line(G.LOOT_ROLL_ALL_PASSED, 12, ITEM_LINK), "", "", "", "", "", 0, 0, "", 0, 1, "", 0,
+        false, false, false, false, { userID = 0, globalName = "", lastOnlineGUID = "", lastOnlineName = "",
+        hasAttachment = false, hasPoll = false, hasEmbed = false, hasSticker = false, hasEmoji = false,
+        hasError = false, hasForwardedMessage = false, forwardedMessage = "", fromDiscord = false })
+    expect(notes["suu:rollresult:8"].title).toBe("Everyone passed on Dusk Mantle")
+    M:OnLootLine(line(G.LOOT_ROLL_NEED, 12, "Tamsin", "|Hitem:1::::::::|h[Other]|h"))
+    -- every roll cancelled at once
+    M:StartRoll(9, 60000)
+    mock.fireEvent("CANCEL_ALL_LOOT_ROLLS")
+    expect(notes["suu:roll:9"]).toBe(nil)
+end
+
+@test("who's still choosing: your group, in class colours, four at most and how many more")
+local function waiting()
+    local members: any[] = {}
+    for i, name in ipairs({ "Tamsin", "Ashford", "Partyone", "Partytwo" }) do
+        local u = mock.spawnUnit({ name = name, player = true, class = "MAGE", level = 60, reaction = "friendly" })
+        C_PartyInfo.InviteUnit(name)
+        mock.advanceTime(1)                        -- (they accept a moment later)
+        local joining: any = u
+        joining:joinGroup()
+        members[i] = u
+    end
+    fakeRoll()
+    M:StartRoll(7, 60000)
+    local n = card(7)
+    expect(n.body:find("Waiting on ", 1, true) ~= nil).toBe(true)
+    expect(n.bodyTooltip.title).toBe("Still choosing · 4")
+    M:OnLootLine(line(G.LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    expect(card(7).bodyTooltip.title).toBe("Still choosing · 3")
+    -- in a raid: everyone but you, four named and how many more
+    mock.advanceTime(2)                            -- (the party forms, you leading, a moment after the invite)
+    C_PartyInfo.ConvertToRaid()
+    local fifth: any = mock.spawnUnit({ name = "Tester", player = true, class = "DRUID", level = 60, reaction = "friendly" })
+    C_PartyInfo.InviteUnit("Tester")
+    mock.advanceTime(1)
+    fifth:joinGroup()
+    mock.advanceTime(0.5)
+    expect(IsInRaid()).toBe(true)
+    M:StartRoll(8, 60000)
+    expect(card(8).body:find("and 1 more", 1, true) ~= nil).toBe(true)   -- five others, four named
+    expect(#members).toBe(4)
+end
+
+@test("the card's item tooltip: the game's while open, the link's after")
+local function itemTips()
+    fakeRoll()
+    M:StartRoll(7, 60000)
+    local owner = CreateFrame("Frame", nil, UIParent)
+    local rollTip = mock.stub(GameTooltip, "SetLootRollItem", function(_: any, _: number) end)
+    card(7).icon.tooltip(owner)
+    expect(rollTip).toHaveBeenCalledWith(GameTooltip, 7)
+    local link = mock.stub(GameTooltip, "SetHyperlink", function(_: any, _: string) end)
+    M:EndRoll(7)
+    M:Result(M:RollFor(ITEM_LINK) :: any, nil)
+    notes["suu:rollresult:7"].icon.tooltip(owner)
+    expect(link).toHaveBeenCalledWith(GameTooltip, "item:4704::::::::")
+    M:ItemTip(owner, { id = 1, test = true, link = 5 } :: any, true)
+    expect(GameTooltip).never.toBeShown()
+end
+
+@test("/suu lootroll: a test roll that fills in and ends with a result; raid: forty players choosing")
+local function testRolls()
+    mock.slash("/suu lootroll")
+    local id = -M.testRolls
+    local n = card(id)
+    expect(n.title:find("Protector's Silvered Chain Helm", 1, true) ~= nil).toBe(true)
+    expect(action(n, "Greed").count).toBe(2)
+    action(n, "Need").onClick()
+    expect(action(card(id), "Need").count).toBe(2)
+    mock.advanceTime(8.1)
+    expect(action(card(id), "Greed").count).toBe(3)
+    mock.advanceTime(22)
+    expect(notes["suu:rollresult:" .. id].title).toBe("Ysolde won Plans: Protector's Silvered Chain Helm")
+    mock.slash("/suu lootroll raid")
+    local raid = -M.testRolls
+    mock.advanceTime(10)
+    expect(card(raid).bodyTooltip ~= nil).toBe(true)
+    -- ended before its votes all came: they stop
+    M:EndRoll(raid)
+    mock.advanceTime(25)
+end
+
+@test("without the Notifications module, the test roll says why")
+local function noNotifications()
+    local real = SuuUI.GetModule
+    mock.stub(SuuUI, "GetModule", function(id: string): any
+        if id == "notifications" then return nil end
+        return real(id)
+    end)
+    local n = printedCount()
+    M:TestRoll(nil)
+    expect(hasLine(printedSince(n), "turn the Notifications module on")).toBe(true)
+    expect(M:RollsOn()).toBe(nil)
+end
+
+@test("set up again after a reload: the rolls still running come back; turned off, the window closes")
+local function reloaded()
+    fakeRoll({ left = 20000 })
+    mock.stub(G, "GetActiveLootRollIDs", function(): any return { 11, 12 } end)
+    registry.unregister(M)
+    editMode.unregister(M)
+    unregisterCommands(M)
+    M:OnEnable()
+    expect(card(11).remaining).toBe(20)
+    expect(card(12) ~= nil).toBe(true)
+    events.emit("SUUUI_MODULE_ENABLED", "notifications")   -- wired already: once
+    mock.fireEvent("LOOT_OPENED", false, false)
+    M:OnDisable()
+    expect(win()).never.toBeShown()
+end

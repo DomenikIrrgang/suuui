@@ -254,7 +254,7 @@ end
 -- slim rail along each window's left side, outside it, so the window keeps
 -- its height. Your bags: the backpack (fixed), four bags and the reagent bag
 -- after a hairline; at a banker the bank's own slots, its bag slots 2-9
--- (bought with a bag, bought and empty, or locked) and a buy cell with the
+-- (bought with a bag, or bought and empty) and a buy cell with the
 -- next slot's cost. Drag a bag onto a slot (or click with it) to put it in,
 -- drag a slot's bag away to take it off; hovering a slot lights its bag's
 -- slots in the window and fades the rest. Only on what is live: your own
@@ -277,7 +277,7 @@ local BACKPACK_ICON = 133633
 -- bank's buy cell.
 type RailEntry = {
     kind: string, bag?: number, inv?: any, tab?: number, fixed?: boolean, has: boolean, icon: any, size: number,
-    quality?: string, locked?: boolean,
+    quality?: string,
 }
 type RailBuy = { off?: boolean, why?: string, done?: boolean, price?: number, next?: number }
 
@@ -316,7 +316,7 @@ function M:RailCell(rail: any, i: number): any
         cell.skin.hover = true
         cell.skin:Draw()
         self:RailTip(cell)
-        if cell.entry and cell.entry.bag and not cell.entry.locked then self:LightBag(cell.entry.bag) end
+        if cell.entry and cell.entry.bag then self:LightBag(cell.entry.bag) end
     end)
     b:SetScript("OnLeave", function(cell)
         cell.skin.hover = false
@@ -335,7 +335,7 @@ end
 -- Put what the cursor holds into the slot (or pick the slot's bag up).
 function M:RailPut(cell: any)
     local e = cell.entry
-    if not e or e.fixed or e.locked then return end
+    if not e or e.fixed then return end
     if e.inv then
         if CursorHasItem() then call(PutItemInBag, e.inv) else call(PickupBagFromSlot, e.inv) end
     elseif e.tab then
@@ -345,7 +345,7 @@ end
 
 function M:RailPick(cell: any)
     local e = cell.entry
-    if not e or e.fixed or e.locked then return end
+    if not e or e.fixed then return end
     if e.inv then call(PickupBagFromSlot, e.inv)
     elseif e.tab then call(C_Container.PickupContainerItem, TAB_BAG, e.tab) end
 end
@@ -355,10 +355,7 @@ function M:RailTip(cell: any)
     if not e then return end
     local free = e.bag and C_Container.GetContainerNumFreeSlots(e.bag)
     local sizeLine = e.size and e.size > 0 and (e.size .. " slots" .. ((plain(free) and free) and (" · " .. free .. " free") or "")) or nil
-    if e.locked then
-        UI.ShowTooltip(cell, { title = "Bank slot " .. e.tab, subtitle = "Not bought yet",
-            description = "Buy bank slot buys the next one; the game asks first." })
-    elseif e.fixed then
+    if e.fixed then
         UI.ShowTooltip(cell, { title = e.kind == "bank" and "Bank" or "Backpack", subtitle = sizeLine,
             description = e.kind == "bank" and "The bank's own slots." or "Always there; it can't be changed." })
     elseif not e.has then
@@ -401,9 +398,9 @@ function M:LayoutRail(rail: any, entries: RailEntry[], buy: RailBuy?)
         b.entry = e
         b:ClearAllPoints()
         b:SetPoint("TOP", rail, "TOP", 0, -y)
-        if e.locked or not e.has then
+        if not e.has then
             b.skin:SetItem(nil)
-            b.glyph:SetTexture(GLYPHS .. (e.locked and "lock" or (e.kind == "reagent" and "leaf" or "bag")))
+            b.glyph:SetTexture(GLYPHS .. (e.kind == "reagent" and "leaf" or "bag"))
             UI.Paint(b.glyph, "ink-faint")
             b.glyph:Show()
         else
@@ -444,9 +441,6 @@ function M:LayoutRail(rail: any, entries: RailEntry[], buy: RailBuy?)
         c:Show()
         c.cost:Show()
         y = y + RAIL_SLOT + 2 + T.type.micro.lineHeight
-    elseif rail.buy then
-        rail.buy:Hide()
-        rail.buy.cost:Hide()
     end
     rail:SetHeight(y - RAIL_GAP + RAIL_PAD)
 end
@@ -992,16 +986,28 @@ local CLOSES = { CloseAllBags = true, CloseBag = true, CloseBackpack = true }
 
 function M:BagCall(name: string, frame: any)
     local shown = self.inv and self.inv:IsShown() or false
+    -- Blizzard's outer calls make inner ones first (OpenAllBags opens the
+    -- backpack and each bag, CloseAllBags closes them): whether the window
+    -- was open is read at the first call of the moment.
+    if not self.syncQueued then self.burstShown, self.burstOpenedBy = shown, self.openedBy end
     if OPENS[name] then
         -- opened for a window (a vendor, the mail): closed with it, unless
         -- the bags were open before (Blizzard's own rule)
         if name == "OpenAllBags" then
-            if not shown and not self.wantOpen then self.openedBy = frame and frame.GetName and frame:GetName() or nil end
+            if not self.burstShown then self.openedBy = frame and frame.GetName and frame:GetName() or nil end
         end
         self.wantOpen = true
     elseif CLOSES[name] then
         if name == "CloseAllBags" and frame and frame.GetName then
-            if frame:GetName() ~= self.openedBy then return end
+            -- another window's bags closing: yours stay as they were. (The
+            -- bag-by-bag closes Blizzard made inside this call came in
+            -- too: bags you had opened SuuUI's way, or were open before,
+            -- closed with a vendor or the mail.)
+            if frame:GetName() ~= self.burstOpenedBy then
+                self.wantOpen, self.openedBy = self.burstShown, self.burstOpenedBy
+                self:QueueSync()
+                return
+            end
         end
         -- one bag closing (the game closes a bag taken off its slot) leaves
         -- the window, which shows every bag, open (found in game)

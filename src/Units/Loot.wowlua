@@ -187,7 +187,9 @@ type Roll = {
 type Pattern = any[]
 type Line = any[]
 -- "%s has selected Need for: %s" → "^(.+) has selected Need for: (.+)$".
-local function pattern(fmt: any): Pattern?
+-- `shift`: numbered arguments (%2$s) counted from one later (the loot
+-- history link, the first, taken off).
+local function pattern(fmt: any, shift: number?): Pattern?
     if type(fmt) ~= "string" then return nil end
     local out, order, auto, i = { "^" }, {}, 0, 1
     while i <= #fmt do
@@ -195,7 +197,7 @@ local function pattern(fmt: any): Pattern?
         if c == "%" then
             local pos, t = fmt:match("^%%(%d)%$([sd])", i)
             if pos then
-                order[#order + 1] = tonumber(pos)
+                order[#order + 1] = (tonumber(pos) or 0) - (shift or 0)
                 out[#out + 1] = t == "d" and "(%d+)" or "(.+)"
                 i = i + 4
             else
@@ -229,6 +231,14 @@ end
 
 -- What a loot line says: what, who, the item, the choice, the number.
 type LineFn = (c: { [number]: string }) -> (string, any, any, any?, number?)
+-- This client's loot lines start with a link to the loot history
+-- ("|HlootHistory:%d|h[Loot]|h: %s has selected Need for: %s"): it goes
+-- from the formats and the lines, so the captures are who, the item, the
+-- number (counted from the start, the history's number came first and no
+-- vote, number or winner was ever matched).
+local HISTORY_FORMAT = "^|HlootHistory:%%[%d%$]*d|h%[.-%]|h:%s*"
+local HISTORY_LINE = "^|HlootHistory:%d+|h%[.-%]|h:%s*"
+
 local LINES: Line[]?
 local function lines(): Line[]
     if LINES then return LINES end
@@ -237,27 +247,39 @@ local function lines(): Line[]
     me = me:match("^([^%-]+)") or me
     local list: Line[] = {}
     LINES = list
-    local function add(global: string, fn: LineFn) local p = pattern(_G[global]); if p then list[#list + 1] = { p, fn } end end
-    -- votes: (who, item)
+    local function add(global: string, fn: LineFn)
+        local fmt = _G[global]
+        -- (without the loot history link: HISTORY_FORMAT)
+        local shift = 0
+        if type(fmt) == "string" then fmt, shift = fmt:gsub(HISTORY_FORMAT, "") end
+        local p = pattern(fmt, shift)
+        if p then list[#list + 1] = { p, fn } end
+    end
+    -- The specific lines before the general ones: "You passed on: X",
+    -- "Everyone passed on: X" and "You won: X" fit "%s passed on: %s" and
+    -- "%s won: %s" too, with "You" or "Everyone" as a player.
+    -- the end, yours and everyone's
+    add("LOOT_ROLL_ALL_PASSED", function(c) return "allPassed", nil, c[1] end)
+    add("LOOT_ROLL_YOU_WON", function(c) return "won", me, c[1] end)
+    -- your votes: (item)
+    add("LOOT_ROLL_NEED_SELF", function(c) return "vote", me, c[1], "need" end)
+    add("LOOT_ROLL_GREED_SELF", function(c) return "vote", me, c[1], "greed" end)
+    add("LOOT_ROLL_DISENCHANT_SELF", function(c) return "vote", me, c[1], "disenchant" end)
+    add("LOOT_ROLL_PASSED_SELF", function(c) return "vote", me, c[1], "pass" end)
+    add("LOOT_ROLL_PASSED_SELF_AUTO", function(c) return "vote", me, c[1], "pass" end)
+    -- others' votes: (who, item)
     add("LOOT_ROLL_NEED", function(c) return "vote", c[1], c[2], "need" end)
     add("LOOT_ROLL_GREED", function(c) return "vote", c[1], c[2], "greed" end)
     add("LOOT_ROLL_DISENCHANT", function(c) return "vote", c[1], c[2], "disenchant" end)
     add("LOOT_ROLL_PASSED", function(c) return "vote", c[1], c[2], "pass" end)
     add("LOOT_ROLL_PASSED_AUTO", function(c) return "vote", c[1], c[2], "pass" end)
     add("LOOT_ROLL_PASSED_AUTO_FEMALE", function(c) return "vote", c[1], c[2], "pass" end)
-    add("LOOT_ROLL_NEED_SELF", function(c) return "vote", me, c[1], "need" end)
-    add("LOOT_ROLL_GREED_SELF", function(c) return "vote", me, c[1], "greed" end)
-    add("LOOT_ROLL_DISENCHANT_SELF", function(c) return "vote", me, c[1], "disenchant" end)
-    add("LOOT_ROLL_PASSED_SELF", function(c) return "vote", me, c[1], "pass" end)
-    add("LOOT_ROLL_PASSED_SELF_AUTO", function(c) return "vote", me, c[1], "pass" end)
     -- the numbers: (value, item, who)
     add("LOOT_ROLL_ROLLED_NEED", function(c) return "rolled", c[3], c[2], "need", tonumber(c[1]) end)
     add("LOOT_ROLL_ROLLED_GREED", function(c) return "rolled", c[3], c[2], "greed", tonumber(c[1]) end)
     add("LOOT_ROLL_ROLLED_DE", function(c) return "rolled", c[3], c[2], "disenchant", tonumber(c[1]) end)
-    -- the end
+    -- someone else won
     add("LOOT_ROLL_WON", function(c) return "won", c[1], c[2] end)
-    add("LOOT_ROLL_YOU_WON", function(c) return "won", me, c[1] end)
-    add("LOOT_ROLL_ALL_PASSED", function(c) return "allPassed", nil, c[1] end)
     return list
 end
 
@@ -459,6 +481,7 @@ end
 
 function M:OnLootLine(text: any)
     if not plain(text) or type(text) ~= "string" then return end
+    text = text:gsub(HISTORY_LINE, "")
     for _, line in ipairs(lines()) do
         local caps = match(line[1], text)
         if caps then
@@ -685,22 +708,33 @@ function M:OnEnable()
     self.rolls, self.ended = self.rolls or {}, self.ended or {}
     self:RegisterCommand("lootroll", "A test loot roll in the notification stack; \"/suu lootroll raid\": in a 40-player raid.",
         function(arg) self:TestRoll(arg) end)
-    if self:RollsOn() then
-        self:HideBlizzardRolls()
-        self:OnGameEvent("START_LOOT_ROLL", function(_, rollID, rollTime) self:StartRoll(rollID, rollTime) end)
-        self:OnGameEvent("CANCEL_LOOT_ROLL", function(_, rollID) if plain(rollID) then self:EndRoll(rollID) end end)
-        self:OnGameEvent("CANCEL_ALL_LOOT_ROLLS", function()
-            for id in pairs(self.rolls) do if id > 0 then self:EndRoll(id) end end
-        end)
-        self:OnGameEvent("CHAT_MSG_LOOT", function(_, text) self:OnLootLine(text) end)
-        -- rolls already running (a /reload mid-roll)
-        if GetActiveLootRollIDs then
-            local ok, ids = pcall(GetActiveLootRollIDs)
-            if ok and type(ids) == "table" then
-                for _, id in ipairs(ids :: any[]) do
-                    local left = GetLootRollTimeLeft(id)
-                    self:StartRoll(id, plain(left) and left or nil)
-                end
+    -- the Notifications module may turn on after this one (the modules turn
+    -- on in the order they load): the rolls wait for it
+    self.rollsWired = nil
+    if self:RollsOn() then self:WireRolls() end
+    self:On("SUUUI_MODULE_ENABLED", function(_, id)
+        if id == "notifications" and self:RollsOn() then self:WireRolls() end
+    end)
+end
+
+-- The rolls in the notification stack (once a session).
+function M:WireRolls()
+    if self.rollsWired then return end
+    self.rollsWired = true
+    self:HideBlizzardRolls()
+    self:OnGameEvent("START_LOOT_ROLL", function(_, rollID, rollTime) self:StartRoll(rollID, rollTime) end)
+    self:OnGameEvent("CANCEL_LOOT_ROLL", function(_, rollID) if plain(rollID) then self:EndRoll(rollID) end end)
+    self:OnGameEvent("CANCEL_ALL_LOOT_ROLLS", function()
+        for id in pairs(self.rolls) do if id > 0 then self:EndRoll(id) end end
+    end)
+    self:OnGameEvent("CHAT_MSG_LOOT", function(_, text) self:OnLootLine(text) end)
+    -- rolls already running (a /reload mid-roll)
+    if GetActiveLootRollIDs then
+        local ok, ids = pcall(GetActiveLootRollIDs)
+        if ok and type(ids) == "table" then
+            for _, id in ipairs(ids :: any[]) do
+                local left = GetLootRollTimeLeft(id)
+                self:StartRoll(id, plain(left) and left or nil)
             end
         end
     end

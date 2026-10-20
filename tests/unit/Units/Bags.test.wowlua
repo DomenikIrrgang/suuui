@@ -1,0 +1,603 @@
+-- Units/Bags: SuuUI's bags and bank windows (the sort planning and the
+-- characters' data are Bags/Sort's and Bags/Characters', tested there).
+-- Which bags show; opening and closing with Blizzard's bag calls (opened
+-- for a window and closed with it, one bag closing); the slots (items,
+-- free counts, the reagent bag and keyring sections, updates, cooldowns);
+-- the bag rails (cells, tooltips, lighting a bag's slots, putting a bag in
+-- and taking it off); the bank (its window beside the bags, its rail and
+-- the buy cell, Blizzard's frame off screen or back); other characters'
+-- saved bags and bank, the search across all of them; item counts in
+-- tooltips; selling junk; sorting (SuuUI's waves, the game's sort, what
+-- stops one); the settings rows; Blizzard's bag frames kept hidden.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as registry from "/SettingsUI/Registry"
+import expectNoErrors, newParent from "../../helpers"
+import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
+
+local M: any = assert(SuuUI.GetModule("bags"))
+local G: any = _G
+
+local CLOTH, POTION, RAG, HERB = 990021, 990022, 990023, 990024
+mock.defineItem(CLOTH, { name = "Test Cloth", quality = 1, stackCount = 20, icon = 132889, classID = 7, sellPrice = 10 }, { cached = true })
+mock.defineItem(POTION, { name = "Test Potion", quality = 2, stackCount = 5, icon = 134830, classID = 0, sellPrice = 50 }, { cached = true })
+mock.defineItem(RAG, { name = "Grey Rag", quality = 0, stackCount = 20, icon = 133722, classID = 15, sellPrice = 25 }, { cached = true })
+mock.defineItem(HERB, { name = "Test Herb", quality = 1, stackCount = 20, icon = 134187, classID = 7, sellPrice = 5 }, { cached = true })
+
+@beforeEach
+local function start()
+    mock.setBag(0, { slots = 16, items = { [1] = { id = CLOTH, count = 3 }, [2] = { id = POTION, count = 2 } } })
+end
+
+@afterEach
+local function cleanup()
+    if M.sorting then M:StopSort("the test ended") end
+    ClearCursor()
+    mock.setBag(5, nil)                            -- (the reagent bag one test filled)
+    M:SetOpen(false)
+    mock.advanceTime(0.5)
+    for _, key in ipairs({ "columns", "reagentBag", "keyring", "bank", "itemCounts", "bagSlots", "sortOrder", "sortDirection",
+                           "position" }) do
+        M:Reset(key)
+    end
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.advanceTime(1)
+    expectNoErrors()
+end
+
+local function inv(): any return G.SuuUIBags end
+local function bank(): any return G.SuuUIBank end
+
+local function open()
+    M:SetOpen(true)
+    mock.advanceTime(0.01)
+end
+
+local function shownSlots(): any[]
+    local out: any[] = {}
+    for _, slots in pairs(M.buttons) do
+        for _, b in ipairs(slots) do if b:IsShown() then out[#out + 1] = b end end
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Which bags, opening and closing
+--------------------------------------------------------------------------------
+
+@test("the bags shown: the backpack and four bags, the reagent bag, the keyring when asked")
+local function bagList()
+    expect(M:Bags()).toEqual({ 0, 1, 2, 3, 4, 5 })
+    M:Set("reagentBag", false)
+    M:Set("keyring", true)
+    expect(M:Bags()).toEqual({ 0, 1, 2, 3, 4, -1 })
+end
+
+@test("Blizzard's bag calls open and close the window; a toggle, the close button, Toggle")
+local function openClose()
+    G.ToggleAllBags()
+    mock.advanceTime(0.01)
+    expect(inv()).toBeShown()
+    G.ToggleAllBags()
+    mock.advanceTime(0.01)
+    expect(inv()).never.toBeShown()
+    G.OpenBackpack()
+    mock.advanceTime(0.01)
+    expect(inv()).toBeShown()
+    G.CloseBag(1)                                  -- one bag taken off: the window stays
+    mock.advanceTime(0.01)
+    expect(inv()).toBeShown()
+    inv().onClose()
+    expect(inv()).never.toBeShown()
+    M:Toggle()
+    expect(inv()).toBeShown()
+    G.CloseBackpack()
+    mock.advanceTime(0.01)
+    expect(inv()).never.toBeShown()
+end
+
+@test("opened for a window (a vendor, the mail), it closes with it, unless it was open before")
+local function openedFor()
+    local mail = G.MailFrame
+    G.OpenAllBags(mail)
+    mock.advanceTime(0.01)
+    expect(inv()).toBeShown()
+    G.CloseAllBags(G.MerchantFrame)                -- another window: stays
+    mock.advanceTime(0.01)
+    expect(inv()).toBeShown()
+    G.CloseAllBags(mail)
+    mock.advanceTime(0.01)
+    expect(inv()).never.toBeShown()
+    open()
+    G.OpenAllBags(mail)                            -- open already: not the mail's
+    G.CloseAllBags(mail)
+    mock.advanceTime(0.01)
+    expect(inv()).toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Slots
+--------------------------------------------------------------------------------
+
+@test("every bag's slots in one grid: the items, how many are free")
+local function slots()
+    open()
+    expect(#shownSlots() >= 16).toBe(true)
+    expect(inv().meta:GetText():find(" free of ", 1, true) ~= nil).toBe(true)
+    local first = M.buttons[0][1]
+    expect(M.skins[first].item.count).toBe(3)
+    expect(M.skins[M.buttons[0][2]].item.quality).toBe("uncommon")
+    expect(M.skins[M.buttons[0][3]].item).toBe(nil)
+    -- a bag that shrank: its extra slots hidden
+    mock.setBag(0, { slots = 12, items = { [1] = { id = CLOTH, count = 3 } } })
+    mock.advanceTime(0.1)
+    expect(M.buttons[0][16]).never.toBeShown()
+end
+
+@test("the reagent bag and the keyring as sections of their own; no reagent bag says where one goes")
+local function sections()
+    local laid: any = nil
+    mock.stub(inv(), "LayoutSlots", function(_: any, _: any[], s: any) laid = s end)
+    open()
+    expect(laid[1].note).toBe("No reagent bag · the reagent slot takes one")
+    mock.setBag(5, { slots = 8, items = { [1] = { id = HERB, count = 4 } } })
+    M:Set("keyring", true)
+    mock.stub(C_Container, "GetContainerNumSlots", function(bag: number): number
+        if bag == -1 then return 4 end
+        if bag == 0 then return 16 end
+        if bag == 5 then return 8 end
+        return 0
+    end)
+    M:Refresh()
+    expect(laid[1].label).toBe("Reagents")
+    expect(laid[1].meta).toBe("8 · 7 free")
+    expect(laid[2].label).toBe("Keyring")
+end
+
+@test("a bag's update, a lock and a cooldown redraw its slots")
+local function updates()
+    open()
+    mock.setBag(0, { slots = 16, items = { [1] = { id = CLOTH, count = 9 }, [2] = { id = POTION, count = 2, locked = true } } })
+    mock.fireEvent("BAG_UPDATE", 0)
+    expect(M.skins[M.buttons[0][1]].item.count).toBe(9)
+    mock.fireEvent("ITEM_LOCK_CHANGED", 0, 2)
+    expect(M.skins[M.buttons[0][2]].item.locked).toBe(true)
+    mock.setItemCooldown(POTION, 60, 30)
+    mock.fireEvent("BAG_UPDATE_COOLDOWN")
+    mock.fireEvent("BAG_UPDATE", mock.secret(0))   -- unreadable: nothing
+    mock.fireEvent("ITEM_LOCK_CHANGED", 16)          -- a worn item's: not a bag slot
+end
+
+--------------------------------------------------------------------------------
+-- The bag rail
+--------------------------------------------------------------------------------
+
+@test("the bag rail: the backpack, your bags, one empty slot, the reagent slot; hovering one lights its slots")
+local function rail()
+    open()
+    local r = M.bagRail
+    expect(r).toBeShown()
+    local cells: any[] = {}
+    for _, c in ipairs(r.cells) do if c:IsShown() then cells[#cells + 1] = c end end
+    expect(cells[1].entry.kind).toBe("backpack")
+    expect(cells[#cells].entry.kind).toBe("reagent")
+    mock.hover(cells[1])
+    expect(M.buttons[0][1]:GetAlpha()).toBe(1)
+    mock.hover(cells[2])                            -- an empty bag slot: its tooltip
+    mock.hover(cells[#cells])
+    mock.hover(nil)
+    -- a bag in a slot: picked up or swapped
+    local pick = mock.stub(G, "PickupBagFromSlot", function(_: number) end)
+    local put = mock.stub(G, "PutItemInBag", function(_: number) end)
+    mock.click(cells[2])
+    expect(pick).toHaveBeenCalledTimes(1)
+    mock.stub(G, "CursorHasItem", function(): boolean return true end)
+    mock.script(cells[2], "OnReceiveDrag")
+    expect(put).toHaveBeenCalledTimes(1)
+    mock.script(cells[2], "OnDragStart")
+    expect(pick).toHaveBeenCalledTimes(2)
+    mock.click(cells[1])                           -- the backpack: fixed
+    expect(put).toHaveBeenCalledTimes(1)
+    -- a bag in it: the game's tooltip, its size
+    local firstBag = C_Container.ContainerIDToInventoryID(1)
+    mock.stub(G, "GetInventoryItemTexture", function(_: string, slot: number): any return slot == firstBag and 133639 or nil end)
+    M:DrawBagRail()
+    mock.hover(nil)
+    local tip = mock.stub(GameTooltip, "SetInventoryItem", function(_: any, _: string, _: number): boolean return true end)
+    mock.hover(r.cells[2])
+    expect(tip).toHaveBeenCalledTimes(1)
+    mock.hover(nil)
+    -- off: no rail
+    M:Set("bagSlots", false)
+    expect(r).never.toBeShown()
+    inv().slotsToggle.onChange(true)
+    expect(r).toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The bank
+--------------------------------------------------------------------------------
+
+local function atBank(opts: { [string]: any }?)
+    mock.player:setMoney(1000000)
+    local banker = mock.spawnUnit({ name = "Banker", reaction = "friendly" })
+    local o = opts or {}
+    mock.defineBank(banker, { tabs = o.tabs or { { name = "Tab 1", slots = 28, items = { [1] = { id = CLOTH, count = 7 } } } },
+        nextTabCost = o.cost or 10000 })
+    mock.player:interact(banker)
+    mock.advanceTime(0.5)
+end
+
+@test("at a banker: the bank window with its tabs, your bags beside it; away: back to their place")
+local function bankWindow()
+    open()
+    atBank()
+    expect(bank()).toBeShown()
+    expect(bank().note:GetText():find("slots", 1, true) ~= nil).toBe(true)
+    expect((select(2, inv():GetPoint(1)))).toBe(bank())
+    expect(G.BankFrame:GetAlpha()).toBe(0)
+    G.BankFrame:SetPoint("CENTER")                 -- the game places it again: away again
+    mock.advanceTime(0.01)
+    expect(G.BankFrame:GetLeft() < 0).toBe(true)
+    mock.fireEvent("BANKFRAME_CLOSED")
+    expect(bank()).never.toBeShown()
+    expect(M:CharData().bank ~= nil).toBe(true)
+end
+
+@test("the bank rail: its own slots, the bank slots bought, the buy cell with its cost or why not")
+local function bankRail()
+    atBank()
+    local r = M.bankRail
+    expect(r).toBeShown()
+    local buy = r.buy
+    expect(buy).toBeShown()
+    mock.hover(buy)
+    expect(buy.skin.hover).toBe(true)
+    mock.hover(nil)
+    mock.stub(C_Bank, "FetchNextPurchasableBankTabData", function(_: any): any return { tabCost = 999999999, canAfford = false } end)
+    M:DrawBankRail()
+    expect(buy.why:find("You need ", 1, true) ~= nil).toBe(true)
+    mock.stub(C_Bank, "HasMaxBankTabs", function(_: any): boolean return true end)
+    M:DrawBankRail()
+    expect(buy.why).toBe("Every bank slot is bought.")
+    mock.stub(C_Bank, "HasMaxBankTabs", function(_: any): boolean return false end)
+    mock.stub(C_Bank, "FetchNextPurchasableBankTabData", function(_: any): any return nil end)
+    M:DrawBankRail()
+    expect(buy.why).toBe("The bank doesn't offer another slot right now.")
+    -- a bank slot's tooltip
+    mock.hover(r.cells[1])
+    mock.hover(nil)
+    mock.fireEvent("PLAYER_MONEY")
+    mock.player:enterCombat()
+    mock.player:leaveCombat()
+    mock.fireEvent("BANKFRAME_CLOSED")
+end
+
+@test("the bank setting off: Blizzard's bank window as always")
+local function bankOff()
+    atBank()
+    M:Set("bank", false)
+    expect(bank()).never.toBeShown()
+    expect(G.BankFrame:GetAlpha()).toBe(1)
+    mock.fireEvent("BANKFRAME_CLOSED")
+    M:Set("bank", true)
+end
+
+--------------------------------------------------------------------------------
+-- Other characters, the search
+--------------------------------------------------------------------------------
+
+local OTHER = "Otherplayer - Realm"
+
+local function others()
+    local real = M.AllCharData
+    mock.stub(M, "AllCharData", function(self: any): any
+        local all: any = {}
+        for k, v in pairs(real(self)) do all[k] = v end
+        all[OTHER] = { name = "Otherplayer", realm = GetRealmName(), class = "MAGE", level = 50, money = 123456, seen = time() - 3600,
+            bags = { slots = { { t = 132889, c = 4, q = 1, l = "|cffffffff|Hitem:" .. CLOTH .. "::::::::|h[Test Cloth]|h|r" }, false },
+                     size = 2, free = 1, seen = time() - 3600 },
+            bank = { slots = { { t = 134830, c = 1, q = 2, l = "|cff1eff00|Hitem:" .. POTION .. "::::::::|h[Test Potion]|h|r" } },
+                     size = 1, free = 0, seen = time() - 7200 },
+            equipped = {} }
+        return all
+    end)
+end
+
+@test("the picker shows another character's bags or bank, read only, dated")
+local function otherCharacter()
+    others()
+    open()
+    M:UpdatePicker()
+    inv().who.onChange(OTHER)
+    expect(M:IsLive()).toBe(false)
+    expect(M.savedSlots[1]).toBeShown()
+    expect(inv().meta:GetText()).toBe("1 free of 2")
+    mock.hover(M.savedSlots[1])
+    expect(GameTooltip).toBeShown()
+    mock.hover(nil)
+    local link = mock.stub(G, "HandleModifiedItemClick", function(_: string) end)
+    mock.stub(G, "IsModifiedClick", function(_: string?): boolean return true end)
+    mock.click(M.savedSlots[1])
+    expect(link).toHaveBeenCalledTimes(1)
+    inv().view.onChange("bank")
+    expect(inv().meta:GetText()).toBe("0 free of 1")
+    -- closing goes back to your own bags
+    M:SetOpen(false)
+    open()
+    expect(M:IsLive()).toBe(true)
+end
+
+@test("the search: the game's item search on your bags; All characters lists what everyone carries")
+local function searching()
+    others()
+    open()
+    local set = mock.stub(C_Container, "SetItemSearch", function(_: string) end)
+    inv().search.onTextChanged("cloth")
+    expect(set).toHaveBeenCalledWith("cloth")
+    expect(bank().search:GetValue()).toBe("cloth")
+    inv().all.value = true
+    inv().all.onChange(true)
+    mock.advanceTime(0.2)
+    expect(M:ShowingResults()).toBe(true)
+    expect(inv().meta:GetText():find("item", 1, true) ~= nil).toBe(true)
+    local row = inv().resultRows[1]
+    if row and row.onEnter then
+        row.onEnter(row)
+        row.onLeave(row)
+    end
+    -- closing ends the search
+    inv().all.value = false
+    M:SetOpen(false)
+    expect(inv().search:GetValue()).toBe("")
+    -- another character's bags with a search dim what doesn't match
+    open()
+    inv().who.onChange(OTHER)
+    inv().search.onTextChanged("potion")
+    mock.advanceTime(0.2)
+end
+
+@test("item counts: which characters have how many, where, and the total")
+local function counts()
+    others()
+    M:SaveMe()
+    local lines: string[] = {}
+    local tip: any = { AddLine = function(_: any, t: string) lines[#lines + 1] = t end,
+        AddDoubleLine = function(_: any, l: string, r: string) lines[#lines + 1] = l .. " | " .. r end, Show = function(_: any) end }
+    M:AddCounts(tip, { id = CLOTH })
+    expect(hasLine(lines, "Bags 3")).toBe(true)
+    expect(hasLine(lines, "Bags 4")).toBe(true)
+    expect(hasLine(lines, "Total | ")).toBe(true)
+    lines = {}
+    M:AddCounts(tip, { id = 1 })                   -- nobody has it
+    M:AddCounts(tip, { id = mock.secret(CLOTH) })
+    M:Set("itemCounts", false)
+    M:AddCounts(tip, { id = CLOTH })
+    expect(#lines).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- Sell junk
+--------------------------------------------------------------------------------
+
+@test("at a vendor with grey items: Sell junk, one a moment, until none is left")
+local function junk()
+    mock.setBag(0, { slots = 16, items = { [1] = { id = RAG, count = 2 }, [2] = { id = RAG, count = 1, locked = true },
+                                          [3] = { id = CLOTH, count = 1 } } })
+    open()
+    mock.openMerchant({ name = "Vendor", items = {} })
+    mock.advanceTime(0.2)
+    expect(M:Junk()).toBe(1)
+    local used: number[] = {}
+    mock.stub(C_Container, "UseContainerItem", function(bag: number, slot: number) used[#used + 1] = bag * 100 + slot end)
+    M:SellJunk()
+    M:SellJunk()                                   -- selling already: once
+    mock.advanceTime(0.21)
+    expect(used).toEqual({ 1 })
+    mock.setBag(0, { slots = 16, items = { [3] = { id = CLOTH, count = 1 } } })
+    mock.advanceTime(0.21)
+    expect(M.selling).toBe(nil)
+    mock.closeMerchant()
+end
+
+--------------------------------------------------------------------------------
+-- Sorting
+--------------------------------------------------------------------------------
+
+@test("Sort: SuuUI's order in waves under the loading mark, the items moved, the window back")
+local function sorting()
+    -- (distinct items: the engine doesn't stack an item onto a part stack of its own kind)
+    mock.setBag(0, { slots = 16, items = { [5] = { id = CLOTH, count = 3 }, [9] = { id = POTION, count = 2 },
+                                          [12] = { id = HERB, count = 4 } } })
+    open()
+    mock.click(inv().sort)
+    expect(M.sorting ~= nil).toBe(true)
+    expect(inv().sortCover).toBeShown()
+    M:Sort(false)                                  -- sorting already: once
+    for _ = 1, 40 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then break end
+    end
+    expect(M.sorting).toBe(nil)
+    expect(inv().sortCover).never.toBeShown()
+end
+
+@test("the game's sort when asked; what stops a sort: combat, an item in hand, the window closing")
+local function sortStops()
+    M:Set("sortOrder", "game")
+    open()
+    local sorted = mock.stub(C_Container, "SortBags", function() end)
+    M:Sort(false)
+    expect(sorted).toHaveBeenCalledTimes(1)
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    for _ = 1, 30 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then break end
+    end
+    expect(M.sorting).toBe(nil)
+    M:Reset("sortOrder")
+    local n = printedCount()
+    mock.player:enterCombat()
+    M:Sort(false)
+    expect(hasLine(printedSince(n), "can't be sorted in combat")).toBe(true)
+    mock.player:leaveCombat()
+    mock.stub(G, "CursorHasItem", function(): boolean return true end)
+    M:Sort(false)
+    expect(hasLine(printedSince(n), "Put down the item")).toBe(true)
+    mock.stub(G, "CursorHasItem", function(): boolean return false end)
+    mock.setBag(0, { slots = 16, items = { [5] = { id = CLOTH, count = 3 }, [9] = { id = POTION, count = 2 } } })
+    M:Sort(false)
+    M:SetOpen(false)
+    expect(M.sorting).toBe(nil)
+    expect(hasLine(printedSince(n), "Sorting stopped: the bags closed")).toBe(true)
+    open()
+    M:Sort(false)
+    mock.player:enterCombat()
+    expect(hasLine(printedSince(n), "combat started")).toBe(true)
+    mock.player:leaveCombat()
+    open()
+    M:Sort(false)
+    mock.fireEvent("UI_ERROR_MESSAGE", 1, "Can't do that")
+    mock.advanceFrames(2, 100)
+end
+
+@test("the bank sorts the same way; refused at once, the game's bank sort instead")
+local function bankSort()
+    -- two part stacks: the engine keeps the item on the cursor (see the notes), the move refused
+    atBank({ tabs = { { name = "Tab 1", slots = 28, items = { [3] = { id = CLOTH, count = 7 }, [9] = { id = CLOTH, count = 3 } } } } })
+    local n = printedCount()
+    local game = mock.stub(C_Container, "SortBank", function(...: any) end)
+    M.sorting = nil
+    M:Sort(true)
+    if M.sorting then M:StopSort("the game didn't take a move") end
+    expect(game).toHaveBeenCalledTimes(1)
+    expect(hasLine(printedSince(n), "the game's own sort instead")).toBe(true)
+    mock.fireEvent("BANKFRAME_CLOSED")
+end
+
+--------------------------------------------------------------------------------
+-- Settings, Blizzard's frames, the rest
+--------------------------------------------------------------------------------
+
+local function rowOf(label: string): any
+    local s = registry.get("bags") :: registry.Section
+    for _, g in ipairs(s.groups or {}) do
+        for _, r in ipairs(g.rows) do if r.label == label then return r end end
+    end
+    error("no row " .. label)
+end
+
+@test("Forget a character: chosen, then a second click; the picker loses them")
+local function forget()
+    others()
+    local f = rowOf("Forget a character").build(newParent(400, 100))
+    expect(#f.select.options).toBe(1)
+    mock.click(f.button)                            -- nothing chosen
+    f.select.onChange(OTHER)
+    mock.click(f.button)
+    expect(f.button.label:GetText()).toBe("Click again")
+    mock.advanceTime(3.1)
+    expect(f.button.label:GetText()).toBe("Forget")
+    mock.click(f.button)
+    local forgot = mock.stub(M, "ForgetCharData", function(_: any, _: string) end)
+    mock.click(f.button)
+    expect(forgot).toHaveBeenCalledWith(M, OTHER)
+    f:Hide()
+    f:Show()
+end
+
+@test("the preview, the sort's tooltip, the columns, a theme")
+local function settingsRest()
+    local s = registry.get("bags") :: registry.Section
+    local view = (s.preview :: (parent: any) -> any)(newParent(400, 400))
+    expect(view).toBe(M:PreviewView(newParent(400, 400)))
+    M:Set("sortDirection", "start")
+    expect(inv().sort.tip.description:find("the start", 1, true) ~= nil).toBe(true)
+    open()
+    M:Set("columns", 12)
+    themeChanged()
+    M:Set("reagentBag", false)
+    expect(inv()).toBeShown()
+end
+
+@test("Blizzard's bag frames stay hidden, however the game parents them")
+local function keptHidden()
+    local f = G.ContainerFrameContainer or G.ContainerFrameCombinedBags
+    local hiddenParent = f:GetParent()
+    f:SetParent(UIParent)
+    mock.advanceTime(0.01)
+    expect(f:GetParent()).toBe(hiddenParent)
+end
+
+@test("money and the gear are saved for your other characters; off, both windows close")
+local function saved()
+    mock.player:setMoney(4242)
+    mock.fireEvent("PLAYER_MONEY")
+    expect(M:CharData().money).toBe(4242)
+    mock.fireEvent("PLAYER_EQUIPMENT_CHANGED", 1, false)
+    mock.advanceTime(1.1)
+    expect(type(M:CharData().equipped)).toBe("table")
+    mock.fireEvent("PLAYER_LOGOUT")
+    open()
+    M:OnDisable()
+    expect(inv()).never.toBeShown()
+end
+
+@test("the old regression: each special bag keeps its own slots in a sort's plan")
+local function twoSpecialBags()
+    local HERBS, SHARDS = 32, 4
+    local slotsList = {
+        { bag = 0, slot = 1, family = 0, item = { id = "cloth", count = 1, classID = 7 } },
+        { bag = 0, slot = 2, family = 0 },
+        { bag = 2, slot = 1, family = HERBS, item = { id = "shard", count = 1, classID = 7, family = SHARDS } },
+        { bag = 1, slot = 1, family = SHARDS, item = { id = "herb", count = 1, classID = 7, family = HERBS } },
+    }
+    local target = assert(M:SortTarget(slotsList, "type", false))
+    expect(target[3] and target[3].id).toBe("herb")
+    expect(target[4] and target[4].id).toBe("shard")
+    expect(target[1] and target[1].id).toBe("cloth")
+end
+
+@test("the bank: its tabs without the game's list, a bank slot's bag picked up, closing, its slots' cooldowns")
+local function bankMore()
+    atBank({ tabs = { { name = "Tab 1", slots = 28, items = {} }, { name = "Tab 2", slots = 20, icon = 133639, items = {} } } })
+    mock.stub(C_Bank, "FetchPurchasedBankTabIDs", function(_: any): any return {} end)
+    expect(#M:BankBags() >= 1).toBe(true)
+    mock.fireEvent("BAG_UPDATE_COOLDOWN")
+    -- a bought bank slot: picked up or swapped (the bank's own slots are fixed)
+    local picked = mock.stub(C_Container, "PickupContainerItem", function(_: number, _: number) end)
+    local cell: any = nil
+    for _, c in ipairs(M.bankRail.cells) do if c:IsShown() and c.entry.tab and c.entry.tab > 1 then cell = c end end
+    if cell then
+        mock.script(cell, "OnClick", "LeftButton")
+        mock.script(cell, "OnDragStart")
+        expect(picked).toHaveBeenCalledTimes(2)
+    end
+    -- the window's close: the game's bank closes
+    local closed = mock.stub(C_Bank, "CloseBankFrame", function() end)
+    bank().onClose()
+    expect(closed).toHaveBeenCalledTimes(1)
+    local realClose = C_Bank.CloseBankFrame
+    C_Bank.CloseBankFrame = nil                     -- an older client: the global
+    local global = mock.stub(G, "CloseBankFrame", function() end)
+    bank().onClose()
+    C_Bank.CloseBankFrame = realClose
+    expect(global).toHaveBeenCalledTimes(1)
+    mock.fireEvent("BANKFRAME_CLOSED")
+end
+
+@test("an item picked up mid-sort stops it")
+local function pickedMidSort()
+    mock.setBag(0, { slots = 16, items = { [5] = { id = CLOTH, count = 3 }, [9] = { id = POTION, count = 2 } } })
+    open()
+    local n = printedCount()
+    M:Sort(false)
+    mock.stub(G, "CursorHasItem", function(): boolean return true end)
+    for _ = 1, 20 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then break end
+    end
+    expect(hasLine(printedSince(n), "you picked up an item")).toBe(true)
+end

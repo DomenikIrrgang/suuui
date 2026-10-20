@@ -1,0 +1,105 @@
+-- Units/MicroBags: Blizzard's micro menu and bag bar in holders edit mode
+-- places. With SuuUI's own micro menu and bags on (the test client's
+-- start), Blizzard's bag bar is put away and stays away; with them off
+-- (faked, and the module's setup run again), both move into their holders
+-- at Blizzard's size times Scale, come back when Blizzard moves them,
+-- stay where the game takes the micro menu on purpose, and show as Shows
+-- says.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as events from "/Core/Events"
+import * as registry from "/SettingsUI/Registry"
+import * as editMode from "/EditMode/EditMode"
+import expectNoErrors from "../../helpers"
+
+local M: any = assert(SuuUI.GetModule("microbags"))
+local UI: any = SuuUI.UI
+local G: any = _G
+
+@afterEach
+local function cleanup()
+    for _, key in ipairs({ "shows", "scale", "microPosition", "bagsPosition" }) do M:Reset(key) end
+    mock.advanceTime(0.1)
+    expectNoErrors()
+end
+
+-- SuuUI's micro menu and bags off, and the module set up again.
+local function withoutOwn()
+    local real = SuuUI.GetModule
+    mock.stub(SuuUI, "GetModule", function(id: string): any
+        if id == "micromenu" or id == "bags" then
+            return { Get = function(_: any, _: string): any return false end }
+        end
+        return real(id)
+    end)
+    registry.unregister(M)
+    editMode.unregister(M)
+    M:OnEnable()
+end
+
+@test("with SuuUI's own bags, Blizzard's bag bar is put away, and stays away")
+local function putAway()
+    local bar = G.BagsBar
+    expect(bar:IsVisible()).toBe(false)
+    local away = bar:GetParent()
+    bar:SetParent(UIParent)
+    mock.advanceTime(0.01)
+    expect(bar:GetParent()).toBe(away)
+    expect(G.SuuUIMicroHolder).toBe(nil)            -- SuuUI's micro menu: Blizzard's left alone
+end
+
+@test("without them: both in holders at Blizzard's size times Scale; Scale and a new root scale size them again")
+local function holders()
+    withoutOwn()
+    local micro, holder = G.MicroMenu, G.SuuUIMicroHolder
+    expect(micro:GetParent()).toBe(holder)
+    expect(G.BagsBar:GetParent()).toBe(G.SuuUIBagsHolder)
+    local w = micro:GetWidth() * micro:GetScale()
+    expect(holder:GetWidth()).toBeCloseTo(math.max(1, w))
+    M:Set("scale", 1.2)
+    expect(micro:GetScale()).toBeCloseTo(UIParent:GetEffectiveScale() / holder:GetEffectiveScale() * 1.2)
+    events.emit("SUUUI_ROOT_SCALED")
+    expect(micro:GetParent()).toBe(holder)
+    -- set up again (turned on after being off): the same holders
+    registry.unregister(M)
+    editMode.unregister(M)
+    M:OnEnable()
+    expect(G.SuuUIMicroHolder).toBe(holder)
+end
+
+@test("Blizzard moving them puts them back a frame later; the game taking the micro menu leaves it there")
+local function guarded()
+    withoutOwn()
+    local micro, holder = G.MicroMenu, G.SuuUIMicroHolder
+    micro:ClearAllPoints()
+    micro:SetPoint("CENTER", UIParent, "CENTER")
+    micro:SetPoint("CENTER", UIParent, "CENTER")   -- once, a frame later
+    mock.advanceTime(0.01)
+    expect((select(2, micro:GetPoint(1)))).toBe(holder)
+    micro:SetParent(G.MicroMenuContainer)          -- home: back to the holder
+    mock.advanceTime(0.01)
+    expect(micro:GetParent()).toBe(holder)
+    local vehicle = CreateFrame("Frame", nil, UIParent)
+    micro:SetParent(vehicle)                       -- the game's on purpose
+    mock.advanceTime(0.01)
+    expect(micro:GetParent()).toBe(vehicle)
+    micro:SetParent(UIParent)
+    mock.advanceTime(0.01)
+    expect(micro:GetParent()).toBe(holder)
+end
+
+@test("the holders show as Shows says, hidden while edit mode hid them")
+local function shows()
+    withoutOwn()
+    local vis = mock.stub(UI, "SetVisibility", function(_: any, _: string?) end)
+    M:Set("shows", "always")
+    expect(vis).toHaveBeenCalledWith(G.SuuUIMicroHolder, "always")
+    M:Set("bagsPosition", { point = "TOP", x = 20, y = -116, hidden = true })
+    expect(vis).toHaveBeenCalledWith(G.SuuUIBagsHolder, "hidden")
+    local s = registry.get("microbags") :: registry.Section
+    local scale: any = nil
+    for _, r in ipairs((s.groups or {})[1].rows) do if r.key == "scale" then scale = r end end
+    expect(scale.format(0.85)).toBe("85%")
+end
