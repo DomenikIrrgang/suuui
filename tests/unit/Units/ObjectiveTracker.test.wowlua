@@ -1,49 +1,469 @@
-import test, expect from "wowlua:test"
-import * as mock from "wowlua:mock"
-import internal M from "/Units/ObjectiveTracker"
-import internal M as N from "/Units/NpcDialogue"
-import errorsSoFar from "../../helpers"
+-- Units/ObjectiveTracker: your tracked quests from the engine's quest log
+-- (taken from a quest giver): tracked as accepted, their titles, colours,
+-- objectives and counts, grouped and sorted by zone, ready to turn in; a
+-- quest's usable item (secure, beside its title; in combat kept in place;
+-- its cooldown and range); the head's toggle and boss fights; a quest's
+-- clicks and menu; tracked recipes (reagents, counts, the opener, the
+-- menu); the settings and the preview; stopped.
 
-@test("explore")
-local function explore()
-    local log: string[] = {}
-    local function p(...: any) local t: string[] = {} for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end log[#log + 1] = table.concat(t, " ") end
-    p("tracker", M:IsEnabled(), M.frame, M.tracker, "npc", N:IsEnabled(), N.root)
-    local npc = mock.spawnUnit({ name = "Marshal Dughan", level = 30, reaction = "friendly", distance = 3 })
-    mock.defineQuest(9001, { title = "Wolves Across the Border", text = "Kill wolves, $N.", objective = "Kill 5 wolves.", giver = npc,
-        level = 5, xp = 450, money = 75, header = "Elwynn Forest",
-        objectives = { { text = "Prowler slain", required = 5 } } })
-    mock.player:interact(npc)
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, sortQuests from "/Units/ObjectiveTracker"
+import expectNoErrors from "../../helpers"
+
+local UI = SuuUI.UI
+local G: any = _G
+
+-- Placeholder quests, each from its own giver (made once: the engine keeps them).
+local WOLVES, LETTERS, CATTAILS = 9001, 9002, 9003
+local function giver(name: string): mock.MockUnit
+    return mock.spawnUnit({ name = name, level = 30, reaction = "friendly", distance = 3 })
+end
+local givers: { [number]: mock.MockUnit } = {
+    [WOLVES] = giver("Quartermaster Hale"),
+    [LETTERS] = giver("Courier Ambrey"),
+    [CATTAILS] = giver("Herbalist Wenna"),
+}
+mock.defineQuest(WOLVES, { title = "Wolves Across the Border", text = "Kill wolves, $N.", objective = "Kill 5 wolves.",
+    giver = givers[WOLVES], level = 5, header = "Elwynn Forest", objectives = { { text = "Prowler slain", required = 5 } } })
+mock.defineQuest(LETTERS, { title = "Letters for the Crossroads", text = "Take these.", objective = "Deliver the letters.",
+    giver = givers[LETTERS], level = 1, header = "Elwynn Forest", objectives = { { text = "Letters delivered", required = 1 } } })
+mock.defineQuest(CATTAILS, { title = "Speargrass Cuttings", text = "Gather them.", objective = "Gather cattails.",
+    giver = givers[CATTAILS], level = 1, header = "Durotar", objectives = { { text = "Handful of Cattails", required = 2 } } })
+
+-- Takes a quest from its giver.
+local function take(id: number)
+    mock.player:interact(givers[id] :: mock.MockUnit)
     mock.advanceTime(0.5)
     mock.advanceFrames(3)
-    p("questframe", QuestFrame:IsShown(), N.questView, N.root:IsShown(), N:View())
-    p("title", GetTitleText(), GetQuestText(), GetObjectiveText(), GetRewardXP(), GetRewardMoney())
-    p("speech", N.speech.text:GetText(), N.plate.name:GetText())
     AcceptQuest()
     mock.advanceTime(0.5)
     mock.advanceFrames(3)
-    p("log", C_QuestLog.GetNumQuestLogEntries(), C_QuestLog.GetNumQuestWatches(), C_QuestLog.GetLogIndexForQuestID(9001))
-    local idx = C_QuestLog.GetLogIndexForQuestID(9001)
-    if idx then
-        local info = C_QuestLog.GetInfo(idx)
-        p("info", info and info.title, info and info.level, info and info.difficultyLevel, info and info.isHeader)
-        local o = C_QuestLog.GetQuestObjectives(9001)
-        p("obj", o and o[1] and o[1].text, o and o[1] and o[1].finished)
+end
+
+local function settle()
+    mock.advanceFrames(2)
+end
+
+-- The tracker's rows in use, by title.
+local function row(title: string): any
+    for _, r in ipairs(M.tracker.rows) do
+        if r.inUse and r.quest and r.quest.title == title then return r end
     end
-    p("q", #M:TrackedQuests(), M.quests and #M.quests)
-    local ok, e = pcall(C_QuestLog.GetDistanceSqToQuest, 9001) p("dist", ok, e)
-    ok, e = pcall(GetQuestDifficultyColor, 5) p("diff", ok, e and e.font)
-    ok, e = pcall(GetQuestLogSpecialItemInfo, 1) p("special", ok, e)
-    ok, e = pcall(C_TradeSkillUI.GetRecipesTracked, false) p("recipes", ok, e)
-    ok, e = pcall(C_SuperTrack.GetSuperTrackedQuestID) p("super", ok, e)
-    ok, e = pcall(C_QuestLog.GetQuestWatchType, 9001) p("wt", ok, e)
-    p("gossip", GossipFrame, QuestFrameGreetingPanel, QuestFrameDetailPanel)
-    local g = mock.spawnUnit({ name = "Innkeeper", reaction = "friendly", distance = 3 })
-    mock.defineGossip(g, { text = "Welcome!", options = { { name = "Make this inn your home.", icon = 132052, gossipOptionID = 1 } } })
-    mock.player:interact(g)
+    return nil
+end
+
+-- What a context menu offered: its buttons by label.
+local menu: { [string]: () -> () } = {}
+local function captureMenus()
+    mock.stub(UI, "ContextMenuFrom", function(owner: any, describe: (owner: any, root: any) -> ())
+        for k in pairs(menu) do menu[k] = nil end
+        local root: any = {}
+        function root:CreateTitle(_: string) end
+        function root:CreateButton(label: string, fn: () -> ()) menu[label] = fn end
+        describe(owner, root)
+    end)
+end
+
+local function choose(label: string)
+    local fn = menu[label]
+    assert(fn, "no menu button " .. label)
+    fn()
+end
+
+-- Stops tracking and abandons every quest in the log.
+local function dropAll()
+    for i = C_QuestLog.GetNumQuestWatches(), 1, -1 do
+        local id = C_QuestLog.GetQuestIDForQuestWatchIndex(i)
+        if id then C_QuestLog.RemoveQuestWatch(id) end
+    end
+    for _, id in ipairs({ WOLVES, LETTERS, CATTAILS }) do
+        if C_QuestLog.GetLogIndexForQuestID(id) then
+            C_QuestLog.SetSelectedQuest(id)
+            C_QuestLog.SetAbandonQuest()
+            C_QuestLog.AbandonQuest()
+        end
+    end
     mock.advanceTime(0.5)
-    mock.advanceFrames(3)
-    p("gossipshown", GossipFrame:IsShown(), N:View(), N.root:IsShown(), N.speech.text:GetText(), N.answerList and #N.answerList)
-    p("errs", #errorsSoFar(), errorsSoFar()[1])
-    expect(log).toEqual({})
+    settle()
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, k in ipairs({ "autoTrack", "items", "recipes", "collapsed", "recipesCollapsed", "collapseInBossFights",
+                         "maxHeight", "shows" }) do
+        M:Reset(k)
+    end
+    dropAll()
+    expectNoErrors()
+end
+
+@test("a quest you accept is tracked: its title in its colour, objectives with their counts, under its zone")
+local function accepted()
+    take(WOLVES)
+    settle()
+    expect(C_QuestLog.GetNumQuestWatches()).toBe(1)
+    local quests = M:TrackedQuests()
+    expect(#quests).toBe(1)
+    local q = quests[1]
+    expect(q.title).toBe("Wolves Across the Border")
+    expect(q.zone).toBe("Elwynn Forest")
+    -- (level 5 for a level 1 character)
+    expect(q.difficulty).toBe("very-difficult")
+    expect(q.objectives[1].text).toBe("Prowler slain")
+    expect(q.objectives[1].progress).toBe("0/5")
+    expect(q.objectives[1].done).toBe(false)
+    expect(row("Wolves Across the Border") ~= nil).toBe(true)
+    expect(M.tracker:GetAlpha()).toBe(1)
+    -- the heading found by walking up the log; a colour the tracker doesn't know: standard
+    mock.stub(C_QuestLog, "GetHeaderIndexForQuest", function(_: number): any return nil end)
+    mock.stub(G, "GetQuestDifficultyColor", function(_: number): any return { font = "GameFontNormal" } end)
+    q = M:TrackedQuests()[1]
+    expect(q.zone).toBe("Elwynn Forest")
+    expect(q.difficulty).toBe("standard")
+end
+
+@test("Track accepted quests: the tracker watches one the game didn't; off, it leaves it")
+local function autoTrack()
+    -- (the game watches an accepted quest itself, as recorded: the quest
+    -- here as one it didn't)
+    mock.stub(C_QuestLog, "GetQuestWatchType", function(_: number): any return nil end)
+    local added = mock.spy(function(_: number) end)
+    mock.stub(C_QuestLog, "AddQuestWatch", added)
+    take(LETTERS)
+    expect(added).toHaveBeenCalledWith(LETTERS)
+    M:Set("autoTrack", false)
+    take(CATTAILS)
+    expect(added).toHaveBeenCalledTimes(1)
+end
+
+@test("nothing tracked: nothing shown")
+local function empty()
+    settle()
+    M:Refresh()
+    expect(M.tracker:GetAlpha()).toBe(0)
+    expect(M.toggle:GetAlpha()).toBe(0)
+end
+
+@test("by zone: the zone you're in first, then the nearest, the rest in log order; the nearest first within one")
+local function sorting()
+    local list: { [string]: any }[] = {
+        { questID = 1, zone = "Durotar", logIndex = 5, distance = 100 },
+        { questID = 2, zone = "Elwynn Forest", logIndex = 3, distance = 900 },
+        { questID = 3, zone = "Elwynn Forest", logIndex = 2, distance = 400 },
+        { questID = 4, zone = "Westfall", logIndex = 1 },
+        { questID = 5, zone = "Duskwood", logIndex = 9 },
+        { questID = 6, zone = "Westfall", logIndex = 7 },
+        { questID = 7, logIndex = 8, distance = 50 },
+    }
+    sortQuests(list, { ["Elwynn Forest"] = true })
+    local order: number[] = {}
+    for i, q in ipairs(list) do order[i] = q.questID end
+    expect(order).toEqual({ 3, 2, 7, 1, 4, 6, 5 })
+end
+
+@test("objectives as the game words them: a count first, a count last, none")
+local function objectiveTexts()
+    take(WOLVES)
+    local real = C_QuestLog.GetQuestObjectives
+    mock.stub(C_QuestLog, "GetQuestObjectives", function(_: number): any
+        return { { text = "0/2 Handful of Cattails", finished = false }, { text = "Cattails: 1/4", finished = false },
+                 { text = "Find the cave", finished = true } }
+    end)
+    local o = M:TrackedQuests()[1].objectives
+    expect(o[1].text).toBe("Handful of Cattails")
+    expect(o[1].progress).toBe("0/2")
+    expect(o[2].text).toBe("Cattails")
+    expect(o[2].progress).toBe("1/4")
+    expect(o[3].text).toBe("Find the cave")
+    expect(o[3].progress).toBeNil()
+    expect(o[3].done).toBe(true)
+    -- unreadable: none
+    mock.stub(C_QuestLog, "GetQuestObjectives", function(_: number): any return "nothing" end)
+    expect(#M:TrackedQuests()[1].objectives).toBe(0)
+    -- (Blizzard's own code reads it too: the real one back at once)
+    mock.stub(C_QuestLog, "GetQuestObjectives", real)
+end
+
+@test("a quest done: ready to turn in, its completion text as the tooltip")
+local function complete()
+    take(LETTERS)
+    mock.stub(C_QuestLog, "IsComplete", function(id: number): boolean return id == LETTERS end)
+    mock.stub(G, "GetQuestLogCompletionText", function(_: number): string return "Return to the Courier." end)
+    local q = M:TrackedQuests()[1]
+    expect(q.complete).toBe(true)
+    expect(q.objectives).toBeNil()
+    expect(q.tooltip.description).toBe("Return to the Courier.")
+end
+
+@test("a quest's item: a secure button beside its title, its cooldown, in range; kept in place in combat")
+local function items()
+    take(WOLVES)
+    local link = "|cffffffff|Hitem:6145::::::::1:::::::::|h[Clarice's Pendant]|h|r"
+    mock.stub(G, "GetQuestLogSpecialItemInfo", function(_: number): (string, number, number, boolean)
+        return link, 133282, 3, false
+    end)
+    mock.stub(G, "GetQuestLogSpecialItemCooldown", function(_: number): (number, number, number)
+        return GetTime(), 30, 1
+    end)
+    local inRange = 1
+    mock.stub(G, "IsQuestLogSpecialItemInRange", function(_: number): number return inRange end)
+    M:Refresh()
+    local b = M.itemButtons[1]
+    expect(b).toBeShown()
+    expect(b:GetAttribute("type")).toBe("item")
+    expect(b:GetAttribute("item")).toBe(link)
+    expect(b.count:GetText()).toBe("3")
+    expect(b.coolingDown).toBe(true)
+    expect(M.itemsShown).toBe(1)
+    -- in its area: the suggested look
+    mock.advanceFrames(20)
+    expect(b.suggested).toBe(true)
+    inRange = 0
+    M:TickItems()
+    expect(b.suggested).toBe(false)
+    -- its tooltip: the quest item's
+    b:ShowTooltip()
+    b.logIndex = nil
+    b:ShowTooltip()
+    GameTooltip:Hide()
+    -- no cooldown
+    mock.stub(G, "GetQuestLogSpecialItemCooldown", function(_: number): any return nil end)
+    mock.fireEvent("BAG_UPDATE_COOLDOWN")
+    -- in combat the list holds still; laid out again after
+    mock.player:enterCombat()
+    expect(M.tracker.scrollLocked).toBe(true)
+    take(CATTAILS)
+    M:Refresh()
+    expect(M.pendingItems).toBe(true)
+    M:LayoutItems(M.quests)
+    mock.player:leaveCombat()
+    expect(M.pendingItems).toBeNil()
+    -- Quest items off: none
+    M:Set("items", false)
+    expect(b).never.toBeShown()
+    expect(M.itemsShown).toBe(0)
+end
+
+@test("the head's toggle folds the quests (secure); a boss folds everything and hides the items")
+local function collapsing()
+    take(WOLVES)
+    settle()
+    mock.click(M.toggle)
+    expect(M:Get("collapsed")).toBe(true)
+    expect(M.holder).never.toBeShown()
+    mock.click(M.toggle)
+    expect(M:Get("collapsed")).toBe(false)
+    expect(M.holder).toBeShown()
+    -- a boss up: only the head
+    local boss = mock.spawnUnit({ name = "Hogger", level = 11, reaction = "hostile", classification = "elite" })
+    mock.startEncounter({ id = 1, name = "Hogger", bosses = { boss } })
+    mock.advanceFrames(20)
+    mock.advanceFrames(2)
+    expect(M:InBossFight()).toBeTruthy()
+    expect(M.holder).never.toBeShown()
+    mock.endEncounter(true)
+    mock.advanceFrames(20)
+    mock.advanceFrames(2)
+    expect(M:InBossFight()).toBeFalsy()
+    -- off: a boss fight doesn't fold it
+    M:Set("collapseInBossFights", false)
+    mock.startEncounter({ id = 2, name = "Hogger" })
+    expect(M:InBossFight()).toBeFalsy()
+    mock.endEncounter(true)
+    -- changed in combat: applied after
+    mock.player:enterCombat()
+    M:ApplySecure()
+    expect(M.pendingSecure).toBe(true)
+    mock.player:leaveCombat()
+    expect(M.pendingSecure).toBeNil()
+end
+
+@test("a quest's clicks: left for its details on the map; right: focus, share in a group, open, stop tracking")
+local function questClicks()
+    captureMenus()
+    take(WOLVES)
+    settle()
+    local opened = mock.spy(function(_: number) end)
+    mock.stub(G, "QuestMapFrame_OpenToQuestDetails", opened)
+    local r = row("Wolves Across the Border")
+    M:QuestClick(WOLVES, "LeftButton", r)
+    expect(opened).toHaveBeenCalledWith(WOLVES)
+    M:QuestClick(WOLVES, "RightButton", r)
+    expect(menu["Share"]).toBeNil()
+    -- (the game focuses a quest you accept)
+    expect(C_SuperTrack.GetSuperTrackedQuestID()).toBe(WOLVES)
+    choose("Stop focusing")
+    expect(C_SuperTrack.GetSuperTrackedQuestID()).toBeNil()
+    M:QuestClick(WOLVES, "RightButton", r)
+    choose("Focus")
+    expect(C_SuperTrack.GetSuperTrackedQuestID()).toBe(WOLVES)
+    choose("Open in quest log")
+    expect(opened).toHaveBeenCalledTimes(2)
+    -- in a group: share
+    local friend = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", reaction = "friendly" })
+    mock.group:add(friend)
+    mock.stub(C_QuestLog, "IsPushableQuest", function(_: number): boolean return true end)
+    local pushed = mock.spy(function() end)
+    mock.stub(G, "QuestLogPushQuest", pushed)
+    M:QuestClick(WOLVES, "RightButton", r)
+    choose("Share")
+    expect(pushed).toHaveBeenCalled()
+    mock.group:leave()
+    choose("Stop tracking")
+    mock.advanceFrames(2)
+    expect(C_QuestLog.GetNumQuestWatches()).toBe(0)
+end
+
+-- A tracked recipe's schematic: its product and reagents.
+local PRODUCT, ORE, STONE = 990101, 990102, 990103
+mock.defineItem(PRODUCT, { name = "Rough Sharpening Stone", quality = 1, icon = 135248 })
+mock.defineItem(ORE, { name = "Rough Stone", quality = 1, icon = 135232 })
+mock.defineItem(STONE, { name = "Coarse Stone", quality = 1, icon = 135233 })
+local RECIPE = 2660
+
+local function trackRecipe(have: { [number]: number })
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): any
+        return { outputItemID = PRODUCT, name = "Rough Sharpening Stone",
+                 reagentSlotSchematics = { { reagents = { { itemID = ORE } }, quantityRequired = 2 },
+                                           { reagents = { { itemID = STONE } }, quantityRequired = 1 },
+                                           { reagents = { { itemID = 1 } }, required = false } } }
+    end)
+    mock.stub(C_Item, "GetItemCount", function(id: number): number return have[id] or 0 end)
+    C_TradeSkillUI.SetRecipeTracked(RECIPE, true, false)
+    settle()
+end
+
+@test("tracked recipes: under the quests, their reagents counted, ready to craft, how many; folded on their own")
+local function recipes()
+    trackRecipe({ [ORE] = 1 })
+    local list = M:TrackedRecipes()
+    expect(#list).toBe(1)
+    local r = list[1]
+    expect(r.title).toBe("Rough Sharpening Stone")
+    expect(r.objectives[1].text).toBe("Rough Stone")
+    expect(r.objectives[1].progress).toBe("1/2")
+    expect(r.objectives[1].done).toBe(false)
+    expect(r.objectives[2].progress).toBe("0/1")
+    expect(r.complete).toBe(false)
+    expect(M.tracker:GetAlpha()).toBe(1)
+    trackRecipe({ [ORE] = 5, [STONE] = 3 })
+    r = M:TrackedRecipes()[1]
+    expect(r.complete).toBe(true)
+    expect(r.count).toBe("×2")
+    -- the section's own toggle
+    M.tracker.onSectionToggle("recipes")
+    expect(M:Get("recipesCollapsed")).toBe(true)
+    M.tracker.onSectionToggle("recipes")
+    -- off: none
+    M:Set("recipes", false)
+    expect(#M:TrackedRecipes()).toBe(0)
+    M:Set("recipes", true)
+    -- a product not loaded yet: asked for, drawn again once it comes
+    mock.stub(C_Item, "GetItemInfo", function(_: number): any return nil end)
+    M:TrackedRecipes()
+    expect(M.waitingItems).toBe(true)
+    mock.fireEvent("GET_ITEM_INFO_RECEIVED", PRODUCT, true)
+    expect(M.waitingItems).toBe(false)
+    C_TradeSkillUI.SetRecipeTracked(RECIPE, false, false)
+end
+
+@test("a tracked recipe's row: the secure opener over it, a click to open, the menu; in combat the row's own click")
+local function recipeClicks()
+    captureMenus()
+    trackRecipe({ [ORE] = 2, [STONE] = 1 })
+    local r = row("Rough Sharpening Stone")
+    expect(r ~= nil).toBe(true)
+    -- no profession to open it: nothing
+    mock.stub(SuuUI, "ProfessionOpener", function(_: number): number? return nil end)
+    M:RowEnter(r)
+    expect(M.opener).toBeNil()
+    mock.stub(SuuUI, "ProfessionOpener", function(_: number): number? return 2018 end)
+    M:RowEnter(r)
+    local b = M.opener
+    expect(b).toBeShown()
+    expect(b:GetAttribute("type1")).toBe("spell")
+    expect(b:GetAttribute("spell1")).toBe(2018)
+    local expected = mock.spy(function(_: number) end)
+    mock.stub(SuuUI, "ExpectRecipe", expected)
+    local opened = mock.spy(function(_: number) end)
+    mock.stub(SuuUI, "OpenRecipe", opened)
+    b.casting = false
+    b:Click("LeftButton")
+    expect(expected).toHaveBeenCalledWith(RECIPE)
+    expect(opened).toHaveBeenCalledWith(RECIPE)
+    mock.advanceTime(0.4)
+    b:Click("RightButton")
+    expect(menu["Stop tracking"] ~= nil).toBe(true)
+    -- the mouse away: the opener goes
+    b:GetScript("OnEnter")(b)
+    b:GetScript("OnLeave")(b)
+    expect(b).never.toBeShown()
+    -- the row's own clicks: the menu; the profession open already: chosen
+    M:RecipeClick(RECIPE, "RightButton", r)
+    mock.stub(C_TradeSkillUI, "GetBaseProfessionInfo", function(): any return { professionID = 0 } end)
+    mock.stub(C_TradeSkillUI, "GetTradeSkillLineForRecipe", function(_: number): (number, string, number) return 0, "", 0 end)
+    mock.stub(C_TradeSkillUI, "IsTradeSkillReady", function(): boolean return true end)
+    M:RecipeClick(RECIPE, "LeftButton", r)
+    expect(opened).toHaveBeenCalledTimes(2)
+    mock.stub(C_TradeSkillUI, "IsTradeSkillReady", function(): boolean return false end)
+    mock.player:enterCombat()
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    M:RecipeClick(RECIPE, "LeftButton", r)
+    expect(said[1]).toBe("Professions open out of combat.")
+    M:RowEnter(r)
+    mock.player:leaveCombat()
+    choose("Stop tracking")
+    settle()
+    expect(#M:TrackedRecipes()).toBe(0)
+end
+
+@test("the settings: height (applied after combat), shows, the preview")
+local function settings()
+    take(WOLVES)
+    M:Set("maxHeight", 200)
+    expect(M.frame:GetHeight()).toBe(200)
+    mock.player:enterCombat()
+    M:Set("maxHeight", 300)
+    expect(M.pendingSize).toBe(true)
+    mock.player:leaveCombat()
+    expect(M.frame:GetHeight()).toBe(300)
+    M:Set("shows", "combat")
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetParent()).toBe(parent)
+    expect(M:PreviewView(UIParent)).toBe(view)
+    M:Emit("SUUUI_THEME_CHANGED")
+    settle()
+end
+
+@test("sorted again every ten seconds as you move, not while the mouse is on it")
+local function resort()
+    take(WOLVES)
+    settle()
+    local refresh = mock.spy(function(_: any) end)
+    mock.stub(M, "QueueRefresh", refresh)
+    mock.advanceFrames(11, 1000)
+    expect(refresh).toHaveBeenCalled()
+end
+
+@test("scrolled: the items follow the list")
+local function scrolled()
+    take(WOLVES)
+    settle()
+    local laid = mock.spy(function(_: any, _: any) end)
+    mock.stub(M, "LayoutItems", laid)
+    M.tracker.onScroll()
+    expect(laid).toHaveBeenCalled()
+end
+
+-- (last: the tracker off)
+@test("stopped: hidden")
+local function disabled()
+    local m: any = M
+    m:OnDisable()
+    expect(M.frame).never.toBeShown()
 end
