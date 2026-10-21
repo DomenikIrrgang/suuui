@@ -8,9 +8,10 @@
 -- tiles, trying one on); the foot; opening it (the key, the game's
 -- journal); the game's news.
 --
--- The engine answers the recorded empty journals (no mount displayed, no
--- toy), so the tests give the mounts, toys, appearances and SuuUI's source
--- data themselves.
+-- The game's journals answer from the account's mounts, toys and
+-- collected appearances the tests set (`mock.setMounts`, `mock.setToys`,
+-- `mock.setAppearances`; the wardrobe's catalogue is the client's); the
+-- tests give SuuUI's source data themselves.
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -35,46 +36,30 @@ local SOURCES: any = {
     },
     toys = { 201, 202, 203 },
     toy = { [201] = { x = "From a holiday" } },
-    item = { [301] = { d = { 2 }, dn = 3 } },
+    item = { [56] = { d = { 2 }, dn = 3 } },
 }
 
--- The mounts: { id, name, spellID, icon, usable, sourceType, favourite, hidden, collected }
-local MOUNTS: any[] = {}
-local function mount(id: number, name: string, opts: any?): any
+-- The account's mounts, by mount ID: the game's journal holds them.
+local MOUNTS: { [number]: mock.MountData } = {}
+local function mount(id: number, name: string, opts: { favorite?: boolean, collected?: boolean, hidden?: boolean, usable?: boolean }?)
     local o = opts or {}
-    return { id = id, name = name, spellID = id * 10, icon = 132000 + id, usable = o.usable ~= false, sourceType = o.sourceType or 1,
-             favourite = o.favourite or false, hidden = o.hidden or false, collected = o.collected ~= false, display = 9000 + id }
+    MOUNTS[id] = { name = name, spellID = id * 10, icon = 132000 + id, sourceType = 1, display = 9000 + id,
+                   favorite = o.favorite, collected = o.collected, hidden = o.hidden, usable = o.usable }
 end
 
 local mounted = false
 
 @beforeEach
 local function start()
-    MOUNTS = {
-        mount(101, "Brown Horse"), mount(102, "Swift Ram", { favourite = true }), mount(103, "Zebra", { collected = false }),
-        mount(104, "Hidden Steed", { hidden = true }), mount(105, "Night Saber", { usable = false }),
-    }
+    MOUNTS = {}
+    mount(101, "Brown Horse")
+    mount(102, "Swift Ram", { favorite = true })
+    mount(103, "Zebra", { collected = false })
+    mount(104, "Hidden Steed", { hidden = true })
+    mount(105, "Night Saber", { usable = false })
+    mock.setMounts(MOUNTS)
     mounted = false
     mock.stub(SuuUI, "CollectionSources", function() return SOURCES end)
-    mock.stub(MJ, "GetMountIDs", function(): any
-        local ids = {}
-        for _, m in ipairs(MOUNTS) do ids[#ids + 1] = m.id end
-        return ids
-    end)
-    local function byID(id: number): any for _, m in ipairs(MOUNTS) do if m.id == id then return m end end end
-    mock.stub(MJ, "GetMountInfoByID", function(id: number): ...any
-        local m = byID(id)
-        if not m then return nil end
-        return m.name, m.spellID, m.icon, false, m.usable, m.sourceType, m.favourite, false, nil, m.hidden, m.collected
-    end)
-    mock.stub(MJ, "GetMountInfoExtraByID", function(id: number): ...any local m = byID(id) return m and m.display, nil, nil, false, nil, 4 end)
-    mock.stub(MJ, "GetNumDisplayedMounts", function() return #MOUNTS end)
-    mock.stub(MJ, "GetDisplayedMountID", function(i: number): any return MOUNTS[i] and MOUNTS[i].id end)
-    mock.stub(MJ, "GetDisplayedMountInfo", function(i: number): ...any
-        local m = MOUNTS[i]
-        if not m then return nil end
-        return m.name, m.spellID, m.icon, false, m.usable, m.sourceType, m.favourite, false, nil, m.hidden, m.collected, m.id, false
-    end)
     mock.stub(G, "IsMounted", function() return mounted end)
     mock.stub(C_QuestLog, "GetTitleForQuestID", function(id: number): any return id == 10 and "The Ram Trial" or nil end)
 end
@@ -194,71 +179,49 @@ end
 
 @test("the toys: every toy of Forever, yours first, favourites, by name; names the game hasn't sent yet")
 local function toys()
-    mock.stub(C_ToyBox, "GetToyInfo", function(id: number): ...any
-        if id == 201 then return id, "Toy Drum", 134001, true end
-        if id == 202 then return id, mock.secret("x"), 134002, false end
-        return id, nil, nil, false
-    end)
-    mock.stub(G, "PlayerHasToy", function(id: number) return id ~= 203 end)
-    mock.stub(C_ToyBox, "IsToyUsable", function(id: number) return id ~= 202 end)
-    mock.stub(C_Item, "GetItemNameByID", function(id: number): any return id == 202 and "Bubble Wand" or nil end)
-    mock.stub(C_Item, "GetItemIconByID", function() return 134999 end)
+    -- the third's item not loaded yet: no name, the question mark
+    mock.defineItem(201, { name = "Toy Drum", icon = 134001 })
+    mock.defineItem(202, { name = "Bubble Wand", icon = 134002 })
+    mock.setToys({ [201] = { favorite = true }, [202] = { usable = false }, [203] = { collected = false } })
     M.namesPending = nil
     local list = M:Toys()
     local names: string[] = {}
     for _, e in ipairs(list) do names[#names + 1] = e.name end
     expect(names).toEqual({ "Toy Drum", "Bubble Wand", "Toy 203" })
     expect(list[1].source).toBe(SOURCES.toy[201])
+    expect(list[1].icon).toBe(134001)
     expect(list[2].usable).toBe(false)
     expect(list[3].collected).toBe(false)
-    expect(list[3].icon).toBe(134999)
+    expect(list[3].icon).toBe(134400)
     expect(M.namesPending).toBe(true)
 end
 
--- Two armour categories and two weapon kinds; the chest's appearances.
+-- The wardrobe is the client's (its categories, appearances and sources):
+-- the chest has 438 appearances to show, the main hand's kinds (one-handed
+-- swords and maces, two-handed maces) 242. Yours: the chest's 63239 (the
+-- robe, item 56) and 63305 (by its second source, the vest), a sword
+-- (130253); 63305 a favourite. You wear item 57 (the chest's 63240).
+local CHEST_ALL = 438
+local MAIN_ALL = 242
 local function wardrobeData()
-    mock.stub(TC, "GetCategoryInfo", function(cat: number): ...any
-        if cat == 12 then return "Swords", true, nil, true, true, false end
-        if cat == 13 then return "Shields", true, nil, false, true, false end
-        if cat == 14 then return "Axes", false end
-        return nil
-    end)
-    mock.stub(TC, "GetCategoryAppearances", function(cat: number): any
-        if cat == 4 then
-            return { { visualID = 41, isCollected = false }, { visualID = 40, isCollected = true, isFavorite = true },
-                     { visualID = 42, isCollected = true }, { visualID = 43, isHideVisual = true } }
-        end
-        if cat == 12 then return { { visualID = 120, isCollected = true } } end
-        return {}
-    end)
-    mock.stub(TC, "GetAppearanceSources", function(visual: number): any
-        if visual == 40 then return { { sourceID = 400, itemID = 301, name = "Gilded Robe", quality = 4, isCollected = true, sourceType = 1 } } end
-        if visual == 41 then return { { sourceID = 410, itemID = 302, name = mock.secret("x"), quality = 2, isCollected = false, sourceType = 2 } } end
-        if visual == 42 then
-            return { { sourceID = 420, itemID = 303, name = "Plain Vest", quality = 1, isCollected = false },
-                     { sourceID = 421, itemID = 304, name = "Plain Vest", quality = 1, isCollected = true } }
-        end
-        if visual == 120 then return { { sourceID = 1200, itemID = 305, name = "Test Sword", quality = 3, isCollected = true } } end
-        return {}
-    end)
-    mock.stub(TC, "GetAppearanceCameraID", function() return 238 end)
-    -- you wear the plain vest (visual 42)
-    mock.stub(TC, "GetItemInfo", function(): any return 42 end)
-    mock.stub(G, "GetInventoryItemID", function(_: any, slot: number): any return slot == 5 and 304 or nil end)
-    mock.stub(C_Item, "GetItemNameByID", function(id: number): any return id == 302 and "Silk Tunic" or nil end)
+    mock.defineItem(56, { name = "Gilded Robe", quality = 4, equipLoc = "INVTYPE_ROBE" })
+    mock.defineItem(57, { name = "Worn Tunic", quality = 1, equipLoc = "INVTYPE_CHEST" })
+    mock.defineItem(281284, { name = "Plain Vest", quality = 1, equipLoc = "INVTYPE_CHEST" })
+    mock.setAppearances({ collected = { 156056, 316091, 311021 }, favorites = { 63305 } })
+    mock.player:equip(5, 57)
 end
 
 @test("the weapon kinds a hand can use; each slot's yours of all; a slot without a kind for this class says why")
 local function slotCounts()
     wardrobeData()
     local main = M:WeaponKinds("main")
-    expect(#main).toBe(1)
-    expect(main[1]).toEqual({ category = 12, name = "Swords" })
+    expect(#main).toBe(3)
+    expect(main[1]).toEqual({ category = 14, name = "One-Handed Swords" })
     expect(#M:WeaponKinds("off")).toBe(2)
     expect(#M:WeaponKinds("ranged")).toBe(0)
     local counts = M:SlotCounts("Warriors")
-    expect(counts.CHESTSLOT).toEqual({ have = 2, all = 3 })
-    expect(counts.MAINHANDSLOT).toEqual({ have = 1, all = 1 })
+    expect(counts.CHESTSLOT).toEqual({ have = 2, all = CHEST_ALL })
+    expect(counts.MAINHANDSLOT).toEqual({ have = 1, all = MAIN_ALL })
     expect(counts.RANGEDSLOT.reason).toBe("No ranged weapons for Warriors")
     expect(M:SlotCounts(nil).RANGEDSLOT.reason).toBe("No ranged weapons for this class")
 end
@@ -268,20 +231,23 @@ local function appearances()
     wardrobeData()
     M.namesPending = nil
     local list = M:Appearances(4, "CHESTSLOT")
+    expect(#list).toBe(CHEST_ALL)
     local ids: number[] = {}
-    for _, e in ipairs(list) do ids[#ids + 1] = e.visualID end
-    expect(ids).toEqual({ 42, 40, 41 })
+    for i = 1, 4 do ids[i] = list[i].visualID end
+    expect(ids).toEqual({ 63240, 63239, 63305, 63242 })
     expect(list[1].worn).toBe(true)
-    expect(list[1].sourceID).toBe(421)
-    expect(list[2].source).toBe(SOURCES.item[301])
-    expect(list[3].name).toBe("Silk Tunic")
-    expect(list[2].camera).toBe(238)
-    mock.stub(C_Item, "GetItemNameByID", function(): any return nil end)
-    expect(M:Appearances(4, nil)[3].name).toBe("…")
+    expect(list[1].name).toBe("Worn Tunic")
+    expect(list[2].source).toBe(SOURCES.item[56])
+    expect(list[2].camera).toBe(545)
+    expect(list[3].sourceID).toBe(316091)
+    expect(list[3].favourite).toBe(true)
+    -- an item the client hasn't loaded yet: its name to come
+    expect(list[4].name).toBe("…")
     expect(M.namesPending).toBe(true)
     -- nothing worn in the slot
-    mock.stub(G, "GetInventoryItemID", function(): any return nil end)
+    mock.player:equip(5, nil)
     expect(M:Worn("CHESTSLOT")).toBe(nil)
+    expect(M:Appearances(4, nil)[1].visualID).toBe(63239)
 end
 
 @test("the search and the filters: yours, missing, favourites, recent (newest first, from before SuuUI last)")
@@ -388,7 +354,8 @@ end
 
 @test("paging: 36 a page, the arrows, the wheel; the search and the filters; nothing left: the stage says so")
 local function paging()
-    for i = 1, 40 do MOUNTS[#MOUNTS + 1] = mount(1000 + i, ("Test Mount %02d"):format(i)) end
+    for i = 1, 40 do mount(1000 + i, ("Test Mount %02d"):format(i)) end
+    mock.setMounts(MOUNTS)
     open()
     expect(M.pages).toBe(2)
     expect(M.strip.next).toBeShown()
@@ -524,29 +491,41 @@ local function summon()
     expect(M.actionAfterCombat).toBe(nil)
 end
 
+-- Three toys: the drum yours, the wand yours (a favourite, not usable
+-- here), the kite not yet. The game's toy tooltip has only the name: what
+-- a toy does is the test's.
+local function toyData()
+    mock.defineItem(201, { name = "Toy Drum", icon = 134201 })
+    mock.defineItem(202, { name = "Bubble Wand", icon = 134202 })
+    mock.defineItem(203, { name = "Kite", icon = 134203 })
+    mock.setToys({ [201] = {}, [202] = { favorite = true, usable = false }, [203] = { collected = false } })
+    mock.stub(C_TooltipInfo, "GetToyByItemID", function(id: number): any
+        if id == 201 then return { lines = { { leftText = "Toy Drum" }, { leftText = "Use: Plays a drum." } } } end
+        return { lines = {} }
+    end)
+end
+
 @test("the favourite star: a mount's by its place in the game's list; a toy's; an appearance's")
 local function favourites()
     open()
-    local fav = mock.stub(MJ, "SetIsFavorite", function() end)
     mock.click(cells()[2])
+    expect(M.chosen.name).toBe("Brown Horse")
     mock.click(M.stage.star)
-    expect(fav).toHaveBeenCalledWith(1, true)
+    expect(select(7, MJ.GetMountInfoByID(101))).toBe(true)
     mock.advanceTime(0.2)
-    local toyFav = mock.stub(C_ToyBox, "SetIsFavorite", function() end)
-    M.chosen = { kind = "toy", itemID = 201, favourite = true }
+    toyData()
+    M.chosen = { kind = "toy", itemID = 201, favourite = false }
     M:ToggleFavourite()
-    expect(toyFav).toHaveBeenCalledWith(201, false)
-    local look = mock.stub(TC, "SetIsAppearanceFavorite", function() end)
-    M.chosen = { kind = "appearance", visualID = 40, favourite = false }
+    expect(C_ToyBox.GetIsFavorite(201)).toBe(true)
+    M.chosen = { kind = "appearance", visualID = 11257, favourite = false }
     M:ToggleFavourite()
-    expect(look).toHaveBeenCalledWith(40, true)
-    -- a mount the list doesn't show, or nothing chosen: nothing
-    mock.resetSpies()
-    M.chosen = { kind = "mount", id = 9999 }
+    expect(TC.GetIsAppearanceFavorite(11257)).toBe(true)
+    -- a mount the game's list doesn't show (not yours), or nothing chosen: nothing
+    M.chosen = { kind = "mount", id = 103 }
     M:ToggleFavourite()
     M.chosen = nil
     M:ToggleFavourite()
-    expect(fav).never.toHaveBeenCalled()
+    expect(select(7, MJ.GetMountInfoByID(103))).toBe(false)
     mock.advanceTime(0.2)
     -- the star's tooltip
     local shown: any = nil
@@ -561,19 +540,6 @@ end
 --------------------------------------------------------------------------------
 -- The Toys tab
 --------------------------------------------------------------------------------
-
-local function toyData()
-    mock.stub(C_ToyBox, "GetToyInfo", function(id: number): ...any
-        local names: { [number]: string } = { [201] = "Toy Drum", [202] = "Bubble Wand", [203] = "Kite" }
-        return id, names[id], 134000 + id, id == 202
-    end)
-    mock.stub(G, "PlayerHasToy", function(id: number) return id ~= 203 end)
-    mock.stub(C_ToyBox, "IsToyUsable", function(id: number) return id ~= 202 end)
-    mock.stub(C_TooltipInfo, "GetToyByItemID", function(id: number): any
-        if id == 201 then return { lines = { { leftText = "Toy Drum" }, { leftText = "Use: Plays a drum." } } } end
-        return { lines = {} }
-    end)
-end
 
 @test("Toys: a card each with what it does, where it comes from, Use on SuuUI's secure button; yours first")
 local function toysTab()
@@ -620,28 +586,21 @@ end
 @test("a toy on cooldown: when it's ready, again each second and when the game says; its star; in combat the buttons wait")
 local function toyCooldowns()
     toyData()
-    local cd = 0
-    mock.stub(C_Container, "GetItemCooldown", function(id: number): ...any
-        if id == 201 and cd > 0 then return cd, 600 end
-        return 0, 0
-    end)
     open("toys")
     local drum = M.shelf.cards[2]
-    cd = GetTime()
+    mock.setItemCooldown(201, 600)
+    expect(drum.src:GetText()).toBe("Ready in 10 min")
     mock.advanceTime(1.1)
     expect(drum.src:GetText()).toBe("Ready in 10 min")
     expect(tokenOf(drum.src)).toBe("arcane")
     expect(drum.act.why).toBe("Ready in 10 min.")
-    cd = 0
-    mock.fireEvent("BAG_UPDATE_COOLDOWN")
+    mock.setItemCooldown(201, 0)
     expect(drum.src:GetText()).toBe("From a holiday")
     -- the star: yours only
-    local fav = mock.stub(C_ToyBox, "SetIsFavorite", function() end)
     mock.click(drum.star)
-    expect(fav).toHaveBeenCalledWith(201, true)
-    mock.resetSpies()
+    expect(C_ToyBox.GetIsFavorite(201)).toBe(true)
     mock.click(M.shelf.cards[3].star)
-    expect(fav).never.toHaveBeenCalled()
+    expect(C_ToyBox.GetIsFavorite(203)).toBe(false)
     mock.advanceTime(0.2)
     -- in combat: drawn, the secure part after
     mock.player:enterCombat()
@@ -664,34 +623,35 @@ end
 @test("Appearances: the doll, the slots with yours of all, the chest's tiles; one chosen tried on with its card")
 local function wardrobe()
     wardrobeData()
+    mock.defineItem(60, { name = "Silk Tunic", quality = 2, equipLoc = "INVTYPE_CHEST" })
     open("wardrobe")
     expect(M.wardrobe).toBeShown()
     expect(M.tools.title:GetText()).toBe("Chest")
-    expect(slotButton("CHESTSLOT").n:GetText()).toBe("2/3")
+    expect(slotButton("CHESTSLOT").n:GetText()).toBe("2/" .. CHEST_ALL)
     expect(slotButton("RANGEDSLOT").n:GetText()).toBe("—")
     expect(slotButton("CHESTSLOT").glow).toBeShown()
     M:LayoutTiles()
     local tiles = M.strip.tiles
     expect(tiles[1]).toBeShown()
     expect(tiles[1].worn).toBeShown()
-    expect(tiles[2].star).toBeShown()
-    expect(tiles[4]).never.toBeShown()
+    expect(tiles[3].star).toBeShown()
+    expect(tiles[4]).toBeShown()
     -- the first is chosen and tried on, its card with Worn
-    expect(M.chosen.visualID).toBe(42)
+    expect(M.chosen.visualID).toBe(63240)
     expect(M.card.extra:GetText()).toBe("Worn")
     local try = mock.stub(M.wardrobe.doll, "TryOn", function() end)
     mock.click(tiles[2])
-    expect(try).toHaveBeenCalledWith(M.wardrobe.doll, 400)
+    expect(try).toHaveBeenCalledWith(M.wardrobe.doll, 156056)
     expect(tokenOf(M.card.name)).toBe("quality-epic")
     -- a tile's tooltip
     local shown: any = nil
     mock.stub(SuuUI.UI, "ShowTooltip", function(_: any, opts: any) shown = opts end)
-    mock.hover(tiles[3])
+    mock.hover(tiles[4])
     expect(shown.subtitle).toBe("Not collected")
     expect(shown.titleColor).toBe("quality-uncommon")
-    expect(tiles[3].dim).never.toBeShown()
+    expect(tiles[4].dim).never.toBeShown()
     mock.hover(nil)
-    expect(tiles[3].dim).toBeShown()
+    expect(tiles[4].dim).toBeShown()
     -- the tile's model loaded, or after two seconds
     mock.script(tiles[1].model, "OnModelLoaded")
     expect(tiles[1].icon).never.toBeShown()
@@ -715,7 +675,7 @@ local function wardrobeSlots()
     local shown: any = nil
     mock.stub(SuuUI.UI, "ShowTooltip", function(_: any, opts: any) shown = opts end)
     mock.hover(slotButton("CHESTSLOT"))
-    expect(shown.description).toBe("2 of 3 collected")
+    expect(shown.description).toBe("2 of " .. CHEST_ALL .. " collected")
     mock.hover(slotButton("RANGEDSLOT"))
     expect(shown.description:find("^No ranged weapons for ") ~= nil).toBe(true)
     mock.hover(nil)
@@ -725,14 +685,13 @@ local function wardrobeSlots()
     -- the main hand: its kind chosen, shown in the title
     mock.click(slotButton("MAINHANDSLOT"))
     expect(M.slot).toBe("MAINHANDSLOT")
-    expect(M.tools.title:GetText()).toBe("Main hand · Swords")
+    expect(M.tools.title:GetText()).toBe("Main hand · One-Handed Swords")
     expect(M.wardrobe.kind).toBeShown()
-    M.wardrobe.kind.onChange(12)
-    expect(M.weaponKind.main).toBe(12)
+    M.wardrobe.kind.onChange(15)
+    expect(M.weaponKind.main).toBe(15)
     -- the class
-    local filter = mock.stub(TC, "SetClassFilter", function() end)
     M.wardrobe.class.onChange(2)
-    expect(filter).toHaveBeenCalledWith(2)
+    expect(TC.GetClassFilter()).toBe(2)
     expect(M.slotCounts ~= nil).toBe(true)
     -- the doll turns and zooms
     local d = M.wardrobe.doll

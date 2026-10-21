@@ -1,0 +1,34 @@
+-- Units/WorldMap/Overlays: the overlays you haven't explored, cut into the
+-- game's tiles (the last row and column cut to what's left, read from a
+-- file of the next power of two).
+
+import test, expect from "wowlua:test"
+import unexploredTiles from "/Units/WorldMap/Overlays"
+
+@test("an overlay in tiles: the last column cut to what's left, from a smaller file")
+local function tiles()
+    local out = unexploredTiles({ { 300, 200, 10, 20, 1001, 1002 } }, {}, 256, 256)
+    expect(out).toEqual({
+        { file = 1001, w = 256, h = 200, u = 1, v = 200 / 256, x = 10, y = 20 },
+        { file = 1002, w = 44, h = 200, u = 44 / 64, v = 200 / 256, x = 266, y = 20 },
+    })
+end
+
+@test("rows of whole tiles, a tile at a time down")
+local function rows()
+    local out = unexploredTiles({ { 256, 512, 0, 0, 1, 2 } }, {}, 256, 256)
+    expect(out).toEqual({
+        { file = 1, w = 256, h = 256, u = 1, v = 1, x = 0, y = 0 },
+        { file = 2, w = 256, h = 256, u = 1, v = 1, x = 0, y = 256 },
+    })
+end
+
+@test("explored overlays and missing files are left out")
+local function leftOut()
+    local explored: { [string]: any }[] = { { textureWidth = 300, textureHeight = 200, offsetX = 10, offsetY = 20 } }
+    expect(unexploredTiles({ { 300, 200, 10, 20, 1001, 1002 } }, explored, 256, 256)).toEqual({})
+    expect(unexploredTiles({ { 100, 100, 0, 0 } }, {}, 256, 256)).toEqual({})
+    -- a small overlay: its file the next power of two from 16
+    local out = unexploredTiles({ { 10, 30, 5, 5, 7 } }, {}, 256, 256)
+    expect(out).toEqual({ { file = 7, w = 10, h = 30, u = 10 / 16, v = 30 / 32, x = 5, y = 5 } })
+end

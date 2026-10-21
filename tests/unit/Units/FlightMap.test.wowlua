@@ -1,35 +1,623 @@
-import test, expect from "wowlua:test"
+-- Units/FlightMap: the world map as the flight master's map (the masters,
+-- the routes, the destinations in the side panel, flying from a click or
+-- the bar's Fly), a flight timed and learned, the flight bar in the air
+-- (the stops, Land at), the route on the map in flight, a reload in the
+-- air, the settings.
+--
+-- The flight master is the engine's: Orgrimmar's (Doras), his gossip and
+-- his taxi map as the client recorded a Horde paladin's (/stdtest engine
+-- scenario taxi), the nodes' places on Kalimdor the client's. The game's
+-- early landing (TaxiRequestEarlyLanding) is stubbed: the engine has no
+-- recording of one.
+
+import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
+import internal M, SECTION from "/Units/FlightMap"
+import expectNoErrors from "../../helpers"
 
-local out: string[] = {}
-local function p(...: any)
-    local t = {}
-    for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end
-    out[#out + 1] = table.concat(t, " ")
+local G: any = _G
+
+local KALIMDOR, ORGRIMMAR = 1414, 1454
+
+-- Kalimdor's flight masters as the paladin knew them in Orgrimmar (state 0
+-- here, 1 reachable, 2 not found yet), in the client's slots; the
+-- Crossroads' flight as long as it took.
+local NODES = {
+    { name = "Thunder Bluff, Mulgore", nodeID = 22, x = 0.44947779178619, y = 0.56151235103607, state = 1, cost = 50, routes = 1, hops = { 2, 1 } },
+    { name = "Orgrimmar, Durotar", nodeID = 23, x = 0.62800776958466, y = 0.44340223073959, state = 0, cost = 0, routes = 0 },
+    { name = "Crossroads, The Barrens", nodeID = 25, x = 0.55735743045807, y = 0.53047657012939, state = 1, cost = 110, routes = 1, hops = { 2, 3 }, flightTime = 110.176 },
+    { name = "Sun Rock Retreat, Stonetalon Mountains", nodeID = 29, x = 0.4079572558403, y = 0.47261422872543, state = 1, cost = 320, routes = 2, hops = { 2, 3, 4 } },
+    { name = "Freewind Post, Thousand Needles", nodeID = 30, x = 0.549889087677, y = 0.73449921607971, state = 2, cost = 0, routes = 0 },
+    { name = "Shadowprey Village, Desolace", nodeID = 38, x = 0.31660270690918, y = 0.58494818210602, state = 2, cost = 0, routes = 0 },
+    { name = "Gadgetzan, Tanaris", nodeID = 40, x = 0.60601317882538, y = 0.80192649364471, state = 2, cost = 730, routes = 1, hops = { 2, 7 } },
+    { name = "Camp Mojache, Feralas", nodeID = 42, x = 0.44250988960266, y = 0.69391369819641, state = 2, cost = 0, routes = 0 },
+    { name = "Valormok, Azshara", nodeID = 44, x = 0.63107562065125, y = 0.36189317703247, state = 2, cost = 830, routes = 1, hops = { 2, 9 } },
+    { name = "Bloodvenom Post, Felwood", nodeID = 48, x = 0.46455299854279, y = 0.30409198999405, state = 2, cost = 830, routes = 1, hops = { 2, 10 } },
+    { name = "Everlook, Winterspring", nodeID = 53, x = 0.64014458656311, y = 0.23241329193115, state = 2, cost = 1020, routes = 1, hops = { 2, 11 } },
+    { name = "Brackenwall Village, Dustwallow Marsh", nodeID = 55, x = 0.56746834516525, y = 0.6416347026825, state = 2, cost = 630, routes = 1, hops = { 2, 12 } },
+    { name = "Zoram'gar Outpost, Ashenvale", nodeID = 58, x = 0.40973830223083, y = 0.3736766576767, state = 2, cost = 0, routes = 0 },
+    { name = "Splintertree Post, Ashenvale", nodeID = 61, x = 0.55441868305206, y = 0.41773253679276, state = 2, cost = 530, routes = 1, hops = { 2, 14 } },
+    { name = "Moonglade", nodeID = 69, x = 0.53793668746948, y = 0.20540714263916, state = 2, cost = 0, routes = 0 },
+    { name = "Cenarion Hold, Silithus", nodeID = 72, x = 0.41632127761841, y = 0.79216885566711, state = 2, cost = 0, routes = 0 },
+    -- (a flight with a stop: as long as the hop to the Crossroads, where
+    -- Land at sets it down)
+    { name = "Camp Taurajo, The Barrens", nodeID = 77, x = 0.52804720401764, y = 0.61013436317444, state = 1, cost = 220, routes = 2, hops = { 2, 3, 17 }, flightTime = 110.176 },
+    { name = "Marshal's Refuge, Un'Goro Crater", nodeID = 79, x = 0.49764585494995, y = 0.76350945234299, state = 2, cost = 0, routes = 0 },
+    { name = "Ratchet, The Barrens", nodeID = 80, x = 0.6057111620903, y = 0.54907929897308, state = 1, cost = 220, routes = 2, hops = { 2, 3, 19 } },
+    { name = "Summit of Eternity, Mount Hyjal", nodeID = 559, x = 0.58655297756195, y = 0.29526746273041, state = 2, cost = 0, routes = 0 },
+    { name = "zzOLDPowderfuse Port, Riverglades", nodeID = 3208, x = 0.6057111620903, y = 0.54907929897308, state = 2, cost = 0, routes = 0 },
+    { name = "Tainted Foothills, Mount Hyjal", nodeID = 3242, x = 0.5672287940979, y = 0.33181923627853, state = 2, cost = 0, routes = 0 },
+}
+
+local doras = mock.spawnUnit({ name = "Doras", npcID = 3310, level = 55, reaction = "friendly", classification = "elite" })
+mock.defineGossip(doras, {
+    text = "You haven't lived until you've looked down on the world from the back of a wind rider.",
+    options = { { name = "I need a ride.", icon = 132057, gossipOptionID = 98541, opens = "taxi" } },
+})
+mock.defineTaxi(doras, { mapID = 1464, nodes = NODES })
+doras:setDistance(3)
+
+-- In Orgrimmar, by the flight master.
+local function home()
+    mock.moveTo({ mapID = ORGRIMMAR, x = 0.451, y = 0.639 })
+end
+home()
+
+-- A flight master's place on Kalimdor, as the client gives it.
+local function placeOf(nodeID: number): (number, number)
+    for _, n in ipairs(C_TaxiMap.GetTaxiNodesForMap(KALIMDOR) :: any[]) do
+        if n.nodeID == nodeID then return n.position:GetXY() end
+    end
+    error("no node " .. nodeID)
 end
 
-@test("spike")
-local function spike()
-    local M: any = SuuUI.GetModule("flightmap")
-    p("enabled", M:IsEnabled(), M.map, M.timer)
-    p("map", C_Map.GetBestMapForUnit("player"), UnitOnTaxi("player"))
-    mock.moveTo({ mapID = 1412, x = 0.5, y = 0.5 })
-    p("map2", C_Map.GetBestMapForUnit("player"))
-    local pos = C_Map.GetPlayerMapPosition(1412, "player")
-    p("pos", pos and pos:GetXY())
-    local info = C_Map.GetMapInfo(1412)
-    p("info", info and info.name, info and info.mapType, info and info.parentMapID)
-    local ok, list = pcall(C_TaxiMap.GetTaxiNodesForMap, 1414)
-    p("taxinodes", ok, type(list) == "table" and #list or list)
-    if ok and type(list) == "table" and list[1] then p("n1", list[1].nodeID, list[1].name, list[1].position and list[1].position:GetXY()) end
-    local ok2, w = pcall(C_Map.GetWorldPosFromMapPos, 1414, CreateVector2D(0.5, 0.5))
-    p("worldpos", ok2, w, select(3, pcall(C_Map.GetWorldPosFromMapPos, 1414, CreateVector2D(0.5, 0.5))))
-    p("maptopos", pcall(C_Map.GetMapPosFromWorldPos, 1, CreateVector2D(0, 0), 1414))
-    p("numtaxi", pcall(NumTaxiNodes))
-    p("routes", SuuUI.FlightRoutes()[22] and next(SuuUI.FlightRoutes()[22]))
-    p("taxiframe", _G.TaxiFrame)
-    p("quests", pcall(C_QuestLog.GetQuestsOnMap, 1412))
-    p("children", pcall(C_Map.GetMapChildrenInfo, 1414, nil, true))
-    expect(table.concat(out, "\n")).toBe("")
+-- The player at a flight master (on Kalimdor's map).
+local function at(nodeID: number)
+    local x, y = placeOf(nodeID)
+    mock.moveTo({ mapID = KALIMDOR, x = x, y = y })
+end
+
+-- A shown button by its text.
+local function button(root: any, text: string, depth: number?): any
+    local d = depth or 0
+    if d > 8 or not root then return nil end
+    if root:IsObjectType("Button") and root:IsVisible() then
+        if root.GetText and root:GetText() == text then return root end
+        for _, r in ipairs({ root:GetRegions() }) do
+            if r:IsObjectType("FontString") and r:GetText() == text then return root end
+        end
+    end
+    for _, c in ipairs({ root:GetChildren() }) do
+        local found = button(c, text, d + 1)
+        if found then return found end
+    end
+    return nil
+end
+
+-- Talk to Doras and ask for a ride: his taxi map opens.
+local function openMaster()
+    mock.player:target(doras)
+    mock.player:interact(doras)
+    mock.advanceTime(1)
+    local ride = button(G.GossipFrame, "I need a ride.")
+    expect(ride ~= nil).toBe(true)
+    mock.click(ride)
+    mock.advanceTime(1)
+    mock.advanceFrames(2)
+end
+
+-- The side panel's row of a destination, by its short name.
+local function row(name: string): any
+    for _, r in ipairs(M.side.rows) do
+        if r:IsShown() and r.node and r.name:GetText() == name then return r end
+    end
+    error("no row " .. name)
+end
+
+local function rowNames(): string[]
+    local out: string[] = {}
+    for _, r in ipairs(M.side.rows) do
+        if r:IsShown() then out[#out + 1] = r.name:GetText() end
+    end
+    return out
+end
+
+-- Fly: the flight taken (the server's answer a moment later), in the air.
+local function takeOff()
+    mock.advanceTime(1)
+    mock.advanceFrames(2)
+end
+
+-- The rest of a flight of `seconds`, already `flown` in, landing where
+-- the player is moved to first.
+local function land(nodeID: number, seconds: number, flown: number)
+    mock.advanceTime(seconds - flown - 5)
+    at(nodeID)
+    mock.advanceTime(10)
+    mock.advanceFrames(2)
+end
+
+local function routes(): { [string]: any }
+    local data = SuuUI.AccountData("flightmap")
+    data.routes = data.routes or {}
+    return data.routes
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if G.WorldMapFrame:IsShown() then G.WorldMapFrame:Hide() end
+    if G.GossipFrame:IsShown() then G.GossipFrame:Hide() end
+    -- a flight still in the air lands
+    if UnitOnTaxi("player") then mock.advanceTime(200) end
+    mock.advanceTime(1)
+    mock.player:target(nil)
+    M:ForgetTimes()
+    M:Reset("confirm")
+    M:Reset("atMaster")
+    M:Reset("inFlight")
+    M:Reset("timer")
+    M.flight, M.pending = nil, nil
+    M:CharData().flight = nil
+    home()
+    mock.advanceTime(0.5)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- At the flight master
+--------------------------------------------------------------------------------
+
+@test("at the flight master: the world map on the continent, the game's map unseen underneath")
+local function atTheMaster()
+    openMaster()
+    expect(M:AtMaster()).toBe(true)
+    local taxi = G.TaxiFrame
+    expect(taxi).toBeShown()
+    expect(taxi:GetAlpha()).toBe(0)
+    expect(taxi:IsMouseEnabled()).toBe(false)
+    expect(G.WorldMapFrame).toBeShown()
+    expect(G.WorldMapFrame:GetMapID()).toBe(KALIMDOR)
+    expect(M.map.suuChrome.title).toHaveText("Flight master · Orgrimmar")
+    expect(M.side).toBeShown()
+    expect(M.session.current.id).toBe(23)
+end
+
+@test("the destinations: the ones you can fly to by name, their stops and estimated times")
+local function destinations()
+    openMaster()
+    expect(M.side.head.meta).toHaveText("5")
+    expect(rowNames()).toEqual({ "Camp Taurajo", "Crossroads", "Ratchet", "Sun Rock Retreat", "Thunder Bluff" })
+    expect(row("Crossroads").stops:GetText():find("^Direct")).toBe(1)
+    expect(row("Camp Taurajo").stops).toHaveText("1 stop")
+    -- (3335 yards at 30.3 yards a second)
+    expect(row("Crossroads").time).toHaveText("~1:50")
+    -- the junk node left out, the ones not found listed but not flown to
+    expect(M.session.byID[3208]).toBeNil()
+    expect(M.session.byID[30].kind).toBe("DISTANT")
+end
+
+@test("on the map: a pin for each master, the time beside each destination, you are here")
+local function pins()
+    openMaster()
+    local here, crossroads, distant
+    for _, pin in ipairs(M.pins) do
+        if pin.node.id == 23 then here = pin end
+        if pin.node.id == 25 then crossroads = pin end
+        if pin.node.id == 30 then distant = pin end
+    end
+    expect(here.tag.text).toHaveText("You are here")
+    expect(crossroads.tag.text).toHaveText("~1:50")
+    expect(distant.tag).never.toBeShown()
+    expect(#M.pins).toBe(21)
+end
+
+@test("a destination hovered: its route drawn, its tooltip; away, the network only")
+local function hovering()
+    openMaster()
+    local before = M.ink.pools.ARTWORK.n
+    mock.hover(row("Camp Taurajo"))
+    mock.advanceFrames(2)
+    expect(M.hovered.id).toBe(77)
+    expect(M.ink.pools.ARTWORK.n > before).toBe(true)
+    local tip = M:Tip(M.hovered)
+    expect(tip.title).toBe("Camp Taurajo, The Barrens")
+    expect(tip.subtitle).toBe("via Crossroads")
+    expect(tip.lines[2]).toEqual({ "Time", "about 3:21" })
+    expect(tip.meta).toBe("Click to fly")
+    mock.hover(nil)
+    mock.advanceFrames(2)
+    expect(M.hovered).toBeNil()
+    expect(M.ink.pools.ARTWORK.n).toBe(before)
+end
+
+@test("the tooltips of where you are and of a master not found yet")
+local function otherTips()
+    openMaster()
+    expect(M:Tip(M.session.byID[23]).subtitle).toBe("Flight master · you are here")
+    expect(M:Tip(M.session.byID[30]).subtitle).toBe("Flight master · not found yet")
+end
+
+--------------------------------------------------------------------------------
+-- A flight
+--------------------------------------------------------------------------------
+
+@test("a click flies: the map closes, the flight bar counts down, the flight's time is learned")
+local function flying()
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    expect(UnitOnTaxi("player")).toBe(true)
+    expect(M:AtMaster()).toBe(false)
+    expect(G.WorldMapFrame).never.toBeShown()
+    local bar = M.timer
+    expect(bar).toBeShown()
+    expect(bar.name).toHaveText("Crossroads")
+    expect(bar.time:GetText():sub(1, 1)).toBe("~")
+    expect(bar.next:GetText():find("^Not timed yet · estimated")).toBe(1)
+    land(25, 110.176, 2)
+    expect(UnitOnTaxi("player")).toBe(false)
+    expect(bar).never.toBeShown()
+    local r = routes()["23>25"]
+    expect(r.n).toBe(1)
+    expect(r.t).toBeCloseTo(110.176, 0)
+    -- the character's speed a quarter of the way to what it flew
+    expect(M:Speed()).toBeCloseTo(30.3 + 0.25 * (3335 / r.t - 30.3), 2)
+    expect(M:CharData().flights).toBe(1)
+end
+
+@test("a flight flown before shows its time; the bar's fill solid")
+local function timedFlight()
+    routes()["23>25"] = { t = 100, n = 1, v = 30.3 }
+    openMaster()
+    expect(row("Crossroads").time).toHaveText("1:40")
+    mock.click(row("Crossroads"))
+    takeOff()
+    expect(M.timer.time:GetText():sub(1, 1)).never.toBe("~")
+    expect(M.timer.lands:GetText():find("^lands ")).toBe(1)
+    expect(M.timer.next).toHaveText("Direct")
+end
+
+@test("Confirm before flying: a click chooses, the bar's Fly flies")
+local function confirming()
+    M:Set("confirm", true)
+    openMaster()
+    mock.click(row("Ratchet"))
+    expect(M.selected.id).toBe(80)
+    expect(M.bar).toBeShown()
+    expect(M.bar.name).toHaveText("Ratchet")
+    expect(M.bar.via).toHaveText("via Crossroads")
+    expect(M:Tip(M.selected).meta).toBe("Fly in the bar below")
+    expect(UnitOnTaxi("player")).toBe(false)
+    mock.click(M.bar.fly)
+    takeOff()
+    expect(UnitOnTaxi("player")).toBe(true)
+end
+
+@test("Confirm turned off at the master: the choice let go")
+local function confirmOff()
+    M:Set("confirm", true)
+    openMaster()
+    mock.click(row("Ratchet"))
+    expect(M.bar).toBeShown()
+    M:Set("confirm", false)
+    expect(M.selected).toBeNil()
+    expect(M.bar).never.toBeShown()
+end
+
+@test("the map closed at the flight master closes the master too")
+local function closing()
+    openMaster()
+    G.WorldMapFrame:Hide()
+    mock.advanceTime(0.5)
+    expect(M:AtMaster()).toBe(false)
+    expect(G.TaxiFrame).never.toBeShown()
+    expect(G.TaxiFrame:GetAlpha()).toBe(1)
+end
+
+@test("with the setting off, the game's own flight map")
+local function gamesOwn()
+    M:Set("atMaster", false)
+    openMaster()
+    expect(M:AtMaster()).toBe(false)
+    expect(G.TaxiFrame).toBeShown()
+    expect(G.TaxiFrame:GetAlpha()).toBe(1)
+    expect(G.WorldMapFrame).never.toBeShown()
+    CloseTaxiMap()
+    mock.advanceTime(0.5)
+end
+
+@test("the setting turned off at the master: the game's map back")
+local function settingOff()
+    openMaster()
+    M:Set("atMaster", false)
+    expect(M:AtMaster()).toBe(false)
+    expect(G.TaxiFrame:GetAlpha()).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- In the air
+--------------------------------------------------------------------------------
+
+@test("a flight with a stop: the next stop, Land at sets you down there")
+local function landAt()
+    local asked = mock.spy(function() end)
+    mock.fake("TaxiRequestEarlyLanding", asked)
+    openMaster()
+    mock.click(row("Camp Taurajo"))
+    takeOff()
+    mock.advanceTime(1)
+    local bar = M.timer
+    expect(bar.next:GetText():find("^Not timed yet")).toBe(1)
+    expect(bar.land).toBeShown()
+    expect(bar.land.label).toHaveText("Land at Crossroads")
+    mock.click(bar.land)
+    expect(asked).toHaveBeenCalledTimes(1)
+    expect(M.flight.early).toBe(2)
+    expect(M:CharData().flight.early).toBe(2)
+    expect(bar.land).never.toBeShown()
+    expect(bar.name).toHaveText("Crossroads")
+    land(25, 110.176, 3)
+    -- timed as the flight to the Crossroads
+    expect(routes()["23>25"].n).toBe(1)
+    expect(routes()["23>25>77"]).toBeNil()
+end
+
+@test("the map opened in the air: the continent with your route, the time left by the destination")
+local function routeInFlight()
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    expect(M.timer).toBeShown()
+    ToggleWorldMap()
+    mock.advanceFrames(3)
+    expect(G.WorldMapFrame:GetMapID()).toBe(KALIMDOR)
+    expect(M.timer).never.toBeShown()
+    expect(M.ink.pools.ARTWORK.n > 0).toBe(true)
+    expect(M.ink.left).toBeShown()
+    expect(M.ink.left.text:GetText():find("left$") ~= nil).toBe(true)
+    -- the clock once a second
+    mock.advanceTime(1.1)
+    mock.advanceFrames(2)
+    expect(M.ink.left).toBeShown()
+    -- without the setting, no route
+    M:Set("inFlight", false)
+    mock.advanceFrames(2)
+    expect(M.ink.pools.ARTWORK.n).toBe(0)
+    G.WorldMapFrame:Hide()
+    expect(M.timer).toBeShown()
+end
+
+@test("a reload in the air: the flight shown again, not timed")
+local function reload()
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    local kept = M:CharData().flight
+    expect(kept.path).toEqual({ 23, 25 })
+    M.flight = nil
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
+    expect(M.flight.reloaded).toBe(true)
+    mock.advanceTime(1.1)
+    expect(M.timer.next:GetText():find("^Not timed yet") ~= nil).toBe(true)
+    land(25, 110.176, 3.1)
+    expect(routes()["23>25"]).toBeNil()
+end
+
+@test("a kept flight too old, or on the ground: dropped")
+local function staleFlight()
+    M:CharData().flight = { path = { 23, 25 }, wall = time() - 60 }
+    M:ResumeFlight()
+    expect(M.flight).toBeNil()
+    expect(M:CharData().flight).toBeNil()
+    M:CharData().flight = { path = { 23, 25 } }
+    M:ResumeFlight()
+    expect(M.flight).toBeNil()
+end
+
+@test("the flight bar off by its setting, and in edit mode a sample to place")
+local function barSetting()
+    M:Set("timer", false)
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    expect(M.timer).never.toBeShown()
+    M:Set("timer", true)
+    expect(M.timer).toBeShown()
+    land(25, 110.176, 2)
+    mock.stub(SuuUI.EditMode, "IsActive", function(): boolean return true end)
+    M:Emit("SUUUI_EDITMODE_CHANGED")
+    expect(M.timer).toBeShown()
+    expect(M.timer.name).toHaveText("Crossroads")
+    expect(M.timer.land.label).toHaveText("Land at Camp Taurajo")
+end
+
+--------------------------------------------------------------------------------
+-- Settings
+--------------------------------------------------------------------------------
+
+@test("the settings: the times summary and Forget")
+local function settings()
+    expect(M:TimesSummary():find("30.3 yards a second (not flown yet)", 1, true) ~= nil).toBe(true)
+    routes()["23>25"] = { t = 100, n = 1, v = 30.3 }
+    M:CharData().flights = 2
+    expect(M:TimesSummary():find("(from 2 flights)", 1, true) ~= nil).toBe(true)
+    expect(M:TimesSummary():find("Routes timed for the account: 1.", 1, true) ~= nil).toBe(true)
+    M:ForgetTimes()
+    expect(routes()["23>25"]).toBeNil()
+    expect(M:CharData().flights).toBeNil()
+    local confirm = SECTION.groups[1].rows[2]
+    expect(confirm.disabled()).toBe(false)
+    M:Set("atMaster", false)
+    expect(confirm.disabled()).toBe(true)
+end
+
+@test("turned off at the master: the game's map back; on again")
+local function offAndOn()
+    openMaster()
+    M:Set("enabled", false)
+    expect(M:IsEnabled()).toBe(false)
+    expect(M:AtMaster()).toBe(false)
+    expect(G.TaxiFrame:GetAlpha()).toBe(1)
+    M:Reset("enabled")
+    expect(M:IsEnabled()).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The rest
+--------------------------------------------------------------------------------
+
+@test("no nodes from the game yet: asked again a moment later, else the game's own map")
+local function noNodes()
+    mock.fake("NumTaxiNodes", function(): number return 0 end)
+    openMaster()
+    mock.advanceTime(0.3)
+    expect(M:AtMaster()).toBe(false)
+    expect(G.TaxiFrame:GetAlpha()).toBe(1)
+    CloseTaxiMap()
+end
+
+@test("the destinations beside the map while the quest log is closed; over it again when it opens")
+local function besideTheMap()
+    openMaster()
+    G.WorldMapFrame:SetQuestLogPanelShown(false)
+    mock.advanceFrames(2)
+    expect(M.side.edge.top).toBeShown()
+    local _, rel, relPoint = M.side:GetPoint(1)
+    expect(rel).toBe(G.WorldMapFrame)
+    expect(relPoint).toBe("TOPRIGHT")
+    G.WorldMapFrame:SetQuestLogPanelShown(true)
+    mock.advanceFrames(2)
+    expect(M.side.edge.top).never.toBeShown()
+end
+
+@test("a pin hovered: its route and tooltip; a click flies")
+local function pinHover()
+    openMaster()
+    local crossroads
+    for _, pin in ipairs(M.pins) do if pin.node.id == 25 then crossroads = pin end end
+    mock.hover(crossroads)
+    expect(M.hovered.id).toBe(25)
+    mock.hover(nil)
+    expect(M.hovered).toBeNil()
+    mock.click(crossroads)
+    takeOff()
+    expect(UnitOnTaxi("player")).toBe(true)
+end
+
+@test("the quests near a destination: in its row and its tooltip")
+local function questSteps()
+    -- (a quest taken: the map shows it where the client did)
+    local giver = mock.spawnUnit({ name = "Kargal Battlescar", level = 30, reaction = "friendly" })
+    mock.defineQuest(959, { title = "Trouble at the Docks", giver = giver })
+    giver:setDistance(3)
+    mock.player:interact(giver)
+    mock.advanceTime(1)
+    AcceptQuest()
+    mock.advanceTime(1)
+    expect(C_QuestLog.IsOnQuest(959)).toBe(true)
+    openMaster()
+    local found: any = nil
+    for id, steps in pairs(M.steps) do
+        for _, q in ipairs(steps) do if q == 959 then found = M.session.byID[id] end end
+    end
+    expect(found ~= nil).toBe(true)
+    expect(row(found.name:match("^[^,]+")).stops:GetText():find("1 quest step nearby", 1, true) ~= nil).toBe(true)
+    local tip = M:Tip(found)
+    -- (no objectives: ready to turn in)
+    expect(tip.lines[3]).toEqual({ "Trouble at the Docks", "turn in" })
+end
+
+@test("a flight timed before, with a stop: the next stop and its time; landing early")
+local function timedWithStop()
+    routes()["23>25>77"] = { t = 110.176, n = 1, v = 30.3 }
+    local asked = mock.spy(function() end)
+    mock.fake("TaxiRequestEarlyLanding", asked)
+    openMaster()
+    mock.click(row("Camp Taurajo"))
+    takeOff()
+    mock.advanceTime(1)
+    local bar = M.timer
+    expect(bar.next:GetText():find("^Next stop Crossroads · ") ~= nil).toBe(true)
+    mock.click(bar.land)
+    expect(bar.next).toHaveText("Landing early")
+end
+
+@test("a flight with no estimate: the time flown over a sweep; still with Reduce motion")
+local function sweep()
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    -- (a route the data doesn't know, as after a reload from an older SuuUI)
+    M.flight = nil
+    M:CharData().flight = { path = { 23, 99999 }, wall = time() - 3 }
+    M:ResumeFlight()
+    M:TickTimer()
+    local bar = M.timer
+    expect(bar.sweep).toBeShown()
+    expect(bar.next).toHaveText("Not timed yet")
+    expect(bar.lands).toHaveText("so far")
+    expect(bar.name).toHaveText("?")
+    mock.advanceFrames(3)
+    mock.stub(SuuUI.Motion, "Reduced", function(): boolean return true end)
+    M:TickTimer()
+    mock.advanceFrames(2)
+    -- a fresh flight not yet timed says it's being timed
+    local v = M:TimerView({ path = { 23, 99999 }, started = GetTime(), names = {} })
+    expect(v.left).toBe("Not timed yet · timing this flight")
+end
+
+@test("a kept flight's stops named from the continent's masters")
+local function namesFromMap()
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    M.flight = nil
+    M:CharData().flight = { path = { 23, 25 }, wall = time() - 2 }
+    M:ResumeFlight()
+    expect(M:StopName(M.flight, 25)).toBe("Crossroads")
+end
+
+@test("the landing time on the game's 24-hour clock")
+local function militaryTime()
+    C_CVar.SetCVar("timeMgrUseMilitaryTime", "1")
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    expect(M.timer.lands:GetText():find("^about %d%d:%d%d$") ~= nil).toBe(true)
+    C_CVar.SetCVar("timeMgrUseMilitaryTime", "0")
+end
+
+@test("the route in flight by the time flown when the game doesn't say where you are")
+local function byTime()
+    openMaster()
+    mock.click(row("Crossroads"))
+    takeOff()
+    mock.fake("C_Map.GetPlayerMapPosition", function(): any return nil end)
+    ToggleWorldMap()
+    mock.advanceFrames(3)
+    expect(M.ink.pools.ARTWORK.n > 0).toBe(true)
+    local fl = M.flight
+    fl.route = nil
+    expect(M:Flown(fl, false)).toBeCloseTo((GetTime() - fl.started) / fl.expected, 3)
+    -- untimed: from the start
+    local points = { { 0, 0 }, { 10, 0 } }
+    fl.expected = nil
+    expect({ M:Along(points, 100, 100) }).toEqual({ 1, 0, 0 })
+end
+
+@test("Forget asks first, then forgets; a theme measures the bar again")
+local function forgetAndTheme()
+    routes()["23>25"] = { t = 100, n = 1, v = 30.3 }
+    mock.stub(SuuUI.UI, "Confirm", function(opts: any) opts.onConfirm() end)
+    SECTION.groups[3].rows[1].onClick()
+    expect(routes()["23>25"]).toBeNil()
+    expect((SECTION.groups[3].rows[1].description :: any)()).toBe(M:TimesSummary())
+    M:Set("confirm", true)
+    openMaster()
+    mock.click(row("Ratchet"))
+    M:Emit("SUUUI_THEME_CHANGED")
+    mock.advanceFrames(2)
+    expect(M.bar).toBeShown()
 end

@@ -1,0 +1,144 @@
+-- Units/WorldMap/Tips: the world map pins' tooltips (one pin's card, a
+-- merged pin's list, and with Shift what each quest asks of you).
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as tips from "/Units/WorldMap/Tips"
+import type Group, Item from "/Units/WorldMap/Arrange"
+
+local MUTED = "|cff" .. SuuUI.Tokens.color["ink-muted"].hex
+local S = SuuUI.Tokens.space
+
+local function group(items: Item[], distinct: number?): Group
+    return { x = 0, y = 0, items = items, key = nil, fixed = nil, small = nil, distinct = distinct or #items, uids = {} }
+end
+
+-- The quest data's objectives and names for these tests.
+local function questData()
+    mock.stub(SuuUI, "QuestStarts", function(): any
+        return {
+            objectives = { [1] = "Bring 8 Scorpid Worker Tails to $N.", [2] = "Find $Gyour brother:your sister; in Razor Hill." },
+            quests = { [2] = { "Family Ties" } },
+        }
+    end)
+end
+
+@test("the objectives' placeholders: your name, race, class, and the words for your sex")
+local function filling()
+    mock.setPlayer({ name = "Tamsin", class = "WARRIOR", race = "Orc", sex = 3 })
+    expect(tips.fillText("$N, the $r $C: $Ghero:heroine;")).toBe("Tamsin, the Orc Warrior: heroine")
+    mock.setPlayer({ name = "Brannoc", class = "WARRIOR", race = "Orc", sex = 2 })
+    expect(tips.fillText("$n, $g hero : heroine;")).toBe("Brannoc, hero ")
+end
+
+@test("a pin's quests, once each")
+local function groupQuests()
+    expect(tips.groupQuests(group({ { quests = { 1, 2 } }, { quests = { 2, 3 } }, {} }))).toEqual({ 1, 2, 3 })
+    expect(tips.groupQuests(group({ {} }))).toEqual({})
+end
+
+@test("one pin: its own card, else its name, title and kind, a quest's colour")
+local function onePin()
+    local card = { title = "Its own" }
+    expect(tips.tipBase(group({ { tip = function(): any return card end } }))).toBe(card)
+    local tip = tips.tipBase(group({ { name = "Grosk", detail = "Food & Drink", kindName = "Repair", small = true,
+        more = { { "Open all day" } } } }), "a hint")
+    expect(tip.title).toBe("Grosk")
+    expect(tip.subtitle).toBe("Food & Drink · Repair")
+    expect(tip.lines).toEqual({ { "Open all day" } })
+    expect(tip.meta).toBe("a hint")
+    -- its title already says it; or no title at all
+    expect(tips.tipBase(group({ { name = "Grosk", detail = "Repair Merchant", kindName = "Repair", small = true } })).subtitle)
+        .toBe("Repair Merchant")
+    expect(tips.tipBase(group({ { name = "Grosk", kindName = "Repair", small = true } })).subtitle).toBe("Repair")
+    local quest = tips.tipBase(group({ { name = "Gornek", difficulty = "standard", quests = { 7, 8 } } }))
+    expect(quest.titleColor).toBe("quest-standard")
+    expect(quest.titleQuest).toBe(7)
+    expect(quest.lines).toBeNil()
+end
+
+@test("a merged pin: a line per name with its title, how many, who teaches what")
+local function merged()
+    local tip = tips.tipBase(group({
+        { name = "Innkeeper Grosk", detail = "Innkeeper", kindName = "Innkeeper", uid = "a" },
+        { name = "Innkeeper Grosk", detail = "Innkeeper", uid = "a" },
+        { name = "Sayoc", detail = "Weapon Master", teaches = "Bows, Daggers", uid = "b" },
+    }, 2), "Shift: what to do")
+    expect(tip.title).toBe("Innkeeper · 2")
+    expect(tip.meta).toBe("Click to zoom in · Shift: what to do")
+    expect(tip.lines).toEqual({
+        { "Innkeeper Grosk  " .. MUTED .. "Innkeeper|r", gap = S["space-4"] },
+        { "Sayoc  " .. MUTED .. "Weapon Master|r", gap = S["space-5"] },
+        { MUTED .. "Teaches Bows, Daggers|r" },
+    })
+end
+
+@test("a merged pin of one name: the title says it all; mailboxes counted")
+local function oneName()
+    local tip = tips.tipBase(group({ { name = "Mailbox", kindName = "Mailbox", uid = "m1" }, { name = "Mailbox", uid = "m2" } }))
+    expect(tip.title).toBe("Mailbox · 2")
+    expect(tip.lines).toBeNil()
+    expect(tip.meta).toBe("Click to zoom in")
+    -- untitled kinds: repeatable quests, quests to pick up
+    expect(tips.tipBase(group({ { name = "A", repeatable = true }, { name = "B" } })).title).toBe("Repeatable quests · 2")
+    expect(tips.tipBase(group({ { name = "A", key = "available" }, { name = "B" } })).title).toBe("Quests to pick up · 2")
+    expect(tips.tipBase(group({ { name = "A" }, { name = "B" } })).title).toBe(" · 2")
+end
+
+@test("a merged pin of many: twelve lines, then how many more")
+local function many()
+    local items: Item[] = {}
+    for i = 1, 15 do items[i] = { name = "Rare " .. i } end
+    local tip = tips.tipBase(group(items))
+    expect(#tip.lines).toBe(13)
+    expect(tip.lines[13]).toEqual({ "and 3 more" })
+end
+
+@test("with Shift: one quest's objectives as the description, unknown ones said so")
+local function objectives()
+    questData()
+    mock.setPlayer({ name = "Tamsin", class = "WARRIOR", race = "Orc", sex = 3 })
+    local tip = tips.addObjectives({ title = "Gornek" }, { 1 })
+    expect(tip.description).toBe(MUTED .. "Bring 8 Scorpid Worker Tails to Tamsin.|r")
+    tip = tips.addObjectives({ title = "Gornek" }, { 99 })
+    expect(tip.description).toBe(MUTED .. "The quest data doesn't say what this quest asks.|r")
+end
+
+@test("with Shift: each quest's objectives under its own name")
+local function eachUnder()
+    questData()
+    mock.setPlayer({ name = "Tamsin", class = "WARRIOR", race = "Orc", sex = 3 })
+    local tip = tips.addObjectives({ title = "Gornek", titleQuest = 1, lines = {
+        { "Kaltunk", quest = 1 },
+        { "Grosk", quests = { 1, 2 } },
+    } }, { 1, 2 })
+    expect(tip.lines).toEqual({
+        { MUTED .. "Bring 8 Scorpid Worker Tails to Tamsin.|r", gap = S["space-4"] },
+        { "Kaltunk", quest = 1 },
+        { MUTED .. "Bring 8 Scorpid Worker Tails to Tamsin.|r" },
+        { "Grosk", quests = { 1, 2 } },
+        { MUTED .. "Bring 8 Scorpid Worker Tails to Tamsin.|r" },
+        { "Family Ties", gap = S["space-2"] },
+        { MUTED .. "Find your sister in Razor Hill.|r" },
+    })
+    -- under a subtitle: no gap before the first
+    tip = tips.addObjectives({ title = "Gornek", subtitle = "Quest giver", titleQuest = 1, lines = {} }, { 1 })
+    expect(tip.lines).toEqual({ { MUTED .. "Bring 8 Scorpid Worker Tails to Tamsin.|r" } })
+end
+
+@test("a pin's tooltip: wider, a Shift hint for quests, their objectives while Shift is held")
+local function withShift()
+    questData()
+    local plainTip = tips.tipFor(group({ { name = "Grosk", detail = "Innkeeper" } }))
+    expect(plainTip.maxWidth).toBe(360)
+    expect(plainTip.meta).toBeNil()
+    local g = group({ { name = "Gornek", quests = { 1 } } })
+    expect(tips.tipFor(g).meta).toBe("Shift: what to do")
+    expect(tips.tipFor(g).description).toBeNil()
+    mock.setModifiers({ shift = true })
+    local tip = tips.tipFor(g)
+    expect(tip.meta).toBeNil()
+    expect(tip.description).toBe(MUTED .. "Bring 8 Scorpid Worker Tails to " .. tostring(UnitName("player")) .. ".|r")
+    mock.setModifiers({})
+end

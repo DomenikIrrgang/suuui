@@ -1,0 +1,105 @@
+-- Units/WorldMap/Arrange: pins where they crowd (merged by kind within a
+-- radius, pushed apart where they still overlap, drawn in order).
+
+import test, expect from "wowlua:test"
+import * as arr from "/Units/WorldMap/Arrange"
+
+-- an item at x, y (0-1) of a kind
+local function item(x: number, y: number, key: string?, extra: { [string]: any }?): arr.Item
+    local it: arr.Item = { x = x, y = y, key = key }
+    for k, v in pairs(extra or {}) do it[k] = v end
+    return it
+end
+
+@test("pins of one kind within the radius merge at their middle; one NPC's spawns count once")
+local function merging()
+    local groups = arr.merge({
+        item(0.1, 0.1, "inn", { uid = "a" }),
+        item(0.11, 0.1, "inn", { uid = "a" }),
+        item(0.12, 0.1, "inn", { uid = "b" }),
+        item(0.1, 0.1, "mail"),
+        item(0.1, 0.1),
+        item(0.5, 0.5, "inn"),
+    }, 1000, 1000, 38)
+    expect(#groups).toBe(4)
+    local inn = groups[1]
+    expect(#inn.items).toBe(3)
+    expect(inn.x).toBeCloseTo(110)
+    expect(inn.y).toBeCloseTo(100)
+    expect(inn.distinct).toBe(2)
+    expect(groups[2].key).toBe("mail")
+    -- (no kind: never merged)
+    expect(groups[3].key).toBeNil()
+    expect(groups[4].x).toBe(500)
+end
+
+@test("a merged pin is fixed only when all of its pins are")
+local function fixedness()
+    local groups = arr.merge({ item(0, 0, "dungeon", { fixed = true }), item(0.01, 0, "dungeon", { fixed = true }) }, 1000, 1000, 38)
+    expect(groups[1].fixed).toBe(true)
+    groups = arr.merge({ item(0, 0, "inn", { fixed = true }), item(0.01, 0, "inn") }, 1000, 1000, 38)
+    expect(groups[1].fixed).toBeFalsy()
+end
+
+@test("groups that end up near each other join, weighted by their pins")
+local function joining()
+    local groups = arr.merge({ item(0, 0, "inn"), item(0.001, 0, "inn"), item(0.03, 0, "inn"), item(0.02, 0, "mail") }, 1000, 1000, 20)
+    expect(#groups).toBe(3)
+    arr.mergeGroups(groups, 38)
+    expect(#groups).toBe(2)
+    expect(#groups[1].items).toBe(3)
+    -- (0.5 px for two pins, 30 px for one)
+    expect(groups[1].x).toBeCloseTo((0.5 * 2 + 30) / 3)
+    expect(groups[1].distinct).toBe(3)
+    expect(groups[2].key).toBe("mail")
+end
+
+@test("overlapping pins step apart: both when both may move, only the movable one beside a fixed one")
+local function spreading()
+    local g = arr.merge({ item(0, 0, "a", { small = true }), item(0, 0, "b", { small = true }) }, 1000, 1000, 38)
+    arr.spread(g)
+    expect(g[1].x).toBeCloseTo(-10.5)
+    expect(g[2].x).toBeCloseTo(10.5)
+    g = arr.merge({ item(0, 0, "dungeon", { fixed = true }), item(0.005, 0, "inn", { small = true }) }, 1000, 1000, 38)
+    arr.spread(g)
+    expect(g[1].x).toBe(0)
+    expect(g[2].x).toBeCloseTo(23.5)
+    -- the movable one first: it steps back
+    g = arr.merge({ item(0.005, 0, "inn", { small = true }), item(0, 0, "dungeon", { fixed = true }) }, 1000, 1000, 38)
+    arr.spread(g)
+    expect(g[1].x).toBeCloseTo(23.5)
+    expect(g[2].x).toBe(0)
+    -- single full-size pins stay where they are
+    g = arr.merge({ item(0, 0, "a"), item(0.005, 0, "b") }, 1000, 1000, 38)
+    arr.spread(g)
+    expect(g[2].x).toBe(5)
+end
+
+@test("drawn small ones first, places last, each by its height on the map")
+local function order()
+    local groups, grow = arr.arrange({
+        item(0.5, 0.9, "dungeon", { fixed = true }),
+        item(0.1, 0.8, "quest"),
+        item(0.9, 0.2, "inn", { small = true }),
+        item(0.3, 0.1, "quest2"),
+    }, 1000, 1000, false)
+    expect(grow).toBe(1)
+    local keys: string[] = {}
+    for i, g in ipairs(groups) do keys[i] = g.key :: string end
+    expect(keys).toEqual({ "inn", "quest2", "quest", "dungeon" })
+end
+
+@test("zoomed all the way in: nothing moves, only pins on one spot merge, and they're larger")
+local function closest()
+    local list = { item(0, 0, "inn", { small = true }), item(0.01, 0, "inn", { small = true }), item(0.0001, 0, "inn", { small = true }) }
+    local groups, grow = arr.arrange(list, 1000, 1000, true)
+    expect(grow).toBe(arr.CLOSEST_GROW)
+    expect(#groups).toBe(2)
+    expect(groups[1].fixed).toBe(true)
+    -- (the items themselves untouched)
+    expect(list[1].fixed).toBeNil()
+    local xs: number[] = {}
+    for i, g in ipairs(groups) do xs[i] = math.floor(g.x + 0.5) end
+    table.sort(xs)
+    expect(xs).toEqual({ 0, 10 })
+end
