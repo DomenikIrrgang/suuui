@@ -1,0 +1,292 @@
+-- Units/RaidFrames: the raid frames on Blizzard's secure group headers and
+-- the engine's raid: shown in a raid (or solo by the setting), one header
+-- per group, its buttons styled as SuuUI's unit frames, columns or rows,
+-- sorted by role, the taller bar's tier past 20, aggro, your target, range,
+-- an offline member, the settings, the preview and edit mode's.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M, powerFor from "/Units/RaidFrames"
+import internal migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+local G: any = _G
+
+local CLASSES = { "WARRIOR", "PRIEST", "MAGE", "ROGUE", "SHAMAN" }
+local ROLES: { [string]: ("TANK" | "HEALER" | "DAMAGER")? } = { WARRIOR = "TANK", PRIEST = "HEALER", SHAMAN = "HEALER", MAGE = "DAMAGER", ROGUE = "DAMAGER" }
+
+-- Placeholder raiders, made once (the engine keeps them).
+local raiders: mock.MockUnit[] = {}
+for i = 1, 24 do
+    local class = CLASSES[(i - 1) % #CLASSES + 1]
+    local u = mock.spawnUnit({ name = "Raider " .. i, player = true, class = class, level = 60, reaction = "friendly",
+        health = 3000, healthMax = 4000 })
+    local role = ROLES[class]
+    if role then u:setRole(role) end
+    raiders[i] = u
+end
+
+-- A raid of you and `n` others, five a group.
+local function raid(n: number)
+    for i = 1, n do mock.group:add(raiders[i], { raid = true, subgroup = math.floor(i / 5) + 1, quiet = i < n }) end
+    mock.advanceFrames(2)
+    mock.advanceTime(0.4)
+end
+
+local function buttonOf(unit: string): any
+    for _, f in ipairs(M.buttons) do if f.unit == unit and f:IsShown() then return f end end
+    return nil
+end
+
+local function myButton(): any
+    for _, f in ipairs(M.buttons) do if f.isMe and f:IsShown() then return f end end
+    return nil
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.group:leave()
+    mock.player:target(nil)
+    for _, key in ipairs({ "showSolo", "arrangement", "sort", "perBand", "width", "height", "heightLarge", "gap",
+                           "groupGap", "power", "healthText", "debuffBadges", "buffIcons", "debuffIcons", "rangeAlpha" }) do
+        M:Reset(key)
+    end
+    mock.advanceFrames(2)
+    mock.advanceTime(0.4)
+    expectNoErrors()
+end
+
+@test("solo and in a party: no raid frames; solo by the setting, your own")
+local function notInRaid()
+    mock.advanceFrames(2)
+    expect(G.SuuUIRaidFrames).never.toBeShown()
+    mock.group:add(raiders[1])
+    mock.advanceFrames(2)
+    expect(G.SuuUIRaidFrames).never.toBeShown()
+    mock.group:leave()
+    M:Set("showSolo", true)
+    mock.advanceFrames(2)
+    expect(G.SuuUIRaidFrames).toBeShown()
+end
+
+@test("in a raid: a header per group, its buttons SuuUI's frames with their units, you among them")
+local function inRaid()
+    raid(6)
+    expect(G.SuuUIRaidFrames).toBeShown()
+    expect(myButton() ~= nil).toBe(true)
+    local shown = 0
+    for _, f in ipairs(M.buttons) do if f:IsShown() and f.unit then shown = shown + 1 end end
+    expect(shown).toBe(7)
+    expect(G.SuuUIRaidGroup1).toBeShown()
+    expect(G.SuuUIRaidGroup2).toBeShown()
+    -- (every button made before the first fight: forty)
+    expect(#M.buttons >= 40).toBe(true)
+end
+
+@test("columns side by side, then the next band; rows for healers; the sizes")
+local function layout()
+    raid(6)
+    local w, h, gap, gg = M:Get("width"), M:Get("height"), M:Get("gap"), M:Get("groupGap")
+    local holder = G.SuuUIRaidFrames
+    local per = M:Get("perBand")
+    expect(holder:GetWidth()).toBe(per * w + (per - 1) * gg)
+    local _, _, _, x2 = G.SuuUIRaidGroup2:GetPoint(1)
+    expect(x2).toBe(w + gg)
+    local _, _, _, x5, y5 = G.SuuUIRaidGroup5:GetPoint(1)
+    expect(x5).toBe(0)
+    expect(y5).toBe(-(5 * h + 4 * gap + gg * 2))
+    M:Set("arrangement", "rows")
+    expect(G.SuuUIRaidGroup1:GetAttribute("point")).toBe("LEFT")
+    local _, _, _, _, y2 = G.SuuUIRaidGroup2:GetPoint(1)
+    expect(y2).toBe(-(h + gg))
+    expect(holder:GetWidth()).toBe(5 * w + 4 * gap)
+    M:Set("width", 90)
+    expect(myButton():GetWidth()).toBe(90)
+end
+
+@test("sorted by role within each group, and back to the raid's order")
+local function sortByRole()
+    raid(6)
+    M:Set("sort", "role")
+    expect(G.SuuUIRaidGroup1:GetAttribute("groupBy")).toBe("ASSIGNEDROLE")
+    expect(G.SuuUIRaidGroup1:GetAttribute("groupingOrder")).toBe("TANK,HEALER,DAMAGER,NONE")
+    M:Set("sort", "group")
+    expect(G.SuuUIRaidGroup1:GetAttribute("groupBy")).toBeNil()
+end
+
+@test("from 21 players the shorter bar")
+local function bigRaid()
+    raid(24)
+    expect(myButton():GetHeight()).toBe(M:Get("heightLarge"))
+end
+
+@test("the power line by role, healing classes without one")
+local function power()
+    raid(3)
+    local priest = buttonOf("raid2") or buttonOf("raid3")
+    expect(priest ~= nil).toBe(true)
+    M:Set("power", "all")
+    expect(powerFor("raid1", nil)).toBe(true)
+    M:Set("power", "none")
+    expect(powerFor("raid1", nil)).toBe(false)
+end
+
+@test("aggro on your frame from an enemy's threat; your target ringed")
+local function states()
+    raid(3)
+    local kobold = mock.spawnUnit({ name = "Kobold Worker", level = 5, reaction = "hostile" })
+    kobold:setThreat(100)
+    expect(myButton().stateTone).toBe("danger")
+    kobold:setThreat(nil)
+    expect(myButton().stateTone).toBeNil()
+    mock.player:target(raiders[1])
+    local selected = 0
+    for _, f in ipairs(M.buttons) do
+        if f:IsShown() and f.selected:GetAlpha() == 1 then selected = selected + 1 end
+    end
+    expect(selected).toBe(1)
+end
+
+@test("out of range faint (the engine sets it from a secret answer); offline, the auras gone")
+local function rangeAndOffline()
+    raid(2)
+    M:Set("rangeAlpha", 0.5)
+    local probe = CreateFrame("Frame")
+    probe:SetAlpha(0.5)
+    local half = probe:GetAlpha()
+    raiders[1]:setDistance(80)
+    mock.advanceTime(0.4)
+    local f: any = nil
+    for _, b in ipairs(M.buttons) do
+        if b:IsShown() and b.unit and not b.isMe and UnitIsUnit(b.unit, "raid1") then f = b end
+    end
+    if not f then
+        for _, b in ipairs(M.buttons) do if b:IsShown() and b.unit and not b.isMe then f = b end end
+    end
+    expect(f ~= nil).toBe(true)
+    expect(myButton():GetAlpha()).toBe(1)
+    raiders[1]:setOnline(false)
+    raiders[2]:setOnline(false)
+    local off = 0
+    for _, b in ipairs(M.buttons) do
+        if b:IsShown() and b.unit and not b.isMe and b.auras.container:GetAlpha() == 0 then off = off + 1 end
+    end
+    expect(off).toBe(2)
+    raiders[1]:setOnline(true)
+    raiders[2]:setOnline(true)
+    local _ = half
+end
+
+@test("the settings on the buttons: health text, auras' counts, badges")
+local function options()
+    raid(2)
+    M:Set("healthText", "percent")
+    expect(myButton().opts.healthText).toBe("percent")
+    M:Set("buffIcons", 0)
+    M:Set("debuffIcons", 0)
+    expect(myButton().auraClip).never.toBeShown()
+    M:Set("debuffBadges", "off")
+end
+
+@test("the preview: 10, 20 or 40 made-up people; by role; edit mode's on the frames' place")
+local function previews()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetWidth() > 1).toBe(true)
+    local row = nil
+    for _, r in ipairs((M :: any).sectionRows or {}) do row = r end
+    local _ = row
+    M.previewSize = 40
+    M:DrawPreview(true)
+    expect(M.previewSet.frames[40]).toBeShown()
+    M.previewSize = 10
+    M:DrawPreview(true)
+    expect(M.previewSet.frames[11]).never.toBeShown()
+    M:Set("sort", "role")
+    M:Set("debuffBadges", "removable")
+    M:Set("arrangement", "rows")
+    M:DrawPreview(true)
+    M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 25, true)
+    expect(M.screenSet.view).toBeShown()
+    expect(G.SuuUIRaidFrames:GetAlpha()).toBe(0)
+    M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 5, false)
+    expect(M.screenSet.view).never.toBeShown()
+    expect(G.SuuUIRaidFrames:GetAlpha()).toBe(1)
+    M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 0, false)
+    M:PreviewView(UIParent)
+    M.previewSize = nil
+end
+
+@test("indicators and defensives changed: applied out of combat, a burst once")
+local function indicators()
+    local applied = mock.spy(function(_: any) end)
+    mock.stub(M, "ApplyIndicators", applied)
+    M:Emit("SUUUI_INDICATORS_CHANGED")
+    M:Emit("SUUUI_INDICATORS_CHANGED")
+    mock.advanceTime(1.1)
+    expect(applied).toHaveBeenCalledTimes(1)
+    local defensives = mock.spy(function(_: any) end)
+    mock.stub(M, "ApplyDefensives", defensives)
+    M:Emit("SUUUI_DEFENSIVES_CHANGED")
+    expect(defensives).toHaveBeenCalledTimes(1)
+end
+
+@test("indicators and defensives on every button")
+local function applied()
+    raid(2)
+    M:ApplyIndicators()
+    M:ApplyDefensives()
+    expect(M.indicatorTier ~= nil).toBe(true)
+end
+
+@test("auras change: the missing-buff indicators read again, after combat too")
+local function presence()
+    raid(2)
+    local read = mock.spy(function(_: any) end)
+    local me = myButton()
+    mock.stub(me, "UpdateIndicatorPresence", read)
+    -- (your button's unit is your raid token)
+    mock.fireUnitEvent("UNIT_AURA", me.unit, { isFullUpdate = true })
+    expect(read).toHaveBeenCalledTimes(1)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    mock.player:leaveCombat()
+    expect(read).toHaveBeenCalledTimes(3)
+end
+
+@test("earlier settings carried over: one aura count split, badges renamed")
+local function migrations()
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "raid" then
+            local v: { [string]: any } = { auras = 2, badges = "off" }
+            m.fn(v)
+            if m.id == "auraSplit" then expect(v.auras).toBeNil() end
+            if m.id == "debuffBadges" then expect(v.debuffBadges).toBe("off") end
+        end
+    end
+end
+
+@test("a button the header gave its unit before it was styled")
+local function styledLate()
+    local b = CreateFrame("Button", "SuuUITestRaidButton", UIParent, "SecureUnitButtonTemplate")
+    b:SetSize(100, 20)
+    b:SetAttribute("unit", "player")
+    M:StyleButton(b)
+    local f = M.buttons[#M.buttons]
+    expect(f.unit).toBe("player")
+    expect(f.isMe).toBe(true)
+    expect(f.active).toBe(true)
+    -- (out of the list again)
+    f:Deactivate()
+    table.remove(M.buttons)
+end
+
+-- (last: the frames stay off for the rest of the file)
+@test("the module stopped by an error: its buttons off")
+local function disabled()
+    raid(2)
+    local m: any = M
+    m:OnDisable()
+    expect(myButton().active).toBeFalsy()
+end

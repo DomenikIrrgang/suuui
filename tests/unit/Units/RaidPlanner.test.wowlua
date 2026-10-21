@@ -1,0 +1,934 @@
+-- Units/RaidPlanner: setups (made, saved, changed, loaded, duplicated,
+-- renamed, deleted, made from the raid), shared as text, slots (added,
+-- changed, removed, a spec or a player dropped), the engine's raid read and
+-- filling the slots (pinned, exact before provisional, two fit one slot,
+-- let go), specs from an inspect and from raid members' SuuUI, coverage
+-- (raid-wide and per group), the window's data, Arrange groups on the
+-- engine's raid, the menus, the settings and what's tracked, the migration.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/RaidPlanner"
+import internal migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+local UI = SuuUI.UI
+local G: any = _G
+
+-- Placeholder raiders, made once (the engine keeps them).
+local function raider(name: string, class: string, role: ("TANK" | "HEALER" | "DAMAGER")?): mock.MockUnit
+    local u = mock.spawnUnit({ name = name, player = true, class = class, level = 60, reaction = "friendly" })
+    if role then u:setRole(role) end
+    return u
+end
+
+local warrior = raider("Raider Warrior", "WARRIOR", "TANK")
+local priest = raider("Raider Priest", "PRIEST", "HEALER")
+local mage = raider("Raider Mage", "MAGE")
+local mage2 = raider("Raider Frostmage", "MAGE")
+local hunter = raider("Raider Hunter", "HUNTER")
+local hunter2 = raider("Raider Bowman", "HUNTER")
+local shaman = raider("Raider Shaman", "SHAMAN")
+
+-- The raid: you and these, in their subgroups.
+local function raid(list: { { unit: mock.MockUnit, g: number } })
+    for i, e in ipairs(list) do mock.group:add(e.unit, { raid = true, subgroup = e.g, quiet = i < #list }) end
+    mock.advanceTime(0.6)
+end
+
+-- A fresh start: no setups, no specs, nothing filled.
+local function fresh()
+    local d = M:Data()
+    for k in pairs(d) do d[k] = nil end
+    M.fill, M.letGo, M.inspecting, M.inspectRound, M.inspectFailed, M.askedAt = nil, nil, nil, nil, nil, nil
+end
+
+-- What UI.Confirm was asked (its onConfirm run by the test).
+local confirmed: any = nil
+local printed: string[] = {}
+
+-- What a context menu offered: its buttons by label.
+local menu: { [string]: () -> () } = {}
+local enabled: { [string]: boolean } = {}
+local function captureMenus()
+    mock.stub(UI, "ContextMenuFrom", function(owner: any, describe: (owner: any, root: any) -> ())
+        for k in pairs(menu) do menu[k] = nil end
+        local root: any = {}
+        function root:CreateTitle(_: string) end
+        function root:CreateDivider() end
+        function root:CreateButton(label: string, fn: () -> ())
+            menu[label] = fn
+            local b: any = {}
+            function b:SetEnabled(on: boolean) enabled[label] = on end
+            return b
+        end
+        describe(owner, root)
+    end)
+end
+
+local function choose(label: string)
+    local fn = menu[label]
+    assert(fn, "no menu button " .. label)
+    fn()
+end
+
+-- The planner's messages sent so far (other modules send theirs too).
+local function planner(): any[]
+    local out = {}
+    for _, m in ipairs(mock.sentAddonMessages()) do
+        if m.prefix == "SuuUI" and tostring(m.message):sub(1, 6) == "RPSPEC" then out[#out + 1] = m end
+    end
+    return out
+end
+
+local function setup()
+    fresh()
+    -- (you: a damage dealer, so the raiders take the slots for their class)
+    mock.player:setRole("DAMAGER")
+    confirmed = nil
+    printed = {}
+    mock.stub(UI, "Confirm", function(opts: any) confirmed = opts; return nil end)
+    mock.stub(M, "Print", function(_: any, text: string) printed[#printed + 1] = text end)
+    captureMenus()
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    if M.window then M.window:Hide() end
+    mock.group:leave()
+    mock.player:setRole(nil)
+    for _, k in ipairs({ "preset", "tracked", "fill", "inspect", "flagDoubled", "shareSpec" }) do M:Reset(k) end
+    mock.advanceTime(2)
+    fresh()
+    expectNoErrors()
+end
+
+-- A slot asking for this.
+local function slot(g: number, class: string?, spec: number?, role: string?): any
+    return M:AddSlot(g, { class = class, spec = spec, role = role })
+end
+
+@test("setups: a new one, saved, changed, its name kept unique, duplicated, renamed, deleted")
+local function setups()
+    setup()
+    local w = M:Work()
+    expect(w.name).toBe("New setup")
+    expect(w.size).toBe(40)
+    expect(M:Changed()).toBe(true)
+    slot(1, "WARRIOR", 3)
+    M:Save()
+    expect(w.id).toBe(1)
+    expect(M:Changed()).toBe(false)
+    expect(M:Data().setups[1].slots[1].class).toBe("WARRIOR")
+    slot(1, "PRIEST")
+    expect(M:Changed()).toBe(true)
+    expect(M:UniqueName("New setup")).toBe("New setup 2")
+    M:Duplicate(1)
+    expect(M:Data().setups[2].name).toBe("New setup (copy)")
+    expect(printed[1]).toBe("New setup saved as New setup (copy).")
+    M:Rename(2, "Molten Core")
+    expect(M:Data().setups[2].name).toBe("Molten Core")
+    M:Rename("work", "Main")
+    expect(w.name).toBe("Main")
+    M:Rename(1, "")
+    expect(w.name).toBe("Main")
+    -- loading another drops the changes: asked first
+    M:Load(2)
+    expect(confirmed.title).toBe("Load Molten Core?")
+    confirmed.onConfirm()
+    expect(M:Work().id).toBe(2)
+    expect(#M:Work().slots).toBe(1)
+    -- unchanged: at once
+    confirmed = nil
+    M:Load(1)
+    expect(confirmed).toBeNil()
+    expect(M:Work().id).toBe(1)
+    M:Load(99)
+    -- deleted: the loaded one stays open, unsaved
+    M:Delete(nil)
+    expect(confirmed.title).toBe("Delete New setup?")
+    confirmed.onConfirm()
+    expect(M:Data().setups[1]).toBeNil()
+    expect(M:Work().id).toBeNil()
+    -- the unsaved one: discarded, a new one after
+    M:Delete(nil)
+    expect(confirmed.title).toBe("Discard New setup?")
+    confirmed.onConfirm()
+    expect(#M:Work().slots).toBe(0)
+    -- an empty unsaved one: nothing to discard
+    confirmed = nil
+    M:Delete(nil)
+    expect(confirmed).toBeNil()
+end
+
+@test("save as new: under its own name; a new setup asks first when the loaded one changed")
+local function saveAsNew()
+    setup()
+    slot(1, "MAGE")
+    M:Save()
+    M:SaveAsNew()
+    expect(confirmed.input.value).toBe("New setup 2")
+    confirmed.onConfirm("Onyxia")
+    expect(M:Work().id).toBe(2)
+    expect(M:Data().setups[2].name).toBe("Onyxia")
+    slot(2, "PRIEST")
+    confirmed = nil
+    M:New(false)
+    expect(confirmed.title).toBe("A new setup?")
+    confirmed.onConfirm()
+    expect(#M:Work().slots).toBe(0)
+    expect(M:Work().name).toBe("New setup 2")
+end
+
+@test("as text: exported and imported the same, the odd characters kept; wrong text refused")
+local function asText()
+    setup()
+    local w = M:Work()
+    w.name = "Main; 40, %|"
+    slot(1, "WARRIOR", 3, "TANK")
+    local s = slot(2, "PRIEST")
+    s.label = "Fortitude; first"
+    s.pin = "Raider Priest"
+    slot(3)
+    local text = M:ExportText(w)
+    expect(text:sub(1, 9)).toBe("SuuRaid1;")
+    local back = M:ImportText(text)
+    expect(back.name).toBe("Main; 40, %| 2")
+    expect(#back.slots).toBe(3)
+    expect(back.slots[1].spec).toBe(3)
+    expect(back.slots[1].role).toBe("TANK")
+    expect(back.slots[2].label).toBe("Fortitude; first")
+    expect(back.slots[2].pin).toBe("Raider Priest")
+    expect(back.slots[3].class).toBeNil()
+    local none, why = M:ImportText("hello")
+    expect(none).toBeNil()
+    expect(why).toBe("That isn't a raid planner setup.")
+    local _, why2 = M:ImportText("SuuRaid1;x;25")
+    expect(why2).toBe("The setup's raid size is wrong.")
+    -- what it can't read is left out: a group past the size, a sixth in a group, an unknown class or spec
+    local odd = M:ImportText("SuuRaid1;;10;3,MAGE;1,DEATHKNIGHT,9;1,,,;1,,,;1,,,;1,,,;1,,,;1,MAGE,7,BOGUS")
+    expect(odd.name).toBe("Imported setup")
+    expect(#odd.slots).toBe(5)
+    expect(odd.slots[1].class).toBeNil()
+    expect(odd.slots[1].spec).toBeNil()
+    -- the windows: export shows the text, import makes a setup and loads it
+    M:Export(nil)
+    expect(confirmed.input.value).toBe(text)
+    M:Import()
+    confirmed.onConfirm("nonsense")
+    expect(printed[#printed]).toBe("That isn't a raid planner setup.")
+    M:Import()
+    confirmed.onConfirm(text)
+    expect(printed[#printed]).toBe("Imported Main; 40, %| 2.")
+    -- (the loaded one changed: asked first)
+    confirmed.onConfirm()
+    expect(M:Work().name).toBe("Main; 40, %| 2")
+end
+
+@test("slots: added up to five a group, changed (a spec brings its role), removed; a spec or a player dropped")
+local function slots()
+    setup()
+    for _ = 1, 5 do expect(slot(1) ~= nil).toBe(true) end
+    expect(slot(1)).toBeNil()
+    expect(slot(9)).toBeNil()
+    local s = M:SlotsIn(1)[1]
+    M:ChangeSlot(s.id, { class = "SHAMAN" })
+    M:ChangeSlot(s.id, { spec = 3 })
+    expect(s.role).toBe("HEALER")
+    M:ChangeSlot(s.id, { class = "PRIEST", label = "" })
+    expect(s.spec).toBeNil()
+    expect(s.label).toBeNil()
+    M:ChangeSlot(s.id, { pin = "Raider Priest" })
+    M:ChangeSlot(M:SlotsIn(1)[2].id, { pin = "Raider Priest" })
+    expect(s.pin).toBeNil()
+    M:ChangeSlot(s.id, { role = false })
+    M:ChangeSlot(999, { class = "MAGE" })
+    M:RemoveSlot(s.id)
+    expect(#M:SlotsIn(1)).toBe(4)
+    -- a spec from the palette: onto a slot, onto a group (a new slot)
+    local t = M:SlotsIn(1)[1]
+    M:Drop({ spec = { class = "MAGE", spec = 3 } }, { slot = t.id })
+    expect(t.class).toBe("MAGE")
+    expect(t.role).toBe("DAMAGER")
+    M:Drop({ spec = { class = "DRUID", spec = 2, role = "TANK" } }, { group = 2 })
+    expect(M:SlotsIn(2)[1].role).toBe("TANK")
+end
+
+@test("the raid read: you and the others, their groups, roles, the leader")
+local function roster()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 2 } })
+    local r = M:ReadRoster()
+    expect(M.inRaid).toBe(true)
+    expect(#r).toBe(3)
+    expect(M.me ~= nil).toBe(true)
+    expect(M.me.lead).toBe(true)
+    local w = M.byKey["Raider Warrior"]
+    expect(w.class).toBe("WARRIOR")
+    expect(w.role).toBe("TANK")
+    expect(M.byKey["Raider Priest"].group).toBe(2)
+    mock.group:leave()
+    M:ReadRoster()
+    expect(M.inRaid).toBe(false)
+    expect(#M.roster).toBe(0)
+    -- a party isn't a raid
+    mock.group:add(warrior)
+    mock.advanceTime(0.6)
+    M:ReadRoster()
+    expect(M.inRaid).toBe(false)
+end
+
+@test("filling: the pickiest slot first, exact over provisional, the spec unknown provisional, two fit one slot")
+local function filling()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 1 }, { unit = mage, g = 2 }, { unit = mage2, g = 2 } })
+    local tank = slot(1, "WARRIOR", 3, "TANK")
+    local healer = slot(1, nil, nil, "HEALER")
+    local caster = slot(2, "MAGE")
+    local open = slot(3, "DRUID")
+    M:Refill()
+    expect(M.fill.slot[tank.id].m.name).toBe("Raider Warrior")
+    expect(M.fill.slot[tank.id].how).toBe("provisional")
+    expect(M.fill.slot[healer.id].m.name).toBe("Raider Priest")
+    expect(M.fill.slot[caster.id] ~= nil).toBe(true)
+    expect(M.fill.slot[open.id]).toBeNil()
+    -- the other mage fits the mage slot as well: two fit one
+    expect(M.fill.conflict[caster.id] ~= nil).toBe(true)
+    -- you, without a slot
+    expect(#M.fill.unplaced).toBe(2)
+    -- review mode: who is placed stays until Fill slots
+    M:Set("fill", "review")
+    local extra = slot(3, "MAGE")
+    M:Refill()
+    expect(M.fill.slot[extra.id]).toBeNil()
+    M:Refill(true)
+    expect(M.fill.slot[extra.id] ~= nil).toBe(true)
+end
+
+@test("filling by role: a known tree's role, a class that can't take it, the spec unknown")
+local function fillingByRole()
+    setup()
+    raid({ { unit = shaman, g = 1 }, { unit = mage, g = 1 } })
+    local healer = slot(1, nil, nil, "HEALER")
+    M:Refill()
+    -- the shaman may heal (not known yet); the mage can't
+    expect(M.fill.slot[healer.id].m.name).toBe("Raider Shaman")
+    expect(M.fill.slot[healer.id].how).toBe("provisional")
+    M:NoteSpec("Raider Shaman", 3, "message")
+    M:Refill()
+    expect(M.fill.slot[healer.id].how).toBe("exact")
+    M:NoteSpec("Raider Shaman", 2, "message")
+    M:Refill()
+    expect(M.fill.slot[healer.id]).toBeNil()
+end
+
+@test("pinned by hand: dropped onto a slot, two players swapped, let go, a slot made for a player")
+local function pinned()
+    setup()
+    raid({ { unit = mage, g = 1 }, { unit = mage2, g = 1 } })
+    local a = slot(1, "MAGE")
+    local b = slot(2, "MAGE")
+    M:Refill()
+    M:Drop({ player = "Raider Frostmage" }, { slot = a.id })
+    expect(a.pin).toBe("Raider Frostmage")
+    expect(M.fill.slot[a.id].how).toBe("pinned")
+    -- the one there moves to the dragged one's slot
+    local inA = "Raider Frostmage"
+    local inB = M.fill.slot[b.id].m.name
+    M:Drop({ player = inB, from = b.id }, { slot = a.id })
+    expect(a.pin).toBe(inB)
+    expect(b.pin).toBe(inA)
+    -- let go: without a slot, said so
+    M:Drop({ player = inA }, { unplaced = true })
+    expect(b.pin).toBeNil()
+    local v = M:ViewData()
+    local found = nil
+    for _, u in ipairs(v.unplaced) do if u.name == inA then found = u end end
+    expect(found.detail:find("let go by hand", 1, true) ~= nil).toBe(true)
+    -- dropped on a group: a slot asking for them, pinned
+    M:Drop({ player = inA }, { group = 4 })
+    expect(M:SlotsIn(4)[1].pin).toBe(inA)
+    expect(M:SlotsIn(4)[1].class).toBe("MAGE")
+    M:Drop({ player = inA }, { slot = 999 })
+    -- a requirement of another class drops the pin
+    M:SetRequirement(M:SlotsIn(4)[1], { class = "PRIEST" })
+    expect(M:SlotsIn(4)[1].pin).toBeNil()
+end
+
+@test("specs from raid members' SuuUI: a member's spec heard, asked for, yours shared when asked")
+local function specMessages()
+    setup()
+    raid({ { unit = warrior, g = 1 } })
+    local tank = slot(1, "WARRIOR", 3, "TANK")
+    M:Refill()
+    expect(M.fill.slot[tank.id].how).toBe("provisional")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t3", "RAID", "Raider Warrior")
+    mock.advanceTime(0.6)
+    expect(M.fill.slot[tank.id].how).toBe("exact")
+    expect(M:KnownTree("Raider Warrior", false)).toBe(3)
+    -- nonsense and other addons' messages: nothing
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t7", "RAID", "Raider Priest")
+    mock.receiveAddonMessage("Other", "RPSPEC\t1", "RAID", "Raider Priest")
+    mock.advanceTime(0.6)
+    expect(M:KnownTree("Raider Priest", false)).toBeNil()
+    -- asked by another: yours a moment later
+    mock.stub(SuuUI, "Spec", function() return 1 end)
+    local before = #planner()
+    mock.receiveAddonMessage("SuuUI", "RPSPECQ", "RAID", "Raider Warrior")
+    mock.advanceTime(2.1)
+    local sent = planner()
+    expect(#sent).toBe(before + 1)
+    expect(sent[#sent].message).toBe("RPSPEC\t1")
+    -- not shared when off
+    M:Set("shareSpec", false)
+    M:ShareSpec()
+    expect(#planner()).toBe(before + 1)
+    -- asking: when a spec is unknown, at most twice a minute
+    raid({ { unit = priest, g = 1 } })
+    M:Refill()
+    M:AskSpecs()
+    M:AskSpecs()
+    sent = planner()
+    expect(sent[#sent].message).toBe("RPSPECQ")
+    expect(#sent).toBe(before + 2)
+    -- in combat: nothing sent
+    mock.player:enterCombat()
+    M:Send("RPSPECQ")
+    expect(#planner()).toBe(before + 2)
+end
+
+@test("specs a day old are forgotten as the module starts")
+local function staleSpecs()
+    setup()
+    M:NoteSpec("Raider Warrior", 3, "message")
+    M:Data().specs["Raider Old"] = { tree = 1, at = time() - 2 * 86400 }
+    M:Data().specs["Raider Bad"] = 5 :: any
+    -- (started again: what it registers once left alone)
+    for _, name in ipairs({ "RegisterSettings", "Provide", "RegisterCommand", "OnGameEvent", "On", "Watch" }) do
+        mock.stub(M, name, function() end)
+    end
+    local m: any = M
+    m:OnEnable()
+    expect(M:Data().specs["Raider Old"]).toBeNil()
+    expect(M:Data().specs["Raider Bad"]).toBeNil()
+    expect(M:Data().specs["Raider Warrior"].tree).toBe(3)
+    M:NoteSpec("Raider Warrior", 9, "message")
+    expect(M:Data().specs["Raider Warrior"].tree).toBe(3)
+end
+
+@test("coverage: raid-wide counted once, the blessings per paladin; out of a raid from the slots")
+local function coverage()
+    setup()
+    slot(1, "PRIEST")
+    slot(1, "PALADIN")
+    slot(2, "MAGE", 3)
+    local v = M:ViewData()
+    expect(v.raidWideMeta).toBe("from the slots")
+    local rows: { [string]: any } = {}
+    for _, r in ipairs(v.raidWide) do rows[r.label] = r end
+    expect(rows["Power Word: Fortitude"].n).toBe("1")
+    expect(rows["Power Word: Fortitude"].detail).toBe("priests: 1 slot")
+    expect(rows["Blessings"].n).toBe("1 of 3")
+    expect(rows["Mark of the Wild"].warn).toBe(true)
+    expect(rows["Mark of the Wild"].detail).toBe("none: no druids")
+    expect(v.note).toBe(("Not in a raid: coverage from what the slots ask for · %d tracked"):format(M:TrackedCount()))
+    -- in a raid: who brings it, the open slots besides
+    raid({ { unit = priest, g = 1 }, { unit = mage, g = 2 } })
+    M:Refill()
+    v = M:ViewData()
+    rows = {}
+    for _, r in ipairs(v.raidWide) do rows[r.label] = r end
+    expect(rows["Power Word: Fortitude"].detail).toBe("priests: Raider Priest")
+    expect(rows["Blessings"].detail).toBe("needs the open paladin slot")
+    expect(rows["Blessings"].warn).toBe(true)
+    expect(rows["Arcane Intellect"].tip.lines[1][1]).toBe("Raider Mage")
+    expect(v.raidWideMeta).toBe("tracked only")
+    -- everything tracked: a talent's buff while the spec isn't known, one to ask for
+    M:Set("preset", "all")
+    v = M:ViewData()
+    rows = {}
+    for _, r in ipairs(v.raidWide) do rows[r.label] = r end
+    expect(rows["Power Infusion"].detail).toBe("if specced: Raider Priest")
+    expect(rows["Tranquilizing Shot"].n).toBe("ask")
+end
+
+@test("coverage per group: a doubled Trueshot flagged, a missing one where hunters are, an open slot's")
+local function partyChips()
+    setup()
+    M:Set("preset", "all")
+    raid({ { unit = hunter, g = 1 }, { unit = hunter2, g = 1 }, { unit = shaman, g = 2 } })
+    M:NoteSpec("Raider Hunter", 2, "message")
+    M:NoteSpec("Raider Bowman", 2, "message")
+    slot(1, "HUNTER")
+    slot(1, "HUNTER")
+    slot(2, "SHAMAN")
+    slot(2, "SHAMAN", 3)
+    M:Refill()
+    local v = M:ViewData()
+    local function chip(g: number, start: string): any
+        for _, c in ipairs(v.groups[g].chips) do if c.text:sub(1, #start) == start then return c end end
+        return nil
+    end
+    expect(chip(1, "Trueshot Aura").text).toBe("Trueshot Aura ×2: one wasted")
+    expect(chip(1, "Trueshot Aura").tone).toBe("warn")
+    M:Set("flagDoubled", false)
+    v = M:ViewData()
+    expect(chip(1, "Trueshot Aura").tone).toBe("ok")
+    -- the shaman's tree unknown: maybe; the open Restoration slot
+    expect(chip(2, "Tremor").tone).toBe("ok")
+    expect(chip(2, "Mana Tide").text).toBe("Mana Tide?")
+    expect(v.groups[1].kind).toBe("mixed")
+    -- a group of only an open slot: what it would bring
+    slot(3, "SHAMAN")
+    M:Refill()
+    v = M:ViewData()
+    expect(chip(3, "Tremor").text).toBe("Tremor: slot open")
+    expect(chip(3, "Tremor").tone).toBe("open")
+    -- a hunter's group without the Marksmanship one: flagged
+    M:Data().specs["Raider Hunter"].tree = 1
+    M:Data().specs["Raider Bowman"].tree = 3
+    M:Refill()
+    v = M:ViewData()
+    expect(chip(1, "No Trueshot Aura").tone).toBe("warn")
+end
+
+@test("the window's data: the setups listed, the groups' cards, open slots, the status, the buttons")
+local function viewData()
+    setup()
+    slot(1, "WARRIOR", 3, "TANK")
+    M:Save()
+    M:Duplicate(1)
+    local v = M:ViewData()
+    expect(v.meta).toBe("New setup")
+    expect(#v.setups).toBe(2)
+    expect(v.setups[1].loaded).toBe(true)
+    expect(v.setups[1].meta:find("loaded · saved", 1, true)).toBe(1)
+    expect(v.setups[2].meta:sub(1, 24)).toBe("1 slots · 1 tank · 0 h")
+    -- when saved: minutes, hours, days, weeks ago
+    local copy = M:Data().setups[2]
+    for _, e in ipairs({ { s = 600, says = "10m ago" }, { s = 3 * 3600, says = "3h ago" }, { s = 2 * 86400, says = "2d ago" }, { s = 21 * 86400, says = "3w ago" } }) do
+        copy.saved = time() - e.s
+        local meta = M:ViewData().setups[2].meta
+        expect(meta:sub(-#e.says)).toBe(e.says)
+    end
+    expect(v.groups[1].kind).toBe("tanks")
+    expect(v.groups[1].slots[1].state).toBe("open")
+    expect(v.groups[1].slots[1].tip).toBe("Fills with the raid.")
+    expect(v.arrange.enabled).toBe(false)
+    expect(v.arrange.reason).toBe("Not in a raid.")
+    expect(#v.palette).toBe(9)
+    -- an unsaved one is listed first
+    M:New(false)
+    v = M:ViewData()
+    expect(v.setups[1].meta).toBe("loaded · not saved")
+    expect(v.meta).toBe("New setup 2 · not saved")
+    -- in a raid
+    M:Load(1)
+    raid({ { unit = warrior, g = 2 }, { unit = mage, g = 1 } })
+    slot(1, "PRIEST")
+    local pinnedAway = slot(2, "MAGE")
+    pinnedAway.pin = "Raider Somebody"
+    M:Refill()
+    v = M:ViewData()
+    expect(v.meta).toBe("New setup · changed")
+    local card = v.groups[1].slots[1]
+    expect(card.who).toBe("Raider Warrior")
+    expect(card.state).toBe("provisional")
+    expect(card.spec).toBe("?")
+    expect(card.tip:find("Spec not known yet", 1, true) ~= nil).toBe(true)
+    expect(v.groups[1].slots[2].tip).toBe("Nobody in the raid fits: Priest")
+    expect(v.groups[2].slots[1].state).toBe("away")
+    expect(#v.open).toBe(2)
+    expect(v.open[1].detail).toBe("Fortitude, Magic")
+    expect(v.stats[1].n).toBe(3)
+    expect(v.stats[4].n).toBe(2)
+    expect(v.inspect.shown).toBe(true)
+    expect(v.inspect.label).toBe("Inspect the 2")
+    expect(v.fill.shown).toBe(false)
+    expect(v.note).toBe(("Fills as the raid changes · %d tracked"):format(M:TrackedCount()))
+    -- the mage without a slot, and why
+    local why = v.unplaced[1].detail
+    expect(why:find("no slot asks for a", 1, true) ~= nil or why:find("slot", 1, true) ~= nil).toBe(true)
+    -- in combat: said so, filled after
+    mock.player:enterCombat()
+    v = M:ViewData()
+    expect(v.note:sub(1, 29)).toBe("In combat: fills when it ends")
+    expect(v.inspect.reason).toBe("Not in combat.")
+    M:Refill()
+    mock.player:leaveCombat()
+end
+
+@test("Arrange groups: why it can't, the moves, then the raid moved into the slots' groups")
+local function arrange()
+    setup()
+    expect(select(2, M:CanArrange())).toBe("Not in a raid.")
+    raid({ { unit = warrior, g = 2 }, { unit = priest, g = 2 }, { unit = mage, g = 3 } })
+    M:Refill()
+    expect(select(2, M:CanArrange())).toBe("The setup has no slots yet.")
+    slot(1, "DRUID")
+    M:Refill()
+    expect(select(2, M:CanArrange())).toBe("Nobody in the raid fills a slot yet.")
+    slot(2, "PRIEST")
+    M:Refill()
+    expect(select(2, M:CanArrange())).toBe("Everyone is in their slot's group already.")
+    local tank = slot(1, "WARRIOR", nil, "TANK")
+    slot(3, "MAGE")
+    M:Refill()
+    expect(M:CanArrange()).toBe(true)
+    local moves = M:Moves()
+    expect(#moves).toBe(1)
+    expect(moves[1].name).toBe("Raider Warrior")
+    expect(moves[1].from).toBe(2)
+    expect(moves[1].to).toBe(1)
+    -- the panel: the moves, run on Move
+    local shown: any = nil
+    M:Toggle()
+    mock.stub(M.window, "ShowMoves", function(_: any, data: any, run: () -> ()) shown = { data = data, run = run } end)
+    M:Arrange()
+    expect(#shown.data.moves).toBe(1)
+    shown.run()
+    mock.advanceTime(2)
+    M:ReadRoster()
+    expect(M.byKey["Raider Warrior"].group).toBe(1)
+    expect(M.fill.slot[tank.id].m.group).toBe(1)
+    expect(#M:Moves()).toBe(0)
+    -- in combat: not now
+    mock.player:enterCombat()
+    M:Arrange()
+    expect(printed[#printed]).toBe("Not in combat.")
+    mock.player:leaveCombat()
+    -- not leading nor assisting: only they can move players
+    mock.fake("UnitIsGroupLeader", function(_: string) return false end)
+    M.me.lead = false
+    expect(select(2, M:CanArrange())).toBe("Only the raid leader or an assistant can move players.")
+end
+
+@test("Arrange groups into a full group: a swap with one who doesn't belong there")
+local function arrangeSwap()
+    setup()
+    local five = { warrior, priest, mage, mage2, hunter }
+    local list = {}
+    for i, u in ipairs(five) do list[i] = { unit = u, g = 1 } end
+    list[#list + 1] = { unit = shaman, g = 2 }
+    raid(list)
+    -- (you: group 2 with the shaman)
+    slot(1, "SHAMAN")
+    slot(2, "HUNTER")
+    M:Refill()
+    expect(#M:Moves()).toBe(2)
+    M:RunMoves(1)
+    mock.advanceTime(2)
+    M:ReadRoster()
+    expect(M.byKey["Raider Shaman"].group).toBe(1)
+    expect(M.byKey["Raider Hunter"].group).toBe(2)
+    M:RunMoves(5)
+end
+
+@test("inspecting: one player at a time while the planner is open, the spec from the talents' points")
+local function inspecting()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 1 } })
+    warrior:setInspect({ spec = 1491 })
+    -- (the engine keeps no inspected talent groups: the points as the client gives them)
+    mock.fake("C_Traits.GetGroupDisplayInfoByTreeID", function(_: number)
+        return { { groupID = 11, displayName = "Arms", icon = 132355 }, { groupID = 12, displayName = "Fury", icon = 132347 },
+                 { groupID = 13, displayName = "Protection", icon = 134952 } }
+    end)
+    mock.fake("C_Traits.GetGroupCurrencyInfo", function(_: number, _ids: number[])
+        return { { traitNodeGroupID = 11, currencyInfos = { { spent = 5 } } },
+                 { traitNodeGroupID = 13, currencyInfos = { { spent = 31 } } } }
+    end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number) return { treeIDs = { 1117 } } end)
+    slot(1, "WARRIOR", 3, "TANK")
+    M:Toggle()
+    expect(M.window:IsShown()).toBe(true)
+    -- the warrior inspected; the priest can't be (no inspect data): tried later
+    expect(M.inspecting ~= nil).toBe(true)
+    expect(M.inspecting.m.name).toBe("Raider Warrior")
+    mock.advanceTime(1)
+    expect(M.inspecting).toBeNil()
+    expect(M:KnownTree("Raider Warrior", false)).toBe(3)
+    expect(M:Data().treeIcons.WARRIOR[3]).toBe(134952)
+    expect(M:TreeIcon("WARRIOR", 3)).toBe(134952)
+    expect(M:TreeIcon("PRIEST", 1) ~= nil).toBe(true)
+    expect(M:TreeIcon(nil, 1)).toBeNil()
+    mock.advanceTime(1)
+    expect(M.fill.slot[M:SlotsIn(1)[1].id].how).toBe("exact")
+    -- the priest's turn comes again in a while; on click only: not by itself
+    expect(M:SpecQueue()[1]).toBeNil()
+    mock.advanceTime(31)
+    -- someone joins while the planner is open: asked and inspected a second later
+    local asked = mock.spy(function(_: any) end)
+    mock.stub(M, "AskSpecs", asked)
+    mock.group:add(mage, { raid = true, subgroup = 2 })
+    mock.advanceTime(1.1)
+    expect(asked).toHaveBeenCalled()
+    M:Set("inspect", "click")
+    M.inspectFailed = {}
+    M:InspectNext()
+    expect(M.inspecting).toBeNil()
+end
+
+@test("an inspect that never answers is given up; one answering without a tree fails")
+local function inspectFails()
+    setup()
+    raid({ { unit = warrior, g = 1 } })
+    warrior:setInspect({ spec = 1491 })
+    M:Refill()
+    M.inspectRound = true
+    mock.stub(G, "NotifyInspect", function(_: string) end)
+    M:InspectNext()
+    expect(M.inspecting ~= nil).toBe(true)
+    mock.advanceTime(5.1)
+    expect(M.inspecting).toBeNil()
+    expect(M.inspectFailed["Raider Warrior"] ~= nil).toBe(true)
+    -- the answer to another inspect: not ours
+    M:OnInspectReady("Player-0000-00000000")
+    -- answered, no tree to read: failed
+    M.inspectFailed = {}
+    M.inspectRound = true
+    M:InspectNext()
+    M:OnInspectReady(M.inspecting.guid)
+    expect(M:KnownTree("Raider Warrior", false)).toBeNil()
+    expect(M.inspectFailed["Raider Warrior"] ~= nil).toBe(true)
+end
+
+@test("your own talent groups' icons noted once there")
+local function ownIcons()
+    setup()
+    M.ownIconsRead = nil
+    mock.fake("C_ClassTalents.GetActiveConfigID", function() return 7143862 end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number) return { treeIDs = { 1117 } } end)
+    mock.fake("C_Traits.GetGroupDisplayInfoByTreeID", function(_: number)
+        return { { groupID = 11, displayName = "Arms", icon = 132355 }, { groupID = 12, displayName = "Fury", icon = 134400 },
+                 { groupID = 13, displayName = "Nobody's", icon = 1 } }
+    end)
+    M:NoteOwnTreeIcons()
+    expect(M.ownIconsRead).toBe(true)
+    expect(M:Data().treeIcons.WARRIOR[1]).toBe(132355)
+    -- the question mark isn't an icon
+    expect(M:Data().treeIcons.WARRIOR[2]).toBeNil()
+    M:NoteTreeIcons("NOBODY", {})
+    M:NoteTreeIcons("WARRIOR", 5)
+end
+
+@test("a new setup from the raid as it is: a slot per player in their group, sized to fit")
+local function fromRaid()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 3 } })
+    M:NoteSpec("Raider Warrior", 3, "message")
+    M:Refill()
+    M:New(true)
+    local w = M:Work()
+    expect(w.size).toBe(20)
+    expect(#w.slots).toBe(3)
+    local s = M:SlotsIn(1)
+    local tank = nil
+    for _, x in ipairs(s) do if x.class == "WARRIOR" and x.spec == 3 then tank = x end end
+    expect(tank.role).toBe("TANK")
+    expect(M:SlotsIn(3)[1].class).toBe("PRIEST")
+end
+
+@test("the menus: a slot's, a setup's, a new setup's, a player's")
+local function menus()
+    setup()
+    raid({ { unit = mage, g = 1 }, { unit = priest, g = 2 } })
+    M:Toggle()
+    local s = slot(1, "MAGE")
+    M:Refill()
+    local whispered: string? = nil
+    mock.fake("ChatFrameUtil.SendTell", function(name: string) whispered = name end)
+    M:SlotMenu(s.id, M.window)
+    choose("Whisper")
+    expect(whispered).toBe("Raider Mage")
+    choose("Pin Raider Mage")
+    expect(s.pin).toBe("Raider Mage")
+    M:SlotMenu(s.id, M.window)
+    choose("Unpin")
+    expect(s.pin).toBeNil()
+    -- pinned and away: invite, whisper, unpin
+    s.pin = "Raider Somebody"
+    M:Refill()
+    local invited: string? = nil
+    mock.fake("C_PartyInfo.InviteUnit", function(name: string) invited = name end)
+    M:SlotMenu(s.id, M.window)
+    choose("Invite Raider Somebody")
+    expect(invited).toBe("Raider Somebody")
+    choose("Whisper")
+    expect(whispered).toBe("Raider Somebody")
+    choose("Unpin")
+    M:SlotMenu(s.id, M.window)
+    choose("Clear (any player)")
+    expect(s.class).toBeNil()
+    choose("Edit slot")
+    M:SlotMenu(s.id, M.window)
+    choose("Remove slot")
+    expect(M:SlotById(s.id)).toBeNil()
+    M:SlotMenu(999, M.window)
+    -- a setup's
+    slot(1, "PRIEST")
+    M:Save()
+    M:Duplicate(1)
+    M:SetupMenu(2, M.window)
+    choose("Load")
+    expect(M:Work().id).toBe(2)
+    M:SetupMenu(2, M.window)
+    choose("Save")
+    choose("Rename")
+    choose("Duplicate")
+    expect(M:Data().setups[3] ~= nil).toBe(true)
+    choose("Export as text")
+    expect(confirmed.title).toBe("Export New setup (copy)")
+    choose("Delete…")
+    expect(confirmed.title).toBe("Delete New setup (copy)?")
+    M:SetupMenu(1, M.window)
+    choose("Save as new…")
+    M:SetupMenu("work", M.window)
+    choose("Discard…")
+    M:SetupMenu(99, M.window)
+    -- a new setup's
+    M:NewMenu(M.window)
+    expect(enabled["From the raid as it is"]).toBe(true)
+    choose("Import from text…")
+    expect(confirmed.title).toBe("Import a setup")
+    choose("Empty (40 players)")
+    choose("From the raid as it is")
+    -- a player's: a slot for them in their group
+    M:PersonMenu("Raider Priest", M.window)
+    choose("Whisper")
+    expect(whispered).toBe("Raider Priest")
+    choose("Add a slot for them")
+    local mine = nil
+    for _, x in ipairs(M:Work().slots) do if x.pin == "Raider Priest" then mine = x end end
+    expect(mine.class).toBe("PRIEST")
+end
+
+@test("a player's slot goes to the first group with room when theirs is full")
+local function personFullGroup()
+    setup()
+    raid({ { unit = priest, g = 1 } })
+    M:Toggle()
+    for _ = 1, 5 do slot(1) end
+    M:PersonMenu("Raider Priest", M.window)
+    choose("Add a slot for them")
+    expect(M:SlotsIn(2)[1].pin).toBe("Raider Priest")
+    for g = 2, 8 do while #M:SlotsIn(g) < 5 do slot(g) end end
+    M:PersonMenu("Raider Priest", M.window)
+    choose("Add a slot for them")
+    expect(printed[#printed]).toBe("Every group has five slots.")
+end
+
+@test("the window: opened by /suu raid and the module's service, drawn, its callbacks")
+local function window()
+    setup()
+    mock.slash("/suu raid")
+    expect(M.window:IsShown()).toBe(true)
+    mock.slash("/suu raid")
+    expect(M.window:IsShown()).toBe(false)
+    local w = M.window
+    w:Show()
+    w.onSize(10)
+    expect(M:Data().size).toBe(10)
+    w.onAdd(1)
+    expect(#M:SlotsIn(1)).toBe(1)
+    local id = M:SlotsIn(1)[1].id
+    w.onSlotChange(id, { class = "MAGE" })
+    expect(M:SlotsIn(1)[1].class).toBe("MAGE")
+    w.onSlot(id, w, "LeftButton")
+    w.onSlot(id, w, "RightButton")
+    expect(menu["Edit slot"] ~= nil).toBe(true)
+    w.onSave()
+    w.onSetup("work")
+    w.onSetup(M:Work().id)
+    w.onSetupMenu(M:Work().id, w)
+    w.onNew(w)
+    w.onRename(M:Work().id, "Renamed")
+    expect(M:Work().name).toBe("Renamed")
+    w.onDuplicate()
+    w.onSetup(2)
+    expect(M:Work().id).toBe(2)
+    w.onSaveAsNew()
+    w.onDelete()
+    w.onDrop({ spec = { class = "PRIEST", spec = 1 } }, { group = 2 })
+    w.onPerson("Raider Priest", w, "RightButton")
+    w.onPerson("Raider Priest", w, "LeftButton")
+    w.onSlotRemove(id)
+    w.onInspect()
+    w.onArrange()
+    w.onFill()
+    w:Hide()
+    M:Render()
+end
+
+@test("settings: the presets, a box changed makes it Custom, a family's reset; what's tracked counts")
+local function settings()
+    setup()
+    local section = M:Section()
+    expect(section.id).toBe("raidplanner")
+    local track = section.groups[1].rows[2]
+    expect(track.isDefault()).toBe(true)
+    local essentials = M:TrackedCount()
+    track.set("all")
+    expect(M:TrackedCount() > essentials).toBe(true)
+    -- a box off and on again: back to Everything
+    M:SetTracked("tremor", false)
+    expect(M:Get("preset")).toBe("custom")
+    M:SetTracked("tremor", true)
+    expect(M:Get("preset")).toBe("all")
+    track.set("custom")
+    expect(M:Get("preset")).toBe("custom")
+    track.reset()
+    expect(M:Get("preset")).toBe("essentials")
+    -- one box: Custom; both ways back to the preset
+    M:SetTracked("tremor", true)
+    expect(M:Get("preset")).toBe("custom")
+    expect(M:IsTracked("tremor")).toBe(true)
+    M:SetTracked("tremor", false)
+    expect(M:Get("preset")).toBe("essentials")
+    -- a family's row: its checkboxes, counts, default and reset
+    local fam = section.groups[2]
+    local row = fam.rows[1]
+    local parent = CreateFrame("Frame", nil, UIParent)
+    parent:SetSize(500, 400)
+    local boxes = row.build(parent)
+    boxes:SetValue(row.get())
+    boxes:SetDisabled()
+    expect(row.description():find("tracked", 1, true) ~= nil).toBe(true)
+    expect(row.isDefault()).toBe(true)
+    boxes.boxes[1]:SetValue(true)
+    M:SetTracked(boxes.boxes[1].item.key, not M:IsTracked(boxes.boxes[1].item.key))
+    expect(row.isDefault()).toBe(false)
+    row.reset()
+    expect(row.isDefault()).toBe(true)
+    -- a box's tooltip: the spell's
+    mock.hover(boxes.boxes[1])
+    mock.hover(nil)
+    -- the button opens the planner
+    section.groups[1].rows[1].onClick()
+    expect(M.window:IsShown()).toBe(true)
+end
+
+@test("Strength of Earth and Grace of Air split: Grace of Air tracked wherever the pair was")
+local function migration()
+    local values: { [string]: any } = { tracked = { earth = true } }
+    local ran = false
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "raidplanner" and m.id == "graceOfAir" then m.fn(values); ran = true end
+    end
+    expect(ran).toBe(true)
+    expect(values.tracked.graceOfAir).toBe(true)
+end
+
+-- (last: the module off)
+@test("stopped: the window hidden, inspecting dropped")
+local function disabled()
+    setup()
+    M:Toggle()
+    M.inspecting = {}
+    local m: any = M
+    m:OnDisable()
+    expect(M.window:IsShown()).toBe(false)
+    expect(M.inspecting).toBeNil()
+end

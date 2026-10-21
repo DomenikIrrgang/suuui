@@ -1,0 +1,283 @@
+-- Units/PartyFrames: the party frames on the engine's group: shown in a
+-- party (not solo, not in a raid), each following its unit, the layout's
+-- direction and sizes, the power line by role, aggro, your target, range,
+-- an offline member, the settings, the preview and edit mode's group
+-- preview.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M, powerFor from "/Units/PartyFrames"
+import expectNoErrors from "../../helpers"
+import internal migrations as settingMigrations from "/Core/Settings"
+
+local G: any = _G
+
+-- Placeholder party members.
+local function member(name: string, class: string, role: ("TANK" | "HEALER" | "DAMAGER")?): mock.MockUnit
+    local u = mock.spawnUnit({ name = name, player = true, class = class, level = 60, reaction = "friendly",
+        health = 3000, healthMax = 4000 })
+    if role then u:setRole(role) end
+    return u
+end
+
+local tank = member("Brannoc Ironhand", "WARRIOR", "TANK")
+local healer = member("Tamsin Ashford", "PRIEST", "HEALER")
+
+local function frame(unit: string): any
+    for _, f in ipairs(M.frames) do if f.unit == unit then return f end end
+    error("no frame " .. unit)
+end
+
+local function settle()
+    mock.advanceFrames(2)
+    mock.advanceTime(0.3)
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.group:leave()
+    mock.player:target(nil)
+    for _, key in ipairs({ "showSelf", "showSolo", "direction", "width", "height", "gap", "power", "auraSide",
+                           "debuffBadges", "buffIcons", "debuffIcons", "rangeAlpha", "healthText" }) do
+        M:Reset(key)
+    end
+    settle()
+    expectNoErrors()
+end
+
+@test("solo: no party frames; with Show when solo, your own")
+local function solo()
+    settle()
+    expect(G.SuuUIPartyFrames).never.toBeShown()
+    M:Set("showSolo", true)
+    settle()
+    expect(G.SuuUIPartyFrames).toBeShown()
+    expect(frame("player")).toBeShown()
+end
+
+@test("in a party: you and each member, the empty slots hidden; in a raid none")
+local function party()
+    mock.group:add(tank)
+    settle()
+    expect(G.SuuUIPartyFrames).toBeShown()
+    expect(frame("player")).toBeShown()
+    expect(frame("party1")).toBeShown()
+    expect(frame("party2")).never.toBeShown()
+    mock.group:add(healer)
+    settle()
+    expect(frame("party2")).toBeShown()
+    -- a raid: the raid frames' turn
+    mock.group:leave()
+    mock.group:add(tank, true)
+    settle()
+    expect(G.SuuUIPartyFrames).never.toBeShown()
+end
+
+@test("the layout: up from the bottom, down, across; the sizes; without yourself")
+local function layout()
+    mock.group:add(tank)
+    settle()
+    local w, h, gap = M:Get("width"), M:Get("height"), M:Get("gap")
+    local holder = G.SuuUIPartyFrames
+    expect(holder:GetHeight()).toBe(5 * h + 4 * gap)
+    local point, _, _, _, y = frame("party1"):GetPoint(1)
+    expect(point).toBe("BOTTOMLEFT")
+    expect(y).toBe(h + gap)
+    M:Set("direction", "down")
+    local _, _, _, _, y2 = frame("party1"):GetPoint(1)
+    expect(y2).toBe(-(h + gap))
+    M:Set("direction", "right")
+    expect(holder:GetWidth()).toBe(5 * w + 4 * gap)
+    local _, _, _, x3 = frame("party1"):GetPoint(1)
+    expect(x3).toBe(w + gap)
+    M:Set("showSelf", false)
+    settle()
+    local _, _, _, x4 = frame("party1"):GetPoint(1)
+    expect(x4).toBe(0)
+    expect(frame("player")).never.toBeShown()
+    M:Set("width", 150)
+    expect(frame("party1"):GetWidth()).toBe(150)
+end
+
+@test("the power line: tanks and healers, everyone or none; healing classes without roles")
+local function power()
+    mock.group:add(tank)
+    mock.group:add(healer)
+    settle()
+    expect(powerFor("party1", nil)).toBe(true)
+    local dps = member("Kaelith Dawnmere", "MAGE", "DAMAGER")
+    mock.group:add(dps)
+    settle()
+    expect(powerFor("party3", nil)).toBe(false)
+    local druid = member("Morrow Fenwick", "DRUID")
+    mock.group:add(druid)
+    settle()
+    expect(powerFor("party4", nil)).toBe(true)
+    M:Set("power", "all")
+    expect(powerFor("party3", nil)).toBe(true)
+    M:Set("power", "none")
+    expect(powerFor("party1", nil)).toBe(false)
+end
+
+@test("aggro: an enemy on you shows it on your frame; not on a tank's")
+local function states()
+    mock.group:add(tank)
+    settle()
+    -- (the engine keeps the player's threat: a kobold turns on you)
+    local kobold = mock.spawnUnit({ name = "Kobold Worker", level = 5, reaction = "hostile" })
+    kobold:setThreat(100)
+    expect(frame("player").stateTone).toBe("danger")
+    expect(frame("party1").stateTone).toBeNil()
+    kobold:setThreat(nil)
+    expect(frame("player").stateTone).toBeNil()
+    -- the tank: no aggro badge, the enemy is meant to be on you
+    mock.player:setRole("TANK")
+    kobold:setThreat(100)
+    expect(frame("player").stateTone).toBeNil()
+    kobold:setThreat(nil)
+    mock.player:setRole(nil)
+end
+
+@test("your target ringed")
+local function selected()
+    mock.group:add(tank)
+    mock.group:add(healer)
+    settle()
+    mock.player:target(healer)
+    expect(frame("party2").selected:GetAlpha()).toBe(1)
+    expect(frame("party1").selected:GetAlpha()).toBe(0)
+end
+
+@test("out of range: the frame faint; offline: its auras gone")
+local function rangeAndOffline()
+    mock.group:add(tank)
+    settle()
+    M:Set("rangeAlpha", 0.5)
+    -- (an alpha as the game keeps it: in a byte)
+    local probe = CreateFrame("Frame")
+    probe:SetAlpha(0.5)
+    local half = probe:GetAlpha()
+    tank:setDistance(80)
+    mock.advanceTime(0.3)
+    -- (range is secret: the engine sets the alpha from it, secret too)
+    expect(frame("party1"):GetAlpha()).toBe(mock.secret(half))
+    tank:setDistance(10)
+    mock.advanceTime(0.3)
+    expect(frame("party1"):GetAlpha()).toBe(mock.secret(1))
+    tank:setOnline(false)
+    expect(frame("party1").auras.container:GetAlpha()).toBe(0)
+    tank:setOnline(true)
+    expect(frame("party1").auras.container:GetAlpha()).toBe(1)
+end
+
+@test("the auras' side and counts; the settings' options on the frames")
+local function options()
+    mock.group:add(tank)
+    settle()
+    local f = frame("party1")
+    M:Set("auraSide", "left")
+    local _, rel, relPoint = f.auraClip:GetPoint(1)
+    expect(rel).toBe(f)
+    expect(relPoint).toBe("LEFT")
+    M:Set("auraSide", "inside")
+    expect(f.opts.reserveRight > 0).toBe(true)
+    M:Set("buffIcons", 0)
+    M:Set("debuffIcons", 0)
+    expect(f.auraClip).never.toBeShown()
+    M:Set("healthText", "value")
+    expect(f.opts.healthText).toBe("value")
+end
+
+@test("the settings' preview: a made-up party with every setting; edit mode's group preview on the frames' place")
+local function previews()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetWidth() > 0).toBe(true)
+    for _, side in ipairs({ "left", "inside", "right" }) do
+        M:Set("auraSide", side)
+        M:DrawPreview(true)
+    end
+    M:Set("debuffBadges", "removable")
+    M:DrawPreview(true)
+    expect(M.previewSet.frames[5].dispelDecos.Poison).never.toBeShown()
+    M:Set("debuffBadges", "all")
+    M:DrawPreview(true)
+    expect(M.previewSet.frames[5].dispelDecos.Poison).toBeShown()
+    -- the made-up party out of range and with aggro
+    expect(M.previewSet.frames[5]:GetAlpha()).toBeCloseTo(M:Get("rangeAlpha"))
+    expect(M.previewSet.frames[4].stateTone).toBe("danger")
+    -- edit mode: a party of 5 with their auras over the real frames
+    M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 5, true)
+    expect(M.screenSet.view).toBeShown()
+    expect(G.SuuUIPartyFrames:GetAlpha()).toBe(0)
+    M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 20, false)
+    expect(M.screenSet.view).never.toBeShown()
+    expect(G.SuuUIPartyFrames:GetAlpha()).toBe(1)
+    -- the preview again on another parent
+    M:PreviewView(UIParent)
+end
+
+@test("buff indicators and defensives changed: applied out of combat, a burst once")
+local function indicators()
+    local applied = mock.spy(function(_: any) end)
+    mock.stub(M, "ApplyIndicators", applied)
+    M:Emit("SUUUI_INDICATORS_CHANGED")
+    M:Emit("SUUUI_INDICATORS_CHANGED")
+    mock.advanceTime(1.1)
+    expect(applied).toHaveBeenCalledTimes(1)
+    local defensives = mock.spy(function(_: any) end)
+    mock.stub(M, "ApplyDefensives", defensives)
+    M:Emit("SUUUI_DEFENSIVES_CHANGED")
+    expect(defensives).toHaveBeenCalledTimes(1)
+end
+
+@test("a member's auras change: the frames' missing-buff indicators read again, after combat too")
+local function presence()
+    mock.group:add(tank)
+    settle()
+    local read = mock.spy(function(_: any) end)
+    mock.stub(frame("party1"), "UpdateIndicatorPresence", read)
+    mock.fireUnitEvent("UNIT_AURA", "party1", { isFullUpdate = true })
+    expect(read).toHaveBeenCalledTimes(1)
+    mock.player:enterCombat()
+    mock.fireUnitEvent("UNIT_AURA", "party1", { isFullUpdate = true })
+    mock.advanceFrames(1)
+    mock.player:leaveCombat()
+    expect(read).toHaveBeenCalledTimes(3)
+end
+
+@test("your target in combat: ringed by the engine from a secret answer")
+local function selectedInCombat()
+    mock.group:add(tank)
+    settle()
+    mock.player:enterCombat()
+    mock.player:target(tank)
+    local a = frame("party1").selected:GetAlpha()
+    expect(issecretvalue(a) or a == 1).toBe(true)
+end
+
+@test("earlier settings carried over: one aura row split in two, badges renamed")
+local function migrations()
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "party" then
+            local v: { [string]: any } = { auras = 4, showBuffs = true, badges = "removable" }
+            m.fn(v)
+            if m.id == "auraSplit" then expect(v.auras).toBeNil() end
+            if m.id == "debuffBadges" then
+                expect(v.debuffBadges).toBe("removable")
+                expect(v.badges).toBeNil()
+            end
+        end
+    end
+end
+
+-- (last: the frames stay off for the rest of the file)
+@test("the module stopped by an error: its frames off and hidden")
+local function disabled()
+    mock.group:add(tank)
+    settle()
+    local m: any = M
+    m:OnDisable()
+    expect(frame("party1")).never.toBeShown()
+end
