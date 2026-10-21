@@ -27,12 +27,12 @@ local G: any = _G
 local AH: any = C_AuctionHouse
 
 local ORE, BLADE, RING, CHARM, BAUBLE, GEM = 990201, 990202, 990203, 990204, 990205, 990206
-mock.defineItem(ORE, { name = "Test Ore", quality = 1, stackCount = 200, classID = 7, itemLevel = 10, icon = 134400 }, { cached = true })   -- (without it the item never loads: see the units-bags notes)
-mock.defineItem(BLADE, { name = "Test Blade", quality = 3, stackCount = 1, classID = 2, equipLoc = "INVTYPE_WEAPON", itemLevel = 20, icon = 135274 }, { cached = true })
-mock.defineItem(RING, { name = "Test Ring", quality = 2, stackCount = 1, classID = 15, itemLevel = 10, icon = 133344 }, { cached = true })
-mock.defineItem(CHARM, { name = "Bound Charm", quality = 1, stackCount = 1, classID = 15, itemLevel = 10, icon = 133345 }, { cached = true })
-mock.defineItem(BAUBLE, { name = "Test Bauble", quality = 0, stackCount = 1, classID = 4, itemLevel = 10, icon = 133346 }, { cached = true })
-mock.defineItem(GEM, { name = "Test Gem", quality = 1, stackCount = 20, classID = 3, itemLevel = 10, icon = 134071 }, { cached = true })
+mock.defineItem(ORE, { name = "Test Ore", quality = 1, stackCount = 200, classID = 7, icon = 134400 })
+mock.defineItem(BLADE, { name = "Test Blade", quality = 3, stackCount = 1, classID = 2, equipLoc = "INVTYPE_WEAPON", itemLevel = 20, icon = 135274 })
+mock.defineItem(RING, { name = "Test Ring", quality = 2, stackCount = 1, classID = 15, icon = 133344 })
+mock.defineItem(CHARM, { name = "Bound Charm", quality = 1, stackCount = 1, classID = 15, icon = 133345 })
+mock.defineItem(BAUBLE, { name = "Test Bauble", quality = 0, stackCount = 1, classID = 4, icon = 133346 })
+mock.defineItem(GEM, { name = "Test Gem", quality = 1, stackCount = 20, classID = 3, icon = 134071 })
 
 local function key(id: number, level: number?): any
     return { itemID = id, itemLevel = level or 0, itemSuffix = 0, battlePetSpeciesID = 0 }
@@ -40,8 +40,8 @@ end
 
 -- Ore: 10 at 1s, 200 at 1s 50c (three sellers), 90 of yours at 1s 60c: the
 -- first 10 a cheap few (under 25 % below the next, at most 10 % of all).
--- The gem: 5 at 10s, 10 at 12s, the one bought (the engine keeps what was
--- bought across houses: see the notes). The blade: one with a bid and a
+-- The gem: 5 at 10s, 10 at 12s (what a purchase of 7 is told costs at the
+-- cheapest, 70s, is not what the offers add up to, 74s). The blade: one with a bid and a
 -- buyout, one with a buyout only, two with a starting bid and no buyout.
 -- The ring: one, no time left told.
 local function house(): any
@@ -87,15 +87,12 @@ local auctioneer = mock.spawnUnit({ name = "Auctioneer", reaction = "neutral" })
 auctioneer:setDistance(3)
 
 local confirmed: any = nil
-local full: boolean = true   -- what HasFullBrowseResults says (see the units-trade notes: the engine's queue)
 
 @beforeEach
 local function start()
     confirmed = nil
     mock.stub(UI, "Confirm", function(opts: any) confirmed = opts end)
     mock.player:setMoney(1000000)                  -- 100g
-    full = true
-    mock.stub(AH, "HasFullBrowseResults", function() return full end)
     mock.setBag(0, { slots = 16, items = { [1] = { id = ORE, count = 20 }, [2] = { id = BLADE }, [3] = { id = RING },
                                             [4] = { id = CHARM, bound = true } } })
 end
@@ -123,13 +120,8 @@ local function cleanup()
     expectNoErrors()
 end
 
-local nextID = 500
 local function open(data: any?)
-    -- each house its own auction IDs (the engine keeps the auctions posted
-    -- at the one before: see the notes)
-    local h = data or house()
-    h.nextAuctionID, nextID = nextID, nextID + 100
-    mock.defineAuctionHouse(auctioneer, h)
+    mock.defineAuctionHouse(auctioneer, data or house())
     mock.player:interact(auctioneer)
     mock.advanceTime(1)
     mock.advanceTime(0.01)                         -- (the house opens within the second: its next-frame call runs at the next advance)
@@ -301,11 +293,7 @@ end
 @test("a search: the results with their item, item level, what's offered and the lowest price; Yours; the price remembered")
 local function searching()
     open()
-    local real, none = AH.GetBrowseResults, true
-    mock.stub(AH, "GetBrowseResults", function(): any if none then return {} end return real() end)
-    M:Refresh()
     expect(M.empty:GetText()).toBe("Search, or choose a category.")
-    none = false
     search("ore")
     local rows = shown(M.results_t)
     expect(#rows).toBe(1)
@@ -330,7 +318,8 @@ local function searching()
     search("zzz")
     expect(#shown(M.results_t)).toBe(0)
     expect(M.empty:GetText()).toBe("Nothing for “zzz”.")
-    none = true
+    -- a category with nothing in it
+    mock.stub(AH, "GetBrowseResults", function() return {} end)
     search("")
     expect(M.empty:GetText()).toBe("Nothing here.")
 end
@@ -338,6 +327,10 @@ end
 @test("more results when the house has more; the filters go with the search; a search that doesn't go out says so")
 local function moreAndFilters()
     open()
+    -- (the game's own browse list, shown off screen, asks for more itself as
+    -- results come, as in the client: the house says whether it has more)
+    local full = true
+    mock.stub(AH, "HasFullBrowseResults", function() return full end)
     search("")
     expect(M.more).never.toBeShown()
     full = false
@@ -1212,10 +1205,6 @@ end
 local function ownedAuctions()
     openAuctions()
     local a = M.mine
-    -- (the engine keeps the auctions posted at the houses before: see the notes)
-    local realNum, none = AH.GetNumOwnedAuctions, true
-    mock.stub(AH, "GetNumOwnedAuctions", function(): any if none then return 0 end return realNum() end)
-    M:DrawAuctions()
     expect(a.mineT).toBeShown()
     expect(a.bidsT).never.toBeShown()
     expect(a.mineT.empty:GetText()).toBe("You have no auctions.")
@@ -1223,11 +1212,10 @@ local function ownedAuctions()
     expect(a.cancel:IsEnabled()).toBe(false)
     expect(tipText(a.cancel)).toBe("Choose one of your auctions.")
     postBlade()
-    none = false
-    M:DrawAuctions()
     local rows = auctionRows(a.mineT)
-    local r: any = nil
-    for _, row in ipairs(rows) do if row.second.copper == 47000 then r = row end end
+    expect(#rows).toBe(1)
+    local r = rows[1]
+    expect(r.second.copper).toBe(47000)
     expect(r.name:GetText()).toBe("Test Blade")
     expect(tokenOf(r.name)).toBe("quality-rare")
     expect(r.time:GetText():find("^%d+ h$") ~= nil).toBe(true)
@@ -1250,7 +1238,7 @@ local function ownedAuctions()
     mock.advanceTime(1)
     expect(note()).toBe("Cancelled: Test Blade ×1. The deposit isn't returned.")
     mock.advanceTime(1)
-    expect(#auctionRows(a.mineT)).toBe(#rows - 1)
+    expect(#auctionRows(a.mineT)).toBe(0)
     expect(a.chosen).toBe(nil)
 end
 

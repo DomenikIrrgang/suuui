@@ -73,16 +73,16 @@ local function base(obj: any, method: string): Base
     return made
 end
 
-local function wrap(obj: any, method: string, list: HookEntry[])
+local function wrap(obj: any, method: string, chain: HookEntry[])
     local b = base(obj, method)
     if type(b.fn) ~= "function" then return end
-    if #list == 0 then
+    if #chain == 0 then
         rawset(obj, method, b.raw and b.fn or nil)
         return
     end
     local fn: (...any) -> ...any = b.fn
     local posts: HookEntry[] = {}
-    for _, h in ipairs(list) do
+    for _, h in ipairs(chain) do
         if h.override then
             local inner, user, source = fn, h.fn, ownerName(h.owner)
             fn = function(self: any, ...: any): ...any
@@ -108,8 +108,8 @@ local function wrap(obj: any, method: string, list: HookEntry[])
 end
 
 local function rewrap(kind: string, method: string)
-    local list = hk(kind)[method] or {}
-    for obj in pairs(inst(kind)) do wrap(obj, method, list) end
+    local chain = hk(kind)[method] or {}
+    for obj in pairs(inst(kind)) do wrap(obj, method, chain) end
 end
 
 --------------------------------------------------------------------------------
@@ -124,23 +124,23 @@ local runner = CreateFrame("Frame")
 runner:Hide()
 runner:SetScript("OnUpdate", function(self: Frame)
     self:Hide()
-    local list = queue
+    local due = queue
     queue = {}
-    for _, item in ipairs(list) do
+    for _, item in ipairs(due) do
         for _, e in ipairs(ext(item.kind)) do
             fault.call(ownerName(e.owner), e.fn, item.object, inst(item.kind)[item.object])
         end
     end
 end)
 
-export function add(kind: string, object: any, info: Info?): Info?
+export function add(kind: string, object: any, given: Info?): Info?
     check(kind)
     if inst(kind)[object] then return nil end
     seq += 1
-    local i: Info = info or {}
+    local i: Info = given or {}
     i.kind, i.seq = kind, seq
     inst(kind)[object] = i
-    for method, list in pairs(hk(kind)) do wrap(object, method, list) end
+    for method, chain in pairs(hk(kind)) do wrap(object, method, chain) end
     if #ext(kind) > 0 then
         queue[#queue + 1] = { kind = kind, object = object }
         runner:Show()
@@ -192,13 +192,13 @@ export function each(kind: string, fn: (obj: any, info: Info) -> (), undo: ((obj
     end
 end
 
-local function addHook(kind: string, method: string, fn: (...any) -> ...any, owner: any, override: boolean)
+local function addHook(kind: string, method: string, fn: (...any) -> ...any, owner: any, replaces: boolean)
     check(kind)
     assert(type(method) == "string", "SuuUI Hook: a method name is required")
     assert(type(fn) == "function", "SuuUI Hook: a function is required")
     local entries: HookEntry[] = hk(kind)[method] or {}
     hk(kind)[method] = entries
-    entries[#entries + 1] = { fn = fn, owner = owner, override = override }
+    entries[#entries + 1] = { fn = fn, owner = owner, override = replaces }
     rewrap(kind, method)
 end
 

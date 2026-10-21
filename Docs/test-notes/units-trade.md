@@ -60,28 +60,31 @@ all four sources.
 
 ## VM / wowlua findings (new)
 
-- **The auction house's message queue stalls** (`auction.rs`, `done()`).
-  An answer with another message queued neither sends it nor makes the
-  system ready, though its doc says the next one is sent; nothing more is
-  answered until the house closes. It shows at once here because the
-  game's own browse list asks for more results as the house opens (next
-  finding): SuuUI's search behind it never comes back. The tests stub
-  `HasFullBrowseResults`, so the game's list doesn't ask.
-- **A new `mock.defineAuctionHouse` keeps the last house's state**: what
-  was bought (a commodity's first offer stays short), the browse
-  results (not all told, so the game's list asks for more at the next
-  open), and the player's auctions, while `nextAuctionID` starts again,
-  so two auctions share an ID and cancelling one removes both. The tests
-  give each house its own IDs and buy a commodity no other test uses.
-  Probably a house should start clean when defined, or at least the IDs
-  continue.
-- **`GetItemKeyFromItem` returns the house data's own key table** (the
+All four fixed in wowlua 0.9.5 (decisions T228, T229); the tests run on
+the fixed engine without workarounds.
+
+- **The auction house's message queue stalled** (`auction.rs`, `done()`).
+  An answer with another message queued neither sent it nor made the
+  system ready, though its doc said the next one is sent; nothing more
+  was answered until the house closed. It showed at once here because the
+  game's own browse list asked for more results as the house opened (next
+  finding), so SuuUI's search behind it never came back.
+- **A new `mock.defineAuctionHouse` kept the last house's state**: what
+  was bought (a commodity's first offer stayed short), the browse results
+  (not all told, so the game's list asked for more at the next open), and
+  the player's auctions, while `nextAuctionID` started again, so two
+  auctions shared an ID and cancelling one removed both. A house defined
+  with none open is a fresh one now.
+- **`GetItemKeyFromItem` returned the house data's own key table** (the
   browse row's, when there is one): SuuUI zeroes a gear key's item level
-  before its sell search, which changes the data's row. The client gives
-  a new table each call.
-- **`C_Item.GetCurrentItemLevel` is nil for an item defined without
-  `itemLevel`**, and the game's sell frame errors on it; the client has a
-  level for every item. The test items give one.
+  before its sell search, which changed the data's row. It is a new table
+  at each call now, as in the client.
+- **`C_Item.GetCurrentItemLevel` was nil for an item defined without
+  `itemLevel`**, and the game's sell frame errored on it; the client has a
+  level for every item. `mock.defineItem` gives level 1 now.
+- **Not a finding**: the game's browse list, shown off screen, asks for
+  more results itself as they come (as in the client), so SuuUI's More
+  results button is tested with `HasFullBrowseResults` stubbed.
 - **Not findings, for the next areas**: a zero-delay timer (`after(0)`)
   set while `mock.advanceTime` runs comes due just after that advance, so
   a test advances once more to see it (the house opens within the

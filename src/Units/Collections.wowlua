@@ -43,7 +43,6 @@ local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 --------------------------------------------------------------------------------
 
 local WORLD = 12
-local MAX_SHOWN = 3
 
 -- an entry the strip, the stage and the shelf show; a CollectionSources entry
 type Entry = { [string]: any }
@@ -520,17 +519,17 @@ function M:DrawCard(c: any, e: Entry, extra: string?)
     local card = self:SourceCard(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType)
     if not card[1] then card = { { title = "Source unknown", lines = {} } } end
     local n, prev = 0, c.rule
-    local function text(style: string, color: string, indent: number, gap: number): any
+    local function text(style: string, tone: string, indent: number, gap: number): any
         n = n + 1
         local t = c.texts[n]
         if not t then
-            t = UI.Text(c, style, color)
+            t = UI.Text(c, style, tone)
             t:SetJustifyH("LEFT")
             t:SetWordWrap(true)
             c.texts[n] = t
         end
         t:SetStyle(style)
-        t:SetColor(color)
+        t:SetColor(tone)
         t:ClearAllPoints()
         t:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", indent - (prev.suuIndent or 0), -gap)
         t:SetWidth(CARD_W - indent)
@@ -761,7 +760,6 @@ function M:Build()
     for _, def in ipairs({ { "turnLeft", "Turn left", function() self:Turn(-1) end }, { "minus", "Zoom out", function() self:Zoom(1) end },
                            { "plus", "Zoom in", function() self:Zoom(-1) end }, { "turnRight", "Turn right", function() self:Turn(1) end } }) do
         local glyph = def[1] :: string
-        local file = GLYPHS .. glyph .. ".tga"
         local b = roundButton(ctl, glyph, def[2], def[3])
         if not (glyph == "minus" or glyph == "plus") then
             -- turn arrows: the reset glyph, mirrored for the right
@@ -999,8 +997,8 @@ local function norm(x: number, y: number, z: number): number[]?
     if l == 0 then return nil end
     return { x / l, y / l, z / l }
 end
-local function groundBelow(P: number[], T: number[], lift: number): number?
-    local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
+local function groundBelow(P: number[], aim: number[], lift: number): number?
+    local f = norm(aim[1] - P[1], aim[2] - P[2], aim[3] - P[3])
     if not f then return nil end
     local right = norm(f[2], -f[1], 0)
     if not right then return nil end
@@ -1022,12 +1020,12 @@ function M:PlaceModel()
     for _, v in ipairs({ px, py, pz, tx, ty, tz }) do
         if type(v) ~= "number" or isSecret(v) then return end
     end
-    local P, T = { px, py, pz }, { tx, ty, tz }
-    if not groundBelow(P, T, 0) then return end
+    local P, aim = { px, py, pz }, { tx, ty, tz }
+    if not groundBelow(P, aim, 0) then return end
     local lo, hi = -3, 3
     for _ = 1, 40 do
         local mid = (lo + hi) / 2
-        local b = groundBelow(P, T, mid)
+        local b = groundBelow(P, aim, mid)
         if not b then return end
         if b > FEET_BELOW then lo = mid else hi = mid end
     end
@@ -1550,7 +1548,7 @@ end
 -- The slot's appearances (the chosen weapon kind for a weapon slot).
 function M:WardrobeEntries()
     local def = slotDef(self.slot) or assert(slotDef("CHESTSLOT"))
-    local cat, kindName = def.category, nil
+    local cat, kindLabel = def.category, nil
     if def.weapon then
         local kinds = self:WeaponKinds(def.weapon)
         self.weaponKind = self.weaponKind or {}
@@ -1558,11 +1556,11 @@ function M:WardrobeEntries()
         local found
         for _, k in ipairs(kinds) do if k.category == chosen then found = k end end
         found = found or kinds[1]
-        cat, kindName = found and found.category, found and found.name
+        cat, kindLabel = found and found.category, found and found.name
         self.kinds = kinds
         if found then self.weaponKind[def.weapon] = found.category end
     end
-    self.slotTitle = def.label .. (kindName and (" · " .. kindName) or "")
+    self.slotTitle = def.label .. (kindLabel and (" · " .. kindLabel) or "")
     if not cat then return {} end
     return self:Appearances(cat, def.slot)
 end
@@ -1571,7 +1569,6 @@ end
 function M:DrawWardrobe()
     local w, e = self.wardrobe, self.chosen
     if not self.slotCounts then
-        local _, file = UnitClass("player")
         local className = w.class.value and GetClassInfo and call(GetClassInfo, w.class.value)
         self.slotCounts = self:SlotCounts(className and (className .. "s"))
     end
@@ -1616,8 +1613,8 @@ local CARD_H, SHELF_COLS = 88, 4
 local useText = {}
 local function toyUse(itemID: number): string?
     if useText[itemID] then return useText[itemID] end
-    local data = C_TooltipInfo and C_TooltipInfo.GetToyByItemID and call(C_TooltipInfo.GetToyByItemID, itemID)
-    for _, l in ipairs(data and data.lines or {}) do
+    local tip = C_TooltipInfo and C_TooltipInfo.GetToyByItemID and call(C_TooltipInfo.GetToyByItemID, itemID)
+    for _, l in ipairs(tip and tip.lines or {}) do
         local t = l.leftText
         if plain(t) and t and t:find("^Use:") then
             useText[itemID] = t:gsub("^Use:%s*", "")

@@ -73,7 +73,7 @@ all seven sources.
 
 ## VM / wowlua findings (new)
 
-- **`mock.defineItem(id, data)` without `opts` never loads**: `GetItemInfo`
+- **`mock.defineItem(id, data)` without `opts` never loads** (fixed in wowlua 0.9.5: cached by default, as documented): `GetItemInfo`
   returns nothing, then and seconds later; with `{ cached = true }` it
   answers at once. The docs say `opts.cached = false` makes it load later,
   which reads as cached by default.
