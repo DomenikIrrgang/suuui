@@ -1,0 +1,318 @@
+-- Units/Inspect: SuuUI's inspect window over the game's (asking the server,
+-- kept out of sight). Opening at once while their gear is read, then their
+-- gear with item levels, the identity line, the model (or why there is
+-- none), the item level, Player vs. Player and the guild; Compare with mine;
+-- the slots' tooltips and links; View in Dressing Room and View Talents;
+-- closing with the game's frame, a new target while waiting, no answer.
+--
+-- The inspect is the engine's (unit:setInspect, /inspect); the honor data,
+-- the guild's info and the transmog list are stubbed where a test needs
+-- them.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, identityLine, deltaChip, rankPoints, guildLine, talentsWhy, rankName, itemLevel from "/Units/Inspect"
+import * as events from "/Core/Events"
+import expectNoErrors from "../../helpers"
+import tokenOf from "../SettingsUI/UiSettingsHelpers"
+
+local G: any = _G
+
+local BLADE, HELM, MINE = 990401, 990402, 990403
+mock.defineItem(BLADE, { name = "Test Greatblade", quality = 4, itemLevel = 70, equipLoc = "INVTYPE_2HWEAPON", icon = 135349 })
+mock.defineItem(HELM, { name = "Test Visor", quality = 3, itemLevel = 66, equipLoc = "INVTYPE_HEAD", icon = 133071 })
+mock.defineItem(MINE, { name = "My Old Sword", quality = 2, itemLevel = 60, equipLoc = "INVTYPE_2HWEAPON", icon = 135274 })
+
+local function link(id: number, name: string, q: number): string
+    return ("|cnIQ%d:|Hitem:%d::::::::60:::::::::|h[%s]|h|r"):format(q, id, name)
+end
+
+local other = mock.spawnUnit({ name = "Otherplayer", player = true, level = 60, reaction = "friendly",
+    class = "WARRIOR", classID = 1, race = "Orc", factionGroup = "Horde" })
+other:setDistance(3)
+other:setInspect({ itemLevel = 68.4, items = {
+    [16] = { link = link(BLADE, "Test Greatblade", 4), cached = true },
+    [1] = { link = link(HELM, "Test Visor", 3), cached = true },
+} })
+
+local function win(): any return G.SuuUIInspectWindow end
+
+local function slot(key: string): any
+    for _, b in ipairs(M.slots) do if b.key == key then return b end end
+    error("no slot " .. key)
+end
+
+-- Blizzard's inspect command at the target (/ins), as a player types it
+-- (Blizzard's code untainted)
+local function inspect(wait: number?)
+    mock.player:target(other)
+    mock.slash(SLASH_INSPECT1)
+    mock.advanceTime(wait or 2)
+    mock.advanceTime(0.01)
+end
+
+@afterEach
+local function cleanup()
+    if win() and win():IsShown() then win():Hide() end
+    mock.player:target(nil)
+    mock.advanceTime(0.1)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The parts
+--------------------------------------------------------------------------------
+
+@test("the identity line, a chip's difference, the rank points, the guild line, why View Talents is off, the rank's name")
+local function parts()
+    expect(identityLine(60, "Orc", "Warrior")).toBe("Level 60 · Orc · Warrior")
+    expect(identityLine(mock.secret(60), mock.secret("Orc"), nil)).toBe("Level ??")
+    expect(identityLine(0, nil, "Mage")).toBe("Level ?? · Mage")
+    expect({ deltaChip(70, 60) }).toEqual({ "▲10", "gilt-text" })
+    expect({ deltaChip(55, 60) }).toEqual({ "▼5", "ember-text" })
+    expect({ deltaChip(60, 60) }).toEqual({})
+    expect({ deltaChip(60, nil) }).toEqual({})
+    expect({ rankPoints(1200, 5000) }).toEqual({ "1200 / 5000", 0.24 })
+    expect({ rankPoints(7000, 5000) }).toEqual({ "7000 / 5000", 1 })
+    expect({ rankPoints(300, 0) }).toEqual({ "300", 0 })
+    expect({ rankPoints(mock.secret(1), mock.secret(2)) }).toEqual({ "0", 0 })
+    expect(guildLine("Horde", 42)).toBe(INSPECT_GUILD_FACTION:format("Horde") .. " · " .. INSPECT_GUILD_NUM_MEMBERS:format(42))
+    expect(guildLine(nil, 3)).toBe(INSPECT_GUILD_NUM_MEMBERS:format(3))
+    expect(guildLine("Horde", 0)).toBe(INSPECT_GUILD_FACTION:format("Horde"))
+    expect(talentsWhy(true, true, true)).toBe("Waiting for their gear.")
+    expect(talentsWhy(false, false, true)).toBe("SuuUI's Talents module is off.")
+    expect(talentsWhy(false, true, false)).toBe("Their talents aren't available.")
+    expect(talentsWhy(false, true, true)).toBe(nil)
+    expect(rankName("player", 0)).toBe(PVP_RANK_0_NAME or "Civilian")
+    expect(rankName("player", 3)).toBe(PVP_RANK_NUMBER_AND_TITLE:format(3, assert(GetText("PVP_RANK_7_" .. (UnitFactionGroup("player") == "Alliance" and "1" or "0"), UnitSex("player") :: any))))
+    mock.stub(G, "GetText", function(): any return mock.secret("x") end)
+    expect(rankName("player", 3)).toBe("3")
+    expect(itemLevel(mock.secret("x"))).toBe(nil)
+    expect(itemLevel(nil)).toBe(nil)
+end
+
+--------------------------------------------------------------------------------
+-- Opening, the gear
+--------------------------------------------------------------------------------
+
+@test("an inspect opens the window at once while their gear is read; the game's frame out of sight")
+local function asked()
+    mock.player:target(other)
+    mock.slash(SLASH_INSPECT1)
+    expect(win()).toBeShown()
+    expect(M.loading).toBe(true)
+    expect(M.box.note:GetText()).toBe("Reading their gear…")
+    expect(slot("Head"):GetAlpha()).toBeCloseTo(0.6, 5)
+    expect(M.dressButton:IsEnabled()).toBe(false)
+    expect(M.talentsButton.tooltip.description).toBe("Waiting for their gear.")
+    expect(G.InspectFrame:GetAlpha()).toBe(0)
+    mock.advanceTime(2)
+    mock.advanceTime(0.01)                         -- (placed again in that time: away at the next frame)
+    expect(M.loading).toBe(false)
+    expect(G.InspectFrame:GetLeft() > UIParent:GetRight()).toBe(true)
+    -- the game placing its frame again: off screen again
+    G.InspectFrame:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    expect(G.InspectFrame:GetLeft() > UIParent:GetRight()).toBe(true)
+end
+
+@test("their gear: the item, its quality and level; an empty slot's initial; the identity, the model, the item level")
+local function gear()
+    inspect()
+    local head = slot("Head")
+    expect(head.skin.item.icon).toBe(133071)
+    expect(head.skin.item.quality).toBe("rare")
+    expect(head.level:GetText()).toBe("66")
+    expect(head.initial).never.toBeShown()
+    expect(slot("MainHand").level:GetText()).toBe("70")
+    expect(slot("Neck").initial).toBeShown()
+    expect(slot("Neck").initial:GetText()).toBe("N")
+    expect(M.idRow.name:GetText()).toBe(GetUnitName("target", true))
+    expect(tokenOf(M.idRow.name)).toBe("class-warrior")
+    expect(M.idRow.line:GetText()).toBe("Level 60 · Orc · Warrior")
+    expect(M.model).toBeShown()
+    expect(M.box.note:GetText()).toBe("")
+    expect(M.ilvl.big:GetText()).toBe("68")
+    expect(M.ilvl.note:GetText()).toBe("Average of what they wear")
+    expect(M.guild.none).toBeShown()
+    expect(M.dressButton:IsEnabled()).toBe(true)
+end
+
+@test("Compare with mine: the difference to your item on each slot, your average")
+local function compare()
+    mock.player:equip(16, MINE)
+    inspect()
+    mock.stub(G, "GetAverageItemLevel", function() return 61.6 end)
+    mock.click(M.compareToggle)
+    local main = slot("MainHand")
+    expect(main.delta).toBeShown()
+    expect(main.delta.text:GetText()).toBe("▲10")
+    expect(tokenOf(main.delta.text)).toBe("gilt-text")
+    expect(slot("Head").delta).never.toBeShown()
+    expect(M.ilvl.note:GetText()).toBe("Yours: 62")
+    mock.click(M.compareToggle)
+    expect(main.delta).never.toBeShown()
+    mock.player:equip(16, nil)
+end
+
+@test("too far away: no model, and why; no item level known: a dash")
+local function farAway()
+    mock.stub(G, "UnitIsVisible", function() return false end)
+    mock.stub(C_PaperDollInfo, "GetInspectItemLevel", function() return 0 end)
+    inspect()
+    expect(M.model).never.toBeShown()
+    expect(M.box.note:GetText()).toBe("Too far away to show")
+    expect(M.ilvl.big:GetText()).toBe("—")
+end
+
+@test("Player vs. Player and the guild: the rank, its points toward the next, the kills; the guild with its faction and members")
+local function pvpGuild()
+    mock.stub(G, "GetInspectHonorData", function(): ...any return 4, 0, 0, 0, 1234, 0, 3, 1200, 5000 end)
+    mock.stub(C_PaperDollInfo, "GetInspectGuildInfo", function(): ...any return 0, 42, "Test Guild" end)
+    inspect()
+    expect(M.pvp.rank:GetText()).toBe(rankName("target", 3))
+    expect(M.pvp.points:GetText()).toBe("1200 / 5000")
+    expect(M.pvp.today:GetText()).toBe("4")
+    expect(M.pvp.lifetime:GetText()).toBe("1234")
+    expect(M.idRow.guild:GetText()).toBe("<Test Guild>")
+    expect(M.guild.name:GetText()).toBe("Test Guild")
+    expect(M.guild.line:GetText()).toBe(guildLine("Horde", 42))
+    expect(M.guild.icon).toBeShown()
+    expect(M.guild.none).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The slots, the buttons
+--------------------------------------------------------------------------------
+
+@test("a slot's tooltip: their item, else the slot's name; a click on it is the game's (a link into chat)")
+local function slotTips()
+    inspect()
+    local inv = mock.stub(GameTooltip, "SetInventoryItem", function() return true end)
+    mock.hover(slot("Head"))
+    expect(inv).toHaveBeenCalledWith(GameTooltip, "target", slot("Head").slotID)
+    mock.hover(nil)
+    mock.stub(GameTooltip, "SetInventoryItem", function() return false end)
+    local text = mock.stub(GameTooltip, "SetText", function() end)
+    mock.hover(slot("Neck"))
+    expect(text).toHaveBeenCalledWith(GameTooltip, "Neck")
+    mock.hover(nil)
+    local click = mock.stub(G, "HandleModifiedItemClick", function() end)
+    mock.click(slot("Head"))
+    expect(click).toHaveBeenCalledWith(GetInventoryItemLink("target", slot("Head").slotID))
+    mock.resetSpies()
+    mock.click(slot("Neck"))
+    expect(click).never.toHaveBeenCalled()
+end
+
+@test("View in Dressing Room: their look in the dressing room; View Talents: SuuUI's talents window with theirs")
+local function buttons()
+    inspect()
+    local list = { { appearanceID = 1 } }
+    mock.stub(C_TransmogCollection, "GetInspectItemTransmogInfoList", function() return list end)
+    local dress = mock.stub(G, "DressUpItemTransmogInfoList", function() end)
+    mock.click(M.dressButton)
+    expect(dress).toHaveBeenCalledWith(list)
+    mock.stub(C_TransmogCollection, "GetInspectItemTransmogInfoList", function() return nil end)
+    mock.resetSpies()
+    mock.click(M.dressButton)
+    expect(dress).never.toHaveBeenCalled()
+    -- View Talents: off without their talents, on with them
+    mock.stub(C_Traits, "HasValidInspectData", function() return true end)
+    M:Draw()
+    expect(M.talentsButton:IsEnabled()).toBe(assert(SuuUI.GetModule("talents")):IsEnabled())
+    local show = mock.stub(SuuUI, "ShowTalentsOf", function() end)
+    mock.click(M.talentsButton)
+    expect(show).toHaveBeenCalledWith("target")
+    -- the talents module off
+    mock.stub(assert(SuuUI.GetModule("talents")), "IsEnabled", function() return false end)
+    M:Draw()
+    expect(M.talentsButton.tooltip.description).toBe("SuuUI's Talents module is off.")
+end
+
+@test("the model turns as you drag it and zooms with the wheel")
+local function model()
+    inspect()
+    local m = M.model
+    mock.setCursorPosition(100, 100)
+    mock.script(m, "OnMouseDown", "LeftButton")
+    mock.setCursorPosition(150, 100)
+    local facing = m:GetFacing() or 0
+    mock.nextFrame()
+    expect(math.abs((m:GetFacing() or 0) - (facing + 0.5)) < 0.001).toBe(true)
+    mock.script(m, "OnMouseUp", "LeftButton")
+    mock.nextFrame()
+    mock.script(m, "OnMouseWheel", 1)
+    expect(m.zoom).toBe(0.1)
+    for _ = 1, 10 do mock.script(m, "OnMouseWheel", 1) end
+    expect(m.zoom).toBe(0.8)
+    mock.script(m, "OnMouseDown", "RightButton")
+    expect(m.turning).toBe(nil)
+end
+
+--------------------------------------------------------------------------------
+-- Closing, waiting, the game's events
+--------------------------------------------------------------------------------
+
+@test("closing the window closes the game's inspect; the game's closing closes the window")
+local function closing()
+    inspect()
+    win():Hide()
+    expect(G.InspectFrame).never.toBeShown()
+    expect(M.unit).toBe(nil)
+    inspect()
+    -- (Blizzard's inspect closes when its target goes)
+    mock.player:target(nil)
+    mock.advanceTime(0.1)
+    expect(G.InspectFrame).never.toBeShown()
+    expect(win()).never.toBeShown()
+end
+
+@test("a new target while waiting drops it; no answer in 5 s shows what there is; another player's answer is not theirs")
+local function waiting()
+    mock.stub(G, "NotifyInspect", function() end)
+    mock.player:target(other)
+    mock.slash(SLASH_INSPECT1)
+    expect(M.loading).toBe(true)
+    mock.fireEvent("INSPECT_READY", "Player-0000-00000000x")
+    expect(M.loading).toBe(true)
+    mock.advanceTime(5)
+    expect(M.loading).toBe(false)
+    win():Hide()
+    mock.slash(SLASH_INSPECT1)
+    expect(win()).toBeShown()
+    mock.player:target(nil)
+    mock.advanceTime(0.1)
+    expect(win()).never.toBeShown()
+end
+
+@test("their gear or level changing, the honor data, an item's info: drawn again; a theme sizes the item level")
+local function redraws()
+    inspect()
+    local draw = mock.stub(M, "Draw")
+    mock.fireEvent("UNIT_LEVEL", "target")
+    expect(draw).toHaveBeenCalledTimes(1)
+    mock.fireEvent("UNIT_LEVEL", "player")
+    expect(draw).toHaveBeenCalledTimes(1)
+    mock.fireEvent("INSPECT_HONOR_UPDATE")
+    expect(draw).toHaveBeenCalledTimes(2)
+    local size = mock.stub(M, "SizeItemLevel")
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(size).toHaveBeenCalled()
+end
+
+@test("off: the window closes, and an inspect doesn't open it")
+local function off()
+    inspect()
+    assert(M.OnDisable)(M)
+    expect(win()).never.toBeShown()
+    mock.stub(M, "IsEnabled", function() return false end)
+    mock.slash(SLASH_INSPECT1)
+    mock.advanceTime(2)
+    expect(win()).never.toBeShown()
+    -- the game placing its frame while off: left be
+    G.InspectFrame:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    mock.player:target(nil)
+end
