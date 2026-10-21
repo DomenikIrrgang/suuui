@@ -13,9 +13,10 @@ Collections' are new.
 Inspect runs on the engine's inspect: another player spawned with their
 gear (`setInspect`), targeted, and `/inspect` typed into the chat. The
 dressing room runs on Blizzard's own `DressUpFrame`, its actor stubbed
-(the engine's model scene has no actor). Collections stubs the mount,
-toy and wardrobe journals' data: the engine answers their recorded empty
-state.
+(the engine's model scene has no actor). Collections gives the account its
+mounts, toys and appearances with the engine's `mock.setMounts`,
+`mock.setToys` and `mock.setAppearances` (decision T235): the journals,
+their filters and events are the engine's.
 
 ## Test files
 
@@ -69,9 +70,12 @@ tests run on the fixed engine without workarounds.
   press and the release), so SuuUI's Collections key opened and closed
   the window at once. A button clicks only for the clicks it registered
   (T234).
-- **Not fixed, noted**: the wardrobe, toy box and mount journal answer
-  their recorded empty state, so tests stub their data; and there is no
-  "any value" matcher for `toHaveBeenCalledWith`.
+- **The journals had no collections**: the wardrobe, toy box and mount
+  journal answered their recorded empty state. A world profile and
+  `mock.setMounts`, `mock.setToys`, `mock.setAppearances` give them the
+  account's now (T235).
+- **Not fixed, noted**: there is no "any value" matcher for
+  `toHaveBeenCalledWith`.
 - **Not findings, for the next areas**: `mock.click` leaves the pointer on
   the frame, so `mock.hover(nil)` before hovering it again; change
   Blizzard's fields with `mock.setField`, never an assignment.
