@@ -1,0 +1,373 @@
+-- Units/Spellbook: SuuUI's Spellbook page in the spells window's Spellbook
+-- tab (the schools, the learned spells and the trainer's still to come,
+-- the switches, pages, tooltips, dragging, cooldowns, combat), the
+-- window's size, the training count and cost, and the level-up card.
+--
+-- The spellbook is the engine's (the default character: a level 1 Human
+-- warrior); the trainer's list is SuuUI's data (Data/Trainer).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors from "../../helpers"
+
+local M: any = assert(SuuUI.GetModule("spellbook"))
+local G: any = _G
+
+local function open()
+    PlayerSpellsUtil.OpenToSpellBookTab()
+    mock.advanceFrames(2)
+end
+
+local function cellTexts(): string[]
+    local out: string[] = {}
+    for _, c in ipairs(M.book.cells) do
+        if c:IsShown() then out[#out + 1] = c.label:GetText() or "" end
+    end
+    return out
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    local f = G.PlayerSpellsFrame
+    if f and f:IsShown() then HideUIPanel(f) end
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    M:Reset("unlearned")
+    M:Reset("allRanks")
+    M:Reset("levelUp")
+    M:Reset("untrained")
+    M:Reset("trainingCost")
+    M:Reset("levelUpFor")
+    M.school, M.page = nil, nil
+    mock.advanceTime(20)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- What you know and what the trainer has
+--------------------------------------------------------------------------------
+
+@test("the schools: General, then the warrior's three trees")
+local function schools()
+    local names: string[] = {}
+    for i, s in ipairs(M:Schools()) do names[i] = s.name end
+    expect(names[1]).toBe("General")
+    expect({ names[2], names[3], names[4] }).toEqual({ "Arms", "Fury", "Protection" })
+end
+
+@test("a school's learned spells: the spellbook's, with their levels; the passive's own words")
+local function learned()
+    local arms = M:Schools()[2]
+    local list = M:Learned(arms)
+    expect(#list > 0).toBe(true)
+    for _, s in ipairs(list) do
+        expect(s.status == "learned" or s.status == "passive").toBe(true)
+    end
+end
+
+@test("what's still to train: by your best rank's level; trainable now or later, cheapest first")
+local function unlearned()
+    local entries = {
+        { name = "Heroic Strike", level = 1, cost = 10, icon = 1, school = "Arms" },
+        { name = "Heroic Strike", level = 8, cost = 100, icon = 1, school = "Arms" },
+        { name = "Rend", level = 4, cost = 100, icon = 2, school = "Arms" },
+        { name = "Parry", level = 1, cost = 0, icon = 3, school = "Arms" },
+    }
+    local learnedAll = {
+        { label = "Heroic Strike", level = 1, rank = 1 },
+        { label = "Parry" },
+    }
+    local out = M:Unlearned(entries, learnedAll, 4)
+    expect(#out).toBe(2)
+    expect(out[1].label).toBe("Rend")
+    expect(out[1].status).toBe("trainable")
+    expect(out[1].sub).toBe("Train now · 1s")
+    expect(out[1].fresh).toBe(true)
+    expect(out[2].label).toBe("Heroic Strike")
+    expect(out[2].rank).toBe(2)
+    expect(out[2].status).toBe("future")
+    expect(out[2].sub).toBe("Level 8")
+end
+
+@test("a rank's tooltip line: train now and its cost, or the level it comes at")
+local function trainLine()
+    expect(M:TrainLine({ level = 1, cost = 10 }):find("Train now at your class trainer", 1, true) ~= nil).toBe(true)
+    expect(M:TrainLine({ level = 30, cost = 12345 }):find("Learn at level 30", 1, true) ~= nil).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The page
+--------------------------------------------------------------------------------
+
+@test("the Spellbook tab: SuuUI's page over Blizzard's, the window shortened to it")
+local function page()
+    open()
+    local f = G.PlayerSpellsFrame
+    expect(M.book).toBeShown()
+    expect(f:GetHeight()).toBe(528)
+    expect(#cellTexts() > 0).toBe(true)
+    expect(M.book.title:GetText()).toBe("Arms")
+    -- Blizzard's own spells off screen
+    local _, _, _, x = f.SpellBookFrame.PagedSpellsFrame:GetPoint(1)
+    expect(x).toBe(5000)
+    -- Blizzard's height back for the other tabs
+    HideUIPanel(f)
+    mock.advanceFrames(2)
+    expect(M.blizzHeight).toBeNil()
+end
+
+@test("the schools, the switches and the pages")
+local function navigate()
+    open()
+    local before = #cellTexts()
+    M.book.onSchool(1)
+    expect(M.book.title:GetText()).toBe("General")
+    M.book.onSchool(2)
+    M.book.onSwitch("unlearned", false)
+    expect(M:Get("unlearned")).toBe(false)
+    expect(#cellTexts() <= before).toBe(true)
+    M.book.onSwitch("allRanks", true)
+    expect(M:Get("allRanks")).toBe(true)
+    M.book.onPage(1)
+    expect(M.page).toBe(1)
+end
+
+@test("a learned spell: the game's tooltip, a click casts it, a drag picks it up")
+local function learnedCell()
+    open()
+    M.book.onSchool(1)
+    local c, i = M.book.cells[1], 1
+    expect(c.button:GetAttribute("type")).toBe("spell")
+    M.book.onEnter(i, c)
+    expect(GameTooltip:IsShown()).toBe(true)
+    M.book.onLeave()
+    expect(GameTooltip:IsShown()).toBe(false)
+    M.book.onDragStart(i)
+    -- (GetCursorInfo is declared without its results: wowlua's finding)
+    expect((GetCursorInfo :: any)()).toBe("spell")
+    ClearCursor()
+end
+
+@test("a spell still to train: SuuUI's tooltip with when and what it costs; no click")
+local function unlearnedCell()
+    open()
+    for i = 2, 4 do
+        M.book.onSchool(i)
+        for j, s in ipairs(M.slice) do
+            if s.status == "future" or s.status == "trainable" then
+                local c = M.book.cells[j]
+                expect(c.button:GetAttribute("type")).toBeNil()
+                M.book.onEnter(j, c)
+                M.book.onLeave()
+                M.book.onDragStart(j)
+                expect((GetCursorInfo :: any)()).toBeNil()
+                return
+            end
+        end
+    end
+    error("no spell to train")
+end
+
+@test("in combat: the page as it was; drawn again when it ends")
+local function combat()
+    open()
+    mock.player:enterCombat()
+    M.book.onSchool(1)
+    expect(M.book.title:GetText()).toBe("Arms")
+    M.book.onPage(1)
+    M:Render(true)
+    expect(M.renderAfterCombat).toBe(true)
+    mock.player:leaveCombat()
+    expect(M.renderAfterCombat).toBe(false)
+end
+
+@test("the cooldown sweeps follow the game's cooldowns")
+local function cooldowns()
+    open()
+    local set = mock.spy(function(_: any, _: number, _: any, _: any, _: any) end)
+    mock.stub(M.book, "SetCooldown", set)
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    expect(set).toHaveBeenCalled()
+    M.book.onCooldownDone()
+    mock.advanceTime(0.2)
+end
+
+--------------------------------------------------------------------------------
+-- Training and the level-up card
+--------------------------------------------------------------------------------
+
+@test("how much there is to train, told to the rest of SuuUI; its cost by the setting")
+local function toTrain()
+    local told: any[] = {}
+    M:On("SUUUI_SPELLS_TO_TRAIN", function(_: any, n: number, cost: number?) told[#told + 1] = { n, cost } end)
+    local n, cost = M:CountToTrain()
+    M:SayToTrain()
+    mock.advanceTime(1.1)
+    expect(told[#told]).toEqual({ n, cost })
+    M:Set("trainingCost", false)
+    mock.advanceTime(1.1)
+    expect(told[#told][2]).toBeNil()
+end
+
+@test("the level-up card: the spells a level brings, its cost, gone after its time")
+local function levelUpCard()
+    local shown: any[] = {}
+    mock.stub(SuuUI, "ShowLevelUp", function(_: string, def: any) shown[#shown + 1] = def end)
+    local hidden = mock.spy(function(_: string) end)
+    mock.stub(SuuUI, "HideAlert", hidden)
+    local def = assert(M:NextLevelUp())
+    local level = tonumber(def.title:match("%d+"))
+    expect(M:ShowLevelUp(level :: number)).toBe(true)
+    expect(shown[1].title).toBe(def.title)
+    mock.advanceTime(4 + math.min(#def.spells, 10) + 0.1)
+    expect(hidden).toHaveBeenCalledTimes(1)
+    -- the setting's own seconds
+    M:Set("levelUpFor", 5)
+    M:ShowLevelUp(level :: number)
+    mock.advanceTime(5.1)
+    expect(hidden).toHaveBeenCalledTimes(2)
+    -- nothing to learn at a level (earlier ones' left out): no card
+    M:Set("untrained", false)
+    expect(M:ShowLevelUp(1000)).toBe(false)
+end
+
+@test("a level gained: the card half a second later, or once combat ends")
+local function levelGained()
+    local shown: any[] = {}
+    mock.stub(SuuUI, "ShowLevelUp", function(_: string, def: any) shown[#shown + 1] = def end)
+    local def = assert(M:NextLevelUp())
+    local level = tonumber(def.title:match("%d+")) :: number
+    mock.player:enterCombat()
+    M:LevelGained(level)
+    mock.advanceTime(1)
+    expect(#shown).toBe(0)
+    mock.player:leaveCombat()
+    mock.advanceTime(1)
+    expect(#shown).toBe(1)
+    -- the card off: nothing
+    M:Set("levelUp", false)
+    M:LevelGained(level)
+    mock.advanceTime(1)
+    expect(#shown).toBe(1)
+end
+
+@test("/suu levelup: the next level's card, a given level's, or why not")
+local function command()
+    local shown: any[] = {}
+    mock.stub(SuuUI, "ShowLevelUp", function(_: string, def: any) shown[#shown + 1] = def end)
+    mock.slash("/suu levelup")
+    expect(#shown).toBe(1)
+    mock.slash("/suu levelup 20")
+    expect(shown[2].title).toBe("Level 20")
+    -- a level that brings nothing
+    mock.stub(M, "ShowLevelUp", function(): boolean return false end)
+    local before = #mock.printed()
+    mock.slash("/suu levelup 7")
+    expect(#mock.printed() > before).toBe(true)
+end
+
+@test("the settings' preview: the next level's card")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view.card:GetWidth() > 0).toBe(true)
+    M:Set("untrained", false)
+    expect(view.card).toBeShown()
+end
+
+@test("the game's level-up toast out of sight while the card is on")
+local function toasts()
+    local f = G.EventToastManagerFrame
+    -- the game's next toast (the server's: a level reached, then a flight
+    -- point found)
+    local next: any = { eventType = Enum.EventToastEventType.LevelUp,
+        displayType = Enum.EventToastDisplayType.NormalSingleLine, title = "Level 2" }
+    mock.fake("C_EventToastManager.GetNextToastToDisplay", function(): any return next end)
+    f:DisplayToast(true)
+    expect(f:GetAlpha()).toBe(0)
+    next = { eventType = Enum.EventToastEventType.FlightpointDiscovered,
+        displayType = Enum.EventToastDisplayType.NormalSingleLine, title = "Crossroads" }
+    f:DisplayToast(true)
+    expect(f:GetAlpha()).toBe(1)
+    next = nil
+    f:DisplayToast(true)
+end
+
+@test("a flyout's spells unpacked, but not those with their own entry; dragged by spell")
+local function flyouts()
+    -- (the game's answers for a warrior with a stances flyout: the default
+    -- character has none)
+    local BANK = Enum.SpellBookSpellBank.Player
+    mock.fake("C_SpellBook.GetNumSpellBookSkillLines", function(): number return 1 end)
+    mock.fake("C_SpellBook.GetSpellBookSkillLineInfo", function(_: number): any
+        return { name = "Protection", iconID = 1, itemIndexOffset = 0, numSpellBookItems = 2 }
+    end)
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number, _: any): any
+        if slot == 1 then return { itemType = Enum.SpellBookItemType.Spell, spellID = 2457, name = "Battle Stance" } end
+        return { itemType = Enum.SpellBookItemType.Flyout, actionID = 93 }
+    end)
+    mock.fake("GetFlyoutInfo", function(_: number): ...any return "Stances", "", 2, true end)
+    mock.fake("GetFlyoutSlotInfo", function(_: number, j: number): ...any
+        if j == 1 then return 2457, nil, true, "Battle Stance" end
+        return 71, nil, true, "Defensive Stance"
+    end)
+    local list = M:Learned({ first = 1, count = 2 })
+    local names: string[] = {}
+    for i, s in ipairs(list) do names[i] = s.label end
+    expect(names).toEqual({ "Battle Stance", "Defensive Stance" })
+    expect(list[2].slot).toBeNil()
+    -- dragged by its spell
+    M.slice = { list[2] }
+    local picked = mock.spy(function(_: number) end)
+    mock.fake("C_Spell.PickupSpell", picked)
+    list[2].status = "learned"
+    M:Build()
+    if M.book then M.book.onDragStart(1) end
+    expect(picked).toHaveBeenCalledWith(71)
+    M.slice = nil
+    local _ = BANK
+end
+
+@test("a spell to train without its ID known: SuuUI's own tooltip")
+local function ownTip()
+    local shown: any = nil
+    mock.stub(SuuUI.UI, "ShowTooltip", function(_: any, def: any) shown = def end)
+    M:ShowUnlearnedTip(UIParent, { label = "Made Up", level = 70, rank = 2, cost = 5, status = "future", text = "x" })
+    expect(shown.title).toBe("Made Up")
+    expect(shown.subtitle).toBe("Rank 2")
+    expect(shown.meta).toBe("Learn at level 70")
+end
+
+@test("Blizzard places its spells again: off screen once more, a frame later")
+local function spellsAway()
+    open()
+    local spells = G.PlayerSpellsFrame.SpellBookFrame.PagedSpellsFrame
+    spells:SetPoint("TOPLEFT", UIParent, "TOPLEFT")
+    mock.advanceFrames(2)
+    local _, _, _, x = spells:GetPoint(1)
+    expect(x).toBe(5000)
+end
+
+@test("nothing left to learn: said so")
+local function nothingLeft()
+    mock.stub(M, "ShowLevelUp", function(): boolean return false end)
+    local before = #mock.printed()
+    M:PreviewLevelUp()
+    expect(#mock.printed()).toBe(before + 1)
+end
+
+@test("the Character window resized while the Spellbook shows: the same height; money and themes redraw")
+local function redraws()
+    open()
+    local render = mock.spy(function(_: any, _: any) end)
+    M:MeasureCharacter()
+    expect(G.PlayerSpellsFrame:GetHeight()).toBe(528)
+    mock.stub(M, "Render", render)
+    mock.player:setMoney(12345)
+    expect(render).toHaveBeenCalled()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    M:PreviewView(parent)
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(render).toHaveBeenCalledTimes(2)
+end

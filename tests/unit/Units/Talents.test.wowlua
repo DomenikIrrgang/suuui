@@ -74,6 +74,9 @@ local function newWorld(): world.World
     local nw = world.new(CONFIG, { a, p })
     nw.configs[VIEW] = PALADIN_TREE
     nw.configs[INSPECT] = WARRIOR_TREE
+    -- the warrior's and the paladin's trees, by their classes' first specs
+    nw.specTrees[GetSpecializationInfoForClassID(1, 1) :: number] = WARRIOR_TREE
+    nw.specTrees[GetSpecializationInfoForClassID(2, 1) :: number] = PALADIN_TREE
     return nw
 end
 
@@ -100,7 +103,7 @@ local function setup()
     local d = store()
     d.builds, d.active, d.reset, d.nextID = {}, {}, {}, 1
     M.draft, M.buildView, M.planning, M.viewing = nil, nil, false, nil
-    M.buildTrees, M.learned, M.learnedFor, M.data = nil, nil, nil, nil
+    M.buildTrees, M.learned, M.learnedFor, M.data, M.classes = nil, nil, nil, nil, nil
     M.inspectUnit, M.inspectData, M.wipeAt, M.talented, M.unseenStaged = nil, nil, nil, nil, nil
     savedPages.windowPage, savedPages.page = M.windowPage, M.page
     heard = {}
@@ -1075,7 +1078,9 @@ local function fillPlan()
     M.draft.dirty = true
     M:Render()
     p.drawn.actions.secondary.onClick()
-    expect(M.draft).toBe(nil)
+    -- (the saved build drawn again: a fresh draft of it, unchanged)
+    expect(M.draft.dirty).toBe(false)
+    expect(M.draft.steps).toEqual(store().builds[M.draft.id].steps)
     -- a problem
     M:Draft().problem = "Step 3 isn't a talent of this tree any more."
     M:Render()
@@ -1229,11 +1234,12 @@ local function fit()
     local nodes = wt().nodes
     nodes[1].rank = 1
     nodes[4].rank = 1 -- 21: not in the build
-    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 23, 12)))
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 23, 12, 13)))
     local data = assert(M:Collect())
     local fits, conflicts, learned = M:Fit(M:Builds()[id], data)
-    -- 11 learned; 13, 13, 23 fit; 12 needs 5 spent (it has 4 then): stops
-    expect(fits).toEqual(steps(13, 13, 23))
+    -- 11 learned; 13 and 23 fit; 12 needs 5 spent in the whole tree (4
+    -- then: 11, 21, 13, 23): stops, the rest after it too
+    expect(fits).toEqual(steps(13, 23))
     expect(conflicts).toEqual({ { node = 21, name = "Fury One", treeName = "Fury", ranks = 1 } })
     expect(learned[11]).toBe(1)
     -- out of points
@@ -1300,7 +1306,7 @@ local function useBuildMismatch()
     local p = M.mismatch
     expect(p).toBeShown()
     expect(M:ActiveID()).toBeNil()
-    expect(p.use).toHaveText("Use, plan the 3 that fit")
+    expect(p.use.label).toHaveText("Use, plan the 3 that fit")
     local texts: string[] = {}
     for _, l in ipairs(p.lines) do if l:IsShown() then texts[#texts + 1] = l:GetText() end end
     expect(texts).toEqual({
@@ -1319,7 +1325,7 @@ local function useBuildMismatch()
     wt().available = 0
     w.staged = {}
     M:UseBuild(id)
-    expect(p.use).toHaveText("Use it")
+    expect(p.use.label).toHaveText("Use it")
     texts = {}
     for _, l in ipairs(p.lines) do if l:IsShown() then texts[#texts + 1] = l:GetText() end end
     expect(texts[2]).toBe("Nothing yet: the talents in the way come first.")
@@ -1531,7 +1537,9 @@ local function showShare()
     M:ShowShare("copy")
     expect(p.mode).toBe("copy")
     expect(p.text.edit:GetText()).toBe(text)
-    expect(p.game).never.toBeShown()
+    -- (the game's own string too: the engine answers its version and the tree's hash)
+    expect(p.game).toBeShown()
+    expect(p.game.shared ~= "").toBe(true)
     mock.advanceTime(0.05)
     -- the copy fields stay as written
     p.text.edit:SetText("changed")
@@ -1724,3 +1732,36 @@ local function gameEvents()
     mock.advanceTime(0.1)
     expectNoErrors()
 end
+
+--------------------------------------------------------------------------------
+-- The rest
+--------------------------------------------------------------------------------
+
+@test("another class's builds by name within the class")
+local function othersByName()
+    assert(M:AddBuild("Retribution", "PALADIN", {}))
+    assert(M:AddBuild("Holy", "PALADIN", {}))
+    local list = M:PickerOptions()
+    local labels: string[] = {}
+    for _, o in ipairs(list.options or list) do
+        if o.label == "Holy" or o.label == "Retribution" then labels[#labels + 1] = o.label end
+    end
+    expect(labels).toEqual({ "Holy", "Retribution" })
+end
+
+@test("a choice talent's entry: in SuuUI's text and the game's string, and read back")
+local function choices()
+    wt().nodes[3].choice = true
+    M.buildTrees = nil
+    local id = assert(M:AddBuild("Choice", "WARRIOR", { { node = 11 }, { node = 13, entry = 131 } }))
+    local b = M:Builds()[id]
+    local share = assert(M:ShareText(b))
+    local game = assert(M:GameString(b))
+    local fromShare = assert(M:ReadPasted(share))
+    expect(fromShare.steps[2].entry).toBe(131)
+    local fromGame = assert(M:ReadPasted(game))
+    local entry: number? = nil
+    for _, s in ipairs(fromGame.steps) do if s.node == 13 then entry = s.entry end end
+    expect(entry).toBe(131)
+end
+
