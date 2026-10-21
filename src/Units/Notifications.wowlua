@@ -1191,7 +1191,8 @@ end
 
 function M:Rebuild()
     if not self.stack then return end
-    self.stack:SetItems(self:Items(), InCombatLockdown())
+    -- (in a fight from its event on: the lockdown itself comes a moment later)
+    self.stack:SetItems(self:Items(), InCombatLockdown() or self.fighting or false)
     for _, h in pairs(self.hosts) do self:Attach(h) end
     self:SecureActions()
 end
@@ -1204,7 +1205,7 @@ end
 -- stack protected); out of combat only: hidden as a fight starts, the
 -- plain button then says why it can't.
 function M:SecureActions()
-    if InCombatLockdown() or not self.stack then return end
+    if InCombatLockdown() or self.fighting or not self.stack then return end
     self.secure = self.secure or {}
     local used = {}
     local ui = UIParent:GetEffectiveScale()
@@ -1474,8 +1475,10 @@ function M:OnEnable()
         self:Rebuild()
     end)
     -- in combat notes wait; out of it they come back
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:HideSecureActions(); self:Rebuild() end)
+    -- (the event comes before the lockdown: drawn as in combat from here)
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self.fighting = true; self:HideSecureActions(); self:Rebuild() end)
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        self.fighting = nil
         self:Rebuild()
         -- online/offline held in the fight
         for key, q in pairs(self.presence or {}) do if q.held then self:FlushPresence(key) end end

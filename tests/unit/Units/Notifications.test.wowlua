@@ -1,0 +1,594 @@
+-- Units/Notifications: SuuUI's notes (timed, sticky, until, replaced, in
+-- combat, cleared), its own notes about the game (damaged and broken gear,
+-- full bags, talent and Legacy points), friends and guild members coming
+-- online and going offline (one card for a burst, held in combat, a
+-- Battle.net friend's, the chat lines hidden), Blizzard's popups hosted on
+-- cards from the engine (dying, deleting an item, logging out, a party
+-- invite, a plugin's kind; released when they close), the ready check, a
+-- note's secure macro button, the settings and the preview, stopped.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Notifications"
+import expectNoErrors from "../../helpers"
+
+local G: any = _G
+
+local function tick(seconds: number?)
+    -- the stack's tick runs on frames, ten a second
+    mock.advanceFrames(math.max(1, math.floor((seconds or 0.2) * 10)), 100)
+end
+
+-- A chest piece that wears out, worn.
+local VEST = 990401
+mock.defineItem(VEST, { name = "Militia Vest", quality = 1, icon = 132760, equipLoc = "INVTYPE_CHEST" })
+
+-- A slot the character wears something in.
+local function worn(): number
+    for slot = 1, 19 do
+        local _, max = GetInventoryItemDurability(slot)
+        if max then return slot end
+    end
+    error("nothing worn")
+end
+
+local function card(id: string): any
+    return M.stack:CardFor(id)
+end
+
+-- The hosted popup's card (the only one, or by its category).
+local function hosted(category: string?): any
+    for _, h in pairs(M.hosts) do
+        if not category or h.kind.category == category then return h end
+    end
+    return nil
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, k in ipairs({ "requests", "max", "durability", "bagsFull", "talentPoints", "legacyPoints",
+                         "presenceBnetOnline", "presenceBnetOffline", "presenceFriendOnline", "presenceFriendOffline",
+                         "presenceGuildOnline", "presenceGuildOffline", "presenceHideChat" }) do
+        M:Reset(k)
+    end
+    for i = 1, 4 do
+        local d = G["StaticPopup" .. i]
+        if d and d:IsShown() then d:Hide() end
+    end
+    for id in pairs(M.notes) do M:Dismiss(id) end
+    M.presence = nil
+    mock.group:leave()
+    tick(1)
+    expectNoErrors()
+end
+
+@test("notes: a timed one goes by itself, a sticky one stays till closed, a condition till it's over; one id replaced in place")
+local function notes()
+    expect(M:Notify(nil)).toBeNil()
+    local timed = M:Notify({ category = "Test", title = "A timed note", duration = 1 }) :: string
+    local sticky = M:Notify({ kind = "sticky", category = "Test", title = "A sticky note" }) :: string
+    local cond = M:Notify({ id = "test:cond", kind = "until", category = "Test", title = "A condition", ["until"] = "Goes later" }) :: string
+    expect(card(timed) ~= nil).toBe(true)
+    expect(card(sticky) ~= nil).toBe(true)
+    expect(card(cond) ~= nil).toBe(true)
+    tick(1.3)
+    expect(M.notes[timed]).toBeNil()
+    expect(M.notes[sticky] ~= nil).toBe(true)
+    -- the same id: replaced, not added
+    M:Notify({ id = "test:cond", kind = "until", category = "Test", title = "The condition, changed" })
+    expect(#M.noteOrder).toBe(2)
+    expect(M.notes[cond].title).toBe("The condition, changed")
+    -- Clear all: the sticky ones
+    M.stack.onClearAll()
+    expect(M.notes[sticky]).toBeNil()
+    expect(M.notes[cond] ~= nil).toBe(true)
+    -- a card's close button
+    M.notes[cond].onClose()
+    expect(M.notes[cond]).toBeNil()
+    M:Dismiss("nothing")
+end
+
+@test("a request with a time counts down and stays; in combat only requests and conditions show")
+local function combat()
+    local roll = M:Notify({ kind = "roll", category = "Loot", title = "Need or greed", duration = 60, remaining = 30 }) :: string
+    local note = M:Notify({ kind = "sticky", category = "Test", title = "A note" }) :: string
+    tick(0.5)
+    expect(M.notes[roll].remaining < 30).toBe(true)
+    mock.player:enterCombat()
+    expect(card(note)).toBeNil()
+    expect(card(roll) ~= nil).toBe(true)
+    mock.player:leaveCombat()
+    expect(card(note) ~= nil).toBe(true)
+    -- the most at once: the rest behind "+N more"
+    M:Set("max", 3)
+    expect(M.stack.max).toBe(3)
+end
+
+@test("gear: badly damaged, then broken (the Durability module's names), gone when repaired")
+local function durability()
+    mock.player:equip(5, { id = VEST, durability = 100, maxDurability = 100 })
+    mock.advanceFrames(2)
+    mock.player:setDurability(worn(), 15, 100)
+    -- (the server tells it with its next update)
+    mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
+    tick()
+    local n = M.notes["suu:durability"]
+    expect(n ~= nil).toBe(true)
+    expect(n.tone).toBe("warning")
+    mock.player:setDurability(worn(), 0, 100)
+    mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
+    tick()
+    n = M.notes["suu:durability"]
+    expect(n.tone).toBe("danger")
+    -- without the Durability module: the game's own numbers
+    mock.stub(SuuUI, "Durability", function(): any return nil end)
+    M.durabilityState = nil
+    M:CheckDurability()
+    expect(M.notes["suu:durability"].title).toBe("Some of your gear is broken")
+    mock.player:setDurability(worn(), 15, 100)
+    M:CheckDurability()
+    expect(M.notes["suu:durability"].title).toBe("Your gear is badly damaged")
+    mock.player:setDurability(worn(), 100, 100)
+    M:CheckDurability()
+    expect(M.notes["suu:durability"]).toBeNil()
+    -- off: none
+    M:Set("durability", false)
+    mock.player:setDurability(worn(), 0, 100)
+    M:CheckDurability()
+    expect(M.notes["suu:durability"]).toBeNil()
+    mock.player:setDurability(worn(), 100, 100)
+end
+
+@test("the Durability module's note: which pieces, Show repairers")
+local function namedPieces()
+    mock.stub(SuuUI, "Durability", function(): any
+        return { state = "broken", parts = { note = true }, pieces = {
+            { state = "broken", label = "Chest", name = "Militia Vest" },
+            { state = "damaged", label = "Legs", percent = 15 } } }
+    end)
+    M.durabilityState = nil
+    M:CheckDurability()
+    local n = M.notes["suu:durability"]
+    expect(n.title).toBe("Your Chest is broken")
+    expect(n.body).toBe("Militia Vest gives no stats until repaired · Legs 15%")
+    mock.stub(SuuUI, "Durability", function(): any
+        return { state = "broken", parts = { note = true }, pieces = {
+            { state = "broken", label = "Chest", name = "Militia Vest" }, { state = "broken", label = "Feet", name = "Boots" } } }
+    end)
+    M:CheckDurability()
+    expect(M.notes["suu:durability"].title).toBe("2 pieces are broken")
+    mock.stub(SuuUI, "Durability", function(): any
+        return { state = "damaged", parts = { note = true }, pieces = { { state = "damaged", label = "Legs", percent = 15 } } }
+    end)
+    M:CheckDurability()
+    n = M.notes["suu:durability"]
+    expect(n.title).toBe("Your gear is badly damaged")
+    -- Show repairers: the world map
+    local toggled = mock.spy(function() end)
+    mock.stub(G, "ToggleWorldMap", toggled)
+    mock.stub(SuuUI, "GetModule", function(_: string): any return nil end)
+    n.actions[1].onClick()
+    expect(toggled).toHaveBeenCalled()
+end
+
+@test("full bags: a note while no slot is free, gone when one is")
+local function bags()
+    mock.stub(C_Container, "GetContainerNumFreeSlots", function(_: number): (number, number) return 0, 0 end)
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    expect(M.notes["suu:bags"] ~= nil).toBe(true)
+    mock.stub(C_Container, "GetContainerNumFreeSlots", function(bag: number): (number, number) return bag == 0 and 1 or 0, 0 end)
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    expect(M.notes["suu:bags"]).toBeNil()
+end
+
+@test("talent points to spend: the count, the next talent of a build followed, Open talents")
+local function talents()
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): any return { { quantity = 2 } } end)
+    mock.stub(C_ClassTalents, "GetActiveConfigID", function(): number return 7143862 end)
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): any return { treeIDs = { 1117 } } end)
+    M.talentPointsShown = nil
+    M:CheckTalents()
+    local n = M.notes["suu:talents"]
+    expect(n.title).toBe("2 talent points to spend")
+    local opened = mock.spy(function() end)
+    mock.stub(SuuUI, "ToggleTalents", opened)
+    mock.stub(SuuUI, "TalentsShown", function(): boolean return false end)
+    if n.actions then
+        n.actions[1].onClick()
+        expect(opened).toHaveBeenCalled()
+    end
+    mock.stub(SuuUI, "TalentBuildNext", function(): any
+        return { node = 1, rank = 1, max = 3, name = "Tactical Mastery", build = "Arms leveling", icon = 136031 }
+    end)
+    M:CheckTalents()
+    n = M.notes["suu:talents"]
+    expect(n.title).toBe("2 talent points · next: Tactical Mastery")
+    expect(n.body).toBe("Rank 1 of 3 · Arms leveling")
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): any return { { quantity = 0 } } end)
+    M:CheckTalents()
+    expect(M.notes["suu:talents"]).toBeNil()
+    -- after a talent event, a moment later
+    mock.fireEvent("PLAYER_TALENT_UPDATE")
+    mock.advanceTime(0.3)
+end
+
+@test("Legacy points to spend: a note with Open Legacy")
+local function legacy()
+    mock.stub(C_Traits, "GetConfigIDByTreeID", function(_: number): number return 7143863 end)
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): any return { { quantity = 1 } } end)
+    M.legacyPointsShown = nil
+    M:CheckLegacy()
+    local n = M.notes["suu:legacy"]
+    expect(n.title).toBe("1 Legacy point to spend")
+    -- Open Legacy: the game's window shown (a stand-in: the Legacy window has its own test)
+    local legacyFrame = CreateFrame("Frame")
+    legacyFrame:Hide()
+    mock.setField(G, "LegacySystemFrame", legacyFrame)
+    n.actions[1].onClick()
+    expect(legacyFrame:IsShown()).toBe(true)
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): any return { { quantity = 0 } } end)
+    M:CheckLegacy()
+    expect(M.notes["suu:legacy"]).toBeNil()
+end
+
+-- A friend on the friends list, by name.
+local function friendList(friends: { [string]: any })
+    mock.stub(C_FriendList, "GetFriendInfo", function(name: string): any return friends[name] end)
+end
+
+local function presenceCards(): any[]
+    local out = {}
+    for _, id in ipairs(M.noteOrder) do
+        local n = M.notes[id]
+        if n.presence then out[#out + 1] = n end
+    end
+    return out
+end
+
+@test("friends coming online: one card for a burst, Whisper and Invite; going offline; your own line ignored")
+local function friendsOnline()
+    friendList({ ["Brannoc Ironhand"] = { name = "Brannoc Ironhand", level = 60, area = "Ironforge", className = "Warrior" },
+                 ["Tamsin Ashford"] = { name = "Tamsin Ashford", level = 42, className = "Priest" } })
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand"))
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    -- the same one again: once
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    mock.advanceTime(2.6)
+    local cards = presenceCards()
+    expect(#cards).toBe(1)
+    local p = cards[1].presence
+    expect(p.online).toBe(true)
+    expect(p.source).toBe("Friend")
+    expect(#p.people).toBe(2)
+    expect(p.people[1].detail).toBe("Level 60 · Ironforge")
+    expect(p.invite).toBeNil()
+    local told = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", told)
+    p.people[1].whisper()
+    expect(told).toHaveBeenCalledWith("Brannoc Ironhand")
+    -- going offline, alone: Invite only for those online
+    mock.systemMessage(ERR_FRIEND_OFFLINE_S:format("Brannoc Ironhand"))
+    mock.advanceTime(2.6)
+    cards = presenceCards()
+    expect(cards[#cards].presence.online).toBe(false)
+    -- one alone online: Invite
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand"))
+    mock.advanceTime(2.6)
+    cards = presenceCards()
+    local invited = mock.spy(function(_: string) end)
+    mock.stub(C_PartyInfo, "InviteUnit", invited)
+    cards[#cards].presence.invite()
+    expect(invited).toHaveBeenCalledWith("Brannoc Ironhand")
+    -- your own name, someone unknown, nonsense: nothing
+    local before = #presenceCards()
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Kaelith Dawnmere", "Kaelith Dawnmere"))
+    M:SystemLine(tostring(SuuUI.FullName("player")) .. " has gone offline.")
+    M:SystemLine(42)
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(before)
+    -- off by the setting
+    M:Set("presenceFriendOnline", false)
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(before)
+end
+
+@test("guild members: their rank, level and zone; in combat the card waits for the fight's end")
+local function guildOnline()
+    mock.joinGuild({ name = "Wardens of Dawn", ranks = { { name = "Guild Master" }, { name = "Officer" } } })
+    mock.defineGuildMember({ name = "Tamsin Ashford", rank = 1, level = 42, class = "PRIEST",
+        zone = "Stormwind City", online = true })
+    mock.advanceTime(1)
+    friendList({})
+    mock.player:enterCombat()
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(0)
+    mock.player:leaveCombat()
+    local cards = presenceCards()
+    expect(#cards).toBe(1)
+    expect(cards[1].presence.source).toBe("Wardens of Dawn")
+    expect(cards[1].presence.people[1].detail:find("Officer", 1, true)).toBe(1)
+    mock.leaveGuild()
+end
+
+@test("a Battle.net friend: their game and character, Invite on your side; the card for them only once")
+local function bnet()
+    local game = { clientProgram = BNET_CLIENT_WOW or "WoW", characterName = "Brannoc Ironhand", className = "Warrior",
+        areaName = "Ironforge", wowProjectID = WOW_PROJECT_ID, gameAccountID = 77, factionName = UnitFactionGroup("player") }
+    mock.stub(C_BattleNet, "GetAccountInfoByID", function(_: number): any
+        return { accountName = "|Kq1|k", battleTag = "Brannoc#1137", gameAccountInfo = game }
+    end)
+    mock.fireEvent("BN_FRIEND_ACCOUNT_ONLINE", 5, false)
+    mock.advanceTime(2.6)
+    local cards = presenceCards()
+    expect(#cards).toBe(1)
+    local p = cards[1].presence
+    expect(p.source).toBe("Battle.net")
+    expect(p.people[1].tag).toBe("#1137")
+    expect(p.people[1].detail).toBe("Brannoc Ironhand · Ironforge")
+    local invited = mock.spy(function(_: number) end)
+    mock.stub(C_BattleNet, "InviteFriend", invited)
+    p.invite()
+    expect(invited).toHaveBeenCalledWith(77)
+    p.people[1].whisper()
+    -- the same character as a friend too: no second card
+    friendList({ ["Brannoc Ironhand"] = { name = "Brannoc Ironhand", level = 60 } })
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand"))
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(1)
+    -- in another game: its name; offline
+    game.clientProgram = "WTCG"
+    mock.fireEvent("BN_FRIEND_ACCOUNT_OFFLINE", 5, false)
+    mock.advanceTime(2.6)
+    cards = presenceCards()
+    expect(cards[#cards].presence.people[1].detail).toBe("Hearthstone")
+end
+
+@test("a Battle.net friend still loading in: Invite added when their character arrives")
+local function bnetLoading()
+    local game: { [string]: any } = { clientProgram = "App" }
+    mock.stub(C_BattleNet, "GetAccountInfoByID", function(_: number): any
+        return { accountName = "|Kq1|k", battleTag = "Tamsin#2041", gameAccountInfo = game }
+    end)
+    mock.fireEvent("BN_FRIEND_ACCOUNT_ONLINE", 6, false)
+    mock.advanceTime(2.6)
+    expect(presenceCards()[1].presence.invite).toBeNil()
+    expect(M.awaitInvite ~= nil).toBe(true)
+    -- still not playing: waits
+    mock.fireEvent("BN_FRIEND_INFO_CHANGED", 1)
+    expect(M.awaitInvite ~= nil).toBe(true)
+    game.clientProgram = BNET_CLIENT_WOW or "WoW"
+    game.characterName = "Tamsin Ashford"
+    game.wowProjectID = WOW_PROJECT_ID
+    game.gameAccountID = 78
+    game.factionName = UnitFactionGroup("player")
+    mock.fireEvent("BN_FRIEND_INFO_CHANGED", 1)
+    expect(M.awaitInvite).toBeNil()
+    local cards = presenceCards()
+    expect(cards[#cards].presence.invite ~= nil).toBe(true)
+    M:BnetInfoChanged()
+end
+
+@test("the game's online lines hidden in chat (and Battle.net's toast); shown with the setting off")
+local function chatLines()
+    local chat = G.ChatFrame1
+    local line = ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand")
+    local before = chat:GetNumMessages()
+    mock.systemMessage(line)
+    expect(chat:GetNumMessages()).toBe(before)
+    -- another system line: shown
+    mock.systemMessage("You feel rested.")
+    expect(chat:GetNumMessages()).toBe(before + 1)
+    M:Set("presenceHideChat", false)
+    mock.systemMessage(line)
+    expect(chat:GetNumMessages()).toBe(before + 2)
+    M:Set("presenceHideChat", true)
+    M.presence = nil
+    local toast = G.BNToastFrame
+    if toast then
+        toast.toastType = BN_TOAST_TYPE_ONLINE or 1
+        toast:Show()
+        expect(toast:IsShown()).toBe(false)
+    end
+end
+
+@test("/suu presence: one card of each kind")
+local function testCards()
+    mock.slash("/suu presence")
+    expect(#presenceCards()).toBe(5)
+    mock.slash("/suu notify")
+    expect(#M.noteOrder).toBe(8)
+end
+
+@test("dying: Blizzard's popup as a card, its own button on it; released when it closes")
+local function death()
+    mock.player:die()
+    mock.advanceFrames(3)
+    local h = hosted("You died")
+    expect(h ~= nil).toBe(true)
+    expect(h.card ~= nil).toBe(true)
+    local list = h.buttons()
+    local b = list[#list].button
+    local _, rel = b:GetPoint(1)
+    expect(rel).toBe(h.card.actionsRow)
+    -- the popup itself off screen
+    local point = h.dialog:GetPoint(1)
+    expect(point).toBe("BOTTOMRIGHT")
+    -- moved by Blizzard: put back, its buttons on the card again
+    h.dialog:ClearAllPoints()
+    h.dialog:SetPoint("CENTER")
+    b:ClearAllPoints()
+    b:SetPoint("CENTER")
+    tick()
+    expect((h.dialog:GetPoint(1))).toBe("BOTTOMRIGHT")
+    local _, rel2 = b:GetPoint(1)
+    expect(rel2).toBe(h.card.actionsRow)
+    -- the button's look follows the mouse
+    b:GetScript("OnEnter")(b)
+    b:GetScript("OnLeave")(b)
+    -- Blizzard sizes it again: kept
+    b:SetWidth(120)
+    expect(b:GetWidth() ~= 120).toBe(true)
+    h.dialog:Hide()
+    mock.advanceFrames(2)
+    expect(hosted("You died")).toBeNil()
+    -- a priest offers to bring you back: its card
+    local healer = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "PRIEST", reaction = "friendly", distance = 5 })
+    healer:resurrect(mock.player)
+    mock.advanceFrames(3)
+    local r = hosted("Resurrection")
+    expect(r ~= nil).toBe(true)
+    r.buttons()[1].button:Click()
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+    expect(hosted("Resurrection")).toBeNil()
+end
+
+@test("deleting an item: its card names it; Blizzard's popups as they are with the setting off")
+local function deleting()
+    local ITEM = 990301
+    mock.defineItem(ITEM, { name = "Ember Pelt", quality = 1, icon = 134366 })
+    mock.setBag(0, { slots = 16, items = { [1] = ITEM } })
+    C_Container.PickupContainerItem(0, 1)
+    mock.clickWorld()
+    mock.advanceFrames(3)
+    local h = hosted("Delete item")
+    expect(h ~= nil).toBe(true)
+    expect(h.data.item.label).toBe("Ember Pelt")
+    -- Blizzard's "No"
+    for _, x in ipairs(h.buttons()) do if x.index == 2 then x.button:Click() end end
+    mock.advanceFrames(2)
+    expect(hosted("Delete item")).toBeNil()
+    ClearCursor()
+    -- off: Blizzard's own
+    M:Set("requests", false)
+    C_Container.PickupContainerItem(0, 1)
+    mock.clickWorld()
+    mock.advanceFrames(3)
+    expect(hosted("Delete item")).toBeNil()
+    ClearCursor()
+    for i = 1, 4 do if G["StaticPopup" .. i]:IsShown() then G["StaticPopup" .. i]:Hide() end end
+end
+
+@test("a good item: type DELETE on the card")
+local function deletingGood()
+    local ITEM = 990302
+    mock.defineItem(ITEM, { name = "Shining Blade", quality = 4, icon = 135274 })
+    mock.setBag(0, { slots = 16, items = { [2] = ITEM } })
+    C_Container.PickupContainerItem(0, 2)
+    mock.clickWorld()
+    mock.advanceFrames(3)
+    local h = hosted()
+    expect(h ~= nil).toBe(true)
+    if h.kind.confirm then
+        expect(h.data.confirmText).toBe(DELETE_ITEM_CONFIRM_STRING or "DELETE")
+    end
+    ClearCursor()
+    h.dialog:Hide()
+end
+
+@test("logging out: the countdown on its card; a party invite; a popup a plugin added; one SuuUI doesn't know stays Blizzard's")
+local function camping()
+    mock.slash("/camp")
+    mock.advanceFrames(3)
+    local h = hosted("Logging out")
+    expect(h ~= nil).toBe(true)
+    tick(1.2)
+    expect(h.card ~= nil).toBe(true)
+    h.dialog:Hide()
+    mock.advanceFrames(2)
+    -- a party invite (shown as the game shows it)
+    StaticPopup_Show("PARTY_INVITE", "Brannoc Ironhand")
+    mock.advanceFrames(2)
+    expect(hosted("Party invite") ~= nil).toBe(true)
+    -- a second popup under it: back on screen
+    local other = StaticPopup_Show("CONFIRM_RESET_INSTANCES")
+    if other then
+        other:ClearAllPoints()
+        other:SetPoint("TOP", hosted("Party invite").dialog, "BOTTOM")
+        tick()
+        local _, rel = other:GetPoint(1)
+        expect(rel).toBe(UIParent)
+        other:Hide()
+    end
+    hosted("Party invite").dialog:Hide()
+    -- a plugin's kind
+    local plugin: any = SuuUI.GetModule("notifications")
+    plugin:AddNotificationKind("CONFIRM_RESET_INSTANCES", { category = "Reset", glyph = "door" })
+    local d = StaticPopup_Show("CONFIRM_RESET_INSTANCES")
+    mock.advanceFrames(2)
+    expect(hosted("Reset") ~= nil).toBe(true)
+    if d then d:Hide() end
+end
+
+@test("a bank tab's price on its card, in coins")
+local function bankTab()
+    local d = StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = Enum.BankType and Enum.BankType.Character })
+    mock.advanceFrames(2)
+    local h = hosted("Bank")
+    if h then
+        if h.data.body then expect(h.data.body:sub(1, 6)).toBe("Costs ") end
+        M:Emit("SUUUI_THEME_CHANGED")
+    end
+    if d then d:Hide() end
+end
+
+@test("the ready check: Blizzard's window on a card with its time")
+local function readyCheck()
+    local friend = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", reaction = "friendly" })
+    mock.group:add(friend)
+    mock.advanceFrames(2)
+    mock.fireEvent("READY_CHECK", "Brannoc Ironhand", 30)
+    mock.advanceFrames(3)
+    expect(M.readyEndsAt ~= nil).toBe(true)
+    local h = hosted("Ready check")
+    if h then
+        local duration, left = h.time()
+        expect(duration).toBe(30)
+        expect(left <= 30).toBe(true)
+    end
+    mock.fireEvent("READY_CHECK_FINISHED", false)
+    expect(M.readyEndsAt).toBeNil()
+    if G.ReadyCheckFrame and G.ReadyCheckFrame:IsShown() then G.ReadyCheckFrame:Hide() end
+end
+
+@test("a note's macro action: a secure button over it, out of combat")
+local function secureAction()
+    local after = mock.spy(function(_: any) end)
+    local id = M:Notify({ kind = "sticky", category = "Group Finder", title = "Your listing",
+        actions = { { label = "Open", variant = "primary", macro = "/run print(1)", onClick = after } } }) :: string
+    M:SecureActions()
+    local s = M.secure and M.secure[id .. "#1"]
+    if s then
+        expect(s:GetAttribute("type1")).toBe("macro")
+        expect(s:GetAttribute("macrotext1")).toBe("/run print(1)")
+        mock.player:enterCombat()
+        expect(s:IsShown()).toBe(false)
+        mock.player:leaveCombat()
+    end
+    M:Dismiss(id)
+    M:SecureActions()
+end
+
+@test("the settings' preview")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetParent()).toBe(parent)
+    expect(M:PreviewView(UIParent)).toBe(view)
+end
+
+-- (last: the module off)
+@test("stopped: popups back to Blizzard, the stack hidden")
+local function disabled()
+    StaticPopup_Show("PARTY_INVITE", "Brannoc Ironhand")
+    mock.advanceFrames(2)
+    local m: any = M
+    m:OnDisable()
+    expect(next(M.hosts)).toBeNil()
+    expect(M.frame).never.toBeShown()
+    for i = 1, 4 do if G["StaticPopup" .. i]:IsShown() then G["StaticPopup" .. i]:Hide() end end
+end
