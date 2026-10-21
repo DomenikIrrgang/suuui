@@ -72,32 +72,28 @@ pass) and committed, with notes in `Docs/test-notes/<area>.md`:
 | ui-windows | src/UI: Reskin, WindowSkin, Tooltip, ContextMenu, FilterMenu, Notification, Alert, Loot, LevelUp, MicroMenu | 100% lines; fixed Reskin hooks lost on Blizzard's pooled menu frames |
 | ui-social | src/UI: GroupFinder, GroupFinderListed, GroupFinderListing, GroupFinderWho, Guild, GuildControl, Social | 100% lines; typed view data |
 
-Not done (the queue), in this order. Partial work from agents that were
-stopped when the PC crashed is in commit **68d8ab6** ("WIP checkpoint") and
-is **unverified**: test files for some of these, and in `src/Units` new
-sibling-module folders (`Bags/`, `Chat/`, `ChatCommands/`, `CooldownManager/`,
-`FlightMap/`, `GroupFinder/`, `WorldMap/`) from refactors in progress, plus
-scratch probe tests (`tests/unit/Units/Z*Probe*.test.wowlua`,
-`TraitWorld.wowlua`) that should be reviewed and probably deleted. An agent
-continuing an area must first read what's there, finish or undo it, and
-verify it.
+Done since (2026-10-20 to 2026-10-22), each with its notes in
+`Docs/test-notes/<area>.md`: ui-world, ui-settings, units-chat,
+units-cooldowns, units-bags, units-trade, units-character, units-maps,
+units-talents, units-group. The checkpoint's work in them was finished or
+replaced.
+
+In progress: **units-notices** (`Docs/test-notes/units-notices.md` has the
+state): ObjectiveTracker, NpcDialogue, Alerts, DeathRecap and Support done;
+Notifications at 88.8% (left: the group finder's invite with role buttons,
+the battleground's ready window, the ready check window's card); then
+`smoke` and `compat`.
+
+Not done (the queue), in this order:
 
 | Area | Sources | Partial work in 68d8ab6 |
 |------|---------|--------------------------|
-| ui-world | src/UI: ObjectiveTracker, MapPin, Professions, RaidPlanner, Inventory, Legacy | MapPin test, WorldHelpers |
-| ui-settings | src/UI: TalentTree, TalentBuilds, Spellbook, Timeline; src/SettingsUI/*; src/EditMode/* | TalentBuilds, Timeline, Registry, LayoutCheck tests |
-| units-chat | src/Units: Chat, ChatCommands | Chat/, ChatCommands/ folders, tests |
-| units-cooldowns | src/Units: CooldownManager, Defensives, BuffIndicators | CooldownManager/ folder, tests |
-| units-bags | src/Units: Bags, MicroBags, Merchant, Mail, Loot | Bags/ folder; also `tests/units/bagsort.test.wowlua` (a regression test to fold in) |
-| units-trade | src/Units: AuctionHouse, Professions, Trainer, Macros | tests for Professions, Trainer, Macros |
-| units-character | src/Units: Collections, DressingRoom, CharacterWindow, Inspect, Durability | tests for CharacterWindow, Durability |
-| units-maps | src/Units: FlightMap, WorldMap, Campsite | FlightMap/, WorldMap/ folders, tests |
-| units-talents | src/Units: Talents, Spellbook, Legacy, Convergences, Welcome | tests for Talents, Convergences |
-| units-group | src/Units: RaidPlanner, RaidFrames, PartyFrames, Readiness, Marks | Readiness test |
-| units-notices | src/Units: Notifications, NpcDialogue, ObjectiveTracker, Alerts, DeathRecap, Support | tests for ObjectiveTracker, Alerts, DeathRecap, Support |
 | units-social | src/Units: GroupFinder, Guild, Social, GameMenu, MicroMenu | GroupFinder/ folder, test |
 | units-windows | src/Units: Windows, Nameplates, Tooltips, Minimap, Addons | Addons test |
 | units-hud | src/Units: ActionBars, Auras, CastBars, UnitFrames, SwingTimer, Threat, Timeline, DamageMeter | none (never started) |
+
+Several of these tests need wowlua's branch `m9-coverage-stale-handle`
+(fixes after 0.9.5, unreleased): run them with its build until 0.9.6 is out.
 
 Then:
 
