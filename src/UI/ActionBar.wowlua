@@ -35,34 +35,7 @@ const S = T.space
 const BUTTONS = 12
 
 -- A bar actionBar makes (a table, its frame the header).
-export interface ActionBar
-    name: string
-    slot: number
-    binding?: string
-    paging?: string
-    onPage?: (bar: ActionBar, page: number) -> ()
-    columns: number
-    gap: number
-    count?: number
-    size?: number
-    page?: number
-    hidden?: boolean
-    hotkeysShown?: boolean
-    header: Frame
-    buttons: ActionButton[]
-    function Page(): number
-    function UpdatePage()
-    function SetHotkeysShown(shown: any)
-    function SetShowEmpty(shown: any)
-    function UpdateBindings()
-    function SetVisibility(mode: string)
-    function SetShown(shown: any)
-    function UpdateLock()
-    function Layout(columns: number?, gap: number?, count: number?, size: number?)
-end
 
-local Bar: ActionBar = {} :: any
-mixins.ActionBar = Bar
 local bars: ActionBar[] = {}                     -- every bar made
 local bySlot: { [number]: { [ActionButton]: boolean } } = {} -- [slot] = { [button] = true }
 
@@ -141,101 +114,6 @@ end
 -- The bar
 --------------------------------------------------------------------------------
 
-function Bar:Page()
-    if not self.paging then return 1 end
-    local p = SecureCmdOptionParse(self.paging)
-    return tonumber(p) or 1
-end
-
--- The art follows the page; the secure driver already moved the attribute.
-function Bar:UpdatePage()
-    local page = self:Page()
-    if page == self.page then return end
-    self.page = page
-    for i, b in ipairs(self.buttons) do
-        b:SetSlot(self.slot + (page - 1) * BUTTONS + i - 1)
-        rangeNow(b)
-    end
-    if self.onPage then self.onPage(self, page) end
-end
-
-function Bar:SetHotkeysShown(shown: any)
-    self.hotkeysShown = shown and true or false
-    for _, b in ipairs(self.buttons) do b:SetHotkeyShown(self.hotkeysShown) end
-end
-
-function Bar:SetShowEmpty(shown: any)
-    for _, b in ipairs(self.buttons) do
-        b.showEmpty = shown and true or false
-        b:UpdateEmpty()
-    end
-end
-
--- Every key bound to the bar's commands clicks its buttons. Out of combat.
-function Bar:UpdateBindings()
-    if not self.binding then return end
-    combat.run("actionbar:bind:" .. self.name, function()
-        ClearOverrideBindings(self.header)
-        if self.hidden then return end
-        for i, b in ipairs(self.buttons) do
-            local keys = { GetBindingKey((self.binding :: string) .. i) }
-            if i <= (self.count or #self.buttons) then
-                for _, key in ipairs(keys) do
-                    SetOverrideBindingClick(self.header, false, key, b:GetName(), "LeftButton")
-                end
-            end
-            b:SetHotkey(shortKey(keys[1]))
-        end
-    end, "Action bars")
-end
-
--- When the bar shows: "always", "combat", "mouseover" or "hidden". A hidden
--- bar also gives its keys back.
-function Bar:SetVisibility(mode: string)
-    self.hidden = mode == "hidden"
-    setVisibility(self.header, mode)
-    self:UpdateBindings()
-end
-
-function Bar:SetShown(shown: any)
-    self:SetVisibility(shown and "always" or "hidden")
-end
-
--- Drag lock follows the game's "Lock Action Bars" (Shift drags anyway).
-function Bar:UpdateLock()
-    combat.run("actionbar:lock:" .. self.name, function()
-        local locked = GetCVarBool("lockActionBars") and true or false
-        for _, b in ipairs(self.buttons) do b:SetAttribute("suu-locked", locked) end
-    end, "Action bars")
-end
-
--- Columns and rows, filled row by row from the top: `count` buttons of
--- `size` px, `gap` apart (space-1 by default). Out of combat.
-function Bar:Layout(columns: number?, gap: number?, count: number?, size: number?)
-    self.columns = columns or self.columns
-    self.gap = gap or self.gap
-    local n = math.max(1, math.min(count or self.count or #self.buttons, #self.buttons))
-    local px: number = size or self.size or self.buttons[1]:GetWidth()
-    self.count, self.size = n, px
-    local cols = math.min(self.columns, n)
-    local rows = math.ceil(n / cols)
-    local g = self.gap
-    combat.run("actionbar:layout:" .. self.name, function()
-        for i, b in ipairs(self.buttons) do
-            b:Resize(px)
-            local shown = i <= (self.count :: number) -- (set above; read when it runs)
-            b:SetShown(shown)
-            if shown then
-                local c, r = (i - 1) % cols, math.floor((i - 1) / cols)
-                b:ClearAllPoints()
-                b:SetPoint("TOPLEFT", self.header, "TOPLEFT", c * (px + g), -r * (px + g))
-            end
-        end
-        self.header:SetSize(cols * px + (cols - 1) * g, rows * px + (rows - 1) * g)
-    end, "Action bars")
-    self:UpdateBindings()
-end
-
 -- Secure snippets. The button's slot is base + (page - 1) * 12.
 const PAGE_SNIPPET = [[
     self:SetAttribute("actionpage", tonumber(newstate) or 1)
@@ -252,60 +130,176 @@ const CLICK_PRE = [[
     if down and IsModifiedClick("PICKUPACTION") and self:IsUnderMouse() then return false end
 ]]
 
-export function actionBar(parent: Frame, opts: { [string]: any }): any
-    local bar: ActionBar = setmetatable({}, { __index = Bar }) :: any
-    bar.name = opts.name
-    bar.slot = opts.slot or 1
-    bar.binding = opts.binding
-    bar.paging = opts.paging
-    bar.onPage = opts.onPage
-    bar.columns = opts.columns or BUTTONS
-    bar.gap = opts.gap or S["space-1"]
+export class ActionBar
+    name: string
+    slot: number
+    binding: string? = nil
+    paging: string? = nil
+    onPage: ((bar: ActionBar, page: number) -> ())? = nil
+    columns: number
+    gap: number
+    header: Frame
+    buttons: ActionButton[]
+    page: number? = nil
+    hotkeysShown: boolean? = nil
+    hidden: boolean? = nil
+    count: number? = nil
+    size: number? = nil
 
-    local h = CreateFrame("Frame", opts.name, parent, "SecureHandlerStateTemplate")
-    h:SetSize(1, 1)
-    bar.header = h
-    bar.buttons = {}
+    constructor(parent: Frame, opts: { [string]: any })
+        -- (a plain object)
+        self.name = opts.name
+        self.slot = opts.slot or 1
+        self.binding = opts.binding
+        self.paging = opts.paging
+        self.onPage = opts.onPage
+        self.columns = opts.columns or BUTTONS
+        self.gap = opts.gap or S["space-1"]
 
-    for i = 1, math.min(opts.count or BUTTONS, BUTTONS) do
-        local b: ActionButton = actionButton(h, opts.name .. "Button" .. i, opts.size)
-        b.onSlotChanged = onSlotChanged
-        if opts.binding then
-            b.bindCommand = opts.binding .. i
-            b.bindLabel = (opts.label or opts.name) .. " button " .. i
+        local h = CreateFrame("Frame", opts.name, parent, "SecureHandlerStateTemplate")
+        h:SetSize(1, 1)
+        self.header = h
+        self.buttons = {}
+
+        for i = 1, math.min(opts.count or BUTTONS, BUTTONS) do
+            local b: ActionButton = actionButton(h, opts.name .. "Button" .. i, opts.size)
+            b.onSlotChanged = onSlotChanged
+            if opts.binding then
+                b.bindCommand = opts.binding .. i
+                b.bindLabel = (opts.label or opts.name) .. " button " .. i
+            end
+            b:SetID(0)
+            b:SetAttribute("type", "action")
+            b:SetAttribute("action", self.slot + i - 1)
+            b:SetAttribute("checkselfcast", true)
+            b:SetAttribute("checkfocuscast", true)
+            b:RegisterForClicks("AnyUp", "AnyDown")
+            b:RegisterForDrag("LeftButton")
+            b:SetAttribute("_childupdate-page", CHILD_PAGE:format(self.slot + i - 1))
+            SecureHandlerWrapScript(b, "OnDragStart", h, DRAG_START)
+            SecureHandlerWrapScript(b, "OnReceiveDrag", h, RECEIVE_DRAG)
+            SecureHandlerWrapScript(b, "OnClick", h, CLICK_PRE)
+            self.buttons[i] = b
         end
-        b:SetID(0)
-        b:SetAttribute("type", "action")
-        b:SetAttribute("action", bar.slot + i - 1)
-        b:SetAttribute("checkselfcast", true)
-        b:SetAttribute("checkfocuscast", true)
-        b:RegisterForClicks("AnyUp", "AnyDown")
-        b:RegisterForDrag("LeftButton")
-        b:SetAttribute("_childupdate-page", CHILD_PAGE:format(bar.slot + i - 1))
-        SecureHandlerWrapScript(b, "OnDragStart", h, DRAG_START)
-        SecureHandlerWrapScript(b, "OnReceiveDrag", h, RECEIVE_DRAG)
-        SecureHandlerWrapScript(b, "OnClick", h, CLICK_PRE)
-        bar.buttons[i] = b
+
+        if self.paging then
+            h:SetAttribute("_onstate-page", PAGE_SNIPPET)
+            RegisterStateDriver(h, "page", self.paging)
+        end
+
+        bars[#bars + 1] = self
+        self:Layout()
+        self:UpdateLock()
+        self:UpdateBindings()
+        self.page = nil
+        if self.paging then
+            self:UpdatePage()
+        else
+            self.page = 1
+            for i, b in ipairs(self.buttons) do b:SetSlot(self.slot + i - 1); rangeNow(b) end
+        end
+        extend.add(extend.Kind.ActionBar, self, { name = opts and opts.name })
     end
 
-    if bar.paging then
-        h:SetAttribute("_onstate-page", PAGE_SNIPPET)
-        RegisterStateDriver(h, "page", bar.paging)
+    function Page()
+        if not self.paging then return 1 end
+        local p = SecureCmdOptionParse(self.paging)
+        return tonumber(p) or 1
     end
 
-    bars[#bars + 1] = bar
-    bar:Layout()
-    bar:UpdateLock()
-    bar:UpdateBindings()
-    bar.page = nil
-    if bar.paging then
-        bar:UpdatePage()
-    else
-        bar.page = 1
-        for i, b in ipairs(bar.buttons) do b:SetSlot(bar.slot + i - 1); rangeNow(b) end
+    -- The art follows the page; the secure driver already moved the attribute.
+    function UpdatePage()
+        local page = self:Page()
+        if page == self.page then return end
+        self.page = page
+        for i, b in ipairs(self.buttons) do
+            b:SetSlot(self.slot + (page - 1) * BUTTONS + i - 1)
+            rangeNow(b)
+        end
+        if self.onPage then self.onPage(self, page) end
     end
-    extend.add(extend.Kind.ActionBar, bar, { name = opts and opts.name })
-    return bar
+
+    function SetHotkeysShown(shown: any)
+        self.hotkeysShown = shown and true or false
+        for _, b in ipairs(self.buttons) do b:SetHotkeyShown(self.hotkeysShown) end
+    end
+
+    function SetShowEmpty(shown: any)
+        for _, b in ipairs(self.buttons) do
+            b.showEmpty = shown and true or false
+            b:UpdateEmpty()
+        end
+    end
+
+    -- Every key bound to the bar's commands clicks its buttons. Out of combat.
+    function UpdateBindings()
+        if not self.binding then return end
+        combat.run("actionbar:bind:" .. self.name, function()
+            ClearOverrideBindings(self.header)
+            if self.hidden then return end
+            for i, b in ipairs(self.buttons) do
+                local keys = { GetBindingKey((self.binding :: string) .. i) }
+                if i <= (self.count or #self.buttons) then
+                    for _, key in ipairs(keys) do
+                        SetOverrideBindingClick(self.header, false, key, b:GetName(), "LeftButton")
+                    end
+                end
+                b:SetHotkey(shortKey(keys[1]))
+            end
+        end, "Action bars")
+    end
+
+    -- When the bar shows: "always", "combat", "mouseover" or "hidden". A hidden
+    -- bar also gives its keys back.
+    function SetVisibility(mode: string)
+        self.hidden = mode == "hidden"
+        setVisibility(self.header, mode)
+        self:UpdateBindings()
+    end
+
+    function SetShown(shown: any)
+        self:SetVisibility(shown and "always" or "hidden")
+    end
+
+    -- Drag lock follows the game's "Lock Action Bars" (Shift drags anyway).
+    function UpdateLock()
+        combat.run("actionbar:lock:" .. self.name, function()
+            local locked = GetCVarBool("lockActionBars") and true or false
+            for _, b in ipairs(self.buttons) do b:SetAttribute("suu-locked", locked) end
+        end, "Action bars")
+    end
+
+    -- Columns and rows, filled row by row from the top: `count` buttons of
+    -- `size` px, `gap` apart (space-1 by default). Out of combat.
+    function Layout(columns: number?, gap: number?, count: number?, size: number?)
+        self.columns = columns or self.columns
+        self.gap = gap or self.gap
+        local n = math.max(1, math.min(count or self.count or #self.buttons, #self.buttons))
+        local px: number = size or self.size or self.buttons[1]:GetWidth()
+        self.count, self.size = n, px
+        local cols = math.min(self.columns, n)
+        local rows = math.ceil(n / cols)
+        local g = self.gap
+        combat.run("actionbar:layout:" .. self.name, function()
+            for i, b in ipairs(self.buttons) do
+                b:Resize(px)
+                local shown = i <= (self.count :: number) -- (set above; read when it runs)
+                b:SetShown(shown)
+                if shown then
+                    local c, r = (i - 1) % cols, math.floor((i - 1) / cols)
+                    b:ClearAllPoints()
+                    b:SetPoint("TOPLEFT", self.header, "TOPLEFT", c * (px + g), -r * (px + g))
+                end
+            end
+            self.header:SetSize(cols * px + (cols - 1) * g, rows * px + (rows - 1) * g)
+        end, "Action bars")
+        self:UpdateBindings()
+    end
+end
+mixins.ActionBar = ActionBar
+
+export function actionBar(parent: Frame, opts: { [string]: any }): ActionBar
+    return ActionBar.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
