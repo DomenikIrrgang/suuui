@@ -12,6 +12,11 @@
 -- wowlua:events does the registering and dispatching; this layer keeps
 -- SuuUI's shape of it (the name first, an owner always, removal by name and
 -- owner, unit lists longer than two, errors under the owner's name).
+--
+-- The bus is an EventBus: what registers and dispatches (a Dispatcher) and
+-- what reports errors (a Reporter) come in through interfaces, so a test
+-- builds a bus over a dispatcher of its own. `bus` is SuuUI's; the module's
+-- functions are its methods.
 
 import * as wl from "wowlua:events"
 import * as fault from "./Fault"
@@ -19,91 +24,149 @@ import ownerName from "./Util"
 
 export type Listener = (name: string, ...any) -> ()
 
-type Entry = { name: string, owner: any, sub: wl.Subscription? }
+-- What registers listeners and dispatches to them. A listener runs later,
+-- when its event comes (`@deferred`: the load-order check knows it).
+export interface Dispatcher
+    function on(name: string, @deferred fn: (...any) -> (), owner: any): wl.Subscription
+    -- one or two units (RegisterUnitEvent's limit)
+    function onUnit(event: string, units: string[], @deferred fn: (...any) -> (), owner: any): wl.Subscription
+    function send(name: string, ...: any)
+end
 
--- every subscription made here, so off(name, owner) finds them
-local entries: Entry[] = {}
+-- wowlua:events: the game's events and SuuUI's messages.
+export class StdDispatcher implements Dispatcher
+    function on(name: string, fn: (...any) -> (), owner: any): wl.Subscription
+        return wl.on(name :: any, fn, owner)
+    end
 
--- A listener removed during a dispatch is skipped from then on (wowlua:events
--- dispatches from a snapshot, which would still call it this time).
-local function guarded(entry: Entry, source: string, fn: Listener, name: string): (...any) -> ()
-    return function(...: any)
-        local sub = entry.sub
-        if sub and sub.active then fault.call(source, fn, name, ...) end
+    function onUnit(event: string, units: string[], fn: (...any) -> (), owner: any): wl.Subscription
+        return wl.onUnit(event :: any, units :: any, fn, owner)
+    end
+
+    function send(name: string, ...: any)
+        wl.send(name :: any, ...)
     end
 end
+
+type Entry = { name: string, owner: any, sub: wl.Subscription? }
 
 local function checked(fn: any, owner: any)
     assert(type(fn) == "function", "SuuUI Events: callback must be a function")
     assert(owner ~= nil, "SuuUI Events: an owner is required, so the listener can be removed")
 end
 
-local function listen(name: string, fn: Listener, owner: any)
-    checked(fn, owner)
-    local entry: Entry = { name = name, owner = owner, sub = nil }
-    entry.sub = wl.on(name :: any, guarded(entry, ownerName(owner), fn, name), owner)
-    entries[#entries + 1] = entry
+export class EventBus
+    -- every subscription made here, so off(name, owner) finds them
+    private entries: Entry[] = {}
+
+    constructor(private dispatcher: Dispatcher = StdDispatcher.new(), private reporter: fault.Reporter = fault.log)
+    end
+
+    -- A listener removed during a dispatch is skipped from then on (the
+    -- dispatcher may dispatch from a snapshot, which would still call it
+    -- this time).
+    private function guarded(entry: Entry, source: string, fn: Listener, name: string): (...any) -> ()
+        local reporter = self.reporter
+        return function(...: any)
+            local sub = entry.sub
+            if sub and sub.active then reporter:call(source, fn, name, ...) end
+        end
+    end
+
+    private function listen(name: string, fn: Listener, owner: any)
+        checked(fn, owner)
+        local entry: Entry = { name = name, owner = owner, sub = nil }
+        entry.sub = self.dispatcher:on(name, self:guarded(entry, ownerName(owner), fn, name), owner)
+        self.entries[#self.entries + 1] = entry
+    end
+
+    -- A SuuUI message. Names carry a prefix so they never collide with a
+    -- game event: SUUUI_* for SuuUI's own, the plugin's own prefix for a
+    -- plugin's.
+    function on(name: string, fn: Listener, owner: any)
+        self:listen(name, fn, owner)
+    end
+
+    function emit(name: string, ...: any)
+        self.dispatcher:send(name, ...)
+    end
+
+    -- A game event.
+    function onGame(event: string, fn: Listener, owner: any)
+        self:listen(event, fn, owner)
+    end
+
+    -- RegisterUnitEvent takes at most two units, so a longer list gets a
+    -- registration per pair. An event the client refuses is an error, as
+    -- RegisterUnitEvent's own.
+    function onUnit(event: string, units: string | string[], fn: Listener, owner: any)
+        checked(fn, owner)
+        local list: string[] = type(units) == "string" and { units } or units :: string[]
+        assert(type(list) == "table" and #list > 0, "SuuUI Events: a unit or a list of units is required")
+        local source = ownerName(owner)
+        for i = 1, #list, 2 do
+            local pair: string[] = list[i + 1] and { list[i], list[i + 1] } or { list[i] }
+            local entry: Entry = { name = event, owner = owner, sub = nil }
+            entry.sub = self.dispatcher:onUnit(event, pair, self:guarded(entry, source, fn, event), owner)
+            self.entries[#self.entries + 1] = entry
+        end
+    end
+
+    function off(name: string, owner: any)
+        for i = #self.entries, 1, -1 do
+            local e = self.entries[i]
+            if e.name == name and e.owner == owner then
+                if e.sub then e.sub:cancel() end
+                table.remove(self.entries, i)
+            end
+        end
+    end
+
+    function offAll(owner: any)
+        if owner == nil then return end
+        for i = #self.entries, 1, -1 do
+            local e = self.entries[i]
+            if e.owner == owner then
+                if e.sub then e.sub:cancel() end
+                table.remove(self.entries, i)
+            end
+        end
+    end
+
+    -- How many listeners the bus holds (for an owner, or all).
+    function count(owner: any?): number
+        if owner == nil then return #self.entries end
+        local n = 0
+        for _, e in ipairs(self.entries) do
+            if e.owner == owner then n += 1 end
+        end
+        return n
+    end
 end
 
---------------------------------------------------------------------------------
--- SuuUI messages
---------------------------------------------------------------------------------
+-- SuuUI's bus, and its methods as the module's functions.
+export const bus = EventBus.new()
 
--- Message names carry a prefix so they never collide with a game event:
--- SUUUI_* for SuuUI's own, the plugin's own prefix for a plugin's.
 export function on(name: string, fn: Listener, owner: any)
-    listen(name, fn, owner)
+    bus:on(name, fn, owner)
 end
 
 export function emit(name: string, ...: any)
-    wl.send(name :: any, ...)
+    bus:emit(name, ...)
 end
-
---------------------------------------------------------------------------------
--- Game events
---------------------------------------------------------------------------------
 
 export function onGame(event: string, fn: Listener, owner: any)
-    listen(event, fn, owner)
+    bus:onGame(event, fn, owner)
 end
 
--- RegisterUnitEvent takes at most two units, so a longer list gets a
--- registration per pair. An event the client refuses is an error, as
--- RegisterUnitEvent's own.
 export function onUnit(event: string, units: string | string[], fn: Listener, owner: any)
-    checked(fn, owner)
-    local list: string[] = type(units) == "string" and { units } or units :: string[]
-    assert(type(list) == "table" and #list > 0, "SuuUI Events: a unit or a list of units is required")
-    local source = ownerName(owner)
-    for i = 1, #list, 2 do
-        local pair: string[] = list[i + 1] and { list[i], list[i + 1] } or { list[i] }
-        local entry: Entry = { name = event, owner = owner, sub = nil }
-        entry.sub = wl.onUnit(event :: any, pair :: any, guarded(entry, source, fn, event), owner)
-        entries[#entries + 1] = entry
-    end
+    bus:onUnit(event, units, fn, owner)
 end
-
---------------------------------------------------------------------------------
--- Removal
---------------------------------------------------------------------------------
 
 export function off(name: string, owner: any)
-    for i = #entries, 1, -1 do
-        local e = entries[i]
-        if e.name == name and e.owner == owner then
-            if e.sub then e.sub:cancel() end
-            table.remove(entries, i)
-        end
-    end
+    bus:off(name, owner)
 end
 
 export function offAll(owner: any)
-    if owner == nil then return end
-    for i = #entries, 1, -1 do
-        local e = entries[i]
-        if e.owner == owner then
-            if e.sub then e.sub:cancel() end
-            table.remove(entries, i)
-        end
-    end
+    bus:offAll(owner)
 end

@@ -5,6 +5,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as events from "/Core/Events"
 import * as fault from "/Core/Fault"
+import FakeDispatcher, FakeReporter from "../../fakes"
 
 const A = { name = "Events Test A" }
 const B = { name = "Events Test B" }
@@ -212,4 +213,51 @@ local function unitError()
     mock.fireUnitEvent("UNIT_HEALTH", "player")
     local e = faultWith("events-err-unit")
     expect(e and e.source).toBe("Events Test B")
+end
+
+--------------------------------------------------------------------------------
+-- A bus of its own: a fake dispatcher and reporter, nothing global
+--------------------------------------------------------------------------------
+
+@test("a bus of its own: listeners registered with the dispatcher, the name first, an error under the owner")
+local function ownBus()
+    local d, r = FakeDispatcher.new(), FakeReporter.new()
+    local bus = events.EventBus.new(d, r)
+    local heard: string[] = {}
+    bus:on("SUUUI_OWN", function(name: string, a: any) heard[#heard + 1] = `{name} {tostring(a)}` end, A)
+    bus:on("SUUUI_OWN", function() error("own-bus-err") end, B)
+    bus:on("SUUUI_OWN", function(name: string) heard[#heard + 1] = "after " .. name end, A)
+    bus:emit("SUUUI_OWN", 7)
+    expect(heard).toEqual({ "SUUUI_OWN 7", "after SUUUI_OWN" })
+    expect(r.errors).toEqual({ "Events Test B: own-bus-err" })
+    expect(d.sent).toEqual({ "SUUUI_OWN" })
+    expect(bus:count()).toBe(3)
+    expect(bus:count(A)).toBe(2)
+end
+
+@test("a bus of its own: a unit list in pairs; removal by name and owner cancels the dispatcher's subscriptions")
+local function ownRemoval()
+    local d = FakeDispatcher.new()
+    local bus = events.EventBus.new(d, FakeReporter.new())
+    bus:onUnit("UNIT_HEALTH", { "party1", "party2", "party3" }, function() end, A)
+    expect(#d.registrations).toBe(2)
+    expect(d.registrations[1].units).toEqual({ "party1", "party2" })
+    expect(d.registrations[2].units).toEqual({ "party3" })
+    bus:onGame("PLAYER_LOGIN", function() end, B)
+    bus:off("UNIT_HEALTH", A)
+    expect(d:active()).toBe(1)
+    bus:offAll(B)
+    expect(d:active()).toBe(0)
+    expect(bus:count()).toBe(0)
+end
+
+@test("a bus of its own: a listener removed during a dispatch is skipped from then on")
+local function ownRemovedDuring()
+    local d = FakeDispatcher.new()
+    local bus = events.EventBus.new(d, FakeReporter.new())
+    local second = 0
+    bus:onGame("PLAYER_LOGIN", function() bus:offAll(B) end, A)
+    bus:onGame("PLAYER_LOGIN", function() second += 1 end, B)
+    d:deliver("PLAYER_LOGIN")
+    expect(second).toBe(0)
 end

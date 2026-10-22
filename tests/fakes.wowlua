@@ -1,0 +1,89 @@
+-- tests/fakes.wowlua
+-- Stand-ins for the interfaces SuuUI's parts depend on, so a test builds a
+-- part of its own (a bus, a queue, a log…) with nothing global behind it.
+--
+--   FakeReporter     fault.Reporter: runs callbacks under pcall, keeps
+--                    what failed (source and first line) in `errors`
+--   FakeDispatcher   events.Dispatcher: keeps registrations, delivers
+--                    synchronously (`send`, `deliver`)
+--   FakeSubscription what the dispatcher hands out: cancel() ends it
+
+import * as wl from "wowlua:events"
+import * as fault from "/Core/Fault"
+import * as events from "/Core/Events"
+
+export class FakeReporter implements fault.Reporter
+    errors: string[] = {}
+
+    function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
+        local function keep(ok: boolean, ...: any): (boolean, ...any)
+            if not ok then
+                self:report(source, (...))
+                return false
+            end
+            return true, ...
+        end
+        return keep(pcall(fn, ...))
+    end
+
+    function report(source: any, message: any, stack: string?)
+        local text = (tostring(message):match("^[^\n]*")) or ""
+        -- (the error's position taken off: `file:line: text`)
+        text = text:gsub("^[^:]+:%d+: ", "")
+        self.errors[#self.errors + 1] = `{tostring(source)}: {text}` .. (stack and " (with a stack)" or "")
+    end
+end
+
+export class FakeSubscription implements wl.Subscription
+    active: boolean = true
+
+    function cancel()
+        self.active = false
+    end
+end
+
+-- One registration: its name, units (unit events), handler and owner.
+export type Registration = { name: string, units: string[]?, fn: (...any) -> (), owner: any, sub: FakeSubscription }
+
+export class FakeDispatcher implements events.Dispatcher
+    registrations: Registration[] = {}
+    sent: string[] = {}
+
+    function on(name: string, fn: (...any) -> (), owner: any): wl.Subscription
+        local sub = FakeSubscription.new()
+        self.registrations[#self.registrations + 1] = { name = name, units = nil, fn = fn, owner = owner, sub = sub }
+        return sub
+    end
+
+    function onUnit(event: string, units: string[], fn: (...any) -> (), owner: any): wl.Subscription
+        local sub = FakeSubscription.new()
+        self.registrations[#self.registrations + 1] = { name = event, units = units, fn = fn, owner = owner, sub = sub }
+        return sub
+    end
+
+    function send(name: string, ...: any)
+        self.sent[#self.sent + 1] = name
+        self:deliver(name, ...)
+    end
+
+    -- Runs every active handler of `name` (a game event the test fires),
+    -- from a snapshot, as wowlua:events does.
+    function deliver(name: string, ...: any)
+        local snapshot: Registration[] = {}
+        for _, r in ipairs(self.registrations) do
+            if r.name == name then snapshot[#snapshot + 1] = r end
+        end
+        for _, r in ipairs(snapshot) do
+            if r.sub.active then r.fn(...) end
+        end
+    end
+
+    -- How many registrations are still active.
+    function active(): number
+        local n = 0
+        for _, r in ipairs(self.registrations) do
+            if r.sub.active then n += 1 end
+        end
+        return n
+    end
+end
