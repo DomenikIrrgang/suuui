@@ -184,8 +184,8 @@ local function chosen()
     mock.fake("UnitGroupRolesAssigned", function(_: string): string return "HEALER" end)
     profiles.setChosenRole("TANK")
     local role, source = roles.current()
-    expect(role).toBe("TANK")
-    expect(source).toBe("chosen")
+    expect(role).toBe(roles.Role.Tank)
+    expect(source).toBe(roles.RoleSource.Chosen)
 end
 
 @test("a chosen role that isn't one counts as automatic")
@@ -193,16 +193,16 @@ local function chosenBogus()
     mock.fake("UnitGroupRolesAssigned", function(_: string): string return "HEALER" end)
     profiles.setChosenRole("WIZARD")
     local role, source = roles.current()
-    expect(role).toBe("HEALER")
-    expect(source).toBe("assigned")
+    expect(role).toBe(roles.Role.Healer)
+    expect(source).toBe(roles.RoleSource.Assigned)
 end
 
 @test("then the role assigned to you")
 local function assigned()
     mock.fake("UnitGroupRolesAssigned", function(_: string): string return "HEALER" end)
     local role, source = roles.current()
-    expect(role).toBe("HEALER")
-    expect(source).toBe("assigned")
+    expect(role).toBe(roles.Role.Healer)
+    expect(source).toBe(roles.RoleSource.Assigned)
 end
 
 @test("then your talents, read as a role for your class")
@@ -210,9 +210,10 @@ local function fromTalents()
     mock.fake("UnitGroupRolesAssigned", function(_: string): string return "NONE" end)
     points(0, 0, 9)
     local role, source = roles.current()
-    expect(source).toBe("talents")
-    local byClass: { [string]: string } = { DRUID = "HEALER", PALADIN = "DAMAGER", PRIEST = "DAMAGER", SHAMAN = "HEALER", WARRIOR = "TANK" }
-    expect(role).toBe(byClass[CLASS] or "DAMAGER")
+    expect(source).toBe(roles.RoleSource.Talents)
+    local Role = roles.Role
+    local byClass: { [string]: roles.Role } = { DRUID = Role.Healer, PALADIN = Role.Damager, PRIEST = Role.Damager, SHAMAN = Role.Healer, WARRIOR = Role.Tank }
+    expect(role).toBe(byClass[CLASS] or Role.Damager)
 end
 
 @test("a secret assigned role, or no group roles API, falls through to talents")
@@ -220,24 +221,24 @@ local function secretAssigned()
     points(0, 0, 9)
     mock.fake("UnitGroupRolesAssigned", function(_: string): any return mock.secret("TANK") end)
     local _, source = roles.current()
-    expect(source).toBe("talents")
+    expect(source).toBe(roles.RoleSource.Talents)
     local api = _G.UnitGroupRolesAssigned
     _G.UnitGroupRolesAssigned = nil
     local _, source2 = roles.current()
     _G.UnitGroupRolesAssigned = api
-    expect(source2).toBe("talents")
+    expect(source2).toBe(roles.RoleSource.Talents)
 end
 
 @test("no talents at all reads as DPS")
 local function noTreeIsDps()
     mock.fake("UnitGroupRolesAssigned", function(_: string): string return "NONE" end)
     noTalents()
-    expect(roles.current()).toBe("DAMAGER")
+    expect(roles.current()).toBe(roles.Role.Damager)
 end
 
 @test("labels for the three roles")
 local function labels()
-    expect(roles.LABEL).toEqual({ TANK = "Tank", HEALER = "Healer", DAMAGER = "DPS" })
+    expect(roles.LABEL).toEqual({ [roles.Role.Tank] = "Tank", [roles.Role.Healer] = "Healer", [roles.Role.Damager] = "DPS" })
 end
 
 --------------------------------------------------------------------------------
@@ -284,7 +285,7 @@ local function byHand()
     mock.fireEvent("PLAYER_ROLES_ASSIGNED")
     mock.advanceTime(0.6)
     expect(profiles.current()).toBe("RolesTank")
-    expect(profiles.lastRole()).toBe("TANK")
+    expect(profiles.lastRole()).toBe(roles.Role.Tank)
     profiles.use(startProfile)
     mock.fireEvent("TRAIT_CONFIG_UPDATED", 1)
     mock.advanceTime(0.6)
@@ -325,7 +326,7 @@ local function unmapped()
     profiles.setChosenRole("HEALER")
     mock.advanceTime(0.6)
     expect(profiles.current()).toBe(startProfile)
-    expect(profiles.lastRole()).toBe("HEALER")
+    expect(profiles.lastRole()).toBe(roles.Role.Healer)
 end
 
 @test("the role's profile already in use: nothing to do")
