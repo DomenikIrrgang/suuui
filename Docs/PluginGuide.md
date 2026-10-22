@@ -168,7 +168,7 @@ SuuUI.RegisterTheme({
 
 `SuuUI.Raw` reaches everything SuuUI is made of, for what the API doesn't cover:
 - `Raw.UI`: every component, including the ones not exported.
-- `Raw.Mixins`: the components' method tables. Change one when your file loads and every frame SuuUI builds afterwards has it.
+- `Raw.Mixins`: the components' classes (0.19). Change a method on one when your file loads and every frame SuuUI builds afterwards has it, the class's subclasses' frames too.
 - `Raw.Module(id)`: a module's internals.
 - `Raw.ns`: SuuUI's addon table, which holds the wowlua runtime (`Raw.ns.__wowlua.require("UI/Panel")` gives a module's exports).
 
