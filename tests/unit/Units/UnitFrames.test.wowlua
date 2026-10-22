@@ -1,0 +1,311 @@
+-- Units/UnitFrames: the frames (player, target, target of target, focus,
+-- pet, bosses) over Blizzard's stood-down ones, published for others to
+-- attach to; each following its unit, off by its setting or hidden in
+-- edit mode (after a fight); the player and target size (after a fight);
+-- the options live; the out-of-combat fade; aggro on your frame in a
+-- group; combo points; the rested sign and its tooltip lines; the
+-- settings preview and rows; stopped.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, SECTION from "/Units/UnitFrames"
+import expectNoErrors from "../../helpers"
+
+local G: any = _G
+local T = SuuUI.Tokens
+
+local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10 })
+local tank = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
+
+local KEYS = { "showToT", "showFocus", "showPet", "showBoss", "fadeOutOfCombat", "showPower", "healthText", "nameColor",
+    "showMeta", "eliteDragon", "raidMarkers", "comboPoints", "width", "height", "debuffBadges", "restedSign", "restedShow",
+    "restedAnimation", "restedHideCombat", "restedHideMax", "targetPosition", "totPosition", "focusPosition", "petPosition",
+    "bossPosition" }
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.player:target(nil)
+    wolf:setThreat(nil)
+    wolf:setThreat(nil, tank)
+    mock.group:leave()
+    mock.setResting(false)
+    for _, k in ipairs(KEYS) do M:Reset(k) end
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+local function rows(): { [string]: any }
+    local out: { [string]: any } = {}
+    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do out[r.key] = r end end
+    return out
+end
+
+@test("every frame drawn over Blizzard's stood-down ones and published for other modules")
+local function frames()
+    expect(G.PlayerFrame:IsShown()).toBe(false)
+    expect(G.TargetFrame:IsShown()).toBe(false)
+    expect(M.frames.player:IsShown()).toBe(true)
+    expect(SuuUI.GetAnchor("player")).toBe(M.frames.player)
+    expect(SuuUI.GetAnchor("target")).toBe(M.frames.target)
+    expect(SuuUI.GetAnchor("targettarget")).toBe(M.frames.tot)
+    expect(SuuUI.GetAnchor("boss3")).toBe(M.bosses[3])
+end
+
+@test("each frame follows its unit; off by its setting or hidden in edit mode, after a fight")
+local function follow()
+    local target = M.frames.target
+    expect(target:IsShown()).toBe(false)
+    mock.player:target(wolf)
+    mock.advanceFrames(2)
+    expect(target:IsShown()).toBe(true)
+    -- the target's target: the wolf on you
+    wolf:target(mock.player)
+    mock.advanceFrames(12)
+    expect(M.frames.tot:IsShown()).toBe(true)
+    M:Set("showToT", false)
+    mock.advanceFrames(2)
+    expect(M.frames.tot:IsShown()).toBe(false)
+    M:Set("showToT", true)
+    mock.advanceFrames(2)
+    expect(M.frames.tot:IsShown()).toBe(true)
+    -- in a fight: after it
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:Set("targetPosition", { point = "BOTTOM", x = 350, y = 308, hidden = true })
+    expect(target:IsShown()).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(target:IsShown()).toBe(false)
+    M:Set("showBoss", false)
+    M:Set("showFocus", false)
+    M:Set("showPet", false)
+end
+
+@test("the player and target size, after a fight")
+local function size()
+    M:Set("width", 300)
+    M:Set("height", 40)
+    expect(M.frames.player:GetWidth()).toBe(300)
+    expect(M.frames.target:GetHeight()).toBe(40)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:Set("width", 260)
+    expect(M.frames.player:GetWidth()).toBe(300)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(M.frames.player:GetWidth()).toBe(260)
+end
+
+@test("the options live on every frame")
+local function options()
+    M:Set("showPower", false)
+    M:Set("healthText", "both")
+    M:Set("nameColor", "ink")
+    M:Set("raidMarkers", false)
+    M:Set("showMeta", false)
+    M:Set("eliteDragon", true)
+    local f = M.frames.target
+    expect(f.opts.power).toBe(false)
+    expect(f.opts.healthText).toBe("both")
+    expect(f.opts.nameColor).toBe("ink")
+    expect(f.opts.raidMarker).toBe(false)
+    expect(f.opts.meta).toBe(false)
+    expect(f.opts.dragon).toBe(true)
+    -- the target of target has no power line
+    M:Set("showPower", true)
+    expect(M.frames.tot.opts.power).toBe(false)
+    expect(M.frames.player.opts.power).toBe(true)
+end
+
+@test("out of combat the frames rest dimmed (your health is secret: hurt or not); in combat or hovered, full")
+local function fade()
+    local player = M.frames.player
+    M:UpdateFade()
+    mock.advanceFrames(120)
+    expect(player:GetAlpha()).toBeCloseTo(T.opacity["opacity-ooc"])
+    mock.hover(player)
+    mock.advanceFrames(120)
+    expect(player:GetAlpha()).toBe(1)
+    mock.hover(nil)
+    mock.advanceFrames(120)
+    mock.player:enterCombat()
+    mock.advanceFrames(120)
+    expect(player:GetAlpha()).toBe(1)
+    mock.player:leaveCombat()
+    -- hurt: the game hides your health from addons, so it rests all the same
+    mock.player:damage(50)
+    mock.advanceFrames(120)
+    expect(player:GetAlpha()).toBeCloseTo(T.opacity["opacity-ooc"])
+    mock.player:heal(50)
+    M:Set("fadeOutOfCombat", false)
+    mock.advanceFrames(120)
+    expect(player:GetAlpha()).toBe(1)
+end
+
+@test("aggro on your frame in a group (not as the tank); solo none")
+local function aggro()
+    local player = M.frames.player
+    mock.player:target(wolf)
+    wolf:setThreat(100)
+    mock.advanceFrames(1)
+    expect(player.stateTone).toBeNil()
+    tank:setRole("TANK")
+    mock.group:add(tank)
+    wolf:setThreat(80, tank)
+    wolf:target(mock.player)
+    mock.advanceFrames(1)
+    expect(player.stateTone).toBe("danger")
+    expect(player.stateWord).toBe("Aggro")
+    -- the wolf back on the tank, you below it
+    wolf:target(tank)
+    wolf:setThreat(50)
+    mock.advanceFrames(1)
+    expect(player.stateTone).toBeNil()
+end
+
+@test("combo points over the target: a rogue's on an enemy; the setting off")
+local function combo()
+    local c = M.combo
+    mock.player:target(wolf)
+    mock.advanceFrames(1)
+    expect(c:IsShown()).toBe(false)
+    mock.setPlayer({ class = "ROGUE" })
+    c:Update()
+    expect(c:IsShown()).toBe(true)
+    expect(c.pips[1].lit:GetAlpha()).toBe(0)
+    M:Set("comboPoints", false)
+    expect(c:IsShown()).toBe(false)
+    M:Set("comboPoints", true)
+    -- a druid: in cat form (energy) only
+    mock.setPlayer({ class = "DRUID" })
+    c:Update()
+    expect(c:IsShown()).toBe(false)
+    mock.setPlayer({ class = "WARRIOR" })
+end
+
+@test("the rested sign while you rest and earn; full; carrying; hidden in combat and at the cap")
+local function rested()
+    local sign = M.restedSign
+    expect(sign.look).toBeNil()
+    mock.player:setStats({ restedXP = 400, xpMax = 1000 })
+    mock.setResting(true)
+    mock.advanceFrames(1)
+    expect(sign.look).toBe("earn")
+    mock.player:setStats({ restedXP = 1500 })
+    mock.advanceFrames(1)
+    expect(sign.look).toBe("full")
+    -- in combat: gone; back after
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(sign.look).toBeNil()
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(sign.look).toBe("full")
+    -- out of the inn with some left: only when asked
+    mock.player:setStats({ restedXP = 400 })
+    mock.setResting(false)
+    mock.advanceFrames(1)
+    expect(sign.look).toBeNil()
+    M:Set("restedShow", "carrying")
+    expect(sign.look).toBe("carry")
+    -- at the cap: none, or the still sign in an inn
+    mock.setPlayer({ level = 60 })
+    M:UpdateRested()
+    expect(sign.look).toBeNil()
+    M:Set("restedHideMax", false)
+    mock.setResting(true)
+    mock.advanceFrames(1)
+    expect(sign.look).toBe("rest")
+    mock.setPlayer({ level = 1 })
+    M:Set("restedSign", false)
+    expect(sign.look).toBeNil()
+end
+
+@test("your frame's tooltip: the rested lines after the unit's")
+local function tooltip()
+    local lines: { string } = {}
+    local tip: any = {}
+    function tip:AddLine(text: string) lines[#lines + 1] = text end
+    function tip:AddDoubleLine(a: string, b: string) lines[#lines + 1] = a .. " | " .. b end
+    mock.player:setStats({ restedXP = 400, xpMax = 1000 })
+    mock.setResting(true)
+    mock.advanceFrames(1)
+    M:AddRestedLines(tip)
+    expect(lines[3]).toBe("Rested XP | 400 · 40% of a level")
+    expect(lines[4]).toBe("Earning rested XP")
+    expect(lines[5]).toBe("Logging out here is instant.")
+    lines = {}
+    mock.player:setStats({ restedXP = 1500 })
+    M:AddRestedLines(tip)
+    expect(lines[4]).toBe("Rested XP full")
+    lines = {}
+    mock.setResting(false)
+    mock.player:setStats({ restedXP = 400 })
+    M:Set("restedShow", "carrying")
+    M:AddRestedLines(tip)
+    expect(lines[4]).toBe("Kills give double XP until it's spent.")
+    expect(#lines).toBe(5)
+    lines = {}
+    M:Set("restedSign", false)
+    M:AddRestedLines(tip)
+    expect(#lines).toBe(0)
+    -- hovering your frame calls it
+    expect(M.frames.player.onTooltip ~= nil).toBe(true)
+end
+
+@test("edit mode: the sign stands still where it could show")
+local function editMode()
+    mock.stub(SuuUI.EditMode, "IsActive", function(): boolean return true end)
+    M:Emit("SUUUI_EDITMODE_CHANGED")
+    expect(M.restedSign.look).toBe("rest")
+end
+
+@test("the settings preview: your frame at its size, the sign, the reason while it wouldn't show")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    parent:SetSize(500, 200)
+    local v = M:PreviewView(parent)
+    expect(v:GetParent()).toBe(parent)
+    expect(v.frame:GetWidth()).toBe(M:Get("width"))
+    expect(v.reason.value).toBe("")
+    M:Set("restedSign", false)
+    expect(v.reason.value).toBe("The rested sign is off.")
+    M:Set("restedSign", true)
+    mock.setPlayer({ level = 60 })
+    M:DrawPreview()
+    expect(v.reason.value).toBe("Hidden at the level cap: there is no XP to rest for.")
+    mock.setPlayer({ level = 1 })
+    -- a narrow column: the frame's left end gives way
+    parent:SetWidth(200)
+    M:DrawPreview()
+    expect(v:GetWidth()).toBe(200)
+    M:Emit("SUUUI_SETTING_CHANGED", "ui", "reducedMotion")
+end
+
+@test("the settings rows: combo points for rogues and druids; the rested rows wait for the sign")
+local function rowsWait()
+    local r = rows()
+    local off, why = r.comboPoints.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("Only rogues and druids use combo points.")
+    mock.setPlayer({ class = "DRUID" })
+    expect((r.comboPoints.disabled())).toBe(false)
+    mock.setPlayer({ class = "WARRIOR" })
+    expect((r.restedShow.disabled())).toBeNil()
+    M:Set("restedSign", false)
+    off, why = r.restedShow.disabled()
+    expect(why).toBe("The rested sign is off.")
+    M:Set("debuffBadges", "off")
+end
+
+-- (last: the module off)
+@test("stopped: the frames gone, their anchors withdrawn")
+local function disabled()
+    local m: any = M
+    m:OnDisable()
+    expect(M.frames.player:IsShown()).toBe(false)
+    expect(SuuUI.GetAnchor("player")).toBeNil()
+    expect(M.frames.player.onTooltip).toBeNil()
+end
