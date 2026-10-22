@@ -30,6 +30,24 @@ import type Entry from "./Store"
 import type Listing from "./Tool"
 import type Listener, Part from "./LFG"
 
+-- Why an entry concerns you (LFG.MatchReasons; the Match event).
+export enum MatchReason {
+    Role = "role",           -- a group for your activity needs your role
+    Activity = "activity",   -- a group for your activity
+    Player = "player",       -- a player for your group
+    Quest = "quest",         -- a quest in your log
+    Zone = "zone",           -- open world in your zone, near your level
+    Boss = "boss",           -- a world boss or event
+    Friend = "friend",       -- a friend or guild member
+}
+
+-- What happened to a group you whispered (the Contacted event).
+export enum ContactNews {
+    Full = "full",
+    Gone = "gone",
+    Reposted = "reposted",
+}
+
 -- What you're after (LFG.Interest()).
 export type Interest = {
     listed: string[],
@@ -169,45 +187,45 @@ local function anyIn(list: string[]?, set: { [string]: boolean }): boolean
     return false
 end
 
-export function matchReasons(e: Entry?, given: Interest?): string[]
+export function matchReasons(e: Entry?, given: Interest?): MatchReason[]
     if not e or e.you then return {} end
     local mine: Interest = given or interest()
     local set = expandSet(mine.listed, mine.watches)
-    local reasons: string[] = {}
+    local reasons: MatchReason[] = {}
     local forMine = anyIn(e.activities, set)
     if e.intent == "group" and forMine then
-        reasons[#reasons + 1] = "activity"
+        reasons[#reasons + 1] = MatchReason.Activity
         for role in pairs(e.roles.needed) do
-            if mine.roles[role] then reasons[#reasons + 1] = "role" break end
+            if mine.roles[role] then reasons[#reasons + 1] = MatchReason.Role break end
         end
     end
     -- a player for your group: you're listed and lead a group (listed alone,
     -- you're a player looking yourself, found in game)
     if e.intent == "player" and forMine and mine.listing and IsInGroup() and UnitIsGroupLeader("player") then
-        reasons[#reasons + 1] = "player"
+        reasons[#reasons + 1] = MatchReason.Player
     end
-    for _, q in ipairs(e.quests) do if mine.quests[q] then reasons[#reasons + 1] = "quest" break end end
+    for _, q in ipairs(e.quests) do if mine.quests[q] then reasons[#reasons + 1] = MatchReason.Quest break end end
     for _, key in ipairs(e.activities) do
         local a = catalogue.Get(key)
         if a and a.kind == "zone" and key == mine.zone then
             local lvl = e.level and e.level[1]
-            if not lvl or math.abs(lvl - (mine.level or lvl)) <= 6 then reasons[#reasons + 1] = "zone" end
+            if not lvl or math.abs(lvl - (mine.level or lvl)) <= 6 then reasons[#reasons + 1] = MatchReason.Zone end
         elseif a and a.kind == "boss" then
-            reasons[#reasons + 1] = "boss"
+            reasons[#reasons + 1] = MatchReason.Boss
         end
     end
     local who = e.leader and e.leader.name or e.key
-    if socials[who] or socials[Ambiguate and Ambiguate(who, "short") or who] then reasons[#reasons + 1] = "friend" end
+    if socials[who] or socials[Ambiguate and Ambiguate(who, "short") or who] then reasons[#reasons + 1] = MatchReason.Friend end
     return reasons
 end
 
 -- Each entry's reasons so far: Match fires for new ones only.
-local matched: { [Entry]: { [string]: boolean } } = setmetatable({}, { __mode = "k" })
+local matched: { [Entry]: { [MatchReason]: boolean } } = setmetatable({}, { __mode = "k" })
 
 local function check(e: Entry)
     local reasons = matchReasons(e)
     local had = matched[e] or {}
-    local new: string[] = {}
+    local new: MatchReason[] = {}
     for _, r in ipairs(reasons) do if not had[r] then new[#new + 1] = r; had[r] = true end end
     matched[e] = had
     if #new > 0 then fire("Match", e, new) end
@@ -222,9 +240,9 @@ local function contactedUpdate(e: Entry, removed: boolean?)
     if not contacted[e.key] then return end
     if removed then
         contacted[e.key] = nil
-        fire("Contacted", e, "gone")
+        fire("Contacted", e, ContactNews.Gone)
     elseif e.intent == "group" and e.need == 0 then
-        fire("Contacted", e, "full")
+        fire("Contacted", e, ContactNews.Full)
     end
 end
 
@@ -254,7 +272,7 @@ export const part = {
         local onAdded: Listener = I.onAdded or function(e: Entry) check(e) end
         local onUpdated: Listener = I.onUpdated or function(e: Entry) check(e); contactedUpdate(e) end
         local onRefreshed: Listener = I.onRefreshed or function(e: Entry)
-            if contacted[e.key] and e.intent == "group" and (e.need or 1) > 0 then fire("Contacted", e, "reposted") end
+            if contacted[e.key] and e.intent == "group" and (e.need or 1) > 0 then fire("Contacted", e, ContactNews.Reposted) end
         end
         local onRemoved: Listener = I.onRemoved or function(e: Entry) contactedUpdate(e, true) end
         I.onAdded, I.onUpdated, I.onRefreshed, I.onRemoved = onAdded, onUpdated, onRefreshed, onRemoved
