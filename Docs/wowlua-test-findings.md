@@ -84,7 +84,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V13](#v13) | VM | low | open | `IsMouseOver` ignores the cursor and its offsets |
 | [V14](#v14) | VM | low | open | Chat windows' settings aren't kept |
 | [V15](#v15) | VM | high | fixed after 0.9.6 (T244) | A hidden edit box kept the keyboard |
-| [V16](#v16) | VM | medium | open | An item put onto a part stack of its kind isn't stacked |
+| [V16](#v16) | VM | medium | fixed after 0.9.6 (T256) | An item put onto a part stack of its kind isn't stacked |
 | [V17](#v17) | VM | high | fixed 0.9.5 | The auction house: a stalled message queue, a shared item key table, no item level |
 | [V18](#v18) | VM | medium | fixed 0.9.6 | Inspect, models, bindings and journals |
 | [V19](#v19) | VM | high | fixed 0.9.6 (T237, T238) | UIParent's scale was 1; unknown atlases were 0 by 0 |
@@ -666,9 +666,9 @@ Later keys in a test went into it (a closed dialog's box swallowed `J`). The foc
 
 ### V16. An item put onto a part stack of its kind isn't stacked
 
-*Status: open.*
+*Status: fixed after 0.9.6 (T256).*
 
-The engine keeps it on the cursor ("unverified, nothing"); the client stacks it (SuuUI's probe), and SuuUI's bag sort counts on it. (units-bags)
+The engine kept it on the cursor ("unverified, nothing"); the client stacks it (SuuUI's probe), and SuuUI's bag sort counts on it. It stacks now, in the order the probe recorded; a split part and what doesn't fit are modelled unverified (a probe is noted in wowlua). (units-bags)
 
 <a id="v17"></a>
 

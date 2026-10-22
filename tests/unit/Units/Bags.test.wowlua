@@ -406,11 +406,20 @@ end
 -- Sorting
 --------------------------------------------------------------------------------
 
-@test("Sort: SuuUI's order in waves under the loading mark, the items moved, the window back")
+-- Where an item is in a bag: "slot×count" for each stack of it.
+local function stacksOf(bag: number, id: number): string
+    local out = {}
+    for slot = 1, C_Container.GetContainerNumSlots(bag) do
+        local info = C_Container.GetContainerItemInfo(bag, slot)
+        if info and info.itemID == id then out[#out + 1] = slot .. "×" .. info.stackCount end
+    end
+    return table.concat(out, ", ")
+end
+
+@test("Sort: part stacks put together, SuuUI's order in waves under the loading mark, the items moved, the window back")
 local function sorting()
-    -- (distinct items: the engine doesn't stack an item onto a part stack of its own kind)
     mock.setBag(0, { slots = 16, items = { [5] = { id = CLOTH, count = 3 }, [9] = { id = POTION, count = 2 },
-                                          [12] = { id = HERB, count = 4 } } })
+                                          [12] = { id = HERB, count = 4 }, [14] = { id = CLOTH, count = 5 } } })
     open()
     mock.click(inv().sort)
     expect(M.sorting ~= nil).toBe(true)
@@ -422,6 +431,7 @@ local function sorting()
     end
     expect(M.sorting).toBe(nil)
     expect(inv().sortCover).never.toBeShown()
+    expect(stacksOf(0, CLOTH):match("^%d+×8$") ~= nil).toBe(true)
 end
 
 @test("the game's sort when asked; what stops a sort: combat, an item in hand, the window closing")
@@ -463,15 +473,24 @@ local function sortStops()
     mock.advanceFrames(2, 100)
 end
 
-@test("the bank sorts the same way; refused at once, the game's bank sort instead")
+@test("the bank sorts the same way, part stacks put together; refused at once, the game's bank sort instead")
 local function bankSort()
-    -- two part stacks: the engine keeps the item on the cursor (see the notes), the move refused
+    atBank({ tabs = { { name = "Tab 1", slots = 28, items = { [3] = { id = CLOTH, count = 7 }, [9] = { id = CLOTH, count = 3 } } } } })
+    local bank = Enum.BagIndex.CharacterBankTab_1
+    M.sorting = nil
+    M:Sort(true)
+    for _ = 1, 40 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then break end
+    end
+    expect(M.sorting).toBe(nil)
+    expect(stacksOf(bank, CLOTH):match("^%d+×10$") ~= nil).toBe(true)
+    -- the game refusing the first wave: its own bank sort
     atBank({ tabs = { { name = "Tab 1", slots = 28, items = { [3] = { id = CLOTH, count = 7 }, [9] = { id = CLOTH, count = 3 } } } } })
     local n = printedCount()
     local game = mock.stub(C_Container, "SortBank", function(...: any) end)
-    M.sorting = nil
     M:Sort(true)
-    if M.sorting then M:StopSort("the game didn't take a move") end
+    mock.fireEvent("UI_ERROR_MESSAGE", 1, "Can't do that")
     expect(game).toHaveBeenCalledTimes(1)
     expect(hasLine(printedSince(n), "the game's own sort instead")).toBe(true)
     mock.fireEvent("BANKFRAME_CLOSED")

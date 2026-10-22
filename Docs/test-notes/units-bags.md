@@ -77,12 +77,12 @@ all seven sources.
   returns nothing, then and seconds later; with `{ cached = true }` it
   answers at once. The docs say `opts.cached = false` makes it load later,
   which reads as cached by default.
-- **An item put onto a part stack of its own kind isn't stacked**: the
-  engine keeps it on the cursor (`cursor.rs`: "a stack of the same item, a
-  part of a stack: unverified, nothing"). The client stacks it (SuuUI's
-  `/suu probe bagsort`, 2026-10-19), and SuuUI's sort counts on it: in the
-  engine its stacking pass is refused ("the game didn't take a move"). The
-  tests sort distinct items, and use the refusal for the bank's fallback.
+- **Fixed in wowlua (T256): an item put onto a part stack of its own
+  kind wasn't stacked.** The engine kept it on the cursor; the client
+  stacks it (SuuUI's `/suu probe bagsort`, 2026-10-19), and SuuUI's sort
+  counts on it. The engine stacks it now, in the probe's recorded order;
+  the sort tests put part stacks together, in the bags and the bank, and
+  the bank's fallback is tested through the game's error message.
 - **Many events' payloads are checked in full** (`CHAT_MSG_LOOT` with its
   Discord info, `PLAYER_LEVEL_UP` with ten deltas, `GUILD_ROSTER_UPDATE`,
   `ITEM_LOCK_CHANGED`): right, but a test that only needs the event names
