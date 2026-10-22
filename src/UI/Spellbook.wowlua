@@ -24,8 +24,17 @@
 --   book:SetCooldown(i, active, gcd, duration)   -- the sweep over a spell's
 --                          -- icon: the engine's duration object (secret-safe);
 --                          -- the global cooldown sweeps without digits
--- Cells are secure buttons: SetSpells changes only their look; their
--- attributes are the owner's, and only out of combat.
+-- Cells are secure buttons. What each casts on every school's every page
+-- is handed over out of combat (book:SetCasts); a secure router points
+-- the cells at the page shown, so the schools and pages switch in combat
+-- too: the tabs and the pager's arrows each carry an invisible secure
+-- button over them that takes the click (the game lets only secure code
+-- change what a button casts in combat). In combat the page changes only
+-- its look: nothing secure is moved, shown or hidden (an empty slot's
+-- content goes see-through instead).
+--   book:SetCasts(schools, perPage)   -- schools[s][i] = spellID or false,
+--                          -- in the order SetSpells shows them; out of combat
+--   book:SetCastPage(school, page)    -- out of combat: the router to that page
 
 import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
@@ -52,9 +61,12 @@ local function cell(book: any, i: number): any
     local b = CreateFrame("Button", nil, c, "SecureActionButtonTemplate")
     b:SetSize(ICON, ICON)
     b:SetPoint("LEFT")
-    -- down and up: a secure button acts on the one the game's "cast on key
-    -- down" option says (on by default: up alone never cast, found in game)
+    -- down and up registered (up alone never cast, found in game), acting
+    -- on the release whatever the game's "cast on key down" option says
+    -- (useOnKeyDown off): pressing to drag a spell to a bar cast it (found
+    -- in game); the press starts the drag, a release on the icon casts
     b:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+    b:SetAttribute("useOnKeyDown", false)
     b:RegisterForDrag("LeftButton")
     c.button = b
     c.icon = icon(b, ICON)
@@ -144,18 +156,28 @@ function Book:SetSpells(list: any[])
     local headH = 30 + S["space-4"]
     local room = self.main:GetHeight() - headH - self.foot:GetHeight() - S["space-4"]
     local gridH = self.rows * ICON + (self.rows - 1) * S["space-4"]
-    self.grid:ClearAllPoints()
-    self.grid:SetPoint("TOPLEFT", self.main, "TOPLEFT", math.max(0, (width - used) / 2), -(headH + math.max(0, (room - gridH) / 2)))
-    self.grid:SetSize(used, gridH)
+    -- (in combat the grid and its cells stay as they are: they hold secure
+    -- buttons; the columns are as wide on every page anyway, SetWidest)
+    local layout = not InCombatLockdown()
+    if layout then
+        self.grid:ClearAllPoints()
+        self.grid:SetPoint("TOPLEFT", self.main, "TOPLEFT", math.max(0, (width - used) / 2), -(headH + math.max(0, (room - gridH) / 2)))
+        self.grid:SetSize(used, gridH)
+    end
     for i = 1, self.rows * COLUMNS do
         local c = cell(self, i)
         local s = list[i]
         c.spell = s
-        if s then
+        if layout then
             local r, col = math.floor((i - 1) / COLUMNS), (i - 1) % COLUMNS
             c:ClearAllPoints()
             c:SetPoint("TOPLEFT", self.grid, "TOPLEFT", col * (colW + S["space-6"]), -r * (ICON + S["space-4"]))
             c:SetWidth(colW)
+            c:Show()
+        end
+        -- an empty slot keeps its cell (shown: it can't be shown in combat), see-through
+        c:SetAlpha(s and 1 or 0)
+        if s then
             c.icon:SetArt(s.icon)
             -- "Healing Wave  Rank 10" for a rank not learned yet (the rank in ink-muted)
             local name = s.label or ""
@@ -165,13 +187,87 @@ function Book:SetSpells(list: any[])
             c.label:SetValue(name)
             c.sub:SetValue(s.sub or "")
             self:DrawCell(c)
-            c:Show()
         else
-            c:Hide()
+            c.cooldown:Clear()
         end
     end
     -- the rows a taller page had
-    for i = self.rows * COLUMNS + 1, #self.cells do self.cells[i]:Hide() end
+    if layout then
+        for i = self.rows * COLUMNS + 1, #self.cells do self.cells[i]:Hide() end
+    end
+end
+
+-- The secure side: a router that points the cells at a school's page, and
+-- what each cell casts there, as its attributes ("cast<school>_<page>_<i>",
+-- "pages<school>"). Out of combat.
+local ROUTE = [=[
+    if name ~= "school" and name ~= "page" then return end
+    local s, p = self:GetAttribute("school"), self:GetAttribute("page")
+    if not s or not p then return end
+    for i = 1, self:GetAttribute("cells") or 0 do
+        local b = self:GetFrameRef("cell" .. i)
+        local id = self:GetAttribute("cast" .. s .. "_" .. p .. "_" .. i)
+        if id then
+            b:SetAttribute("type", "spell")
+            b:SetAttribute("spell", id)
+        else
+            b:SetAttribute("type", nil)
+            b:SetAttribute("spell", nil)
+        end
+    end
+]=]
+
+function Book:SetCasts(schools: any[], perPage: number)
+    if InCombatLockdown() then return end
+    local r = self.router
+    for _, key in ipairs(self.castKeys or {}) do r:SetAttribute(key, nil) end
+    local keys: string[] = {}
+    for s, list in ipairs(schools) do
+        local pages = math.max(1, math.ceil(#list / perPage))
+        r:SetAttribute("pages" .. s, pages)
+        keys[#keys + 1] = "pages" .. s
+        for i, id in ipairs(list) do
+            if id then
+                local p, slot = math.floor((i - 1) / perPage) + 1, (i - 1) % perPage + 1
+                local key = "cast" .. s .. "_" .. p .. "_" .. slot
+                r:SetAttribute(key, id)
+                keys[#keys + 1] = key
+            end
+        end
+    end
+    self.castKeys = keys
+    -- every cell the page may hold, known to the router
+    for i = 1, perPage do
+        local c = cell(self, i)
+        r:SetFrameRef("cell" .. i, c.button)
+    end
+    r:SetAttribute("cells", perPage)
+end
+
+function Book:SetCastPage(school: number, page: number)
+    if InCombatLockdown() then return end
+    -- (both set: the router points the cells at the page each time)
+    self.router:SetAttribute("page", page)
+    self.router:SetAttribute("school", school)
+end
+
+-- An invisible secure button over a control: it takes the click, runs
+-- `snippet` (secure, in combat too), then `onClick`; the control's hover
+-- look follows it. It is the control's sibling, placed where the control
+-- is (by the caller), never its child nor anchored to it: a frame that
+-- holds or anchors a secure one is restricted in combat too, and the
+-- control's look changes in combat (an arrow's enabled state).
+local function secureOver(book: any, control: any, snippet: string, onClick: () -> ()): any
+    local o = CreateFrame("Button", nil, control:GetParent(), "SecureHandlerClickTemplate")
+    o:SetSize(control:GetWidth(), control:GetHeight())
+    o:SetFrameLevel(control:GetFrameLevel() + 5)
+    o:RegisterForClicks("LeftButtonUp")
+    o:SetFrameRef("router", book.router)
+    o:SetAttribute("_onclick", snippet)
+    o:HookScript("OnClick", onClick)
+    o:SetScript("OnEnter", function() if control.suuEnter then control.suuEnter(control) end end)
+    o:SetScript("OnLeave", function() if control.suuLeave then control.suuLeave(control) end end)
+    return o
 end
 
 -- As many rows as the page's height holds (out of combat: the cells are
@@ -215,14 +311,27 @@ function Book:SetSchools(list: any[])
             t.ring:SetPoint("CENTER", t, "TOPRIGHT", -2, -2)
             t.dot = draw.diamond(over, 7, "arcane", "OVERLAY", 7)
             t.dot:SetPoint("CENTER", t, "TOPRIGHT", -2, -2)
-            t:SetScript("OnClick", function() if self.onSchool then self.onSchool(t.index) end end)
-            t:SetScript("OnEnter", function(btn)
+            -- (hover and click come from the secure button over it)
+            t:EnableMouse(false)
+            local marker = self.schoolMarker
+            t.suuEnter = function(btn: any)
                 btn:SetAlpha(1)
+                marker.hovered = btn
+                marker:Aim()
                 showTooltip(btn, { title = btn.label, description = btn.trainable and btn.trainable > 0
                     and (btn.trainable .. (btn.trainable == 1 and " spell" or " spells") .. " to train") or nil })
-            end)
-            t:SetScript("OnLeave", function(btn) btn:SetAlpha(btn.active and 1 or 0.6); hideTooltip() end)
-            self.schoolMarker:Track(t)
+            end
+            t.suuLeave = function(btn: any)
+                btn:SetAlpha(btn.active and 1 or 0.6)
+                if marker.hovered == btn then marker.hovered = nil end
+                marker:Aim()
+                hideTooltip()
+            end
+            t.secure = secureOver(self, t, [=[
+                local r = self:GetFrameRef("router")
+                r:SetAttribute("page", 1)
+                r:SetAttribute("school", self:GetAttribute("school"))
+            ]=], function() if self.onSchool then self.onSchool(t.index) end end)
             self.tabs[i] = t
         end
         t.index, t.label, t.trainable, t.active = i, s.label, s.trainable, s.active
@@ -231,12 +340,25 @@ function Book:SetSchools(list: any[])
         t.ring:SetShown((s.trainable or 0) > 0)
         if s.active then chosen = t end
         t:SetAlpha(s.active and 1 or 0.6)
-        t:ClearAllPoints()
-        -- centred between the window's edge (edgeInset to the left) and the divider
-        t:SetPoint("TOP", self.tabColumn, "TOPLEFT", (40 - self.edgeInset) / 2, -(i - 1) * (TAB + S["space-3"]))
-        t:Show()
+        -- (in combat the tabs stay where they are: their secure buttons with them)
+        if not InCombatLockdown() then
+            t.secure:SetAttribute("school", i)
+            -- centred between the window's edge (edgeInset to the left) and the divider
+            local x, y = (40 - self.edgeInset) / 2, -(i - 1) * (TAB + S["space-3"])
+            t:ClearAllPoints()
+            t:SetPoint("TOP", self.tabColumn, "TOPLEFT", x, y)
+            t:Show()
+            t.secure:ClearAllPoints()
+            t.secure:SetPoint("TOP", self.tabColumn, "TOPLEFT", x, y)
+            t.secure:Show()
+        end
     end
-    for i = #list + 1, #self.tabs do self.tabs[i]:Hide() end
+    if not InCombatLockdown() then
+        for i = #list + 1, #self.tabs do
+            self.tabs[i]:Hide()
+            self.tabs[i].secure:Hide()
+        end
+    end
     self.schoolMarker:SetChosen(chosen)
 end
 
@@ -359,12 +481,18 @@ export function spellbook(parent: any, options: { [string]: any }?): any
     frule:SetHeight(1)
     frule:SetPoint("TOPLEFT")
     frule:SetPoint("TOPRIGHT")
-    book.pageText = text(foot, "caption", "ink-muted")
+    -- the page text in a frame of its own, as wide as its longest text: the
+    -- arrows' secure buttons anchor to it (the game refuses to anchor a
+    -- protected frame to a text: found in game)
+    book.pager = CreateFrame("Frame", nil, foot)
+    book.pager:SetSize(math.ceil(measureText("caption", "Page 10 of 10")), 30)
+    book.pager:SetPoint("BOTTOM")
+    book.pageText = text(book.pager, "caption", "ink-muted")
     book.pageText:SetPoint("BOTTOM", 0, 8)
     book.prev = controls.button(foot, { text = "", width = 30, onClick = function() if book.onPage then book.onPage(-1) end end })
-    book.prev:SetPoint("RIGHT", book.pageText, "LEFT", -S["space-5"], 0)
+    book.prev:SetPoint("RIGHT", book.pager, "LEFT", -S["space-5"], 0)
     book.next = controls.button(foot, { text = "", width = 30, onClick = function() if book.onPage then book.onPage(1) end end })
-    book.next:SetPoint("LEFT", book.pageText, "RIGHT", S["space-5"], 0)
+    book.next:SetPoint("LEFT", book.pager, "RIGHT", S["space-5"], 0)
     for _, pair in ipairs({ { book.prev, "chevronLeft" }, { book.next, "chevronRight" } }) do
         local g = pair[1]:CreateTexture(nil, "OVERLAY")
         g:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. pair[2] .. ".tga")
@@ -373,5 +501,30 @@ export function spellbook(parent: any, options: { [string]: any }?): any
         draw.paint(g, "ink")
     end
     book.foot = foot
+    -- the secure side: the router, and the pager's arrows' secure buttons
+    book.router = CreateFrame("Frame", nil, book, "SecureHandlerAttributeTemplate")
+    book.router:SetAttribute("_onattributechanged", ROUTE)
+    for _, pair in ipairs({ { book.prev, -1 }, { book.next, 1 } }) do
+        local arrow, delta = pair[1], pair[2]
+        arrow.suuEnter = arrow:GetScript("OnEnter")
+        arrow.suuLeave = arrow:GetScript("OnLeave")
+        local o = secureOver(book, arrow, [=[
+            local r = self:GetFrameRef("router")
+            local s = r:GetAttribute("school")
+            if not s then return end
+            local p = (r:GetAttribute("page") or 1) + self:GetAttribute("delta")
+            local n = r:GetAttribute("pages" .. s) or 1
+            if p < 1 then p = 1 elseif p > n then p = n end
+            r:SetAttribute("page", p)
+        ]=], function() if book.onPage and arrow:IsEnabled() then book.onPage(delta) end end)
+        o:SetAttribute("delta", delta)
+        -- (where the arrow is: beside the page text's frame)
+        if delta < 0 then
+            o:SetPoint("RIGHT", book.pager, "LEFT", -S["space-5"], 0)
+        else
+            o:SetPoint("LEFT", book.pager, "RIGHT", S["space-5"], 0)
+        end
+        arrow.secure = o
+    end
     return book
 end

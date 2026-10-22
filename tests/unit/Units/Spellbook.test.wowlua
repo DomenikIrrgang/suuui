@@ -22,7 +22,8 @@ end
 local function cellTexts(): string[]
     local out: string[] = {}
     for _, c in ipairs(M.book.cells) do
-        if c:IsShown() then out[#out + 1] = c.label:GetText() or "" end
+        -- (an empty slot keeps its cell, see-through)
+        if c:IsShown() and c:GetAlpha() > 0 then out[#out + 1] = c.label:GetText() or "" end
     end
     return out
 end
@@ -169,17 +170,68 @@ local function unlearnedCell()
     error("no spell to train")
 end
 
-@test("in combat: the page as it was; drawn again when it ends")
+-- What each learned cell's button casts, by the cell's spell.
+local function castsMatch(): boolean
+    for i, c in ipairs(M.book.cells) do
+        local s = M.slice and M.slice[i]
+        local want = s and s.status == "learned" and s.spellID or nil
+        if c.button:GetAttribute("spell") ~= want then return false end
+    end
+    return true
+end
+
+@test("a spell icon casts on the release, whatever the game's cast on key down says: the press starts a drag")
+local function castOnRelease()
+    open()
+    mock.setCVar("ActionButtonUseKeyDown", "1")
+    local b: any
+    for i, c in ipairs(M.book.cells) do
+        local s = M.slice and M.slice[i]
+        if s and s.status == "learned" and c.button:GetAttribute("spell") then b = c.button break end
+    end
+    expect(b ~= nil).toBe(true)
+    expect(b:GetAttribute("useOnKeyDown")).toBe(false)
+    -- (the cast the secure button makes, watched through a secure hook)
+    local casts = 0
+    hooksecurefunc("CastSpellByID", function() casts = casts + 1 end)
+    -- the press alone: nothing
+    mock.script(b, "OnClick", "LeftButton", true)
+    expect(casts).toBe(0)
+    -- a whole click: cast once, on the release
+    mock.click(b)
+    expect(casts).toBe(1)
+    mock.setCVar("ActionButtonUseKeyDown", "0")
+end
+
+@test("in combat: the schools and pages switch, the buttons casting the new page's spells; the switches wait for its end")
 local function combat()
     open()
+    expect(castsMatch()).toBe(true)
     mock.player:enterCombat()
-    M.book.onSchool(1)
+    mock.advanceFrames(1)
+    -- General's tab: clicked through its secure button
+    mock.click(M.book.tabs[1].secure)
+    expect(M.book.title:GetText()).toBe("General")
+    expect(castsMatch()).toBe(true)
+    local general = M.book.cells[1].button:GetAttribute("spell")
+    expect(general ~= nil).toBe(true)
+    -- back to Arms
+    mock.click(M.book.tabs[2].secure)
     expect(M.book.title:GetText()).toBe("Arms")
-    M.book.onPage(1)
-    M:Render(true)
+    expect(castsMatch()).toBe(true)
+    -- the pager: within the school's pages, both sides agree
+    mock.click(M.book.next.secure)
+    mock.click(M.book.prev.secure)
+    expect(M.page).toBe(1)
+    expect(castsMatch()).toBe(true)
+    -- a switch changes what the pages hold: after combat
+    M.book.onSwitch("unlearned", false)
     expect(M.renderAfterCombat).toBe(true)
     mock.player:leaveCombat()
+    mock.advanceFrames(1)
     expect(M.renderAfterCombat).toBe(false)
+    expect(castsMatch()).toBe(true)
+    expectNoErrors()
 end
 
 @test("the cooldown sweeps follow the game's cooldowns")

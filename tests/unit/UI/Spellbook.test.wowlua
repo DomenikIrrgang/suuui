@@ -67,28 +67,31 @@ local function schools()
     -- hover: bright, its tooltip; away: back to its alpha
     local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
     mock.stub(tooltipModule, "hideTooltip", function() end)
-    mock.hover(fire)
+    -- (the tab's secure button takes the mouse)
+    mock.hover(fire.secure)
     expect(fire:GetAlpha()).toBe(1)
+    expect(b.schoolMarker.hovered).toBe(fire)
     expect(show).toHaveBeenCalledWith(fire, { title = "Fire", description = "2 spells to train" })
-    mock.hover(frost)
+    mock.hover(frost.secure)
     expect(fire:GetAlpha()).toBeCloseTo(0.6, 2)
     expect(show).toHaveBeenCalledWith(frost, { title = "Frost" })
     mock.hover(nil)
     -- one to train
     b:SetSchools({ { label = "General", icon = 1, active = true }, { label = "Fire", icon = 2, trainable = 1 } })
-    mock.hover(fire)
+    mock.hover(fire.secure)
     expect(show).toHaveBeenCalledWith(fire, { title = "Fire", description = "1 spell to train" })
     mock.hover(g)
     expect(g:GetAlpha()).toBe(1)
     mock.hover(nil)
     expect(g:GetAlpha()).toBe(1)
     expect(frost).never.toBeShown()
-    -- a click to onSchool with its index
+    -- a click (on the tab's secure button) to onSchool with its index
     local picked = mock.spy(function(_i: number) end)
-    mock.click(fire)
+    mock.click(fire.secure)
     b.onSchool = picked
-    mock.click(fire)
+    mock.click(fire.secure)
     expect(picked).toHaveBeenCalledWith(2)
+    expect(fire.secure:GetAttribute("school")).toBe(2)
 end
 
 --------------------------------------------------------------------------------
@@ -183,12 +186,17 @@ local function pager()
     expect(b.pageText).toHaveText("Page 1 of 1")
     local paged = mock.spy(function(_d: number) end)
     b:SetPage(2, 3)
-    mock.click(b.next)
+    mock.click(b.next.secure)
     b.onPage = paged
-    mock.click(b.next)
-    mock.click(b.prev)
+    -- (the arrows' secure buttons take the clicks)
+    mock.click(b.next.secure)
+    mock.click(b.prev.secure)
     expect(paged).toHaveBeenCalledWith(1)
     expect(paged).toHaveBeenCalledWith(-1)
+    -- a disabled arrow: nothing
+    b:SetPage(1, 3)
+    mock.click(b.prev.secure)
+    expect(paged).toHaveBeenCalledTimes(2)
 end
 
 --------------------------------------------------------------------------------
@@ -221,8 +229,8 @@ local function cells()
     expect(plainCell.sub).toHaveText("")
     expect(tokenOf(plainCell.label)).toBe("ink")
     expect(learned.button:GetAttribute("type")).toBeNil()
-    -- the rest of the page hidden
-    expect(b.cells[6]).never.toBeShown()
+    -- the rest of the page see-through (shown: secure buttons can't be shown in combat)
+    expect(b.cells[6]:GetAlpha()).toBe(0)
     expect(#b.cells).toBe(12)
 end
 

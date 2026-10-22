@@ -13,8 +13,10 @@
 --
 -- Each learned spell is a SecureActionButton (type "spell"): clicking casts
 -- it, dragging puts it on a bar (C_SpellBook.PickupSpellBookItem, allowed
--- for addons: probed 2026-10-13). The buttons are set out of combat only:
--- switching school or page waits for the end of combat.
+-- for addons: probed 2026-10-13). What every school's pages cast is handed
+-- to the page's secure router out of combat, so schools and pages switch
+-- in combat too (asked for in game); the switches (Unlearned, All ranks)
+-- wait for the end of combat, as they change what the pages hold.
 --
 -- A level-up shows what it brings: the level-up card (UI.LevelUp, through
 -- SuuUI.ShowLevelUp) in the alerts' place, out of combat (a level gained in
@@ -381,7 +383,10 @@ end
 -- its buttons are ready before a fight: the buttons can't change in one.
 function M:Render(force: boolean?)
     if not self.book or not (force or self.book:IsVisible()) then return end
-    if InCombatLockdown() then
+    -- in combat: only the look of a school or page the router already points
+    -- the buttons at (prepared out of combat)
+    local combat = InCombatLockdown()
+    if combat and not self.prepared then
         self.renderAfterCombat = true
         return
     end
@@ -393,8 +398,12 @@ function M:Render(force: boolean?)
     local tabs = {}
     local current, toTrain
     local widest = 0
+    local casts = {}
     for i, s in ipairs(schools) do
         local list, n = self:SchoolList(s, trainer)
+        local ids = {}
+        for k, sp in ipairs(list) do ids[k] = (sp.status == "learned" and sp.spellID) or false end
+        casts[i] = ids
         for _, sp in ipairs(list) do
             local name = (sp.label or "") .. ((sp.status ~= "learned" and sp.status ~= "passive" and sp.rank) and ("  Rank " .. sp.rank) or "")
             widest = math.max(widest, UI.MeasureText("label", name), UI.MeasureText("caption", sp.sub or ""))
@@ -402,9 +411,9 @@ function M:Render(force: boolean?)
         tabs[i] = { label = s.name, icon = s.icon, trainable = n, active = i == self.school }
         if i == self.school then current, toTrain = list, n end
     end
-    -- the window as wide as two columns of the longest name
+    -- the window as wide as two columns of the longest name (out of combat)
     local want = pageWidth(widest)
-    if want ~= self.wantWidth then
+    if not combat and want ~= self.wantWidth then
         self.wantWidth = want
         self:Shorten()
     end
@@ -424,17 +433,12 @@ function M:Render(force: boolean?)
     self.book:SetSpells(slice)
     self.book:SetPage(self.page, pages)
     self:UpdateCooldowns()
-    -- what each button casts: learned spells only
-    for i, c in ipairs(self.book.cells) do
-        local s = slice[i]
-        local b = c.button
-        if s and s.status == "learned" and s.spellID then
-            b:SetAttribute("type", "spell")
-            b:SetAttribute("spell", s.spellID)
-        else
-            b:SetAttribute("type", nil)
-            b:SetAttribute("spell", nil)
-        end
+    -- what each button casts (learned spells only), on every school's
+    -- pages: the router points the buttons at this one, in combat too
+    if not combat then
+        self.book:SetCasts(casts, perPage)
+        self.book:SetCastPage(self.school, self.page)
+        self.prepared = true
     end
 end
 
@@ -499,19 +503,20 @@ function M:Build()
     book:SetFrameLevel(page:GetFrameLevel() + 50)
     book:EnableMouse(true) -- Blizzard's buttons underneath get no clicks
     self.book = book
+    -- (the secure router has already pointed the buttons at the new page)
     book.onSchool = function(i: number)
-        if InCombatLockdown() then return end
         self.school, self.page = i, 1
         self:Render()
     end
     book.onPage = function(delta: number)
-        if InCombatLockdown() then return end
         self.page = (self.page or 1) + delta
         self:Render()
     end
     book.onSwitch = function(key: string, on: boolean)
         self:Set(key == "unlearned" and "unlearned" or "allRanks", on)
         self.page = 1
+        -- (what the pages hold changes: after combat)
+        if InCombatLockdown() then self.prepared = false end
         self:Render()
     end
     book.onEnter = function(i: number, c: any)
