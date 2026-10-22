@@ -1206,6 +1206,7 @@ function M:OnEnable()
         if self.bindAfterCombat then self.bindAfterCombat = nil; self:BindKeys() end
         if self.actionAfterCombat then self.actionAfterCombat = nil; self:DrawAction() end
         if self.shelfAfterCombat then self.shelfAfterCombat = nil; if self.tab == "toys" then self:Refresh() end end
+        if self.layoutAfterCombat then self.layoutAfterCombat = nil; self:LayoutTab() end
     end)
     for _, e in ipairs({ "PLAYER_MOUNT_DISPLAY_CHANGED", "COMPANION_UPDATE" }) do
         self:OnGameEvent(e, function() self:DrawAction() end)
@@ -1731,8 +1732,17 @@ end
 
 function M:DrawCard_Toy(c: any)
     local e = c.entry
-    if not e then c:Hide() return end
-    c:Show()
+    -- (a card holds its secure Use: shown or hidden out of combat only, the
+    -- game refuses even an unchanged Show in a fight)
+    if not e then
+        if c:IsShown() then
+            if InCombatLockdown() then self.shelfAfterCombat = true else c:Hide() end
+        end
+        return
+    end
+    if not c:IsShown() then
+        if InCombatLockdown() then self.shelfAfterCombat = true else c:Show() end
+    end
     c.icon:SetTexture(e.icon)
     c.icon:SetDesaturated(not e.collected)
     local v = e.collected and 1 or 0.55
@@ -1779,6 +1789,8 @@ end
 
 function M:LayoutShelf()
     local shelf = self.shelf
+    -- (the cards hold secure buttons: laid out out of combat only)
+    if InCombatLockdown() then self.shelfAfterCombat = true return end
     local w = shelf.list.child:GetWidth()
     if not w or isSecret(w) or w <= 0 then return end
     local gap = S["space-4"]
@@ -1793,14 +1805,23 @@ end
 
 function M:DrawShelf()
     local shelf, list = self.shelf, self.entries or {}
-    for i = #shelf.cards + 1, #list do shelf.cards[i] = buildToyCard(shelf.list.child, self, i) end
+    -- in a fight the cards keep their places (they hold secure buttons):
+    -- only what they show changes; new cards and the layout after it
+    local combat = InCombatLockdown()
+    if combat then
+        if #list > #shelf.cards then self.shelfAfterCombat = true end
+    else
+        for i = #shelf.cards + 1, #list do shelf.cards[i] = buildToyCard(shelf.list.child, self, i) end
+    end
     for i, c in ipairs(shelf.cards) do
         c.entry = list[i]
         self:DrawCard_Toy(c)
     end
     self:LayoutShelf()
-    local rows = math.ceil(#list / SHELF_COLS)
-    shelf.list.child:SetHeight(math.max(1, rows * CARD_H + math.max(0, rows - 1) * S["space-4"]))
+    if not combat then
+        local rows = math.ceil(#list / SHELF_COLS)
+        shelf.list.child:SetHeight(math.max(1, rows * CARD_H + math.max(0, rows - 1) * S["space-4"]))
+    end
     shelf.empty:SetShown(#list == 0)
 end
 
@@ -1820,9 +1841,15 @@ end
 function M:LayoutTab()
     local toys = self.tab == "toys"
     local tools = self.tools
-    self.shelf:SetShown(toys)
-    self.stage:SetShown(not toys)
-    self.strip:SetShown(not toys)
+    -- (the shelf and the stage hold secure buttons: shown or hidden out of
+    -- combat only, and only when it changes: the game refuses even an
+    -- unchanged SetShown in a fight)
+    for _, pair in ipairs({ { self.shelf, toys }, { self.stage, not toys }, { self.strip, not toys } }) do
+        local f, on = pair[1], pair[2]
+        if f:IsShown() ~= on then
+            if InCombatLockdown() then self.layoutAfterCombat = true else f:SetShown(on) end
+        end
+    end
     tools:ClearAllPoints()
     if toys then
         tools:SetPoint("TOPLEFT", self.window.body, "TOPLEFT")
