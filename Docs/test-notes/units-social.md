@@ -63,7 +63,8 @@ Not fixed, noted:
 - **The first Esc in a test skips SuuUI's welcome**, as in the game at a
   first login: a test of the game menu presses Esc once more (or closes
   the welcome first).
-- **A call helper's cap is invisible to the checker.** `call(...)`
+- **A call helper's cap was invisible to the checker.** `call(...)`
   returns `...any`, so reading its 11th result through a helper that
-  returns 8 type-checks. wowlua could infer a function's return count
-  from its `return` statements and warn when a caller reads past it.
+  returns 8 type-checked. wowlua's W2062 (decision S40, after 0.9.6)
+  counts a local function's returns and warns on a read past them; on
+  SuuUI before the fix it caught both bugs.

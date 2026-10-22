@@ -69,6 +69,7 @@ Not fixed, noted:
 - **`mock.hover` doesn't move the cursor**: code that reads the cursor
   over a frame (the world map's coordinates) needs
   `mock.setCursorPosition` too.
-- **The engine's threat is the player's alone**: `unit:setThreat` gives
-  status 3; a tank's "Losing" (status 2) and a group member's threat
-  come from the plate's API table.
+- **The engine's threat was the player's alone** (`unit:setThreat` gave
+  status 3): a tank's "Losing" (status 2) comes from the plate's API
+  table here. Fixed in units-hud (decision T247: `mob:setThreat(value,
+  who)`), which Threat's test uses.

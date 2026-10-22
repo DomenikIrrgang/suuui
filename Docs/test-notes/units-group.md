@@ -62,8 +62,9 @@ Not fixed, noted:
   `GROUP_ROSTER_UPDATE` at once; SuuUI's probe saw it 0.4-0.7 s later
   (PROBES.md item 12). The planner's Arrange groups waits for it either
   way.
-- **Threat only for the player**: the engine keeps the player's threat, so
-  aggro is tested on your own frame.
+- **Threat only for the player**: the engine kept the player's threat, so
+  aggro is tested on your own frame. Fixed later (decision T247:
+  `mob:setThreat(value, who)`).
 - **No inspected talent groups**: the engine answers an inspect's spec ID,
   but not its talent groups' points (`C_Traits.GetGroupCurrencyInfo`); the
   planner's test fakes those. Forever's spec IDs are one per class, so
