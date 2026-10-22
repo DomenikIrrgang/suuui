@@ -1194,9 +1194,35 @@ function M:OnEnable()
     self.tab = self.tab or "mounts"
     self.slot = self.slot or "CHESTSLOT"
     if not self.toggleButton then
-        self.toggleButton = CreateFrame("Button", "SuuUICollectionsToggle", UIParent)
-        self.toggleButton:SetScript("OnClick", function() self:Toggle() end)
+        -- the key shows and hides the window through the game's secure code:
+        -- the window holds secure buttons, so it is protected, and SuuUI's
+        -- own code can't show it in a fight (found in tests: nothing opened)
+        local b = CreateFrame("Button", "SuuUICollectionsToggle", UIParent, "SecureHandlerClickTemplate")
+        b:SetFrameRef("window", self.window)
+        b:SetAttribute("_onclick", [=[
+            local w = self:GetFrameRef("window")
+            if w:IsShown() then w:Hide() else w:Show() end
+        ]=])
+        self.toggleButton = b
+        -- its close button too: a secure one over it (passing the hover on
+        -- to the button under it)
+        local close: any = (self.window :: any).close
+        if close then
+            local o = CreateFrame("Button", nil, close, "SecureHandlerClickTemplate")
+            o:SetAllPoints(close)
+            o:SetFrameRef("window", self.window)
+            o:SetAttribute("_onclick", [=[ self:GetFrameRef("window"):Hide() ]=])
+            for _, script in ipairs({ "OnEnter", "OnLeave" }) do
+                o:SetScript(script, function(_: any, ...: any)
+                    local fn = close:GetScript(script)
+                    if fn then fn(close, ...) end
+                end)
+            end
+            self.closeOverlay = o
+        end
         self.bindOwner = CreateFrame("Frame")
+        -- (the tab chosen before the first open, which may be in a fight)
+        self.window:SetTab(self.tab)
     end
     self:BindKeys()
     self:OnGameEvent("UPDATE_BINDINGS", function() self:BindKeys() end)
