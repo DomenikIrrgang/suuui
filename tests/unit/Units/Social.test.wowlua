@@ -1,0 +1,551 @@
+-- Units/Social: SuuUI's pages over Forever's social window (opened with
+-- its key, its tabs clicked): Contacts (Battle.net and character friends,
+-- online first, each kind's line and actions, notes, removing, adding,
+-- ignoring, your status), Recent allies (pinned first, the menu), Friend
+-- requests, the Raid page (members, moves and swaps, the leader's menu,
+-- the made-up test raid, lockouts), a probe asking the pages to step
+-- aside.
+--
+-- The engine has no friends, Battle.net friends, ignores or recent allies:
+-- the game's calls answer as the client would for the ones the test lists.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Social"
+import expectNoErrors from "../../helpers"
+
+local UI = SuuUI.UI
+local G: any = _G
+
+local function frame(): any return G.SocialUIFrame end
+
+local function open()
+    if not frame():IsShown() then mock.pressKey("O") end
+    mock.advanceFrames(3)
+end
+
+-- A tab of the window by its type ("Friends", "RecentAllies", "FriendRequests", "RaidList").
+local function tab(kind: string): any
+    for t in frame().socialTabPool:EnumerateActive() do
+        local b: any = t
+        if b.tabData and b.tabData.tabType == G.SocialUITabType[kind] then return b end
+    end
+    return nil
+end
+
+local function openTab(kind: string)
+    open()
+    local b = tab(kind)
+    if b then mock.click(b) end
+    mock.advanceFrames(3)
+end
+
+-- What a context menu offered: its buttons by label.
+local menu: { [string]: () -> () } = {}
+local function captureMenus()
+    mock.stub(UI, "ContextMenuFrom", function(owner: any, describe: (owner: any, root: any) -> ())
+        for k in pairs(menu) do menu[k] = nil end
+        local root: any = {}
+        function root:CreateTitle(_: string) end
+        function root:CreateDivider() end
+        function root:CreateButton(label: string, fn: () -> ()) menu[label] = fn end
+        describe(owner, root)
+    end)
+end
+
+local function choose(label: string)
+    local fn = menu[label]
+    assert(fn, "no menu button " .. label)
+    fn()
+end
+
+local confirmed: any = nil
+local function captureConfirm()
+    mock.stub(UI, "Confirm", function(opts: any): any confirmed = opts; return nil end)
+end
+
+-- Battle.net friends as the client gives them (C_BattleNet.GetFriendAccountInfo).
+local FACTION = UnitFactionGroup("player")
+local OTHER = FACTION == "Alliance" and "Horde" or "Alliance"
+local function bnetFriends(list: any[])
+    mock.stub(G, "BNGetNumFriends", function(): (number, number) return #list, #list end)
+    mock.stub(C_BattleNet, "GetFriendAccountInfo", function(i: number): any return list[i] end)
+end
+
+local function wowGame(over: { [string]: any }?): { [string]: any }
+    local g: { [string]: any } = { isOnline = true, clientProgram = BNET_CLIENT_WOW or "WoW", characterName = "Brannoc Ironhand",
+        className = "Warrior", characterLevel = 60, areaName = "Ironforge", wowProjectID = WOW_PROJECT_ID, gameAccountID = 77,
+        factionName = FACTION }
+    for k, v in pairs(over or {}) do g[k] = v end
+    return g
+end
+
+-- Character friends as the client gives them (C_FriendList.GetFriendInfoByIndex).
+local function characterFriends(list: any[])
+    mock.stub(C_FriendList, "GetNumFriends", function(): number return #list end)
+    mock.stub(C_FriendList, "GetFriendInfoByIndex", function(i: number): any return list[i] end)
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    if M.raidTest then M:TestRaid() end
+    if M.lockoutPanel and M.lockoutPanel:IsShown() then M:ToggleLockouts() end
+    if frame():IsShown() then HideUIPanel(frame()) end
+    mock.group:leave()
+    M.selected, M.mode, M.pinWanted = nil, nil, nil
+    mock.advanceFrames(3)
+    expectNoErrors()
+end
+
+@test("the window on its key: SuuUI's Contacts page over it, Blizzard's friends list out of sight")
+local function opens()
+    open()
+    expect(frame():IsShown()).toBe(true)
+    expect(M.view).toBeShown()
+    expect(M.friendsList:GetAlpha()).toBe(0)
+    local _, rel, relPoint = M.friendsList:GetPoint(1)
+    expect(rel).toBe(UIParent)
+    expect(relPoint).toBe("TOPRIGHT")
+    -- Blizzard places it again: away once more
+    M.friendsList:ClearAllPoints()
+    M.friendsList:SetPoint("CENTER")
+    mock.advanceFrames(2)
+    local _, rel2 = M.friendsList:GetPoint(1)
+    expect(rel2).toBe(UIParent)
+end
+
+@test("friends: online first, then by name; each kind's line and why it can't be invited")
+local function friends()
+    bnetFriends({
+        { bnetAccountID = 1, accountName = "|Kq1|k", battleTag = "Brannoc#1137", note = "raid lead", gameAccountInfo = wowGame() },
+        { bnetAccountID = 2, accountName = "|Kq2|k", battleTag = "Aster#2001", gameAccountInfo = wowGame({ factionName = OTHER, characterName = "Aster Vale" }) },
+        { bnetAccountID = 3, accountName = "|Kq3|k", battleTag = "Corwin#3001", gameAccountInfo = wowGame({ wowProjectID = -1 }) },
+        { bnetAccountID = 4, accountName = "|Kq4|k", battleTag = "Dara#4001", isAFK = true, gameAccountInfo = { isOnline = true, clientProgram = "WTCG" } },
+        { bnetAccountID = 5, accountName = "|Kq5|k", battleTag = "Elian#5001", lastOnlineTime = time() - 3 * 86400, gameAccountInfo = { isOnline = false } },
+        { bnetAccountID = 6, accountName = "|Kq6|k", battleTag = "Fenn#6001", gameAccountInfo = { isOnline = false } },
+    })
+    characterFriends({
+        { name = "Tamsin Ashford", connected = true, level = 42, className = "Priest", area = "Stormwind City", notes = "healer" },
+        { name = "Morrow Fenwick", connected = false, className = "Druid" },
+    })
+    local list, online = M:Friends()
+    expect(#list).toBe(8)
+    expect(online).toBe(5)
+    -- online first
+    for i = 1, 5 do expect(list[i].online).toBe(true) end
+    local by: { [string]: any } = {}
+    for _, r in ipairs(list) do by[r.key] = r end
+    local b1 = by["bn:1"]
+    expect(b1.character).toBe("Brannoc Ironhand")
+    expect(b1.detail).toBe("Level 60 Warrior · Ironforge")
+    expect(b1.invite).toBe(true)
+    expect(b1.note).toBe("raid lead")
+    expect(by["bn:2"].why).toBe("They're in the other faction.")
+    expect(by["bn:3"].why).toBe("They're playing another version of World of Warcraft.")
+    expect(by["bn:4"].detail).toBe("Playing Hearthstone")
+    expect(by["bn:4"].away).toBe(true)
+    expect(by["bn:5"].detail).toBe("Last online 3 days ago")
+    expect(by["bn:6"].detail).toBe("Offline")
+    local tamsin = by["c:Tamsin Ashford"]
+    expect(tamsin.detail).toBe("Level 42 Priest · Stormwind City")
+    expect(tamsin.color).toBe("class-priest")
+    expect(by["c:Morrow Fenwick"].why).toBe("They're offline.")
+    -- drawn: the page gets them with your status and BattleTag
+    mock.stub(G, "BNGetInfo", function(): ...any return 1, "Tamsin#1234", 1, "", false, true end)
+    local drawn: any = nil
+    open()
+    mock.stub(M.view, "SetData", function(_: any, d: any) drawn = d end)
+    M:Render()
+    expect(drawn.total).toBe(8)
+    expect(drawn.online).toBe(5)
+    expect(drawn.me).toBe("Tamsin#1234")
+    expect(drawn.status).toBe("busy")
+end
+
+@test("how long ago: hours, days, months")
+local function ago()
+    local now = time()
+    local function lastOnline(seconds: number): string
+        bnetFriends({ { bnetAccountID = 9, accountName = "x", battleTag = "X#1", lastOnlineTime = now - seconds, gameAccountInfo = { isOnline = false } } })
+        characterFriends({})
+        return (M:Friends())[1].detail
+    end
+    expect(lastOnline(60)).toBe("Last online less than an hour ago")
+    expect(lastOnline(3600)).toBe("Last online 1 hour ago")
+    expect(lastOnline(5 * 3600)).toBe("Last online 5 hours ago")
+    expect(lastOnline(86400)).toBe("Last online 1 day ago")
+    expect(lastOnline(40 * 86400)).toBe("Last online 1 month ago")
+    expect(lastOnline(90 * 86400)).toBe("Last online 3 months ago")
+end
+
+@test("the page's actions: whisper, invite, your status, add a friend or a BattleTag, ignore and unignore")
+local function actions()
+    captureConfirm()
+    open()
+    local v = M.view
+    local tell = mock.spy(function(_: string) end)
+    local bnTell = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", tell)
+    mock.stub(ChatFrameUtil, "SendBNetTell", bnTell)
+    v.onWhisper({ name = "Tamsin Ashford" })
+    expect(tell).toHaveBeenCalledWith("Tamsin Ashford")
+    v.onWhisper({ bnet = true, name = "|Kq1|k" })
+    expect(bnTell).toHaveBeenCalledWith("|Kq1|k")
+    local bnInvite = mock.spy(function(_: number) end)
+    mock.stub(C_BattleNet, "InviteFriend", bnInvite)
+    v.onInvite({ gameAccountID = 77 })
+    expect(bnInvite).toHaveBeenCalledWith(77)
+    local invite = mock.spy(function(_: string) end)
+    mock.stub(C_PartyInfo, "InviteUnit", invite)
+    v.onInvite({ inviteName = "Tamsin Ashford" })
+    expect(invite).toHaveBeenCalledWith("Tamsin Ashford")
+    -- status: away, busy
+    local afk = mock.spy(function(_: boolean) end)
+    local dnd = mock.spy(function(_: boolean) end)
+    mock.stub(C_BattleNet, "SetAFK", afk)
+    mock.stub(C_BattleNet, "SetDND", dnd)
+    v.onStatus("busy")
+    expect(afk).toHaveBeenCalledWith(false)
+    expect(dnd).toHaveBeenCalledWith(true)
+    mock.advanceTime(0.5)
+    -- add: a BattleTag or a character
+    v.onAdd()
+    local sent = mock.spy(function(_: string) end)
+    mock.stub(G, "BNSendFriendInvite", sent)
+    confirmed.onConfirm("Brannoc#1137")
+    expect(sent).toHaveBeenCalledWith("Brannoc#1137")
+    v.onAdd()
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    mock.stub(SuuUI, "AddFriend", function(_: string): boolean return true end)
+    confirmed.onConfirm("Brannoc Ironhand")
+    expect(said[1]).toBe("Friend request sent to Brannoc Ironhand.")
+    -- ignore and unignore
+    local ignored = mock.spy(function(_: string) end)
+    mock.stub(C_FriendList, "AddIgnore", ignored)
+    v.onIgnore()
+    confirmed.onConfirm("Corwin Hale")
+    expect(ignored).toHaveBeenCalledWith("Corwin Hale")
+    local unignored = mock.spy(function(_: string) end)
+    mock.stub(C_FriendList, "DelIgnore", unignored)
+    v.onUnignore("Corwin Hale")
+    expect(unignored).toHaveBeenCalledWith("Corwin Hale")
+    -- views and the selection
+    v.onView("ignored")
+    expect(M.mode).toBe("ignored")
+    v.onSelect("bn:1")
+    expect(M.selected).toBe("bn:1")
+    -- the ignored list
+    mock.stub(C_FriendList, "GetNumIgnores", function(): number return 1 end)
+    mock.stub(C_FriendList, "GetIgnoreName", function(_: number): string return "Corwin Hale" end)
+    expect(M:Ignored()).toEqual({ "Corwin Hale" })
+    mock.advanceTime(0.5)
+end
+
+@test("a friend's menu: whisper, invite, a note, ignore, remove (a character's and a Battle.net friend's)")
+local function friendMenu()
+    captureMenus()
+    captureConfirm()
+    open()
+    local row = { name = "Tamsin Ashford", whisper = true, invite = true, inviteName = "Tamsin Ashford", note = "healer" }
+    local tell = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", tell)
+    M.view.onMenu(row, M.view)
+    choose("Whisper")
+    expect(tell).toHaveBeenCalled()
+    local invite = mock.spy(function(_: string) end)
+    mock.stub(C_PartyInfo, "InviteUnit", invite)
+    choose("Invite")
+    expect(invite).toHaveBeenCalled()
+    local notes = mock.spy(function(_: string, _: string) end)
+    mock.stub(C_FriendList, "SetFriendNotes", notes)
+    choose("Set note")
+    expect(confirmed.input.value).toBe("healer")
+    confirmed.onConfirm("tank now")
+    expect(notes).toHaveBeenCalledWith("Tamsin Ashford", "tank now")
+    choose("Ignore")
+    expect(confirmed.title).toBe("Ignore Tamsin Ashford?")
+    local removed = mock.spy(function(_: string) end)
+    mock.stub(C_FriendList, "RemoveFriend", removed)
+    choose("Remove friend")
+    confirmed.onConfirm()
+    expect(removed).toHaveBeenCalledWith("Tamsin Ashford")
+    -- a Battle.net friend: no Ignore; its note and removal by account
+    local bnRow = { bnet = true, bnetID = 5, name = "|Kq1|k", character = "Brannoc Ironhand", whisper = true }
+    M.view.onMenu(bnRow, M.view)
+    expect(menu["Ignore"]).toBeNil()
+    local bnNote = mock.spy(function(_: number, _: string) end)
+    mock.stub(G, "BNSetFriendNote", bnNote)
+    choose("Set note")
+    confirmed.onConfirm("old friend")
+    expect(bnNote).toHaveBeenCalledWith(5, "old friend")
+    local bnRemove = mock.spy(function(_: number) end)
+    mock.stub(G, "BNRemoveFriend", bnRemove)
+    choose("Remove friend")
+    confirmed.onConfirm()
+    expect(bnRemove).toHaveBeenCalledWith(5)
+    mock.advanceTime(0.5)
+end
+
+-- Recent allies as the client gives them (C_RecentAllies.GetRecentAllies).
+local function allies(pinned: { [string]: boolean })
+    mock.stub(C_RecentAllies, "GetRecentAllies", function(): any
+        return {
+            { characterData = { guid = "Player-0000-00000001", fullName = "Tamsin Ashford", classID = 5, level = 42 },
+              stateData = { isOnline = true, currentLocation = "Stormwind City" },
+              interactionData = { note = "good healer", interactions = { { description = "Grouped in The Stockade" } } } },
+            { characterData = { guid = "Player-0000-00000002", name = "Brannoc Ironhand", classID = 1, level = 60 },
+              stateData = { isOnline = false, friendRequestSentThisSession = true } },
+            { characterData = { guid = "Player-0000-00000003", name = "Aster Vale", classID = 8 },
+              stateData = { isOnline = false } },
+        }
+    end)
+    mock.stub(C_RecentAllies, "IsRecentAllyPinned", function(guid: string): boolean return pinned[guid] or false end)
+end
+
+@test("recent allies: pinned first, then online, then by name; how you met; add friend or already requested")
+local function recentAllies()
+    allies({ ["Player-0000-00000003"] = true })
+    local list = M:Allies()
+    expect(list[1].name).toBe("Aster Vale")
+    expect(list[1].pinned).toBe(true)
+    expect(list[2].name).toBe("Tamsin Ashford")
+    local t = list[2]
+    expect(t.detail).toBe("Level 42 · Stormwind City · Grouped in The Stockade")
+    expect(t.note).toBe("good healer")
+    expect(t.color).toBe("class-priest")
+    expect(t.actions[1].label).toBe("Whisper")
+    expect(t.actions[2].label).toBe("Add friend")
+    local b = list[3]
+    expect(b.actions[1].label).toBe("Requested")
+    expect(b.actions[1].disabled).toBe(true)
+    -- Add friend: a request, the list again a moment later
+    mock.stub(SuuUI, "AddFriend", function(_: string): boolean return false end)
+    t.actions[2].onClick(t)
+    mock.advanceTime(0.6)
+    -- the page on its tab
+    openTab("RecentAllies")
+    if M.alliesPage then
+        expect(M.alliesPage:IsShown()).toBe(true)
+        expect(frame().RecentAlliesList:GetAlpha()).toBe(0)
+    end
+end
+
+@test("an ally's menu: whisper, invite, pin (at once, before the game agrees), ignore, a note")
+local function allyMenu()
+    captureMenus()
+    captureConfirm()
+    local pinned: { [string]: boolean } = {}
+    allies(pinned)
+    local set = mock.spy(function(_: string, _: boolean) end)
+    mock.stub(C_RecentAllies, "SetRecentAllyPinned", set)
+    local row = M:Allies()[1]
+    expect(row.name).toBe("Tamsin Ashford")
+    M:AllyMenu(row, UIParent)
+    local tell = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", tell)
+    choose("Whisper")
+    expect(tell).toHaveBeenCalledWith("Tamsin Ashford")
+    local invite = mock.spy(function(_: string) end)
+    mock.stub(C_PartyInfo, "InviteUnit", invite)
+    choose("Invite")
+    expect(invite).toHaveBeenCalledWith("Tamsin Ashford")
+    choose("Pin")
+    expect(set).toHaveBeenCalledWith("Player-0000-00000001", true)
+    -- wanted until the game's own data says so
+    expect(M:Pinned("Player-0000-00000001")).toBe(true)
+    pinned["Player-0000-00000001"] = true
+    expect(M:Pinned("Player-0000-00000001")).toBe(true)
+    expect(M.pinWanted["Player-0000-00000001"]).toBeNil()
+    mock.advanceTime(1.1)
+    choose("Ignore")
+    expect(confirmed.title).toBe("Ignore Tamsin Ashford?")
+    mock.stub(C_RecentAllies, "CanSetRecentAllyNote", function(): boolean return true end)
+    local noted = mock.spy(function(_: string, _: string) end)
+    mock.stub(C_RecentAllies, "SetRecentAllyNote", noted)
+    M:AllyMenu(row, UIParent)
+    choose("Set note")
+    confirmed.onConfirm("tank too")
+    expect(noted).toHaveBeenCalledWith("Player-0000-00000001", "tank too")
+    mock.advanceTime(0.3)
+    expect(M:Pinned(nil)).toBe(false)
+end
+
+@test("friend requests: who and when, accept or decline")
+local function requests()
+    mock.stub(G, "BNGetNumFriendInvites", function(): number return 2 end)
+    mock.stub(G, "BNGetFriendInviteInfo", function(i: number): ...any
+        if i == 1 then return 11, "|Kq7|k", false, nil, time() - 2 * 3600 end
+        return 12, "|Kq8|k", false, nil, nil
+    end)
+    local list = M:Requests()
+    expect(#list).toBe(2)
+    expect(list[1].detail).toBe("Sent 2 hours ago")
+    expect(list[2].detail).toBe("Wants to be your Battle.net friend")
+    local accepted = mock.spy(function(_: number) end)
+    local declined = mock.spy(function(_: number) end)
+    mock.stub(G, "BNAcceptFriendInvite", accepted)
+    mock.stub(G, "BNDeclineFriendInvite", declined)
+    list[1].actions[2].onClick()
+    expect(accepted).toHaveBeenCalledWith(11)
+    list[2].actions[1].onClick()
+    expect(declined).toHaveBeenCalledWith(12)
+    openTab("FriendRequests")
+    mock.fireEvent("BN_FRIEND_INVITE_ADDED", 13)
+    mock.advanceTime(0.2)
+end
+
+-- Placeholder raiders, made once.
+local raiders: mock.MockUnit[] = {}
+for i, class in ipairs({ "WARRIOR", "PRIEST", "MAGE" }) do
+    raiders[i] = mock.spawnUnit({ name = ({ "Brannoc Ironhand", "Tamsin Ashford", "Aster Vale" })[i], player = true, class = class,
+        level = 60, reaction = "friendly" })
+end
+
+@test("the Raid page: the raid's members by group, moves and swaps, the leader's menu, its buttons")
+local function raid()
+    captureMenus()
+    for i, u in ipairs(raiders) do mock.group:add(u, { raid = true, subgroup = i == 3 and 2 or 1, quiet = i < 3 }) end
+    mock.advanceTime(0.6)
+    openTab("RaidList")
+    local page = M.raidPage
+    expect(page ~= nil).toBe(true)
+    expect(page:IsShown()).toBe(true)
+    local members = M:RaidMembers()
+    expect(#members).toBe(4)
+    local me = nil
+    for _, m in ipairs(members) do if m.you then me = m end end
+    expect(me.leader).toBe(true)
+    -- moved to another group, swapped
+    local aster: any = nil
+    for _, m in ipairs(members) do if m.name == "Aster Vale" then aster = m end end
+    page.onMove(aster.index, 3)
+    mock.advanceTime(0.6)
+    local function groupOf(name: string): number?
+        for _, m in ipairs(M:RaidMembers()) do if m.name == name then return m.group end end
+        return nil
+    end
+    expect(groupOf("Aster Vale")).toBe(3)
+    local tamsin: any = nil
+    for _, m in ipairs(M:RaidMembers()) do if m.name == "Tamsin Ashford" then tamsin = m end end
+    page.onSwap(tamsin.index, aster.index)
+    mock.advanceTime(0.6)
+    expect(groupOf("Tamsin Ashford")).toBe(3)
+    expect(groupOf("Aster Vale")).toBe(1)
+    -- in combat: not moved
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    page.onMove(tamsin.index, 2)
+    page.onSwap(tamsin.index, aster.index)
+    mock.player:leaveCombat()
+    -- a member's menu: the leader's choices
+    local promote = mock.spy(function(_: string) end)
+    mock.stub(G, "PromoteToAssistant", promote)
+    page.onMember(tamsin, "RightButton", page)
+    expect(menu["Promote to assistant"] ~= nil).toBe(true)
+    choose("Promote to assistant")
+    expect(promote).toHaveBeenCalledWith(tamsin.unit)
+    local tell = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", tell)
+    choose("Whisper")
+    expect(tell).toHaveBeenCalledWith("Tamsin Ashford")
+    local leader = mock.spy(function(_: string) end)
+    mock.stub(G, "PromoteToLeader", leader)
+    choose("Make leader")
+    expect(leader).toHaveBeenCalledWith(tamsin.unit)
+    local remove = mock.spy(function(_: string) end)
+    mock.stub(C_PartyInfo, "UninviteUnit", remove)
+    choose("Remove from group")
+    expect(remove).toHaveBeenCalledWith(tamsin.unit)
+    choose("Ignore")
+    -- an assistant: Demote
+    tamsin.assistant = true
+    page.onMember(tamsin, "RightButton", page)
+    expect(menu["Demote from assistant"] ~= nil).toBe(true)
+    local demote = mock.spy(function(_: string) end)
+    mock.stub(G, "DemoteAssistant", demote)
+    choose("Demote from assistant")
+    expect(demote).toHaveBeenCalled()
+    -- yourself: no whisper; a left click: no menu
+    page.onMember(me, "RightButton", page)
+    expect(menu["Whisper"]).toBeNil()
+    page.onMember(tamsin, "LeftButton", page)
+    -- the buttons: ready check, role check, convert, plan
+    local ready = mock.spy(function() end)
+    mock.stub(G, "DoReadyCheck", ready)
+    page.onReadyCheck()
+    expect(ready).toHaveBeenCalled()
+    local roles = mock.spy(function() end)
+    mock.stub(G, "InitiateRolePoll", roles)
+    page.onRoleCheck()
+    expect(roles).toHaveBeenCalled()
+    local convert = mock.spy(function() end)
+    mock.stub(C_PartyInfo, "ConvertToRaid", convert)
+    page.onConvert()
+    expect(convert).toHaveBeenCalled()
+    local planned = mock.spy(function() end)
+    mock.stub(SuuUI, "Service", function(name: string): any return name == "raidplanner" and { Toggle = planned } or nil end)
+    page.onPlan()
+    expect(planned).toHaveBeenCalled()
+    -- the roster's changes: drawn again
+    mock.fireEvent("PARTY_LEADER_CHANGED")
+    mock.advanceTime(0.2)
+end
+
+@test("Raid Info: your lockouts in a panel beside the window; none")
+local function lockouts()
+    mock.stub(G, "GetNumSavedInstances", function(): number return 2 end)
+    mock.stub(G, "GetSavedInstanceInfo", function(i: number): ...any
+        if i == 1 then return "Molten Core", 1, 3 * 86400, 9, true, false, 0, true, 40, "40 Player", 10, 3, false, 409 end
+        return "The Stockade", 2, 0, 1, false, false, 0, false, 5, "Normal", 6, 6, false, 34
+    end)
+    local list = M:Lockouts()
+    expect(#list).toBe(1)
+    expect(list[1].name).toBe("Molten Core")
+    openTab("RaidList")
+    M.raidPage.onRaidInfo()
+    local p = M.lockoutPanel
+    expect(p:IsShown()).toBe(true)
+    expect(p.rows[1].name:GetText()).toBe("Molten Core")
+    expect(p.rows[1].progress:GetText()).toBe("3 / 10")
+    expect(p.rows[1].detail:GetText():find("40 Player", 1, true)).toBe(1)
+    mock.fireEvent("UPDATE_INSTANCE_INFO")
+    M:Emit("SUUUI_THEME_CHANGED")
+    -- extended, no bosses counted
+    mock.stub(G, "GetSavedInstanceInfo", function(_: number): ...any
+        return "Onyxia's Lair", 3, 0, 9, false, true, 0, true, 40, "", 0, 0, false, 249
+    end)
+    M:DrawLockouts()
+    expect(p.rows[1].detail:GetText()).toBe("extended")
+    mock.stub(G, "GetNumSavedInstances", function(): number return 0 end)
+    M:DrawLockouts()
+    expect(p.empty:IsShown()).toBe(true)
+    M:ToggleLockouts()
+    expect(p:IsShown()).toBe(false)
+end
+
+@test("/suu raidtest: 17 made-up members to drag around; again to end it")
+local function testRaid()
+    openTab("RaidList")
+    mock.stub(M, "Print", function(_: any, _: string) end)
+    mock.slash("/suu raidtest")
+    expect(#M:RaidMembers()).toBe(17)
+    local page = M.raidPage
+    page.onMove(2, 8)
+    expect(M.raidTest[2].group).toBe(8)
+    page.onSwap(2, 3)
+    expect(M.raidTest[2].group).toBe(M.raidTest[2].group)
+    mock.slash("/suu raidtest")
+    expect(M.raidTest).toBeNil()
+end
+
+@test("a probe that shows Blizzard's own social pages: SuuUI's step aside")
+local function probeAside()
+    mock.stub(SuuUI, "ProbeShowsBlizzardSocial", function(): boolean return true end)
+    open()
+    M:Follow()
+    expect(M.view).never.toBeShown()
+    expect(M.friendsList:GetAlpha()).toBe(1)
+end
