@@ -8,6 +8,11 @@
 -- name. Errors in the standard library's callbacks that SuuUI hands it
 -- directly (timers, hooks) go to the game's error handler as wowlua:errors
 -- reports them, and are kept here too (as "SuuUI").
+--
+-- The log is a FaultLog: where its lines go (the chat, the saved variables)
+-- and what timing measures with come in through interfaces, so a test builds
+-- its own log with stand-ins. `log` is SuuUI's; the module's functions are
+-- its methods.
 
 import * as errors from "wowlua:errors"
 import on from "wowlua:events"
@@ -20,132 +25,228 @@ const MAX_KEPT = 50
 
 export type Entry = { source: string, message: string, stack: string?, count: number, time: string }
 
-local list: Entry[] = {}          -- oldest first
-local byKey: { [string]: Entry } = {} -- source .. "\0" .. message
+-- Timing (/suu perf, Perf.wowlua): a source's own time and allocation.
+export type Spent = { ms: number, calls: number, peak: number, kb: number }
+
+--------------------------------------------------------------------------------
+-- What a log needs, and what it gives
+--------------------------------------------------------------------------------
+
+-- Runs callbacks guarded and reports what fails: what every other part of
+-- SuuUI depends on (Events, Combat, Settings, Modules…).
+export interface Reporter
+    -- fn(...) guarded: true and its results, or false (the error reported
+    -- under `source`)
+    function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
+    function report(source: any, message: any, stack: string?)
+end
+
+-- Where a new error goes: the player's chat line, the saved record.
+export interface FaultOutput
+    function announce(source: string, text: string)
+    function keep(source: string, text: string, stack: string?)
+    function forget()
+end
+
+-- What timing measures with: milliseconds and Lua's memory in KB.
+export interface Meter
+    function ms(): number
+    function kb(): number
+end
+
+-- The game's: the chat line, the saved variables (written on /reload or
+-- logout, so a session's errors can be read outside the game).
+export class ChatOutput implements FaultOutput
+    function announce(source: string, text: string)
+        print(("|cffff9a80%s hit an error and was skipped:|r %s  (/suu errors)"):format(source, text))
+    end
+
+    function keep(source: string, text: string, stack: string?)
+        if not DB.loaded() then return end
+        local saved: any[] = DB.db.errors or {}
+        DB.db.errors = saved
+        saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), source = source, message = text,
+            stack = stack, version = version }
+        while #saved > 30 do table.remove(saved, 1) end
+    end
+
+    function forget()
+        if DB.loaded() then DB.db.errors = nil end
+    end
+end
+
+export class GameMeter implements Meter
+    function ms(): number
+        return debugprofilestop()
+    end
+
+    function kb(): number
+        return collectgarbage("count")
+    end
+end
 
 local function firstLine(msg: any): string
     return (tostring(msg):match("^[^\n]*")) or ""
 end
 
--- Records an error from `source` (a module or owner name). `stack` is optional.
+--------------------------------------------------------------------------------
+-- The log
+--------------------------------------------------------------------------------
+
+export class FaultLog implements Reporter
+    private list: Entry[] = {}                -- oldest first
+    private byKey: { [string]: Entry } = {}   -- source .. "\0" .. message
+    -- the stack of the error the handler last saw (xpcall's handler runs
+    -- before the stack unwinds)
+    private lastStack: string? = nil
+    private handler: (err: any) -> any
+    -- timing: while on, each call's own time and the memory it allocated
+    -- (its nested calls' taken out) are added to its source. Allocation is
+    -- Lua's memory count before and after: a garbage collection step inside
+    -- the call takes some off, so it reads low rather than high (never
+    -- below 0).
+    private timing: boolean = false
+    private spent: { [string]: Spent } = {}
+    private starts: number[] = {}
+    private childs: number[] = {}
+    private kbStarts: number[] = {}
+    private kbChilds: number[] = {}
+    private depth: number = 0
+
+    constructor(private output: FaultOutput = ChatOutput.new(), private meter: Meter = GameMeter.new(),
+                private maxKept: number = MAX_KEPT)
+        self.handler = function(err: any): any
+            self.lastStack = debugstack(2)
+            return err
+        end
+    end
+
+    -- Records an error from `source` (a module or owner name). `stack` is
+    -- optional. The same error again only counts.
+    function report(source: any, message: any, stack: string?)
+        local from = tostring(source or "SuuUI")
+        local text = firstLine(message)
+        local key = from .. "\0" .. text
+        local entry = self.byKey[key]
+        if entry then
+            entry.count += 1
+            return
+        end
+        entry = { source = from, message = text, stack = stack, count = 1, time = date("%H:%M:%S") }
+        self.byKey[key] = entry
+        self.list[#self.list + 1] = entry
+        if #self.list > self.maxKept then
+            local old = table.remove(self.list, 1)
+            if old then self.byKey[old.source .. "\0" .. old.message] = nil end
+        end
+        self.output:announce(from, text)
+        self.output:keep(from, text, stack)
+    end
+
+    private function finish(source: string, ok: boolean, ...: any): (boolean, ...any)
+        if not ok then
+            self:report(source, (...), self.lastStack)
+            return false
+        end
+        return true, ...
+    end
+
+    private function finishTimed(source: string, ok: boolean, ...: any): (boolean, ...any)
+        local depth = self.depth
+        -- timing was turned off (or on again) inside this call: nothing to add
+        if depth == 0 or not self.starts[depth] then return self:finish(source, ok, ...) end
+        local now, kbNow = self.meter:ms(), self.meter:kb()
+        local total = now - self.starts[depth]
+        local own = total - self.childs[depth]
+        local kbTotal = math.max(0, kbNow - self.kbStarts[depth])
+        local kbOwn = math.max(0, kbTotal - self.kbChilds[depth])
+        self.depth = depth - 1
+        if self.depth > 0 then
+            self.childs[self.depth] += total
+            self.kbChilds[self.depth] += kbTotal
+        end
+        local rec = self.spent[source]
+        if not rec then
+            rec = { ms = 0, calls = 0, peak = 0, kb = 0 }
+            self.spent[source] = rec
+        end
+        rec.ms, rec.calls, rec.kb = rec.ms + own, rec.calls + 1, rec.kb + kbOwn
+        if own > rec.peak then rec.peak = own end
+        return self:finish(source, ok, ...)
+    end
+
+    -- Calls fn(...) under xpcall; an error is reported against `source`.
+    -- Returns true plus fn's results on success, false on error. Allocates
+    -- nothing on success, so every event callback can go through it.
+    function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
+        if not self.timing then return self:finish(source, xpcall(fn, self.handler, ...)) end
+        self.depth += 1
+        local depth = self.depth
+        self.starts[depth], self.childs[depth] = self.meter:ms(), 0
+        self.kbStarts[depth], self.kbChilds[depth] = self.meter:kb(), 0
+        return self:finishTimed(source, xpcall(fn, self.handler, ...))
+    end
+
+    -- Timing on or off (on: from zero), and what it has counted.
+    function setTiming(enabled: boolean)
+        self.timing = enabled and true or false
+        self.depth = 0
+        if enabled then wipe(self.spent) end
+    end
+
+    function timingState(): (boolean, { [string]: Spent })
+        return self.timing, self.spent
+    end
+
+    function entries(): Entry[]
+        return self.list
+    end
+
+    -- Every error forgotten, the saved ones too.
+    function clear()
+        wipe(self.list)
+        wipe(self.byKey)
+        self.output:forget()
+    end
+end
+
+-- SuuUI's log, and its methods as the module's functions.
+export const log = FaultLog.new()
+
 export function report(source: any, message: any, stack: string?)
-    local from = tostring(source or "SuuUI")
-    local text = firstLine(message)
-    local key = from .. "\0" .. text
-    local entry = byKey[key]
-    if entry then
-        entry.count += 1
-        return
-    end
-    entry = { source = from, message = text, stack = stack, count = 1, time = date("%H:%M:%S") }
-    byKey[key] = entry
-    list[#list + 1] = entry
-    if #list > MAX_KEPT then
-        local old = table.remove(list, 1)
-        if old then byKey[old.source .. "\0" .. old.message] = nil end
-    end
-    print(("|cffff9a80%s hit an error and was skipped:|r %s  (/suu errors)"):format(from, text))
-
-    -- Kept in the saved variables too (written on /reload or logout), so the
-    -- errors of a session can be read outside the game.
-    if DB.loaded() then
-        local saved: any[] = DB.db.errors or {}
-        DB.db.errors = saved
-        saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), source = from, message = text,
-            stack = stack, version = version }
-        while #saved > 30 do table.remove(saved, 1) end
-    end
-end
-
--- Calls fn(...) under xpcall; an error is reported against `source`.
--- Returns true plus fn's results on success, false on error. Allocates
--- nothing on success, so every event callback can go through it.
-local lastStack: string? = nil
-
-local function handler(err: any): any
-    lastStack = debugstack(2)
-    return err
-end
-
-local function finish(source: string, ok: boolean, ...: any): (boolean, ...any)
-    if not ok then
-        report(source, (...), lastStack)
-        return false
-    end
-    return true, ...
-end
-
--- Timing (/suu perf, Perf.wowlua): while on, each call's own time and the
--- memory it allocated (its nested calls' taken out) are added to its source,
--- a module's name. Allocation is Lua's memory count before and after: a
--- garbage collection step inside the call takes some off, so it reads low
--- rather than high (never below 0).
-export type Spent = { ms: number, calls: number, peak: number, kb: number }
-
-local timing = false
-local spent: { [string]: Spent } = {}
-local starts: number[], childs: number[], kbStarts: number[], kbChilds: number[] = {}, {}, {}, {}
-local depth = 0
-local clock = debugprofilestop
-
-local function finishTimed(source: string, ok: boolean, ...: any): (boolean, ...any)
-    -- timing was turned off (or on again) inside this call: nothing to add
-    if depth == 0 or not starts[depth] then return finish(source, ok, ...) end
-    local now, kbNow = clock(), collectgarbage("count")
-    local total = now - starts[depth]
-    local own = total - childs[depth]
-    local kbTotal = math.max(0, kbNow - kbStarts[depth])
-    local kbOwn = math.max(0, kbTotal - kbChilds[depth])
-    depth -= 1
-    if depth > 0 then
-        childs[depth] += total
-        kbChilds[depth] += kbTotal
-    end
-    local rec = spent[source]
-    if not rec then
-        rec = { ms = 0, calls = 0, peak = 0, kb = 0 }
-        spent[source] = rec
-    end
-    rec.ms, rec.calls, rec.kb = rec.ms + own, rec.calls + 1, rec.kb + kbOwn
-    if own > rec.peak then rec.peak = own end
-    return finish(source, ok, ...)
+    log:report(source, message, stack)
 end
 
 export function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
-    if not timing then return finish(source, xpcall(fn, handler, ...)) end
-    depth += 1
-    starts[depth], childs[depth] = clock(), 0
-    kbStarts[depth], kbChilds[depth] = collectgarbage("count"), 0
-    return finishTimed(source, xpcall(fn, handler, ...))
+    return log:call(source, fn, ...)
 end
 
--- Timing on or off (on: from zero), and what it has counted.
 export function setTiming(enabled: boolean)
-    timing = enabled and true or false
-    depth = 0
-    if enabled then wipe(spent) end
+    log:setTiming(enabled)
 end
 
 export function timingState(): (boolean, { [string]: Spent })
-    return timing, spent
+    return log:timingState()
 end
 
 export function entries(): Entry[]
-    return list
+    return log:entries()
 end
+
+--------------------------------------------------------------------------------
+-- Wiring: the standard library's errors, /suu errors, blocked actions
+--------------------------------------------------------------------------------
 
 -- What wowlua:errors reports (the standard library's own callbacks: timers,
 -- hooks, deferred combat work) is kept in the list as well.
 errors.onError(function(msg: string)
     local text = msg:gsub("^" .. ADDON .. ": ", "")
-    report("SuuUI", text)
+    log:report("SuuUI", text)
 end)
 
 registerCommand("errors", "List the errors SuuUI caught this session; \"/suu errors test\" raises one on purpose.", function(arg: string)
     if arg == "clear" then
-        wipe(list)
-        wipe(byKey)
-        if DB.loaded() then DB.db.errors = nil end
+        log:clear()
         return print("Errors cleared.")
     end
     if arg == "test" then
@@ -156,6 +257,7 @@ registerCommand("errors", "List the errors SuuUI caught this session; \"/suu err
         events.offAll("Fault test (second listener)")
         return
     end
+    local list = log:entries()
     if #list == 0 then
         print("No errors this session.")
         return
@@ -167,13 +269,19 @@ registerCommand("errors", "List the errors SuuUI caught this session; \"/suu err
     if arg ~= "full" then _G.print("  /suu errors full adds the stacks.") end
 end)
 
+-- What the game blocked: the event's names.
+enum Blocked {
+    Blocked = "ADDON_ACTION_BLOCKED",
+    Forbidden = "ADDON_ACTION_FORBIDDEN",
+}
+
 -- Protected calls the game blocked ("Interface action failed because of an
 -- AddOn"): in combat, or out of it where a call needs the user's click or
 -- key press (the group finder's search). The game names only the function,
 -- so that is what is kept, with SuuUI's stack at the moment it fired when
 -- there is one.
-local function blocked(event: string, addon: any, func: any)
-    local what = event == "ADDON_ACTION_FORBIDDEN" and "Forbidden"
+local function blocked(event: Blocked, addon: any, func: any)
+    local what = event == Blocked.Forbidden and "Forbidden"
         or (InCombatLockdown() and "Blocked in combat" or "Blocked")
     if addon ~= ADDON then
         -- blamed on someone else (another addon, or a name the game makes
@@ -197,8 +305,8 @@ local function blocked(event: string, addon: any, func: any)
     if #written > 0 then
         stack = stack .. "\nWritten by addon code: " .. table.concat(written, "; ", 1, math.min(#written, 40))
     end
-    report("Taint", ("%s: %s"):format(what, tostring(func)), stack)
+    log:report("Taint", ("%s: %s"):format(what, tostring(func)), stack)
 end
 
-on("ADDON_ACTION_BLOCKED", function(addon: any, func: any) blocked("ADDON_ACTION_BLOCKED", addon, func) end)
-on("ADDON_ACTION_FORBIDDEN", function(addon: any, func: any) blocked("ADDON_ACTION_FORBIDDEN", addon, func) end)
+on(Blocked.Blocked, function(addon: any, func: any) blocked(Blocked.Blocked, addon, func) end)
+on(Blocked.Forbidden, function(addon: any, func: any) blocked(Blocked.Forbidden, addon, func) end)

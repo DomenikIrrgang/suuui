@@ -190,6 +190,99 @@ local function toggledInside()
 end
 
 --------------------------------------------------------------------------------
+-- A log of its own: its output and meter stand-ins
+--------------------------------------------------------------------------------
+
+-- Records what a log announces, keeps and forgets.
+class FakeOutput implements fault.FaultOutput
+    announced: string[] = {}
+    kept: string[] = {}
+    forgot: number = 0
+
+    function announce(source: string, text: string)
+        self.announced[#self.announced + 1] = source .. ": " .. text
+    end
+
+    function keep(source: string, text: string, stack: string?)
+        self.kept[#self.kept + 1] = `{source}: {text} [{stack ?? "-"}]`
+    end
+
+    function forget()
+        self.forgot += 1
+    end
+end
+
+-- A clock and a memory count the test moves.
+class FakeMeter implements fault.Meter
+    now: number = 0
+    memory: number = 100
+
+    function ms(): number
+        return self.now
+    end
+
+    function kb(): number
+        return self.memory
+    end
+
+    function spend(ms: number, kb: number?)
+        self.now += ms
+        self.memory += kb ?? 0
+    end
+end
+
+@test("a log of its own: one announcement and one record per distinct error, the oldest dropped past its limit")
+local function ownLog()
+    local out = FakeOutput.new()
+    local log = fault.FaultLog.new(out, FakeMeter.new(), 3)
+    log:report("Bags", "a\nsecond line", "stack")
+    log:report("Bags", "a")
+    log:report(nil, 42)
+    expect(out.announced).toEqual({ "Bags: a", "SuuUI: 42" })
+    expect(out.kept).toEqual({ "Bags: a [stack]", "SuuUI: 42 [-]" })
+    expect(log:entries()[1].count).toBe(2)
+    log:report("Chat", "b")
+    log:report("Chat", "c")
+    local list = log:entries()
+    expect(#list).toBe(3)
+    expect(list[1].message).toBe("42")
+    -- (SuuUI's own log saw none of it)
+    expect(#fault.entries()).toBe(0)
+    log:clear()
+    expect(#log:entries()).toBe(0)
+    expect(out.forgot).toBe(1)
+end
+
+@test("a log of its own: timing counts each source's own time and memory exactly")
+local function ownTiming()
+    local meter = FakeMeter.new()
+    local log = fault.FaultLog.new(FakeOutput.new(), meter)
+    log:setTiming(true)
+    log:call("Outer", function()
+        meter:spend(5, 1)
+        log:call("Inner", function() meter:spend(20, 4) end)
+        meter:spend(5, 1)
+    end)
+    log:call("Inner", function() meter:spend(30, 2) end)
+    local _, spent = log:timingState()
+    expect(spent.Outer).toEqual({ ms = 10, calls = 1, peak = 10, kb = 2 })
+    expect(spent.Inner).toEqual({ ms = 50, calls = 2, peak = 30, kb = 6 })
+    -- a garbage collection inside a call reads as nothing allocated
+    log:call("Collected", function() meter:spend(1, -50) end)
+    expect((spent.Collected :: fault.Spent).kb).toBe(0)
+end
+
+@test("a log of its own: an error inside a guarded call reported with its stack, the call false")
+local function ownCall()
+    local out = FakeOutput.new()
+    local log = fault.FaultLog.new(out)
+    local ok = log:call("Boom", function() error("own-boom") end)
+    expect(ok).toBe(false)
+    expect(out.announced[1]:find("Boom: ", 1, true) ~= nil).toBe(true)
+    expect(type(log:entries()[1].stack)).toBe("string")
+end
+
+--------------------------------------------------------------------------------
 -- the standard library's errors
 --------------------------------------------------------------------------------
 
