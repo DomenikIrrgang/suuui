@@ -82,7 +82,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [K7](#k7) | checker | low | fixed after 0.9.6 (T260) | The closing line of a multi-line `return f(...)` reads as not run |
 | [V12](#v12) | VM | medium | fixed 0.9.4 | `IsModifiedClick("CHATLINK")` was always false |
 | [V13](#v13) | VM | low | fixed after 0.9.6 (T257) | `IsMouseOver` ignores the cursor and its offsets |
-| [V14](#v14) | VM | low | open | Chat windows' settings aren't kept |
+| [V14](#v14) | VM | low | fixed after 0.9.6 (T263) | Chat windows' settings aren't kept |
 | [V15](#v15) | VM | high | fixed after 0.9.6 (T244) | A hidden edit box kept the keyboard |
 | [V16](#v16) | VM | medium | fixed after 0.9.6 (T256) | An item put onto a part stack of its kind isn't stacked |
 | [V17](#v17) | VM | high | fixed 0.9.5 | The auction house: a stalled message queue, a shared item key table, no item level |
@@ -658,7 +658,7 @@ The engine answers whether the hovered frame is the frame or a child; the client
 
 ### V14. Chat windows' settings aren't kept
 
-*Status: open.*
+*Status: fixed after 0.9.6 (T263): the setters keep their values and `GetChatWindowInfo` answers them; the chat test's fake is gone.*
 
 `SetChatWindowName`, `SetChatWindowSize` and the other `SetChatWindow*` are no-ops; `GetChatWindowInfo` keeps the recording. (units-chat)
 
