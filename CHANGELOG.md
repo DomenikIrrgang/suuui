@@ -6,7 +6,7 @@
 
 - The spellbook: in a fight, switch between schools and pages; your spells now cast when you let go of the mouse, so pressing one to drag it to a bar no longer casts it; and dragging a spell to a bar works in a fight too.
 - Plugin API 0.18: `SuuUI.UI.SecurePlacement`, a protected window opened in combat at its tab's size and place.
-- Plugin API 0.19: SuuUI's components are classes, and `SuuUI.Raw.Mixins` holds them (with `WindowFrame` and `ClassBar` added). Changing a method on one when your plugin loads still reaches every frame SuuUI builds afterwards, and now the frames of the classes built on it too: a change to `Panel` reaches windows.
+- Plugin API 0.19: SuuUI's components are classes, and `SuuUI.Raw.Mixins` holds them (with `WindowFrame` and `ClassBar` added). Changing a method on one when your plugin loads still reaches every frame SuuUI builds afterwards, those of the classes built on it included (a change to `Panel` reaches windows and the bags).
 - Unit frames: while you rest in an inn or a city, a small "z Z Z" drifts up from your frame's top-right corner (a full moon once your rested XP is full), and hovering your frame shows your rested XP and what it means. Settings › Unit frames › Rested: show it also while carrying rested XP, keep it still, hide it in combat or at max level. The Unit frames settings now preview your frame.
 
 ### Fixed
