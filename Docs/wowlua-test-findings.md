@@ -100,7 +100,11 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V29](#v29) | VM | low | fixed after 0.9.6 (T249) | A member logging out sent no `UNIT_CONNECTION` |
 | [V30](#v30) | VM | low | open | A unit can't turn hostile (a duel) |
 | [V31](#v31) | VM | low | open | No combo points |
-| [V32](#v32) | VM | medium | open (probe) | An addon's encounter timeline event on Forever |
+| [V32](#v32) | VM | medium | fixed after 0.9.6 (T255) | An addon's encounter timeline event on Forever |
+| [V33](#v33) | VM | high | fixed after 0.9.6 (T251) | A secret alpha read back plain |
+| [V34](#v34) | VM | high | fixed after 0.9.6 (T252) | A protected frame could anchor to a region |
+| [V35](#v35) | VM | high | fixed after 0.9.6 (T253) | An addon could pick up a spellbook spell in combat |
+| [V36](#v36) | VM | high | fixed after 0.9.6 (T254) | A frame holding a protected frame wasn't protected |
 
 ## Test runner and mock issues
 
@@ -790,9 +794,41 @@ Nameplates' recheck stubs `UnitCanAttack`. A `unit:setReaction` with `UNIT_FACTI
 
 ### V32. An addon's encounter timeline event on Forever
 
-*Status: open (probe).*
+*Status: fixed after 0.9.6 (T255).*
 
-Forever's timeline is off (`IsFeatureAvailable()` false, recorded); the engine answers `AddScriptEvent` with 0 and an empty list, unrecorded. SuuUI's pull countdown and test timeline ride on it; its test stands in for the calls. (units-hud)
+Forever's own timeline is off (`IsFeatureAvailable()` false, recorded), but SuuUI's pull countdown shows on it in game (seen by the user). The engine keeps an addon's script events now: added, paused, resumed, run out or cancelled, each told by the timeline's events. Timeline's test runs on them instead of a stand-in. (units-hud)
+
+<a id="v33"></a>
+
+### V33. A secret alpha read back plain
+
+*Status: fixed after 0.9.6 (T251).*
+
+Once a frame's alpha is set from a secret (UnitFrames' resting alpha through a health curve), the game answers its alpha secret from then on; the engine forgot it, so Motion's fade from it did arithmetic in tests but errored in game. Motion snaps from a secret alpha now, and Reskin leaves one alone. (units-hud, found in game)
+
+<a id="v34"></a>
+
+### V34. A protected frame could anchor to a region
+
+*Status: fixed after 0.9.6 (T252).*
+
+The game errors "Cannot anchor protected frames to regions" at login; the engine let the spellbook's secure overlays anchor to textures. They anchor to a pager frame now. (units-windows, found in game)
+
+<a id="v35"></a>
+
+### V35. An addon could pick up a spellbook spell in combat
+
+*Status: fixed after 0.9.6 (T253).*
+
+`PickupSpellBookItem` is blocked for addons in combat. The spellbook's icons drag through `SecureHandlerDragTemplate` now, as the game allows. (units-windows, found in game)
+
+<a id="v36"></a>
+
+### V36. A frame holding a protected frame wasn't protected
+
+*Status: fixed after 0.9.6 (T254).*
+
+A parent of a protected frame is protected too: a secure handle to it works in combat, and its own `Show`, `SetShown` and moves are refused there. The engine let Collections show and lay out its tabs in combat, which the game refuses; they wait for combat's end now. (units-windows)
 
 ## Not bugs (for test writers)
 

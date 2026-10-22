@@ -2,12 +2,11 @@
 
 Area: ActionBars, Auras, CastBars, UnitFrames, SwingTimer, Threat,
 Timeline and DamageMeter (`src/Units/`). Written on wowlua 0.9.6 and fixes
-after it on `m9-coverage-stale-handle` (decisions T247 to T249, see below).
+after it on `m9-coverage-stale-handle` (decisions T247 to T255, see below).
 
 None of these had tests. They run over the engine's units, threat lists,
 damage meter, nameplates-free HUD and Blizzard's own frames (stood down
-by the modules). The encounter timeline's calls are a stand-in (see
-below); everything else is the engine's.
+by the modules), the encounter timeline included.
 
 ## Test files
 
@@ -62,17 +61,19 @@ Fixed in wowlua (after 0.9.6):
 - **T249: a member logging out sent no `UNIT_CONNECTION`.** Only the
   roster update came; Auras dims an offline target's auras on the
   documented event. A probe for its order is noted in wowlua.
+- **T255: the encounter timeline kept no addon timers.** Forever has the
+  game's own timeline off, but SuuUI's pull countdown shows on it in game
+  (confirmed by the user). The engine keeps an addon's script events now:
+  added, paused, resumed, run out or cancelled, with the timeline's
+  events; Timeline's test no longer stands in for the calls.
 
 Not fixed, noted:
 
 - **A stubbed global runs Blizzard's code tainted** (as in Nameplates):
   prefer the engine's own state (`mob:setThreat`), a module's own API
   table, or SuuUI's stand-in tables (`/UI/WeaponEnchants`' `G`).
-- **Forever's encounter timeline is off** (`IsFeatureAvailable()` false)
-  and whether an addon's `AddScriptEvent` still works there is unknown:
-  the engine answers 0 and an empty list (unrecorded), so Timeline's test
-  stands in for the calls. A probe is noted in wowlua's `PROBES.md`; if
-  the game refuses it too, SuuUI's pull countdown never shows on the
-  timeline (its alert still counts).
+- **A timeline event's name kept secret**: the engine gives an addon's
+  own events their names; Timeline's test wraps `GetEventInfo` to check
+  a secret one is left out.
 - **`mock.advanceTime` runs no frames**: animations (Motion's fades)
   need `mock.advanceFrames`.
