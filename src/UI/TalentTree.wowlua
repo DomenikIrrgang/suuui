@@ -49,7 +49,7 @@
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
+import text, Text from "/UI/Text"
 import icon from "/UI/Icon"
 import * as panel from "/UI/Panel"
 import * as inputs from "/UI/Inputs"
@@ -81,8 +81,6 @@ local PICKER_H = 30
 
 local function hex(token: string): string return T.color[token].hex end
 local live: { [any]: boolean } = setmetatable({}, { __mode = "k" }) -- built trees, drawn again on a theme change
-
-local TT: { [string]: any } = {}
 
 --------------------------------------------------------------------------------
 -- A node
@@ -428,337 +426,369 @@ local function makeOrder(tt: any): any
     return o
 end
 
-function TT:SetOrder(lines: any[]?)
-    self.orderLines = lines
-    if lines and not self.order then self.order = makeOrder(self) end
-    local o = self.order
-    if o then
-        o:SetShown(lines ~= nil)
-        if lines then
-            o.empty:SetShown(#lines == 0)
-            local steps = 0
-            for i, d in ipairs(lines) do
-                local l = o.lines[i] or makeLine(self, o)
-                o.lines[i] = l
-                l.data, l.index = d, i
-                l:ClearAllPoints()
-                l:SetPoint("TOPLEFT", o.scroll.child, "TOPLEFT", 0, -(i - 1) * LINE_STEP)
-                l:SetPoint("RIGHT", o.scroll.child, "RIGHT", 0, 0)
-                l.levels:SetValue(d.levels or "")
-                l.icon:SetTexture(d.icon or 134400)
-                local ranks = d.ranks and d.ranks ~= "" and (" |cff" .. hex("ink-muted") .. d.ranks .. "|r") or ""
-                l.name:SetValue((d.name or "") .. ranks)
-                drawLine(l)
-                l:Show()
-                steps = steps + (d.count or 1)
-            end
-            for i = #lines + 1, #o.lines do o.lines[i]:Hide(); o.lines[i].data = nil end
-            o.scroll.child:SetHeight(math.max(1, #lines * LINE_STEP))
-            o.count:SetValue(tostring(steps))
-        end
-    end
-    self:Layout()
-end
-
-function TT:MarkNode(nodeID: any)
-    for _, p in ipairs(self.panels) do
-        for _, b in ipairs(p.nodes) do
-            local marked = nodeID ~= nil and b.data ~= nil and b.data.id == nodeID
-            if (b.marked or false) ~= marked then
-                b.marked = marked
-                drawNode(b)
-            end
-        end
-    end
-end
-
 --------------------------------------------------------------------------------
 -- The page
 --------------------------------------------------------------------------------
 
-function TT:SetSpecs(list: any, viewing: number?)
-    self.specList = list
-    local show = list and #list > 1
-    self.specRow:SetShown(show and true or false)
-    if show then
-        if not self.segmented or self.segmentedFor ~= #list then
-            if self.segmented then self.segmented:Hide() end
-            local options = {}
-            for i, s in ipairs(list) do
-                options[i] = { value = i, label = s.label .. (s.name and s.name ~= "" and (": " .. s.name) or ""), disabled = s.locked }
-            end
-            self.segmented = inputs.segmented(self.specRow, {
-                options = options,
-                onChange = function(v: any) if self.onSpec then self.onSpec(v) end end,
-            })
-            self.segmented:SetPoint("LEFT")
-            self.segmentedFor = #list
-        end
-        self.segmented:SetValue(viewing or 1)
-        local spec = list[viewing or 1] or {}
-        self.activeBadge:SetShown(spec.active and true or false)
-        self.activate:SetShown(not spec.active)
-        if not spec.active then self.activate:SetLabel("Activate " .. (spec.name ~= "" and spec.name or spec.label or "")) end
-    end
-    self:Layout()
-end
+export class TalentTree extends Frame
+    panels: any
+    specRow: Frame
+    activeBadge: any
+    activate: any
+    summary: Frame
+    summaryName: Text
+    summaryPoints: Text
+    summaryDiamond: Texture
+    summaryLine: Text
+    summaryBadge: any
+    treesRow: Frame
+    foot: Frame
+    apply: any
+    undo: any
+    back: any
+    unspent: Text
+    status: Text
+    orderLines: any? = nil
+    specList: any? = nil
+    segmented: any? = nil
+    segmentedFor: any? = nil
+    builds: any? = nil
+    picker: any? = nil
+    pickerBadge: any? = nil
+    pickerButtons: any? = nil
+    data: any? = nil
+    headShown: any? = nil
 
--- The build picker in the summary's place (nil: the summary as before).
-function TT:SetBuilds(b: any)
-    self.builds = b
-    if b and not self.picker then
-        self.picker = uiSelect.select(self.summary, { width = 280, search = "always", maxRows = 12, minListWidth = 300,
-            onChange = function(v: any) if self.builds and self.builds.onChange then self.builds.onChange(v) end end })
-        self.pickerBadge = controls.stateBadge(self.summary, "neutral", "Active")
-        self.pickerButtons = {}
+    constructor(parent: any)
+        super(nil, parent)
+        self.panels = {}
+        -- the specs (two talent groups only)
+        self.specRow = CreateFrame("Frame", nil, self)
+        self.specRow:SetHeight(30)
+        self.activeBadge = controls.stateBadge(self.specRow, "neutral", "Active")
+        self.activate = controls.button(self.specRow, { text = "Activate", variant = "quiet",
+            onClick = function() if self.onActivate then self.onActivate() end end })
+        self.activeBadge:SetPoint("RIGHT", self.specRow, "RIGHT", 0, 0)
+        self.activate:SetPoint("RIGHT", self.specRow, "RIGHT", 0, 0)
+        self.specRow:Hide()
+        -- the summary
+        self.summary = CreateFrame("Frame", nil, self)
+        self.summary:SetSize(1, T.type.label.lineHeight)
+        self.summaryName = text(self.summary, "label", "ink")
+        self.summaryName:SetPoint("LEFT")
+        self.summaryPoints = text(self.summary, "caption", "ink-muted")
+        self.summaryPoints:SetPoint("LEFT", self.summaryName, "RIGHT", S["space-5"], 0)
+        -- someone else's (0.17): the class diamond, the line, Read only
+        self.summaryDiamond = draw.diamond(self.summary, 7, "ink", "OVERLAY")
+        self.summaryDiamond:SetPoint("CENTER", self.summary, "LEFT", 4, 0)
+        self.summaryDiamond:Hide()
+        self.summaryLine = text(self.summary, "caption", "ink-muted")
+        self.summaryLine:SetPoint("LEFT", self.summaryName, "RIGHT", S["space-4"], -1)
+        self.summaryLine:Hide()
+        self.summaryBadge = controls.stateBadge(self.summary, "neutral", "Read only")
+        self.summaryBadge:SetPoint("RIGHT")
+        self.summaryBadge:Hide()
+        -- the trees
+        self.treesRow = CreateFrame("Frame", nil, self)
+        -- the foot: a faint rule, the points, the status, Undo and Apply
+        self.foot = CreateFrame("Frame", nil, self)
+        self.foot:SetPoint("BOTTOMLEFT")
+        self.foot:SetPoint("BOTTOMRIGHT")
+        self.foot:SetHeight(FOOT_H)
+        local rule = draw.fill(self.foot, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT")
+        rule:SetPoint("TOPRIGHT")
+        self.apply = controls.button(self.foot, { text = "Apply", variant = "primary", onClick = function()
+            local a = self.data and self.data.actions
+            if a and a.primary then a.primary.onClick() elseif self.onApply then self.onApply() end
+        end })
+        self.apply:SetPoint("BOTTOMRIGHT", self.foot, "BOTTOMRIGHT", 0, 0)
+        self.undo = controls.button(self.foot, { text = "Undo", variant = "quiet", onClick = function()
+            local a = self.data and self.data.actions
+            if a and a.secondary then a.secondary.onClick() elseif self.onUndo then self.onUndo() end
+        end })
+        self.undo:SetPoint("RIGHT", self.apply, "LEFT", -S["space-3"], 0)
+        self.back = controls.button(self.foot, { text = "Back", icon = "chevronLeft",
+            onClick = function() if self.onBack then self.onBack() end end })
+        self.back:SetPoint("BOTTOMRIGHT", self.foot, "BOTTOMRIGHT", 0, 0)
+        self.back:Hide()
+        self.unspent = text(self.foot, "caption", "ink-muted")
+        self.unspent:SetPoint("LEFT", self.foot, "BOTTOMLEFT", 0, 15)
+        self.status = text(self.foot, "caption", "ink-muted")
+        self.status:SetPoint("LEFT", self.unspent, "RIGHT", S["space-5"], 0)
+        self.status:SetPoint("RIGHT", self.undo, "LEFT", -S["space-5"], 0)
+        self.status:SetJustifyH("LEFT")
+        self:Layout()
+        self:SetData({})
+        live[self] = true
     end
-    if self.picker then
-        self.picker:SetShown(b ~= nil)
-        self.pickerBadge:SetShown(b ~= nil and b.badge ~= nil)
-        if b then
-            self.picker.foot = b.foot
-            self.picker:SetOptions(b.options or {})
-            self.picker:SetValue(b.value)
-            if b.badge then self.pickerBadge:SetState("neutral", b.badge) end
-            self.picker:ClearAllPoints()
-            if b.diamond and T.color[b.diamond] then
-                self.summaryDiamond:Show()
-                draw.paint(self.summaryDiamond, b.diamond)
-                self.picker:SetPoint("LEFT", self.summary, "LEFT", 14, 0)
-            else
-                self.summaryDiamond:Hide()
-                self.picker:SetPoint("LEFT", self.summary, "LEFT", 0, 0)
-            end
-            self.pickerBadge:ClearAllPoints()
-            self.pickerBadge:SetPoint("LEFT", self.picker, "RIGHT", S["space-4"], 0)
-        end
-        -- the row's buttons, right to left
-        local last
-        for i, def in ipairs(b and b.buttons or {}) do
-            local btn = self.pickerButtons[i]
-            if not btn then
-                btn = controls.button(self.summary, { text = def.label, variant = def.variant or "quiet",
-                    onClick = function(x) if x.def and x.def.onClick and not x.def.disabled then x.def.onClick() end end })
-                btn:HookScript("OnEnter", function(x)
-                    if x.def and x.def.reason then showTooltip(x, { title = x.def.label, description = x.def.reason }) end
-                end)
-                btn:HookScript("OnLeave", function() hideTooltip() end)
-                self.pickerButtons[i] = btn
-            end
-            btn.def = def
-            btn:SetLabel(def.label)
-            btn:SetEnabledState(not def.disabled)
-            btn:ClearAllPoints()
-            if last then btn:SetPoint("RIGHT", last, "LEFT", -S["space-3"], 0)
-            else btn:SetPoint("RIGHT", self.summary, "RIGHT", 0, 0) end
-            btn:Show()
-            last = btn
-        end
-        for i = #(b and b.buttons or {}) + 1, #self.pickerButtons do self.pickerButtons[i]:Hide() end
-    end
-    self:Layout()
-end
 
-function TT:Layout()
-    local top = 0
-    if self.specRow:IsShown() then
-        self.specRow:ClearAllPoints()
-        self.specRow:SetPoint("TOPLEFT", self, "TOPLEFT", 0, 0)
-        self.specRow:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, 0)
-        top = top + 30 + S["space-5"]
-    end
-    self.summary:ClearAllPoints()
-    self.summary:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
-    self.summary:SetPoint("RIGHT", self, "RIGHT", 0, 0)
-    self.summary:SetShown(not self.noSummary)
-    local sh = self.headShown and T.type["unit-name-lg"].lineHeight or T.type.label.lineHeight
-    if self.builds then sh = PICKER_H end
-    self.summary:SetHeight(sh)
-    if not self.noSummary then top = top + sh + S["space-5"] end
-    local order = self.order and self.order:IsShown()
-    self.treesRow:ClearAllPoints()
-    self.treesRow:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
-    self.treesRow:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", order and -TALENT_ORDER_W or 0, FOOT_H + S["space-5"])
-    if order then
-        self.order:ClearAllPoints()
-        self.order:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, -top)
-        self.order:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, FOOT_H + S["space-5"])
-        self.order:SetWidth(ORDER_W)
-    end
-end
-
-function TT:SetData(data: any)
-    local d = data or {}
-    self.data = d
-    local trees = d.trees or {}
-    -- the summary: the spec, the points per tree
-    local per, total = {}, 0
-    for i, t in ipairs(trees) do per[i] = tostring(t.points or 0); total = total + (t.points or 0) end
-    local head = d.head
-    if (head ~= nil) ~= (self.headShown or false) then
-        self.headShown = head ~= nil
+    function SetOrder(lines: any[]?)
+        self.orderLines = lines
+        if lines and not self.order then self.order = makeOrder(self) end
+        local o = self.order
+        if o then
+            o:SetShown(lines ~= nil)
+            if lines then
+                o.empty:SetShown(#lines == 0)
+                local steps = 0
+                for i, d in ipairs(lines) do
+                    local l = o.lines[i] or makeLine(self, o)
+                    o.lines[i] = l
+                    l.data, l.index = d, i
+                    l:ClearAllPoints()
+                    l:SetPoint("TOPLEFT", o.scroll.child, "TOPLEFT", 0, -(i - 1) * LINE_STEP)
+                    l:SetPoint("RIGHT", o.scroll.child, "RIGHT", 0, 0)
+                    l.levels:SetValue(d.levels or "")
+                    l.icon:SetTexture(d.icon or 134400)
+                    local ranks = d.ranks and d.ranks ~= "" and (" |cff" .. hex("ink-muted") .. d.ranks .. "|r") or ""
+                    l.name:SetValue((d.name or "") .. ranks)
+                    drawLine(l)
+                    l:Show()
+                    steps = steps + (d.count or 1)
+                end
+                for i = #lines + 1, #o.lines do o.lines[i]:Hide(); o.lines[i].data = nil end
+                o.scroll.child:SetHeight(math.max(1, #lines * LINE_STEP))
+                o.count:SetValue(tostring(steps))
+            end
+        end
         self:Layout()
     end
-    local builds = self.builds ~= nil and not head
-    self.summaryDiamond:SetShown(head ~= nil or (builds and self.builds.diamond ~= nil))
-    self.summaryBadge:SetShown(head ~= nil)
-    self.summaryLine:SetShown(head ~= nil)
-    self.summaryName:ClearAllPoints()
-    if head then
-        -- someone else's: who, and the points per tree by name
-        local token = head.class and "class-" .. head.class:lower()
-        if not (token and T.color[token]) then token = nil end
-        if token then draw.paint(self.summaryDiamond, token) else self.summaryDiamond:SetVertexColor(1, 1, 1, 1) end
-        self.summaryName:SetStyle("unit-name-lg")
-        self.summaryName:SetPoint("LEFT", self.summaryDiamond, "RIGHT", S["space-4"], 0)
-        self.summaryName:SetColor(token or "ink")
-        self.summaryName:SetValue(head.name or "")
-        self.summaryLine:SetValue(head.line or "")
-        local named = {}
-        for i, t in ipairs(trees) do named[i] = ("%s |cff%s%d|r"):format(t.name or "", hex("ink"), t.points or 0) end
-        self.summaryPoints:SetValue(table.concat(named, "   "))
-    else
-        self.summaryName:SetStyle("label")
-        self.summaryName:SetColor("ink")
-        self.summaryName:SetPoint("LEFT")
-        self.summaryName:SetValue(builds and "" or (d.name or ""))
-        self.summaryPoints:SetValue(#per > 0 and (table.concat(per, " / ") .. " · " .. total .. (d.spentLabel or " spent")) or "")
-    end
-    self.summaryPoints:ClearAllPoints()
-    local after = head and self.summaryLine or self.summaryName
-    if builds then after = self.builds.badge and self.pickerBadge or self.picker end
-    self.summaryPoints:SetPoint("LEFT", after, "RIGHT", S["space-5"], 0)
-    -- the trees, side by side, as wide as the row allows
-    local width = self.treesRow:GetWidth()
-    if not width or width <= 0 then width = TALENT_TREE_W end
-    local n = math.max(1, #trees)
-    local panelW = math.max(PANEL_W, math.floor((width - GAP * (n - 1)) / n))
-    local rows = d.rows or ROWS
-    local anyMore = false
-    for _, t in ipairs(trees) do if t.more then anyMore = true end end
-    for i, t in ipairs(trees) do
-        local p = self.panels[i] or makePanel(self)
-        self.panels[i] = p
-        p:ClearAllPoints()
-        p:SetPoint("TOPLEFT", self.treesRow, "TOPLEFT", (i - 1) * (panelW + GAP), 0)
-        p.graph:SetHeight(graphH(rows))
-        local h = PAD + HEAD_H + PAD + graphH(rows) + PAD + (anyMore and (S["space-3"] + T.type.caption.lineHeight) or 0)
-        if self.fillPanels then
-            local room = self.treesRow:GetHeight()
-            if room and room > h then h = room end
+
+    function MarkNode(nodeID: any)
+        for _, p in ipairs(self.panels) do
+            for _, b in ipairs(p.nodes) do
+                local marked = nodeID ~= nil and b.data ~= nil and b.data.id == nodeID
+                if (b.marked or false) ~= marked then
+                    b.marked = marked
+                    drawNode(b)
+                end
+            end
         end
-        p:SetSize(panelW, h)
-        fillPanel(self, p, t)
-        p:Show()
     end
-    for i = #trees + 1, #self.panels do self.panels[i]:Hide() end
-    -- the foot
-    local available = d.available or 0
-    local ro = d.readOnly
-    self.unspent:SetShown(not ro)
-    self.apply:SetShown(not ro)
-    self.undo:SetShown(not ro)
-    self.back:SetShown(d.back ~= nil)
-    if d.back then self.back:SetLabel(d.back) end
-    self.status:ClearAllPoints()
-    if ro then
-        self.status:SetPoint("LEFT", self.foot, "BOTTOMLEFT", 0, 15)
-    else
-        self.status:SetPoint("LEFT", self.unspent, "RIGHT", S["space-5"], 0)
+
+    function SetSpecs(list: any, viewing: number?)
+        self.specList = list
+        local show = list and #list > 1
+        self.specRow:SetShown(show and true or false)
+        if show then
+            if not self.segmented or self.segmentedFor ~= #list then
+                if self.segmented then self.segmented:Hide() end
+                local options = {}
+                for i, s in ipairs(list) do
+                    options[i] = { value = i, label = s.label .. (s.name and s.name ~= "" and (": " .. s.name) or ""), disabled = s.locked }
+                end
+                self.segmented = inputs.segmented(self.specRow, {
+                    options = options,
+                    onChange = function(v: any) if self.onSpec then self.onSpec(v) end end,
+                })
+                self.segmented:SetPoint("LEFT")
+                self.segmentedFor = #list
+            end
+            self.segmented:SetValue(viewing or 1)
+            local spec = list[viewing or 1] or {}
+            self.activeBadge:SetShown(spec.active and true or false)
+            self.activate:SetShown(not spec.active)
+            if not spec.active then self.activate:SetLabel("Activate " .. (spec.name ~= "" and spec.name or spec.label or "")) end
+        end
+        self:Layout()
     end
-    self.status:SetPoint("RIGHT", d.back and self.back or (ro and self.foot or self.undo), d.back and "LEFT" or (ro and "RIGHT" or "LEFT"), -S["space-5"], 0)
-    self.unspent:SetText(d.unspent or ("|cff%s%d|r %s"):format(hex("ink"), available, available == 1 and "point to spend" or "points to spend"))
-    local pending = d.pending or 0
-    if d.status then
-        self.status:SetColor(d.statusColor or "ink-muted")
-        self.status:SetValue(d.status)
-    elseif pending > 0 then
-        self.status:SetColor("arcane")
-        self.status:SetValue(pending .. (pending == 1 and " point" or " points") .. " not applied yet · right-click to take one back")
-    else
-        self.status:SetColor("ink-muted")
-        self.status:SetValue(d.hint or "Click a talent to plan a point. Nothing changes until you apply.")
+
+    -- The build picker in the summary's place (nil: the summary as before).
+    function SetBuilds(b: any)
+        self.builds = b
+        if b and not self.picker then
+            self.picker = uiSelect.select(self.summary, { width = 280, search = "always", maxRows = 12, minListWidth = 300,
+                onChange = function(v: any) if self.builds and self.builds.onChange then self.builds.onChange(v) end end })
+            self.pickerBadge = controls.stateBadge(self.summary, "neutral", "Active")
+            self.pickerButtons = {}
+        end
+        if self.picker then
+            self.picker:SetShown(b ~= nil)
+            self.pickerBadge:SetShown(b ~= nil and b.badge ~= nil)
+            if b then
+                self.picker.foot = b.foot
+                self.picker:SetOptions(b.options or {})
+                self.picker:SetValue(b.value)
+                if b.badge then self.pickerBadge:SetState("neutral", b.badge) end
+                self.picker:ClearAllPoints()
+                if b.diamond and T.color[b.diamond] then
+                    self.summaryDiamond:Show()
+                    draw.paint(self.summaryDiamond, b.diamond)
+                    self.picker:SetPoint("LEFT", self.summary, "LEFT", 14, 0)
+                else
+                    self.summaryDiamond:Hide()
+                    self.picker:SetPoint("LEFT", self.summary, "LEFT", 0, 0)
+                end
+                self.pickerBadge:ClearAllPoints()
+                self.pickerBadge:SetPoint("LEFT", self.picker, "RIGHT", S["space-4"], 0)
+            end
+            -- the row's buttons, right to left
+            local last
+            for i, def in ipairs(b and b.buttons or {}) do
+                local btn = self.pickerButtons[i]
+                if not btn then
+                    btn = controls.button(self.summary, { text = def.label, variant = def.variant or "quiet",
+                        onClick = function(x) if x.def and x.def.onClick and not x.def.disabled then x.def.onClick() end end })
+                    btn:HookScript("OnEnter", function(x)
+                        if x.def and x.def.reason then showTooltip(x, { title = x.def.label, description = x.def.reason }) end
+                    end)
+                    btn:HookScript("OnLeave", function() hideTooltip() end)
+                    self.pickerButtons[i] = btn
+                end
+                btn.def = def
+                btn:SetLabel(def.label)
+                btn:SetEnabledState(not def.disabled)
+                btn:ClearAllPoints()
+                if last then btn:SetPoint("RIGHT", last, "LEFT", -S["space-3"], 0)
+                else btn:SetPoint("RIGHT", self.summary, "RIGHT", 0, 0) end
+                btn:Show()
+                last = btn
+            end
+            for i = #(b and b.buttons or {}) + 1, #self.pickerButtons do self.pickerButtons[i]:Hide() end
+        end
+        self:Layout()
     end
-    -- a build's plan has its own two (Discard, Save build)
-    local a = d.actions
-    self.undo:SetLabel(a and a.secondary and a.secondary.label or "Undo")
-    self.apply:SetLabel(a and a.primary and a.primary.label or "Apply")
-    if a then
-        self.undo:SetShown(a.secondary ~= nil and not ro)
-        self.apply:SetShown(a.primary ~= nil and not ro)
-        self.undo:SetEnabledState(a.secondary ~= nil and a.secondary.enabled ~= false)
-        self.apply:SetEnabledState(a.primary ~= nil and a.primary.enabled ~= false)
-    else
-        self.undo:SetEnabledState(pending > 0)
-        self.apply:SetEnabledState(pending > 0 and d.editable ~= false)
+
+    function Layout()
+        local top = 0
+        if self.specRow:IsShown() then
+            self.specRow:ClearAllPoints()
+            self.specRow:SetPoint("TOPLEFT", self, "TOPLEFT", 0, 0)
+            self.specRow:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, 0)
+            top = top + 30 + S["space-5"]
+        end
+        self.summary:ClearAllPoints()
+        self.summary:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
+        self.summary:SetPoint("RIGHT", self, "RIGHT", 0, 0)
+        self.summary:SetShown(not self.noSummary)
+        local sh = self.headShown and T.type["unit-name-lg"].lineHeight or T.type.label.lineHeight
+        if self.builds then sh = PICKER_H end
+        self.summary:SetHeight(sh)
+        if not self.noSummary then top = top + sh + S["space-5"] end
+        local order = self.order and self.order:IsShown()
+        self.treesRow:ClearAllPoints()
+        self.treesRow:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
+        self.treesRow:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", order and -TALENT_ORDER_W or 0, FOOT_H + S["space-5"])
+        if order then
+            self.order:ClearAllPoints()
+            self.order:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, -top)
+            self.order:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, FOOT_H + S["space-5"])
+            self.order:SetWidth(ORDER_W)
+        end
+    end
+
+    function SetData(data: any)
+        local d = data or {}
+        self.data = d
+        local trees = d.trees or {}
+        -- the summary: the spec, the points per tree
+        local per, total = {}, 0
+        for i, t in ipairs(trees) do per[i] = tostring(t.points or 0); total = total + (t.points or 0) end
+        local head = d.head
+        if (head ~= nil) ~= (self.headShown or false) then
+            self.headShown = head ~= nil
+            self:Layout()
+        end
+        local builds = self.builds ~= nil and not head
+        self.summaryDiamond:SetShown(head ~= nil or (builds and self.builds.diamond ~= nil))
+        self.summaryBadge:SetShown(head ~= nil)
+        self.summaryLine:SetShown(head ~= nil)
+        self.summaryName:ClearAllPoints()
+        if head then
+            -- someone else's: who, and the points per tree by name
+            local token = head.class and "class-" .. head.class:lower()
+            if not (token and T.color[token]) then token = nil end
+            if token then draw.paint(self.summaryDiamond, token) else self.summaryDiamond:SetVertexColor(1, 1, 1, 1) end
+            self.summaryName:SetStyle("unit-name-lg")
+            self.summaryName:SetPoint("LEFT", self.summaryDiamond, "RIGHT", S["space-4"], 0)
+            self.summaryName:SetColor(token or "ink")
+            self.summaryName:SetValue(head.name or "")
+            self.summaryLine:SetValue(head.line or "")
+            local named = {}
+            for i, t in ipairs(trees) do named[i] = ("%s |cff%s%d|r"):format(t.name or "", hex("ink"), t.points or 0) end
+            self.summaryPoints:SetValue(table.concat(named, "   "))
+        else
+            self.summaryName:SetStyle("label")
+            self.summaryName:SetColor("ink")
+            self.summaryName:SetPoint("LEFT")
+            self.summaryName:SetValue(builds and "" or (d.name or ""))
+            self.summaryPoints:SetValue(#per > 0 and (table.concat(per, " / ") .. " · " .. total .. (d.spentLabel or " spent")) or "")
+        end
+        self.summaryPoints:ClearAllPoints()
+        local after = head and self.summaryLine or self.summaryName
+        if builds then after = self.builds.badge and self.pickerBadge or self.picker end
+        self.summaryPoints:SetPoint("LEFT", after, "RIGHT", S["space-5"], 0)
+        -- the trees, side by side, as wide as the row allows
+        local width = self.treesRow:GetWidth()
+        if not width or width <= 0 then width = TALENT_TREE_W end
+        local n = math.max(1, #trees)
+        local panelW = math.max(PANEL_W, math.floor((width - GAP * (n - 1)) / n))
+        local rows = d.rows or ROWS
+        local anyMore = false
+        for _, t in ipairs(trees) do if t.more then anyMore = true end end
+        for i, t in ipairs(trees) do
+            local p = self.panels[i] or makePanel(self)
+            self.panels[i] = p
+            p:ClearAllPoints()
+            p:SetPoint("TOPLEFT", self.treesRow, "TOPLEFT", (i - 1) * (panelW + GAP), 0)
+            p.graph:SetHeight(graphH(rows))
+            local h = PAD + HEAD_H + PAD + graphH(rows) + PAD + (anyMore and (S["space-3"] + T.type.caption.lineHeight) or 0)
+            if self.fillPanels then
+                local room = self.treesRow:GetHeight()
+                if room and room > h then h = room end
+            end
+            p:SetSize(panelW, h)
+            fillPanel(self, p, t)
+            p:Show()
+        end
+        for i = #trees + 1, #self.panels do self.panels[i]:Hide() end
+        -- the foot
+        local available = d.available or 0
+        local ro = d.readOnly
+        self.unspent:SetShown(not ro)
+        self.apply:SetShown(not ro)
+        self.undo:SetShown(not ro)
+        self.back:SetShown(d.back ~= nil)
+        if d.back then self.back:SetLabel(d.back) end
+        self.status:ClearAllPoints()
+        if ro then
+            self.status:SetPoint("LEFT", self.foot, "BOTTOMLEFT", 0, 15)
+        else
+            self.status:SetPoint("LEFT", self.unspent, "RIGHT", S["space-5"], 0)
+        end
+        self.status:SetPoint("RIGHT", d.back and self.back or (ro and self.foot or self.undo), d.back and "LEFT" or (ro and "RIGHT" or "LEFT"), -S["space-5"], 0)
+        self.unspent:SetText(d.unspent or ("|cff%s%d|r %s"):format(hex("ink"), available, available == 1 and "point to spend" or "points to spend"))
+        local pending = d.pending or 0
+        if d.status then
+            self.status:SetColor(d.statusColor or "ink-muted")
+            self.status:SetValue(d.status)
+        elseif pending > 0 then
+            self.status:SetColor("arcane")
+            self.status:SetValue(pending .. (pending == 1 and " point" or " points") .. " not applied yet · right-click to take one back")
+        else
+            self.status:SetColor("ink-muted")
+            self.status:SetValue(d.hint or "Click a talent to plan a point. Nothing changes until you apply.")
+        end
+        -- a build's plan has its own two (Discard, Save build)
+        local a = d.actions
+        self.undo:SetLabel(a and a.secondary and a.secondary.label or "Undo")
+        self.apply:SetLabel(a and a.primary and a.primary.label or "Apply")
+        if a then
+            self.undo:SetShown(a.secondary ~= nil and not ro)
+            self.apply:SetShown(a.primary ~= nil and not ro)
+            self.undo:SetEnabledState(a.secondary ~= nil and a.secondary.enabled ~= false)
+            self.apply:SetEnabledState(a.primary ~= nil and a.primary.enabled ~= false)
+        else
+            self.undo:SetEnabledState(pending > 0)
+            self.apply:SetEnabledState(pending > 0 and d.editable ~= false)
+        end
     end
 end
 
-export function talentTree(parent: any): any
-    local f = CreateFrame("Frame", nil, parent)
-    Mixin(f, TT)
-    f.panels = {}
-    -- the specs (two talent groups only)
-    f.specRow = CreateFrame("Frame", nil, f)
-    f.specRow:SetHeight(30)
-    f.activeBadge = controls.stateBadge(f.specRow, "neutral", "Active")
-    f.activate = controls.button(f.specRow, { text = "Activate", variant = "quiet",
-        onClick = function() if f.onActivate then f.onActivate() end end })
-    f.activeBadge:SetPoint("RIGHT", f.specRow, "RIGHT", 0, 0)
-    f.activate:SetPoint("RIGHT", f.specRow, "RIGHT", 0, 0)
-    f.specRow:Hide()
-    -- the summary
-    f.summary = CreateFrame("Frame", nil, f)
-    f.summary:SetSize(1, T.type.label.lineHeight)
-    f.summaryName = text(f.summary, "label", "ink")
-    f.summaryName:SetPoint("LEFT")
-    f.summaryPoints = text(f.summary, "caption", "ink-muted")
-    f.summaryPoints:SetPoint("LEFT", f.summaryName, "RIGHT", S["space-5"], 0)
-    -- someone else's (0.17): the class diamond, the line, Read only
-    f.summaryDiamond = draw.diamond(f.summary, 7, "ink", "OVERLAY")
-    f.summaryDiamond:SetPoint("CENTER", f.summary, "LEFT", 4, 0)
-    f.summaryDiamond:Hide()
-    f.summaryLine = text(f.summary, "caption", "ink-muted")
-    f.summaryLine:SetPoint("LEFT", f.summaryName, "RIGHT", S["space-4"], -1)
-    f.summaryLine:Hide()
-    f.summaryBadge = controls.stateBadge(f.summary, "neutral", "Read only")
-    f.summaryBadge:SetPoint("RIGHT")
-    f.summaryBadge:Hide()
-    -- the trees
-    f.treesRow = CreateFrame("Frame", nil, f)
-    -- the foot: a faint rule, the points, the status, Undo and Apply
-    f.foot = CreateFrame("Frame", nil, f)
-    f.foot:SetPoint("BOTTOMLEFT")
-    f.foot:SetPoint("BOTTOMRIGHT")
-    f.foot:SetHeight(FOOT_H)
-    local rule = draw.fill(f.foot, "gilt-faint", "ARTWORK")
-    rule:SetHeight(1)
-    rule:SetPoint("TOPLEFT")
-    rule:SetPoint("TOPRIGHT")
-    f.apply = controls.button(f.foot, { text = "Apply", variant = "primary", onClick = function()
-        local a = f.data and f.data.actions
-        if a and a.primary then a.primary.onClick() elseif f.onApply then f.onApply() end
-    end })
-    f.apply:SetPoint("BOTTOMRIGHT", f.foot, "BOTTOMRIGHT", 0, 0)
-    f.undo = controls.button(f.foot, { text = "Undo", variant = "quiet", onClick = function()
-        local a = f.data and f.data.actions
-        if a and a.secondary then a.secondary.onClick() elseif f.onUndo then f.onUndo() end
-    end })
-    f.undo:SetPoint("RIGHT", f.apply, "LEFT", -S["space-3"], 0)
-    f.back = controls.button(f.foot, { text = "Back", icon = "chevronLeft",
-        onClick = function() if f.onBack then f.onBack() end end })
-    f.back:SetPoint("BOTTOMRIGHT", f.foot, "BOTTOMRIGHT", 0, 0)
-    f.back:Hide()
-    f.unspent = text(f.foot, "caption", "ink-muted")
-    f.unspent:SetPoint("LEFT", f.foot, "BOTTOMLEFT", 0, 15)
-    f.status = text(f.foot, "caption", "ink-muted")
-    f.status:SetPoint("LEFT", f.unspent, "RIGHT", S["space-5"], 0)
-    f.status:SetPoint("RIGHT", f.undo, "LEFT", -S["space-5"], 0)
-    f.status:SetJustifyH("LEFT")
-    f:Layout()
-    f:SetData({})
-    live[f] = true
-    return f
+export function talentTree(parent: any): TalentTree
+    return TalentTree.new(parent)
 end
 
 -- A theme can change the colours in the summary and the foot, and the

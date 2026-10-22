@@ -44,8 +44,6 @@ end
 -- The points
 --------------------------------------------------------------------------------
 
-local Points: { [string]: any } = {}
-
 local function blockHeight(): number return T.type.caption.lineHeight + 1 + 24 end
 
 local function block(f: any, caption: string): any
@@ -67,39 +65,47 @@ local function restyleBlock(b: any)
     b.big:SetFont(T.type.numeric.file, 20, "")
 end
 
-function Points:SetPoints(d: any)
-    d = d or {}
-    self.data = d
-    local earned, total = d.earned or 0, d.total or 0
-    local spent, cap, pending = d.spent or 0, d.cap or 0, d.pending or 0
-    self.account.big:SetText(tostring(earned))
-    self.account.rest:SetText(" of " .. total .. " earned")
-    self.char.caption:SetValue("Spent on " .. (d.character or "this character"))
-    self.char.big:SetText(tostring(spent))
-    self.char.rest:SetText(" of " .. cap .. (pending > 0 and colorize(hex("arcane"), " · " .. pending .. " not applied") or ""))
-    local w = math.max(self.account.caption:GetUnboundedStringWidth(),
-        self.account.big:GetUnboundedStringWidth() + self.account.rest:GetUnboundedStringWidth())
-    self.account:SetWidth(math.ceil(w) + 2)
-end
-
 -- opts.account = false: this character's points only (the account's are
 -- on the track at the window's foot)
-export function legacyPoints(parent: any, opts: { [string]: any }?): any
-    local f: any = CreateFrame("Frame", nil, parent)
-    Mixin(f, Points)
-    f.account = block(f, "Legacy points · account")
-    f.account:SetPoint("TOPLEFT")
-    f.char = block(f, "Spent on this character")
-    if opts and opts.account == false then
-        f.account:Hide()
-        f.char:SetPoint("TOPLEFT")
-    else
-        f.char:SetPoint("TOPLEFT", f.account, "TOPRIGHT", S["space-6"], 0)
+export class LegacyPoints extends Frame
+    account: any
+    char: any
+    data: any? = nil
+
+    constructor(parent: any, opts: { [string]: any }?)
+        super(nil, parent)
+        self.account = block(self, "Legacy points · account")
+        self.account:SetPoint("TOPLEFT")
+        self.char = block(self, "Spent on this character")
+        if opts and opts.account == false then
+            self.account:Hide()
+            self.char:SetPoint("TOPLEFT")
+        else
+            self.char:SetPoint("TOPLEFT", self.account, "TOPRIGHT", S["space-6"], 0)
+        end
+        self.char:SetWidth(200)
+        self:SetHeight(self.account:GetHeight())
+        live[self] = "points"
     end
-    f.char:SetWidth(200)
-    f:SetHeight(f.account:GetHeight())
-    live[f] = "points"
-    return f
+
+    function SetPoints(d: any)
+        d = d or {}
+        self.data = d
+        local earned, total = d.earned or 0, d.total or 0
+        local spent, cap, pending = d.spent or 0, d.cap or 0, d.pending or 0
+        self.account.big:SetText(tostring(earned))
+        self.account.rest:SetText(" of " .. total .. " earned")
+        self.char.caption:SetValue("Spent on " .. (d.character or "this character"))
+        self.char.big:SetText(tostring(spent))
+        self.char.rest:SetText(" of " .. cap .. (pending > 0 and colorize(hex("arcane"), " · " .. pending .. " not applied") or ""))
+        local w = math.max(self.account.caption:GetUnboundedStringWidth(),
+            self.account.big:GetUnboundedStringWidth() + self.account.rest:GetUnboundedStringWidth())
+        self.account:SetWidth(math.ceil(w) + 2)
+    end
+end
+
+export function legacyPoints(parent: any, opts: { [string]: any }?): LegacyPoints
+    return LegacyPoints.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -147,7 +153,6 @@ end
 -- Challenges
 --------------------------------------------------------------------------------
 
-local Challenges: { [string]: any } = {}
 local CARD_ROWS = 5
 local COLS = 3
 
@@ -180,60 +185,6 @@ local function makeCard(view: any): any
     c:SetScript("OnLeave", function(self) self.border:SetColor("gilt-faint") end)
     c:SetScript("OnClick", function(self) view:Open(self.index) end)
     return c
-end
-
-function Challenges:Layout()
-    local w = self:GetWidth()
-    if not w or w <= 0 then return end
-    local gap = S["space-5"]
-    local cw = math.floor((w - gap * (COLS - 1)) / COLS)
-    local ch = cardHeight()
-    for i, c in ipairs(self.cards) do
-        local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
-        c:ClearAllPoints()
-        c:SetPoint("TOPLEFT", self.grid, "TOPLEFT", col * (cw + gap), -row * (ch + gap))
-        c:SetSize(cw, ch)
-        -- the bar as far as done of total
-        local d = c.data
-        local frac = (d and d.total and d.total > 0) and (d.done / d.total) or 0
-        local trackW = cw - S["space-4"] * 2
-        c.fill:SetWidth(math.max(0.01, trackW * math.min(1, frac)))
-        c.fill:SetShown(frac > 0)
-    end
-end
-
-function Challenges:SetCategories(list: any[]?)
-    self.list = list or {}
-    for i, d in ipairs(self.list) do
-        local c = self.cards[i] or makeCard(self)
-        self.cards[i] = c
-        c.index, c.data = i, d
-        c.name:SetValue(d.name or "")
-        c.count:SetValue((d.done or 0) .. "/" .. (d.total or 0))
-        for k = 1, CARD_ROWS do
-            local item = d.items and d.items[k]
-            local r = c.rows[k]
-            if item then
-                if not r then
-                    r = makeRow(c)
-                    c.rows[k] = r
-                    r:SetPoint("TOPLEFT", c.track, "BOTTOMLEFT", 0, -S["space-3"] - (k - 1) * (ROW_H + S["space-2"]))
-                    r:SetPoint("RIGHT", c, "RIGHT", -S["space-4"], 0)
-                end
-                fillRow(r, item)
-                r:Show()
-            elseif r then
-                r:Hide()
-            end
-        end
-        local more = (d.total or 0) - math.min(CARD_ROWS, #(d.items or {}))
-        c.all:SetValue(more > 0 and ("All " .. d.total .. " challenges") or "")
-        c:Show()
-    end
-    for i = #self.list + 1, #self.cards do self.cards[i]:Hide() end
-    self:Layout()
-    -- a refresh (progress changed) keeps the open list where it was scrolled
-    if self.openIndex then self:Open(self.openIndex, true) end
 end
 
 --------------------------------------------------------------------------------
@@ -382,56 +333,6 @@ local function makePanel(parent: any): any
     return p
 end
 
--- Open steps from x, y: steps that are achievements as rows (they open in
--- turn, one step further in), the others in columns; returns the new y.
-function Challenges:LayoutSteps(p: any, list: any[], x: number, y: number, width: number): number
-    local plainSteps: any[] = {}
-    local function grid()
-        if #plainSteps == 0 then return end
-        local cols = math.max(1, math.floor(width / STEP_W))
-        for n, step in ipairs(plainSteps) do
-            p.stepIndex = p.stepIndex + 1
-            local c = p.steps[p.stepIndex] or makeStep(p)
-            p.steps[p.stepIndex] = c
-            local col, row = (n - 1) % cols, math.floor((n - 1) / cols)
-            c:ClearAllPoints()
-            c:SetPoint("TOPLEFT", p, "TOPLEFT", x + col * STEP_W, -(y + S["space-1"] + row * STEP_H))
-            c.check:SetShown(step.done and true or false)
-            c.ring:SetShown(not step.done)
-            c.hole:SetShown(not step.done)
-            local label = step.text or ""
-            if step.count then label = label .. "  " .. colorize(hex("ink-muted"), step.count[1] .. "/" .. step.count[2]) end
-            c.text:SetValue(label)
-            c.text:SetColor(step.done and "ink-muted" or "ink")
-            c:Show()
-        end
-        y = y + S["space-1"] + math.ceil(#plainSteps / cols) * STEP_H + S["space-3"]
-        plainSteps = {}
-    end
-    for _, step in ipairs(list) do
-        if step.steps then
-            grid()
-            p.subIndex = p.subIndex + 1
-            local r = p.subrows[p.subIndex] or makeDetailRow(self, p)
-            p.subrows[p.subIndex] = r
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", p, "TOPLEFT", x, -y)
-            r:SetWidth(width)
-            fillDetailRow(self, r, { id = step.id, name = step.text, done = step.done,
-                stepsN = step.stepsN, stepsDone = step.stepsDone, steps = step.steps })
-            r:Show()
-            y = y + ROW_H + 2 + S["space-1"]
-            if self.expanded[step.id] and not step.done then
-                y = self:LayoutSteps(p, step.steps(), x + INDENT, y, width - INDENT)
-            end
-        else
-            plainSteps[#plainSteps + 1] = step
-        end
-    end
-    grid()
-    return y
-end
-
 -- A panel's rows and open steps; returns its height.
 local function fillPanel(view: any, p: any, g: any, width: number): number
     p:SetWidth(width)
@@ -462,101 +363,222 @@ local function fillPanel(view: any, p: any, g: any, width: number): number
     return h
 end
 
-function Challenges:Open(i: number, keep: boolean?)
-    local d = self.list[i]
-    if not d then return self:Close() end
-    self.openIndex = i
-    self.grid:Hide()
-    self.detail:Show()
-    self.detailTitle:SetValue(d.name or "")
-    self.detailCount:SetValue((d.done or 0) .. "/" .. (d.total or 0))
-    self.detailBar:SetFraction((d.total or 0) > 0 and d.done / d.total or 0)
-    local scroll = self.scroll
-    local offset = keep and scroll:GetVerticalScroll() or 0
-    local child = scroll.child
-    local W = math.max(1, scroll:GetWidth() - S["space-5"])
-    child:SetWidth(W)
-    local gap = S["space-5"]
-    local half = math.floor((W - gap) / 2)
-    -- small groups two to a row, the rest the full width
-    local y: number, k: number, pending: number? = 0, 0, nil
-    local function flush()
-        if pending then y = y + pending + gap; pending = nil end
+export class LegacyChallenges extends Frame
+    cards: any
+    grid: Frame
+    expanded: any
+    panels: any
+    detail: Frame
+    back: any
+    detailTitle: any
+    detailCount: any
+    detailBar: any
+    scroll: any
+    list: any? = nil
+    openIndex: any? = nil
+
+    constructor(parent: any)
+        super(nil, parent)
+        self.cards = {}
+        self.grid = CreateFrame("Frame", nil, self)
+        self.grid:SetAllPoints()
+        -- the full list of one category: a bar with the way back, the panels
+        self.expanded, self.panels = {}, {}
+        self.detail = CreateFrame("Frame", nil, self)
+        self.detail:SetAllPoints()
+        self.detail:Hide()
+        self.back = controls.button(self.detail, { text = "All challenges", variant = "quiet", onClick = function() self:Close() end })
+        self.back.fixedWidth = true
+        self.back:SetWidth(self.back.label:GetUnboundedStringWidth() + S["space-5"] * 2 + 14)
+        self.back.label:ClearAllPoints()
+        self.back.label:SetPoint("CENTER", 7, 0)
+        -- the press moves the label 1px down: keep it beside the chevron
+        self.back:HookScript("OnMouseDown", function(b) if b:IsEnabled() then b.label:SetPoint("CENTER", 7, -1) end end)
+        self.back:HookScript("OnMouseUp", function(b) b.label:SetPoint("CENTER", 7, 0) end)
+        self.back.chevron = self.back:CreateTexture(nil, "OVERLAY")
+        self.back.chevron:SetTexture(GLYPHS .. "chevronLeft.tga")
+        self.back.chevron:SetSize(10, 10)
+        self.back.chevron:SetPoint("LEFT", S["space-5"], 0)
+        draw.paint(self.back.chevron, "gilt-text")
+        self.back:SetPoint("TOPLEFT")
+        self.detailTitle = uiText.text(self.detail, "header", "gilt-text")
+        self.detailTitle:SetPoint("LEFT", self.back, "RIGHT", S["space-6"], 0)
+        self.detailCount = uiText.text(self.detail, "caption", "ink-muted")
+        self.detailCount:SetPoint("LEFT", self.detailTitle, "RIGHT", S["space-4"], 0)
+        self.detailBar = thinBar(self.detail, 4)
+        self.detailBar:SetPoint("LEFT", self.detailCount, "RIGHT", S["space-5"], 0)
+        self.detailBar:SetPoint("RIGHT", self.detail, "RIGHT", 0, 0)
+        self.scroll = panel.scrollArea(self.detail, 6)
+        self.scroll:SetPoint("TOPLEFT", self.back, "BOTTOMLEFT", 0, -S["space-5"])
+        self.scroll:SetPoint("BOTTOMRIGHT", self.detail, "BOTTOMRIGHT", -10, 0)
+        self:SetScript("OnSizeChanged", function() self:Layout() end)
+        live[self] = "challenges"
     end
-    for _, g in ipairs(d.groups or {}) do
-        k = k + 1
-        local p = self.panels[k] or makePanel(child)
-        self.panels[k] = p
-        local wide = #g.items > 4
-        for _, item in ipairs(g.items) do if item.stepsN and item.stepsN > 1 then wide = true end end
-        p:ClearAllPoints()
-        if wide then
-            flush()
-            local h = fillPanel(self, p, g, W)
-            p:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
-            y = y + h + gap
-        elseif pending then
-            local h = fillPanel(self, p, g, half)
-            p:SetPoint("TOPLEFT", child, "TOPLEFT", half + gap, -y)
-            pending = math.max(pending, h)
-            flush()
-        else
-            local h = fillPanel(self, p, g, half)
-            p:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
-            pending = h
+
+    function Layout()
+        local w = self:GetWidth()
+        if not w or w <= 0 then return end
+        local gap = S["space-5"]
+        local cw = math.floor((w - gap * (COLS - 1)) / COLS)
+        local ch = cardHeight()
+        for i, c in ipairs(self.cards) do
+            local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
+            c:ClearAllPoints()
+            c:SetPoint("TOPLEFT", self.grid, "TOPLEFT", col * (cw + gap), -row * (ch + gap))
+            c:SetSize(cw, ch)
+            -- the bar as far as done of total
+            local d = c.data
+            local frac = (d and d.total and d.total > 0) and (d.done / d.total) or 0
+            local trackW = cw - S["space-4"] * 2
+            c.fill:SetWidth(math.max(0.01, trackW * math.min(1, frac)))
+            c.fill:SetShown(frac > 0)
         end
-        p:Show()
     end
-    flush()
-    for n = k + 1, #self.panels do self.panels[n]:Hide() end
-    child:SetHeight(math.max(1, y - gap))
-    scroll:SetVerticalScroll(keep and math.min(offset, math.max(0, y - scroll:GetHeight())) or 0)
+
+    function SetCategories(list: any[]?)
+        self.list = list or {}
+        for i, d in ipairs(self.list) do
+            local c = self.cards[i] or makeCard(self)
+            self.cards[i] = c
+            c.index, c.data = i, d
+            c.name:SetValue(d.name or "")
+            c.count:SetValue((d.done or 0) .. "/" .. (d.total or 0))
+            for k = 1, CARD_ROWS do
+                local item = d.items and d.items[k]
+                local r = c.rows[k]
+                if item then
+                    if not r then
+                        r = makeRow(c)
+                        c.rows[k] = r
+                        r:SetPoint("TOPLEFT", c.track, "BOTTOMLEFT", 0, -S["space-3"] - (k - 1) * (ROW_H + S["space-2"]))
+                        r:SetPoint("RIGHT", c, "RIGHT", -S["space-4"], 0)
+                    end
+                    fillRow(r, item)
+                    r:Show()
+                elseif r then
+                    r:Hide()
+                end
+            end
+            local more = (d.total or 0) - math.min(CARD_ROWS, #(d.items or {}))
+            c.all:SetValue(more > 0 and ("All " .. d.total .. " challenges") or "")
+            c:Show()
+        end
+        for i = #self.list + 1, #self.cards do self.cards[i]:Hide() end
+        self:Layout()
+        -- a refresh (progress changed) keeps the open list where it was scrolled
+        if self.openIndex then self:Open(self.openIndex, true) end
+    end
+
+    -- Open steps from x, y: steps that are achievements as rows (they open in
+    -- turn, one step further in), the others in columns; returns the new y.
+    function LayoutSteps(p: any, list: any[], x: number, y: number, width: number): number
+        local plainSteps: any[] = {}
+        local function grid()
+            if #plainSteps == 0 then return end
+            local cols = math.max(1, math.floor(width / STEP_W))
+            for n, step in ipairs(plainSteps) do
+                p.stepIndex = p.stepIndex + 1
+                local c = p.steps[p.stepIndex] or makeStep(p)
+                p.steps[p.stepIndex] = c
+                local col, row = (n - 1) % cols, math.floor((n - 1) / cols)
+                c:ClearAllPoints()
+                c:SetPoint("TOPLEFT", p, "TOPLEFT", x + col * STEP_W, -(y + S["space-1"] + row * STEP_H))
+                c.check:SetShown(step.done and true or false)
+                c.ring:SetShown(not step.done)
+                c.hole:SetShown(not step.done)
+                local label = step.text or ""
+                if step.count then label = label .. "  " .. colorize(hex("ink-muted"), step.count[1] .. "/" .. step.count[2]) end
+                c.text:SetValue(label)
+                c.text:SetColor(step.done and "ink-muted" or "ink")
+                c:Show()
+            end
+            y = y + S["space-1"] + math.ceil(#plainSteps / cols) * STEP_H + S["space-3"]
+            plainSteps = {}
+        end
+        for _, step in ipairs(list) do
+            if step.steps then
+                grid()
+                p.subIndex = p.subIndex + 1
+                local r = p.subrows[p.subIndex] or makeDetailRow(self, p)
+                p.subrows[p.subIndex] = r
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", p, "TOPLEFT", x, -y)
+                r:SetWidth(width)
+                fillDetailRow(self, r, { id = step.id, name = step.text, done = step.done,
+                    stepsN = step.stepsN, stepsDone = step.stepsDone, steps = step.steps })
+                r:Show()
+                y = y + ROW_H + 2 + S["space-1"]
+                if self.expanded[step.id] and not step.done then
+                    y = self:LayoutSteps(p, step.steps(), x + INDENT, y, width - INDENT)
+                end
+            else
+                plainSteps[#plainSteps + 1] = step
+            end
+        end
+        grid()
+        return y
+    end
+
+    function Open(i: number, keep: boolean?)
+        local d = self.list[i]
+        if not d then return self:Close() end
+        self.openIndex = i
+        self.grid:Hide()
+        self.detail:Show()
+        self.detailTitle:SetValue(d.name or "")
+        self.detailCount:SetValue((d.done or 0) .. "/" .. (d.total or 0))
+        self.detailBar:SetFraction((d.total or 0) > 0 and d.done / d.total or 0)
+        local scroll = self.scroll
+        local offset = keep and scroll:GetVerticalScroll() or 0
+        local child = scroll.child
+        local W = math.max(1, scroll:GetWidth() - S["space-5"])
+        child:SetWidth(W)
+        local gap = S["space-5"]
+        local half = math.floor((W - gap) / 2)
+        -- small groups two to a row, the rest the full width
+        local y: number, k: number, pending: number? = 0, 0, nil
+        local function flush()
+            if pending then y = y + pending + gap; pending = nil end
+        end
+        for _, g in ipairs(d.groups or {}) do
+            k = k + 1
+            local p = self.panels[k] or makePanel(child)
+            self.panels[k] = p
+            local wide = #g.items > 4
+            for _, item in ipairs(g.items) do if item.stepsN and item.stepsN > 1 then wide = true end end
+            p:ClearAllPoints()
+            if wide then
+                flush()
+                local h = fillPanel(self, p, g, W)
+                p:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
+                y = y + h + gap
+            elseif pending then
+                local h = fillPanel(self, p, g, half)
+                p:SetPoint("TOPLEFT", child, "TOPLEFT", half + gap, -y)
+                pending = math.max(pending, h)
+                flush()
+            else
+                local h = fillPanel(self, p, g, half)
+                p:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
+                pending = h
+            end
+            p:Show()
+        end
+        flush()
+        for n = k + 1, #self.panels do self.panels[n]:Hide() end
+        child:SetHeight(math.max(1, y - gap))
+        scroll:SetVerticalScroll(keep and math.min(offset, math.max(0, y - scroll:GetHeight())) or 0)
+    end
+
+    function Close()
+        self.openIndex = nil
+        self.detail:Hide()
+        self.grid:Show()
+    end
 end
 
-function Challenges:Close()
-    self.openIndex = nil
-    self.detail:Hide()
-    self.grid:Show()
-end
-
-export function legacyChallenges(parent: any): any
-    local f: any = CreateFrame("Frame", nil, parent)
-    Mixin(f, Challenges)
-    f.cards = {}
-    f.grid = CreateFrame("Frame", nil, f)
-    f.grid:SetAllPoints()
-    -- the full list of one category: a bar with the way back, the panels
-    f.expanded, f.panels = {}, {}
-    f.detail = CreateFrame("Frame", nil, f)
-    f.detail:SetAllPoints()
-    f.detail:Hide()
-    f.back = controls.button(f.detail, { text = "All challenges", variant = "quiet", onClick = function() f:Close() end })
-    f.back.fixedWidth = true
-    f.back:SetWidth(f.back.label:GetUnboundedStringWidth() + S["space-5"] * 2 + 14)
-    f.back.label:ClearAllPoints()
-    f.back.label:SetPoint("CENTER", 7, 0)
-    -- the press moves the label 1px down: keep it beside the chevron
-    f.back:HookScript("OnMouseDown", function(b) if b:IsEnabled() then b.label:SetPoint("CENTER", 7, -1) end end)
-    f.back:HookScript("OnMouseUp", function(b) b.label:SetPoint("CENTER", 7, 0) end)
-    f.back.chevron = f.back:CreateTexture(nil, "OVERLAY")
-    f.back.chevron:SetTexture(GLYPHS .. "chevronLeft.tga")
-    f.back.chevron:SetSize(10, 10)
-    f.back.chevron:SetPoint("LEFT", S["space-5"], 0)
-    draw.paint(f.back.chevron, "gilt-text")
-    f.back:SetPoint("TOPLEFT")
-    f.detailTitle = uiText.text(f.detail, "header", "gilt-text")
-    f.detailTitle:SetPoint("LEFT", f.back, "RIGHT", S["space-6"], 0)
-    f.detailCount = uiText.text(f.detail, "caption", "ink-muted")
-    f.detailCount:SetPoint("LEFT", f.detailTitle, "RIGHT", S["space-4"], 0)
-    f.detailBar = thinBar(f.detail, 4)
-    f.detailBar:SetPoint("LEFT", f.detailCount, "RIGHT", S["space-5"], 0)
-    f.detailBar:SetPoint("RIGHT", f.detail, "RIGHT", 0, 0)
-    f.scroll = panel.scrollArea(f.detail, 6)
-    f.scroll:SetPoint("TOPLEFT", f.back, "BOTTOMLEFT", 0, -S["space-5"])
-    f.scroll:SetPoint("BOTTOMRIGHT", f.detail, "BOTTOMRIGHT", -10, 0)
-    f:SetScript("OnSizeChanged", function() f:Layout() end)
-    live[f] = "challenges"
-    return f
+export function legacyChallenges(parent: any): LegacyChallenges
+    return LegacyChallenges.new(parent)
 end
 
 --------------------------------------------------------------------------------
@@ -567,7 +589,6 @@ end
 -- reward under the bar. Names are in the icons' tooltips.
 --------------------------------------------------------------------------------
 
-local Track: { [string]: any } = {}
 local ICON = 24
 local LEFT_W = 150
 local TRACK_TOP = ICON + S["space-3"]
@@ -577,80 +598,91 @@ end
 local trackH = trackHeight()
 export const LEGACY_TRACK_H: number = trackH
 
-function Track:SetTrack(d: any)
-    d = d or {}
-    self.data = d
-    local stops = d.stops or {}
-    local max = (d.max and d.max > 0) and d.max or 1
-    local earned = d.earned or 0
-    self.points.big:SetText(tostring(earned))
-    self.points.rest:SetText(" of " .. (d.total or 0) .. " earned")
-    local w = self:GetWidth()
-    if not w or w <= 0 then w = 800 end
-    local left = LEFT_W + ICON / 2
-    local inner = math.max(10, w - left - ICON / 2 - 4)
-    self.bar:ClearAllPoints()
-    self.bar:SetPoint("TOPLEFT", self, "TOPLEFT", left, -TRACK_TOP)
-    self.bar:SetWidth(inner)
-    self.fill:SetWidth(math.max(0.01, inner * math.min(1, earned / max)))
-    self.fill:SetShown(earned > 0)
-    for i, s in ipairs(stops) do
-        local st = self.stops[i]
-        if not st then
-            st = CreateFrame("Frame", nil, self)
-            st:SetSize(ICON, trackH)
-            st.slot = inventory.itemSlot(st, ICON)
-            st.slot:SetPoint("TOP", st, "TOP", 0, 0)
-            st.slot:SetScript("OnEnter", function(b) if b.stop and b.stop.onEnter then b.stop.onEnter(b) end end)
-            st.slot:SetScript("OnLeave", function(b) if b.stop and b.stop.onLeave then b.stop.onLeave() end end)
-            st.over = CreateFrame("Frame", nil, st.slot)
-            st.over:SetAllPoints()
-            st.over:SetFrameLevel(st.slot:GetFrameLevel() + 5)
-            st.check = st.over:CreateTexture(nil, "OVERLAY", nil, 7)
-            st.check:SetTexture(GLYPHS .. "check.tga")
-            st.check:SetSize(10, 10)
-            st.check:SetPoint("TOPRIGHT", st.slot, "TOPRIGHT", 3, 3)
-            draw.paint(st.check, "fel")
-            st.mark = draw.diamond(st, 9, "gilt-line", "OVERLAY", 3)
-            st.mark:SetPoint("CENTER", st, "TOP", 0, -(TRACK_TOP + 3))
-            st.at = uiText.text(st, "numeric", "ink-muted")
-            st.at:SetPoint("TOP", st, "TOP", 0, -(TRACK_TOP + 6 + S["space-3"]))
-            self.stops[i] = st
-        end
-        local got = earned >= (s.at or 0)
-        st.slot.stop = s
-        st.slot.skin:SetItem({ icon = s.icon, quality = s.quality, dim = not got })
-        draw.paint(st.mark, got and "gilt" or "gilt-line")
-        st.at:SetValue(tostring(s.at or 0))
-        st.at:SetColor(got and "gilt-text" or "ink-muted")
-        st.check:SetShown(s.collected and true or false)
-        st:ClearAllPoints()
-        st:SetPoint("TOP", self, "TOPLEFT", left + inner * math.min(1, (s.at or 0) / max), 0)
-        st:Show()
+export class LegacyTrack extends Frame
+    stops: any
+    points: any
+    bar: Texture
+    fill: Texture
+    next: any
+    data: any? = nil
+
+    constructor(parent: any)
+        super(nil, parent)
+        self:SetHeight(trackH)
+        self.stops = {}
+        -- the account's points
+        self.points = block(self, "Legacy · account")
+        self.points:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -(TRACK_TOP - 18))
+        self.points:SetWidth(LEFT_W - 8)
+        self.bar = draw.fill(self, "track", "ARTWORK")
+        self.bar:SetHeight(6)
+        self.fill = draw.fill(self, "progress-fill", "ARTWORK", 1)
+        self.fill:SetHeight(6)
+        self.fill:SetPoint("TOPLEFT", self.bar, "TOPLEFT")
+        self.next = uiText.text(self, "caption", "ink-muted")
+        self.next:SetPoint("BOTTOM", self, "BOTTOM", LEFT_W / 2, 0)
+        self:SetScript("OnSizeChanged", function() if self.data then self:SetTrack(self.data) end end)
+        live[self] = "track"
     end
-    for i = #stops + 1, #self.stops do self.stops[i]:Hide() end
-    self.next:SetValue(d.next or "")
+
+    function SetTrack(d: any)
+        d = d or {}
+        self.data = d
+        local stops = d.stops or {}
+        local max = (d.max and d.max > 0) and d.max or 1
+        local earned = d.earned or 0
+        self.points.big:SetText(tostring(earned))
+        self.points.rest:SetText(" of " .. (d.total or 0) .. " earned")
+        local w = self:GetWidth()
+        if not w or w <= 0 then w = 800 end
+        local left = LEFT_W + ICON / 2
+        local inner = math.max(10, w - left - ICON / 2 - 4)
+        self.bar:ClearAllPoints()
+        self.bar:SetPoint("TOPLEFT", self, "TOPLEFT", left, -TRACK_TOP)
+        self.bar:SetWidth(inner)
+        self.fill:SetWidth(math.max(0.01, inner * math.min(1, earned / max)))
+        self.fill:SetShown(earned > 0)
+        for i, s in ipairs(stops) do
+            local st = self.stops[i]
+            if not st then
+                st = CreateFrame("Frame", nil, self)
+                st:SetSize(ICON, trackH)
+                st.slot = inventory.itemSlot(st, ICON)
+                st.slot:SetPoint("TOP", st, "TOP", 0, 0)
+                st.slot:SetScript("OnEnter", function(b) if b.stop and b.stop.onEnter then b.stop.onEnter(b) end end)
+                st.slot:SetScript("OnLeave", function(b) if b.stop and b.stop.onLeave then b.stop.onLeave() end end)
+                st.over = CreateFrame("Frame", nil, st.slot)
+                st.over:SetAllPoints()
+                st.over:SetFrameLevel(st.slot:GetFrameLevel() + 5)
+                st.check = st.over:CreateTexture(nil, "OVERLAY", nil, 7)
+                st.check:SetTexture(GLYPHS .. "check.tga")
+                st.check:SetSize(10, 10)
+                st.check:SetPoint("TOPRIGHT", st.slot, "TOPRIGHT", 3, 3)
+                draw.paint(st.check, "fel")
+                st.mark = draw.diamond(st, 9, "gilt-line", "OVERLAY", 3)
+                st.mark:SetPoint("CENTER", st, "TOP", 0, -(TRACK_TOP + 3))
+                st.at = uiText.text(st, "numeric", "ink-muted")
+                st.at:SetPoint("TOP", st, "TOP", 0, -(TRACK_TOP + 6 + S["space-3"]))
+                self.stops[i] = st
+            end
+            local got = earned >= (s.at or 0)
+            st.slot.stop = s
+            st.slot.skin:SetItem({ icon = s.icon, quality = s.quality, dim = not got })
+            draw.paint(st.mark, got and "gilt" or "gilt-line")
+            st.at:SetValue(tostring(s.at or 0))
+            st.at:SetColor(got and "gilt-text" or "ink-muted")
+            st.check:SetShown(s.collected and true or false)
+            st:ClearAllPoints()
+            st:SetPoint("TOP", self, "TOPLEFT", left + inner * math.min(1, (s.at or 0) / max), 0)
+            st:Show()
+        end
+        for i = #stops + 1, #self.stops do self.stops[i]:Hide() end
+        self.next:SetValue(d.next or "")
+    end
 end
 
-export function legacyTrack(parent: any): any
-    local f: any = CreateFrame("Frame", nil, parent)
-    Mixin(f, Track)
-    f:SetHeight(trackH)
-    f.stops = {}
-    -- the account's points
-    f.points = block(f, "Legacy · account")
-    f.points:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -(TRACK_TOP - 18))
-    f.points:SetWidth(LEFT_W - 8)
-    f.bar = draw.fill(f, "track", "ARTWORK")
-    f.bar:SetHeight(6)
-    f.fill = draw.fill(f, "progress-fill", "ARTWORK", 1)
-    f.fill:SetHeight(6)
-    f.fill:SetPoint("TOPLEFT", f.bar, "TOPLEFT")
-    f.next = uiText.text(f, "caption", "ink-muted")
-    f.next:SetPoint("BOTTOM", f, "BOTTOM", LEFT_W / 2, 0)
-    f:SetScript("OnSizeChanged", function() if f.data then f:SetTrack(f.data) end end)
-    live[f] = "track"
-    return f
+export function legacyTrack(parent: any): LegacyTrack
+    return LegacyTrack.new(parent)
 end
 
 -- A theme can change the caption style (the heights above) and the colours

@@ -31,7 +31,7 @@
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
+import text, Text from "/UI/Text"
 import button from "/UI/Controls"
 import checkbox, segmented from "/UI/Inputs"
 
@@ -51,7 +51,6 @@ catcher:Hide()
 catcher:RegisterForClicks("AnyDown")
 catcher:SetScript("OnClick", function() if openMenu then openMenu:Close() end end)
 
-local Menu: { [string]: any } = {}
 local menus: { [any]: boolean } = setmetatable({}, { __mode = "k" })
 
 local function copyList(list: any[]?): any[]
@@ -63,83 +62,6 @@ end
 local function has(list: any[]?, v: any): boolean
     for _, x in ipairs(list or {}) do if x == v then return true end end
     return false
-end
-
--- The value with every group filled in from the defaults.
-function Menu:Full(value: { [string]: any }?): { [string]: any }
-    local out: { [string]: any } = {}
-    for _, g in ipairs(self.groups) do
-        local v = value and value[g.key]
-        if v == nil then v = self.defaults[g.key] end
-        if g.kind == "one" then out[g.key] = v else out[g.key] = copyList(v) end
-    end
-    return out
-end
-
--- How many choices differ from the defaults.
-function Menu:Count()
-    local n = 0
-    for _, g in ipairs(self.groups) do
-        local v, d = self.value[g.key], self.defaults[g.key]
-        if g.kind == "one" then
-            if v ~= d then n = n + 1 end
-        else
-            for _, x in ipairs(v or {}) do if not has(d, x) then n = n + 1 end end
-            for _, x in ipairs(d or {}) do if not has(v, x) then n = n + 1 end end
-        end
-    end
-    return n
-end
-
-function Menu:GetValue() return self:Full(self.value) end
-
-function Menu:SetValue(value: { [string]: any }?)
-    self.value = self:Full(value)
-    self:Draw()
-end
-
-function Menu:SetGroups(groups: { [string]: any }[]?)
-    self:Close()
-    self.panel = nil
-    self.groups = groups or {}
-    self.value = self:Full(self.value)
-    self:Draw()
-end
-
-function Menu:Changed()
-    self:Draw()
-    if self.onChange then self.onChange(self:GetValue()) end
-end
-
--- The field and, when built, the panel's controls, from the value.
-function Menu:Draw()
-    local n = self:Count()
-    if self.style == "button" then
-        self.text:SetValue(self.placeholder or "Filters")
-        self.changed:SetShown(n > 0)
-    else
-        self.text:SetValue((self.placeholder or "Filters") .. (n > 0 and (" · " .. n) or ""))
-        draw.paint(self.glyph, n > 0 and "arcane" or "ink-muted")
-    end
-    local p = self.panel
-    if not p then return end
-    for _, row in ipairs(p.rows) do
-        local g, v = row.group, self.value[row.group.key]
-        if g.kind == "one" then
-            row.control:SetValue(v)
-        elseif g.kind == "many" then
-            for _, chip in ipairs(row.chips) do
-                local on = has(v, chip.option.value)
-                chip.bg:SetShown(on)
-                chip.edgeOn:SetShown(on)
-                chip.label:SetColor(on and "ink" or "ink-muted")
-            end
-        else
-            for _, box in ipairs(row.boxes) do box:SetValue(has(v, box.option.value)) end
-        end
-    end
-    p.count:SetValue(n > 0 and (n .. (n == 1 and " filter on" or " filters on")) or "Defaults")
-    p.reset:SetEnabledState(n > 0)
 end
 
 local function makeChip(menu: any, parent: any, group: { [string]: any }, option: { [string]: any }): any
@@ -176,161 +98,6 @@ local function makeChip(menu: any, parent: any, group: { [string]: any }, option
     return b
 end
 
-function Menu:Build()
-    local menu = self
-    local p = CreateFrame("Frame", nil, UIParent)
-    self.panel = p
-    p:SetFrameStrata("FULLSCREEN_DIALOG")
-    p:SetFrameLevel(catcher:GetFrameLevel() + 10)
-    p:EnableMouse(true)
-    p:SetClampedToScreen(true)
-    draw.fill(p, "surface"):SetAllPoints()
-    draw.border(p, "gilt-line")
-    draw.shadow(p, "shadow-panel")
-    p.rows = {}
-    local pad = S["space-5"]
-    -- the columns: a group with `column` starts the next one
-    local multi = false
-    for gi, g in ipairs(self.groups) do if gi > 1 and g.column then multi = true end end
-    local inner = multi and COLUMN_W or PANEL_W - pad * 2
-    local columns: any[], col: any = {}, nil
-    local function newColumn()
-        col = CreateFrame("Frame", nil, p)
-        col:SetSize(1, 1)
-        col.width, col.y = inner, 0
-        columns[#columns + 1] = col
-    end
-    newColumn()
-    local y = 0
-    for gi, g in ipairs(self.groups) do
-        if gi > 1 and g.column then
-            col.y = y
-            newColumn()
-            y = 0
-        elseif gi > 1 then
-            y = y + S["space-4"]
-        end
-        local row: { [string]: any } = { group = g }
-        local label = text(p, "caption", "ink-muted")
-        label:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
-        label:SetValue(g.label)
-        y = y + T.type.caption.lineHeight + S["space-2"]
-        if g.kind == "one" then
-            row.control = segmented(p, { options = g.options, onChange = function(v: any)
-                menu.value[g.key] = v
-                menu:Changed()
-            end })
-            row.control:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
-            col.width = math.max(col.width, row.control:GetWidth())
-            y = y + row.control:GetHeight()
-        elseif g.kind == "many" then
-            -- chips, wrapping onto the next line
-            row.chips = {}
-            local x = 0
-            for _, o in ipairs(g.options) do
-                local chip = makeChip(menu, p, g, o)
-                if x > 0 and x + chip:GetWidth() > inner then
-                    x = 0
-                    y = y + CHIP_H + S["space-2"]
-                end
-                chip:SetPoint("TOPLEFT", col, "TOPLEFT", x, -y)
-                x = x + chip:GetWidth() + S["space-2"]
-                row.chips[#row.chips + 1] = chip
-            end
-            y = y + CHIP_H
-        else
-            row.boxes = {}
-            for i, o in ipairs(g.options) do
-                if i > 1 then y = y + S["space-2"] end
-                local box = checkbox(p, { label = o.label, onChange = function(on: boolean)
-                    local list = menu.value[g.key]
-                    if on then
-                        if not has(list, o.value) then list[#list + 1] = o.value end
-                    else
-                        local kept: any[] = {}
-                        for _, x in ipairs(list) do if x ~= o.value then kept[#kept + 1] = x end end
-                        menu.value[g.key] = kept
-                    end
-                    menu:Changed()
-                end })
-                box.option = o
-                box:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
-                col.width = math.max(col.width, box:GetWidth())
-                y = y + box:GetHeight()
-                row.boxes[#row.boxes + 1] = box
-            end
-        end
-        p.rows[#p.rows + 1] = row
-    end
-    -- the columns side by side, the panel around them
-    col.y = y
-    local x, tallest = pad, 0
-    for i, c in ipairs(columns) do
-        if i > 1 then x = x + S["space-6"] end
-        c:SetPoint("TOPLEFT", p, "TOPLEFT", x, -pad)
-        x = x + c.width
-        tallest = math.max(tallest, c.y)
-    end
-    p:SetWidth(multi and (x + pad) or PANEL_W)
-    y = pad + tallest
-    -- the foot: how many are on, Reset (and Done)
-    y = y + S["space-5"]
-    local rule = draw.fill(p, "gilt-faint", "ARTWORK")
-    rule:SetHeight(1)
-    rule:SetPoint("TOPLEFT", pad, -y)
-    rule:SetPoint("TOPRIGHT", -pad, -y)
-    y = y + 1 + S["space-4"]
-    p.reset = button(p, { text = "Reset", variant = "quiet", onClick = function()
-        menu.value = menu:Full(nil)
-        menu:Changed()
-    end })
-    if self.done then
-        p.done = button(p, { text = "Done", onClick = function() menu:Close() end })
-        p.done:SetPoint("TOPRIGHT", -pad, -y)
-        p.reset:SetPoint("RIGHT", p.done, "LEFT", -S["space-3"], 0)
-    else
-        p.reset:SetPoint("TOPRIGHT", -pad, -y)
-    end
-    p.count = text(p, "caption", "ink-muted")
-    p.count:SetPoint("LEFT", p, "TOPLEFT", pad, -(y + p.reset:GetHeight() / 2))
-    y = y + p.reset:GetHeight() + pad
-    p:SetHeight(y)
-    -- Esc closes it (out of combat: the key can't be held back in one)
-    p:EnableKeyboard(true)
-    p:SetScript("OnKeyDown", function(self: any, key: string)
-        if InCombatLockdown() then return end
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            menu:Close()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    p:Hide()
-end
-
-function Menu:Open()
-    if openMenu and openMenu ~= self then openMenu:Close() end
-    if not self.panel then self:Build() end
-    local p = self.panel
-    p:ClearAllPoints()
-    p:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-2"])
-    self:Draw()
-    openMenu = self
-    catcher:Show()
-    p:Show()
-    self.edge:SetColor("arcane")
-end
-
-function Menu:Close()
-    if self.panel then self.panel:Hide() end
-    if openMenu == self then
-        openMenu = nil
-        catcher:Hide()
-    end
-    self.edge:SetColor("gilt-line")
-end
-
 -- The button style's width: its glyph, placeholder and diamond.
 local function buttonWidth(f: any): number
     return math.ceil(S["space-4"] + 12 + S["space-3"] + f.text:GetUnboundedStringWidth() + S["space-3"] + 5 + S["space-4"])
@@ -348,51 +115,302 @@ events.on("SUUUI_THEME_CHANGED", function()
     end
 end, "UI.FilterMenu")
 
-export function filterMenu(parent: any, opts: { [string]: any }): any
-    local f = CreateFrame("Button", nil, parent)
-    Mixin(f, Menu)
-    f.groups, f.onChange, f.placeholder = opts.groups or {}, opts.onChange, opts.placeholder
-    f.defaults, f.style, f.done = opts.defaults or {}, opts.style, opts.done
-    f.glyph = f:CreateTexture(nil, "ARTWORK")
-    f.glyph:SetTexture(GLYPHS .. "filter.tga")
-    f.glyph:SetSize(14, 14)
-    f.glyph:SetPoint("LEFT", S["space-4"], 0)
-    if f.style == "button" then
-        -- a quiet button: the glyph, the placeholder, a diamond while changed
-        draw.fill(f, "surface-raised"):SetAllPoints()
-        f.edge = draw.border(f, "gilt-line")
-        f.glyph:SetSize(12, 12)
-        f.glyph:SetPoint("LEFT", S["space-4"], 0)
-        draw.paint(f.glyph, "ink-muted")
-        f.text = text(f, "label", "ink")
-        f.text:SetPoint("LEFT", f.glyph, "RIGHT", S["space-3"], 0)
-        f.text:SetValue(opts.placeholder or "Filters")
-        f.changed = draw.diamond(f, 5, "ink")
-        f.changed:SetPoint("LEFT", f.text, "RIGHT", S["space-3"], 0)
-        f.autoWidth = not opts.width
-        f:SetSize(opts.width or buttonWidth(f), opts.height or 30)
-    else
-        f:SetSize(opts.width or 140, opts.height or 30)
-        draw.fill(f, "surface-sunk"):SetAllPoints()
-        f.edge = draw.border(f, "gilt-line")
-        f.chevron = f:CreateTexture(nil, "ARTWORK")
-        f.chevron:SetTexture(GLYPHS .. "chevronDown.tga")
-        f.chevron:SetSize(12, 12)
-        f.chevron:SetPoint("RIGHT", -S["space-4"], 0)
-        draw.paint(f.chevron, "ink-muted")
-        f.text = text(f, "body", "ink")
-        f.text:SetPoint("LEFT", f.glyph, "RIGHT", S["space-3"], 0)
-        f.text:SetPoint("RIGHT", f.chevron, "LEFT", -S["space-3"], 0)
-        f.text:SetJustifyH("LEFT")
+export class FilterMenu extends Button
+    groups: any
+    onChange: any
+    placeholder: any
+    defaults: any
+    style: any
+    done: any
+    glyph: Texture
+    edge: draw.Border
+    text: Text
+    changed: Texture? = nil
+    autoWidth: any? = nil
+    chevron: Texture? = nil
+    value: any
+    panel: any? = nil
+
+    constructor(parent: any, opts: { [string]: any })
+        super(nil, parent)
+        self.groups, self.onChange, self.placeholder = opts.groups or {}, opts.onChange, opts.placeholder
+        self.defaults, self.style, self.done = opts.defaults or {}, opts.style, opts.done
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "filter.tga")
+        self.glyph:SetSize(14, 14)
+        self.glyph:SetPoint("LEFT", S["space-4"], 0)
+        if self.style == "button" then
+            -- a quiet button: the glyph, the placeholder, a diamond while changed
+            draw.fill(self, "surface-raised"):SetAllPoints()
+            self.edge = draw.border(self, "gilt-line")
+            self.glyph:SetSize(12, 12)
+            self.glyph:SetPoint("LEFT", S["space-4"], 0)
+            draw.paint(self.glyph, "ink-muted")
+            self.text = text(self, "label", "ink")
+            self.text:SetPoint("LEFT", self.glyph, "RIGHT", S["space-3"], 0)
+            self.text:SetValue(opts.placeholder or "Filters")
+            self.changed = draw.diamond(self, 5, "ink")
+            self.changed:SetPoint("LEFT", self.text, "RIGHT", S["space-3"], 0)
+            self.autoWidth = not opts.width
+            self:SetSize(opts.width or buttonWidth(self), opts.height or 30)
+        else
+            self:SetSize(opts.width or 140, opts.height or 30)
+            draw.fill(self, "surface-sunk"):SetAllPoints()
+            self.edge = draw.border(self, "gilt-line")
+            self.chevron = self:CreateTexture(nil, "ARTWORK")
+            self.chevron:SetTexture(GLYPHS .. "chevronDown.tga")
+            self.chevron:SetSize(12, 12)
+            self.chevron:SetPoint("RIGHT", -S["space-4"], 0)
+            draw.paint(self.chevron, "ink-muted")
+            self.text = text(self, "body", "ink")
+            self.text:SetPoint("LEFT", self.glyph, "RIGHT", S["space-3"], 0)
+            self.text:SetPoint("RIGHT", self.chevron, "LEFT", -S["space-3"], 0)
+            self.text:SetJustifyH("LEFT")
+        end
+        self:SetScript("OnClick", function()
+            if openMenu == self then self:Close() else self:Open() end
+        end)
+        self:SetScript("OnEnter", function() if openMenu ~= self then self.edge:SetColor("gilt") end end)
+        self:SetScript("OnLeave", function() if openMenu ~= self then self.edge:SetColor("gilt-line") end end)
+        self:HookScript("OnHide", function() self:Close() end)
+        self.value = self:Full(opts.value)
+        self:Draw()
+        menus[self] = true
     end
-    f:SetScript("OnClick", function(self: any)
-        if openMenu == self then self:Close() else self:Open() end
-    end)
-    f:SetScript("OnEnter", function(self: any) if openMenu ~= self then self.edge:SetColor("gilt") end end)
-    f:SetScript("OnLeave", function(self: any) if openMenu ~= self then self.edge:SetColor("gilt-line") end end)
-    f:HookScript("OnHide", function(self: any) self:Close() end)
-    f.value = f:Full(opts.value)
-    f:Draw()
-    menus[f] = true
-    return f
+
+    -- The value with every group filled in from the defaults.
+    function Full(value: { [string]: any }?): { [string]: any }
+        local out: { [string]: any } = {}
+        for _, g in ipairs(self.groups) do
+            local v = value and value[g.key]
+            if v == nil then v = self.defaults[g.key] end
+            if g.kind == "one" then out[g.key] = v else out[g.key] = copyList(v) end
+        end
+        return out
+    end
+
+    -- How many choices differ from the defaults.
+    function Count()
+        local n = 0
+        for _, g in ipairs(self.groups) do
+            local v, d = self.value[g.key], self.defaults[g.key]
+            if g.kind == "one" then
+                if v ~= d then n = n + 1 end
+            else
+                for _, x in ipairs(v or {}) do if not has(d, x) then n = n + 1 end end
+                for _, x in ipairs(d or {}) do if not has(v, x) then n = n + 1 end end
+            end
+        end
+        return n
+    end
+
+    function GetValue() return self:Full(self.value) end
+
+    function SetValue(value: { [string]: any }?)
+        self.value = self:Full(value)
+        self:Draw()
+    end
+
+    function SetGroups(groups: { [string]: any }[]?)
+        self:Close()
+        self.panel = nil
+        self.groups = groups or {}
+        self.value = self:Full(self.value)
+        self:Draw()
+    end
+
+    function Changed()
+        self:Draw()
+        if self.onChange then self.onChange(self:GetValue()) end
+    end
+
+    -- The field and, when built, the panel's controls, from the value.
+    function Draw()
+        local n = self:Count()
+        if self.style == "button" then
+            self.text:SetValue(self.placeholder or "Filters")
+            if self.changed then self.changed:SetShown(n > 0) end
+        else
+            self.text:SetValue((self.placeholder or "Filters") .. (n > 0 and (" · " .. n) or ""))
+            draw.paint(self.glyph, n > 0 and "arcane" or "ink-muted")
+        end
+        local p = self.panel
+        if not p then return end
+        for _, row in ipairs(p.rows) do
+            local g, v = row.group, self.value[row.group.key]
+            if g.kind == "one" then
+                row.control:SetValue(v)
+            elseif g.kind == "many" then
+                for _, chip in ipairs(row.chips) do
+                    local on = has(v, chip.option.value)
+                    chip.bg:SetShown(on)
+                    chip.edgeOn:SetShown(on)
+                    chip.label:SetColor(on and "ink" or "ink-muted")
+                end
+            else
+                for _, box in ipairs(row.boxes) do box:SetValue(has(v, box.option.value)) end
+            end
+        end
+        p.count:SetValue(n > 0 and (n .. (n == 1 and " filter on" or " filters on")) or "Defaults")
+        p.reset:SetEnabledState(n > 0)
+    end
+
+    function Build()
+        local menu = self
+        local p = CreateFrame("Frame", nil, UIParent)
+        self.panel = p
+        p:SetFrameStrata("FULLSCREEN_DIALOG")
+        p:SetFrameLevel(catcher:GetFrameLevel() + 10)
+        p:EnableMouse(true)
+        p:SetClampedToScreen(true)
+        draw.fill(p, "surface"):SetAllPoints()
+        draw.border(p, "gilt-line")
+        draw.shadow(p, "shadow-panel")
+        p.rows = {}
+        local pad = S["space-5"]
+        -- the columns: a group with `column` starts the next one
+        local multi = false
+        for gi, g in ipairs(self.groups) do if gi > 1 and g.column then multi = true end end
+        local inner = multi and COLUMN_W or PANEL_W - pad * 2
+        local columns: any[], col: any = {}, nil
+        local function newColumn()
+            col = CreateFrame("Frame", nil, p)
+            col:SetSize(1, 1)
+            col.width, col.y = inner, 0
+            columns[#columns + 1] = col
+        end
+        newColumn()
+        local y = 0
+        for gi, g in ipairs(self.groups) do
+            if gi > 1 and g.column then
+                col.y = y
+                newColumn()
+                y = 0
+            elseif gi > 1 then
+                y = y + S["space-4"]
+            end
+            local row: { [string]: any } = { group = g }
+            local label = text(p, "caption", "ink-muted")
+            label:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
+            label:SetValue(g.label)
+            y = y + T.type.caption.lineHeight + S["space-2"]
+            if g.kind == "one" then
+                row.control = segmented(p, { options = g.options, onChange = function(v: any)
+                    menu.value[g.key] = v
+                    menu:Changed()
+                end })
+                row.control:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
+                col.width = math.max(col.width, row.control:GetWidth())
+                y = y + row.control:GetHeight()
+            elseif g.kind == "many" then
+                -- chips, wrapping onto the next line
+                row.chips = {}
+                local x = 0
+                for _, o in ipairs(g.options) do
+                    local chip = makeChip(menu, p, g, o)
+                    if x > 0 and x + chip:GetWidth() > inner then
+                        x = 0
+                        y = y + CHIP_H + S["space-2"]
+                    end
+                    chip:SetPoint("TOPLEFT", col, "TOPLEFT", x, -y)
+                    x = x + chip:GetWidth() + S["space-2"]
+                    row.chips[#row.chips + 1] = chip
+                end
+                y = y + CHIP_H
+            else
+                row.boxes = {}
+                for i, o in ipairs(g.options) do
+                    if i > 1 then y = y + S["space-2"] end
+                    local box = checkbox(p, { label = o.label, onChange = function(on: boolean)
+                        local list = menu.value[g.key]
+                        if on then
+                            if not has(list, o.value) then list[#list + 1] = o.value end
+                        else
+                            local kept: any[] = {}
+                            for _, x in ipairs(list) do if x ~= o.value then kept[#kept + 1] = x end end
+                            menu.value[g.key] = kept
+                        end
+                        menu:Changed()
+                    end })
+                    box.option = o
+                    box:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -y)
+                    col.width = math.max(col.width, box:GetWidth())
+                    y = y + box:GetHeight()
+                    row.boxes[#row.boxes + 1] = box
+                end
+            end
+            p.rows[#p.rows + 1] = row
+        end
+        -- the columns side by side, the panel around them
+        col.y = y
+        local x, tallest = pad, 0
+        for i, c in ipairs(columns) do
+            if i > 1 then x = x + S["space-6"] end
+            c:SetPoint("TOPLEFT", p, "TOPLEFT", x, -pad)
+            x = x + c.width
+            tallest = math.max(tallest, c.y)
+        end
+        p:SetWidth(multi and (x + pad) or PANEL_W)
+        y = pad + tallest
+        -- the foot: how many are on, Reset (and Done)
+        y = y + S["space-5"]
+        local rule = draw.fill(p, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT", pad, -y)
+        rule:SetPoint("TOPRIGHT", -pad, -y)
+        y = y + 1 + S["space-4"]
+        p.reset = button(p, { text = "Reset", variant = "quiet", onClick = function()
+            menu.value = menu:Full(nil)
+            menu:Changed()
+        end })
+        if self.done then
+            p.done = button(p, { text = "Done", onClick = function() menu:Close() end })
+            p.done:SetPoint("TOPRIGHT", -pad, -y)
+            p.reset:SetPoint("RIGHT", p.done, "LEFT", -S["space-3"], 0)
+        else
+            p.reset:SetPoint("TOPRIGHT", -pad, -y)
+        end
+        p.count = text(p, "caption", "ink-muted")
+        p.count:SetPoint("LEFT", p, "TOPLEFT", pad, -(y + p.reset:GetHeight() / 2))
+        y = y + p.reset:GetHeight() + pad
+        p:SetHeight(y)
+        -- Esc closes it (out of combat: the key can't be held back in one)
+        p:EnableKeyboard(true)
+        p:SetScript("OnKeyDown", function(panel: any, key: string)
+            if InCombatLockdown() then return end
+            if key == "ESCAPE" then
+                panel:SetPropagateKeyboardInput(false)
+                menu:Close()
+            else
+                panel:SetPropagateKeyboardInput(true)
+            end
+        end)
+        p:Hide()
+    end
+
+    function Open()
+        if openMenu and openMenu ~= self then openMenu:Close() end
+        if not self.panel then self:Build() end
+        local p = self.panel
+        p:ClearAllPoints()
+        p:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-2"])
+        self:Draw()
+        openMenu = self
+        catcher:Show()
+        p:Show()
+        self.edge:SetColor("arcane")
+    end
+
+    function Close()
+        if self.panel then self.panel:Hide() end
+        if openMenu == self then
+            openMenu = nil
+            catcher:Hide()
+        end
+        self.edge:SetColor("gilt-line")
+    end
+end
+
+export function filterMenu(parent: any, opts: { [string]: any }): FilterMenu
+    return FilterMenu.new(parent, opts)
 end

@@ -18,7 +18,7 @@ import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
 import text from "/UI/Text"
 import itemSlot, money from "/UI/Inventory"
-import panel from "/UI/Panel"
+import Panel from "/UI/Panel"
 
 local S = T.space
 
@@ -26,8 +26,6 @@ local SLOT = T.size["slot"]
 local GAP = S["space-2"]
 local WIDTH = 260
 local BODY_W = WIDTH - S["space-5"] * 2
-
-local LW: { [string]: any } = {}
 
 local function row(lw: any, i: number): any
     local r = lw.rows[i]
@@ -67,47 +65,54 @@ local function row(lw: any, i: number): any
     return r
 end
 
-function LW:SetSource(source: string?)
-    self:SetTitle("Loot", source or "")
-end
+export class LootWindow extends Panel
+    rows: any
+    skins: any
 
--- items: { { index, icon, count, quality, label, copper, locked } … } in
--- order; `index` is what onClick gets (the loot slot), default the position.
-function LW:SetItems(items: { [string]: any }[])
-    for i, item in ipairs(items) do
-        local r = row(self, i)
-        r.index = item.index or i
-        r.slot.skin:SetItem({ icon = item.icon, count = item.count, quality = item.quality or "common", locked = item.locked })
-        if item.copper then
-            r.label:Hide()
-            r.money:SetCopper(item.copper)
-            r.money:Show()
-        else
-            r.money:Hide()
-            r.label:Show()
-            r.label:SetValue(item.label or "")
-            local q = item.quality
-            r.label:SetColor((q and q ~= "common") and ("quality-" .. q) or "ink")
-        end
-        r:ClearAllPoints()
-        r:SetPoint("TOPLEFT", 0, -(i - 1) * (SLOT + GAP))
-        r:Show()
+    constructor(parent: any, opts: { name?: string }?)
+        opts = opts or {}
+        super(parent, { name = opts.name, title = "Loot", meta = "", closable = true,
+            onClose = function(p: any) if p.onClose then p.onClose() else p:Hide() end end })
+        self.rows, self.skins = {}, {}
+        self:SetItems({})
     end
-    for i = #items + 1, #self.rows do self.rows[i]:Hide() end
-    local n = math.max(1, #items)
-    self.body:SetSize(BODY_W, n * SLOT + (n - 1) * GAP)
+
+    function SetSource(source: string?)
+        self:SetTitle("Loot", source or "")
+    end
+
+    -- items: { { index, icon, count, quality, label, copper, locked } … } in
+    -- order; `index` is what onClick gets (the loot slot), default the position.
+    function SetItems(items: { [string]: any }[])
+        for i, item in ipairs(items) do
+            local r = row(self, i)
+            r.index = item.index or i
+            r.slot.skin:SetItem({ icon = item.icon, count = item.count, quality = item.quality or "common", locked = item.locked })
+            if item.copper then
+                r.label:Hide()
+                r.money:SetCopper(item.copper)
+                r.money:Show()
+            else
+                r.money:Hide()
+                r.label:Show()
+                r.label:SetValue(item.label or "")
+                local q = item.quality
+                r.label:SetColor((q and q ~= "common") and ("quality-" .. q) or "ink")
+            end
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -(i - 1) * (SLOT + GAP))
+            r:Show()
+        end
+        for i = #items + 1, #self.rows do self.rows[i]:Hide() end
+        local n = math.max(1, #items)
+        self.body:SetSize(BODY_W, n * SLOT + (n - 1) * GAP)
+    end
+
+    function FirstSlotOffset()
+        return S["space-5"] + SLOT / 2, self:BodyTop() + SLOT / 2
+    end
 end
 
-function LW:FirstSlotOffset()
-    return S["space-5"] + SLOT / 2, self:BodyTop() + SLOT / 2
-end
-
-export function lootWindow(parent: any, opts: { name?: string }?): any
-    opts = opts or {}
-    local lw = panel(parent, { name = opts.name, title = "Loot", meta = "", closable = true,
-        onClose = function(p: any) if p.onClose then p.onClose() else p:Hide() end end })
-    Mixin(lw, LW)
-    lw.rows, lw.skins = {}, {}
-    lw:SetItems({})
-    return lw
+export function lootWindow(parent: any, opts: { name?: string }?): LootWindow
+    return LootWindow.new(parent, opts)
 end

@@ -18,7 +18,7 @@
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as draw from "/UI/Draw"
-import text, measureText from "/UI/Text"
+import text, measureText, Text from "/UI/Text"
 
 local S = T.space
 
@@ -32,19 +32,6 @@ local TONES: { [string]: Tone } = {
     info = { ground = "surface-glass", line = "gilt-line", jewel = "gilt", title = "gilt-text" },
 }
 local JEWEL = 9
-
-local Alert: { [string]: any } = {}
-
-function Alert:SetTone(tone: string)
-    local t = TONES[tone] or assert(TONES.danger)
-    self.tone = TONES[tone] and tone or "danger"
-    draw.paintFill(self.ground, t.ground)
-    self.rules:SetColor(t.line)
-    draw.paint(self.left, t.jewel)
-    draw.paint(self.right, t.jewel)
-    self.title:SetColor(t.title)
-    self.glow:SetShown(t.glow and true or false)
-end
 
 -- The detail: plain text, or a format with arguments (secret ones allowed).
 -- Returns the text to measure, or nil when an argument is secret.
@@ -69,70 +56,96 @@ local function setDetail(self: any, detail: string?, ...: any): string?
     return n > 0 and detail:format(...) or detail
 end
 
--- The band's size from the title and the readable detail (nil: secret);
--- again after a theme changed the text styles.
-function Alert:Fit()
-    local readable: string? = self.detailText
-    local detailW: number? = nil
-    local lines = 1
-    if readable then
-        local w, n = 0, 0
-        for line in (readable .. "\n"):gmatch("(.-)\n") do
-            n = n + 1
-            w = math.max(w, measureText("caption", line))
-        end
-        detailW, lines = w, n
-    end
-    local titleW = measureText("alert", self.titleText)
-    local inner = math.max(titleW, detailW or draw.size("notice-w"))
-    -- a secret detail: fixed width, cut at the band's edge; several lines:
-    -- as wide as the longest, centred
-    if lines > 1 then
-        self.detail:SetWidth(math.ceil(detailW or 0) + 2)
-        self.detail:SetWordWrap(true)
-    else
-        self.detail:SetWidth(detailW and 0 or inner)
-        self.detail:SetWordWrap(false)
-    end
-    local h = S["space-4"] * 2 + T.type.alert.lineHeight
-    if self.detail:IsShown() then h = h + S["space-1"] + T.type.caption.lineHeight * lines end
-    self:SetSize(math.ceil(inner) + S["space-6"] * 2, h)
-end
-
 local alerts: { [any]: boolean } = setmetatable({}, { __mode = "k" })
 events.on("SUUUI_THEME_CHANGED", function()
     for a in pairs(alerts) do a:Fit() end
 end, "UI.Alert")
 
-function Alert:SetAlert(tone: string, title: string?, detail: string?, ...: any)
-    self:SetTone(tone)
-    self.title:SetValue(title or "")
-    self.titleText = title or ""
-    self.detailText = setDetail(self, detail, ...)
-    self:Fit()
+export class Alert extends Frame
+    ground: Texture
+    glow: draw.SoftEdge
+    rules: draw.Border
+    left: Texture
+    right: Texture
+    title: Text
+    detail: Text
+    tone: any? = nil
+    titleText: any? = nil
+    detailText: any? = nil
+
+    constructor(parent: any)
+        super(nil, parent)
+        alerts[self] = true
+        self.ground = self:CreateTexture(nil, "BACKGROUND")
+        self.ground:SetAllPoints()
+        self.glow = draw.shadow(self, "glow-ember")
+        -- the rules above and below (a border without its sides)
+        self.rules = draw.border(self, "ember")
+        self.rules.left:Hide()
+        self.rules.right:Hide()
+        self.left = draw.diamond(self, JEWEL, "ember")
+        self.left:SetPoint("CENTER", self, "LEFT", 0, 0)
+        self.right = draw.diamond(self, JEWEL, "ember")
+        self.right:SetPoint("CENTER", self, "RIGHT", 0, 0)
+        self.title = text(self, "alert", "ember-text")
+        -- the display face is small caps with no descenders: its line box
+        -- centres 2px high, so it sits 2px lower
+        self.title:SetPoint("TOP", 0, -S["space-4"] - 2)
+        self.detail = text(self, "caption", "ink")
+        self.detail:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-1"])
+        self:SetAlert("danger", "")
+    end
+
+    function SetTone(tone: string)
+        local t = TONES[tone] or assert(TONES.danger)
+        self.tone = TONES[tone] and tone or "danger"
+        draw.paintFill(self.ground, t.ground)
+        self.rules:SetColor(t.line)
+        draw.paint(self.left, t.jewel)
+        draw.paint(self.right, t.jewel)
+        self.title:SetColor(t.title)
+        self.glow:SetShown(t.glow and true or false)
+    end
+
+    -- The band's size from the title and the readable detail (nil: secret);
+    -- again after a theme changed the text styles.
+    function Fit()
+        local readable: string? = self.detailText
+        local detailW: number? = nil
+        local lines = 1
+        if readable then
+            local w, n = 0, 0
+            for line in (readable .. "\n"):gmatch("(.-)\n") do
+                n = n + 1
+                w = math.max(w, measureText("caption", line))
+            end
+            detailW, lines = w, n
+        end
+        local titleW = measureText("alert", self.titleText)
+        local inner = math.max(titleW, detailW or draw.size("notice-w"))
+        -- a secret detail: fixed width, cut at the band's edge; several lines:
+        -- as wide as the longest, centred
+        if lines > 1 then
+            self.detail:SetWidth(math.ceil(detailW or 0) + 2)
+            self.detail:SetWordWrap(true)
+        else
+            self.detail:SetWidth(detailW and 0 or inner)
+            self.detail:SetWordWrap(false)
+        end
+        local h = S["space-4"] * 2 + T.type.alert.lineHeight
+        if self.detail:IsShown() then h = h + S["space-1"] + T.type.caption.lineHeight * lines end
+        self:SetSize(math.ceil(inner) + S["space-6"] * 2, h)
+    end
+
+    function SetAlert(tone: string, title: string?, detail: string?, ...: any)
+        self:SetTone(tone)
+        self.title:SetValue(title or "")
+        self.titleText = title or ""
+        self.detailText = setDetail(self, detail, ...)
+        self:Fit()
+    end
 end
 
-export function alert(parent: any): any
-    local f = CreateFrame("Frame", nil, parent)
-    Mixin(f, Alert)
-    alerts[f] = true
-    f.ground = f:CreateTexture(nil, "BACKGROUND")
-    f.ground:SetAllPoints()
-    f.glow = draw.shadow(f, "glow-ember")
-    -- the rules above and below (a border without its sides)
-    f.rules = draw.border(f, "ember")
-    f.rules.left:Hide()
-    f.rules.right:Hide()
-    f.left = draw.diamond(f, JEWEL, "ember")
-    f.left:SetPoint("CENTER", f, "LEFT", 0, 0)
-    f.right = draw.diamond(f, JEWEL, "ember")
-    f.right:SetPoint("CENTER", f, "RIGHT", 0, 0)
-    f.title = text(f, "alert", "ember-text")
-    -- the display face is small caps with no descenders: its line box
-    -- centres 2px high, so it sits 2px lower
-    f.title:SetPoint("TOP", 0, -S["space-4"] - 2)
-    f.detail = text(f, "caption", "ink")
-    f.detail:SetPoint("TOP", f.title, "BOTTOM", 0, -S["space-1"])
-    f:SetAlert("danger", "")
-    return f
+export function alert(parent: any): Alert
+    return Alert.new(parent)
 end
