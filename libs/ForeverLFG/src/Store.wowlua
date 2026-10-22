@@ -19,7 +19,9 @@
 -- }
 
 import config, fire, now from "./LFG"
+import type Config from "./LFG"
 import catalogue from "./Catalogue"
+import type CatalogueApi from "./Catalogue"
 import type ToolSource from "./Tool"
 import type ChatSource from "./Chat"
 
@@ -66,11 +68,6 @@ export type StoreApi = {
     Clear: () -> (),
     Expire: () -> (),
 }
-
-export const store = {} :: StoreApi
-local S = store
-
-local byKey: { [string]: Entry } = {}
 
 local function union(into: any[], list: any[]?, seen: { [any]: boolean })
     for _, v in ipairs(list or {}) do
@@ -128,134 +125,167 @@ local function rebuild(e: Entry)
     e.you = (tool and tool.self) or (chat and chat.self) or false
 end
 
-function S.Put(key: string?, source: string, data: any): Entry?
-    if not key or key == "" then return end
-    local t = now()
-    local e = byKey[key]
-    local new = not e
-    if not e then
-        e = { key = key, sources = {}, firstSeen = t } :: Entry
-        byKey[key] = e
+-- Where the store tells what changed (LFG's events).
+export type Emit = (event: string, ...any) -> ()
+
+-- The merged list (a class: a test builds one over its own clock, events
+-- and catalogue). `entryStore` is the library's; `store` (LFG.Store) is its
+-- published table.
+export class EntryStore
+    private byKey: { [string]: Entry } = {}
+
+    constructor(
+        private emit: Emit = fire,
+        private clock: () -> number = now,
+        private activities: CatalogueApi = catalogue,
+        private settings: Config = config
+    )
     end
-    local before = not new and signature(e)
-    local sources = e.sources :: any
-    sources[source] = data
-    e.lastSeen = t
-    rebuild(e)
-    if new then
-        fire("EntryAdded", e)
-    elseif signature(e) ~= before then
-        fire("EntryUpdated", e)
-    else
-        -- the same again (a repost): only fresher
-        fire("EntryRefreshed", e)
-    end
-    return e
-end
 
-function S.Drop(key: string, source: string, reason: string)
-    local e = byKey[key]
-    local sources = e and e.sources :: any
-    if not (e and sources[source]) then return end
-    sources[source] = nil
-    if not next(sources) then
-        byKey[key] = nil
-        fire("EntryRemoved", e, reason)
-    else
-        rebuild(e)
-        fire("EntryUpdated", e)
-    end
-end
-
--- A key changing (a tool result whose leader's name came later).
-function S.Rename(old: string, new: string)
-    local e = byKey[old]
-    if not e or old == new then return end
-    byKey[old] = nil
-    local other = byKey[new]
-    if other then
-        local into = other.sources :: any
-        for source, data in pairs(e.sources :: any) do into[source] = into[source] or data end
-        rebuild(other)
-        fire("EntryRemoved", e, "merged")
-        fire("EntryUpdated", other)
-    else
-        e.key = new
-        byKey[new] = e
-        rebuild(e)
-        fire("EntryUpdated", e)
-    end
-end
-
-function S.Each(fn: (key: string, e: Entry) -> ())
-    for key, e in pairs(byKey) do fn(key, e) end
-end
-
-function S.Clear()
-    for key, e in pairs(byKey) do
-        byKey[key] = nil
-        fire("EntryRemoved", e, "stopped")
-    end
-end
-
--- Chat posts out of date.
-function S.Expire()
-    local t, limit = now(), config.chatExpiry or 300
-    local gone: string[] = {}
-    for key, e in pairs(byKey) do
-        local chat = e.sources.chat
-        if chat and t - (chat.lastPost or 0) > limit then gone[#gone + 1] = key end
-    end
-    for _, key in ipairs(gone) do S.Drop(key, "chat", "expired") end
-end
-
---------------------------------------------------------------------------------
--- Reading the list
---------------------------------------------------------------------------------
-
-export function entry(key: string): Entry? return byKey[key] end
-
--- filter = { intent, kinds = { dungeon = true, ... }, activities = { key = true },
---            sources = { tool = true, chat = true }, minConfidence, search, notYou }
-export function entries(filter: Filter?): Entry[]
-    local f: Filter = filter or {}
-    local wanted: { [string]: boolean }?
-    if f.activities then
-        local w: { [string]: boolean } = {}
-        for key in pairs(f.activities) do
-            for _, k in ipairs(catalogue.Expand(key)) do w[k] = true end
+    function put(key: string?, source: string, data: any): Entry?
+        if not key or key == "" then return end
+        local t = self.clock()
+        local e = self.byKey[key]
+        local new = not e
+        if not e then
+            e = { key = key, sources = {}, firstSeen = t } :: Entry
+            self.byKey[key] = e
         end
-        wanted = w
-    end
-    local out: Entry[] = {}
-    for _, e in pairs(byKey) do
-        local keep = true
-        if f.intent and e.intent ~= f.intent then keep = false end
-        if keep and f.notYou and e.you then keep = false end
-        if keep and f.minConfidence and e.confidence < f.minConfidence then keep = false end
-        local sources = f.sources
-        if keep and sources then
-            keep = false
-            for source in pairs(e.sources :: any) do if sources[source] then keep = true end end
+        local before = not new and signature(e)
+        local sources = e.sources :: any
+        sources[source] = data
+        e.lastSeen = t
+        rebuild(e)
+        if new then
+            self.emit("EntryAdded", e)
+        elseif signature(e) ~= before then
+            self.emit("EntryUpdated", e)
+        else
+            -- the same again (a repost): only fresher
+            self.emit("EntryRefreshed", e)
         end
-        local kinds = f.kinds
-        if keep and (kinds or wanted) then
-            keep = false
-            for _, key in ipairs(e.activities) do
-                for _, k in ipairs(catalogue.Expand(key)) do
-                    local a = catalogue.Get(k)
-                    if (not kinds or (a and kinds[a.kind])) and (not wanted or wanted[k]) then keep = true end
-                end
+        return e
+    end
+
+    function drop(key: string, source: string, reason: string)
+        local e = self.byKey[key]
+        local sources = e and e.sources :: any
+        if not (e and sources[source]) then return end
+        sources[source] = nil
+        if not next(sources) then
+            self.byKey[key] = nil
+            self.emit("EntryRemoved", e, reason)
+        else
+            rebuild(e)
+            self.emit("EntryUpdated", e)
+        end
+    end
+
+    -- A key changing (a tool result whose leader's name came later).
+    function rename(old: string, new: string)
+        local e = self.byKey[old]
+        if not e or old == new then return end
+        self.byKey[old] = nil
+        local other = self.byKey[new]
+        if other then
+            local into = other.sources :: any
+            for source, data in pairs(e.sources :: any) do into[source] = into[source] or data end
+            rebuild(other)
+            self.emit("EntryRemoved", e, "merged")
+            self.emit("EntryUpdated", other)
+        else
+            e.key = new
+            self.byKey[new] = e
+            rebuild(e)
+            self.emit("EntryUpdated", e)
+        end
+    end
+
+    function each(fn: (key: string, e: Entry) -> ())
+        for key, e in pairs(self.byKey) do fn(key, e) end
+    end
+
+    function clear()
+        for key, e in pairs(self.byKey) do
+            self.byKey[key] = nil
+            self.emit("EntryRemoved", e, "stopped")
+        end
+    end
+
+    -- Chat posts out of date.
+    function expire()
+        local t, limit = self.clock(), self.settings.chatExpiry or 300
+        local gone: string[] = {}
+        for key, e in pairs(self.byKey) do
+            local chat = e.sources.chat
+            if chat and t - (chat.lastPost or 0) > limit then gone[#gone + 1] = key end
+        end
+        for _, key in ipairs(gone) do self:drop(key, "chat", "expired") end
+    end
+
+    ----------------------------------------------------------------------------
+    -- Reading the list
+    ----------------------------------------------------------------------------
+
+    function entry(key: string): Entry? return self.byKey[key] end
+
+    -- filter = { intent, kinds = { dungeon = true, ... }, activities = { key = true },
+    --            sources = { tool = true, chat = true }, minConfidence, search, notYou }
+    function entries(filter: Filter?): Entry[]
+        local f: Filter = filter or {}
+        local wanted: { [string]: boolean }?
+        if f.activities then
+            local w: { [string]: boolean } = {}
+            for key in pairs(f.activities) do
+                for _, k in ipairs(self.activities.Expand(key)) do w[k] = true end
             end
-            if not keep and kinds and kinds.quest and #e.quests > 0 then keep = true end
+            wanted = w
         end
-        local search = f.search
-        if keep and search and search ~= "" then
-            local hay = (e.key .. " " .. (e.text or "")):lower()
-            keep = hay:find(search:lower(), 1, true) ~= nil
+        local out: Entry[] = {}
+        for _, e in pairs(self.byKey) do
+            local keep = true
+            if f.intent and e.intent ~= f.intent then keep = false end
+            if keep and f.notYou and e.you then keep = false end
+            if keep and f.minConfidence and e.confidence < f.minConfidence then keep = false end
+            local sources = f.sources
+            if keep and sources then
+                keep = false
+                for source in pairs(e.sources :: any) do if sources[source] then keep = true end end
+            end
+            local kinds = f.kinds
+            if keep and (kinds or wanted) then
+                keep = false
+                for _, key in ipairs(e.activities) do
+                    for _, k in ipairs(self.activities.Expand(key)) do
+                        local a = self.activities.Get(k)
+                        if (not kinds or (a and kinds[a.kind])) and (not wanted or wanted[k]) then keep = true end
+                    end
+                end
+                if not keep and kinds and kinds.quest and #e.quests > 0 then keep = true end
+            end
+            local search = f.search
+            if keep and search and search ~= "" then
+                local hay = (e.key .. " " .. (e.text or "")):lower()
+                keep = hay:find(search:lower(), 1, true) ~= nil
+            end
+            if keep then out[#out + 1] = e end
         end
-        if keep then out[#out + 1] = e end
+        table.sort(out, function(a: Entry, b: Entry) return (a.lastSeen or 0) > (b.lastSeen or 0) end)
+        return out
     end
-    table.sort(out, function(a: Entry, b: Entry) return (a.lastSeen or 0) > (b.lastSeen or 0) end)
-    return out
 end
+
+export const entryStore = EntryStore.new()
+
+-- LFG.Store, as published (dot calls).
+export const store: StoreApi = {
+    Put = function(key: string?, source: string, data: any): Entry? return entryStore:put(key, source, data) end,
+    Drop = function(key: string, source: string, reason: string) entryStore:drop(key, source, reason) end,
+    Rename = function(old: string, new: string) entryStore:rename(old, new) end,
+    Each = function(fn: (key: string, e: Entry) -> ()) entryStore:each(fn) end,
+    Clear = function() entryStore:clear() end,
+    Expire = function() entryStore:expire() end,
+}
+
+export function entry(key: string): Entry? return entryStore:entry(key) end
+export function entries(filter: Filter?): Entry[] return entryStore:entries(filter) end
