@@ -75,13 +75,13 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [R20](#r20) | mock | medium | fixed 0.9.6 (T233) | `mock.slash` skipped Blizzard's own commands |
 | [R21](#r21) | mock | low | fixed 0.9.6 | Mock declarations lacked fields and methods the engine has |
 | [R22](#r22) | mock | medium | fixed after 0.9.6 (T246) | A test could not be listed in the group finder |
-| [R23](#r23) | mock | low | open | `mock.hover` doesn't move the cursor |
+| [R23](#r23) | mock | low | fixed after 0.9.6 (T257) | `mock.hover` doesn't move the cursor |
 | [K4](#k4) | checker | medium | done 0.9.6 (W2061) | `a and nil or b` is always `b` |
 | [K5](#k5) | checker | medium | done after 0.9.6 (W2062, S40) | A value read past what a function gives |
 | [K6](#k6) | checker | low | open | `GetCursorInfo` is declared without its results |
 | [K7](#k7) | checker | low | open (likely) | The closing line of a multi-line `return f(...)` reads as not run |
 | [V12](#v12) | VM | medium | fixed 0.9.4 | `IsModifiedClick("CHATLINK")` was always false |
-| [V13](#v13) | VM | low | open | `IsMouseOver` ignores the cursor and its offsets |
+| [V13](#v13) | VM | low | fixed after 0.9.6 (T257) | `IsMouseOver` ignores the cursor and its offsets |
 | [V14](#v14) | VM | low | open | Chat windows' settings aren't kept |
 | [V15](#v15) | VM | high | fixed after 0.9.6 (T244) | A hidden edit box kept the keyboard |
 | [V16](#v16) | VM | medium | fixed after 0.9.6 (T256) | An item put onto a part stack of its kind isn't stacked |
@@ -105,6 +105,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V34](#v34) | VM | high | fixed after 0.9.6 (T252) | A protected frame could anchor to a region |
 | [V35](#v35) | VM | high | fixed after 0.9.6 (T253) | An addon could pick up a spellbook spell in combat |
 | [V36](#v36) | VM | high | fixed after 0.9.6 (T254) | A frame holding a protected frame wasn't protected |
+| [V37](#v37) | VM | medium | fixed after 0.9.6 (T258) | `ClearPoint` did nothing |
 
 ## Test runner and mock issues
 
@@ -377,7 +378,7 @@ An addon's `CreateListing` is blocked, and stubbing `C_LFGList.HasActiveEntryInf
 
 ### R23. `mock.hover` doesn't move the cursor
 
-*Status: open.*
+*Status: fixed after 0.9.6 (T257): `mock.hover` and `mock.click` put the cursor on the frame's middle (unless it is over it already); `mock.hover(nil)` takes it off every frame.*
 
 Code that reads the cursor over a hovered frame (`GetNormalizedCursorPosition`, the world map's coordinates) needs `mock.setCursorPosition` too; `IsMouseOver` follows the hover alone (see V13). (units-windows)
 
@@ -642,7 +643,7 @@ Blizzard's default `SHIFT-BUTTON1` took `BUTTON1` for a key never held. (ui-worl
 
 ### V13. `IsMouseOver` ignores the cursor and its offsets
 
-*Status: open.*
+*Status: fixed after 0.9.6 (T257): measured against the frame's rectangle and offsets. Three tests leaned on the old answer: two hovered frames that were never placed (the game can't put the mouse over those), and the map's status line read a reading left from the test before.*
 
 The engine answers whether the hovered frame is the frame or a child; the client measures the cursor against the frame grown by the offsets (`tabs:IsMouseOver(12, -12, -24, 24)`). (units-chat)
 
@@ -829,6 +830,14 @@ The game errors "Cannot anchor protected frames to regions" at login; the engine
 *Status: fixed after 0.9.6 (T254).*
 
 A parent of a protected frame is protected too: a secure handle to it works in combat, and its own `Show`, `SetShown` and moves are refused there. The engine let Collections show and lay out its tabs in combat, which the game refuses; they wait for combat's end now. (units-windows)
+
+<a id="v37"></a>
+
+### V37. `ClearPoint` did nothing
+
+*Status: fixed after 0.9.6 (T258).*
+
+`Region:ClearPoint(point)` wasn't modelled, so Blizzard's dropdown menus that open upward near the screen's bottom (they flip one point) kept both points and came out upside down. Found by wowlua's own settings test once `IsMouseOver` measured the menu (V13).
 
 ## Not bugs (for test writers)
 
