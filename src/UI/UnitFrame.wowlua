@@ -196,10 +196,6 @@ end
 -- Building
 --------------------------------------------------------------------------------
 
--- `any`: its methods' self is the frame they are mixed into
-local UF: any = {}
-mixins.UnitFrame = UF
-
 local function bar(f: any, level: number, color: string?): StatusBar
     local b = CreateFrame("StatusBar", nil, f.inner)
     b:SetStatusBarTexture(WHITE)
@@ -215,269 +211,9 @@ local function gradient(b: StatusBar, deep: string, fill: string)
     draw.paintGradient(b:GetStatusBarTexture(), "HORIZONTAL", deep, fill)
 end
 
-export function unitFrame(parent: Frame?, unit: string?, opts: { [string]: any }?): any
-    opts = opts or {}
-    local size = SIZES[opts.size or "md"] :: Size
-    -- opts.frame: a button a group header made (SecureUnitButtonTemplate);
-    -- the header owns its unit, its attributes are set when it is made
-    local f = opts.frame or CreateFrame("Button", opts.name, parent, opts.secure ~= false and "SecureUnitButtonTemplate" or nil)
-    Mixin(f, UF)
-    f.unit, f.opts, f.size = unit, opts, size
-    f.api = opts.api or GAME
-    local w, h = draw.size(opts.width or size.width), draw.size(opts.height or size.height)
-    if not (opts.frame and InCombatLockdown()) then f:SetSize(w, h) end
-
-    if opts.secure ~= false and not opts.frame then
-        f:SetAttribute("unit", unit)
-        f:SetAttribute("*type1", "target")
-        f:SetAttribute("*type2", "togglemenu")
-        f:RegisterForClicks("AnyUp")
-    end
-    f:SetScript("OnEnter", function(self)
-        if not self.unit then return end
-        GameTooltip_SetDefaultAnchor(GameTooltip, self)
-        GameTooltip:SetUnit(self.unit)
-        -- 0.17: a module's own lines after the unit's (the player frame's rested lines)
-        if self.onTooltip then self.onTooltip(self, GameTooltip) end
-        GameTooltip:Show()
-    end)
-    f:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-    -- The ground and, clipped inside the 1px border, the bars.
-    f.ground = draw.fill(f, "surface-sunk")
-    f.ground:SetAllPoints()
-    f.inner = CreateFrame("Frame", nil, f)
-    f.inner:SetPoint("TOPLEFT", 1, -1)
-    f.inner:SetPoint("BOTTOMRIGHT", -1, 1)
-    f.inner:SetClipsChildren(true)
-
-    f.ghost = bar(f, 1, "ghost")
-    f.ghost:SetAllPoints(f.inner)
-    f.health = bar(f, 2)
-    f.health:SetAllPoints(f.inner)
-    -- opts.crest (0.17): the rare and elite crest on the top edge over the
-    -- right end (design "Rare and elite units" B)
-    if opts.crest then
-        f.crest = crest.crest(f, "frame")
-        f.crest:SetPoint("CENTER", f, "TOPRIGHT", -64, -0.5)
-        -- opts.dragon (0.17): the game's own dragon instead, over the bars
-        -- (as Blizzard draws it over its frame) and under the name and
-        -- numbers; under the bar its head was hidden (seen in game)
-        f.dragonHost = CreateFrame("Frame", nil, f)
-        f.dragonHost:SetAllPoints()
-        f.dragonHost:SetFrameLevel(f:GetFrameLevel() + 7)
-        f.dragon = f.dragonHost:CreateTexture(nil, "ARTWORK")
-        f.dragon:Hide()
-    end
-    gradient(f.health, "unit-fill-deep", "unit-fill")
-    f.healthLow = bar(f, 3)
-    f.healthLow:SetAllPoints(f.inner)
-    gradient(f.healthLow, "unit-fill-low-deep", "unit-fill-low")
-    f.healthLow:SetAlpha(0)
-
-    -- The low-health tint: ember over the empty part of the bar, from the
-    -- fill's edge to the bar's end; the engine sets its strength (a curve).
-    f.tint = f.health:CreateTexture(nil, "BACKGROUND")
-    f.tint:SetPoint("TOPLEFT", f.health:GetStatusBarTexture(), "TOPRIGHT")
-    f.tint:SetPoint("BOTTOMRIGHT", f.inner, "BOTTOMRIGHT")
-    draw.paintFill(f.tint, "ember")
-    f.tint:SetAlpha(0)
-
-    -- Incoming heals, then absorbs, each starting where the one before ends.
-    f.incoming = bar(f, 4, "fel-incoming")
-    f.incoming:SetPoint("TOPLEFT", f.health:GetStatusBarTexture(), "TOPRIGHT")
-    f.incoming:SetPoint("BOTTOMLEFT", f.health:GetStatusBarTexture(), "BOTTOMRIGHT")
-    f.incoming:SetWidth(w - 2)
-    f.absorb = bar(f, 5)
-    f.absorb:SetStatusBarTexture(HATCH)
-    local hatch = f.absorb:GetStatusBarTexture()
-    hatch:SetHorizTile(true)
-    hatch:SetVertTile(true)
-    draw.paint(f.absorb, "ward-absorb")
-    f.absorb:SetPoint("TOPLEFT", f.incoming:GetStatusBarTexture(), "TOPRIGHT")
-    f.absorb:SetPoint("BOTTOMLEFT", f.incoming:GetStatusBarTexture(), "BOTTOMRIGHT")
-    f.absorb:SetWidth(w - 2)
-
-    -- The power line: along the bottom; inside the anchor frame on the player.
-    f.power = bar(f, 6, "mana")
-    f.powerLow = bar(f, 7, "amber")
-    f.powerLow:SetAlpha(0)
-    local inset = opts.anchor and 3 or 0
-    for _, b in ipairs({ f.power, f.powerLow }) do
-        b:ClearAllPoints()
-        b:SetPoint("BOTTOMLEFT", f.inner, "BOTTOMLEFT", inset, inset)
-        b:SetPoint("BOTTOMRIGHT", f.inner, "BOTTOMRIGHT", -inset, inset)
-        b:SetHeight(S["space-1"])
-    end
-
-    -- Everything drawn over the bars: border, anchor frame, text, badges.
-    local o = CreateFrame("Frame", nil, f)
-    o:SetAllPoints()
-    o:SetFrameLevel(f:GetFrameLevel() + 9)
-    f.over = o
-    f.border = draw.border(o, opts.anchor and "gilt-line" or "gilt-hairline")
-    if opts.anchor then
-        local rings = T.shadow["inset-anchor"]
-        draw.border(o, rings[1].color, { width = rings[1].spread, inset = 1 })
-        draw.border(o, rings[2].color, { width = 1, inset = 1 + rings[1].spread })
-        draw.diamond(o, 7, "gilt"):SetPoint("CENTER", f, "TOPLEFT", 0, 0)
-        draw.diamond(o, 7, "gilt"):SetPoint("CENTER", f, "BOTTOMRIGHT", 0, 0)
-    end
-    f.glow = draw.shadow(f, "glow-ember")
-    f.glow:SetShown(false)
-
-    -- The row (marker, name, meta, badges) is clipped where the health % slot
-    -- begins, so a long name never runs into it, even when it is secret.
-    f.row = CreateFrame("Frame", nil, o)
-    f.row:SetPoint("TOPLEFT", size.pad, 0)
-    f.row:SetClipsChildren(true)
-    f.role = o:CreateTexture(nil, "OVERLAY")
-    f.role:SetSize(size.role, size.role)
-    f.classDot = draw.diamond(o, opts.size == "sm" and 4 or 5, "ink")
-    f.name = uiText.text(f.row, size.name, "ink")
-    f.name:SetShadowed(true)
-    f.name:SetWordWrap(false)
-    f.meta = uiText.text(f.row, "caption", "ink")
-    f.meta:SetShadowed(true)
-    -- The state badge (Aggro…) at the row's end, where a debuff type's badge
-    -- shows too: one spot, one badge. Its layer sits under the debuff-type
-    -- slots (SetDispelBadges), so a debuff you may need to remove covers
-    -- Aggro while both are up (a healer must see the curse on the tank); the
-    -- ember glow still says aggro.
-    f.stateLayer = CreateFrame("Frame", nil, o)
-    f.stateLayer:SetAllPoints(f)
-    f.stateLayer:SetFrameLevel(o:GetFrameLevel() + 1)
-    f.badge = controls.stateBadge(f.stateLayer, "danger", "")
-    f.badge:SetPoint("RIGHT", f.row, "RIGHT", 0, 0)
-    f.badge:Hide()
-    f.you = controls.stateBadge(f.row, "neutral", "you")
-    f.you:SetShown(opts.you == true or opts.youWhenPlayer == true)
-    f.right = uiText.text(o, "numeric", "ink")
-    f.right:SetShadowed(true)
-    f.right:SetPoint("RIGHT", -size.pad, 0)
-
-    -- The raid target marker: centred on the top edge, standing over it, on
-    -- its own layer above the borders, badges and the selection.
-    f.markerLayer = CreateFrame("Frame", nil, f)
-    f.markerLayer:SetAllPoints()
-    f.markerLayer:SetFrameLevel(o:GetFrameLevel() + 10)
-    f.markerLayer:EnableMouse(false)
-    f.marker = raidMarker(f.markerLayer, size.marker)
-    f.marker:SetPoint("TOP", f, "TOP", 0, size.rise)
-    f:FitRow() -- the row ends where the health text (and reserved room) begins
-    f.rightW = 0
-    extend.add(extend.Kind.UnitFrame, f, { unit = unit, name = f:GetName(), preview = opts.api ~= nil or nil })
-    return f
-end
-
 --------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
-
-function UF:UpdateHealth(instant: boolean?)
-    local A = self.api
-    local u = self.unit
-    local dead = uiText.flag(A.UnitIsDeadOrGhost(u))
-    local offline = isOffline(A, u)
-    -- dead or offline: an empty bar
-    local gone = dead or offline
-    local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
-    for _, b in ipairs({ self.health, self.healthLow, self.ghost, self.incoming, self.absorb }) do
-        b:SetMinMaxValues(0, amount(max))
-    end
-    cur = gone and 0 or amount(cur)
-    self.health:SetValue(cur)
-    self.healthLow:SetValue(cur)
-    if self.opts.lowHealth == false then
-        self.healthLow:SetAlpha(0)
-    else
-        self.healthLow:SetAlpha(gone and 0 or amount(A.UnitHealthPercent(u, true, belowCurve(LOW_HEALTH))))
-    end
-    local tint = self.opts.lowTint and not gone and lowTintCurve()
-    self.tint:SetAlpha(tint and amount(A.UnitHealthPercent(u, true, tint)) or 0)
-
-    -- The ghost trails the fill: after a hold, the engine eases it down.
-    if instant or not INTERPOLATE then
-        if self.ghostTimer then self.ghostTimer:Cancel() self.ghostTimer = nil end
-        self.ghost:SetValue(cur)
-    else
-        self.ghostValue = cur
-        if not self.ghostTimer then
-            self.ghostTimer = timer.after(GHOST_HOLD, function()
-                self.ghostTimer = nil
-                self.ghost:SetValue(self.ghostValue, INTERPOLATE)
-            end)
-        end
-    end
-
-    local noIncoming = gone or self.opts.incoming == false
-    self.incoming:SetValue(noIncoming and 0 or amount(UnitGetIncomingHeals and A.UnitGetIncomingHeals(u)))
-    self.absorb:SetValue(noIncoming and 0 or amount(UnitGetTotalAbsorbs and A.UnitGetTotalAbsorbs(u)))
-
-    if gone then
-        self.right:SetStyle("caption")
-        self.right:SetColor("ink-muted")
-        self.right:SetValue(offline and "Offline" or (uiText.flag(A.UnitIsGhost(u)) and "Ghost" or "Dead"))
-    elseif self.opts.healthText ~= "none" and (self.opts.size ~= "sm" or self.opts.textOnSmall) then
-        self.right:SetStyle("numeric")
-        self.right:SetColor("ink")
-        local mode = self.opts.healthText or "percent"
-        -- plain ifs: `x and secret or nil` would test the secret
-        local pct, value
-        if mode ~= "value" then pct = healthPercent(A, u) end
-        if mode ~= "percent" then value = shortNumber(cur) end
-        -- secret parts go to the engine's own formatting, never through Lua
-        if isSecret(pct) or isSecret(value) then
-            if mode == "value" then
-                self.right:SetFormattedText("%s", value)
-            elseif mode == "both" then
-                self.right:SetFormattedText("%s · %d%%", value, pct)
-            else
-                self.right:SetFormattedText("%d%%", pct)
-            end
-            self.right.value = nil
-        elseif mode == "value" then
-            self.right:SetValue(value or "")
-        elseif mode == "both" then
-            self.right:SetValue(pct and ("%s · %d%%"):format(value or "", pct + 0.5) or (value or ""))
-        else
-            self.right:SetValue(pct and ("%d%%"):format(pct + 0.5) or "")
-        end
-    else
-        self.right:SetValue("")
-    end
-    if self.dead ~= dead or self.offline ~= offline then
-        local power = self.offline ~= offline
-        self.dead, self.offline = dead, offline
-        self:UpdateIdentity()
-        if power then self:UpdatePower() end -- an offline unit has none
-    end
-    if self.onHealth then self.onHealth(self) end
-end
-
-function UF:UpdatePower()
-    local A = self.api
-    local u = self.unit
-    if self.offline or self.opts.power == false or (self.opts.powerFor and not self.opts.powerFor(u, self.api)) then
-        self.power:Hide()
-        self.powerLow:Hide()
-        return
-    end
-    local pType, token = A.UnitPowerType(u)
-    local max = A.UnitPowerMax(u, pType)
-    local shown = isSecret(max) or (max or 0) > 0
-    self.power:SetShown(shown)
-    self.powerLow:SetShown(shown and token == "MANA")
-    if not shown then return end
-    draw.paint(self.power, POWER_TOKEN[token] or "mana")
-    self.power:SetMinMaxValues(0, amount(max))
-    self.power:SetValue(amount(A.UnitPower(u, pType)))
-    if token == "MANA" then
-        self.powerLow:SetMinMaxValues(0, amount(max))
-        self.powerLow:SetValue(amount(A.UnitPower(u, pType)))
-        self.powerLow:SetAlpha(amount(A.UnitPowerPercent(u, pType, true, belowCurve(LOW_MANA))))
-    end
-end
 
 local CLASSIFICATION: { [string]: string } = { worldboss = "Boss", elite = "Elite", rareelite = "Rare Elite", rare = "Rare" }
 
@@ -518,85 +254,6 @@ local function metaText(A: any, u: string): string
     return word and (lv .. " " .. word) or lv
 end
 
-function UF:ShowDragon(art: any)
-    if self.dragon then crest.placeDragon(self.dragon, art, self, self:GetHeight()) end
-end
-
-function UF:UpdateIdentity()
-    local A = self.api
-    local u = self.unit
-    if not A.UnitExists(u) then return end
-
-    -- The marker before the name: a role icon, else the class diamond.
-    local role = UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(u)
-    local isPlayer = uiText.flag(A.UnitIsPlayer(u))
-    local _, class = A.UnitClass(u)
-    local classColor = isPlayer and not isSecret(class) and class and "class-" .. class:lower()
-    if classColor and not T.color[classColor] then classColor = nil end
-    self.role:Hide()
-    self.classDot:Hide()
-    local marker
-    if not isSecret(role) and role and ROLE_ICON[role] then
-        self.role:SetTexture(ROLE_ICON[role])
-        draw.paint(self.role, role == "DAMAGER" and "ink-muted" or "ink")
-        self.role:Show()
-        marker = self.role
-    elseif classColor then
-        draw.paint(self.classDot, classColor)
-        self.classDot:Show()
-        marker = self.classDot
-    end
-
-    -- The name: class colour for players, reaction colour for hostile and
-    -- neutral NPCs, ink for friendly ones; ink-faint when dead or offline.
-    self.name:SetValue(A.UnitName(u))
-    if self.dead or self.offline then
-        self.name:SetColor("ink-faint")
-    elseif self.opts.nameColor == "ink" then
-        self.name:SetColor("ink")
-    elseif classColor then
-        self.name:SetColor(classColor)
-    else
-        local r = A.UnitReaction(u, "player")
-        if isSecret(r) or not r then
-            self.name:SetColor("ink")
-        elseif r <= 3 then
-            self.name:SetColor("reaction-hostile")
-        elseif r == 4 then
-            self.name:SetColor("reaction-neutral")
-        else
-            self.name:SetColor("ink")
-        end
-    end
-    if self.crest then
-        local c = not isPlayer and A.UnitClassification and A.UnitClassification(u) or nil
-        local dragon = self.opts.dragon and crest.dragonArt(c, A.UnitIsBossMob and A.UnitIsBossMob(u))
-        self.crest:SetClassification(not dragon and c or nil)
-        self:ShowDragon(dragon)
-    end
-    local meta = self.opts.meta
-    if meta == "family" then
-        local family = A.UnitCreatureFamily(u)
-        self.meta:SetValue((not isSecret(family) and family) or "")
-    else
-        self.meta:SetValue(meta and metaText(A, u) or "")
-        -- the level in its difficulty's colour (a secret one: as it is)
-        local level = meta and A.UnitLevel(u)
-        if meta and not isSecret(level) then self.meta:SetColor(levelColor(level)) end
-    end
-    if self.opts.youWhenPlayer then
-        -- "Is it you?" is a secret boolean in combat: the engine sets the
-        -- badge's alpha from it. The badge keeps its place either way.
-        local isYou = A.UnitIsUnit(u, "player")
-        if issecretvalue and issecretvalue(isYou) then
-            self.you:SetAlphaFromBoolean(isYou, 1, 0)
-        else
-            self.you:SetAlpha(isYou and 1 or 0)
-        end
-    end
-    self:LayoutRow(marker)
-end
-
 -- The raid target marker. GetRaidTargetIndex may be secret in combat: the
 -- game's SetRaidTargetIconTexture works out the cell with Lua arithmetic,
 -- which a secret refuses, so a secret index goes to the texture's sprite
@@ -628,83 +285,6 @@ export function showRaidMarker(t: any, u: string?, api: any?)
     end
 end
 
-function UF:UpdateRaidMarker()
-    if self.opts.raidMarker == false then return self.marker:Hide() end
-    showRaidMarker(self.marker, self.unit, self.api)
-end
-
--- marker, name, meta, badges ... health %, in one row; the name gives way.
-function UF:LayoutRow(marker: any)
-    local size = self.size
-    local x = 0
-    for _, m in ipairs({ self.role, self.classDot }) do m:ClearAllPoints() end
-    if marker then
-        marker:SetPoint("LEFT", self.row, "LEFT", marker == self.classDot and 2 or 0, 0)
-        x = (marker == self.role and size.role or 5) + size.gap
-    end
-
-    -- the state badge has its own spot at the row's end (the name leaves
-    -- room for it); "you" follows the name
-    local badges = {}
-    if self.you:IsShown() then badges[#badges + 1] = self.you end
-    local endW = self.badge:IsShown() and ((self.badge.knownWidth or 0) + size.gap) or 0
-    -- Never read sizes back from the meta or the badges: they are anchored
-    -- after the name, and a secret name makes their geometry secret too.
-    local metaValue = self.meta.value or ""
-    local tailW = 0
-    if metaValue ~= "" then tailW = tailW + size.gap + uiText.measureText("caption", metaValue) end
-    for _, b in ipairs(badges) do tailW = tailW + size.gap + (b.knownWidth or 0) end
-
-    -- A readable name sizes itself to its text and the meta and badges follow
-    -- it, as the design draws it; a name that would crowd them out gets a
-    -- width, which adds the ellipsis. A secret name (an enemy in combat)
-    -- can't be measured: it gets the room the meta and badges leave, the
-    -- engine adds the ellipsis, and they sit at the row's right end instead.
-    local natural = self.name:GetUnboundedStringWidth()
-    local room = self.row:GetWidth() - x - tailW - endW
-    local secretName = isSecret(natural)
-    self.name:ClearAllPoints()
-    self.name:SetPoint("LEFT", self.row, "LEFT", x, 0)
-    if secretName then
-        self.name:SetWidth(math.max(1, room))
-    elseif natural > room and room > 20 then
-        self.name:SetWidth(room)
-    else
-        self.name:SetWidth(0)
-    end
-
-    if self.opts.size == "sm" or secretName then
-        -- right to left from the row's end (after the state badge's spot, if
-        -- it shows): the badges, then the meta
-        local after = self.badge:IsShown() and self.badge or nil
-        local function place(region: any)
-            region:ClearAllPoints()
-            if after then region:SetPoint("RIGHT", after, "LEFT", -size.gap, 0)
-            else region:SetPoint("RIGHT", self.row, "RIGHT", 0, 0) end
-            after = region
-        end
-        for i = #badges, 1, -1 do place(badges[i]) end
-        if metaValue ~= "" and self.opts.size ~= "sm" then place(self.meta) end
-        if self.opts.size == "sm" then
-            self.meta:ClearAllPoints()
-            if metaValue ~= "" then self.meta:SetPoint("LEFT", self.name, "RIGHT", size.gap, 0) end
-        end
-        return
-    end
-
-    local prev = self.name
-    if metaValue ~= "" then
-        self.meta:ClearAllPoints()
-        self.meta:SetPoint("LEFT", prev, "RIGHT", size.gap, 0)
-        prev = self.meta
-    end
-    for _, b in ipairs(badges) do
-        b:ClearAllPoints()
-        b:SetPoint("LEFT", prev, "RIGHT", size.gap, 0)
-        prev = b
-    end
-end
-
 -- A state border and its badge: "danger", "warning", "magic", "curse",
 -- "poison", "disease", "ward" or nil.
 local STATE_BORDER: { [string]: string } = {
@@ -712,39 +292,9 @@ local STATE_BORDER: { [string]: string } = {
     magic = "dispel-magic", curse = "dispel-curse", poison = "dispel-poison", disease = "dispel-disease",
 }
 
-function UF:SetState(tone: string?, word: string?)
-    if tone == self.stateTone and word == self.stateWord then return end
-    self.stateTone, self.stateWord = tone, word
-    self.border:SetColor(STATE_BORDER[tone] or (self.opts.anchor and "gilt-line" or "gilt-hairline"))
-    self.glow:SetShown(tone == "danger")
-    if tone and word then
-        self.badge:SetState(tone, word)
-        self.badge:Show()
-    else
-        self.badge:Hide()
-    end
-    self:LayoutRow(self.role:IsShown() and self.role or (self.classDot:IsShown() and self.classDot) or nil)
-end
-
 -- The row (name, badges) stops where the health text begins; how much room
 -- that text needs depends on what it shows.
 local TEXT_W: { [string]: number } = { percent = 34, value = 40, both = 84, none = 0 }
-
-function UF:FitRow()
-    local size, opts = self.size, self.opts
-    local textW = (opts.size == "sm" and not opts.textOnSmall) and 0 or (TEXT_W[opts.healthText or "percent"] or 34)
-    local extra = opts.reserveRight or 0
-    self.row:SetPoint("BOTTOMRIGHT", -(size.pad + (textW > 0 and textW + size.gap or 0) + extra), 0)
-    self.right:ClearAllPoints()
-    self.right:SetPoint("RIGHT", -(size.pad + extra), 0)
-end
-
-function UF:Resize(w: number, h: number)
-    self:SetSize(w, h)
-    self.incoming:SetWidth(w - 2)
-    self.absorb:SetWidth(w - 2)
-    if self.active then self:Refresh() end
-end
 
 --------------------------------------------------------------------------------
 -- Buff indicators (healers' HoTs and shields). Each indicator watches some spells (every rank) on the unit:
@@ -820,86 +370,6 @@ local function indicatorKey(ind: { [string]: any }): string
                           table.concat(ind.ids or {}, ",") }, "|")
 end
 
--- Live indicators: out of combat (containers are made here). The engine
--- never frees a container, so each frame keeps its containers by identity
--- and reuses them: changing one indicator builds one new container, and
--- going back to an earlier look reuses the old one. Unused ones are unbound
--- and hidden.
-function UF:SetIndicators(list: { [string]: any }[]?)
-    self.indicatorCache = self.indicatorCache or {}
-    for _, c in ipairs(self.indicatorContainers or {}) do
-        c.container:Hide()
-        c:SetUnit("none")
-    end
-    self.indicatorContainers = {}
-    -- the missing looks: plain frames, kept by identity too
-    self.missingCache = self.missingCache or {}
-    for _, m in ipairs(self.missingLooks or {}) do m:Hide() end
-    self.missingLooks = {}
-    for _, ind in ipairs(list or {}) do
-        local show = ind.show or "up"
-        if ind.kind == "fill" and show == "both" then show = "up" end
-        if show ~= "up" then
-            local mkey = indicatorKey(ind) .. "|" .. show .. "|" .. (ind.missingColor or "ember")
-            local look = self.missingCache[mkey]
-            if not look then
-                local art = ind.ids and ind.ids[1] and C_Spell.GetSpellTexture(ind.ids[1])
-                look = indicatorLook(self, self, ind, art, true)
-                self.missingCache[mkey] = look
-            end
-            look.mode = show
-            look.ind = ind
-            self.missingLooks[#self.missingLooks + 1] = look
-        end
-    end
-    for i, ind in ipairs(list or {}) do
-        local key = indicatorKey(ind)
-        local cached = self.indicatorCache[key]
-        if ind.show == "missing" then
-            -- only the missing look: no live container
-        elseif cached then
-            cached.container:Show()
-            cached:SetUnit(self.unit or "none")
-            cached.ind = ind
-            self.indicatorContainers[#self.indicatorContainers + 1] = cached
-        elseif ind.ids and #ind.ids > 0 then
-            local filter = ind.source == "any" and { "HELPFUL" } or { "HELPFUL", "PLAYER" }
-            local group = { key = "i" .. i, filter = filter, max = 1, include = ind.ids }
-            local opts = { size = ind.size or 10, anchor = "TOPLEFT", groups = { group } }
-            if ind.kind == "icon" then
-                group.stacks, group.digits = false, (ind.size or 10) >= 16
-            else
-                group.initialize = function(button: any)
-                    pcall(button.SetSize, button, 1, 1)
-                    pcall(button.SetMouseClickEnabled, button, false)
-                    pcall(button.SetMouseMotionEnabled, button, false)
-                    indicatorLook(self, button, ind)
-                end
-            end
-            local c = auraContainer(self, self.unit or "none", opts)
-            if c then
-                if ind.kind == "icon" then
-                    -- the engine lays its one icon from the container's top
-                    -- left; place that corner so the icon sits at the point
-                    local point, size = ind.point or "TOPRIGHT", ind.size or 10
-                    local x, y = pointOffset(point)
-                    local dx = point:find("RIGHT") and size or ((point:find("LEFT")) and 0 or size / 2)
-                    local dy = point:find("BOTTOM") and size or ((point:find("TOP")) and 0 or size / 2)
-                    c.container:SetPoint("TOPLEFT", self, point, x - dx, y + dy)
-                    c.container:SetFrameLevel(self.over:GetFrameLevel() + 8)
-                else
-                    c.container:SetPoint("TOPLEFT", self, "TOPLEFT")
-                    c.container:SetFrameLevel(self.over:GetFrameLevel() + 2)
-                end
-                self.indicatorCache[key] = c
-                c.ind = ind
-                self.indicatorContainers[#self.indicatorContainers + 1] = c
-            end
-        end
-    end
-    self:UpdateIndicatorPresence()
-end
-
 -- Whether a group member is in your own raid group (in a party, or for a
 -- party token in a raid: yes). Read out of combat; an unreadable answer is yes.
 -- (A: where the group is read from, the game's functions; a parameter for tests)
@@ -917,78 +387,6 @@ local function inYourGroup(unit: string, A: any = _G): boolean
         end
     end
     return true
-end
-
--- The missing looks: "both" shows whenever the unit is there (the live look
--- covers it); "missing" only out of combat, while none of its spells is up.
--- "on = group" limits them, and the live looks, to your own raid group: the
--- live containers of everyone else are hidden, out of combat (who is in
--- your group is known before a fight; the engine still shows the aura).
-function UF:UpdateIndicatorPresence()
-    local u = self.unit
-    local exists = u and UnitExists(u)
-    local fight = InCombatLockdown()
-    local mine
-    for _, look in ipairs(self.missingLooks or {}) do
-        local show = false
-        local scoped = true
-        if exists and (look.ind.on or look.ind.missingOn) == "group" then
-            if mine == nil then mine = inYourGroup(u) end
-            scoped = mine
-        end
-        if not scoped then
-            show = false
-        elseif exists and look.mode == "both" then
-            show = true
-        elseif exists and look.mode == "missing" and not fight then
-            local ind = look.ind
-            local set = {}
-            for _, id in ipairs(ind.ids or {}) do set[id] = true end
-            local filter = ind.source == "any" and "HELPFUL" or "HELPFUL|PLAYER"
-            local up = false
-            for i = 1, 40 do
-                local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, u, i, filter)
-                if not ok or isSecret(a) or not a then break end
-                local id = a.spellId
-                if not isSecret(id) and id and set[id] then up = true break end
-            end
-            show = not up
-        end
-        look:SetShown(show)
-    end
-    -- live looks limited to your group: everyone else's container is hidden
-    -- (out of combat; in combat the last answer stays)
-    if not fight then
-        for _, c in ipairs(self.indicatorContainers or {}) do
-            local scoped = true
-            if exists and c.ind and (c.ind.on or c.ind.missingOn) == "group" then
-                if mine == nil then mine = inYourGroup(u) end
-                scoped = mine
-            end
-            c.container:SetShown(scoped and true or false)
-        end
-    end
-end
-
--- Preview indicators: the looks drawn directly, as if every aura were up
--- (a "missing" one as missing, so its look can be judged). Frames are never
--- freed either, so the looks are kept by identity, as the missing looks are.
-function UF:SetPreviewIndicators(list: { [string]: any }[]?)
-    self.previewCache = self.previewCache or {}
-    for _, look in ipairs(self.previewLooks or {}) do look:Hide() end
-    self.previewLooks = {}
-    for _, ind in ipairs(list or {}) do
-        local missing = ind.show == "missing"
-        local key = indicatorKey(ind) .. "|" .. (missing and ("missing|" .. (ind.missingColor or "ember")) or "up")
-        local look = self.previewCache[key]
-        if not look then
-            local art = ind.ids and ind.ids[1] and C_Spell.GetSpellTexture(ind.ids[1])
-            look = indicatorLook(self, self, ind, art, missing)
-            self.previewCache[key] = look
-        end
-        look:Show()
-        self.previewLooks[#self.previewLooks + 1] = look
-    end
 end
 
 -- Group sizes an indicator can be limited to (ind.sizes = { ["10"] = true,
@@ -1038,22 +436,6 @@ export function setGroupDefensives(d: { [string]: number[] }?)
     defensives = d or EMPTY_DEFENSIVES
     defensivesVersion = defensivesVersion + 1
     events.emit("SUUUI_DEFENSIVES_CHANGED")
-end
-
--- keepAttribute: the unit attribute is already set (a group header did it)
-function UF:SetUnit(unit: string?, keepAttribute: boolean?)
-    if unit == self.unit then return end
-    local wasActive = self.active
-    if wasActive then self:Deactivate() end
-    self.unit = unit
-    if self.opts.secure ~= false and not keepAttribute then self:SetAttribute("unit", unit) end
-    for _, list in pairs(self.dispelSets or {}) do
-        for _, c in ipairs(list) do c:SetUnit(unit or "none") end
-    end
-    for _, c in ipairs(self.indicatorContainers or {}) do c:SetUnit(unit or "none") end
-    if self.wardSlot then self.wardSlot:SetUnit(unit or "none") end
-    self:UpdateIndicatorPresence()
-    if wasActive and unit then self:Activate() end
 end
 
 --------------------------------------------------------------------------------
@@ -1110,26 +492,6 @@ end
 
 export const DEBUFF_TYPES: string[] = { "Magic", "Curse", "Poison", "Disease" } -- drawn top first
 
--- The type's border and badge over this frame, on `parent` (a slot's button,
--- or the frame itself in a preview).
-function UF:DispelDecoration(parent: any, kind: string)
-    local tone = kind:lower()
-    local deco = CreateFrame("Frame", nil, parent)
-    deco:SetAllPoints(self)
-    deco:EnableMouse(false)
-    draw.border(deco, "dispel-" .. tone)
-    local badge = controls.stateBadge(deco, tone, kind)
-    badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
-    -- at least as wide as the Aggro badge it covers, so none of it peeks out
-    badge:SetWidth(math.max(badge.knownWidth or 0, uiText.measureText("badge", "Aggro") + 10))
-    -- over the frame's own border and text and over Warded; Magic on top,
-    -- then down the list
-    local rank = 1
-    for i, k in ipairs(DEBUFF_TYPES) do if k == kind then rank = i end end
-    deco:SetFrameLevel(self.over:GetFrameLevel() + 3 + (#DEBUFF_TYPES - rank))
-    return deco
-end
-
 local function buildDispelSet(self: any, set: string): any[]
     local filter = set == "removable" and { "HARMFUL", "RAID_PLAYER_DISPELLABLE" } or { "HARMFUL" }
     local list: any[] = {}
@@ -1151,18 +513,6 @@ local function buildDispelSet(self: any, set: string): any[]
     return list
 end
 
--- "all" (every type), "removable" (only what you can remove) or "off". Out of
--- combat: the first use of a set creates its containers.
-function UF:SetDispelBadges(mode: string)
-    self.dispelSets = self.dispelSets or {}
-    if mode == "all" or mode == "removable" then
-        self.dispelSets[mode] = self.dispelSets[mode] or buildDispelSet(self, mode)
-    end
-    for set, list in pairs(self.dispelSets) do
-        for _, c in ipairs(list) do c.container:SetShown(set == mode) end
-    end
-end
-
 --------------------------------------------------------------------------------
 -- Warded, in combat too: one engine aura container filtered to the
 -- Defensives list's spells with Warded on (max 1). Its button carries the
@@ -1171,70 +521,6 @@ end
 -- above), Warded covers Aggro (the state layer sits below), and Aggro's ember
 -- glow draws over the ward's.
 --------------------------------------------------------------------------------
-
--- The ward border, badge and glow over this frame, on `parent` (the slot's
--- button, or the frame itself in a preview).
-function UF:WardDecoration(parent: any)
-    local deco = CreateFrame("Frame", nil, parent)
-    deco:SetAllPoints(self)
-    deco:EnableMouse(false)
-    draw.border(deco, "ward")
-    local badge = controls.stateBadge(deco, "ward", "Warded")
-    badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
-    -- at least as wide as the Aggro badge it covers
-    badge:SetWidth(math.max(badge.knownWidth or 0, uiText.measureText("badge", "Aggro") + 10))
-    deco:SetFrameLevel(self.over:GetFrameLevel() + 2)
-    -- the glow on its own layer under the frame's, so Aggro's ember glow wins
-    local glow = CreateFrame("Frame", nil, parent)
-    glow:SetAllPoints(self)
-    glow:EnableMouse(false)
-    glow:SetFrameLevel(math.max(0, self:GetFrameLevel() - 1))
-    draw.shadow(glow, "glow-ward")
-    -- on a slot's button both follow the button; a preview shows and hides
-    -- them with deco:SetWarded(on)
-    deco.glow = glow
-    function deco.SetWarded(_: any, on: boolean)
-        deco:SetShown(on)
-        glow:SetShown(on)
-    end
-    return deco
-end
-
--- The spells that ward this frame (nil or empty: none). Out of combat: the
--- first call creates the slot.
-function UF:SetWardSpells(ids: number[]?)
-    ids = ids or {}
-    if self.wardSlot then
-        self.wardSlot:SetGroupSpells("ward", ids)
-        return
-    end
-    if #ids == 0 then return end
-    local init = function(button: any)
-        pcall(button.SetSize, button, 1, 1)
-        pcall(button.SetMouseClickEnabled, button, false)
-        pcall(button.SetMouseMotionEnabled, button, false)
-        self:WardDecoration(button)
-    end
-    local c = auraContainer(self, self.unit or "none", { size = 1, anchor = "TOPLEFT",
-        groups = { { key = "ward", filter = { "HELPFUL" }, max = 1, include = ids, initialize = init } } })
-    if c then
-        c.container:SetPoint("TOPLEFT", self, "TOPLEFT")
-        c.container:SetFrameLevel(self.over:GetFrameLevel() + 1)
-        self.wardSlot = c
-    end
-end
-
-function UF:Refresh()
-    local A = self.api
-    self:FitRow()
-    if not A.UnitExists(self.unit) then return end
-    self.dead = uiText.flag(A.UnitIsDeadOrGhost(self.unit))
-    self.offline = isOffline(A, self.unit)
-    self:UpdateIdentity()
-    self:UpdateHealth(true)
-    self:UpdatePower()
-    self:UpdateRaidMarker()
-end
 
 --------------------------------------------------------------------------------
 -- Events
@@ -1250,53 +536,823 @@ local function onUnit(f: any, event: string, fn: events.Listener)
     if not ok then debug("UnitFrame: no event", event) end
 end
 
-function UF:Activate()
-    if self.active then return end
-    self.active = true
-    for _, e in ipairs(HEALTH_EVENTS) do onUnit(self, e, function() self:UpdateHealth() end) end
-    for _, e in ipairs(POWER_EVENTS) do onUnit(self, e, function() self:UpdatePower() end) end
-    for _, e in ipairs(IDENTITY_EVENTS) do onUnit(self, e, function() self:UpdateIdentity() end) end
-    -- going offline or coming back: the bar, the text, the name and the power line
-    onUnit(self, "UNIT_CONNECTION", function() self:Refresh() end)
-    events.onGame("RAID_TARGET_UPDATE", function() self:UpdateRaidMarker() end, self)
-    events.onGame("PLAYER_ENTERING_WORLD", function() self:Refresh() end, self)
-    -- a group unit can become another person: redraw everything
-    local grouped = self.unit:find("^party") or self.unit:find("^raid")
-    -- a role change moves the marker and may turn the power line on or off
-    -- (powerFor: tanks and healers)
-    events.onGame("GROUP_ROSTER_UPDATE", function()
-        if grouped then self:Refresh() else self:UpdateIdentity(); self:UpdatePower() end
-    end, self)
-    events.onGame("PLAYER_ROLES_ASSIGNED", function() self:UpdateIdentity(); self:UpdatePower() end, self)
-    if self.unit == "target" then
-        events.onGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
-    elseif self.unit == "focus" then
-        events.onGame("PLAYER_FOCUS_CHANGED", function() self:Refresh() end, self)
-    elseif self.unit == "targettarget" then
-        events.onGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
-        -- your target picks another target: UNIT_TARGET fires for "target"
-        -- (never for "targettarget"), and the poll only redraws health
-        events.onUnit("UNIT_TARGET", "target", function() self:Refresh() end, self)
-    elseif self.unit == "pet" then
-        events.onUnit("UNIT_PET", "player", function() self:Refresh() end, self)
-    elseif self.unit:find("^boss") then
-        events.onGame("INSTANCE_ENCOUNTER_ENGAGE_UNIT", function() self:Refresh() end, self)
-    end
-    if self.opts.poll then
-        -- A unit with no events of its own: redraw while shown.
-        self.ticker = timer.every(self.opts.poll, function()
-            if self:IsVisible() and UnitExists(self.unit) then
-                self:UpdateHealth(true)
-                self:UpdatePower()
-            end
+export class UnitFrame extends Button
+    unit: any
+    opts: any
+    size: any
+    api: any
+    ground: Texture
+    inner: Frame
+    ghost: any
+    health: any
+    crest: any? = nil
+    dragonHost: Frame? = nil
+    dragon: Texture? = nil
+    healthLow: any
+    tint: Texture
+    incoming: any
+    absorb: any
+    power: any
+    powerLow: any
+    over: any
+    border: draw.Border
+    glow: draw.SoftEdge
+    row: Frame
+    role: Texture
+    classDot: Texture
+    name: any
+    meta: any
+    stateLayer: Frame
+    badge: any
+    you: any
+    right: any
+    markerLayer: Frame
+    marker: any
+    rightW: number
+    ghostValue: any? = nil
+    ghostTimer: any? = nil
+    dead: any? = nil
+    offline: any? = nil
+    stateTone: any? = nil
+    stateWord: any? = nil
+    indicatorCache: any? = nil
+    indicatorContainers: any? = nil
+    missingCache: any? = nil
+    missingLooks: any? = nil
+    previewCache: any? = nil
+    previewLooks: any? = nil
+    dispelSets: any? = nil
+    wardSlot: any? = nil
+    active: boolean? = nil
+    ticker: any? = nil
+
+    constructor(parent: Frame?, unit: string?, opts: { [string]: any }?)
+        opts = opts or {}
+        local size = SIZES[opts.size or "md"] :: Size
+        -- opts.frame: a button a group header made (SecureUnitButtonTemplate);
+        -- the header owns its unit, its attributes are set when it is made
+        super(opts.name, parent, opts.secure ~= false and "SecureUnitButtonTemplate" or nil)
+        self.unit, self.opts, self.size = unit, opts, size
+        self.api = opts.api or GAME
+        local w, h = draw.size(opts.width or size.width), draw.size(opts.height or size.height)
+        if not (opts.frame and InCombatLockdown()) then self:SetSize(w, h) end
+
+        if opts.secure ~= false and not opts.frame then
+            self:SetAttribute("unit", unit)
+            self:SetAttribute("*type1", "target")
+            self:SetAttribute("*type2", "togglemenu")
+            self:RegisterForClicks("AnyUp")
+        end
+        self:SetScript("OnEnter", function()
+            if not self.unit then return end
+            GameTooltip_SetDefaultAnchor(GameTooltip, self)
+            GameTooltip:SetUnit(self.unit)
+            -- 0.17: a module's own lines after the unit's (the player frame's rested lines)
+            if self.onTooltip then self.onTooltip(self, GameTooltip) end
+            GameTooltip:Show()
         end)
+        self:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        -- The ground and, clipped inside the 1px border, the bars.
+        self.ground = draw.fill(self, "surface-sunk")
+        self.ground:SetAllPoints()
+        self.inner = CreateFrame("Frame", nil, self)
+        self.inner:SetPoint("TOPLEFT", 1, -1)
+        self.inner:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.inner:SetClipsChildren(true)
+
+        self.ghost = bar(self, 1, "ghost")
+        self.ghost:SetAllPoints(self.inner)
+        self.health = bar(self, 2)
+        self.health:SetAllPoints(self.inner)
+        -- opts.crest (0.17): the rare and elite crest on the top edge over the
+        -- right end (design "Rare and elite units" B)
+        if opts.crest then
+            self.crest = crest.crest(self, "frame")
+            self.crest:SetPoint("CENTER", self, "TOPRIGHT", -64, -0.5)
+            -- opts.dragon (0.17): the game's own dragon instead, over the bars
+            -- (as Blizzard draws it over its frame) and under the name and
+            -- numbers; under the bar its head was hidden (seen in game)
+            local host = CreateFrame("Frame", nil, self)
+            self.dragonHost = host
+            host:SetAllPoints()
+            host:SetFrameLevel(self:GetFrameLevel() + 7)
+            self.dragon = host:CreateTexture(nil, "ARTWORK")
+            self.dragon:Hide()
+        end
+        gradient(self.health, "unit-fill-deep", "unit-fill")
+        self.healthLow = bar(self, 3)
+        self.healthLow:SetAllPoints(self.inner)
+        gradient(self.healthLow, "unit-fill-low-deep", "unit-fill-low")
+        self.healthLow:SetAlpha(0)
+
+        -- The low-health tint: ember over the empty part of the bar, from the
+        -- fill's edge to the bar's end; the engine sets its strength (a curve).
+        self.tint = self.health:CreateTexture(nil, "BACKGROUND")
+        self.tint:SetPoint("TOPLEFT", self.health:GetStatusBarTexture(), "TOPRIGHT")
+        self.tint:SetPoint("BOTTOMRIGHT", self.inner, "BOTTOMRIGHT")
+        draw.paintFill(self.tint, "ember")
+        self.tint:SetAlpha(0)
+
+        -- Incoming heals, then absorbs, each starting where the one before ends.
+        self.incoming = bar(self, 4, "fel-incoming")
+        self.incoming:SetPoint("TOPLEFT", self.health:GetStatusBarTexture(), "TOPRIGHT")
+        self.incoming:SetPoint("BOTTOMLEFT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT")
+        self.incoming:SetWidth(w - 2)
+        self.absorb = bar(self, 5)
+        self.absorb:SetStatusBarTexture(HATCH)
+        local hatch = self.absorb:GetStatusBarTexture()
+        hatch:SetHorizTile(true)
+        hatch:SetVertTile(true)
+        draw.paint(self.absorb, "ward-absorb")
+        self.absorb:SetPoint("TOPLEFT", self.incoming:GetStatusBarTexture(), "TOPRIGHT")
+        self.absorb:SetPoint("BOTTOMLEFT", self.incoming:GetStatusBarTexture(), "BOTTOMRIGHT")
+        self.absorb:SetWidth(w - 2)
+
+        -- The power line: along the bottom; inside the anchor frame on the player.
+        self.power = bar(self, 6, "mana")
+        self.powerLow = bar(self, 7, "amber")
+        self.powerLow:SetAlpha(0)
+        local inset = opts.anchor and 3 or 0
+        for _, b in ipairs({ self.power, self.powerLow }) do
+            b:ClearAllPoints()
+            b:SetPoint("BOTTOMLEFT", self.inner, "BOTTOMLEFT", inset, inset)
+            b:SetPoint("BOTTOMRIGHT", self.inner, "BOTTOMRIGHT", -inset, inset)
+            b:SetHeight(S["space-1"])
+        end
+
+        -- Everything drawn over the bars: border, anchor frame, text, badges.
+        local o = CreateFrame("Frame", nil, self)
+        o:SetAllPoints()
+        o:SetFrameLevel(self:GetFrameLevel() + 9)
+        self.over = o
+        self.border = draw.border(o, opts.anchor and "gilt-line" or "gilt-hairline")
+        if opts.anchor then
+            local rings = T.shadow["inset-anchor"]
+            draw.border(o, rings[1].color, { width = rings[1].spread, inset = 1 })
+            draw.border(o, rings[2].color, { width = 1, inset = 1 + rings[1].spread })
+            draw.diamond(o, 7, "gilt"):SetPoint("CENTER", self, "TOPLEFT", 0, 0)
+            draw.diamond(o, 7, "gilt"):SetPoint("CENTER", self, "BOTTOMRIGHT", 0, 0)
+        end
+        self.glow = draw.shadow(self, "glow-ember")
+        self.glow:SetShown(false)
+
+        -- The row (marker, name, meta, badges) is clipped where the health % slot
+        -- begins, so a long name never runs into it, even when it is secret.
+        self.row = CreateFrame("Frame", nil, o)
+        self.row:SetPoint("TOPLEFT", size.pad, 0)
+        self.row:SetClipsChildren(true)
+        self.role = o:CreateTexture(nil, "OVERLAY")
+        self.role:SetSize(size.role, size.role)
+        self.classDot = draw.diamond(o, opts.size == "sm" and 4 or 5, "ink")
+        self.name = uiText.text(self.row, size.name, "ink")
+        self.name:SetShadowed(true)
+        self.name:SetWordWrap(false)
+        self.meta = uiText.text(self.row, "caption", "ink")
+        self.meta:SetShadowed(true)
+        -- The state badge (Aggro…) at the row's end, where a debuff type's badge
+        -- shows too: one spot, one badge. Its layer sits under the debuff-type
+        -- slots (SetDispelBadges), so a debuff you may need to remove covers
+        -- Aggro while both are up (a healer must see the curse on the tank); the
+        -- ember glow still says aggro.
+        self.stateLayer = CreateFrame("Frame", nil, o)
+        self.stateLayer:SetAllPoints(self)
+        self.stateLayer:SetFrameLevel(o:GetFrameLevel() + 1)
+        self.badge = controls.stateBadge(self.stateLayer, "danger", "")
+        self.badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
+        self.badge:Hide()
+        self.you = controls.stateBadge(self.row, "neutral", "you")
+        self.you:SetShown(opts.you == true or opts.youWhenPlayer == true)
+        self.right = uiText.text(o, "numeric", "ink")
+        self.right:SetShadowed(true)
+        self.right:SetPoint("RIGHT", -size.pad, 0)
+
+        -- The raid target marker: centred on the top edge, standing over it, on
+        -- its own layer above the borders, badges and the selection.
+        self.markerLayer = CreateFrame("Frame", nil, self)
+        self.markerLayer:SetAllPoints()
+        self.markerLayer:SetFrameLevel(o:GetFrameLevel() + 10)
+        self.markerLayer:EnableMouse(false)
+        self.marker = raidMarker(self.markerLayer, size.marker)
+        self.marker:SetPoint("TOP", self, "TOP", 0, size.rise)
+        self.rightW = 0
+        self:FitRow() -- the row ends where the health text (and reserved room) begins
+        extend.add(extend.Kind.UnitFrame, self, { unit = unit, name = self:GetName(), preview = opts.api ~= nil or nil })
     end
-    self:Refresh()
+
+    function UpdateHealth(instant: boolean?)
+        local A = self.api
+        local u = self.unit
+        local dead = uiText.flag(A.UnitIsDeadOrGhost(u))
+        local offline = isOffline(A, u)
+        -- dead or offline: an empty bar
+        local gone = dead or offline
+        local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
+        for _, b in ipairs({ self.health, self.healthLow, self.ghost, self.incoming, self.absorb }) do
+            b:SetMinMaxValues(0, amount(max))
+        end
+        cur = gone and 0 or amount(cur)
+        self.health:SetValue(cur)
+        self.healthLow:SetValue(cur)
+        if self.opts.lowHealth == false then
+            self.healthLow:SetAlpha(0)
+        else
+            self.healthLow:SetAlpha(gone and 0 or amount(A.UnitHealthPercent(u, true, belowCurve(LOW_HEALTH))))
+        end
+        local tint = self.opts.lowTint and not gone and lowTintCurve()
+        self.tint:SetAlpha(tint and amount(A.UnitHealthPercent(u, true, tint)) or 0)
+
+        -- The ghost trails the fill: after a hold, the engine eases it down.
+        if instant or not INTERPOLATE then
+            if self.ghostTimer then self.ghostTimer:Cancel() self.ghostTimer = nil end
+            self.ghost:SetValue(cur)
+        else
+            self.ghostValue = cur
+            if not self.ghostTimer then
+                self.ghostTimer = timer.after(GHOST_HOLD, function()
+                    self.ghostTimer = nil
+                    self.ghost:SetValue(self.ghostValue, INTERPOLATE)
+                end)
+            end
+        end
+
+        local noIncoming = gone or self.opts.incoming == false
+        self.incoming:SetValue(noIncoming and 0 or amount(UnitGetIncomingHeals and A.UnitGetIncomingHeals(u)))
+        self.absorb:SetValue(noIncoming and 0 or amount(UnitGetTotalAbsorbs and A.UnitGetTotalAbsorbs(u)))
+
+        if gone then
+            self.right:SetStyle("caption")
+            self.right:SetColor("ink-muted")
+            self.right:SetValue(offline and "Offline" or (uiText.flag(A.UnitIsGhost(u)) and "Ghost" or "Dead"))
+        elseif self.opts.healthText ~= "none" and (self.opts.size ~= "sm" or self.opts.textOnSmall) then
+            self.right:SetStyle("numeric")
+            self.right:SetColor("ink")
+            local mode = self.opts.healthText or "percent"
+            -- plain ifs: `x and secret or nil` would test the secret
+            local pct, value
+            if mode ~= "value" then pct = healthPercent(A, u) end
+            if mode ~= "percent" then value = shortNumber(cur) end
+            -- secret parts go to the engine's own formatting, never through Lua
+            if isSecret(pct) or isSecret(value) then
+                if mode == "value" then
+                    self.right:SetFormattedText("%s", value)
+                elseif mode == "both" then
+                    self.right:SetFormattedText("%s · %d%%", value, pct)
+                else
+                    self.right:SetFormattedText("%d%%", pct)
+                end
+                self.right.value = nil
+            elseif mode == "value" then
+                self.right:SetValue(value or "")
+            elseif mode == "both" then
+                self.right:SetValue(pct and ("%s · %d%%"):format(value or "", pct + 0.5) or (value or ""))
+            else
+                self.right:SetValue(pct and ("%d%%"):format(pct + 0.5) or "")
+            end
+        else
+            self.right:SetValue("")
+        end
+        if self.dead ~= dead or self.offline ~= offline then
+            local power = self.offline ~= offline
+            self.dead, self.offline = dead, offline
+            self:UpdateIdentity()
+            if power then self:UpdatePower() end -- an offline unit has none
+        end
+        if self.onHealth then self.onHealth(self) end
+    end
+
+    function UpdatePower()
+        local A = self.api
+        local u = self.unit
+        if self.offline or self.opts.power == false or (self.opts.powerFor and not self.opts.powerFor(u, self.api)) then
+            self.power:Hide()
+            self.powerLow:Hide()
+            return
+        end
+        local pType, token = A.UnitPowerType(u)
+        local max = A.UnitPowerMax(u, pType)
+        local shown = isSecret(max) or (max or 0) > 0
+        self.power:SetShown(shown)
+        self.powerLow:SetShown(shown and token == "MANA")
+        if not shown then return end
+        draw.paint(self.power, POWER_TOKEN[token] or "mana")
+        self.power:SetMinMaxValues(0, amount(max))
+        self.power:SetValue(amount(A.UnitPower(u, pType)))
+        if token == "MANA" then
+            self.powerLow:SetMinMaxValues(0, amount(max))
+            self.powerLow:SetValue(amount(A.UnitPower(u, pType)))
+            self.powerLow:SetAlpha(amount(A.UnitPowerPercent(u, pType, true, belowCurve(LOW_MANA))))
+        end
+    end
+
+    function ShowDragon(art: any)
+        if self.dragon then crest.placeDragon(self.dragon, art, self, self:GetHeight()) end
+    end
+
+    function UpdateIdentity()
+        local A = self.api
+        local u = self.unit
+        if not A.UnitExists(u) then return end
+
+        -- The marker before the name: a role icon, else the class diamond.
+        local role = UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(u)
+        local isPlayer = uiText.flag(A.UnitIsPlayer(u))
+        local _, class = A.UnitClass(u)
+        local classColor = isPlayer and not isSecret(class) and class and "class-" .. class:lower()
+        if classColor and not T.color[classColor] then classColor = nil end
+        self.role:Hide()
+        self.classDot:Hide()
+        local marker
+        if not isSecret(role) and role and ROLE_ICON[role] then
+            self.role:SetTexture(ROLE_ICON[role])
+            draw.paint(self.role, role == "DAMAGER" and "ink-muted" or "ink")
+            self.role:Show()
+            marker = self.role
+        elseif classColor then
+            draw.paint(self.classDot, classColor)
+            self.classDot:Show()
+            marker = self.classDot
+        end
+
+        -- The name: class colour for players, reaction colour for hostile and
+        -- neutral NPCs, ink for friendly ones; ink-faint when dead or offline.
+        self.name:SetValue(A.UnitName(u))
+        if self.dead or self.offline then
+            self.name:SetColor("ink-faint")
+        elseif self.opts.nameColor == "ink" then
+            self.name:SetColor("ink")
+        elseif classColor then
+            self.name:SetColor(classColor)
+        else
+            local r = A.UnitReaction(u, "player")
+            if isSecret(r) or not r then
+                self.name:SetColor("ink")
+            elseif r <= 3 then
+                self.name:SetColor("reaction-hostile")
+            elseif r == 4 then
+                self.name:SetColor("reaction-neutral")
+            else
+                self.name:SetColor("ink")
+            end
+        end
+        if self.crest then
+            local c = not isPlayer and A.UnitClassification and A.UnitClassification(u) or nil
+            local dragon = self.opts.dragon and crest.dragonArt(c, A.UnitIsBossMob and A.UnitIsBossMob(u))
+            self.crest:SetClassification(not dragon and c or nil)
+            self:ShowDragon(dragon)
+        end
+        local meta = self.opts.meta
+        if meta == "family" then
+            local family = A.UnitCreatureFamily(u)
+            self.meta:SetValue((not isSecret(family) and family) or "")
+        else
+            self.meta:SetValue(meta and metaText(A, u) or "")
+            -- the level in its difficulty's colour (a secret one: as it is)
+            local level = meta and A.UnitLevel(u)
+            if meta and not isSecret(level) then self.meta:SetColor(levelColor(level)) end
+        end
+        if self.opts.youWhenPlayer then
+            -- "Is it you?" is a secret boolean in combat: the engine sets the
+            -- badge's alpha from it. The badge keeps its place either way.
+            local isYou = A.UnitIsUnit(u, "player")
+            if issecretvalue and issecretvalue(isYou) then
+                self.you:SetAlphaFromBoolean(isYou, 1, 0)
+            else
+                self.you:SetAlpha(isYou and 1 or 0)
+            end
+        end
+        self:LayoutRow(marker)
+    end
+
+    function UpdateRaidMarker()
+        if self.opts.raidMarker == false then return self.marker:Hide() end
+        showRaidMarker(self.marker, self.unit, self.api)
+    end
+
+    -- marker, name, meta, badges ... health %, in one row; the name gives way.
+    function LayoutRow(marker: any)
+        local size = self.size
+        local x = 0
+        for _, m in ipairs({ self.role, self.classDot }) do m:ClearAllPoints() end
+        if marker then
+            marker:SetPoint("LEFT", self.row, "LEFT", marker == self.classDot and 2 or 0, 0)
+            x = (marker == self.role and size.role or 5) + size.gap
+        end
+
+        -- the state badge has its own spot at the row's end (the name leaves
+        -- room for it); "you" follows the name
+        local badges = {}
+        if self.you:IsShown() then badges[#badges + 1] = self.you end
+        local endW = self.badge:IsShown() and ((self.badge.knownWidth or 0) + size.gap) or 0
+        -- Never read sizes back from the meta or the badges: they are anchored
+        -- after the name, and a secret name makes their geometry secret too.
+        local metaValue = self.meta.value or ""
+        local tailW = 0
+        if metaValue ~= "" then tailW = tailW + size.gap + uiText.measureText("caption", metaValue) end
+        for _, b in ipairs(badges) do tailW = tailW + size.gap + (b.knownWidth or 0) end
+
+        -- A readable name sizes itself to its text and the meta and badges follow
+        -- it, as the design draws it; a name that would crowd them out gets a
+        -- width, which adds the ellipsis. A secret name (an enemy in combat)
+        -- can't be measured: it gets the room the meta and badges leave, the
+        -- engine adds the ellipsis, and they sit at the row's right end instead.
+        local natural = self.name:GetUnboundedStringWidth()
+        local room = self.row:GetWidth() - x - tailW - endW
+        local secretName = isSecret(natural)
+        self.name:ClearAllPoints()
+        self.name:SetPoint("LEFT", self.row, "LEFT", x, 0)
+        if secretName then
+            self.name:SetWidth(math.max(1, room))
+        elseif natural > room and room > 20 then
+            self.name:SetWidth(room)
+        else
+            self.name:SetWidth(0)
+        end
+
+        if self.opts.size == "sm" or secretName then
+            -- right to left from the row's end (after the state badge's spot, if
+            -- it shows): the badges, then the meta
+            local after = self.badge:IsShown() and self.badge or nil
+            local function place(region: any)
+                region:ClearAllPoints()
+                if after then region:SetPoint("RIGHT", after, "LEFT", -size.gap, 0)
+                else region:SetPoint("RIGHT", self.row, "RIGHT", 0, 0) end
+                after = region
+            end
+            for i = #badges, 1, -1 do place(badges[i]) end
+            if metaValue ~= "" and self.opts.size ~= "sm" then place(self.meta) end
+            if self.opts.size == "sm" then
+                self.meta:ClearAllPoints()
+                if metaValue ~= "" then self.meta:SetPoint("LEFT", self.name, "RIGHT", size.gap, 0) end
+            end
+            return
+        end
+
+        local prev = self.name
+        if metaValue ~= "" then
+            self.meta:ClearAllPoints()
+            self.meta:SetPoint("LEFT", prev, "RIGHT", size.gap, 0)
+            prev = self.meta
+        end
+        for _, b in ipairs(badges) do
+            b:ClearAllPoints()
+            b:SetPoint("LEFT", prev, "RIGHT", size.gap, 0)
+            prev = b
+        end
+    end
+
+    function SetState(tone: string?, word: string?)
+        if tone == self.stateTone and word == self.stateWord then return end
+        self.stateTone, self.stateWord = tone, word
+        self.border:SetColor(STATE_BORDER[tone] or (self.opts.anchor and "gilt-line" or "gilt-hairline"))
+        self.glow:SetShown(tone == "danger")
+        if tone and word then
+            self.badge:SetState(tone, word)
+            self.badge:Show()
+        else
+            self.badge:Hide()
+        end
+        self:LayoutRow(self.role:IsShown() and self.role or (self.classDot:IsShown() and self.classDot) or nil)
+    end
+
+    function FitRow()
+        local size, opts = self.size, self.opts
+        local textW = (opts.size == "sm" and not opts.textOnSmall) and 0 or (TEXT_W[opts.healthText or "percent"] or 34)
+        local extra = opts.reserveRight or 0
+        self.row:SetPoint("BOTTOMRIGHT", -(size.pad + (textW > 0 and textW + size.gap or 0) + extra), 0)
+        self.right:ClearAllPoints()
+        self.right:SetPoint("RIGHT", -(size.pad + extra), 0)
+    end
+
+    function Resize(w: number, h: number)
+        self:SetSize(w, h)
+        self.incoming:SetWidth(w - 2)
+        self.absorb:SetWidth(w - 2)
+        if self.active then self:Refresh() end
+    end
+
+    -- Live indicators: out of combat (containers are made here). The engine
+    -- never frees a container, so each frame keeps its containers by identity
+    -- and reuses them: changing one indicator builds one new container, and
+    -- going back to an earlier look reuses the old one. Unused ones are unbound
+    -- and hidden.
+    function SetIndicators(list: { [string]: any }[]?)
+        self.indicatorCache = self.indicatorCache or {}
+        for _, c in ipairs(self.indicatorContainers or {}) do
+            c.container:Hide()
+            c:SetUnit("none")
+        end
+        self.indicatorContainers = {}
+        -- the missing looks: plain frames, kept by identity too
+        self.missingCache = self.missingCache or {}
+        for _, m in ipairs(self.missingLooks or {}) do m:Hide() end
+        self.missingLooks = {}
+        for _, ind in ipairs(list or {}) do
+            local show = ind.show or "up"
+            if ind.kind == "fill" and show == "both" then show = "up" end
+            if show ~= "up" then
+                local mkey = indicatorKey(ind) .. "|" .. show .. "|" .. (ind.missingColor or "ember")
+                local look = self.missingCache[mkey]
+                if not look then
+                    local art = ind.ids and ind.ids[1] and C_Spell.GetSpellTexture(ind.ids[1])
+                    look = indicatorLook(self, self, ind, art, true)
+                    self.missingCache[mkey] = look
+                end
+                look.mode = show
+                look.ind = ind
+                self.missingLooks[#self.missingLooks + 1] = look
+            end
+        end
+        for i, ind in ipairs(list or {}) do
+            local key = indicatorKey(ind)
+            local cached = self.indicatorCache[key]
+            if ind.show == "missing" then
+                -- only the missing look: no live container
+            elseif cached then
+                cached.container:Show()
+                cached:SetUnit(self.unit or "none")
+                cached.ind = ind
+                self.indicatorContainers[#self.indicatorContainers + 1] = cached
+            elseif ind.ids and #ind.ids > 0 then
+                local filter = ind.source == "any" and { "HELPFUL" } or { "HELPFUL", "PLAYER" }
+                local group = { key = "i" .. i, filter = filter, max = 1, include = ind.ids }
+                local opts = { size = ind.size or 10, anchor = "TOPLEFT", groups = { group } }
+                if ind.kind == "icon" then
+                    group.stacks, group.digits = false, (ind.size or 10) >= 16
+                else
+                    group.initialize = function(button: any)
+                        pcall(button.SetSize, button, 1, 1)
+                        pcall(button.SetMouseClickEnabled, button, false)
+                        pcall(button.SetMouseMotionEnabled, button, false)
+                        indicatorLook(self, button, ind)
+                    end
+                end
+                local c = auraContainer(self, self.unit or "none", opts)
+                if c then
+                    if ind.kind == "icon" then
+                        -- the engine lays its one icon from the container's top
+                        -- left; place that corner so the icon sits at the point
+                        local point, size = ind.point or "TOPRIGHT", ind.size or 10
+                        local x, y = pointOffset(point)
+                        local dx = point:find("RIGHT") and size or ((point:find("LEFT")) and 0 or size / 2)
+                        local dy = point:find("BOTTOM") and size or ((point:find("TOP")) and 0 or size / 2)
+                        c.container:SetPoint("TOPLEFT", self, point, x - dx, y + dy)
+                        c.container:SetFrameLevel(self.over:GetFrameLevel() + 8)
+                    else
+                        c.container:SetPoint("TOPLEFT", self, "TOPLEFT")
+                        c.container:SetFrameLevel(self.over:GetFrameLevel() + 2)
+                    end
+                    self.indicatorCache[key] = c
+                    c.ind = ind
+                    self.indicatorContainers[#self.indicatorContainers + 1] = c
+                end
+            end
+        end
+        self:UpdateIndicatorPresence()
+    end
+
+    -- The missing looks: "both" shows whenever the unit is there (the live look
+    -- covers it); "missing" only out of combat, while none of its spells is up.
+    -- "on = group" limits them, and the live looks, to your own raid group: the
+    -- live containers of everyone else are hidden, out of combat (who is in
+    -- your group is known before a fight; the engine still shows the aura).
+    function UpdateIndicatorPresence()
+        local u = self.unit
+        local exists = u and UnitExists(u)
+        local fight = InCombatLockdown()
+        local mine
+        for _, look in ipairs(self.missingLooks or {}) do
+            local show = false
+            local scoped = true
+            if exists and (look.ind.on or look.ind.missingOn) == "group" then
+                if mine == nil then mine = inYourGroup(u) end
+                scoped = mine
+            end
+            if not scoped then
+                show = false
+            elseif exists and look.mode == "both" then
+                show = true
+            elseif exists and look.mode == "missing" and not fight then
+                local ind = look.ind
+                local set = {}
+                for _, id in ipairs(ind.ids or {}) do set[id] = true end
+                local filter = ind.source == "any" and "HELPFUL" or "HELPFUL|PLAYER"
+                local up = false
+                for i = 1, 40 do
+                    local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, u, i, filter)
+                    if not ok or isSecret(a) or not a then break end
+                    local id = a.spellId
+                    if not isSecret(id) and id and set[id] then up = true break end
+                end
+                show = not up
+            end
+            look:SetShown(show)
+        end
+        -- live looks limited to your group: everyone else's container is hidden
+        -- (out of combat; in combat the last answer stays)
+        if not fight then
+            for _, c in ipairs(self.indicatorContainers or {}) do
+                local scoped = true
+                if exists and c.ind and (c.ind.on or c.ind.missingOn) == "group" then
+                    if mine == nil then mine = inYourGroup(u) end
+                    scoped = mine
+                end
+                c.container:SetShown(scoped and true or false)
+            end
+        end
+    end
+
+    -- Preview indicators: the looks drawn directly, as if every aura were up
+    -- (a "missing" one as missing, so its look can be judged). Frames are never
+    -- freed either, so the looks are kept by identity, as the missing looks are.
+    function SetPreviewIndicators(list: { [string]: any }[]?)
+        self.previewCache = self.previewCache or {}
+        for _, look in ipairs(self.previewLooks or {}) do look:Hide() end
+        self.previewLooks = {}
+        for _, ind in ipairs(list or {}) do
+            local missing = ind.show == "missing"
+            local key = indicatorKey(ind) .. "|" .. (missing and ("missing|" .. (ind.missingColor or "ember")) or "up")
+            local look = self.previewCache[key]
+            if not look then
+                local art = ind.ids and ind.ids[1] and C_Spell.GetSpellTexture(ind.ids[1])
+                look = indicatorLook(self, self, ind, art, missing)
+                self.previewCache[key] = look
+            end
+            look:Show()
+            self.previewLooks[#self.previewLooks + 1] = look
+        end
+    end
+
+    -- keepAttribute: the unit attribute is already set (a group header did it)
+    function SetUnit(unit: string?, keepAttribute: boolean?)
+        if unit == self.unit then return end
+        local wasActive = self.active
+        if wasActive then self:Deactivate() end
+        self.unit = unit
+        if self.opts.secure ~= false and not keepAttribute then self:SetAttribute("unit", unit) end
+        for _, list in pairs(self.dispelSets or {}) do
+            for _, c in ipairs(list) do c:SetUnit(unit or "none") end
+        end
+        for _, c in ipairs(self.indicatorContainers or {}) do c:SetUnit(unit or "none") end
+        if self.wardSlot then self.wardSlot:SetUnit(unit or "none") end
+        self:UpdateIndicatorPresence()
+        if wasActive and unit then self:Activate() end
+    end
+
+    -- The type's border and badge over this frame, on `parent` (a slot's button,
+    -- or the frame itself in a preview).
+    function DispelDecoration(parent: any, kind: string)
+        local tone = kind:lower()
+        local deco = CreateFrame("Frame", nil, parent)
+        deco:SetAllPoints(self)
+        deco:EnableMouse(false)
+        draw.border(deco, "dispel-" .. tone)
+        local badge = controls.stateBadge(deco, tone, kind)
+        badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
+        -- at least as wide as the Aggro badge it covers, so none of it peeks out
+        badge:SetWidth(math.max(badge.knownWidth or 0, uiText.measureText("badge", "Aggro") + 10))
+        -- over the frame's own border and text and over Warded; Magic on top,
+        -- then down the list
+        local rank = 1
+        for i, k in ipairs(DEBUFF_TYPES) do if k == kind then rank = i end end
+        deco:SetFrameLevel(self.over:GetFrameLevel() + 3 + (#DEBUFF_TYPES - rank))
+        return deco
+    end
+
+    -- "all" (every type), "removable" (only what you can remove) or "off". Out of
+    -- combat: the first use of a set creates its containers.
+    function SetDispelBadges(mode: string)
+        self.dispelSets = self.dispelSets or {}
+        if mode == "all" or mode == "removable" then
+            self.dispelSets[mode] = self.dispelSets[mode] or buildDispelSet(self, mode)
+        end
+        for set, list in pairs(self.dispelSets) do
+            for _, c in ipairs(list) do c.container:SetShown(set == mode) end
+        end
+    end
+
+    -- The ward border, badge and glow over this frame, on `parent` (the slot's
+    -- button, or the frame itself in a preview).
+    function WardDecoration(parent: any)
+        local deco = CreateFrame("Frame", nil, parent)
+        deco:SetAllPoints(self)
+        deco:EnableMouse(false)
+        draw.border(deco, "ward")
+        local badge = controls.stateBadge(deco, "ward", "Warded")
+        badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
+        -- at least as wide as the Aggro badge it covers
+        badge:SetWidth(math.max(badge.knownWidth or 0, uiText.measureText("badge", "Aggro") + 10))
+        deco:SetFrameLevel(self.over:GetFrameLevel() + 2)
+        -- the glow on its own layer under the frame's, so Aggro's ember glow wins
+        local glow = CreateFrame("Frame", nil, parent)
+        glow:SetAllPoints(self)
+        glow:EnableMouse(false)
+        glow:SetFrameLevel(math.max(0, self:GetFrameLevel() - 1))
+        draw.shadow(glow, "glow-ward")
+        -- on a slot's button both follow the button; a preview shows and hides
+        -- them with deco:SetWarded(on)
+        deco.glow = glow
+        function deco.SetWarded(_: any, on: boolean)
+            deco:SetShown(on)
+            glow:SetShown(on)
+        end
+        return deco
+    end
+
+    -- The spells that ward this frame (nil or empty: none). Out of combat: the
+    -- first call creates the slot.
+    function SetWardSpells(ids: number[]?)
+        ids = ids or {}
+        if self.wardSlot then
+            self.wardSlot:SetGroupSpells("ward", ids)
+            return
+        end
+        if #ids == 0 then return end
+        local init = function(button: any)
+            pcall(button.SetSize, button, 1, 1)
+            pcall(button.SetMouseClickEnabled, button, false)
+            pcall(button.SetMouseMotionEnabled, button, false)
+            self:WardDecoration(button)
+        end
+        local c = auraContainer(self, self.unit or "none", { size = 1, anchor = "TOPLEFT",
+            groups = { { key = "ward", filter = { "HELPFUL" }, max = 1, include = ids, initialize = init } } })
+        if c then
+            c.container:SetPoint("TOPLEFT", self, "TOPLEFT")
+            c.container:SetFrameLevel(self.over:GetFrameLevel() + 1)
+            self.wardSlot = c
+        end
+    end
+
+    function Refresh()
+        local A = self.api
+        self:FitRow()
+        if not A.UnitExists(self.unit) then return end
+        self.dead = uiText.flag(A.UnitIsDeadOrGhost(self.unit))
+        self.offline = isOffline(A, self.unit)
+        self:UpdateIdentity()
+        self:UpdateHealth(true)
+        self:UpdatePower()
+        self:UpdateRaidMarker()
+    end
+
+    function Activate()
+        if self.active then return end
+        self.active = true
+        for _, e in ipairs(HEALTH_EVENTS) do onUnit(self, e, function() self:UpdateHealth() end) end
+        for _, e in ipairs(POWER_EVENTS) do onUnit(self, e, function() self:UpdatePower() end) end
+        for _, e in ipairs(IDENTITY_EVENTS) do onUnit(self, e, function() self:UpdateIdentity() end) end
+        -- going offline or coming back: the bar, the text, the name and the power line
+        onUnit(self, "UNIT_CONNECTION", function() self:Refresh() end)
+        events.onGame("RAID_TARGET_UPDATE", function() self:UpdateRaidMarker() end, self)
+        events.onGame("PLAYER_ENTERING_WORLD", function() self:Refresh() end, self)
+        -- a group unit can become another person: redraw everything
+        local grouped = self.unit:find("^party") or self.unit:find("^raid")
+        -- a role change moves the marker and may turn the power line on or off
+        -- (powerFor: tanks and healers)
+        events.onGame("GROUP_ROSTER_UPDATE", function()
+            if grouped then self:Refresh() else self:UpdateIdentity(); self:UpdatePower() end
+        end, self)
+        events.onGame("PLAYER_ROLES_ASSIGNED", function() self:UpdateIdentity(); self:UpdatePower() end, self)
+        if self.unit == "target" then
+            events.onGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
+        elseif self.unit == "focus" then
+            events.onGame("PLAYER_FOCUS_CHANGED", function() self:Refresh() end, self)
+        elseif self.unit == "targettarget" then
+            events.onGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
+            -- your target picks another target: UNIT_TARGET fires for "target"
+            -- (never for "targettarget"), and the poll only redraws health
+            events.onUnit("UNIT_TARGET", "target", function() self:Refresh() end, self)
+        elseif self.unit == "pet" then
+            events.onUnit("UNIT_PET", "player", function() self:Refresh() end, self)
+        elseif self.unit:find("^boss") then
+            events.onGame("INSTANCE_ENCOUNTER_ENGAGE_UNIT", function() self:Refresh() end, self)
+        end
+        if self.opts.poll then
+            -- A unit with no events of its own: redraw while shown.
+            self.ticker = timer.every(self.opts.poll, function()
+                if self:IsVisible() and UnitExists(self.unit) then
+                    self:UpdateHealth(true)
+                    self:UpdatePower()
+                end
+            end)
+        end
+        self:Refresh()
+    end
+
+    function Deactivate()
+        if not self.active then return end
+        self.active = false
+        events.offAll(self)
+        if self.ticker then self.ticker:Cancel() self.ticker = nil end
+    end
+end
+mixins.UnitFrame = UnitFrame
+
+-- A unit frame (Raw.Mixins.UnitFrame is the class). opts.frame: a button a
+-- group header made (SecureUnitButtonTemplate), which becomes the frame.
+export function unitFrame(parent: Frame?, unit: string?, opts: { [string]: any }?): UnitFrame
+    local o = opts or {}
+    if o.frame then return UnitFrame.adopt(o.frame, parent, unit, o) end
+    return UnitFrame.new(parent, unit, o)
 end
 
-function UF:Deactivate()
-    if not self.active then return end
-    self.active = false
-    events.offAll(self)
-    if self.ticker then self.ticker:Cancel() self.ticker = nil end
-end
