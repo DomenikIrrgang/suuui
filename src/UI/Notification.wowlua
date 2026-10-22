@@ -58,7 +58,7 @@ import mixins from "/Core/Init"
 import * as events from "/Core/Events"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
+import text, Text from "/UI/Text"
 import button from "/UI/Controls"
 import icon as iconFrame from "/UI/Icon"
 import closeButton from "/UI/Panel"
@@ -77,8 +77,6 @@ local function rolesH(): number return 36 + S["space-2"] + T.type.caption.lineHe
 
 local TONE_EDGE: { [string]: string } = { warning = "amber", danger = "ember" }
 
-local Note: { [string]: any } = {}
-mixins.Notification = Note
 
 local function clock(seconds: number): string
     local s = math.max(0, math.floor(seconds + 0.5))
@@ -109,31 +107,7 @@ local function noteButton(n: any, i: number, variant: string): any
     return b
 end
 
-function Note:SetIcon(def: { [string]: any }?)
-    local icon = def or {}
-    self.iconTip = icon.tooltip
-    local art = self.iconArt
-    if icon.glyph then
-        art:SetTexture(GLYPHS .. icon.glyph .. ".tga")
-        art:SetTexCoord(0, 1, 0, 1)
-        art:ClearAllPoints()
-        art:SetPoint("TOPLEFT", 4, -4)
-        art:SetPoint("BOTTOMRIGHT", -4, 4)
-        draw.paint(art, icon.color or "ink")
-    else
-        art:SetTexture(icon.texture or (GLYPHS .. "bell.tga"))
-        if icon.coords then art:SetTexCoord(unpack(icon.coords))
-        else art:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
-        art:ClearAllPoints()
-        art:SetPoint("TOPLEFT", 1, -1)
-        art:SetPoint("BOTTOMRIGHT", -1, 1)
-        art:SetVertexColor(1, 1, 1, 1)
-    end
-end
 
-function Note:SetTitle(title: string?)
-    self.title:SetValue(title or "")
-end
 
 -- A name on a group presence card: whispers them.
 local function nameButton(n: any, i: number): any
@@ -149,487 +123,557 @@ local function nameButton(n: any, i: number): any
     return b
 end
 
--- The presence layout (see SetData's presence).
-function Note:SetPresence(d: { [string]: any }): number
-    local p = d.presence
-    local people = p.people or {}
-    local single = #people == 1
-    for _, f in ipairs({ self.bodyRow, self.itemRow, self.confirmRow, self.untilRow }) do f:Hide() end
-    for _, pool in pairs(self.buttons) do for _, b in ipairs(pool) do b:Hide() end end
-    for _, b in ipairs(self.names) do b:Hide() end
-    self.namesRow:Hide()
-    self.time:Hide()
-    self.drain:Hide()
-    self.border:SetColor("gilt-line")
-    self.status:Show()
-    draw.paint(self.status, p.online and "arcane" or "ink-faint")
-    -- a click on the card: whisper the one person on it
-    self.onCardClick = single and people[1].whisper or nil
-    if not p.online then
-        -- offline: one quiet line
-        self.icon:Hide()
-        self.close:Hide()
-        self.category:Hide()
-        local names: string[] = {}
-        for i, person in ipairs(people) do
-            if i > 2 then break end
-            names[#names + 1] = person.name
-        end
-        local line = table.concat(names, ", ")
-        if #people > 2 then line = line .. " and " .. (#people - 2) .. " more" end
-        self.title:SetValue(line .. " went offline")
-        self.title:SetColor("ink-muted")
-        self.source:SetValue(p.source or "")
-        self.source:Show()
-        local lineH = T.type.label.lineHeight
-        self.head:SetHeight(lineH)
-        self.status:ClearAllPoints()
-        self.status:SetPoint("CENTER", self.head, "LEFT", 4, 0)
-        self.title:SetWidth(WIDTH - PAD * 2 - 14 - self.source:GetUnboundedStringWidth() - S["space-4"])
-        self.title:ClearAllPoints()
-        self.title:SetPoint("LEFT", self.head, "LEFT", 14, 0)
-        self.source:ClearAllPoints()
-        self.source:SetPoint("RIGHT", self.head, "RIGHT")
-        self:SetHeight(PAD * 2 + lineH)
-        return PAD * 2 + lineH
-    end
-    -- online
-    self.icon:Show()
-    self.source:Hide()
-    self.close:Show()
-    if single and people[1].icon then
-        self:SetIcon(people[1].icon)
-    else
-        self:SetIcon({ glyph = p.glyph or "people" })
-    end
-    self.category:SetValue("Online · " .. (p.source or ""))
-    self.category:Show()
-    local title: string
-    if single then
-        local person = people[1]
-        title = person.name .. (person.tag and ("|cff" .. T.color["ink-faint"].hex .. person.tag .. "|r") or "")
-        self.title:SetColor(person.color or "ink")
-    else
-        title = #people .. " " .. (p.plural or "people") .. " came online"
-        self.title:SetColor("ink")
-    end
-    self.title:SetValue(title)
-    local textW = WIDTH - PAD * 2 - ICON - S["space-4"] - 22 - S["space-3"]
-    self.title:SetWidth(textW)
-    self.category:SetWidth(textW - 10)
-    local titleH = T.type.label.lineHeight
-    local catH = T.type.caption.lineHeight
-    local headH = math.max(ICON, catH + titleH)
-    self.head:SetHeight(headH)
-    local top = math.max(0, (headH - catH - titleH) / 2)
-    local x = ICON + S["space-4"]
-    self.status:ClearAllPoints()
-    self.status:SetPoint("CENTER", self.head, "TOPLEFT", x + 3, -(top + catH / 2))
-    self.category:ClearAllPoints()
-    self.category:SetPoint("TOPLEFT", x + 10, -top)
-    self.title:ClearAllPoints()
-    self.title:SetPoint("TOPLEFT", x, -(top + catH))
-    local y = PAD + headH
-    if single then
-        local person = people[1]
-        if person.detail and person.detail ~= "" then
-            self.body:SetWidth(WIDTH - PAD * 2)
-            self.body:SetValue(person.detail)
-            local h = T.type.caption.lineHeight
-            y = y + S["space-3"]
-            self.bodyRow:ClearAllPoints()
-            self.bodyRow:SetPoint("TOPLEFT", PAD, -y)
-            self.bodyRow:SetPoint("TOPRIGHT", -PAD, -y)
-            self.bodyRow:SetHeight(h)
-            self.bodyRow:EnableMouse(false)
-            self.bodyRow:Show()
-            y = y + h
-        end
-        -- Whisper (always) and Invite (when they can be invited), right-aligned
-        local actions: { label: string, onClick: () -> () }[] = {}
-        if person.whisper then actions[#actions + 1] = { label = "Whisper", onClick = person.whisper } end
-        if p.invite then actions[#actions + 1] = { label = "Invite", onClick = p.invite } end
-        if #actions > 0 then
-            y = y + S["space-3"]
-            self.actionsRow:ClearAllPoints()
-            self.actionsRow:SetPoint("TOPLEFT", PAD, -y)
-            self.actionsRow:SetPoint("TOPRIGHT", -PAD, -y)
-            self.actionsRow:SetHeight(ACTION_H)
-            self.actionsRow:Show()
-            local bx = 0
-            for i = #actions, 1, -1 do
-                local a = actions[i]
-                local btn = noteButton(self, i, "quiet")
-                btn:SetLabel(a.label)
-                btn.pressed = false
-                btn.pressedBg:SetShown(false)
-                btn.border:SetColor("gilt-line")
-                btn.label:SetColor("ink")
-                btn:SetEnabledState(true)
-                btn.tooltip = nil
-                btn:SetScript("OnClick", function() a.onClick() end)
-                btn:ClearAllPoints()
-                btn:SetPoint("RIGHT", -bx, 0)
-                btn:Show()
-                bx = bx + btn:GetWidth() + S["space-3"]
-            end
-            y = y + ACTION_H
-        else
-            self.actionsRow:Hide()
-        end
-    else
-        -- the names, each whispering them, wrapping
-        self.actionsRow:Hide()
-        y = y + S["space-3"]
-        local inner, x2, rowY = WIDTH - PAD * 2, 0, 0
-        local lineH = T.type.label.lineHeight
-        for i, person in ipairs(people) do
-            local b = nameButton(self, i)
-            b.person = person
-            local sep = i < #people and "," or ""
-            b.text:SetValue(person.name .. sep)
-            b.text:SetColor(person.color or "ink")
-            local w = math.ceil(b.text:GetUnboundedStringWidth())
-            if x2 > 0 and x2 + w > inner then x2 = 0; rowY = rowY + lineH + S["space-1"] end
-            b:SetSize(w, lineH)
-            b:ClearAllPoints()
-            b:SetPoint("TOPLEFT", self.namesRow, "TOPLEFT", x2, -rowY)
-            b:Show()
-            x2 = x2 + w + S["space-3"]
-        end
-        local h = rowY + lineH
-        self.namesRow:ClearAllPoints()
-        self.namesRow:SetPoint("TOPLEFT", PAD, -y)
-        self.namesRow:SetPoint("TOPRIGHT", -PAD, -y)
-        self.namesRow:SetHeight(h)
-        self.namesRow:Show()
-        y = y + h
-    end
-    y = y + PAD
-    self:SetHeight(y)
-    -- the drain of a timed note
-    if d.duration and d.remaining then
-        self.drain:Show()
-        draw.paintFill(self.drain, "gilt-line")
-        self:SetRemaining(d.remaining)
-    end
-    return y
-end
 
-function Note:SetData(d: { [string]: any }): number
-    self.data = d
-    self.status:Hide()
-    self.source:Hide()
-    self.namesRow:Hide()
-    self.rolesRow:Hide()
-    self.warningRow:Hide()
-    self.sourceRow:Hide()
-    self.onCardClick = nil
-    if d.presence then return self:SetPresence(d) end
-    self.icon:Show()
-    self.category:Show()
-    self.title:SetColor("ink")
-    local kind = d.kind or "timed"
-    self.border:SetColor(TONE_EDGE[d.tone] or "gilt-line")
-    self:SetIcon(d.icon)
-    self.category:SetValue(d.category or "")
-    self.category:SetShown(d.category ~= nil and d.category ~= "")
-    self.title:SetValue(d.title or "")
-    local closable = d.closable
-    if closable == nil then closable = kind == "sticky" or kind == "timed" end
-    self.close:SetShown(closable and true or false)
-    local hasTime = d.duration and d.remaining
-    self.time:SetShown(hasTime and kind ~= "timed" and true or false)
-    -- the titles' width: what's left of the head
-    local right = (closable and 22 + S["space-3"] or 0) + ((hasTime and kind ~= "timed") and 36 or 0)
-    local textW = WIDTH - PAD * 2 - ICON - S["space-4"] - right
-    self.title:SetWidth(textW)
-    self.category:SetWidth(textW)
-    local titleH = math.max(T.type.label.lineHeight, math.ceil(self.title:GetStringHeight()))
-    local catH = self.category:IsShown() and T.type.caption.lineHeight or 0
-    local headH = math.max(ICON, catH + titleH)
-    self.head:SetHeight(headH)
-    -- category over title, the two centred on the icon's height
-    local top = math.max(0, (headH - catH - titleH) / 2)
-    local x = ICON + S["space-4"]
-    self.category:ClearAllPoints()
-    self.category:SetPoint("TOPLEFT", x, -top)
-    self.title:ClearAllPoints()
-    self.title:SetPoint("TOPLEFT", x, -(top + catH))
-    -- the time: left of the close button, or at the right edge
-    self.time:ClearAllPoints()
-    if closable then self.time:SetPoint("RIGHT", self.close, "LEFT", -S["space-3"], 0)
-    else self.time:SetPoint("TOPRIGHT", 0, -(headH - T.type.numeric.lineHeight) / 2) end
-    local y = PAD + headH
-    local function place(f: any, h: number)
-        y = y + S["space-3"]
-        f:ClearAllPoints()
-        f:SetPoint("TOPLEFT", PAD, -y)
-        f:SetPoint("TOPRIGHT", -PAD, -y)
-        f:SetHeight(h)
-        f:Show()
-        y = y + h
-    end
-    -- body
-    if d.body and d.body ~= "" then
-        self.body:SetWidth(WIDTH - PAD * 2)
-        self.body:SetValue(d.body)
-        local h = math.ceil(self.body:GetStringHeight())
-        self.bodyRow:SetHeight(h)
-        self.bodyRow:EnableMouse(d.bodyTooltip ~= nil)
-        place(self.bodyRow, h)
-    else
-        self.bodyRow:Hide()
-    end
-    -- where it came from (a Group Finder note): badges, then the post
-    if d.source then
-        local bx = 0
-        local function badge(i: number, word: string)
-            local b = self.badges[i]
-            if not b then
-                b = CreateFrame("Frame", nil, self.sourceRow) :: any
-                b:SetHeight(16)
-                draw.fill(b, "surface-raised"):SetAllPoints()
-                draw.border(b, "gilt-line")
-                b.text = text(b, "micro", "ink-muted")
-                b.text:SetPoint("CENTER")
-                self.badges[i] = b
-            end
-            b.text:SetValue(word)
-            b:SetWidth(math.ceil(b.text:GetUnboundedStringWidth()) + S["space-4"] * 2)
-            b:ClearAllPoints()
-            b:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", bx, 0)
-            b:Show()
-            bx = bx + b:GetWidth() + S["space-2"]
-        end
-        local n = 0
-        if d.source.tool then n = n + 1; badge(n, "Tool") end
-        if d.source.channel then n = n + 1; badge(n, d.source.channel) end
-        for i = n + 1, #self.badges do self.badges[i]:Hide() end
-        local h = n > 0 and 16 or 0
-        local post = d.source.text
-        if post and post ~= "" then
-            self.quote:SetWidth(WIDTH - PAD * 2)
-            self.quote:SetValue("“" .. post .. "”")
-            self.quote:ClearAllPoints()
-            -- the post space-3 under its badges (2px sat it on them, found in game)
-            local gap = h > 0 and S["space-3"] or 0
-            self.quote:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", 0, -(h + gap))
-            self.quote:Show()
-            h = h + gap + math.ceil(self.quote:GetStringHeight())
-            self.sourceRow.post = post
-        else
-            self.quote:Hide()
-            self.sourceRow.post = nil
-        end
-        self.sourceRow:EnableMouse(self.sourceRow.post ~= nil)
-        if h > 0 then place(self.sourceRow, h) end
-    end
-    -- the item
-    if d.item then
-        self.item:SetArt(d.item.icon)
-        self.item:SetBorder(d.item.quality and ("quality-" .. d.item.quality) or "gilt-hairline")
-        self.itemLabel:SetValue(d.item.label or "")
-        self.itemLabel:SetColor(d.item.quality and ("quality-" .. d.item.quality) or "ink")
-        place(self.itemRow, 28)
-    else
-        self.itemRow:Hide()
-    end
-    -- the role choices (hosted), and a warning under them
-    if d.host and d.host.roles and d.host.roles > 0 then
-        place(self.rolesRow, rolesH())
-    end
-    if d.warning and d.warning ~= "" then
-        self.warningText:SetWidth(WIDTH - PAD * 2)
-        self.warningText:SetValue(d.warning)
-        place(self.warningRow, math.ceil(self.warningText:GetStringHeight()))
-    end
-    -- the confirm field
-    if d.confirmText then
-        self.confirmLabel:SetValue("Type " .. d.confirmText .. " to confirm")
-        place(self.confirmRow, T.type.caption.lineHeight + S["space-2"] + FIELD_H)
-    else
-        self.confirmRow:Hide()
-    end
-    -- what makes it go
-    if d["until"] then
-        self.untilText:SetValue(d["until"])
-        place(self.untilRow, T.type.caption.lineHeight)
-    else
-        self.untilRow:Hide()
-    end
-    -- actions
-    for _, pool in pairs(self.buttons) do
-        for _, b in ipairs(pool) do b:Hide() end
-    end
-    local actions = d.actions or {}
-    if d.host and d.host.buttons and d.host.buttons > 0 then
-        place(self.actionsRow, ACTION_H)
-    elseif #actions > 0 then
-        place(self.actionsRow, ACTION_H)
-        local bx = 0
-        for i = #actions, 1, -1 do
-            local a = actions[i]
-            local b = noteButton(self, i, a.variant or "quiet")
-            -- a count after the label: how many chose it (a loot roll's votes)
-            local label = a.label or ""
-            if a.count then
-                label = label .. "  |cff" .. T.color[a.count > 0 and "ink-muted" or "ink-faint"].hex .. a.count .. "|r"
-            end
-            b:SetLabel(label)
-            b:SetIcon(a.icon)
-            b.pressed = a.pressed and true or false
-            b.pressedBg:SetShown(b.pressed)
-            if b.variant ~= "primary" then b.border:SetColor(b.pressed and "arcane" or (a.variant == "danger" and "ember" or "gilt-line")) end
-            b.label:SetColor(b.pressed and "arcane" or (b.variant == "primary" and "on-signal" or (a.variant == "danger" and "ember-text" or "ink")))
-            b:SetEnabledState(not a.disabled or b.pressed)
-            b.tooltip = a.tooltip
-            b:SetScript("OnClick", function() if a.onClick and not a.disabled then a.onClick(self) end end)
-            b:ClearAllPoints()
-            b:SetPoint("RIGHT", -bx, 0)
-            b:Show()
-            bx = bx + b:GetWidth() + S["space-3"]
-        end
-    else
-        self.actionsRow:Hide()
-    end
-    y = y + PAD
-    self:SetHeight(y)
-    -- the drain
-    self.drain:SetShown(hasTime and true or false)
-    draw.paintFill(self.drain, kind == "timed" and "gilt-line" or "ink-muted")
-    if hasTime then self:SetRemaining(d.remaining) end
-    return y
-end
 
-function Note:SetRemaining(remaining: number)
-    local d = self.data
-    if not d or not d.duration then return end
-    d.remaining = remaining
-    local frac = math.max(0, math.min(1, remaining / math.max(0.01, d.duration)))
-    self.drain:SetWidth(math.max(0.01, (WIDTH - 2) * frac))
-    local soon = (d.kind or "timed") ~= "timed" and remaining <= (d.soonAt or 10)
-    self.time:SetValue(clock(remaining))
-    self.time:SetColor(soon and "amber" or "ink-muted")
-    if soon then draw.paintFill(self.drain, "amber") end
-end
 
 local notes: { [any]: boolean } = setmetatable({}, { __mode = "k" })
 
-export function notification(parent: any): any
-    local n = CreateFrame("Frame", nil, parent)
-    Mixin(n, Note)
-    notes[n] = true
-    n:SetSize(WIDTH, 80)
-    n.buttons = {}
-    draw.fill(n, "surface-glass", "BACKGROUND"):SetAllPoints()
-    n.border = draw.border(n, "gilt-line")
-    draw.shadow(n, "shadow-panel")
-    n:EnableMouse(true)
+export class Notification extends Frame
+    buttons: any
+    border: draw.Border
+    head: Frame
+    icon: Frame
+    iconArt: Texture
+    category: Text
+    title: Text
+    time: Text
+    close: any
+    bodyRow: Frame
+    body: Text
+    itemRow: Frame
+    item: any
+    itemLabel: Text
+    confirmRow: Frame
+    confirmLabel: Text
+    confirmBox: Frame
+    untilRow: Frame
+    untilGlyph: Texture
+    untilText: Text
+    sourceRow: Frame
+    badges: any
+    quote: Text
+    rolesRow: Frame
+    warningRow: Frame
+    warningText: Text
+    actionsRow: Frame
+    status: Texture
+    source: Text
+    namesRow: Frame
+    names: any
+    drain: Texture
+    iconTip: any = nil
+    onCardClick: any = nil
+    data: any = nil
 
-    n.head = CreateFrame("Frame", nil, n)
-    n.head:SetPoint("TOPLEFT", PAD, -PAD)
-    n.head:SetPoint("TOPRIGHT", -PAD, -PAD)
-    n.head:SetHeight(ICON)
-    n.icon = CreateFrame("Frame", nil, n.head)
-    n.icon:SetSize(ICON, ICON)
-    draw.fill(n.icon, "surface-sunk"):SetAllPoints()
-    draw.border(n.icon, "gilt-hairline", { layer = "OVERLAY" })
-    n.iconArt = n.icon:CreateTexture(nil, "ARTWORK")
-    -- icon.tooltip(owner): what hovering the icon shows (an item's tooltip)
-    n.icon:EnableMouse(true)
-    n.icon:SetScript("OnEnter", function(self: any) if n.iconTip then n.iconTip(self) end end)
-    n.icon:SetScript("OnLeave", function() if n.iconTip then GameTooltip:Hide() end end)
-    n.icon:SetPoint("TOPLEFT")
-    n.category = text(n.head, "caption", "ink-muted")
-    n.category:SetJustifyH("LEFT")
-    n.title = text(n.head, "label", "ink")
-    n.title:SetJustifyH("LEFT")
-    n.title:SetWordWrap(true)
-    n.time = text(n.head, "numeric", "ink-muted")
-    n.close = closeButton(n.head, function()
-        local d = n.data
-        if d and d.onClose then d.onClose(n) end
-    end)
-    n.close:SetPoint("TOPRIGHT")
+    constructor(parent: any)
+        super(nil, parent)
+        notes[self] = true
+        self:SetSize(WIDTH, 80)
+        self.buttons = {}
+        draw.fill(self, "surface-glass", "BACKGROUND"):SetAllPoints()
+        self.border = draw.border(self, "gilt-line")
+        draw.shadow(self, "shadow-panel")
+        self:EnableMouse(true)
 
-    n.bodyRow = CreateFrame("Frame", nil, n)
-    n.body = text(n.bodyRow, "caption", "ink-muted")
-    n.body:SetJustifyH("LEFT")
-    n.body:SetWordWrap(true)
-    n.body:SetPoint("TOPLEFT")
-    -- bodyTooltip: what hovering the body shows (everyone still choosing)
-    n.bodyRow:SetScript("OnEnter", function(self: any) if n.data and n.data.bodyTooltip then showTooltip(self, n.data.bodyTooltip) end end)
-    n.bodyRow:SetScript("OnLeave", function() hideTooltip() end)
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT", PAD, -PAD)
+        self.head:SetPoint("TOPRIGHT", -PAD, -PAD)
+        self.head:SetHeight(ICON)
+        self.icon = CreateFrame("Frame", nil, self.head)
+        self.icon:SetSize(ICON, ICON)
+        draw.fill(self.icon, "surface-sunk"):SetAllPoints()
+        draw.border(self.icon, "gilt-hairline", { layer = "OVERLAY" })
+        self.iconArt = self.icon:CreateTexture(nil, "ARTWORK")
+        -- icon.tooltip(owner): what hovering the icon shows (an item's tooltip)
+        self.icon:EnableMouse(true)
+        self.icon:SetScript("OnEnter", function(owner: Frame) if self.iconTip then self.iconTip(owner) end end)
+        self.icon:SetScript("OnLeave", function() if self.iconTip then GameTooltip:Hide() end end)
+        self.icon:SetPoint("TOPLEFT")
+        self.category = text(self.head, "caption", "ink-muted")
+        self.category:SetJustifyH("LEFT")
+        self.title = text(self.head, "label", "ink")
+        self.title:SetJustifyH("LEFT")
+        self.title:SetWordWrap(true)
+        self.time = text(self.head, "numeric", "ink-muted")
+        self.close = closeButton(self.head, function()
+            local d = self.data
+            if d and d.onClose then d.onClose(self) end
+        end)
+        self.close:SetPoint("TOPRIGHT")
 
-    n.itemRow = CreateFrame("Frame", nil, n)
-    n.item = iconFrame(n.itemRow, 28)
-    n.item:SetPoint("LEFT")
-    n.itemLabel = text(n.itemRow, "label", "ink")
-    n.itemLabel:SetPoint("LEFT", n.item, "RIGHT", S["space-4"], 0)
+        self.bodyRow = CreateFrame("Frame", nil, self)
+        self.body = text(self.bodyRow, "caption", "ink-muted")
+        self.body:SetJustifyH("LEFT")
+        self.body:SetWordWrap(true)
+        self.body:SetPoint("TOPLEFT")
+        -- bodyTooltip: what hovering the body shows (everyone still choosing)
+        self.bodyRow:SetScript("OnEnter", function(row: Frame) if self.data and self.data.bodyTooltip then showTooltip(row, self.data.bodyTooltip) end end)
+        self.bodyRow:SetScript("OnLeave", function() hideTooltip() end)
 
-    n.confirmRow = CreateFrame("Frame", nil, n)
-    n.confirmLabel = text(n.confirmRow, "caption", "ink-muted")
-    n.confirmLabel:SetPoint("TOPLEFT")
-    -- the field a hosted edit box sits on
-    n.confirmBox = CreateFrame("Frame", nil, n.confirmRow)
-    n.confirmBox:SetPoint("BOTTOMLEFT")
-    n.confirmBox:SetPoint("BOTTOMRIGHT")
-    n.confirmBox:SetHeight(FIELD_H)
-    draw.fill(n.confirmBox, "surface-sunk", "BACKGROUND"):SetAllPoints()
-    n.confirmBox.edge = draw.border(n.confirmBox, "gilt-line")
+        self.itemRow = CreateFrame("Frame", nil, self)
+        self.item = iconFrame(self.itemRow, 28)
+        self.item:SetPoint("LEFT")
+        self.itemLabel = text(self.itemRow, "label", "ink")
+        self.itemLabel:SetPoint("LEFT", self.item, "RIGHT", S["space-4"], 0)
 
-    n.untilRow = CreateFrame("Frame", nil, n)
-    n.untilGlyph = n.untilRow:CreateTexture(nil, "ARTWORK")
-    n.untilGlyph:SetTexture(GLYPHS .. "hourglass.tga")
-    draw.paint(n.untilGlyph, "ink-muted")
-    n.untilGlyph:SetSize(11, 11)
-    n.untilGlyph:SetPoint("LEFT")
-    n.untilText = text(n.untilRow, "caption", "ink-muted")
-    n.untilText:SetPoint("LEFT", n.untilGlyph, "RIGHT", S["space-2"], 0)
+        self.confirmRow = CreateFrame("Frame", nil, self)
+        self.confirmLabel = text(self.confirmRow, "caption", "ink-muted")
+        self.confirmLabel:SetPoint("TOPLEFT")
+        -- the field a hosted edit box sits on
+        self.confirmBox = CreateFrame("Frame", nil, self.confirmRow)
+        self.confirmBox:SetPoint("BOTTOMLEFT")
+        self.confirmBox:SetPoint("BOTTOMRIGHT")
+        self.confirmBox:SetHeight(FIELD_H)
+        draw.fill(self.confirmBox, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        self.confirmBox.edge = draw.border(self.confirmBox, "gilt-line")
 
-    -- where a Group Finder note came from
-    n.sourceRow = CreateFrame("Frame", nil, n)
-    n.sourceRow:Hide()
-    n.badges = {}
-    n.quote = text(n.sourceRow, "caption", "ink-muted")
-    n.quote:SetJustifyH("LEFT")
-    n.quote:SetWordWrap(true)
-    n.quote:SetMaxLines(2)
-    n.sourceRow:SetScript("OnEnter", function(self: any)
-        if self.post and n.quote:IsTruncated() then showTooltip(self, { description = self.post }) end
-    end)
-    n.sourceRow:SetScript("OnLeave", function() hideTooltip() end)
+        self.untilRow = CreateFrame("Frame", nil, self)
+        self.untilGlyph = self.untilRow:CreateTexture(nil, "ARTWORK")
+        self.untilGlyph:SetTexture(GLYPHS .. "hourglass.tga")
+        draw.paint(self.untilGlyph, "ink-muted")
+        self.untilGlyph:SetSize(11, 11)
+        self.untilGlyph:SetPoint("LEFT")
+        self.untilText = text(self.untilRow, "caption", "ink-muted")
+        self.untilText:SetPoint("LEFT", self.untilGlyph, "RIGHT", S["space-2"], 0)
 
-    n.rolesRow = CreateFrame("Frame", nil, n)
-    n.rolesRow:Hide()
-    n.warningRow = CreateFrame("Frame", nil, n)
-    n.warningRow:Hide()
-    n.warningText = text(n.warningRow, "caption", "amber")
-    n.warningText:SetPoint("TOPLEFT")
-    n.warningText:SetJustifyH("LEFT")
-    n.warningText:SetWordWrap(true)
+        -- where a Group Finder note came from
+        self.sourceRow = CreateFrame("Frame", nil, self)
+        self.sourceRow:Hide()
+        self.badges = {}
+        self.quote = text(self.sourceRow, "caption", "ink-muted")
+        self.quote:SetJustifyH("LEFT")
+        self.quote:SetWordWrap(true)
+        self.quote:SetMaxLines(2)
+        self.sourceRow:SetScript("OnEnter", function(row: any)
+            if row.post and self.quote:IsTruncated() then showTooltip(row, { description = row.post }) end
+        end)
+        self.sourceRow:SetScript("OnLeave", function() hideTooltip() end)
 
-    n.actionsRow = CreateFrame("Frame", nil, n)
+        self.rolesRow = CreateFrame("Frame", nil, self)
+        self.rolesRow:Hide()
+        self.warningRow = CreateFrame("Frame", nil, self)
+        self.warningRow:Hide()
+        self.warningText = text(self.warningRow, "caption", "amber")
+        self.warningText:SetPoint("TOPLEFT")
+        self.warningText:SetJustifyH("LEFT")
+        self.warningText:SetWordWrap(true)
 
-    -- presence: the status diamond, where they're from (offline), the names
-    n.status = draw.diamond(n.head, 6, "arcane")
-    n.status:Hide()
-    n.source = text(n.head, "caption", "ink-faint")
-    n.source:Hide()
-    n.namesRow = CreateFrame("Frame", nil, n)
-    n.namesRow:Hide()
-    n.names = {}
-    n:SetScript("OnMouseUp", function(self: any, mouseButton: string)
-        if mouseButton == "LeftButton" and self.onCardClick then self.onCardClick() end
-    end)
+        self.actionsRow = CreateFrame("Frame", nil, self)
 
-    n.drain = n:CreateTexture(nil, "OVERLAY")
-    n.drain:SetPoint("BOTTOMLEFT", 1, 1)
-    n.drain:SetHeight(2)
-    n.drain:Hide()
-    extend.add(extend.Kind.Notification, n, {})
-    return n
+        -- presence: the status diamond, where they're from (offline), the names
+        self.status = draw.diamond(self.head, 6, "arcane")
+        self.status:Hide()
+        self.source = text(self.head, "caption", "ink-faint")
+        self.source:Hide()
+        self.namesRow = CreateFrame("Frame", nil, self)
+        self.namesRow:Hide()
+        self.names = {}
+        self:SetScript("OnMouseUp", function(_: Frame, mouseButton: string)
+            if mouseButton == "LeftButton" and self.onCardClick then self.onCardClick() end
+        end)
+
+        self.drain = self:CreateTexture(nil, "OVERLAY")
+        self.drain:SetPoint("BOTTOMLEFT", 1, 1)
+        self.drain:SetHeight(2)
+        self.drain:Hide()
+        extend.add(extend.Kind.Notification, self, {})
+    end
+
+    function SetIcon(def: { [string]: any }?)
+        local icon = def or {}
+        self.iconTip = icon.tooltip
+        local art = self.iconArt
+        if icon.glyph then
+            art:SetTexture(GLYPHS .. icon.glyph .. ".tga")
+            art:SetTexCoord(0, 1, 0, 1)
+            art:ClearAllPoints()
+            art:SetPoint("TOPLEFT", 4, -4)
+            art:SetPoint("BOTTOMRIGHT", -4, 4)
+            draw.paint(art, icon.color or "ink")
+        else
+            art:SetTexture(icon.texture or (GLYPHS .. "bell.tga"))
+            if icon.coords then art:SetTexCoord(unpack(icon.coords))
+            else art:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+            art:ClearAllPoints()
+            art:SetPoint("TOPLEFT", 1, -1)
+            art:SetPoint("BOTTOMRIGHT", -1, 1)
+            art:SetVertexColor(1, 1, 1, 1)
+        end
+    end
+
+    function SetTitle(title: string?)
+        self.title:SetValue(title or "")
+    end
+
+    -- The presence layout (see SetData's presence).
+    function SetPresence(d: { [string]: any }): number
+        local p = d.presence
+        local people = p.people or {}
+        local single = #people == 1
+        for _, f in ipairs({ self.bodyRow, self.itemRow, self.confirmRow, self.untilRow }) do f:Hide() end
+        for _, pool in pairs(self.buttons) do for _, b in ipairs(pool) do b:Hide() end end
+        for _, b in ipairs(self.names) do b:Hide() end
+        self.namesRow:Hide()
+        self.time:Hide()
+        self.drain:Hide()
+        self.border:SetColor("gilt-line")
+        self.status:Show()
+        draw.paint(self.status, p.online and "arcane" or "ink-faint")
+        -- a click on the card: whisper the one person on it
+        self.onCardClick = single and people[1].whisper or nil
+        if not p.online then
+            -- offline: one quiet line
+            self.icon:Hide()
+            self.close:Hide()
+            self.category:Hide()
+            local names: string[] = {}
+            for i, person in ipairs(people) do
+                if i > 2 then break end
+                names[#names + 1] = person.name
+            end
+            local line = table.concat(names, ", ")
+            if #people > 2 then line = line .. " and " .. (#people - 2) .. " more" end
+            self.title:SetValue(line .. " went offline")
+            self.title:SetColor("ink-muted")
+            self.source:SetValue(p.source or "")
+            self.source:Show()
+            local lineH = T.type.label.lineHeight
+            self.head:SetHeight(lineH)
+            self.status:ClearAllPoints()
+            self.status:SetPoint("CENTER", self.head, "LEFT", 4, 0)
+            self.title:SetWidth(WIDTH - PAD * 2 - 14 - self.source:GetUnboundedStringWidth() - S["space-4"])
+            self.title:ClearAllPoints()
+            self.title:SetPoint("LEFT", self.head, "LEFT", 14, 0)
+            self.source:ClearAllPoints()
+            self.source:SetPoint("RIGHT", self.head, "RIGHT")
+            self:SetHeight(PAD * 2 + lineH)
+            return PAD * 2 + lineH
+        end
+        -- online
+        self.icon:Show()
+        self.source:Hide()
+        self.close:Show()
+        if single and people[1].icon then
+            self:SetIcon(people[1].icon)
+        else
+            self:SetIcon({ glyph = p.glyph or "people" })
+        end
+        self.category:SetValue("Online · " .. (p.source or ""))
+        self.category:Show()
+        local title: string
+        if single then
+            local person = people[1]
+            title = person.name .. (person.tag and ("|cff" .. T.color["ink-faint"].hex .. person.tag .. "|r") or "")
+            self.title:SetColor(person.color or "ink")
+        else
+            title = #people .. " " .. (p.plural or "people") .. " came online"
+            self.title:SetColor("ink")
+        end
+        self.title:SetValue(title)
+        local textW = WIDTH - PAD * 2 - ICON - S["space-4"] - 22 - S["space-3"]
+        self.title:SetWidth(textW)
+        self.category:SetWidth(textW - 10)
+        local titleH = T.type.label.lineHeight
+        local catH = T.type.caption.lineHeight
+        local headH = math.max(ICON, catH + titleH)
+        self.head:SetHeight(headH)
+        local top = math.max(0, (headH - catH - titleH) / 2)
+        local x = ICON + S["space-4"]
+        self.status:ClearAllPoints()
+        self.status:SetPoint("CENTER", self.head, "TOPLEFT", x + 3, -(top + catH / 2))
+        self.category:ClearAllPoints()
+        self.category:SetPoint("TOPLEFT", x + 10, -top)
+        self.title:ClearAllPoints()
+        self.title:SetPoint("TOPLEFT", x, -(top + catH))
+        local y = PAD + headH
+        if single then
+            local person = people[1]
+            if person.detail and person.detail ~= "" then
+                self.body:SetWidth(WIDTH - PAD * 2)
+                self.body:SetValue(person.detail)
+                local h = T.type.caption.lineHeight
+                y = y + S["space-3"]
+                self.bodyRow:ClearAllPoints()
+                self.bodyRow:SetPoint("TOPLEFT", PAD, -y)
+                self.bodyRow:SetPoint("TOPRIGHT", -PAD, -y)
+                self.bodyRow:SetHeight(h)
+                self.bodyRow:EnableMouse(false)
+                self.bodyRow:Show()
+                y = y + h
+            end
+            -- Whisper (always) and Invite (when they can be invited), right-aligned
+            local actions: { label: string, onClick: () -> () }[] = {}
+            if person.whisper then actions[#actions + 1] = { label = "Whisper", onClick = person.whisper } end
+            if p.invite then actions[#actions + 1] = { label = "Invite", onClick = p.invite } end
+            if #actions > 0 then
+                y = y + S["space-3"]
+                self.actionsRow:ClearAllPoints()
+                self.actionsRow:SetPoint("TOPLEFT", PAD, -y)
+                self.actionsRow:SetPoint("TOPRIGHT", -PAD, -y)
+                self.actionsRow:SetHeight(ACTION_H)
+                self.actionsRow:Show()
+                local bx = 0
+                for i = #actions, 1, -1 do
+                    local a = actions[i]
+                    local btn = noteButton(self, i, "quiet")
+                    btn:SetLabel(a.label)
+                    btn.pressed = false
+                    btn.pressedBg:SetShown(false)
+                    btn.border:SetColor("gilt-line")
+                    btn.label:SetColor("ink")
+                    btn:SetEnabledState(true)
+                    btn.tooltip = nil
+                    btn:SetScript("OnClick", function() a.onClick() end)
+                    btn:ClearAllPoints()
+                    btn:SetPoint("RIGHT", -bx, 0)
+                    btn:Show()
+                    bx = bx + btn:GetWidth() + S["space-3"]
+                end
+                y = y + ACTION_H
+            else
+                self.actionsRow:Hide()
+            end
+        else
+            -- the names, each whispering them, wrapping
+            self.actionsRow:Hide()
+            y = y + S["space-3"]
+            local inner, x2, rowY = WIDTH - PAD * 2, 0, 0
+            local lineH = T.type.label.lineHeight
+            for i, person in ipairs(people) do
+                local b = nameButton(self, i)
+                b.person = person
+                local sep = i < #people and "," or ""
+                b.text:SetValue(person.name .. sep)
+                b.text:SetColor(person.color or "ink")
+                local w = math.ceil(b.text:GetUnboundedStringWidth())
+                if x2 > 0 and x2 + w > inner then x2 = 0; rowY = rowY + lineH + S["space-1"] end
+                b:SetSize(w, lineH)
+                b:ClearAllPoints()
+                b:SetPoint("TOPLEFT", self.namesRow, "TOPLEFT", x2, -rowY)
+                b:Show()
+                x2 = x2 + w + S["space-3"]
+            end
+            local h = rowY + lineH
+            self.namesRow:ClearAllPoints()
+            self.namesRow:SetPoint("TOPLEFT", PAD, -y)
+            self.namesRow:SetPoint("TOPRIGHT", -PAD, -y)
+            self.namesRow:SetHeight(h)
+            self.namesRow:Show()
+            y = y + h
+        end
+        y = y + PAD
+        self:SetHeight(y)
+        -- the drain of a timed note
+        if d.duration and d.remaining then
+            self.drain:Show()
+            draw.paintFill(self.drain, "gilt-line")
+            self:SetRemaining(d.remaining)
+        end
+        return y
+    end
+
+    function SetData(d: { [string]: any }): number
+        self.data = d
+        self.status:Hide()
+        self.source:Hide()
+        self.namesRow:Hide()
+        self.rolesRow:Hide()
+        self.warningRow:Hide()
+        self.sourceRow:Hide()
+        self.onCardClick = nil
+        if d.presence then return self:SetPresence(d) end
+        self.icon:Show()
+        self.category:Show()
+        self.title:SetColor("ink")
+        local kind = d.kind or "timed"
+        self.border:SetColor(TONE_EDGE[d.tone] or "gilt-line")
+        self:SetIcon(d.icon)
+        self.category:SetValue(d.category or "")
+        self.category:SetShown(d.category ~= nil and d.category ~= "")
+        self.title:SetValue(d.title or "")
+        local closable = d.closable
+        if closable == nil then closable = kind == "sticky" or kind == "timed" end
+        self.close:SetShown(closable and true or false)
+        local hasTime = d.duration and d.remaining
+        self.time:SetShown(hasTime and kind ~= "timed" and true or false)
+        -- the titles' width: what's left of the head
+        local right = (closable and 22 + S["space-3"] or 0) + ((hasTime and kind ~= "timed") and 36 or 0)
+        local textW = WIDTH - PAD * 2 - ICON - S["space-4"] - right
+        self.title:SetWidth(textW)
+        self.category:SetWidth(textW)
+        local titleH = math.max(T.type.label.lineHeight, math.ceil(self.title:GetStringHeight()))
+        local catH = self.category:IsShown() and T.type.caption.lineHeight or 0
+        local headH = math.max(ICON, catH + titleH)
+        self.head:SetHeight(headH)
+        -- category over title, the two centred on the icon's height
+        local top = math.max(0, (headH - catH - titleH) / 2)
+        local x = ICON + S["space-4"]
+        self.category:ClearAllPoints()
+        self.category:SetPoint("TOPLEFT", x, -top)
+        self.title:ClearAllPoints()
+        self.title:SetPoint("TOPLEFT", x, -(top + catH))
+        -- the time: left of the close button, or at the right edge
+        self.time:ClearAllPoints()
+        if closable then self.time:SetPoint("RIGHT", self.close, "LEFT", -S["space-3"], 0)
+        else self.time:SetPoint("TOPRIGHT", 0, -(headH - T.type.numeric.lineHeight) / 2) end
+        local y = PAD + headH
+        local function place(f: any, h: number)
+            y = y + S["space-3"]
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", PAD, -y)
+            f:SetPoint("TOPRIGHT", -PAD, -y)
+            f:SetHeight(h)
+            f:Show()
+            y = y + h
+        end
+        -- body
+        if d.body and d.body ~= "" then
+            self.body:SetWidth(WIDTH - PAD * 2)
+            self.body:SetValue(d.body)
+            local h = math.ceil(self.body:GetStringHeight())
+            self.bodyRow:SetHeight(h)
+            self.bodyRow:EnableMouse(d.bodyTooltip ~= nil)
+            place(self.bodyRow, h)
+        else
+            self.bodyRow:Hide()
+        end
+        -- where it came from (a Group Finder note): badges, then the post
+        if d.source then
+            local bx = 0
+            local function badge(i: number, word: string)
+                local b = self.badges[i]
+                if not b then
+                    b = CreateFrame("Frame", nil, self.sourceRow) :: any
+                    b:SetHeight(16)
+                    draw.fill(b, "surface-raised"):SetAllPoints()
+                    draw.border(b, "gilt-line")
+                    b.text = text(b, "micro", "ink-muted")
+                    b.text:SetPoint("CENTER")
+                    self.badges[i] = b
+                end
+                b.text:SetValue(word)
+                b:SetWidth(math.ceil(b.text:GetUnboundedStringWidth()) + S["space-4"] * 2)
+                b:ClearAllPoints()
+                b:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", bx, 0)
+                b:Show()
+                bx = bx + b:GetWidth() + S["space-2"]
+            end
+            local n = 0
+            if d.source.tool then n = n + 1; badge(n, "Tool") end
+            if d.source.channel then n = n + 1; badge(n, d.source.channel) end
+            for i = n + 1, #self.badges do self.badges[i]:Hide() end
+            local h = n > 0 and 16 or 0
+            local post = d.source.text
+            if post and post ~= "" then
+                self.quote:SetWidth(WIDTH - PAD * 2)
+                self.quote:SetValue("“" .. post .. "”")
+                self.quote:ClearAllPoints()
+                -- the post space-3 under its badges (2px sat it on them, found in game)
+                local gap = h > 0 and S["space-3"] or 0
+                self.quote:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", 0, -(h + gap))
+                self.quote:Show()
+                h = h + gap + math.ceil(self.quote:GetStringHeight())
+                self.sourceRow.post = post
+            else
+                self.quote:Hide()
+                self.sourceRow.post = nil
+            end
+            self.sourceRow:EnableMouse(self.sourceRow.post ~= nil)
+            if h > 0 then place(self.sourceRow, h) end
+        end
+        -- the item
+        if d.item then
+            self.item:SetArt(d.item.icon)
+            self.item:SetBorder(d.item.quality and ("quality-" .. d.item.quality) or "gilt-hairline")
+            self.itemLabel:SetValue(d.item.label or "")
+            self.itemLabel:SetColor(d.item.quality and ("quality-" .. d.item.quality) or "ink")
+            place(self.itemRow, 28)
+        else
+            self.itemRow:Hide()
+        end
+        -- the role choices (hosted), and a warning under them
+        if d.host and d.host.roles and d.host.roles > 0 then
+            place(self.rolesRow, rolesH())
+        end
+        if d.warning and d.warning ~= "" then
+            self.warningText:SetWidth(WIDTH - PAD * 2)
+            self.warningText:SetValue(d.warning)
+            place(self.warningRow, math.ceil(self.warningText:GetStringHeight()))
+        end
+        -- the confirm field
+        if d.confirmText then
+            self.confirmLabel:SetValue("Type " .. d.confirmText .. " to confirm")
+            place(self.confirmRow, T.type.caption.lineHeight + S["space-2"] + FIELD_H)
+        else
+            self.confirmRow:Hide()
+        end
+        -- what makes it go
+        if d["until"] then
+            self.untilText:SetValue(d["until"])
+            place(self.untilRow, T.type.caption.lineHeight)
+        else
+            self.untilRow:Hide()
+        end
+        -- actions
+        for _, pool in pairs(self.buttons) do
+            for _, b in ipairs(pool) do b:Hide() end
+        end
+        local actions = d.actions or {}
+        if d.host and d.host.buttons and d.host.buttons > 0 then
+            place(self.actionsRow, ACTION_H)
+        elseif #actions > 0 then
+            place(self.actionsRow, ACTION_H)
+            local bx = 0
+            for i = #actions, 1, -1 do
+                local a = actions[i]
+                local b = noteButton(self, i, a.variant or "quiet")
+                -- a count after the label: how many chose it (a loot roll's votes)
+                local label = a.label or ""
+                if a.count then
+                    label = label .. "  |cff" .. T.color[a.count > 0 and "ink-muted" or "ink-faint"].hex .. a.count .. "|r"
+                end
+                b:SetLabel(label)
+                b:SetIcon(a.icon)
+                b.pressed = a.pressed and true or false
+                b.pressedBg:SetShown(b.pressed)
+                if b.variant ~= "primary" then b.border:SetColor(b.pressed and "arcane" or (a.variant == "danger" and "ember" or "gilt-line")) end
+                b.label:SetColor(b.pressed and "arcane" or (b.variant == "primary" and "on-signal" or (a.variant == "danger" and "ember-text" or "ink")))
+                b:SetEnabledState(not a.disabled or b.pressed)
+                b.tooltip = a.tooltip
+                b:SetScript("OnClick", function() if a.onClick and not a.disabled then a.onClick(self) end end)
+                b:ClearAllPoints()
+                b:SetPoint("RIGHT", -bx, 0)
+                b:Show()
+                bx = bx + b:GetWidth() + S["space-3"]
+            end
+        else
+            self.actionsRow:Hide()
+        end
+        y = y + PAD
+        self:SetHeight(y)
+        -- the drain
+        self.drain:SetShown(hasTime and true or false)
+        draw.paintFill(self.drain, kind == "timed" and "gilt-line" or "ink-muted")
+        if hasTime then self:SetRemaining(d.remaining) end
+        return y
+    end
+
+    function SetRemaining(remaining: number)
+        local d = self.data
+        if not d or not d.duration then return end
+        d.remaining = remaining
+        local frac = math.max(0, math.min(1, remaining / math.max(0.01, d.duration)))
+        self.drain:SetWidth(math.max(0.01, (WIDTH - 2) * frac))
+        local soon = (d.kind or "timed") ~= "timed" and remaining <= (d.soonAt or 10)
+        self.time:SetValue(clock(remaining))
+        self.time:SetColor(soon and "amber" or "ink-muted")
+        if soon then draw.paintFill(self.drain, "amber") end
+    end
+end
+mixins.Notification = Notification
+
+export function notification(parent: any): Notification
+    return Notification.new(parent)
 end
 
 --------------------------------------------------------------------------------
@@ -638,99 +682,11 @@ end
 
 local ORDER: { [string]: number } = { action = 0, roll = 0, ["until"] = 1, sticky = 2, timed = 3 }
 
-local Stack: { [string]: any } = {}
 
--- Notes out of sight (a window covers them), requests kept.
-function Stack:SetNotesHidden(hidden: any)
-    local on = hidden and true or false
-    if self.notesHidden == on then return end
-    self.notesHidden = on
-    for _, card in pairs(self.cards) do
-        if card.data then card:SetShown(card.request or not on) end
-    end
-    self.foot:SetAlpha(on and 0 or 1)
-end
 
-function Stack:CardFor(id: any): any
-    return self.cards[id]
-end
 
 type Entry = { d: { [string]: any }, i: number }
 
-function Stack:SetItems(items: { [string]: any }[]?, inCombat: boolean?)
-    self.items, self.inCombat = items, inCombat
-    local list: Entry[], held = {}, 0
-    for i, d in ipairs(items or {}) do
-        local kind = d.kind or "timed"
-        if inCombat and (kind == "sticky" or kind == "timed") then
-            held = held + 1
-        else
-            list[#list + 1] = { d = d, i = i }
-        end
-    end
-    table.sort(list, function(a: Entry, b: Entry): boolean
-        local oa, ob = ORDER[a.d.kind or "timed"] or 3, ORDER[b.d.kind or "timed"] or 3
-        if oa ~= ob then return oa < ob end
-        return a.i < b.i
-    end)
-    local max = self.expanded and #list or math.min(#list, self.max)
-    local used: { [any]: boolean } = {}
-    local y = 0
-    for k = 1, max do
-        local d = list[k].d
-        local card = self.cards[d.id]
-        if not card then
-            card = table.remove(self.spare) or notification(self)
-            self.cards[d.id] = card
-        end
-        used[d.id] = true
-        -- requests (popups to answer, loot rolls) above open windows; notes
-        -- at the stack's own layer, under them (asked for in game)
-        local request = d.kind == "action" or d.kind == "roll"
-        card.request = request
-        card:SetFrameStrata(request and "DIALOG" or self:GetFrameStrata())
-        card:SetData(d)
-        card:ClearAllPoints()
-        card:SetPoint("TOPLEFT", 0, -y)
-        card:SetShown(request or not self.notesHidden)
-        y = y + card:GetHeight() + S["space-3"]
-    end
-    for id, card in pairs(self.cards) do
-        if not used[id] then
-            card:Hide()
-            card.data = nil
-            self.cards[id] = nil
-            self.spare[#self.spare + 1] = card
-        end
-    end
-    -- the foot: more, held in combat, dismiss all
-    local more = #list - max
-    local sticky = 0
-    for _, x in ipairs(list) do if (x.d.kind or "timed") == "sticky" then sticky = sticky + 1 end end
-    self.moreLink:SetShown(more > 0)
-    self.moreLink.label:SetValue("+" .. more .. " more")
-    self.heldText:SetShown(held > 0)
-    self.heldText:SetValue(held .. " waiting for the end of combat")
-    self.clearLink:SetShown(sticky > 1 and not inCombat)
-    local footShown = more > 0 or held > 0 or (sticky > 1 and not inCombat)
-    self.foot:SetShown(footShown)
-    if footShown then
-        self.foot:ClearAllPoints()
-        -- flush with the cards' edges: Dismiss all ends at their right edge
-        self.foot:SetPoint("TOPLEFT", 0, -y)
-        self.foot:SetPoint("TOPRIGHT", 0, -y)
-        local x = 0
-        for _, f in ipairs({ self.moreLink, self.heldText }) do
-            if f:IsShown() then
-                f:ClearAllPoints()
-                f:SetPoint("LEFT", x, 0)
-                x = x + (f.GetUnboundedStringWidth and f:GetUnboundedStringWidth() or f:GetWidth()) + S["space-4"]
-            end
-        end
-        y = y + T.type.caption.lineHeight
-    end
-    self:SetHeight(math.max(1, y))
-end
 
 local function link(parent: any, label: string, onClick: () -> ()): any
     local b = CreateFrame("Button", nil, parent) :: any
@@ -766,23 +722,125 @@ events.on("SUUUI_THEME_CHANGED", function()
     end
 end, "UI.Notification")
 
-export function notificationStack(parent: any, opts: { name?: string, max?: number }?): any
-    opts = opts or {}
-    local s = CreateFrame("Frame", opts.name, parent)
-    Mixin(s, Stack)
-    stacks[s] = true
-    s:SetSize(WIDTH, 1)
-    s.max = opts.max or 5
-    s.cards, s.spare = {}, {}
-    s.foot = CreateFrame("Frame", nil, s)
-    s.foot:SetHeight(T.type.caption.lineHeight)
-    s.moreLink = link(s.foot, "+1 more", function()
-        s.expanded = true
-        if s.onExpand then s.onExpand() end
-    end)
-    s.heldText = text(s.foot, "caption", "ink-muted")
-    s.clearLink = link(s.foot, "Dismiss all", function() if s.onClearAll then s.onClearAll() end end)
-    s.clearLink:SetPoint("RIGHT")
-    s.foot:Hide()
-    return s
+export class NotificationStack extends Frame
+    max: any
+    foot: Frame
+    moreLink: any
+    expanded: boolean = false
+    heldText: Text
+    clearLink: any
+    notesHidden: any = nil
+
+    constructor(parent: any, opts: { name?: string, max?: number }?)
+        opts = opts or {}
+        super(opts.name, parent)
+        stacks[self] = true
+        self:SetSize(WIDTH, 1)
+        self.max = opts.max or 5
+        self.cards, self.spare = {}, {}
+        self.foot = CreateFrame("Frame", nil, self)
+        self.foot:SetHeight(T.type.caption.lineHeight)
+        self.moreLink = link(self.foot, "+1 more", function()
+            self.expanded = true
+            if self.onExpand then self.onExpand() end
+        end)
+        self.heldText = text(self.foot, "caption", "ink-muted")
+        self.clearLink = link(self.foot, "Dismiss all", function() if self.onClearAll then self.onClearAll() end end)
+        self.clearLink:SetPoint("RIGHT")
+        self.foot:Hide()
+    end
+
+    -- Notes out of sight (a window covers them), requests kept.
+    function SetNotesHidden(hidden: any)
+        local on = hidden and true or false
+        if self.notesHidden == on then return end
+        self.notesHidden = on
+        for _, card in pairs(self.cards) do
+            if card.data then card:SetShown(card.request or not on) end
+        end
+        self.foot:SetAlpha(on and 0 or 1)
+    end
+
+    function CardFor(id: any): any
+        return self.cards[id]
+    end
+
+    function SetItems(items: { [string]: any }[]?, inCombat: boolean?)
+        self.items, self.inCombat = items, inCombat
+        local list: Entry[], held = {}, 0
+        for i, d in ipairs(items or {}) do
+            local kind = d.kind or "timed"
+            if inCombat and (kind == "sticky" or kind == "timed") then
+                held = held + 1
+            else
+                list[#list + 1] = { d = d, i = i }
+            end
+        end
+        table.sort(list, function(a: Entry, b: Entry): boolean
+            local oa, ob = ORDER[a.d.kind or "timed"] or 3, ORDER[b.d.kind or "timed"] or 3
+            if oa ~= ob then return oa < ob end
+            return a.i < b.i
+        end)
+        local max = self.expanded and #list or math.min(#list, self.max)
+        local used: { [any]: boolean } = {}
+        local y = 0
+        for k = 1, max do
+            local d = list[k].d
+            local card = self.cards[d.id]
+            if not card then
+                card = table.remove(self.spare) or notification(self)
+                self.cards[d.id] = card
+            end
+            used[d.id] = true
+            -- requests (popups to answer, loot rolls) above open windows; notes
+            -- at the stack's own layer, under them (asked for in game)
+            local request = d.kind == "action" or d.kind == "roll"
+            card.request = request
+            card:SetFrameStrata(request and "DIALOG" or self:GetFrameStrata())
+            card:SetData(d)
+            card:ClearAllPoints()
+            card:SetPoint("TOPLEFT", 0, -y)
+            card:SetShown(request or not self.notesHidden)
+            y = y + card:GetHeight() + S["space-3"]
+        end
+        for id, card in pairs(self.cards) do
+            if not used[id] then
+                card:Hide()
+                card.data = nil
+                self.cards[id] = nil
+                self.spare[#self.spare + 1] = card
+            end
+        end
+        -- the foot: more, held in combat, dismiss all
+        local more = #list - max
+        local sticky = 0
+        for _, x in ipairs(list) do if (x.d.kind or "timed") == "sticky" then sticky = sticky + 1 end end
+        self.moreLink:SetShown(more > 0)
+        self.moreLink.label:SetValue("+" .. more .. " more")
+        self.heldText:SetShown(held > 0)
+        self.heldText:SetValue(held .. " waiting for the end of combat")
+        self.clearLink:SetShown(sticky > 1 and not inCombat)
+        local footShown = more > 0 or held > 0 or (sticky > 1 and not inCombat)
+        self.foot:SetShown(footShown)
+        if footShown then
+            self.foot:ClearAllPoints()
+            -- flush with the cards' edges: Dismiss all ends at their right edge
+            self.foot:SetPoint("TOPLEFT", 0, -y)
+            self.foot:SetPoint("TOPRIGHT", 0, -y)
+            local x = 0
+            for _, f in ipairs({ self.moreLink, self.heldText }) do
+                if f:IsShown() then
+                    f:ClearAllPoints()
+                    f:SetPoint("LEFT", x, 0)
+                    x = x + (f.GetUnboundedStringWidth and f:GetUnboundedStringWidth() or f:GetWidth()) + S["space-4"]
+                end
+            end
+            y = y + T.type.caption.lineHeight
+        end
+        self:SetHeight(math.max(1, y))
+    end
+end
+
+export function notificationStack(parent: any, opts: { name?: string, max?: number }?): NotificationStack
+    return NotificationStack.new(parent, opts)
 end
