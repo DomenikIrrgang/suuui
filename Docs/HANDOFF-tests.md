@@ -75,19 +75,19 @@ pass) and committed, with notes in `Docs/test-notes/<area>.md`:
 Done since (2026-10-20 to 2026-10-22), each with its notes in
 `Docs/test-notes/<area>.md`: ui-world, ui-settings, units-chat,
 units-cooldowns, units-bags, units-trade, units-character, units-maps,
-units-talents, units-group, units-notices. The checkpoint's work in them was finished or
+units-talents, units-group, units-notices, units-social. The checkpoint's work in them was finished or
 replaced.
 
 Not done (the queue), in this order:
 
 | Area | Sources | Partial work in 68d8ab6 |
 |------|---------|--------------------------|
-| units-social | src/Units: GroupFinder, Guild, Social, GameMenu, MicroMenu | GroupFinder/ folder, test |
 | units-windows | src/Units: Windows, Nameplates, Tooltips, Minimap, Addons | Addons test |
 | units-hud | src/Units: ActionBars, Auras, CastBars, UnitFrames, SwingTimer, Threat, Timeline, DamageMeter | none (never started) |
 
-Several of these tests need wowlua's branch `m9-coverage-stale-handle`
-(fixes after 0.9.5, unreleased): run them with its build until 0.9.6 is out.
+The tests need wowlua 0.9.6 or later (Guild's also its fix T244 on
+`m9-coverage-stale-handle`, after 0.9.6: a hidden edit box lets go of the
+keyboard); run them with that branch's build until the next release.
 
 Then:
 

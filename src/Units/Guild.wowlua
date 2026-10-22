@@ -159,8 +159,10 @@ function M:FootOverlays(m: Member?, actions: { [string]: any })
         local over = self.overs[key]
         if not over and btn and not combat then
             over = secureOver(btn)
-            over:HookScript("PostClick", function()
-                if InCombatLockdown() then return end
+            over:HookScript("PostClick", function(_, _, down)
+                -- the release only: a click is a press and a release here, and
+                -- both would arm Remove and disarm it again at once
+                if down or InCombatLockdown() then return end
                 if key == "remove" and not over.armed then
                     -- the first click arms it
                     over.armed = true
@@ -811,22 +813,11 @@ function M:SkinTextEdit()
     if dlg:IsShown() then UI.ReskinDialog(dlg) end
 end
 
+-- Without Blizzard's box: saying why (SetMOTD and SetInfoText are forbidden
+-- to addon code; a dialog of SuuUI's own could never save).
 function M:EditInfoOwn(key: string)
-    local motd = key == "motd"
-    local current = motd and call(GetGuildRosterMOTD) or call(GetGuildInfoText)
-    UI.Confirm({ title = motd and "Message of the day" or "Guild information",
-        text = motd and "Everyone in the guild sees it when they log in." or "What the guild is about, for its members.",
-        input = { label = motd and "Message" or "Information", value = plain(current) and current or "" }, confirm = "Save",
-        onConfirm = function(text: string)
-            if motd then
-                local set = (C_GuildInfo and C_GuildInfo.SetMOTD) or GuildSetMOTD
-                if set then pcall(set, text) end
-            else
-                local set = (C_GuildInfo and C_GuildInfo.SetInfoText) or SetGuildInfoText
-                if set then pcall(set, text) end
-            end
-            after(0.5, function() self:RenderInfo() end)
-        end })
+    self:Print(("The game's own box for the %s isn't available right now: try again in a moment."):format(
+        key == "motd" and "message of the day" or "guild information"))
 end
 
 --------------------------------------------------------------------------------

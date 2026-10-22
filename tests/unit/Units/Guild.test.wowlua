@@ -1,0 +1,408 @@
+-- Units/Guild: SuuUI's pages over Blizzard's Communities window (opened
+-- with J, its tabs clicked) on the engine's guild: the roster (online and
+-- offline, search, sorting), what your rank allows with each member and
+-- why not, the foot's secure Promote, Demote and Remove (Remove asks
+-- twice), Invite to guild (a secure /ginvite), a member's details, the
+-- Info page and the message of the day, the Log and Settings pages, the
+-- club picker, a fight starting.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Guild"
+import expectNoErrors from "../../helpers"
+
+local UI = SuuUI.UI
+local G: any = _G
+
+-- A guild of placeholders: you lead it.
+local function joinGuild()
+    mock.joinGuild({ name = "Wardens of Dawn", rank = 0, motd = "Raid at eight.", info = "A friendly guild.",
+        members = {
+            { name = "Brannoc Ironhand", class = "WARRIOR", level = 60, rank = 1, zone = "Ironforge", online = true, note = "tank" },
+            { name = "Tamsin Ashford", class = "PRIEST", level = 42, rank = 3, zone = "Stormwind City", online = true,
+              note = "healer", officerNote = "trial ends soon", status = 1 },
+            { name = "Aster Vale", class = "MAGE", level = 20, rank = 4, online = false, lastOnline = { 0, 0, 3, 0 } },
+        } })
+    mock.advanceTime(1)
+end
+
+local function frame(): any return G.CommunitiesFrame end
+
+local function open()
+    if not frame() or not frame():IsShown() then mock.pressKey("J") end
+    mock.advanceFrames(3)
+end
+
+local function tabTo(key: string)
+    open()
+    local t = frame()[key]
+    if t and t:IsShown() then mock.click(t) end
+    mock.advanceFrames(3)
+end
+
+local function member(name: string): any
+    for _, m in ipairs((M:Members())) do if m.name == name then return m end end
+    error("no member " .. name)
+end
+
+-- What a context menu offered: its buttons by label.
+local menu: { [string]: () -> () } = {}
+local function captureMenus()
+    mock.stub(UI, "ContextMenuFrom", function(owner: any, describe: (owner: any, root: any) -> ())
+        for k in pairs(menu) do menu[k] = nil end
+        local root: any = {}
+        function root:CreateTitle(_: string) end
+        function root:CreateButton(label: string, fn: () -> ()) menu[label] = fn end
+        describe(owner, root)
+    end)
+end
+
+local function choose(label: string)
+    local fn = menu[label]
+    assert(fn, "no menu button " .. label)
+    fn()
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    if M.details and M.details:IsShown() then M.details:Hide() end
+    if frame() and frame():IsShown() then HideUIPanel(frame()) end
+    M.search, M.sort, M.selected, M.ownPage = nil, nil, nil, nil
+    M:Reset("showOffline")
+    mock.leaveGuild()
+    mock.advanceFrames(3)
+    expectNoErrors()
+end
+
+@test("J opens the guild's window: Blizzard's communities list folded away, the picker with your guild first")
+local function opens()
+    joinGuild()
+    open()
+    local f = frame()
+    expect(f:IsShown()).toBe(true)
+    expect(f.CommunitiesList:GetAlpha()).toBe(0)
+    expect(f.CommunitiesList:GetWidth()).toBe(1)
+    local clubs = M:Clubs()
+    expect(clubs[1].guild).toBe(true)
+    expect(clubs[1].label).toBe("Wardens of Dawn")
+    expect(M.picker ~= nil).toBe(true)
+    -- Blizzard refolding it: folded again
+    f.CommunitiesList:SetWidth(200)
+    mock.advanceFrames(2)
+    expect(f.CommunitiesList:GetWidth()).toBe(1)
+end
+
+@test("the roster: online members by rank; offline ones with the setting; search; every sort")
+local function roster()
+    joinGuild()
+    tabTo("RosterTab")
+    expect(M.roster:IsShown()).toBe(true)
+    local drawn: any = nil
+    mock.stub(M.roster, "SetData", function(_: any, d: any) drawn = d end)
+    M:Render()
+    expect(drawn.total).toBe(4)
+    expect(drawn.online).toBe(3)
+    -- online only, by rank: you (the leader) first
+    expect(#drawn.members).toBe(3)
+    expect(drawn.members[1].you).toBe(true)
+    expect(drawn.members[2].name).toBe("Brannoc Ironhand")
+    M.roster.onShowOffline(true)
+    expect(#drawn.members).toBe(4)
+    local aster = member("Aster Vale")
+    expect(aster.lastOnline).toBe("3 days ago")
+    -- away and its note
+    local tamsin = member("Tamsin Ashford")
+    expect(tamsin.away).toBe(true)
+    expect(tamsin.note).toBe("healer")
+    M.roster.onSearch("stormwind")
+    mock.advanceTime(0.2)
+    expect(#drawn.members).toBe(1)
+    expect(drawn.members[1].name).toBe("Tamsin Ashford")
+    M.roster.onSearch("")
+    mock.advanceTime(0.2)
+    for _, key in ipairs({ "name", "level", "zone", "class", "note", "rank" }) do
+        M.roster.onSort(key)
+        expect(drawn.sort).toBe(key)
+    end
+    M.roster.onSort("level")
+    expect(drawn.members[1].level >= drawn.members[2].level).toBe(true)
+end
+
+@test("how long ago someone was online: years, months, days, hours, less than an hour")
+local function lastOnline()
+    joinGuild()
+    local answer: { number } = { 0, 0, 0, 0 }
+    mock.stub(G, "GetGuildRosterLastOnline", function(_: number): ...any return answer[1], answer[2], answer[3], answer[4] end)
+    local function ago(y: number, mo: number, d: number, h: number): string
+        answer = { y, mo, d, h }
+        return member("Aster Vale").lastOnline
+    end
+    expect(ago(2, 0, 0, 0)).toBe("2 years ago")
+    expect(ago(1, 0, 0, 0)).toBe("1 year ago")
+    expect(ago(0, 1, 0, 0)).toBe("1 month ago")
+    expect(ago(0, 0, 1, 0)).toBe("1 day ago")
+    expect(ago(0, 0, 0, 5)).toBe("5 hours ago")
+    expect(ago(0, 0, 0, 0)).toBe("less than an hour ago")
+    mock.stub(G, "GetGuildRosterLastOnline", function(_: number): ...any return nil end)
+    expect(member("Aster Vale").lastOnline).toBe("Offline")
+end
+
+@test("what your rank allows with a member, and why not")
+local function actions()
+    joinGuild()
+    local a = M:Actions(member("Tamsin Ashford"))
+    expect(a.whisper.enabled).toBe(true)
+    expect(a.invite.enabled).toBe(true)
+    expect(a.promote.enabled).toBe(true)
+    expect(a.demote.enabled).toBe(true)
+    expect(a.remove.enabled).toBe(true)
+    -- one rank under you: a promotion would reach yours
+    local b = M:Actions(member("Brannoc Ironhand"))
+    expect(b.promote.enabled).toBe(false)
+    expect(b.promote.why).toBe("They'd reach your own rank.")
+    -- at the lowest rank: no demotion; offline: no whisper or invite
+    local c = M:Actions(member("Aster Vale"))
+    expect(c.demote.why).toBe("They're at the lowest rank already.")
+    expect(c.whisper.why).toBe("They're offline.")
+    -- yourself
+    local me: any = nil
+    for _, m in ipairs((M:Members())) do if m.you then me = m end end
+    local d = M:Actions(me)
+    expect(d.whisper.why).toBe("That's you.")
+    expect(d.remove.why).toBe("That's you.")
+    -- a rank that may do nothing
+    mock.stub(G, "CanGuildPromote", function(): boolean return false end)
+    mock.stub(G, "CanGuildRemove", function(): boolean return false end)
+    local e = M:Actions(member("Tamsin Ashford"))
+    expect(e.promote.why).toBe("Your rank can't promote.")
+    expect(e.remove.why).toBe("Your rank can't remove members.")
+    -- in a group led by someone else: no invite
+    local friend = mock.spawnUnit({ name = "Morrow Fenwick", player = true, class = "DRUID", reaction = "friendly" })
+    mock.group:add(friend)
+    mock.stub(G, "UnitIsGroupLeader", function(_: string): boolean return false end)
+    expect(M:Actions(member("Tamsin Ashford")).invite.why).toBe("Only your group's leader or an assistant can invite.")
+    mock.group:leave()
+    -- below: nothing to say about members ranked above
+    expect(M:Actions(nil).whisper).toBeNil()
+end
+
+@test("the foot's Promote, Demote and Remove: secure /gpromote, /gdemote, /gremove for the selected member; Remove asks twice")
+local function foot()
+    joinGuild()
+    tabTo("RosterTab")
+    M.roster.onSelect(member("Tamsin Ashford").key)
+    mock.advanceFrames(2)
+    local promote, remove = M.overs.promote, M.overs.remove
+    expect(promote:IsShown()).toBe(true)
+    expect(promote:GetAttribute("type1")).toBe("macro")
+    expect(promote:GetAttribute("macrotext1")).toBe("/gpromote " .. member("Tamsin Ashford").full)
+    expect(M.overs.demote:GetAttribute("macrotext1"):sub(1, 9)).toBe("/gdemote ")
+    -- Remove: the first click arms it
+    expect(remove:GetAttribute("type1")).toBeNil()
+    mock.click(remove)
+    expect(remove.armed).toBe(true)
+    expect(remove:GetAttribute("type1")).toBe("macro")
+    mock.click(remove)
+    expect(remove.armed).toBeNil()
+    mock.click(promote)
+    mock.advanceTime(0.6)
+    -- another member: disarmed; one you can't act on: no secure buttons
+    M.roster.onSelect(member("Brannoc Ironhand").key)
+    expect(promote:IsShown()).toBe(false)
+    -- the plain button reached: the secure one wasn't there
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    M:Act("promote", member("Brannoc Ironhand"))
+    expect(said[1]:sub(1, 8)).toBe("promote:")
+    -- a fight: the secure buttons away
+    M.roster.onSelect(member("Tamsin Ashford").key)
+    mock.player:enterCombat()
+    expect(promote:IsShown()).toBe(false)
+end
+
+@test("Whisper and Invite; a member's menu; Invite to guild runs a secure /ginvite with the typed name")
+local function whisperInvite()
+    joinGuild()
+    captureMenus()
+    tabTo("RosterTab")
+    local tell = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", tell)
+    local tamsin = member("Tamsin Ashford")
+    M.roster.onAction("whisper", tamsin)
+    expect(tell).toHaveBeenCalledWith(tamsin.full)
+    local invite = mock.spy(function(_: string) end)
+    mock.stub(C_PartyInfo, "InviteUnit", invite)
+    M.roster.onAction("invite", tamsin)
+    expect(invite).toHaveBeenCalledWith(tamsin.full)
+    M.roster.onMenu(tamsin, M.roster)
+    choose("Whisper")
+    choose("Invite")
+    expect(invite).toHaveBeenCalledTimes(2)
+    M:Act("whisper", nil)
+    -- Invite to guild: SuuUI's dialog, its Invite covered by a secure /ginvite
+    local dialog = CreateFrame("Frame", nil, UIParent)
+    dialog.ok = CreateFrame("Button", nil, dialog)
+    dialog.ok:SetSize(80, 24)
+    dialog.ok:SetPoint("CENTER")
+    dialog.field = { edit = CreateFrame("EditBox", nil, dialog) }
+    dialog.field.edit:SetSize(120, 20)
+    dialog.field.edit:SetPoint("TOP")
+    mock.stub(UI, "Confirm", function(_: any): any return dialog end)
+    M.roster.onAction("guildInvite", nil)
+    local over = M.inviteOver
+    expect(over:IsShown()).toBe(true)
+    expect(over:GetAttribute("macrotext1")).toBe("/ginvite ")
+    mock.typeText(dialog.field.edit, "Kaelith Dawnmere")
+    expect(over:GetAttribute("macrotext1")).toBe("/ginvite Kaelith Dawnmere")
+    mock.click(over)
+    mock.advanceTime(1.1)
+    expect(dialog:IsShown()).toBe(false)
+    expect(over:IsShown()).toBe(false)
+    -- in a fight: not now
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M.roster.onAction("guildInvite", nil)
+    expect(said[1]).toBe("Inviting to the guild works out of combat.")
+end
+
+@test("a member's details beside the window: who, where, the notes; whisper and invite there")
+local function details()
+    joinGuild()
+    tabTo("RosterTab")
+    M.roster.onSelect(member("Tamsin Ashford").key)
+    local p = M.details
+    expect(p:IsShown()).toBe(true)
+    expect(p.line1:GetText()).toBe("Level 42 Priest")
+    expect(p.line2:GetText()).toBe("Member · Stormwind City")
+    expect(p.note:GetText()).toBe("healer")
+    -- the leader sees the officer note
+    if p.officer:IsShown() then expect(p.officer:GetText()).toBe("trial ends soon") end
+    local tell = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", tell)
+    p.whisper:Click()
+    expect(tell).toHaveBeenCalled()
+    -- an offline member: when they were last on, no note
+    M.roster.onShowOffline(true)
+    M.roster.onSelect(member("Aster Vale").key)
+    expect(p.line2:GetText()).toBe("Initiate · 3 days ago")
+    expect(p.note:GetText():find("No note", 1, true) ~= nil).toBe(true)
+    -- Edit's plain button reached: why it couldn't be the secure one
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    if p.noteEdit:IsEnabled() then
+        p.noteEdit:Click()
+        expect(#said).toBe(1)
+    end
+    -- a theme change: drawn again; hidden with the window
+    M:Emit("SUUUI_THEME_CHANGED")
+    HideUIPanel(frame())
+    mock.advanceFrames(2)
+    expect(p:IsShown()).toBe(false)
+end
+
+@test("the Info page: the guild's information and its ranks with their counts; Edit through Blizzard's own box")
+local function info()
+    joinGuild()
+    tabTo("GuildInfoTab")
+    if not M.infoPage:IsShown() then return end
+    local drawn: any = nil
+    mock.stub(M.infoPage, "SetData", function(_: any, d: any) drawn = d end)
+    M:RenderInfo()
+    expect(drawn.info).toBe("A friendly guild.")
+    expect(drawn.ranks[1].count).toBe(1)
+    expect(#drawn.ranks).toBe(5)
+    -- Blizzard's edit button missing: why it can't be edited now (the game
+    -- forbids saving it from addon code)
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    mock.stub(M, "BlizzEdits", function(_: any): any return {} end)
+    M:EditInfo("motd")
+    expect(said[1]:find("message of the day", 1, true) ~= nil).toBe(true)
+    M:EditInfo("info")
+    expect(said[2]:find("guild information", 1, true) ~= nil).toBe(true)
+end
+
+@test("the message of the day: the Chat tab's banner, a new one from its event before the game's copy")
+local function motd()
+    joinGuild()
+    tabTo("ChatTab")
+    expect(M:Motd()).toBe("Raid at eight.")
+    mock.fireEvent("GUILD_MOTD", "Raid moved to nine.")
+    expect(M:Motd()).toBe("Raid moved to nine.")
+    -- the game's own copy caught up: it again
+    mock.stub(G, "GetGuildRosterMOTD", function(): string return "Raid moved to nine." end)
+    expect(M:Motd()).toBe("Raid moved to nine.")
+    expect(M.freshMotd).toBeNil()
+end
+
+@test("the Log page: invites, joins, promotions in words, newest first; the Settings page hosting Blizzard's guild control")
+local function logAndSettings()
+    joinGuild()
+    open()
+    local events = {
+        { "invite", "Brannoc Ironhand", "Tamsin Ashford", nil, 0, 0, 2, 0 },
+        { "promote", "Brannoc Ironhand", "Tamsin Ashford", "Member", 0, 0, 0, 3 },
+        { "join", "Tamsin Ashford", nil, nil, 1, 0, 0, 0 },
+        { "unknown", "x", "y", nil, 0, 0, 0, 0 },
+        { "quit", "Aster Vale", nil, nil, 0, 2, 0, 0 },
+        { "remove", "Brannoc Ironhand", "Corwin Hale", nil, 0, 0, 0, 0 },
+    }
+    mock.stub(G, "GetNumGuildEvents", function(): number return #events end)
+    mock.stub(G, "GetGuildEventInfo", function(i: number): ...any return unpack(events[i]) end)
+    M:ShowOwn("log")
+    expect(M.logPage:IsShown()).toBe(true)
+    local drawn: any = nil
+    mock.stub(M.logPage, "SetData", function(_: any, d: any) drawn = d end)
+    M:RenderLog()
+    expect(#drawn.lines).toBe(5)
+    expect(drawn.lines[1].text).toBe("Brannoc Ironhand removed Corwin Hale")
+    expect(drawn.lines[1].when).toBe("just now")
+    expect(drawn.lines[2].when).toBe("2 months ago")
+    expect(drawn.lines[3].text).toBe("Tamsin Ashford joined the guild")
+    expect(drawn.lines[3].when).toBe("1 year ago")
+    expect(drawn.lines[4].text).toBe("Brannoc Ironhand promoted Tamsin Ashford to Member")
+    expect(drawn.lines[4].when).toBe("3 hours ago")
+    expect(drawn.lines[5].when).toBe("2 days ago")
+    M:GuildSettings()
+    expect(M.settingsCover:IsShown()).toBe(true)
+    M:ShowOwn(nil)
+    expect(M.settingsCover:IsShown()).toBe(false)
+end
+
+@test("the picker: Join or create when the game has no such entry; another club leaves SuuUI's pages")
+local function picker()
+    joinGuild()
+    open()
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    M.plus:GetScript("OnEnter")(M.plus)
+    M.plus:GetScript("OnLeave")(M.plus)
+    M:JoinOrCreate()
+    if said[1] then expect(said[1]).toBe("The game's Join or Create Community isn't available here.") end
+    mock.fireEvent("CLUB_UPDATED", C_Club.GetGuildClubId())
+end
+
+@test("a fight: every secure button over the window away at once; drawn again after")
+local function fight()
+    joinGuild()
+    tabTo("RosterTab")
+    M.roster.onSelect(member("Tamsin Ashford").key)
+    local row = CreateFrame("Button", nil, UIParent)
+    row:SetSize(100, 20)
+    row:SetPoint("CENTER")
+    row:SetScript("OnEnter", function() end)
+    row:SetScript("OnLeave", function() end)
+    M.roster.onRowEnter(row, member("Tamsin Ashford"))
+    expect(M.rowOver:IsShown()).toBe(true)
+    -- the row's own hover kept while the layer is over it; gone when it leaves
+    M.roster.onRowLeave(row)
+    mock.player:enterCombat()
+    for _, over in pairs(M.overs) do expect(over:IsShown()).toBe(false) end
+    expect(M.rowOver:IsShown()).toBe(false)
+    mock.player:leaveCombat()
+    mock.advanceTime(0.3)
+end
