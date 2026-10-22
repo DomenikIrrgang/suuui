@@ -1,0 +1,251 @@
+-- Units/Tooltips: Blizzard's tooltips in SuuUI's look: skinned and at
+-- SuuUI's scale, a unit's name in its class or reaction colour and its
+-- level in its difficulty's, the health bar in the unit fill; a group
+-- member's auras as lines out of combat (yours marked, at most twelve) and
+-- as the game's container in a panel in combat; spell IDs and who cast an
+-- aura; where an ownerless tooltip opens (SuuUI's place, above the bags);
+-- an addon's tooltip skinned on first use; the unit menus; a theme change.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Tooltips"
+import expectNoErrors from "../../helpers"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local G: any = _G
+
+-- Placeholder units (made once).
+local friend = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "MAGE", level = 42, reaction = "friendly" })
+local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10 })
+local trader = mock.spawnUnit({ name = "Merchant Elwin", level = 30, reaction = "neutral", distance = 10 })
+
+-- A colour as the tooltip line has it, compared with a token's.
+local function hasColor(fs: any, token: string): boolean
+    local r, g, b = fs:GetTextColor()
+    local tr, tg, tb = UI.RGBA(token)
+    return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
+end
+
+local function lines(): string[]
+    local out: string[] = {}
+    for i = 1, GameTooltip:NumLines() do
+        local l = G["GameTooltipTextLeft" .. i]
+        local r = G["GameTooltipTextRight" .. i]
+        out[#out + 1] = tostring(l and l:GetText() or "") .. "|" .. tostring(r and r:IsShown() and r:GetText() or "")
+    end
+    return out
+end
+
+local function hasLine(start: string): boolean
+    for _, l in ipairs(lines()) do if l:sub(1, #start) == start then return true end end
+    return false
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    GameTooltip:Hide()
+    mock.player:target(nil)
+    mock.group:leave()
+    for _, k in ipairs({ "nameColors", "groupAuras", "ids", "anchor", "unitMenus" }) do M:Reset(k) end
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+@test("Blizzard's tooltips skinned, at SuuUI's scale")
+local function skinned()
+    for _, name in ipairs({ "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1" }) do
+        expect(UI.IsTooltipSkinned(G[name])).toBe(true)
+    end
+    local want = SuuUI.Root:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    expect(GameTooltip:GetScale()).toBeCloseTo(want)
+    mock.fireEvent("UI_SCALE_CHANGED")
+    mock.advanceFrames(2)
+    expect(GameTooltip:GetScale()).toBeCloseTo(want)
+end
+
+@test("a unit's name in its class colour (a player) or its reaction's (the rest); off by the setting")
+local function nameColors()
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(friend)
+    GameTooltip:SetUnit("target")
+    expect(hasColor(G.GameTooltipTextLeft1, "class-mage")).toBe(true)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(wolf)
+    GameTooltip:SetUnit("target")
+    expect(hasColor(G.GameTooltipTextLeft1, "reaction-hostile")).toBe(true)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(trader)
+    GameTooltip:SetUnit("target")
+    expect(hasColor(G.GameTooltipTextLeft1, "reaction-neutral")).toBe(true)
+    -- a theme change: the open tooltip's name again
+    M:Emit("SUUUI_THEME_CHANGED")
+    M:Set("nameColors", false)
+    GameTooltip:Hide()
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(friend)
+    GameTooltip:SetUnit("target")
+    expect(hasColor(G.GameTooltipTextLeft1, "class-mage")).toBe(false)
+end
+
+@test("the level in its difficulty's colour, the rest of its line as the game wrote it")
+local function level()
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(wolf)
+    GameTooltip:SetUnit("target")
+    local hex = T.color[UI.LevelColor(9)].hex
+    local found = false
+    for i = 2, GameTooltip:NumLines() do
+        local text = G["GameTooltipTextLeft" .. i]:GetText() or ""
+        if text:find("|cff" .. hex .. "9|r", 1, true) then found = true end
+    end
+    expect(found).toBe(true)
+    -- coloured once: drawn again, not twice
+    M:ColorLevel(GameTooltip)
+end
+
+@test("the health bar keeps the unit fill whatever the game colours it")
+local function healthBar()
+    local bar = G.GameTooltipStatusBar
+    bar:SetStatusBarColor(1, 0, 0)
+    local r, g, b = bar:GetStatusBarColor()
+    local fr, fg, fb = UI.RGBA("unit-fill")
+    expect(math.abs(r - fr) + math.abs(g - fg) + math.abs(b - fb) < 0.02).toBe(true)
+end
+
+@test("a group member's auras as lines out of combat: debuffs first, yours marked, the time left, at most twelve")
+local function groupAuras()
+    mock.group:add(friend)
+    mock.advanceFrames(2)
+    friend:applyAura({ spellID = 1243, name = "Power Word: Fortitude", duration = 1800, source = mock.player })
+    friend:applyAura({ spellID = 589, name = "Shadow Word: Pain", harmful = true, duration = 18 })
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetUnit("party1")
+    local all = lines()
+    local pain, fort = nil, nil
+    for i, l in ipairs(all) do
+        if l:find("Shadow Word: Pain", 1, true) then pain = i end
+        if l:find("Power Word: Fortitude", 1, true) then fort = i end
+    end
+    expect(pain ~= nil and fort ~= nil).toBe(true)
+    expect(pain < fort).toBe(true)
+    expect(all[fort]:find("(yours)", 1, true) ~= nil).toBe(true)
+    expect(all[fort]:find("|29m", 1, true) ~= nil or all[fort]:find("|30m", 1, true) ~= nil).toBe(true)
+    -- more than twelve: "+N more"
+    for i = 1, 12 do friend:applyAura({ spellID = 990500 + i, name = "Blessing " .. i, duration = 0 }) end
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetUnit("party1")
+    expect(hasLine("+2 more")).toBe(true)
+    -- off: none
+    M:Set("groupAuras", false)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetUnit("party1")
+    expect(hasLine("+2 more")).toBe(false)
+end
+
+@test("in combat: the game's aura container in a panel under the tooltip, gone with it")
+local function auraPanel()
+    mock.group:add(friend)
+    mock.advanceFrames(2)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetUnit("party1")
+    local p = M.auraPanel
+    expect(p:IsShown()).toBe(true)
+    expect(M.auraFor).toBe(GameTooltip)
+    GameTooltip:Hide()
+    expect(p:IsShown()).toBe(false)
+    -- a theme change sizes it after the fight
+    M:Emit("SUUUI_THEME_CHANGED")
+    mock.player:leaveCombat()
+end
+
+@test("spell IDs at a spell tooltip's foot; who cast an aura, in their class colour; off by the setting")
+local function ids()
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetSpellByID(1243)
+    expect(hasLine("Spell ID|1243")).toBe(true)
+    -- an aura on you, cast by a friend: From
+    mock.group:add(friend)
+    mock.advanceFrames(2)
+    mock.player:applyAura({ spellID = 1243, name = "Power Word: Fortitude", duration = 1800, source = friend })
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetUnitAura("player", 1, "HELPFUL")
+    expect(hasLine("From|Tamsin Ashford")).toBe(true)
+    -- yours
+    mock.player:applyAura({ spellID = 6673, name = "Battle Shout", duration = 120, source = mock.player })
+    local a: any = C_UnitAuras.GetAuraDataBySpellName("player", "Battle Shout")
+    if a then
+        GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+        GameTooltip:SetUnitBuffByAuraInstanceID("player", a.auraInstanceID)
+        local you = false
+        for _, l in ipairs(lines()) do if l:find("(you)", 1, true) then you = true end end
+        expect(you).toBe(true)
+    end
+    M:Set("ids", false)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetSpellByID(1243)
+    expect(hasLine("Spell ID")).toBe(false)
+end
+
+@test("a tooltip without a place of its own: SuuUI's, above the bags while they're open; Blizzard's by the setting")
+local function anchor()
+    G.GameTooltip_SetDefaultAnchor(GameTooltip, UIParent)
+    local _, rel = GameTooltip:GetPoint(1)
+    expect(rel).toBe(M.anchorFrame)
+    local bags = CreateFrame("Frame", "SuuUIBags", UIParent)
+    bags:SetSize(100, 100)
+    bags:SetPoint("CENTER")
+    bags:Show()
+    G.GameTooltip_SetDefaultAnchor(GameTooltip, UIParent)
+    local _, rel2 = GameTooltip:GetPoint(1)
+    expect(rel2).toBe(bags)
+    bags:Hide()
+    mock.setField(G, "SuuUIBags", nil)
+    M:Set("anchor", "blizzard")
+    G.GameTooltip_SetDefaultAnchor(GameTooltip, UIParent)
+    local _, rel3 = GameTooltip:GetPoint(1)
+    expect(rel3 ~= M.anchorFrame).toBe(true)
+end
+
+@test("an addon's own tooltip skinned the first time it shows the game's data; an embedded one keeps its host's")
+local function skinAny()
+    local tip = CreateFrame("GameTooltip", "SuuUITestTooltip", UIParent, "GameTooltipTemplate")
+    tip:SetOwner(UIParent, "ANCHOR_NONE")
+    tip:SetSpellByID(1243)
+    expect(UI.IsTooltipSkinned(tip)).toBe(true)
+    expect(tip:GetScale()).toBeCloseTo(SuuUI.Root:GetEffectiveScale() / UIParent:GetEffectiveScale())
+    local embedded = CreateFrame("GameTooltip", "SuuUITestEmbeddedTooltip", UIParent, "GameTooltipTemplate")
+    M:SkinAny(embedded)
+    expect(UI.IsTooltipSkinned(embedded)).toBe(false)
+    tip:Hide()
+end
+
+@test("the game's unit menus in SuuUI's look; off by the setting")
+local function unitMenus()
+    local reskinned = 0
+    mock.stub(UI, "ReskinMenu", function(_: any) reskinned = reskinned + 1 end)
+    G.UnitPopupManager:OpenMenu("SELF", { unit = "player" })
+    mock.advanceFrames(2)
+    local times = reskinned
+    expect(times > 0).toBe(true)
+    G.Menu.GetManager():CloseMenus()
+    M:Set("unitMenus", false)
+    G.UnitPopupManager:OpenMenu("SELF", { unit = "player" })
+    expect(reskinned).toBe(times)
+    G.Menu.GetManager():CloseMenus()
+end
+
+@test("the aura buttons' own tooltip styled through the engine; a refusal said")
+local function auraTooltip()
+    local said: string[] = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    local inbound = G.AuraContainerInbound
+    if inbound then
+        mock.stub(inbound, "SetTooltipBackdrop", function(_: any) error("not now") end)
+        M:StyleAuraTooltip()
+        expect(said[1]:sub(1, 34)).toBe("couldn't style the aura tooltips: ")
+    end
+end
