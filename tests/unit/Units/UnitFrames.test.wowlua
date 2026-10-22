@@ -119,26 +119,35 @@ local function options()
     expect(M.frames.player.opts.power).toBe(true)
 end
 
-@test("out of combat the frames rest dimmed (your health is secret: hurt or not); in combat or hovered, full")
+@test("out of combat at full health the frames rest dimmed (the game picks it from your secret health); hurt, in combat or hovered: full")
 local function fade()
-    local player = M.frames.player
+    local player, target = M.frames.player, M.frames.target
+    -- (alphas are stored at 8 bits: the resting one as a plain frame reads it back)
+    local probe = CreateFrame("Frame")
+    probe:SetAlpha(T.opacity["opacity-ooc"])
+    local rest = mock.secret(probe:GetAlpha())
     M:UpdateFade()
-    mock.advanceFrames(120)
-    expect(player:GetAlpha()).toBeCloseTo(T.opacity["opacity-ooc"])
+    expect(player:GetAlpha() :: any).toBe(rest)
+    expect(target:GetAlpha() :: any).toBe(rest)
+    -- hurt: shown in full, at once
+    mock.player:damage(50)
+    mock.advanceFrames(2)
+    expect(player:GetAlpha() :: any).toBe(mock.secret(1))
+    mock.player:heal(50)
+    mock.advanceFrames(2)
+    expect(player:GetAlpha() :: any).toBe(rest)
+    -- hovered: full at once (a secret alpha can't be faded from), then resting again
     mock.hover(player)
-    mock.advanceFrames(120)
     expect(player:GetAlpha()).toBe(1)
     mock.hover(nil)
-    mock.advanceFrames(120)
+    expect(player:GetAlpha() :: any).toBe(rest)
+    -- in combat: full
     mock.player:enterCombat()
-    mock.advanceFrames(120)
+    mock.advanceFrames(2)
     expect(player:GetAlpha()).toBe(1)
     mock.player:leaveCombat()
-    -- hurt: the game hides your health from addons, so it rests all the same
-    mock.player:damage(50)
-    mock.advanceFrames(120)
-    expect(player:GetAlpha()).toBeCloseTo(T.opacity["opacity-ooc"])
-    mock.player:heal(50)
+    mock.advanceFrames(2)
+    -- the setting off: full, faded to
     M:Set("fadeOutOfCombat", false)
     mock.advanceFrames(120)
     expect(player:GetAlpha()).toBe(1)

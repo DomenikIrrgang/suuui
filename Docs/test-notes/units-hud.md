@@ -37,14 +37,13 @@ without the timeline; DamageMeter on a client without `C_DamageMeter`.
   to a row went on under the timeline at 1920 wide. It measures from the
   timeline's right edge now.
 
-Not fixed, noted:
-
-- **The frames dim out of combat even when you're hurt.** Your own
-  health is secret to addons on Forever (`UnitHealth`,
-  `UnitHealthPercent`), so "at full health" can't be told; the fallback
-  rests on combat alone, as its comment says. A curve-driven alpha
-  (`UnitHealthPercent` with a step curve into `SetAlpha`) could do it,
-  but not with the animated fade. A design question.
+- **Fixed: the frames dimmed out of combat even when you were hurt**
+  (confirmed in game: hurt or not). Your own health is secret to addons
+  on Forever, so "at full health" couldn't be told and the fallback
+  rested on combat alone. The game now picks the alpha itself from your
+  health through a step curve (`UnitHealthPercent` into `SetAlpha`):
+  full health rests, anything less shows in full. That alpha is secret,
+  so the change is immediate instead of a fade (chosen by the user).
 
 ## VM / wowlua findings (new)
 

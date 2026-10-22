@@ -124,7 +124,6 @@ status; CLAUDE.md describes the tests. Nothing is merged to `main`.
   fix (ui-windows).
 - The `plain(v)` nil-vs-secret order question (needs a probe in game).
 - Design questions from the tests: `autoQuestWatch` and "Track accepted
-  quests" (units-notices); the unit frames' out-of-combat fade can't tell
-  "hurt" since your health is secret (units-hud).
+  quests" (units-notices).
 - wowlua issues to report: `Docs/wowlua-0.9.1-report.md` (the port) and
   `Docs/wowlua-test-findings.md` (the tests; every area, with status).

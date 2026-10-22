@@ -200,24 +200,50 @@ end
 -- Combat-reactive fade and the aggro state
 --------------------------------------------------------------------------------
 
-local function playerFull()
-    local pct = UnitHealthPercent and CurveConstants and UnitHealthPercent("player", true, CurveConstants.ScaleTo100)
-    if isSecret(pct) then return true end -- can't tell: rest on combat state alone
-    return (pct or 100) >= 100
+-- Out of combat the frames rest at opacity-ooc, but only at full health.
+-- Your health is secret to addons (always, on Forever: found in game, the
+-- frames dimmed hurt or not), so the game itself picks the alpha from it
+-- through a step curve: full health rests, anything less shows in full.
+-- That alpha is secret too, so it is set at once, not faded.
+local restCurve, restAt
+local function restingAlpha(): any
+    local ooc = T.opacity["opacity-ooc"]
+    if not (C_CurveUtil and Enum.LuaCurveType and UnitHealthPercent) then return ooc end
+    if restAt ~= ooc then
+        local c = C_CurveUtil.CreateCurve()
+        c:SetType(Enum.LuaCurveType.Step)
+        c:AddPoint(0, 1)
+        c:AddPoint(1, ooc)
+        restCurve, restAt = c, ooc
+    end
+    return UnitHealthPercent("player", true, restCurve)
 end
 
--- Out of combat at full health, the frames rest at opacity-ooc. Boss frames
--- exist only in encounters and never fade.
+-- Out of combat and not hovered, the frames rest (at full health only).
+-- Boss frames exist only in encounters and never fade.
 function M:UpdateFade()
     local hovered = false
     for _, d in ipairs(FRAMES) do
         local f = self.frames[d.key]
         if f:IsVisible() and f:IsMouseOver() then hovered = true end
     end
-    local resting = self:Get("fadeOutOfCombat") and not UI.Flag(UnitAffectingCombat("player")) and playerFull() and not hovered
-    local alpha = resting and T.opacity["opacity-ooc"] or 1
+    local resting = self:Get("fadeOutOfCombat") and not UI.Flag(UnitAffectingCombat("player")) and not hovered
+    local alpha = resting and restingAlpha() or 1
     for _, d in ipairs(FRAMES) do
-        Motion.AlphaTo(self.frames[d.key], alpha, T.duration["dur-slow"])
+        local f = self.frames[d.key]
+        if isSecret(alpha) then
+            -- (a running fade would set its own alpha over it)
+            Motion.Stop(f)
+            f:SetAlpha(alpha)
+            f.suuSecretAlpha = true
+        elseif f.suuSecretAlpha then
+            -- a secret alpha can't be faded from: at once
+            f.suuSecretAlpha = nil
+            Motion.Stop(f)
+            f:SetAlpha(alpha)
+        else
+            Motion.AlphaTo(f, alpha, T.duration["dur-slow"])
+        end
     end
 end
 
