@@ -26,6 +26,13 @@
 -- register those in OnEnable. Turning a module on or off waits for the end
 -- of combat. A module whose callback errors is marked errored and turned off;
 -- SuuUI and the other modules keep running.
+--
+-- The registry is a ModuleRegistry: the settings it keeps "enabled" in,
+-- what runs work out of combat and whether combat is on, what reports a
+-- module's error, what hears a module's state change, and what takes away
+-- everything a module registered all come in through its constructor, so
+-- a test drives modules of its own. `registry` is SuuUI's; the module's
+-- functions are its methods.
 
 import onLogin from "wowlua:lifecycle"
 import print, name as ADDON, registerCommand, unregisterCommands from "./Init"
@@ -42,6 +49,27 @@ import * as editMode from "/EditMode/EditMode"
 
 export const API_VERSION = "0.18.0"
 
+-- Where a module is in its life.
+export enum ModuleState {
+    Registered = "registered",       -- waiting for login
+    Enabled = "enabled",
+    Disabled = "disabled",
+    Errored = "errored",             -- a callback failed; turned off
+    Incompatible = "incompatible",   -- needs a newer SuuUI API
+}
+
+-- The settings a module's "enabled" lives in (SuuUI's SettingsStore).
+export interface ModuleSettings
+    function register(namespace: string, defs: { [string]: any })
+    function get(namespace: string, key: string): any
+    function watch(namespace: string, key: string, @deferred fn: (value: any, namespace: string, key: string) -> (), owner: any)
+end
+
+-- What runs work now or after combat, keyed (SuuUI's CombatQueue).
+export interface Runner
+    function run(key: any, fn: () -> (), source: string?)
+end
+
 local RESERVED: { [string]: boolean } = { core = true, ui = true, layout = true }
 
 --- A SuuUI module as plugins see it: SuuUI's own fields (read only), the
@@ -53,7 +81,7 @@ export type Module = {
     api: string?,
     source: string,
     builtIn: boolean,
-    state: string,
+    state: ModuleState,
     error: string?,
     pendingReload: boolean?,
     enabledAtLoad: boolean?,
@@ -67,10 +95,6 @@ export type Module = {
     OnDisable: ((self: Module) -> ())?,
     [string]: any,
 }
-
-local list: Module[] = {}
-local byId: { [string]: Module } = {}
-local started = false
 
 --------------------------------------------------------------------------------
 -- API versions
@@ -225,7 +249,8 @@ end
 -- Lifecycle
 --------------------------------------------------------------------------------
 
-local function cleanup(m: Module)
+-- Everything a module registered through its own methods, taken away.
+local function releaseAll(m: any)
     events.offAll(m)
     settings.unwatch(m)
     unregisterCommands(m)
@@ -234,105 +259,6 @@ local function cleanup(m: Module)
     extend.unregister(m)
     services.unregister(m)
 end
-
-local function fail(m: Module, phase: string)
-    own(m, "state", "errored")
-    own(m, "error", phase .. " failed")
-    -- Undo what a failed OnEnable got as far as building (frames shown,
-    -- anchors published). fault.call reports an error here and carries on.
-    local onDisable = m.OnDisable
-    if phase == "OnEnable" and onDisable then fault.call(m.name, onDisable, m) end
-    cleanup(m)
-    events.emit("SUUUI_MODULE_ERRORED", m.id)
-end
-
-local function enable(m: Module)
-    if m.state == "enabled" or m.state == "incompatible" then return end
-    if not m.initialized then
-        local onInit = m.OnInitialize
-        if onInit and not fault.call(m.name, onInit, m) then return fail(m, "OnInitialize") end
-        own(m, "initialized", true)
-    end
-    local onEnable = m.OnEnable
-    if onEnable and not fault.call(m.name, onEnable, m) then return fail(m, "OnEnable") end
-    own(m, "state", "enabled")
-    own(m, "error", nil)
-    events.emit("SUUUI_MODULE_ENABLED", m.id)
-end
-
-local function disable(m: Module)
-    if m.state ~= "enabled" then
-        if m.state ~= "incompatible" then own(m, "state", "disabled") end
-        return
-    end
-    local onDisable = m.OnDisable
-    if onDisable then fault.call(m.name, onDisable, m) end
-    cleanup(m)
-    own(m, "state", "disabled")
-    events.emit("SUUUI_MODULE_DISABLED", m.id)
-end
-
--- Brings the module in line with its "enabled" setting.
-local function apply(m: Module)
-    if m.state == "incompatible" or m.replacedBy then return end
-    local want = settings.get(m.id, "enabled")
-    if m.reloadToToggle then
-        -- an errored module that is still on retries at the next load
-        own(m, "pendingReload", (want ~= m.enabledAtLoad or (want and m.state == "errored")) or nil)
-        return
-    end
-    combat.run("module:" .. m.id, function()
-        if settings.get(m.id, "enabled") then enable(m) else disable(m) end
-    end, m.name)
-end
-
--- The module standing in for `m` this session (0.17: `replaces`): one that
--- is on and can load. Decided at login, so a change takes a reload.
-local function replacer(m: Module): Module?
-    for _, o in ipairs(list) do
-        if o.replaces == m.id and o ~= m and o.state ~= "incompatible" and settings.get(o.id, "enabled") then return o end
-    end
-    return nil
-end
-
-local function start(m: Module)
-    local by = replacer(m)
-    if by then
-        own(m, "replacedBy", by.name)
-        own(m, "enabledAtLoad", false)
-        own(m, "state", "disabled")
-        settings.watch(m.id, "enabled", function() end, "Modules")
-        return
-    end
-    own(m, "enabledAtLoad", settings.get(m.id, "enabled"))
-    settings.watch(m.id, "enabled", function() apply(m) end, "Modules")
-    if m.state == "incompatible" then return end
-    if m.enabledAtLoad then
-        -- after a reload in combat a module waits for the fight's end, unless
-        -- it makes no secure frames (found in game: buffs and the Cooldown
-        -- Manager were missing until the fight ended)
-        if m.combatSafe and InCombatLockdown() then
-            fault.call(m.name, function() enable(m) end)
-        else
-            combat.run("module:" .. m.id, function() enable(m) end, m.name)
-        end
-    else
-        own(m, "state", "disabled")
-    end
-end
-
-@onLogin
-local function startAll()
-    -- the chosen theme first: plugins' themes are registered by now, and no
-    -- module has built a frame yet
-    fault.call("Themes", themes.apply)
-    started = true
-    for _, m in ipairs(list) do start(m) end
-end
-
---------------------------------------------------------------------------------
--- Registration
---------------------------------------------------------------------------------
 
 -- The addon whose file called RegisterModule, from the call stack: the first
 -- frame of another addon, else SuuUI itself. SuuUI's own frames are skipped
@@ -348,85 +274,215 @@ local function sourceAddon(): string
     return mine and ADDON or "?"
 end
 
-export function register(def: { [string]: any }): Module
-    assert(type(def) == "table", "SuuUI.RegisterModule takes a table")
-    local id = def.id
-    assert(type(id) == "string" and id:find("^%l[%l%d_]*$"),
-        "SuuUI.RegisterModule: id must be lower case letters, digits and _, starting with a letter")
-    assert(not byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
-    local defaults: { [string]: any } = util.copy(def.defaults or {})
-    assert(defaults.enabled == nil, "SuuUI.RegisterModule: \"enabled\" is SuuUI's own setting; use enabledByDefault")
-    assert(def.replaces == nil or (type(def.replaces) == "string" and def.replaces ~= id),
-        "SuuUI.RegisterModule: replaces names another module's id")
-    defaults.enabled = def.enabledByDefault ~= false
+export class ModuleRegistry
+    private modules: Module[] = {}
+    private byId: { [string]: Module } = {}
+    private started: boolean = false
 
-    local m: Module = setmetatable({
-        OnInitialize = def.OnInitialize,
-        OnEnable = def.OnEnable,
-        OnDisable = def.OnDisable,
-    }, ModuleMeta) :: any
-    local source = def.addon or sourceAddon()
-    fields[m] = {
-        id = id,
-        name = def.name or id,
-        description = def.description,
-        api = def.api,
-        reloadToToggle = def.reloadToToggle and true or false,
-        combatSafe = def.combatSafe and true or false,
-        source = source,
-        builtIn = source == ADDON,
-        state = "registered",
-        replaces = def.replaces,
-    }
-
-    settings.register(id, defaults)
-    if def.api and not apiAtLeast(def.api) then
-        own(m, "state", "incompatible")
-        own(m, "error", ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(def.api), API_VERSION))
-        print(("%s (%s) can't load: it %s."):format(m.name, m.source, tostring(m.error)))
+    constructor(
+        private store: ModuleSettings = settings.store,
+        private runner: Runner = combat.queue,
+        private lockdown: combat.CombatState = combat.GameCombat.new(),
+        private reporter: fault.Reporter = fault.log,
+        private notifier: events.Notifier = events.bus,
+        private release: (owner: any) -> () = releaseAll
+    )
     end
 
-    list[#list + 1] = m
-    byId[id] = m
-    events.emit("SUUUI_MODULE_REGISTERED", id)
-    if started then start(m) end
-    return m
-end
-
-export function get(id: string): Module?
-    return byId[id]
-end
-
-export function all(): Module[]
-    return list
-end
-
--- The module `text` names: its id or name, in any letter case.
-export function find(text: string?): Module?
-    local wanted = strtrim(text or ""):lower()
-    for _, m in ipairs(list) do
-        if m.id == wanted or m.name:lower() == wanted then return m end
+    private function fail(m: Module, phase: string)
+        own(m, "state", ModuleState.Errored)
+        own(m, "error", phase .. " failed")
+        -- Undo what a failed OnEnable got as far as building (frames shown,
+        -- anchors published). The reporter reports an error here and
+        -- carries on.
+        local onDisable = m.OnDisable
+        if phase == "OnEnable" and onDisable then self.reporter:call(m.name, onDisable, m) end
+        self.release(m)
+        self.notifier:emit("SUUUI_MODULE_ERRORED", m.id)
     end
-    return nil
+
+    private function enable(m: Module)
+        if m.state == ModuleState.Enabled or m.state == ModuleState.Incompatible then return end
+        if not m.initialized then
+            local onInit = m.OnInitialize
+            if onInit and not self.reporter:call(m.name, onInit, m) then return self:fail(m, "OnInitialize") end
+            own(m, "initialized", true)
+        end
+        local onEnable = m.OnEnable
+        if onEnable and not self.reporter:call(m.name, onEnable, m) then return self:fail(m, "OnEnable") end
+        own(m, "state", ModuleState.Enabled)
+        own(m, "error", nil)
+        self.notifier:emit("SUUUI_MODULE_ENABLED", m.id)
+    end
+
+    private function disable(m: Module)
+        if m.state ~= ModuleState.Enabled then
+            if m.state ~= ModuleState.Incompatible then own(m, "state", ModuleState.Disabled) end
+            return
+        end
+        local onDisable = m.OnDisable
+        if onDisable then self.reporter:call(m.name, onDisable, m) end
+        self.release(m)
+        own(m, "state", ModuleState.Disabled)
+        self.notifier:emit("SUUUI_MODULE_DISABLED", m.id)
+    end
+
+    -- Brings the module in line with its "enabled" setting.
+    function sync(m: Module)
+        if m.state == ModuleState.Incompatible or m.replacedBy then return end
+        local want = self.store:get(m.id, "enabled")
+        if m.reloadToToggle then
+            -- an errored module that is still on retries at the next load
+            own(m, "pendingReload", (want ~= m.enabledAtLoad or (want and m.state == ModuleState.Errored)) or nil)
+            return
+        end
+        self.runner:run("module:" .. m.id, function()
+            if self.store:get(m.id, "enabled") then self:enable(m) else self:disable(m) end
+        end, m.name)
+    end
+
+    -- The module standing in for `m` this session (0.17: `replaces`): one
+    -- that is on and can load. Decided at login, so a change takes a reload.
+    private function replacer(m: Module): Module?
+        for _, o in ipairs(self.modules) do
+            if o.replaces == m.id and o ~= m and o.state ~= ModuleState.Incompatible and self.store:get(o.id, "enabled") then return o end
+        end
+        return nil
+    end
+
+    private function start(m: Module)
+        local by = self:replacer(m)
+        if by then
+            own(m, "replacedBy", by.name)
+            own(m, "enabledAtLoad", false)
+            own(m, "state", ModuleState.Disabled)
+            self.store:watch(m.id, "enabled", function() end, "Modules")
+            return
+        end
+        own(m, "enabledAtLoad", self.store:get(m.id, "enabled"))
+        self.store:watch(m.id, "enabled", function() self:sync(m) end, "Modules")
+        if m.state == ModuleState.Incompatible then return end
+        if m.enabledAtLoad then
+            -- after a reload in combat a module waits for the fight's end,
+            -- unless it makes no secure frames (found in game: buffs and the
+            -- Cooldown Manager were missing until the fight ended)
+            if m.combatSafe and self.lockdown:inCombat() then
+                self.reporter:call(m.name, function() self:enable(m) end)
+            else
+                self.runner:run("module:" .. m.id, function() self:enable(m) end, m.name)
+            end
+        else
+            own(m, "state", ModuleState.Disabled)
+        end
+    end
+
+    -- Login: every module registered so far starts, and each one registered
+    -- later starts as it comes.
+    function startAll()
+        self.started = true
+        for _, m in ipairs(self.modules) do self:start(m) end
+    end
+
+    ----------------------------------------------------------------------------
+    -- Registration
+    ----------------------------------------------------------------------------
+
+    function register(def: { [string]: any }): Module
+        assert(type(def) == "table", "SuuUI.RegisterModule takes a table")
+        local id = def.id
+        assert(type(id) == "string" and id:find("^%l[%l%d_]*$"),
+            "SuuUI.RegisterModule: id must be lower case letters, digits and _, starting with a letter")
+        assert(not self.byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
+        local defaults: { [string]: any } = util.copy(def.defaults or {})
+        assert(defaults.enabled == nil, "SuuUI.RegisterModule: \"enabled\" is SuuUI's own setting; use enabledByDefault")
+        assert(def.replaces == nil or (type(def.replaces) == "string" and def.replaces ~= id),
+            "SuuUI.RegisterModule: replaces names another module's id")
+        defaults.enabled = def.enabledByDefault ~= false
+
+        local m: Module = setmetatable({
+            OnInitialize = def.OnInitialize,
+            OnEnable = def.OnEnable,
+            OnDisable = def.OnDisable,
+        }, ModuleMeta) :: any
+        local source = def.addon or sourceAddon()
+        fields[m] = {
+            id = id,
+            name = def.name or id,
+            description = def.description,
+            api = def.api,
+            reloadToToggle = def.reloadToToggle and true or false,
+            combatSafe = def.combatSafe and true or false,
+            source = source,
+            builtIn = source == ADDON,
+            state = ModuleState.Registered,
+            replaces = def.replaces,
+        }
+
+        self.store:register(id, defaults)
+        if def.api and not apiAtLeast(def.api) then
+            own(m, "state", ModuleState.Incompatible)
+            own(m, "error", ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(def.api), API_VERSION))
+            print(("%s (%s) can't load: it %s."):format(m.name, m.source, tostring(m.error)))
+        end
+
+        self.modules[#self.modules + 1] = m
+        self.byId[id] = m
+        self.notifier:emit("SUUUI_MODULE_REGISTERED", id)
+        if self.started then self:start(m) end
+        return m
+    end
+
+    function get(id: string): Module?
+        return self.byId[id]
+    end
+
+    function all(): Module[]
+        return self.modules
+    end
+
+    -- The module `text` names: its id or name, in any letter case.
+    function find(text: string?): Module?
+        local wanted = strtrim(text or ""):lower()
+        for _, m in ipairs(self.modules) do
+            if m.id == wanted or m.name:lower() == wanted then return m end
+        end
+        return nil
+    end
+end
+
+-- SuuUI's registry, and its methods as the module's functions.
+export const registry = ModuleRegistry.new()
+
+export function register(def: { [string]: any }): Module return registry:register(def) end
+export function get(id: string): Module? return registry:get(id) end
+export function all(): Module[] return registry:all() end
+export function find(text: string?): Module? return registry:find(text) end
+
+@onLogin
+local function startAll()
+    -- the chosen theme first: plugins' themes are registered by now, and no
+    -- module has built a frame yet
+    fault.call("Themes", themes.apply)
+    registry:startAll()
 end
 
 --------------------------------------------------------------------------------
 -- Chat commands
 --------------------------------------------------------------------------------
 
-local STATE_TEXT: { [string]: string } = {
-    enabled = "|cff3fd0ffon|r",
-    disabled = "|cffa39b8boff|r",
-    errored = "|cffff9a80errored|r",
-    incompatible = "|cffff9a80incompatible|r",
-    registered = "|cffa39b8bwaiting for login|r",
+local STATE_TEXT: { [ModuleState]: string } = {
+    [ModuleState.Enabled] = "|cff3fd0ffon|r",
+    [ModuleState.Disabled] = "|cffa39b8boff|r",
+    [ModuleState.Errored] = "|cffff9a80errored|r",
+    [ModuleState.Incompatible] = "|cffff9a80incompatible|r",
+    [ModuleState.Registered] = "|cffa39b8bwaiting for login|r",
 }
 
 local function describe(m: Module): string
     local state = STATE_TEXT[m.state] or m.state
     if m.replacedBy then state = "|cffa39b8breplaced by " .. m.replacedBy .. "|r" end
     if m.pendingReload then
-        local retry = m.state == "errored" and settings.get(m.id, "enabled")
+        local retry = m.state == ModuleState.Errored and settings.get(m.id, "enabled")
         local afterReload = (retry and "retries") or (m.enabledAtLoad and "off") or "on"
         state = state .. (" |cffffb23f(%s after /reload)|r"):format(afterReload)
     end
@@ -436,15 +492,16 @@ local function describe(m: Module): string
 end
 
 registerCommand("modules", "List every module, built in and from plugins, with its state.", function()
+    local list = registry:all()
     print(("%d modules, API %s:"):format(#list, API_VERSION))
     for _, m in ipairs(list) do _G.print(describe(m)) end
 end)
 
 local function toggle(arg: string, on: boolean)
-    local m = find(arg)
+    local m = registry:find(arg)
     if not m then return print(("No module called \"%s\". /suu modules lists them."):format(arg)) end
-    if m.state == "incompatible" then return print(m.name .. " " .. tostring(m.error) .. ".") end
-    if on and m.state == "errored" then
+    if m.state == ModuleState.Incompatible then return print(m.name .. " " .. tostring(m.error) .. ".") end
+    if on and m.state == ModuleState.Errored then
         -- Turning an errored module on again is a retry; one that replaces
         -- protected frames can only retry from a fresh load.
         if m.reloadToToggle then
@@ -453,8 +510,8 @@ local function toggle(arg: string, on: boolean)
             print(("%s tries again after a /reload."):format(m.name))
             return _G.print(describe(m))
         end
-        own(m, "state", "disabled")
-        if settings.get(m.id, "enabled") then apply(m) end
+        own(m, "state", ModuleState.Disabled)
+        if settings.get(m.id, "enabled") then registry:sync(m) end
     end
     settings.set(m.id, "enabled", on)
     if m.reloadToToggle and m.pendingReload then

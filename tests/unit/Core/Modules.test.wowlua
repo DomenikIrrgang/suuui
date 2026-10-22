@@ -9,6 +9,8 @@
 import test, cases, expect, config, afterEach, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as modules from "/Core/Modules"
+import ModuleState as State from "/Core/Modules"
+import FakeReporter, FakeNotifier, FakeCombat from "../../fakes"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as fault from "/Core/Fault"
@@ -146,25 +148,25 @@ end
 
 @test("at login in combat: combatSafe modules start at once, the others when it ends")
 local function loginInCombat()
-    expect(seen.beforeSafe.state).toBe("registered")
-    expect(seen.beforeFuture.state).toBe("incompatible")
+    expect(seen.beforeSafe.state).toBe(State.Registered)
+    expect(seen.beforeFuture.state).toBe(State.Incompatible)
     expect(seen.beforeFuture.error).toBe("needs SuuUI API 1.0; this SuuUI has " .. modules.API_VERSION)
     local fight, after = seen.inCombat, seen.after
-    expect(fight.safe.state).toBe("enabled")
+    expect(fight.safe.state).toBe(State.Enabled)
     expect(fight.safeCalls).toEqual({ init = 1, enable = 1, disable = 0 })
-    expect(fight.normal.state).toBe("registered")
+    expect(fight.normal.state).toBe(State.Registered)
     expect(fight.normalCalls.enable).toBe(0)
-    expect(fight.off.state).toBe("disabled")
-    expect(fight.old.state).toBe("disabled")
+    expect(fight.off.state).toBe(State.Disabled)
+    expect(fight.old.state).toBe(State.Disabled)
     expect(fight.old.replacedBy).toBe("ZZ New")
     expect(fight.old.enabledAtLoad).toBe(false)
-    expect(after.normal.state).toBe("enabled")
+    expect(after.normal.state).toBe(State.Enabled)
     expect(after.normal.enabledAtLoad).toBe(true)
     expect(after.normalCalls).toEqual({ init = 1, enable = 1, disable = 0 })
-    expect(after.newer.state).toBe("enabled")
+    expect(after.newer.state).toBe(State.Enabled)
     expect(after.offCalls.init).toBe(0)
     expect(after.oldCalls.init).toBe(0)
-    expect(after.future.state).toBe("incompatible")
+    expect(after.future.state).toBe(State.Incompatible)
 end
 
 --------------------------------------------------------------------------------
@@ -219,7 +221,7 @@ local function registers()
     expect(m.api).toBe("0.1")
     expect(m.source).toBe("Plugin")
     expect(m.builtIn).toBe(false)
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     expect(m.error).toBeNil()
     expect(m.initialized).toBe(true)
     expect(m.enabledAtLoad).toBe(true)
@@ -486,14 +488,14 @@ local function toggles()
     local msg = mock.spy(function(_: string, ...: any) end)
     local m, calls = tracked({ id = nextId(), OnEnable = function(self: Module) self:On("SUUUI_ZZM_LIFE", msg) end })
     m:Set("enabled", false)
-    expect(m.state).toBe("disabled")
+    expect(m.state).toBe(State.Disabled)
     expect(m:IsEnabled()).toBe(false)
     expect(calls).toEqual({ init = 1, enable = 1, disable = 1 })
     expect(disabled).toHaveBeenCalledWith("SUUUI_MODULE_DISABLED", m.id)
     events.emit("SUUUI_ZZM_LIFE")
     expect(msg).never.toHaveBeenCalled()
     m:Set("enabled", true)
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     expect(calls).toEqual({ init = 1, enable = 2, disable = 1 })
     expect(enabled).toHaveBeenCalledWith("SUUUI_MODULE_ENABLED", m.id)
     events.emit("SUUUI_ZZM_LIFE")
@@ -505,15 +507,15 @@ local function toggleInCombat()
     local m, calls = tracked({ id = nextId() })
     mock.player:enterCombat()
     m:Set("enabled", false)
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     mock.player:leaveCombat()
-    expect(m.state).toBe("disabled")
+    expect(m.state).toBe(State.Disabled)
     mock.player:enterCombat()
     m:Set("enabled", true)
     m:Set("enabled", false)
     m:Set("enabled", true)
     mock.player:leaveCombat()
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     -- off and on again inside one fight: nothing to do at its end
     mock.player:enterCombat()
     m:Set("enabled", false)
@@ -527,11 +529,11 @@ local function registeredInCombat()
     mock.player:enterCombat()
     local s = modules.register({ id = nextId(), combatSafe = true })
     local n = modules.register({ id = nextId() })
-    expect(s.state).toBe("enabled")
+    expect(s.state).toBe(State.Enabled)
     expect(s.combatSafe).toBe(true)
-    expect(n.state).toBe("registered")
+    expect(n.state).toBe(State.Registered)
     mock.player:leaveCombat()
-    expect(n.state).toBe("enabled")
+    expect(n.state).toBe(State.Enabled)
 end
 
 @test("OnInitialize fails: errored, nothing else runs; turning it on again retries")
@@ -540,7 +542,7 @@ local function initFails()
     local fixed = false
     local m, calls = tracked({ id = nextId(), name = "ZZ Init Fails",
         OnInitialize = function() if not fixed then error("modules-err-init") end end })
-    expect(m.state).toBe("errored")
+    expect(m.state).toBe(State.Errored)
     expect(m.error).toBe("OnInitialize failed")
     expect(m.initialized).toBeNil()
     expect(calls).toEqual({ init = 1, enable = 0, disable = 0 })
@@ -549,7 +551,7 @@ local function initFails()
     expect(line(m)).toBe(("  %s  ZZ Init Fails  |cffff9a80errored|r  - %s  (OnInitialize failed)"):format(m.id, shown(m)))
     fixed = true
     mock.slash("/suu enable " .. m.id)
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     expect(m.error).toBeNil()
     expect(calls).toEqual({ init = 2, enable = 1, disable = 0 })
 end
@@ -561,7 +563,7 @@ local function enableFails()
         self:On("SUUUI_ZZM_HALF", msg)
         error("modules-err-enable")
     end })
-    expect(m.state).toBe("errored")
+    expect(m.state).toBe(State.Errored)
     expect(m.error).toBe("OnEnable failed")
     expect(m.initialized).toBe(true)
     expect(calls).toEqual({ init = 1, enable = 1, disable = 1 })
@@ -569,7 +571,7 @@ local function enableFails()
     expect(msg).never.toHaveBeenCalled()
     -- turned off while errored: just off, no OnDisable
     m:Set("enabled", false)
-    expect(m.state).toBe("disabled")
+    expect(m.state).toBe(State.Disabled)
     expect(calls.disable).toBe(1)
 end
 
@@ -577,21 +579,21 @@ end
 local function erroredSetting()
     local fail = true
     local m = modules.register({ id = nextId(), OnEnable = function() if fail then error("modules-err-again") end end })
-    expect(m.state).toBe("errored")
+    expect(m.state).toBe(State.Errored)
     fail = false
     -- still on: the setting doesn't change, so /suu enable is the retry
     m:Set("enabled", false)
     m:Set("enabled", true)
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
 end
 
 @test("reloadToToggle: the change waits for a reload")
 local function reloadToToggle()
     local m, calls = tracked({ id = nextId(), name = "ZZ Reload", reloadToToggle = true })
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     expect(m.reloadToToggle).toBe(true)
     m:Set("enabled", false)
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     expect(m.pendingReload).toBe(true)
     expect(calls.disable).toBe(0)
     expect(line(m)).toBe(("  %s  ZZ Reload  |cff3fd0ffon|r |cffffb23f(off after /reload)|r  - %s"):format(m.id, shown(m)))
@@ -604,7 +606,7 @@ local function reloadToToggle()
     expect(printedBy(function() mock.slash("/suu enable " .. m.id) end))
         .toEqual({ ("  %s  ZZ Reload  |cff3fd0ffon|r  - %s"):format(m.id, shown(m)) })
     local offAtLoad = modules.register({ id = nextId(), name = "ZZ Reload Off", reloadToToggle = true, enabledByDefault = false })
-    expect(offAtLoad.state).toBe("disabled")
+    expect(offAtLoad.state).toBe(State.Disabled)
     offAtLoad:Set("enabled", true)
     expect(offAtLoad.pendingReload).toBe(true)
     expect(line(offAtLoad)).toBe(("  %s  ZZ Reload Off  |cffa39b8boff|r |cffffb23f(on after /reload)|r  - %s")
@@ -615,7 +617,7 @@ end
 local function reloadErrored()
     local m = modules.register({ id = nextId(), name = "ZZ Reload Err", reloadToToggle = true,
         OnEnable = function() error("modules-err-reload") end })
-    expect(m.state).toBe("errored")
+    expect(m.state).toBe(State.Errored)
     local out = printedBy(function() mock.slash("/suu enable " .. m.id) end)
     expect(out[1]).toBe(P .. "ZZ Reload Err tries again after a /reload.")
     expect(out[2]).toBe(("  %s  ZZ Reload Err  |cffff9a80errored|r |cffffb23f(retries after /reload)|r  - %s  (OnEnable failed)")
@@ -631,23 +633,23 @@ end
 local function replaces()
     local by = modules.register({ id = nextId(), name = "ZZ By" })
     local replaced, calls = tracked({ id = "zzmrep1", name = "ZZ Replaced" })
-    expect(replaced.state).toBe("enabled") -- registered before anything replaced it
+    expect(replaced.state).toBe(State.Enabled) -- registered before anything replaced it
     local by2 = modules.register({ id = nextId(), name = "ZZ By Two", replaces = "zzmrep2" })
     local replaced2, calls2 = tracked({ id = "zzmrep2", name = "ZZ Replaced Two" })
-    expect(replaced2.state).toBe("disabled")
+    expect(replaced2.state).toBe(State.Disabled)
     expect(replaced2.replacedBy).toBe("ZZ By Two")
     expect(calls2.init).toBe(0)
     expect(line(replaced2)).toBe(("  zzmrep2  ZZ Replaced Two  |cffa39b8breplaced by ZZ By Two|r  - %s"):format(shown(replaced2)))
     -- its setting does nothing this session
     replaced2:Set("enabled", false)
     replaced2:Set("enabled", true)
-    expect(replaced2.state).toBe("disabled")
+    expect(replaced2.state).toBe(State.Disabled)
     expect(calls2.enable).toBe(0)
     modules.register({ id = nextId(), replaces = "zzmrep3", enabledByDefault = false })
     modules.register({ id = nextId(), replaces = "zzmrep3", api = "9.0" })
-    expect(modules.register({ id = "zzmrep3" }).state).toBe("enabled")
-    expect(by.state).toBe("enabled")
-    expect(by2.state).toBe("enabled")
+    expect(modules.register({ id = "zzmrep3" }).state).toBe(State.Enabled)
+    expect(by.state).toBe(State.Enabled)
+    expect(by2.state).toBe(State.Enabled)
     expect(calls.enable).toBe(1)
 end
 
@@ -656,10 +658,10 @@ local function incompatible()
     local out = printedBy(function() modules.register({ id = "zzmlater", name = "ZZ Later", api = "2.3", addon = "Plug" }) end)
     expect(out).toEqual({ P .. "ZZ Later (Plug) can't load: it needs SuuUI API 2.3; this SuuUI has 0.18.0." })
     local m = modules.get("zzmlater") :: Module
-    expect(m.state).toBe("incompatible")
+    expect(m.state).toBe(State.Incompatible)
     m:Set("enabled", false)
     m:Set("enabled", true)
-    expect(m.state).toBe("incompatible")
+    expect(m.state).toBe(State.Incompatible)
     expect(printedBy(function() mock.slash("/suu enable zzmlater") end))
         .toEqual({ P .. "ZZ Later needs SuuUI API 2.3; this SuuUI has 0.18.0." })
     expect(line(m)).toBe("  zzmlater  ZZ Later  |cffff9a80incompatible|r  - Plug  (needs SuuUI API 2.3; this SuuUI has 0.18.0)")
@@ -686,17 +688,107 @@ local function toggleCommands()
         .toEqual({ P .. "No module called \"nothing\". /suu modules lists them." })
     local m = modules.register({ id = nextId(), name = "ZZ Toggle" })
     local out = printedBy(function() mock.slash("/suu disable zz toggle") end)
-    expect(m.state).toBe("disabled")
+    expect(m.state).toBe(State.Disabled)
     expect(out).toEqual({ ("  %s  ZZ Toggle  |cffa39b8boff|r  - %s"):format(m.id, shown(m)) })
     mock.player:enterCombat()
     out = printedBy(function() mock.slash("/suu enable " .. m.id) end)
     expect(out[1]).toBe(P .. "ZZ Toggle turns on when combat ends.")
-    expect(m.state).toBe("disabled")
+    expect(m.state).toBe(State.Disabled)
     mock.player:leaveCombat()
-    expect(m.state).toBe("enabled")
+    expect(m.state).toBe(State.Enabled)
     mock.player:enterCombat()
     out = printedBy(function() mock.slash("/suu disable " .. m.id) end)
     expect(out[1]).toBe(P .. "ZZ Toggle turns off when combat ends.")
     mock.player:leaveCombat()
-    expect(m.state).toBe("disabled")
+    expect(m.state).toBe(State.Disabled)
+end
+
+--------------------------------------------------------------------------------
+-- A registry of its own
+--------------------------------------------------------------------------------
+
+-- A registry over a store, a fight and a reporter of its own: nothing of
+-- SuuUI's (its modules, SuuUIDB, the combat lockdown) is touched.
+type Own = {
+    reg: modules.ModuleRegistry,
+    store: settings.SettingsStore,
+    fight: FakeCombat,
+    reporter: FakeReporter,
+    notifier: FakeNotifier,
+    released: any[],
+}
+
+local function own(): Own
+    local reporter, notifier, fight = FakeReporter.new(), FakeNotifier.new(), FakeCombat.new()
+    local store = settings.SettingsStore.new(reporter, notifier)
+    local queue = combat.CombatQueue.new(fight, reporter)
+    local released: any[] = {}
+    local reg = modules.ModuleRegistry.new(store, queue, fight, reporter, notifier, function(m: any)
+        released[#released + 1] = m.id
+    end)
+    return { reg = reg, store = store, fight = fight, reporter = reporter, notifier = notifier, released = released }
+end
+
+-- A module whose callbacks say what ran, in `ran`.
+local function recording(o: Own, def: { [string]: any }, ran: string[]): modules.Module
+    def.OnInitialize = def.OnInitialize or function() ran[#ran + 1] = "init" end
+    def.OnEnable = def.OnEnable or function() ran[#ran + 1] = "enable" end
+    def.OnDisable = def.OnDisable or function() ran[#ran + 1] = "disable" end
+    def.addon = "OwnPlugin"
+    return o.reg:register(def)
+end
+
+@test("a registry of its own: starts at login after the fight, follows its setting, releases what it registered")
+local function ownLifecycle()
+    local o = own()
+    local ran: string[] = {}
+    local m = recording(o, { id = "ownbars" }, ran)
+    o.store:bind({}, "Tamsin Ashford - Realm")
+    expect(m.state).toBe(State.Registered)
+    o.fight.fighting = true
+    o.reg:startAll()
+    expect(ran).toEqual({})
+    o.fight:finish()
+    expect(ran).toEqual({ "init", "enable" })
+    expect(m.state).toBe(State.Enabled)
+    o.store:set("ownbars", "enabled", false)
+    expect(m.state).toBe(State.Disabled)
+    expect(o.released).toEqual({ "ownbars" })
+    o.store:set("ownbars", "enabled", true)
+    -- initialised once
+    expect(ran).toEqual({ "init", "enable", "disable", "enable" })
+    expect(o.reg:find("OWNBARS") == m).toBe(true)
+    -- SuuUI's own registry knows nothing of it
+    expect(modules.get("ownbars")).toBeNil()
+end
+
+@test("a registry of its own: a failing OnEnable errors the module, undoes it and reports it")
+local function ownFailure()
+    local o = own()
+    local ran: string[] = {}
+    local m = recording(o, { id = "ownbroken", OnEnable = function() error("own-enable") end }, ran)
+    o.store:bind({}, "Tamsin Ashford - Realm")
+    o.reg:startAll()
+    expect(m.state).toBe(State.Errored)
+    expect(m.error).toBe("OnEnable failed")
+    expect(ran).toEqual({ "init", "disable" })
+    expect(o.released).toEqual({ "ownbroken" })
+    expect(o.reporter.errors).toEqual({ "ownbroken: own-enable" })
+end
+
+@test("a registry of its own: a combat-safe module starts in the fight; a replacement stands in")
+local function ownStart()
+    local o = own()
+    local ran: string[] = {}
+    local quick = recording(o, { id = "ownsafe", combatSafe = true }, ran)
+    local replaced = recording(o, { id = "ownold" }, {})
+    local new = recording(o, { id = "ownnew", replaces = "ownold" }, {})
+    o.store:bind({}, "Tamsin Ashford - Realm")
+    o.fight.fighting = true
+    o.reg:startAll()
+    expect(quick.state).toBe(State.Enabled)
+    expect(replaced.state).toBe(State.Disabled)
+    expect(replaced.replacedBy).toBe("ownnew")
+    o.fight:finish()
+    expect(new.state).toBe(State.Enabled)
 end
