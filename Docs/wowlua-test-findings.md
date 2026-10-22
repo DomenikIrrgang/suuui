@@ -66,7 +66,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V9](#v9) | VM | low | fixed 0.9.3 | The width of secret text reads as a plain number |
 | [V10](#v10) | VM | low | open | A frame never anchored lays its children out against the screen |
 | [V11](#v11) | VM | low | open | *Unverified:* a Blizzard menu's submenu doesn't open on hover |
-| [R14](#r14) | mock | medium | open | `mock.drag` runs no frame between `OnDragStart` and `OnDragStop` |
+| [R14](#r14) | mock | medium | fixed after 0.9.6 (T264) | `mock.drag` runs no frame between `OnDragStart` and `OnDragStop` |
 | [R15](#r15) | mock | low | fixed after 0.9.6 (T261) | No "any value" matcher for `toHaveBeenCalledWith` |
 | [R16](#r16) | mock | low | open | Long event payloads have no defaults |
 | [R17](#r17) | mock | medium | fixed 0.9.5 | `mock.defineItem(id, data)` without `opts` never loaded |
@@ -306,7 +306,7 @@ check). (core-b, ui-primitives)
 
 ### R14. `mock.drag` runs no frame between `OnDragStart` and `OnDragStop`
 
-*Status: open.*
+*Status: fixed after 0.9.6 (T264): `mock.drag(frame, dx, dy, frames)` moves in steps with a frame after each, the cursor following. Edit Mode's tests still run the scripts by hand where they check the frame mid-drag.*
 
 An `OnUpdate` set while dragging (edit mode's frames following the outline) never runs. Tests call the two scripts themselves and advance a frame between them; a drag over `n` frames would make it one call. (ui-settings)
 
