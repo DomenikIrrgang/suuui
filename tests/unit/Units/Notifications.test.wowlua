@@ -573,6 +573,99 @@ local function secureAction()
     M:SecureActions()
 end
 
+@test("an invite that asks for your role: Blizzard's role buttons on the card as SuuUI's toggles, its queue warning")
+local function roleInvite()
+    -- (the game's own event: with a role allowed, Blizzard shows its role popup)
+    mock.fireEvent("PARTY_INVITE_REQUEST", "Brannoc Ironhand", true, true, false, true, false, "Player-0000-00000000", false)
+    mock.advanceFrames(3)
+    local h = hosted("Party invite")
+    expect(h ~= nil).toBe(true)
+    expect(h.which).toBe("LFGInvitePopup")
+    local roles = h.roles()
+    expect(#roles > 0).toBe(true)
+    -- each role button over the card's role row, drawn by SuuUI
+    local b = roles[1]
+    local art = M.arts[b]
+    expect(art ~= nil).toBe(true)
+    expect(art:IsShown()).toBe(true)
+    local _, rel = b:GetPoint(1)
+    expect(rel).toBe(h.card.rolesRow)
+    -- the game's checkbox drives the toggle; hover brightens it
+    if b.checkButton then
+        b.checkButton:SetChecked(true)
+        expect(art.tick:IsShown()).toBe(true)
+        b.checkButton:SetChecked(false)
+        expect(art.tick:IsShown()).toBe(false)
+    end
+    mock.hover(b)
+    expect(art.hover).toBe(true)
+    mock.hover(nil)
+    expect(art.hover).toBe(false)
+    -- a role the game disables: dimmed
+    b:Disable()
+    expect(art:GetAlpha() < 1).toBe(true)
+    b:Enable()
+    -- the queue warning, when the game shows it
+    local warning = G.LFGInvitePopup.QueueWarningText
+    if warning then
+        warning:SetText("You will be removed from the queue.")
+        warning:Show()
+        expect(h.warning()).toBe("You will be removed from the queue.")
+    end
+    -- Decline: the popup goes, its card with it
+    G.LFGInvitePopupDeclineButton:Click()
+    mock.advanceFrames(2)
+    expect(hosted("Party invite")).toBeNil()
+end
+
+@test("the battleground ready to enter: its window on a card, its time counting down")
+local function battleground()
+    mock.stub(G, "GetMaxBattlefieldID", function(): number return 2 end)
+    mock.stub(G, "GetBattlefieldStatus", function(i: number): string return i == 2 and "confirm" or "none" end)
+    local left = 80000
+    mock.stub(G, "GetBattlefieldPortExpiration", function(_: number): number return left end)
+    local dialog = G.PVPReadyDialog
+    dialog:Show()
+    mock.advanceFrames(2)
+    local h = hosted("Battleground")
+    expect(h ~= nil).toBe(true)
+    -- milliseconds on this client: 80 s, and the first reading is the whole time
+    local total, remaining = h.time()
+    expect(total).toBe(80)
+    expect(remaining).toBe(80)
+    left = 50000
+    local total2, remaining2 = h.time()
+    expect(total2).toBe(80)
+    expect(remaining2).toBe(50)
+    -- in seconds on others
+    left = 30
+    local _, r3 = h.time()
+    expect(r3).toBe(30)
+    -- none waiting: no time
+    mock.stub(G, "GetBattlefieldStatus", function(_: number): string return "none" end)
+    expect((h.time())).toBeNil()
+    dialog:Hide()
+    mock.advanceFrames(2)
+    expect(hosted("Battleground")).toBeNil()
+end
+
+@test("a bank tab's price from the next tab's data when the popup shows none")
+local function bankTabPrice()
+    mock.stub(C_Bank, "FetchNextPurchasableBankTabData", function(_: any): any return { tabCost = 1234567 } end)
+    local d = StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = Enum.BankType and Enum.BankType.Character })
+    mock.advanceFrames(2)
+    local h = hosted("Bank")
+    expect(h ~= nil).toBe(true)
+    if d and d.MoneyFrame and d.MoneyFrame.staticMoney then
+        -- (the popup's own money frame wins when it shows one)
+        expect(h.cost).toBe(d.MoneyFrame.staticMoney)
+    else
+        expect(h.cost).toBe(1234567)
+        expect(h.data.body:find("123", 1, true) ~= nil).toBe(true)
+    end
+    if d then d:Hide() end
+end
+
 @test("the settings' preview")
 local function preview()
     local parent = CreateFrame("Frame", nil, UIParent)

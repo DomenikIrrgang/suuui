@@ -1,4 +1,4 @@
-# Test notes: units-notices (in progress)
+# Test notes: units-notices
 
 Area: Notifications, NpcDialogue, ObjectiveTracker, Alerts, DeathRecap,
 Support (`src/Units/`). Written on wowlua 0.9.5 and the fixes after it
@@ -10,20 +10,16 @@ Support (`src/Units/`). Written on wowlua 0.9.5 and the fixes after it
 |---|---|---|---|
 | ObjectiveTracker | `Units/ObjectiveTracker.test.wowlua` (replaces the checkpoint's probe) | 15 | 100% |
 | NpcDialogue | `Units/NpcDialogue.test.wowlua` (new) | 13 | 99.7% |
-| Notifications | `Units/Notifications.test.wowlua` (new) | 22 | 88.8% |
+| Notifications | `Units/Notifications.test.wowlua` (new) | 25 | 98.2% |
 | Alerts | `Units/Alerts.test.wowlua` (checkpoint, passes as it was) | 23 | 100% |
 | DeathRecap | `Units/DeathRecap.test.wowlua` (checkpoint, passes as it was) | 25 | 100% |
 | Support | `Units/Support.test.wowlua` (checkpoint, passes as it was) | 16 | 100% |
 
-Still to do for this area:
-
-- Notifications: the group finder's invite with role buttons
-  (`LFGInvitePopup`, lines 932-1015), the battleground's ready window
-  (`PVPReadyDialog`) and the ready check window's own card (the window
-  isn't shown in a test yet). Plan: show those frames with their data
-  stubbed, as the hosted popups are.
-- `smoke` and `compat` after the last changes (they passed before
-  Notifications' fix), and the identity scan's notes.
+Notifications' lines not run: a bank tab's price when the popup shows none (it always
+shows one in the engine), the Battle.net toast's own hide (the frame isn't
+there when the hook is made), a card that scrolled out of the stack while
+its popup shows, and the button art's hover while hidden. `smoke` and
+`compat` pass.
 
 ## Bugs found
 

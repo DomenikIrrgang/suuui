@@ -75,14 +75,8 @@ pass) and committed, with notes in `Docs/test-notes/<area>.md`:
 Done since (2026-10-20 to 2026-10-22), each with its notes in
 `Docs/test-notes/<area>.md`: ui-world, ui-settings, units-chat,
 units-cooldowns, units-bags, units-trade, units-character, units-maps,
-units-talents, units-group. The checkpoint's work in them was finished or
+units-talents, units-group, units-notices. The checkpoint's work in them was finished or
 replaced.
-
-In progress: **units-notices** (`Docs/test-notes/units-notices.md` has the
-state): ObjectiveTracker, NpcDialogue, Alerts, DeathRecap and Support done;
-Notifications at 88.8% (left: the group finder's invite with role buttons,
-the battleground's ready window, the ready check window's card); then
-`smoke` and `compat`.
 
 Not done (the queue), in this order:
 
