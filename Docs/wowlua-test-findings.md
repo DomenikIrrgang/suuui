@@ -67,7 +67,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V10](#v10) | VM | low | open | A frame never anchored lays its children out against the screen |
 | [V11](#v11) | VM | low | open | *Unverified:* a Blizzard menu's submenu doesn't open on hover |
 | [R14](#r14) | mock | medium | open | `mock.drag` runs no frame between `OnDragStart` and `OnDragStop` |
-| [R15](#r15) | mock | low | open | No "any value" matcher for `toHaveBeenCalledWith` |
+| [R15](#r15) | mock | low | fixed after 0.9.6 (T261) | No "any value" matcher for `toHaveBeenCalledWith` |
 | [R16](#r16) | mock | low | open | Long event payloads have no defaults |
 | [R17](#r17) | mock | medium | fixed 0.9.5 | `mock.defineItem(id, data)` without `opts` never loaded |
 | [R18](#r18) | mock | high | fixed 0.9.5 (T228, T229) | A new `mock.defineAuctionHouse` kept the last house's state |
@@ -314,7 +314,7 @@ An `OnUpdate` set while dragging (edit mode's frames following the outline) neve
 
 ### R15. No "any value" matcher for `toHaveBeenCalledWith`
 
-*Status: open.*
+*Status: fixed after 0.9.6 (T261): `anything` and `ofType(kind)` from `wowlua:test`, in `toEqual` and `toHaveBeenCalledWith`.*
 
 A call whose one argument is a fresh table or a frame can't be matched without checking each argument by hand. (units-character)
 

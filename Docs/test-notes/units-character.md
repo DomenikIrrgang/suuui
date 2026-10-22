@@ -74,8 +74,9 @@ tests run on the fixed engine without workarounds.
   journal answered their recorded empty state. A world profile and
   `mock.setMounts`, `mock.setToys`, `mock.setAppearances` give them the
   account's now (T235).
-- **Not fixed, noted**: there is no "any value" matcher for
-  `toHaveBeenCalledWith`.
+- **Fixed later (T261)**: there was no "any value" matcher for
+  `toHaveBeenCalledWith`; `anything` and `ofType(kind)` from `wowlua:test`
+  are those now.
 - **Not findings, for the next areas**: `mock.click` leaves the pointer on
   the frame, so `mock.hover(nil)` before hovering it again; change
   Blizzard's fields with `mock.setField`, never an assignment.
