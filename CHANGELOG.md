@@ -10,7 +10,7 @@
 
 ### Fixed
 
-- The spells window opened in a fight at Blizzard's size and place, its header against the top of the screen: it now opens where and as large as out of combat.
+- The spells window opened in a fight at Blizzard's size and place, its header against the top of the screen: it now opens where and as large as out of combat, also when a fight is the first time you open it.
 - Unit frames: out of combat they dimmed even while you were hurt; they now dim only at full health (the change is immediate instead of a fade).
 - Your buffs no longer run under the encounter timeline when they grow left (the default).
 - The damage meter no longer errors when the game hides a fight's list; it says the list is secret until combat ends.

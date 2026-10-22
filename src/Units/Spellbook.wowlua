@@ -582,14 +582,7 @@ function M:Shorten()
     -- Character window
     local target = TALL
     local width = self.wantWidth or NARROW
-    -- opened in combat too at this size and place (the window's secure
-    -- placer: SuuUI can't size or move it in a fight)
-    local placer = UI.SecurePlacement(f)
-    local page = f.SpellBookFrame or f.SpellbookFrame
-    if placer and page then
-        placer:Track("spellbook", page)
-        placer:SetTabSize("spellbook", width, target)
-    end
+    self:Place()
     local narrow = math.abs(f:GetWidth() - width) < 1
     if math.abs(f:GetHeight() - target) < 1 and narrow then return end
     if math.abs(f:GetHeight() - target) >= 1 then self.blizzHeight = f:GetHeight() end
@@ -598,6 +591,21 @@ function M:Shorten()
     f:SetHeight(target)
     f:SetWidth(width)
     self.sizing = false
+end
+
+-- The window opened in combat too at this size and place (its secure
+-- placer: SuuUI can't size or move it in a fight). Out of combat; the
+-- placer needs SuuUI's skin on the window, which may come after the page
+-- (found in game: first opened in a fight, Blizzard's size and place).
+function M:Place()
+    local f = _G.PlayerSpellsFrame
+    if not f or InCombatLockdown() then return end
+    local placer = UI.SecurePlacement(f)
+    local page = f.SpellBookFrame or f.SpellbookFrame
+    if placer and page then
+        placer:Track("spellbook", page)
+        placer:SetTabSize("spellbook", self.wantWidth or NARROW, TALL)
+    end
 end
 
 -- How many spells you could train now, across every school; said to the
@@ -850,6 +858,14 @@ function M:OnEnable()
         end)
     end
     self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:SayToTrain() end)
+    -- the page made ready as a fight starts (the moment before the
+    -- lockdown) if it never was: the window first opened in that fight
+    -- takes the Spellbook's size, and its school and page buttons work
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+        if not self.book then return end
+        if not self.prepared then self:Render(true) end
+        self:Place()
+    end)
     -- the sweeps: in combat too (only the look changes)
     for _, e in ipairs({ "SPELL_UPDATE_COOLDOWN", "ACTIONBAR_UPDATE_COOLDOWN" }) do
         if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid(e) then
