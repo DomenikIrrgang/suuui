@@ -165,36 +165,6 @@ export interface BrowseEmpty extends Frame
     refresh: SuuButton
 end
 
-export interface GroupFinderBrowse extends Frame
-    data?: BrowseData
-    rows: BrowseRowFrame[]
-    heads: { [string]: SectionHead }
-    skeletons: SkeletonRow[]
-    category: Select
-    activity: Select
-    search: TextField
-    fits: Checkbox
-    show: Select
-    refreshQuiet: SuuButton
-    refreshPrimary: SuuButton
-    refresh: SuuButton
-    staleText: Text
-    hourglass: Texture
-    box: Frame
-    list: ScrollArea
-    loadNote: Text
-    empty: BrowseEmpty
-    onRefresh?: () -> ()
-    onFilter?: (changes: BrowseFilter) -> ()
-    onWhisper?: (row: BrowseRow) -> ()
-    onInvite?: (row: BrowseRow) -> ()
-    onToggle?: (key: string) -> ()
-    onClear?: () -> ()
-    function SetData(d: BrowseData)
-    function LayoutBar()
-    function Draw()
-end
-
 local S = T.space
 
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
@@ -497,8 +467,6 @@ end
 -- The page
 --------------------------------------------------------------------------------
 
-local B: GroupFinderBrowse = {} :: any
-
 local function sectionHead(b: GroupFinderBrowse, key: string, label: string): SectionHead
     local h: SectionHead = CreateFrame("Button", nil, b.list.child) :: any
     h:SetHeight(HEAD_H)
@@ -555,30 +523,6 @@ local function toolText(tool: BrowseTool): string
     return "Tool results " .. (m < 1 and "just now" or (m .. "m old")) .. (tool.stale and " · stale" or "")
 end
 
-function B:SetData(d: BrowseData)
-    self.data = d
-    -- the bar
-    self.category:SetOptions(d.categories or {})
-    self.category:SetValue(d.category)
-    self.activity:SetOptions(d.activityOptions or {})
-    self.activity:SetValue(d.activities or {})
-    if self.search:GetValue() ~= (d.search or "") and not self.search.edit:HasFocus() then self.search:SetValue(d.search or "") end
-    self.fits:SetValue(d.fits)
-    self.show:SetValue(d.show or "both")
-    -- the tool's age
-    local tool = d.tool or {}
-    self.staleText:SetValue(toolText(tool))
-    self.staleText:SetColor(tool.stale and "amber" or "ink-muted")
-    draw.paint(self.hourglass, tool.stale and "amber" or "ink-muted")
-    -- stale: Refresh is the suggested action
-    local stale = tool.stale and not tool.searching
-    self.refreshQuiet:SetShown(not stale)
-    self.refreshPrimary:SetShown(stale and true or false)
-    self.refresh = stale and self.refreshPrimary or self.refreshQuiet
-    self:LayoutBar()
-    self:Draw()
-end
-
 -- The bar's widths (design: 150, 190, 170, the checkbox, 120; the tool's age
 -- and Refresh at the right). Too narrow: Search gives way first (down to
 -- 56), then the three selects by their widths; the age is cut short last.
@@ -612,166 +556,219 @@ local function barWidths(width: number, fixed: number, fresh: number): (BarWidth
     return w, fresh
 end
 
-function B:LayoutBar()
-    local width = self:GetWidth()
-    if not width or width <= 1 then return end
-    local g = S["space-3"]
-    local textW = math.ceil(uiText.measureText("caption", self.staleText:GetText() or ""))
-    local w, fresh = barWidths(width, self.refresh:GetWidth() + self.fits:GetWidth() + g * 8, 12 + g + textW)
-    self.category:SetWidth(w.category)
-    self.activity:SetWidth(w.activity)
-    self.search:SetWidth(w.search)
-    self.show:SetWidth(w.show)
-    self.staleText:ClearAllPoints()
-    self.staleText:SetPoint("RIGHT", self.refresh, "LEFT", -g, 0)
-    self.staleText:SetWidth(math.max(1, fresh - 12 - g))
-    self.staleText:SetShown(fresh > 12)
-end
+export class GroupFinderBrowse extends Frame
+    rows: BrowseRowFrame[]
+    heads: { [string]: SectionHead }
+    skeletons: SkeletonRow[]
+    category: Select
+    activity: Select
+    search: TextField
+    fits: Checkbox
+    show: Select
+    refreshQuiet: SuuButton
+    refreshPrimary: SuuButton
+    refresh: SuuButton
+    staleText: Text
+    hourglass: Texture
+    box: Frame
+    list: ScrollArea
+    loadNote: Text
+    empty: BrowseEmpty
+    data: BrowseData? = nil
+    onRefresh: (() -> ())? = nil
+    onFilter: ((changes: BrowseFilter) -> ())? = nil
+    onWhisper: ((row: BrowseRow) -> ())? = nil
+    onInvite: ((row: BrowseRow) -> ())? = nil
+    onToggle: ((key: string) -> ())? = nil
+    onClear: (() -> ())? = nil
 
-function B:Draw()
-    local d = self.data
-    if not d then return end
-    local width = math.max(1, self.list:GetWidth())
-    self.list.child:SetWidth(width)
-    local loading = d.tool and d.tool.loading
-    local none = #(d.groups or {}) + #(d.players or {}) == 0 and not loading
-    local y = 0
-    local used, skels = 0, 0
-    for _, key in ipairs({ "groups", "players" }) do
-        local rows = d[key] or {}
-        local h = self.heads[key] :: SectionHead
-        h:SetShown(not none)
-        if not none then
-            h:ClearAllPoints()
-            h:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
-            h:SetWidth(width)
-            h.text:SetValue(h.label)
-            h.count:SetValue(tostring(#rows))
-            h.note:SetValue(loading and "from chat so far" or "")
-            local closed = d.collapsed and d.collapsed[key]
-            h.glyph:SetTexture(GLYPHS .. (closed and "chevronRight.tga" or "chevronDown.tga"))
-            y = y + HEAD_H
-            if not closed then
-                for _, row in ipairs(rows) do
-                    used = used + 1
-                    local r = self.rows[used] or makeRow(self)
-                    self.rows[used] = r
-                    drawRow(self, r, row, y, width)
-                    y = y + ROW_H
-                end
-                -- the tool's rows still to come
-                for _ = 1, loading and (key == "groups" and 3 or 2) or 0 do
-                    skels = skels + 1
-                    local r = self.skeletons[skels] or makeSkeleton(self)
-                    self.skeletons[skels] = r
-                    r:ClearAllPoints()
-                    r:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
-                    r:SetWidth(width)
-                    r.b:SetWidth(math.max(40, (width - 20 - S["space-4"] * 4 - 132) * 0.62))
-                    r.b2:SetWidth(math.max(36, r.b:GetWidth() - 4))
-                    r:Show()
-                    y = y + ROW_H
-                end
-            end
-            y = y + S["space-3"]
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.rows, self.heads, self.skeletons = {}, {}, {}
+        -- the bar
+        local function changed(t: BrowseFilter) if self.onFilter then self.onFilter(t) end end
+        local g = S["space-3"]
+        self.category = uiSelect.select(self, { width = 150, placeholder = "Category",
+            onChange = function(v: any) changed({ category = v }) end })
+        self.category:SetPoint("TOPLEFT")
+        self.category:SetHeight(BAR_H)
+        self.activity = uiSelect.select(self, { width = 190, multiple = true, maxShown = 1, placeholder = "Filter by activity", maxRows = 12,
+            onChange = function(v: any) changed({ activities = v }) end })
+        self.activity:SetPoint("LEFT", self.category, "RIGHT", g, 0)
+        self.activity:SetHeight(BAR_H)
+        self.search = inputs.textField(self, { width = 170, placeholder = "Search",
+            onTextChanged = function(text: string) changed({ search = text }) end })
+        self.search:SetPoint("LEFT", self.activity, "RIGHT", g, 0)
+        self.fits = inputs.checkbox(self, { label = "Only what fits me", onChange = function(on: boolean) changed({ fits = on }) end })
+        self.fits:SetPoint("LEFT", self.search, "RIGHT", g * 2, 0)
+        self.show = uiSelect.select(self, { width = 120, options = {
+            { value = "both", label = "Both" }, { value = "group", label = "Groups" }, { value = "player", label = "Players looking" } },
+            onChange = function(v: any) changed({ show = v }) end })
+        self.show:SetPoint("LEFT", self.fits, "RIGHT", g * 2, 0)
+        self.show:SetHeight(BAR_H)
+        -- the tool's age and Refresh, at the right (primary once stale)
+        local function refresh() if self.onRefresh then self.onRefresh() end end
+        self.refreshQuiet = controls.button(self, { text = "Refresh", variant = "quiet", onClick = refresh,
+            tooltip = { title = "Refresh", description = "Search the tool again (chat entries are live)" } })
+        self.refreshPrimary = controls.button(self, { text = "Refresh", variant = "primary", onClick = refresh,
+            tooltip = { title = "Refresh", description = "Search the tool again (chat entries are live)" } })
+        for _, r in ipairs({ self.refreshQuiet, self.refreshPrimary }) do
+            r:SetHeight(BAR_H)
+            r:SetPoint("TOPRIGHT")
         end
+        self.refreshPrimary:Hide()
+        self.refresh = self.refreshQuiet
+        self.staleText = uiText.text(self, "caption", "ink-muted")
+        self.staleText:SetWordWrap(false)
+        self.staleText:SetJustifyH("RIGHT")
+        self.staleText:SetPoint("RIGHT", self.refresh, "LEFT", -g, 0)
+        self.hourglass = self:CreateTexture(nil, "ARTWORK")
+        self.hourglass:SetTexture(GLYPHS .. "hourglass.tga")
+        self.hourglass:SetSize(12, 12)
+        draw.paint(self.hourglass, "ink-muted")
+        self.hourglass:SetPoint("RIGHT", self.staleText, "LEFT", -g, 0)
+        self:HookScript("OnSizeChanged", function() self:LayoutBar() end)
+        -- the list
+        self.box = CreateFrame("Frame", nil, self)
+        self.box:SetPoint("TOPLEFT", 0, -(BAR_H + S["space-4"]))
+        self.box:SetPoint("BOTTOMRIGHT")
+        draw.fill(self.box, "surface-sunk"):SetAllPoints()
+        draw.border(self.box, "gilt-faint")
+        self.list = panel.scrollArea(self.box, 2)
+        self.list:SetPoint("TOPLEFT", 1, -S["space-2"])
+        self.list:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-2"])
+        self.list:HookScript("OnSizeChanged", function() self:Draw() end)
+        self.heads.groups = sectionHead(self, "groups", "Groups")
+        self.heads.players = sectionHead(self, "players", "Players")
+        self.loadNote = uiText.text(self.list.child, "caption", "ink-muted")
+        self.loadNote:SetValue("Searching the tool… Chat posts show up as they’re written.")
+        -- nothing to show: a faint search glyph, what happened, Clear filters and Refresh
+        local e: BrowseEmpty = CreateFrame("Frame", nil, self.box) :: any
+        e:SetSize(360, 140)
+        e:SetPoint("CENTER")
+        e.glyph = e:CreateTexture(nil, "ARTWORK")
+        e.glyph:SetTexture(GLYPHS .. "search.tga")
+        e.glyph:SetSize(24, 24)
+        draw.paint(e.glyph, "ink-faint")
+        e.glyph:SetPoint("TOP")
+        e.title = uiText.text(e, "label", "ink")
+        e.title:SetPoint("TOP", e.glyph, "BOTTOM", 0, -g)
+        e.title:SetValue("Nothing matches your filters")
+        e.text = uiText.text(e, "caption", "ink-muted")
+        e.text:SetWidth(360)
+        e.text:SetJustifyH("CENTER")
+        e.text:SetPoint("TOP", e.title, "BOTTOM", 0, -g)
+        e.text:SetValue("Chat posts show up here as they’re written. Clear a filter, or refresh the tool for new listings.")
+        e.clear = controls.button(e, { text = "Clear filters", icon = "close", onClick = function() if self.onClear then self.onClear() end end })
+        e.refresh = controls.button(e, { text = "Refresh", icon = "reset", onClick = refresh })
+        for _, btn in ipairs({ e.clear, e.refresh }) do btn:SetHeight(26) end
+        e.clear:SetPoint("TOPRIGHT", e.text, "BOTTOM", -g / 2, -g * 2)
+        e.refresh:SetPoint("TOPLEFT", e.text, "BOTTOM", g / 2, -g * 2)
+        e:Hide()
+        self.empty = e
     end
-    for i = used + 1, #self.rows do self.rows[i]:Hide() end
-    for i = skels + 1, #self.skeletons do self.skeletons[i]:Hide() end
-    self.loadNote:SetShown(loading and true or false)
-    if loading then
-        self.loadNote:ClearAllPoints()
-        self.loadNote:SetPoint("TOP", self.list.child, "TOP", 0, -(y + S["space-5"]))
-        y = y + S["space-5"] * 2 + 16
+
+    function SetData(d: BrowseData)
+        self.data = d
+        -- the bar
+        self.category:SetOptions(d.categories or {})
+        self.category:SetValue(d.category)
+        self.activity:SetOptions(d.activityOptions or {})
+        self.activity:SetValue(d.activities or {})
+        if self.search:GetValue() ~= (d.search or "") and not self.search.edit:HasFocus() then self.search:SetValue(d.search or "") end
+        self.fits:SetValue(d.fits)
+        self.show:SetValue(d.show or "both")
+        -- the tool's age
+        local tool = d.tool or {}
+        self.staleText:SetValue(toolText(tool))
+        self.staleText:SetColor(tool.stale and "amber" or "ink-muted")
+        draw.paint(self.hourglass, tool.stale and "amber" or "ink-muted")
+        -- stale: Refresh is the suggested action
+        local stale = tool.stale and not tool.searching
+        self.refreshQuiet:SetShown(not stale)
+        self.refreshPrimary:SetShown(stale and true or false)
+        self.refresh = stale and self.refreshPrimary or self.refreshQuiet
+        self:LayoutBar()
+        self:Draw()
     end
-    self.list.child:SetHeight(math.max(1, y))
-    self.empty:SetShown(none)
+
+    function LayoutBar()
+        local width = self:GetWidth()
+        if not width or width <= 1 then return end
+        local g = S["space-3"]
+        local textW = math.ceil(uiText.measureText("caption", self.staleText:GetText() or ""))
+        local w, fresh = barWidths(width, self.refresh:GetWidth() + self.fits:GetWidth() + g * 8, 12 + g + textW)
+        self.category:SetWidth(w.category)
+        self.activity:SetWidth(w.activity)
+        self.search:SetWidth(w.search)
+        self.show:SetWidth(w.show)
+        self.staleText:ClearAllPoints()
+        self.staleText:SetPoint("RIGHT", self.refresh, "LEFT", -g, 0)
+        self.staleText:SetWidth(math.max(1, fresh - 12 - g))
+        self.staleText:SetShown(fresh > 12)
+    end
+
+    function Draw()
+        local d = self.data
+        if not d then return end
+        local width = math.max(1, self.list:GetWidth())
+        self.list.child:SetWidth(width)
+        local loading = d.tool and d.tool.loading
+        local none = #(d.groups or {}) + #(d.players or {}) == 0 and not loading
+        local y = 0
+        local used, skels = 0, 0
+        for _, key in ipairs({ "groups", "players" }) do
+            local rows = d[key] or {}
+            local h = self.heads[key] :: SectionHead
+            h:SetShown(not none)
+            if not none then
+                h:ClearAllPoints()
+                h:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
+                h:SetWidth(width)
+                h.text:SetValue(h.label)
+                h.count:SetValue(tostring(#rows))
+                h.note:SetValue(loading and "from chat so far" or "")
+                local closed = d.collapsed and d.collapsed[key]
+                h.glyph:SetTexture(GLYPHS .. (closed and "chevronRight.tga" or "chevronDown.tga"))
+                y = y + HEAD_H
+                if not closed then
+                    for _, row in ipairs(rows) do
+                        used = used + 1
+                        local r = self.rows[used] or makeRow(self)
+                        self.rows[used] = r
+                        drawRow(self, r, row, y, width)
+                        y = y + ROW_H
+                    end
+                    -- the tool's rows still to come
+                    for _ = 1, loading and (key == "groups" and 3 or 2) or 0 do
+                        skels = skels + 1
+                        local r = self.skeletons[skels] or makeSkeleton(self)
+                        self.skeletons[skels] = r
+                        r:ClearAllPoints()
+                        r:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -y)
+                        r:SetWidth(width)
+                        r.b:SetWidth(math.max(40, (width - 20 - S["space-4"] * 4 - 132) * 0.62))
+                        r.b2:SetWidth(math.max(36, r.b:GetWidth() - 4))
+                        r:Show()
+                        y = y + ROW_H
+                    end
+                end
+                y = y + S["space-3"]
+            end
+        end
+        for i = used + 1, #self.rows do self.rows[i]:Hide() end
+        for i = skels + 1, #self.skeletons do self.skeletons[i]:Hide() end
+        self.loadNote:SetShown(loading and true or false)
+        if loading then
+            self.loadNote:ClearAllPoints()
+            self.loadNote:SetPoint("TOP", self.list.child, "TOP", 0, -(y + S["space-5"]))
+            y = y + S["space-5"] * 2 + 16
+        end
+        self.list.child:SetHeight(math.max(1, y))
+        self.empty:SetShown(none)
+    end
 end
 
 export function groupFinderBrowse(parent: Frame): GroupFinderBrowse
-    local b: GroupFinderBrowse = CreateFrame("Frame", nil, parent) :: any
-    Mixin(b, B)
-    b.rows, b.heads, b.skeletons = {}, {}, {}
-    -- the bar
-    local function changed(t: BrowseFilter) if b.onFilter then b.onFilter(t) end end
-    local g = S["space-3"]
-    b.category = uiSelect.select(b, { width = 150, placeholder = "Category",
-        onChange = function(v: any) changed({ category = v }) end })
-    b.category:SetPoint("TOPLEFT")
-    b.category:SetHeight(BAR_H)
-    b.activity = uiSelect.select(b, { width = 190, multiple = true, maxShown = 1, placeholder = "Filter by activity", maxRows = 12,
-        onChange = function(v: any) changed({ activities = v }) end })
-    b.activity:SetPoint("LEFT", b.category, "RIGHT", g, 0)
-    b.activity:SetHeight(BAR_H)
-    b.search = inputs.textField(b, { width = 170, placeholder = "Search",
-        onTextChanged = function(text: string) changed({ search = text }) end })
-    b.search:SetPoint("LEFT", b.activity, "RIGHT", g, 0)
-    b.fits = inputs.checkbox(b, { label = "Only what fits me", onChange = function(on: boolean) changed({ fits = on }) end })
-    b.fits:SetPoint("LEFT", b.search, "RIGHT", g * 2, 0)
-    b.show = uiSelect.select(b, { width = 120, options = {
-        { value = "both", label = "Both" }, { value = "group", label = "Groups" }, { value = "player", label = "Players looking" } },
-        onChange = function(v: any) changed({ show = v }) end })
-    b.show:SetPoint("LEFT", b.fits, "RIGHT", g * 2, 0)
-    b.show:SetHeight(BAR_H)
-    -- the tool's age and Refresh, at the right (primary once stale)
-    local function refresh() if b.onRefresh then b.onRefresh() end end
-    b.refreshQuiet = controls.button(b, { text = "Refresh", variant = "quiet", onClick = refresh,
-        tooltip = { title = "Refresh", description = "Search the tool again (chat entries are live)" } })
-    b.refreshPrimary = controls.button(b, { text = "Refresh", variant = "primary", onClick = refresh,
-        tooltip = { title = "Refresh", description = "Search the tool again (chat entries are live)" } })
-    for _, r in ipairs({ b.refreshQuiet, b.refreshPrimary }) do
-        r:SetHeight(BAR_H)
-        r:SetPoint("TOPRIGHT")
-    end
-    b.refreshPrimary:Hide()
-    b.refresh = b.refreshQuiet
-    b.staleText = uiText.text(b, "caption", "ink-muted")
-    b.staleText:SetWordWrap(false)
-    b.staleText:SetJustifyH("RIGHT")
-    b.staleText:SetPoint("RIGHT", b.refresh, "LEFT", -g, 0)
-    b.hourglass = b:CreateTexture(nil, "ARTWORK")
-    b.hourglass:SetTexture(GLYPHS .. "hourglass.tga")
-    b.hourglass:SetSize(12, 12)
-    draw.paint(b.hourglass, "ink-muted")
-    b.hourglass:SetPoint("RIGHT", b.staleText, "LEFT", -g, 0)
-    b:HookScript("OnSizeChanged", function() b:LayoutBar() end)
-    -- the list
-    b.box = CreateFrame("Frame", nil, b)
-    b.box:SetPoint("TOPLEFT", 0, -(BAR_H + S["space-4"]))
-    b.box:SetPoint("BOTTOMRIGHT")
-    draw.fill(b.box, "surface-sunk"):SetAllPoints()
-    draw.border(b.box, "gilt-faint")
-    b.list = panel.scrollArea(b.box, 2)
-    b.list:SetPoint("TOPLEFT", 1, -S["space-2"])
-    b.list:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-2"])
-    b.list:HookScript("OnSizeChanged", function() b:Draw() end)
-    b.heads.groups = sectionHead(b, "groups", "Groups")
-    b.heads.players = sectionHead(b, "players", "Players")
-    b.loadNote = uiText.text(b.list.child, "caption", "ink-muted")
-    b.loadNote:SetValue("Searching the tool… Chat posts show up as they’re written.")
-    -- nothing to show: a faint search glyph, what happened, Clear filters and Refresh
-    local e: BrowseEmpty = CreateFrame("Frame", nil, b.box) :: any
-    e:SetSize(360, 140)
-    e:SetPoint("CENTER")
-    e.glyph = e:CreateTexture(nil, "ARTWORK")
-    e.glyph:SetTexture(GLYPHS .. "search.tga")
-    e.glyph:SetSize(24, 24)
-    draw.paint(e.glyph, "ink-faint")
-    e.glyph:SetPoint("TOP")
-    e.title = uiText.text(e, "label", "ink")
-    e.title:SetPoint("TOP", e.glyph, "BOTTOM", 0, -g)
-    e.title:SetValue("Nothing matches your filters")
-    e.text = uiText.text(e, "caption", "ink-muted")
-    e.text:SetWidth(360)
-    e.text:SetJustifyH("CENTER")
-    e.text:SetPoint("TOP", e.title, "BOTTOM", 0, -g)
-    e.text:SetValue("Chat posts show up here as they’re written. Clear a filter, or refresh the tool for new listings.")
-    e.clear = controls.button(e, { text = "Clear filters", icon = "close", onClick = function() if b.onClear then b.onClear() end end })
-    e.refresh = controls.button(e, { text = "Refresh", icon = "reset", onClick = refresh })
-    for _, btn in ipairs({ e.clear, e.refresh }) do btn:SetHeight(26) end
-    e.clear:SetPoint("TOPRIGHT", e.text, "BOTTOM", -g / 2, -g * 2)
-    e.refresh:SetPoint("TOPLEFT", e.text, "BOTTOM", g / 2, -g * 2)
-    e:Hide()
-    b.empty = e
-    return b
+    return GroupFinderBrowse.new(parent)
 end
