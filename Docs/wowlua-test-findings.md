@@ -89,7 +89,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V18](#v18) | VM | medium | fixed 0.9.6 | Inspect, models, bindings and journals |
 | [V19](#v19) | VM | high | fixed 0.9.6 (T237, T238) | UIParent's scale was 1; unknown atlases were 0 by 0 |
 | [V20](#v20) | VM | high | fixed 0.9.6 (T239, T240) | A test's payload table tainted Blizzard's handlers; talents never opened |
-| [V21](#v21) | VM | medium | open (probe) | A frame whose top is below its bottom has a negative height |
+| [V21](#v21) | VM | medium | fixed after 0.9.6 (T266) | A frame whose top is below its bottom has a negative height |
 | [V22](#v22) | VM | medium | fixed 0.9.6 (T241, T242) | A test's group was an instance group; `UnitFullName("player")` had no realm |
 | [V23](#v23) | VM | low | open (probe) | Moving a raid member tells the roster at once |
 | [V24](#v24) | VM | low | open | No inspected talent groups |
@@ -714,7 +714,7 @@ Text under SuuUI's root measured too wide (the game's UIParent is 0.71 at 1920 b
 
 ### V21. A frame whose top is below its bottom has a negative height
 
-*Status: open (probe).*
+*Status: fixed after 0.9.6 (T266): probed in game (size 0, at the LEFT and BOTTOM points); the Legacy test no longer avoids reopening on the challenges.*
 
 Blizzard's Legacy challenge list then asks for rows 8 to 6 and errors; the game's answer is unrecorded. (units-talents)
 

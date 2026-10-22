@@ -56,10 +56,10 @@ Fixed in wowlua (decisions T239, T240; shipping in 0.9.6):
 
 Not fixed, noted (wowlua's PROBES.md lists what needs recording):
 
-- **A frame whose top is below its bottom** has a negative height in the
-  engine; Blizzard's Legacy challenge list then asks for rows 8 to 6 and
-  errors. Whether the game gives 0 there is unrecorded; the test avoids
-  reopening the window on the challenges.
+- **A frame whose top is below its bottom** had a negative height in the
+  engine; Blizzard's Legacy challenge list then asked for rows 8 to 6 and
+  errored. Probed later: the game gives 0 (wowlua T266); the test no
+  longer avoids reopening the window on the challenges.
 - **`C_Traits.RefundRank`, other classes' view loadouts and both spec
   groups' configs** have no recording: Talents keeps its stand-in.
 - **`GetCursorInfo` is declared without its results** (in every flavor's
