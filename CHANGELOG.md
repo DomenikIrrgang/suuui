@@ -23,6 +23,8 @@
 - Loot rolls show in the notifications again, with votes, roll numbers and the winner; "You passed on" and "You won" lines are read right.
 - Bags opened SuuUI's way stay open when a merchant or the mailbox closes.
 - The character window's item flyout no longer errors.
+- Guild: opening the guild window in a fight no longer causes "Interface action failed because of an AddOn"; the message of the day shows as it was before the fight.
+- Professions: the professions window opened for the first time in a fight now has SuuUI's look too.
 - `/suu errors` says "Blocked" for an action the game refused out of combat (one that needs your click or key press), instead of "Blocked in combat".
 - Cooldown Manager: the Defensives editor saves your changes; the Timer and Stacks switches can be turned off.
 - Raid planner: specs are shared and asked for in game, and a setup no longer breaks when someone has no slot.

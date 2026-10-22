@@ -693,8 +693,16 @@ end
 
 -- The message of the day: the one the last GUILD_MOTD brought until the
 -- game's own copy has caught up.
+-- In combat the game refuses addons the message (GetGuildRosterMOTD
+-- blocked, found in game): the one read before the fight.
 function M:Motd()
-    local motd = call(GetGuildRosterMOTD)
+    local motd: any
+    if InCombatLockdown() then
+        motd = self.lastMotd
+    else
+        motd = call(GetGuildRosterMOTD)
+        if plain(motd) then self.lastMotd = motd end
+    end
     if self.freshMotd then
         if plain(motd) and motd == self.freshMotd then self.freshMotd = nil end
         motd = self.freshMotd or motd
@@ -708,7 +716,9 @@ function M:RenderBanner()
     local b = self.motdBanner
     if not b then return end
     local text = self.onChat and self:Motd() or nil
-    b:SetData({ text = text, canEdit = call(CanEditMOTD) })
+    -- (whether you may edit it: read out of combat, as the message)
+    if not InCombatLockdown() then self.lastCanEdit = call(CanEditMOTD) and true or false end
+    b:SetData({ text = text, canEdit = self.lastCanEdit })
     self:LayChat()
     self:InfoOverlays()
 end
@@ -1226,6 +1236,10 @@ function M:OnEnable()
     -- the details' secure buttons away when a fight starts (rank changes
     -- wait for its end)
     self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+        -- the message read the moment before the lockdown, for a window
+        -- first opened in this fight
+        self:Motd()
+        self.lastCanEdit = call(CanEditMOTD) and true or false
         for _, over in pairs(self.overs or {}) do over:Hide() end
         for _, over in pairs(self.infoOvers or {}) do over:Hide() end
         for _, over in pairs(self.noteOvers or {}) do over:Hide() end
