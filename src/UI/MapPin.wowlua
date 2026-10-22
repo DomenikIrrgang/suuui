@@ -91,9 +91,7 @@ export type MapPinData = {
     glow?: string,
 }
 
-export interface MapPin extends Button
-    size: number
-    baseAlpha: number?
+export class MapPin extends Button
     glow: Texture
     hl: Texture
     ringOuter: Texture
@@ -109,157 +107,155 @@ export interface MapPin extends Button
     char: Text
     countTab: Frame
     countText: Text
-    function PinSize(): number
-    function SetHighlight(state: (boolean | string)?)
-    function SetBaseAlpha(a: number)
-    function SetData(d: MapPinData)
-end
+    baseAlpha: number?
+    size: number = SIZE -- SetData's
 
-local Pin: MapPin = {} :: any
-
-function Pin:PinSize() return self.size end
-
-function Pin:SetHighlight(state: (boolean | string)?)
-    self.hl:SetShown(state == true)
-    if state == true then fit(self.hl, self.size + 6) end
-    -- (a ringed pin full, a dimmed one fainter than its usual opacity)
-    local base = self.baseAlpha or 1
-    self:SetAlpha(state == true and 1 or state == "dim" and 0.3 * base or base)
-end
-
-function Pin:SetBaseAlpha(a: number)
-    self.baseAlpha = a
-    self:SetAlpha(a)
-end
-
-function Pin:SetData(d: MapPinData)
-    local size = d.small and SMALL or SIZE
-    self.size = size
-    self:SetSize(size, size)
-    -- the second ring: the ring's colour, a gap of surface, then the pin
-    self.ringOuter:SetShown(d.ring ~= nil)
-    self.ringGap:SetShown(d.ring ~= nil)
-    if d.ring then
-        fit(self.ringOuter, size + 6)
-        draw.paint(self.ringOuter, d.ring)
-        fit(self.ringGap, size + 3)
-        draw.paint(self.ringGap, "surface")
-    end
-    self.glow:SetShown(d.glow ~= nil)
-    if d.glow then
-        fit(self.glow, size + 16)
-        draw.paint(self.glow, d.glow)
-    end
-    self.outline:SetShown(d.outline and true or false)
-    if d.outline then
-        fit(self.outline, size + 2)
-        draw.paint(self.outline, "surface")
-    end
-    -- a split edge: the edge itself in surface (the gaps), an arc per item
-    local arcs = d.arcs and #d.arcs > 1 and d.arcs or nil
-    local n = arcs and math.min(#arcs, 4) or 0
-    fit(self.edge, size)
-    draw.paint(self.edge, arcs and "surface" or (d.edge or "gilt-line"))
-    fit(self.fill, size - 2 * (d.edgeWidth or 1))
-    draw.paint(self.fill, "surface")
-    for k = 1, 4 do
-        local t = self.arcs[k]
-        if arcs and k <= n then
-            t:SetTexture(ARC .. n .. ".tga")
-            fit(t, size)
-            draw.paint(t, arcs[k])
-            -- clockwise from the top: each arc turned by its share
-            t:SetRotation(-(k - 1) * 2 * math.pi / n)
-            t:Show()
-        else
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.glow = disc(self, "BACKGROUND", -1)
+        self.glow:SetTexture(SOFT)
+        self.hl = disc(self, "BACKGROUND", 0)
+        draw.paint(self.hl, "ink")
+        self.hl:Hide()
+        self.ringOuter = disc(self, "BACKGROUND", 1)
+        self.ringGap = disc(self, "BACKGROUND", 2)
+        self.outline = disc(self, "BACKGROUND", 3)
+        self.edge = disc(self, "BORDER", 1)
+        self.fill = disc(self, "BORDER", 2)
+        self.arcs = {}
+        for k = 1, 4 do
+            local t = self:CreateTexture(nil, "BORDER", nil, 3)
+            t:SetPoint("CENTER")
             t:Hide()
+            self.arcs[k] = t
         end
+        self.barEdge = self:CreateTexture(nil, "BACKGROUND", nil, 4)
+        self.barEdge:SetSize(18, 6)
+        self.barEdge:SetPoint("TOP", self, "BOTTOM", 0, -3)
+        self.bar = self:CreateTexture(nil, "BORDER", nil, 4)
+        self.bar:SetSize(16, 4)
+        self.bar:SetPoint("TOP", self, "BOTTOM", 0, -4)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetPoint("CENTER")
+        -- the turn: clockwise, as the game's instance portals turn (seen in
+        -- game; a positive angle turns counter-clockwise)
+        self.spin = self.glyph:CreateAnimationGroup()
+        self.spin:SetLooping("REPEAT")
+        local turn = self.spin:CreateAnimation("Rotation")
+        turn:SetDegrees(-360)
+        turn:SetDuration(6)
+        turn:SetOrigin("CENTER", 0, 0)
+        self.char = uiText.text(self, "label", "ink")
+        self.char:SetPoint("CENTER", 0, 0)
+        self.char:SetFontObject(charFont())
+        self.countTab = CreateFrame("Frame", nil, self)
+        self.countTab:SetFrameLevel(self:GetFrameLevel() + 2)
+        draw.fill(self.countTab, "surface-raised"):SetAllPoints()
+        draw.border(self.countTab, "gilt-line")
+        self.countText = uiText.text(self.countTab, "micro", "ink")
+        self.countText:SetPoint("CENTER", 0, 0)
+        self:SetData({})
     end
-    -- the bar under the pin (a group quest), 4 px below, outlined
-    self.barEdge:SetShown(d.bar ~= nil)
-    self.bar:SetShown(d.bar ~= nil)
-    if d.bar then
-        draw.paintFill(self.bar, d.bar)
-        draw.paintFill(self.barEdge, "surface")
+
+    function PinSize() return self.size end
+
+    function SetHighlight(state: (boolean | string)?)
+        self.hl:SetShown(state == true)
+        if state == true then fit(self.hl, self.size + 6) end
+        -- (a ringed pin full, a dimmed one fainter than its usual opacity)
+        local base = self.baseAlpha or 1
+        self:SetAlpha(state == true and 1 or state == "dim" and 0.3 * base or base)
     end
-    local inner = d.small and 14 or 17
-    if d.glyph then
-        self.glyph:SetTexture(GLYPHS .. d.glyph .. ".tga")
-        self.glyph:SetSize(inner, inner)
-        draw.paint(self.glyph, d.color or "ink")
-        self.glyph:Show()
-        self.char:Hide()
-        if d.spin then
-            if not self.spin:IsPlaying() then self.spin:Play() end
+
+    function SetBaseAlpha(a: number)
+        self.baseAlpha = a
+        self:SetAlpha(a)
+    end
+
+    function SetData(d: MapPinData)
+        local size = d.small and SMALL or SIZE
+        self.size = size
+        self:SetSize(size, size)
+        -- the second ring: the ring's colour, a gap of surface, then the pin
+        self.ringOuter:SetShown(d.ring ~= nil)
+        self.ringGap:SetShown(d.ring ~= nil)
+        if d.ring then
+            fit(self.ringOuter, size + 6)
+            draw.paint(self.ringOuter, d.ring)
+            fit(self.ringGap, size + 3)
+            draw.paint(self.ringGap, "surface")
+        end
+        self.glow:SetShown(d.glow ~= nil)
+        if d.glow then
+            fit(self.glow, size + 16)
+            draw.paint(self.glow, d.glow)
+        end
+        self.outline:SetShown(d.outline and true or false)
+        if d.outline then
+            fit(self.outline, size + 2)
+            draw.paint(self.outline, "surface")
+        end
+        -- a split edge: the edge itself in surface (the gaps), an arc per item
+        local arcs = d.arcs and #d.arcs > 1 and d.arcs or nil
+        local n = arcs and math.min(#arcs, 4) or 0
+        fit(self.edge, size)
+        draw.paint(self.edge, arcs and "surface" or (d.edge or "gilt-line"))
+        fit(self.fill, size - 2 * (d.edgeWidth or 1))
+        draw.paint(self.fill, "surface")
+        for k = 1, 4 do
+            local t = self.arcs[k]
+            if arcs and k <= n then
+                t:SetTexture(ARC .. n .. ".tga")
+                fit(t, size)
+                draw.paint(t, arcs[k])
+                -- clockwise from the top: each arc turned by its share
+                t:SetRotation(-(k - 1) * 2 * math.pi / n)
+                t:Show()
+            else
+                t:Hide()
+            end
+        end
+        -- the bar under the pin (a group quest), 4 px below, outlined
+        self.barEdge:SetShown(d.bar ~= nil)
+        self.bar:SetShown(d.bar ~= nil)
+        if d.bar then
+            draw.paintFill(self.bar, d.bar)
+            draw.paintFill(self.barEdge, "surface")
+        end
+        local inner = d.small and 14 or 17
+        if d.glyph then
+            self.glyph:SetTexture(GLYPHS .. d.glyph .. ".tga")
+            self.glyph:SetSize(inner, inner)
+            draw.paint(self.glyph, d.color or "ink")
+            self.glyph:Show()
+            self.char:Hide()
+            if d.spin then
+                if not self.spin:IsPlaying() then self.spin:Play() end
+            else
+                self.spin:Stop()
+            end
         else
             self.spin:Stop()
+            self.glyph:Hide()
+            self.char:SetValue(d.char or "")
+            self.char:SetColor(d.color or "ink")
+            self.char:Show()
         end
-    else
-        self.spin:Stop()
-        self.glyph:Hide()
-        self.char:SetValue(d.char or "")
-        self.char:SetColor(d.color or "ink")
-        self.char:Show()
-    end
-    local n = d.count
-    if n and n > 1 then
-        self.countText:SetValue(n > 99 and "99+" or tostring(n))
-        self.countTab:SetSize(math.ceil(self.countText:GetUnboundedStringWidth()) + 4, 11)
-        -- on the disc's edge at its lower right
-        local off = math.floor(size * 0.36 + 0.5)
-        self.countTab:ClearAllPoints()
-        self.countTab:SetPoint("CENTER", self, "CENTER", off, -off)
-        self.countTab:Show()
-    else
-        self.countTab:Hide()
+        local n = d.count
+        if n and n > 1 then
+            self.countText:SetValue(n > 99 and "99+" or tostring(n))
+            self.countTab:SetSize(math.ceil(self.countText:GetUnboundedStringWidth()) + 4, 11)
+            -- on the disc's edge at its lower right
+            local off = math.floor(size * 0.36 + 0.5)
+            self.countTab:ClearAllPoints()
+            self.countTab:SetPoint("CENTER", self, "CENTER", off, -off)
+            self.countTab:Show()
+        else
+            self.countTab:Hide()
+        end
     end
 end
 
 export function mapPin(parent: Frame): MapPin
-    local b: MapPin = CreateFrame("Button", nil, parent) :: any
-    Mixin(b, Pin)
-    b.glow = disc(b, "BACKGROUND", -1)
-    b.glow:SetTexture(SOFT)
-    b.hl = disc(b, "BACKGROUND", 0)
-    draw.paint(b.hl, "ink")
-    b.hl:Hide()
-    b.ringOuter = disc(b, "BACKGROUND", 1)
-    b.ringGap = disc(b, "BACKGROUND", 2)
-    b.outline = disc(b, "BACKGROUND", 3)
-    b.edge = disc(b, "BORDER", 1)
-    b.fill = disc(b, "BORDER", 2)
-    b.arcs = {}
-    for k = 1, 4 do
-        local t = b:CreateTexture(nil, "BORDER", nil, 3)
-        t:SetPoint("CENTER")
-        t:Hide()
-        b.arcs[k] = t
-    end
-    b.barEdge = b:CreateTexture(nil, "BACKGROUND", nil, 4)
-    b.barEdge:SetSize(18, 6)
-    b.barEdge:SetPoint("TOP", b, "BOTTOM", 0, -3)
-    b.bar = b:CreateTexture(nil, "BORDER", nil, 4)
-    b.bar:SetSize(16, 4)
-    b.bar:SetPoint("TOP", b, "BOTTOM", 0, -4)
-    b.glyph = b:CreateTexture(nil, "ARTWORK")
-    b.glyph:SetPoint("CENTER")
-    -- the turn: clockwise, as the game's instance portals turn (seen in
-    -- game; a positive angle turns counter-clockwise)
-    b.spin = b.glyph:CreateAnimationGroup()
-    b.spin:SetLooping("REPEAT")
-    local turn = b.spin:CreateAnimation("Rotation")
-    turn:SetDegrees(-360)
-    turn:SetDuration(6)
-    turn:SetOrigin("CENTER", 0, 0)
-    b.char = uiText.text(b, "label", "ink")
-    b.char:SetPoint("CENTER", 0, 0)
-    b.char:SetFontObject(charFont())
-    b.countTab = CreateFrame("Frame", nil, b)
-    b.countTab:SetFrameLevel(b:GetFrameLevel() + 2)
-    draw.fill(b.countTab, "surface-raised"):SetAllPoints()
-    draw.border(b.countTab, "gilt-line")
-    b.countText = uiText.text(b.countTab, "micro", "ink")
-    b.countText:SetPoint("CENTER", 0, 0)
-    b:SetData({})
-    return b
+    return MapPin.new(parent)
 end

@@ -48,312 +48,10 @@ end
 
 -- A button actionButton makes (bars add their own fields: bindCommand,
 -- bindLabel, tooltipNote, onSlotChanged, showEmpty).
-export interface ActionButton extends Button
-    face: Frame
-    art: Texture
-    veil: Texture
-    cooldown: Cooldown
-    over: Frame
-    border: draw.Border
-    ring: draw.Border
-    flash: Texture
-    hotkey: FontString
-    count: FontString
-    hotkeyText: string
-    hotkeyShown: boolean
-    slot?: number
-    hasAction?: boolean
-    active?: boolean
-    hover?: boolean
-    grid?: boolean
-    showEmpty?: boolean
-    unusable?: boolean
-    outOfRange?: boolean
-    coolingDown?: boolean
-    onGCD?: boolean
-    confirming?: boolean
-    recheck?: boolean
-    cooldownSpell?: number
-    dashes?: Texture[]
-    autocastOn?: boolean
-    textSize?: number
-    tooltipNote?: string
-    bindCommand?: string
-    bindLabel?: string
-    onSlotChanged?: (b: ActionButton, old: number?, new: number?) -> ()
-    function SetHotkey(text: string?)
-    function SetHotkeyShown(shown: any)
-    function UpdateHotkey()
-    function UpdateBorder()
-    function SetSlot(slot: number?)
-    function Update()
-    function SetGrid(on: any)
-    function UpdateEmpty()
-    function UpdateCount()
-    function ShowCooldown(active: boolean, gcd: boolean, duration: any)
-    function UpdateCooldown()
-    function ShowSpellCooldown(spellID: number?)
-    function ShowUsable(unusable: any)
-    function ShowActive(on: any)
-    function Resize(px: number)
-    function ShowAutocast(on: any)
-    function ShowTooltip()
-    function UpdateUsable()
-    function UpdateActive()
-    function SetOutOfRange(out: any)
-    function UpdateArt()
-    function SetTextSize(px: number?)
-end
-
-local AB: ActionButton = {} :: any
-mixins.ActionButton = AB
 
 --------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
-
-function AB:SetHotkey(text: string?)
-    self.hotkeyText = text or ""
-    self.hotkey:SetText(self.hotkeyText)
-    self:UpdateHotkey()
-end
-
-function AB:SetHotkeyShown(shown: any)
-    self.hotkeyShown = shown and true or false
-    self:UpdateHotkey()
-end
-
-function AB:UpdateHotkey()
-    local show = self.hotkeyShown and self.hotkeyText ~= "" and self.hasAction
-    self.hotkey:SetShown(show and true or false)
-    draw.paint(self.hotkey, self.outOfRange and "ember-text" or "ink-muted")
-end
-
--- The border: a state's colour, gilt while hovered, the hairline at rest.
-function AB:UpdateBorder()
-    local token = "gilt-hairline"
-    if self.active then token = "ink"
-    elseif self.hover then token = "gilt" end
-    self.border:SetColor(token)
-end
-
-function AB:SetSlot(slot: number?)
-    if self.slot == slot then return end
-    local old = self.slot
-    self.slot = slot
-    if self.onSlotChanged then self.onSlotChanged(self, old, slot) end
-    -- A new slot starts without the old one's cooldown: a paging bar 1 would
-    -- otherwise pop "ready" on every page whose slot isn't cooling down.
-    self.coolingDown = false
-    motion.alphaTo(self.flash, 0, 0)
-    self:Update()
-end
-
-function AB:Update()
-    local slot = self.slot
-    self.hasAction = slot ~= nil and HasAction(slot) or false
-    if self.hasAction then
-        self.art:SetTexture(GetActionTexture(slot))
-        self.art:Show()
-    else
-        self.art:Hide()
-        self.cooldown:Clear()
-        self.coolingDown = false
-        self.outOfRange = false
-    end
-    self:UpdateCount()
-    self:UpdateCooldown()
-    self:UpdateUsable()
-    self:UpdateActive()
-    self:UpdateHotkey()
-    self:UpdateEmpty()
-end
-
--- An empty slot shows only while you drag something (or with showEmpty).
-function AB:SetGrid(on: any)
-    self.grid = on and true or false
-    self:UpdateEmpty()
-end
-
-function AB:UpdateEmpty()
-    local alpha = 1
-    if not self.hasAction then
-        alpha = (self.grid or self.showEmpty) and 1 or 0
-    elseif self.unusable then
-        alpha = T.opacity["opacity-disabled"]
-    end
-    self.face:SetAlpha(alpha)
-end
-
-function AB:UpdateCount()
-    -- The display count may be secret: it goes to SetText untouched.
-    local text = self.hasAction and C_ActionBar and C_ActionBar.GetActionDisplayCount
-        and C_ActionBar.GetActionDisplayCount(self.slot :: number) or ""
-    self.count:SetText(text)
-end
-
--- Draws a cooldown from any source: whether it runs, whether it is only the
--- global cooldown, and the engine's duration object (secret-safe).
-function AB:ShowCooldown(active: boolean, gcd: boolean, duration: any)
-    -- Right as the global cooldown ends the game can report it for a moment
-    -- as a real cooldown (active, no longer "on the GCD"): every button would
-    -- flash grey. Coming from the global cooldown, such a reading is believed
-    -- only when it still holds a moment later; meanwhile it draws as the GCD.
-    if active and not gcd and self.onGCD and not self.confirming then
-        gcd = true
-        if not self.recheck then
-            self.recheck = true
-            after(0.15, function()
-                self.recheck = nil
-                self.confirming = true
-                self:UpdateCooldown()
-                self.confirming = nil
-            end)
-        end
-    end
-    self.onGCD = active and gcd or false
-    if active then
-        if duration then self.cooldown:SetCooldownFromDurationObject(duration) end
-        -- The global cooldown sweeps but shows no digits and keeps the colour.
-        self.cooldown:SetHideCountdownNumbers(gcd and true or false)
-    else
-        self.cooldown:Clear()
-    end
-    local real = active and not gcd
-    if self.coolingDown and not active then
-        -- Off cooldown: the ready pop and an arcane flash on the border.
-        motion.pop(self.face)
-        self.flash:SetAlpha(1)
-        motion.alphaTo(self.flash, 0, T.duration["dur-slow"])
-    end
-    self.coolingDown = real and true or false
-    self:UpdateArt()
-end
-
-function AB:UpdateCooldown()
-    if not self.hasAction then return end
-    -- stance and pet buttons have no action slot: their spell's cooldown
-    -- (the sweep's end looked up a slot of nil: an error on a stance change)
-    if not self.slot then
-        if self.cooldownSpell then self:ShowSpellCooldown(self.cooldownSpell) end
-        return
-    end
-    local slot = self.slot
-    local info = C_ActionBar.GetActionCooldown and C_ActionBar.GetActionCooldown(slot)
-    local active, gcd = cooldownFlags(info or nil)
-    local d = active and C_ActionBar.GetActionCooldownDuration and C_ActionBar.GetActionCooldownDuration(slot)
-    self:ShowCooldown(active, gcd, d or nil)
-end
-
--- A spell's cooldown (stance and pet buttons).
-function AB:ShowSpellCooldown(spellID: number?)
-    self.cooldownSpell = spellID
-    local info = spellID and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(spellID)
-    local active, gcd = cooldownFlags(info or nil)
-    local d = active and spellID and C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(spellID)
-    self:ShowCooldown(active, gcd, d or nil)
-end
-
-function AB:ShowUsable(unusable: any)
-    self.unusable = unusable and true or false
-    self:UpdateArt()
-    self:UpdateEmpty()
-end
-
-function AB:ShowActive(on: any)
-    local active = on and true or false
-    self.active = active
-    self.ring:SetShown(active)
-    self:UpdateBorder()
-end
-
--- A new button size (out of combat: the button is secure).
-function AB:Resize(px: number)
-    if self:GetWidth() == px then return end
-    self:SetSize(px, px)
-    if self.dashes then
-        for _, t in ipairs(self.dashes) do t:Hide() end
-        self.dashes = nil
-        if self.autocastOn then self:ShowAutocast(true) end
-    end
-end
-
--- Pet abilities the pet uses by itself: a dashed ink ring inside the border.
-function AB:ShowAutocast(on: any)
-    self.autocastOn = on and true or false
-    local dashes = self.dashes
-    if not dashes then
-        if not on then return end
-        local made: Texture[] = {}
-        dashes, self.dashes = made, made
-        local inset, dash, step = 2, 2, 4
-        local size = self:GetWidth() - inset * 2
-        local function add(horizontal: boolean, offset: number, edge: "TOPLEFT" | "BOTTOMLEFT" | "TOPRIGHT")
-            for pos = 0, size - dash, step do
-                local t = self.over:CreateTexture(nil, "OVERLAY", nil, 2)
-                draw.paintFill(t, "ink")
-                if horizontal then
-                    t:SetSize(dash, 1)
-                    t:SetPoint(edge, self, edge == "TOPLEFT" and "TOPLEFT" or "BOTTOMLEFT", inset + pos, offset)
-                else
-                    t:SetSize(1, dash)
-                    t:SetPoint(edge, self, edge == "TOPLEFT" and "TOPLEFT" or "TOPRIGHT", offset, -(inset + pos))
-                end
-                made[#made + 1] = t
-            end
-        end
-        add(true, -inset, "TOPLEFT")
-        add(true, inset, "BOTTOMLEFT")
-        add(false, inset, "TOPLEFT")
-        add(false, -inset, "TOPRIGHT")
-    end
-    for _, t in ipairs(dashes) do t:SetShown(on and true or false) end
-end
-
-function AB:ShowTooltip()
-    if self.slot then GameTooltip:SetAction(self.slot) end
-end
-
-function AB:UpdateUsable()
-    if not self.hasAction then
-        self.unusable = false
-        return self:UpdateEmpty()
-    end
-    local usable, noMana
-    if C_ActionBar and C_ActionBar.IsUsableAction then
-        usable, noMana = C_ActionBar.IsUsableAction(self.slot :: number)
-    else
-        usable, noMana = IsUsableAction(self.slot)
-    end
-    -- Unknown reads as usable: never dim a spell on a value we can't see.
-    self:ShowUsable(not known(usable, true) or known(noMana, false))
-end
-
-function AB:UpdateActive()
-    local on = false
-    if self.hasAction then
-        on = flag(IsCurrentAction(self.slot)) or flag(IsAutoRepeatAction(self.slot))
-    end
-    self:ShowActive(on)
-end
-
-function AB:SetOutOfRange(out: any)
-    out = (out and self.hasAction) and true or false
-    if self.outOfRange == out then return end
-    self.outOfRange = out
-    self.veil:SetShown(out)
-    self:UpdateArt()
-    self:UpdateHotkey()
-end
-
-function AB:UpdateArt()
-    local desat = 0
-    if self.coolingDown or self.unusable then desat = 1
-    elseif self.outOfRange then desat = 0.6 end
-    self.art:SetDesaturation(desat)
-    local v = self.coolingDown and 0.7 or 1
-    self.art:SetVertexColor(v, v, v)
-end
 
 --------------------------------------------------------------------------------
 -- Construction
@@ -398,15 +96,6 @@ local function digitFont(px: number): string
     return d.name
 end
 
-function AB:SetTextSize(px: number?)
-    px = math.max(MICRO.size, px or MICRO.size)
-    if self.textSize == px then return end
-    self.textSize = px
-    self.hotkey:SetFont(MICRO.file, px, "OUTLINE")
-    self.count:SetFont(MICRO.file, px, "OUTLINE")
-    if self.cooldown.SetCountdownFont then pcall(self.cooldown.SetCountdownFont, self.cooldown, digitFont(px)) end
-end
-
 -- Every action button made, for keybind mode (each bar sets b.bindCommand,
 -- the game's binding command, and b.bindLabel, a name people read).
 export local actionButtons: any[] = {}
@@ -429,98 +118,388 @@ events.on("SUUUI_THEME_CHANGED", function()
     end
 end, "ActionButton")
 
-export function actionButton(parent: Frame, name: string?, size: any): any
-    local px = draw.size(size or "action")
-    local b: ActionButton = CreateFrame("Button", name, parent, "SecureActionButtonTemplate") :: any
-    Mixin(b, AB)
-    actionButtons[#actionButtons + 1] = b
-    b:SetSize(px, px)
-    b.hotkeyText, b.hotkeyShown = "", true
+export class ActionButton extends Button
+    hotkeyText: string
+    hotkeyShown: boolean
+    face: Frame
+    art: Texture
+    veil: Texture
+    cooldown: Cooldown
+    over: Frame
+    border: draw.Border
+    ring: draw.Border
+    flash: Texture
+    hotkey: FontString
+    count: FontString
+    hover: boolean? = nil
+    slot: number? = nil
+    coolingDown: boolean? = nil
+    hasAction: boolean? = nil
+    outOfRange: boolean? = nil
+    grid: boolean? = nil
+    recheck: boolean? = nil
+    confirming: boolean? = nil
+    onGCD: boolean? = nil
+    cooldownSpell: number? = nil
+    unusable: boolean? = nil
+    active: boolean? = nil
+    dashes: Texture[]? = nil
+    autocastOn: boolean? = nil
+    textSize: number? = nil
+    showEmpty: boolean? = nil
+    tooltipNote: string? = nil
+    bindCommand: string? = nil
+    bindLabel: string? = nil
+    onSlotChanged: ((b: ActionButton, old: number?, new: number?) -> ())? = nil
 
-    -- Everything visible sits on the face, a plain child frame.
-    local face = CreateFrame("Frame", nil, b)
-    face:SetAllPoints()
-    b.face = face
-    draw.fill(face, "surface-raised"):SetAllPoints()
-    b.art = face:CreateTexture(nil, "ARTWORK")
-    b.art:SetPoint("TOPLEFT", 1, -1)
-    b.art:SetPoint("BOTTOMRIGHT", -1, 1)
-    b.art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
+    constructor(parent: Frame, name: string?, size: any)
+        local px = draw.size(size or "action")
+        super(name, parent, "SecureActionButtonTemplate")
+        actionButtons[#actionButtons + 1] = self
+        self:SetSize(px, px)
+        self.hotkeyText, self.hotkeyShown = "", true
 
-    b.veil = face:CreateTexture(nil, "ARTWORK", nil, 2)
-    b.veil:SetAllPoints(b.art)
-    draw.paintFill(b.veil, "ember", 0.4)
-    b.veil:Hide()
+        -- Everything visible sits on the face, a plain child frame.
+        local face = CreateFrame("Frame", nil, self)
+        face:SetAllPoints()
+        self.face = face
+        draw.fill(face, "surface-raised"):SetAllPoints()
+        self.art = face:CreateTexture(nil, "ARTWORK")
+        self.art:SetPoint("TOPLEFT", 1, -1)
+        self.art:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
 
-    b.cooldown = CreateFrame("Cooldown", nil, face, "CooldownFrameTemplate")
-    b.cooldown:SetAllPoints(b.art)
-    b.cooldown:SetDrawEdge(false)
-    b.cooldown:SetDrawBling(false)
-    b.cooldown:SetSwipeColor(0, 0, 0, 0.7)
-    b.cooldown:SetHideCountdownNumbers(false)
-    if b.cooldown.SetCountdownFont then pcall(b.cooldown.SetCountdownFont, b.cooldown, "SuuUIFont_micro") end
-    -- At the very end of a sweep the game can still call the cooldown (the
-    -- global one) active for a moment: the button would stay grey with
-    -- nothing left to end it. Look again a moment later.
-    b.cooldown:HookScript("OnCooldownDone", function()
-        b:UpdateCooldown()
-        after(0.1, function() b:UpdateCooldown() end)
-    end)
+        self.veil = face:CreateTexture(nil, "ARTWORK", nil, 2)
+        self.veil:SetAllPoints(self.art)
+        draw.paintFill(self.veil, "ember", 0.4)
+        self.veil:Hide()
 
-    -- Text, rings and the border over the sweep.
-    local over = CreateFrame("Frame", nil, face)
-    b.over = over
-    over:SetAllPoints()
-    over:SetFrameLevel(b.cooldown:GetFrameLevel() + 2)
-    b.border = draw.border(over, "gilt-hairline", { layer = "OVERLAY" })
-    b.ring = draw.border(over, "ink", { inset = 3, layer = "OVERLAY" })
-    b.ring:SetShown(false)
-    b.flash = over:CreateTexture(nil, "OVERLAY", nil, 3)
-    b.flash:SetAllPoints()
-    draw.paintFill(b.flash, "arcane", 0.35)
-    b.flash:SetAlpha(0)
+        self.cooldown = CreateFrame("Cooldown", nil, face, "CooldownFrameTemplate")
+        self.cooldown:SetAllPoints(self.art)
+        self.cooldown:SetDrawEdge(false)
+        self.cooldown:SetDrawBling(false)
+        self.cooldown:SetSwipeColor(0, 0, 0, 0.7)
+        self.cooldown:SetHideCountdownNumbers(false)
+        if self.cooldown.SetCountdownFont then pcall(self.cooldown.SetCountdownFont, self.cooldown, "SuuUIFont_micro") end
+        -- At the very end of a sweep the game can still call the cooldown (the
+        -- global one) active for a moment: the button would stay grey with
+        -- nothing left to end it. Look again a moment later.
+        self.cooldown:HookScript("OnCooldownDone", function()
+            self:UpdateCooldown()
+            after(0.1, function() self:UpdateCooldown() end)
+        end)
 
-    b.hotkey = over:CreateFontString(nil, "OVERLAY")
-    fonts.apply(b.hotkey, "micro")
-    b.hotkey:SetShadowColor(0, 0, 0, 1)
-    b.hotkey:SetShadowOffset(0, -1)
-    b.hotkey:SetPoint("TOPLEFT", 2, 0)
-    b.hotkey:SetJustifyH("LEFT")
+        -- Text, rings and the border over the sweep.
+        local over = CreateFrame("Frame", nil, face)
+        self.over = over
+        over:SetAllPoints()
+        over:SetFrameLevel(self.cooldown:GetFrameLevel() + 2)
+        self.border = draw.border(over, "gilt-hairline", { layer = "OVERLAY" })
+        self.ring = draw.border(over, "ink", { inset = 3, layer = "OVERLAY" })
+        self.ring:SetShown(false)
+        self.flash = over:CreateTexture(nil, "OVERLAY", nil, 3)
+        self.flash:SetAllPoints()
+        draw.paintFill(self.flash, "arcane", 0.35)
+        self.flash:SetAlpha(0)
 
-    b.count = over:CreateFontString(nil, "OVERLAY")
-    fonts.apply(b.count, "micro")
-    b.count:SetShadowColor(0, 0, 0, 1)
-    b.count:SetShadowOffset(0, -1)
-    b.count:SetPoint("BOTTOMRIGHT", -1, 0)
-    b.count:SetJustifyH("RIGHT")
+        self.hotkey = over:CreateFontString(nil, "OVERLAY")
+        fonts.apply(self.hotkey, "micro")
+        self.hotkey:SetShadowColor(0, 0, 0, 1)
+        self.hotkey:SetShadowOffset(0, -1)
+        self.hotkey:SetPoint("TOPLEFT", 2, 0)
+        self.hotkey:SetJustifyH("LEFT")
 
-    -- Hover, press and the game's tooltip for the slot.
-    b:HookScript("OnEnter", function(self)
-        self.hover = true
-        self:UpdateBorder()
-        if self.hasAction and not (GameTooltip:IsForbidden()) then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            self:ShowTooltip()
-            -- A note from the bar, e.g. the page bar 1 is on.
-            -- (It wraps: the colour's alpha used to go in as AddLine's wrap
-            -- argument, draw.rgba's fourth value, always a number.)
-            if self.tooltipNote then
-                local r, g, bl = draw.rgba("ink-muted")
-                GameTooltip:AddLine(self.tooltipNote, r, g, bl, true)
+        self.count = over:CreateFontString(nil, "OVERLAY")
+        fonts.apply(self.count, "micro")
+        self.count:SetShadowColor(0, 0, 0, 1)
+        self.count:SetShadowOffset(0, -1)
+        self.count:SetPoint("BOTTOMRIGHT", -1, 0)
+        self.count:SetJustifyH("RIGHT")
+
+        -- Hover, press and the game's tooltip for the slot.
+        self:HookScript("OnEnter", function()
+            self.hover = true
+            self:UpdateBorder()
+            if self.hasAction and not (GameTooltip:IsForbidden()) then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                self:ShowTooltip()
+                -- A note from the bar, e.g. the page bar 1 is on.
+                -- (It wraps: the colour's alpha used to go in as AddLine's wrap
+                -- argument, draw.rgba's fourth value, always a number.)
+                if self.tooltipNote then
+                    local r, g, bl = draw.rgba("ink-muted")
+                    GameTooltip:AddLine(self.tooltipNote, r, g, bl, true)
+                end
+                GameTooltip:Show()
             end
-            GameTooltip:Show()
-        end
-    end)
-    b:HookScript("OnLeave", function(self)
-        self.hover = false
-        self:UpdateBorder()
-        if GameTooltip:GetOwner() == self then GameTooltip:Hide() end
-    end)
-    b:HookScript("OnMouseDown", function(self) self.face:SetPoint("TOPLEFT", 0, -1); self.face:SetPoint("BOTTOMRIGHT", 0, -1) end)
-    b:HookScript("OnMouseUp", function(self) self.face:SetAllPoints() end)
+        end)
+        self:HookScript("OnLeave", function()
+            self.hover = false
+            self:UpdateBorder()
+            if GameTooltip:GetOwner() == self then GameTooltip:Hide() end
+        end)
+        self:HookScript("OnMouseDown", function() self.face:SetPoint("TOPLEFT", 0, -1); self.face:SetPoint("BOTTOMRIGHT", 0, -1) end)
+        self:HookScript("OnMouseUp", function() self.face:SetAllPoints() end)
 
-    b:SetTextSize(actionTextSize)
-    b:SetGrid(false)
-    extend.add(extend.Kind.ActionButton, b, { name = name })
-    return b
+        self:SetTextSize(actionTextSize)
+        self:SetGrid(false)
+        extend.add(extend.Kind.ActionButton, self, { name = name })
+    end
+
+    function SetHotkey(text: string?)
+        self.hotkeyText = text or ""
+        self.hotkey:SetText(self.hotkeyText)
+        self:UpdateHotkey()
+    end
+
+    function SetHotkeyShown(shown: any)
+        self.hotkeyShown = shown and true or false
+        self:UpdateHotkey()
+    end
+
+    function UpdateHotkey()
+        local show = self.hotkeyShown and self.hotkeyText ~= "" and self.hasAction
+        self.hotkey:SetShown(show and true or false)
+        draw.paint(self.hotkey, self.outOfRange and "ember-text" or "ink-muted")
+    end
+
+    -- The border: a state's colour, gilt while hovered, the hairline at rest.
+    function UpdateBorder()
+        local token = "gilt-hairline"
+        if self.active then token = "ink"
+        elseif self.hover then token = "gilt" end
+        self.border:SetColor(token)
+    end
+
+    function SetSlot(slot: number?)
+        if self.slot == slot then return end
+        local old = self.slot
+        self.slot = slot
+        if self.onSlotChanged then self.onSlotChanged(self, old, slot) end
+        -- A new slot starts without the old one's cooldown: a paging bar 1 would
+        -- otherwise pop "ready" on every page whose slot isn't cooling down.
+        self.coolingDown = false
+        motion.alphaTo(self.flash, 0, 0)
+        self:Update()
+    end
+
+    function Update()
+        local slot = self.slot
+        self.hasAction = slot ~= nil and HasAction(slot) or false
+        if self.hasAction then
+            self.art:SetTexture(GetActionTexture(slot))
+            self.art:Show()
+        else
+            self.art:Hide()
+            self.cooldown:Clear()
+            self.coolingDown = false
+            self.outOfRange = false
+        end
+        self:UpdateCount()
+        self:UpdateCooldown()
+        self:UpdateUsable()
+        self:UpdateActive()
+        self:UpdateHotkey()
+        self:UpdateEmpty()
+    end
+
+    -- An empty slot shows only while you drag something (or with showEmpty).
+    function SetGrid(on: any)
+        self.grid = on and true or false
+        self:UpdateEmpty()
+    end
+
+    function UpdateEmpty()
+        local alpha = 1
+        if not self.hasAction then
+            alpha = (self.grid or self.showEmpty) and 1 or 0
+        elseif self.unusable then
+            alpha = T.opacity["opacity-disabled"]
+        end
+        self.face:SetAlpha(alpha)
+    end
+
+    function UpdateCount()
+        -- The display count may be secret: it goes to SetText untouched.
+        local text = self.hasAction and C_ActionBar and C_ActionBar.GetActionDisplayCount
+            and C_ActionBar.GetActionDisplayCount(self.slot :: number) or ""
+        self.count:SetText(text)
+    end
+
+    -- Draws a cooldown from any source: whether it runs, whether it is only the
+    -- global cooldown, and the engine's duration object (secret-safe).
+    function ShowCooldown(active: boolean, gcd: boolean, duration: any)
+        -- Right as the global cooldown ends the game can report it for a moment
+        -- as a real cooldown (active, no longer "on the GCD"): every button would
+        -- flash grey. Coming from the global cooldown, such a reading is believed
+        -- only when it still holds a moment later; meanwhile it draws as the GCD.
+        if active and not gcd and self.onGCD and not self.confirming then
+            gcd = true
+            if not self.recheck then
+                self.recheck = true
+                after(0.15, function()
+                    self.recheck = nil
+                    self.confirming = true
+                    self:UpdateCooldown()
+                    self.confirming = nil
+                end)
+            end
+        end
+        self.onGCD = active and gcd or false
+        if active then
+            if duration then self.cooldown:SetCooldownFromDurationObject(duration) end
+            -- The global cooldown sweeps but shows no digits and keeps the colour.
+            self.cooldown:SetHideCountdownNumbers(gcd and true or false)
+        else
+            self.cooldown:Clear()
+        end
+        local real = active and not gcd
+        if self.coolingDown and not active then
+            -- Off cooldown: the ready pop and an arcane flash on the border.
+            motion.pop(self.face)
+            self.flash:SetAlpha(1)
+            motion.alphaTo(self.flash, 0, T.duration["dur-slow"])
+        end
+        self.coolingDown = real and true or false
+        self:UpdateArt()
+    end
+
+    function UpdateCooldown()
+        if not self.hasAction then return end
+        -- stance and pet buttons have no action slot: their spell's cooldown
+        -- (the sweep's end looked up a slot of nil: an error on a stance change)
+        if not self.slot then
+            if self.cooldownSpell then self:ShowSpellCooldown(self.cooldownSpell) end
+            return
+        end
+        local slot = self.slot
+        local info = C_ActionBar.GetActionCooldown and C_ActionBar.GetActionCooldown(slot)
+        local active, gcd = cooldownFlags(info or nil)
+        local d = active and C_ActionBar.GetActionCooldownDuration and C_ActionBar.GetActionCooldownDuration(slot)
+        self:ShowCooldown(active, gcd, d or nil)
+    end
+
+    -- A spell's cooldown (stance and pet buttons).
+    function ShowSpellCooldown(spellID: number?)
+        self.cooldownSpell = spellID
+        local info = spellID and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(spellID)
+        local active, gcd = cooldownFlags(info or nil)
+        local d = active and spellID and C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(spellID)
+        self:ShowCooldown(active, gcd, d or nil)
+    end
+
+    function ShowUsable(unusable: any)
+        self.unusable = unusable and true or false
+        self:UpdateArt()
+        self:UpdateEmpty()
+    end
+
+    function ShowActive(on: any)
+        local active = on and true or false
+        self.active = active
+        self.ring:SetShown(active)
+        self:UpdateBorder()
+    end
+
+    -- A new button size (out of combat: the button is secure).
+    function Resize(px: number)
+        if self:GetWidth() == px then return end
+        self:SetSize(px, px)
+        if self.dashes then
+            for _, t in ipairs(self.dashes) do t:Hide() end
+            self.dashes = nil
+            if self.autocastOn then self:ShowAutocast(true) end
+        end
+    end
+
+    -- Pet abilities the pet uses by itself: a dashed ink ring inside the border.
+    function ShowAutocast(on: any)
+        self.autocastOn = on and true or false
+        local dashes = self.dashes
+        if not dashes then
+            if not on then return end
+            local made: Texture[] = {}
+            dashes, self.dashes = made, made
+            local inset, dash, step = 2, 2, 4
+            local size = self:GetWidth() - inset * 2
+            local function add(horizontal: boolean, offset: number, edge: "TOPLEFT" | "BOTTOMLEFT" | "TOPRIGHT")
+                for pos = 0, size - dash, step do
+                    local t = self.over:CreateTexture(nil, "OVERLAY", nil, 2)
+                    draw.paintFill(t, "ink")
+                    if horizontal then
+                        t:SetSize(dash, 1)
+                        t:SetPoint(edge, self, edge == "TOPLEFT" and "TOPLEFT" or "BOTTOMLEFT", inset + pos, offset)
+                    else
+                        t:SetSize(1, dash)
+                        t:SetPoint(edge, self, edge == "TOPLEFT" and "TOPLEFT" or "TOPRIGHT", offset, -(inset + pos))
+                    end
+                    made[#made + 1] = t
+                end
+            end
+            add(true, -inset, "TOPLEFT")
+            add(true, inset, "BOTTOMLEFT")
+            add(false, inset, "TOPLEFT")
+            add(false, -inset, "TOPRIGHT")
+        end
+        for _, t in ipairs(dashes) do t:SetShown(on and true or false) end
+    end
+
+    function ShowTooltip()
+        if self.slot then GameTooltip:SetAction(self.slot) end
+    end
+
+    function UpdateUsable()
+        if not self.hasAction then
+            self.unusable = false
+            return self:UpdateEmpty()
+        end
+        local usable, noMana
+        if C_ActionBar and C_ActionBar.IsUsableAction then
+            usable, noMana = C_ActionBar.IsUsableAction(self.slot :: number)
+        else
+            usable, noMana = IsUsableAction(self.slot)
+        end
+        -- Unknown reads as usable: never dim a spell on a value we can't see.
+        self:ShowUsable(not known(usable, true) or known(noMana, false))
+    end
+
+    function UpdateActive()
+        local on = false
+        if self.hasAction then
+            on = flag(IsCurrentAction(self.slot)) or flag(IsAutoRepeatAction(self.slot))
+        end
+        self:ShowActive(on)
+    end
+
+    function SetOutOfRange(out: any)
+        out = (out and self.hasAction) and true or false
+        if self.outOfRange == out then return end
+        self.outOfRange = out
+        self.veil:SetShown(out)
+        self:UpdateArt()
+        self:UpdateHotkey()
+    end
+
+    function UpdateArt()
+        local desat = 0
+        if self.coolingDown or self.unusable then desat = 1
+        elseif self.outOfRange then desat = 0.6 end
+        self.art:SetDesaturation(desat)
+        local v = self.coolingDown and 0.7 or 1
+        self.art:SetVertexColor(v, v, v)
+    end
+
+    function SetTextSize(px: number?)
+        px = math.max(MICRO.size, px or MICRO.size)
+        if self.textSize == px then return end
+        self.textSize = px
+        self.hotkey:SetFont(MICRO.file, px, "OUTLINE")
+        self.count:SetFont(MICRO.file, px, "OUTLINE")
+        if self.cooldown.SetCountdownFont then pcall(self.cooldown.SetCountdownFont, self.cooldown, digitFont(px)) end
+    end
+end
+mixins.ActionButton = ActionButton
+
+export function actionButton(parent: Frame, name: string?, size: any): ActionButton
+    return ActionButton.new(parent, name, size)
 end

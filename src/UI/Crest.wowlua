@@ -17,15 +17,6 @@ import * as draw from "./Draw"
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local KINDS: { [string]: boolean } = { elite = true, rare = true, rareelite = true, worldboss = true }
 
-export interface Crest extends Frame
-    variant: string
-    kind?: string
-    looks?: { [string]: Texture[] }
-    function Look(kind: string): Texture[]
-    function SetClassification(c: any)
-end
-
-local Crest: Crest = {} :: any
 -- A diamond jewel: gilt, silver or both, `size` px a side, centred at x, y.
 local function jewel(c: Frame, kind: string, size: number, x: number, y: number): Texture[]
     local parts: Texture[] = {}
@@ -62,56 +53,64 @@ local function wing(c: Frame, color: string, x: number, y: number, length: numbe
     return { t }
 end
 
--- The pieces of one look, made once.
-function Crest:Look(kind: string): Texture[]
-    local looks: { [string]: Texture[] } = self.looks or {}
-    self.looks = looks
-    local made = looks[kind]
-    if made then return made end
-    local parts: Texture[], plate = {}, self.variant == "plate"
-    local function add(list: Texture[]) for _, t in ipairs(list) do parts[#parts + 1] = t end end
-    local metal = (kind == "elite" or kind == "worldboss") and "gilt" or "ink"
-    local stone = kind == "rare" and "silver" or kind == "rareelite" and "both" or "gilt"
-    if plate then
-        add(jewel(self, stone, 5, 0, 0))
-        add(wing(self, metal, 3.5, 0, 10))
-        if kind == "worldboss" then add(jewel(self, "gilt", 3, 8, 0)) end
-    elseif kind == "worldboss" then
-        add(wing(self, "gilt", -6, 0, 44, true))
-        add(wing(self, "gilt", 6, 0, 44))
-        add(jewel(self, "gilt", 5, -10.5, 0))
-        add(jewel(self, "gilt", 5, 10.5, 0))
-        add(jewel(self, "gilt", 9, 0, 0))
-    else
-        add(wing(self, metal, -4, 0, 26, true))
-        add(wing(self, metal, 4, 0, 26))
-        add(jewel(self, stone, 7, 0, 0))
-    end
-    for _, t in ipairs(parts) do t:Hide() end
-    looks[kind] = parts
-    return parts
-end
+export class Crest extends Frame
+    variant: string
+    looks: { [string]: Texture[] }? = nil
+    kind: string? = nil
 
--- The unit's classification (a secret one: hidden, like the meta words).
-function Crest:SetClassification(c: any)
-    if isSecret(c) then c = nil end
-    local kind: string? = c ~= nil and KINDS[c] and c or nil
-    if kind == self.kind then return end
-    local was = self.kind
-    if was then for _, t in ipairs(self:Look(was)) do t:Hide() end end
-    self.kind = kind
-    if kind then for _, t in ipairs(self:Look(kind)) do t:Show() end end
-    self:SetShown(kind ~= nil)
+    constructor(parent: Frame, variant: string?)
+        super(nil, parent)
+        self.variant = variant or "frame"
+        self:SetSize(1, 1)
+        self:SetFrameLevel(parent:GetFrameLevel() + 8)
+        self:Hide()
+    end
+
+    -- The pieces of one look, made once.
+    function Look(kind: string): Texture[]
+        local looks: { [string]: Texture[] } = self.looks or {}
+        self.looks = looks
+        local made = looks[kind]
+        if made then return made end
+        local parts: Texture[], plate = {}, self.variant == "plate"
+        local function add(list: Texture[]) for _, t in ipairs(list) do parts[#parts + 1] = t end end
+        local metal = (kind == "elite" or kind == "worldboss") and "gilt" or "ink"
+        local stone = kind == "rare" and "silver" or kind == "rareelite" and "both" or "gilt"
+        if plate then
+            add(jewel(self, stone, 5, 0, 0))
+            add(wing(self, metal, 3.5, 0, 10))
+            if kind == "worldboss" then add(jewel(self, "gilt", 3, 8, 0)) end
+        elseif kind == "worldboss" then
+            add(wing(self, "gilt", -6, 0, 44, true))
+            add(wing(self, "gilt", 6, 0, 44))
+            add(jewel(self, "gilt", 5, -10.5, 0))
+            add(jewel(self, "gilt", 5, 10.5, 0))
+            add(jewel(self, "gilt", 9, 0, 0))
+        else
+            add(wing(self, metal, -4, 0, 26, true))
+            add(wing(self, metal, 4, 0, 26))
+            add(jewel(self, stone, 7, 0, 0))
+        end
+        for _, t in ipairs(parts) do t:Hide() end
+        looks[kind] = parts
+        return parts
+    end
+
+    -- The unit's classification (a secret one: hidden, like the meta words).
+    function SetClassification(c: any)
+        if isSecret(c) then c = nil end
+        local kind: string? = c ~= nil and KINDS[c] and c or nil
+        if kind == self.kind then return end
+        local was = self.kind
+        if was then for _, t in ipairs(self:Look(was)) do t:Hide() end end
+        self.kind = kind
+        if kind then for _, t in ipairs(self:Look(kind)) do t:Show() end end
+        self:SetShown(kind ~= nil)
+    end
 end
 
 export function crest(parent: Frame, variant: string?): Crest
-    local c: Crest = CreateFrame("Frame", nil, parent) :: any
-    Mixin(c, Crest)
-    c.variant = variant or "frame"
-    c:SetSize(1, 1)
-    c:SetFrameLevel(parent:GetFrameLevel() + 8)
-    c:Hide()
-    return c
+    return Crest.new(parent, variant)
 end
 
 --------------------------------------------------------------------------------

@@ -18,90 +18,85 @@ import text, Text from "./Text"
 
 local CROP = 0.08
 
-export interface Icon extends Frame
+local STATE_BORDER: { [string]: string } = { rest = "gilt-hairline", ready = "arcane", dim = "gilt-hairline", active = "ink" }
+
+export class Icon extends Frame
     well: Texture
     art: Texture
     border: draw.Border
     state: string?
     borderToken: string?
     glowToken: string?
-    glow: draw.SoftEdge?
     glows: { [string]: draw.SoftEdge }?
+    glow: draw.SoftEdge?
     count: Text?
+
+    constructor(parent: Frame, size: number | string | nil)
+        local px = draw.size(size or "icon-md")
+        super(nil, parent)
+        self:SetSize(px, px)
+        self.well = draw.fill(self, "surface-sunk")
+        self.well:SetAllPoints()
+        self.art = self:CreateTexture(nil, "ARTWORK")
+        self.art:SetPoint("TOPLEFT", 1, -1)
+        self.art:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
+        self.border = draw.border(self, "gilt-hairline", { layer = "OVERLAY" })
+        self:SetState("rest")
+    end
+
     function SetArt(texture: any)
+        self.art:SetTexture(texture)
+    end
+
     function SetState(state: string?)
+        state = state and STATE_BORDER[state] and state or "rest"
+        self.state = state
+        local dim = state == "dim"
+        self.art:SetDesaturated(dim)
+        self.art:SetVertexColor(dim and 0.5 or 1, dim and 0.5 or 1, dim and 0.5 or 1)
+        self.border:SetColor(self.borderToken or STATE_BORDER[state] :: string)
+        self:SetGlow(state == "ready" and "glow-arcane" or nil)
+    end
+
     function SetBorder(token: string?)
+        self.borderToken = token
+        self.border:SetColor(token or STATE_BORDER[self.state or "rest"] :: string)
+    end
+
+    -- A shadow token ("glow-arcane", "glow-ember", "glow-ward") or nil for none.
     function SetGlow(token: string?)
+        if self.glowToken == token then return end
+        self.glowToken = token
+        if self.glow then self.glow:SetShown(false) end
+        if token then
+            local glows: { [string]: draw.SoftEdge } = self.glows or {}
+            self.glows = glows
+            local glow = glows[token] or draw.shadow(self, token)
+            glows[token] = glow
+            self.glow = glow
+            glow:SetShown(true)
+        else
+            self.glow = nil
+        end
+    end
+
     function SetCount(n: any)
+        local count = self.count
+        if not count then
+            count = text(self, "micro", "ink")
+            count:SetShadowed(true)
+            count:SetPoint("BOTTOMRIGHT", -1, 1)
+            self.count = count
+        end
+        count:SetValue(n and n ~= 0 and n ~= 1 and tostring(n) or "")
+    end
+
     function Pop()
-end
-
-local Icon: Icon = {} :: any
-function Icon:SetArt(texture: any)
-    self.art:SetTexture(texture)
-end
-
-local STATE_BORDER: { [string]: string } = { rest = "gilt-hairline", ready = "arcane", dim = "gilt-hairline", active = "ink" }
-
-function Icon:SetState(state: string?)
-    state = state and STATE_BORDER[state] and state or "rest"
-    self.state = state
-    local dim = state == "dim"
-    self.art:SetDesaturated(dim)
-    self.art:SetVertexColor(dim and 0.5 or 1, dim and 0.5 or 1, dim and 0.5 or 1)
-    self.border:SetColor(self.borderToken or STATE_BORDER[state] :: string)
-    self:SetGlow(state == "ready" and "glow-arcane" or nil)
-end
-
-function Icon:SetBorder(token: string?)
-    self.borderToken = token
-    self.border:SetColor(token or STATE_BORDER[self.state or "rest"] :: string)
-end
-
--- A shadow token ("glow-arcane", "glow-ember", "glow-ward") or nil for none.
-function Icon:SetGlow(token: string?)
-    if self.glowToken == token then return end
-    self.glowToken = token
-    if self.glow then self.glow:SetShown(false) end
-    if token then
-        local glows: { [string]: draw.SoftEdge } = self.glows or {}
-        self.glows = glows
-        local glow = glows[token] or draw.shadow(self, token)
-        glows[token] = glow
-        self.glow = glow
-        glow:SetShown(true)
-    else
-        self.glow = nil
+        motion.pop(self)
     end
-end
-
-function Icon:SetCount(n: any)
-    local count = self.count
-    if not count then
-        count = text(self, "micro", "ink")
-        count:SetShadowed(true)
-        count:SetPoint("BOTTOMRIGHT", -1, 1)
-        self.count = count
-    end
-    count:SetValue(n and n ~= 0 and n ~= 1 and tostring(n) or "")
-end
-
-function Icon:Pop()
-    motion.pop(self)
 end
 
 export function icon(parent: Frame, size: number | string | nil): Icon
-    local px = draw.size(size or "icon-md")
-    local f: Icon = CreateFrame("Frame", nil, parent) :: any
-    Mixin(f, Icon)
-    f:SetSize(px, px)
-    f.well = draw.fill(f, "surface-sunk")
-    f.well:SetAllPoints()
-    f.art = f:CreateTexture(nil, "ARTWORK")
-    f.art:SetPoint("TOPLEFT", 1, -1)
-    f.art:SetPoint("BOTTOMRIGHT", -1, 1)
-    f.art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
-    f.border = draw.border(f, "gilt-hairline", { layer = "OVERLAY" })
-    f:SetState("rest")
-    return f
+    return Icon.new(parent, size)
 end

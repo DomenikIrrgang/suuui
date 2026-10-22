@@ -13,7 +13,7 @@ import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
 import text, Text from "/UI/Text"
 import icon, Icon from "/UI/Icon"
-import panel, Panel from "/UI/Panel"
+import Panel from "/UI/Panel"
 import button, SuuButton from "/UI/Controls"
 
 const S = T.space
@@ -41,20 +41,6 @@ export interface ReadinessRow extends Frame
 end
 
 -- The panel readiness makes.
-export interface Readiness extends Panel
-    rows: ReadinessRow[]
-    data: Entry[]
-    footRule: Texture
-    action: SuuButton
-    actionShown: boolean
-    listH?: number
-    function Update()
-    function SetRows(list: Entry[]?)
-    function SetActionShown(on: any)
-    function Layout(listH: number)
-end
-
-local Readiness: Readiness = {} :: any
 
 local function buildRow(r: Readiness, i: number): ReadinessRow
     local row: ReadinessRow = CreateFrame("Frame", nil, r.body) :: any
@@ -81,87 +67,98 @@ local function buildRow(r: Readiness, i: number): ReadinessRow
     return row
 end
 
-function Readiness:Update()
-    local now = GetTime()
-    for i, d in ipairs(self.data) do
-        local row = self.rows[i]
-        local left = d.endsAt and d.endsAt - now or 0
-        if left > 0 then
-            row.icon:SetState("dim")
-            row.status:SetStyle("numeric")
-            row.status:SetColor("ink-muted")
-            row.status:SetValue(fmtLeft(left))
-        else
-            row.icon:SetState("rest")
-            row.status:SetStyle("label")
-            row.status:SetColor("arcane")
-            row.status:SetValue("Ready")
+export class Readiness extends Panel
+    rows: ReadinessRow[]
+    data: Entry[]
+    footRule: Texture
+    action: SuuButton
+    actionShown: boolean
+    listH: number? = nil
+
+    constructor(parent: Frame, options: { [string]: any }?)
+        local opts: { [string]: any } = options or {}
+        super(parent, { title = "Readiness", meta = "before pull", width = WIDTH })
+        self.rows, self.data = {}, {}
+        self.footRule = self.body:CreateTexture(nil, "BORDER")
+        draw.paintFill(self.footRule, "gilt-faint")
+        self.footRule:SetHeight(1)
+        self.action = button(self.body, { variant = "primary", text = "Ready check",
+            onClick = function() if opts.onReadyCheck then opts.onReadyCheck() end end })
+        self.actionShown = false
+        local wait = 0
+        self:SetScript("OnUpdate", function(_, elapsed: number)
+            wait = wait - elapsed
+            if wait > 0 then return end
+            wait = 0.5
+            self:Update()
+        end)
+        self:SetRows({})
+    end
+
+    function Update()
+        local now = GetTime()
+        for i, d in ipairs(self.data) do
+            local row = self.rows[i]
+            local left = d.endsAt and d.endsAt - now or 0
+            if left > 0 then
+                row.icon:SetState("dim")
+                row.status:SetStyle("numeric")
+                row.status:SetColor("ink-muted")
+                row.status:SetValue(fmtLeft(left))
+            else
+                row.icon:SetState("rest")
+                row.status:SetStyle("label")
+                row.status:SetColor("arcane")
+                row.status:SetValue("Ready")
+            end
         end
     end
-end
 
-function Readiness:SetRows(list: Entry[]?)
-    self.data = list or {}
-    local y = 0
-    for i, d in ipairs(self.data) do
-        local row = self.rows[i] or buildRow(self, i)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", 0, -y)
-        row.rule:SetShown(i > 1)
-        row.icon:SetArt(d.icon or 134400)
-        row.spell:SetValue(d.spell or "")
-        row.who:SetValue(d.who or "")
-        local c = d.class and COLORS["class-" .. d.class:lower()] and ("class-" .. d.class:lower())
-        row.diamond:SetShown(c and true or false)
-        if c then draw.paint(row.diamond, c) end
-        row:Show()
-        y = y + ROW_H
-    end
-    for i = #self.data + 1, #self.rows do self.rows[i]:Hide() end
-    self:Update()
-    self:Layout(y)
-end
-
-function Readiness:SetActionShown(on: any)
-    self.actionShown = on and true or false
-    self:Layout(self.listH or 0)
-end
-
-function Readiness:Layout(listH: number)
-    self.listH = listH
-    local foot = 0
-    self.footRule:SetShown(self.actionShown)
-    self.action:SetShown(self.actionShown)
-    if self.actionShown then
-        self.footRule:ClearAllPoints()
-        self.footRule:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -(listH + S["space-4"]))
-        self.footRule:SetPoint("TOPRIGHT", self.body, "TOPRIGHT", 0, -(listH + S["space-4"]))
-        self.action:ClearAllPoints()
-        self.action:SetPoint("TOPRIGHT", self.footRule, "BOTTOMRIGHT", 0, -S["space-4"])
-        foot = S["space-4"] * 2 + 1 + 30
-    end
-    self.body:SetSize(WIDTH - S["space-5"] * 2, math.max(1, listH + foot))
-    self:Fit()
-end
-
-export function readiness(parent: Frame, options: { [string]: any }?): any
-    local opts: { [string]: any } = options or {}
-    local r: Readiness = panel(parent, { title = "Readiness", meta = "before pull", width = WIDTH }) :: any
-    Mixin(r, Readiness)
-    r.rows, r.data = {}, {}
-    r.footRule = r.body:CreateTexture(nil, "BORDER")
-    draw.paintFill(r.footRule, "gilt-faint")
-    r.footRule:SetHeight(1)
-    r.action = button(r.body, { variant = "primary", text = "Ready check",
-        onClick = function() if opts.onReadyCheck then opts.onReadyCheck() end end })
-    r.actionShown = false
-    local wait = 0
-    r:SetScript("OnUpdate", function(self: Readiness, elapsed: number)
-        wait = wait - elapsed
-        if wait > 0 then return end
-        wait = 0.5
+    function SetRows(list: Entry[]?)
+        self.data = list or {}
+        local y = 0
+        for i, d in ipairs(self.data) do
+            local row = self.rows[i] or buildRow(self, i)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", 0, -y)
+            row.rule:SetShown(i > 1)
+            row.icon:SetArt(d.icon or 134400)
+            row.spell:SetValue(d.spell or "")
+            row.who:SetValue(d.who or "")
+            local c = d.class and COLORS["class-" .. d.class:lower()] and ("class-" .. d.class:lower())
+            row.diamond:SetShown(c and true or false)
+            if c then draw.paint(row.diamond, c) end
+            row:Show()
+            y = y + ROW_H
+        end
+        for i = #self.data + 1, #self.rows do self.rows[i]:Hide() end
         self:Update()
-    end)
-    r:SetRows({})
-    return r
+        self:Layout(y)
+    end
+
+    function SetActionShown(on: any)
+        self.actionShown = on and true or false
+        self:Layout(self.listH or 0)
+    end
+
+    function Layout(listH: number)
+        self.listH = listH
+        local foot = 0
+        self.footRule:SetShown(self.actionShown)
+        self.action:SetShown(self.actionShown)
+        if self.actionShown then
+            self.footRule:ClearAllPoints()
+            self.footRule:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -(listH + S["space-4"]))
+            self.footRule:SetPoint("TOPRIGHT", self.body, "TOPRIGHT", 0, -(listH + S["space-4"]))
+            self.action:ClearAllPoints()
+            self.action:SetPoint("TOPRIGHT", self.footRule, "BOTTOMRIGHT", 0, -S["space-4"])
+            foot = S["space-4"] * 2 + 1 + 30
+        end
+        self.body:SetSize(WIDTH - S["space-5"] * 2, math.max(1, listH + foot))
+        self:Fit()
+    end
+end
+
+export function readiness(parent: Frame, options: { [string]: any }?): Readiness
+    return Readiness.new(parent, options)
 end

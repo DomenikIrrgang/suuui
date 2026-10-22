@@ -41,8 +41,6 @@ local DRIFT_X, DRIFT_Y = 3, 8
 local FADE_IN, HOLD, FADE_OUT = 0.6, 1.0, 1.2
 local MOON = 7
 
-local Sign = {}
-
 local function smoothing(easing: string): string return (T.easing :: { [string]: any })[easing].smoothing end
 
 -- A letter's loop: the holder drifts and fades in, its glyph fades out (an
@@ -74,115 +72,126 @@ local function buildLoop(holder: Frame, glyph: any, d: Letter): AnimationGroup
     return g
 end
 
-export function restedSign(frame: any): any
-    local s = CreateFrame("Frame", nil, frame.markerLayer or frame)
-    Mixin(s, Sign)
-    s:SetSize(1, 1)
-    s:SetPoint("CENTER", frame, "TOPRIGHT", 0, 0)
-    s:EnableMouse(false)
-    s:Hide()
-    -- the body carries opacity-ooc out of a rest area; the sign itself its fades
-    s.body = CreateFrame("Frame", nil, s)
-    s.body:SetAllPoints()
-    s.letters = {}
-    for i, d in ipairs(LETTERS) do
-        local l = CreateFrame("Frame", nil, s.body)
-        l:SetSize(1, 1)
-        l:SetPoint("CENTER", frame, "TOPRIGHT", d.x, d.y)
-        l.glyph = uiText.text(l, d.style, "progress-fill")
-        l.glyph:SetShadowed(true)
-        l.glyph:SetPoint("CENTER", l, "CENTER", 0, 0)
-        l.glyph:SetValue(d.text)
-        l.loop = buildLoop(l, l.glyph, d)
-        l.still = d.still
-        s.letters[i] = l
+export class RestedSign extends Frame
+    body: Frame
+    letters: any
+    out: any
+    animating: boolean? = nil
+    look: any? = nil
+
+    constructor(frame: any)
+        super(nil, frame.markerLayer or frame)
+        self:SetSize(1, 1)
+        self:SetPoint("CENTER", frame, "TOPRIGHT", 0, 0)
+        self:EnableMouse(false)
+        self:Hide()
+        -- the body carries opacity-ooc out of a rest area; the sign itself its fades
+        self.body = CreateFrame("Frame", nil, self)
+        self.body:SetAllPoints()
+        self.letters = {}
+        for i, d in ipairs(LETTERS) do
+            local l = CreateFrame("Frame", nil, self.body)
+            l:SetSize(1, 1)
+            l:SetPoint("CENTER", frame, "TOPRIGHT", d.x, d.y)
+            l.glyph = uiText.text(l, d.style, "progress-fill")
+            l.glyph:SetShadowed(true)
+            l.glyph:SetPoint("CENTER", l, "CENTER", 0, 0)
+            l.glyph:SetValue(d.text)
+            l.loop = buildLoop(l, l.glyph, d)
+            l.still = d.still
+            self.letters[i] = l
+        end
+        -- the full moon in the first letter's place, with the same shadow (0 1px, black 90%)
+        local first = self.letters[1]
+        first.shade = first:CreateTexture(nil, "ARTWORK")
+        first.shade:SetTexture(DISC)
+        first.shade:SetSize(MOON, MOON)
+        first.shade:SetPoint("CENTER", first, "CENTER", 0, -1)
+        first.shade:SetVertexColor(0, 0, 0, 0.9)
+        first.moon = first:CreateTexture(nil, "OVERLAY")
+        first.moon:SetTexture(DISC)
+        first.moon:SetSize(MOON, MOON)
+        first.moon:SetPoint("CENTER", first, "CENTER", 0, 0)
+        draw.paint(first.moon, "progress-fill")
+
+        -- leaving: from where it is to 0, ease-in, then hidden
+        self.out = self:CreateAnimationGroup()
+        self.out.alpha = self.out:CreateAnimation("Alpha")
+        self.out.alpha:SetToAlpha(0)
+        self.out.alpha:SetSmoothing(smoothing("ease-in"))
+        self.out:SetScript("OnFinished", function() self:Gone() end)
+        -- a loop doesn't run while hidden: shown again, the three start together
+        self:SetScript("OnShow", function() if self.animating then self:Restart() end end)
+        self:SetMoon(false)
     end
-    -- the full moon in the first letter's place, with the same shadow (0 1px, black 90%)
-    local first = s.letters[1]
-    first.shade = first:CreateTexture(nil, "ARTWORK")
-    first.shade:SetTexture(DISC)
-    first.shade:SetSize(MOON, MOON)
-    first.shade:SetPoint("CENTER", first, "CENTER", 0, -1)
-    first.shade:SetVertexColor(0, 0, 0, 0.9)
-    first.moon = first:CreateTexture(nil, "OVERLAY")
-    first.moon:SetTexture(DISC)
-    first.moon:SetSize(MOON, MOON)
-    first.moon:SetPoint("CENTER", first, "CENTER", 0, 0)
-    draw.paint(first.moon, "progress-fill")
 
-    -- leaving: from where it is to 0, ease-in, then hidden
-    s.out = s:CreateAnimationGroup()
-    s.out.alpha = s.out:CreateAnimation("Alpha")
-    s.out.alpha:SetToAlpha(0)
-    s.out.alpha:SetSmoothing(smoothing("ease-in"))
-    s.out:SetScript("OnFinished", function() s:Gone() end)
-    -- a loop doesn't run while hidden: shown again, the three start together
-    s:SetScript("OnShow", function(self) if self.animating then self:Restart() end end)
-    s:SetMoon(false)
-    return s
-end
-
-function Sign:SetMoon(on: boolean)
-    local first = self.letters[1]
-    first.glyph:SetShown(not on)
-    first.moon:SetShown(on)
-    first.shade:SetShown(on)
-end
-
-function Sign:Restart()
-    for _, l in ipairs(self.letters) do
-        l.loop:Stop()
-        l:SetAlpha(0)
-        l.loop:Play()
+    function SetMoon(on: boolean)
+        local first = self.letters[1]
+        first.glyph:SetShown(not on)
+        first.moon:SetShown(on)
+        first.shade:SetShown(on)
     end
-end
 
--- Drifting, or standing at the start points.
-function Sign:Pose(still: boolean?)
-    if still then
-        self.animating = false
+    function Restart()
         for _, l in ipairs(self.letters) do
             l.loop:Stop()
-            l:SetAlpha(l.still)
+            l:SetAlpha(0)
+            l.loop:Play()
         end
-    elseif not self.animating then
-        self.animating = true
-        self:Restart()
     end
-end
 
-function Sign:Gone()
-    self:Pose(true)
-    self:Hide()
-    self:SetAlpha(1)
-end
+    -- Drifting, or standing at the start points.
+    function Pose(still: boolean?)
+        if still then
+            self.animating = false
+            for _, l in ipairs(self.letters) do
+                l.loop:Stop()
+                l:SetAlpha(l.still)
+            end
+        elseif not self.animating then
+            self.animating = true
+            self:Restart()
+        end
+    end
 
-function Sign:SetLook(look: string?, opts: { still: boolean?, fade: number? }?)
-    opts = opts or {}
-    if not look then
-        if not self.look then return end
-        self.look = nil
-        local from = self:GetAlpha()
-        motion.stop(self)
-        if opts.fade and opts.fade > 0 and self:IsVisible() and not motion.reduced() then
-            self.out.alpha:SetFromAlpha(from)
-            self.out.alpha:SetDuration(opts.fade)
-            self:SetAlpha(0) -- what's left when the fade ends
-            self.out:Play()
-        else
+    function Gone()
+        self:Pose(true)
+        self:Hide()
+        self:SetAlpha(1)
+    end
+
+    function SetLook(look: string?, opts: { still: boolean?, fade: number? }?)
+        opts = opts or {}
+        if not look then
+            if not self.look then return end
+            self.look = nil
+            local from = self:GetAlpha()
+            motion.stop(self)
+            if opts.fade and opts.fade > 0 and self:IsVisible() and not motion.reduced() then
+                self.out.alpha:SetFromAlpha(from)
+                self.out.alpha:SetDuration(opts.fade)
+                self:SetAlpha(0) -- what's left when the fade ends
+                self.out:Play()
+            else
+                self.out:Stop()
+                self:Gone()
+            end
+            return
+        end
+        local appearing = not self.look
+        self.look = look
+        self.body:SetAlpha(look == "carry" and T.opacity["opacity-ooc"] or 1)
+        self:SetMoon(look == "full")
+        self:Pose(opts.still or look ~= "earn" or motion.reduced())
+        if appearing then
             self.out:Stop()
-            self:Gone()
+            self:Show()
+            if opts.fade and opts.fade > 0 then motion.fadeIn(self, opts.fade) else motion.stop(self) end
         end
-        return
-    end
-    local appearing = not self.look
-    self.look = look
-    self.body:SetAlpha(look == "carry" and T.opacity["opacity-ooc"] or 1)
-    self:SetMoon(look == "full")
-    self:Pose(opts.still or look ~= "earn" or motion.reduced())
-    if appearing then
-        self.out:Stop()
-        self:Show()
-        if opts.fade and opts.fade > 0 then motion.fadeIn(self, opts.fade) else motion.stop(self) end
     end
 end
+
+export function restedSign(frame: any): RestedSign
+    return RestedSign.new(frame)
+end
+

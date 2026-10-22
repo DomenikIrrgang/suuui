@@ -59,26 +59,6 @@ export interface TimelineList extends Frame
 end
 
 --- What encounterTimeline makes.
-export interface EncounterTimeline extends Frame
-    window: number
-    soonAt: number
-    variant: string
-    events: TimelineEvent[]
-    -- the track
-    track: Frame?
-    ticks: Texture[]
-    endLabel: Text
-    later: Text
-    evs: TrackEvent[]
-    -- the list
-    list: TimelineList?
-    rows: ListRow[]
-    listTop: number
-    function Layout()
-    function SetEvents(list: TimelineEvent[]?)
-    function SetMeta(meta: string?)
-    function SetVariant(variant: string?)
-end
 
 local EV_W = 92
 local TRACK_H = 70
@@ -173,13 +153,15 @@ local function layoutTrack(t: EncounterTimeline, now: number)
         f:Show()
     end
     for i = #inWin + 1, #t.evs do t.evs[i]:Hide(); t.evs[i].id = nil end
+    local laterText = t.later
+    if not laterText then return end
     if #later > 0 then
         local first = later[1]
         local more = #later > 1 and (" · +%d more"):format(#later - 1) or ""
-        t.later:SetValue(("then %s in %s%s"):format(first.e.label or "?", fmtTime(first.r), more))
-        t.later:SetVisible(true)
+        laterText:SetValue(("then %s in %s%s"):format(first.e.label or "?", fmtTime(first.r), more))
+        laterText:SetVisible(true)
     else
-        t.later:SetVisible(false)
+        laterText:SetVisible(false)
     end
 end
 
@@ -321,43 +303,60 @@ end
 -- The timeline
 --------------------------------------------------------------------------------
 
-local Timeline: EncounterTimeline = {} :: any
+export class EncounterTimeline extends Frame
+    window: number
+    soonAt: number
+    events: TimelineEvent[]
+    variant: string = "track"
+    -- the track's parts (the "track" variant)
+    track: Frame?
+    ticks: Texture[] = {}
+    endLabel: Text? = nil
+    later: Text? = nil
+    evs: TrackEvent[] = {}
+    -- the list's (the "list" variant)
+    list: TimelineList?
+    rows: ListRow[] = {}
+    listTop: number = 0
 
-function Timeline:Layout()
-    local now = GetTime()
-    if self.variant == "list" then layoutList(self, now) else layoutTrack(self, now) end
-end
-
-function Timeline:SetEvents(list: TimelineEvent[]?)
-    self.events = list or {}
-    self:Layout()
-    self:SetScript("OnUpdate", #self.events > 0 and function() self:Layout() end or nil)
-end
-
-function Timeline:SetMeta(meta: string?)
-    if self.list then self.list.meta:SetValue(meta or "") end
-end
-
-function Timeline:SetVariant(variant: string?)
-    self.variant = variant == "list" and "list" or "track"
-    if self.variant == "list" and not self.list then buildList(self) end
-    if self.variant == "track" and not self.track then buildTrack(self) end
-    if self.track then self.track:SetShown(self.variant == "track") end
-    if self.list then self.list:SetShown(self.variant == "list") end
-    if self.variant == "track" then
-        self:SetSize(draw.size("timeline-w"), TRACK_H)
-    else
-        self:SetWidth(LIST_W)
+    constructor(parent: Frame, options: { variant?: string, window?: number, soonAt?: number }?)
+        local opts = options or {}
+        super(nil, parent)
+        self.window, self.soonAt = opts.window or 30, opts.soonAt or 5
+        self.events = {}
+        self:SetVariant(opts.variant or "track")
     end
-    self:Layout()
+
+    function Layout()
+        local now = GetTime()
+        if self.variant == "list" then layoutList(self, now) else layoutTrack(self, now) end
+    end
+
+    function SetEvents(list: TimelineEvent[]?)
+        self.events = list or {}
+        self:Layout()
+        self:SetScript("OnUpdate", #self.events > 0 and function() self:Layout() end or nil)
+    end
+
+    function SetMeta(meta: string?)
+        if self.list then self.list.meta:SetValue(meta or "") end
+    end
+
+    function SetVariant(variant: string?)
+        self.variant = variant == "list" and "list" or "track"
+        if self.variant == "list" and not self.list then buildList(self) end
+        if self.variant == "track" and not self.track then buildTrack(self) end
+        if self.track then self.track:SetShown(self.variant == "track") end
+        if self.list then self.list:SetShown(self.variant == "list") end
+        if self.variant == "track" then
+            self:SetSize(draw.size("timeline-w"), TRACK_H)
+        else
+            self:SetWidth(LIST_W)
+        end
+        self:Layout()
+    end
 end
 
 export function encounterTimeline(parent: Frame, options: { variant?: string, window?: number, soonAt?: number }?): EncounterTimeline
-    local opts = options or {}
-    local t: EncounterTimeline = CreateFrame("Frame", nil, parent) :: any
-    Mixin(t, Timeline)
-    t.window, t.soonAt = opts.window or 30, opts.soonAt or 5
-    t.events = {}
-    t:SetVariant(opts.variant or "track")
-    return t
+    return EncounterTimeline.new(parent, options)
 end
