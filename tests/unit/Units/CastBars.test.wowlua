@@ -1,0 +1,100 @@
+-- Units/CastBars: your cast bar (Blizzard's hidden, its width, the
+-- options on it, off and hidden in edit mode) and the cast bars under the
+-- target, focus and boss frames (their switches, their width, a frame
+-- gone); the settings live; stopped.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/CastBars"
+import expectNoErrors from "../../helpers"
+
+local G: any = _G
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, k in ipairs({ "showPlayer", "showTarget", "showFocus", "showBoss", "showIcon", "showKick", "castTarget",
+                         "playerWidth", "playerPosition" }) do
+        M:Reset(k)
+    end
+    local frames: any = SuuUI.GetModule("unitframes")
+    frames:Reset("width")
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+@test("your cast bar: Blizzard's out of sight, at the set width, the icon and target live")
+local function player()
+    local p = M.player
+    expect(p.active).toBe(true)
+    expect(G.PlayerCastingBarFrame:IsShown()).toBe(false)
+    expect(p:GetWidth()).toBe(340)
+    M:Set("playerWidth", 300)
+    expect(p:GetWidth()).toBe(300)
+    M:Set("showIcon", false)
+    expect(p.iconShown).toBe(false)
+    M:Set("castTarget", false)
+    expect(p.targetShown).toBe(false)
+    -- off, or hidden in edit mode: not running
+    M:Set("showPlayer", false)
+    expect(p.active).toBe(false)
+    M:Set("showPlayer", true)
+    expect(p.active).toBe(true)
+    M:Set("playerPosition", { point = "BOTTOM", x = 0, y = 292, hidden = true })
+    expect(p.active).toBe(false)
+end
+
+@test("the target's, focus' and bosses' cast bars under their frames, each with its switch")
+local function attached()
+    local target = M.attached.target
+    expect(target ~= nil).toBe(true)
+    expect(target:GetParent()).toBe(SuuUI.GetAnchor("target"))
+    expect(target.active).toBe(true)
+    M:Set("showTarget", false)
+    expect(target.active).toBe(false)
+    M:Set("showKick", false)
+    expect(target.kickShown).toBe(false)
+    if M.attached.focus then
+        M:Set("showFocus", false)
+        expect(M.attached.focus.active).toBe(false)
+    end
+    if M.attached.boss1 then
+        M:Set("showBoss", false)
+        expect(M.attached.boss1.active).toBe(false)
+    end
+end
+
+@test("the target's bar as wide as the target frame, live (after a fight)")
+local function targetWidth()
+    local frames: any = SuuUI.GetModule("unitframes")
+    local target = M.attached.target
+    frames:Set("width", 300)
+    mock.advanceFrames(1)
+    expect(target:GetWidth()).toBe(300)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    frames:Set("width", 280)
+    expect(target:GetWidth()).toBe(300)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(target:GetWidth()).toBe(280)
+end
+
+@test("a frame gone: its bar stops; another name: nothing")
+local function frameGone()
+    M:Attach("focus", nil)
+    if M.attached.focus then expect(M.attached.focus.active).toBe(false) end
+    M:Attach("party1", UIParent)
+    expect(M.attached.party1).toBeNil()
+    M:Attach("focus", SuuUI.GetAnchor("focus"))
+end
+
+-- (last: the module off)
+@test("stopped: every bar stops")
+local function disabled()
+    local m: any = M
+    m:OnDisable()
+    expect(M.player.active).toBe(false)
+    for _, bar in pairs(M.attached) do expect(bar.active).toBe(false) end
+end
