@@ -42,15 +42,21 @@ local function closeThen(fn: (() -> ())?, sound: number?): () -> ()
     end
 end
 
+-- In a fight: the lockdown, or its event already (it comes a moment before
+-- the lockdown: the entries are drawn blocked from there).
+local function inFight(): boolean
+    return InCombatLockdown() or M.fighting == true
+end
+
 local function exitBlocked(): string?
     if StaticPopup_Visible and (StaticPopup_Visible("CAMP") or StaticPopup_Visible("QUIT")) then
         return "Already on the way out"
     end
-    if InCombatLockdown() then return "Not in combat" end
+    if inFight() then return "Not in combat" end
 end
 
 local function notInCombat(): string?
-    if InCombatLockdown() then return "Not in combat" end
+    if inFight() then return "Not in combat" end
 end
 
 -- An entry: { label, glyph, onClick, blocked = fn -> reason }, and for the
@@ -63,7 +69,7 @@ local GROUPS: Group[] = {
         { "Options", "gear", closeThen(function() SettingsPanel:Open() end) },
         { "Edit Mode", "pushpin", closeThen(function() ShowUIPanel(EditModeManagerFrame) end),
             function()
-                if InCombatLockdown() then return "Not in combat" end
+                if inFight() then return "Not in combat" end
                 if EditModeManagerFrame and EditModeManagerFrame.CanEnterEditMode and not EditModeManagerFrame:CanEnterEditMode() then
                     return "Not available right now"
                 end
@@ -352,6 +358,7 @@ function M:OnEnable()
     end)
     for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
         self:OnGameEvent(e, function()
+            self.fighting = e == "PLAYER_REGEN_DISABLED" or nil
             if self.dim:IsShown() then self:Draw() end
             self:PlaceSecure(self.dim:IsShown())
         end)
