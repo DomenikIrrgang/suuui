@@ -79,7 +79,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [K4](#k4) | checker | medium | done 0.9.6 (W2061) | `a and nil or b` is always `b` |
 | [K5](#k5) | checker | medium | done after 0.9.6 (W2062, S40) | A value read past what a function gives |
 | [K6](#k6) | checker | low | fixed after 0.9.6 (T259) | `GetCursorInfo` is declared without its results |
-| [K7](#k7) | checker | low | open (likely) | The closing line of a multi-line `return f(...)` reads as not run |
+| [K7](#k7) | checker | low | fixed after 0.9.6 (T260) | The closing line of a multi-line `return f(...)` reads as not run |
 | [V12](#v12) | VM | medium | fixed 0.9.4 | `IsModifiedClick("CHATLINK")` was always false |
 | [V13](#v13) | VM | low | fixed after 0.9.6 (T257) | `IsMouseOver` ignores the cursor and its offsets |
 | [V14](#v14) | VM | low | open | Chat windows' settings aren't kept |
@@ -452,7 +452,7 @@ In every flavor's declarations; a strict test reads it through `any`. (units-tal
 
 ### K7. The closing line of a multi-line `return f(...)` reads as not run
 
-*Status: open (likely).*
+*Status: fixed after 0.9.6 (T260): coverage leaves the dead return out; Chat's ignore comment is gone.*
 
 The return after the tail call never runs and is counted on its last line when that line holds only `})`. (units-chat)
 
