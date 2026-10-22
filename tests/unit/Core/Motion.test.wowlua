@@ -1,0 +1,220 @@
+-- Core/Motion: the design's motion presets as AnimationGroups, alphaTo's
+-- shared fade driver, and ui.reducedMotion making every preset jump to its end.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as motion from "/Core/Motion"
+import * as settings from "/Core/Settings"
+import newParent, expectNoErrors from "../../helpers"
+
+type Groups = { [string]: AnimationGroup }
+
+local made: Frame[] = {}
+local function frame(): Frame
+    local f = newParent(50, 50)
+    made[#made + 1] = f
+    return f
+end
+
+-- The groups Motion keeps on a frame (its suuMotion field), and the
+-- animations it keeps on a group (alpha, down): fields Motion adds to
+-- client objects, read through one untyped view each.
+local function groups(f: Frame): Groups?
+    local fields: { [string]: any } = f :: any
+    return fields.suuMotion
+end
+type Kept = { alpha: Alpha, down: Translation? }
+local function kept(g: AnimationGroup): Kept
+    local fields: { [string]: any } = g :: any
+    return { alpha = fields.alpha, down = fields.down }
+end
+
+local function group(f: Frame, preset: string): AnimationGroup
+    return assert(assert(groups(f), "no groups")[preset], "no " .. preset)
+end
+
+@afterEach
+local function cleanUp()
+    for _, f in ipairs(made) do motion.stop(f); f:Hide() end
+    made = {}
+    settings.reset("ui", "reducedMotion")
+end
+
+@test("reduced follows ui.reducedMotion, and is off before the settings are ready")
+local function reduced()
+    expect(motion.reduced()).toBe(false)
+    settings.set("ui", "reducedMotion", true)
+    expect(motion.reduced()).toBe(true)
+    mock.stub(settings, "ready", function(): boolean return false end)
+    expect(motion.reduced()).toBe(false)
+end
+
+@test("fadeIn plays alpha 0 to 1 over dur-base, ease-out, and ends at 1")
+local function fadeIn()
+    local f = frame()
+    motion.fadeIn(f)
+    local g = group(f, "fadeIn")
+    expect(g:IsPlaying()).toBe(true)
+    local a = kept(g).alpha
+    expect(a:GetFromAlpha()).toBe(0)
+    expect(a:GetToAlpha()).toBe(1)
+    expect(a:GetDuration()).toBe(T.duration["dur-base"])
+    expect(a:GetSmoothing()).toBe("OUT")
+    mock.advanceFrames(5)
+    expect(g:IsPlaying()).toBe(true)
+    mock.advanceFrames(40)
+    expect(g:IsPlaying()).toBe(false)
+    expect(f:GetAlpha()).toBe(1)
+    expectNoErrors()
+end
+
+@test("a duration given to fadeIn is used; the group is built once")
+local function fadeInDuration()
+    local f = frame()
+    motion.fadeIn(f, 0.6)
+    local g = group(f, "fadeIn")
+    expect(kept(g).alpha:GetDuration()).toBe(0.6)
+    motion.fadeIn(f)
+    expect(group(f, "fadeIn")).toBe(g)
+    expect(kept(g).alpha:GetDuration()).toBe(T.duration["dur-base"])
+end
+
+@test("enter drops 6px and fades in over dur-base")
+local function enter()
+    local f = frame()
+    motion.enter(f)
+    local g = group(f, "enter")
+    expect(g:IsPlaying()).toBe(true)
+    local down = assert(kept(g).down)
+    local x, y = down:GetOffset()
+    expect(x).toBe(0)
+    expect(y).toBe(-6)
+    expect(down:GetDuration()).toBe(T.duration["dur-base"])
+    expect(kept(g).alpha:GetDuration()).toBe(T.duration["dur-base"])
+    motion.enter(f, 0.4)
+    expect(down:GetDuration()).toBe(0.4)
+    mock.advanceFrames(60)
+    expect(g:IsPlaying()).toBe(false)
+    expect(f:GetAlpha()).toBe(1)
+    expectNoErrors()
+end
+
+@test("pop scales from 0.86 and fades from 0.4")
+local function pop()
+    local f = frame()
+    motion.pop(f)
+    local g = group(f, "pop")
+    expect(g:IsPlaying()).toBe(true)
+    local kinds: string[] = {}
+    for _, anim in ipairs({ g:GetAnimations() }) do kinds[#kinds + 1] = anim:GetObjectType() end
+    table.sort(kinds)
+    expect(kinds).toEqual({ "Alpha", "Scale" })
+    mock.advanceFrames(40)
+    expect(g:IsPlaying()).toBe(false)
+    expect(f:GetAlpha()).toBe(1)
+end
+
+@test("with reduced motion the presets do nothing but set full alpha")
+local function reducedPresets()
+    settings.set("ui", "reducedMotion", true)
+    local f = frame()
+    f:SetAlpha(0.3)
+    motion.fadeIn(f)
+    motion.enter(f)
+    motion.pop(f)
+    expect(groups(f)).toBeNil()
+    expect(f:GetAlpha()).toBe(1)
+end
+
+@test("stop stops every preset and sets full alpha")
+local function stop()
+    local f = frame()
+    motion.fadeIn(f)
+    motion.pop(f)
+    motion.stop(f)
+    expect(group(f, "fadeIn"):IsPlaying()).toBe(false)
+    expect(group(f, "pop"):IsPlaying()).toBe(false)
+    expect(f:GetAlpha()).toBe(1)
+    -- a frame Motion never touched
+    local g = frame()
+    g:SetAlpha(0.2)
+    motion.stop(g)
+    expect(g:GetAlpha()).toBe(1)
+end
+
+@test("alphaTo fades from the current alpha over dur-slow, ease-out")
+local function alphaTo()
+    local f = frame()
+    motion.alphaTo(f, 0)
+    expect(f:GetAlpha()).toBe(1)
+    mock.advanceTime(T.duration["dur-slow"] / 2)
+    mock.advanceFrames(1, 0)
+    local mid = f:GetAlpha()
+    -- ease-out: past half way at half the time
+    expect(mid < 0.5 and mid > 0).toBe(true)
+    mock.advanceTime(T.duration["dur-slow"])
+    mock.advanceFrames(1)
+    expect(f:GetAlpha()).toBe(0)
+    expectNoErrors()
+end
+
+@test("alphaTo on a frame whose alpha was once secret: set at once, no fade (the game reads it back secret for good)")
+local function alphaToSecret()
+    local f = frame()
+    f:SetAlpha(mock.secret(0.5))
+    f:SetAlpha(1)
+    motion.alphaTo(f, 0.2)
+    -- (as a plain frame stores 0.2: alphas are kept at 8 bits)
+    local probe = frame()
+    probe:SetAlpha(0.2)
+    expect(f:GetAlpha() :: any).toBe(mock.secret(probe:GetAlpha()))
+    -- no fade running: nothing more changes it
+    mock.advanceFrames(30)
+    expect(f:GetAlpha() :: any).toBe(mock.secret(probe:GetAlpha()))
+    expectNoErrors()
+end
+
+@test("alphaTo toward the same target keeps the running fade; a new target restarts it")
+local function alphaToAgain()
+    local f = frame()
+    motion.alphaTo(f, 0, 1)
+    mock.advanceTime(0.5)
+    mock.advanceFrames(1, 0)
+    local a = f:GetAlpha()
+    motion.alphaTo(f, 0, 1)
+    mock.advanceFrames(1, 0)
+    expect(f:GetAlpha()).toBeCloseTo(a, 2)
+    -- a new target: from where it is
+    motion.alphaTo(f, 1, 1)
+    mock.advanceTime(2)
+    mock.advanceFrames(1)
+    expect(f:GetAlpha()).toBe(1)
+end
+
+@test("alphaTo sets at once: reduced motion, no duration, or already there")
+local function alphaToNow()
+    local f = frame()
+    motion.alphaTo(f, 0.5, 0)
+    expect(f:GetAlpha()).toBeCloseTo(0.5, 2)
+    motion.alphaTo(f, 0.505, 1)
+    expect(f:GetAlpha()).toBeCloseTo(0.505, 2)
+    settings.set("ui", "reducedMotion", true)
+    motion.alphaTo(f, 0.1, 1)
+    expect(f:GetAlpha()).toBeCloseTo(0.1, 2)
+end
+
+@test("an immediate alphaTo or stop ends a running fade")
+local function cancel()
+    local f = frame()
+    motion.alphaTo(f, 0, 1)
+    motion.alphaTo(f, 0.7, 0)
+    mock.advanceTime(2)
+    mock.advanceFrames(1)
+    expect(f:GetAlpha()).toBeCloseTo(0.7, 2)
+    motion.alphaTo(f, 0, 1)
+    motion.stop(f)
+    mock.advanceTime(2)
+    mock.advanceFrames(1)
+    expect(f:GetAlpha()).toBe(1)
+end

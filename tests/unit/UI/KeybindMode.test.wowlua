@@ -1,0 +1,290 @@
+-- UI/KeybindMode: entering and leaving, hovering a button, binding keys,
+-- mouse buttons and the wheel, clearing, combat.
+
+import test, expect, beforeAll, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as events from "/Core/Events"
+import * as editMode from "/EditMode/EditMode"
+import * as settingsWindow from "/SettingsUI/Window"
+import * as keybindMode from "/UI/KeybindMode"
+import internal state, withModifiers, commandName, keyText from "/UI/KeybindMode"
+import actionButton, actionButtons, ActionButton from "/UI/ActionButton"
+import Text from "/UI/Text"
+import SuuButton from "/UI/Controls"
+import Panel from "/UI/Panel"
+import expectNoErrors, newParent from "../../helpers"
+
+const CMD = "MULTIACTIONBAR4BUTTON7"
+
+local parent: Frame? = nil
+local made: ActionButton[] = {}
+local editing = false
+local editExit = mock.spy(function() editing = false end)
+local settingsClose = mock.spy(function() end)
+
+@beforeAll
+local function stubs()
+    mock.module(editMode, { isActive = function(): boolean return editing end, exit = editExit })
+    mock.module(settingsWindow, { close = settingsClose })
+end
+
+-- A button with a binding command, as a bar makes it.
+local function bound(label: string?): ActionButton
+    local p = parent or newParent(200, 200)
+    parent = p
+    local b: ActionButton = actionButton(p, nil, nil)
+    b.bindCommand, b.bindLabel = CMD, label
+    b:SetPoint("CENTER")
+    made[#made + 1] = b
+    return b
+end
+
+local function catcher(): Frame return state.catcher :: Frame end
+local function highlight(): Button return state.highlight :: Button end
+local function status(): string return (state.status :: Text):GetText() end
+
+local function press(key: string) mock.script(catcher(), "OnKeyDown", key) end
+
+@afterEach
+local function cleanup()
+    keybindMode.exit()
+    mock.hover(nil)
+    mock.setModifiers({})
+    for _, b in ipairs(made) do
+        b:Hide()
+        for i = #actionButtons, 1, -1 do if actionButtons[i] == b then table.remove(actionButtons, i) end end
+    end
+    made = {}
+    if parent then parent:Hide() end
+    parent = nil
+    for _, key in ipairs({ GetBindingKey(CMD) }) do SetBinding(key) end
+    mock.player:leaveCombat()
+end
+
+@test("withModifiers: the binding API's spelling; modifier keys alone are nothing")
+local function modifiers()
+    expect(withModifiers(nil)).toBeNil()
+    expect(withModifiers("LSHIFT")).toBeNil()
+    expect(withModifiers("UNKNOWN")).toBeNil()
+    expect(withModifiers("F")).toBe("F")
+    mock.setModifiers({ shift = true, ctrl = true, alt = true })
+    expect(withModifiers("F")).toBe("ALT-CTRL-SHIFT-F")
+    mock.fake("IsMetaKeyDown", function(): boolean return true end)
+    expect(withModifiers("F")).toBe("ALT-CTRL-SHIFT-META-F")
+end
+
+@test("command and key names")
+local function names()
+    expect(commandName("NOT_A_COMMAND_X")).toBe("NOT_A_COMMAND_X")
+    local g = _G :: any -- a binding name global
+    g.BINDING_NAME_SUUTEST = "Test thing"
+    expect(commandName("SUUTEST")).toBe("Test thing")
+    g.BINDING_NAME_SUUTEST = nil
+    mock.fake("GetBindingText", function(key: string): string return "<" .. key .. ">" end)
+    expect(keyText("F")).toBe("<F>")
+end
+
+@test("enter opens the panel and the grid; exit closes them")
+local function enterExit()
+    local b = bound("Bar 6 button 7")
+    local changed: { any } = {}
+    events.on("SUUUI_KEYBINDMODE_CHANGED", function(_: string, on: boolean) changed[#changed + 1] = on end, "KeybindModeTest")
+    expect(keybindMode.isActive()).toBeNil()
+    expect(keybindMode.enter()).toBe(true)
+    expect(keybindMode.isActive()).toBe(true)
+    expect(settingsClose).toHaveBeenCalled()
+    expect(state.panel).toBeShown()
+    expect(catcher()).toBeShown()
+    expect(b.grid).toBe(true)
+    expect(status()).toBe(" ")
+    expect(keybindMode.enter()).toBe(true) -- already on
+    keybindMode.exit()
+    expect(keybindMode.isActive()).toBe(false)
+    expect(state.panel).never.toBeShown()
+    expect(catcher()).never.toBeShown()
+    expect(b.grid).toBe(false)
+    keybindMode.exit() -- already off
+    expect(changed).toEqual({ true, false })
+    events.offAll("KeybindModeTest")
+    expectNoErrors()
+end
+
+@test("toggle and the slash command")
+local function toggle()
+    keybindMode.toggle()
+    expect(keybindMode.isActive()).toBe(true)
+    keybindMode.toggle()
+    expect(keybindMode.isActive()).toBe(false)
+    mock.slash("/suu keybind")
+    expect(keybindMode.isActive()).toBe(true)
+end
+
+@test("edit mode closes first")
+local function editModeFirst()
+    editing = true
+    keybindMode.enter()
+    expect(editExit).toHaveBeenCalled()
+    expect(editing).toBe(false)
+end
+
+@test("not in combat; combat closes it")
+local function combat()
+    mock.player:enterCombat()
+    expect(keybindMode.enter()).toBe(false)
+    expect(keybindMode.isActive()).never.toBe(true)
+    local printed = table.concat(mock.printed(), "\n")
+    expect(printed:find("opens out of combat", 1, true) ~= nil).toBe(true)
+    mock.player:leaveCombat()
+    keybindMode.enter()
+    mock.player:enterCombat()
+    expect(keybindMode.isActive()).toBe(false)
+    printed = table.concat(mock.printed(), "\n")
+    expect(printed:find("combat started", 1, true) ~= nil).toBe(true)
+end
+
+@test("hovering a button targets it with its tooltip; leaving drops it")
+local function hover()
+    local b = bound("Bar 6 button 7")
+    keybindMode.enter()
+    mock.hover(b)
+    expect(state.target).toBe(b)
+    expect(highlight()).toBeShown()
+    expect(GameTooltip:GetOwner()).toBe(highlight())
+    expect(GameTooltip).toHaveLines({ { "Bar 6 button 7" }, { "Not bound" }, { "Press a key to bind it. Delete clears." } })
+    mock.script(highlight(), "OnLeave")
+    expect(state.target).toBeNil()
+    expect(highlight()).never.toBeShown()
+    expect(GameTooltip).never.toBeShown()
+    -- not in the mode: hovering does nothing
+    keybindMode.exit()
+    mock.hover(nil)
+    mock.hover(b)
+    expect(state.target).toBeNil()
+end
+
+@test("a key binds the hovered button's command, saved, the tooltip lists it")
+local function bindKey()
+    local saved = mock.spy(function(_: number) end)
+    mock.fake("SaveBindings", saved)
+    local b = bound("Bar 6 button 7")
+    keybindMode.enter()
+    mock.hover(b)
+    press("F7")
+    expect(GetBindingAction("F7")).toBe(CMD)
+    expect(saved).toHaveBeenCalledTimes(1)
+    expect(status():find("→ Bar 6 button 7", 1, true) ~= nil).toBe(true)
+    expect(GameTooltip).toHaveLines({ { "Bar 6 button 7" }, { keyText("F7") }, { "Press a key to bind it. Delete clears." } })
+    -- the same key again: nothing
+    press("F7")
+    expect(saved).toHaveBeenCalledTimes(1)
+    -- with modifiers, replacing another command
+    SetBinding("SHIFT-F8", "MULTIACTIONBAR4BUTTON8")
+    mock.setModifiers({ shift = true })
+    press("F8")
+    expect(GetBindingAction("SHIFT-F8")).toBe(CMD)
+    expect(status():find("(was ", 1, true) ~= nil).toBe(true)
+    -- a modifier alone binds nothing
+    press("LSHIFT")
+    expect(saved).toHaveBeenCalledTimes(2)
+end
+
+@test("a key without a label shows the command; a refused key says so")
+local function refused()
+    mock.fake("SaveBindings", function(_: number) end)
+    local b = bound(nil)
+    keybindMode.enter()
+    mock.hover(b)
+    press("F9")
+    expect(status():find("→ " .. CMD, 1, true) ~= nil).toBe(true)
+    mock.fake("SetBinding", function(_: string, _: string?): boolean return false end)
+    press("F10")
+    expect(status():find("can't be bound", 1, true) ~= nil).toBe(true)
+end
+
+@test("mouse buttons and the wheel bind; a left click does not")
+local function mouse()
+    mock.fake("SaveBindings", function(_: number) end)
+    local b = bound("B")
+    keybindMode.enter()
+    mock.hover(b)
+    mock.script(highlight(), "OnMouseDown", "MiddleButton")
+    expect(GetBindingAction("BUTTON3")).toBe(CMD)
+    mock.script(highlight(), "OnMouseDown", "Button4")
+    expect(GetBindingAction("BUTTON4")).toBe(CMD)
+    mock.script(highlight(), "OnMouseDown", "LeftButton")
+    mock.script(highlight(), "OnMouseWheel", 1)
+    expect(GetBindingAction("MOUSEWHEELUP")).toBe(CMD)
+    mock.script(highlight(), "OnMouseWheel", -1)
+    expect(GetBindingAction("MOUSEWHEELDOWN")).toBe(CMD)
+    for _, k in ipairs({ "BUTTON3", "BUTTON4", "MOUSEWHEELUP", "MOUSEWHEELDOWN" }) do SetBinding(k) end
+end
+
+@test("Delete clears the button's keys; nothing to clear does nothing")
+local function clearKeys()
+    local saved = mock.spy(function(_: number) end)
+    mock.fake("SaveBindings", saved)
+    local b = bound("B")
+    keybindMode.enter()
+    mock.hover(b)
+    press("DELETE")
+    expect(saved).toHaveBeenCalledTimes(0)
+    SetBinding("F11", CMD)
+    SetBinding("F12", CMD)
+    press("DELETE")
+    expect({ GetBindingKey(CMD) }).toEqual({})
+    expect(saved).toHaveBeenCalledTimes(1)
+    expect(status()).toBe("B: no keys.")
+end
+
+@test("no target or combat: keys do nothing; Esc closes; Print Screen shoots")
+local function otherKeys()
+    local shot = mock.spy(function() end)
+    mock.fake("Screenshot", shot)
+    local saved = mock.spy(function(_: number) end)
+    mock.fake("SaveBindings", saved)
+    keybindMode.enter()
+    press("F7")
+    press("DELETE")
+    expect(saved).toHaveBeenCalledTimes(0)
+    press("PRINTSCREEN")
+    expect(shot).toHaveBeenCalledTimes(1)
+    press("ESCAPE")
+    expect(keybindMode.isActive()).toBe(false)
+end
+
+@test("in combat (lockdown) a key binds nothing")
+local function lockdown()
+    local saved = mock.spy(function(_: number) end)
+    mock.fake("SaveBindings", saved)
+    local b = bound("B")
+    keybindMode.enter()
+    mock.hover(b)
+    mock.fake("InCombatLockdown", function(): boolean return true end)
+    press("F7")
+    press("DELETE")
+    expect(saved).toHaveBeenCalledTimes(0)
+end
+
+@test("clearing a button without a label names its command")
+local function clearUnlabeled()
+    mock.fake("SaveBindings", function(_: number) end)
+    local b = bound(nil)
+    keybindMode.enter()
+    mock.hover(b)
+    SetBinding("F11", CMD)
+    press("DELETE")
+    expect(status()).toBe(CMD .. ": no keys.")
+end
+
+@test("the panel's Done button closes the mode")
+local function done()
+    keybindMode.enter()
+    local found: SuuButton? = nil
+    for _, child in ipairs({ (state.panel :: Panel).body:GetChildren() }) do
+        local b = child :: any -- a child of any kind: the one with a label "Done"
+        if b.label and b.label:GetText() == "Done" then found = b end
+    end
+    expect(found).never.toBeNil()
+    mock.click(found :: SuuButton)
+    expect(keybindMode.isActive()).toBe(false)
+end

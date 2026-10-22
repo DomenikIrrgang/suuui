@@ -11,7 +11,7 @@
 # files fetched here (tools/apply_questiedb_pull.py); SOURCES records each
 # one's head commit.
 #   sh tools/fetch_quest_starts.sh <dir> [<pull request> ...]
-# Then: lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.lua src/Data/MapPlaces.lua
+# Then: lua tools/gen_quest_starts.lua <dir> src/Data/QuestStarts.wowlua src/Data/MapPlaces.wowlua
 # Or both at once: sh tools/update_quest_starts.sh
 set -e
 DIR=${1:?usage: fetch_quest_starts.sh <dir> [<pull request> ...]}

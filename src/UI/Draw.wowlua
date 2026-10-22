@@ -1,0 +1,449 @@
+-- UI/Draw.wowlua
+-- Drawing helpers every component is built from: token fills, 1px borders that
+-- stay one physical pixel at any scale, fading hairlines, the gilt diamond,
+-- and soft glows and shadows.
+
+import tokens as T, Color, ShadowLayer from "/Core/Tokens"
+import * as pixel from "/Core/Pixel"
+import * as events from "/Core/Events"
+
+
+local colors = T.color :: { [string]: Color }
+
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Soft.tga"
+
+-- A token colour as r, g, b, a; `alpha` multiplies the token's own alpha.
+export function rgba(name: string, alpha: number?): (number, number, number, number)
+    local c = colors[name] or error("SuuUI: unknown colour token " .. tostring(name), 2)
+    return c[1], c[2], c[3], c[4] * (alpha or 1)
+end
+
+--------------------------------------------------------------------------------
+-- Paint: colours that follow the theme (asked 2026-10-19: themes and colour
+-- vision change without a reload). A colour set by its token is kept with
+-- the region it was set on; when the theme or colour vision changes,
+-- repaint sets every kept one again. Setting the region's colour any
+-- other way (a class colour, a raw value, a texture instead) lets it go,
+-- so a repaint never undoes what the code set since.
+--   paint(region, token[, alpha])          a FontString's or EditBox's text
+--                                          colour, a StatusBar's bar colour,
+--                                          or a texture's vertex colour
+--   paintFill(texture, token[, alpha])     a solid colour texture
+--   paintGradient(texture, orientation, fromToken, toToken[, fromAlpha, toAlpha])
+--   bind(region, fn)                       fn(region) now and after each
+--                                          change, for anything else
+-- `alpha` multiplies the token's own, as with rgba. What can't be kept
+-- this way (colour codes in text, colours worked out from a token) is set
+-- again on the message SUUUI_THEME_CHANGED.
+--------------------------------------------------------------------------------
+
+type Paint = {
+    kind?: string,
+    token?: string,
+    alpha?: number,
+    fn?: ((region: any) -> ()),
+    token2?: string,
+    alpha2?: number,
+    orientation?: string,
+}
+
+local paints: { [any]: Paint } = setmetatable({}, { __mode = "k" })  -- region -> { kind, token, alpha, ... }
+local watched: { [any]: { [string]: boolean } } = setmetatable({}, { __mode = "k" }) -- region -> { [setter] = true }
+local painting = false
+
+-- the setters that take a colour away from each kind of paint
+local LETS_GO: { [string]: string[] } = {
+    fill = { "SetColorTexture", "SetTexture", "SetAtlas", "SetGradient" },
+    vertex = { "SetVertexColor", "SetGradient" },
+    text = { "SetTextColor" },
+    bar = { "SetStatusBarColor" },
+    gradient = { "SetColorTexture", "SetVertexColor", "SetGradient", "SetTexture", "SetAtlas" },
+    fn = { "SetColorTexture", "SetVertexColor", "SetGradient", "SetTextColor", "SetStatusBarColor" },
+}
+
+local function letGo(region: any)
+    if not painting then paints[region] = nil end
+end
+
+local function watch(region: any, kind: string)
+    local w = watched[region]
+    if not w then w = {}; watched[region] = w end
+    for _, setter in ipairs(LETS_GO[kind] :: string[]) do
+        if not w[setter] and region[setter] then
+            w[setter] = true
+            hooksecurefunc(region, setter, letGo)
+        end
+    end
+end
+
+local function draw(region: any, p: Paint)
+    local kind = p.kind
+    if kind == "fill" then
+        region:SetColorTexture(rgba(p.token :: string, p.alpha))
+    elseif kind == "vertex" then
+        region:SetVertexColor(rgba(p.token :: string, p.alpha))
+    elseif kind == "text" then
+        region:SetTextColor(rgba(p.token :: string, p.alpha))
+    elseif kind == "bar" then
+        region:SetStatusBarColor(rgba(p.token :: string, p.alpha))
+    elseif kind == "gradient" then
+        local r1, g1, b1, a1 = rgba(p.token :: string, p.alpha)
+        local r2, g2, b2, a2 = rgba(p.token2 :: string, p.alpha2)
+        region:SetGradient(p.orientation, CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
+    else
+        (p.fn :: (region: any) -> ())(region)
+    end
+end
+
+local function keep(region: any, kind: string, token: string, alpha: number?): Paint
+    local p = paints[region]
+    if not p then p = {}; paints[region] = p end
+    p.kind, p.token, p.alpha, p.fn = kind, token, alpha, nil
+    -- (a hook may paint while repaint runs: keep its flag)
+    local was = painting
+    painting = true
+    local ok, err = pcall(draw, region, p)
+    painting = was
+    if not ok then paints[region] = nil; error(err, 3) end
+    watch(region, kind)
+    return p
+end
+
+local KIND: { [string]: string } = { FontString = "text", EditBox = "text", StatusBar = "bar" }
+
+-- A FontString, EditBox, StatusBar or texture (see above).
+export function paint(region: Region, token: string, alpha: number?)
+    keep(region, KIND[region:GetObjectType()] or "vertex", token, alpha)
+end
+
+export function paintFill(texture: Texture, token: string, alpha: number?)
+    keep(texture, "fill", token, alpha)
+end
+
+export function paintGradient(texture: Texture, orientation: string, from: string, to: string, fromAlpha: number?, toAlpha: number?)
+    local p: Paint = paints[texture] or {}
+    paints[texture] = p
+    p.token2, p.alpha2, p.orientation = to, toAlpha, orientation
+    keep(texture, "gradient", from, fromAlpha)
+end
+
+export function bind<R>(region: R, fn: (region: R) -> ())
+    local p = paints[region]
+    if not p then p = {}; paints[region] = p end
+    p.kind, p.fn = "fn", fn
+    local was = painting
+    painting = true
+    local ok, err = pcall(fn, region)
+    painting = was
+    if not ok then paints[region] = nil; error(err, 2) end
+    watch(region, "fn")
+end
+
+-- Every kept colour again (Themes.wowlua, after the theme or colour vision
+-- changed the tokens).
+export function repaint()
+    painting = true
+    -- (a hook painting another region mid-loop adds to the table: walk a copy)
+    local list: any[] = {}
+    for region, p in pairs(paints) do list[#list + 1] = region; list[#list + 1] = p end
+    for i = 1, #list, 2 do
+        local ok, err = pcall(draw, list[i], list[i + 1])
+        if not ok then geterrorhandler()(err) end
+    end
+    painting = false
+end
+
+-- A size token in px, or a number passed through.
+export function size(v: number | string): number
+    if type(v) == "number" then return v end
+    return (T.size :: { [string]: number })[v] or (T.space :: { [string]: number })[v] or error("SuuUI: unknown size token " .. tostring(v), 2)
+end
+
+local function crisp(tex: Texture): Texture
+    tex:SetSnapToPixelGrid(false)
+    tex:SetTexelSnappingBias(0)
+    return tex
+end
+
+-- A solid texture in a token colour.
+export function fill(parent: Frame, color: string, layer: DrawLayer?, sublevel: number?): Texture
+    local t = parent:CreateTexture(nil, layer or "BACKGROUND", nil, sublevel)
+    paintFill(t, color)
+    return t
+end
+
+--------------------------------------------------------------------------------
+-- Borders: four textures, `width` physical pixels thick, `inset` pixels in
+-- from the frame's edge. Re-laid out when the root rescales.
+--------------------------------------------------------------------------------
+
+-- A colour for setColor: a token name (plus an alpha multiplier as `g`),
+-- { r, g, b, a }, or r, g, b, a.
+export type ColorArg = string | number[] | number
+
+export type BorderOptions = { width?: number, inset?: number, layer?: DrawLayer, sublevel?: number }
+
+export interface Border
+    frame: Frame
+    width: number
+    inset: number
+    top: Texture
+    bottom: Texture
+    left: Texture
+    right: Texture
+    parts: Texture[]
+    function Layout()
+    function SetColor(r: ColorArg, g: number?, b: number?, a: number?)
+    function SetShown(shown: boolean)
+end
+
+local borders: { [Border]: boolean } = setmetatable({}, { __mode = "k" })
+
+local Border: Border = {} :: any
+(Border :: any).__index = Border
+
+function Border:Layout()
+    local px = pixel.size(self.frame)
+    local w, i = px * self.width, px * self.inset
+    local top, bottom, left, right = self.top, self.bottom, self.left, self.right
+    top:ClearAllPoints()
+    top:SetPoint("TOPLEFT", i, -i)
+    top:SetPoint("TOPRIGHT", -i, -i)
+    top:SetHeight(w)
+    bottom:ClearAllPoints()
+    bottom:SetPoint("BOTTOMLEFT", i, i)
+    bottom:SetPoint("BOTTOMRIGHT", -i, i)
+    bottom:SetHeight(w)
+    left:ClearAllPoints()
+    left:SetPoint("TOPLEFT", i, -i - w)
+    left:SetPoint("BOTTOMLEFT", i, i + w)
+    left:SetWidth(w)
+    right:ClearAllPoints()
+    right:SetPoint("TOPRIGHT", -i, -i - w)
+    right:SetPoint("BOTTOMRIGHT", -i, i + w)
+    right:SetWidth(w)
+end
+
+-- A token name (plus an optional alpha multiplier), { r, g, b, a }, or r, g, b, a.
+function Border:SetColor(r: ColorArg, g: number?, b: number?, a: number?)
+    if type(r) == "string" then
+        for _, t in ipairs(self.parts) do paintFill(t, r, g) end
+        return
+    end
+    local rgb: any = r
+    if type(r) == "table" then rgb, g, b, a = unpack(r) end
+    for _, t in ipairs(self.parts) do t:SetColorTexture(rgb, g :: number, b :: number, a) end
+end
+
+function Border:SetShown(shown: boolean)
+    for _, t in ipairs(self.parts) do t:SetShown(shown) end
+end
+
+export function border(frame: Frame, color: ColorArg, opts: BorderOptions?): Border
+    opts = opts or {}
+    local b: Border = setmetatable({ frame = frame, width = opts.width or 1, inset = opts.inset or 0 }, Border :: any) :: any
+    local layer: DrawLayer, sub = opts.layer or "BORDER", opts.sublevel
+    b.top, b.bottom = crisp(frame:CreateTexture(nil, layer, nil, sub)), crisp(frame:CreateTexture(nil, layer, nil, sub))
+    b.left, b.right = crisp(frame:CreateTexture(nil, layer, nil, sub)), crisp(frame:CreateTexture(nil, layer, nil, sub))
+    b.parts = { b.top, b.bottom, b.left, b.right }
+    b:SetColor(color)
+    b:Layout()
+    borders[b] = true
+    return b
+end
+
+--------------------------------------------------------------------------------
+-- Hairlines: a 1px horizontal line. fade = "out" (solid, then fading to the
+-- right), "both" (fading in from the left and out to the right) or nil (solid).
+--------------------------------------------------------------------------------
+
+local hairlines: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+
+local function gradient(tex: Texture, color: string, fromAlpha: number, toAlpha: number)
+    tex:SetColorTexture(1, 1, 1, 1)
+    paintGradient(tex, "HORIZONTAL", color, color, fromAlpha, toAlpha)
+end
+
+export function hairline(parent: Frame, color: string, fade: string?): Frame
+    local line = CreateFrame("Frame", nil, parent)
+    if fade == "both" then
+        local left, right = crisp(line:CreateTexture(nil, "ARTWORK")), crisp(line:CreateTexture(nil, "ARTWORK"))
+        left:SetPoint("TOPLEFT")
+        left:SetPoint("BOTTOMRIGHT", line, "BOTTOM")
+        right:SetPoint("TOPLEFT", line, "TOP")
+        right:SetPoint("BOTTOMRIGHT")
+        gradient(left, color, 0, 1)
+        gradient(right, color, 1, 0)
+    else
+        local t = crisp(line:CreateTexture(nil, "ARTWORK"))
+        t:SetAllPoints()
+        if fade == "out" then
+            gradient(t, color, 1, 0)
+        else
+            paintFill(t, color)
+        end
+    end
+    line:SetHeight(pixel.size(line))
+    hairlines[line] = true
+    return line
+end
+
+--------------------------------------------------------------------------------
+-- The gilt diamond: a square turned 45 degrees (ornaments, the divider jewel,
+-- active tabs, class diamonds).
+--------------------------------------------------------------------------------
+
+export function diamond(parent: Frame, px: number, color: string?, layer: DrawLayer?, sublevel: number?): Texture
+    local t = parent:CreateTexture(nil, layer or "OVERLAY", nil, sublevel or 7)
+    t:SetTexture(WHITE)
+    paint(t, color or "gilt")
+    t:SetSize(px, px)
+    t:SetRotation(math.rad(45))
+    return t
+end
+
+--------------------------------------------------------------------------------
+-- Soft edges: the design's box shadows (glow-arcane, glow-ember, glow-ward,
+-- shadow-panel), drawn behind `frame` from Soft.tga as a 3x3 slice.
+--------------------------------------------------------------------------------
+
+local SLICES: { [number]: any }[] = {
+    -- the four corners: point, relative point, u1, u2, v1, v2
+    { "TOPLEFT", "TOPLEFT", 0, 0.25, 0, 0.25 },
+    { "TOPRIGHT", "TOPRIGHT", 0.75, 1, 0, 0.25 },
+    { "BOTTOMLEFT", "BOTTOMLEFT", 0, 0.25, 0.75, 1 },
+    { "BOTTOMRIGHT", "BOTTOMRIGHT", 0.75, 1, 0.75, 1 },
+}
+
+export interface SoftEdge
+    frame: Frame
+    holder: Frame
+    corners: Texture[]
+    parts: Texture[]
+    function SetBlur(blur: number, x: number?, y: number?)
+    function SetColor(r: ColorArg, g: number?, b: number?, a: number?)
+    function SetShown(shown: boolean)
+end
+
+local SoftEdge: SoftEdge = {} :: any
+(SoftEdge :: any).__index = SoftEdge
+
+-- CSS blur radius B has a Gaussian sigma of B/2; Soft.tga's falloff is a
+-- third of its margin, so the margin is drawn 1.5 * B wide.
+function SoftEdge:SetBlur(blur: number, x: number?, y: number?)
+    local s = math.max(1, blur * 1.5)
+    x, y = x or 0, y or 0
+    local h, f = self.holder, self.frame
+    h:ClearAllPoints()
+    h:SetPoint("TOPLEFT", f, "TOPLEFT", -s + x, s + y)
+    h:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", s + x, -s + y)
+    for i = 1, 4 do self.corners[i]:SetSize(s, s) end
+end
+
+-- A token name (and alpha), a colour table (a shadow layer's, which colour
+-- vision and themes change in place: kept), or r, g, b, a.
+function SoftEdge:SetColor(r: ColorArg, g: number?, b: number?, a: number?)
+    if type(r) == "string" then
+        for _, t in ipairs(self.parts) do paint(t, r, g) end
+        return
+    end
+    if type(r) == "table" then
+        local c = r
+        for _, t in ipairs(self.parts) do bind(t, function(tex: Texture) tex:SetVertexColor(unpack(c)) end) end
+        return
+    end
+    for _, t in ipairs(self.parts) do t:SetVertexColor(r, g :: number, b :: number, a) end
+end
+
+function SoftEdge:SetShown(shown: boolean)
+    self.holder:SetShown(shown)
+end
+
+export function softEdge(frame: Frame): SoftEdge
+    local h = CreateFrame("Frame", nil, frame)
+    h:SetFrameLevel(math.max(0, frame:GetFrameLevel() - 1))
+    local e: SoftEdge = setmetatable({ frame = frame, holder = h, corners = {}, parts = {} }, SoftEdge :: any) :: any
+    local function part(u1: number, u2: number, v1: number, v2: number): Texture
+        local t = h:CreateTexture(nil, "BACKGROUND", nil, -8)
+        t:SetTexture(SOFT)
+        t:SetTexCoord(u1, u2, v1, v2)
+        e.parts[#e.parts + 1] = t
+        return t
+    end
+    for i, s in ipairs(SLICES) do
+        local t = part(s[3], s[4], s[5], s[6])
+        t:SetPoint(s[1], h, s[2])
+        e.corners[i] = t
+    end
+    local tl, tr, bl, br = e.corners[1], e.corners[2], e.corners[3], e.corners[4]
+    local top = part(0.25, 0.75, 0, 0.25)
+    top:SetPoint("TOPLEFT", tl, "TOPRIGHT")
+    top:SetPoint("BOTTOMRIGHT", tr, "BOTTOMLEFT")
+    local bottom = part(0.25, 0.75, 0.75, 1)
+    bottom:SetPoint("TOPLEFT", bl, "TOPRIGHT")
+    bottom:SetPoint("BOTTOMRIGHT", br, "BOTTOMLEFT")
+    local left = part(0, 0.25, 0.25, 0.75)
+    left:SetPoint("TOPLEFT", tl, "BOTTOMLEFT")
+    left:SetPoint("BOTTOMRIGHT", bl, "TOPRIGHT")
+    local right = part(0.75, 1, 0.25, 0.75)
+    right:SetPoint("TOPLEFT", tr, "BOTTOMLEFT")
+    right:SetPoint("BOTTOMRIGHT", br, "TOPRIGHT")
+    local center = part(0.25, 0.75, 0.25, 0.75)
+    center:SetPoint("TOPLEFT", tl, "BOTTOMRIGHT")
+    center:SetPoint("BOTTOMRIGHT", br, "TOPLEFT")
+    e:SetBlur(8)
+    e:SetColor(1, 1, 1, 1)
+    return e
+end
+
+-- A soft edge from a shadow token's first outer layer, e.g. "glow-arcane".
+export function shadow(frame: Frame, token: string): SoftEdge
+    local found: ShadowLayer? = nil
+    for _, l in ipairs((T.shadow :: { [string]: ShadowLayer[] })[token] or error("SuuUI: unknown shadow token " .. tostring(token), 2)) do
+        if not l.inset then found = l break end
+    end
+    -- (a token with inset layers only: indexing nil errors, as before)
+    local layer = found :: ShadowLayer
+    local e = softEdge(frame)
+    e:SetBlur(layer.blur, layer.x, -layer.y)
+    e:SetColor(layer.color)
+    return e
+end
+
+--------------------------------------------------------------------------------
+-- The close glyph: two crossed strokes in a square.
+--------------------------------------------------------------------------------
+
+export interface Cross extends Frame
+    strokes: Texture[]
+    function SetColor(name: string)
+end
+
+export function cross(parent: Frame, px: number, color: string?): Cross
+    local holder = CreateFrame("Frame", nil, parent)
+    holder:SetSize(px, px)
+    holder.strokes = {}
+    for i, angle in ipairs({ 45, -45 }) do
+        local t = holder:CreateTexture(nil, "OVERLAY")
+        t:SetTexture(WHITE)
+        t:SetSize(px * 1.15, 1.5)
+        t:SetPoint("CENTER")
+        t:SetRotation(math.rad(angle))
+        holder.strokes[i] = t
+    end
+    function holder:SetColor(name: string)
+        for _, t in ipairs(self.strokes) do paint(t, name) end
+    end
+    holder:SetColor(color or "ink-muted")
+    return holder :: Cross
+end
+
+--------------------------------------------------------------------------------
+-- Keep every pixel-thick line one physical pixel after a rescale.
+--------------------------------------------------------------------------------
+
+events.on("SUUUI_ROOT_SCALED", function()
+    for b in pairs(borders) do b:Layout() end
+    for line in pairs(hairlines) do line:SetHeight(pixel.size(line)) end
+end, "Draw")

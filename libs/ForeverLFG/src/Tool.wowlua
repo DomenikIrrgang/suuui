@@ -1,0 +1,343 @@
+-- ForeverLFG/Tool.wowlua
+-- The tool source: the game's group finder (C_LFGList, its vanilla-style
+-- UI on Forever). Probed 2026-10-14:
+--   - a search works from your click or key press, never from a timer
+--     (ADDON_ACTION_BLOCKED), so LFG.Refresh must be called from a click;
+--     results go stale and the library says so (ToolStale);
+--   - creating or updating a listing is blocked for addon code (the Group
+--     Finder module hosts the game's own listing panel for that);
+--   - RemoveListing works from a click (LFG.Delist);
+--   - joining: no sign-up on Forever; Invite only for single players.
+--
+--   LFG.Refresh(categoryID)  -- from a click; Dungeons when nil
+--   LFG.Listing()            -- your listing, or nil
+--   LFG.Delist()             -- from a click
+--   LFG.CanInvite(entry) / LFG.Invite(entry) / LFG.Whisper(entry)
+--   LFG.ToolAge(categoryID)  -- seconds since its last search, or nil
+--   (here: refresh, listing, delist, canInvite, invite, whisper, toolAge)
+--   events: ToolSearched(categoryID, count), ToolSearchFailed(categoryID),
+--           ToolStale(categoryID, age), ListingChanged(listing|nil),
+--           ListingExpiring(secondsLeft), Delisted()
+
+import * as events from "wowlua:events"
+import every from "wowlua:timer"
+import config, fire, now from "./LFG"
+import type Part from "./LFG"
+import catalogue from "./Catalogue"
+import store from "./Store"
+import watches from "./Interest"
+import type Entry, Leader from "./Store"
+
+-- What a tool result adds to its entry (entry.sources.tool).
+export type ToolSource = {
+    resultID: number,
+    category?: number,
+    activities: string[],
+    intent: string,                  -- "group" | "player"
+    comment?: string,
+    age?: number,
+    delisted?: boolean,
+    newPlayerFriendly?: boolean,
+    playstyle: any,
+    self?: boolean,
+    needed: { [string]: number },
+    offered: { [string]: boolean },
+    seenAt: number,
+    need?: number,
+    has?: { [string]: number },      -- its members by the role each chose
+    leader?: Leader,
+    members: number[],               -- { have, max }
+}
+
+-- Your listing (LFG.Listing()).
+export type Listing = {
+    activities: string[],
+    comment?: string,
+    playstyle: any,
+    duration?: number,               -- seconds left
+    voiceMode: any,
+    newPlayerFriendly?: boolean,
+    category?: number,
+    roles: { [string]: boolean },
+}
+
+export type ToolApi = {
+    lastSearch: { [number]: number },    -- categoryID -> time
+    staleFired: { [number]: boolean },   -- categoryID -> true once ToolStale went out
+    pending?: number,
+    keys: { [number]: string },
+}
+
+export const tool = {} :: ToolApi
+local T = tool
+
+local isSecret: (v: any) -> boolean = issecretvalue or function(_: any) return false end
+local DUNGEONS = 2
+
+local ticker: TickerHandle?
+-- the events' owner (wowlua:events), for Stop
+local OWNER = {}
+T.lastSearch = {}       -- categoryID -> time
+T.staleFired = {}       -- categoryID -> true once ToolStale went out
+T.pending = nil
+
+local function lfg(): any return C_LFGList end
+
+local function tableOK(t: any): boolean return type(t) == "table" and not isSecret(t) end
+
+-- One result as the store's tool source.
+local function readResult(id: number, category: number?): (string?, ToolSource?)
+    local L = lfg()
+    local ok, info = pcall(L.GetSearchResultInfo, id)
+    if not ok or not tableOK(info) then return nil end
+    local acts: string[] = {}
+    for _, a in ipairs(info.activityIDs or { info.activityID }) do
+        acts[#acts + 1] = catalogue.ForTool(a) or ("tool:" .. a)
+    end
+    local data = {
+        resultID = id, category = category, activities = acts,
+        intent = (info.numMembers or 0) <= 1 and "player" or "group",
+        comment = info.comment, age = info.age, delisted = info.isDelisted,
+        newPlayerFriendly = info.newPlayerFriendly, playstyle = info.generalPlaystyle,
+        self = info.hasSelf, needed = {}, offered = {}, seenAt = now(),
+    } :: ToolSource
+    local okC, counts = pcall(L.GetSearchResultMemberCounts, id)
+    -- (for a single player these are a whole group's open spots: not theirs)
+    if data.intent == "group" and okC and tableOK(counts) then
+        local need = 0
+        for role, field in pairs({ tank = "TANK_REMAINING", healer = "HEALER_REMAINING", damage = "DAMAGER_REMAINING" }) do
+            local n = counts[field]
+            if type(n) == "number" and n > 0 then data.needed[role] = n; need = need + n end
+        end
+        if data.intent == "group" then data.need = need end
+        -- what it has: its members by the role each chose (the game doesn't
+        -- enforce roles, so the remaining ones above can add up to more than
+        -- the free spots: a group of four damage dealers still needs a tank
+        -- and a healer, found in game)
+        local has: { [string]: number } = {}
+        for role, field in pairs({ tank = "TANK", healer = "HEALER", damage = "DAMAGER", none = "NOROLE" }) do
+            local n = counts[field]
+            if type(n) == "number" and n > 0 then has[role] = n end
+        end
+        data.has = has
+    end
+    local okL, leader = pcall(L.GetSearchResultLeaderInfo, id)
+    if okL and tableOK(leader) then
+        data.leader = { name = leader.name, class = leader.classFilename, level = leader.level }
+        local roles = leader.lfgRoles
+        if data.intent == "player" and tableOK(roles) then
+            data.offered = { tank = roles.tank or nil, healer = roles.healer or nil, damage = roles.dps or nil }
+        end
+    end
+    local first = catalogue.Get(acts[1] or "")
+    local size = first and first.size
+    data.members = { info.numMembers or 1, size or 5 }
+    local name = (data.leader and data.leader.name) or info.leaderName
+    return (type(name) == "string" and not isSecret(name)) and name or ("tool:" .. id), data
+end
+
+-- Results by ID: the key each is stored under (a result's leader name
+-- often comes a moment after the search, found in game: "tool:<id>" until then).
+T.keys = {}
+
+local function put(id: number, key: string, data: ToolSource)
+    local old = T.keys[id]
+    if old and old ~= key then store.Rename(old, key) end
+    T.keys[id] = key
+    if data.delisted then store.Drop(key, "tool", "delisted")
+    else store.Put(key, "tool", data) end
+end
+
+local function received()
+    local L = lfg()
+    local ok, count, ids = pcall(L.GetSearchResults)
+    if not ok or not tableOK(ids) then T.pending = nil return end
+    -- the category searched: ours, or (the game's own panel searched) the
+    -- one its results are in
+    local category = T.pending
+    T.pending = nil
+    if not category then
+        for _, id in ipairs(ids) do
+            local okI, info = pcall(L.GetSearchResultInfo, id)
+            local first = okI and tableOK(info) and info.activityIDs and info.activityIDs[1]
+            local a = first and catalogue.Get(catalogue.ForTool(first) or ("tool:" .. first))
+            if a and a.category then category = a.category break end
+        end
+    end
+    local cat: number = category or DUNGEONS
+    local seen: { [string]: boolean } = {}
+    for _, id in ipairs(ids) do
+        local key, data = readResult(id, cat)
+        if key and data then
+            seen[key] = true
+            put(id, key, data)
+        end
+    end
+    -- the ones this category's search no longer has
+    local gone: string[] = {}
+    store.Each(function(key: string, e: Entry)
+        local source = e.sources.tool
+        if source and source.category == cat and not seen[key] then gone[#gone + 1] = key end
+    end)
+    for _, key in ipairs(gone) do store.Drop(key, "tool", "gone") end
+    T.lastSearch[cat] = now()
+    T.staleFired[cat] = nil
+    fire("ToolSearched", cat, count)
+end
+
+local function updated(id: any)
+    local category: number?
+    store.Each(function(_: string, e: Entry)
+        local source = e.sources.tool
+        if source and source.resultID == id then category = source.category end
+    end)
+    local key, data = readResult(id, category)
+    if not key or not data then return end
+    put(id, key, data)
+end
+
+
+--------------------------------------------------------------------------------
+-- From a click
+--------------------------------------------------------------------------------
+
+export function refresh(category: number?): boolean
+    local L = lfg()
+    if not (L and L.Search) then return false end
+    local cat = category or DUNGEONS
+    T.pending = cat
+    local ok = pcall(L.Search, cat, 0, 0, nil, false, nil, nil)
+    return ok
+end
+
+export function toolAge(category: number?): number?
+    local t = T.lastSearch[category or DUNGEONS]
+    return t and (now() - t) or nil
+end
+
+export function listing(): Listing?
+    local L = lfg()
+    if not (L and L.HasActiveEntryInfo) then return nil end
+    local okH, has = pcall(L.HasActiveEntryInfo)
+    if not okH or not has then return nil end
+    local ok, info = pcall(L.GetActiveEntryInfo)
+    if not ok or not tableOK(info) then return nil end
+    local acts: string[] = {}
+    for _, a in ipairs(info.activityIDs or {}) do acts[#acts + 1] = catalogue.ForTool(a) or ("tool:" .. a) end
+    local okR, leader, tank, healer, dps = pcall(GetLFGRoles)
+    -- the category: the first activity's
+    local category
+    local first = info.activityIDs and info.activityIDs[1]
+    local okA, a = pcall(L.GetActivityInfoTable, first)
+    if okA and type(a) == "table" then category = a.categoryID end
+    return {
+        activities = acts, comment = info.comment, playstyle = info.generalPlaystyle, duration = info.duration,
+        voiceMode = info.voiceMode, newPlayerFriendly = info.newPlayerFriendly, category = category,
+        roles = okR and { leader = leader or nil, tank = tank or nil, healer = healer or nil, damage = dps or nil } :: { [string]: boolean } or {},
+    }
+end
+
+export function delist(): (boolean?, any)
+    local L = lfg()
+    if L and L.RemoveListing then return pcall(L.RemoveListing) end
+    return nil
+end
+
+export function canInvite(e: Entry?): boolean
+    if not (e and e.intent == "player") or e.you then return false end
+    if IsInGroup() and not (UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")) then return false end
+    return true
+end
+
+export function invite(e: Entry?)
+    if not e or not canInvite(e) then return end
+    local inviteUnit = (C_PartyInfo and C_PartyInfo.InviteUnit) or (_G :: any).InviteUnit
+    if inviteUnit then pcall(inviteUnit, e.key) end
+end
+
+-- An empty whisper to the leader.
+export function whisper(e: Entry?)
+    if not e then return end
+    local g = _G :: any
+    local tell = (g.ChatFrameUtil and g.ChatFrameUtil.SendTell) or g.ChatFrame_SendTell
+    if tell then tell(e.key) end
+end
+
+--------------------------------------------------------------------------------
+-- Staleness, your listing
+--------------------------------------------------------------------------------
+
+local wasListed: boolean?, expiringFired: boolean?
+
+local function watchedCategories(): ({ [number]: boolean }, Listing?)
+    local cats: { [number]: boolean } = {}
+    local mine = listing()
+    local function addFor(key: string)
+        for _, k in ipairs(catalogue.Expand(key)) do
+            local a = catalogue.Get(k)
+            local category = a and a.category
+            if category then cats[category] = true end
+        end
+    end
+    for _, key in ipairs(mine and mine.activities or {}) do addFor(key) end
+    for key in pairs(watches()) do addFor(key) end
+    return cats, mine
+end
+
+local function tick()
+    store.Expire()
+    local cats, mine = watchedCategories()
+    local limit = config.staleAfter or 300
+    for category in pairs(cats) do
+        local age = toolAge(category)
+        if (not age or age > limit) and not T.staleFired[category] then
+            T.staleFired[category] = true
+            fire("ToolStale", category, age)
+        end
+    end
+    -- your listing running out
+    local duration = mine and mine.duration
+    if mine and type(duration) == "number" then
+        if duration <= (config.expiringSoon or 120) and not expiringFired then
+            expiringFired = true
+            fire("ListingExpiring", duration)
+        elseif duration > (config.expiringSoon or 120) then
+            expiringFired = nil
+        end
+    end
+end
+
+local function listingChanged()
+    local mine = listing()
+    fire("ListingChanged", mine)
+    if wasListed and not mine then fire("Delisted") end
+    wasListed = mine ~= nil
+    expiringFired = nil
+end
+
+local function onEvent(event: string, a1: any)
+    if event == "LFG_LIST_SEARCH_RESULTS_RECEIVED" then received()
+    elseif event == "LFG_LIST_SEARCH_FAILED" then
+        fire("ToolSearchFailed", T.pending)
+        T.pending = nil
+    elseif event == "LFG_LIST_SEARCH_RESULT_UPDATED" then updated(a1)
+    elseif event == "LFG_LIST_ACTIVE_ENTRY_UPDATE" then listingChanged() end
+end
+
+-- Started and stopped with the library (init adds it with LFG.AddPart).
+export const part = {
+    Start = function()
+        for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED",
+                             "LFG_LIST_SEARCH_RESULT_UPDATED", "LFG_LIST_ACTIVE_ENTRY_UPDATE" }) do
+            events.on(e, function(...: any) onEvent(e, ...) end, OWNER)
+        end
+        catalogue.ReadTool()
+        wasListed = listing() ~= nil
+        ticker = ticker or every(10, tick)
+    end,
+    Stop = function()
+        events.offAll(OWNER)
+        local t = ticker
+        if t then t:Cancel(); ticker = nil end
+    end,
+} :: Part

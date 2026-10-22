@@ -1,0 +1,262 @@
+-- UI/GroupFinderWho: the Who page's bar, list, empty states and foot.
+
+import test, cases, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import groupFinderWho, GroupFinderWho, WhoData, WhoResult, WhoColumn from "/UI/GroupFinderWho"
+import internal columns, countText from "/UI/GroupFinderWho"
+import expectNoErrors from "../../helpers"
+import tokenOf, host, cleanup from "./SocialHelpers"
+
+@afterEach
+local function done() cleanup() end
+
+local function page(): GroupFinderWho
+    local w = groupFinderWho(host(900, 500))
+    w:SetAllPoints()
+    mock.advanceFrames(1)
+    return w
+end
+
+local RESULTS: WhoResult[] = {
+    { name = "Tamsin Ashford", level = 31, race = "Human", class = "MAGE", className = "Mage", guild = "Dawn", zone = "Duskwood" },
+    { name = "Brannoc Ironhand", level = 12, race = "Dwarf", class = "NOPE", className = "Odd", guild = "", zone = "Dun Morogh" },
+    { name = "Player" },
+}
+
+@test("countText: nothing before a search, then the count, capped past 50")
+@cases({
+    { { state = "idle", total = 5 }, "" },
+    { { state = "results", results = { {}, {} } }, "2 players found" },
+    { { state = "results", results = { {} } }, "1 player found" },
+    { { state = "none", results = {} }, "0 players found" },
+    { { state = "none" }, "0 players found" },
+    { { state = "results", total = 1, results = { {}, {} } }, "1 player found" },
+    { { state = "results", total = 50, capped = true }, "50 players found · showing the first 50" },
+    { { state = "results", total = 51 }, "51 players found · showing the first 50" },
+    { { state = "results", total = 50 }, "50 players found" },
+})
+local function counts(d: WhoData, out: string)
+    expect(countText(d)).toBe(out)
+end
+
+@test("columns: Level fixed, the rest by share, gaps between")
+local function cols()
+    local c = columns(800)
+    local function col(key: string): WhoColumn return c[key] :: WhoColumn end
+    local name, level, race, class, guild, zone = col("name"), col("level"), col("race"), col("class"), col("guild"), col("zone")
+    expect(level.w).toBe(44)
+    expect(name.x).toBe(22)
+    -- each column starts after the one before and a gap (more after Level)
+    expect(level.x).toBe(name.x + name.w + 8)
+    expect(race.x).toBe(level.x + 44 + 8 + 8)
+    expect(class.x).toBe(race.x + race.w + 8)
+    expect(guild.x).toBe(class.x + class.w + 8)
+    expect(zone.x).toBe(guild.x + guild.w + 8)
+    -- shares: name 24, race 14, class 14, guild 26, zone 26 of 104
+    local inner = 800 - 22 - 8 - 8 * 5 - 8 - 44
+    expect(name.w).toBe(math.floor(inner * 24 / 104))
+    expect(zone.w).toBe(math.floor(inner * 26 / 104))
+    expect(race.w).toBe(class.w)
+end
+
+@test("a new page: before a search, nothing chosen, the foot off and saying why")
+local function idle()
+    local w = page()
+    expect(w.count).toHaveText("")
+    expect(w.empty).toBeShown()
+    expect(w.empty.title).toHaveText("Who is online?")
+    expect(w.empty.text).toHaveText("Search for players by name, guild, zone or level range, e.g. 20-30")
+    expect(w.heads.name).toHaveText("Name")
+    expect(w.heads.level).toHaveText("Level")
+    expect(w.heads.zone).toHaveText("Zone")
+    for _, b in ipairs({ w.addFriend, w.whisper, w.invite }) do
+        expect(b:IsEnabled()).toBe(false)
+        expect(b.tooltip).toEqual({ title = b.label:GetText(), description = "Choose a player first" })
+    end
+    expect(w:Chosen()).toBeNil()
+    expectNoErrors()
+end
+
+@test("results: a row per player, its cells, the class colour")
+local function results()
+    local w = page()
+    w:SetData({ state = "results", results = RESULTS })
+    expect(w.count).toHaveText("3 players found")
+    expect(w.empty).never.toBeShown()
+    local a, b, c = w.rows[1], w.rows[2], w.rows[3]
+    expect(a.name).toHaveText("Tamsin Ashford")
+    expect(a.level).toHaveText("31")
+    expect(a.race).toHaveText("Human")
+    expect(a.class).toHaveText("Mage")
+    expect(a.guild).toHaveText("<Dawn>")
+    expect(a.zone).toHaveText("Duskwood")
+    expect(tokenOf(a.dia)).toBe("class-mage")
+    expect(tokenOf(a.name)).toBe("class-mage")
+    -- an unknown class: ink; an empty guild: no brackets
+    expect(tokenOf(b.dia)).toBe("ink")
+    expect(b.guild).toHaveText("")
+    -- nothing but a name
+    expect(c.level).toHaveText("")
+    expect(c.race).toHaveText("")
+    expect(c.guild).toHaveText("")
+    expect(tokenOf(c.name)).toBe("ink")
+    expect(w.list.child:GetHeight()).toBe(3 * 24)
+    for _, r in ipairs({ a, b, c }) do
+        expect(r).toBeShown()
+        expect(r.selected).never.toBeShown()
+        expect(r.edge).never.toBeShown()
+    end
+    -- fewer results: the spare rows hide
+    w:SetData({ state = "results", results = { RESULTS[1] } })
+    expect(w.rows[2]).never.toBeShown()
+    expect(w.rows[3]).never.toBeShown()
+    expect(w.list.child:GetHeight()).toBe(24)
+    expectNoErrors()
+end
+
+@test("nothing found: the query in the message")
+local function none()
+    local w = page()
+    w:SetData({ state = "none", query = "zzz", results = {} })
+    expect(w.empty).toBeShown()
+    expect(w.empty.title).toHaveText("No players found")
+    expect(w.empty.text).toHaveText("Nobody online matches “zzz” and your filters. Try fewer words, or check the Filter menu.")
+    expect(w.count).toHaveText("0 players found")
+    w:SetData({ state = "none" })
+    expect(w.empty.text).toHaveText("Nobody online matches “” and your filters. Try fewer words, or check the Filter menu.")
+    expect(w.list.child:GetHeight()).toBe(1)
+    expectNoErrors()
+end
+
+@test("a click chooses a player; the foot acts on them")
+local function choose()
+    local w = page()
+    local friend, whisper, invite = mock.spy(), mock.spy(), mock.spy()
+    w.onAddFriend, w.onWhisper, w.onInvite = friend, whisper, invite
+    w:SetData({ state = "results", results = RESULTS })
+    mock.click(w.rows[2])
+    expect(w.selected).toBe(2)
+    expect(w.rows[2].selected).toBeShown()
+    expect(w.rows[2].edge).toBeShown()
+    expect(w.rows[1].selected).never.toBeShown()
+    expect(w:Chosen()).toBe(RESULTS[2])
+    for _, b in ipairs({ w.addFriend, w.whisper, w.invite }) do
+        expect(b:IsEnabled()).toBe(true)
+        expect(b.tooltip).toBeNil()
+    end
+    mock.click(w.addFriend)
+    mock.click(w.whisper)
+    mock.click(w.invite)
+    expect(friend).toHaveBeenCalledWith(RESULTS[2])
+    expect(whisper).toHaveBeenCalledWith(RESULTS[2])
+    expect(invite).toHaveBeenCalledWith(RESULTS[2])
+    -- the same results again keep the choice; a new search drops it
+    w:SetData({ state = "results", results = RESULTS })
+    expect(w.selected).toBe(2)
+    w:SetData({ state = "results", results = { RESULTS[1] } })
+    expect(w.selected).toBeNil()
+    expect(w.addFriend:IsEnabled()).toBe(false)
+    expectNoErrors()
+end
+
+@test("the foot without callbacks or a choice does nothing")
+local function footQuiet()
+    local w = page()
+    w:SetData({ state = "results", results = RESULTS })
+    mock.click(w.rows[1])
+    mock.click(w.addFriend)  -- no onAddFriend
+    local invite = mock.spy()
+    w.onInvite = invite
+    w.selected = nil
+    mock.script(w.invite, "OnClick", "LeftButton")
+    expect(invite).toHaveBeenCalledTimes(0)
+    -- a choice outside the results page: none
+    w.selected = 1
+    w.data = { state = "none", results = RESULTS }
+    expect(w:Chosen()).toBeNil()
+    w.data = nil
+    expect(w:Chosen()).toBeNil()
+    expectNoErrors()
+end
+
+@test("a right click asks for the player's menu, without choosing")
+local function menu()
+    local w = page()
+    local onMenu = mock.spy()
+    w.onMenu = onMenu
+    w:SetData({ state = "results", results = RESULTS })
+    mock.click(w.rows[1], "RightButton")
+    expect(onMenu).toHaveBeenCalledWith(RESULTS[1])
+    expect(w.selected).toBeNil()
+    -- no onMenu: nothing
+    w.onMenu = nil
+    mock.click(w.rows[1], "RightButton")
+    -- a row without a player ignores clicks
+    w.rows[1].data = nil
+    mock.script(w.rows[1], "OnClick", "LeftButton")
+    expect(w.selected).toBeNil()
+    expectNoErrors()
+end
+
+@test("hovering a row lights it")
+local function hover()
+    local w = page()
+    w:SetData({ state = "results", results = RESULTS })
+    local r = w.rows[1]
+    mock.hover(r)
+    expect(r.hover).toBeShown()
+    mock.hover(nil)
+    expect(r.hover).never.toBeShown()
+end
+
+@test("Search and Enter search for what's typed")
+local function search()
+    local w = page()
+    local onSearch = mock.spy()
+    w.onSearch = onSearch
+    mock.typeText(w.query.edit, "20-30")
+    mock.pressKey("ENTER")
+    expect(onSearch).toHaveBeenCalledWith("20-30")
+    mock.click(w.search)
+    expect(onSearch).toHaveBeenCalledTimes(2)
+    -- without a listener: nothing
+    w.onSearch = nil
+    mock.click(w.search)
+    expect(onSearch).toHaveBeenCalledTimes(2)
+    expectNoErrors()
+end
+
+@test("Filter hands over its button; sized to its word")
+local function filter()
+    local w = page()
+    local onFilter = mock.spy()
+    w.onFilter = onFilter
+    mock.click(w.filter)
+    expect(onFilter).toHaveBeenCalledWith(w.filter)
+    w.onFilter = nil
+    mock.click(w.filter)
+    expect(onFilter).toHaveBeenCalledTimes(1)
+    local want = 12 * 2 + 12 + 6 + math.ceil(w.filter.label:GetUnboundedStringWidth()) + 6 + 12
+    expect(w.filter:GetWidth()).toBe(want)
+    w.filter:Hide()
+    w.filter:Show()
+    expect(w.filter:GetWidth()).toBe(want)
+    expectNoErrors()
+end
+
+@test("a new size lays the list out again")
+local function resize()
+    local p = host(900, 500)
+    local w = groupFinderWho(p)
+    w:SetAllPoints()
+    w:SetData({ state = "results", results = RESULTS })
+    mock.advanceFrames(1)
+    local before = w.rows[1].zone:GetWidth()
+    p:SetWidth(1200)
+    -- (the VM runs OnSizeChanged only for an explicit SetSize: see
+    -- Docs/test-notes/ui-primitives.md; the game runs it for this too)
+    mock.script(w.list, "OnSizeChanged", w.list:GetWidth(), w.list:GetHeight())
+    expect(w.rows[1].zone:GetWidth() > before).toBe(true)
+    expect(w.rows[1]:GetWidth()).toBe(w.list:GetWidth())
+    expectNoErrors()
+end

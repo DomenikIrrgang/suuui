@@ -1,0 +1,187 @@
+-- Diagnostics/TalentProbe.wowlua
+-- "/suu probe talents": what Forever's talent system gives an addon, for
+-- SuuUI's own Talents page (step 3.2c). Saved in SuuUIProbe.talents on
+-- /reload.
+--   * C_ClassTalents, C_Traits, C_SpecializationInfo: their functions
+--   * your active config and its info, the tree(s), points to spend (tree
+--     currencies), staged changes
+--   * every node: position, ranks, max, available, edges (links), entries
+--     and their spell, visible/shown state (the first 120)
+--   * the specs / talent groups: how many, which is active, their configs
+--
+--   /suu probe talents        sample (out of combat), then /reload
+--   /suu probe talents plan   SuuUI's code plans one point on a node you
+--                             can take (C_Traits.PurchaseRank) and undoes it
+--                             at once (RollbackConfig): may an addon? Nothing
+--                             is applied. Then /reload
+
+import isSecret from "wowlua:secret"
+import after from "wowlua:timer"
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+
+type Map = { [any]: any }
+
+local function show(v: any): string
+    if isSecret(v) then return "secret" end
+    if v == nil then return "nil" end
+    if type(v) == "table" then
+        local parts: string[] = {}
+        for k, x in pairs(v) do
+            local val: string
+            if isSecret(x) then val = "secret"
+            elseif type(x) == "table" then
+                local inner: string[] = {}
+                for k2, y in pairs(x) do
+                    inner[#inner + 1] = tostring(k2) .. ":" .. (type(y) == "table" and "{…}" or tostring(y))
+                    if #inner > 8 then break end
+                end
+                val = "{" .. table.concat(inner, " ") .. "}"
+            else val = tostring(x) end
+            parts[#parts + 1] = tostring(k) .. "=" .. val
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return tostring(v)
+end
+
+local function call(fn: any, ...: any): string
+    if type(fn) ~= "function" then return "missing" end
+    local res = { pcall(fn, ...) }
+    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 140) end
+    local parts: string[] = {}
+    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    return table.concat(parts, " | ")
+end
+
+local function namesIn(t: any): string[]
+    local out: string[] = {}
+    if type(t) ~= "table" then return { "missing" } end
+    for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
+    table.sort(out)
+    return out
+end
+
+export function sample(): Map
+    local store: Map = {}
+    DB.probe.talents = store
+    store.at = date("%Y-%m-%d %H:%M:%S")
+    store.level = UnitLevel("player")
+    store.C_ClassTalents = namesIn(C_ClassTalents)
+    store.C_Traits = namesIn(C_Traits)
+    store.C_SpecializationInfo = namesIn(C_SpecializationInfo)
+    local configID = C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
+    store.activeConfig = show(configID)
+    store.lastSelectedSpec = call(C_ClassTalents.GetLastSelectedSavedConfigID, 0)
+    store.specs = {
+        numSpecGroups = call(GetNumSpecGroups),
+        activeSpecGroup = call(GetActiveSpecGroup),
+        numSpecializations = call(GetNumSpecializations),
+        specInfo1 = call(C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo, 1),
+        activeTalentGroup = call(GetActiveTalentGroup),
+        numTalentGroups = call(_G.GetNumTalentGroups),
+        classSpecs = call(C_SpecializationInfo and C_SpecializationInfo.GetNumSpecializationsForClassID, select(3, UnitClass("player"))),
+    }
+    if not configID or isSecret(configID) then return store end
+    local info = C_Traits.GetConfigInfo(configID)
+    store.configInfo = show(info)
+    store.canEdit = call(C_Traits.CanEditConfig, configID)
+    store.staged = call(C_Traits.ConfigHasStagedChanges, configID)
+    local trees = info and info.treeIDs or {}
+    store.trees = {}
+    for _, treeID in ipairs(trees) do
+        local t: Map = { id = treeID }
+        t.info = call(C_Traits.GetTreeInfo, configID, treeID)
+        t.currency = call(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
+        local nodes = C_Traits.GetTreeNodes(treeID) or {}
+        t.nodeCount = #nodes
+        t.nodes = {}
+        for i, nodeID in ipairs(nodes) do
+            if i > 120 then break end
+            local n = C_Traits.GetNodeInfo(configID, nodeID)
+            local line: Map = { id = nodeID }
+            if n then
+                line.pos = ("%s,%s"):format(show(n.posX), show(n.posY))
+                line.ranks = ("%s/%s (purchased %s) active=%s"):format(show(n.currentRank), show(n.maxRanks), show(n.ranksPurchased), show(n.activeRank))
+                line.state = ("available=%s canPurchase=%s meetsEdges=%s visible=%s type=%s flags=%s subTree=%s"):format(
+                    show(n.isAvailable), show(n.canPurchaseRank), show(n.meetsEdgeRequirements), show(n.isVisible),
+                    show(n.type), show(n.flags), show(n.subTreeID))
+                local edges: string[] = {}
+                for _, e in ipairs(n.visibleEdges or {}) do edges[#edges + 1] = show(e) end
+                line.edges = table.concat(edges, " ")
+                line.conditions = show(n.conditionIDs)
+                local entries: string[] = {}
+                for _, entryID in ipairs(n.entryIDs or {}) do
+                    local entry = C_Traits.GetEntryInfo(configID, entryID)
+                    local def = entry and entry.definitionID and C_Traits.GetDefinitionInfo(entry.definitionID)
+                    local spellID = def and def.spellID
+                    entries[#entries + 1] = ("%s def=%s spell=%s name=%s maxRanks=%s"):format(show(entryID), show(entry and entry.definitionID),
+                        show(spellID), show(spellID and C_Spell.GetSpellName(spellID)), show(entry and entry.maxRanks))
+                end
+                line.entries = entries
+            end
+            t.nodes[#t.nodes + 1] = line
+        end
+        -- the conditions of the first few nodes (gates: "5 points in …")
+        t.gates = {}
+        for i, nodeID in ipairs(nodes) do
+            if i > 120 then break end
+            local n = C_Traits.GetNodeInfo(configID, nodeID)
+            for _, cid in ipairs(n and n.conditionIDs or {}) do
+                if #t.gates < 20 then t.gates[#t.gates + 1] = show(cid) .. " " .. call(C_Traits.GetConditionInfo, configID, cid) end
+            end
+        end
+        store.trees[#store.trees + 1] = t
+    end
+    return store
+end
+
+-- Plan one point on a node you can take, then undo it: may an addon?
+export function plan()
+    if InCombatLockdown() then print("Talent probe: out of combat, please.") return end
+    local store = DB.probe.talents or {}
+    DB.probe.talents = store
+    local configID: any = C_ClassTalents.GetActiveConfigID()
+    local r: Map = { at = date("%H:%M:%S") }
+    store.planTest = r
+    local blocked: string[] = {}
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("ADDON_ACTION_BLOCKED")
+    f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+    f:SetScript("OnEvent", function(_, e, a, b) blocked[#blocked + 1] = e .. " " .. show(a) .. " " .. show(b) end)
+    local info = configID and C_Traits.GetConfigInfo(configID)
+    local target
+    for _, treeID in ipairs(info and info.treeIDs or {}) do
+        for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
+            local n = C_Traits.GetNodeInfo(configID, nodeID)
+            if n and n.canPurchaseRank then target = nodeID break end
+        end
+        if target then break end
+    end
+    r.node = show(target)
+    if not target then
+        print("Talent probe: no node you can take now (no points to spend?).")
+        f:UnregisterAllEvents()
+        return
+    end
+    r.before = call(C_Traits.GetNodeInfo, configID, target):sub(1, 200)
+    r.purchase = call(C_Traits.PurchaseRank, configID, target)
+    r.staged = call(C_Traits.ConfigHasStagedChanges, configID)
+    r.after = call(C_Traits.GetNodeInfo, configID, target):sub(1, 200)
+    r.rollback = call(C_Traits.RollbackConfig, configID)
+    r.stagedAfterRollback = call(C_Traits.ConfigHasStagedChanges, configID)
+    after(0.5, function()
+        r.blocked = blocked
+        f:UnregisterAllEvents()
+        print(("Talent probe: plan %s, undone %s%s. /reload to save."):format(tostring(r.purchase), tostring(r.rollback),
+            #blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked"))
+    end)
+end
+
+export function command(arg: string?)
+    if arg == "plan" then return plan() end
+    if InCombatLockdown() then print("Talent probe: out of combat, please.") return end
+    local store = sample()
+    print(("Talent probe: config %s, %d trees. /reload to save."):format(tostring(store.activeConfig), store.trees and #store.trees or 0))
+end

@@ -1,0 +1,914 @@
+-- Diagnostics/Probe.wowlua
+-- /suu probe: reports which client APIs, frames and Blizzard addons the design
+-- depends on exist on this client, and which unit values are secret right now.
+--
+-- The report opens in a copyable window and is saved to SuuUIProbe, so it can
+-- be read from WTF\...\SavedVariables\SuuUI.lua after a /reload. API results
+-- are overwritten on every run; the secret-value samples are kept per context
+-- (combat or not, instance type, group type), so running it in a dungeon pull
+-- adds to what a run in the open world found.
+--
+-- Read-only by design: it never calls anything that changes game state, and
+-- it never compares or stores a value that might be secret, only the boolean
+-- issecretvalue() returns for it.
+
+import print, version from "/Core/Init"
+import * as DB from "/Core/DB"
+import isSecret from "wowlua:secret"
+import * as ahDataProbe from "/Diagnostics/AhDataProbe"
+import * as ahPostProbe from "/Diagnostics/AhPostProbe"
+import * as ahScanProbe from "/Diagnostics/AhScanProbe"
+import * as apiDocs from "/Diagnostics/ApiDocs"
+import * as bagProbe from "/Diagnostics/BagProbe"
+import * as bagSortProbe from "/Diagnostics/BagSortProbe"
+import * as bankSlotsProbe from "/Diagnostics/BankSlotsProbe"
+import * as calendarProbe from "/Diagnostics/CalendarProbe"
+import * as campProbe from "/Diagnostics/CampProbe"
+import * as castTargetProbe from "/Diagnostics/CastTargetProbe"
+import * as characterProbe from "/Diagnostics/CharacterProbe"
+import * as chatPaletteProbe from "/Diagnostics/ChatPaletteProbe"
+import * as chatProbe from "/Diagnostics/ChatProbe"
+import * as classData from "/Diagnostics/ClassData"
+import * as collectionsArtProbe from "/Diagnostics/CollectionsArtProbe"
+import * as collectionsOwnProbe from "/Diagnostics/CollectionsOwnProbe"
+import * as collectionsTilesProbe from "/Diagnostics/CollectionsTilesProbe"
+import * as deathRecapProbe from "/Diagnostics/DeathRecapProbe"
+import * as dragonProbe from "/Diagnostics/DragonProbe"
+import * as durabilityProbe from "/Diagnostics/DurabilityProbe"
+import * as flickerProbe from "/Diagnostics/FlickerProbe"
+import * as gameMenuProbe from "/Diagnostics/GameMenuProbe"
+import * as garbageProbe from "/Diagnostics/GarbageProbe"
+import * as giverProbe from "/Diagnostics/GiverProbe"
+import * as groupProbe from "/Diagnostics/GroupProbe"
+import * as holdProbe from "/Diagnostics/HoldProbe"
+import * as hoverTipProbe from "/Diagnostics/HoverTipProbe"
+import * as iconProbe from "/Diagnostics/IconProbe"
+import * as legacyProbe from "/Diagnostics/LegacyProbe"
+import * as lfgProbe from "/Diagnostics/LfgProbe"
+import * as lootProbe from "/Diagnostics/LootProbe"
+import * as mapPinsProbe from "/Diagnostics/MapPinsProbe"
+import * as mapProbe from "/Diagnostics/MapProbe"
+import * as markProbe from "/Diagnostics/MarkProbe"
+import * as memoryProbe from "/Diagnostics/MemoryProbe"
+import * as menuProbe from "/Diagnostics/MenuProbe"
+import * as meterProbe from "/Diagnostics/MeterProbe"
+import * as microProbe from "/Diagnostics/MicroProbe"
+import * as minimapProbe from "/Diagnostics/MinimapProbe"
+import * as mountFeetProbe from "/Diagnostics/MountFeetProbe"
+import * as mountFrameProbe from "/Diagnostics/MountFrameProbe"
+import * as npcPortraitProbe from "/Diagnostics/NpcPortraitProbe"
+import * as partyAuraProbe from "/Diagnostics/PartyAuraProbe"
+import * as plateProbe from "/Diagnostics/PlateProbe"
+import * as popupProbe from "/Diagnostics/PopupProbe"
+import * as powerProbe from "/Diagnostics/PowerProbe"
+import * as profIconProbe from "/Diagnostics/ProfIconProbe"
+import * as professionProbe from "/Diagnostics/ProfessionProbe"
+import * as questGroupProbe from "/Diagnostics/QuestGroupProbe"
+import * as questProbe from "/Diagnostics/QuestProbe"
+import * as raidProbe from "/Diagnostics/RaidProbe"
+import * as skysightProbe from "/Diagnostics/SkysightProbe"
+import * as socialProbe from "/Diagnostics/SocialProbe"
+import * as spellData from "/Diagnostics/SpellData"
+import * as spellbookProbe from "/Diagnostics/SpellbookProbe"
+import * as supportProbe from "/Diagnostics/SupportProbe"
+import * as taintProbe from "/Diagnostics/TaintProbe"
+import * as talentBuildProbe from "/Diagnostics/TalentBuildProbe"
+import * as talentProbe from "/Diagnostics/TalentProbe"
+import * as taxiProbe from "/Diagnostics/TaxiProbe"
+import * as timelineProbe from "/Diagnostics/TimelineProbe"
+import * as tooltipProbe from "/Diagnostics/TooltipProbe"
+import * as totemProbe from "/Diagnostics/TotemProbe"
+import * as toyModelProbe from "/Diagnostics/ToyModelProbe"
+import * as trackProbe from "/Diagnostics/TrackProbe"
+import * as treeProbe from "/Diagnostics/TreeProbe"
+import * as unlearnProbe from "/Diagnostics/UnlearnProbe"
+import * as weaponEnchantProbe from "/Diagnostics/WeaponEnchantProbe"
+import * as windowsProbe from "/Diagnostics/WindowsProbe"
+
+--------------------------------------------------------------------------------
+-- What to check, grouped by the part of the design that depends on it
+--
+-- Item kinds:
+--   api    a function at a dotted path
+--   ns     a C_ namespace; reports how many functions it has
+--   frame  a global frame
+--   addon  a Blizzard addon: loaded, on demand or absent
+--   enum   an Enum table; reports how many values it has
+--   method a widget method, { widgetType, methodName }
+--   scan   globals and Enum names containing any of `find` (case-insensitive),
+--          minus any containing one of `skip`; `within` limits it to one
+--          namespace's functions
+--------------------------------------------------------------------------------
+
+type Item = {
+    api?: string, ns?: string, frame?: string, addon?: string, enum?: string, method?: string[],
+    scan?: string, find?: string[], skip?: string[], within?: string,
+}
+type Section = { title: string, items: Item[] }
+-- the full lists a run collects, saved beside the report
+type Saved = { namespaces: { [string]: string[] }, enums: { [string]: { [any]: any } }, scans: { [string]: string[] } }
+
+local SECTIONS: Section[] = {
+    { title = "Client", items = {
+        { scan = "Game type APIs", find = { "gamerules", "gamemode", "loadgametype", "gametype" } },
+    } },
+    { title = "Secret values", items = {
+        { api = "issecretvalue" },
+        { api = "canaccessvalue" },
+        { api = "issecrettable" },
+        { api = "UnitHealthPercent" },
+        { api = "UnitPowerPercent" },
+        { api = "C_CurveUtil.CreateColorCurve" },
+        { api = "C_CurveUtil.EvaluateColorValueFromBoolean" },
+        { api = "C_DurationUtil.CreateDuration" },
+        { method = { "Texture", "SetAlphaFromBoolean" } },
+        { method = { "Texture", "SetVertexColorFromBoolean" } },
+        { method = { "StatusBar", "SetTimerDuration" } },
+        { method = { "Cooldown", "SetCooldownFromDurationObject" } },
+    } },
+    { title = "Unit frames and auras", items = {
+        { api = "CreateUnitHealPredictionCalculator" },
+        { api = "UnitGetDetailedHealPrediction" },
+        { api = "UnitGetIncomingHeals" },
+        { api = "UnitGetTotalAbsorbs" },
+        { api = "UnitGetTotalHealAbsorbs" },
+        { api = "UnitGroupRolesAssigned" },
+        { api = "C_UnitAuras.GetAuraDataByIndex" },
+        { api = "C_UnitAuras.GetAuraDataByAuraInstanceID" },
+        { api = "C_UnitAuras.GetAuraDuration" },
+        { scan = "Dispel-type APIs", within = "C_UnitAuras", find = { "dispel" } },
+    } },
+    { title = "Casts and nameplates", items = {
+        { api = "UnitCastingDuration" },
+        { api = "UnitChannelDuration" },
+        { api = "C_NamePlate.GetNamePlateForUnit" },
+        { frame = "NamePlateDriverFrame" },
+        { frame = "PlayerCastingBarFrame" },
+    } },
+    { title = "Threat", items = {
+        { api = "UnitThreatSituation" },
+        { api = "UnitDetailedThreatSituation" },
+        { api = "GetThreatStatusColor" },
+    } },
+    { title = "Swing timer", items = {
+        { ns = "C_SwingTimer" },
+        { enum = "PlayerSwingType" },
+        { addon = "Blizzard_SwingTimer" },
+    } },
+    { title = "Cooldown Manager", items = {
+        { ns = "C_CooldownViewer" },
+        { enum = "CooldownViewerCategory" },
+        { addon = "Blizzard_CooldownViewer" },
+        { frame = "EssentialCooldownViewer" },
+        { frame = "UtilityCooldownViewer" },
+        { frame = "BuffIconCooldownViewer" },
+        { frame = "BuffBarCooldownViewer" },
+    } },
+    { title = "Damage meter", items = {
+        { ns = "C_DamageMeter" },
+        { enum = "DamageMeterType" },
+        { enum = "DamageMeterSessionType" },
+        { addon = "Blizzard_DamageMeter" },
+    } },
+    { title = "Encounter timeline", items = {
+        { ns = "C_EncounterTimeline" },
+        { addon = "Blizzard_EncounterTimeline" },
+        { scan = "Timeline APIs", find = { "timeline" } },
+    } },
+    { title = "Action bars", items = {
+        { ns = "C_ActionBar" },
+        { api = "C_ActionBar.GetActionCooldownDuration" },
+        { enum = "EditModeActionBarSystemIndices" },
+        { frame = "MainActionBar" },
+        { frame = "MainMenuBar" },
+        { frame = "MultiBarBottomLeft" },
+        { frame = "MultiBarBottomRight" },
+        { frame = "MultiBarRight" },
+        { frame = "MultiBarLeft" },
+        { frame = "MultiBar5" },
+        { frame = "MultiBar6" },
+        { frame = "MultiBar7" },
+        { frame = "MultiBar8" },
+        { frame = "StanceBar" },
+        { frame = "PetActionBar" },
+    } },
+    { title = "Edit Mode", items = {
+        { ns = "C_EditMode" },
+        { frame = "EditModeManagerFrame" },
+    } },
+    { title = "Group sync (readiness)", items = {
+        { api = "C_ChatInfo.SendAddonMessage" },
+        { api = "C_ChatInfo.RegisterAddonMessagePrefix" },
+        { scan = "Messaging lockdown APIs", within = "C_ChatInfo", find = { "lockdown", "restrict" } },
+    } },
+    { title = "Loot", items = {
+        { ns = "C_LootHistory" },
+        { api = "GetLootRollItemInfo" },
+        { frame = "GroupLootContainer" },
+        { frame = "LootFrame" },
+    } },
+    { title = "Talents and specializations", items = {
+        { api = "GetSpecialization" },
+        { ns = "C_SpecializationInfo" },
+        { ns = "C_ClassTalents" },
+        { ns = "C_Traits" },
+        { addon = "Blizzard_PlayerSpells" },
+        { addon = "Blizzard_TalentUI" },
+    } },
+    { title = "Legacy", items = {
+        { scan = "Legacy APIs and frames", find = { "legacy" } },
+    } },
+    { title = "Professions", items = {
+        { ns = "C_TradeSkillUI" },
+        { ns = "C_ProfSpecs" },
+        { addon = "Blizzard_Professions" },
+        { addon = "Blizzard_ProfessionsBook" },
+    } },
+    { title = "Group Finder and social", items = {
+        { ns = "C_LFGList" },
+        { ns = "C_FriendList" },
+        { ns = "C_BattleNet" },
+        { ns = "C_Club" },
+        { addon = "Blizzard_GroupFinder" },
+        { addon = "Blizzard_Communities" },
+    } },
+    { title = "Map and quests", items = {
+        { ns = "C_Map" },
+        { api = "C_QuestLog.GetQuestsOnMap" },
+        { ns = "C_QuestLine" },
+        { ns = "C_TaskQuest" },
+        { ns = "C_SuperTrack" },
+        { frame = "WorldMapFrame" },
+        { frame = "ObjectiveTrackerFrame" },
+        { frame = "QuestWatchFrame" },
+    } },
+    { title = "Campsite", items = {
+        { scan = "Camping APIs and frames", find = { "camp", "bonfire" }, skip = { "campaign" } },
+    } },
+    { title = "Bags, bank and tooltips", items = {
+        { ns = "C_Container" },
+        { ns = "C_Bank" },
+        { api = "TooltipDataProcessor.AddTooltipPostCall" },
+        { ns = "C_TooltipInfo" },
+        { frame = "ContainerFrameCombinedBags" },
+        { frame = "BankFrame" },
+    } },
+    { title = "Blizzard frames SuuUI will replace", items = {
+        { frame = "PlayerFrame" }, { frame = "TargetFrame" }, { frame = "FocusFrame" },
+        { frame = "TargetFrameToT" }, { frame = "PetFrame" }, { frame = "PartyFrame" },
+        { frame = "CompactRaidFrameContainer" }, { frame = "BossTargetFrameContainer" },
+        { frame = "BuffFrame" }, { frame = "DebuffFrame" }, { frame = "MinimapCluster" },
+        { frame = "MicroMenuContainer" }, { frame = "BagsBar" }, { frame = "StatusTrackingBarManager" },
+        { frame = "ChatFrame1" }, { frame = "StaticPopup1" }, { frame = "AlertFrame" },
+        { frame = "CharacterFrame" }, { frame = "SpellBookFrame" }, { frame = "PlayerSpellsFrame" },
+        { frame = "FriendsFrame" }, { frame = "GameTooltip" },
+    } },
+}
+
+-- Widget methods whose names match these are listed in full in the saved data.
+local METHOD_HINTS = { "boolean", "duration", "secret", "curve", "timer" }
+local METHOD_WIDGETS = { "Frame", "StatusBar", "Cooldown", "Texture", "FontString" }
+
+-- Console variables whose names match these are listed in the saved data.
+local CVAR_HINTS = { "swing", "timeline", "damagemeter", "cooldownviewer", "encounter", "camp" }
+
+-- Units sampled for secret values, and the spells whose cooldown is sampled:
+-- 29515 is Forever's global cooldown reference, 61304 retail's.
+local SAMPLE_UNITS = { "player", "target", "focus", "pet", "party1", "raid1", "boss1", "nameplate1" }
+local SAMPLE_SPELLS = { 29515, 61304 }
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+local function resolve(path: string): any
+    local v: any = _G
+    for part in path:gmatch("[^%.]+") do
+        if type(v) ~= "table" then return nil end
+        v = v[part]
+    end
+    return v
+end
+
+local function sortedKeys(t: { [any]: any }, filter: ((k: string, v: any) -> boolean)?): string[]
+    local out: string[] = {}
+    for k, v in pairs(t) do
+        if type(k) == "string" and (not filter or filter(k, v)) then
+            out[#out + 1] = k
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+local function functionNames(t: { [any]: any }): string[]
+    return sortedKeys(t, function(_, v) return type(v) == "function" end)
+end
+
+local function matchesAny(lower: string, needles: string[]): boolean
+    for _, n in ipairs(needles) do
+        if lower:find(n, 1, true) then return true end
+    end
+    return false
+end
+
+local function scan(item: Item): string[]
+    local function wanted(name: string): boolean
+        local lower = name:lower()
+        return matchesAny(lower, item.find or {}) and not (item.skip and matchesAny(lower, item.skip))
+    end
+    local hits: string[] = {}
+    local within = item.within
+    if within then
+        local t = resolve(within)
+        if type(t) == "table" then
+            for _, name in ipairs(functionNames(t)) do
+                if wanted(name) then hits[#hits + 1] = within .. "." .. name end
+            end
+        end
+        return hits
+    end
+    for name, v in pairs(_G) do
+        local t = type(v)
+        if type(name) == "string" and (t == "function" or t == "table")
+            and not name:find("^SuuUI") and wanted(name) then
+            hits[#hits + 1] = name
+        end
+    end
+    for name in pairs(Enum :: any) do
+        if type(name) == "string" and wanted(name) then hits[#hits + 1] = "Enum." .. name end
+    end
+    table.sort(hits)
+    return hits
+end
+
+local function addonState(name: string): (boolean, string)
+    local ok, exists = pcall(C_AddOns.DoesAddOnExist, name)
+    if not ok or not exists then return false, "absent" end
+    if C_AddOns.IsAddOnLoaded(name) then return true, "loaded" end
+    if C_AddOns.IsAddOnLoadOnDemand and C_AddOns.IsAddOnLoadOnDemand(name) then
+        return true, "on demand"
+    end
+    return true, "present, not loaded"
+end
+
+local widgets: { [string]: any }?
+local function widget(kind: string): any
+    local w = widgets
+    if not w then
+        local host = CreateFrame("Frame")
+        host:Hide()
+        w = {
+            Frame = host,
+            StatusBar = CreateFrame("StatusBar", nil, host),
+            Cooldown = CreateFrame("Cooldown", nil, host),
+            Texture = host:CreateTexture(),
+            FontString = host:CreateFontString(),
+        }
+        widgets = w
+    end
+    return w[kind]
+end
+
+local function methodsOf(kind: string): { [any]: any }
+    local mt = getmetatable(widget(kind))
+    local index = mt and mt.__index
+    return type(index) == "table" and index or {}
+end
+
+local function preview(list: string[], limit: number): string
+    if #list <= limit then return table.concat(list, ", ") end
+    local head: string[] = {}
+    for i = 1, limit do head[i] = list[i] end
+    return table.concat(head, ", ") .. (", +%d more"):format(#list - limit)
+end
+
+--------------------------------------------------------------------------------
+-- Checks
+--------------------------------------------------------------------------------
+
+-- Returns ok, label, detail for one item; `saved` collects the full lists.
+local function check(item: Item, saved: Saved): (boolean, string, string?)
+    local api, ns, frame, addon, enum, method, scanName = item.api, item.ns, item.frame, item.addon, item.enum, item.method, item.scan
+    if api then
+        return type(resolve(api)) == "function", api
+    elseif ns then
+        local t = resolve(ns)
+        if type(t) ~= "table" then return false, ns end
+        local names = functionNames(t)
+        saved.namespaces[ns] = names
+        return true, ns, ("%d functions"):format(#names)
+    elseif frame then
+        return type(_G[frame]) == "table", frame
+    elseif addon then
+        local ok, state = addonState(addon)
+        return ok, addon, state
+    elseif enum then
+        local label = "Enum." .. enum
+        local t = (Enum :: any)[enum]
+        if type(t) ~= "table" then return false, label end
+        local copy: { [any]: any }, n = {}, 0
+        for k, v in pairs(t) do copy[k] = v; n = n + 1 end
+        saved.enums[enum] = copy
+        return true, label, ("%d values"):format(n)
+    elseif method then
+        local kind, name = method[1], method[2]
+        return type(methodsOf(kind)[name]) == "function", kind .. ":" .. name
+    elseif scanName then
+        local hits = scan(item)
+        saved.scans[scanName] = hits
+        if #hits == 0 then return false, scanName, "nothing found" end
+        return true, scanName, preview(hits, 6)
+    end
+    -- (every item is one of the kinds above)
+    return false, "?"
+end
+
+local function collectMethods(): { [string]: string[] }
+    local out: { [string]: string[] } = {}
+    for _, kind in ipairs(METHOD_WIDGETS) do
+        out[kind] = sortedKeys(methodsOf(kind), function(k: string, v: any): boolean
+            return type(v) == "function" and matchesAny(k:lower(), METHOD_HINTS)
+        end)
+    end
+    return out
+end
+
+local function collectCVars(): string[]?
+    if not (C_Console and C_Console.GetAllCommands) then return nil end
+    local ok, all = pcall(C_Console.GetAllCommands)
+    if not ok or type(all) ~= "table" then return nil end
+    local out: string[] = {}
+    for _, info in ipairs(all :: any[]) do
+        local name = info.command
+        if type(name) == "string" and matchesAny(name:lower(), CVAR_HINTS) then
+            out[#out + 1] = name
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Secret-value samples for the current context
+--------------------------------------------------------------------------------
+
+local isSecretTable: (t: any) -> boolean = issecrettable or function(_: any) return false end
+
+local function errText(msg: any): string
+    return (tostring(msg):gsub("^Interface\\[^:]*:%d+: ", "")):sub(1, 160)
+end
+
+-- "secret", "readable" or "none" for one value; never keeps the value.
+local function state(v: any): string
+    if isSecret(v) then return "secret" end
+    if v == nil then return "none" end
+    return "readable"
+end
+
+-- The state of every string-keyed field of a table the client returned, or
+-- the state of a non-table value.
+local function describe(t: any): any
+    if isSecret(t) or type(t) ~= "table" then return state(t) end
+    if isSecretTable(t) then return "secret table" end
+    local out: { [string]: string } = {}
+    local ok, err = pcall(function()
+        for k, v in pairs(t) do
+            if type(k) == "string" then
+                out[k] = isSecret(v) and "secret" or (v == nil and "none" or "readable")
+            end
+        end
+    end)
+    if not ok then return "error: " .. errText(err) end
+    return out
+end
+
+-- Calls fn and describes its first result; errors become "error: <message>".
+local function call(fn: any, ...: any): any
+    if type(fn) ~= "function" then return "missing" end
+    local ok, v = pcall(fn, ...)
+    if not ok then return "error: " .. errText(v) end
+    return describe(v)
+end
+
+local UNIT_FIELDS: { [number]: any }[] = {
+    { "name", function(u) return UnitName(u) end },
+    { "class", function(u) return (select(2, UnitClass(u))) end },
+    { "level", UnitLevel },
+    { "classification", UnitClassification },
+    { "reaction", function(u) return UnitReaction(u, "player") end },
+    { "dead", UnitIsDeadOrGhost },
+    { "role", UnitGroupRolesAssigned },
+    { "health", UnitHealth },
+    { "healthMax", UnitHealthMax },
+    { "healthPercent", UnitHealthPercent },
+    { "healthPercentScaled", function(u) return UnitHealthPercent(u, true, CurveConstants.ScaleTo100) end },
+    { "powerPercentScaled", function(u) return UnitPowerPercent(u, UnitPowerType(u), true, CurveConstants.ScaleTo100) end },
+    { "power", UnitPower },
+    { "powerType", UnitPowerType },
+    { "absorbs", UnitGetTotalAbsorbs },
+    { "incomingHeals", UnitGetIncomingHeals },
+    { "threat", function(u) return UnitThreatSituation("player", u) end },
+    { "castName", UnitCastingInfo },
+    { "castNotInterruptible", function(u) return (select(8, UnitCastingInfo(u))) end },
+    { "castDuration", UnitCastingDuration },
+}
+
+-- The first aura of each filter, read three ways: by index, through the slot
+-- API that Blizzard's AuraUtil uses, and as a list.
+local function sampleAuras(unit: string): { [string]: any }
+    local A: any = C_UnitAuras or {}
+    local out: { [string]: any } = {}
+    for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
+        out["byIndex " .. filter] = call(A.GetAuraDataByIndex, unit, 1, filter)
+        if A.GetAuraSlots then
+            local ok, tokenOrError, slot = pcall(A.GetAuraSlots, unit, filter)
+            if not ok then
+                out["slots " .. filter] = "error: " .. errText(tokenOrError)
+            else
+                out["slots " .. filter] = state(slot)
+                if slot ~= nil and not isSecret(slot) then
+                    out["bySlot " .. filter] = call(A.GetAuraDataBySlot, unit, slot)
+                end
+            end
+        end
+        if A.GetUnitAuras then
+            local ok, list = pcall(A.GetUnitAuras, unit, filter, 1)
+            if not ok then
+                out["list " .. filter] = "error: " .. errText(list)
+            elseif type(list) == "table" and not isSecret(list) and not isSecretTable(list) then
+                out["list " .. filter] = describe(list[1])
+            else
+                out["list " .. filter] = describe(list)
+            end
+        end
+    end
+    return out
+end
+
+local function sampleUnits(): { [string]: any }
+    local out: { [string]: any } = {}
+    for _, unit in ipairs(SAMPLE_UNITS) do
+        if UnitExists(unit) then
+            local fields: { [string]: any } = {}
+            for _, f in ipairs(UNIT_FIELDS) do
+                if not (f[1] == "threat" and unit == "player") then
+                    fields[f[1]] = call(f[2], unit)
+                end
+            end
+            out[unit] = { fields = fields, auras = sampleAuras(unit) }
+        end
+    end
+    return out
+end
+
+-- The GCD reference spells, then up to three actions on the current bar 1.
+local function sampleCooldowns(): { [string]: any }
+    local out: { [string]: any } = {}
+    for _, id in ipairs(SAMPLE_SPELLS) do
+        out["spell " .. id] = call(C_Spell and C_Spell.GetSpellCooldown, id)
+    end
+    local AB: any = C_ActionBar or {}
+    local hasAction = _G.HasAction or AB.HasAction
+    local n = 0
+    for slot = 1, 12 do
+        if n < 3 and hasAction and hasAction(slot) then
+            n = n + 1
+            out["action " .. slot] = call(AB.GetActionCooldown, slot)
+            out["action " .. slot .. " duration object"] = call(AB.GetActionCooldownDuration, slot)
+        end
+    end
+    return out
+end
+
+-- Calls the no-argument queries the messaging scan found and keeps their
+-- answer when it is readable.
+local function sampleMessaging(saved: Saved): { [string]: string }
+    local out: { [string]: string } = {}
+    for _, path in ipairs(saved.scans["Messaging lockdown APIs"] or {}) do
+        local short = path:match("%.(%w+)$")
+        if short and (short:find("^Is") or short:find("^In") or short:find("^Are")) then
+            local ok, v = pcall(resolve(path))
+            if not ok then out[short] = "error: " .. errText(v)
+            elseif isSecret(v) then out[short] = "secret"
+            else out[short] = tostring(v) end
+        end
+    end
+    return out
+end
+
+-- One report line from a describe() result: fields grouped by state, then
+-- each error with its message.
+local function summarize(label: string, d: any): string[]
+    if type(d) ~= "table" then return { ("  %s: %s"):format(label, d) } end
+    local groups: { [string]: string[] }, errors: string[] = {}, {}
+    for _, k in ipairs(sortedKeys(d)) do
+        local v = d[k]
+        if type(v) == "table" then v = "table" end
+        if v:find("^error") then
+            errors[#errors + 1] = ("    %s %s"):format(k, v)
+        else
+            local group = groups[v] or {}
+            groups[v] = group
+            table.insert(group, k)
+        end
+    end
+    local parts: string[] = {}
+    for _, s in ipairs({ "readable", "secret", "secret table", "none", "missing", "table" }) do
+        local group = groups[s]
+        if group then parts[#parts + 1] = s .. " " .. table.concat(group, ", ") end
+    end
+    local lines = { ("  %s: %s"):format(label, #parts > 0 and table.concat(parts, " · ") or "nothing") }
+    for _, e in ipairs(errors) do lines[#lines + 1] = e end
+    return lines
+end
+
+local function context(): { [string]: any }
+    local _, instance = IsInInstance()
+    local group = IsInRaid() and "raid" or IsInGroup() and "party" or "solo"
+    local combat = InCombatLockdown()
+    return {
+        time = date("%Y-%m-%d %H:%M:%S"),
+        combat = combat,
+        instance = instance or "none",
+        group = group,
+        size = GetNumGroupMembers(),
+        zone = GetRealZoneText(),
+        level = UnitLevel("player"),
+        class = select(2, UnitClass("player")),
+        key = ("%s%s · %s"):format(combat and "combat · " or "", instance or "none", group),
+    }
+end
+
+local function clientInfo(): { [string]: any }
+    local clientVersion, build, buildDate, toc = GetBuildInfo()
+    local w, h = GetPhysicalScreenSize()
+    return {
+        version = clientVersion, build = build, date = buildDate, toc = toc,
+        locale = GetLocale(),
+        screen = ("%dx%d"):format(w, h),
+        uiScale = UIParent:GetScale(),
+        useUiScale = GetCVar("useUiScale"),
+    }
+end
+
+--------------------------------------------------------------------------------
+-- Run and report
+--------------------------------------------------------------------------------
+
+local function run(): (string, number, number)
+    local saved: Saved = { namespaces = {}, enums = {}, scans = {} }
+    local report: string[], found, total = {}, 0, 0
+    local client, ctx = clientInfo(), context()
+
+    report[#report + 1] = ("SuuUI probe %s · %s"):format(version, ctx.time)
+    report[#report + 1] = ("Client %s build %s (interface %d), %s, screen %s, UI scale %.2f (useUiScale %s)")
+        :format(client.version, client.build, client.toc, client.locale, client.screen, client.uiScale, tostring(client.useUiScale))
+    report[#report + 1] = ("Context: %s, level %d %s, %s")
+        :format(ctx.key, ctx.level, ctx.class or "?", ctx.zone or "?")
+
+    local sections: { [string]: any }[] = {}
+    for _, section in ipairs(SECTIONS) do
+        report[#report + 1] = ""
+        report[#report + 1] = section.title
+        local rows: { [string]: any }[] = {}
+        for _, item in ipairs(section.items) do
+            local ok, label, detail = check(item, saved)
+            total = total + 1
+            if ok then found = found + 1 end
+            rows[#rows + 1] = { label = label, ok = ok, detail = detail }
+            report[#report + 1] = ("  [%s] %s%s"):format(ok and "ok" or "--", label, detail and ("  (" .. detail .. ")") or "")
+        end
+        sections[#sections + 1] = { title = section.title, rows = rows }
+    end
+
+    local samples = {
+        context = ctx,
+        units = sampleUnits(),
+        cooldowns = sampleCooldowns(),
+        messaging = sampleMessaging(saved),
+    }
+
+    report[#report + 1] = ""
+    report[#report + 1] = "Secret values right now (" .. ctx.key .. ")"
+    local function add(lines: string[])
+        for _, line in ipairs(lines) do report[#report + 1] = line end
+    end
+    for _, unit in ipairs(SAMPLE_UNITS) do
+        local u = samples.units[unit]
+        if u then
+            add(summarize(unit, u.fields))
+            for _, k in ipairs(sortedKeys(u.auras)) do
+                add(summarize("  " .. unit .. " aura " .. k, u.auras[k]))
+            end
+        end
+    end
+    for _, k in ipairs(sortedKeys(samples.cooldowns)) do
+        add(summarize(k, samples.cooldowns[k]))
+    end
+    for _, k in ipairs(sortedKeys(samples.messaging)) do
+        report[#report + 1] = ("  %s: %s"):format(k, samples.messaging[k])
+    end
+
+    report[#report + 1] = ""
+    report[#report + 1] = ("Found %d of %d."):format(found, total)
+
+    local db = DB.probe
+    db.version = version
+    db.client = client
+    db.sections = sections
+    db.namespaces = saved.namespaces
+    db.enums = saved.enums
+    db.scans = saved.scans
+    db.methods = collectMethods()
+    db.cvars = collectCVars()
+    db.allNamespaces = sortedKeys(_G, function(k: string, v: any): boolean return type(v) == "table" and k:find("^C_") ~= nil end)
+    db.runs = db.runs or {}
+    db.runs[ctx.key] = samples
+    db.lastReport = table.concat(report, "\n")
+
+    return db.lastReport, found, total
+end
+
+--------------------------------------------------------------------------------
+-- Report window: a plain, movable frame holding a read-only edit box, so the
+-- text can be selected and copied. It is a diagnostic, not part of the design.
+--------------------------------------------------------------------------------
+
+local window: any
+
+local function buildWindow(): any
+    local f: any = CreateFrame("Frame", "SuuUIProbeFrame", UIParent, "BackdropTemplate")
+    f:SetSize(720, 540)
+    f:SetPoint("CENTER")
+    f:SetFrameStrata("DIALOG")
+    f:SetClampedToScreen(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    f:SetBackdropColor(0.06, 0.07, 0.09, 0.96)
+    f:SetBackdropBorderColor(0.62, 0.50, 0.28, 1)
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 14, -12)
+    title:SetText("SuuUI probe")
+
+    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    hint:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+    hint:SetText("Ctrl+A, Ctrl+C copies the report. /reload also saves it to SavedVariables\\SuuUI.lua.")
+
+    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -2, -2)
+
+    local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", 14, -56)
+    scroll:SetPoint("BOTTOMRIGHT", -34, 14)
+
+    local edit = CreateFrame("EditBox", nil, scroll)
+    edit:SetMultiLine(true)
+    edit:SetAutoFocus(false)
+    edit:SetFontObject(ChatFontNormal)
+    edit:SetWidth(660)
+    edit:SetScript("OnEscapePressed", function() f:Hide() end)
+    -- Read-only: typing puts the report back.
+    edit:SetScript("OnTextChanged", function(self, userInput)
+        if userInput then self:SetText(f.report or "") end
+    end)
+    scroll:SetScrollChild(edit)
+
+    f.edit = edit
+    tinsert(UISpecialFrames, "SuuUIProbeFrame")
+    return f
+end
+
+local function show(text: string)
+    window = window or buildWindow()
+    window.report = text
+    window.edit:SetText(text)
+    window.edit:SetCursorPosition(0)
+    window:Show()
+    window.edit:SetFocus()
+    window.edit:HighlightText()
+end
+
+-- Run by the diagnostics module's /suu probe.
+
+-- The topics /suu probe takes (the chat's command palette lists them): a
+-- new topic in command below goes here too.
+export const TOPICS: string[] = {
+    "ahdata", "ahpost", "ahscan", "api", "bags", "bagsort", "bankslots", "calendar", "camp", "casttarget", "character", "chat",
+    "chatpalette", "class", "collart", "collown", "colltiles", "deathrecap", "dragon", "durability", "filters",
+    "flicker", "gamemenu", "garbage", "givers", "group", "hold", "hovertip", "icons", "legacy", "lfg", "loot", "map",
+    "mappins", "marks", "memory", "meter", "micro", "minimap", "mountfeet", "mountframe", "npcportrait", "partyauras",
+    "plates", "popups", "power", "professions", "proficons", "quest", "questgroup", "raid", "runtime", "show",
+    "skysight", "social", "sound", "spellbook", "spells", "support", "taint", "talentbuilds", "talents", "taxi", "timeline",
+    "tooltips", "totems", "toymodels", "track", "tree", "unitmenu", "unlearn", "weaponenchants", "windows",
+}
+
+export function hide()
+    if window then window:Hide() end
+end
+
+-- Each topic's command, called with the words after the topic. (One
+-- function testing every topic, as before the port, would hold more than
+-- Lua's 60 upvalues: one per probe module.)
+local TOPIC_COMMANDS: { [string]: (rest: string) -> () } = {
+    track = function(rest: string) trackProbe.command(rest) end,
+    spells = function(rest: string) spellData.command(rest) end,
+    plates = function(rest: string) plateProbe.command(rest) end,
+    meter = function(rest: string) meterProbe.command(rest) end,
+    timeline = function(rest: string) timelineProbe.command(rest) end,
+    micro = function() microProbe.command() end,
+    minimap = function(rest: string) minimapProbe.command(rest) end,
+    chat = function() chatProbe.command() end,
+    quest = function(rest: string) questProbe.command(rest) end,
+    popups = function(rest: string) popupProbe.command(rest) end,
+    bags = function(rest: string) bagProbe.command(rest) end,
+    bagsort = function(rest: string) bagSortProbe.command(rest) end,
+    loot = function(rest: string) lootProbe.command(rest) end,
+    tooltips = function() tooltipProbe.command() end,
+    camp = function() campProbe.command() end,
+    partyauras = function(rest: string) partyAuraProbe.command(rest) end,
+    hovertip = function() hoverTipProbe.command() end,
+    character = function() characterProbe.command() end,
+    tree = function(rest: string) treeProbe.command(rest) end,
+    spellbook = function(rest: string) spellbookProbe.command(rest) end,
+    flicker = function(rest: string) flickerProbe.command(rest) end,
+    professions = function() professionProbe.command() end,
+    unlearn = function() unlearnProbe.command() end,
+    social = function(rest: string) socialProbe.command(rest) end,
+    lfg = function(rest: string) lfgProbe.command(rest) end,
+    map = function(rest: string) mapProbe.command(rest) end,
+    calendar = function() calendarProbe.command() end,
+    proficons = function() profIconProbe.command() end,
+    givers = function(rest: string) giverProbe.command(rest) end,
+    marks = function(rest: string) markProbe.command(rest) end,
+    windows = function(rest: string) windowsProbe.command(rest) end,
+    npcportrait = function() npcPortraitProbe.command() end,
+    support = function() supportProbe.command() end,
+    gamemenu = function() gameMenuProbe.command() end,
+    unitmenu = function() menuProbe.command() end,
+    dragon = function() dragonProbe.command() end,
+    taxi = function(rest: string) taxiProbe.command(rest) end,
+    raid = function(rest: string) raidProbe.command(rest) end,
+    skysight = function(rest: string) skysightProbe.command(rest) end,
+    weaponenchants = function(rest: string) weaponEnchantProbe.command(rest) end,
+    chatpalette = function(rest: string) chatPaletteProbe.command(rest) end,
+    power = function(rest: string) powerProbe.command(rest) end,
+    mappins = function() mapPinsProbe.command() end,
+    durability = function(rest: string) durabilityProbe.command(rest) end,
+    deathrecap = function() deathRecapProbe.command() end,
+    questgroup = function() questGroupProbe.command() end,
+    casttarget = function() castTargetProbe.command() end,
+    totems = function(rest: string) totemProbe.command(rest) end,
+    garbage = function() garbageProbe.command() end,
+    memory = function() memoryProbe.command() end,
+    bankslots = function(rest: string) bankSlotsProbe.command(rest) end,
+    toymodels = function() toyModelProbe.command() end,
+    mountfeet = function() mountFeetProbe.command() end,
+    mountframe = function(rest: string) mountFrameProbe.command(rest) end,
+    collown = function() collectionsOwnProbe.command() end,
+    colltiles = function() collectionsTilesProbe.command() end,
+    collart = function() collectionsArtProbe.command() end,
+    ahscan = function() ahScanProbe.command() end,
+    ahpost = function() ahPostProbe.command() end,
+    ahdata = function(rest: string) ahDataProbe.command(rest) end,
+    legacy = function(rest: string) legacyProbe.command(rest) end,
+    taint = function() taintProbe.command() end,
+    hold = function() holdProbe.command() end,
+    talents = function(rest: string) talentProbe.command(rest) end,
+    talentbuilds = function(rest: string) talentBuildProbe.command(rest) end,
+    group = function(rest: string) groupProbe.command(rest) end,
+    class = function() classData.command() end,
+    icons = function() iconProbe.command() end,
+    api = function(rest: string) apiDocs.command(rest) end,
+    runtime = function() apiDocs.runtime() end,
+    filters = function() apiDocs.filters() end,
+    sound = function(rest: string)
+        if rest == "play" then apiDocs.soundPlay() else apiDocs.sound() end
+    end,
+}
+
+export function command(arg: string?)
+    -- a full stop or comma copied along with the command is dropped
+    local sub, rest = (arg or ""):gsub("[%.,;:!]+%s*$", ""):match("^(%S*)%s*(.-)$")
+    local topic = TOPIC_COMMANDS[sub or ""]
+    if topic then
+        topic(rest or "")
+        return
+    end
+    if arg == "show" then
+        if DB.probe.lastReport then
+            show(DB.probe.lastReport)
+        else
+            print("No probe report yet. Run /suu probe.")
+        end
+        return
+    end
+    local text, found, total = run()
+    show(text)
+    print(("Probe found %d of %d. /reload to save it for Claude to read."):format(found, total))
+end

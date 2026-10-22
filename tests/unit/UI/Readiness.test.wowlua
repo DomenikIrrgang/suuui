@@ -1,0 +1,129 @@
+-- UI/Readiness: the readiness panel's rows, their status and the action.
+
+import test, cases, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import readiness, Readiness from "/UI/Readiness"
+import internal fmtLeft from "/UI/Readiness"
+import expectNoErrors, newParent from "../../helpers"
+
+local parent: Frame? = nil
+
+local function host(): Frame
+    local p = newParent(400, 400)
+    parent = p
+    return p
+end
+
+@afterEach
+local function cleanup()
+    if parent then parent:Hide() end
+    parent = nil
+end
+
+@test("fmtLeft: seconds, then minutes and seconds")
+@cases({ { 0, "0s" }, { 0.2, "1s" }, { 59, "59s" }, { 60, "1:00" }, { 61.5, "1:02" }, { 3599, "59:59" }, { -5, "0s" } })
+local function formats(s: number, out: string)
+    expect(fmtLeft(s)).toBe(out)
+end
+
+@test("a new panel has no rows and no action")
+local function empty()
+    local r: Readiness = readiness(host())
+    expect(#r.rows).toBe(0)
+    expect(#r.data).toBe(0)
+    expect(r.action).never.toBeShown()
+    expect(r.footRule).never.toBeShown()
+    expect(r.listH).toBe(0)
+    expectNoErrors()
+end
+
+@test("rows: ready, cooling down, class diamond, defaults")
+local function rows()
+    local r: Readiness = readiness(host())
+    local now = GetTime()
+    r:SetRows({
+        { icon = 135936, spell = "Rebirth", who = "Moonfire", class = "DRUID" },
+        { spell = "Innervate", who = "Leaf", class = "DRUID", endsAt = now + 75 },
+        { icon = 1, class = "NOPE", endsAt = now - 1 },
+        { icon = 2 },
+    })
+    expect(#r.rows).toBe(4)
+    local a, b, c, d = r.rows[1], r.rows[2], r.rows[3], r.rows[4]
+    expect(a.status).toHaveText("Ready")
+    expect(a.icon.state).toBe("rest")
+    expect(a.spell).toHaveText("Rebirth")
+    expect(a.who).toHaveText("Moonfire")
+    expect(a.diamond).toBeShown()
+    expect(a.rule).never.toBeShown()
+    expect(a.icon.art:GetTextureFileID()).toBe(135936)
+    expect(b.status).toHaveText("1:15")
+    expect(b.status.style).toBe("numeric")
+    expect(b.icon.state).toBe("dim")
+    expect(b.rule).toBeShown()
+    -- an unknown class: no diamond; past endsAt: ready
+    expect(c.diamond).never.toBeShown()
+    expect(c.status).toHaveText("Ready")
+    expect(c.spell).toHaveText("")
+    expect(c.who).toHaveText("")
+    -- no class at all: no diamond, the default art when no icon
+    expect(d.diamond).never.toBeShown()
+    r:SetRows({ {} })
+    expect(r.rows[1].icon.art:GetTextureFileID()).toBe(134400)
+    expect(r.rows[2]).never.toBeShown()
+    expect(r.rows[4]).never.toBeShown()
+    expect(r.rows[1]).toBeShown()
+    expectNoErrors()
+end
+
+@test("the time left counts down every half second")
+local function countdown()
+    local r: Readiness = readiness(host())
+    r:SetRows({ { spell = "Rebirth", endsAt = GetTime() + 3 } })
+    local row = r.rows[1]
+    expect(row.status).toHaveText("3s")
+    mock.advanceFrames(70) -- ~1.17 s: at least one update
+    expect(row.status).toHaveText("2s")
+    mock.advanceFrames(150)
+    expect(row.status).toHaveText("Ready")
+    expect(row.status.style).toBe("label")
+    expect(row.icon.state).toBe("rest")
+    expectNoErrors()
+end
+
+@test("SetRows(nil) empties the list")
+local function nilRows()
+    local r: Readiness = readiness(host())
+    r:SetRows({ { spell = "A" }, { spell = "B" } })
+    r:SetRows(nil)
+    expect(#r.data).toBe(0)
+    expect(r.rows[1]).never.toBeShown()
+    expect(r.rows[2]).never.toBeShown()
+    expect(r.listH).toBe(0)
+end
+
+@test("the ready check action shows in the foot and calls back")
+local function action()
+    local spy = mock.spy(function() end)
+    local r: Readiness = readiness(host(), { onReadyCheck = spy })
+    r:SetRows({ { spell = "A" } })
+    local before = r.body:GetHeight()
+    r:SetActionShown(true)
+    expect(r.actionShown).toBe(true)
+    expect(r.action).toBeShown()
+    expect(r.footRule).toBeShown()
+    expect(r.body:GetHeight() > before).toBe(true)
+    mock.click(r.action)
+    expect(spy).toHaveBeenCalledTimes(1)
+    r:SetActionShown(nil)
+    expect(r.action).never.toBeShown()
+    expect(r.body:GetHeight()).toBe(before)
+    expectNoErrors()
+end
+
+@test("the action without a callback does nothing")
+local function actionNoCallback()
+    local r: Readiness = readiness(host())
+    r:SetActionShown(1)
+    mock.click(r.action)
+    expectNoErrors()
+end

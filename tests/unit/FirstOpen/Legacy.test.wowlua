@@ -1,0 +1,38 @@
+-- The Legacy window first opened in a fight (never opened before it):
+-- SuuUI's look on it, nothing refused. Its own file: no earlier test may
+-- open it first.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import expectNoErrors from "../../helpers"
+
+local G: any = _G
+local FACTION = 2802
+
+-- the window opens once the reward track has renown; its rewards' items
+-- (game data comes from the tests)
+mock.setRenown(FACTION, 1)
+for _, lv in ipairs(C_MajorFactions.GetRenownLevels(FACTION) or {}) do
+    for _, r in ipairs(C_MajorFactions.GetRenownRewardsForLevel(FACTION, lv.level) or {}) do
+        if r.itemID then mock.defineItem(r.itemID, { name = r.name or ("Reward " .. r.itemID), quality = 4, icon = r.icon }) end
+    end
+end
+
+@test("first opened in a fight: SuuUI's look, nothing refused")
+local function firstInCombat()
+    mock.advanceTime(2)
+    mock.pressKey("ESCAPE") -- (SuuUI's welcome, as at a first login, gone)
+    mock.advanceFrames(2)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    -- (its key, as the player presses it: SuuUI may take it over)
+    local key = GetBindingKey("TOGGLELEGACYSYSTEM")
+    if key then mock.pressKey(key) else mock.pressBinding("TOGGLELEGACYSYSTEM") end
+    mock.advanceFrames(3)
+    local f = G.LegacySystemFrame
+    expect(f ~= nil and f:IsShown()).toBe(true)
+    expect(f.suuChrome ~= nil).toBe(true)
+    expect(#mock.refusals()).toBe(0)
+    mock.player:leaveCombat()
+    expectNoErrors()
+end

@@ -1,0 +1,615 @@
+-- UI/Select: the closed field and its summary (one value, several, a
+-- placeholder, a looked-up option), the open list (rows, headings, notes,
+-- icons, diamonds, fonts, disabled options), choosing, several at once with
+-- Select all and Clear, search and lookup, scrolling, the foot's links,
+-- closing (a click elsewhere, another select, hiding, disabling) and the
+-- bare field.
+
+import test, expect, afterEach, beforeAll, beforeEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as fonts from "/Core/Fonts"
+import * as tooltip from "/UI/Tooltip"
+import measureText from "/UI/Text"
+import select, Select, SelectOption, SelectOptions, SelectList from "/UI/Select"
+import internal catcher from "/UI/Select"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf from "./PrimitivesHelpers"
+
+local S = T.space
+local parent: Frame? = nil
+local shown = mock.spy(function(_owner: any, _data: any) end)
+local hidden = mock.spy(function() end)
+
+@beforeAll
+local function fakeTooltips()
+    mock.module(tooltip, { showTooltip = shown, hideTooltip = hidden })
+end
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(600, 400)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local OPTIONS: SelectOption[] = {
+    { value = "a", label = "Alpha" },
+    { value = "b", label = "Beta", note = "second" },
+    { value = "c", label = "Gamma", disabled = true, reason = "Not yet" },
+}
+
+local function make(opts: SelectOptions): Select
+    local s = select(parent :: Frame, opts)
+    s:SetPoint("TOPLEFT")
+    return s
+end
+
+local function list(s: Select): SelectList
+    return s.list :: SelectList
+end
+
+-- the open list's visible rows, as their labels' texts
+local function rowTexts(s: Select): string[]
+    local out: string[] = {}
+    for _, r in ipairs(list(s).rows) do
+        if r:IsShown() then out[#out + 1] = r.label:GetText() end
+    end
+    return out
+end
+
+local function row(s: Select, i: number): any
+    return list(s).rows[i]
+end
+
+local function many(n: number): SelectOption[]
+    local out: SelectOption[] = {}
+    for i = 1, n do out[i] = { value = i, label = "Option " .. i } end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- closed
+--------------------------------------------------------------------------------
+
+@test("closed: 190 by 30, the chosen option's label in ink")
+local function closed()
+    local s = make({ options = OPTIONS, value = "b" })
+    expect(s).toHaveSize(190, 30)
+    expect(s.text).toHaveText("Beta")
+    expect(tokenOf(s.text)).toBe("ink")
+    expect(tokenOf(s.bg)).toBe("surface-sunk")
+    expect(tokenOf(s.border.top)).toBe("gilt-line")
+    expect(s.list).toBeNil()
+    local w = make({ options = OPTIONS, width = 120 })
+    expect(w:GetWidth()).toBeCloseTo(120, 3)
+end
+
+@test("nothing chosen: the placeholder in ink-muted, or nothing")
+local function placeholder()
+    local s = make({ options = OPTIONS, placeholder = "Choose" })
+    expect(s.text).toHaveText("Choose")
+    expect(tokenOf(s.text)).toBe("ink-muted")
+    local bare = make({ options = OPTIONS })
+    expect(bare.text).toHaveText("")
+    expect(tokenOf(bare.text)).toBe("ink")
+    local none = make({})
+    expect(none.options).toEqual({})
+end
+
+@test("an option's summary is what the closed field shows")
+local function summary()
+    local s = make({ options = { { value = 1, label = "Skill", summary = "Sort: Skill" } }, value = 1 })
+    expect(s:Summary()).toBe("Sort: Skill")
+    expect(s.text).toHaveText("Sort: Skill")
+end
+
+@test("several: none, the placeholder or None; all; a few by name; many counted")
+@cases({
+    { {}, "Pick", "Pick" },
+    { {}, nil, "None" },
+    { { "a", "b", "c" }, nil, "All" },
+    { { "a" }, nil, "Alpha" },
+    { { "b", "a" }, nil, "Alpha, Beta" },
+})
+local function summaries(value: any[], ph: string?, out: string)
+    local s = make({ options = OPTIONS, multiple = true, value = value, placeholder = ph })
+    expect(s:Summary()).toBe(out)
+end
+
+@test("past maxShown the field counts what's chosen")
+local function counted()
+    local opts = many(6)
+    local s = make({ options = opts, multiple = true, value = { 1, 2, 3 } })
+    expect(s:Summary()).toBe("3 of 6")
+    local wide = make({ options = opts, multiple = true, maxShown = 3, value = { 1, 2, 3 } })
+    expect(wide:Summary()).toBe("Option 1, Option 2, Option 3")
+    -- headings don't count
+    local h: SelectOption[] = { { heading = "Group" }, { value = 1, label = "One" }, { value = 2, label = "Two" } }
+    expect(make({ options = h, multiple = true, value = { 1, 2 } }):Summary()).toBe("All")
+    -- an empty multiple field is in ink-muted with a placeholder
+    local e = make({ options = opts, multiple = true, placeholder = "Any" })
+    expect(tokenOf(e.text)).toBe("ink-muted")
+end
+
+@test("SetValue of a multiple field copies the list")
+local function multipleCopy()
+    local s = make({ options = OPTIONS, multiple = true })
+    local v = { "a" }
+    s:SetValue(v)
+    v[2] = "b"
+    expect(s.value).toEqual({ "a" })
+    s:SetValue(nil)
+    expect(s.value).toEqual({})
+end
+
+@test("SetOptions shows the value against the new options")
+local function setOptions()
+    local s = make({ options = OPTIONS, value = "z" })
+    expect(s.text).toHaveText("")
+    s:SetOptions({ { value = "z", label = "Zed" } })
+    expect(s.text).toHaveText("Zed")
+    s:SetOptions(nil)
+    expect(s.options).toEqual({})
+end
+
+@test("hover lights the edge gilt, unless disabled")
+local function hover()
+    local s = make({ options = OPTIONS })
+    mock.hover(s)
+    expect(tokenOf(s.border.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(s.border.top)).toBe("gilt-line")
+    s:SetDisabled(true)
+    expect(s:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    mock.hover(s)
+    expect(tokenOf(s.border.top)).toBe("gilt-line")
+    -- enabled again under the mouse: gilt
+    s:SetDisabled(false)
+    expect(tokenOf(s.border.top)).toBe("gilt")
+    expect(s:GetAlpha()).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- open
+--------------------------------------------------------------------------------
+
+@test("a click opens the list under the field, the chosen one checked")
+local function opens()
+    local s = make({ options = OPTIONS, value = "a" })
+    mock.click(s)
+    local l = list(s)
+    expect(l).toBeShown()
+    expect(l:GetFrameStrata()).toBe("FULLSCREEN_DIALOG")
+    expect(pointOf(l)).toEqual({ point = "TOPLEFT", relativeTo = s, relativePoint = "BOTTOMLEFT", x = 0, y = -S["space-1"] })
+    expect(catcher).toBeShown()
+    expect(rowTexts(s)).toEqual({ "Alpha", "Beta", "Gamma" })
+    expect(row(s, 1).check).toBeShown()
+    expect(row(s, 2).check).never.toBeShown()
+    expect(row(s, 1).box).never.toBeShown()
+    expect(row(s, 2).note).toHaveText("second")
+    expect(tokenOf(row(s, 3).label)).toBe("ink-faint")
+    expect(l.search).never.toBeShown()
+    expect(l.bulk).never.toBeShown()
+    expect(l.track).never.toBeShown()
+    expect(l.footRule).never.toBeShown()
+    expect(l:GetHeight()).toBeCloseTo(S["space-2"] + 3 * 28 + S["space-2"], 3)
+    expect(l:GetWidth() >= 190).toBe(true)
+    mock.click(s)
+    expect(l).never.toBeShown()
+    expect(catcher).never.toBeShown()
+end
+
+@test("a pick closes the list, shows it and calls onChange; the same one doesn't")
+local function picks()
+    local s = mock.spy(function(_v: any) end)
+    local f = make({ options = OPTIONS, value = "a", onChange = s })
+    mock.click(f)
+    mock.click(row(f, 2))
+    expect(f.value).toBe("b")
+    expect(f.text).toHaveText("Beta")
+    expect(s).toHaveBeenCalledWith("b")
+    expect(list(f)).never.toBeShown()
+    mock.click(f)
+    mock.click(row(f, 2))
+    expect(s).toHaveBeenCalledTimes(1)
+    expect(list(f)).never.toBeShown()
+    -- the chosen one's note sits by its check
+    mock.click(f)
+    expect(row(f, 2).note).toBeAnchoredTo(row(f, 2).check, "RIGHT", "LEFT")
+    local quiet = make({ options = OPTIONS })
+    mock.click(quiet)
+    mock.click(row(quiet, 1))
+    expect(quiet.value).toBe("a")
+end
+
+@test("a disabled option can't be picked; its tooltip says why")
+local function disabledOption()
+    local s = make({ options = OPTIONS, value = "a" })
+    mock.click(s)
+    mock.click(row(s, 3))
+    expect(s.value).toBe("a")
+    expect(list(s)).toBeShown()
+    mock.hover(row(s, 3))
+    expect(row(s, 3).hover).never.toBeShown()
+    expect(shown).toHaveBeenCalledWith(row(s, 3), { title = "Gamma", description = "Not yet" })
+    mock.hover(row(s, 1))
+    expect(row(s, 1).hover).toBeShown()
+    mock.hover(nil)
+    expect(row(s, 1).hover).never.toBeShown()
+    expect(hidden).toHaveBeenCalled()
+end
+
+@test("headings: the header face in gilt, a rule above all but the first")
+local function headings()
+    local opts: SelectOption[] = {
+        { heading = "Tanks" }, { value = 1, label = "Warrior" },
+        { heading = "Healers" }, { value = 2, label = "Priest" },
+    }
+    local s = make({ options = opts })
+    mock.click(s)
+    expect(rowTexts(s)).toEqual({ "Tanks", "Warrior", "Healers", "Priest" })
+    local h1, h2 = row(s, 1), row(s, 3)
+    expect(h1.label:GetFontObject()).toBe(fonts.get("header"))
+    expect(tokenOf(h1.label)).toBe("gilt-text")
+    expect(h1.rule).never.toBeShown()
+    expect(h2.rule).toBeShown()
+    expect(h1:GetHeight()).toBeCloseTo(22, 3)
+    expect(h2:GetHeight()).toBeCloseTo(30, 3)
+    mock.click(h1)
+    expect(s.value).toBeNil()
+    mock.hover(h1)
+    expect(h1.hover).never.toBeShown()
+    -- a row reused for an option gets the body face back
+    s:SetOptions({ { value = 9, label = "Nine" } })
+    expect(row(s, 1).label:GetFontObject()).toBe(fonts.get("body"))
+    expect(row(s, 1).rule).never.toBeShown()
+end
+
+@test("icons, diamonds and fonts beside an option's label")
+local function decorations()
+    local opts: SelectOption[] = {
+        { value = 1, label = "Fireball", icon = 135812 },
+        { value = 2, label = "Off", icon = 135813, disabled = true },
+        { value = 3, label = "Shaman", diamond = "class-shaman" },
+        { value = 4, label = "Nope", diamond = "not-a-colour" },
+        { value = 5, label = "Big", font = "header" },
+    }
+    local s = make({ options = opts })
+    mock.click(s)
+    expect(row(s, 1).icon).toBeShown()
+    expect(row(s, 1).icon:GetTexture()).toBe(135812)
+    expect(row(s, 1).icon:IsDesaturated()).toBe(false)
+    expect(row(s, 1).label).toBeAnchoredTo(row(s, 1).icon, "LEFT", "RIGHT")
+    expect(row(s, 2).icon:IsDesaturated()).toBe(true)
+    expect(row(s, 3).diamond).toBeShown()
+    expect(tokenOf(row(s, 3).diamond)).toBe("class-shaman")
+    expect(row(s, 3).icon).never.toBeShown()
+    expect(row(s, 4).diamond).never.toBeShown()
+    expect(row(s, 5).label:GetFontObject()).toBe(fonts.get("header"))
+end
+
+@test("the list is as wide as its longest entry needs, or minListWidth")
+local function widths()
+    local long = "A very long option label that needs room"
+    local s = make({ options = { { value = 1, label = long, note = "note" } }, width = 100 })
+    mock.click(s)
+    local need = S["space-2"] * 2 + S["space-4"] * 2 + measureText("body", long)
+        + measureText("caption", "note") + S["space-3"] + 14 + S["space-3"] + 8
+    expect(list(s):GetWidth()).toBeCloseTo(need, 3)
+    s:Close()
+    local m = make({ options = OPTIONS, minListWidth = 500 })
+    mock.click(m)
+    expect(list(m):GetWidth()).toBeCloseTo(500, 3)
+end
+
+--------------------------------------------------------------------------------
+-- several
+--------------------------------------------------------------------------------
+
+@test("several: each click turns one on or off, the list stays open")
+local function multiple()
+    local s = mock.spy(function(_v: any) end)
+    local f = make({ options = OPTIONS, multiple = true, value = { "a" }, onChange = s })
+    mock.click(f)
+    expect(list(f).bulk).toBeShown()
+    expect(row(f, 1).box).toBeShown()
+    expect(row(f, 1).box.value).toBe(true)
+    expect(row(f, 1).check).never.toBeShown()
+    mock.click(row(f, 2))
+    expect(s).toHaveBeenCalledWith({ "a", "b" })
+    expect(list(f)).toBeShown()
+    expect(row(f, 2).box.value).toBe(true)
+    mock.click(row(f, 1))
+    expect(s).toHaveBeenCalledWith({ "b" })
+    expect(f.text).toHaveText("Beta")
+    local quiet = make({ options = OPTIONS, multiple = true })
+    mock.click(quiet)
+    mock.click(row(quiet, 1))
+    expect(quiet.value).toEqual({ "a" })
+end
+
+@test("Select all picks every option you could; Clear none")
+local function bulk()
+    local s = mock.spy(function(_v: any) end)
+    local f = make({ options = { { heading = "H" }, OPTIONS[1], OPTIONS[2], OPTIONS[3] }, multiple = true, onChange = s })
+    mock.click(f)
+    local links = (list(f).bulk :: any).links
+    expect(links[1]:GetWidth()).toBeCloseTo(links[1].text:GetUnboundedStringWidth(), 3)
+    mock.click(links[1])
+    expect(f.value).toEqual({ "a", "b" })
+    expect(s).toHaveBeenCalledWith({ "a", "b" })
+    mock.click(links[2])
+    expect(f.value).toEqual({})
+    expect(s).toHaveBeenCalledWith({})
+    mock.hover(links[1])
+    expect(tokenOf(links[1].text)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(links[1].text)).toBe("ink-muted")
+    -- without onChange
+    f.onChange = nil
+    mock.click(links[1])
+    mock.click(links[2])
+    expect(f.value).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- search, lookup, scrolling
+--------------------------------------------------------------------------------
+
+@test("a long list gets a focused search field; typing filters, Enter picks")
+local function search()
+    local s = mock.spy(function(_v: any) end)
+    local f = make({ options = many(12), onChange = s })
+    mock.click(f)
+    local l = list(f)
+    expect(l.search).toBeShown()
+    expect(l.search.edit:HasFocus()).toBe(true)
+    expect(#rowTexts(f)).toBe(10)
+    mock.typeText(l.search.edit, "1")
+    expect(rowTexts(f)).toEqual({ "Option 1", "Option 10", "Option 11", "Option 12" })
+    mock.typeText(l.search.edit, "1")
+    expect(rowTexts(f)).toEqual({ "Option 11" })
+    mock.pressKey("ENTER")
+    expect(s).toHaveBeenCalledWith(11)
+    expect(l).never.toBeShown()
+    -- opened again: the search starts empty
+    mock.click(f)
+    expect(l.search:GetValue()).toBe("")
+    expect(#rowTexts(f)).toBe(10)
+end
+
+@test("Enter with no match picks nothing")
+local function searchNoMatch()
+    local f = make({ options = many(12) })
+    mock.click(f)
+    mock.typeText(list(f).search.edit, "zzz")
+    expect(rowTexts(f)).toEqual({ "No match" })
+    expect(tokenOf(row(f, 1).label)).toBe("ink-muted")
+    mock.click(row(f, 1)) -- the No match row is a heading
+    expect(f.value).toBeNil()
+    mock.pressKey("ENTER")
+    expect(f.value).toBeNil()
+end
+
+@test("search matches an option's search text; headings come with their matches")
+local function searchText()
+    local opts: SelectOption[] = {
+        { heading = "Shaman" }, { value = 1, label = "Elemental", search = "shaman caster" },
+        { heading = "Mage" }, { value = 2, label = "Fire" }, { value = 3, label = "Frost", disabled = true },
+    }
+    local f = make({ options = opts, search = "always" })
+    mock.click(f)
+    expect(list(f).search).toBeShown()
+    mock.typeText(list(f).search.edit, "CASTER")
+    expect(rowTexts(f)).toEqual({ "Shaman", "Elemental" })
+    list(f).search:SetValue("")
+    f.query = "f"
+    f:Refresh()
+    expect(rowTexts(f)).toEqual({ "Mage", "Fire", "Frost" })
+    -- Enter skips headings and disabled options
+    f.query = "frost"
+    f:Refresh()
+    mock.script(list(f).search.edit, "OnEnterPressed")
+    expect(f.value).toBeNil()
+end
+
+@test("search = false never shows the field")
+local function noSearch()
+    local f = make({ options = many(20), search = false, maxRows = 5 })
+    mock.click(f)
+    expect(list(f).search).never.toBeShown()
+    expect(#rowTexts(f)).toBe(5)
+end
+
+@test("lookup adds options for what's typed, first; a looked-up pick is summarised")
+local function lookup()
+    local found: SelectOption = { value = 133, label = "Fireball (133)" }
+    local s = mock.spy(function(_v: any) end)
+    local f = make({ options = OPTIONS, onChange = s, lookup = function(q: string): SelectOption[]?
+        if q == "133" then return { found } end
+        return nil
+    end })
+    mock.click(f)
+    expect(list(f).search).toBeShown()
+    mock.typeText(list(f).search.edit, "133")
+    expect(rowTexts(f)).toEqual({ "Fireball (133)" })
+    mock.click(row(f, 1))
+    expect(f.value).toBe(133)
+    expect(f.lookedUp).toBe(found)
+    expect(f.text).toHaveText("Fireball (133)")
+    mock.click(f)
+    mock.typeText(list(f).search.edit, "x")
+    expect(rowTexts(f)).toEqual({ "No match" })
+end
+
+@test("the wheel scrolls a long list, three rows a notch, with a scrollbar")
+local function scrolls()
+    local f = make({ options = many(20), maxRows = 5, search = false })
+    mock.click(f)
+    local l = list(f)
+    expect(l.track).toBeShown()
+    expect(l.thumb).toBeShown()
+    expect(l.thumb:GetHeight()).toBeCloseTo(math.max(16, 5 * 28 * 5 / 20), 3)
+    mock.wheel(l, -1)
+    expect(f.offset).toBe(3)
+    expect(rowTexts(f)[1]).toBe("Option 4")
+    mock.wheel(l, -10)
+    expect(f.offset).toBe(15)
+    expect(rowTexts(f)[5]).toBe("Option 20")
+    expect((pointOf(l.thumb) :: any).y).toBe(-(5 * 28 - l.thumb:GetHeight()))
+    mock.wheel(l, 10)
+    expect(f.offset).toBe(0)
+    -- SetValue while open refreshes the rows
+    f:SetValue(2)
+    expect(row(f, 2).check).toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- the foot, closing
+--------------------------------------------------------------------------------
+
+@test("the foot's links sit under a rule; a click closes the list first")
+local function foot()
+    local clicked = mock.spy(function() end)
+    local f = make({ options = OPTIONS })
+    f.foot = { { label = "New build…", onClick = clicked }, { label = "Import…" } }
+    mock.click(f)
+    local l = list(f)
+    expect(l.footRule).toBeShown()
+    local links = l.footLinks
+    expect(#links).toBe(2)
+    expect(links[1].label).toHaveText("New build…")
+    expect(l:GetHeight()).toBeCloseTo(S["space-2"] + 3 * 28 + S["space-2"] + 1 + S["space-1"] + 2 * 28 + S["space-2"], 3)
+    mock.hover(links[1])
+    expect(links[1].hover).toBeShown()
+    expect(tokenOf(links[1].label)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(links[1].label)).toBe("ink-muted")
+    mock.click(links[1])
+    expect(l).never.toBeShown()
+    expect(clicked).toHaveBeenCalledTimes(1)
+    mock.click(f)
+    mock.click(links[2])
+    expect(l).never.toBeShown()
+    -- fewer links: the rest hide
+    f.foot = { { label = "Only" } }
+    mock.click(f)
+    expect(links[2]).never.toBeShown()
+    f.foot = {}
+    f:Refresh()
+    expect(l.footRule).never.toBeShown()
+end
+
+@test("a click anywhere else closes the list")
+local function clickElsewhere()
+    local f = make({ options = OPTIONS })
+    mock.click(f)
+    mock.click(catcher)
+    expect(list(f)).never.toBeShown()
+    expect(catcher).never.toBeShown()
+    -- with nothing open the catcher does nothing
+    mock.script(catcher, "OnClick", "LeftButton")
+end
+
+@test("opening another select closes the first")
+local function another()
+    local a = make({ options = OPTIONS })
+    local b = make({ options = OPTIONS })
+    b:SetPoint("TOPLEFT", 0, -100)
+    mock.click(a)
+    mock.click(b)
+    expect(list(a)).never.toBeShown()
+    expect(list(b)).toBeShown()
+    -- closing the first again leaves the second's catcher alone
+    a:Close()
+    expect(catcher).toBeShown()
+    a:Open()
+    a:Open() -- already the open one
+    expect(list(a)).toBeShown()
+end
+
+@test("hiding or disabling a select closes it; a disabled one won't open")
+local function closes()
+    local f = make({ options = OPTIONS })
+    mock.click(f)
+    f:Hide()
+    expect(list(f)).never.toBeShown()
+    f:Show()
+    mock.click(f)
+    f:SetDisabled(true)
+    expect(list(f)).never.toBeShown()
+    f:Open()
+    expect(list(f)).never.toBeShown()
+    -- Close before the list was ever made
+    make({ options = OPTIONS }):Close()
+end
+
+@test("closing drops the search field's focus")
+local function closeSearch()
+    local f = make({ options = many(12) })
+    mock.click(f)
+    expect(list(f).search.edit:HasFocus()).toBe(true)
+    f:Close()
+    expect(list(f).search.edit:HasFocus()).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- bare
+--------------------------------------------------------------------------------
+
+@test("bare: no field until hovered, as wide as its label, in its own style")
+local function bare()
+    local f = make({ options = OPTIONS, value = "a", bare = true, width = 300, textStyle = "header", textColor = "gilt-text" })
+    expect(f:GetHeight()).toBeCloseTo(24, 3)
+    expect(f.bg).never.toBeShown()
+    expect(f.border.top).never.toBeShown()
+    expect(f.text:GetFontObject()).toBe(fonts.get("header"))
+    expect(tokenOf(f.text)).toBe("gilt-text")
+    local w = math.ceil(measureText("header", "Alpha") + S["space-2"] * 2 + S["space-1"] + 12)
+    expect(f:GetWidth()).toBeCloseTo(math.min(300, w), 3)
+    expect(f.minListWidth).toBe(200)
+    mock.hover(f)
+    expect(f.border.top).toBeShown()
+    mock.hover(nil)
+    expect(f.border.top).never.toBeShown()
+    -- the colour stays its own when nothing is chosen
+    f:SetValue(nil)
+    expect(tokenOf(f.text)).toBe("gilt-text")
+end
+
+@test("a bare field is never wider than its width; its defaults")
+local function bareCapped()
+    local long = "An extremely long label for a bare select field"
+    local f = make({ options = { { value = 1, label = long } }, value = 1, bare = true, width = 80 })
+    expect(f:GetWidth()).toBeCloseTo(80, 3)
+    local d = make({ options = OPTIONS, bare = true })
+    expect(d.maxWidth).toBe(190)
+    expect(d.textStyle).toBe("body")
+    expect(tokenOf(d.text)).toBe("ink")
+    local m = make({ options = OPTIONS, bare = true, minListWidth = 50 })
+    expect(m.minListWidth).toBe(50)
+end
+
+@test("a looked-up option no longer chosen isn't the summary; a disabled option without a reason has no tooltip")
+local function moreEdges()
+    local found: SelectOption = { value = 7, label = "Seven" }
+    local f = make({ options = { { value = 1, label = "One" }, { value = 2, label = "Two", disabled = true } },
+        placeholder = "Pick", lookup = function(_q: string): SelectOption[]? return { found } end })
+    mock.click(f)
+    mock.typeText(list(f).search.edit, "7")
+    mock.click(row(f, 1))
+    expect(f.text).toHaveText("Seven")
+    f:SetValue(99)
+    expect(f.text).toHaveText("Pick")
+    mock.click(f)
+    mock.hover(row(f, 2))
+    expect(shown).never.toHaveBeenCalled()
+end

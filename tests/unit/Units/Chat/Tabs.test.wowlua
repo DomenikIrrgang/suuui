@@ -1,0 +1,65 @@
+-- Units/Chat/Tabs: the tabs' order and geometry as data.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tabs from "/Units/Chat/Tabs"
+
+local function window(id: number, target: any?): tabs.Window
+    return { isTemporary = target ~= nil, chatTarget = target, GetID = function(_: any): number return id end }
+end
+
+@test("a window's key: its ID, a whisper's player")
+local function keys()
+    expect(tabs.tabKey(window(3))).toBe("id:3")
+    expect(tabs.tabKey(window(11, "Bob"))).toBe("w:Bob")
+    expect(tabs.tabKey(window(11, ""))).toBeNil()
+    expect(tabs.tabKey(window(11, mock.secret("Bob")))).toBeNil()
+    expect(tabs.tabKey(window(11, 5))).toBeNil()
+end
+
+@test("the windows in the kept order, the rest after; a closed whisper's place dropped")
+local function order()
+    local general, global, log, bob, ann = window(1), window(4), window(2), window(11, "Bob"), window(12, "Ann")
+    local windows = { general, global, log, bob, ann }
+    local kept: any[] = { "id:2", "w:Gone", "w:Ann", 42, "id:9", "id:1", "id:2" }
+    local out = tabs.ordered(windows, kept, tabs.tabKey)
+    expect(out[1] == log and out[2] == ann and out[3] == general and out[4] == global and out[5] == bob).toBe(true)
+    expect(kept).toEqual({ "id:2", "w:Ann", "id:9", "id:1", "id:2" })
+    -- an empty order: the starting one
+    local same = tabs.ordered(windows, {}, tabs.tabKey)
+    for i, w in ipairs(windows) do expect(same[i] == w).toBe(true) end
+end
+
+@test("the keys of a list, those without one left out")
+local function keysOf()
+    expect(tabs.keysOf({ window(1), window(11, ""), window(11, "Bob") }, tabs.tabKey)).toEqual({ "id:1", "w:Bob" })
+end
+
+@test("where a dragged tab drops")
+local function drop()
+    expect(tabs.dropIndex({ 10, 50, 90 }, 5)).toBe(1)
+    expect(tabs.dropIndex({ 10, 50, 90 }, 60)).toBe(3)
+    expect(tabs.dropIndex({ 10, 50, 90 }, 100)).toBe(4)
+    expect(tabs.dropIndex({ 10, false, 90 }, 60)).toBe(2)
+    expect(tabs.dropIndex({}, 60)).toBe(1)
+end
+
+@test("the glide's easing")
+local function easing()
+    expect(tabs.smooth(0)).toBe(0)
+    expect(tabs.smooth(0.5)).toBe(0.5)
+    expect(tabs.smooth(1)).toBe(1)
+end
+
+@test("the dashed outline: top and bottom, then the sides between")
+local function dashes()
+    local d = tabs.dashes(12, 14, 1)
+    -- x = 0, 5, 10 (the last one 2 wide), y = 5 (14 - 5 = 9 >= 5)
+    expect(d).toEqual({
+        { x = 0, y = 0, w = 3, h = 1 }, { x = 0, y = 13, w = 3, h = 1 },
+        { x = 5, y = 0, w = 3, h = 1 }, { x = 5, y = 13, w = 3, h = 1 },
+        { x = 10, y = 0, w = 2, h = 1 }, { x = 10, y = 13, w = 2, h = 1 },
+        { x = 0, y = 5, w = 1, h = 3 }, { x = 11, y = 5, w = 1, h = 3 },
+    })
+    expect(tabs.dashes(0, 0, 1)).toEqual({})
+end

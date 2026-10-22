@@ -1,0 +1,137 @@
+-- Units/SwingTimer: the swing timer under your cast bar and as wide (live);
+-- shown in combat, always or never (no events then); hidden for a healer
+-- in a group; the Auto Shot window and its switch-off; the settings rows;
+-- the old toggle carried over; stopped.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, SECTION from "/Units/SwingTimer"
+import internal migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.group:leave()
+    for _, k in ipairs({ "shows", "hideForHealers", "autoShotWindow", "autoShotNoCast", "position" }) do M:Reset(k) end
+    local cast: any = SuuUI.GetModule("castbars")
+    cast:Reset("playerWidth")
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+local function rows(): { [string]: any }
+    local out: { [string]: any } = {}
+    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do out[r.key] = r end end
+    return out
+end
+
+@test("as wide as your cast bar, following its width")
+local function width()
+    local t = M.timer
+    local cast: any = SuuUI.GetModule("castbars")
+    expect(t:GetWidth()).toBe(cast:Get("playerWidth"))
+    cast:Set("playerWidth", 400)
+    expect(t:GetWidth()).toBe(400)
+end
+
+@test("shown in combat only by default; always; off (its events off too)")
+local function shows()
+    local t = M.timer
+    expect(t:IsShown()).toBe(false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(t:IsShown()).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(t:IsShown()).toBe(false)
+    M:Set("shows", "always")
+    expect(t:IsShown()).toBe(true)
+    M:Set("shows", "off")
+    expect(t:IsShown()).toBe(false)
+    expect(t.active).toBe(false)
+    M:Set("shows", "always")
+    expect(t.active).toBe(true)
+    -- hidden in edit mode: not shown
+    M:Set("position", { point = "BOTTOM", x = 0, y = 271, hidden = true })
+    expect(t:IsShown()).toBe(false)
+end
+
+@test("a healer in a group has none (unless asked); solo it shows")
+local function healer()
+    M:Set("shows", "always")
+    mock.stub(SuuUI, "Role", function(): string return "HEALER" end)
+    M:UpdateVisibility()
+    expect(M.timer:IsShown()).toBe(true)
+    mock.group:add(mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", reaction = "friendly" }))
+    mock.advanceFrames(1)
+    expect(M.timer:IsShown()).toBe(false)
+    M:Set("hideForHealers", false)
+    expect(M.timer:IsShown()).toBe(true)
+end
+
+@test("the Auto Shot window: off by the setting, off for good once Auto Shot fires while you run")
+local function autoShot()
+    local t = M.timer
+    expect(t.autoShotWindow).toBe(true)
+    M:Set("autoShotWindow", false)
+    expect(t.autoShotWindow).toBe(false)
+    M:Set("autoShotWindow", true)
+    local said: { string } = {}
+    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    t.onNoAutoShotCast()
+    expect(M:Get("autoShotNoCast")).toBe(true)
+    -- (the timer turned its window off itself) the setting can't bring it back
+    M:Set("autoShotWindow", false)
+    M:Set("autoShotWindow", true)
+    expect(t.autoShotWindow).toBe(false)
+    expect(said[1]:find("no stand-still cast", 1, true) ~= nil).toBe(true)
+    local r = rows()
+    local off, why = r.autoShotWindow.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("This client's Auto Shot fires while you move, so there is no window.")
+end
+
+@test("the settings rows wait for the timer to be on")
+local function rowsWait()
+    local r = rows()
+    expect((r.hideForHealers.disabled())).toBe(false)
+    expect((r.autoShotWindow.disabled())).toBe(false)
+    M:Set("shows", "off")
+    local off, why = r.hideForHealers.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("Turn the swing timer on first.")
+    expect((r.autoShotWindow.disabled())).toBe(true)
+end
+
+@test("In combat only, once a toggle, carried over")
+local function migration()
+    local found = false
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "swingtimer" and m.id == "shows" then
+            found = true
+            local on: { [string]: any } = { inCombatOnly = true }
+            m.fn(on)
+            expect(on.shows).toBe("combat")
+            expect(on.inCombatOnly).toBeNil()
+            local off: { [string]: any } = { inCombatOnly = false }
+            m.fn(off)
+            expect(off.shows).toBe("always")
+            local new: { [string]: any } = { shows = "off" }
+            m.fn(new)
+            expect(new.shows).toBe("off")
+        end
+    end
+    expect(found).toBe(true)
+end
+
+-- (last: the module off)
+@test("stopped: the timer gone")
+local function disabled()
+    M:Set("shows", "always")
+    local m: any = M
+    m:OnDisable()
+    expect(M.timer:IsShown()).toBe(false)
+    expect(M.timer.active).toBe(false)
+end

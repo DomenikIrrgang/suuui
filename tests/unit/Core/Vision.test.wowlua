@@ -1,0 +1,142 @@
+-- Core/Vision: colour vision presets replace signal tokens in place, and the
+-- glows drawn in a signal colour follow.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import tokens as T, Color, ShadowLayer from "/Core/Tokens"
+import * as vision from "/Core/Vision"
+
+-- The tokens as the design has them, put back after every test (apply
+-- changes them in place; only Themes.apply resets them in the addon).
+type Saved = { r: number, g: number, b: number, a: number, hex: string }
+local savedColors: { [string]: Saved } = {}
+local savedShadows: { [ShadowLayer]: number[] } = {}
+local savedPresets: { [string]: { [string]: Color } }? = nil
+
+local function colors(): { [string]: Color } return T.color :: { [string]: Color } end
+local function shadows(): { [string]: ShadowLayer[] } return T.shadow :: { [string]: ShadowLayer[] } end
+local function saved(name: string): Saved return assert(savedColors[name]) end
+local function layer(l: ShadowLayer): number[] return assert(savedShadows[l]) end
+
+@beforeEach
+local function save()
+    for name, c in pairs(colors()) do savedColors[name] = { r = c[1], g = c[2], b = c[3], a = c[4], hex = c.hex } end
+    for _, layers in pairs(shadows()) do
+        for _, l in ipairs(layers) do savedShadows[l] = { l.color[1], l.color[2], l.color[3], l.color[4] } end
+    end
+    savedPresets = T.vision
+end
+
+@afterEach
+local function restore()
+    for name, s in pairs(savedColors) do
+        local c = colors()[name]
+        c[1], c[2], c[3], c[4], c.hex = s.r, s.g, s.b, s.a, s.hex
+    end
+    for l, c in pairs(savedShadows) do l.color[1], l.color[2], l.color[3], l.color[4] = c[1], c[2], c[3], c[4] end
+    T.vision = savedPresets
+    vision.apply("normal")
+end
+
+@test("three modes, each with a label and a hint")
+local function modes()
+    expect(vision.MODES).toEqual({ "normal", "redgreen", "blueyellow" })
+    for _, m in ipairs(vision.MODES) do
+        expect(type(vision.LABEL[m])).toBe("string")
+        expect(type(vision.HINT[m])).toBe("string")
+    end
+    expect(vision.LABEL.redgreen).toBe("Red-green")
+end
+
+@test("normal is always available; a preset when the design gave it values")
+local function available()
+    expect(vision.available("normal")).toBe(true)
+    expect(vision.available("redgreen")).toBe(true)
+    expect(vision.available("blueyellow")).toBe(true)
+    expect(vision.available("purple")).toBe(false)
+    T.vision = { redgreen = {} }
+    expect(vision.available("redgreen")).toBe(false)
+    T.vision = nil
+    expect(vision.available("redgreen")).toBe(false)
+    expect(vision.available("normal")).toBe(true)
+end
+
+@test("normal (or nothing) leaves the tokens as they are")
+local function normal()
+    local before = T.color.ember[1]
+    vision.apply(nil)
+    expect(vision.appliedMode()).toBe("normal")
+    vision.apply("normal")
+    expect(vision.appliedMode()).toBe("normal")
+    expect(T.color.ember[1]).toBe(before)
+end
+
+@test("an unknown or empty preset falls back to normal")
+local function unknown()
+    vision.apply("purple")
+    expect(vision.appliedMode()).toBe("normal")
+    T.vision = { redgreen = {} }
+    vision.apply("redgreen")
+    expect(vision.appliedMode()).toBe("normal")
+end
+
+@test("a preset replaces its tokens in place, keeping a token's own alpha")
+local function replaces()
+    local ember = T.color.ember
+    local preset = assert(assert(assert(T.vision).redgreen).ember)
+    vision.apply("redgreen")
+    expect(vision.appliedMode()).toBe("redgreen")
+    -- the same table, its components changed
+    expect(T.color.ember).toBe(ember)
+    expect({ ember[1], ember[2], ember[3] }).toEqual({ preset[1], preset[2], preset[3] })
+    expect(ember[4]).toBe(saved("ember").a)
+    expect(ember.hex).toBe("ec6b00")
+    -- a preset colour with an alpha sets it
+    expect(T.color["fel-incoming"][4]).toBe(0.4)
+    -- tokens a preset leaves alone stay
+    expect(T.color.gilt.hex).toBe(saved("gilt").hex)
+end
+
+@test("a preset colour without a hex keeps the token's; a name that isn't a token is skipped")
+local function partial()
+    T.vision = {
+        redgreen = {
+            ["ember"] = { 1, 0, 0 } :: Color,
+            ["not-a-token"] = { 0, 0, 0, hex = "000000" } :: Color,
+        },
+    }
+    vision.apply("redgreen")
+    expect(T.color.ember[1]).toBe(1)
+    expect(T.color.ember.hex).toBe(saved("ember").hex)
+    expect(colors()["not-a-token"]).toBeNil()
+end
+
+@test("the glows follow their signal colour; the focus ring's dark inner layer keeps its colour")
+local function glows()
+    vision.apply("blueyellow")
+    local arcane, ward, ember = T.color.arcane, T.color.ward, T.color.ember
+    local a = T.shadow["glow-arcane"][1].color
+    expect({ a[1], a[2], a[3] }).toEqual({ arcane[1], arcane[2], arcane[3] })
+    expect(a[4]).toBe(layer(T.shadow["glow-arcane"][1])[4])
+    for _, l in ipairs(T.shadow["glow-ward"]) do
+        expect({ l.color[1], l.color[2], l.color[3] }).toEqual({ ward[1], ward[2], ward[3] })
+    end
+    local e = T.shadow["glow-ember"][1].color
+    expect({ e[1], e[2], e[3] }).toEqual({ ember[1], ember[2], ember[3] })
+    local ring = T.shadow["focus-ring"]
+    local inner = layer(ring[1])
+    expect({ ring[1].color[1], ring[1].color[2], ring[1].color[3] }).toEqual({ inner[1], inner[2], inner[3] })
+    expect({ ring[2].color[1], ring[2].color[2], ring[2].color[3] }).toEqual({ arcane[1], arcane[2], arcane[3] })
+end
+
+@test("syncGlows copes with a glow that isn't there and a layer without a colour")
+local function syncMissing()
+    -- (a shape the generated tokens never have: written through an untyped view)
+    local shadowMap: { [string]: any } = T.shadow :: any
+    local ember, ward = shadowMap["glow-ember"], shadowMap["glow-ward"]
+    shadowMap["glow-ember"] = nil
+    local bare: { [string]: any } = { x = 0, y = 0, blur = 1, spread = 0, inset = false }
+    shadowMap["glow-ward"] = { bare }
+    vision.syncGlows()
+    shadowMap["glow-ember"], shadowMap["glow-ward"] = ember, ward
+    expect(bare.color).toBeNil()
+end

@@ -1,0 +1,67 @@
+-- Core/Anchors: publish, look up and hear about named frames.
+
+import test, expect, afterEach from "wowlua:test"
+import * as anchors from "/Core/Anchors"
+import * as events from "/Core/Events"
+import expectNoErrors from "../../helpers"
+
+const OWNER = "AnchorsTest"
+
+type Heard = { name: string, frame: Frame? }
+local heard: Heard[] = {}
+events.on("SUUUI_ANCHOR_CHANGED", function(_: string, name: string, frame: Frame?)
+    heard[#heard + 1] = { name = name, frame = frame }
+end, OWNER)
+
+@afterEach
+local function clear()
+    anchors.publish("test-a", nil)
+    anchors.publish("test-b", nil)
+    heard = {}
+end
+
+@test("an unpublished name has no frame")
+local function unknown()
+    expect(anchors.get("test-nothing")).toBeNil()
+end
+
+@test("a published frame is found under its name and announced")
+local function publish()
+    local f = CreateFrame("Frame")
+    anchors.publish("test-a", f)
+    expect(anchors.get("test-a")).toBe(f)
+    expect(#heard).toBe(1)
+    expect(heard[1].name).toBe("test-a")
+    expect(heard[1].frame).toBe(f)
+    expectNoErrors()
+end
+
+@test("publishing the same frame again says nothing")
+local function same()
+    local f = CreateFrame("Frame")
+    anchors.publish("test-a", f)
+    anchors.publish("test-a", f)
+    expect(#heard).toBe(1)
+end
+
+@test("another frame under the name replaces it; nil unpublishes")
+local function replace()
+    local f, g = CreateFrame("Frame"), CreateFrame("Frame")
+    anchors.publish("test-a", f)
+    anchors.publish("test-a", g)
+    expect(anchors.get("test-a")).toBe(g)
+    anchors.publish("test-a", nil)
+    expect(anchors.get("test-a")).toBeNil()
+    expect(#heard).toBe(3)
+    expect(heard[3].name).toBe("test-a")
+    expect(heard[3].frame).toBeNil()
+end
+
+@test("names are independent")
+local function independent()
+    local f, g = CreateFrame("Frame"), CreateFrame("Frame")
+    anchors.publish("test-a", f)
+    anchors.publish("test-b", g)
+    expect(anchors.get("test-a")).toBe(f)
+    expect(anchors.get("test-b")).toBe(g)
+end

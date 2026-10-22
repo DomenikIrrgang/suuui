@@ -1,0 +1,619 @@
+-- Units/Readiness: the group's big cooldowns (everyone's own SuuUI shares
+-- them by addon message), and the panel that shows them between pulls.
+
+import test, cases, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, game, encodeShare, decodeShare, rowBefore, wanted, readable, roster from "/Units/Readiness"
+import expectNoErrors, newParent from "../../helpers"
+
+-- The world around the module: the group, the spells you know. Replaced
+-- in the module's `game` table, not in _G (a replacement there taints
+-- Blizzard's code that reads it, for the rest of the file).
+type World = { raid?: boolean, group?: boolean, lead?: boolean, kind?: string, members?: { [string]: { name: string?, class: string? } } }
+
+local SPELLS: { [string]: number } = { Rebirth = 20484, Innervate = 29166, Tranquility = 740 }
+local NAMES: { [number]: string } = { [20484] = "Rebirth", [29166] = "Innervate", [740] = "Tranquility", [871] = "Shield Wall" }
+
+local function inWorld(w: World)
+    mock.stub(game, "IsInRaid", function(): boolean return w.raid == true end)
+    mock.stub(game, "IsInGroup", function(): boolean return w.group == true or w.raid == true end)
+    mock.stub(game, "UnitIsGroupLeader", function(unit: string): boolean return unit == "player" and w.lead == true end)
+    mock.stub(game, "UnitIsGroupAssistant", function(): boolean return false end)
+    mock.stub(game, "IsInInstance", function(): (boolean, string) return w.kind ~= nil and w.kind ~= "none", w.kind or "none" end)
+    local members = w.members or {}
+    mock.stub(game, "UnitExists", function(unit: string): boolean return unit == "player" or members[unit] ~= nil end)
+    mock.stub(game, "UnitIsUnit", function(a: string, b: string): boolean return a == b end)
+    mock.stub(SuuUI, "FullName", function(unit: string?): any
+        if unit == nil or unit == "player" then return "Ayla Dawnfeather" end
+        local m = members[unit]
+        return m and m.name
+    end)
+    mock.stub(game, "UnitClass", function(unit: string): (string?, string?)
+        if unit == "player" then return "Druid", "DRUID" end
+        local m = members[unit]
+        return m and m.class, m and m.class
+    end)
+end
+
+-- Your druid's spells: which you know, and their cooldowns.
+local function knowSpells(known: { [number]: boolean }, cooldowns: { [number]: any })
+    mock.stub(game, "GetSpellInfo", function(name: string): any
+        local id = SPELLS[name]
+        return id and { spellID = id, name = name }
+    end)
+    mock.stub(game, "IsPlayerSpell", function(id: number): boolean return known[id] == true end)
+    mock.stub(game, "GetSpellCooldown", function(id: number): any return cooldowns[id] end)
+    mock.stub(game, "GetSpellName", function(id: number): string? return NAMES[id] end)
+end
+
+local sent: { [number]: any }[] = {}
+local function captureSends()
+    sent = {}
+    mock.stub(game, "SendAddonMessage", function(...: any): boolean
+        sent[#sent + 1] = { ... }
+        return true
+    end)
+end
+
+@beforeEach
+local function fresh()
+    -- anything queued by an earlier test runs out first
+    mock.advanceTime(3)
+    M.heard, M.own, M.lastSend, M.shareQueued, M.encounter = nil, nil, nil, nil, nil
+    sent = {}
+end
+
+@afterEach
+local function undo()
+    M:Reset("shows")
+    M:Reset("position")
+    if mock.player then mock.player:leaveCombat() end
+end
+
+--------------------------------------------------------------------------------
+-- Pure parts
+--------------------------------------------------------------------------------
+
+@test("readable: a plain number only")
+local function readableValues()
+    expect(readable(3)).toBe(true)
+    expect(readable("3")).toBe(false)
+    expect(readable(nil)).toBe(false)
+    expect(readable(mock.secret(3))).toBe(false)
+end
+
+@test("the share message: ids and whole seconds left")
+local function encodes()
+    expect(encodeShare({})).toBe("RDY\t")
+    expect(encodeShare({ { id = 20484, left = 0 } })).toBe("RDY\t20484:0")
+    expect(encodeShare({ { id = 20484, left = 89.4 }, { id = 29166, left = 89.5 } })).toBe("RDY\t20484:89,29166:90")
+end
+
+@test("a share message read back: each spell's end from now")
+local function decodes()
+    local spells = assert(decodeShare("RDY\t20484:0,29166:120", 100))
+    expect(#spells).toBe(2)
+    expect(spells[1].id).toBe(20484)
+    expect(spells[1].endsAt).toBe(100)
+    expect(spells[2].id).toBe(29166)
+    expect(spells[2].endsAt).toBe(220)
+    -- empty, junk between, and not a share at all
+    expect(#(assert(decodeShare("RDY\t", 5)))).toBe(0)
+    expect(#(assert(decodeShare("RDY\tx:1,7:2", 5)))).toBe(1)
+    expect(decodeShare("RDYQ", 5)).toBe(nil)
+    expect(decodeShare("MARK\t1", 5)).toBe(nil)
+end
+
+@test("the round trip keeps the message format")
+local function roundTrip()
+    local text = encodeShare({ { id = 740, left = 12 }, { id = 20484, left = 0 } })
+    local back = assert(decodeShare(text, 0))
+    expect(back[1].id).toBe(740)
+    expect(back[1].endsAt).toBe(12)
+    expect(back[2].endsAt).toBe(0)
+end
+
+@test("the rows' order: ready first, then the soonest, then group order")
+local function order()
+    local ready1 = { order = 2 }
+    local ready2 = { order = 1, endsAt = 0 }
+    local soon = { order = 1, endsAt = 50 }
+    local later = { order = 0, endsAt = 90 }
+    expect(rowBefore(ready1, soon)).toBe(true)
+    expect(rowBefore(soon, ready1)).toBe(false)
+    expect(rowBefore(soon, later)).toBe(true)
+    expect(rowBefore(later, soon)).toBe(false)
+    expect(rowBefore(ready2, ready1)).toBe(true)
+    expect(rowBefore(ready1, ready2)).toBe(false)
+    local tie1, tie2 = { order = 1, endsAt = 50 }, { order = 3, endsAt = 50 }
+    expect(rowBefore(tie1, tie2)).toBe(true)
+    expect(rowBefore(tie2, tie1)).toBe(false)
+end
+
+@test("where the panel is wanted")
+@cases({
+    { "always", false, "none", true },
+    { "off", true, "raid", false },
+    { "group", false, "none", false },
+    { "group", true, "none", true },
+    { "instance", true, "party", true },
+    { "instance", true, "raid", true },
+    { "instance", true, "none", false },
+    { "instance", false, "raid", false },
+})
+local function wantedCases(shows: string, inGroup: boolean, kind: string, out: boolean)
+    expect(wanted(shows, inGroup, kind) and true or false).toBe(out)
+end
+
+--------------------------------------------------------------------------------
+-- Your own cooldowns
+--------------------------------------------------------------------------------
+
+@test("ReadOwn: the class's spells you know, with the time left")
+local function readOwn()
+    inWorld({})
+    local now = GetTime()
+    knowSpells({ [20484] = true, [29166] = true }, {
+        [20484] = { startTime = now - 10, duration = 600 },
+        [29166] = { startTime = now, duration = 1.5 },   -- the global cooldown
+    })
+    local own = assert(M:ReadOwn())
+    expect(#own).toBe(2)
+    expect(own[1].id).toBe(20484)
+    expect(math.floor(own[1].left + 0.5)).toBe(590)
+    expect(own[2].id).toBe(29166)
+    expect(own[2].left).toBe(0)
+end
+
+@test("ReadOwn: a cooldown long over, a secret one, a secret spell")
+local function readOwnEdges()
+    inWorld({})
+    local now = GetTime()
+    knowSpells({ [20484] = true, [29166] = true, [740] = true }, {
+        [20484] = { startTime = now - 900, duration = 600 },
+        [29166] = mock.secret({ startTime = now, duration = 300 }),
+        [740] = { startTime = mock.secret(now), duration = 300 },
+    })
+    local own = assert(M:ReadOwn())
+    expect(#own).toBe(3)
+    for _, c in ipairs(own) do expect(c.left).toBe(0) end
+    -- a spell whose ID is secret is left out
+    mock.stub(game, "GetSpellInfo", function(name: string): any
+        return { spellID = name == "Rebirth" and mock.secret(20484) or SPELLS[name] }
+    end)
+    expect(#(assert(M:ReadOwn()))).toBe(2)
+    -- an unknown spell (no info)
+    mock.stub(game, "GetSpellInfo", function(): any return nil end)
+    expect(#(assert(M:ReadOwn()))).toBe(0)
+end
+
+@test("ReadOwn: a class without big cooldowns, an unknown class, combat")
+local function readOwnNone()
+    inWorld({})
+    mock.stub(game, "UnitClass", function(): (string, string) return "Rogue", "ROGUE" end)
+    expect(#(assert(M:ReadOwn()))).toBe(0)
+    mock.stub(game, "UnitClass", function(): (string, string) return "Monk", "MONK" end)
+    expect(#(assert(M:ReadOwn()))).toBe(0)
+    mock.player:enterCombat()
+    expect(M:ReadOwn()).toBe(nil)
+end
+
+--------------------------------------------------------------------------------
+-- Sending
+--------------------------------------------------------------------------------
+
+@test("Send: to the raid or party, never solo or in combat")
+local function send()
+    captureSends()
+    inWorld({})
+    M:Send("RDYQ")
+    expect(#sent).toBe(0)
+    expect(M.lastSend).toBe(nil)
+    inWorld({ group = true })
+    M:Send("RDYQ")
+    expect(#sent).toBe(1)
+    expect(sent[1][1]).toBe("SuuUI")
+    expect(sent[1][2]).toBe("RDYQ")
+    expect(sent[1][3]).toBe("PARTY")
+    expect(M.lastSend.ok).toBe(true)
+    expect(M.lastSend.result).toBe("true")
+    expect(M.lastSend.text).toBe("RDYQ")
+    inWorld({ raid = true })
+    M:Send(string.rep("x", 60))
+    expect(sent[2][3]).toBe("RAID")
+    expect(#M.lastSend.text).toBe(40)
+    mock.player:enterCombat()
+    M:Send("RDYQ")
+    expect(#sent).toBe(2)
+end
+
+@test("Send: what the game answered, an error or a secret")
+local function sendAnswers()
+    inWorld({ group = true })
+    mock.stub(game, "SendAddonMessage", function(): any error("throttled") end)
+    M:Send("RDYQ")
+    expect(M.lastSend.ok).toBe(false)
+    expect(M.lastSend.result).toContain("throttled")
+    mock.stub(game, "SendAddonMessage", function(): any return mock.secret(0) end)
+    M:Send("RDYQ")
+    expect(M.lastSend.ok).toBe(true)
+    expect(M.lastSend.result).toBe("secret")
+end
+
+@test("Share: your cooldowns as one message; nothing in combat")
+local function share()
+    captureSends()
+    inWorld({ group = true })
+    local now = GetTime()
+    knowSpells({ [20484] = true }, { [20484] = { startTime = now - 100, duration = 600 } })
+    M:Share()
+    expect(#sent).toBe(1)
+    expect(sent[1][2]).toBe("RDY\t20484:500")
+    mock.player:enterCombat()
+    M:Share()
+    expect(#sent).toBe(1)
+end
+
+@test("ShareSoon: a burst makes one share, two seconds on")
+local function shareSoon()
+    local s = mock.stub(M, "Share")
+    M:ShareSoon()
+    M:ShareSoon()
+    M:ShareSoon()
+    expect(s).never.toHaveBeenCalled()
+    mock.advanceTime(2.1)
+    expect(s).toHaveBeenCalledTimes(1)
+    expect(M.shareQueued).toBe(nil)
+    -- turned off meanwhile: no share
+    mock.stub(M, "IsEnabled", function(): boolean return false end)
+    M:ShareSoon()
+    mock.advanceTime(2.1)
+    expect(s).toHaveBeenCalledTimes(1)
+end
+
+--------------------------------------------------------------------------------
+-- Hearing
+--------------------------------------------------------------------------------
+
+@test("OnMessage: a share from someone else is kept")
+local function hears()
+    inWorld({})
+    local now = GetTime()
+    M:OnMessage("SuuUI", "RDY\t20484:0,29166:60", "PARTY", "Thessaly Moonbrook-Realm")
+    local h = M.heard["Thessaly Moonbrook"]
+    expect(h).toBeTruthy()
+    expect(h.at).toBe(now)
+    expect(#h.spells).toBe(2)
+    expect(h.spells[2].endsAt).toBe(now + 60)
+    -- a newer share replaces it
+    M:OnMessage("SuuUI", "RDY\t", "PARTY", "Thessaly Moonbrook")
+    expect(#M.heard["Thessaly Moonbrook"].spells).toBe(0)
+end
+
+@test("OnMessage: what isn't a share is ignored")
+local function ignores()
+    inWorld({})
+    M:OnMessage("Other", "RDY\t1:1", "PARTY", "Thessaly")
+    M:OnMessage("SuuUI", mock.secret("RDY\t1:1"), "PARTY", "Thessaly")
+    M:OnMessage("SuuUI", 42, "PARTY", "Thessaly")
+    M:OnMessage("SuuUI", "RDY\t1:1", "PARTY", mock.secret("Thessaly"))
+    M:OnMessage("SuuUI", "RDY\t1:1", "PARTY", nil)
+    M:OnMessage("SuuUI", "MARK\t1\t0.5\t0.5", "PARTY", "Thessaly")
+    -- your own message coming back
+    M:OnMessage("SuuUI", "RDY\t1:1", "PARTY", "Ayla Dawnfeather")
+    expect(M.heard).toBe(nil)
+end
+
+@test("OnMessage: RDYQ asks for yours (soon)")
+local function asked()
+    inWorld({})
+    local s = mock.stub(M, "ShareSoon")
+    M:OnMessage("SuuUI", "RDYQ", "RAID", "Thessaly")
+    expect(s).toHaveBeenCalledTimes(1)
+    expect(M.heard).toBe(nil)
+end
+
+@test("a real addon message reaches it")
+local function wired()
+    inWorld({})
+    mock.receiveAddonMessage("SuuUI", "RDY\t20484:30", "PARTY", "Brannoc")
+    mock.advanceFrames(1)
+    expect(M.heard and M.heard["Brannoc"]).toBeTruthy()
+end
+
+--------------------------------------------------------------------------------
+-- The roster and the rows
+--------------------------------------------------------------------------------
+
+@test("roster: you first, then the party; secret names left out")
+local function partyRoster()
+    inWorld({ group = true, members = {
+        party1 = { name = "Brannoc Stone", class = "WARRIOR" },
+        party2 = { name = "Veyra-Elsewhere", class = "SHAMAN" },
+    } })
+    local r = roster()
+    expect(#r).toBe(3)
+    expect(r[1].name).toBe("Ayla Dawnfeather")
+    expect(r[1].class).toBe("DRUID")
+    expect(r[1].you).toBe(true)
+    expect(r[2].name).toBe("Brannoc Stone")
+    expect(r[2].class).toBe("WARRIOR")
+    expect(r[3].name).toBe("Veyra")
+    mock.stub(SuuUI, "FullName", function(unit: string?): any
+        if unit == "party1" then return mock.secret("Hidden") end
+        if unit == "party2" then return nil end
+        return "Ayla Dawnfeather"
+    end)
+    expect(#roster()).toBe(1)
+    -- a secret class: kept, without one
+    mock.stub(SuuUI, "FullName", function(unit: string?): any return unit == "party1" and "Brannoc" or "Ayla Dawnfeather" end)
+    mock.stub(game, "UnitClass", function(unit: string): (any, any)
+        if unit == "player" then return "Druid", "DRUID" end
+        return "Warrior", mock.secret("WARRIOR")
+    end)
+    local r2 = roster()
+    expect(r2[2].name).toBe("Brannoc")
+    expect(r2[2].class).toBe(nil)
+end
+
+@test("roster: a raid's forty tokens, yourself once")
+local function raidRoster()
+    inWorld({ raid = true, members = {
+        raid1 = { name = "Ayla Dawnfeather", class = "DRUID" },
+        raid7 = { name = "Oren", class = "PRIEST" },
+    } })
+    mock.stub(game, "UnitIsUnit", function(a: string, b: string): boolean return a == b or (a == "raid1" and b == "player") end)
+    local r = roster()
+    expect(#r).toBe(2)
+    expect(r[2].name).toBe("Oren")
+end
+
+@test("Rows: yours and what others shared, ready first")
+local function rows()
+    inWorld({ group = true, members = { party1 = { name = "Brannoc", class = "WARRIOR" }, party2 = { name = "Quiet", class = "MAGE" } } })
+    local now = GetTime()
+    knowSpells({ [20484] = true, [29166] = true }, { [29166] = { startTime = now - 10, duration = 300 } })
+    M.heard = { Brannoc = { at = now, spells = { { id = 871, endsAt = now + 100 }, { id = 99999, endsAt = now - 5 } } } }
+    local rows = M:Rows()
+    expect(#rows).toBe(4)
+    -- ready: yours (group order 1), then Brannoc's past one (order 2)
+    expect(rows[1].spell).toBe("Rebirth")
+    expect(rows[1].who).toBe("Ayla Dawnfeather")
+    expect(rows[1].class).toBe("DRUID")
+    expect(rows[1].endsAt).toBe(nil)
+    expect(rows[2].spell).toBe("?")
+    expect(rows[2].who).toBe("Brannoc")
+    expect(rows[2].endsAt).toBe(nil)
+    expect(rows[3].spell).toBe("Shield Wall")
+    expect(rows[3].endsAt).toBe(now + 100)
+    expect(rows[4].spell).toBe("Innervate")
+    expect(rows[4].endsAt).toBe(now + 290)
+    -- in combat: your last read stays
+    mock.player:enterCombat()
+    expect(#M:Rows()).toBe(4)
+end
+
+--------------------------------------------------------------------------------
+-- The panel
+--------------------------------------------------------------------------------
+
+local function panelShown(): boolean return M.panel:IsShown() and true or false end
+
+@test("Update: off, always, hidden by edit mode, combat, an encounter")
+local function update()
+    inWorld({})
+    knowSpells({ [20484] = true }, {})
+    M:Set("shows", "off")
+    M:Update()
+    expect(panelShown()).toBe(false)
+    M:Set("shows", "always")
+    M:Update()
+    expect(panelShown()).toBe(true)
+    expect(#M.panel.data).toBe(1)
+    expect(M.panel.action).never.toBeShown()
+    local pos = M:Get("position")
+    pos.hidden = true
+    M:Set("position", pos)
+    M:Update()
+    expect(panelShown()).toBe(false)
+    M:Reset("position")
+    M:Update()
+    expect(panelShown()).toBe(true)
+    M.encounter = true
+    M:Update()
+    expect(panelShown()).toBe(false)
+    M.encounter = nil
+    mock.player:enterCombat()
+    M:Update()
+    expect(panelShown()).toBe(false)
+    expectNoErrors()
+end
+
+@test("Update: in a group or an instance; empty unless you can check")
+local function updateGroup()
+    knowSpells({}, {})
+    inWorld({})
+    M:Set("shows", "group")
+    M:Update()
+    expect(panelShown()).toBe(false)
+    -- in a group, nobody shared, you can't start a ready check: nothing to show
+    inWorld({ group = true })
+    M:Update()
+    expect(panelShown()).toBe(false)
+    -- the leader: the panel for its Ready check button
+    inWorld({ group = true, lead = true })
+    M:Update()
+    expect(panelShown()).toBe(true)
+    expect(M.panel.action).toBeShown()
+    M:Set("shows", "instance")
+    M:Update()
+    expect(panelShown()).toBe(false)
+    inWorld({ group = true, lead = true, kind = "party" })
+    M:Update()
+    expect(panelShown()).toBe(true)
+    mock.stub(game, "UnitIsGroupLeader", function(): boolean return false end)
+    mock.stub(game, "UnitIsGroupAssistant", function(): boolean return true end)
+    M:Update()
+    expect(panelShown()).toBe(true)
+end
+
+@test("Update without a panel does nothing")
+local function noPanel()
+    local panel = M.panel
+    M.panel = nil
+    M:Update()
+    M.panel = panel
+    expectNoErrors()
+end
+
+@test("the settings preview: four made-up rows, built once")
+local function preview()
+    local p1 = newParent()
+    local view = M:PreviewView(p1)
+    expect(#view.data).toBe(4)
+    expect(view.action).toBeShown()
+    local p2 = newParent()
+    expect(M:PreviewView(p2)).toBe(view)
+    expect(view:GetParent()).toBe(p2)
+    p1:Hide()
+    p2:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Events, the heartbeat, the command
+--------------------------------------------------------------------------------
+
+@test("the roster changing while solo: an update, no message")
+local function rosterEventSolo()
+    captureSends()
+    local soon = mock.stub(M, "ShareSoon")
+    local update = mock.stub(M, "Update")
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    expect(update).toHaveBeenCalled()
+    expect(#sent).toBe(0)
+    expect(soon).never.toHaveBeenCalled()
+end
+
+@test("a cooldown changing: a share soon, in a group and out of combat")
+local function cooldownEvent()
+    local soon = mock.stub(M, "ShareSoon")
+    inWorld({})
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    expect(soon).never.toHaveBeenCalled()
+    inWorld({ group = true })
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    expect(soon).toHaveBeenCalledTimes(1)
+    mock.player:enterCombat()
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    expect(soon).toHaveBeenCalledTimes(1)
+end
+
+@test("combat hides it; a second after it ends it comes back and shares")
+local function combatEvents()
+    inWorld({})
+    knowSpells({ [20484] = true }, {})
+    M:Set("shows", "always")
+    expect(panelShown()).toBe(true)
+    local soon = mock.stub(M, "ShareSoon")
+    mock.player:enterCombat()
+    expect(panelShown()).toBe(false)
+    mock.player:leaveCombat()
+    expect(panelShown()).toBe(false)
+    mock.advanceTime(1.1)
+    expect(panelShown()).toBe(true)
+    expect(soon).toHaveBeenCalledTimes(1)
+end
+
+@test("an encounter hides it until it ends; entering the world updates it")
+local function encounterEvents()
+    inWorld({})
+    knowSpells({ [20484] = true }, {})
+    M:Set("shows", "always")
+    mock.fireEvent("ENCOUNTER_START", 1084, "Onyxia", 9, 40)
+    expect(M.encounter).toBe(true)
+    expect(panelShown()).toBe(false)
+    mock.fireEvent("ENCOUNTER_END", 1084, "Onyxia", 9, 40, 1, {})
+    expect(M.encounter).toBe(nil)
+    expect(panelShown()).toBe(true)
+    M.panel:Hide()
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
+    expect(panelShown()).toBe(true)
+end
+
+@test("the heartbeat shares every 30 seconds in a group, out of combat")
+local function heartbeat()
+    local share = mock.stub(M, "Share")
+    inWorld({})
+    mock.advanceTime(30)
+    expect(share).never.toHaveBeenCalled()
+    inWorld({ group = true })
+    mock.advanceTime(30)
+    expect(share).toHaveBeenCalledTimes(1)
+    mock.player:enterCombat()
+    mock.advanceTime(30)
+    expect(share).toHaveBeenCalledTimes(1)
+end
+
+@test("/suu ready: who shared and the last message sent")
+local function command()
+    local before = #mock.printed()
+    mock.slash("/suu ready")
+    local out = mock.printed()
+    expect(#out).toBe(before + 2)
+    expect(out[before + 1]).toContain("nobody shared yet")
+    expect(out[before + 2]).toContain("nothing sent yet")
+    inWorld({ group = true })
+    captureSends()
+    M:OnMessage("SuuUI", "RDY\t1:1,2:2", "PARTY", "Oren")
+    M:Send("RDYQ")
+    mock.slash("/suu ready")
+    out = mock.printed()
+    expect(out[before + 3]).toContain("heard from Oren (2)")
+    expect(out[before + 4]).toContain("ok, true (RDYQ)")
+    M.lastSend.ok = false
+    mock.slash("/suu ready")
+    expect(mock.printed()[before + 6]).toContain("error")
+end
+
+@test("the Ready check button starts a ready check")
+local function readyCheck()
+    local s = mock.fake("DoReadyCheck", function() end)
+    inWorld({ group = true, lead = true })
+    M:Set("shows", "group")
+    expect(panelShown()).toBe(true)
+    mock.click(M.panel.action)
+    expect(s).toHaveBeenCalledTimes(1)
+end
+
+@test("turned off: the panel goes")
+local function disable()
+    inWorld({})
+    knowSpells({ [20484] = true }, {})
+    M:Set("shows", "always")
+    expect(panelShown()).toBe(true)
+    mock.slash("/suu disable readiness")
+    expect(M:IsEnabled()).toBe(false)
+    expect(panelShown()).toBe(false)
+    mock.slash("/suu enable readiness")
+    expect(M:IsEnabled()).toBe(true)
+    expect(panelShown()).toBe(true)
+    expectNoErrors()
+end
+
+-- Last: a real group stays for the rest of the file.
+@test("joining a party: a question for everyone's cooldowns, then yours")
+local function joinParty()
+    local share = mock.stub(M, "Share")
+    local before = #mock.sentAddonMessages()
+    local brannoc = mock.spawnUnit({ name = "Brannoc", class = "WARRIOR", player = true })
+    mock.group:add(brannoc)
+    local sentNow = mock.sentAddonMessages()
+    expect(#sentNow).toBe(before + 1)
+    expect(sentNow[#sentNow].prefix).toBe("SuuUI")
+    expect(sentNow[#sentNow].message).toBe("RDYQ")
+    expect(sentNow[#sentNow].chatType).toBe("PARTY")
+    mock.advanceTime(2.1)
+    expect(share).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end

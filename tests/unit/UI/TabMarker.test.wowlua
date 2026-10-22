@@ -1,0 +1,306 @@
+-- UI/TabMarker: the chosen tab's underline and jewel: placed at once the
+-- first time, gliding to a newly chosen tab and to a hovered one, at once
+-- with reduced motion or a hidden row; laid-out offsets, a button not laid
+-- out yet, the vertical jewel and the segmented box; the easing curve.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tabMarker, TabMarker, TabMarkerOptions from "/UI/TabMarker"
+import internal ease from "/UI/TabMarker"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf, reduceMotion from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+local GLIDE_FRAMES = math.ceil(0.18 * 60) + 2
+
+type Row = { row: Frame, a: Button, b: Button, m: TabMarker }
+
+-- a 400 x 30 row with two tabs: 0..50 and 60..130
+local function make(opts: TabMarkerOptions?): Row
+    parent = newParent()
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetPoint("TOPLEFT")
+    row:SetSize(400, 30)
+    local a = CreateFrame("Button", nil, row)
+    a:SetSize(50, 30)
+    a:SetPoint("LEFT", 0, 0)
+    local b = CreateFrame("Button", nil, row)
+    b:SetSize(70, 30)
+    b:SetPoint("LEFT", 60, 0)
+    local m = tabMarker(row, opts)
+    m:Track(a)
+    m:Track(b)
+    return { row = row, a = a, b = b, m = m }
+end
+
+local function ruleX(m: TabMarker): number
+    return (pointOf(m.rule) :: any).x
+end
+
+local function jewelX(m: TabMarker): number
+    return (pointOf(m.jewel) :: any).x
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    reduceMotion(false)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+@test("a new marker: a both-ways gilt-line rule and a gilt jewel, hidden")
+local function build()
+    local r = make()
+    local m = r.m
+    expect(m.holder:GetFrameLevel()).toBe(r.row:GetFrameLevel() + 2)
+    expect(m.rule).never.toBeShown()
+    expect(m.jewel).never.toBeShown()
+    expect(m.jewel).toHaveSize(5, 5)
+    expect(tokenOf(m.jewel)).toBe("gilt")
+    expect(#{ (m.rule :: Frame):GetRegions() }).toBe(2)
+    expect(m.box).toBeNil()
+end
+
+@test("the first choice is placed at once under the tab")
+local function firstChoice()
+    local r = make({ y = 3 })
+    r.m:SetChosen(r.a)
+    expect(r.m.rule).toBeShown()
+    expect(r.m.jewel).toBeShown()
+    expect(ruleX(r.m)).toBe(0)
+    expect((r.m.rule :: Frame):GetWidth()).toBe(50)
+    expect((pointOf(r.m.rule) :: any).y).toBe(3)
+    expect(jewelX(r.m)).toBe(25)
+    expect(r.m.holder:GetScript("OnUpdate")).toBeNil()
+end
+
+@test("a new choice glides there over dur-base, the rule taking its width")
+local function glides()
+    local r = make()
+    r.m:SetChosen(r.a)
+    r.m:SetChosen(r.b)
+    expect(ruleX(r.m)).toBeCloseTo(0, 3)
+    expect(r.m.holder:GetScript("OnUpdate")).toBeTruthy()
+    mock.advanceFrames(5)
+    local x = ruleX(r.m)
+    expect(x > 0 and x < 60).toBe(true)
+    local w = (r.m.rule :: Frame):GetWidth()
+    expect(w > 50 and w < 70).toBe(true)
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(ruleX(r.m)).toBe(60)
+    expect((r.m.rule :: Frame):GetWidth()).toBe(70)
+    expect(jewelX(r.m)).toBe(95)
+    expect(r.m.holder:GetScript("OnUpdate")).toBeNil()
+    -- the same again: nothing moves
+    r.m:SetChosen(r.b)
+    expect(r.m.holder:GetScript("OnUpdate")).toBeNil()
+end
+
+@test("with reduced motion, or a hidden row, it is there at once")
+local function atOnce()
+    local r = make()
+    r.m:SetChosen(r.a)
+    reduceMotion(true)
+    r.m:SetChosen(r.b)
+    expect(ruleX(r.m)).toBe(60)
+    reduceMotion(false)
+    r.row:Hide()
+    r.m:SetChosen(r.a)
+    -- placed at once while the row is hidden
+    expect(ruleX(r.m)).toBe(0)
+    r.row:Show()
+    expect(r.m.rule).toBeShown()
+    expect(ruleX(r.m)).toBe(0)
+end
+
+@test("the jewel glides to a hovered tab and back; the rule stays")
+local function hover()
+    local r = make()
+    r.m:SetChosen(r.a)
+    mock.hover(r.b)
+    expect(r.m.hovered).toBe(r.b)
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(jewelX(r.m)).toBe(95)
+    expect(ruleX(r.m)).toBe(0)
+    mock.hover(nil)
+    expect(r.m.hovered).toBeNil()
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(jewelX(r.m)).toBe(25)
+end
+
+@test("hovering the chosen tab, or a hidden one, keeps the jewel there")
+local function hoverChosen()
+    local r = make()
+    r.m:SetChosen(r.a)
+    mock.hover(r.a)
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(jewelX(r.m)).toBe(25)
+    -- left by another frame first: the hover isn't ours to clear
+    r.m.hovered = r.b
+    mock.hover(nil)
+    expect(r.m.hovered).toBe(r.b)
+    r.b:Hide()
+    r.m:Aim()
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(jewelX(r.m)).toBe(25)
+end
+
+@test("tracking a button twice hooks it once")
+local function trackOnce()
+    local r = make()
+    r.m:Track(r.a)
+    expect((r.a :: any).suuMarkTracked).toBe(r.m)
+    local aims = 0
+    local real = r.m.Aim
+    r.m.Aim = function(self: TabMarker) aims += 1; real(self) end
+    mock.hover(r.a)
+    expect(aims).toBe(1)
+end
+
+@test("no choice, or a hidden one, hides the marks")
+local function hides()
+    local r = make()
+    r.m:SetChosen(r.a)
+    r.m:SetChosen(nil)
+    expect(r.m.rule).never.toBeShown()
+    expect(r.m.jewel).never.toBeShown()
+    r.a:Hide()
+    r.m:SetChosen(r.a)
+    expect(r.m.jewel).never.toBeShown()
+end
+
+@test("markLeft and markWidth override a button's rectangle")
+local function offsets()
+    local r = make()
+    local a: any = r.a
+    a.markLeft, a.markWidth = 7, 33
+    r.m:SetChosen(r.a)
+    expect(ruleX(r.m)).toBe(7)
+    expect((r.m.rule :: Frame):GetWidth()).toBe(33)
+    local b: any = r.b
+    b.markLeft = 100
+    r.m:SetChosen(r.b)
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(ruleX(r.m)).toBe(100)
+    expect((r.m.rule :: Frame):GetWidth()).toBe(70)
+end
+
+@test("a button not laid out yet is aimed at on the next frame, once")
+local function notLaidOut()
+    local r = make()
+    local c = CreateFrame("Button", nil, r.row)
+    c:SetSize(40, 30)
+    local left = r.m:Place(c)
+    expect(left).toBeNil()
+    r.m:SetChosen(c)
+    expect(r.m.waiting).toBe(true)
+    r.m:Aim() -- already waiting
+    c:SetPoint("LEFT", 200, 0)
+    mock.advanceFrames(1)
+    expect(r.m.waiting).toBe(false)
+    expect(ruleX(r.m)).toBe(200)
+end
+
+@test("Place reads a button in the row's units")
+local function places()
+    local r = make()
+    r.b:SetScale(2)
+    local left, bottom, width, height = r.m:Place(r.b)
+    expect(width).toBe(140)
+    expect(height).toBe(60)
+    expect(left).toBe(r.b:GetLeft() * 2 - (r.row:GetLeft() :: number))
+    expect(bottom).toBe(r.b:GetBottom() * 2 - (r.row:GetBottom() :: number))
+end
+
+@test("rule = false: the jewel only")
+local function noRule()
+    local r = make({ rule = false, jewel = 9, level = 4 })
+    expect(r.m.rule).toBeNil()
+    expect(r.m.jewel).toHaveSize(9, 9)
+    expect(r.m.holder:GetFrameLevel()).toBe(r.row:GetFrameLevel() + 4)
+    r.m:SetChosen(r.b)
+    expect(jewelX(r.m)).toBe(95)
+    local s = make({ rule = "arcane" })
+    local regions = { (s.m.rule :: Frame):GetRegions() }
+    expect(tokenOf(regions[1])).toBe("arcane")
+end
+
+@test("vertical: the jewel beside the entry, gliding up and down")
+local function vertical()
+    parent = newParent()
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetPoint("TOPLEFT")
+    row:SetSize(100, 200)
+    local a = CreateFrame("Button", nil, row)
+    a:SetSize(80, 20)
+    a:SetPoint("TOPLEFT", 10, 0)
+    local b = CreateFrame("Button", nil, row)
+    b:SetSize(80, 20)
+    b:SetPoint("TOPLEFT", 10, -40)
+    local m = tabMarker(row, { vertical = true, side = "RIGHT", x = 4 })
+    expect(m.rule).toBeNil()
+    m:Track(b)
+    m:SetChosen(a)
+    local pt = pointOf(m.jewel) :: any
+    expect({ pt.x, pt.y }).toEqual({ 10 + 80 + 4, 190 })
+    mock.hover(b)
+    mock.advanceFrames(GLIDE_FRAMES)
+    pt = pointOf(m.jewel) :: any
+    expect({ pt.x, pt.y }).toEqual({ 94, 150 })
+    local left = tabMarker(row, { vertical = true })
+    expect(left.side).toBe("LEFT")
+    left:SetChosen(a)
+    expect((pointOf(left.jewel) :: any).x).toBe(10)
+end
+
+@test("box: the chosen option's fill and edge, sized to it, gliding")
+local function boxes()
+    local r = make({ box = { fill = "arcane-soft", border = "arcane" }, level = 1 })
+    local box = r.m.box :: Frame
+    expect(box).never.toBeShown()
+    expect(r.m.rule).toBeNil()
+    expect(r.m.jewel).toBeNil()
+    local regions = { box:GetRegions() }
+    expect(tokenOf(regions[1])).toBe("arcane-soft")
+    r.m:SetChosen(r.a)
+    expect(box).toBeShown()
+    expect(box).toHaveSize(50, 30)
+    expect(pointOf(box)).toEqual({ point = "BOTTOMLEFT", relativeTo = r.row, relativePoint = "BOTTOMLEFT", x = 0, y = 0 })
+    -- hover doesn't move it
+    mock.hover(r.b)
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect((pointOf(box) :: any).x).toBe(0)
+    r.m:SetChosen(r.b)
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(box).toHaveSize(70, 30)
+    expect((pointOf(box) :: any).x).toBe(60)
+    r.m:SetChosen(nil)
+    expect(box).never.toBeShown()
+    -- shown again: aimed again
+    r.row:Hide()
+    r.m:SetChosen(r.a)
+    r.row:Show()
+    expect((pointOf(box) :: any).x).toBe(0)
+end
+
+@test("the easing runs from 0 to 1, symmetric about the middle")
+local function easing()
+    expect(ease(0)).toBeCloseTo(0, 3)
+    expect(ease(1)).toBeCloseTo(1, 3)
+    expect(ease(0.5)).toBeCloseTo(0.5, 2)
+    expect(ease(0.25) < 0.25).toBe(true)
+    expect(ease(0.25) + ease(0.75)).toBeCloseTo(1, 2)
+end
+
+@test("a chosen tab that only got wider moves the rule's width")
+local function widthOnly()
+    local r = make()
+    r.m:SetChosen(r.a)
+    r.a:SetWidth(80)
+    r.m:Aim()
+    mock.advanceFrames(GLIDE_FRAMES)
+    expect(ruleX(r.m)).toBe(0)
+    expect((r.m.rule :: Frame):GetWidth()).toBeCloseTo(80, 3)
+end

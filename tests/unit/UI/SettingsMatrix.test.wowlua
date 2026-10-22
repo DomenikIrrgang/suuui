@@ -1,0 +1,193 @@
+-- UI/SettingsMatrix: the grid's header and rows, cells as checkboxes or
+-- selects (or "—" where an option doesn't apply), the master column greying
+-- a row, values in and out (copies), and changes through the cells.
+
+import test, expect, afterEach, beforeAll, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as tooltip from "/UI/Tooltip"
+import settingsMatrix, SettingsMatrix, MatrixColumn, MatrixRowDef from "/UI/SettingsMatrix"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf from "./PrimitivesHelpers"
+
+local S = T.space
+local parent: Frame? = nil
+local shown = mock.spy(function(_owner: any, _data: any) end)
+local hidden = mock.spy(function() end)
+
+@beforeAll
+local function fakeTooltips()
+    mock.module(tooltip, { showTooltip = shown, hideTooltip = hidden })
+end
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(700, 400)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local COLUMNS: MatrixColumn[] = {
+    { key = "on", label = "On", width = 34, master = true },
+    { key = "conf", label = "Confidence", width = 78, kind = "select", title = "How sure",
+      options = { { value = 70, label = "70%" }, { value = 90, label = "90%" } } },
+    { key = "say", label = "Say", width = 34 },
+}
+
+local ROWS: MatrixRowDef[] = {
+    { key = "role", label = "Your role is needed", description = "Tank or healer" },
+    { key = "full", label = "Group is full" },
+}
+
+type Values = { [string]: { [string]: any } }
+
+local function make(onChange: ((v: Values) -> ())?, width: number?): SettingsMatrix
+    local m = settingsMatrix(parent :: Frame, { columns = COLUMNS, rows = ROWS, onChange = onChange, width = width })
+    m:SetPoint("TOPLEFT")
+    return m
+end
+
+local function cell(m: SettingsMatrix, row: number, col: string): any
+    return (m.rowFrames[row].cells :: any)[col]
+end
+
+@test("the grid: a 28px header, 36px rows, the cells centred in their columns")
+local function build()
+    local m = make()
+    expect(m).toHaveSize(640, 28 + 2 * 36 + S["space-2"])
+    expect(#m.rowFrames).toBe(2)
+    local r1 = m.rowFrames[1]
+    expect(r1.def).toBe(ROWS[1])
+    expect(pointOf(r1)).toEqual({ point = "TOPLEFT", relativeTo = m, relativePoint = "TOPLEFT", x = 0, y = -28 })
+    expect((pointOf(m.rowFrames[2]) :: any).y).toBe(-64)
+    expect(r1.name).toHaveText("Your role is needed")
+    expect((r1.desc :: any)).toHaveText("Tank or healer")
+    expect(m.rowFrames[2].desc).toBeNil()
+    expect(m.rowFrames[2].name).toBeAnchoredTo(m.rowFrames[2], "LEFT", "LEFT")
+    -- the columns from the right: say, conf, on
+    local sayX = 640 - S["space-4"] - 34
+    local confX = sayX - S["space-3"] - 78
+    local onX = confX - S["space-3"] - 34
+    expect((pointOf(cell(m, 1, "say").control) :: any).x).toBe(sayX + 17)
+    expect((pointOf(cell(m, 1, "conf").control) :: any).x).toBe(confX + 39)
+    expect((pointOf(cell(m, 1, "on").none) :: any).x).toBe(onX + 17)
+    expect(r1.name:GetWidth()).toBe(onX - S["space-3"] - S["space-4"])
+    expect(cell(m, 1, "conf").control:GetWidth()).toBe(78)
+    expect(cell(m, 1, "conf").control:GetHeight()).toBe(24)
+    expect(cell(m, 1, "say").none).toHaveText("—")
+end
+
+@test("an empty value: every cell \"—\" and every row's name greyed")
+local function empty()
+    local m = make()
+    m:SetValue(nil)
+    for _, row in ipairs(m.rowFrames) do
+        expect(tokenOf(row.name)).toBe("ink-faint")
+        for _, col in ipairs(COLUMNS) do
+            local c = (row.cells :: any)[col.key]
+            expect(c.none).toBeShown()
+            expect(c.control).never.toBeShown()
+        end
+    end
+    expect(m:GetValue()).toEqual({})
+end
+
+@test("SetValue shows each cell's control with its value")
+local function setValue()
+    local m = make()
+    m:SetValue({ role = { on = true, conf = 90, say = false } })
+    expect(tokenOf(m.rowFrames[1].name)).toBe("ink")
+    expect(cell(m, 1, "on").none).never.toBeShown()
+    expect(cell(m, 1, "on").control).toBeShown()
+    expect(cell(m, 1, "on").control.value).toBe(true)
+    expect(cell(m, 1, "conf").control.value).toBe(90)
+    expect(cell(m, 1, "conf").control.disabled).toBe(false)
+    expect(cell(m, 1, "say").control.value).toBe(false)
+    expect(cell(m, 1, "say").control.disabled).toBe(false)
+    expect(cell(m, 2, "say").control).never.toBeShown()
+end
+
+@test("a row switched off greys its name and disables its other cells, which keep their values")
+local function masterOff()
+    local m = make()
+    m:SetValue({ role = { on = false, conf = 70, say = true } })
+    expect(tokenOf(m.rowFrames[1].name)).toBe("ink-faint")
+    expect(cell(m, 1, "on").control.disabled).toBe(false)
+    expect(cell(m, 1, "conf").control.disabled).toBe(true)
+    expect(cell(m, 1, "say").control.disabled).toBe(true)
+    expect(cell(m, 1, "say").control.value).toBe(true)
+    expect(m:GetValue()).toEqual({ role = { on = false, conf = 70, say = true } })
+end
+
+@test("values in and out are copies")
+local function copies()
+    local m = make()
+    local role: { [string]: any } = { on = true }
+    m:SetValue({ role = role })
+    role.on = false
+    expect(m:GetValue()).toEqual({ role = { on = true } })
+    local out = m:GetValue()
+    local outRole = out.role :: { [string]: any }
+    outRole.on = false
+    expect(m:GetValue()).toEqual({ role = { on = true } })
+end
+
+@test("Set changes one cell and reports the whole value")
+local function set()
+    local s = mock.spy(function(_v: Values) end)
+    local m = make(s)
+    m:Set("full", "say", true)
+    expect(s).toHaveBeenCalledWith({ full = { say = true } })
+    expect(cell(m, 2, "say").control).toBeShown()
+    m:Set("full", "on", true)
+    expect(s).toHaveBeenCalledWith({ full = { say = true, on = true } })
+    expect(tokenOf(m.rowFrames[2].name)).toBe("ink")
+    local quiet = make()
+    quiet:Set("role", "on", true)
+    expect(quiet:GetValue()).toEqual({ role = { on = true } })
+end
+
+@test("a click on a checkbox cell sets it")
+local function clickCell()
+    local s = mock.spy(function(_v: Values) end)
+    local m = make(s)
+    m:SetValue({ role = { on = true, say = false } })
+    mock.click(cell(m, 1, "say").control)
+    expect(s).toHaveBeenCalledWith({ role = { on = true, say = true } })
+    mock.click(cell(m, 1, "on").control)
+    expect(tokenOf(m.rowFrames[1].name)).toBe("ink-faint")
+    expect(cell(m, 1, "say").control.disabled).toBe(true)
+end
+
+@test("a pick in a select cell sets it")
+local function pickCell()
+    local s = mock.spy(function(_v: Values) end)
+    local m = make(s)
+    m:SetValue({ role = { on = true, conf = 70 } })
+    local sel = cell(m, 1, "conf").control
+    mock.click(sel)
+    mock.click(sel.list.rows[2])
+    expect(s).toHaveBeenCalledWith({ role = { on = true, conf = 90 } })
+    expect(sel.value).toBe(90)
+end
+
+@test("a column's title is its header's tooltip")
+local function headerTooltip()
+    local m = make(nil, 500)
+    expect(m:GetWidth()).toBe(500)
+    local hit: Frame? = nil
+    for _, child in ipairs({ m:GetChildren() }) do
+        if child:GetScript("OnEnter") then hit = child end
+    end
+    mock.hover(hit)
+    expect(shown).toHaveBeenCalledWith(hit, { title = "Confidence", description = "How sure" })
+    mock.hover(nil)
+    expect(hidden).toHaveBeenCalled()
+end

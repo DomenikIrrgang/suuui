@@ -1,0 +1,977 @@
+-- Core/API.wowlua
+-- The public API: the global SuuUI. Built-in modules and plugin addons use
+-- only what is published here (documented in Docs/API.md). Anything a module
+-- needs from the core is added here, never reached for in another module's
+-- internals. Built-in modules import it (`import SuuUI from "/Core/API"`);
+-- plugins read the global.
+
+import * as anchors from "/Core/Anchors"
+import * as events from "/Core/Events"
+import * as extend from "/Core/Extend"
+import * as fonts from "/Core/Fonts"
+import * as modules from "/Core/Modules"
+import * as motion from "/Core/Motion"
+import * as pixel from "/Core/Pixel"
+import * as rolePresets from "/Core/RolePresets"
+import * as roles from "/Core/Roles"
+import * as services from "/Core/Services"
+import * as settings from "/Core/Settings"
+import * as themes from "/Core/Themes"
+import * as vision from "/Core/Vision"
+import * as editMode from "/EditMode/EditMode"
+import * as registry from "/SettingsUI/Registry"
+import * as window from "/SettingsUI/Window"
+import * as actionBar from "/UI/ActionBar"
+import * as actionButton from "/UI/ActionButton"
+import * as alert from "/UI/Alert"
+import * as auras from "/UI/Auras"
+import * as bar from "/UI/Bar"
+import * as castBar from "/UI/CastBar"
+import * as classBars from "/UI/ClassBars"
+import * as contextMenu from "/UI/ContextMenu"
+import * as controls from "/UI/Controls"
+import * as cooldownTracker from "/UI/CooldownTracker"
+import * as crest from "/UI/Crest"
+import * as damageMeter from "/UI/DamageMeter"
+import * as draw from "/UI/Draw"
+import * as filterMenu from "/UI/FilterMenu"
+import * as groupFinder from "/UI/GroupFinder"
+import * as groupFinderListed from "/UI/GroupFinderListed"
+import * as groupFinderListing from "/UI/GroupFinderListing"
+import * as groupFinderWho from "/UI/GroupFinderWho"
+import * as guild from "/UI/Guild"
+import * as guildControl from "/UI/GuildControl"
+import * as icon from "/UI/Icon"
+import * as inputs from "/UI/Inputs"
+import * as inventory from "/UI/Inventory"
+import * as keybindMode from "/UI/KeybindMode"
+import * as layout from "/UI/Layout"
+import * as legacy from "/UI/Legacy"
+import * as levelUp from "/UI/LevelUp"
+import * as loadingMark from "/UI/LoadingMark"
+import * as loot from "/UI/Loot"
+import * as mapPin from "/UI/MapPin"
+import * as microMenu from "/UI/MicroMenu"
+import * as notification from "/UI/Notification"
+import * as objectiveTracker from "/UI/ObjectiveTracker"
+import * as panel from "/UI/Panel"
+import * as pickers from "/UI/Pickers"
+import * as professions from "/UI/Professions"
+import * as raidPlanner from "/UI/RaidPlanner"
+import * as readiness from "/UI/Readiness"
+import * as reskin from "/UI/Reskin"
+import * as resourceBar from "/UI/ResourceBar"
+import * as restedSign from "/UI/RestedSign"
+import * as selectModule from "/UI/Select"
+import * as settingRow from "/UI/SettingRow"
+import * as settingsMatrix from "/UI/SettingsMatrix"
+import * as social from "/UI/Social"
+import * as spellbook from "/UI/Spellbook"
+import * as stage from "/UI/Stage"
+import * as swingTimer from "/UI/SwingTimer"
+import * as tabMarker from "/UI/TabMarker"
+import * as talentBuilds from "/UI/TalentBuilds"
+import * as talentTree from "/UI/TalentTree"
+import * as text from "/UI/Text"
+import * as threatMeter from "/UI/ThreatMeter"
+import * as timeline from "/UI/Timeline"
+import * as tooltip from "/UI/Tooltip"
+import * as unitFrame from "/UI/UnitFrame"
+import * as visibility from "/UI/Visibility"
+import * as weaponEnchants from "/UI/WeaponEnchants"
+import * as windowSkin from "/UI/WindowSkin"
+import lfg from "foreverlfg"
+import type ForeverLFG from "foreverlfg"
+import tokens as T from "/Core/Tokens"
+import questStarts from "/Data/QuestStarts"
+import mapPlaces from "/Data/MapPlaces"
+import collectionSources from "/Data/CollectionSources"
+import recipeSources from "/Data/RecipeSources"
+import auraCatalog from "/Data/AuraCatalog"
+import classTalents, ClassTalent from "/Data/Talents"
+import defensives from "/Data/Defensives"
+import flightRoutes from "/Data/FlightRoutes"
+import flightPaths from "/Data/FlightPaths"
+import instanceLevels from "/Data/InstanceLevels"
+import mapOverlays from "/Data/MapOverlays"
+import raidCatalog from "/Data/RaidPlanner"
+import cooldownPresets, CooldownPreset from "/Data/Presets"
+import trainerSpells, trainerSpellIDs from "/Data/Trainer"
+import version, mixins, listCommands, CommandInfo from "/Core/Init"
+import * as socialProbe from "/Diagnostics/SocialProbe"
+import API_VERSION from "/Core/Modules"
+import root from "/Core/Root"
+import * as blizzard from "/Core/Blizzard"
+
+
+local API = {}
+
+API.API_VERSION = API_VERSION
+API.version = version
+
+-- Modules
+API.RegisterModule = modules.register
+API.APIAtLeast = modules.apiAtLeast
+
+function API.GetModule(id: string): modules.Module?
+    return modules.get(id)
+end
+
+-- 0.17: every /suu subcommand, { { name, help, args } } (Core/Init.lua)
+function API.Commands(): CommandInfo[] return listCommands() end
+
+-- A snapshot of every module: { id, name, description, state, source, builtIn, error }.
+function API.ListModules()
+    local out = {}
+    for _, m in ipairs(modules.all()) do
+        out[#out + 1] = {
+            id = m.id, name = m.name, description = m.description, state = m.state,
+            source = m.source, builtIn = m.builtIn, error = m.error, pendingReload = m.pendingReload,
+            replaces = m.replaces, replacedBy = m.replacedBy,
+        }
+    end
+    return out
+end
+
+-- 0.17: SuuUI's own UI for plugins (Core/Extend.lua; a module's Each, Hook
+-- and Override are its methods). Instances of a kind, in the order made; one
+-- instance's info ({ kind, module, role, unit, preview… }); a component of
+-- your own added to a kind (a replacement module's frames), and more info on
+-- one.
+API.KINDS = extend.KINDS
+-- 0.17: a theme (Core/Themes.lua): { id, name, description, colors =
+-- { [token] = { r, g, b[, a] } }, fonts = { [style] = { file, size } } }
+API.RegisterTheme = function(def: { [string]: any }) themes.register(def) end
+-- 0.17: what modules added to a list ("micromenu", "gamemenu",
+-- "notificationkinds", "rolepresets"), for whoever draws it
+API.Additions = extend.additions
+-- 0.17: a service by name (Core/Services.wowlua; M:Provide offers one), or nil
+API.Service = services.get
+API.Instances = extend.list
+API.InstanceInfo = extend.info
+API.AddInstance = extend.add
+API.TagInstance = extend.tag
+
+-- 0.17: raw access, unstable: everything SuuUI is made of, for what the
+-- documented API doesn't cover. May change in any version without notice.
+-- every component under its old name, the ones not exported above too
+local rawUI: { [string]: any } = {
+    ActionBar = actionBar.actionBar,
+    ActionBarPaging = actionBar.actionBarPaging,
+    ActionButton = actionButton.actionButton,
+    Alert = alert.alert,
+    AnchorButton = pickers.anchorButton,
+    AnchorPicker = pickers.anchorPicker,
+    AttachTooltip = tooltip.attachTooltip,
+    AuraContainer = auras.auraContainer,
+    Bind = draw.bind,
+    Border = draw.border,
+    Button = controls.button,
+    CastBar = castBar.castBar,
+    CenterWindow = windowSkin.centerWindow,
+    Check = inputs.check,
+    Checkbox = inputs.checkbox,
+    Chevron = inputs.chevron,
+    CloseButton = panel.closeButton,
+    CloseContextMenu = contextMenu.closeContextMenu,
+    Confirm = panel.confirm,
+    Contacts = social.contacts,
+    ContextMenu = contextMenu.contextMenu,
+    ContextMenuFrom = contextMenu.contextMenuFrom,
+    CooldownConditionMet = cooldownTracker.cooldownConditionMet,
+    CooldownTracker = cooldownTracker.cooldownTracker,
+    Crest = crest.crest,
+    Cross = draw.cross,
+    DAMAGE_METER_TYPES = damageMeter.DAMAGE_METER_TYPES,
+    DEBUFF_TYPES = unitFrame.DEBUFF_TYPES,
+    DamageMeter = damageMeter.damageMeter,
+    DecodeTalentBuild = talentBuilds.decodeTalentBuild,
+    Diamond = draw.diamond,
+    DragonArt = crest.dragonArt,
+    DurationTextBinding = auras.durationTextBinding,
+    EncodeTalentBuild = talentBuilds.encodeTalentBuild,
+    EncounterTimeline = timeline.encounterTimeline,
+    Fill = draw.fill,
+    FilterMenu = filterMenu.filterMenu,
+    Flag = text.flag,
+    GROUP_TIERS = unitFrame.GROUP_TIERS,
+    GroupDefensives = unitFrame.groupDefensives,
+    GroupFinderBrowse = groupFinder.groupFinderBrowse,
+    GroupFinderListed = groupFinderListed.groupFinderListed,
+    GroupFinderWho = groupFinderWho.groupFinderWho,
+    GroupIndicators = unitFrame.groupIndicators,
+    GroupTier = unitFrame.groupTier,
+    GuildControl = guildControl.guildControl,
+    GuildInfo = guild.guildInfo,
+    GuildLog = guild.guildLog,
+    GuildMotdBanner = guild.guildMotdBanner,
+    GuildRoster = guild.guildRoster,
+    Hairline = draw.hairline,
+    HideTooltip = tooltip.hideTooltip,
+    INDICATOR_POINTS = unitFrame.INDICATOR_POINTS,
+    Icon = icon.icon,
+    IndicatorsFor = unitFrame.indicatorsFor,
+    Inventory = inventory.inventory,
+    IsCoveredByWindow = windowSkin.isCoveredByWindow,
+    IsTooltipSkinned = tooltip.isTooltipSkinned,
+    ItemSlot = inventory.itemSlot,
+    KeyChip = panel.keyChip,
+    LEGACY_CARD_H = legacy.LEGACY_CARD_H,
+    LEGACY_TRACK_H = legacy.LEGACY_TRACK_H,
+    LegacyChallenges = legacy.legacyChallenges,
+    LegacyPoints = legacy.legacyPoints,
+    LegacyTrack = legacy.legacyTrack,
+    LevelColor = unitFrame.levelColor,
+    LevelUp = levelUp.levelUp,
+    LoadingMark = loadingMark.loadingMark,
+    LootWindow = loot.lootWindow,
+    MakeModal = panel.makeModal,
+    MapPin = mapPin.mapPin,
+    MeasureText = text.measureText,
+    MicroMenu = microMenu.microMenu,
+    Minus = inputs.minus,
+    ModelStage = stage.modelStage,
+    Money = inventory.money,
+    MoneyInput = inputs.moneyInput,
+    Notification = notification.notification,
+    NotificationStack = notification.notificationStack,
+    NumberField = inputs.numberField,
+    ObjectiveTracker = objectiveTracker.objectiveTracker,
+    PROFESSIONS_H = professions.PROFESSIONS_H,
+    PROFESSIONS_W = professions.PROFESSIONS_W,
+    PROFESSION_FILTER_DEFAULTS = professions.PROFESSION_FILTER_DEFAULTS,
+    Paint = draw.paint,
+    PaintFill = draw.paintFill,
+    PaintGradient = draw.paintGradient,
+    Panel = panel.panel,
+    PeopleList = social.peopleList,
+    PetBar = classBars.petBar,
+    PlaceDragon = crest.placeDragon,
+    Plus = inputs.plus,
+    Professions = professions.professions,
+    RGBA = draw.rgba,
+    RaidGroups = social.raidGroups,
+    RaidMarker = unitFrame.raidMarker,
+    RaidPlanner = raidPlanner.raidPlanner,
+    ReadGameTalentHeader = talentBuilds.readGameTalentHeader,
+    ReadGameTalentString = talentBuilds.readGameTalentString,
+    Readiness = readiness.readiness,
+    RefreshTooltip = tooltip.refreshTooltip,
+    Repaint = draw.repaint,
+    Reskin = reskin.reskin,
+    ReskinButton = reskin.reskinButton,
+    ReskinCheckButton = reskin.reskinCheckButton,
+    ReskinCollapseButton = reskin.reskinCollapseButton,
+    ReskinDialog = reskin.reskinDialog,
+    ReskinDropdown = reskin.reskinDropdown,
+    ReskinEditBox = reskin.reskinEditBox,
+    ReskinFillBar = reskin.reskinFillBar,
+    ReskinIconButton = reskin.reskinIconButton,
+    ReskinMenu = reskin.reskinMenu,
+    ReskinPopup = reskin.reskinPopup,
+    ReskinScrollBar = reskin.reskinScrollBar,
+    ReskinScrollBox = reskin.reskinScrollBox,
+    ReskinStatusBar = reskin.reskinStatusBar,
+    ResourceBar = resourceBar.resourceBar,
+    RestedSign = restedSign.restedSign,
+    ScrollArea = panel.scrollArea,
+    SectionHeader = panel.sectionHeader,
+    Segmented = inputs.segmented,
+    Select = selectModule.select,
+    SetActionTextSize = actionButton.setActionTextSize,
+    SetGroupDefensives = unitFrame.setGroupDefensives,
+    SetGroupIndicators = unitFrame.setGroupIndicators,
+    SetVisibility = visibility.setVisibility,
+    SettingRow = settingRow.settingRow,
+    SettingsGroup = settingRow.settingsGroup,
+    SettingsMatrix = settingsMatrix.settingsMatrix,
+    Shadow = draw.shadow,
+    ShortKey = actionButton.shortKey,
+    ShowRaidMarker = unitFrame.showRaidMarker,
+    ShowTooltip = tooltip.showTooltip,
+    Size = draw.size,
+    SkinGroupFinderListing = groupFinderListing.skinGroupFinderListing,
+    SkinItemSlot = inventory.skinItemSlot,
+    SkinTooltip = tooltip.skinTooltip,
+    SecurePlacement = windowSkin.securePlacement,
+    SkinWindow = windowSkin.skinWindow,
+    Slider = inputs.slider,
+    SoftEdge = draw.softEdge,
+    SpellTooltip = tooltip.spellTooltip,
+    Spellbook = spellbook.spellbook,
+    StanceBar = classBars.stanceBar,
+    StateBadge = controls.stateBadge,
+    StatusBar = bar.statusBar,
+    Stepper = inputs.stepper,
+    SwatchRow = pickers.swatchRow,
+    SwingTimer = swingTimer.swingTimer,
+    TALENT_MAX_POINTS = talentBuilds.TALENT_MAX_POINTS,
+    TALENT_ORDER_W = talentTree.TALENT_ORDER_W,
+    TALENT_ROW_POINTS = talentBuilds.TALENT_ROW_POINTS,
+    TALENT_TREE_W = talentTree.TALENT_TREE_W,
+    TRACKER_HEAD_H = objectiveTracker.TRACKER_HEAD_H,
+    TabMarker = tabMarker.tabMarker,
+    TalentNextProblem = talentBuilds.talentNextProblem,
+    TalentOrderCheck = talentBuilds.talentOrderCheck,
+    TalentStepProblem = talentBuilds.talentStepProblem,
+    TalentStepsFromRanks = talentBuilds.talentStepsFromRanks,
+    TalentTree = talentTree.talentTree,
+    Text = text.text,
+    TextField = inputs.textField,
+    ThreatMeter = threatMeter.threatMeter,
+    Toggle = inputs.toggle,
+    ToggleChips = pickers.toggleChips,
+    TooltipFrame = tooltip.tooltipFrame,
+    TotemBar = classBars.totemBar,
+    TrackerAuraSounds = cooldownTracker.trackerAuraSounds,
+    TrackerSound = cooldownTracker.trackerSound,
+    TrackerSoundFiles = cooldownTracker.trackerSoundFiles,
+    TraitTooltip = talentTree.traitTooltip,
+    UnitFrame = unitFrame.unitFrame,
+    UnitFrameCurveValue = unitFrame.unitFrameCurveValue,
+    UnitStandIn = unitFrame.unitStandIn,
+    VISIBILITY_OPTIONS = visibility.VISIBILITY_OPTIONS,
+    WINDOW_HEAD_H = windowSkin.WINDOW_HEAD_H,
+    WeaponEnchant = weaponEnchants.weaponEnchant,
+    WeaponEnchantIcon = weaponEnchants.weaponEnchantIcon,
+    WeaponEnchantSpell = weaponEnchants.weaponEnchantSpell,
+    WeaponEnchantable = weaponEnchants.weaponEnchantable,
+    WindowFrame = panel.windowFrame,
+    WriteGameTalentString = talentBuilds.writeGameTalentString,
+    actionButtons = actionButton.actionButtons,
+}
+-- (0.18: SuuUI's code is wowlua modules now: Raw.ns is the addon table,
+-- which holds the wowlua runtime; the modules are no longer fields of it)
+local _, addonTable = ...
+API.Raw = {
+    UI = rawUI,
+    Mixins = mixins,
+    ns = addonTable,
+    Module = modules.get,
+}
+
+-- Design tokens (read only: never change them) and text styles
+API.Tokens = T
+API.Fonts = {
+    Get = fonts.get,
+    Apply = fonts.apply,
+}
+
+-- Physical pixels
+API.Pixel = {
+    Size = pixel.size,
+    Snap = pixel.snap,
+    PerfectScale = pixel.perfectScale,
+}
+
+-- 0.9: your role ("TANK", "HEALER", "DAMAGER") and where it came from
+-- ("chosen", "assigned", "talents"); your spec (talent tree 1-3, 0 unspecced)
+function API.Role() return roles.current() end
+function API.Spec() return roles.spec() end
+-- Blizzard frames
+API.SuppressBlizzard = blizzard.suppress
+API.RestoreBlizzard = blizzard.restore
+API.IsSuppressed = blizzard.isSuppressed
+
+-- 0.2: the screen root, components, layouts and motion
+
+-- Every SuuUI frame on the screen lives under SuuUI.Root. One unit there is
+-- one design pixel (a physical pixel times ui.scale), so design sizes and
+-- offsets from the screen's edges or centre are used as they are.
+API.Root = root
+
+API.UI = {
+    -- components
+    Panel = panel.panel,
+    SectionHeader = panel.sectionHeader,
+    WindowFrame = panel.windowFrame,
+    Button = controls.button,
+    CloseButton = panel.closeButton,
+    KeyChip = panel.keyChip,
+    StateBadge = controls.stateBadge,
+    Crest = crest.crest,
+    TabMarker = tabMarker.tabMarker,
+    DragonArt = crest.dragonArt,
+    PlaceDragon = crest.placeDragon,
+    Icon = icon.icon,
+    StatusBar = bar.statusBar,
+    Text = text.text,
+    -- the tooltip
+    ShowTooltip = tooltip.showTooltip,
+    HideTooltip = tooltip.hideTooltip,
+    RefreshTooltip = tooltip.refreshTooltip,
+    AttachTooltip = tooltip.attachTooltip,
+    TooltipFrame = tooltip.tooltipFrame,
+    -- drawing
+    Fill = draw.fill,
+    Border = draw.border,
+    Hairline = draw.hairline,
+    Diamond = draw.diamond,
+    Shadow = draw.shadow,
+    SoftEdge = draw.softEdge,
+    Cross = draw.cross,
+    RGBA = draw.rgba,
+    Size = draw.size,
+    -- colours that follow the theme (0.17)
+    Paint = draw.paint,
+    PaintFill = draw.paintFill,
+    PaintGradient = draw.paintGradient,
+    Bind = draw.bind,
+}
+
+API.Layout = {
+    Stack = layout.stack,
+    Grid = layout.grid,
+}
+
+API.Motion = {
+    FadeIn = motion.fadeIn,
+    Enter = motion.enter,
+    Pop = motion.pop,
+    Stop = motion.stop,
+}
+
+-- 0.3: settings controls and the settings window
+
+API.UI.Toggle = inputs.toggle
+API.UI.Checkbox = inputs.checkbox
+API.UI.Segmented = inputs.segmented
+API.UI.Select = selectModule.select
+API.UI.Slider = inputs.slider
+API.UI.Stepper = inputs.stepper
+API.UI.TextField = inputs.textField
+API.UI.NumberField = inputs.numberField -- 0.17: NumberField(parent, { letter, value, min, max, width, onChange, onFocus, onTab, onTyping })
+API.UI.MoneyInput = inputs.moneyInput -- 0.17: MoneyInput(parent, { value, onChange }) -> GetCopper, SetCopper, Clear, SetDisabled
+API.UI.LoadingMark = loadingMark.loadingMark -- 0.17: LoadingMark(parent, { size, wings }) -> Start, Stop
+API.UI.ModelStage = stage.modelStage -- 0.17: ModelStage(frame, { floor, shade }) -> frame:CentreOn(x), frame:Tint(token)
+API.UI.IsTooltipSkinned = tooltip.isTooltipSkinned -- 0.17: whether SkinTooltip already dressed this tooltip
+API.UI.WINDOW_HEAD_H = windowSkin.WINDOW_HEAD_H -- 0.17: the height of a skinned window's header
+API.UI.SettingRow = settingRow.settingRow
+API.UI.SettingsGroup = settingRow.settingsGroup
+
+-- A settings section that is always there (a module uses module:RegisterSettings,
+-- whose section goes away with the module). See SettingsUI/Registry.lua.
+function API.RegisterSettings(def: { [string]: any }): any
+    return registry.register(def)
+end
+
+-- Opens the settings window, at a section if given.
+function API.OpenSettings(sectionId: string?)
+    window.open(sectionId)
+end
+-- 0.10: opens the settings window, or closes it while it's open
+function API.ToggleSettings()
+    window.toggle()
+end
+
+-- 0.4: edit mode
+
+-- An edit-mode handle for a frame whose position lives in a settings table
+-- (opts.namespace, opts.key); modules use module:RegisterMover instead.
+function API.RegisterMover(frame: any, opts: { [string]: any }): any
+    return editMode.register(frame, opts)
+end
+
+API.EditMode = {
+    Enter = editMode.enter,
+    Exit = editMode.exit,
+    Toggle = editMode.toggle,
+    IsActive = editMode.isActive,
+    Refresh = editMode.refresh, -- 0.8: re-reads each mover's `enabled`
+    Rect = editMode.rect,           -- 0.8: a frame's rectangle in root units
+    AnchorFor = editMode.anchorFor, -- 0.8: the screen anchor for a rectangle; 0.17: or the offset from a given point
+    GroupPreview = editMode.groupPreview,       -- 0.17: 0, 5, 10, 20 or 40 while edit mode shows a group preview
+    SetGroupPreview = editMode.setGroupPreview, -- 0.17
+}
+
+-- 0.5: unit frames
+
+API.UI.UnitFrame = unitFrame.unitFrame
+API.UI.LevelColor = unitFrame.levelColor -- 0.17: LevelColor(level) -> a colour token by how hard the level is for you
+API.UI.RestedSign = restedSign.restedSign -- 0.17: RestedSign(unitFrame) -> the rested sign over its top-right corner; :SetLook(look[, { still, fade }])
+API.UI.AnchorPicker = pickers.anchorPicker -- 0.9: the 3×3 point grid (no offsets)
+API.UI.AnchorButton = pickers.anchorButton -- 0.17: the nine points in a 30px button; a click opens the grid under it
+API.UI.SwatchRow = pickers.swatchRow       -- 0.9: token colour swatches
+API.UI.ToggleChips = pickers.toggleChips   -- 0.9: on/off chips for choices that combine
+API.UI.SettingsMatrix = settingsMatrix.settingsMatrix -- 0.13: SettingsMatrix(parent, { width, columns, rows, onChange }): settings repeated per row as a grid
+API.UI.INDICATOR_POINTS = unitFrame.INDICATOR_POINTS -- 0.9: where an indicator can sit on a unit frame
+API.UI.GroupIndicators = unitFrame.groupIndicators   -- 0.9: the buff indicators group frames show, and a version
+API.UI.GROUP_TIERS = unitFrame.GROUP_TIERS           -- 0.9: "5", "10", "20", "40"
+API.UI.GroupTier = unitFrame.groupTier               -- 0.9: the current group's size tier (or for a count)
+API.UI.IndicatorsFor = unitFrame.indicatorsFor       -- 0.9: the indicators of a list active at a tier
+API.UI.SetGroupIndicators = unitFrame.setGroupIndicators -- 0.9: set them (the Buff indicators module); emits SUUUI_INDICATORS_CHANGED
+API.UI.GroupDefensives = unitFrame.groupDefensives       -- 0.16: the Defensives list's spell IDs group frames use ({ external, defensive, warded, all }), and a version
+API.UI.SetGroupDefensives = unitFrame.setGroupDefensives -- 0.16: set them (the Defensives module); emits SUUUI_DEFENSIVES_CHANGED
+API.UI.UnitStandIn = unitFrame.unitStandIn -- 0.9: Unit* stand-ins for previews: UnitStandIn(person) -> api for UnitFrame opts.api
+API.UI.RaidMarker = unitFrame.raidMarker -- 0.9: RaidMarker(parent, size[, layer]) -> a hidden raid target marker texture
+API.UI.ShowRaidMarker = unitFrame.showRaidMarker -- 0.9: ShowRaidMarker(texture, unit[, api]): that unit's marker, or hidden
+API.UI.DEBUFF_TYPES = unitFrame.DEBUFF_TYPES -- 0.9: { "Magic", "Curse", "Poison", "Disease" }, drawn top first
+API.UI.UnitFrameCurveValue = unitFrame.unitFrameCurveValue -- 0.9: what a unit frame curve gives for a 0-1 fraction (preview stand-ins)
+API.UI.Flag = text.flag               -- a possibly secret boolean as a plain one (secret reads as false)
+API.UI.MeasureText = text.measureText -- text width, safe where anchors make geometry secret
+API.Motion.AlphaTo = motion.alphaTo
+API.Motion.Reduced = motion.reduced -- 0.17: whether ui.reducedMotion is on
+
+-- 0.6: anchors and cast bars
+
+-- Modules publish their frames under a name (player, target, targettarget,
+-- focus, pet, boss1 ... boss5); others attach to them. Message:
+-- SUUUI_ANCHOR_CHANGED (name, frame).
+API.PublishAnchor = anchors.publish
+API.GetAnchor = anchors.get
+
+API.UI.CastBar = castBar.castBar
+API.UI.SwingTimer = swingTimer.swingTimer
+
+-- 0.7: auras (engine aura containers, styled as the design's AuraIcon)
+API.UI.AuraContainer = auras.auraContainer
+
+-- 0.8: action bars (SuuUI's own secure buttons; see UI/ActionBar.lua)
+API.UI.ActionButton = actionButton.actionButton
+API.UI.ActionBar = actionBar.actionBar
+API.UI.ActionBarPaging = actionBar.actionBarPaging -- bar 1's paging conditions on Forever
+API.UI.ShortKey = actionButton.shortKey               -- "SHIFT-1" -> "S1"
+API.UI.StanceBar = classBars.stanceBar
+API.UI.TotemBar = classBars.totemBar -- 0.17: TotemBar(parent, { name, label, onLayout }) -> a shaman's totem bar: SetButtonSize(px), SetEnabled(on), header
+API.UI.DurationTextBinding = auras.durationTextBinding -- 0.17: DurationTextBinding(fontString[, expiringSeconds]) -> b:SetDuration(d), b:SetEnabled(on)
+API.UI.CooldownTracker = cooldownTracker.cooldownTracker
+-- (documented in Docs/API.md since 0.9, but until now only in Raw.UI)
+API.UI.CooldownConditionMet = cooldownTracker.cooldownConditionMet
+API.UI.ResourceBar = resourceBar.resourceBar -- 0.17: your power, combo points and a druid's mana in forms
+API.UI.WeaponEnchant = weaponEnchants.weaponEnchant -- 0.17: WeaponEnchant(slot) -> the temporary enchant on that weapon, or nil
+API.UI.WeaponEnchantable = weaponEnchants.weaponEnchantable -- 0.17: WeaponEnchantable(slot) -> a weapon is in that slot
+API.UI.WeaponEnchantSpell = weaponEnchants.weaponEnchantSpell -- 0.17: WeaponEnchantSpell(slot) -> the spell seen putting it on
+API.UI.WeaponEnchantIcon = weaponEnchants.weaponEnchantIcon -- 0.17: WeaponEnchantIcon(parent, size) -> an icon for one weapon's enchant
+API.UI.TrackerSound = cooldownTracker.trackerSound -- "chime", "ping", "proc" or "warning" (anything else plays nothing)
+API.UI.MakeModal = panel.makeModal -- a panel centred over a dimmed screen
+API.UI.ScrollArea = panel.scrollArea -- 0.9: ScrollArea(parent[, bar]) -> a mouse-wheel scroll frame, content in .child, a thin bar `bar` px right of it while it overflows
+API.UI.Confirm = panel.confirm     -- { title, text, confirm, cancel, onConfirm, onCancel, typeToConfirm }
+-- The Cooldown Manager presets of your class (only your class's data loads):
+-- { { id, name, lists = { essential, utility, buffs, debuffs, procs } }, ... },
+-- each entry { name, ids = { every ID with that name in the client }, mine }.
+function API.CooldownPresets(): CooldownPreset[] return cooldownPresets or {} end
+-- 0.9: every talent of a class (all nine classes', generated from the class
+-- data): { { id = spellID, name, tree = 1-3 }, ... }, nil for an unknown class
+function API.ClassTalents(class: string): ClassTalent[]? return classTalents[class] end
+-- 0.9: every aura any class's presets track: { [name] = { classes = "Priest",
+-- ids = { ... } } } (Data/AuraCatalog.lua, generated)
+function API.AuraCatalog(): typeof(auraCatalog) return auraCatalog end
+-- 0.16: SuuUI's default defensives, { { name, kind = "external" | "defensive",
+-- ward, note, ids = { ... } } } (Data/Defensives.lua, generated)
+function API.Defensives(): typeof(defensives) return defensives end
+-- 0.17: what each class and spec brings to a raid, for the raid planner's
+-- coverage: { classes, families, items } (Data/RaidPlanner.lua; its layout
+-- is in its header)
+function API.RaidCatalog(): typeof(raidCatalog) return raidCatalog end
+API.UI.SetActionTextSize = actionButton.setActionTextSize -- px, never below micro (9.5)
+API.UI.SetVisibility = visibility.setVisibility -- "always" | "combat" | "mouseover" | "hidden"
+API.UI.VISIBILITY_OPTIONS = visibility.VISIBILITY_OPTIONS -- 0.9: the {value,label} choices "always","combat","mouseover"
+
+-- Keybind mode: hover a button, press a key. Message: SUUUI_KEYBINDMODE_CHANGED (active).
+API.KeybindMode = {
+    Enter = keybindMode.enter,
+    Exit = keybindMode.exit,
+    Toggle = keybindMode.toggle,
+    IsActive = keybindMode.isActive,
+}
+API.UI.PetBar = classBars.petBar
+
+-- 0.10: alerts, the threat meter
+
+API.UI.Alert = alert.alert             -- Alert(parent) -> a:SetAlert(tone, title, detail[, ...])
+API.UI.ThreatMeter = threatMeter.threatMeter -- ThreatMeter(parent, { rows }) -> m:SetTarget(name), m:SetRows(list, opts), m:SetMaxRows(n)
+API.UI.DamageMeter = damageMeter.damageMeter -- DamageMeter(parent, opts): one window on C_DamageMeter (see UI/DamageMeter.lua)
+API.UI.EncounterTimeline = timeline.encounterTimeline -- EncounterTimeline(parent, { variant, window, soonAt }) -> t:SetEvents(list), t:SetVariant(v), t:SetMeta(text)
+API.UI.Readiness = readiness.readiness -- Readiness(parent, { onReadyCheck }) -> r:SetRows(list), r:SetActionShown(on)
+API.UI.MicroMenu = microMenu.microMenu -- MicroMenu(parent, { name }) -> m:SetItems({ { key, glyph, label, click | onClick } }), m:SetAlert(key, text); 0.17: m:SetCount(key, text, color, fill), m:SetLines(key, lines)
+API.UI.DAMAGE_METER_TYPES = damageMeter.DAMAGE_METER_TYPES -- the type select's options, Blizzard's order
+
+-- 0.11: the objective tracker
+API.UI.ObjectiveTracker = objectiveTracker.objectiveTracker -- ObjectiveTracker(parent, { width, maxHeight, toggle }) -> t:SetQuests(list, freeze), t:SetCollapsed(on), t:SetMeta(text), t:QuestTop(questID)
+API.UI.TRACKER_HEAD_H = objectiveTracker.TRACKER_HEAD_H -- the tracker head's height (its toggle's size)
+-- 0.11: notifications
+API.UI.Notification = notification.notification -- Notification(parent) -> n:SetData(d), n:SetRemaining(s), n:SetTitle(text)
+API.UI.NotificationStack = notification.notificationStack -- NotificationStack(parent, { max }) -> s:SetItems(list, inCombat), s:CardFor(id)
+-- 0.12: SuuUI's Talents window (the talents module): open or close it, and
+-- whether it is open. False when that module is off.
+function API.ToggleTalents()
+    local t = services.get("talents")
+    if t and t.Toggle then t.Toggle(); return true end
+    return false
+end
+-- 0.17: SuuUI's Talents window showing another player's talents, read only
+-- (an inspected unit, after INSPECT_READY). False when that module is off.
+function API.ShowTalentsOf(unit: string): boolean
+    local t = services.get("talents")
+    if t and t.ShowInspect then t.ShowInspect(unit); return true end
+    return false
+end
+-- 0.13: a recipe opened: in SuuUI's Professions window (the professions
+-- module, which then selects it), else the game's own window.
+function API.OpenRecipe(recipeID: number): any
+    local p = services.get("professions")
+    if p and p.OpenRecipe then return p.OpenRecipe(recipeID) end
+    -- C_TradeSkillUI.OpenRecipe is protected (blocked from an addon): the
+    -- recipe's profession opened instead
+    -- (called on its own line: `a and f()` keeps only f's first value, and
+    -- the parent line is its third)
+    if not (C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe) then return end
+    local line, _, parent = C_TradeSkillUI.GetTradeSkillLineForRecipe(recipeID)
+    local skillLine = (parent and parent ~= 0) and parent or line
+    if skillLine and C_TradeSkillUI.OpenTradeSkill then pcall(C_TradeSkillUI.OpenTradeSkill, skillLine) end
+end
+-- 0.13: the spell that opens a profession's window (Smelting for Mining,
+-- Tanning for Skinning's camp recipes), by its skill line; nil if you
+-- don't have it. Opening a profession from an addon is protected: cast
+-- this from a secure button instead.
+function API.ProfessionOpener(skillLine: number): number?
+    if not (GetProfessions and C_SpellBook and C_TradeSkillUI) then return nil end
+    local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+    for _, index in pairs({ GetProfessions() }) do
+        local _, _, _, _, numSpells, offset, line = GetProfessionInfo(index)
+        if line == skillLine then
+            for k = 1, (numSpells or 0) do
+                local info = C_SpellBook.GetSpellBookItemInfo((offset or 0) + k, bank)
+                if info and info.spellID and not info.isPassive
+                    and C_TradeSkillUI.CanTradeSkillShowCraftingUI(info.spellID) then
+                    return info.spellID
+                end
+            end
+        end
+    end
+end
+-- 0.13: the recipe to choose once its profession's window opens (the
+-- professions module; opened by casting ProfessionOpener's spell).
+function API.ExpectRecipe(recipeID: number)
+    local p = services.get("professions")
+    if p and p.ExpectRecipe then p.ExpectRecipe(recipeID) end
+end
+-- 0.13: the recipe SuuUI's Professions window shows right now, or nil.
+function API.ShownRecipe()
+    local p = services.get("professions")
+    return p and p.ShownRecipe and p.ShownRecipe() or nil
+end
+-- 0.13: a unit's whole name. Forever's characters have a surname, and
+-- its UnitName returns the two parts where other clients give name and
+-- realm ("Suther", "Stargazer": probed 2026-10-14); GetUnitName(unit, true)
+-- gives "Suther Stargazer" (with "-Realm" for another realm), the form
+-- whispers, invites, the roster and chat use.
+function API.FullName(unit: string?): (string | Secret<string>)?
+    local name = GetUnitName and GetUnitName(unit or "player", true)
+    if name and name ~= "" then return name end
+    return (UnitName(unit or "player"))
+end
+-- A diagnostic asked the Social window's SuuUI pages to step aside.
+function API.ProbeShowsBlizzardSocial(): boolean return socialProbe.showsBlizzardSocial() end
+-- 0.17: SuuUI's Collections window (the collections module): open or
+-- close it (on a tab: "mounts", "toys", "wardrobe"), and whether it is
+-- open. False when that module is off.
+function API.ToggleCollections(tab: string?): boolean
+    local c = services.get("collections")
+    if c and c.Toggle then c.Toggle(tab); return true end
+    return false
+end
+function API.CollectionsShown()
+    local c = services.get("collections")
+    return (c and c.IsShown and c.IsShown()) and true or false
+end
+function API.TalentsShown()
+    local t = services.get("talents")
+    return (t and t.IsShown and t.IsShown()) and true or false
+end
+-- 0.17: the talent build you follow: its next talent on this character's
+-- talent group ({ node, name, icon, rank, max, treeName, build, index }),
+-- or nil (no build, all learned, or the talents module off).
+-- SUUUI_TALENT_BUILD_CHANGED: a build was followed, changed or learned along.
+function API.TalentBuildNext()
+    local t = services.get("talents")
+    return t and t.NextTalent and t.NextTalent() or nil
+end
+-- 0.12: open or close the bags without Blizzard's bag functions (called
+-- from an addon they taint Esc in combat): SuuUI's bags when that module is
+-- on; else Blizzard's (ToggleAllBags).
+function API.ToggleBags()
+    local b = services.get("bags")
+    if b and b.Toggle then return b.Toggle() end
+    ToggleAllBags()
+end
+-- 0.11: bags
+API.UI.SkinItemSlot = inventory.skinItemSlot -- SkinItemSlot(button) -> skin:SetItem({ icon, count, quality, dim, locked } or nil)
+API.UI.ItemSlot = inventory.itemSlot   -- ItemSlot(parent[, size]) -> a plain slot (b.skin)
+API.UI.Money = inventory.money         -- Money(parent) -> m:SetCopper(n)
+API.UI.Inventory = inventory.inventory -- Inventory(parent, { title, columns, name, sortTip, characters }) -> inv:LayoutSlots(buttons), inv:SetMeta(t), inv:SetNote(t), inv:SetMoney(c); inv.search, inv.sort, inv.grid, inv.onClose
+API.UI.LootWindow = loot.lootWindow -- LootWindow(parent, { name }) -> lw:SetSource(t), lw:SetItems(list), lw:FirstSlotOffset(); lw.onClick, lw.onEnter, lw.onLeave, lw.onClose
+API.UI.SpellTooltip = tooltip.spellTooltip -- SpellTooltip(owner, spellID, extra[, anchor]): the game's spell tooltip with `extra` line(s) under it, kept through the game's redraws
+API.UI.SkinTooltip = tooltip.skinTooltip -- SkinTooltip(tooltip): SuuUI's art on one of Blizzard's tooltips (its NineSlice hidden)
+API.UI.SkinWindow = windowSkin.skinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset, under }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs(), chrome:SetTitle(text), chrome:SetBinding(binding)
+API.UI.IsCoveredByWindow = windowSkin.isCoveredByWindow -- IsCoveredByWindow(frame): an open window in SuuUI's look covers part of it (0.12)
+API.UI.CenterWindow = windowSkin.centerWindow -- CenterWindow(frame, on): a skinned window in the middle of the screen instead of the row under the micro menu (0.12)
+API.UI.SecurePlacement = windowSkin.securePlacement -- 0.18: SecurePlacement(frame) -> placer:Track(key, tab, { centered }), placer:SetTabSize(key, w, h): a protected skinned window opened in combat at its tab's size and place
+API.UI.Spellbook = spellbook.spellbook -- Spellbook(parent, { rows }) -> SetSchools, SetHead, SetSwitches, SetSpells, SetPage; cells[i].button (secure); onSchool, onPage, onSwitch, onEnter, onLeave, onDragStart
+API.UI.TalentTree = talentTree.talentTree -- TalentTree(parent) -> SetSpecs(list, viewing), SetData({ name, available, pending, editable, hint, trees = { { name, points, nodes, links } } }); onClick, onRemove, onEnter, onLeave, onApply, onUndo, onSpec, onActivate
+API.UI.TALENT_TREE_W = talentTree.TALENT_TREE_W -- the width the Talents page's three trees need
+API.UI.TALENT_ORDER_W = talentTree.TALENT_ORDER_W -- 0.17: the width TalentTree's order panel adds
+API.UI.TALENT_ROW_POINTS = talentBuilds.TALENT_ROW_POINTS -- 0.17: points a talent row needs spent before it (tree-wide)
+API.UI.TALENT_MAX_POINTS = talentBuilds.TALENT_MAX_POINTS -- 0.17: talent points at level 60
+API.UI.TalentOrderCheck = talentBuilds.talentOrderCheck -- 0.17: TalentOrderCheck(steps, tree) -> true, or false, step, why (UI/TalentBuilds.lua)
+API.UI.TalentNextProblem = talentBuilds.talentNextProblem -- 0.17: TalentNextProblem(steps, tree, nodeID) -> nil, or why one more rank can't come next
+API.UI.TalentStepProblem = talentBuilds.talentStepProblem -- 0.17: TalentStepProblem(tree, node, count, spent) -> nil, or why not
+API.UI.TalentStepsFromRanks = talentBuilds.talentStepsFromRanks -- 0.17: TalentStepsFromRanks(ranks, tree[, entries]) -> steps, allPlaced
+API.UI.EncodeTalentBuild = talentBuilds.encodeTalentBuild -- 0.17: EncodeTalentBuild({ name, classID, treeID, steps }[, entryIndex]) -> "SuuUI:T1:…"
+API.UI.DecodeTalentBuild = talentBuilds.decodeTalentBuild -- 0.17: DecodeTalentBuild(text) -> { name, classID, treeID, steps }, or nil and why
+API.UI.ReadGameTalentHeader = talentBuilds.readGameTalentHeader -- 0.17: ReadGameTalentHeader(text) -> version, specID, hash
+API.UI.ReadGameTalentString = talentBuilds.readGameTalentString -- 0.17: ReadGameTalentString(text, tree) -> { version, specID, hash, ranks, entries }, or nil and why
+API.UI.WriteGameTalentString = talentBuilds.writeGameTalentString -- 0.17: WriteGameTalentString(version, specID, hash, tree, ranks[, entries]) -> the game's talent string
+API.UI.TraitTooltip = talentTree.traitTooltip -- TraitTooltip(owner, configID, nodeID, { name, treeName, conditions, canSpend, pending, needs, blocked }): the game's talent tooltip
+API.UI.LegacyPoints = legacy.legacyPoints -- LegacyPoints(parent[, { account = false }]) -> SetPoints({ earned, total, spent, cap, pending, character })
+API.UI.LegacyChallenges = legacy.legacyChallenges -- LegacyChallenges(parent) -> SetCategories(list), Open(i), Close()
+API.UI.Professions = professions.professions -- Professions(parent) -> SetTabs(list, selected), SetOverview({ primary, secondary }), SetCrafting({ name, rank, skill, max, categories, selected }), SetRecipe(r); onTab, onOpen, onSelect, onRecipeEnter, onSearch, onFilters, onTrack, onCreate, onCreateAll
+API.UI.PROFESSION_FILTER_DEFAULTS = professions.PROFESSION_FILTER_DEFAULTS -- the recipe list's filters at rest: { show = "learned", difficulty = {}, quality = {}, other = {} }
+API.UI.ContextMenu = contextMenu.contextMenu -- ContextMenu(owner, { title, items = { { label, onClick, disabled } | { separator = true } } }): a right-click menu at the cursor, in the tooltip's look
+API.UI.ContextMenuFrom = contextMenu.contextMenuFrom -- ContextMenuFrom(owner, fn(owner, root)): the same, described like MenuUtil's (root:CreateTitle, CreateButton, CreateDivider)
+API.UI.CloseContextMenu = contextMenu.closeContextMenu
+API.UI.Contacts = social.contacts -- Contacts(parent) -> SetData({ view, status, online, total, friends, ignored, selected }); onView, onStatus, onSelect, onWhisper, onInvite, onAdd, onIgnore, onUnignore, onMenu
+API.UI.RaidGroups = social.raidGroups -- RaidGroups(parent) -> SetData({ inRaid, inParty, canLead, reason, size, members, plan }); onReadyCheck, onRoleCheck, onRaidInfo, onConvert, onMove, onSwap, onMember, onPlan (0.17)
+API.UI.RaidPlanner = raidPlanner.raidPlanner -- 0.17: RaidPlanner(parent) -> the raid planner's window: SetData(view), EditSlot, ShowMoves, Rename (see UI/RaidPlanner.lua)
+API.UI.PeopleList = social.peopleList -- PeopleList(parent) -> SetData({ title, empty, rows = { { key, name, color, glyph, online, detail, note, pinned, actions } } }); onMenu(row, owner)
+API.UI.GuildRoster = guild.guildRoster -- GuildRoster(parent) -> SetData({ online, total, showOffline, sort, members, selected, actions }); onSearch, onShowOffline, onSort, onSelect, onAction(name, member), onMenu
+API.UI.GuildInfo = guild.guildInfo -- GuildInfo(parent) -> SetData({ info, canEditInfo, ranks }); onEdit("info")
+API.UI.GuildLog = guild.guildLog -- GuildLog(parent) -> SetData({ lines = { { text, when } } })
+API.UI.GuildControl = guildControl.guildControl -- GuildControl(host, GuildControlUI) -> Layout(): the game's guild control laid out in host
+API.UI.GuildMotdBanner = guild.guildMotdBanner -- GuildMotdBanner(parent) -> SetData({ text, canEdit }), Height(); onEdit
+API.UI.SkinGroupFinderListing = groupFinderListing.skinGroupFinderListing -- SkinGroupFinderListing(LFGListingFrame): the game's List yourself panel in SuuUI's look, in place
+API.UI.GroupFinderWho = groupFinderWho.groupFinderWho -- GroupFinderWho(parent) -> SetData({ state, query, total, capped, results }); onSearch, onFilter, onAddFriend, onWhisper, onInvite, onMenu
+API.UI.GroupFinderListed = groupFinderListed.groupFinderListed -- GroupFinderListed(parent) -> SetData({ listing, ad }); onDelist, onUpdate, onChannel, onText, onRewrite, onPost
+API.UI.GroupFinderBrowse = groupFinder.groupFinderBrowse -- GroupFinderBrowse(parent) -> SetData({ groups, players, tool, ... }); onRefresh, onFilter, onWhisper, onInvite, onToggle
+-- ForeverLFG: the game's group finder and public chat as one list of groups
+-- and players looking (Docs/ForeverLFG.md); idle until SuuUI.LFG.Start()
+API.LFG = lfg :: ForeverLFG
+API.UI.FilterMenu = filterMenu.filterMenu -- FilterMenu(parent, { groups = { { key, label, kind = "one" | "many" | "toggles", column, options = { { value, label, color } } } }, defaults, value, placeholder, width, height, style = "button", done, onChange }) -> SetValue, GetValue, Count, Close; 0.17: SetGroups(groups)
+API.UI.MapPin = mapPin.mapPin -- 0.14: MapPin(parent) -> SetData({ glyph or char, color, edge, small, ring, count; 0.17: outline, arcs, bar, glow }), PinSize(), SetHighlight(true | "dim" | nil)
+API.UI.PROFESSIONS_W = professions.PROFESSIONS_W
+API.UI.PROFESSIONS_H = professions.PROFESSIONS_H
+API.UI.LegacyTrack = legacy.legacyTrack -- LegacyTrack(parent) -> SetTrack({ earned, total, max, next, stops }): the reward track strip
+API.UI.LEGACY_TRACK_H = legacy.LEGACY_TRACK_H
+API.UI.LEGACY_CARD_H = legacy.LEGACY_CARD_H
+API.UI.LevelUp = levelUp.levelUp -- LevelUp(parent) -> c:SetLevelUp({ title, detail, spells = { { icon, name, rank, isNew, note, text, meta } }, more, cost })
+API.UI.Reskin = reskin.reskin -- Reskin(frame): Blizzard's rows, category bars, bars, check buttons and scrollbars in it in SuuUI's look (again whenever called)
+API.UI.ReskinScrollBox = reskin.reskinScrollBox
+API.UI.ReskinStatusBar = reskin.reskinStatusBar
+API.UI.ReskinCheckButton = reskin.reskinCheckButton
+API.UI.ReskinScrollBar = reskin.reskinScrollBar
+API.UI.ReskinButton = reskin.reskinButton
+API.UI.ReskinEditBox = reskin.reskinEditBox
+API.UI.ReskinDropdown = reskin.reskinDropdown
+API.UI.ReskinIconButton = reskin.reskinIconButton
+API.UI.ReskinFillBar = reskin.reskinFillBar
+API.UI.ReskinDialog = reskin.reskinDialog -- ReskinDialog(frame): one of Blizzard's small dialogs (a text editor) as a SuuUI panel
+API.UI.ReskinMenu = reskin.reskinMenu -- ReskinMenu(menu): an open Blizzard menu in the context menu's look until it closes
+API.UI.ReskinPopup = reskin.reskinPopup -- ReskinPopup(dialog): one of the game's shared popups in SuuUI's look until it hides
+API.UI.ReskinCollapseButton = reskin.reskinCollapseButton
+-- 0.13: a friend request by a character's whole name. Forever's classic
+-- friends list is off (IsLegacyFriendSystemEnabled false: C_FriendList.AddFriend
+-- does nothing, found in game); its own window sends a title friend invite
+-- (C_BattleNet.SendTitleFriendInviteByName). Only from a click. -> true when sent.
+function API.AddFriend(name: any): boolean
+    if type(name) ~= "string" or name == "" then return false end
+    local fl, bn = C_FriendList, C_BattleNet
+    local okL, legacyOn = pcall(function() return fl and fl.IsLegacyFriendSystemEnabled and fl.IsLegacyFriendSystemEnabled() end)
+    if not (okL and legacyOn) and bn and bn.SendTitleFriendInviteByName then
+        if pcall(bn.SendTitleFriendInviteByName, name) then return true end
+    end
+    return fl and fl.AddFriend and pcall(fl.AddFriend, name) or false
+end
+
+-- A note in the notification stack (the Notifications module; nothing while
+-- it's off): { id?, kind = "timed"|"sticky"|"until", category, title, body,
+-- icon = { glyph | texture }, tone, duration, ["until"], actions } -> id
+function API.Notify(def: { [string]: any }): any
+    local n = services.get("notifications")
+    if n and n.Notify then return n.Notify(def) end
+end
+function API.DismissNotification(id: any)
+    local n = services.get("notifications")
+    if n and n.Dismiss then n.Dismiss(id) end
+end
+-- One alert at a time, centred, in combat only (the Alerts module; nothing
+-- while it's off). The same key updates its alert in place; HideAlert(key)
+-- takes it away. detail: text, or a format whose arguments may be secret.
+function API.ShowAlert(key: any, tone: string?, title: any, detail: any, ...: any)
+    local a = services.get("alerts")
+    if a and a.Show then a.Show(key, tone, title, detail, ...) end
+end
+-- A key whose alerts may also show out of combat (a pull countdown). Kept
+-- here too, for an alerts service that comes later (turned on, a plugin's).
+local anytime: { [any]: boolean } = {}
+function API.AllowAlertOutOfCombat(key: any)
+    anytime[key] = true
+    local a = services.get("alerts")
+    if a and a.AllowOutOfCombat then a.AllowOutOfCombat(key) end
+end
+events.on("SUUUI_SERVICE_CHANGED", function(_, name)
+    local a = name == "alerts" and services.get("alerts")
+    if a and a.AllowOutOfCombat then
+        for key in pairs(anytime) do a.AllowOutOfCombat(key) end
+    end
+end, "API")
+-- 0.12: the level-up card (levelUp.levelUp) in the alert's place, tone info:
+-- def = { title, detail, spells = { { icon, name, rank, isNew, note, text, meta } }, more,
+-- cost (copper) }. HideAlert(key) takes it away.
+function API.ShowLevelUp(key: any, def: { [string]: any })
+    local a = services.get("alerts")
+    if a and a.ShowLevelUp then a.ShowLevelUp(key, def) end
+end
+function API.HideAlert(key: any)
+    local a = services.get("alerts")
+    if a and a.Hide then a.Hide(key) end
+end
+-- 0.17: your gear's durability (the Durability module; nil while it's off):
+-- { line, state, pieces, lowest, average, damaged, broken, bySlot, headline,
+-- summary, lines, parts }, read only (Docs/API.md). SUUUI_DURABILITY_CHANGED
+-- when what it says changes.
+function API.Durability()
+    local d = services.get("durability")
+    return d and d.Get and d.Get() or nil
+end
+
+-- 0.12: what your class trainer teaches (Data/Trainer, from the class
+-- probes): { name, level, cost (copper), school, icon, text } for your class.
+function API.TrainerSpells()
+    return trainerSpells or {}
+end
+-- 0.12: every spell ID this client has for each of those names (players'
+-- ranks and others alike: { [name] = { id, ... } }); pick a rank by
+-- C_Spell.GetSpellLevelLearned.
+-- Where a profession recipe is learned (Data/RecipeSources.lua, made by
+-- tools/gen_recipe_sources.py): a list of { t = "t" } (trainer), { t = "a" }
+-- (automatic) or { t = "i", i = itemID, v, d, dn, o, q, c } (a recipe item:
+-- sold by, dropped by and how many, found in, quest rewards, inside), or nil
+-- when it isn't known.
+-- 0.14: where Forever's quests are picked up and the dungeon entrances
+-- (Data/QuestStarts.lua), and the map's other places: town services,
+-- mailboxes, rares, treasure chests (Data/MapPlaces.lua); both generated
+-- from QuestieDB by tools/update_quest_starts.sh. Their layouts are in
+-- their files' headers.
+function API.QuestStarts(): typeof(questStarts) return questStarts end
+function API.MapPlaces(): typeof(mapPlaces) return mapPlaces end
+-- 0.14: every area overlay of Forever's maps by map art (Data/MapOverlays.lua,
+-- from the client tables: tools/update_map_overlays.sh), for drawing the
+-- areas you haven't explored: { [uiMapArtID] = { { w, h, x, y, fileDataID, ... } } }
+function API.MapOverlays(): typeof(mapOverlays) return mapOverlays end
+-- 0.14: the recommended levels of dungeons, raids and battlegrounds by
+-- their entrances' names (Data/InstanceLevels.lua, the group finder's, from
+-- the client tables: tools/update_instance_levels.sh):
+-- { [kind] = { [name] = { min, max, { wing, min, max }, ... } } }
+function API.InstanceLevels(): typeof(instanceLevels) return instanceLevels end
+-- 0.17: how far each of Forever's flight master routes flies, one hop
+-- (Data/FlightRoutes.lua, from the client tables: tools/update_flight_routes.sh):
+-- { [fromNodeID] = { [toNodeID] = yards } }, nodeIDs as C_TaxiMap gives them;
+-- a longer flight is its hops added up
+function API.FlightRoutes(): typeof(flightRoutes) return flightRoutes end
+-- 0.17: the way each of those routes flies, for drawing it (Data/FlightPaths.lua,
+-- the same tool): { [fromNodeID] = { [toNodeID] = { continentID, x1, y1, x2, y2, ... } } },
+-- world x, y in yards as C_Map.GetWorldPosFromMapPos gives them
+function API.FlightPaths(): typeof(flightPaths) return flightPaths end
+
+function API.RecipeSources(recipeID: number): any
+    return recipeSources[recipeID]
+end
+
+-- 0.17: where Forever's mounts, toys and appearance items come from
+-- (Data/CollectionSources.lua, made by tools/gen_collection_sources.py; its
+-- layout is in its header): { npc, obj, mount, toy, toys, item }.
+function API.CollectionSources(): typeof(collectionSources) return collectionSources end
+
+function API.TrainerSpellIDs()
+    return trainerSpellIDs or {}
+end
+
+--------------------------------------------------------------------------------
+-- 0.17: the first-run welcome (Units/Welcome.lua) and what it sets: role
+-- presets, colour vision, a module's account-wide data, opening it again.
+--------------------------------------------------------------------------------
+
+-- The design's own signal colours, kept before colour vision or a theme
+-- replaces them in place at login: what "Normal" looks like, for previews.
+local designed: { [string]: number[] } = {}
+for name, c in pairs(T.color :: { [string]: any }) do designed[name] = { c[1], c[2], c[3], c[4] } end
+
+-- A role's preset profile name ("TANK" -> "SuuTank"), or nil.
+function API.RolePresetName(role: string): string?
+    return rolePresets.NAME[role]
+end
+
+-- Creates (or resets) a role's preset profile and puts it in its role's
+-- place under Profiles › By role; with `switch`, this character uses it from
+-- now on. Out of combat. -> true, or false and why not.
+function API.ApplyRolePreset(role: string, switch: boolean?): (boolean, string?)
+    local ok, err = rolePresets.apply(role)
+    if not ok then return false, err end
+    if switch then
+        local name = settings.profiles.find(rolePresets.NAME[role])
+        if not name then return false, "The preset's profile is missing." end
+        return settings.profiles.use(name)
+    end
+    return true
+end
+
+-- The colour vision presets this SuuUI has: { { id, label, hint } } in order.
+function API.ColorVisionModes(): { id: string, label: string?, hint: string? }[]
+    local out: { id: string, label: string?, hint: string? }[] = {}
+    for _, mode in ipairs(vision.MODES) do
+        if vision.available(mode) then
+            out[#out + 1] = { id = mode, label = vision.LABEL[mode], hint = vision.HINT[mode] }
+        end
+    end
+    return out
+end
+
+-- The colour vision chosen for the account, and the one in effect (the
+-- same: a change applies at once).
+function API.ColorVision(): (string, string)
+    return settings.account("colorVision") or "normal", vision.appliedMode()
+end
+
+-- Chooses the account's colour vision; it applies at once (0.17).
+-- -> true, or false and why not.
+function API.SetColorVision(mode: string): (boolean, string?)
+    if not vision.LABEL[mode] or not vision.available(mode) then return false, "No such colour vision preset." end
+    settings.setAccount("colorVision", mode ~= "normal" and mode or nil)
+    themes.apply()
+    return true
+end
+
+-- A colour token as a colour vision preset draws it (for previews of a
+-- preset not in effect): r, g, b, a.
+function API.ColorVisionColor(mode: string, token: string): (number, number, number, number)
+    local presets = T.vision
+    local set = mode ~= "normal" and presets and presets[mode] or nil
+    local c: number[]? = (set and set[token]) or designed[token]
+    if not c then error("SuuUI: unknown colour token " .. tostring(token), 2) end
+    local base = designed[token] or c
+    return c[1], c[2], c[3], c[4] or base[4] or 1
+end
+
+-- A module's own table for the whole account (not per character or
+-- profile), saved with SuuUI and made on first use. From OnEnable on.
+function API.AccountData(namespace: string): { [any]: any }
+    assert(type(namespace) == "string", "SuuUI.AccountData: a namespace is required")
+    local all = settings.account("data")
+    if type(all) ~= "table" then
+        all = {}
+        settings.setAccount("data", all)
+    end
+    all[namespace] = all[namespace] or {}
+    return all[namespace]
+end
+
+-- Opens the first-run welcome again (the welcome module). False when that
+-- module is off.
+function API.ShowWelcome()
+    local w = services.get("welcome")
+    if w and w.Show then w.Show(); return true end
+    return false
+end
+
+@global("SuuUI")
+export const SuuUI = API

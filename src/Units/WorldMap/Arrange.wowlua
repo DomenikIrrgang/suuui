@@ -1,0 +1,150 @@
+-- Units/WorldMap/Arrange.wowlua
+-- The world map's pins where they crowd, in screen pixels at the map's
+-- zoom: pins of one kind closer than the radius merge into one with a
+-- count, merged and small pins that still overlap are pushed apart;
+-- entrances, flight masters and campfires never move. Apart from the
+-- map's frames, so it's tested on its own; Units/WorldMap draws the
+-- groups.
+
+-- A pin before merging (M:Collect): x, y, key, small, pin, name, detail, …
+export type Item = { [string]: any }
+-- Pins merged into one, in px (merge)
+export type Group = { x: number, y: number, items: Item[], key: string?, fixed: boolean?, small: boolean?,
+               distinct: number, uids: { [string]: boolean } }
+
+local MERGE_RADIUS = 38 -- px on screen (the design's 32 for 22 px pins, grown with them)
+local MERGE_RADIUS_CLOSEST = 6 -- zoomed all the way in: only pins on one spot (Blackrock Mountain's doors)
+export const CLOSEST_GROW = 1.2 -- zoomed all the way in, pins are this much larger
+local PIN, PIN_SMALL = 26, 21 -- UI.MapPin's sizes
+
+-- items → groups { x, y (px), items, key, fixed, small }
+export function merge(items: Item[], w: number, h: number, radius: number): Group[]
+    local groups: Group[] = {}
+    local r2 = radius * radius
+    for _, it in ipairs(items) do
+        local px, py = it.x * w, it.y * h
+        local into
+        if it.key then
+            for _, g in ipairs(groups) do
+                if g.key == it.key then
+                    local dx, dy = g.x - px, g.y - py
+                    if dx * dx + dy * dy < r2 then into = g break end
+                end
+            end
+        end
+        if into then
+            local n = #into.items
+            into.x = (into.x * n + px) / (n + 1)
+            into.y = (into.y * n + py) / (n + 1)
+            into.items[n + 1] = it
+            into.fixed = into.fixed and it.fixed
+            -- one NPC's (or quest giver's) spawn points count once
+            if not (it.uid and into.uids[it.uid]) then into.distinct = into.distinct + 1 end
+            if it.uid then into.uids[it.uid] = true end
+        else
+            groups[#groups + 1] = { x = px, y = py, items = { it }, key = it.key, fixed = it.fixed, small = it.small,
+                                    distinct = 1, uids = it.uid and { [it.uid] = true } or {} }
+        end
+    end
+    return groups
+end
+
+-- Groups of a kind within the radius join, until none are: a group's
+-- middle moves as pins join it, and spreading moves groups too, so one pass
+-- can leave neighbours apart (two quest pins beside each other at Camp
+-- Taurajo; found in game).
+export function mergeGroups(groups: Group[], radius: number): Group[]
+    local r2 = radius * radius
+    local merged = true
+    while merged do
+        merged = false
+        for i = 1, #groups do
+            local a = groups[i]
+            for j = #groups, i + 1, -1 do
+                local b = groups[j]
+                if a.key and a.key == b.key then
+                    local dx, dy = a.x - b.x, a.y - b.y
+                    if dx * dx + dy * dy < r2 then
+                        local na, nb = #a.items, #b.items
+                        a.x = (a.x * na + b.x * nb) / (na + nb)
+                        a.y = (a.y * na + b.y * nb) / (na + nb)
+                        for _, it in ipairs(b.items) do
+                            a.items[#a.items + 1] = it
+                            if not (it.uid and a.uids[it.uid]) then a.distinct = a.distinct + 1 end
+                            if it.uid then a.uids[it.uid] = true end
+                        end
+                        a.fixed = a.fixed and b.fixed
+                        table.remove(groups, j)
+                        merged = true
+                    end
+                end
+            end
+        end
+    end
+    return groups
+end
+
+-- pins still overlapping: the movable ones (small or merged) step apart
+export function spread(groups: Group[])
+    for _ = 1, 4 do
+        local moved = false
+        for i = 1, #groups do
+            local a = groups[i]
+            for j = i + 1, #groups do
+                local b = groups[j]
+                local aMoves = not a.fixed and (a.small or #a.items > 1)
+                local bMoves = not b.fixed and (b.small or #b.items > 1)
+                if aMoves or bMoves then
+                    local need = ((a.small and PIN_SMALL or PIN) + (b.small and PIN_SMALL or PIN)) / 2
+                    local dx, dy = b.x - a.x, b.y - a.y
+                    local d = math.sqrt(dx * dx + dy * dy)
+                    if d < need then
+                        if d < 0.01 then dx, dy, d = 1, 0, 1 end
+                        local push = (need - d)
+                        local ux, uy = dx / d, dy / d
+                        if aMoves and bMoves then
+                            a.x, a.y = a.x - ux * push / 2, a.y - uy * push / 2
+                            b.x, b.y = b.x + ux * push / 2, b.y + uy * push / 2
+                        elseif aMoves then
+                            a.x, a.y = a.x - ux * push, a.y - uy * push
+                        else
+                            b.x, b.y = b.x + ux * push, b.y + uy * push
+                        end
+                        moved = true
+                    end
+                end
+            end
+        end
+        if not moved then break end
+    end
+end
+
+-- The pins as they're drawn at a zoom (w, h: the canvas in px): merged,
+-- spread, and in drawing order (small ones under the rest, places on top);
+-- and how much larger they are. Zoomed all the way in (`closest`, on a map
+-- that zooms), every pin stays on its exact spot, so you find it there:
+-- none move, and only those on one spot merge (they'd hide each other).
+export function arrange(list: Item[], w: number, h: number, closest: boolean): (Group[], number)
+    local items, radius, grow = list, MERGE_RADIUS, 1
+    if closest then
+        -- (and a little larger: there's room)
+        items, radius, grow = {}, MERGE_RADIUS_CLOSEST, CLOSEST_GROW
+        for i, it in ipairs(list) do
+            items[i] = setmetatable({ fixed = true }, { __index = it })
+        end
+    end
+    local groups = merge(items, w, h, radius)
+    mergeGroups(groups, radius)
+    spread(groups)
+    -- spreading can push two of a kind together: join them, spread again
+    mergeGroups(groups, radius)
+    spread(groups)
+    -- small ones under the rest, places on top
+    table.sort(groups, function(a, b)
+        local la = a.small and 1 or (a.fixed and 3 or 2)
+        local lb = b.small and 1 or (b.fixed and 3 or 2)
+        if la ~= lb then return la < lb end
+        return a.y < b.y
+    end)
+    return groups, grow
+end

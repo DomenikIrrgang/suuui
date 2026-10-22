@@ -1,0 +1,298 @@
+-- UI/GuildControl: the game's guild control window (Blizzard_GuildControlUI)
+-- laid out page by page in a host frame.
+
+import test, cases, expect, beforeAll from "wowlua:test"
+import * as mock from "wowlua:mock"
+import guildControl, GuildControl from "/UI/GuildControl"
+import internal sentence from "/UI/GuildControl"
+import tokens as T from "/Core/Tokens"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, themeChanged from "./SocialHelpers"
+
+-- the game's window and its parts: typed loosely (the game's frames, by name)
+local g: any = _G
+local ui: any = nil
+local c: GuildControl? = nil
+local hostFrame: Frame? = nil
+
+@beforeAll
+local function load()
+    mock.loadAddon("Blizzard_GuildControlUI")
+    ui = g.GuildControlUI
+end
+
+-- one laid-out window for the file: guildControl hooks the game's functions
+-- for good, so a second one would fight the first over the window
+local function control(): GuildControl
+    local made = c
+    if made then return made end
+    local h = newParent(800, 500)
+    hostFrame = h
+    local new = guildControl(h, ui)
+    c = new
+    return new
+end
+
+-- The game's guild: three ranks, everyone allowed to move.
+local function guild(ranks: number)
+    mock.fake("GuildControlGetNumRanks", function(): number return ranks end)
+    mock.fake("GuildControlGetRankName", function(i: number): string return "Rank name " .. i end)
+    mock.fake("GetNumMembersInRank", function(_i: number): number return 0 end)
+    mock.fake("GuildControlGetAllowedShifts", function(_i: number): (boolean, boolean) return true, true end)
+    mock.fake("GuildControlSetRank", function(_i: number) end)
+    mock.fake("C_GuildInfo.GuildControlGetRankFlags", function(_i: number): boolean[]
+        local flags: boolean[] = {}
+        for i = 1, 21 do flags[i] = i ~= 18 end
+        return flags
+    end)
+end
+
+local function show(page: string)
+    ui.currFrame = ui[page]
+    for _, key in ipairs({ "orderFrame", "rankPermFrame", "bankTabFrame", "discordFrame" }) do
+        ui[key]:SetShown(key == page)
+    end
+    ui:Show()
+end
+
+@test("sentence: words after the first in lower case, names kept")
+@cases({
+    { "Edit Guild Info", "Edit guild info" },
+    { "Link Guild Chat to Discord", "Link guild chat to Discord" },
+    { "Can't Remove Members", "Can't remove members" },
+    { "Invite", "Invite" },
+    { "", "" },
+})
+local function sentences(s: string, out: string)
+    expect(sentence(s)).toBe(out)
+end
+
+@test("the window goes into the host: its own frame away, the head row in place")
+local function host()
+    local gc = control()
+    expect(ui:GetParent()).toBe(hostFrame)
+    expect(ui.suuOwn).toBe(true)
+    expect(gc.pageLabel).toHaveText("Page")
+    expect(gc.head:GetHeight()).toBe(24 + 12)
+    gc:Layout()
+    expect(ui).toBeAnchoredTo(hostFrame)
+    -- a page the component doesn't know: only the head row
+    ui.currFrame = nil
+    gc:Layout()
+    expect(gc.extra).toHaveText("")
+    -- busy: not again
+    gc.busy = true
+    gc.extra:SetValue("x")
+    gc:Layout()
+    expect(gc.extra).toHaveText("x")
+    gc.busy = false
+    expectNoErrors()
+end
+
+@test("Guild ranks: two columns of five, icon buttons, New rank in the next row")
+local function ranks()
+    local gc = control()
+    guild(3)
+    show("orderFrame")
+    g.GuildControlUI_RankOrder_Update(ui.orderFrame)
+    expect(gc.extra).toHaveText("3 of 10 ranks")
+    local row = g.GuildControlUIRankOrderFrameRank2
+    expect(row.rankLabel).toHaveText("Rank 2")
+    expect(row:GetHeight()).toBe(30)
+    local del = g.GuildControlUIRankOrderFrameRank2DeleteButton
+    expect(del:GetWidth()).toBe(26)
+    expect(del.suuWhy).toBe("This rank can't be removed now.")
+    expect(g.GuildControlUIRankOrderFrameRank3DeleteButton.suuWhy).toBe("The lowest rank can't be removed.")
+    expect(g.GuildControlUIRankOrderFrameRank1DeleteButton.suuWhy).toBe("The guild master's rank can't be removed.")
+    local new = g.GuildControlUIRankOrderFrameNewButton
+    expect(new:GetFontString()).toHaveText("New rank")
+    expect(new:GetWidth()).toBe(120)
+    expect(gc.rankFoot ~= nil).toBe(true)
+    -- again: the parts are kept
+    local foot = gc.rankFoot
+    gc:Layout()
+    expect(gc.rankFoot).toBe(foot)
+    -- ten ranks: no free row for New rank
+    guild(10)
+    g.GuildControlUI_RankOrder_Update(ui.orderFrame)
+    expect(gc.extra).toHaveText("10 of 10 ranks")
+    expect(g.GuildControlUIRankOrderFrameRank6:GetPoint(1)).toBe("TOPLEFT")
+    -- the rank count unreadable: none
+    mock.fake("GuildControlGetNumRanks", function(): number error("no guild") end)
+    gc:Layout()
+    expect(gc.extra).toHaveText("0 of 10 ranks")
+    expectNoErrors()
+end
+
+@test("an icon button: dimmed while off, its reason on hover, gilt or ember when hot")
+local function iconButtons()
+    local gc = control()
+    guild(3)
+    show("orderFrame")
+    g.GuildControlUI_RankOrder_Update(ui.orderFrame)
+    local up = g.GuildControlUIRankOrderFrameRank2ShiftUpButton
+    up:Enable()
+    expect(up:GetAlpha()).toBe(1)
+    mock.hover(up)
+    mock.hover(nil)
+    up:Disable()
+    expect(up:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"])
+    mock.hover(up)
+    expect(GameTooltip:IsShown()).toBe(true)
+    mock.hover(nil)
+    expect(GameTooltip:IsShown()).toBe(false)
+    up:SetEnabled(true)
+    expect(up:GetAlpha()).toBe(1)
+    local del = g.GuildControlUIRankOrderFrameRank2DeleteButton
+    del:Enable()
+    mock.hover(del)
+    mock.hover(nil)
+    gc:Layout()
+    expectNoErrors()
+end
+
+@test("Rank permissions: Members and Guild bank left, the Officer card right")
+local function permissions()
+    local gc = control()
+    guild(3)
+    mock.fake("GetGuildBankWithdrawGoldLimit", function(): number return 100 end)
+    show("rankPermFrame")
+    g.GuildControlUI_RankPermissions_Update(ui.rankPermFrame)
+    local d = gc.permDeco
+    expect(d ~= nil).toBe(true)
+    if not d then return end
+    expect(d.members).toBeShown()
+    local promote = g.GuildControlUIRankSettingsFrameCheckbox5
+    expect(promote:GetWidth()).toBe(20)
+    expect((promote.Text or promote.text or g.GuildControlUIRankSettingsFrameCheckbox5Text)).toHaveText("Promote")
+    expect(g.GuildControlUIRankSettingsFrameCheckbox16Text).toHaveText("Withdraw gold")
+    -- the officer's powers as a muted list, in sentence case
+    expect(#d.powers > 0).toBe(true)
+    expect(d.powers[1]:GetText():sub(1, 5)).toBe("•  " .. "")
+    expect(d.intro).toHaveText("Officers of this rank can:")
+    local officer = ui.rankPermFrame.OfficerCheckbox
+    officer:SetChecked(true)
+    mock.click(officer)
+    gc:Layout()
+    expect(tokenOf(d.cardEdge.top)).toBe(officer:GetChecked() and "gilt-line" or "gilt-faint")
+    -- the authenticator box at the head row's right
+    expect(g.GuildControlUIRankSettingsFrameCheckbox18).toBeAnchoredTo(gc.band, "RIGHT", "RIGHT")
+    expectNoErrors()
+end
+
+@test("Bank tabs: the bought tabs as a table, the next one as a card")
+local function bank()
+    local gc = control()
+    guild(3)
+    mock.fake("GetNumGuildBankTabs", function(): number return 1 end)
+    mock.fake("GetGuildBankTabInfo", function(_i: number): (string, number) return "Tab one", 134400 end)
+    mock.fake("GetGuildBankTabPermissions", function(_i: number): (boolean, boolean, boolean, number) return true, true, false, 5 end)
+    mock.fake("GetGuildBankTabCost", function(): number return 10000 end)
+    show("bankTabFrame")
+    g.GuildControlUI_BankTabPermissions_Update(ui.bankTabFrame)
+    local head = gc.bankHead
+    expect(head ~= nil).toBe(true)
+    if head then
+        expect(head).toBeShown()
+        expect(head.tab).toHaveText("Tab")
+        expect(head.cols[3]).toHaveText("Withdrawals per day")
+    end
+    expect(g.GuildControlBankTab1:GetHeight()).toBe(40)
+    expect(g.GuildControlBankTab1OwnedTabName).toHaveText("Tab one")
+    expect(g.GuildControlBankTab2BuyBuyText).toHaveText("Buy the next tab?")
+    local purchase = g.GuildControlBankTab2BuyPurchaseButton
+    expect(purchase:GetFontString()).toHaveText("Purchase")
+    expect(tokenOf(purchase:GetFontString())).toBe("on-signal")
+    -- hover: the primary's edge stays arcane; off: dimmed
+    mock.script(purchase, "OnEnter")
+    mock.script(purchase, "OnLeave")
+    purchase:Disable()
+    expect(purchase:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"])
+    purchase:Enable()
+    expect(purchase:GetAlpha()).toBe(1)
+    -- none bought: the card alone, centred
+    mock.fake("GetNumGuildBankTabs", function(): number return 0 end)
+    g.GuildControlUI_BankTabPermissions_Update(ui.bankTabFrame)
+    expect(g.GuildControlBankTab1BuyBuyText).toHaveText("Buy the first tab?")
+    if head then expect(head).never.toBeShown() end
+    expectNoErrors()
+end
+
+@test("Discord: not linked, the link flow in a card; linked, a card with Unlink")
+local function discord()
+    local gc = control()
+    mock.fake("C_Discord.IsUserOAuthed", function(): boolean return true end)
+    mock.fake("C_Discord.GetGuildLinkStatus", function(): (boolean, string, string) return false, "", "" end)
+    mock.fake("C_Discord.GetNumDiscordServers", function(): number return 1 end)
+    mock.fake("C_Discord.GetServerName", function(_i: number): string return "Server" end)
+    mock.fake("C_Discord.GetNumDiscordChannels", function(_i: number): (number, boolean) return 0, true end)
+    g.GuildControlUI.selectedDiscordServer = 1
+    show("discordFrame")
+    g.GuildControlUI_Discord_Update(ui.discordFrame)
+    local d = gc.discordDeco
+    expect(d ~= nil).toBe(true)
+    if d then
+        expect(d).toBeShown()
+        expect(d.title).toHaveText("Not linked to Discord")
+    end
+    -- linked
+    mock.fake("C_Discord.GetGuildLinkStatus", function(): (boolean, string, string) return true, "general", "Server" end)
+    mock.fake("C_Discord.IsGuildSettingSet", function(_s: any): boolean return false end)
+    g.GuildControlUI_Discord_Update(ui.discordFrame)
+    local card = gc.linkedCard
+    expect(card ~= nil).toBe(true)
+    if card then expect(card).toBeShown() end
+    expect(g.DiscordLinkFrameLinkedTitle).toHaveText("Discord linked")
+    expect(g.DiscordLinkFrame.SeparateStream.Label).toHaveText("Separate Discord chat from guild chat")
+    local unlink = g.DiscordLinkFrameButton
+    expect(unlink:GetWidth()).toBe(100)
+    expect(tokenOf(unlink:GetFontString())).toBe("ember-text")
+    mock.script(unlink, "OnEnter")
+    mock.script(unlink, "OnLeave")
+    -- laid out again: the same card
+    g.GuildControlUI_Discord_Update(ui.discordFrame)
+    expect(gc.linkedCard).toBe(card)
+    expectNoErrors()
+end
+
+@test("a theme change lays the shown window out again")
+local function theme()
+    local gc = control()
+    gc.extra:SetValue("x")
+    ui:Show()
+    ui.currFrame = nil
+    themeChanged()
+    expect(gc.extra).toHaveText("")
+    ui:Hide()
+    gc.extra:SetValue("x")
+    themeChanged()
+    expect(gc.extra).toHaveText("x")
+    expectNoErrors()
+end
+
+@test("a rank dropdown without a label of its own sits after the page's")
+local function bareDropdown()
+    local gc = control()
+    local dd = CreateFrame("Frame", nil, hostFrame)
+    gc:HeadRow(dd)
+    expect(dd:GetWidth()).toBe(180)
+    expect(dd).toBeAnchoredTo(g.GuildControlUINavigationDropdown or ui.dropdown, "LEFT", "RIGHT")
+    expectNoErrors()
+end
+
+-- (last: a second component over a stand-in window takes the game's
+-- navigation dropdown with it)
+@test("a window with the game's other frame parts: those go too")
+local function otherParts()
+    local stand: any = CreateFrame("Frame", nil, UIParent)
+    for _, key in ipairs({ "NineSlice", "TitleContainer", "TopTileStreaks", "PortraitContainer" }) do
+        stand[key] = CreateFrame("Frame", nil, stand)
+    end
+    CreateFrame("Button", "SuuTestStandCloseButton", stand)
+    local other = guildControl(newParent(400, 300), stand)
+    expect(stand.NineSlice:GetAlpha()).toBe(0)
+    expect(stand.PortraitContainer:GetAlpha()).toBe(0)
+    expect(g.SuuTestStandCloseButton:GetAlpha()).toBe(0)
+    expect(other.extra).toHaveText("")
+    expectNoErrors()
+end

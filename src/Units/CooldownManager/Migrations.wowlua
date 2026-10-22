@@ -1,0 +1,113 @@
+-- Units/CooldownManager/Migrations.wowlua
+-- The Cooldown Manager's settings migrations: each reshapes one profile's
+-- stored values (`values`, the module's namespace in it) once. The module
+-- registers them in this order (M:Migrate); tests call them directly.
+
+-- Essential size became 30-52px (the design's 40 by default): a size you set
+-- stays, moved into the range if it was outside.
+export function essentialSize(values: { [string]: any })
+    local v = values.essentialSize
+    if type(v) == "number" then values.essentialSize = math.max(30, math.min(52, v)) end
+end
+
+-- Shared slots (groups) saved before every one had a uid get one, so the
+-- editor can follow them through moves and renames.
+export function slotUids(values: { [string]: any })
+    local function give(lists: any, tag: string)
+        if type(lists) ~= "table" then return end
+        for key, list in pairs(lists) do
+            if type(list) == "table" then
+                for i, e in ipairs(list :: any[]) do
+                    if type(e) == "table" and (e.group or e.collection) and not e.uid then e.uid = tag .. key .. i end
+                end
+            end
+        end
+    end
+    if type(values.setups) == "table" then
+        for class, specs in pairs(values.setups) do
+            if type(specs) == "table" then
+                for spec, s in pairs(specs) do
+                    if type(s) == "table" then give(s.lists, "m" .. tostring(class) .. tostring(spec)) end
+                end
+            end
+        end
+    end
+    give(values.lists, "m")
+end
+
+-- "When missing" is each entry's own now: the list-wide Missing buffs and
+-- Missing debuffs settings are gone. A choice made there goes onto every buff
+-- or debuff that had none of its own (the defaults equal the old ones, so
+-- untouched setups don't change).
+export function missingPerEntry(values: { [string]: any })
+    local old = { buffs = values.missingBuffs, debuffs = values.missingDebuffs }
+    values.missingBuffs, values.missingDebuffs = nil, nil
+    local function set(e: any, mode: any)
+        if type(e) ~= "table" then return end
+        if e.collection then
+            for _, x in ipairs(e.entries or {}) do set(x, mode) end
+        elseif e.missing == nil then
+            e.missing = mode
+        end
+    end
+    local function apply(lists: any)
+        if type(lists) ~= "table" then return end
+        for key, mode in pairs(old) do
+            if type(mode) == "string" and type(lists[key]) == "table" then
+                for _, e in ipairs(lists[key]) do set(e, mode) end
+            end
+        end
+    end
+    if type(values.setups) == "table" then
+        for _, specs in pairs(values.setups) do
+            if type(specs) == "table" then
+                for _, s in pairs(specs) do
+                    if type(s) == "table" then apply(s.lists) end
+                end
+            end
+        end
+    end
+    apply(values.lists)
+end
+
+-- The shaman presets' Shields slot had a fixed icon, so Restoration's
+-- reminder showed Water Shield before it was learned. It picks the first
+-- member you know now, the spec's shield leading: a saved copy of it follows
+-- (one with the two shields, Water Shield's art fixed: Water Shield first).
+export function shamanShieldsAuto(values: { [string]: any })
+    local function fix(list: any)
+        for _, e in ipairs((type(list) == "table" and list or {}) :: any[]) do
+            if type(e) == "table" and e.collection then fix(e.entries) end
+            local m = type(e) == "table" and e.group and e.fixedIcon and e.name == "Shields" and e.members
+            if type(m) == "table" and #m == 2 and m[1].name == "Lightning Shield" and m[2].name == "Water Shield" then
+                e.fixedIcon = nil
+                if e.icon == m[2].icon then m[1], m[2] = m[2], m[1] end
+            end
+        end
+    end
+    local specs = type(values.setups) == "table" and values.setups.SHAMAN
+    if type(specs) ~= "table" then return end
+    for _, s in pairs(specs) do
+        if type(s) == "table" and type(s.lists) == "table" then fix(s.lists.buffs) end
+    end
+end
+
+-- Buffs of 3 minutes or less, or used up by charges, are fixed slots that
+-- warn while missing (their time and stacks while up), no longer reminders:
+-- the presets' shaman Shields, Battle Shout and Inner Fire, saved copies too.
+export const SHORT_BUFFS = { SHAMAN = "Shields", WARRIOR = "Battle Shout", PRIEST = "Inner Fire" }
+
+export function shortBuffsWarn(values: { [string]: any })
+    local function fix(list: any, name: string)
+        for _, e in ipairs((type(list) == "table" and list or {}) :: any[]) do
+            if type(e) == "table" and e.collection then fix(e.entries, name) end
+            if type(e) == "table" and e.name == name and e.missing == "remind" then e.missing = "warn" end
+        end
+    end
+    if type(values.setups) ~= "table" then return end
+    for class, name in pairs(SHORT_BUFFS) do
+        for _, s in pairs(type(values.setups[class]) == "table" and values.setups[class] or {}) do
+            if type(s) == "table" and type(s.lists) == "table" then fix(s.lists.buffs, name) end
+        end
+    end
+end

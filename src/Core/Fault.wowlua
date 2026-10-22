@@ -1,0 +1,204 @@
+-- Core/Fault.wowlua
+-- Errors players should know about. A failing callback is skipped, the rest of
+-- SuuUI keeps running, and the player sees one chat line per distinct error per
+-- session. "/suu errors" lists them with their stacks.
+--
+-- SuuUI's own callbacks (events, settings watchers, commands, module
+-- callbacks) run through call() and are reported here under their owner's
+-- name. Errors in the standard library's callbacks that SuuUI hands it
+-- directly (timers, hooks) go to the game's error handler as wowlua:errors
+-- reports them, and are kept here too (as "SuuUI").
+
+import * as errors from "wowlua:errors"
+import on from "wowlua:events"
+import print, registerCommand, name as ADDON, version from "./Init"
+import * as events from "./Events"
+import * as DB from "./DB"
+import * as taintProbe from "/Diagnostics/TaintProbe"
+
+const MAX_KEPT = 50
+
+export type Entry = { source: string, message: string, stack: string?, count: number, time: string }
+
+local list: Entry[] = {}          -- oldest first
+local byKey: { [string]: Entry } = {} -- source .. "\0" .. message
+
+local function firstLine(msg: any): string
+    return (tostring(msg):match("^[^\n]*")) or ""
+end
+
+-- Records an error from `source` (a module or owner name). `stack` is optional.
+export function report(source: any, message: any, stack: string?)
+    local from = tostring(source or "SuuUI")
+    local text = firstLine(message)
+    local key = from .. "\0" .. text
+    local entry = byKey[key]
+    if entry then
+        entry.count += 1
+        return
+    end
+    entry = { source = from, message = text, stack = stack, count = 1, time = date("%H:%M:%S") }
+    byKey[key] = entry
+    list[#list + 1] = entry
+    if #list > MAX_KEPT then
+        local old = table.remove(list, 1)
+        if old then byKey[old.source .. "\0" .. old.message] = nil end
+    end
+    print(("|cffff9a80%s hit an error and was skipped:|r %s  (/suu errors)"):format(from, text))
+
+    -- Kept in the saved variables too (written on /reload or logout), so the
+    -- errors of a session can be read outside the game.
+    if DB.loaded() then
+        local saved: any[] = DB.db.errors or {}
+        DB.db.errors = saved
+        saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), source = from, message = text,
+            stack = stack, version = version }
+        while #saved > 30 do table.remove(saved, 1) end
+    end
+end
+
+-- Calls fn(...) under xpcall; an error is reported against `source`.
+-- Returns true plus fn's results on success, false on error. Allocates
+-- nothing on success, so every event callback can go through it.
+local lastStack: string? = nil
+
+local function handler(err: any): any
+    lastStack = debugstack(2)
+    return err
+end
+
+local function finish(source: string, ok: boolean, ...: any): (boolean, ...any)
+    if not ok then
+        report(source, (...), lastStack)
+        return false
+    end
+    return true, ...
+end
+
+-- Timing (/suu perf, Perf.wowlua): while on, each call's own time and the
+-- memory it allocated (its nested calls' taken out) are added to its source,
+-- a module's name. Allocation is Lua's memory count before and after: a
+-- garbage collection step inside the call takes some off, so it reads low
+-- rather than high (never below 0).
+export type Spent = { ms: number, calls: number, peak: number, kb: number }
+
+local timing = false
+local spent: { [string]: Spent } = {}
+local starts: number[], childs: number[], kbStarts: number[], kbChilds: number[] = {}, {}, {}, {}
+local depth = 0
+local clock = debugprofilestop
+
+local function finishTimed(source: string, ok: boolean, ...: any): (boolean, ...any)
+    -- timing was turned off (or on again) inside this call: nothing to add
+    if depth == 0 or not starts[depth] then return finish(source, ok, ...) end
+    local now, kbNow = clock(), collectgarbage("count")
+    local total = now - starts[depth]
+    local own = total - childs[depth]
+    local kbTotal = math.max(0, kbNow - kbStarts[depth])
+    local kbOwn = math.max(0, kbTotal - kbChilds[depth])
+    depth -= 1
+    if depth > 0 then
+        childs[depth] += total
+        kbChilds[depth] += kbTotal
+    end
+    local rec = spent[source]
+    if not rec then
+        rec = { ms = 0, calls = 0, peak = 0, kb = 0 }
+        spent[source] = rec
+    end
+    rec.ms, rec.calls, rec.kb = rec.ms + own, rec.calls + 1, rec.kb + kbOwn
+    if own > rec.peak then rec.peak = own end
+    return finish(source, ok, ...)
+end
+
+export function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
+    if not timing then return finish(source, xpcall(fn, handler, ...)) end
+    depth += 1
+    starts[depth], childs[depth] = clock(), 0
+    kbStarts[depth], kbChilds[depth] = collectgarbage("count"), 0
+    return finishTimed(source, xpcall(fn, handler, ...))
+end
+
+-- Timing on or off (on: from zero), and what it has counted.
+export function setTiming(enabled: boolean)
+    timing = enabled and true or false
+    depth = 0
+    if enabled then wipe(spent) end
+end
+
+export function timingState(): (boolean, { [string]: Spent })
+    return timing, spent
+end
+
+export function entries(): Entry[]
+    return list
+end
+
+-- What wowlua:errors reports (the standard library's own callbacks: timers,
+-- hooks, deferred combat work) is kept in the list as well.
+errors.onError(function(msg: string)
+    local text = msg:gsub("^" .. ADDON .. ": ", "")
+    report("SuuUI", text)
+end)
+
+registerCommand("errors", "List the errors SuuUI caught this session; \"/suu errors test\" raises one on purpose.", function(arg: string)
+    if arg == "clear" then
+        wipe(list)
+        wipe(byKey)
+        if DB.loaded() then DB.db.errors = nil end
+        return print("Errors cleared.")
+    end
+    if arg == "test" then
+        events.on("SUUUI_FAULT_TEST", function() error("a deliberate test error") end, "Fault test")
+        events.on("SUUUI_FAULT_TEST", function() print("The next listener still ran.") end, "Fault test (second listener)")
+        events.emit("SUUUI_FAULT_TEST")
+        events.offAll("Fault test")
+        events.offAll("Fault test (second listener)")
+        return
+    end
+    if #list == 0 then
+        print("No errors this session.")
+        return
+    end
+    for _, e in ipairs(list) do
+        print(("%s  %s: %s%s"):format(e.time, e.source, e.message, e.count > 1 and (" (x%d)"):format(e.count) or ""))
+        if arg == "full" and e.stack then _G.print(e.stack) end
+    end
+    if arg ~= "full" then _G.print("  /suu errors full adds the stacks.") end
+end)
+
+-- Protected calls the game blocked ("Interface action failed because of an
+-- AddOn"): in combat, or out of it where a call needs the user's click or
+-- key press (the group finder's search). The game names only the function,
+-- so that is what is kept, with SuuUI's stack at the moment it fired when
+-- there is one.
+local function blocked(event: string, addon: any, func: any)
+    local what = event == "ADDON_ACTION_FORBIDDEN" and "Forbidden"
+        or (InCombatLockdown() and "Blocked in combat" or "Blocked")
+    if addon ~= ADDON then
+        -- blamed on someone else (another addon, or a name the game makes
+        -- up): kept too, quietly, since SuuUI may still be the cause (found
+        -- in game: closing the spells window in combat failed and nothing
+        -- was logged)
+        if DB.loaded() then
+            local saved: any[] = DB.db.blocked or {}
+            DB.db.blocked = saved
+            saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), event = event, addon = tostring(addon), func = tostring(func),
+                combat = InCombatLockdown() and true or false, stack = debugstack(2) }
+            while #saved > 30 do table.remove(saved, 1) end
+        end
+        return
+    end
+    -- what the refused code read that addon code wrote (the culprit, while
+    -- it's still there: these come and go)
+    local stack = debugstack(2)
+    local ok, tainted = pcall(taintProbe.scan)
+    local written: string[] = ok and type(tainted) == "table" and tainted :: string[] or {}
+    if #written > 0 then
+        stack = stack .. "\nWritten by addon code: " .. table.concat(written, "; ", 1, math.min(#written, 40))
+    end
+    report("Taint", ("%s: %s"):format(what, tostring(func)), stack)
+end
+
+on("ADDON_ACTION_BLOCKED", function(addon: any, func: any) blocked("ADDON_ACTION_BLOCKED", addon, func) end)
+on("ADDON_ACTION_FORBIDDEN", function(addon: any, func: any) blocked("ADDON_ACTION_FORBIDDEN", addon, func) end)

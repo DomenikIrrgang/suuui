@@ -1,0 +1,358 @@
+-- Units/Timeline: the encounter timeline (hidden while nothing is on it;
+-- the test's five abilities; the timeline or the list; off; a finished
+-- one leaving), the pull countdown (/suu pull through the game's own
+-- countdown: its alert, the last ten seconds or none, the voice, Pull! at
+-- zero; cancelled by 0, by the countdown's cancel or by combat; started by
+-- someone else's countdown or SuuUI message; without the game's countdown
+-- SuuUI's own message), Blizzard's numbers kept away, boss mods (DBM's and
+-- BigWigs' timers on the timeline, their bars and DBM's warnings hidden),
+-- the preview and the settings rows; the old voices carried over;
+-- stopped.
+--
+-- Forever has the game's own timeline off (`IsFeatureAvailable()` false),
+-- but an addon's timers still go on it (seen in game): the engine's
+-- timeline carries them here.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, SECTION from "/Units/Timeline"
+import internal migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+local G: any = _G
+local ET: any = C_EncounterTimeline
+local friend = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
+
+-- The alerts raised: their title by key.
+local function alerts(): { [string]: string }
+    local shown: { [string]: string } = {}
+    mock.stub(SuuUI, "ShowAlert", function(key: string, _: string, title: string, detail: string?)
+        shown[key] = title .. (detail and (" · " .. detail) or "")
+    end)
+    mock.stub(SuuUI, "HideAlert", function(key: string) shown[key] = nil end)
+    return shown
+end
+
+-- An addon message as the game sends it.
+local function addonMessage(prefix: string, text: string, sender: string)
+    mock.fireEvent("CHAT_MSG_ADDON", prefix, text, "PARTY", sender, "", 0, 0, "", 0)
+end
+
+local function labels(sorted: boolean?): string
+    local out = {}
+    for _, e in ipairs(M.timeline.events or {}) do out[#out + 1] = e.label end
+    if sorted then table.sort(out) end
+    return table.concat(out, ", ")
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    M:CancelPull(true)
+    mock.group:leave()
+    for _, k in ipairs({ "variant", "position", "pullSeconds", "pullAlert", "pullVoice", "source", "hideTheirs" }) do M:Reset(k) end
+    M.labels, M.badges, M.addonTimers = nil, nil, nil
+    ET.CancelAllScriptEvents()
+    mock.advanceTime(2)
+    expectNoErrors()
+end
+
+@test("hidden while nothing is on it; the test's five abilities, the timeline or the list; off; one leaving as it runs out")
+local function timeline()
+    M:Refresh()
+    expect(M.timeline:IsShown()).toBe(false)
+    M:Test()
+    expect(M.timeline:IsShown()).toBe(true)
+    expect(labels()).toBe("Shield Wall, Frost Nova, Rain of Fire, Death Coil, Whirlwind")
+    expect(M.timeline.events[1].badge.text).toBe("Tank")
+    expect(M.timeline.variant).toBe("track")
+    M:Set("variant", "list")
+    expect(M.timeline.variant).toBe("list")
+    M:Set("variant", "off")
+    expect(M.timeline:IsShown()).toBe(false)
+    expect(SuuUI.GetAnchor("encounterTimeline")).toBeNil()
+    M:Set("variant", "track")
+    expect(SuuUI.GetAnchor("encounterTimeline")).toBe(M.timeline)
+    -- Shield Wall's 4 seconds run out: it leaves
+    mock.advanceTime(4.2)
+    expect(labels()).toBe("Frost Nova, Rain of Fire, Death Coil, Whirlwind")
+    M:Set("position", { point = "TOP", x = 0, y = -28, hidden = true })
+    expect(M.timeline:IsShown()).toBe(false)
+end
+
+@test("an ability's danger badge from its icons; a secret name or time left out; a paused one")
+local function badges()
+    local set = Enum.EncounterTimelineIconSet
+    ET.AddScriptEvent({ spellID = 122, iconFileID = 1, duration = 8, overrideName = "Nova", icons = bit.lshift(1, set.Deadly) })
+    ET.AddScriptEvent({ spellID = 123, iconFileID = 1, duration = 9, overrideName = "Hold", paused = true })
+    M:Refresh()
+    expect(M.timeline.events[1].badge.text).toBe("Lethal")
+    expect(M.timeline.events[2].paused).toBe(9)
+    -- (a name the game keeps secret)
+    local info = ET.GetEventInfo
+    mock.stub(ET, "GetEventInfo", function(id: number): any
+        local e = info(id)
+        e.spellName = mock.secret(e.spellName)
+        return e
+    end)
+    M:Refresh()
+    expect(M.timeline.events[1].label).toBe("")
+end
+
+@test("/suu pull: the game's countdown, its alert to Pull!, the voice for the last ten seconds")
+local function pull()
+    local shown = alerts()
+    local played: { string } = {}
+    mock.fake("PlaySoundFile", function(path: string) played[#played + 1] = path; return true end)
+    mock.slash("/suu pull 12")
+    expect(M.pullEnds ~= nil).toBe(true)
+    expect(shown.pull).toBe("Pull in 12")
+    expect(labels()).toBe("Pull")
+    mock.advanceTime(5.1)
+    expect(shown.pull).toBe("Pull in 7")
+    -- 10, 9, 8 and 7 spoken
+    expect(#played).toBe(4)
+    expect(played[1]:find("Bella\\10.ogg", 1, true) ~= nil).toBe(true)
+    mock.advanceTime(7)
+    expect(shown.pull).toBe("Pull!")
+    expect(played[#played]:find("pull.ogg", 1, true) ~= nil).toBe(true)
+    mock.advanceTime(2)
+    expect(shown.pull).toBeNil()
+    expect(M.pullEnds).toBeNil()
+end
+
+@test("the countdown's alert: the last ten seconds, or none (Blizzard's numbers then)")
+local function alertModes()
+    local shown = alerts()
+    M:Set("pullAlert", "last10")
+    M:StartPull(15)
+    expect(shown.pull).toBeNil()
+    mock.advanceTime(5.1)
+    expect(shown.pull).toBe("Pull in 10")
+    M:CancelPull()
+    expect(shown.pull).toBeNil()
+    M:Set("pullAlert", "off")
+    expect(M.trackerOff).toBeNil()
+    M:StartPull(3)
+    mock.advanceTime(3.5)
+    expect(shown.pull).toBeNil()
+    M:Set("pullAlert", "all")
+    expect(M.trackerOff).toBe(true)
+end
+
+@test("cancelled by /suu pull 0, by the game's cancel and by combat")
+local function cancel()
+    local shown = alerts()
+    M:Pull(10)
+    expect(shown.pull ~= nil).toBe(true)
+    M:Pull(0)
+    expect(shown.pull).toBeNil()
+    expect(M.pullEnds).toBeNil()
+    M:Pull(10)
+    mock.fireEvent("CANCEL_PLAYER_COUNTDOWN", UnitGUID("player"), false)
+    expect(M.pullEnds).toBeNil()
+    M:Pull(10)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(M.pullEnds).toBeNil()
+end
+
+@test("someone else's countdown, or their SuuUI message: from them; the same countdown twice kept; secret or in combat ignored")
+local function fromOthers()
+    local shown = alerts()
+    mock.group:add(friend)
+    mock.fireEvent("START_PLAYER_COUNTDOWN", UnitGUID("party1"), 8, 8, false)
+    expect(shown.pull).toBe("Pull in 8 · from Brannoc Ironhand")
+    local ends = M.pullEnds
+    mock.fireEvent("START_PLAYER_COUNTDOWN", UnitGUID("party1"), 8, 8, false)
+    expect(M.pullEnds).toBe(ends)
+    M:CancelPull()
+    M:OnCountdown(mock.secret("x"), 8)
+    expect(M.pullEnds).toBeNil()
+    addonMessage("SuuUI", "PULL\t9", "Brannoc Ironhand-Realm")
+    expect(shown.pull).toBe("Pull in 9 · from Brannoc Ironhand")
+    M:CancelPull()
+    -- not ours, our own echo, nonsense: nothing
+    addonMessage("Other", "PULL\t9", "Brannoc Ironhand-Realm")
+    addonMessage("SuuUI", "HELLO", "Brannoc Ironhand-Realm")
+    M:OnMessage("SuuUI", "PULL\t9", "PARTY", SuuUI.FullName("player"))
+    expect(M.pullEnds).toBeNil()
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:OnCountdown(UnitGUID("party1"), 8)
+    expect(M.pullEnds).toBeNil()
+end
+
+@test("without the game's countdown: SuuUI's own message to the group; the game's countdown silent: SuuUI's anyway")
+local function fallback()
+    mock.group:add(friend)
+    mock.setField(C_PartyInfo, "DoCountdown", nil)
+    local sent: { string } = {}
+    mock.stub(C_ChatInfo, "SendAddonMessage", function(prefix: string, text: string, channel: string)
+        sent[#sent + 1] = prefix .. " " .. text .. " " .. channel
+        return true
+    end)
+    M:Pull(6)
+    expect(sent[1]).toBe("SuuUI PULL\t6 PARTY")
+    expect(M.pullEnds ~= nil).toBe(true)
+    M:CancelPull()
+    -- a countdown that never comes back
+    mock.setField(C_PartyInfo, "DoCountdown", function(_: number) return true end)
+    M:Pull(6)
+    expect(M.pullEnds).toBeNil()
+    mock.advanceTime(0.6)
+    expect(M.pullEnds ~= nil).toBe(true)
+end
+
+@test("the voice: off, or quiet while a boss mod feeds the timeline; Hear the voice")
+local function voice()
+    local played: { string } = {}
+    mock.fake("PlaySoundFile", function(path: string) played[#played + 1] = path; return true end)
+    M:Set("pullVoice", "off")
+    M:StartPull(3)
+    mock.advanceTime(3.5)
+    expect(#played).toBe(0)
+    M:Speak(3, "Heart")
+    M:Speak(11, "Heart")
+    expect(#played).toBe(1)
+    M:Set("pullVoice", "Michael")
+    local rows: { [string]: any } = {}
+    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do rows[r.text or r.key] = r end end
+    rows["Hear the voice"].onClick()
+    mock.advanceTime(4)
+    expect(#played).toBe(5)
+    M:Set("pullVoice", "off")
+    expect((rows["Hear the voice"].disabled())).toBe(true)
+    rows["Start a pull countdown"].onClick()
+    rows["Show a test timeline"].onClick()
+end
+
+@test("DBM as the source: its timers on the timeline (paused, updated, stopped), its bars and warnings hidden and given back")
+local function dbm()
+    local callbacks: { [string]: any } = {}
+    local dbmBars: any[] = {}
+    mock.setField(G, "DBM", {
+        Options = { HideDBMWarnings = false },
+        RegisterCallback = function(_: any, event: string, fn: any) callbacks[event] = fn end,
+    })
+    mock.setField(G, "DBT", { CreateBar = function(_: any)
+        local bar = { frame = CreateFrame("Frame") }
+        dbmBars[#dbmBars + 1] = bar
+        return bar
+    end })
+    M.hooked, M.hookedParts = nil, nil
+    M:HookSources()
+    M:HookDisplays()
+    expect(#M:SourceOptions()).toBe(2)
+    M:Set("source", "dbm")
+    expect(G.DBM.Options.HideDBMWarnings).toBe(true)
+    callbacks.DBM_TimerBegin(nil, "t1", "Lava Burst", 12, 135813, nil, nil, 4)
+    callbacks.DBM_TimerBegin(nil, "t2", "Pull in", 10, nil)
+    expect(labels()).toBe("Lava Burst")
+    expect(M.timeline.events[1].badge.text).toBe("Kick")
+    callbacks.DBM_TimerPause(nil, "t1")
+    expect(M.timeline.events[1].paused ~= nil).toBe(true)
+    callbacks.DBM_TimerResume(nil, "t1")
+    callbacks.DBM_TimerUpdate(nil, "t1", 2, 12)
+    expect(M.timeline.events[1].endsAt ~= nil).toBe(true)
+    callbacks.DBM_TimerStop(nil, "t1")
+    expect(labels()).toBe("")
+    -- its bars kept see-through
+    local bar = G.DBT:CreateBar()
+    expect(bar.frame:GetAlpha()).toBe(0)
+    bar.frame:SetAlpha(1)
+    expect(bar.frame:GetAlpha()).toBe(0)
+    -- its own warnings back
+    M:Set("hideTheirs", false)
+    expect(G.DBM.Options.HideDBMWarnings).toBe(false)
+    M:Set("source", "suui")
+    M.hooked = nil
+end
+
+@test("BigWigs as the source: its bars' timers, stop all; its own bars hidden, another addon's not")
+local function bigwigs()
+    local messages: { [string]: any } = {}
+    mock.setField(G, "BigWigsLoader", { RegisterMessage = function(_: any, msg: string, fn: any) messages[msg] = fn end })
+    local proto: any = {}
+    function proto:Start() end
+    function proto:Get(key: string): any return self.data[key] end
+    mock.provideLibrary("LibCandyBar-3.0", { barPrototype = proto })
+    M.hooked, M.hookedParts = nil, nil
+    M:HookSources()
+    M:HookDisplays()
+    M:Set("source", "bigwigs")
+    local mod = {}
+    messages.BigWigs_StartBar(nil, mod, nil, "Magma Blast", 15, 135820)
+    messages.BigWigs_StartBar(nil, mod, nil, "Breath", 20, nil)
+    expect(labels(true)).toBe("Breath, Magma Blast")
+    messages.BigWigs_PauseBar(nil, mod, "Breath")
+    messages.BigWigs_ResumeBar(nil, mod, "Breath")
+    messages.BigWigs_StopBar(nil, mod, "Magma Blast")
+    expect(labels()).toBe("Breath")
+    messages.BigWigs_StopBars(nil)
+    expect(labels()).toBe("")
+    -- (LibCandyBar's bars: frames with its prototype's methods)
+    local ours: any = CreateFrame("Frame")
+    ours.Get, ours.data = proto.Get, { ["bigwigs:module"] = mod }
+    local theirs: any = CreateFrame("Frame")
+    theirs.Get, theirs.data = proto.Get, {}
+    proto.Start(ours)
+    proto.Start(theirs)
+    expect(ours:GetAlpha()).toBe(0)
+    expect(theirs:GetAlpha()).toBe(1)
+    M:Set("source", "suui")
+    M.hooked = nil
+end
+
+@test("the preview: the test's abilities, held; the list")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local p = M:PreviewView(parent)
+    expect(p:GetParent()).toBe(parent)
+    expect(#p.events).toBe(5)
+    M:Set("variant", "list")
+    expect(p.variant).toBe("list")
+end
+
+@test("the settings rows: the boss mods not installed named; Hide their bars waits for one")
+local function rowsWait()
+    local rows: { [string]: any } = {}
+    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do if r.key then rows[r.key] = r end end end
+    expect(rows.source.description():find("Install DBM or BigWigs", 1, true) ~= nil).toBe(true)
+    local off, why = rows.hideTheirs.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("Choose DBM or BigWigs first.")
+end
+
+@test("the old voices and Last 5 seconds carried over")
+local function migrations()
+    local found = 0
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "timeline" and m.id == "pullVoice-kokoro-3" then
+            found = found + 1
+            for old, new in pairs({ David = "Michael", Jim = "Bella", Heart = "Heart" }) do
+                local v: { [string]: any } = { pullVoice = old }
+                m.fn(v)
+                expect(v.pullVoice).toBe(new)
+            end
+        elseif m.namespace == "timeline" and m.id == "pullAlert-last10" then
+            found = found + 1
+            local v: { [string]: any } = { pullAlert = "last5" }
+            m.fn(v)
+            expect(v.pullAlert).toBe("last10")
+        end
+    end
+    expect(found).toBe(2)
+end
+
+-- (last: the module off)
+@test("stopped: the timeline gone, the countdown cancelled, Blizzard's numbers back")
+local function disabled()
+    M:StartPull(10)
+    local m: any = M
+    m:OnDisable()
+    expect(M.pullEnds).toBeNil()
+    expect(M.timeline:IsShown()).toBe(false)
+    expect(M.trackerOff).toBeNil()
+end

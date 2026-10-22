@@ -1,0 +1,238 @@
+-- Units/Legacy: SuuUI's Legacy pages over Blizzard's Legacy window: the
+-- points, the three trees (planned with the game's staging, applied), the
+-- challenges, the reward track along the foot, combat, a theme.
+--
+-- The Legacy is the engine's, as the recorded warrior's: its config, the
+-- trees and their currency (16 of 16 spent), the achievements' challenges;
+-- the reward faction's renown is set here (the window opens from 1).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors from "../../helpers"
+
+local M: any = assert(SuuUI.GetModule("legacy"))
+local G: any = _G
+local FACTION = 2802
+
+mock.setRenown(FACTION, 20)
+-- the rewards' items (game data comes from the tests): each reward's
+for _, lv in ipairs(C_MajorFactions.GetRenownLevels(FACTION) or {}) do
+    for _, r in ipairs(C_MajorFactions.GetRenownRewardsForLevel(FACTION, lv.level) or {}) do
+        if r.itemID then mock.defineItem(r.itemID, { name = r.name or ("Reward " .. r.itemID), quality = 4, icon = r.icon }) end
+    end
+end
+
+local function open()
+    if not (G.LegacySystemFrame and G.LegacySystemFrame:IsShown()) then ToggleLegacySystemUI() end
+    mock.advanceFrames(3)
+    mock.advanceTime(0.2)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    local f = G.LegacySystemFrame
+    if f and f:IsShown() then HideUIPanel(f) end
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.advanceTime(1)
+    expectNoErrors()
+end
+
+@test("the points: renown earned, the most there is, spent and left of this character's")
+local function points()
+    local p = M:Points()
+    expect(p.earned).toBe(20)
+    expect(p.total).toBe(81)
+    expect(p.spent).toBe(16)
+    expect(p.cap).toBe(16)
+    expect(p.available).toBe(0)
+    expect(p.character).toBe(UnitName("player"))
+end
+
+@test("the trees: Blizzard's three, top to bottom; the talents to come counted, not drawn")
+local function trees()
+    local list, rows, pending = M:Trees(assert(M:ConfigID()))
+    expect(#list).toBe(3)
+    expect(rows > 1).toBe(true)
+    expect(pending).toBe(0)
+    for _, t in ipairs(list) do
+        expect(#t.nodes > 0).toBe(true)
+        expect(t.more).toBe("2 more talents in a future update")
+        for _, n in ipairs(t.nodes) do
+            expect(n.col >= 0 and n.col <= 3).toBe(true)
+        end
+    end
+end
+
+@test("the window: SuuUI's tree page and the reward track; Blizzard's pages off screen")
+local function window()
+    open()
+    local f = G.LegacySystemFrame
+    expect(f).toBeShown()
+    expect(M.pages.tree).toBeShown()
+    expect(M.track).toBeShown()
+    local _, _, _, x = f.TreePage:GetPoint(1)
+    expect(x).toBe(5000)
+    expect(f.TreePage:GetAlpha()).toBe(0)
+    -- Blizzard places its page again: off screen, a frame later
+    f.TreePage:SetPoint("TOPLEFT", f, "TOPLEFT")
+    mock.advanceFrames(2)
+    local _, _, _, x2 = f.TreePage:GetPoint(1)
+    expect(x2).toBe(5000)
+end
+
+@test("the challenges' page: the categories with what earns Legacy points, closest first")
+local function challenges()
+    open()
+    local f = G.LegacySystemFrame
+    f:SelectPage(2)
+    mock.advanceFrames(2)
+    expect(M.pages.challenges).toBeShown()
+    local list = M:Challenges()
+    expect(#list).toBe(6)
+    expect(list[1].name).toBe("Classes")
+    for _, cat in ipairs(list) do
+        local lastDone = false
+        for _, item in ipairs(cat.items) do
+            expect(item.points > 0).toBe(true)
+            -- done ones last
+            if lastDone then expect(item.done).toBe(true) end
+            lastDone = item.done
+        end
+    end
+    -- a challenge's tooltip
+    local item = list[1].items[1]
+    item.onEnter(UIParent)
+    expect(GameTooltip:IsShown()).toBe(true)
+    item.onLeave()
+    expect(GameTooltip:IsShown()).toBe(false)
+end
+
+@test("the reward track: its stops by renown, the next one, each reward's tooltip")
+local function rewards()
+    local r = M:Rewards(20, 81)
+    expect(#r.stops).toBe(4)
+    expect(r.earned).toBe(20)
+    expect(r.max).toBe(r.stops[#r.stops].at)
+    local all = M:Rewards(r.max, 81)
+    expect(all.next).toBe("Every reward on the track is yours. Claim them from Innkeeper Wiley in Ratchet.")
+    local none = M:Rewards(0, 81)
+    expect(none.next:find("^Next reward at %d+ points: ") ~= nil).toBe(true)
+    r.stops[1].onEnter(UIParent)
+    expect(GameTooltip:IsShown()).toBe(true)
+    r.stops[1].onLeave()
+end
+
+@test("Blizzard's reward page opening goes to the tree")
+local function rewardPage()
+    open()
+    local f = G.LegacySystemFrame
+    f:SelectPage(1)
+    mock.advanceFrames(2)
+    expect(M.pages.tree).toBeShown()
+end
+
+@test("a talent's tooltip; in combat the trees can't change")
+local function tipsAndCombat()
+    open()
+    local n = M.trees[1].nodes[1]
+    local shown: any = nil
+    mock.stub(SuuUI.UI, "TraitTooltip", function(_: any, _: number, _: number, opts: any) shown = opts end)
+    M:ShowTip(UIParent, n)
+    expect(shown.name).toBe(n.name)
+    expect(shown.blocked).toBeNil()
+    mock.player:enterCombat()
+    expect({ M:Editable() }).toEqual({ false, "Legacy talents can't change in combat." })
+    M:ShowTip(UIParent, n)
+    expect(shown.blocked).toBe("Legacy talents can't change in combat.")
+    -- a click does nothing then
+    local before = n.rank + n.pending
+    M.pages.tree.body.onClick(n)
+    expect(n.rank + n.pending).toBe(before)
+end
+
+@test("the window's changes draw it again: talents, renown, combat; a theme sizes it again")
+local function redraws()
+    open()
+    local render = mock.spy(function(_: any) end)
+    mock.stub(M, "Render", render)
+    mock.fireEvent("TRAIT_CONFIG_UPDATED", assert(M:ConfigID()))
+    mock.advanceTime(0.2)
+    expect(render).toHaveBeenCalledTimes(1)
+    M:Emit("SUUUI_THEME_CHANGED")
+    mock.advanceTime(0.2)
+    expect(render).toHaveBeenCalledTimes(2)
+end
+
+@test("a challenge's steps and its tooltip's list; a step that is another achievement opens in turn")
+local function steps()
+    local byID: { [number]: any } = {}
+    for _, cat in ipairs(M:Challenges()) do
+        for _, item in ipairs(cat.items) do byID[item.id] = item end
+    end
+    local six = byID[62031]
+    expect(six.stepsN).toBe(6)
+    expect(six.stepsDone).toBe(3)
+    local list = six.steps()
+    expect(#list).toBe(6)
+    six.onEnter(UIParent)
+    expect(GameTooltip:NumLines() > 3).toBe(true)
+    six.onLeave()
+    -- a count, and a nested achievement's own steps
+    expect(byID[62046].count[2]).toBe(42000)
+    local two = byID[62382]
+    for _, st in ipairs(two.steps()) do
+        if st.steps then expect(#st.steps() > 0).toBe(true) end
+    end
+    expect(byID[64283].done).toBe(true)
+end
+
+@test("a reward whose item hasn't loaded: its name asked for, the track drawn again")
+local function rewardLoading()
+    mock.defineItem(990777, { name = "Late Cloak", quality = 3 }, { cached = false, delay = 0.3 })
+    mock.fake("C_MajorFactions.GetRenownRewardsForLevel", function(_: number, level: number): any
+        return { { itemID = 990777, icon = 1, level = level } }
+    end)
+    local r = M:Rewards(1, 81)
+    expect(M.namesPending).toBe(true)
+    mock.advanceTime(1)
+    r = M:Rewards(1, 81)
+    expect(r.stops[1].name).toBe("Late Cloak")
+end
+
+@test("a Legacy window without its pages: nothing built")
+local function noPages()
+    local pages, track = M.pages, M.track
+    M.pages = nil
+    mock.setField(G, "LegacySystemFrame", CreateFrame("Frame"))
+    M:Build()
+    expect(M.pages).toBeNil()
+    M.pages, M.track = pages, track
+end
+
+@test("planning a point: a click plans it, Undo takes it back, Apply learns it")
+local function planning()
+    local cfg = assert(M:ConfigID())
+    mock.setTraitRanks(cfg, { [110290] = 0 })
+    open()
+    expect(M:Points().available).toBe(1)
+    local function node(): any
+        for _, n in ipairs(M.trees[1].nodes) do if n.id == 110290 then return n end end
+        return nil
+    end
+    local n = node()
+    expect(n.canSpend).toBe(true)
+    local body = M.pages.tree.body
+    body.onClick(n)
+    expect(node().pending).toBe(1)
+    body.onUndo()
+    expect(node().pending).toBe(0)
+    body.onClick(node())
+    -- (a refund of a planned rank: the engine has none recorded, see PROBES.md)
+    body.onRemove(node())
+    body.onApply()
+    mock.advanceTime(2)
+    expect(node().rank).toBe(1)
+    expect(M:Points().available).toBe(0)
+end

@@ -1,0 +1,71 @@
+-- Core/Services: services by name, provided and withdrawn by their owners.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as services from "/Core/Services"
+import * as events from "/Core/Events"
+
+const OWNER = { name = "ServicesTest" }
+const OTHER = { name = "ServicesTestOther" }
+const LISTENER = { name = "ServicesTestListener" }
+
+@afterEach
+local function cleanup()
+    services.unregister(OWNER)
+    services.unregister(OTHER)
+    events.offAll(LISTENER)
+end
+
+local function changes(): (name: string, ...any) -> ()
+    local heard = mock.spy(function(_: string, ...: any) end)
+    events.on("SUUUI_SERVICE_CHANGED", heard, LISTENER)
+    return heard
+end
+
+@test("provide: get gives the table, and a change names the service")
+local function provides()
+    local heard = changes()
+    local impl = { open = function() end }
+    expect(services.get("coreatest.bags")).toBeNil()
+    services.provide("coreatest.bags", impl, OWNER)
+    expect(services.get("coreatest.bags") == impl).toBe(true)
+    expect(heard).toHaveBeenCalledTimes(1)
+    expect(heard).toHaveBeenCalledWith("SUUUI_SERVICE_CHANGED", "coreatest.bags")
+end
+
+@test("a later provider replaces the earlier one; only the current owner withdraws it")
+local function replaces()
+    local first, second = { n = 1 }, { n = 2 }
+    services.provide("coreatest.talents", first, OWNER)
+    services.provide("coreatest.talents", second, OTHER)
+    expect(services.get("coreatest.talents") == second).toBe(true)
+    services.unregister(OWNER)
+    expect(services.get("coreatest.talents") == second).toBe(true)
+    services.unregister(OTHER)
+    expect(services.get("coreatest.talents")).toBeNil()
+end
+
+@test("unregister: every service of the owner goes, each announced; others stay")
+local function unregisters()
+    services.provide("coreatest.a", {}, OWNER)
+    services.provide("coreatest.b", {}, OWNER)
+    services.provide("coreatest.c", {}, OTHER)
+    local heard = changes()
+    services.unregister(OWNER)
+    expect(services.get("coreatest.a")).toBeNil()
+    expect(services.get("coreatest.b")).toBeNil()
+    expect(services.get("coreatest.c")).never.toBeNil()
+    expect(heard).toHaveBeenCalledTimes(2)
+    expect(heard).toHaveBeenCalledWith("SUUUI_SERVICE_CHANGED", "coreatest.a")
+    expect(heard).toHaveBeenCalledWith("SUUUI_SERVICE_CHANGED", "coreatest.b")
+    -- nothing left to withdraw: no announcement
+    services.unregister(OWNER)
+    expect(heard).toHaveBeenCalledTimes(2)
+end
+
+@test("provide needs a name and a table")
+local function needsNameAndTable()
+    expect(function() services.provide(5 :: any, {}, OWNER) end).toThrow()
+    expect(function() services.provide("coreatest.x", "impl" :: any, OWNER) end).toThrow()
+    expect(services.get("coreatest.x")).toBeNil()
+end

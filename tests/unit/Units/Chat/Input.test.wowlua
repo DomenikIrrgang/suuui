@@ -1,0 +1,110 @@
+-- Units/Chat/Input: the input's history as data (the typed line as a
+-- command, your own line from a chat event, protected commands, recall).
+
+import test, cases, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as input from "/Units/Chat/Input"
+
+local function attrs(t: { [string]: any }): (key: string) -> unknown
+    return function(key: string): unknown return t[key] end
+end
+
+@test("the typed line: a command as typed, a message with its chat type's command")
+@cases({
+    { "/dance", "SAY", "/dance" },
+    { "  hi  ", "SAY", "/s hi" },
+    { "hi", "PARTY", "/p hi" },
+    { "hi", "RAID_WARNING", "/rw hi" },
+    { "hi", "GUILD", "/g hi" },
+})
+local function typed(text: string, chatType: string, want: string)
+    expect(input.typedLine(text, attrs({ chatType = chatType }))).toBe(want)
+end
+
+@test("the typed line: whispers and channels by their target")
+local function typedTargets()
+    expect(input.typedLine("hi", attrs({ chatType = "WHISPER", tellTarget = "Bob" }))).toBe("/w Bob hi")
+    expect(input.typedLine("hi", attrs({ chatType = "BN_WHISPER", tellTarget = "Kay" }))).toBe("/w Kay hi")
+    expect(input.typedLine("hi", attrs({ chatType = "WHISPER", tellTarget = "" }))).toBeNil()
+    expect(input.typedLine("hi", attrs({ chatType = "WHISPER", tellTarget = mock.secret("Bob") }))).toBeNil()
+    expect(input.typedLine("hi", attrs({ chatType = "CHANNEL", channelTarget = 2 }))).toBe("/2 hi")
+    expect(input.typedLine("hi", attrs({ chatType = "CHANNEL" }))).toBeNil()
+end
+
+@test("the typed line: nothing to keep")
+local function typedNothing()
+    expect(input.typedLine(nil, attrs({}))).toBeNil()
+    expect(input.typedLine(mock.secret("hi"), attrs({ chatType = "SAY" }))).toBeNil()
+    expect(input.typedLine(3, attrs({ chatType = "SAY" }))).toBeNil()
+    expect(input.typedLine("   ", attrs({ chatType = "SAY" }))).toBeNil()
+    expect(input.typedLine("hi", attrs({}))).toBeNil()
+    expect(input.typedLine("hi", attrs({ chatType = mock.secret("SAY") }))).toBeNil()
+    expect(input.typedLine("hi", attrs({ chatType = "BATTLEGROUND" }))).toBeNil()
+end
+
+@test("your own line from a chat event")
+local function sent()
+    expect(input.sentLine("CHAT_MSG_SAY", "hi", "Me", 0, "G1", "G1")).toBe("/s hi")
+    expect(input.sentLine("CHAT_MSG_RAID_LEADER", "go", "Me", 0, "G1", "G1")).toBe("/raid go")
+    expect(input.sentLine("CHAT_MSG_CHANNEL", "wts", "Me", 2, "G1", "G1")).toBe("/2 wts")
+    expect(input.sentLine("CHAT_MSG_CHANNEL", "wts", "Me", 0, "G1", "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_CHANNEL", "wts", "Me", mock.secret(2), "G1", "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_CHANNEL", "wts", "Me", "2", "G1", "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_WHISPER_INFORM", "yo", "Bob", 0, nil, "G1")).toBe("/w Bob yo")
+    expect(input.sentLine("CHAT_MSG_WHISPER_INFORM", "yo", "", 0, nil, "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_WHISPER_INFORM", "yo", mock.secret("Bob"), 0, nil, "G1")).toBeNil()
+end
+
+@test("someone else's line, an unknown event or no text: none")
+local function sentNone()
+    expect(input.sentLine("CHAT_MSG_SAY", "hi", "Bob", 0, "G2", "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_SAY", "hi", "Bob", 0, mock.secret("G1"), "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_SAY", "hi", "Bob", 0, "G1", mock.secret("G1"))).toBeNil()
+    expect(input.sentLine("CHAT_MSG_SYSTEM", "hi", "Me", 0, "G1", "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_SAY", "", "Me", 0, "G1", "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_SAY", mock.secret("hi"), "Me", 0, "G1", "G1")).toBeNil()
+    expect(input.sentLine("CHAT_MSG_SAY", 5, "Me", 0, "G1", "G1")).toBeNil()
+    -- the player's own GUID by default
+    expect(input.sentLine("CHAT_MSG_SAY", "hi", "Me", 0, UnitGUID("player"))).toBe("/s hi")
+end
+
+@test("the history keeps a line once in a row, the newest at most `keep`")
+local function push()
+    local list: string[] = {}
+    expect(input.push(list, "/s a", 3)).toBe(true)
+    expect(input.push(list, "/s a", 3)).toBe(false)
+    input.push(list, "/s b", 3)
+    input.push(list, "/s c", 3)
+    input.push(list, "/s d", 3)
+    expect(list).toEqual({ "/s b", "/s c", "/s d" })
+    for i = 1, 60 do input.push(list, "/s " .. i) end
+    expect(#list).toBe(input.HISTORY_KEEP)
+end
+
+@test("protected commands: the client's answer, else SuuUI's list")
+local function protectedLines()
+    expect(input.isProtectedLine("/cast Fireball", false)).toBe(true)
+    expect(input.isProtectedLine("/TARGET Bob", false)).toBe(true)
+    expect(input.isProtectedLine("/s hi", false)).toBe(false)
+    expect(input.isProtectedLine("hello", false)).toBe(false)
+    expect(input.isProtectedLine("/s hi", function(_: string): boolean return true end)).toBe(true)
+    expect(input.isProtectedLine("/cast x", function(_: string): boolean return false end)).toBe(false)
+    expect(input.isProtectedLine("/cast x", function(_: string): any return mock.secret(false) end)).toBe(true)
+    expect(input.isProtectedLine("/cast x", function(_: string): boolean error("no") end)).toBe(true)
+    -- the client's own IsSecureCmd by default
+    expect(input.isProtectedLine("/cast x")).toBe(IsSecureCmd("/cast") and true or false)
+end
+
+@test("recall: Up and Down through the list, past protected commands in combat")
+local function recall()
+    local list = { "/s a", "/cast x", "/s b" }
+    expect(input.recallIndex(list, 4, -1, false, false)).toBe(3)
+    expect(input.recallIndex(list, 3, -1, false, false)).toBe(2)
+    expect(input.recallIndex(list, 3, -1, true, false)).toBe(1)
+    expect(input.recallIndex(list, 1, 1, true, false)).toBe(3)
+    expect(input.recallIndex(list, 1, -1, false, false)).toBeNil()
+    expect(input.recallIndex(list, 4, 1, false, false)).toBeNil()
+    expect(input.recallIndex(list, 3, 1, false, false)).toBe(4)
+    expect(input.recallIndex({ "/cast x" }, 2, -1, true, false)).toBeNil()
+    expect(input.recallIndex(list, 4, -1, false)).toBe(3)
+end

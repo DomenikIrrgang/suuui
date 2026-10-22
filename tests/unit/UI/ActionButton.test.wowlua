@@ -1,0 +1,528 @@
+-- UI/ActionButton: the drawing side of an action button (key text, border,
+-- empty slots, counts, cooldowns and the GCD, usable, active, range,
+-- autocast, text size). The secure side is ActionBar's.
+
+import test, cases, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import actionButton, ActionButton, actionButtons, shortKey, setActionTextSize from "/UI/ActionButton"
+import internal cooldownFlags, digitFonts from "/UI/ActionButton"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, borderToken from "./HudHelpers"
+
+const SLOT = 130 -- a slot no SuuUI bar uses
+const MICRO = T.type["micro"].size
+const DISABLED = T.opacity["opacity-disabled"]
+
+local parent: Frame? = nil
+local made: ActionButton[] = {}
+
+local function button(size: any?): ActionButton
+    local p = parent or newParent(200, 200)
+    parent = p
+    local b: ActionButton = actionButton(p, nil, size)
+    made[#made + 1] = b
+    return b
+end
+
+-- A spell in SLOT (texture 136243).
+local function spellInSlot()
+    mock.setAction(SLOT, { type = "spell", id = 133, texture = 136243 })
+end
+
+-- A cooldown read as the game gives it.
+local function cooldownInfo(active: any, gcd: any): SpellCooldownInfo
+    return { startTime = 0, duration = 0, isEnabled = true, modRate = 1, isActive = active, isOnGCD = gcd } :: any
+end
+
+local function fakeActionCooldown(active: any, gcd: any)
+    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): any return cooldownInfo(active, gcd) end)
+    mock.fake("C_ActionBar.GetActionCooldownDuration", function(_: number): any return { duration = true } end)
+end
+
+@afterEach
+local function cleanup()
+    -- the buttons made here leave the keybind list again
+    for _, b in ipairs(made) do
+        b:Hide()
+        for i = #actionButtons, 1, -1 do
+            if actionButtons[i] == b then table.remove(actionButtons, i) end
+        end
+    end
+    made = {}
+    if parent then parent:Hide() end
+    parent = nil
+    mock.setAction(SLOT, nil)
+    setActionTextSize(nil)
+end
+
+@test("shortKey: modifiers and long key names shortened")
+@cases({
+    { "SHIFT-1", "S1" }, { "CTRL-ALT-2", "CA2" }, { "META-Q", "⌘Q" }, { "MOUSEWHEELUP", "WU" },
+    { "MOUSEWHEELDOWN", "WD" }, { "MIDDLEMOUSE", "M3" }, { "BUTTON4", "M4" }, { "NUMPAD5", "N5" },
+    { "NUMPADPLUS", "N+" }, { "NUMPADMINUS", "N-" }, { "NUMPADMULTIPLY", "N*" }, { "NUMPADDIVIDE", "N/" },
+    { "NUMPADDECIMAL", "N." }, { "SPACE", "Sp" }, { "BACKSPACE", "Bs" }, { "CAPSLOCK", "Cp" },
+    { "PAGEUP", "PU" }, { "PAGEDOWN", "PD" }, { "INSERT", "Ins" }, { "DELETE", "Del" }, { "HOME", "Hm" },
+    { "END", "End" }, { "ESCAPE", "Esc" }, { "ENTER", "Ent" }, { "TAB", "Tab" }, { "F", "F" }, { "", "" },
+})
+local function keys(key: string, out: string)
+    expect(shortKey(key)).toBe(out)
+end
+
+@test("shortKey(nil) is empty")
+local function noKey()
+    expect(shortKey(nil)).toBe("")
+end
+
+@test("cooldownFlags: active and GCD, false while unknown")
+local function flags()
+    local a, g = cooldownFlags(nil)
+    expect(a).toBe(false); expect(g).toBe(false)
+    a, g = cooldownFlags(cooldownInfo(true, true))
+    expect(a).toBe(true); expect(g).toBe(true)
+    a, g = cooldownFlags(cooldownInfo(mock.secret(true), mock.secret(false)))
+    expect(a).toBe(false); expect(g).toBe(false)
+    a, g = cooldownFlags(mock.secret(cooldownInfo(true, true)))
+    expect(a).toBe(false); expect(g).toBe(false)
+end
+
+@test("a new button: listed, sized, empty and invisible")
+local function fresh()
+    local b = button()
+    expect(actionButtons[#actionButtons]).toBe(b)
+    expect(b:GetWidth()).toBe(T.size["action"])
+    expect(button("action-sm"):GetWidth()).toBe(T.size["action-sm"])
+    expect(b.hotkeyText).toBe("")
+    expect(b.hotkeyShown).toBe(true)
+    expect(b.grid).toBe(false)
+    expect(b.textSize).toBe(MICRO)
+    expect(b.ring.top).never.toBeShown()
+    expect(b.veil).never.toBeShown()
+    expect(b.flash:GetAlpha()).toBe(0)
+    expect(borderToken(b.border)).toBe("gilt-hairline")
+    expectNoErrors()
+end
+
+@test("Update without an action: no art, faded out unless grid or showEmpty")
+local function empty()
+    local b = button()
+    b:SetSlot(SLOT)
+    expect(b.slot).toBe(SLOT)
+    expect(b.hasAction).toBe(false)
+    expect(b.art).never.toBeShown()
+    expect(b.face:GetAlpha()).toBe(0)
+    b:SetGrid(true)
+    expect(b.face:GetAlpha()).toBe(1)
+    b:SetGrid(nil)
+    expect(b.face:GetAlpha()).toBe(0)
+    b.showEmpty = true
+    b:UpdateEmpty()
+    expect(b.face:GetAlpha()).toBe(1)
+    -- no slot at all
+    b:SetSlot(nil)
+    expect(b.hasAction).toBe(false)
+end
+
+@test("Update with an action: its art and count")
+local function filled()
+    local b = button()
+    mock.setAction(SLOT, { type = "item", id = 6948, texture = 134414, count = "7" })
+    b:SetSlot(SLOT)
+    expect(b.hasAction).toBe(true)
+    expect(b.art).toBeShown()
+    expect(b.art:GetTextureFileID()).toBe(134414)
+    expect(b.count).toHaveText("7")
+    expect(b.face:GetAlpha()).toBe(1)
+    -- the slot changes away
+    mock.setAction(SLOT, nil)
+    b:Update()
+    expect(b.art).never.toBeShown()
+    expect(b.count).toHaveText("")
+    expectNoErrors()
+end
+
+@test("SetSlot tells onSlotChanged and starts clean; the same slot does nothing")
+local function slotChange()
+    local b = button()
+    local spy = mock.spy(function(_: ActionButton, _: number?, _: number?) end)
+    b.onSlotChanged = spy
+    b.coolingDown = true
+    b:SetSlot(SLOT)
+    expect(spy).toHaveBeenCalledWith(b, nil, SLOT)
+    expect(b.coolingDown).toBe(false)
+    b:SetSlot(SLOT)
+    expect(spy).toHaveBeenCalledTimes(1)
+    b:SetSlot(SLOT + 1)
+    expect(spy).toHaveBeenCalledWith(b, SLOT, SLOT + 1)
+end
+
+@test("the key text: shown with an action and the setting, ember when out of range")
+local function hotkey()
+    local b = button()
+    b:SetHotkey("S1")
+    expect(b.hotkey).toHaveText("S1")
+    expect(b.hotkey).never.toBeShown() -- no action yet
+    spellInSlot()
+    b:SetSlot(SLOT)
+    expect(b.hotkey).toBeShown()
+    expect(tokenOf(b.hotkey)).toBe("ink-muted")
+    b:SetOutOfRange(true)
+    expect(tokenOf(b.hotkey)).toBe("ember-text")
+    b:SetHotkeyShown(false)
+    expect(b.hotkeyShown).toBe(false)
+    expect(b.hotkey).never.toBeShown()
+    b:SetHotkeyShown(1)
+    b:SetHotkey(nil)
+    expect(b.hotkeyText).toBe("")
+    expect(b.hotkey).never.toBeShown()
+end
+
+@test("the border: ink while active, gilt while hovered, the hairline at rest")
+local function borderStates()
+    local b = button()
+    b.hover = true
+    b:UpdateBorder()
+    expect(borderToken(b.border)).toBe("gilt")
+    b:ShowActive(true)
+    expect(borderToken(b.border)).toBe("ink")
+    expect(b.ring.top).toBeShown()
+    b.hover = false
+    b:ShowActive(nil)
+    expect(b.active).toBe(false)
+    expect(borderToken(b.border)).toBe("gilt-hairline")
+    expect(b.ring.top).never.toBeShown()
+end
+
+@test("hover shows the slot's tooltip with the bar's note; the press moves the face")
+local function hover()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    local setAction = mock.spy(function(_: any, _: any) end)
+    mock.stub(GameTooltip :: any, "SetAction", setAction)
+    b.tooltipNote = "Bar 1: page 2"
+    mock.hover(b)
+    expect(b.hover).toBe(true)
+    expect(borderToken(b.border)).toBe("gilt")
+    expect(setAction).toHaveBeenCalledWith(GameTooltip, SLOT)
+    expect(GameTooltip:GetOwner()).toBe(b)
+    expect(GameTooltip).toBeShown()
+    mock.hover(nil)
+    expect(b.hover).toBe(false)
+    expect(GameTooltip).never.toBeShown()
+    -- an empty slot shows no tooltip
+    b:SetSlot(SLOT + 1)
+    mock.hover(b)
+    expect(setAction).toHaveBeenCalledTimes(1)
+    mock.hover(nil)
+    -- the press
+    mock.script(b, "OnMouseDown", "LeftButton")
+    local _, _, _, _, y = b.face:GetPoint(1)
+    expect(y).toBe(-1)
+    mock.script(b, "OnMouseUp", "LeftButton")
+    local _, _, _, _, y2 = b.face:GetPoint(1)
+    expect(y2).toBe(0)
+    expectNoErrors()
+end
+
+@test("a real cooldown greys the art; coming off it flashes")
+local function cooldown()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    fakeActionCooldown(true, false)
+    b:UpdateCooldown()
+    expect(b.coolingDown).toBe(true)
+    expect(b.onGCD).toBe(false)
+    expect(b.cooldown:GetHideCountdownNumbers()).toBe(false)
+    expect(b.art:GetDesaturation()).toBe(1)
+    local v = b.art:GetVertexColor()
+    expect(v).toBeCloseTo(0.7)
+    fakeActionCooldown(false, false)
+    b:UpdateCooldown()
+    expect(b.coolingDown).toBe(false)
+    expect(b.flash:GetAlpha() > 0.9).toBe(true)
+    expect(b.art:GetDesaturation()).toBe(0)
+    mock.advanceTime(1)
+    mock.advanceFrames(2)
+    expect(b.flash:GetAlpha()).toBe(0)
+    expectNoErrors()
+end
+
+@test("the GCD sweeps without digits and keeps the colour")
+local function gcd()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    fakeActionCooldown(true, true)
+    b:UpdateCooldown()
+    expect(b.onGCD).toBe(true)
+    expect(b.coolingDown).toBe(false)
+    expect(b.cooldown:GetHideCountdownNumbers()).toBe(true)
+    expect(b.art:GetDesaturation()).toBe(0)
+end
+
+@test("right after the GCD a 'real' cooldown is believed only if it holds")
+local function gcdEdge()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    fakeActionCooldown(true, true)
+    b:UpdateCooldown()
+    -- the moment the GCD ends the game reports a real cooldown
+    fakeActionCooldown(true, false)
+    b:UpdateCooldown()
+    expect(b.coolingDown).toBe(false)
+    expect(b.recheck).toBe(true)
+    b:UpdateCooldown() -- one recheck at a time
+    -- it ended meanwhile: never grey
+    fakeActionCooldown(false, false)
+    mock.advanceTime(0.2)
+    expect(b.recheck).toBeNil()
+    expect(b.coolingDown).toBe(false)
+    -- a real one that holds is believed
+    fakeActionCooldown(true, true)
+    b:UpdateCooldown()
+    fakeActionCooldown(true, false)
+    b:UpdateCooldown()
+    mock.advanceTime(0.2)
+    expect(b.coolingDown).toBe(true)
+    expect(b.confirming).toBeNil()
+end
+
+@test("a cooldown without a duration object still draws its state")
+local function noDuration()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): any return cooldownInfo(true, false) end)
+    mock.fake("C_ActionBar.GetActionCooldownDuration", function(_: number): any return nil end)
+    b:UpdateCooldown()
+    expect(b.coolingDown).toBe(true)
+end
+
+@test("the sweep's end looks again, at once and a moment later")
+local function cooldownDone()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    fakeActionCooldown(true, false)
+    b:UpdateCooldown()
+    local reads = 0
+    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): any
+        reads = reads + 1
+        return cooldownInfo(false, false)
+    end)
+    mock.script(b.cooldown, "OnCooldownDone")
+    expect(reads).toBe(1)
+    expect(b.coolingDown).toBe(false)
+    mock.advanceTime(0.15)
+    expect(reads).toBe(2)
+end
+
+@test("stance and pet buttons: the spell's cooldown, no slot")
+local function spellCooldown()
+    local b = button()
+    b.hasAction = true
+    mock.fake("C_Spell.GetSpellCooldown", function(_: any): any return cooldownInfo(true, false) end)
+    mock.fake("C_Spell.GetSpellCooldownDuration", function(_: any): any return { duration = true } end)
+    b:ShowSpellCooldown(2457)
+    expect(b.cooldownSpell).toBe(2457)
+    expect(b.coolingDown).toBe(true)
+    -- UpdateCooldown follows the spell
+    mock.fake("C_Spell.GetSpellCooldown", function(_: any): any return cooldownInfo(false, false) end)
+    b:UpdateCooldown()
+    expect(b.coolingDown).toBe(false)
+    -- without a spell nothing is read
+    b:ShowSpellCooldown(nil)
+    expect(b.cooldownSpell).toBeNil()
+    b:UpdateCooldown()
+    -- no action: nothing at all
+    b.hasAction = false
+    b:UpdateCooldown()
+    expectNoErrors()
+end
+
+@test("usable: unusable or out of mana dims, unknown never does")
+local function usable()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    local answer: { any } = { true, false }
+    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (any, any) return answer[1], answer[2] end)
+    b:UpdateUsable()
+    expect(b.unusable).toBe(false)
+    expect(b.face:GetAlpha()).toBe(1)
+    answer = { false, false }
+    b:UpdateUsable()
+    expect(b.unusable).toBe(true)
+    expect(b.face:GetAlpha()).toBeCloseTo(DISABLED)
+    expect(b.art:GetDesaturation()).toBe(1)
+    answer = { true, true }
+    b:UpdateUsable()
+    expect(b.unusable).toBe(true)
+    answer = { mock.secret(false), mock.secret(true) }
+    b:UpdateUsable()
+    expect(b.unusable).toBe(false)
+    -- no action: usable
+    b:SetSlot(SLOT + 1)
+    expect(b.unusable).toBe(false)
+end
+
+@test("usable through IsUsableAction where C_ActionBar lacks it")
+local function usableFallback()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    local api = C_ActionBar :: any -- remove a function the declarations type as present
+    local was = api.IsUsableAction
+    api.IsUsableAction = nil
+    mock.fake("IsUsableAction", function(_: number): (boolean, boolean) return false, false end)
+    b:UpdateUsable()
+    api.IsUsableAction = was
+    expect(b.unusable).toBe(true)
+end
+
+@test("active: the current action or auto repeat")
+local function active()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    expect(b.active).toBe(false)
+    mock.fake("IsCurrentAction", function(_: number): any return true end)
+    b:UpdateActive()
+    expect(b.active).toBe(true)
+    mock.fake("IsCurrentAction", function(_: number): any return mock.secret(true) end)
+    mock.fake("IsAutoRepeatAction", function(_: number): any return true end)
+    b:UpdateActive()
+    expect(b.active).toBe(true)
+    mock.fake("IsAutoRepeatAction", function(_: number): any return false end)
+    b:UpdateActive()
+    expect(b.active).toBe(false)
+end
+
+@test("out of range: the ember veil, only with an action")
+local function range()
+    local b = button()
+    b:SetOutOfRange(true)
+    expect(b.outOfRange).toBe(false) -- no action: never out of range
+    expect(b.veil).never.toBeShown()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    b:SetOutOfRange(true)
+    expect(b.outOfRange).toBe(true)
+    expect(b.veil).toBeShown()
+    expect(b.art:GetDesaturation()).toBeCloseTo(0.6)
+    b:SetOutOfRange(true)
+    b:SetOutOfRange(false)
+    expect(b.veil).never.toBeShown()
+    expect(b.art:GetDesaturation()).toBe(0)
+end
+
+@test("autocast: a dashed ring, rebuilt for a new size")
+local function autocast()
+    local b = button()
+    b:ShowAutocast(false)
+    expect(b.dashes).toBeNil()
+    b:ShowAutocast(true)
+    local dashes = b.dashes :: Texture[]
+    expect(#dashes > 0).toBe(true)
+    expect(dashes[1]).toBeShown()
+    b:ShowAutocast(false)
+    expect(dashes[1]).never.toBeShown()
+    -- a resize with the ring on draws it again
+    b:ShowAutocast(true)
+    local n = #dashes
+    b:Resize(T.size["action"] + 12)
+    expect(b:GetWidth()).toBe(T.size["action"] + 12)
+    expect(dashes[1]).never.toBeShown()
+    local again = b.dashes :: Texture[]
+    expect(#again > n).toBe(true)
+    -- the same size: nothing
+    b:Resize(T.size["action"] + 12)
+    expect(b.dashes).toBe(again)
+    -- a resize with the ring off drops it
+    b:ShowAutocast(false)
+    b:Resize(20)
+    expect(b.dashes).toBeNil()
+    b:Resize(30)
+    expect(b.dashes).toBeNil()
+end
+
+@test("text size: never below micro; every button at once; a theme sets it again")
+local function textSize()
+    local b = button()
+    b:SetTextSize(4)
+    expect(b.textSize).toBe(MICRO)
+    b:SetTextSize(14)
+    expect(b.textSize).toBe(14)
+    local _, px = b.hotkey:GetFont()
+    expect(px).toBeCloseTo(14)
+    b:SetTextSize(14) -- unchanged
+    expect(digitFonts[140]).never.toBeNil()
+    setActionTextSize(12)
+    expect(b.textSize).toBe(12)
+    local other = button()
+    expect(other.textSize).toBe(12)
+    b.textSize = 99
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(b.textSize).toBe(12)
+    expectNoErrors()
+end
+
+@test("clients without the newer action APIs; a cooldown that stays")
+local function olderClients()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    local api = C_ActionBar :: any -- remove functions the declarations type as present
+    local count, cd = api.GetActionDisplayCount, api.GetActionCooldown
+    api.GetActionDisplayCount, api.GetActionCooldown = nil, nil
+    b:Update()
+    api.GetActionDisplayCount, api.GetActionCooldown = count, cd
+    expect(b.count).toHaveText("")
+    expect(b.coolingDown).toBe(false)
+    -- a real cooldown read twice stays one
+    fakeActionCooldown(true, false)
+    b:UpdateCooldown()
+    b:UpdateCooldown()
+    expect(b.coolingDown).toBe(true)
+    -- a spell cooldown without a duration API
+    local spell = C_Spell :: any
+    local dur = spell.GetSpellCooldownDuration
+    spell.GetSpellCooldownDuration = nil
+    mock.fake("C_Spell.GetSpellCooldown", function(_: any): any return cooldownInfo(true, false) end)
+    b:ShowSpellCooldown(2457)
+    spell.GetSpellCooldownDuration = dur
+    expect(b.coolingDown).toBe(true)
+end
+
+@test("the countdown font follows the text size where the client has it")
+local function countdownFont()
+    local b = button()
+    local fonts: { string } = {}
+    mock.stub(b.cooldown :: any, "SetCountdownFont", function(_: any, name: string) fonts[#fonts + 1] = name end)
+    b:SetTextSize(13)
+    expect(fonts).toEqual({ "SuuUIActionDigits130" })
+end
+
+@test("tooltip: no note; leaving when another frame owns the tooltip")
+local function tooltipOwner()
+    local b = button()
+    spellInSlot()
+    b:SetSlot(SLOT)
+    mock.stub(GameTooltip :: any, "SetAction", function(_: any, _: any) end)
+    mock.hover(b)
+    expect(GameTooltip:GetOwner()).toBe(b)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:Show()
+    mock.hover(nil)
+    expect(GameTooltip).toBeShown()
+    GameTooltip:Hide()
+    -- a forbidden tooltip is left alone
+    mock.stub(GameTooltip :: any, "IsForbidden", function(_: any): boolean return true end)
+    mock.hover(b)
+    expect(GameTooltip:GetOwner()).never.toBe(b)
+    mock.hover(nil)
+end

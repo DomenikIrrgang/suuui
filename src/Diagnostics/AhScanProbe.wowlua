@@ -1,0 +1,114 @@
+-- Diagnostics/AhScanProbe.wowlua
+-- "/suu probe ahscan" (at the auction house): does the full scan work on
+-- Forever? It asks the game for every auction once (ReplicateItems), waits
+-- for REPLICATE_ITEM_LIST_UPDATE (a minute at most), and records how long it
+-- took, how many auctions came back, how many had all their info, and five
+-- of them. While it waits it samples, every quarter second, how many
+-- auctions the game already holds (GetNumReplicateItems) and counts the
+-- events that come (does the list fill as it arrives? asked 2026-10-16 for a
+-- progress under the scanning mark). Saved in SuuUIProbe.ahScan on /reload.
+-- The game allows this only now and then (every 15 minutes), so run it once.
+
+import after, every from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+
+-- the scan being waited for, and the frame that hears its answer
+local waiting: boolean? = nil
+local listFrame: Frame? = nil
+
+local function show(v: any): string
+    if isSecret(v) then return "secret" end
+    return tostring(v)
+end
+
+local function store(out: { [string]: any })
+    DB.probe.ahScan = out
+end
+
+-- What came back: the count, the share with all info, five samples.
+local function collect(out: { [string]: any })
+    local ok, n = pcall(C_AuctionHouse.GetNumReplicateItems)
+    out.count = ok and show(n) or ("error: " .. tostring(n))
+    if not ok or type(n) ~= "number" then return end
+    local full, samples = 0, {}
+    for i = 0, n - 1 do
+        local okInfo, name, _, count, quality, _, level, _, minBid, _, buyout, _, _, _, owner, _, _, itemID, hasAll =
+            pcall(C_AuctionHouse.GetReplicateItemInfo, i)
+        if okInfo then
+            if hasAll then full = full + 1 end
+            if #samples < 5 then
+                samples[#samples + 1] = ("%s | item %s | x%s | q%s | lvl %s | bid %s | buyout %s | owner %s | all %s"):format(
+                    show(name), show(itemID), show(count), show(quality), show(level), show(minBid), show(buyout), show(owner), show(hasAll))
+            end
+        elseif #samples < 5 then
+            samples[#samples + 1] = "error at " .. i .. ": " .. tostring(name)
+        end
+    end
+    out.withAllInfo = full
+    out.samples = samples
+end
+
+export function command()
+    if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then
+        print("Auction house scan probe: open the auction house first.")
+        return
+    end
+    if waiting then print("Auction house scan probe: already waiting for the scan.") return end
+    local out: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    store(out)
+    local okReady, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
+    out.throttleReady = okReady and show(ready) or ("error: " .. tostring(ready))
+    local started = GetTime()
+    local f = listFrame or CreateFrame("Frame")
+    listFrame = f
+    f:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
+    -- what fills while it waits: the count every quarter second (when it
+    -- changes), and every auction house event by name
+    out.while_waiting, out.events = {}, {}
+    local last: string? = nil
+    local ticker = every(0.25, function()
+        local okN, n = pcall(C_AuctionHouse.GetNumReplicateItems)
+        local v = okN and show(n) or "error"
+        if v ~= last then
+            last = v
+            table.insert(out.while_waiting, ("%.2fs: %s"):format(GetTime() - started, v))
+        end
+    end)
+    local watch = CreateFrame("Frame")
+    for _, e in ipairs({ "REPLICATE_ITEM_LIST_UPDATE", "AUCTION_HOUSE_THROTTLED_MESSAGE_SENT", "AUCTION_HOUSE_THROTTLED_MESSAGE_QUEUED",
+                         "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED", "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
+                         "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "ITEM_KEY_ITEM_INFO_RECEIVED" }) do
+        pcall(watch.RegisterEvent, watch, e)
+    end
+    watch:SetScript("OnEvent", function(_, e)
+        out.events[e] = out.events[e] or { count = 0 }
+        local ev = out.events[e]
+        ev.count = ev.count + 1
+        ev.first = ev.first or ("%.2fs"):format(GetTime() - started)
+        ev.last = ("%.2fs"):format(GetTime() - started)
+    end)
+    local function finish(why: string)
+        if not waiting then return end
+        waiting = nil
+        ticker:Cancel()
+        after(2, function() watch:UnregisterAllEvents() end)
+        f:UnregisterEvent("REPLICATE_ITEM_LIST_UPDATE")
+        out.result = why
+        out.seconds = ("%.1f"):format(GetTime() - started)
+        collect(out)
+        print(("Auction house scan probe: %s after %ss, %s auctions (%s with all info). /reload to save."):format(
+            why, out.seconds, tostring(out.count), tostring(out.withAllInfo)))
+    end
+    f:SetScript("OnEvent", function() finish("list came back") end)
+    waiting = true
+    local ok, err = pcall(C_AuctionHouse.ReplicateItems)
+    out.call = ok and "ok" or ("error: " .. tostring(err))
+    if not ok then
+        finish("the call failed")
+        return
+    end
+    print("Auction house scan probe: asked for every auction; waiting up to a minute.")
+    after(60, function() finish("no answer in a minute") end)
+end

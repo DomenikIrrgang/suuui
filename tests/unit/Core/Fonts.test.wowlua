@@ -1,0 +1,77 @@
+-- Core/Fonts: one Font object per text style, following the tokens.
+
+import test, expect, afterEach from "wowlua:test"
+import tokens as T, TextStyle from "/Core/Tokens"
+import * as fonts from "/Core/Fonts"
+import newParent from "../../helpers"
+
+local function styles(): { [string]: TextStyle } return T.type :: { [string]: TextStyle } end
+
+local label = T.type.label
+local savedLabel = { file = label.file, size = label.size, lineHeight = label.lineHeight }
+
+@afterEach
+local function restore()
+    label.file, label.size, label.lineHeight = savedLabel.file, savedLabel.size, savedLabel.lineHeight
+    fonts.refresh()
+end
+
+@test("every text style has its Font object, named after it")
+local function objects()
+    for name, style in pairs(styles()) do
+        local font = fonts.get(name)
+        expect(font:GetName()).toBe("SuuUIFont_" .. name:gsub("%-", "_"))
+        local file, size = font:GetFont()
+        expect(file).toBe(style.file)
+        -- (the client keeps sizes as floats: 12.999999 for 13)
+        expect(size).toBeCloseTo(style.size, 4)
+        expect(font:GetSpacing()).toBeCloseTo(style.lineHeight - style.size, 4)
+        expect(font:GetJustifyH()).toBe("LEFT")
+    end
+    expect(_G.SuuUIFont_unit_name_lg).toBe(fonts.get("unit-name-lg"))
+end
+
+@test("the Font objects are drawn in ink")
+local function ink()
+    local r, g, b = fonts.get("body"):GetTextColor()
+    expect(r).toBeCloseTo(T.color.ink[1], 3)
+    expect(g).toBeCloseTo(T.color.ink[2], 3)
+    expect(b).toBeCloseTo(T.color.ink[3], 3)
+end
+
+@test("an unknown style is an error naming it")
+local function unknown()
+    expect(function() fonts.get("shouting") end).toThrow("SuuUI: unknown text style shouting")
+end
+
+@test("apply sets a FontString to a style's Font object")
+local function apply()
+    local p = newParent()
+    local fs = p:CreateFontString()
+    fonts.apply(fs, "caption")
+    expect(fs:GetFontObject()).toBe(fonts.get("caption"))
+    p:Hide()
+end
+
+@test("refresh takes a style's new face, size and line height")
+local function refresh()
+    label.file = T.type.body.file
+    label.size, label.lineHeight = 20, 26
+    fonts.refresh()
+    local file, size = fonts.get("label"):GetFont()
+    expect(file).toBe(T.type.body.file)
+    expect(size).toBeCloseTo(20, 4)
+    expect(fonts.get("label"):GetSpacing()).toBeCloseTo(6, 4)
+end
+
+@test("refresh skips a style the tokens no longer have")
+local function refreshMissing()
+    -- (a shape the generated tokens never have: written through an untyped view)
+    local all: { [string]: any } = T.type :: any
+    local before = { fonts.get("micro"):GetFont() }
+    local micro = all.micro
+    all.micro = nil
+    fonts.refresh()
+    all.micro = micro
+    expect({ fonts.get("micro"):GetFont() }).toEqual(before)
+end

@@ -1,0 +1,151 @@
+-- UI/Bar: the status bar's build (size, track, border, gradient fill, the
+-- ghost), its values (secret ones too) and the ghost's hold and catch-up.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as draw from "/UI/Draw"
+import statusBar, Bar, StatusBarOptions from "/UI/Bar"
+import expectNoErrors, newParent from "../../helpers"
+import paintOf, tokenOf, pointOf from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function make(opts: StatusBarOptions?): Bar
+    parent = newParent()
+    return statusBar(parent :: Frame, opts)
+end
+
+@afterEach
+local function cleanup()
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+@test("a default bar: bar-lg by unit-lg, sunk track, gilt border, the unit gradient")
+local function defaults()
+    local b = make(nil)
+    expect(b).toHaveSize(draw.size("bar-lg"), draw.size("unit-lg"))
+    expect(tokenOf(b.track)).toBe("surface-sunk")
+    expect(b.border).toBeTruthy()
+    expect(tokenOf((b.border :: draw.Border).top)).toBe("gilt-hairline")
+    expect(b.ghost).toBeNil()
+    expect(paintOf(b.bar:GetStatusBarTexture())).toEqual({
+        kind = "gradient", token = "unit-fill-deep", token2 = "unit-fill", orientation = "HORIZONTAL",
+    })
+    expect(pointOf(b.bar)).toEqual({ point = "TOPLEFT", relativeTo = b, relativePoint = "TOPLEFT", x = 1, y = -1 })
+    expect(b.bar:GetFrameLevel()).toBe(b:GetFrameLevel() + 2)
+    local min, max = b.bar:GetMinMaxValues()
+    expect({ min, max, b.bar:GetValue() }).toEqual({ 0, 1, 0 })
+end
+
+@test("sizes in px or tokens, a track and border token, no border")
+local function options()
+    local b = make({ width = 120, height = "unit-lg", track = "surface", border = false })
+    expect(b).toHaveSize(120, draw.size("unit-lg"))
+    expect(tokenOf(b.track)).toBe("surface")
+    expect(b.border).toBeNil()
+    expect(pointOf(b.bar)).toEqual({ point = "TOPLEFT", relativeTo = b, relativePoint = "TOPLEFT", x = 0, y = 0 })
+    local c = make({ border = "arcane" })
+    expect(tokenOf((c.border :: draw.Border).left)).toBe("arcane")
+end
+
+@test("a fill without a deep end is one colour across")
+local function fillOnly()
+    local b = make({ fill = "mana" })
+    local p = paintOf(b.bar:GetStatusBarTexture()) :: any
+    expect({ p.token, p.token2 }).toEqual({ "mana", "mana" })
+    local c = make({ fill = "mana", deep = "ward" })
+    p = paintOf(c.bar:GetStatusBarTexture()) :: any
+    expect({ p.token, p.token2 }).toEqual({ "ward", "mana" })
+end
+
+@test("SetFill repaints the gradient")
+local function setFill()
+    local b = make(nil)
+    b:SetFill("unit-fill-low", "unit-fill-low-deep")
+    local p = paintOf(b.bar:GetStatusBarTexture()) :: any
+    expect({ p.token, p.token2 }).toEqual({ "unit-fill-low-deep", "unit-fill-low" })
+    b:SetFill("ember")
+    p = paintOf(b.bar:GetStatusBarTexture()) :: any
+    expect({ p.token, p.token2 }).toEqual({ "ember", "ember" })
+end
+
+@test("the ghost sits under the bar in the ghost colour")
+local function ghostBuild()
+    local b = make({ ghost = true })
+    local ghost = b.ghost :: StatusBar
+    expect(tokenOf(ghost)).toBe("ghost")
+    expect(ghost:GetFrameLevel()).toBe(b:GetFrameLevel() + 1)
+    expect(pointOf(ghost, 2)).toEqual({ point = "BOTTOMRIGHT", relativeTo = b, relativePoint = "BOTTOMRIGHT", x = -1, y = 1 })
+end
+
+@test("SetMinMax sets the bar and the ghost")
+local function minMax()
+    local b = make({ ghost = true })
+    b:SetMinMax(0, 200)
+    local min, max = b.bar:GetMinMaxValues()
+    expect({ min, max }).toEqual({ 0, 200 })
+    min, max = (b.ghost :: StatusBar):GetMinMaxValues()
+    expect({ min, max }).toEqual({ 0, 200 })
+    local plain = make(nil)
+    plain:SetMinMax(5, 10)
+    min, max = plain.bar:GetMinMaxValues()
+    expect({ min, max }).toEqual({ 5, 10 })
+end
+
+@test("without a ghost a value is set at once")
+local function valueNoGhost()
+    local b = make(nil)
+    b:SetMinMax(0, 100)
+    b:SetValue(40)
+    expect(b.bar:GetValue()).toBe(40)
+    expect(b.ghostTimer).toBeNil()
+    b:SetValueNow(10)
+    expect(b.bar:GetValue()).toBe(10)
+end
+
+@test("the ghost holds 150 ms, then follows to the latest value")
+local function ghostHolds()
+    local b = make({ ghost = true })
+    local ghost = b.ghost :: StatusBar
+    b:SetMinMax(0, 100)
+    b:SetValueNow(100)
+    b:SetValue(60)
+    expect(b.bar:GetValue()).toBe(60)
+    expect(ghost:GetValue()).toBe(100)
+    local timer = b.ghostTimer
+    b:SetValue(30) -- inside the hold: the same timer, a new target
+    expect(b.ghostTimer).toBe(timer)
+    mock.advanceTime(0.1)
+    expect(ghost:GetValue()).toBe(100)
+    mock.advanceTime(0.1)
+    expect(ghost:GetValue()).toBe(30)
+    expect(b.ghostTimer).toBeNil()
+end
+
+@test("SetValueNow drops a waiting ghost and moves it at once")
+local function valueNow()
+    local b = make({ ghost = true })
+    local ghost = b.ghost :: StatusBar
+    b:SetMinMax(0, 100)
+    b:SetValue(70)
+    b:SetValueNow(20)
+    expect(b.ghostTimer).toBeNil()
+    expect(ghost:GetValue()).toBe(20)
+    mock.advanceTime(0.5)
+    expect(ghost:GetValue()).toBe(20)
+    expect(b.bar:GetValue()).toBe(20)
+    -- with nothing waiting
+    b:SetValueNow(5)
+    expect(ghost:GetValue()).toBe(5)
+end
+
+@test("secret values go straight to the engine, ghost included")
+local function secretValues()
+    local b = make({ ghost = true })
+    b:SetMinMax(mock.secret(0), mock.secret(100))
+    b:SetValue(mock.secret(50))
+    mock.advanceTime(0.2)
+    b:SetValueNow(mock.secret(25))
+end

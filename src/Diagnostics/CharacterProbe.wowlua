@@ -1,0 +1,203 @@
+-- Diagnostics/CharacterProbe.wowlua
+-- "/suu probe character": what Forever's Character window is made of (step
+-- 3.1). Saved in SuuUIProbe.character on /reload.
+--   * now: CharacterFrame (protected?, panel attributes, size, art, its
+--     keyed children two levels deep), its tabs (name, text, shown), the
+--     equipment slots, the side panes, the functions and C_ namespaces the
+--     window uses (equipment sets, reputation, currency, skills, honor)
+--   * each time you run it again: which of its panels show (run it once per
+--     tab with the window open)
+--   * from now until /reload, a log: tab and panel switches (the functions
+--     Blizzard calls), the window opening and closing, blocked actions
+--
+--   /suu probe character   with the Character window open on each tab in
+--                          turn (Character, Reputation, Currency, Honor or
+--                          PvP, Skills, any others), then /reload
+
+import hook, hookScript from "wowlua:hooks"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+
+local function show(v: any): string
+    if isSecret(v) then return "secret" end
+    if v == nil then return "nil" end
+    return tostring(v)
+end
+
+local function namesIn(t: any): string[]
+    local out: string[] = {}
+    if type(t) ~= "table" then return { "missing" } end
+    for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
+    table.sort(out)
+    return out
+end
+
+local function keyedChildren(f: any): string[]
+    local out: string[] = {}
+    for k, v in pairs(f) do
+        if type(k) == "string" and type(v) == "table" and v.GetObjectType and not (v.IsForbidden and v:IsForbidden()) then
+            out[#out + 1] = k
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- Any widget: a frame, a texture, a font string, an animation (each answers
+-- only some of these).
+local function frameLine(f: any): string
+    if type(f) ~= "table" or not f.GetObjectType then return "missing" end
+    local function ask(method: string): (any, any)
+        if type(f[method]) ~= "function" then return nil end
+        local ok, a, b = pcall(f[method], f)
+        if ok then return a, b end
+    end
+    local w, h = ask("GetSize")
+    return ("%s shown=%s protected=%s size=%dx%d strata=%s"):format(f:GetObjectType(), show(ask("IsShown")),
+        show(ask("IsProtected")), tonumber(w) or 0, tonumber(h) or 0, show(ask("GetFrameStrata")))
+end
+
+-- A frame and its keyed children, two levels deep.
+local function tree(f: any, depth: number): any
+    if type(f) ~= "table" or not f.GetObjectType then return "missing" end
+    local node = { info = frameLine(f) }
+    if depth > 0 then
+        node.children = {}
+        for _, k in ipairs(keyedChildren(f)) do
+            node.children[k] = (depth > 1) and tree(f[k], depth - 1) or frameLine(f[k])
+        end
+    end
+    return node
+end
+
+local SLOTS = { "Head", "Neck", "Shoulder", "Back", "Chest", "Shirt", "Tabard", "Wrist", "Hands", "Waist", "Legs",
+                "Feet", "Finger0", "Finger1", "Trinket0", "Trinket1", "MainHand", "SecondaryHand", "Ranged", "Ammo" }
+
+local PANES = { "PaperDollFrame", "CharacterStatsPane", "PaperDollItemsFrame", "PaperDollSidebarTabs",
+                "PaperDollTitlesPane", "PaperDollEquipmentManagerPane", "GearManagerDialog", "CharacterModelScene",
+                "CharacterModelFrame", "CharacterFrameInset", "CharacterFrameInsetRight", "ReputationFrame",
+                "ReputationDetailFrame", "TokenFrame", "TokenFramePopup", "CurrencyTransferMenu", "SkillFrame",
+                "HonorFrame", "PVPFrame", "PVPUIFrame", "CharacterFrameTitleText", "PaperDollFrame_UpdateStats",
+                "StatisticsFrame", "AchievementFrame", "LegacyFrame" }
+
+local FUNCS = { "ToggleCharacter", "CharacterFrame_ShowSubFrame", "CharacterFrameTab_OnClick", "PaperDollFrame_SetSidebar",
+                "PaperDollFrame_UpdateStats", "ReputationFrame_Update", "TokenFrame_Update", "SkillFrame_Update",
+                "ToggleTokenFrame", "TogglePVPUI", "TogglePVPFrame", "ToggleHonorFrame", "PanelTemplates_SetTab",
+                "PanelTemplates_TabResize", "CharacterFrame_Collapse", "CharacterFrame_Expand", "ShowUIPanel", "HideUIPanel" }
+
+local store: { [string]: any }? = nil
+local function note(s: string)
+    local log = store and store.log
+    if not log then return end
+    log[#log + 1] = date("%H:%M:%S") .. (InCombatLockdown() and " [combat] " or " ") .. s
+    while #log > 300 do table.remove(log, 1) end
+end
+
+local logging = false
+local function startLog()
+    if logging then return end
+    logging = true
+    for _, name in ipairs({ "ToggleCharacter", "CharacterFrame_ShowSubFrame", "CharacterFrameTab_OnClick", "PaperDollFrame_SetSidebar",
+                            "ToggleTokenFrame", "TogglePVPUI", "TogglePVPFrame", "ToggleHonorFrame", "PanelTemplates_SetTab",
+                            "CharacterFrame_Collapse", "CharacterFrame_Expand" }) do
+        if type(_G[name]) == "function" then
+            hook(name, function(a: any, b: any)
+                local function label(v: any): string
+                    if type(v) == "table" and v.GetName then return v:GetName() or "frame" end
+                    return show(v)
+                end
+                note(name .. "(" .. label(a) .. ", " .. label(b) .. ")")
+            end)
+        end
+    end
+    local cf = _G.CharacterFrame
+    if cf then
+        hookScript(cf, "OnShow", function() note("CharacterFrame shown") end)
+        hookScript(cf, "OnHide", function() note("CharacterFrame hidden") end)
+    end
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "PLAYER_EQUIPMENT_CHANGED", "EQUIPMENT_SETS_CHANGED",
+                         "UPDATE_FACTION", "CURRENCY_DISPLAY_UPDATE", "SKILL_LINES_CHANGED" }) do
+        pcall(f.RegisterEvent, f, e)
+    end
+    f:SetScript("OnEvent", function(_, e, a, b) note(e .. " " .. show(a) .. " " .. show(b)) end)
+end
+
+export function sample()
+    local s: { [string]: any } = DB.probe.character or {}
+    store = s
+    DB.probe.character = s
+    s.at = date("%Y-%m-%d %H:%M:%S")
+    local cf = _G.CharacterFrame
+    s.frame = tree(cf, 2)
+    if cf then
+        s.panel = {}
+        for _, key in ipairs({ "UIPanelLayout-defined", "UIPanelLayout-area", "UIPanelLayout-pushable", "UIPanelLayout-width",
+                               "UIPanelLayout-whileDead" }) do
+            s.panel[key] = show(cf:GetAttribute(key))
+        end
+        s.panelWindows = UIPanelWindows and UIPanelWindows.CharacterFrame and "listed" or "not in UIPanelWindows"
+        s.numTabs = show(cf.numTabs)
+        s.selectedTab = show(cf.selectedTab)
+        local regions = {}
+        for _, r in ipairs({ cf:GetRegions() }) do
+            regions[#regions + 1] = (r:GetDebugName() or "?"):gsub("^.*%.", "") .. "(" .. r:GetObjectType() .. ")"
+        end
+        s.regions = table.concat(regions, " ")
+    end
+    s.tabs = {}
+    for i = 1, 10 do
+        local t = _G["CharacterFrameTab" .. i]
+        if t then
+            s.tabs[i] = ("%s text=%s shown=%s enabled=%s protected=%s"):format(t:GetName(), show(t:GetText()),
+                show(t:IsShown()), show(t:IsEnabled()), show(t:IsProtected()))
+        end
+    end
+    s.slots = {}
+    for _, slot in ipairs(SLOTS) do
+        local b = _G["Character" .. slot .. "Slot"]
+        s.slots[slot] = b and ("%s protected=%s id=%s"):format(b:GetObjectType(), show(b:IsProtected()), show(b:GetID())) or "missing"
+    end
+    s.panes = {}
+    for _, name in ipairs(PANES) do
+        local v = _G[name]
+        s.panes[name] = type(v) == "table" and frameLine(v) or type(v)
+    end
+    s.funcs = {}
+    for _, name in ipairs(FUNCS) do s.funcs[name] = type(_G[name]) end
+    s.C_EquipmentSet = namesIn(C_EquipmentSet)
+    s.C_Reputation = namesIn(C_Reputation)
+    s.C_CurrencyInfo = namesIn(C_CurrencyInfo)
+    s.C_PaperDollInfo = namesIn(C_PaperDollInfo)
+    -- anything model- or HD-like in the window
+    local found = {}
+    local function scan(f: any, path: string, depth: number)
+        if depth > 3 or type(f) ~= "table" or not f.GetObjectType then return end
+        for _, k in ipairs(keyedChildren(f)) do
+            local l = k:lower()
+            if l:find("model") or l:find("hd") or l:find("toggle") or l:find("quality") then
+                found[#found + 1] = path .. "." .. k .. " " .. frameLine(f[k])
+            end
+            scan(f[k], path .. "." .. k, depth + 1)
+        end
+    end
+    if cf then scan(cf, "CharacterFrame", 0) end
+    s.modelThings = found
+    -- what shows right now (one entry per run: run it on each tab)
+    s.views = s.views or {}
+    local view = { at = date("%H:%M:%S"), selectedTab = show(cf and cf.selectedTab), shown = {} }
+    for _, name in ipairs(PANES) do
+        local v = _G[name]
+        if type(v) == "table" and v.IsVisible and v:IsVisible() then view.shown[#view.shown + 1] = name end
+    end
+    table.insert(s.views, view)
+    while #s.views > 10 do table.remove(s.views, 1) end
+    s.log = s.log or {}
+    startLog()
+end
+
+export function command()
+    sample()
+    print("Character probe: sampled. Run it again with the Character window open on each tab in turn, then /reload.")
+end

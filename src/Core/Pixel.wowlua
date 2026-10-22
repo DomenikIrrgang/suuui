@@ -1,0 +1,57 @@
+-- Core/Pixel.wowlua
+-- Physical pixels. WoW lays out in UI units: 768 of them span the screen's
+-- height at a scale of 1. A 1px hairline has to be one physical pixel at
+-- whatever scale its frame ends up with.
+--
+-- Emits SUUUI_PIXEL_CHANGED only when the screen height or UIParent's scale
+-- really changed, not on every CVar write.
+
+import onLogin from "wowlua:lifecycle"
+import print, registerCommand from "./Init"
+import * as events from "./Events"
+
+export function screenHeight(): number
+    local _, h = GetPhysicalScreenSize()
+    return h
+end
+
+-- The effective scale at which one UI unit is one physical pixel.
+export function perfectScale(): number
+    return 768 / screenHeight()
+end
+
+-- One physical pixel, in `region`'s own units (UIParent by default).
+export function size(region: Region?): number
+    return perfectScale() / (region or UIParent):GetEffectiveScale()
+end
+
+-- `value` rounded to whole physical pixels in `region`'s units.
+export function snap(value: number, region: Region?): number
+    local p = size(region)
+    return math.floor(value / p + 0.5) * p
+end
+
+local lastHeight: number? = nil
+local lastScale: number? = nil
+
+local function check()
+    local h, s = screenHeight(), UIParent:GetEffectiveScale()
+    if h == lastHeight and s == lastScale then return end
+    lastHeight, lastScale = h, s
+    events.emit("SUUUI_PIXEL_CHANGED", h, s)
+end
+
+@onLogin
+local function atLogin() check() end
+
+events.onGame("UI_SCALE_CHANGED", check, "Pixel")
+events.onGame("DISPLAY_SIZE_CHANGED", check, "Pixel")
+events.onGame("CVAR_UPDATE", function(_, cvar: any)
+    if cvar == "uiScale" or cvar == "useUiScale" then check() end
+end, "Pixel")
+
+registerCommand("pixel", "Show the screen size, UI scale and the size of one pixel.", function()
+    local w, h = GetPhysicalScreenSize()
+    print(("Screen %dx%d, UIParent scale %.3f, pixel-perfect scale %.3f, 1px = %.3f UI units")
+        :format(w, h, UIParent:GetEffectiveScale(), perfectScale(), size()))
+end)

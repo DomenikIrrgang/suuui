@@ -1,0 +1,275 @@
+-- UI/ThreatMeter: rows by %, by state, filters, your pinned row, secrets.
+
+import test, cases, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import threatMeter, ThreatMeter, ThreatEntry from "/UI/ThreatMeter"
+import internal stateOf, holder, readable, mix, STATUS_RANK from "/UI/ThreatMeter"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, borderToken from "./HudHelpers"
+
+local parent: Frame? = nil
+
+local function meter(opts: { [string]: any }?): ThreatMeter
+    local p = newParent(400, 600)
+    parent = p
+    return threatMeter(p, opts)
+end
+
+@afterEach
+local function cleanup()
+    if parent then parent:Hide() end
+    parent = nil
+end
+
+@test("stateOf: tanks and pets lose at 2; others pull at 1 and have aggro at 2-3")
+@cases({
+    { "TANK", 0, "nil", "nil" }, { "TANK", 1, "nil", "nil" }, { "TANK", 2, "warning", "Losing" }, { "TANK", 3, "nil", "nil" },
+    { "PET", 2, "warning", "Losing" },
+    { "DAMAGER", 0, "nil", "nil" }, { "DAMAGER", 1, "warning", "Pulling" }, { "HEALER", 2, "danger", "Aggro" }, { "DAMAGER", 3, "danger", "Aggro" },
+})
+local function states(role: string, status: number, tone: string, word: string)
+    local t, w = stateOf({ role = role, status = status })
+    expect(tostring(t)).toBe(tone)
+    expect(tostring(w)).toBe(word)
+end
+
+@test("stateOf: unknown or secret status has no state")
+local function stateUnknown()
+    expect(stateOf({ role = "DAMAGER" })).toBeNil()
+    expect(stateOf({ role = "DAMAGER", status = "3" })).toBeNil()
+    expect(stateOf({ role = "DAMAGER", status = mock.secret(3) })).toBeNil()
+end
+
+@test("the small helpers")
+local function helpers()
+    expect(holder("TANK")).toBe(true)
+    expect(holder("PET")).toBe(true)
+    expect(holder("HEALER")).toBe(false)
+    expect(holder(nil)).toBe(false)
+    expect(readable(1)).toBe(true)
+    expect(readable("1")).toBe(false)
+    expect(readable(mock.secret(1))).toBe(false)
+    expect(STATUS_RANK({ status = 2 })).toBe(2)
+    expect(STATUS_RANK({ status = mock.secret(2) })).toBe(-1)
+    expect(STATUS_RANK({})).toBe(-1)
+    local r, g, b = mix("unit-fill")
+    expect(type(r) == "number" and type(g) == "number" and type(b) == "number").toBe(true)
+end
+
+@test("a new meter: empty, the head, the height of its rows")
+local function fresh()
+    local m = meter()
+    expect(m.maxRows).toBe(8)
+    expect(m.title).toHaveText("Threat")
+    expect(m.target).toHaveText("")
+    expect(m.empty).toBeShown()
+    expect(m.note).never.toBeShown()
+    expect(m.pinLine).never.toBeShown()
+    local h = m:GetHeight()
+    local small = meter({ rows = 1 })
+    expect(small.maxRows).toBe(2)
+    expect(small:GetHeight() < h).toBe(true)
+    expectNoErrors()
+end
+
+@test("SetTarget: a name, a secret name, none")
+local function target()
+    local m = meter()
+    m:SetTarget("Hogger")
+    expect(m.target).toHaveText("on Hogger")
+    m:SetTarget(mock.secret("Ragnaros"))
+    expect(m.target.value).toBeNil()
+    m:SetTarget(nil)
+    expect(m.target).toHaveText("")
+    expectNoErrors()
+end
+
+@test("SetMaxRows: the height follows, extra rows hide")
+local function maxRows()
+    local m = meter({ rows = 4 })
+    local list: ThreatEntry[] = {}
+    for i = 1, 4 do list[i] = { name = "P" .. i, percent = 100 - i } end
+    m:SetRows(list, {})
+    expect(m.rows[4]).toBeShown()
+    local h4 = m:GetHeight()
+    m:SetMaxRows(3)
+    expect(m.maxRows).toBe(3)
+    expect(m.rows[4]).never.toBeShown()
+    expect(m:GetHeight() < h4).toBe(true)
+    m:SetMaxRows(nil)
+    expect(m.maxRows).toBe(8)
+    m:SetMaxRows(0)
+    expect(m.maxRows).toBe(2)
+end
+
+@test("by %: sorted, ranked, with the % and the edge of your row")
+local function byPercent()
+    local m = meter()
+    m:SetRows({
+        { name = "Low", class = "MAGE", role = "DAMAGER", status = 0, percent = 20 },
+        { name = "Tank-Realm", class = "WARRIOR", role = "TANK", status = 3, percent = 100, you = true },
+        { name = "Mid", class = "PRIEST", role = "HEALER", status = 1, percent = 60 },
+        { name = "Same", role = "DAMAGER", status = 0, percent = 20 },
+        { name = "Unknown" },
+    }, {})
+    expect(m.empty).never.toBeShown()
+    expect(m.rows[1].name).toHaveText("Tank-Realm")
+    expect(m.rows[2].name).toHaveText("Mid")
+    expect(m.rows[3].name).toHaveText("Low")
+    expect(m.rows[4].name).toHaveText("Same") -- ties keep group order
+    expect(m.rows[5].name).toHaveText("Unknown")
+    expect(m.rows[1].rank).toHaveText("1")
+    expect(m.rows[3].rank).toHaveText("3")
+    expect(m.rows[1].pct).toHaveText("100%")
+    expect(m.rows[5].pct).toHaveText("")
+    expect(m.rows[5].bar:GetValue()).toBe(0)
+    expect(m.rows[2].bar:GetValue()).toBe(60)
+    -- the tank holds it: "Tanking", your edge ink
+    expect(m.rows[1].sub).toHaveText("Tanking")
+    expect(m.rows[1].badge).never.toBeShown()
+    expect(borderToken(m.rows[1].edge)).toBe("ink")
+    -- pulling: the amber badge
+    expect(m.rows[2].badge).toBeShown()
+    expect(m.rows[2].badge.text).toBe("Pulling")
+    expect(borderToken(m.rows[2].edge)).toBe("amber")
+    expect(m.rows[2].glow.holder).never.toBeShown()
+    -- class colour on the name, ink without a class
+    expect(tokenOf(m.rows[3].name)).toBe("class-mage")
+    expect(tokenOf(m.rows[4].name)).toBe("ink")
+    expect(borderToken(m.rows[3].edge)).toBe("gilt-hairline")
+    -- role marks
+    expect(m.rows[1].mark).toBeShown()
+    expect(m.rows[5].mark).never.toBeShown()
+    expect(m.note).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("aggro glows ember; a pet holding it is 'Pet tanking'")
+local function aggro()
+    local m = meter()
+    m:SetRows({
+        { name = "Mage", role = "DAMAGER", status = 3, percent = 110 },
+        { name = "Wolf", role = "PET", status = 3, percent = 100 },
+        { name = "Tank", role = "TANK", status = 2, percent = 90 },
+    }, {})
+    expect(m.rows[1].badge.text).toBe("Aggro")
+    expect(borderToken(m.rows[1].edge)).toBe("ember")
+    expect(m.rows[1].glow.holder).toBeShown()
+    expect(m.rows[2].sub).toHaveText("Pet tanking")
+    expect(m.rows[3].badge.text).toBe("Losing")
+    expect(m.rows[3].sub).toHaveText("")
+end
+
+@test("show: tanks keeps tanks, pets and you; self keeps you, unranked")
+local function filters()
+    local m = meter()
+    local list: ThreatEntry[] = {
+        { name = "A", role = "DAMAGER", percent = 50 },
+        { name = "T", role = "TANK", percent = 90 },
+        { name = "P", role = "PET", percent = 40 },
+        { name = "Me", role = "HEALER", percent = 10, you = true },
+    }
+    m:SetRows(list, { show = "tanks" })
+    expect(m.rows[1].name).toHaveText("T")
+    expect(m.rows[2].name).toHaveText("P")
+    expect(m.rows[3].name).toHaveText("Me")
+    expect(m.rows[4]).toBeNil() -- never built
+    m:SetRows(list, { show = "self" })
+    expect(m.rows[1].name).toHaveText("Me")
+    expect(m.rows[1].rank).never.toBeShown()
+    expect(m.rows[2]).never.toBeShown()
+    -- nothing of yours: empty
+    m:SetRows({ { name = "A", percent = 1 } }, { show = "self" })
+    expect(m.empty).toBeShown()
+    m:SetRows(nil, nil)
+    expect(m.empty).toBeShown()
+end
+
+@test("by state: status order, then group order, the note in the last slot")
+local function byState()
+    local m = meter({ rows = 3 })
+    m:SetRows({
+        { name = "A", status = 0, percent = mock.secret(10) },
+        { name = "B", status = 3, percent = mock.secret(90) },
+        { name = "C", status = 1 },
+        { name = "D", status = mock.secret(2) },
+    }, { byState = true })
+    expect(m.rows[1].name).toHaveText("B")
+    expect(m.rows[2].name).toHaveText("C")
+    expect(m.rows[3]).toBeNil() -- the note's slot
+    expect(m.rows[1].rank).never.toBeShown()
+    expect(m.note).toBeShown()
+    -- a secret % goes to the bar and the text as it is
+    expect(m.rows[1].pct.value).toBeNil()
+    expectNoErrors()
+end
+
+@test("your row past the visible ones takes the last slot under the pin line")
+local function pinned()
+    local m = meter({ rows = 3 })
+    local list: ThreatEntry[] = {}
+    for i = 1, 5 do list[i] = { name = "P" .. i, percent = 100 - i * 10 } end
+    list[5].you = true
+    m:SetRows(list, {})
+    expect(m.rows[3].name).toHaveText("P5")
+    expect(m.rows[3].rank).toHaveText("5")
+    expect(m.pinLine).toBeShown()
+    m:SetRows({ { name = "Me", percent = 1, you = true } }, {})
+    expect(m.pinLine).never.toBeShown()
+    expect(m.rows[2]).never.toBeShown()
+end
+
+@test("markers: class circles, none; raw threat; ink names")
+local function markers()
+    local m = meter()
+    local row: ThreatEntry = { name = "Mage", class = "MAGE", role = "DAMAGER", percent = 50, raw = 1234500 }
+    m:SetRows({ row }, { marker = "class", raw = true, nameColor = "ink" })
+    local r = m.rows[1]
+    expect(r.mark).toBeShown()
+    expect(r.mark:GetWidth()).toBe(16)
+    expect(r.raw).toBeShown()
+    expect(r.raw.value).never.toBeNil()
+    expect(tokenOf(r.name)).toBe("ink")
+    m:SetRows({ row }, { marker = "none" })
+    expect(m.rows[1].mark).never.toBeShown()
+    expect(m.rows[1].raw).never.toBeShown()
+    -- a class with no circle, a role with no icon
+    m:SetRows({ { name = "X", class = "NOPE", role = "PET", percent = 1 } }, { marker = "class" })
+    expect(m.rows[1].mark).never.toBeShown()
+    m:SetRows({ { name = "X", role = "PET", percent = 1 } }, { marker = "role" })
+    expect(m.rows[1].mark).never.toBeShown()
+    -- a secret raw value is left out
+    m:SetRows({ { name = "X", percent = 1, raw = mock.secret(100) } }, { raw = true })
+    expect(m.rows[1].raw).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("raw threat without AbbreviateNumbers")
+local function rawFallback()
+    local m = meter()
+    local g = _G :: any -- a global the declarations type as always there
+    local was = g.AbbreviateNumbers
+    g.AbbreviateNumbers = nil
+    m:SetRows({ { name = "X", percent = 1, raw = 123456 } }, { raw = true })
+    g.AbbreviateNumbers = was
+    expect(m.rows[1].raw).toHaveText("1234")
+end
+
+@test("the remaining cases: no name, unknown %s, by state for yourself, no class circles")
+local function remaining()
+    local m = meter()
+    m:SetRows({ { percent = 5 }, { name = "U1" }, { name = "U2" }, { name = "K", percent = 9 } }, {})
+    expect(m.rows[1].name).toHaveText("K")
+    expect(m.rows[2].name).toHaveText("")
+    expect(m.rows[3].name).toHaveText("U1")
+    m:SetRows({ { name = "Me", status = 1, you = true }, { name = "Other", status = 3 } }, { byState = true, show = "self" })
+    expect(m.rows[1].name).toHaveText("Me")
+    expect(m.note).never.toBeShown()
+    local g = _G :: any -- a Blizzard global an older client may lack
+    local was = g.CLASS_ICON_TCOORDS
+    g.CLASS_ICON_TCOORDS = nil
+    m:SetRows({ { name = "Mage", class = "MAGE", percent = 1 } }, { marker = "class" })
+    g.CLASS_ICON_TCOORDS = was
+    expect(m.rows[1].mark).never.toBeShown()
+    expectNoErrors()
+end

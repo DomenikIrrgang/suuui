@@ -1,0 +1,612 @@
+-- Units/Macros: the macro window's tabs and list, the editor (New, Save,
+-- Delete, what waits in combat), the icon picker, the game's window replaced.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors from "../../helpers"
+import internal M, QUESTION from "/Units/Macros"
+
+const COMBAT = "Macros can't be changed in combat"
+
+-- UI.Confirm's options, not shown.
+local confirmed: { [string]: any }?
+local function stubConfirm()
+    confirmed = nil
+    mock.stub(SuuUI.UI, "Confirm", function(opts: { [string]: any }) confirmed = opts end)
+end
+
+local function confirmOpts(): { [string]: any }
+    return assert(confirmed, "UI.Confirm wasn't called")
+end
+
+local function standard()
+    mock.setMacros({
+        account = { { name = "Heal", icon = 136243, body = "/cast Lesser Heal\n/say healing" }, { name = "Wave", icon = 135000, body = "/wave" } },
+        character = { { name = "Dance", body = "/dance" } },
+    })
+end
+
+local function open()
+    if not M.window:IsShown() then M:Toggle() end
+end
+
+-- icon lists the game fills in (the engine's are empty)
+local function fakeIcons()
+    mock.fake("GetLooseMacroIcons", function(t: any[]) t[#t + 1] = 1 end)
+    mock.fake("GetMacroIcons", function(t: any[]) for i = 2, 60 do t[#t + 1] = i end end)
+    mock.fake("GetLooseMacroItemIcons", function(t: any[]) t[#t + 1] = 1001 end)
+    mock.fake("GetMacroItemIcons", function(t: any[]) t[#t + 1] = 1002 end)
+end
+
+@beforeEach
+local function reset()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    M.window:Hide()
+    M.tab, M.draft, M.chosen = nil, nil, nil
+    standard()
+end
+
+@afterEach
+local function tidy()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    M:ClosePicker()
+    M.window:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Data
+--------------------------------------------------------------------------------
+
+@test("List and Counts: the account's macros, then the character's from 121")
+local function lists()
+    local g = M:List("general")
+    expect(#g).toBe(2)
+    expect(g[1]).toEqual({ index = 1, name = "Heal", icon = 136243, body = "/cast Lesser Heal\n/say healing" })
+    local c = M:List("character")
+    expect(#c).toBe(1)
+    expect(c[1].index).toBe(121)
+    expect(c[1].name).toBe("Dance")
+    local a, b = M:Counts()
+    expect(a).toBe(2)
+    expect(b).toBe(1)
+    -- a gap and a macro without a body
+    mock.fake("GetMacroInfo", function(i: number) if i == 1 then return nil end return "X", 1, nil end)
+    local listed = M:List("general")
+    expect(#listed).toBe(1)
+    expect(listed[1].body).toBe("")
+    mock.fake("GetNumMacros", function() return nil, nil end)
+    expect(#M:List("general")).toBe(0)
+    expect(#M:List("character")).toBe(0)
+    local x, y = M:Counts()
+    expect(x).toBe(0)
+    expect(y).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- The window
+--------------------------------------------------------------------------------
+
+@test("Toggle opens on General with the first macro chosen; again closes")
+local function toggle()
+    M:Toggle()
+    expect(M.window).toBeShown()
+    expect(M.tab).toBe("general")
+    expect(M.count).toHaveText("2 of 120 used")
+    expect(M.rows[1].name).toHaveText("Heal")
+    expect(M.rows[1].first).toHaveText("/cast Lesser Heal")
+    expect(M.rows[1].on).toBeShown()
+    expect(M.rows[2].on).never.toBeShown()
+    expect(M.chosen.name).toBe("Heal")
+    expect(M.nameField:GetValue()).toBe("Heal")
+    expect(M.body:GetText()).toBe("/cast Lesser Heal\n/say healing")
+    expect(M.nameCount).toHaveText("4 / 16")
+    expect(M.hint).toHaveText("Drag the icon to an action bar")
+    expect(M.save:IsEnabled()).toBe(false)
+    expect(M.save.tooltip.title).toBe("Nothing changed")
+    expect(M.none).never.toBeShown()
+    expect(M.empty).never.toBeShown()
+    M:Toggle()
+    expect(M.window).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("Refresh: nothing while hidden")
+local function refreshHidden()
+    local list = mock.stub(M, "List", function() return {} end)
+    M:Refresh()
+    expect(list).never.toHaveBeenCalled()
+end
+
+@test("the character tab: its macros and count; switching drops the choice")
+local function characterTab()
+    open()
+    M.tabs.onChange("character")
+    expect(M.tab).toBe("character")
+    expect(M.count).toHaveText("1 of 18 used")
+    expect(M.rows[1].name).toHaveText("Dance")
+    expect(M.rows[2]).never.toBeShown()
+    expect(M.chosen.index).toBe(121)
+end
+
+@test("an empty tab says so; no macros at all shows the empty page")
+local function empties()
+    mock.setMacros({ account = { { name = "Only", body = "" } } })
+    open()
+    M.tabs.onChange("character")
+    expect(M.none).toBeShown()
+    expect(M.empty).never.toBeShown()
+    mock.setMacros({})
+    expect(M.empty).toBeShown()
+    expect(M.edit).never.toBeShown()
+    -- New from the empty page
+    mock.click(M.empty.new)
+    expect(M.draft).never.toBeNil()
+    expect(M.edit).toBeShown()
+end
+
+@test("the chosen macro is kept by name when indexes shift")
+local function keptByName()
+    open()
+    M:Select(M.macros[2])
+    expect(M.chosen.name).toBe("Wave")
+    mock.setMacros({ account = { { name = "Wave", body = "/wave" } } })
+    expect(M.chosen.index).toBe(1)
+    expect(M.rows[1].on).toBeShown()
+    -- gone: the first one
+    mock.setMacros({ account = { { name = "Other", body = "" } } })
+    expect(M.chosen.name).toBe("Other")
+end
+
+@test("FitTabs: long names get the short labels, then General and Character")
+local function fitTabs()
+    local b1, b2 = M.tabs.buttons[1], M.tabs.buttons[2]
+    M:FitTabs("Al")
+    expect(b1.label).toHaveText("General Macros")
+    expect(b2.label).toHaveText("Al Specific Macros")
+    M:FitTabs("Bartholomewsonson")
+    expect(b1.label).toHaveText("General")
+    expect(b2.label).toHaveText("Bartholomewsonson")
+    M:FitTabs(string.rep("W", 40))
+    expect(b2.label).toHaveText("Character")
+    M:FitTabs(UnitName("player") or "Character")
+end
+
+@test("rows: a click chooses, a drag picks the macro up, hover lifts")
+local function rows()
+    open()
+    local r = M.rows[2]
+    mock.click(r)
+    expect(M.chosen.name).toBe("Wave")
+    local pick = mock.fake("PickupMacro", function() end)
+    mock.script(r, "OnDragStart")
+    expect(pick).toHaveBeenCalledWith(2)
+    r.macro = nil
+    mock.script(r, "OnDragStart")
+    expect(pick).toHaveBeenCalledTimes(1)
+    mock.hover(r)
+    expect(r.hover).toBeShown()
+    mock.hover(nil)
+    expect(r.hover).never.toBeShown()
+end
+
+@test("the big icon: drag picks up the chosen macro; its tooltip")
+local function bigIcon()
+    open()
+    local pick = mock.fake("PickupMacro", function() end)
+    mock.script(M.big, "OnDragStart")
+    expect(pick).toHaveBeenCalledWith(1)
+    local tip = mock.stub(SuuUI.UI, "ShowTooltip", function() end)
+    mock.script(M.big, "OnEnter")
+    expect(tip).toHaveBeenCalledWith(M.big, { title = "Drag to a bar", description = "Heal" })
+    mock.script(M.big, "OnLeave")
+    M:New()
+    M.chosen = nil
+    mock.script(M.big, "OnEnter")
+    expect(tip).toHaveBeenCalledWith(M.big, { title = "Save it first" })
+    mock.script(M.big, "OnDragStart")
+    expect(pick).toHaveBeenCalledTimes(1)
+end
+
+@test("the editor: counts, dirty, Save's reasons")
+local function editor()
+    open()
+    M.nameField:SetValue("")
+    M:DrawState()
+    expect(M.save.tooltip.title).toBe("Give it a name first")
+    M.nameField:SetValue("Heal2")
+    M:DrawState()
+    expect(M.save:IsEnabled()).toBe(true)
+    expect(M.save.tooltip).toBeNil()
+    M.nameField:SetValue("Heal")
+    M.body:SetText(string.rep("x", 245))
+    M:DrawState()
+    expect(M.bodyCount).toHaveText("245 / 255")
+    expect(M:Dirty()).toBe(true)
+    M.body:SetText("/cast Lesser Heal\n/say healing")
+    expect(M:Dirty()).toBe(false)
+    M.icon = 5
+    expect(M:Dirty()).toBe(true)
+    -- nothing loaded
+    M:Load(nil)
+    expect(M:Dirty()).toBe(false)
+    expect(M.save.tooltip.title).toBe("Nothing to save")
+    expect(M.delete.tooltip.title).toBe("Nothing to delete")
+    expect(M.icon).toBe(QUESTION)
+end
+
+@test("typing in the body redraws; a click in the well focuses it")
+local function bodyTyping()
+    open()
+    local draw = mock.spy()
+    local orig = M.DrawState
+    mock.stub(M, "DrawState", function(self: any) draw(); orig(self) end)
+    mock.typeText(M.body, "!")
+    expect(draw).toHaveBeenCalled()
+    expect(M:Dirty()).toBe(true)
+    M.body:ClearFocus()
+    mock.script(M.well, "OnMouseDown")
+    expect(M.body:HasFocus()).toBe(true)
+    mock.script(M.body, "OnEscapePressed")
+    expect(M.body:HasFocus()).toBe(false)
+    -- in combat the well doesn't take the focus
+    mock.player:enterCombat()
+    mock.script(M.well, "OnMouseDown")
+    expect(M.body:HasFocus()).toBe(false)
+end
+
+@test("typing a name redraws the count")
+local function nameTyping()
+    open()
+    M.nameField.edit:SetText("")
+    mock.typeText(M.nameField.edit, "Abc")
+    expect(M.nameCount).toHaveText("3 / 16")
+end
+
+@test("New: a draft named and saved as a General macro")
+local function newGeneral()
+    open()
+    M:New()
+    expect(M.draft).toEqual({ name = "", icon = QUESTION, body = "" })
+    expect(M.delete.label).toHaveText("Discard")
+    expect(M.hint).toHaveText("A new macro: name it and Save")
+    expect(M.new.tooltip.title).toBe("Save or discard the new one first")
+    expect(M.dragHint).never.toBeShown()
+    -- Save without a name does nothing
+    M:Save()
+    expect(M.draft).never.toBeNil()
+    M.nameField:SetValue("  Cheer ")
+    M.body:SetText("/cheer")
+    M:Save()
+    expect(M.draft).toBeNil()
+    expect(M.chosen.name).toBe("Cheer")
+    expect(GetMacroInfo(M.chosen.index)).toBe("Cheer")
+    expect(select(3, GetMacroInfo(M.chosen.index))).toBe("/cheer")
+    expect(M.count).toHaveText("3 of 120 used")
+end
+
+@test("New on the character tab makes a character macro")
+local function newCharacter()
+    open()
+    M.tabs.onChange("character")
+    M:New()
+    M.nameField:SetValue("Mine")
+    M:Save()
+    expect(M.chosen.index > 120).toBe(true)
+    expect(GetMacroInfo(M.chosen.index)).toBe("Mine")
+end
+
+@test("Save: a failed create leaves nothing chosen")
+local function createFails()
+    open()
+    mock.fake("CreateMacro", function() error("no room") end)
+    M:New()
+    M.nameField:SetValue("X")
+    M:Save()
+    expect(M.draft).toBeNil()
+    expect(M.chosen.name).toBe("Heal")
+end
+
+@test("Save: an edit keeps it chosen under its new name")
+local function saveEdit()
+    open()
+    M.nameField:SetValue("Heals")
+    M.body:SetText("/cast Heal")
+    M:Save()
+    local name, _, body = GetMacroInfo(M.chosen.index)
+    expect(name).toBe("Heals")
+    expect(body).toBe("/cast Heal")
+    -- EditMacro answering nothing: the same index
+    mock.fake("EditMacro", function() return nil end)
+    M.nameField:SetValue("Heals")
+    M.body:SetText("/x")
+    M:Save()
+    expect(M.chosen.name).toBe("Heals")
+end
+
+@test("Delete: a draft is discarded; a macro asks first")
+local function delete()
+    open()
+    M:New()
+    M:Delete()
+    expect(M.draft).toBeNil()
+    stubConfirm()
+    M:Delete()
+    local opts = confirmOpts()
+    expect(opts.title).toBe("Delete Heal?")
+    opts.onConfirm()
+    expect(M:Counts()).toBe(1)
+    expect(M.chosen.name).toBe("Wave")
+    -- confirmed in combat: kept
+    confirmed = nil
+    M:Delete()
+    mock.player:enterCombat()
+    confirmOpts().onConfirm()
+    expect(M:Counts()).toBe(1)
+end
+
+@test("a full tab: New says so")
+local function fullTab()
+    open()
+    mock.fake("GetNumMacros", function() return 120, 18 end)
+    M:DrawState()
+    expect(M.new.tooltip.title).toBe("This tab is full")
+    M.tab = "character"
+    M:DrawState()
+    expect(M.new.tooltip.title).toBe("This tab is full")
+    mock.fake("GetNumMacros", function() return 1, 1 end)
+    M:DrawState()
+    expect(M.new.tooltip).toBeNil()
+end
+
+@test("combat: everything waits and says why")
+local function combat()
+    open()
+    mock.player:enterCombat()
+    expect(M.band).toBeShown()
+    expect(M.hint).toHaveText(COMBAT)
+    expect(M.save.tooltip.title).toBe(COMBAT)
+    expect(M.new.tooltip.title).toBe(COMBAT)
+    expect(M.delete.tooltip.title).toBe(COMBAT)
+    expect(M.iconButton.tooltip.title).toBe(COMBAT)
+    expect(M.empty.new:IsEnabled()).toBe(false)
+    -- the actions do nothing
+    M:Select(M.macros[2])
+    expect(M.chosen.name).toBe("Heal")
+    M:New()
+    expect(M.draft).toBeNil()
+    M.nameField:SetValue("Changed")
+    M:Save()
+    expect(GetMacroInfo(1)).toBe("Heal")
+    local confirm = mock.stub(SuuUI.UI, "Confirm", function() end)
+    M:Delete()
+    expect(confirm).never.toHaveBeenCalled()
+    M:TogglePicker()
+    expect(M.picker == nil or not M.picker:IsShown()).toBe(true)
+    mock.player:leaveCombat()
+    expect(M.band).never.toBeShown()
+    expect(M.iconButton.tooltip).toBeNil()
+end
+
+@test("combat closes the picker; with the window hidden nothing is drawn")
+local function combatPicker()
+    open()
+    M:TogglePicker()
+    expect(M.picker).toBeShown()
+    mock.player:enterCombat()
+    expect(M.picker).never.toBeShown()
+    mock.player:leaveCombat()
+    M.window:Hide()
+    local draw = mock.stub(M, "DrawState", function() end)
+    mock.player:enterCombat()
+    mock.player:leaveCombat()
+    expect(draw).never.toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- The icon picker
+--------------------------------------------------------------------------------
+
+@test("AllIcons: \"?\" first, spells then items; by kind")
+local function allIcons()
+    fakeIcons()
+    local all = M:AllIcons()
+    expect(all[1]).toBe(QUESTION)
+    expect(all[2]).toBe(1)
+    expect(#all).toBe(63)
+    expect(all[63]).toBe(1002)
+    expect(#M:AllIcons("spells")).toBe(61)
+    expect(M:AllIcons("items")).toEqual({ QUESTION, 1001, 1002 })
+end
+
+@test("SearchIcons: your spells' and bag items' icons by name, once each")
+local function search()
+    mock.fake("C_SpellBook.GetNumSpellBookSkillLines", function() return 2 end)
+    mock.fake("C_SpellBook.GetSpellBookSkillLineInfo", function(i: number)
+        if i == 2 then return nil end
+        return { itemIndexOffset = 0, numSpellBookItems = 4 }
+    end)
+    local SPELL = Enum.SpellBookItemType.Spell
+    local spells: { [string]: any }[] = {
+        { itemType = SPELL, name = "Fireball", iconID = 11 },
+        { itemType = SPELL, name = "Fire Blast", iconID = 11 },
+        { itemType = 99, name = "Fire Flyout", iconID = 12 },
+        { itemType = SPELL, name = mock.secret("Fire secret"), iconID = 13 },
+    }
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number) return spells[slot] end)
+    mock.fake("C_Container.GetContainerNumSlots", function(bag: number) return bag == 0 and 3 or 0 end)
+    mock.fake("C_Container.GetContainerItemInfo", function(_: number, slot: number)
+        if slot == 3 then return nil end
+        return { itemID = slot, iconFileID = 20 + slot }
+    end)
+    mock.fake("C_Item.GetItemNameByID", function(id: number) return id == 1 and "Firewater" or "Bread" end)
+    expect(M:SearchIcons("FIRE")).toEqual({ 11, 21 })
+    expect(M:SearchIcons("fire", "spells")).toEqual({ 11 })
+    expect(M:SearchIcons("fire", "items")).toEqual({ 21 })
+    expect(M:SearchIcons("zzz")).toEqual({})
+end
+
+@test("the picker: opens with the macro's icon, scrolls, picks, uses")
+local function picker()
+    fakeIcons()
+    open()
+    M:TogglePicker()
+    local p = M.picker
+    expect(p).toBeShown()
+    expect(p.picked).toBe(136243)
+    expect(p.where).toHaveText("63 icons · rows 1–6 of 8 (wheel to scroll)")
+    expect(p.cells[1].iconID).toBe(QUESTION)
+    mock.wheel(p.grid, -1)
+    expect(p.offset).toBe(1)
+    expect(p.where).toHaveText("63 icons · rows 2–7 of 8 (wheel to scroll)")
+    mock.wheel(p.grid, -5)
+    expect(p.offset).toBe(2)
+    mock.wheel(p.grid, 5)
+    expect(p.offset).toBe(0)
+    -- a click picks (the ring), a double click uses it
+    mock.click(p.cells[3])
+    expect(p.picked).toBe(2)
+    expect(p.cells[3].ring.top).toBeShown()
+    expect(p.cells[4].ring.top).never.toBeShown()
+    expect(p.use:IsEnabled()).toBe(true)
+    mock.script(p.cells[4], "OnDoubleClick")
+    expect(M.icon).toBe(3)
+    expect(p).never.toBeShown()
+    expect(M:Dirty()).toBe(true)
+    -- again: Cancel closes, Use icon uses
+    M:TogglePicker()
+    M:TogglePicker()
+    expect(p).never.toBeShown()
+    M:TogglePicker()
+    p.picked = 7
+    mock.click(p.use)
+    expect(M.icon).toBe(7)
+    M:UseIcon()
+    expect(M.icon).toBe(7)
+end
+
+@test("the picker: the kind and the search")
+local function pickerSearch()
+    fakeIcons()
+    mock.stub(M, "SearchIcons", function(_: any, text: string) return text == "none" and {} or { 5, 6 } end)
+    open()
+    M:TogglePicker()
+    local p = M.picker
+    p.kind.onChange("items")
+    expect(p.where).toHaveText("3 icons")
+    p.search:SetValue("abc")
+    M:FillPicker(true)
+    expect(p.where).toHaveText("2 of your spells and items")
+    p.search:SetValue("none")
+    M:FillPicker(true)
+    expect(p.where).toHaveText("None of your spells or items match")
+    expect(p.cells[1]).never.toBeShown()
+    p.search:SetValue("")
+    p.kind.onChange("all")
+end
+
+@test("the picker: nothing to pick from without a macro loaded")
+local function pickerNothing()
+    open()
+    M:Load(nil)
+    M:TogglePicker()
+    expect(M.picker == nil or not M.picker:IsShown()).toBe(true)
+    M.picker = nil
+    M:UseIcon()
+    M:ClosePicker()
+end
+
+@test("the drop zone: a spell's, an item's or a macro's icon")
+local function dropZone()
+    open()
+    M:TogglePicker()
+    local drop = M.picker.drop
+    local cursor: any[] = {}
+    mock.fake("GetCursorInfo", function() return cursor[1], cursor[2], cursor[3], cursor[4] end)
+    local clear = mock.fake("ClearCursor", function() end)
+    mock.fake("C_Spell.GetSpellTexture", function(id: number) return id == 133 and 135812 or nil end)
+    mock.fake("C_Item.GetItemIconByID", function() return 133964 end)
+    -- nothing on the cursor
+    mock.script(drop, "OnReceiveDrag")
+    expect(clear).never.toHaveBeenCalled()
+    cursor = { "spell", 1, "spell", 133 }
+    mock.script(drop, "OnReceiveDrag")
+    expect(M.icon).toBe(135812)
+    expect(clear).toHaveBeenCalled()
+    -- a spell by its second value
+    M:TogglePicker()
+    cursor = { "spell", 1, 133 }
+    mock.click(drop)
+    expect(M.icon).toBe(135812)
+    M:TogglePicker()
+    cursor = { "item", 4540 }
+    mock.script(drop, "OnReceiveDrag")
+    expect(M.icon).toBe(133964)
+    M:TogglePicker()
+    cursor = { "macro", 2 }
+    mock.script(drop, "OnReceiveDrag")
+    expect(M.icon).toBe(135000)
+    -- an unknown spell gives nothing
+    M:TogglePicker()
+    cursor = { "spell", 1, 999 }
+    mock.script(drop, "OnReceiveDrag")
+    expect(M.icon).toBe(135000)
+    expect(M.picker).toBeShown()
+end
+
+@test("Change icon and the picker's Cancel")
+local function pickerButtons()
+    open()
+    mock.click(M.iconButton)
+    expect(M.picker).toBeShown()
+    -- the Cancel button: the one beside Use icon
+    for _, child in ipairs({ M.picker:GetChildren() }) do
+        local b: any = child
+        if b.label and b.label.GetText and b.label:GetText() == "Cancel" then mock.click(b) end
+    end
+    expect(M.picker).never.toBeShown()
+end
+
+@test("a theme change places the name and the picker again")
+local function themeChange()
+    open()
+    M:TogglePicker()
+    local place = mock.stub(M, "PlacePicker", function() end)
+    local name = mock.stub(M, "PlaceName", function() end)
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(place).toHaveBeenCalled()
+    expect(name).toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- Instead of the game's window
+--------------------------------------------------------------------------------
+
+@test("the game's macro window opens SuuUI's instead")
+local function gameWindow()
+    C_AddOns.LoadAddOn("Blizzard_MacroUI")
+    local f: any = _G.MacroFrame
+    expect(M.hooked).toBe(true)
+    ShowMacroFrame()
+    expect(f:IsShown()).toBe(false)
+    expect(M.window).toBeShown()
+    -- already open: stays open
+    f:Show()
+    expect(M.window).toBeShown()
+    -- off: the game's own
+    M.window:Hide()
+    mock.stub(M, "IsEnabled", function() return false end)
+    f:Show()
+    expect(M.window).never.toBeShown()
+    f:Hide()
+    -- hooked once
+    M:HookGame()
+    expectNoErrors()
+end
+
+@test("OnDisable hides the window")
+local function disable()
+    open()
+    assert(M.OnDisable)(M)
+    expect(M.window).never.toBeShown()
+end

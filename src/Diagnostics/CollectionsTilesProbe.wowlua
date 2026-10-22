@@ -1,0 +1,271 @@
+-- Diagnostics/CollectionsTilesProbe.wowlua
+-- "/suu probe colltiles": the open questions for SuuUI's own collections
+-- window (2026-10-16, while its design is drawn):
+--   toys       can every toy be listed, yours or not? (the game's filter
+--              hides the ones you lack: shown for a moment, then put back)
+--   flags      what the game marks: new appearances, mounts needing their
+--              fanfare, favourites (mounts, toys, appearances)
+--   sources    where to get what you lack: a mount's source text (ten of
+--              them), a toy's tooltip lines, an appearance's source type and
+--              drops (bosses, instances) for ones you don't have
+--   cameras    the camera the game frames an appearance with
+--              (GetAppearanceCameraID) and a mount with (its display's)
+--   scene      a mount in a ModelScene framed by the mount's own scene ID
+--              (the 6th value of GetMountInfoExtraByID), as the game does
+--   tiles      a page of 18 appearance previews in a panel, framed by those
+--              cameras: how long they take to build and what the frame rate
+--              does while they show
+-- Printed and saved in SuuUIProbe.collectionsTiles on /reload; the panel
+-- stays for a screenshot.
+
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import panel, closeButton, Panel from "/UI/Panel"
+import fill from "/UI/Draw"
+
+interface TilesPanel extends Panel
+    closeButton?: Button
+    tiles?: DressUpModel[]
+    scene?: any
+end
+
+local probePanel: TilesPanel? = nil
+
+local function show(v: any): string
+    if isSecret(v) then return "secret" end
+    if type(v) == "table" then
+        local parts = {}
+        for k, x in pairs(v) do
+            if type(x) ~= "function" and type(x) ~= "table" then parts[#parts + 1] = tostring(k) .. "=" .. tostring(x) end
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return tostring(v)
+end
+
+local function call(fn: any, ...: any): string
+    if type(fn) ~= "function" then return "missing" end
+    local res = { pcall(fn, ...) }
+    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
+    local parts = {}
+    for i = 2, select("#", unpack(res)) do parts[#parts + 1] = show(res[i]) end
+    return table.concat(parts, " | ")
+end
+
+local function raw(fn: any, ...: any): ...any
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
+    if ok then return a, b, c, d, e, f, g, h, i, j, k end
+end
+
+local out: { [string]: any } = {}
+local function line(section: string, text: string)
+    out[section] = out[section] or {}
+    table.insert(out[section], text)
+end
+
+-- Every toy: the filter shows the ones you lack too, and the list is read
+-- once the game has refiltered (TOYS_UPDATED, or a second). The first run
+-- left "uncollected" off (the game applies filter changes a moment later,
+-- so the read-back saw the old value): it ends on, as it was before.
+local function toys()
+    local TB = C_ToyBox
+    if not TB then line("toys", "C_ToyBox missing") return end
+    line("toys", "filters now " .. show({ collected = raw(TB.GetCollectedShown), uncollected = raw(TB.GetUncollectedShown),
+        unusable = raw(TB.GetUnusableShown) }) .. ", filtered " .. call(TB.GetNumFilteredToys))
+    pcall(TB.SetCollectedShown, true)
+    pcall(TB.SetUncollectedShown, true)
+    pcall(TB.SetUnusableShown, true)
+    pcall(TB.SetAllSourceTypeFilters, true)
+    pcall(TB.SetFilterString, "")
+    pcall(TB.ForceToyRefilter)
+    local done = false
+    local f = CreateFrame("Frame")
+    local function read(why: string)
+        if done then return end
+        done = true
+        f:UnregisterAllEvents()
+        local n = raw(TB.GetNumFilteredToys) or 0
+        line("toys", ("(%s) filtered with everything shown: %d"):format(why, n))
+        for i = 1, math.min(n, 25) do
+            local itemID = raw(TB.GetToyFromIndex, i)
+            local data = itemID and C_TooltipInfo and raw(C_TooltipInfo.GetToyByItemID, itemID)
+            local texts = {}
+            for _, l in ipairs(data and data.lines or {}) do
+                if l.leftText and not isSecret(l.leftText) then texts[#texts + 1] = l.leftText end
+            end
+            line("toys", ("%d: %s info %s has %s | %s"):format(i, show(itemID), call(TB.GetToyInfo, itemID), call(PlayerHasToy, itemID),
+                table.concat(texts, " / "):sub(1, 240)))
+        end
+        line("toys", "filters left at " .. show({ collected = raw(TB.GetCollectedShown), uncollected = raw(TB.GetUncollectedShown),
+            unusable = raw(TB.GetUnusableShown) }))
+    end
+    pcall(f.RegisterEvent, f, "TOYS_UPDATED")
+    f:SetScript("OnEvent", function() after(0.2, function() read("event") end) end)
+    after(1.5, function() read("timeout") end)
+end
+
+local function sources()
+    local MJ, TC = C_MountJournal, C_TransmogCollection
+    local ids = raw(MJ and MJ.GetMountIDs) or {}
+    local shown = 0
+    for _, id in ipairs(ids) do
+        local _, _description, source = raw(MJ.GetMountInfoExtraByID, id)
+        local name, _, _, _, _, sourceType = raw(MJ.GetMountInfoByID, id)
+        if shown < 10 and source and source ~= "" then
+            shown = shown + 1
+            line("sources", ("mount %s (type %s): %s"):format(tostring(name), tostring(sourceType), tostring(source):gsub("|n", " / ")))
+        end
+    end
+    local withText = 0
+    for _, id in ipairs(ids) do
+        local _, _, source = raw(MJ.GetMountInfoExtraByID, id)
+        if source and source ~= "" then withText = withText + 1 end
+    end
+    line("sources", ("%d of %d mounts have a source text"):format(withText, #ids))
+    -- an appearance you lack: its source type and drops
+    local found = 0
+    for _, cat in ipairs({ 4, 10, 14 }) do
+        for _, a in ipairs(raw(TC.GetCategoryAppearances, cat) or {}) do
+            if not a.isCollected and found < 4 then
+                local srcs = raw(TC.GetAppearanceSources, a.visualID) or {}
+                local s1 = srcs[1]
+                if s1 and s1.sourceID then
+                    found = found + 1
+                    line("sources", ("appearance %s item %s %s, source type %s, drops %s"):format(tostring(a.visualID), tostring(s1.itemID),
+                        tostring(s1.name), tostring(s1.sourceType), call(TC.GetAppearanceSourceDrops, s1.sourceID)))
+                end
+            end
+        end
+    end
+end
+
+local function flags()
+    local MJ, TC = C_MountJournal, C_TransmogCollection
+    line("flags", "mounts needing fanfare " .. call(MJ and MJ.GetNumMountsNeedingFanfare))
+    local ids = raw(MJ and MJ.GetMountIDs) or {}
+    if ids[1] then
+        line("flags", "first mount: needs fanfare " .. call(MJ.NeedsFanfare, ids[1]) .. ", favourite " .. call(MJ.GetIsFavorite, 1))
+        line("flags", "mount camera via display " .. call(MJ.GetMountInfoExtraByID, ids[1]))
+        line("flags", "all displays " .. call(MJ.GetMountAllCreatureDisplayInfoByID, ids[1]))
+    end
+    line("flags", "latest appearance " .. call(TC and TC.GetLatestAppearance))
+    line("flags", "appearance favourites " .. call(TC and TC.HasFavorites))
+    line("flags", "pet favourites " .. call(C_PetJournal and C_PetJournal.HasFavoritePets))
+    line("flags", "toy favourites " .. call(C_ToyBox and C_ToyBox.HasFavorites))
+end
+
+-- Up to 18 of your appearances in one slot (chest, else any armor slot).
+local function appearancesToShow(): { [string]: any }[]
+    local TC = C_TransmogCollection
+    local list: { [string]: any }[] = {}
+    for _, cat in ipairs({ 4, 10, 8, 11, 3, 7, 9, 2 }) do
+        for _, a in ipairs(raw(TC.GetCategoryAppearances, cat) or {}) do
+            if a.isCollected then
+                local found = raw(TC.GetAppearanceSources, a.visualID) or {}
+                local src = found[1] and found[1].sourceID
+                if src then list[#list + 1] = { cat = cat, visual = a.visualID, source = src, new = raw(TC.IsNewAppearance, a.visualID),
+                    fav = raw(TC.GetIsAppearanceFavorite, a.visualID), camera = raw(TC.GetAppearanceCameraID, a.visualID) } end
+            end
+            if #list >= 18 then break end
+        end
+        if #list >= 18 then break end
+    end
+    return list
+end
+
+local function tiles()
+    local list = appearancesToShow()
+    line("tiles", #list .. " appearances of yours to show")
+    for i = 1, math.min(4, #list) do line("tiles", show(list[i])) end
+    local p = probePanel or panel(UIParent, { title = "Collections tiles probe", width = 6 * 92 + 40, height = 3 * 120 + 90 + 230, solid = true }) :: TilesPanel
+    probePanel = p
+    p:SetFrameStrata("DIALOG")
+    p:SetPoint("CENTER", 0, 40)
+    p:EnableMouse(true)
+    p:SetMovable(true)
+    p:RegisterForDrag("LeftButton")
+    p:SetScript("OnDragStart", p.StartMoving)
+    p:SetScript("OnDragStop", p.StopMovingOrSizing)
+    if not p.closeButton then
+        local c = closeButton(p, function() p:Hide() end)
+        p.closeButton = c
+        if c then c:SetPoint("TOPRIGHT", -8, -8) end
+    end
+    local previews: DressUpModel[] = p.tiles or {}
+    p.tiles = previews
+    local fpsBefore = GetFramerate()
+    local t0 = debugprofilestop()
+    for i, a in ipairs(list) do
+        local m = previews[i]
+        if not m then
+            m = CreateFrame("DressUpModel", nil, p.body)
+            m:SetSize(88, 116)
+            m:SetPoint("TOPLEFT", ((i - 1) % 6) * 92, -math.floor((i - 1) / 6) * 120)
+            fill(m, "surface-sunk", "BACKGROUND"):SetAllPoints()
+            previews[i] = m
+        end
+        pcall(m.SetUnit, m, "player")
+        pcall(m.Undress, m)
+        local apply = m.ApplyUICamera or _G.Model_ApplyUICamera
+        local camOK = a.camera and apply and pcall(apply, m, a.camera)
+        a.camOK = camOK and true or false
+        pcall(m.TryOn, m, a.source)
+        m:Show()
+    end
+    local built = debugprofilestop() - t0
+    line("tiles", ("built %d previews in %.1f ms; frame rate before %.0f"):format(#list, built, fpsBefore))
+    line("tiles", ("model:ApplyUICamera %s, Model_ApplyUICamera %s; cameras used %s"):format(tostring(previews[1] and previews[1].ApplyUICamera ~= nil),
+        tostring(_G.Model_ApplyUICamera ~= nil), tostring(list[1] and list[1].camOK)))
+    -- a mount in a ModelScene, framed by its own scene
+    local ids = raw(C_MountJournal.GetMountIDs) or {}
+    local id, hidden = nil, 0
+    for _, mid in ipairs(ids) do
+        local _, _, _, _, _, _, _, _, _, hide = raw(C_MountJournal.GetMountInfoByID, mid)
+        if hide then hidden = hidden + 1 elseif not id then id = mid end
+    end
+    line("scene", ("%d of %d mounts hidden for this character"):format(hidden, #ids))
+    if id and not p.scene then
+        local ok, scene = pcall(CreateFrame, "ModelScene", nil, p.body, "ModelSceneMixinTemplate")
+        line("scene", "ModelScene with ModelSceneMixinTemplate: " .. (ok and "made" or ("error " .. tostring(scene))))
+        if ok then
+            scene:SetSize(300, 210)
+            scene:SetPoint("BOTTOM", 0, 0)
+            fill(scene, "surface-sunk", "BACKGROUND"):SetAllPoints()
+            p.scene = scene
+        end
+    end
+    if id and p.scene then
+        local display, _, _, isSelf, _, sceneID = raw(C_MountJournal.GetMountInfoExtraByID, id)
+        local name = raw(C_MountJournal.GetMountInfoByID, id)
+        line("scene", ("mount %s display %s scene %s self %s"):format(tostring(name), tostring(display), tostring(sceneID), tostring(isSelf)))
+        line("scene", "TransitionToModelSceneID " .. call(p.scene.TransitionToModelSceneID, p.scene, sceneID,
+            CAMERA_TRANSITION_TYPE_IMMEDIATE, CAMERA_MODIFICATION_TYPE_DISCARD, true))
+        local actor = raw(p.scene.GetActorByTag, p.scene, "unwrapped")
+        line("scene", "actor 'unwrapped' " .. tostring(actor ~= nil))
+        if actor then
+            line("scene", "SetModelByCreatureDisplayID " .. call(actor.SetModelByCreatureDisplayID, actor, display))
+            if isSelf then pcall(actor.SetAnimation, actor, 618) end
+        end
+    end
+    p:Show()
+    -- the frame rate while they show
+    after(3, function()
+        line("tiles", ("frame rate with them showing %.0f"):format(GetFramerate()))
+        print(("Collections tiles probe: frame rate %.0f before, %.0f with %d previews. /reload to save."):format(fpsBefore, GetFramerate(), #list))
+    end)
+end
+
+export function command()
+    if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_Collections") end
+    out = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.collectionsTiles = out
+    for _, step in ipairs({ toys, sources, flags, tiles }) do
+        local ok, err = pcall(step)
+        if not ok then line("errors", tostring(err)) end
+    end
+    print("Collections tiles probe: recorded; the panel shows 18 previews. Take a screenshot; the frame rate comes in 3 seconds.")
+end

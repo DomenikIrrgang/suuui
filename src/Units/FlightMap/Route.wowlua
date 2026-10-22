@@ -1,0 +1,236 @@
+-- Units/FlightMap/Route.wowlua
+-- The flight map's maths and texts, apart from its frames: flight lengths
+-- from the route data (SuuUI.FlightRoutes), a hop's waypoints fitted to a
+-- map, dashes along a route, a place along it by time, the shares of the
+-- stops on it, and the texts the map, the side panel and the flight bar
+-- show. Pure functions (the route data and the world come in as
+-- parameters), so they're tested on their own; Units/FlightMap draws with
+-- them.
+
+import SuuUI from "/Core/API"
+
+local T = SuuUI.Tokens
+
+-- A flight master on the flight master's map (FlightMap's M:ReadSession).
+export type TaxiNode = { slot: number, id: number, name: string, kind: string, cost: number, path?: number[] }
+-- The routes' lengths: [from nodeID] = { [to nodeID] = yards }
+export type Routes = { [number]: { [number]: number } }
+-- One dash of a dashed line: x1, y1, x2, y2
+export type Segment = { number }
+
+-- "4:12"
+export function clock(s: number): string
+    s = math.max(0, math.floor(s + 0.5))
+    return ("%d:%02d"):format(s / 60, s % 60)
+end
+
+-- "1s 10c" in coin colours (a tooltip's line; built as it shows)
+export function coins(copper: number?): string
+    copper = math.max(0, math.floor(copper or 0))
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local parts: string[] = {}
+    local function part(v: number, unit: string, token: string) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
+    if g > 0 then part(g, "g", "coin-gold") end
+    if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
+    if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
+    return table.concat(parts, " ")
+end
+
+-- "Crossroads, The Barrens" → "Crossroads"
+export function short(name: any): string
+    return name and name:match("^([^,]+)") or name or "?"
+end
+
+-- Taxi nodes the client still lists that no one flies to (an old copy of
+-- Powderfuse Port, transports, quest flights)
+export function junk(name: any): boolean
+    return type(name) ~= "string" or issecretvalue(name) or name:find("^zzOLD") ~= nil or name:find("^Transport,") ~= nil
+        or name:find("^Quest Path") ~= nil
+end
+
+-- One hop's length in yards, either way round; nil when not known.
+export function hopYards(routes: Routes, a: number, b: number): number?
+    local ra, rb = routes[a], routes[b]
+    return (ra and ra[b]) or (rb and rb[a])
+end
+
+-- A flight's length: its hops added up; nil when one isn't known.
+export function pathYards(routes: Routes, path: number[]): number?
+    local total = 0
+    for i = 1, #path - 1 do
+        local y = hopYards(routes, path[i], path[i + 1])
+        if not y then return nil end
+        total = total + y
+    end
+    return total
+end
+
+-- A hop's waypoints on a map (0-1), turned round when they're the reverse
+-- hop's (back), kept when each end lies near its master (pa, pb: their
+-- places on the map; within a quarter of the hop), else false (drawn
+-- straight).
+export function fitWay(way: number[][], back: boolean, pa: number[], pb: number[]): number[][] | false
+    if back then
+        for i = 1, math.floor(#way / 2) do way[i], way[#way + 1 - i] = way[#way + 1 - i], way[i] end
+    end
+    if #way < 2 then return false end
+    local far = 0.25 * math.sqrt((pb[1] - pa[1]) ^ 2 + (pb[2] - pa[2]) ^ 2)
+    local s, e = way[1], way[#way]
+    if math.sqrt((s[1] - pa[1]) ^ 2 + (s[2] - pa[2]) ^ 2) <= far
+        and math.sqrt((e[1] - pb[1]) ^ 2 + (e[2] - pb[2]) ^ 2) <= far then
+        return way
+    end
+    return false
+end
+
+export function span(a: number[], b: number[]): number return math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2) end
+
+-- Dashes along a route's points: dash px drawn, gap px left out, the
+-- pattern carried on round its bends; no more than maxDashes on the line
+-- (zoomed far in, longer dashes). Each { x1, y1, x2, y2 }.
+export function dashes(points: number[][], dash: number, gap: number, maxDashes: number): Segment[]
+    local out: Segment[] = {}
+    local total = 0
+    for i = 1, #points - 1 do total = total + span(points[i], points[i + 1]) end
+    if total < 0.5 then return out end
+    local stretch = math.max(1, total / (dash + gap) / maxDashes)
+    dash, gap = dash * stretch, gap * stretch
+    local run = 0
+    for i = 1, #points - 1 do
+        local a, b = points[i], points[i + 1]
+        local len = span(a, b)
+        if len > 0 then
+            local ux, uy = (b[1] - a[1]) / len, (b[2] - a[2]) / len
+            -- where the pattern stands at this bend: a dash may go on round it
+            local t = -(run % (dash + gap))
+            while t < len do
+                local s, e = math.max(0, t), math.min(len, t + dash)
+                if e > s then out[#out + 1] = { a[1] + ux * s, a[2] + uy * s, a[1] + ux * e, a[2] + uy * e } end
+                t = t + dash + gap
+            end
+        end
+        run = run + len
+    end
+    return out
+end
+
+-- The point on a route nearest x, y: the segment it's on, and the point.
+export function nearest(points: number[][], x: number, y: number): (number?, number?, number?)
+    local best, bk, bx, by
+    for k = 1, #points - 1 do
+        local a, b = points[k], points[k + 1]
+        local dx, dy = b[1] - a[1], b[2] - a[2]
+        local l2 = dx * dx + dy * dy
+        local t = l2 > 0 and math.max(0, math.min(1, ((x - a[1]) * dx + (y - a[2]) * dy) / l2)) or 0
+        local px, py = a[1] + dx * t, a[2] + dy * t
+        local d = (px - x) ^ 2 + (py - y) ^ 2
+        if not best or d < best then best, bk, bx, by = d, k, px, py end
+    end
+    return bk, bx, by
+end
+
+-- The point `frac` (0-1) of the way along a route by its length: the
+-- segment it's on, and the point.
+export function alongByShare(points: number[][], frac: number): (number, number, number)
+    local lengths: number[], sum = {}, 0
+    for k = 1, #points - 1 do
+        lengths[k] = span(points[k], points[k + 1])
+        sum = sum + lengths[k]
+    end
+    local want, run = frac * sum, 0
+    for k = 1, #points - 1 do
+        if run + lengths[k] >= want then
+            local t = lengths[k] > 0 and (want - run) / lengths[k] or 0
+            local a, b = points[k], points[k + 1]
+            return k, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t
+        end
+        run = run + lengths[k]
+    end
+    local last = points[#points]
+    return #points - 1, last[1], last[2]
+end
+
+-- A placed route's lengths: run (the length up to each point), its total,
+-- and each stop's share of it (at[i] for the stop at points[stops[i]]);
+-- nil when it has no length.
+export function shares(points: number[][], stops: number[]): (number[]?, number?, { [number]: number }?)
+    local run: number[] = { 0 }
+    for k = 2, #points do run[k] = run[k - 1] + span(points[k - 1], points[k]) end
+    local total = run[#points]
+    if not (total and total > 0) then return nil end
+    local at: { [number]: number } = {}
+    for i, k in ipairs(stops) do at[i] = run[k] / total end
+    return run, total, at
+end
+
+-- Each master's share of a flight by the hops' lengths alone (at[i] for
+-- path[i]); nil when a hop isn't known or the route has no length.
+export function hopShares(routes: Routes, path: number[]): { [number]: number }?
+    local hops: number[] = { 0 }
+    local total = 0
+    for i = 1, #path - 1 do
+        local yards = hopYards(routes, path[i], path[i + 1])
+        if not yards then return nil end
+        total = total + yards
+        hops[i + 1] = total
+    end
+    if total <= 0 then return nil end
+    local at: { [number]: number } = {}
+    for i = 1, #path do at[i] = hops[i] / total end
+    return at
+end
+
+-- A flight's time from a route's record ({ t, v: the flyer's speed }; nil
+-- none) and its length: the time flown, scaled to `speed` when the
+-- flyer's differed by more than `boost`, and true; else the length at
+-- `speed`, and false; nil when neither is known.
+export function flightTime(record: { [string]: any }?, yards: number?, speed: number, boost: number): (number?, boolean?)
+    if record and record.t then
+        local t = record.t
+        if record.v and math.abs(record.v / speed - 1) > boost then t = t * record.v / speed end
+        return t, true
+    end
+    if yards then return yards / speed, false end
+    return nil
+end
+
+-- a destination's time: "4:12" when timed, "~3:30" estimated; and a word
+-- for its tooltip
+export function timeText(t: number?, measured: boolean?, long: boolean?): string
+    if not t then return long and "Not timed yet" or "–" end
+    if measured then return clock(t) end
+    return (long and "about " or "~") .. clock(t)
+end
+
+-- "Direct", or "via Crossroads, Ratchet": the stops between, by name
+export function viaText(path: number[]?, byID: { [number]: TaxiNode }): string
+    if not path or #path <= 2 then return "Direct" end
+    local names: string[] = {}
+    for i = 2, #path - 1 do
+        local n = byID[path[i]]
+        names[#names + 1] = n and short(n.name) or "?"
+    end
+    return "via " .. table.concat(names, ", ")
+end
+
+export function stopsText(path: number[]?): string
+    local stops = path and (#path - 2) or 0
+    if stops <= 0 then return "Direct" end
+    return stops == 1 and "1 stop" or (stops .. " stops")
+end
+
+export function stepsText(steps: number[]?): string?
+    local n = steps and #steps or 0
+    if n == 0 then return nil end
+    return n == 1 and "1 quest step nearby" or (n .. " quest steps nearby")
+end
+
+-- The master nearest x, y (yards) within `near` yards, or nil.
+export function nearestMaster(masters: { node: TaxiNode, x: number, y: number }[], x: number, y: number, near: number): TaxiNode?
+    local best: TaxiNode?, far = nil, near * near
+    for _, m in ipairs(masters) do
+        local d = (m.x - x) ^ 2 + (m.y - y) ^ 2
+        if d < far then best, far = m.node, d end
+    end
+    return best
+end

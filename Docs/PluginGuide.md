@@ -6,7 +6,7 @@ Two examples ship with SuuUI:
 - `Examples/SuuUI_HelloPlugin` covers a module, a setting, a chat command, events and a movable frame.
 - `Examples/SuuUI_LevelBadge` adds a badge to every one of SuuUI's unit frames, with its settings on SuuUI's own Unit frames page.
 
-Copy either folder into `Interface/AddOns` to try it.
+Both are written in [wowlua](https://github.com/DomenikIrrgang/wowlua), like SuuUI itself: run `wowlua install` in either folder to build it into `Interface/AddOns` (or `wowlua build` and copy `dist/dev/<Name>` there). A plugin doesn't have to use wowlua: the plain Lua addon below works as well.
 
 ## 1. The addon
 
@@ -170,7 +170,7 @@ SuuUI.RegisterTheme({
 - `Raw.UI`: every component, including the ones not exported.
 - `Raw.Mixins`: the components' method tables. Change one when your file loads and every frame SuuUI builds afterwards has it.
 - `Raw.Module(id)`: a module's internals.
-- `Raw.ns`: SuuUI's private namespace.
+- `Raw.ns`: SuuUI's addon table, which holds the wowlua runtime (`Raw.ns.__wowlua.require("UI/Panel")` gives a module's exports).
 
 **None of it is versioned:** it can change in any SuuUI release. Check what you find, and prefer the documented API where it covers what you need.
 

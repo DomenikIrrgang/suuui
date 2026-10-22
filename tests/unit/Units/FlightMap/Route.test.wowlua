@@ -1,0 +1,155 @@
+-- Units/FlightMap/Route: the flight map's maths and texts (flight lengths,
+-- a hop's waypoints fitted to a map, dashes, places along a route, the
+-- stops' shares, flight times and the texts shown).
+
+import test, expect from "wowlua:test"
+import SuuUI from "/Core/API"
+import * as route from "/Units/FlightMap/Route"
+
+local function hex(token: string): string return "|cff" .. SuuUI.Tokens.color[token].hex end
+
+local function node(id: number, name: string): route.TaxiNode
+    return { slot = id, id = id, name = name, kind = "REACHABLE", cost = 0 }
+end
+
+@test("a clock: minutes and seconds, rounded, never below zero")
+local function clockText()
+    expect(route.clock(252)).toBe("4:12")
+    expect(route.clock(59.6)).toBe("1:00")
+    expect(route.clock(5)).toBe("0:05")
+    expect(route.clock(-3)).toBe("0:00")
+end
+
+@test("coins in their colours: gold, silver and copper as needed")
+local function coinsText()
+    local g, s, c = hex("coin-gold"), hex("coin-silver"), hex("coin-copper")
+    expect(route.coins(110)).toBe("1" .. s .. "s|r 10" .. c .. "c|r")
+    expect(route.coins(10000)).toBe("1" .. g .. "g|r")
+    -- (silver kept between gold and copper)
+    expect(route.coins(10005)).toBe("1" .. g .. "g|r 0" .. s .. "s|r 5" .. c .. "c|r")
+    expect(route.coins(nil)).toBe("0" .. c .. "c|r")
+    expect(route.coins(-5)).toBe("0" .. c .. "c|r")
+end
+
+@test("a name up to its comma; the client's dead nodes are junk")
+local function names()
+    expect(route.short("Crossroads, The Barrens")).toBe("Crossroads")
+    expect(route.short("Moonglade")).toBe("Moonglade")
+    expect(route.short(nil)).toBe("?")
+    expect(route.junk("zzOLDPowderfuse Port, Riverglades")).toBe(true)
+    expect(route.junk("Transport, Zeppelin")).toBe(true)
+    expect(route.junk("Quest Path 1234")).toBe(true)
+    expect(route.junk(5)).toBe(true)
+    expect(route.junk(nil)).toBe(true)
+    expect(route.junk("Ratchet, The Barrens")).toBe(false)
+end
+
+@test("a hop's length either way round, a flight's its hops added up")
+local function lengths()
+    local routes: route.Routes = { [1] = { [2] = 100 }, [3] = { [2] = 300 } }
+    expect(route.hopYards(routes, 1, 2)).toBe(100)
+    expect(route.hopYards(routes, 2, 1)).toBe(100)
+    expect(route.hopYards(routes, 2, 3)).toBe(300)
+    expect(route.hopYards(routes, 1, 3)).toBeNil()
+    expect(route.pathYards(routes, { 1, 2, 3 })).toBe(400)
+    expect(route.pathYards(routes, { 3, 2, 1 })).toBe(400)
+    expect(route.pathYards(routes, { 1, 3 })).toBeNil()
+    expect(route.pathYards(routes, { 1 })).toBe(0)
+end
+
+@test("a hop's waypoints kept when each end is near its master, turned round for the reverse hop")
+local function fitting()
+    local pa, pb = { 0, 0 }, { 1, 0 }
+    expect(route.fitWay({ { 0.1, 0 }, { 0.5, 0.1 }, { 0.9, 0 } }, false, pa, pb))
+        .toEqual({ { 0.1, 0 }, { 0.5, 0.1 }, { 0.9, 0 } })
+    expect(route.fitWay({ { 0.9, 0 }, { 0.5, 0.1 }, { 0.1, 0 } }, true, pa, pb))
+        .toEqual({ { 0.1, 0 }, { 0.5, 0.1 }, { 0.9, 0 } })
+    -- an end further than a quarter of the hop from its master: straight
+    expect(route.fitWay({ { 0.5, 0 }, { 1, 0 } }, false, pa, pb)).toBe(false)
+    expect(route.fitWay({ { 0, 0 }, { 0.6, 0 } }, false, pa, pb)).toBe(false)
+    expect(route.fitWay({ { 0, 0 } }, false, pa, pb)).toBe(false)
+    expect(route.span({ 0, 0 }, { 3, 4 })).toBe(5)
+end
+
+@test("dashes along a route: the pattern carried round a bend, at most so many")
+local function dashing()
+    expect(route.dashes({ { 0, 0 }, { 10, 0 } }, 2, 2, 100))
+        .toEqual({ { 0, 0, 2, 0 }, { 4, 0, 6, 0 }, { 8, 0, 10, 0 } })
+    -- the gap from 2 to 4 runs on round the bend at 3
+    expect(route.dashes({ { 0, 0 }, { 3, 0 }, { 3, 3 } }, 2, 2, 100))
+        .toEqual({ { 0, 0, 2, 0 }, { 3, 1, 3, 3 } })
+    -- a hundred units with room for 5: dashes and gaps five times longer
+    expect(#route.dashes({ { 0, 0 }, { 100, 0 } }, 2, 2, 5)).toBe(5)
+    expect(route.dashes({ { 0, 0 }, { 100, 0 } }, 2, 2, 5)[2]).toEqual({ 20, 0, 30, 0 })
+    expect(route.dashes({ { 0, 0 }, { 0.2, 0 } }, 2, 2, 100)).toEqual({})
+end
+
+@test("the point of a route nearest a place, and a share of the way along it")
+local function along()
+    local points = { { 0, 0 }, { 10, 0 }, { 10, 10 } }
+    expect({ route.nearest(points, 5, 3) }).toEqual({ 1, 5, 0 })
+    expect({ route.nearest(points, 12, 8) }).toEqual({ 2, 10, 8 })
+    expect({ route.nearest({ { 1, 1 } }, 0, 0) }).toEqual({})
+    expect({ route.alongByShare(points, 0.25) }).toEqual({ 1, 5, 0 })
+    expect({ route.alongByShare(points, 0.75) }).toEqual({ 2, 10, 5 })
+    expect({ route.alongByShare(points, 1) }).toEqual({ 2, 10, 10 })
+    expect({ route.alongByShare(points, 1.5) }).toEqual({ 2, 10, 10 })
+end
+
+@test("each stop's share of a route, by its placed points or its hops' lengths")
+local function stopShares()
+    local points = { { 0, 0 }, { 10, 0 }, { 10, 10 } }
+    local run, total, at = route.shares(points, { 1, 2, 3 })
+    expect(run).toEqual({ 0, 10, 20 })
+    expect(total).toBe(20)
+    expect(at).toEqual({ 0, 0.5, 1 })
+    expect(route.shares({ { 1, 1 }, { 1, 1 } }, { 1, 2 })).toBeNil()
+    local routes: route.Routes = { [1] = { [2] = 100 }, [3] = { [2] = 300 } }
+    expect(route.hopShares(routes, { 1, 2, 3 })).toEqual({ 0, 0.25, 1 })
+    expect(route.hopShares(routes, { 1, 3 })).toBeNil()
+    expect(route.hopShares(routes, { 1 })).toBeNil()
+end
+
+@test("a flight's time: flown before (scaled to another speed), else estimated from its length")
+local function times()
+    expect({ route.flightTime({ t = 100, v = 30 }, nil, 30, 0.03) }).toEqual({ 100, true })
+    -- a flyer 10% faster: scaled to this speed
+    local t, measured = route.flightTime({ t = 100, v = 33 }, nil, 30, 0.03)
+    expect(t).toBeCloseTo(110)
+    expect(measured).toBe(true)
+    -- within 3%: as flown
+    expect({ route.flightTime({ t = 100, v = 30.5 }, nil, 30, 0.03) }).toEqual({ 100, true })
+    expect({ route.flightTime(nil, 300, 30, 0.03) }).toEqual({ 10, false })
+    expect({ route.flightTime({ n = 1 }, 300, 30, 0.03) }).toEqual({ 10, false })
+    expect({ route.flightTime(nil, nil, 30.3, 0.03) }).toEqual({})
+end
+
+@test("the texts: a time, the stops between, the quest steps")
+local function texts()
+    expect(route.timeText(nil)).toBe("–")
+    expect(route.timeText(nil, nil, true)).toBe("Not timed yet")
+    expect(route.timeText(252, true)).toBe("4:12")
+    expect(route.timeText(252, false)).toBe("~4:12")
+    expect(route.timeText(252, false, true)).toBe("about 4:12")
+    local byID = { [2] = node(2, "Crossroads, The Barrens") }
+    expect(route.viaText(nil, byID)).toBe("Direct")
+    expect(route.viaText({ 1, 2 }, byID)).toBe("Direct")
+    expect(route.viaText({ 1, 2, 3, 4 }, byID)).toBe("via Crossroads, ?")
+    expect(route.stopsText(nil)).toBe("Direct")
+    expect(route.stopsText({ 1, 2 })).toBe("Direct")
+    expect(route.stopsText({ 1, 2, 3 })).toBe("1 stop")
+    expect(route.stopsText({ 1, 2, 3, 4 })).toBe("2 stops")
+    expect(route.stepsText(nil)).toBeNil()
+    expect(route.stepsText({})).toBeNil()
+    expect(route.stepsText({ 5 })).toBe("1 quest step nearby")
+    expect(route.stepsText({ 5, 6 })).toBe("2 quest steps nearby")
+end
+
+@test("the flight master nearest a place, within reach")
+local function nearestMasters()
+    local a, b = node(1, "Ratchet"), node(2, "Crossroads")
+    local masters = { { node = a, x = 0, y = 0 }, { node = b, x = 100, y = 0 } }
+    expect(route.nearestMaster(masters, 70, 0, 800)).toBe(b)
+    expect(route.nearestMaster(masters, 20, 0, 800)).toBe(a)
+    expect(route.nearestMaster(masters, 500, 500, 100)).toBeNil()
+end

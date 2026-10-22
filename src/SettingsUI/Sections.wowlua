@@ -1,0 +1,423 @@
+-- SettingsUI/Sections.wowlua
+-- The General sections SuuUI owns itself: Appearance, Motion, Profiles and
+-- Modules. Module sections are registered by their modules.
+
+import after from "wowlua:timer"
+import print from "/Core/Init"
+import tokens as T from "/Core/Tokens"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as modules from "/Core/Modules"
+import * as themes from "/Core/Themes"
+import * as vision from "/Core/Vision"
+import * as roles from "/Core/Roles"
+import * as rolePresets from "/Core/RolePresets"
+import * as services from "/Core/Services"
+import userScale from "/Core/Root"
+import SuuUI from "/Core/API"
+import * as inputs from "/UI/Inputs"
+import * as controls from "/UI/Controls"
+import * as uiSelect from "/UI/Select"
+import * as editMode from "/EditMode/EditMode"
+import * as registry from "./Registry"
+import * as settingsWindow from "./Window"
+
+local S = T.space
+local profiles = settings.profiles
+
+type Option = { value: string, label: string }
+
+--------------------------------------------------------------------------------
+-- Appearance
+--------------------------------------------------------------------------------
+
+local function scaleIsAuto(): boolean return settings.get("ui", "scale") == 0 end
+
+registry.register({
+    id = "appearance", label = "Appearance", category = "General", order = 10, namespace = "ui",
+    groups = {
+        { title = "Scale", description = "SuuUI draws one design pixel as one pixel of your screen, so frames keep their size on every resolution and only the space between them changes.",
+          rows = {
+            { label = "Automatic scale", control = "toggle", combat = true,
+              description = "100% up to 1440p, larger on taller screens.",
+              get = scaleIsAuto,
+              set = function(on: any): (boolean, string?) return settings.set("ui", "scale", on and 0 or userScale()) end,
+              isDefault = scaleIsAuto,
+              reset = function() settings.reset("ui", "scale") end },
+            { label = "Scale", control = "slider", min = 0.5, max = 2, step = 0.05, live = false, combat = true,
+              description = "Every SuuUI frame at once, when you let go of the slider.",
+              format = function(v: number): string return ("%d%%"):format(v * 100 + 0.5) end,
+              get = function(): number return userScale() end,
+              set = function(v: any): (boolean, string?) return settings.set("ui", "scale", v) end,
+              isDefault = scaleIsAuto,
+              reset = function() settings.reset("ui", "scale") end,
+              disabled = function(): (boolean, string) return scaleIsAuto(), "Turn automatic scale off first." end },
+        } },
+        { title = "Theme", description = "SuuUI's colours and type, one of its themes (High contrast, Class accent, Darker…), or a theme a plugin brings. For every character. Colour vision applies on top of it.",
+          rows = {
+            { label = "Theme", control = "select", width = 220,
+              options = function(): Option[]
+                  local out: Option[] = {}
+                  for _, t in ipairs(themes.all()) do out[#out + 1] = { value = t.id, label = t.name } end
+                  return out
+              end,
+              description = function(): string
+                  local chosen = settings.account("theme") or themes.DEFAULT
+                  local t = themes.get(chosen)
+                  return t and t.description or "Its plugin isn't loaded: SuuUI's own applies."
+              end,
+              get = function(): any return settings.account("theme") or themes.DEFAULT end,
+              set = function(v: any): boolean
+                  settings.setAccount("theme", v ~= themes.DEFAULT and v or nil)
+                  themes.apply()
+                  return true
+              end,
+              isDefault = function(): boolean return (settings.account("theme") or themes.DEFAULT) == themes.DEFAULT end,
+              reset = function() settings.setAccount("theme", nil); themes.apply() end },
+        } },
+        { title = "Colour vision", description = "SuuUI's signal colours (danger, low health, healing, warnings, the dispel types, friend and foe) for your eyes. Shapes, badges and labels stay as they are. For every character.",
+          rows = {
+            { label = "Colours", control = "select", width = 220,
+              options = function(): Option[]
+                  local out: Option[] = {}
+                  for _, mode in ipairs(vision.MODES) do
+                      if vision.available(mode) then out[#out + 1] = { value = mode, label = vision.LABEL[mode] :: string } end
+                  end
+                  return out
+              end,
+              description = function(): string
+                  local chosen = settings.account("colorVision") or "normal"
+                  local text = vision.HINT[chosen] or ""
+                  for _, mode in ipairs(vision.MODES) do
+                      if not vision.available(mode) then
+                          text = text .. " " .. (vision.LABEL[mode] :: string) .. " comes with the design's colours for it."
+                      end
+                  end
+                  return text
+              end,
+              get = function(): any return settings.account("colorVision") or "normal" end,
+              set = function(v: any): boolean
+                  settings.setAccount("colorVision", v ~= "normal" and v or nil)
+                  themes.apply()
+                  return true
+              end,
+              isDefault = function(): boolean return (settings.account("colorVision") or "normal") == "normal" end,
+              reset = function() settings.setAccount("colorVision", nil); themes.apply() end },
+        } },
+        { title = "Blizzard", rows = {
+            { key = "hideIssueReporter", label = "Hide the issue reporter", control = "toggle",
+              description = "The beta's bug report button. Off: it shows as the game places it." },
+        } },
+        { title = "Layout", rows = {
+            { label = "Move frames", control = "button", text = "Edit layout",
+              description = "Drag SuuUI's frames on a snap grid. Closes by itself when combat starts.",
+              onClick = function()
+                  if editMode.enter() then settingsWindow.toggle() end
+              end },
+        } },
+        -- the first-run welcome (the welcome module), for another look
+        { title = "Welcome", rows = {
+            { label = "First steps", control = "button", text = "Show the welcome again",
+              description = "Your role layout, colour vision and where things are, as on your first login.",
+              disabled = function(): (boolean, string)
+                  return services.get("welcome") == nil, "The Welcome module is off (Settings › Modules)."
+              end,
+              onClick = function()
+                  settingsWindow.close()
+                  SuuUI.ShowWelcome()
+              end },
+        } },
+    },
+})
+
+--------------------------------------------------------------------------------
+-- Motion
+--------------------------------------------------------------------------------
+
+registry.register({
+    id = "motion", label = "Motion", category = "General", order = 20, namespace = "ui",
+    groups = {
+        { title = "Animations", rows = {
+            { key = "reducedMotion", label = "Reduce motion", control = "toggle",
+              description = "Drops decorative motion: fades, pops and slides. Every value still updates at once." },
+        } },
+    },
+})
+
+--------------------------------------------------------------------------------
+-- Profiles
+--------------------------------------------------------------------------------
+
+local function otherProfiles(): uiSelect.SelectOption[]
+    local options: uiSelect.SelectOption[] = {}
+    for _, name in ipairs(profiles.list()) do
+        if name ~= profiles.current() then options[#options + 1] = { value = name, label = name } end
+    end
+    return options
+end
+
+local function allProfiles(): Option[]
+    local options: Option[] = {}
+    for _, name in ipairs(profiles.list()) do options[#options + 1] = { value = name, label = name } end
+    return options
+end
+
+-- A Select of other profiles and a button that acts on the chosen one. With
+-- `confirm`, the first click arms the button for a few seconds.
+local function pickAndAct(parent: any, label: string, act: (name: string) -> (boolean, string?), confirm: boolean?): any
+    local f = CreateFrame("Frame", nil, parent)
+    local choice: string? = nil
+    local timer: TimerHandle? = nil
+    f.select = uiSelect.select(f, { width = 190, placeholder = "Choose a profile", options = otherProfiles(),
+        onChange = function(v: any) choice = v end })
+    f.select:SetPoint("LEFT")
+    local function disarm()
+        if timer then timer:Cancel(); timer = nil end
+        f.button:SetLabel(label)
+    end
+    -- the list follows profiles switched, created and deleted elsewhere
+    local function refresh()
+        local options = otherProfiles()
+        f.select:SetOptions(options)
+        local still = false
+        for _, o in ipairs(options) do if o.value == choice then still = true end end
+        if not still then
+            choice = nil
+            f.select:SetValue(nil)
+            disarm()
+        end
+    end
+    f.button = controls.button(f, { text = label, onClick = function(b: any)
+        local chosen = choice
+        if not chosen then return end
+        if confirm and not timer then
+            b:SetLabel("Click again")
+            timer = after(3, function() timer = nil; disarm() end)
+            return
+        end
+        disarm()
+        local ok, err = act(chosen)
+        if not ok then print(err) end
+        choice = nil
+        f.select:SetValue(nil)
+        refresh()
+    end })
+    f.button:SetPoint("LEFT", f.select, "RIGHT", S["space-3"], 0)
+    f:SetSize(190 + S["space-3"] + f.button:GetWidth(), 30)
+    events.on("SUUUI_PROFILE_CHANGED", refresh, f)
+    events.on("SUUUI_PROFILES_CHANGED", refresh, f)
+    return f
+end
+
+local function newProfile(parent: any): any
+    local f = CreateFrame("Frame", nil, parent)
+    f.name = inputs.textField(f, { width = 190, placeholder = "Name" })
+    f.name:SetPoint("LEFT")
+    local function create()
+        local name = strtrim(f.name:GetValue() or "")
+        local ok, err = profiles.create(name)
+        if ok then ok, err = profiles.use(name) end
+        if not ok then print(err) else f.name:SetValue("") end
+    end
+    -- Enter in the name field creates it too
+    f.name.edit:SetScript("OnEnterPressed", function(e: any)
+        create()
+        e:ClearFocus()
+    end)
+    f.button = controls.button(f, { text = "Create", onClick = create })
+    f.button:SetPoint("LEFT", f.name, "RIGHT", S["space-3"], 0)
+    f:SetSize(190 + S["space-3"] + f.button:GetWidth(), 30)
+    return f
+end
+
+-- One role's profile: "Don't switch" or a profile.
+local function roleRow(role: string, label: string): { [string]: any }
+    return { label = label, control = "select", width = 220,
+        options = function(): Option[]
+            local options: Option[] = { { value = "none", label = "Don't switch" } }
+            for _, o in ipairs(allProfiles()) do options[#options + 1] = o end
+            return options
+        end,
+        description = ("When you're a %s, use this profile."):format(roles.LABEL[role]),
+        get = function(): any return profiles.roleProfile(role) or "none" end,
+        set = function(v: any): (boolean, string?) return profiles.setRoleProfile(role, v ~= "none" and v or nil) end }
+end
+
+-- A role preset's button: Create (none yet), or Reset its layout (a second
+-- click within three seconds), then the page shows the new state.
+local function presetButton(role: string): (parent: any) -> any
+    return function(parent: any): any
+        local name = rolePresets.NAME[role] :: string
+        local timer: TimerHandle? = nil
+        local function label(): string
+            return rolePresets.exists(role) and ("Reset " .. name .. "'s layout") or ("Create " .. name)
+        end
+        local b = controls.button(parent, { text = label(), onClick = function(self: any)
+            if rolePresets.exists(role) and not timer then
+                self:SetLabel("Click again to reset")
+                timer = after(3, function() timer = nil; self:SetLabel(label()) end)
+                return
+            end
+            local armed = timer
+            if armed then armed:Cancel(); timer = nil end
+            local ok, err = rolePresets.apply(role)
+            if ok then
+                print(("%s is ready: the %s layout, used when you're a %s (Profiles › By role)."):format(name, roles.LABEL[role], roles.LABEL[role]))
+            else
+                print(name .. ": " .. tostring(err))
+            end
+            self:SetLabel(label())
+        end })
+        b:HookScript("OnShow", function(self: any) if not timer then self:SetLabel(label()) end end)
+        return b
+    end
+end
+
+local function resetAll(parent: any): any
+    local timer: TimerHandle? = nil
+    local b = controls.button(parent, { text = "Reset everything", onClick = function(self: any)
+        local armed = timer
+        if not armed then
+            self:SetLabel("Click again to reset")
+            timer = after(3, function() timer = nil; self:SetLabel("Reset everything") end)
+            return
+        end
+        armed:Cancel()
+        timer = nil
+        self:SetLabel("Reset everything")
+        settings.reset()
+        print("Every setting in " .. (profiles.current() :: string) .. " is back to its default.")
+    end })
+    return b
+end
+
+registry.register({
+    id = "profiles", label = "Profiles", category = "General", order = 40,
+    groups = {
+        { title = "This character", rows = {
+            { label = "Profile", control = "select", width = 220, options = allProfiles,
+              description = "Each character uses its own profile unless you pick another.",
+              get = function(): string? return profiles.current() end,
+              set = function(name: any): (boolean, string?) return profiles.use(name) end },
+            { label = "New profile", control = "custom", build = newProfile,
+              description = "Starts as a copy of the profile you use now, and switches to it." },
+            { label = "Copy settings from", control = "custom",
+              build = function(p: any): any return pickAndAct(p, "Copy", profiles.copyFrom, true) end,
+              description = "Replaces this profile's settings with another profile's." },
+            { label = "Delete a profile", control = "custom",
+              build = function(p: any): any return pickAndAct(p, "Delete", profiles.delete, true) end,
+              description = "Characters using it go back to their own profile." },
+        } },
+        { title = "Role presets", description = "Ready-made layouts from SuuUI's designs, for dungeons and raids alike. Tank and DPS: your group above the chat, you and your target either side of the centre. Healer: your group in the middle between your frame and your target's, the party as one row and the raid's groups as rows. Each is its own profile, copied from the one you use now with the layout set, and takes its role's place below.", rows = {
+            { label = "Tank", control = "custom", build = presetButton("TANK"),
+              description = "SuuTank: the threat meter beside the damage meter, the swing timer under your cast bar." },
+            { label = "Healer", control = "custom", build = presetButton("HEALER"),
+              description = "SuuHeal: the group between you and your target, its icons inside the bars; no threat meter or swing timer." },
+            { label = "DPS", control = "custom", build = presetButton("DAMAGER"),
+              description = "SuuDps: the default layout." },
+        } },
+        { title = "By role", description = "SuuUI can switch profiles with your role: set up a profile for each, and everything follows when you change spec or get a role in a group, out of combat.", rows = {
+            { label = "Your role", control = "select", width = 220,
+              options = function(): Option[]
+                  local now = roles.LABEL[(select(1, roles.current()))] :: string
+                  local auto = profiles.chosenRole() == "auto" and (" (now " .. now .. ")") or ""
+                  return { { value = "auto", label = "Automatic" .. auto },
+                           { value = "TANK", label = "Tank" }, { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "DPS" } }
+              end,
+              description = "Automatic: the role a group gives you (role check, group finder), else the talent tree with the most points. A profile you pick by hand stays until your role changes.",
+              get = function(): any return profiles.chosenRole() end,
+              set = function(v: any): (boolean, string?) return profiles.setChosenRole(v) end },
+            roleRow("TANK", "Tank profile"),
+            roleRow("HEALER", "Healer profile"),
+            roleRow("DAMAGER", "DPS profile"),
+        } },
+        { title = "Share", rows = {
+            { label = "Export", control = "button", text = "Export profile", onClick = function() settingsWindow.export() end,
+              description = "A text string with this profile's settings, to paste on another character or share." },
+            { label = "Import", control = "button", text = "Import profile", onClick = function() settingsWindow.import() end,
+              description = "Paste a profile string; it becomes a new profile." },
+        } },
+        { title = "Start over", rows = {
+            { label = "Reset every setting", control = "custom", build = resetAll,
+              description = "Puts every setting in this profile back to its default." },
+        } },
+    },
+})
+
+--------------------------------------------------------------------------------
+-- Modules
+--------------------------------------------------------------------------------
+
+local STATE: { [string]: string } = {
+    enabled = "On", disabled = "Off", errored = "Errored", incompatible = "Can't load", registered = "Waiting for login",
+}
+
+local function moduleRow(m: modules.Module): { [string]: any }
+    return {
+        label = m.name, control = "toggle", namespace = m.id, key = "enabled",
+        description = function(): string
+            -- (no description: it starts the list without a hole, which made
+            -- ipairs below stop before "Built in" and the state)
+            local parts: string[] = {}
+            if m.description then parts[1] = m.description end
+            parts[#parts + 1] = m.builtIn and "Built in" or ("From " .. m.source)
+            local state = STATE[m.state] or m.state
+            -- 0.17: a plugin stands in for it this session
+            if m.replacedBy then state = "Replaced by " .. m.replacedBy end
+            if m.replaces then
+                local other = modules.get(m.replaces)
+                parts[#parts + 1] = "Replaces " .. (other and other.name or m.replaces :: string) .. " (after a reload)"
+            end
+            local retry = m.state == "errored" and m.reloadToToggle and settings.get(m.id, "enabled")
+            if m.pendingReload and not retry then state = state .. ", " .. (m.enabledAtLoad and "off" or "on") .. " after a reload" end
+            if retry then
+                state = state .. ": " .. (m.error or "") .. ". It tries again after a reload"
+            elseif m.state == "errored" then
+                state = state .. ": " .. (m.error or "") .. ". Turn it off and on to try again"
+            end
+            parts[#parts + 1] = state
+            local out: string[] = {}
+            for _, p in ipairs(parts) do if p ~= "" then out[#out + 1] = p end end
+            return table.concat(out, " · ")
+        end,
+        disabled = function(): (boolean, string?)
+            if m.state == "incompatible" then return true, m.name .. " " .. (m.error or "can't load") .. "." end
+            if m.replacedBy then return true, m.replacedBy .. " stands in for " .. m.name .. ": turn that off to use this again." end
+            return false, nil
+        end,
+    }
+end
+
+local function buildModules(page: any)
+    page:Clear()
+    local builtIn: { [string]: any }[], plugins: { [string]: any }[] = {}, {}
+    for _, m in ipairs(modules.all()) do
+        if type(m.id) == "string" then
+            table.insert(m.builtIn and builtIn or plugins, moduleRow(m))
+        elseif not page.badModuleSaid then
+            -- found in game: one module's id wasn't a name, and the whole
+            -- page failed to build (the settings search with it); left out,
+            -- and said once so it can be traced
+            page.badModuleSaid = true
+            print(("Settings › Modules: left out a module without a proper id (%s, from %s)."):format(
+                tostring(m.name), tostring(m.source)))
+        end
+    end
+    page:AddGroup({ title = "Built in", description = "A module that is off is never loaded: no frames, no events, and Blizzard's own frame stays.", rows = builtIn })
+    if #plugins > 0 then
+        page:AddGroup({ title = "Plugins", description = "Addons that extend SuuUI. Each one can be turned off here without touching the others.", rows = plugins })
+    end
+    page:AddGroup({ title = "Developer", rows = {
+        { label = "Debug lines in chat", control = "toggle", namespace = "core", key = "debug",
+          description = "SuuUI's own debug output. Leave it off unless you are tracking a problem down." },
+    } })
+    page:Refresh()
+end
+
+registry.register({
+    id = "modules", label = "Modules", category = "General", order = 50,
+    build = function(page: any)
+        buildModules(page)
+        events.on("SUUUI_MODULE_REGISTERED", function() buildModules(page) end, page)
+    end,
+})

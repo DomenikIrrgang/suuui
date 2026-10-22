@@ -1,0 +1,402 @@
+-- UI/Auras: engine aura containers (groups, flow, sizes, places, filters,
+-- spells, release, preview), the AuraIcon initializer, and the duration
+-- text's formatter, colour curves and bindings.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as auras from "/UI/Auras"
+import * as events from "/Core/Events"
+import * as fault from "/Core/Fault"
+import internal filterString, loadEngine, newContainer, makeInitializer, setDurationText, durationOptions,
+    expiringColor, durationFormatter, candidates, call, DISPEL_STYLE from "/UI/Auras"
+import errorsSoFar, newParent from "../../helpers"
+
+local parent: Frame
+local made: any[] = {}
+
+local function container(unit: string, opts: { [string]: any }): any
+    local c = auras.auraContainer(parent, unit, opts)
+    made[#made + 1] = c
+    return c
+end
+
+local function buffs(extra: { [string]: any }?): { [string]: any }
+    local g: { [string]: any } = { key = "buffs", filter = { "HELPFUL" }, max = 4 }
+    for k, v in pairs(extra or {}) do g[k] = v end
+    return g
+end
+
+-- A button the initializer styles, with the engine's registrations as spies.
+local function fakeButton(withBar: boolean?): any
+    local b: any = CreateFrame("Button", nil, parent)
+    for _, m in ipairs({ "SetIcon", "SetApplicationCount", "SetDurationText", "SetCancelAuraButtons" }) do
+        b[m] = mock.spy()
+    end
+    if withBar ~= false then b.SetDurationBar = mock.spy() end
+    return b
+end
+
+@beforeEach
+local function setUp()
+    parent = newParent(400, 300)
+end
+
+@afterEach
+local function tearDown()
+    for _, c in ipairs(made) do c:Release() end
+    made = {}
+    parent:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Pure parts
+--------------------------------------------------------------------------------
+
+@test("filterString: the polarity first, the other tokens sorted")
+local function filterStrings()
+    expect(filterString({ "PLAYER", "HARMFUL", "RAID" })).toBe("HARMFUL|PLAYER|RAID")
+    expect(filterString({ "HELPFUL" })).toBe("HELPFUL")
+    expect(filterString({ "RAID", "PLAYER" })).toBe("PLAYER|RAID")
+    expect(filterString({})).toBe("")
+end
+
+@test("candidates: spell lists as the engine takes them")
+local function candidateLists()
+    expect(candidates(nil, nil)).toBeNil()
+    expect(candidates({ 1, 2 }, nil)).toEqual({ includeSpellIDs = { [1] = true, [2] = true } })
+    expect(candidates(nil, { 3 })).toEqual({ excludeSpellIDs = { [3] = true } })
+end
+
+@test("loadEngine loads Blizzard_AuraContainer once it isn't loaded")
+local function engineLoad()
+    local loaded = false
+    local load = mock.spy()
+    local addons: { [string]: any } = {
+        IsAddOnLoaded = function(_: string): boolean return loaded end,
+        LoadAddOn = function(name: string) load(name) end,
+    }
+    loadEngine(addons)
+    expect(load).toHaveBeenCalledWith("Blizzard_AuraContainer")
+    loaded = true
+    loadEngine(addons)
+    expect(load).toHaveBeenCalledTimes(1)
+    loadEngine() -- the game's: already loaded
+end
+
+@test("call: the first method the container has, else false")
+local function calls()
+    local seen = mock.spy()
+    local obj: { [string]: any } = { B = function(_: any, x: number): number seen(x) return x * 2 end }
+    expect({ call(obj, { "A", "B" }, 21) }).toEqual({ true, 42 })
+    expect(seen).toHaveBeenCalledWith(21)
+    expect(call(obj, { "C" })).toBe(false)
+end
+
+@test("durationOptions: the formatter and the amber colour curve")
+local function durationOpts()
+    local f = durationFormatter()
+    expect(durationFormatter()).toBe(f)
+    local o = durationOptions(5)
+    expect(o.textFormatter).toBe(f)
+    expect(o.textColor.curve).toBe(expiringColor(5))
+    expect(expiringColor(nil)).toBe(expiringColor(3))
+    expect(expiringColor(5) ~= expiringColor(3)).toBe(true)
+end
+
+@test("a theme change sets the curves' colours again")
+local function themeCurves()
+    local before = #errorsSoFar()
+    local c = expiringColor(7)
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(expiringColor(7)).toBe(c)
+    expect(#errorsSoFar()).toBe(before)
+end
+
+@test("durationTextBinding: a binding for a font string")
+local function textBinding()
+    local fs = parent:CreateFontString(nil, "OVERLAY")
+    local b = auras.durationTextBinding(fs, 5)
+    expect(b ~= nil).toBe(true)
+    expect(auras.durationTextBinding(fs) ~= nil).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The AuraIcon
+--------------------------------------------------------------------------------
+
+@test("the initializer: size, regions, registrations")
+local function initializer()
+    local owner: { [string]: any } = { sizes = {}, buttons = {} }
+    local b = fakeButton()
+    makeInitializer(buffs({ drain = "fel" }), 32, owner)(b)
+    expect({ b:GetSize() }).toEqual({ 32, 32 })
+    expect(#owner.buttons).toBe(1)
+    expect(owner.buttons[1].key).toBe("buffs")
+    expect(owner.buttons[1].scrim:GetHeight()).toBe(19)
+    expect(b.SetIcon).toHaveBeenCalled()
+    expect(b.SetApplicationCount).toHaveBeenCalled()
+    expect(b.SetDurationText).toHaveBeenCalledTimes(1)
+    expect(b.SetDurationBar).toHaveBeenCalled()
+    expect(b.SetCancelAuraButtons).never.toHaveBeenCalled()
+    expect(b:IsMouseClickEnabled()).toBe(false)
+end
+
+@test("the initializer: the group's size now, small icons, cancel, no stacks or digits")
+local function initializerOptions()
+    local owner: { [string]: any } = { sizes = { buffs = 20 }, buttons = {} }
+    local b = fakeButton(false)
+    makeInitializer(buffs({ cancel = true, stacks = false, digits = false, glow = "glow-arcane", border = "gilt" }), 32, owner)(b)
+    expect({ b:GetSize() }).toEqual({ 20, 20 })
+    expect(b.SetCancelAuraButtons).toHaveBeenCalledWith(b, "RightButtonUp")
+    expect(b.SetApplicationCount).never.toHaveBeenCalled()
+    expect(b.SetDurationText).never.toHaveBeenCalled()
+    expect(owner.buttons[1].scrim:IsShown()).toBe(false)
+    -- harmfulEdge without a border of its own
+    makeInitializer(buffs({ harmfulEdge = true }), 16, { sizes = {}, buttons = {} })(fakeButton())
+end
+
+@test("the initializer: the dispel border's edges registered until one is refused")
+local function dispelEdges()
+    if DISPEL_STYLE == nil then return end
+    local b = fakeButton()
+    local added = 0
+    b.AddDispelTypeTexture = function(_: any, _: any, opts: any)
+        added += 1
+        expect(opts.showWhenHarmful).toBe(true)
+        if added == 2 then error("refused") end
+    end
+    makeInitializer(buffs({ dispel = true }), 24, { sizes = {}, buttons = {} })(b)
+    expect(added).toBe(2)
+    -- a client without either method: no edges
+    makeInitializer(buffs({ dispel = true }), 24, { sizes = {}, buttons = {} })(fakeButton())
+end
+
+@test("setDurationText drops the colour, then every option, when refused")
+local function durationFallbacks()
+    local fs = parent:CreateFontString(nil, "OVERLAY")
+    local got: any[] = {}
+    local b: { [string]: any } = { SetDurationText = function(_: any, _: any, opts: any)
+        got[#got + 1] = opts
+        if opts.textColor then error("no colour") end
+    end }
+    setDurationText(b, fs, 3)
+    expect(#got).toBe(2)
+    expect(got[2].textColor).toBeNil()
+    got = {}
+    b.SetDurationText = function(_: any, _: any, opts: any)
+        got[#got + 1] = opts
+        if next(opts) ~= nil then error("nothing") end
+    end
+    setDurationText(b, fs, 3)
+    expect(#got).toBe(3)
+    expect(got[3]).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- The container
+--------------------------------------------------------------------------------
+
+@test("auraContainer: groups added, places by position, the engine's buttons styled")
+local function containerBuild()
+    local c = container("player", { size = "icon-md", spacing = 3, anchor = "TOPRIGHT", growth = { "LEFT", "UP" }, lineWidth = 200,
+        groups = { buffs(), { key = "debuffs", filter = { "HARMFUL", "PLAYER" }, size = 20, index = 5, gap = 4 } } })
+    expect(c.groups.buffs.added).toBe(true)
+    expect(c.groups.debuffs.filter).toBe("HARMFUL|PLAYER")
+    expect(c.places.buffs).toEqual({ index = 1 })
+    expect(c.places.debuffs).toEqual({ index = 5, gap = 4 })
+    expect(c.sizes.debuffs).toBe(20)
+    expect(c.spacing).toBe(3)
+    expect(c.rescan).toBeNil()
+    mock.player:applyAura({ spellId = 1243, name = "Fortitude", duration = 30 })
+    mock.advanceFrames(2)
+    expect(#c.buttons > 0).toBe(true)
+end
+
+@test("re-scans when the token may point at someone new")
+local function rescans()
+    local t = container("target", { groups = { buffs() } })
+    expect(t.rescan).toBe("PLAYER_TARGET_CHANGED")
+    local f = container("focus", { groups = { buffs() } })
+    expect(f.rescan).toBe("PLAYER_FOCUS_CHANGED")
+    expect(container("boss1", { groups = { buffs() } }).rescan).toBe("INSTANCE_ENCOUNTER_ENGAGE_UNIT")
+    expect(container("party2", { groups = { buffs() } }).rescan).toBe("GROUP_ROSTER_UPDATE")
+    expect(container("raid9", { groups = { buffs() } }).rescan).toBe("GROUP_ROSTER_UPDATE")
+    local scan = mock.stub(t.container, "UpdateAllAuras")
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    expect(scan).toHaveBeenCalledTimes(1)
+end
+
+@test("Release parks a container; SetUnit brings it back")
+local function release()
+    local c = container("target", { groups = { buffs() } })
+    local scan = mock.stub(c.container, "UpdateAllAuras")
+    c:Release()
+    expect(c.released).toBe(true)
+    expect(c.unit).toBe("none")
+    expect(c.container:IsShown()).toBe(false)
+    expect(c.rescan).toBeNil()
+    c:Release() -- once
+    mock.resetSpies()
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    expect(scan).never.toHaveBeenCalled()
+    c:SetUnit("target")
+    expect(c.released).toBeNil()
+    expect(c.container:IsShown()).toBe(true)
+    expect(c.rescan).toBe("PLAYER_TARGET_CHANGED")
+    expect(scan).toHaveBeenCalled()
+    mock.resetSpies()
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    expect(scan).toHaveBeenCalledTimes(1)
+end
+
+@test("SetFlow and SetLineWidth, after creation")
+local function flow()
+    local c = container("player", { groups = { buffs() } })
+    local anchor = mock.stub(c.container, "SetFlowLayoutAnchorPoint")
+    local grow = mock.stub(c.container, "SetFlowLayoutGrowthDirection")
+    local line = mock.stub(c.container, "SetFlowLayoutMaximumLineSize")
+    c:SetFlow("BOTTOMLEFT", { "LEFT", "UP" })
+    expect(anchor).toHaveBeenCalledWith(c.container, "BOTTOMLEFT")
+    expect(c.flow).toEqual({ anchor = "BOTTOMLEFT", growth = { "LEFT", "UP" } })
+    expect(grow).toHaveBeenCalledTimes(1)
+    c:SetFlow(nil, nil)
+    expect(c.flow).toEqual({ anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" } })
+    c:SetLineWidth(120)
+    expect(line).toHaveBeenCalledWith(c.container, 120)
+    expect(c.lineWidth).toBe(120)
+end
+
+@test("SetGroupSize: the layout and the buttons already made, live")
+local function groupSize()
+    local c = container("player", { groups = { buffs() } })
+    mock.player:applyAura({ spellId = 1243, name = "Fortitude", duration = 30 })
+    mock.advanceFrames(2)
+    local layout = mock.stub(c.container, "SetAuraGroupLayout")
+    c:SetGroupSize("buffs", 40)
+    expect(c.sizes.buffs).toBe(40)
+    expect(layout).toHaveBeenCalledTimes(1)
+    for _, b in ipairs(c.buttons) do expect(b.button:GetWidth()).toBe(40) end
+    c:SetGroupSize("buffs", 40) -- the same: nothing
+    expect(layout).toHaveBeenCalledTimes(1)
+    -- a group not in the engine yet: only remembered
+    local lazy = container("player", { lazy = true, groups = { buffs({ max = 0 }) } })
+    lazy:SetGroupSize("buffs", 12)
+    expect(lazy.sizes.buffs).toBe(12)
+end
+
+@test("SetGroupPlace: a group's order and gap, live")
+local function groupPlace()
+    local c = container("player", { groups = { buffs() } })
+    local layout = mock.stub(c.container, "SetAuraGroupLayout")
+    c:SetGroupPlace("buffs", 1, nil) -- what it has
+    expect(layout).never.toHaveBeenCalled()
+    c:SetGroupPlace("buffs", 2, 6)
+    expect(layout).toHaveBeenCalledTimes(1)
+    expect(c.places.buffs).toEqual({ index = 2, gap = 6 })
+    local lazy = container("player", { lazy = true, groups = { buffs({ max = 0 }) } })
+    lazy:SetGroupPlace("buffs", 3)
+    expect(lazy.places.buffs).toEqual({ index = 3 })
+end
+
+@test("SetGroupMax: the count live; a lazy group joins the engine with its first count")
+local function groupMax()
+    local c = container("player", { groups = { buffs() } })
+    local count = mock.stub(c.container, "SetAuraGroupMaxFrameCount")
+    c:SetGroupMax("buffs", 8)
+    expect(count).toHaveBeenCalledWith(c.container, "buffs", 8)
+    c:SetGroupMax("nope", 1)
+    local lazy = container("player", { lazy = true, groups = { buffs({ max = 0 }) } })
+    expect(lazy.groups.buffs.added).toBeFalsy()
+    lazy:SetGroupMax("buffs", 0)
+    expect(lazy.groups.buffs.added).toBeFalsy()
+    lazy:SetGroupMax("buffs", 2)
+    expect(lazy.groups.buffs.added).toBe(true)
+end
+
+@test("a group the engine refuses is reported and tried again later")
+local function groupRefused()
+    local report = mock.stub(fault, "report")
+    local lazy = container("player", { lazy = true, groups = { buffs({ max = 0 }) } })
+    mock.stub(lazy.container, "AddAuraGroup", function() error("refused") end)
+    lazy:SetGroupMax("buffs", 2)
+    expect(lazy.groups.buffs.added).toBe(false)
+    expect(report).toHaveBeenCalledWith("Auras", "couldn't add the aura group buffs")
+end
+
+@test("SetGroupFilter: live once added, kept until then")
+local function groupFilter()
+    local c = container("player", { groups = { buffs() } })
+    local set = mock.stub(c.container, "SetAuraGroupFilterString")
+    c:SetGroupFilter("buffs", { "RAID_PLAYER_DISPELLABLE", "HARMFUL" })
+    expect(set).toHaveBeenCalledWith(c.container, "buffs", "HARMFUL|RAID_PLAYER_DISPELLABLE")
+    c:SetGroupFilter("nope", { "HELPFUL" })
+    local lazy = container("player", { lazy = true, groups = { buffs({ max = 0 }) } })
+    lazy:SetGroupFilter("buffs", { "HARMFUL" })
+    expect(lazy.groups.buffs.filter).toBe("HARMFUL")
+end
+
+@test("SetGroupSpells: include and exclude lists, live once added")
+local function groupSpells()
+    local c = container("player", { groups = { buffs({ include = { 1 } }), { key = "types", filter = { "HARMFUL" }, dispelTypes = { "Curse" } } } })
+    expect(c.groups.types.candidates).toEqual({ includeDispelTypes = { Curse = true } })
+    expect(c:SetGroupSpells("buffs", { 6673 }, { 871 })).toBe(true)
+    expect(c.groups.buffs.candidates).toEqual({ includeSpellIDs = { [6673] = true }, excludeSpellIDs = { [871] = true } })
+    expect(c:SetGroupSpells("buffs", nil, nil)).toBe(true)
+    expect(c.groups.buffs.candidates).toEqual({})
+    expect(c:SetGroupSpells("nope", { 1 })).toBe(false)
+    local lazy = container("player", { lazy = true, groups = { buffs({ max = 0 }) } })
+    expect(lazy:SetGroupSpells("buffs", { 2 })).toBe(true)
+end
+
+@test("ShowPreview: made-up icons laid out as the engine would; HidePreview")
+local function preview()
+    local c = container("player", { size = 20, spacing = 2, lineWidth = 64, groups = { buffs() } })
+    local items = { { icon = 136243 }, { icon = 136243, border = "ember" }, { icon = 136243 }, { icon = 136243 } }
+    c:ShowPreview(items)
+    local pv = c.preview
+    expect(pv:IsShown()).toBe(true)
+    expect(#pv.icons).toBe(4)
+    -- three to a line of 64 px: the fourth starts the next line, down
+    local _, _, _, x3 = pv.icons[3]:GetPoint(1)
+    local _, _, _, x4, y4 = pv.icons[4]:GetPoint(1)
+    expect(x3).toBe(44)
+    expect({ x4, y4 }).toEqual({ 0, -22 })
+    expect(c.container:GetAlpha()).toBe(0)
+    -- fewer the next time: the rest hidden; the caller's place; another flow
+    c:SetFlow("TOPRIGHT", { "LEFT", "UP" })
+    c:ShowPreview({ items[1], items[2] }, { "TOPLEFT", parent, "TOPLEFT", 5, -5 })
+    expect(pv.icons[3]:IsShown()).toBe(false)
+    expect(pv).toBeAnchoredTo(parent, "TOPLEFT", "TOPLEFT")
+    local _, _, _, x2 = pv.icons[2]:GetPoint(1)
+    expect(x2).toBe(-22)
+    c:ShowPreview({ items[1] }, { "CENTER", parent })
+    c:HidePreview()
+    expect(pv:IsShown()).toBe(false)
+    expect(c.container:GetAlpha()).toBe(1)
+    -- never previewed: only the alpha
+    local d = container("player", { groups = { buffs({ size = 16 }) } })
+    d:HidePreview()
+    d:ShowPreview({ items[1] })
+    expect(d.preview.icons[1]:GetWidth()).toBe(16)
+end
+
+@test("a client without aura containers: reported, nil")
+local function noContainers()
+    local report = mock.stub(fault, "report")
+    local c = newContainer(parent, "player", { groups = {} }, function() error("no such type") end)
+    expect(c).toBeNil()
+    expect(report).toHaveBeenCalled()
+end
+
+@test("in combat: containers made and driven without errors")
+local function inCombat()
+    local before = #errorsSoFar()
+    mock.player:enterCombat()
+    local c = container("target", { groups = { buffs({ dispel = true }) } })
+    mock.player:applyAura({ spellId = 1243, name = "Fortitude", duration = 30 })
+    mock.advanceFrames(2)
+    c:SetGroupMax("buffs", 2)
+    c:Refresh()
+    mock.player:leaveCombat()
+    expect(#errorsSoFar()).toBe(before)
+end

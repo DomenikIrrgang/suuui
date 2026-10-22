@@ -1,0 +1,646 @@
+-- UI/TalentTree: the page's nodes (every state, hover, clicks, the build's
+-- next talent, a marked one), the trees' panels and their arrows, the spec
+-- row, the summary (yours, someone else's read only, the build picker with
+-- its badge and buttons), the foot (points to spend, what's planned, Undo
+-- and Apply or a build's own actions, Back), the order panel (lines, hover,
+-- dragging a line to another place, scrolling along) and the game's talent
+-- tooltip.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import talentTree, traitTooltip, TALENT_TREE_W, TALENT_ORDER_W from "/UI/TalentTree"
+import * as tooltipModule from "/UI/Tooltip"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, borderToken from "./WorldHelpers"
+
+local S = T.space
+
+local parent: Frame? = nil
+
+local function make(w: number?, h: number?): any
+    parent = newParent(w or TALENT_TREE_W + TALENT_ORDER_W, h or 520)
+    local tt = talentTree(parent)
+    tt:SetAllPoints()
+    return tt
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    GameTooltip:Hide()
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+-- A plain text, its colour codes taken out.
+local function plain(s: string?): string
+    return ((s or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+local function node(over: { [string]: any }?): { [string]: any }
+    local n: { [string]: any } = { id = 1, row = 0, col = 0, rank = 0, max = 5, icon = 132292 }
+    for k, v in pairs(over or {}) do n[k] = v end
+    return n
+end
+
+local function data(over: { [string]: any }?): { [string]: any }
+    local a = node({ id = 1, row = 0, col = 1, rank = 5, max = 5 })
+    local b = node({ id = 2, row = 1, col = 1, rank = 1, max = 3, canSpend = true })
+    local c = node({ id = 3, row = 1, col = 2, rank = 0, max = 1, locked = true })
+    local d: { [string]: any } = {
+        name = "Arms", available = 3, pending = 0, editable = true,
+        trees = {
+            { name = "Arms", points = 6, nodes = { a, b, c },
+              links = { { from = a, to = b, met = true }, { from = b, to = c } } },
+            { name = "Fury", points = 0, nodes = {} },
+            { name = "Protection", points = 0, nodes = {}, more = "2 more talents in a future update" },
+        },
+    }
+    for k, v in pairs(over or {}) do d[k] = v end
+    return d
+end
+
+--------------------------------------------------------------------------------
+-- Nodes
+--------------------------------------------------------------------------------
+
+@test("a node's state: full in ink, one to spend in arcane with a glow, locked dim, planned with an arcane badge")
+local function nodeStates()
+    local tt = make()
+    tt:SetData(data())
+    local p = tt.panels[1]
+    local full, spend, locked = p.nodes[1], p.nodes[2], p.nodes[3]
+    expect(full.icon.borderToken).toBe("ink")
+    expect(full.icon.state).toBe("rest")
+    expect(full.badge.text).toHaveText("5/5")
+    expect(tokenOf(full.badge.text)).toBe("ink")
+    expect(spend.icon.borderToken).toBe("arcane")
+    expect(spend.icon.glowToken).toBe("glow-arcane")
+    expect(tokenOf(spend.badge.text)).toBe("arcane")
+    expect(borderToken(spend.badge.edge)).toBe("arcane")
+    expect(locked.icon.borderToken).toBe("gilt-faint")
+    expect(locked.icon.state).toBe("dim")
+    expect(tokenOf(locked.badge.text)).toBe("ink-muted")
+    -- placed on the grid
+    local _, _, _, x, y = full:GetPoint(1)
+    expect(x).toBe(1 * 44 + 20)
+    expect(y).toBe(0)
+    -- an empty one: hairline, dim
+    tt:SetData(data({ trees = { { name = "A", nodes = { node({ rank = 0, max = 2 }) } } } }))
+    local empty = p.nodes[1]
+    expect(empty.icon.borderToken).toBe("gilt-hairline")
+    expect(empty.icon.state).toBe("dim")
+    -- planned: arcane, the badge filled
+    tt:SetData(data({ pending = 1, trees = { { name = "A", nodes = { node({ rank = 1, pending = 1, max = 3 }) } } } }))
+    expect(empty.icon.borderToken).toBe("arcane")
+    expect(empty.badge.text).toHaveText("2/3")
+    expect(tokenOf(empty.badge.bg)).toBe("arcane")
+    expect(tokenOf(empty.badge.text)).toBe("on-signal")
+    -- its icon: a default one without
+    tt:SetData(data({ trees = { { name = "A", nodes = { node({ icon = false }) } } } }))
+    expect(empty.icon.art:GetTextureFileID()).toBe(134400)
+end
+
+@test("hover gilds a node (not a locked one); clicks to onClick and onRemove; onEnter and onLeave")
+local function nodeInput()
+    local tt = make()
+    tt:SetData(data())
+    local p = tt.panels[1]
+    local spend, locked = p.nodes[2], p.nodes[3]
+    local clicked = mock.spy(function(_n: any) end)
+    local removed = mock.spy(function(_n: any) end)
+    local entered = mock.spy(function(_b: any, _n: any) end)
+    local left = mock.spy()
+    mock.hover(spend)
+    expect(spend.icon.borderToken).toBe("gilt")
+    mock.hover(locked)
+    expect(locked.icon.borderToken).toBe("gilt-faint")
+    expect(spend.icon.borderToken).toBe("arcane")
+    mock.click(spend)
+    mock.click(spend, "RightButton")
+    tt.onClick, tt.onRemove, tt.onEnter, tt.onLeave = clicked, removed, entered, left
+    mock.click(spend)
+    mock.click(spend, "RightButton")
+    expect(clicked).toHaveBeenCalledWith(spend.data)
+    expect(removed).toHaveBeenCalledWith(spend.data)
+    mock.hover(nil)
+    mock.hover(spend)
+    expect(entered).toHaveBeenCalledWith(spend, spend.data)
+    mock.hover(nil)
+    expect(left).toHaveBeenCalled()
+    -- a node no longer used: no data, no clicks
+    tt:SetData(data({ trees = { { name = "A", nodes = {} } } }))
+    expect(spend).never.toBeShown()
+    expect(spend.data).toBeNil()
+    spend:Show()
+    mock.click(spend)
+    mock.hover(spend)
+    expect(clicked).toHaveBeenCalledTimes(1)
+end
+
+@test("the build's next talent: a fel ring and a Next tag, gone when it isn't")
+local function nextTalent()
+    local tt = make()
+    tt:SetData(data({ trees = { { name = "A", nodes = { node({ next = true }) } } } }))
+    local b = tt.panels[1].nodes[1]
+    expect(b.ring).toBeShown()
+    expect(b.tag).toBeShown()
+    expect(b.tag.text).toHaveText("Next")
+    tt:SetData(data({ trees = { { name = "A", nodes = { node() } } } }))
+    expect(b.ring).never.toBeShown()
+    expect(b.tag).never.toBeShown()
+end
+
+@test("MarkNode: the talent outlined in gilt with the ward glow, nil none")
+local function markNode()
+    local tt = make()
+    tt:SetData(data())
+    local p = tt.panels[1]
+    tt:MarkNode(2)
+    expect(p.nodes[2].marked).toBe(true)
+    expect(p.nodes[2].icon.borderToken).toBe("gilt")
+    expect(p.nodes[2].icon.glowToken).toBe("glow-ward")
+    expect(p.nodes[1].marked).toBeFalsy()
+    tt:MarkNode(nil)
+    expect(p.nodes[2].marked).toBe(false)
+    expect(p.nodes[2].icon.borderToken).toBe("arcane")
+end
+
+--------------------------------------------------------------------------------
+-- Panels and arrows
+--------------------------------------------------------------------------------
+
+@test("the panels: a tree's name, points and the more line; side by side, as wide as the row allows")
+local function panels()
+    local tt = make()
+    tt:SetData(data())
+    local a, b, c = tt.panels[1], tt.panels[2], tt.panels[3]
+    expect(a.name).toHaveText("Arms")
+    expect(a.points).toHaveText("6")
+    expect(a.more).never.toBeShown()
+    expect(c.more).toBeShown()
+    expect(c.more).toHaveText("2 more talents in a future update")
+    local width = tt.treesRow:GetWidth()
+    local panelW = math.max(200 + S["space-4"] * 2, math.floor((width - S["space-6"] * 2) / 3))
+    expect(a:GetWidth()).toBe(panelW)
+    local _, _, _, xc = c:GetPoint(1)
+    expect(xc).toBe(2 * (panelW + S["space-6"]))
+    -- all of them as tall, with room for a more line
+    expect(a:GetHeight()).toBe(c:GetHeight())
+    -- fewer trees: hidden; the rows asked for
+    tt:SetData(data({ rows = 3, trees = { { name = "One" } } }))
+    expect(b).never.toBeShown()
+    expect(a.graph:GetHeight()).toBe(3 * 46 - (46 - 32))
+    expect(a.points).toHaveText("0")
+end
+
+@test("fillPanels: the trees' panels down to the foot")
+local function fillPanels()
+    local tt = make()
+    tt.fillPanels = true
+    tt:SetData(data())
+    expect(tt.panels[1]:GetHeight()).toBe(tt.treesRow:GetHeight())
+end
+
+@test("arrows: down from one to the next, sideways in a row, faint until met")
+local function arrows()
+    local tt = make()
+    tt:SetData(data())
+    local p = tt.panels[1]
+    local down, side = p.lines[1], p.lines[2]
+    expect(down).toBeShown()
+    expect(tokenOf(down)).toBe("ink-muted")
+    expect(p.heads[1]:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronDown.tga")
+    expect(tokenOf(side)).toBe("gilt-line")
+    expect(p.heads[2]:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronRight.tga")
+    -- leftwards
+    local a, b = node({ id = 1, row = 2, col = 3 }), node({ id = 2, row = 2, col = 1 })
+    tt:SetData(data({ trees = { { name = "A", nodes = { a, b }, links = { { from = a, to = b } } } } }))
+    expect(p.heads[1]:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronLeft.tga")
+    expect(p.lines[2]).never.toBeShown()
+    expect(p.heads[2]).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The spec row
+--------------------------------------------------------------------------------
+
+@test("the specs: a row only with two; Active or Activate; onSpec and onActivate")
+local function specs()
+    local tt = make()
+    tt:SetSpecs({ { label = "Primary", name = "Arms", active = true } }, 1)
+    expect(tt.specRow).never.toBeShown()
+    local specs = { { label = "Primary", name = "Arms", active = true }, { label = "Secondary", name = "", locked = true } }
+    tt:SetSpecs(specs, 1)
+    expect(tt.specRow).toBeShown()
+    expect(tt.activeBadge).toBeShown()
+    expect(tt.activate).never.toBeShown()
+    expect(tt.segmented.value).toBe(1)
+    -- the summary under the row
+    local _, _, _, _, y = tt.summary:GetPoint(1)
+    expect(y).toBe(-(30 + S["space-5"]))
+    local seg = tt.segmented
+    tt:SetSpecs(specs, 2)
+    expect(tt.segmented).toBe(seg)
+    expect(tt.activate).toBeShown()
+    expect(tt.activate.label).toHaveText("Activate Secondary")
+    tt:SetSpecs({ { label = "Primary", name = "Arms" }, { label = "Secondary", name = "Fury" } }, 2)
+    expect(tt.activate.label).toHaveText("Activate Fury")
+    -- a different count: a new switch
+    tt:SetSpecs({ { label = "A", name = "" }, { label = "B", name = "" }, { label = "C", name = "" } }, nil)
+    expect(tt.segmented ~= seg).toBe(true)
+    expect(seg).never.toBeShown()
+    expect(tt.segmented.value).toBe(1)
+    local onSpec = mock.spy(function(_v: any) end)
+    local onActivate = mock.spy()
+    tt.segmented.onChange(2)
+    mock.click(tt.activate)
+    tt.onSpec, tt.onActivate = onSpec, onActivate
+    tt.segmented.onChange(2)
+    expect(onSpec).toHaveBeenCalledWith(2)
+    tt:SetSpecs({ { label = "A", name = "" }, { label = "B", name = "" }, { label = "C", name = "" } }, 2)
+    mock.click(tt.activate)
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    tt:SetSpecs(nil, nil)
+    expect(tt.specRow).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The summary
+--------------------------------------------------------------------------------
+
+@test("your summary: the spec's name, the points per tree and in all")
+local function summary()
+    local tt = make()
+    tt:SetData(data())
+    expect(tt.summaryName).toHaveText("Arms")
+    expect(tt.summaryPoints).toHaveText("6 / 0 / 0 · 6 spent")
+    expect(tt.summaryDiamond).never.toBeShown()
+    expect(tt.summaryBadge).never.toBeShown()
+    tt:SetData(data({ spentLabel = " used" }))
+    expect(tt.summaryPoints).toHaveText("6 / 0 / 0 · 6 used")
+    tt:SetData({})
+    expect(tt.summaryPoints).toHaveText("")
+    -- noSummary: hidden, the trees at the top
+    tt.noSummary = true
+    tt:Layout()
+    expect(tt.summary).never.toBeShown()
+    local _, _, _, _, y = tt.treesRow:GetPoint(1)
+    expect(y).toBe(0)
+end
+
+@test("someone else's talents: their class diamond, the name in its colour, the line, read only")
+local function readOnly()
+    local tt = make()
+    local back = mock.spy()
+    tt.onBack = back
+    tt:SetData(data({ head = { name = "Tamsin", class = "SHAMAN", line = "Level 30 Shaman" }, readOnly = true, back = "Back to inspect" }))
+    expect(tt.headShown).toBe(true)
+    expect(tt.summaryDiamond).toBeShown()
+    expect(tokenOf(tt.summaryDiamond)).toBe("class-shaman")
+    expect(tt.summaryName).toHaveText("Tamsin")
+    expect(tokenOf(tt.summaryName)).toBe("class-shaman")
+    expect(tt.summaryLine).toHaveText("Level 30 Shaman")
+    expect(plain(tt.summaryPoints:GetText())).toBe("Arms 6   Fury 0   Protection 0")
+    expect(tt.summaryBadge).toBeShown()
+    expect(tt.summary:GetHeight()).toBe(T.type["unit-name-lg"].lineHeight)
+    -- no points to spend, no Undo or Apply; Back
+    expect(tt.unspent).never.toBeShown()
+    expect(tt.apply).never.toBeShown()
+    expect(tt.undo).never.toBeShown()
+    expect(tt.back).toBeShown()
+    expect(tt.back.label).toHaveText("Back to inspect")
+    mock.click(tt.back)
+    expect(back).toHaveBeenCalledTimes(1)
+    -- an unknown class: the name in ink
+    tt:SetData(data({ head = { name = "Someone" }, readOnly = true }))
+    expect(tokenOf(tt.summaryName)).toBe("ink")
+    expect(tt.back).never.toBeShown()
+    -- yours again: the label style back
+    tt:SetData(data())
+    expect(tt.headShown).toBe(false)
+    expect(tt.summaryName).toHaveText("Arms")
+end
+
+@test("the build picker in the summary's place: options, the diamond, the badge, its buttons")
+local function builds()
+    local tt = make()
+    local changed = mock.spy(function(_v: any) end)
+    local saved, deleted = mock.spy(), mock.spy()
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.stub(tooltipModule, "hideTooltip", function() end)
+    tt:SetBuilds({ options = { { value = "a", label = "Leveling" }, { value = "b", label = "Raid" } }, value = "a",
+        onChange = changed, diamond = "class-warrior", badge = "Active", foot = { { label = "New build" } },
+        buttons = { { label = "Save", variant = "primary", onClick = saved },
+                    { label = "Delete", onClick = deleted, disabled = true, reason = "Your only build" } } })
+    tt:SetData(data())
+    expect(tt.picker).toBeShown()
+    expect(tt.picker.value).toBe("a")
+    expect(#tt.picker.options).toBe(2)
+    expect(tt.picker.foot).toEqual({ { label = "New build" } })
+    expect(tt.summaryDiamond).toBeShown()
+    expect(tokenOf(tt.summaryDiamond)).toBe("class-warrior")
+    expect(tt.pickerBadge).toBeShown()
+    expect(tt.summaryName).toHaveText("")
+    expect(tt.summaryPoints).toBeAnchoredTo(tt.pickerBadge, "LEFT", "RIGHT")
+    expect(tt.summary:GetHeight()).toBe(30)
+    local save, delete = tt.pickerButtons[1], tt.pickerButtons[2]
+    expect(save.label).toHaveText("Save")
+    expect(save).toBeAnchoredTo(tt.summary, "RIGHT", "RIGHT")
+    expect(delete).toBeAnchoredTo(save, "RIGHT", "LEFT")
+    expect(delete:IsEnabled()).toBe(false)
+    mock.click(save)
+    expect(saved).toHaveBeenCalledTimes(1)
+    mock.hover(delete)
+    expect(show).toHaveBeenCalledWith(delete, { title = "Delete", description = "Your only build" })
+    mock.hover(save)
+    expect(show).toHaveBeenCalledTimes(1)
+    tt.picker.onChange("b")
+    expect(changed).toHaveBeenCalledWith("b")
+    -- no diamond, no badge, one button
+    tt:SetBuilds({ options = {}, buttons = { { label = "Save" } } })
+    tt:SetData(data())
+    expect(tt.summaryDiamond).never.toBeShown()
+    expect(tt.pickerBadge).never.toBeShown()
+    expect(tt.summaryPoints).toBeAnchoredTo(tt.picker, "LEFT", "RIGHT")
+    expect(delete).never.toBeShown()
+    mock.click(save)
+    expect(saved).toHaveBeenCalledTimes(1)
+    tt.picker.onChange("x")
+    -- none: the summary as before
+    tt:SetBuilds(nil)
+    tt:SetData(data())
+    expect(tt.picker).never.toBeShown()
+    expect(save).never.toBeShown()
+    expect(tt.summaryName).toHaveText("Arms")
+    tt.picker.onChange("x")
+end
+
+--------------------------------------------------------------------------------
+-- The foot
+--------------------------------------------------------------------------------
+
+@test("the foot: points to spend, the hint; planned points in arcane with Undo and Apply")
+local function foot()
+    local tt = make()
+    local applied, undone = mock.spy(), mock.spy()
+    tt:SetData(data({ available = 1 }))
+    expect(plain(tt.unspent:GetText())).toBe("1 point to spend")
+    expect(tt.status).toHaveText("Click a talent to plan a point. Nothing changes until you apply.")
+    expect(tokenOf(tt.status)).toBe("ink-muted")
+    expect(tt.undo:IsEnabled()).toBe(false)
+    expect(tt.apply:IsEnabled()).toBe(false)
+    tt:SetData(data({ available = 3, hint = "Pick the first talent", pending = 2 }))
+    expect(plain(tt.unspent:GetText())).toBe("3 points to spend")
+    expect(tt.status).toHaveText("2 points not applied yet · right-click to take one back")
+    expect(tokenOf(tt.status)).toBe("arcane")
+    expect(tt.undo:IsEnabled()).toBe(true)
+    expect(tt.apply:IsEnabled()).toBe(true)
+    mock.click(tt.apply)
+    mock.click(tt.undo)
+    tt.onApply, tt.onUndo = applied, undone
+    mock.click(tt.apply)
+    mock.click(tt.undo)
+    expect(applied).toHaveBeenCalledTimes(1)
+    expect(undone).toHaveBeenCalledTimes(1)
+    tt:SetData(data({ pending = 1 }))
+    expect(tt.status).toHaveText("1 point not applied yet · right-click to take one back")
+    -- not editable: Apply off
+    tt:SetData(data({ pending = 1, editable = false }))
+    expect(tt.apply:IsEnabled()).toBe(false)
+    -- no pending, a hint of its own
+    tt:SetData(data({ hint = "Pick the first talent" }))
+    expect(tt.status).toHaveText("Pick the first talent")
+end
+
+@test("a build's plan: its own two actions, status and unspent text")
+local function actions()
+    local tt = make()
+    local primary, secondary = mock.spy(), mock.spy()
+    tt.onApply = mock.spy()
+    tt:SetData(data({ unspent = "12 of 51 planned", status = "Saved", statusColor = "fel",
+        actions = { primary = { label = "Save build", onClick = primary }, secondary = { label = "Discard", onClick = secondary, enabled = false } } }))
+    expect(tt.unspent:GetText()).toBe("12 of 51 planned")
+    expect(tt.status).toHaveText("Saved")
+    expect(tokenOf(tt.status)).toBe("fel")
+    expect(tt.apply.label).toHaveText("Save build")
+    expect(tt.undo.label).toHaveText("Discard")
+    expect(tt.apply:IsEnabled()).toBe(true)
+    expect(tt.undo:IsEnabled()).toBe(false)
+    mock.click(tt.apply)
+    expect(primary).toHaveBeenCalledTimes(1)
+    expect(tt.onApply).never.toHaveBeenCalled()
+    tt:SetData(data({ status = "Unsaved", actions = { secondary = { label = "Discard", onClick = secondary } } }))
+    expect(tt.apply).never.toBeShown()
+    expect(tokenOf(tt.status)).toBe("ink-muted")
+    mock.click(tt.undo)
+    expect(secondary).toHaveBeenCalledTimes(1)
+end
+
+--------------------------------------------------------------------------------
+-- The order panel
+--------------------------------------------------------------------------------
+
+local function lines(n: number): { [string]: any }[]
+    local list: { [string]: any }[] = {}
+    for i = 1, n do
+        list[i] = { levels = (10 + i) .. "–" .. (10 + i), name = "Talent " .. i, ranks = i == 1 and "1–5" or "", icon = 1000 + i,
+            state = i == 1 and "learned" or (i == 2 and "next" or nil), count = i == 1 and 5 or 1 }
+    end
+    return list
+end
+
+@test("the order panel: a line per run of ranks, learned muted, the next tagged; its count")
+local function order()
+    local tt = make()
+    tt:SetOrder({})
+    local o = tt.order
+    expect(o).toBeShown()
+    expect(o.empty).toBeShown()
+    expect(o.count).toHaveText("0")
+    -- the trees make room for it
+    local _, _, _, right = tt.treesRow:GetPoint(2)
+    expect(right).toBe(-TALENT_ORDER_W)
+    tt:SetOrder(lines(3))
+    expect(o.empty).never.toBeShown()
+    expect(o.count).toHaveText("7")
+    local a, b, c = o.lines[1], o.lines[2], o.lines[3]
+    expect(a.levels).toHaveText("11–11")
+    expect(plain(a.name:GetText())).toBe("Talent 1 1–5")
+    expect(tokenOf(a.name)).toBe("ink-muted")
+    expect(a.icon:IsDesaturated()).toBe(true)
+    expect(b.tag).toBeShown()
+    expect(tokenOf(b.name)).toBe("ink")
+    expect(c.tag).never.toBeShown()
+    local _, _, _, _, y3 = c:GetPoint(1)
+    expect(y3).toBe(-2 * 23)
+    -- fewer lines; none
+    tt:SetOrder(lines(1))
+    expect(b).never.toBeShown()
+    expect(b.data).toBeNil()
+    tt:SetOrder(nil)
+    expect(o).never.toBeShown()
+end
+
+@test("an order line's hover: lit, onOrderEnter and onOrderLeave")
+local function orderHover()
+    local tt = make()
+    tt:SetOrder(lines(2))
+    local l = tt.order.lines[2]
+    local entered = mock.spy(function(_d: any, _l: any) end)
+    local left = mock.spy(function(_d: any) end)
+    mock.hover(l)
+    expect(l.hoverFill).toBeShown()
+    tt.onOrderEnter, tt.onOrderLeave = entered, left
+    mock.hover(nil)
+    expect(l.hoverFill).never.toBeShown()
+    mock.hover(l)
+    expect(entered).toHaveBeenCalledWith(l.data, l)
+    mock.hover(nil)
+    expect(left).toHaveBeenCalledWith(l.data)
+end
+
+-- The cursor `below` px under the top of the order list.
+local function cursorAt(o: any, below: number)
+    local child = o.scroll.child
+    local s = child:GetEffectiveScale()
+    mock.setCursorPosition(child:GetLeft() * s + 10, (child:GetTop() - below) * s)
+end
+
+@test("dragging a line: lifted onto a plate, a rule where it lands, onOrderMove(from, before)")
+local function orderDrag()
+    local tt = make()
+    tt:SetOrder(lines(5))
+    local o = tt.order
+    local moved = mock.spy(function(_f: number, _b: number) end)
+    local left = mock.spy(function(_d: any) end)
+    tt.onOrderMove, tt.onOrderLeave = moved, left
+    mock.fake("IsMouseButtonDown", function(_b: string?): boolean return true end)
+    local l = o.lines[1]
+    cursorAt(o, 11)
+    mock.script(l, "OnMouseDown", "LeftButton")
+    -- not moved far enough yet: nothing
+    cursorAt(o, 13)
+    mock.advanceFrames(1)
+    expect(o.dragging).toBeNil()
+    -- dragged down past the fourth line
+    cursorAt(o, 90)
+    mock.advanceFrames(1)
+    expect(o.dragging).toBe(true)
+    expect(l.dragged).toBe(true)
+    expect(l:GetAlpha()).toBeCloseTo(0.4, 2)
+    expect(o.plate).toBeShown()
+    expect(o.plate.name:GetText()).toBe(l.name:GetText())
+    expect(o.drop).toBeShown()
+    expect(left).toHaveBeenCalledWith(l.data)
+    mock.script(l, "OnMouseUp", "LeftButton")
+    expect(moved).toHaveBeenCalledWith(1, 5)
+    expect(o.plate).never.toBeShown()
+    expect(o.drop).never.toBeShown()
+    expect(l.dragged).toBe(false)
+    -- dropped where it was: no move
+    cursorAt(o, 23 + 11)
+    mock.script(o.lines[2], "OnMouseDown", "LeftButton")
+    cursorAt(o, 23 + 20)
+    mock.advanceFrames(1)
+    mock.script(o.lines[2], "OnMouseUp", "LeftButton")
+    expect(moved).toHaveBeenCalledTimes(1)
+    -- a press without a drag; the right button presses nothing
+    mock.script(l, "OnMouseDown", "RightButton")
+    expect(o.press).toBeNil()
+    mock.script(l, "OnMouseDown", "LeftButton")
+    mock.script(l, "OnMouseUp", "LeftButton")
+    expect(moved).toHaveBeenCalledTimes(1)
+end
+
+@test("a drag ends when the button is let go elsewhere; near the edges the list scrolls")
+local function orderRelease()
+    local tt = make(nil, 300)
+    tt:SetOrder(lines(30))
+    local o = tt.order
+    local moved = mock.spy(function(_f: number, _b: number) end)
+    tt.onOrderMove = moved
+    local down = true
+    mock.fake("IsMouseButtonDown", function(_b: string?): boolean return down end)
+    local l = o.lines[3]
+    cursorAt(o, 2 * 23 + 11)
+    mock.script(l, "OnMouseDown", "LeftButton")
+    -- down near the bottom: scrolls along
+    local sc = o.scroll
+    local s = sc:GetEffectiveScale()
+    mock.setCursorPosition(sc:GetLeft() * s + 10, (sc:GetBottom() + 5) * s)
+    mock.advanceFrames(2)
+    expect(sc:GetVerticalScroll() > 0).toBe(true)
+    -- up near the top: back
+    local scrolled = sc:GetVerticalScroll()
+    mock.setCursorPosition(sc:GetLeft() * s + 10, (sc:GetTop() - 5) * s)
+    mock.advanceFrames(1)
+    expect(sc:GetVerticalScroll() < scrolled).toBe(true)
+    -- let go elsewhere: the drag ends on the next frame
+    down = false
+    mock.advanceFrames(1)
+    expect(o.press).toBeNil()
+    expect(moved).toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- A theme change
+--------------------------------------------------------------------------------
+
+@test("a theme change lays the page out and draws it again, its order too")
+local function theme()
+    local tt = make()
+    tt:SetData(data())
+    tt:SetOrder(lines(2))
+    local set = mock.spy(function(_s: any, _d: any) end)
+    local order = mock.spy(function(_s: any, _l: any) end)
+    mock.stub(tt, "SetData", set)
+    mock.stub(tt, "SetOrder", order)
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(set).toHaveBeenCalled()
+    expect(order).toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- The game's talent tooltip
+--------------------------------------------------------------------------------
+
+@test("traitTooltip: the title, the rank, the entry and the next, what a click does, what it needs")
+local function tooltip()
+    local owner = make()
+    local appended = mock.stub(GameTooltip, "AppendInfo", function(_t: any, _k: string, _id: number, _r: number) end)
+    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): any
+        return { currentRank = 1, maxRanks = 3, ranksIncreased = 0, ranksPurchased = 1,
+            activeEntry = { entryID = 11, rank = 1 }, nextEntry = { entryID = 11, rank = 2 } }
+    end)
+    mock.fake("C_Traits.GetConditionInfo", function(_c: number, id: number): any
+        if id == 1 then return { isMet = false, tooltipText = "Requires 5 points in Arms", spentAmountRequired = 5 } end
+        if id == 2 then return { isMet = false, tooltipText = "Requires 10 points in Arms", spentAmountRequired = 10 } end
+        return { isMet = true }
+    end)
+    traitTooltip(owner, 1, 2, { name = "Tactical Mastery", treeName = "Arms", conditions = { 1, 2, 3 },
+        canSpend = true, needs = { "Requires Improved Rend" }, blocked = "Not in combat" })
+    expect(GameTooltip:IsShown()).toBe(true)
+    expect(GameTooltip).toHaveLines({ "Tactical Mastery", "Rank 1/3", " ", " ", "Next Rank:", " ", "Click to learn", " ",
+        "Requires 10 points in Arms", "Requires Improved Rend", "Not in combat" })
+    expect(appended).toHaveBeenCalledWith(GameTooltip, "GetTraitEntry", 11, 1)
+    expect(appended).toHaveBeenCalledWith(GameTooltip, "GetTraitEntry", 11, 2)
+end
+
+@test("traitTooltip: a planned point's line; a node the game doesn't answer for: nothing")
+local function tooltipPending()
+    local owner = make()
+    mock.stub(GameTooltip, "AppendInfo", function(_t: any, _k: string, _id: number, _r: number) end)
+    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): any
+        return { currentRank = mock.secret(1), maxRanks = 1 }
+    end)
+    traitTooltip(owner, 1, 2, { pending = 1 })
+    expect(GameTooltip).toHaveLines({ "", "Rank 0/1", " ", "Right-click to take a planned point back" })
+    GameTooltip:Hide()
+    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): any return nil end)
+    traitTooltip(owner, 1, 2, nil)
+    expect(GameTooltip:IsShown()).toBe(false)
+end

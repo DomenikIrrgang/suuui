@@ -1,0 +1,353 @@
+-- Units/Bags/Sort: the bags' sort orders and plans, on made-up slots.
+
+import test, expect, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as sort from "/Units/Bags/Sort"
+import expectNoErrors from "../../../helpers"
+
+type SortItem = sort.SortItem
+type SortSlot = sort.SortSlot
+
+local HERBS, SHARDS = 32, 4
+
+local function item(id: any, count: number?, extra: { [string]: any }?): SortItem
+    local it: SortItem = { id = id, count = count or 1, classID = 7, maxStack = 20 }
+    for k, v in pairs(extra or {}) do (it :: any)[k] = v end
+    return it
+end
+
+local function slot(bag: number, n: number, it: SortItem?, family: sort.Family?, locked: boolean?): SortSlot
+    return { bag = bag, slot = n, family = family or 0, item = it, locked = locked }
+end
+
+-- the ids of a target in slot order ("-" for empty)
+local function ids(target: sort.Target?, n: number): string
+    local out: string[] = {}
+    for i = 1, n do
+        local it = target and target[i]
+        out[i] = it and tostring(it.id) or "-"
+    end
+    return table.concat(out, " ")
+end
+
+--------------------------------------------------------------------------------
+-- Orders
+--------------------------------------------------------------------------------
+
+@test("an order's label, and By type for one it doesn't know")
+@cases({ { "type", "By type" }, { "quality", "By quality" }, { "level", "By item level" }, { "name", "By name" },
+         { "game", "The game's sort" }, { "nonsense", "By type" } })
+local function sortLabel(order: string, label: string)
+    expect(sort.sortLabel(order)).toBe(label)
+end
+
+@test("an order's keys, by type for one it doesn't know")
+local function orderKeys()
+    expect(sort.orderKeys("nonsense")).toBe(sort.orderKeys("type"))
+    expect(#sort.orderKeys("name")).toBe(5)
+    expect(#sort.orderKeys("quality")).toBe(9)
+    expect(#sort.orderKeys("level")).toBe(9)
+end
+
+@test("two equal items: neither goes first, every key compared")
+@cases({ { "type" }, { "quality" }, { "level" }, { "name" } })
+local function equalItems(order: string)
+    local gear = item(5, 1, { classID = 4, equipLoc = "INVTYPE_HEAD", quality = 2, level = 10, name = "Cap", link = "l" })
+    local twin = item(5, 1, { classID = 4, equipLoc = "INVTYPE_HEAD", quality = 2, level = 10, name = "Cap", link = "l" })
+    expect(sort.before(gear, twin, sort.orderKeys(order))).toBe(false)
+    local plainItem = item(6)
+    expect(sort.before(plainItem, item(6), sort.orderKeys(order))).toBe(false)
+end
+
+@test("by type: better quality first, conjured after grey, then class, slot, subclass, level, price, name, part stacks first")
+local function byType()
+    local keys = sort.orderKeys("type")
+    expect(sort.before(item(1, 1, { quality = 3 }), item(2, 1, { quality = 1 }), keys)).toBe(true)
+    expect(sort.before(item(1, 1, { quality = 0 }), item(2, 1, { quality = 1, conjured = true }), keys)).toBe(true)
+    expect(sort.before(item(1, 1, { classID = 0 }), item(2, 1, { classID = 7 }), keys)).toBe(true)
+    -- gear by where it's worn, an unknown slot first
+    local head = item(1, 1, { classID = 4, equipLoc = "INVTYPE_HEAD" })
+    local robe = item(2, 1, { classID = 4, equipLoc = "INVTYPE_ROBE" })
+    local odd = item(3, 1, { classID = 4, equipLoc = "INVTYPE_NON_EQUIP_IGNORE" })
+    expect(sort.before(head, robe, keys)).toBe(true)
+    expect(sort.before(odd, head, keys)).toBe(true)
+    -- the rest by subclass (none: last)
+    expect(sort.before(item(1, 1, { subclassID = 1 }), item(2, 1, { subclassID = 5 }), keys)).toBe(true)
+    expect(sort.before(item(1, 1, { subclassID = 5 }), item(2, 1), keys)).toBe(true)
+    expect(sort.before(item(1, 1, { level = 20 }), item(2, 1, { level = 10 }), keys)).toBe(true)
+    expect(sort.before(item(1, 1, { price = 50 }), item(2, 1, { price = 5 }), keys)).toBe(true)
+    expect(sort.before(item(1, 1, { name = "Apple" }), item(2, 1, { name = "Bread" }), keys)).toBe(true)
+    expect(sort.before(item(1), item(2), keys)).toBe(true)
+    expect(sort.before(item(1, 1, { link = "a" }), item(1, 1, { link = "b" }), keys)).toBe(true)
+    expect(sort.before(item(1, 3), item(1, 9), keys)).toBe(true)
+end
+
+@test("by quality, item level and name")
+local function otherOrders()
+    local q, l, n = sort.orderKeys("quality"), sort.orderKeys("level"), sort.orderKeys("name")
+    expect(sort.before(item(1, 1, { quality = 4 }), item(2, 1, { quality = 2 }), q)).toBe(true)
+    expect(sort.before(item(1, 1, { classID = 2 }), item(2, 1, { classID = 4 }), q)).toBe(true)
+    expect(sort.before(item(1, 1, { subclassID = 1 }), item(2, 1, { subclassID = 2 }), q)).toBe(true)
+    expect(sort.before(item(1, 1, { equipLoc = "INVTYPE_HEAD" }), item(2, 1, { equipLoc = "INVTYPE_FEET" }), q)).toBe(true)
+    expect(sort.before(item(1, 9), item(1, 3), q)).toBe(true) -- full stacks first
+    expect(sort.before(item(1, 1, { level = 30 }), item(2, 1, { level = 5, quality = 5 }), l)).toBe(true)
+    expect(sort.before(item(1, 1, { name = "Axe", quality = 0 }), item(2, 1, { name = "Bow", quality = 5 }), n)).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- What fits where
+--------------------------------------------------------------------------------
+
+@test("what fits a bag of a family")
+local function fits()
+    expect(sort.fits(item(1, 1, { classID = 1 }), 0)).toBe(true)
+    expect(sort.fits(item(1, 1, { classID = 1, reagent = true }), "reagent")).toBe(false)
+    expect(sort.fits(item(1, 1, { reagent = true }), "reagent")).toBe(true)
+    expect(sort.fits(item(1, 1, { reagent = false }), "reagent")).toBe(false)
+    expect(sort.fits(item(1, 1, { family = HERBS }), HERBS)).toBe(true)
+    expect(sort.fits(item(1, 1, { family = HERBS }), SHARDS)).toBe(false)
+    expect(sort.fits(item(1), HERBS)).toBe(false)
+end
+
+@test("the same item and count")
+local function same()
+    expect(sort.same(nil, nil)).toBe(true)
+    expect(sort.same(item(1), nil)).toBe(false)
+    expect(sort.same(nil, item(1))).toBe(false)
+    expect(sort.same(item(1, 2, { link = "x" }), item(1, 2, { link = "x" }))).toBe(true)
+    expect(sort.same(item(1, 2), item(1, 3))).toBe(false)
+    expect(sort.same(item(1, 2, { link = "x" }), item(1, 2, { link = "y" }))).toBe(false)
+    expect(sort.same(item(1), item(2))).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Part stacks
+--------------------------------------------------------------------------------
+
+@test("an item's last part stack goes onto its first")
+local function stacks()
+    local slots = {
+        slot(0, 1, item(1, 5)), slot(0, 2, item(1, 20)), slot(0, 3, item(1, 7)), slot(0, 4, item(1, 2)),
+        slot(0, 5, item(2, 1, { maxStack = 1 })), slot(0, 6, item(2, 1, { maxStack = 1 })),
+        slot(0, 7, item(3, 4)), slot(0, 8, item(3, 4), 0, true), slot(0, 9),
+    }
+    local st: sort.StackState = { partials = {}, noStack = {} }
+    local moves = sort.planStacks(slots, st)
+    expect(#moves).toBe(1)
+    expect(moves[1].from).toBe(slots[4])
+    expect(moves[1].to).toBe(slots[1])
+    expect(st.partials[1]).toBe(3)
+    -- no fewer part stacks a round later: the item doesn't stack
+    moves = sort.planStacks(slots, st)
+    expect(#moves).toBe(0)
+    expect(st.noStack[1]).toBe(true)
+end
+
+@test("at most a wave of stack moves")
+local function stackWave()
+    local slots: SortSlot[] = {}
+    for id = 1, sort.WAVE + 2 do
+        slots[#slots + 1] = slot(0, #slots + 1, item(id, 1))
+        slots[#slots + 1] = slot(0, #slots + 1, item(id, 2))
+    end
+    local moves = sort.planStacks(slots, { partials = {}, noStack = {} })
+    expect(#moves).toBe(sort.WAVE)
+end
+
+--------------------------------------------------------------------------------
+-- Targets
+--------------------------------------------------------------------------------
+
+@test("items gather at the start, or at the end mirrored")
+local function target()
+    local slots = { slot(0, 1, item("b", 1, { quality = 1 })), slot(0, 2), slot(0, 3, item("a", 1, { quality = 3 })), slot(0, 4) }
+    expect(ids(sort.sortTarget(slots, "type", false), 4)).toBe("a b - -")
+    expect(ids(sort.sortTarget(slots, "type", true), 4)).toBe("- - b a")
+    expect(ids(sort.sortTarget(slots, "nonsense", false), 4)).toBe("a b - -")
+end
+
+@test("each special bag keeps its own slots (bag IDs 1-4 once collided with the list slots)")
+local function twoSpecialBags()
+    local slots = {
+        slot(0, 1, item("cloth")),
+        slot(0, 2),
+        slot(2, 1, item("shard", 1, { family = SHARDS }), HERBS),
+        slot(1, 1, item("herb", 1, { family = HERBS }), SHARDS),
+    }
+    expect(ids(sort.sortTarget(slots, "type", false), 4)).toBe("cloth - herb shard")
+end
+
+@test("the reagent bag takes reagents first, as many as fit; the rest go to the ordinary bags")
+local function reagentBag()
+    local slots = {
+        slot(0, 1, item("r1", 1, { reagent = true, name = "A" })), slot(0, 2, item("r2", 1, { reagent = true, name = "B" })),
+        slot(0, 3, item("x", 1, { name = "C" })), slot(0, 4),
+        slot(5, 1, nil, "reagent"),
+    }
+    expect(ids(sort.sortTarget(slots, "name", false), 5)).toBe("r2 x - - r1")
+end
+
+@test("no target when the items don't fit the ordinary bags")
+local function overflow()
+    local slots = { slot(0, 1, item("a")), slot(5, 1, item("b"), "reagent") }
+    expect(sort.sortTarget(slots, "type", false)).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Waves
+--------------------------------------------------------------------------------
+
+@test("a wave swaps items into place and counts the wrong slots")
+local function swap()
+    local a, b = item("a", 1, { name = "A" }), item("b", 1, { name = "B" })
+    local slots = { slot(0, 1, b), slot(0, 2, a) }
+    local t = assert(sort.sortTarget(slots, "name", false))
+    local moves, wrong = sort.planWave(slots, t)
+    expect(wrong).toBe(2)
+    expect(#moves).toBe(1)
+    expect(moves[1].from).toBe(slots[2])
+    expect(moves[1].to).toBe(slots[1])
+    -- in order: nothing to do
+    moves, wrong = sort.planWave({ slot(0, 1, a), slot(0, 2, b) }, { a, b })
+    expect(wrong).toBe(0)
+    expect(#moves).toBe(0)
+end
+
+@test("an item in the way that can't go where the wanted one is moves to an empty slot first")
+local function outOfTheWay()
+    local herb = item("herb", 1, { family = HERBS, name = "A" })
+    local cloth = item("cloth", 1, { name = "B" })
+    -- slot 1 (ordinary) wants the herb, which sits in the herb bag: the
+    -- cloth in slot 1 can't go to the herb bag, so it goes to empty slot 2
+    local slots = { slot(0, 1, cloth), slot(0, 2), slot(1, 1, herb, HERBS) }
+    local moves, wrong = sort.planWave(slots, { herb, cloth })
+    expect(wrong).toBe(3)
+    expect(#moves).toBe(1)
+    expect(moves[1].from).toBe(slots[1])
+    expect(moves[1].to).toBe(slots[2])
+end
+
+@test("locked slots are left alone, and a wave stops at its size")
+local function lockedAndWave()
+    local a, b = item("a"), item("b")
+    local moves = sort.planWave({ slot(0, 1, b, 0, true), slot(0, 2, a) }, { a, b })
+    expect(#moves).toBe(0)
+    local slots: SortSlot[], t: sort.Target = {}, {}
+    for i = 1, 2 * (sort.WAVE + 2) do
+        slots[i] = slot(0, i, item(i))
+        t[i] = item(i % 2 == 0 and i - 1 or i + 1)
+    end
+    moves = sort.planWave(slots, t)
+    expect(#moves).toBe(sort.WAVE)
+end
+
+@test("an item with no slot to go to stays")
+local function nowhere()
+    local cloth = item("cloth")
+    -- slot 1 wants an item that isn't there; the cloth in it could only go
+    -- to the herb bag's empty slot, where it doesn't fit
+    local moves, wrong = sort.planWave({ slot(0, 1, cloth), slot(1, 1, nil, HERBS) }, { item("x") })
+    expect(wrong).toBe(1)
+    expect(#moves).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- A wave on its way
+--------------------------------------------------------------------------------
+
+local function never(_: SortSlot): boolean return false end
+local function always(_: SortSlot): boolean return true end
+
+@test("the game's sort ends once the bags are quiet, or after 8 s")
+local function gameWave()
+    local w: sort.Wave = { at = 100, moves = {} }
+    expect(sort.waveState(w, 100.5, true, nil, never)).toBe("wait")
+    expect(sort.waveState(w, 100.7, true, nil, never)).toBe("finish")
+    expect(sort.waveState(w, 100.7, true, 100.5, never)).toBe("wait")
+    expect(sort.waveState(w, 108.1, true, 108, never)).toBe("finish")
+end
+
+@test("SuuUI's wave: on once its slots are free and the bags updated; a timeout after 4 s")
+local function ownWave()
+    local m: sort.Move = { from = slot(0, 1), to = slot(0, 2) }
+    local w: sort.Wave = { at = 100, moves = { m } }
+    expect(sort.waveState(w, 100.01, false, nil, never)).toBe("wait")
+    expect(sort.waveState(w, 100.5, false, nil, always)).toBe("wait")
+    expect(sort.waveState(w, 100.5, false, nil, never)).toBe("wait") -- not updated yet
+    expect(sort.waveState(w, 101.1, false, nil, never)).toBe("next")
+    w.updated = true
+    expect(sort.waveState(w, 100.5, false, nil, never)).toBe("next")
+    expect(sort.waveState(w, 104.5, false, nil, always)).toBe("timeout")
+    local empty: sort.Wave = { at = 100, moves = {} }
+    expect(sort.waveState(empty, 100.1, false, nil, never)).toBe("wait")
+    expect(sort.waveState(empty, 100.3, false, nil, never)).toBe("next")
+end
+
+--------------------------------------------------------------------------------
+-- The game's item data
+--------------------------------------------------------------------------------
+
+@test("a conjured item, by its tooltip")
+local function conjured()
+    mock.fake("C_TooltipInfo.GetItemByID", function(id: number): any
+        if id == 1 then return { lines = { { leftText = "Mana Biscuit" }, { leftText = ITEM_CONJURED or "Conjured Item" } } } end
+        if id == 2 then return { lines = { { leftText = mock.secret("Conjured Item") } } } end
+        if id == 3 then return { lines = "none" } end
+        error("no item")
+    end)
+    expect(sort.conjured(1)).toBe(true)
+    expect(sort.conjured(2)).toBe(false)
+    expect(sort.conjured(3)).toBe(false)
+    expect(sort.conjured(4)).toBe(false)
+end
+
+@test("an item read once per link, from the game's data")
+local function itemOf()
+    mock.defineItem(91001, { name = "Linen Cloth", quality = 1, itemLevel = 5, stackCount = 20, sellPrice = 13, classID = 7,
+        subclassID = 5, icon = 132889 }, { cached = true })
+    local spy = mock.stub(C_Item, "GetItemInfo", C_Item.GetItemInfo)
+    local a = sort.itemOf({ itemID = 91001, stackCount = 5 })
+    expect(a.count).toBe(5)
+    expect(a.name).toBe("Linen Cloth")
+    expect(a.maxStack).toBe(20)
+    expect(a.price).toBe(13)
+    expect(a.classID).toBe(7)
+    expect(a.conjured).toBe(false)
+    expect(a.reagent).toBe(false)
+    local b = sort.itemOf({ itemID = 91001, stackCount = mock.secret(3) })
+    expect(b.count).toBe(1)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("an item by its link: its effective item level")
+local function itemOfLink()
+    mock.defineItem(91002, { name = "Worn Axe", quality = 2, itemLevel = 9, stackCount = 1, sellPrice = 50, classID = 2,
+        subclassID = 0, equipLoc = "INVTYPE_2HWEAPON", icon = 135421 }, { cached = true })
+    mock.fake("C_Item.GetDetailedItemLevelInfo", function(_: any): number return 12 end)
+    mock.setBag(4, { slots = 4, items = { [1] = 91002 } })
+    local link = assert(assert(C_Container.GetContainerItemInfo(4, 1)).hyperlink)
+    local a = sort.itemOf({ itemID = 91002, hyperlink = link, quality = 2 })
+    expect(a.link).toBe(link)
+    expect(a.level).toBe(12)
+    expect(a.equipLoc).toBe("INVTYPE_2HWEAPON")
+    mock.setBag(4, nil)
+end
+
+@test("an item the game hasn't loaded: what it knows at once, and it's asked for")
+local function itemNotLoaded()
+    local asked = mock.fake("C_Item.RequestLoadItemDataByID", function(_: any) end)
+    local a = sort.itemOf({ itemID = 91999, stackCount = 2, quality = 3, hyperlink = mock.secret("x") })
+    expect(a.name).toBeNil()
+    expect(a.link).toBeNil()
+    expect(a.quality).toBe(3)
+    expect(a.count).toBe(2)
+    expect(asked).toHaveBeenCalled()
+end
+
+@test("an item's family, when the game tells it")
+local function itemFamily()
+    mock.defineItem(91003, { name = "Peacebloom", quality = 1, stackCount = 20, sellPrice = 1, classID = 7, subclassID = 9, icon = 1 }, { cached = true })
+    mock.fake("C_Item.GetItemFamily", function(_: any): number return HERBS end)
+    expect(sort.itemOf({ itemID = 91003 }).family).toBe(HERBS)
+end

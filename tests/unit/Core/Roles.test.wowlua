@@ -1,0 +1,452 @@
+-- Core/Roles: your role (chosen, assigned, else read from your talents) and
+-- switching to the role's profile when it changes, out of combat only.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as roles from "/Core/Roles"
+import internal listen, CLASS from "/Core/Roles"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import expectNoErrors from "../../helpers"
+
+const OWNER = "RolesTest"
+const CONFIG = 9001
+
+local profiles = settings.profiles
+
+type Node = { posX?: number, ranksPurchased?: any, activeRank?: number, currentRank?: number }
+
+-- A talent config of these nodes (by node ID) in one tree.
+local function talents(nodes: { [number]: Node })
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): number return CONFIG end)
+    mock.fake("C_Traits.GetConfigInfo", function(cfg: number): any
+        expect(cfg).toBe(CONFIG)
+        return { treeIDs = { 77 } }
+    end)
+    mock.fake("C_Traits.GetTreeNodes", function(treeID: number): number[]
+        expect(treeID).toBe(77)
+        local ids: number[] = {}
+        for id in pairs(nodes) do ids[#ids + 1] = id end
+        table.sort(ids)
+        return ids
+    end)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, nodeID: number): any return nodes[nodeID] end)
+end
+
+-- Points in the three trees, laid out side by side at x 0-99, 100-199, 200-300.
+local function points(a: number, b: number, c: number)
+    talents({
+        [1] = { posX = 0, ranksPurchased = a }, [2] = { posX = 150, ranksPurchased = b },
+        [3] = { posX = 300, ranksPurchased = c }, [4] = { posX = 25000, ranksPurchased = 50 },
+    })
+end
+
+local function noTalents()
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): number? return nil end)
+end
+
+-- SUUUI_SPEC_CHANGED carries the tree (a number), SUUUI_ROLE_CHANGED the role
+type Heard = { name: string, value: number | string }
+local heard: Heard[] = {}
+events.on("SUUUI_SPEC_CHANGED", function(name: string, v: number) heard[#heard + 1] = { name = name, value = v } end, OWNER)
+events.on("SUUUI_ROLE_CHANGED", function(name: string, v: string) heard[#heard + 1] = { name = name, value = v } end, OWNER)
+
+local function heardOf(name: string): (number | string)[]
+    local out: (number | string)[] = {}
+    for _, h in ipairs(heard) do if h.name == name then out[#out + 1] = h.value end end
+    return out
+end
+
+local startProfile: string = "?"
+
+@beforeEach
+local function settle()
+    -- whatever login queued has run
+    mock.advanceTime(1)
+    startProfile = assert(profiles.current())
+    heard = {}
+end
+
+@afterEach
+local function cleanUp()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    profiles.setChosenRole("auto")
+    for _, role in ipairs({ "TANK", "HEALER", "DAMAGER" }) do profiles.setRoleProfile(role, nil) end
+    mock.advanceTime(1)
+    profiles.use(startProfile)
+    for _, name in ipairs({ "RolesTank", "RolesHeal", "RolesDps" }) do
+        if profiles.find(name) == name then profiles.delete(name) end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- spec
+--------------------------------------------------------------------------------
+
+@test("spec is the tree with the most points, and the points per tree")
+local function spec()
+    points(3, 11, 2)
+    local tree, pts = roles.spec()
+    expect(tree).toBe(2)
+    expect(pts).toEqual({ 3, 11, 2 })
+    points(0, 0, 5)
+    expect(roles.spec()).toBe(3)
+end
+
+@test("a tie goes to the leftmost tree")
+local function tie()
+    points(5, 5, 1)
+    expect(roles.spec()).toBe(1)
+    points(1, 4, 4)
+    expect(roles.spec()).toBe(2)
+end
+
+@test("ranks are read from ranksPurchased, else activeRank, else currentRank")
+local function ranks()
+    talents({
+        [1] = { posX = 0, activeRank = 2 }, [2] = { posX = 150, currentRank = 7 },
+        [3] = { posX = 300 }, [4] = { posX = 299, ranksPurchased = 1, activeRank = 9 },
+    })
+    local _, pts = roles.spec()
+    expect(pts).toEqual({ 2, 7, 1 })
+end
+
+@test("a secret rank counts as none")
+local function secretRank()
+    talents({ [1] = { posX = 0, ranksPurchased = mock.secret(30) }, [2] = { posX = 300, ranksPurchased = 1 } })
+    local tree, pts = roles.spec()
+    expect(tree).toBe(3)
+    expect(pts).toEqual({ 0, 0, 1 })
+end
+
+@test("no talents spent, no config, or no trees: 0")
+local function none()
+    points(0, 0, 0)
+    local tree, pts = roles.spec()
+    expect(tree).toBe(0)
+    expect(pts).toEqual({ 0, 0, 0 })
+    noTalents()
+    expect(roles.spec()).toBe(0)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): number return CONFIG end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number): any return {} end)
+    expect(roles.spec()).toBe(0)
+    -- only far-off nodes, or nodes without a position
+    talents({ [1] = { posX = 30000, ranksPurchased = 5 }, [2] = { ranksPurchased = 5 } })
+    expect(roles.spec()).toBe(0)
+    talents({})
+    expect(roles.spec()).toBe(0)
+end
+
+@test("a client without the talent APIs, a tree without nodes, a node without info: none")
+local function missingApis()
+    local all: { [string]: any } = _G :: any
+    local answers: number[] = {}
+    local saved = all.C_ClassTalents
+    all.C_ClassTalents = nil
+    answers[#answers + 1] = (roles.spec())
+    all.C_ClassTalents = {}
+    answers[#answers + 1] = (roles.spec())
+    all.C_ClassTalents = saved
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): number return CONFIG end)
+    local traits = all.C_Traits
+    all.C_Traits = nil
+    answers[#answers + 1] = (roles.spec())
+    all.C_Traits = traits
+    talents({})
+    mock.fake("C_Traits.GetTreeNodes", function(_: number): number[]? return nil end)
+    answers[#answers + 1] = (roles.spec())
+    -- node 2 has no info: skipped
+    mock.fake("C_Traits.GetTreeNodes", function(_: number): number[] return { 1, 2, 3 } end)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, id: number): any
+        if id == 2 then return nil end
+        return { posX = id == 1 and 0 or 300, ranksPurchased = id }
+    end)
+    answers[#answers + 1] = (roles.spec())
+    expect(answers).toEqual({ 0, 0, 0, 0, 3 })
+end
+
+@test("an error reading the talents reads as none")
+local function broken()
+    points(1, 2, 3)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, _: number): any error("boom") end)
+    local tree, pts = roles.spec()
+    expect(tree).toBe(0)
+    expect(pts).toEqual({ 0, 0, 0 })
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- current
+--------------------------------------------------------------------------------
+
+@test("a role chosen for the character comes first")
+local function chosen()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "HEALER" end)
+    profiles.setChosenRole("TANK")
+    local role, source = roles.current()
+    expect(role).toBe("TANK")
+    expect(source).toBe("chosen")
+end
+
+@test("a chosen role that isn't one counts as automatic")
+local function chosenBogus()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "HEALER" end)
+    profiles.setChosenRole("WIZARD")
+    local role, source = roles.current()
+    expect(role).toBe("HEALER")
+    expect(source).toBe("assigned")
+end
+
+@test("then the role assigned to you")
+local function assigned()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "HEALER" end)
+    local role, source = roles.current()
+    expect(role).toBe("HEALER")
+    expect(source).toBe("assigned")
+end
+
+@test("then your talents, read as a role for your class")
+local function fromTalents()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "NONE" end)
+    points(0, 0, 9)
+    local role, source = roles.current()
+    expect(source).toBe("talents")
+    local byClass: { [string]: string } = { DRUID = "HEALER", PALADIN = "DAMAGER", PRIEST = "DAMAGER", SHAMAN = "HEALER", WARRIOR = "TANK" }
+    expect(role).toBe(byClass[CLASS] or "DAMAGER")
+end
+
+@test("a secret assigned role, or no group roles API, falls through to talents")
+local function secretAssigned()
+    points(0, 0, 9)
+    mock.fake("UnitGroupRolesAssigned", function(_: string): any return mock.secret("TANK") end)
+    local _, source = roles.current()
+    expect(source).toBe("talents")
+    local api = _G.UnitGroupRolesAssigned
+    _G.UnitGroupRolesAssigned = nil
+    local _, source2 = roles.current()
+    _G.UnitGroupRolesAssigned = api
+    expect(source2).toBe("talents")
+end
+
+@test("no talents at all reads as DPS")
+local function noTreeIsDps()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "NONE" end)
+    noTalents()
+    expect(roles.current()).toBe("DAMAGER")
+end
+
+@test("labels for the three roles")
+local function labels()
+    expect(roles.LABEL).toEqual({ TANK = "Tank", HEALER = "Healer", DAMAGER = "DPS" })
+end
+
+--------------------------------------------------------------------------------
+-- switching profiles
+--------------------------------------------------------------------------------
+
+local function mapRoles()
+    profiles.create("RolesTank")
+    profiles.create("RolesHeal")
+    profiles.setRoleProfile("TANK", "RolesTank")
+    profiles.setRoleProfile("HEALER", "RolesHeal")
+end
+
+@test("a role change switches to that role's profile, after events settle")
+local function switches()
+    mapRoles()
+    mock.advanceTime(1)
+    profiles.use(startProfile)
+    local role = "HEALER"
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return role end)
+    heard = {}
+    mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    -- not before the burst settled
+    mock.advanceTime(0.3)
+    expect(profiles.current()).toBe(startProfile)
+    mock.advanceTime(0.3)
+    expect(profiles.current()).toBe("RolesHeal")
+    expect(heardOf("SUUUI_ROLE_CHANGED")).toEqual({ "HEALER" })
+    local printed = mock.printed()
+    expect(printed[#printed]:find("Healer role: switched to the profile RolesHeal.", 1, true) ~= nil).toBe(true)
+    role = "TANK"
+    heard = {}
+    mock.fireEvent("TRAIT_CONFIG_UPDATED", 1)
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe("RolesTank")
+    expect(heardOf("SUUUI_ROLE_CHANGED")).toEqual({ "TANK" })
+    expectNoErrors()
+end
+
+@test("a profile picked by hand stays until the role changes again")
+local function byHand()
+    mapRoles()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "TANK" end)
+    mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe("RolesTank")
+    expect(profiles.lastRole()).toBe("TANK")
+    profiles.use(startProfile)
+    mock.fireEvent("TRAIT_CONFIG_UPDATED", 1)
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe(startProfile)
+end
+
+@test("a new mapping applies at once, even for the same role")
+local function forced()
+    mapRoles()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "TANK" end)
+    mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    mock.advanceTime(0.6)
+    profiles.use(startProfile)
+    -- the mapping changed: forced, even though the role didn't
+    profiles.setRoleProfile("TANK", "RolesTank")
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe("RolesTank")
+end
+
+@test("events in a burst run one check; a forced one stays forced")
+local function burst()
+    mapRoles()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "TANK" end)
+    mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    mock.advanceTime(0.6)
+    profiles.use(startProfile)
+    heard = {}
+    mock.fireEvent("TRAIT_CONFIG_UPDATED", 1)
+    events.emit("SUUUI_ROLE_PROFILES_CHANGED")
+    mock.fireEvent("TRAIT_CONFIG_UPDATED", 1)
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe("RolesTank")
+end
+
+@test("a role without a profile leaves the profile alone")
+local function unmapped()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "DAMAGER" end)
+    profiles.setChosenRole("HEALER")
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe(startProfile)
+    expect(profiles.lastRole()).toBe("HEALER")
+end
+
+@test("the role's profile already in use: nothing to do")
+local function alreadyThere()
+    mapRoles()
+    profiles.use("RolesHeal")
+    local before = #mock.printed()
+    profiles.setChosenRole("HEALER")
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe("RolesHeal")
+    expect(#mock.printed()).toBe(before)
+end
+
+@test("in combat the switch waits for its end, to the role then")
+local function combat()
+    mapRoles()
+    local role = "TANK"
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return role end)
+    mock.player:enterCombat()
+    mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe(startProfile)
+    role = "HEALER"
+    mock.player:leaveCombat()
+    expect(profiles.current()).toBe("RolesHeal")
+    expectNoErrors()
+end
+
+@test("after combat no switch when the mapping went, the profile is already in use, or it can't be used")
+local function combatChanged()
+    mapRoles()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "TANK" end)
+    -- the mapping removed while the fight lasted
+    mock.player:enterCombat()
+    events.emit("SUUUI_ROLE_PROFILES_CHANGED")
+    mock.advanceTime(0.6)
+    profiles.setRoleProfile("TANK", nil)
+    mock.advanceTime(0.6)
+    mock.player:leaveCombat()
+    expect(profiles.current()).toBe(startProfile)
+    -- the profile picked by hand in the meantime
+    profiles.setRoleProfile("TANK", "RolesTank")
+    mock.player:enterCombat()
+    mock.advanceTime(0.6)
+    profiles.use("RolesTank")
+    local before = #mock.printed()
+    mock.player:leaveCombat()
+    expect(#mock.printed()).toBe(before)
+    -- the switch refused
+    profiles.use(startProfile)
+    mock.stub(profiles, "use", function(_: string?): (boolean, string?) return false, "no" end)
+    events.emit("SUUUI_ROLE_PROFILES_CHANGED")
+    mock.advanceTime(0.6)
+    expect(#mock.printed()).toBe(before)
+    expect(profiles.current()).toBe(startProfile)
+end
+
+@test("the spec changing is announced")
+local function specChanged()
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "NONE" end)
+    points(9, 0, 0)
+    mock.fireEvent("PLAYER_TALENT_UPDATE")
+    mock.advanceTime(0.6)
+    points(0, 9, 0)
+    mock.fireEvent("PLAYER_TALENT_UPDATE")
+    mock.advanceTime(0.6)
+    expect(heardOf("SUUUI_SPEC_CHANGED")).toContain(2)
+    -- unchanged: not again
+    local n = #heardOf("SUUUI_SPEC_CHANGED")
+    mock.fireEvent("PLAYER_TALENT_UPDATE")
+    mock.advanceTime(0.6)
+    expect(#heardOf("SUUUI_SPEC_CHANGED")).toBe(n)
+end
+
+@test("past level 10 with no talents read yet, the role waits for the talent events")
+local function waitsForTalents()
+    mapRoles()
+    profiles.setRoleProfile("DAMAGER", "RolesTank")
+    mock.fake("UnitGroupRolesAssigned", function(_: string): string return "NONE" end)
+    mock.fake("UnitLevel", function(_: string): number return 40 end)
+    noTalents()
+    heard = {}
+    events.emit("SUUUI_ROLE_PROFILES_CHANGED")
+    mock.advanceTime(0.6)
+    expect(heardOf("SUUUI_ROLE_CHANGED")).toEqual({})
+    expect(profiles.current()).toBe(startProfile)
+    -- below level 10 an unspent character is DPS
+    mock.fake("UnitLevel", function(_: string): number return 5 end)
+    events.emit("SUUUI_ROLE_PROFILES_CHANGED")
+    mock.advanceTime(0.6)
+    expect(profiles.current()).toBe("RolesTank")
+end
+
+@test("an event the client doesn't know is not listened to")
+local function invalidEvent()
+    local valid = false
+    mock.fake("C_EventUtils.IsEventValid", function(_: string): boolean return valid end)
+    local calls = 0
+    listen("PLAYER_UPDATE_RESTING", function() calls += 1 end)
+    valid = true
+    listen("UPDATE_SHAPESHIFT_FORMS", function() calls += 10 end)
+    mock.fireEvent("PLAYER_UPDATE_RESTING")
+    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+    expect(calls).toBe(10)
+    events.off("UPDATE_SHAPESHIFT_FORMS", "Roles")
+    -- C_EventUtils without IsEventValid: listened to
+    local utilsAll: { [string]: any } = C_EventUtils :: any
+    local isValid = utilsAll.IsEventValid
+    utilsAll.IsEventValid = nil
+    listen("UPDATE_SHAPESHIFT_FORMS", function() calls += 1000 end)
+    utilsAll.IsEventValid = isValid
+    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+    expect(calls).toBe(1010)
+    events.off("UPDATE_SHAPESHIFT_FORMS", "Roles")
+    calls = 10
+    -- a client without C_EventUtils: every event is listened to
+    local utils = _G.C_EventUtils
+    _G.C_EventUtils = nil
+    listen("UPDATE_SHAPESHIFT_FORMS", function() calls += 100 end)
+    _G.C_EventUtils = utils
+    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+    expect(calls).toBe(110)
+    events.off("UPDATE_SHAPESHIFT_FORMS", "Roles")
+end

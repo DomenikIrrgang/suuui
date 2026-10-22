@@ -1,0 +1,516 @@
+-- UI/Guild: the Guild window's Roster, Info and Log pages and the message
+-- of the day banner.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import guildRoster, guildInfo, guildLog, guildMotdBanner, GuildRoster, GuildMember, RosterRow, RosterButton from "/UI/Guild"
+import internal columnsFor from "/UI/Guild"
+import tokens as T from "/Core/Tokens"
+import * as tooltipModule from "/UI/Tooltip"
+import expectNoErrors from "../../helpers"
+import tokenOf, alphaOf, host, cleanup, themeChanged from "./SocialHelpers"
+
+@afterEach
+local function done() cleanup() end
+
+local function roster(): GuildRoster
+    local r = guildRoster(host(900, 500))
+    r:SetAllPoints()
+    mock.advanceFrames(1)
+    return r
+end
+
+local MAGE: GuildMember = { key = "m1", name = "Tamsin Ashford", class = "MAGE", className = "Mage", level = 31,
+    zone = "Duskwood", rank = "Officer", note = "alt", officerNote = "trusted", online = true, away = true }
+local WARRIOR: GuildMember = { key = "m2", name = "Brannoc Ironhand", class = "WARRIOR", className = "Warrior", level = 60,
+    rank = "Member", online = false, lastOnline = "3 days ago", busy = true }
+local NOBODY: GuildMember = { key = "m3", name = "Player", online = false }
+
+local ON = { enabled = true }
+
+local function button(r: GuildRoster, key: string): RosterButton
+    return r.buttons[key] :: RosterButton
+end
+
+--------------------------------------------------------------------------------
+-- Roster
+--------------------------------------------------------------------------------
+
+@test("columnsFor: the fixed columns, the rest by share, gaps between")
+local function cols()
+    local c = columnsFor(800)
+    local room = 800 - (44 + 104) - 8 * 5 - 12 * 2
+    expect(c[1]).toEqual({ x = 12, w = math.floor(room * 0.30) })
+    expect(c[2].w).toBe(44)
+    expect(c[3].w).toBe(104)
+    expect(c[4].w).toBe(math.floor(room * 0.26))
+    for i = 2, 6 do expect(c[i].x).toBe(c[i - 1].x + c[i - 1].w + 8) end
+    -- too narrow: the shared columns get nothing
+    expect(columnsFor(10)[1].w).toBe(0)
+end
+
+@test("an empty roster: the count, No one matches, the foot off")
+local function emptyRoster()
+    local r = roster()
+    r:SetData({})
+    expect(r.count).toHaveText("0 online · 0 members")
+    expect(r.empty).toBeShown()
+    expect(r.offline.value).toBe(false)
+    for _, b in pairs(r.buttons) do
+        expect(b:IsEnabled()).toBe(false)
+        expect(b.reason).toBe("Choose a member first.")
+    end
+    expect(r.guildInvite:IsEnabled()).toBe(false)
+    expect(r.guildInvite.reason).toBeNil()
+    r:SetData({ online = 1, total = 1, showOffline = true })
+    expect(r.count).toHaveText("1 online · 1 member")
+    expect(r.offline.value).toBe(true)
+    expectNoErrors()
+end
+
+@test("members: name in class colour, faded offline, the cells, badges")
+local function members()
+    local r = roster()
+    r:SetData({ online = 1, total = 3, members = { MAGE, WARRIOR, NOBODY } })
+    expect(r.empty).never.toBeShown()
+    local a, b, c = r.rows[1], r.rows[2], r.rows[3]
+    expect(a.cells[1]).toHaveText("Tamsin Ashford")
+    expect(a.cells[2]).toHaveText("31")
+    expect(a.cells[3]).toHaveText("Mage")
+    expect(a.cells[4]).toHaveText("Duskwood")
+    expect(a.cells[5]).toHaveText("Officer")
+    expect(a.cells[6]).toHaveText("alt")
+    expect(tokenOf(a.cells[1])).toBe("class-mage")
+    expect(alphaOf(a.cells[1])).toBe(1)
+    expect(tokenOf(a.diamond)).toBe("class-mage")
+    expect(tokenOf(a.cells[2])).toBe("ink")
+    expect(tokenOf(a.cells[6])).toBe("ink-muted")
+    expect(a.badge).toBeShown()
+    expect(a.badge.text).toHaveText("Away")
+    expect(a.classIcon).toBeShown()
+    expect(a.classIcon:IsDesaturated()).toBe(false)
+    -- offline: how long ago in place of the zone, faded, no badge
+    expect(b.cells[4]).toHaveText("3 days ago")
+    expect(tokenOf(b.cells[1])).toBe("class-warrior")
+    expect(alphaOf(b.cells[1])).toBe(T.opacity["opacity-disabled"])
+    expect(tokenOf(b.cells[6])).toBe("ink-faint")
+    expect(b.badge).never.toBeShown()
+    expect(b.classIcon:IsDesaturated()).toBe(true)
+    -- no class, nothing known
+    expect(c.cells[2]).toHaveText("")
+    expect(c.cells[3]).toHaveText("")
+    expect(c.cells[4]).toHaveText("Offline")
+    expect(c.cells[5]).toHaveText("")
+    expect(tokenOf(c.cells[1])).toBe("ink-faint")
+    expect(c.classIcon).never.toBeShown()
+    expect(r.list.child:GetHeight()).toBe(3 * 24)
+    -- an online member without a class: ink; busy wins over away
+    r:SetData({ members = { { key = "x", name = "Player", online = true, busy = true, away = true } } })
+    expect(tokenOf(r.rows[1].cells[1])).toBe("ink")
+    expect(r.rows[1].badge.text).toHaveText("Busy")
+    expect(r.rows[2]).never.toBeShown()
+    expect(r.rows[3]).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("the class icon from the old texture when the game has no class atlas")
+local function classCoords()
+    if not CLASS_ICON_TCOORDS then return end
+    mock.fake("GetClassAtlas", function(_c: string): string? return nil end)
+    local r = roster()
+    r:SetData({ members = { MAGE } })
+    local icon = r.rows[1].classIcon
+    expect(icon).toBeShown()
+    expect(icon:GetTexture()).toBe("Interface\\TargetingFrame\\UI-Classes-Circles")
+    expectNoErrors()
+end
+
+@test("the headings: the sort column in gilt; a click sorts")
+local function heads()
+    local r = roster()
+    local onSort = mock.spy(function(_c: string) end)
+    r.onSort = onSort
+    r:SetData({ members = { MAGE } })
+    expect(r.heads[1].text).toHaveText("Name")
+    expect(tokenOf(r.heads[5].text)).toBe("gilt-text")
+    expect(tokenOf(r.heads[1].text)).toBe("ink-muted")
+    r:SetData({ sort = "name", members = { MAGE } })
+    expect(tokenOf(r.heads[1].text)).toBe("gilt-text")
+    mock.click(r.heads[4])
+    expect(onSort).toHaveBeenCalledWith("zone")
+    -- hover: ink; leave: back to its colour
+    mock.hover(r.heads[4])
+    expect(tokenOf(r.heads[4].text)).toBe("ink")
+    mock.hover(r.heads[1])
+    expect(tokenOf(r.heads[4].text)).toBe("ink-muted")
+    mock.hover(nil)
+    expect(tokenOf(r.heads[1].text)).toBe("gilt-text")
+    -- no data: rank is the default
+    r.data = nil
+    mock.hover(r.heads[5])
+    mock.hover(nil)
+    expect(tokenOf(r.heads[5].text)).toBe("gilt-text")
+    r.onSort = nil
+    mock.click(r.heads[4])
+    expect(onSort).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("the selected member: highlighted; the foot on, or off with the reason")
+local function selected()
+    local r = roster()
+    local onAction = mock.spy(function(_n: string, _m: GuildMember?) end)
+    r.onAction = onAction
+    r:SetData({ members = { MAGE, WARRIOR }, selected = "m1", actions = {
+        whisper = ON, invite = ON, promote = { enabled = false, why = "Only officers can." },
+        demote = { enabled = false }, remove = ON, guildInvite = ON } })
+    expect(r.rows[1].sel).toBeShown()
+    expect(r.rows[1].edge).toBeShown()
+    expect(r.rows[2].sel).never.toBeShown()
+    expect(r.selectedMember).toBe(MAGE)
+    expect(button(r, "whisper"):IsEnabled()).toBe(true)
+    expect(button(r, "whisper").reason).toBeNil()
+    expect(button(r, "promote"):IsEnabled()).toBe(false)
+    expect(button(r, "promote").reason).toBe("Only officers can.")
+    expect(button(r, "demote").reason).toBeNil()
+    expect(r.guildInvite:IsEnabled()).toBe(true)
+    for _, key in ipairs({ "whisper", "invite", "remove" }) do mock.click(button(r, key)) end
+    mock.click(r.guildInvite)
+    expect(onAction).toHaveBeenCalledWith("whisper", MAGE)
+    expect(onAction).toHaveBeenCalledWith("invite", MAGE)
+    expect(onAction).toHaveBeenCalledWith("remove", MAGE)
+    -- (cast: the matcher asks for the optional member the call leaves out;
+    -- wowlua finding T1)
+    expect(onAction :: any).toHaveBeenCalledWith("guildInvite")
+    -- no listener: nothing
+    r.onAction = nil
+    mock.click(r.guildInvite)
+    mock.click(button(r, "whisper"))
+    r.selectedMember = nil
+    expect(onAction).toHaveBeenCalledTimes(4)
+    -- the guild invite off, with a reason
+    r:SetData({ members = {}, actions = { guildInvite = { enabled = false, why = "Your rank can't invite." } } })
+    expect(r.guildInvite:IsEnabled()).toBe(false)
+    expect(r.guildInvite.reason).toBe("Your rank can't invite.")
+    expectNoErrors()
+end
+
+@test("a disabled foot button explains itself; Remove stays ember")
+local function reasons()
+    local r = roster()
+    r:SetData({ members = { MAGE }, selected = "m1", actions = { remove = { enabled = false, why = "Not below you." } } })
+    local remove = button(r, "remove")
+    expect(tokenOf(remove.border.top)).toBe("ember")
+    expect(tokenOf(remove.label)).toBe("ember-text")
+    local tip = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.hover(remove)
+    expect(tip).toHaveBeenCalledWith(remove, { title = "Remove", description = "Not below you." })
+    mock.hover(nil)
+    expect(tokenOf(remove.border.top)).toBe("ember")
+    -- enabled: no reason tooltip
+    r:SetData({ members = { MAGE }, selected = "m1", actions = { whisper = ON } })
+    mock.hover(button(r, "whisper"))
+    mock.hover(nil)
+    expect(tip).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("a click selects, a right click asks for the menu, a double click whispers")
+local function clicks()
+    local r = roster()
+    local onSelect = mock.spy(function(_k: any) end)
+    local onMenu = mock.spy(function(_m: GuildMember, _o: RosterRow) end)
+    local onAction = mock.spy(function(_n: string, _m: GuildMember?) end)
+    r.onSelect, r.onMenu, r.onAction = onSelect, onMenu, onAction
+    r:SetData({ members = { MAGE, WARRIOR } })
+    mock.click(r.rows[1])
+    expect(onSelect).toHaveBeenCalledWith("m1")
+    expect(onMenu).toHaveBeenCalledTimes(0)
+    mock.click(r.rows[2], "RightButton")
+    expect(onSelect).toHaveBeenCalledWith("m2")
+    expect(onMenu).toHaveBeenCalledWith(WARRIOR, r.rows[2])
+    mock.script(r.rows[1], "OnDoubleClick", "LeftButton")
+    expect(onAction).toHaveBeenCalledWith("whisper", MAGE)
+    -- offline: no whisper
+    mock.script(r.rows[2], "OnDoubleClick", "LeftButton")
+    expect(onAction).toHaveBeenCalledTimes(1)
+    -- without listeners, or a row without a member
+    r.onSelect, r.onMenu, r.onAction = nil, nil, nil
+    mock.click(r.rows[1], "RightButton")
+    mock.script(r.rows[1], "OnDoubleClick", "LeftButton")
+    r.rows[1].member = nil
+    mock.click(r.rows[1])
+    mock.script(r.rows[1], "OnDoubleClick", "LeftButton")
+    expect(onSelect).toHaveBeenCalledTimes(2)
+    expectNoErrors()
+end
+
+@test("hovering a row: the hover layer's callbacks, the officer note")
+local function rowHover()
+    local r = roster()
+    local enter = mock.spy(function(_r: RosterRow, _m: GuildMember) end)
+    local leave = mock.spy(function(_r: RosterRow) end)
+    r.onRowEnter, r.onRowLeave = enter, leave
+    r:SetData({ members = { MAGE, WARRIOR, { key = "o", name = "Player", officerNote = "x" } } })
+    mock.hover(r.rows[1])
+    expect(r.rows[1].hover).toBeShown()
+    expect(enter).toHaveBeenCalledWith(r.rows[1], MAGE)
+    expect(GameTooltip).toHaveLines({ "Tamsin Ashford", "Note: alt", "Officer note: trusted" })
+    mock.hover(r.rows[2])
+    expect(leave).toHaveBeenCalledWith(r.rows[1])
+    expect(r.rows[1].hover).never.toBeShown()
+    expect(GameTooltip:IsShown()).toBe(false)
+    -- an officer note without a note
+    mock.hover(r.rows[3])
+    expect(GameTooltip).toHaveLines({ "Player", "Officer note: x" })
+    mock.hover(nil)
+    r.onRowEnter, r.onRowLeave = nil, nil
+    r.rows[1].member = nil
+    mock.hover(r.rows[1])
+    mock.hover(nil)
+    expect(enter).toHaveBeenCalledTimes(3)
+    expectNoErrors()
+end
+
+@test("search and Show offline report")
+local function topBar()
+    local r = roster()
+    local onSearch = mock.spy(function(_t: string) end)
+    local onOffline = mock.spy(function(_o: boolean) end)
+    r.onSearch, r.onShowOffline = onSearch, onOffline
+    mock.typeText(r.search.edit, "ta")
+    expect(onSearch).toHaveBeenCalledWith("ta")
+    r.search.edit:ClearFocus()
+    mock.click(r.offline)
+    expect(onOffline).toHaveBeenCalledWith(true)
+    r.onSearch, r.onShowOffline = nil, nil
+    mock.typeText(r.search.edit, "x")
+    r.search.edit:ClearFocus()
+    mock.click(r.offline)
+    expect(onOffline).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("a new list size draws the roster again, once there is data")
+local function rosterResize()
+    local r = roster()
+    mock.script(r.list, "OnSizeChanged", 100, 100)
+    expect(#r.rows).toBe(0)
+    r:SetData({ members = { MAGE } })
+    local before = r.rows[1].cells[4]:GetWidth()
+    ;(r:GetParent() :: Frame):SetWidth(1400)
+    -- (the VM runs OnSizeChanged only for an explicit SetSize: see
+    -- Docs/test-notes/ui-primitives.md)
+    mock.script(r.list, "OnSizeChanged", r.list:GetWidth(), r.list:GetHeight())
+    expect(r.rows[1].cells[4]:GetWidth() > before).toBe(true)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Info
+--------------------------------------------------------------------------------
+
+@test("info: the guild information, Edit when allowed, the ranks")
+local function info()
+    local i = guildInfo(host(800, 400))
+    i:SetAllPoints()
+    local onEdit = mock.spy(function(_k: string) end)
+    i.onEdit = onEdit
+    i:SetData({ info = "We raid on Fridays.", canEditInfo = true, ranks = { { name = "Guild Master", count = 1 }, { name = "Member", count = 24 } } })
+    expect(i.info.head).toHaveText("Guild information")
+    expect(i.info.text).toHaveText("We raid on Fridays.")
+    expect(i.info.edit).toBeShown()
+    expect(i.info:GetWidth()).toBe(math.floor((800 - 20) * 0.62))
+    expect(i.ranks.head).toHaveText("Ranks")
+    expect(i.rankRows[1].name).toHaveText("Guild Master")
+    expect(i.rankRows[2].count).toHaveText("24")
+    mock.click(i.info.edit)
+    expect(onEdit).toHaveBeenCalledWith("info")
+    -- nothing yet: a faint line; no Edit; ranks without names or counts
+    i:SetData({ ranks = { {} } })
+    expect(i.info.text).toHaveText("|cff" .. T.color["ink-faint"].hex .. "No guild information yet.|r")
+    expect(i.info.edit).never.toBeShown()
+    expect(i.rankRows[1].name).toHaveText("")
+    expect(i.rankRows[1].count).toHaveText("0")
+    expect(i.rankRows[2]).never.toBeShown()
+    i:SetData({ info = "" })
+    expect(i.info.text).toHaveText("|cff" .. T.color["ink-faint"].hex .. "No guild information yet.|r")
+    expect(i.rankRows[1]).never.toBeShown()
+    i.onEdit = nil
+    i.info.edit:Show()
+    mock.click(i.info.edit)
+    expect(onEdit).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("info: laid out again on a new size; nothing without a width")
+local function infoLayout()
+    local p = host(800, 400)
+    local i = guildInfo(p)
+    i:SetData({ info = "x" })
+    expect(i.info:GetNumPoints()).toBe(0)
+    i:SetAllPoints()
+    p:SetWidth(1000)
+    mock.script(i, "OnSizeChanged", 1000, 400)
+    expect(i.info:GetWidth()).toBe(math.floor((1000 - 20) * 0.62))
+    expect(i.ranks).toBeAnchoredTo(i, "TOPLEFT", "TOPLEFT")
+    -- without data the size changes nothing
+    local j = guildInfo(p)
+    j:SetAllPoints()
+    mock.script(j, "OnSizeChanged", 1000, 400)
+    expect(j.info:GetNumPoints()).toBe(0)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Log
+--------------------------------------------------------------------------------
+
+@test("log: a line each, newest first as given; empty says so")
+local function log()
+    local l = guildLog(host(600, 300))
+    l:SetAllPoints()
+    mock.advanceFrames(1)
+    l:SetData({ lines = { { text = "Tamsin Ashford invited Player.", when = "2h" }, {} } })
+    expect(l.rows[1].text).toHaveText("Tamsin Ashford invited Player.")
+    expect(l.rows[1].when).toHaveText("2h")
+    expect(l.rows[2].text).toHaveText("")
+    expect(l.rows[2].when).toHaveText("")
+    expect(l.empty).never.toBeShown()
+    local rowH = T.type.body.lineHeight + 6
+    expect(l.list.child:GetHeight()).toBe(2 * rowH)
+    l:SetData({ lines = { { text = "one" } } })
+    expect(l.rows[2]).never.toBeShown()
+    l:SetData({})
+    expect(l.rows[1]).never.toBeShown()
+    expect(l.empty).toBeShown()
+    expect(l.empty).toHaveText("Nothing has happened in the guild yet.")
+    expect(l.list.child:GetHeight()).toBe(1)
+    expectNoErrors()
+end
+
+@test("log: a new list size draws it again, once there is data")
+local function logResize()
+    local l = guildLog(host(600, 300))
+    l:SetAllPoints()
+    mock.script(l.list, "OnSizeChanged", 100, 100)
+    expect(#l.rows).toBe(0)
+    l:SetData({ lines = { { text = "a" } } })
+    l.list.child:SetWidth(5)
+    mock.script(l.list, "OnSizeChanged", l.list:GetWidth(), l.list:GetHeight())
+    expect(l.list.child:GetWidth()).toBe(math.max(1, l.list:GetWidth()))
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The message of the day
+--------------------------------------------------------------------------------
+
+@test("motd: no message, no banner")
+local function motdNone()
+    local b = guildMotdBanner(host(700, 100))
+    expect(b).never.toBeShown()
+    b:SetData(nil)
+    expect(b).never.toBeShown()
+    expect(b:Height()).toBe(0)
+    b:SetData({ text = "" })
+    expect(b).never.toBeShown()
+    expect(b.has).toBe(false)
+    b:Layout()
+    expectNoErrors()
+end
+
+@test("motd: the message, Edit when allowed, as tall as its text")
+local function motd()
+    local p = host(700, 100)
+    local b = guildMotdBanner(p)
+    b:SetPoint("TOPLEFT")
+    b:SetPoint("TOPRIGHT")
+    local onEdit = mock.spy()
+    b.onEdit = onEdit
+    b:SetData({ text = "Raid at eight.", canEdit = true })
+    expect(b).toBeShown()
+    expect(b.head).toHaveText("Message of the day")
+    expect(b.message).toHaveText("Raid at eight.")
+    expect(b.edit).toBeShown()
+    local th = math.max(b.message:GetStringHeight(), b.head:GetStringHeight(), 14)
+    expect(b:GetHeight()).toBe(math.ceil(2 * 8 + th))
+    expect(b:Height()).toBe(b:GetHeight())
+    local withEdit = b.message:GetWidth()
+    mock.click(b.edit)
+    expect(onEdit).toHaveBeenCalledTimes(1)
+    b:SetData({ text = "Raid at eight." })
+    expect(b.edit).never.toBeShown()
+    expect(b.message:GetWidth() > withEdit).toBe(true)
+    b.onEdit = nil
+    b.edit:Show()
+    mock.click(b.edit)
+    expect(onEdit).toHaveBeenCalledTimes(1)
+    -- too narrow to lay out: left as it was
+    local narrow = guildMotdBanner(host(50, 100))
+    narrow:SetAllPoints()
+    local h0 = narrow:GetHeight()
+    narrow:SetData({ text = "x" })
+    -- (its width still its text's: Layout set none)
+    expect(narrow.message:GetWidth()).toBe(narrow.message:GetStringWidth())
+    expect(narrow:GetHeight()).toBe(h0)
+    expectNoErrors()
+end
+
+@test("motd: cut short, the whole message on hover")
+local function motdTooltip()
+    local b = guildMotdBanner(host(700, 100))
+    b:SetAllPoints()
+    b:SetData({ text = "A very long message." })
+    mock.hover(b)
+    expect(GameTooltip:IsShown()).toBe(false)
+    mock.hover(nil)
+    -- (a font string: stub takes it as the table it is)
+    mock.stub(b.message :: any, "IsTruncated", function(): boolean return true end)
+    mock.hover(b)
+    expect(GameTooltip).toHaveLines({ "Message of the day", "A very long message." })
+    mock.hover(nil)
+    expect(GameTooltip:IsShown()).toBe(false)
+    expectNoErrors()
+end
+
+@test("motd: laid out again on a new size")
+local function motdResize()
+    local p = host(700, 100)
+    local b = guildMotdBanner(p)
+    b:SetAllPoints()
+    b:SetData({ text = "x" })
+    local w = b.message:GetWidth()
+    p:SetWidth(900)
+    mock.script(b, "OnSizeChanged", 900, 100)
+    expect(b.message:GetWidth()).toBe(w + 200)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- A theme change
+--------------------------------------------------------------------------------
+
+@test("a theme change draws the live pages again")
+local function theme()
+    local i = guildInfo(host(800, 400))
+    i:SetAllPoints()
+    i:SetData({ info = "x" })
+    local idle = guildInfo(host(800, 400))
+    local l = guildLog(host(600, 300))
+    l:SetAllPoints()
+    l:SetData({ lines = { { text = "a" } } })
+    local quiet = guildLog(host(600, 300))
+    local b = guildMotdBanner(host(700, 100))
+    b:SetAllPoints()
+    b:SetData({ text = "x" })
+    i.info.text:SetText("changed")
+    l.rows[1].text:SetText("changed")
+    i.info.text.value, l.rows[1].text.value = nil, nil
+    themeChanged()
+    expect(i.info.text).toHaveText("x")
+    expect(l.rows[1].text).toHaveText("a")
+    expect(idle.data).toBeNil()
+    expect(quiet.data).toBeNil()
+    expectNoErrors()
+end

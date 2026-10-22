@@ -1,0 +1,93 @@
+-- Core/Blizzard.wowlua
+-- Standing Blizzard's own frames down when a SuuUI module replaces them.
+--
+--   suppress(frame, { children = { "healthbar", "HealthBarsContainer.healthBar" }, keepParent = false })
+--
+-- The frame (and the named children) stop their events, hide, and move under
+-- a hidden parent. Never with an OnShow -> Hide hook: Hide() on a protected
+-- frame is refused in combat, while a hidden parent keeps it out of sight
+-- whatever Blizzard's code does. The reparent waits for the end of combat for
+-- protected frames, and never runs while the game's Edit Mode is open: Edit
+-- Mode's layout pass reparents the frames it manages, and reparenting inside
+-- it taints code that reads secret values. If the game reparents the frame
+-- again, it goes back under the hidden parent on the next frame.
+-- keepParent only stops events and hides, for frames whose reparenting itself
+-- would taint. noHide skips the Hide: for frames Edit Mode shows and hides
+-- through a protected setter (the action bars), where an addon's Hide taints
+-- the next combat transition; the hidden parent keeps them out of sight.
+-- Only a reload brings a suppressed frame back.
+
+import after from "wowlua:timer"
+import hook from "wowlua:hooks"
+import * as combat from "./Combat"
+
+export type SuppressOptions = { children?: string[], keepParent?: boolean, noHide?: boolean }
+
+local hiddenParent = CreateFrame("Frame", "SuuUIHiddenParent", UIParent)
+hiddenParent:Hide()
+
+local suppressed: { [any]: boolean } = {}
+local hooked: { [any]: boolean } = {}
+local pending: { [any]: boolean } = {}
+
+local function resolve(frame: any, path: string): any
+    local v = frame
+    for part in path:gmatch("[^%.]+") do
+        if type(v) ~= "table" then return nil end
+        v = v[part]
+    end
+    return v
+end
+
+local function reparent(frame: any)
+    pending[frame] = nil
+    if frame:GetParent() == hiddenParent then return end
+    if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
+        pending[frame] = true
+        after(0.25, function() reparent(frame) end)
+    elseif InCombatLockdown() and frame:IsProtected() then
+        pending[frame] = true
+        combat.run("blizzard:" .. (frame:GetName() or tostring(frame)), function() reparent(frame) end, "Hide Blizzard frame")
+    else
+        frame:SetParent(hiddenParent)
+    end
+end
+
+export function suppress(target: any, opts: SuppressOptions?)
+    local frame = target
+    if type(frame) == "string" then frame = _G[frame] end
+    if not frame or suppressed[frame] then return end
+    suppressed[frame] = true
+    local o: SuppressOptions = opts or {}
+
+    frame:UnregisterAllEvents()
+    for _, path in ipairs(o.children or {}) do
+        local child = resolve(frame, path)
+        if type(child) == "table" and child.UnregisterAllEvents then child:UnregisterAllEvents() end
+    end
+    if not o.noHide and not (InCombatLockdown() and frame:IsProtected()) then frame:Hide() end
+    if o.keepParent then return end
+
+    reparent(frame)
+    if not hooked[frame] then
+        hooked[frame] = true
+        hook(frame, "SetParent", function(self: any, parent: any)
+            if parent ~= hiddenParent and not pending[self] then
+                pending[self] = true
+                after(0, function() reparent(self) end)
+            end
+        end)
+    end
+end
+
+-- Suppressed frames come back only with a reload; this says whether one is.
+export function isSuppressed(target: any): boolean
+    local frame = target
+    if type(frame) == "string" then frame = _G[frame] end
+    return frame ~= nil and suppressed[frame] == true
+end
+
+-- Kept for the public API: always false for a suppressed frame (reload to restore).
+export function restore(target: any): boolean
+    return not isSuppressed(target)
+end

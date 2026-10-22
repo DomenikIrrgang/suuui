@@ -1,0 +1,43 @@
+-- Core/Combat.wowlua
+-- The combat queue: work that touches protected frames runs now, or waits for
+-- the end of combat if the client is in lockdown. Work is keyed, so a later
+-- request for the same thing replaces the one waiting (moving a bar twice in a
+-- fight moves it once, to the last place).
+--
+-- wowlua:combat's queue does the waiting (first queued, first run; work left
+-- when combat starts again mid-flush waits for the next end); the keys are
+-- SuuUI's: the first request for a key takes the place in the queue, the
+-- latest one's function runs.
+
+import inCombat, defer from "wowlua:combat"
+import * as fault from "./Fault"
+
+type Job = { fn: () -> (), source: string }
+
+local waiting: { [any]: Job } = {}
+local pending = 0
+
+-- Runs fn now or after combat. `source` names it in error reports.
+export function run(key: any, fn: () -> (), source: string?)
+    local from = source or tostring(key)
+    if not inCombat() then
+        fault.call(from, fn)
+        return
+    end
+    if waiting[key] then
+        waiting[key] = { fn = fn, source = from }
+        return
+    end
+    waiting[key] = { fn = fn, source = from }
+    pending += 1
+    defer(function()
+        local job = waiting[key]
+        waiting[key] = nil
+        pending -= 1
+        if job then fault.call(job.source, job.fn) end
+    end)
+end
+
+export function pendingCount(): number
+    return pending
+end

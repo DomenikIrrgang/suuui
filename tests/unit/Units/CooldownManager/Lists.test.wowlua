@@ -1,0 +1,784 @@
+-- Units/CooldownManager/Lists: the Cooldown Manager's lists as data, on
+-- made-up presets and lists.
+
+import test, expect, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as Lists from "/Units/CooldownManager/Lists"
+
+type Path = Lists.Path
+
+local function single(name: string, ids: number[], extra: { [string]: any }?): { [string]: any }
+    local e: { [string]: any } = { name = name, ids = ids }
+    for k, v in pairs(extra or {}) do e[k] = v end
+    return e
+end
+
+local function slot(name: string, members: { [string]: any }[], extra: { [string]: any }?): { [string]: any }
+    local e: { [string]: any } = { group = true, name = name, members = members }
+    for k, v in pairs(extra or {}) do e[k] = v end
+    Lists.regroup(e)
+    return e
+end
+
+-- A preset of every kind of entry: single entries, a shared slot, a
+-- collection with a shared slot and a weapon enchant inside, an enchant.
+local function preset(): { [string]: any }
+    return {
+        id = "arms", name = "Arms (Two-hander)", tree = 1,
+        lists = {
+            essential = { single("Mortal Strike", { 12294, 21551 }), single("Overpower", { 7384 }) },
+            utility = {
+                slot("Interrupts", { single("Pummel", { 6552 }), single("Shield Bash", { 72 }) }),
+            },
+            buffs = {
+                single("Battle Shout", { 6673 }, { missing = "warn" }),
+                { collection = true, name = "Shouts", entries = {
+                    single("Commanding Shout", { 469 }),
+                    slot("Stances", { single("Battle Stance", { 2457 }) }),
+                    { enchant = "off", name = "Off-hand enchant", ids = {} },
+                } },
+                { enchant = "main", name = "Main-hand enchant", ids = {} },
+            },
+        },
+    }
+end
+
+--------------------------------------------------------------------------------
+-- Copies and presets
+--------------------------------------------------------------------------------
+
+@test("copy: a deep copy, other values as they are")
+local function copyDeep()
+    local t = { a = { b = { 1, 2 } }, c = "x" }
+    local c = Lists.copy(t)
+    expect(c).toEqual(t)
+    expect(c == t).toBe(false)
+    expect(c.a == t.a).toBe(false)
+    expect(c.a.b == t.a.b).toBe(false)
+    expect(Lists.copy(5)).toBe(5)
+    expect(Lists.copy(nil)).toBeNil()
+    expect(Lists.copy("s")).toBe("s")
+end
+
+@test("findPreset and specPreset")
+local function presetLookup()
+    local a = { id = "a", tree = 1 }
+    local u = { id = "u" }
+    local b = { id = "b", tree = 2 }
+    local all = { u, a, b }
+    expect(Lists.findPreset(all, "b")).toBe(b)
+    expect(Lists.findPreset(all, "zz")).toBeNil()
+    expect(Lists.findPreset({}, "a")).toBeNil()
+    expect(Lists.specPreset(all, 2)).toBe(b)
+    expect(Lists.specPreset(all, 0)).toBe(u)  -- no tree: Unspecced's
+    expect(Lists.specPreset(all, 3)).toBeNil()
+    expect(Lists.specPreset(all, nil)).toBeNil()
+end
+
+@test("specName")
+@cases({ { 0, "Unspecced" }, { 1, "Arms" }, { 2, "Fury" }, { 3, "Tree 3" } })
+local function specName(spec: number, name: string)
+    local all = { { id = "arms", name = "Arms (Two-hander)", tree = 1 }, { id = "fury", name = "Fury", tree = 2 } }
+    expect(Lists.specName(all, spec)).toBe(name)
+end
+
+@test("copyLists: every list, uids on shared slots, collections and enchants")
+local function copyLists()
+    local p = preset()
+    local out = Lists.copyLists(p)
+    expect(#out.essential).toBe(2)
+    expect(out.essential[1].uid).toBeNil()
+    expect(out.utility[1].uid).toBe("armsutility1")
+    expect(out.buffs[1].uid).toBeNil()
+    expect(out.buffs[2].uid).toBe("armsbuffs2")
+    expect(out.buffs[2].entries[1].uid).toBeNil()
+    expect(out.buffs[2].entries[2].uid).toBe("armsbuffs2.2")
+    expect(out.buffs[2].entries[3].uid).toBe("armsbuffs2.3")
+    expect(out.buffs[3].uid).toBe("armsbuffs3")
+    -- lists the preset doesn't have start empty
+    expect(out.debuffs).toEqual({})
+    expect(out.procs).toEqual({})
+    -- a copy: the preset is untouched
+    out.essential[1].name = "changed"
+    expect(p.lists.essential[1].name).toBe("Mortal Strike")
+    expect(p.lists.utility[1].uid).toBeNil()
+end
+
+@test("copyLists: a uid the preset has stays")
+local function copyListsKeepsUid()
+    local p = { id = "x", lists = { buffs = { { collection = true, uid = "C", entries = { { group = true, uid = "G", members = {} }, { group = true, members = {} } } } } } }
+    local out = Lists.copyLists(p)
+    expect(out.buffs[1].uid).toBe("C")
+    expect(out.buffs[1].entries[1].uid).toBe("G")
+    expect(out.buffs[1].entries[2].uid).toBe("C.2")
+end
+
+@test("copyLists: a collection without entries")
+local function copyListsEmptyCollection()
+    local out = Lists.copyLists({ id = "x", lists = { buffs = { { collection = true } } } })
+    expect(out.buffs[1].uid).toBe("xbuffs1")
+end
+
+--------------------------------------------------------------------------------
+-- Spec
+--------------------------------------------------------------------------------
+
+@test("pointsByTree: no nodes")
+local function noNodes()
+    local pts, total = Lists.pointsByTree({})
+    expect(pts).toEqual({ 0, 0, 0 })
+    expect(total).toBe(0)
+end
+
+@test("pointsByTree: thirds of the span, left to right")
+local function thirds()
+    local pts, total = Lists.pointsByTree({
+        { x = 0, ranks = 2 }, { x = 290, ranks = 1 },   -- tree 1
+        { x = 300, ranks = 3 }, { x = 599, ranks = 0 },   -- tree 2
+        { x = 600, ranks = 4 }, { x = 900, ranks = 5 },   -- tree 3
+    })
+    expect(pts).toEqual({ 3, 3, 9 })
+    expect(total).toBe(15)
+end
+
+@test("pointsByTree: a secret or missing rank counts nothing")
+local function secretRanks()
+    local pts, total = Lists.pointsByTree({ { x = 0, ranks = mock.secret(5) }, { x = 450, ranks = nil }, { x = 900, ranks = 2 } })
+    expect(pts).toEqual({ 0, 0, 2 })
+    expect(total).toBe(2)
+end
+
+@test("pointsByTree: every node in one column goes to the last tree")
+local function oneColumn()
+    local pts, total = Lists.pointsByTree({ { x = 10, ranks = 1 }, { x = 10, ranks = 2 } })
+    expect(pts).toEqual({ 0, 0, 3 })
+    expect(total).toBe(3)
+end
+
+@test("bestTree")
+@cases({ { { 0, 0, 0 }, 0, 0 }, { { 5, 0, 0 }, 5, 1 }, { { 1, 7, 2 }, 10, 2 }, { { 0, 1, 9 }, 10, 3 }, { { 4, 4, 1 }, 9, 1 }, { { 1, 4, 4 }, 9, 2 } })
+local function bestTree(pts: number[], total: number, best: number)
+    expect(Lists.bestTree(pts, total)).toBe(best)
+end
+
+--------------------------------------------------------------------------------
+-- Paths
+--------------------------------------------------------------------------------
+
+local function sample(): { [string]: any }
+    return Lists.copyLists(preset())
+end
+
+@test("locate: a list's entry, a collection's, a shared slot's member")
+local function locatePaths()
+    local l = sample()
+    local t, i, s = Lists.locate(l, { key = "essential", i = 2 })
+    expect(t).toBe(l.essential)
+    expect(i).toBe(2)
+    expect(s).toBeNil()
+    t, i, s = Lists.locate(l, { key = "buffs", i = 2, j = 1 })
+    expect(t).toBe(l.buffs[2].entries)
+    expect(i).toBe(1)
+    expect(s).toBeNil()
+    t, i, s = Lists.locate(l, { key = "utility", i = 1, m = 2 })
+    expect(t).toBe(l.utility[1].members)
+    expect(i).toBe(2)
+    expect(s).toBe(l.utility[1])
+    t, i, s = Lists.locate(l, { key = "buffs", i = 2, j = 2, m = 1 })
+    expect(t).toBe(l.buffs[2].entries[2].members)
+    expect(s).toBe(l.buffs[2].entries[2])
+end
+
+@test("locate: nothing there")
+local function locateNothing()
+    local l = sample()
+    -- a member of something that isn't a shared slot
+    local t, i, s = Lists.locate(l, { key = "essential", i = 1, m = 1 })
+    expect(t).toBeNil()
+    expect(i).toBeNil()
+    expect(s).toBeNil()
+    -- inside an entry that isn't a collection
+    t = Lists.locate(l, { key = "essential", i = 1, j = 1 })
+    expect(t).toBeNil()
+    -- past the end of the list
+    t = Lists.locate(l, { key = "essential", i = 9, j = 1 })
+    expect(t).toBeNil()
+    -- a list that isn't there
+    t = Lists.locate({}, { key = "essential", i = 1 })
+    expect(t).toBeNil()
+end
+
+@test("entryAt and samePath")
+local function entryAtSamePath()
+    local l = sample()
+    expect(Lists.entryAt(l, { key = "essential", i = 1 }).name).toBe("Mortal Strike")
+    expect(Lists.entryAt(l, { key = "utility", i = 1, m = 2 }).name).toBe("Shield Bash")
+    expect(Lists.entryAt(l, { key = "essential", i = 1, m = 1 })).toBeFalsy()
+    expect(Lists.entryAt(l, { key = "procs", i = 1 })).toBeNil()
+    expect(Lists.samePath({ key = "a", i = 1 }, { key = "a", i = 1 })).toBe(true)
+    expect(Lists.samePath({ key = "a", i = 1, j = 2, m = 3 }, { key = "a", i = 1, j = 2, m = 3 })).toBe(true)
+    expect(Lists.samePath({ key = "a", i = 1 }, { key = "b", i = 1 })).toBe(false)
+    expect(Lists.samePath({ key = "a", i = 1 }, { key = "a", i = 2 })).toBe(false)
+    expect(Lists.samePath({ key = "a", i = 1, j = 1 }, { key = "a", i = 1 })).toBe(false)
+    expect(Lists.samePath({ key = "a", i = 1, m = 1 }, { key = "a", i = 1, m = 2 })).toBe(false)
+end
+
+@test("walk: every entry with its path, collections and members included")
+local function walkAll()
+    local l = sample()
+    local seen: string[] = {}
+    Lists.walk(l.buffs, "buffs", function(e: any, p: Path)
+        seen[#seen + 1] = ("%s %s/%d/%s/%s"):format(e.name, p.key, p.i, tostring(p.j), tostring(p.m))
+    end)
+    expect(seen).toEqual({
+        "Battle Shout buffs/1/nil/nil",
+        "Shouts buffs/2/nil/nil",
+        "Commanding Shout buffs/2/1/nil",
+        "Stances buffs/2/2/nil",
+        "Battle Stance buffs/2/2/1",
+        "Off-hand enchant buffs/2/3/nil",
+        "Main-hand enchant buffs/3/nil/nil",
+    })
+    local n = 0
+    Lists.walk(nil, "x", function() n = n + 1 end)
+    Lists.walk({ { group = true, name = "empty" }, { collection = true, name = "c" } }, "x", function() n = n + 1 end)
+    expect(n).toBe(2)
+end
+
+--------------------------------------------------------------------------------
+-- Shared slots
+--------------------------------------------------------------------------------
+
+@test("regroup: every member's IDs once, sorted, the first member's art")
+local function regroupIds()
+    local e: { [string]: any } = { group = true, members = { { ids = { 30, 10 } }, { ids = { 20, 10 } } } }
+    Lists.regroup(e)
+    expect(e.ids).toEqual({ 10, 20, 30 })
+    expect(e.icon).toBe(30)
+end
+
+@test("regroup: an icon still among the IDs, or a member's art, stays")
+local function regroupKeepsIcon()
+    local e: { [string]: any } = { group = true, icon = 20, fixedIcon = true, members = { { ids = { 10 } }, { ids = { 20 } } } }
+    Lists.regroup(e)
+    expect(e.icon).toBe(20)
+    expect(e.fixedIcon).toBe(true)
+    local art: { [string]: any } = { group = true, icon = 99, fixedIcon = true, members = { { ids = { 10 }, icon = 99 } } }
+    Lists.regroup(art)
+    expect(art.icon).toBe(99)
+    expect(art.fixedIcon).toBe(true)
+end
+
+@test("regroup: an icon whose member left isn't fixed any more")
+local function regroupDropsIcon()
+    local e: { [string]: any } = { group = true, icon = 20, fixedIcon = true, members = { { ids = { 10 } } } }
+    Lists.regroup(e)
+    expect(e.fixedIcon).toBeNil()
+    expect(e.icon).toBe(10)
+    local empty: { [string]: any } = { group = true, icon = 5, fixedIcon = true, members = {} }
+    Lists.regroup(empty)
+    expect(empty.ids).toEqual({})
+    expect(empty.icon).toBeNil()
+    local none: { [string]: any } = { group = true }
+    Lists.regroup(none)
+    expect(none.ids).toEqual({})
+end
+
+@test("entrySource")
+local function entrySource()
+    expect(Lists.entrySource({ source = "others" }, "buffs")).toBe("others")
+    expect(Lists.entrySource({ group = true }, "buffs")).toBe("mine")
+    expect(Lists.entrySource({ mine = true }, "buffs")).toBe("mine")
+    expect(Lists.entrySource({}, "buffs")).toBe("any")
+    expect(Lists.entrySource({}, "debuffs")).toBe("mine")
+    expect(Lists.entrySource({}, "procs")).toBe("mine")
+    expect(Lists.entrySource({}, "essential")).toBe("mine")
+end
+
+@test("changed: whose, behaviour and the entry's own keys")
+local function changedKeys()
+    local base = single("Renew", { 139 })
+    expect(Lists.changed(single("Renew", { 139 }), base, "buffs")).toBe(false)
+    expect(Lists.changed(single("Renew", { 139 }, { source = "mine" }), base, "buffs")).toBe(true)
+    expect(Lists.changed(single("Renew", { 139 }, { glow = true }), base, "buffs")).toBe(true)
+    expect(Lists.changed(single("Renew", { 139 }, { hidden = true }), base, "buffs")).toBe(true)
+    expect(Lists.changed(single("Renew", { 139, 6074 }), base, "buffs")).toBe(true)
+    -- the same source written out isn't a change
+    expect(Lists.changed(single("Renew", { 139 }, { source = "any" }), base, "buffs")).toBe(false)
+    -- a key the panel doesn't set isn't either
+    expect(Lists.changed(single("Renew", { 139 }, { uid = "x" }), base, "buffs")).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Changes from the preset
+--------------------------------------------------------------------------------
+
+@test("countChanges: a fresh copy has none")
+local function noChanges()
+    local p = preset()
+    expect(Lists.countChanges(p, Lists.copyLists(p))).toBe(0)
+end
+
+@test("countChanges: added, removed and changed entries")
+local function changesCounted()
+    local p = preset()
+    local l = Lists.copyLists(p)
+    table.insert(l.essential, single("Execute", { 5308 }))   -- added
+    table.remove(l.essential, 2)                             -- Overpower removed
+    l.essential[1].glow = true                               -- changed
+    expect(Lists.countChanges(p, l)).toBe(3)
+end
+
+@test("countChanges: a collection counts for itself, and what moves in or out")
+local function collectionChanges()
+    local p = preset()
+    local l = Lists.copyLists(p)
+    l.buffs[2].name = "Renamed"                              -- the collection: 1
+    expect(Lists.countChanges(p, l)).toBe(1)
+    -- an entry moved out of it: 1 more
+    local cs = table.remove(l.buffs[2].entries, 1)
+    table.insert(l.buffs, cs)
+    expect(Lists.countChanges(p, l)).toBe(2)
+end
+
+@test("countChanges: a collection matched by name when its uid differs")
+local function collectionByName()
+    local p = preset()
+    local l = Lists.copyLists(p)
+    l.buffs[2].uid = "other"
+    -- matched by name; its entries count against the matched uid
+    expect(Lists.countChanges(p, l)).toBe(0)
+end
+
+@test("countChanges: a collection removed, and one added")
+local function collectionRemovedAdded()
+    local p = preset()
+    local l = Lists.copyLists(p)
+    local col = table.remove(l.buffs, 2)
+    -- the collection and its three entries are gone
+    expect(Lists.countChanges(p, l)).toBe(4)
+    col.uid, col.name = "new", "New"
+    table.insert(l.buffs, col)
+    -- a new collection, with its entries under another parent
+    expect(Lists.countChanges(p, l)).toBe(5)
+end
+
+@test("countChanges: a preset collection that has a uid of its own")
+local function presetCollectionUid()
+    local p = preset()
+    p.lists.buffs[2].uid = "SHOUTS"
+    local l = Lists.copyLists(p)
+    expect(l.buffs[2].uid).toBe("SHOUTS")
+    expect(Lists.countChanges(p, l)).toBe(0)
+end
+
+@test("countChanges: two collections of the same name pair off")
+local function twoCollections()
+    local p = { id = "p", lists = { buffs = {
+        { collection = true, name = "C", entries = {} },
+        { collection = true, name = "C", entries = {} },
+    } } }
+    local l = Lists.copyLists(p)
+    l.buffs[1].uid, l.buffs[2].uid = "a", "b"
+    expect(Lists.countChanges(p, l)).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- Members and singles
+--------------------------------------------------------------------------------
+
+@test("asMember: a cooldown slot's member is its name and IDs")
+local function asMemberCooldown()
+    local e = single("Pummel", { 6552 }, { glow = true, when = { conditions = {} } })
+    local m = Lists.asMember(e, "utility", nil, { group = true }, "utility")
+    expect(m).toEqual({ name = "Pummel", ids = { 6552 } })
+    expect(m.ids == e.ids).toBe(false)
+end
+
+@test("asMember: an aura keeps whose where it differs from the slot's, and its condition")
+local function asMemberAura()
+    local when = { match = "all", conditions = { { type = "combat" } } }
+    -- a buff (anyone's) into a slot of yours
+    local m = Lists.asMember(single("Renew", { 139 }, { when = when }), "buffs", nil, { group = true }, "buffs")
+    expect(m.source).toBe("any")
+    expect(m.when).toEqual(when)
+    -- the same whose: not written
+    m = Lists.asMember(single("Renew", { 139 }, { source = "mine" }), "buffs", nil, { group = true }, "buffs")
+    expect(m.source).toBeNil()
+    -- from another slot: its own whose, else that slot's
+    m = Lists.asMember(single("Renew", { 139 }), "buffs", { group = true, source = "others" }, { group = true }, "buffs")
+    expect(m.source).toBe("others")
+    m = Lists.asMember(single("Renew", { 139 }, { source = "any" }), "buffs", { group = true }, { group = true }, "buffs")
+    expect(m.source).toBe("any")
+end
+
+@test("asSingle: a member leaving its slot")
+local function asSingle()
+    -- a cooldown: name and IDs
+    expect(Lists.asSingle(single("Pummel", { 6552 }), "utility", { group = true }, "essential")).toEqual({ name = "Pummel", ids = { 6552 } })
+    -- an aura: the slot's whose (yours), written down as buffs count anyone's
+    local e = Lists.asSingle(single("Renew", { 139 }, { when = { conditions = {} } }), "buffs", { group = true }, "buffs")
+    expect(e.source).toBe("mine")
+    expect(e.when).toEqual({ conditions = {} })
+    -- the list's own whose isn't written
+    e = Lists.asSingle(single("Renew", { 139 }, { source = "any" }), "buffs", { group = true }, "buffs")
+    expect(e.source).toBeNil()
+    e = Lists.asSingle(single("Renew", { 139 }), "buffs", { group = true }, "debuffs")
+    expect(e.source).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Moving
+--------------------------------------------------------------------------------
+
+local function names(t: any[]): string[]
+    local out: string[] = {}
+    for _, e in ipairs(t) do out[#out + 1] = e.name end
+    return out
+end
+
+@test("moveEntry: down and up within a list")
+local function moveWithin()
+    local l = { essential = { single("A", { 1 }), single("B", { 2 }), single("C", { 3 }) } }
+    Lists.moveEntry(l, { key = "essential", i = 1 }, { key = "essential", i = 3 })
+    expect(names(l.essential)).toEqual({ "B", "A", "C" })
+    Lists.moveEntry(l, { key = "essential", i = 3 }, { key = "essential", i = 1 })
+    expect(names(l.essential)).toEqual({ "C", "B", "A" })
+    -- past the end: last
+    Lists.moveEntry(l, { key = "essential", i = 1 }, { key = "essential", i = 99 })
+    expect(names(l.essential)).toEqual({ "B", "A", "C" })
+end
+
+@test("moveEntry: into another list, into a collection")
+local function moveAcross()
+    local l = sample()
+    Lists.moveEntry(l, { key = "essential", i = 1 }, { key = "utility", i = 1 })
+    expect(names(l.essential)).toEqual({ "Overpower" })
+    expect(names(l.utility)).toEqual({ "Mortal Strike", "Interrupts" })
+    Lists.moveEntry(l, { key = "buffs", i = 1 }, { key = "buffs", i = 2, j = math.huge })
+    expect(names(l.buffs[1].entries)).toEqual({ "Commanding Shout", "Stances", "Off-hand enchant", "Battle Shout" })
+end
+
+@test("moveEntry: into a shared slot makes a member, out of one a single entry")
+local function moveSlots()
+    local l = sample()
+    Lists.moveEntry(l, { key = "essential", i = 2 }, { key = "utility", i = 1, m = math.huge })
+    local s = l.utility[1]
+    expect(names(s.members)).toEqual({ "Pummel", "Shield Bash", "Overpower" })
+    expect(s.ids).toEqual({ 72, 6552, 7384 })
+    -- out again, to the top of essential
+    Lists.moveEntry(l, { key = "utility", i = 1, m = 1 }, { key = "essential", i = 1 })
+    expect(names(l.essential)).toEqual({ "Pummel", "Mortal Strike" })
+    expect(s.ids).toEqual({ 72, 7384 })
+    -- within the slot: stays a member
+    Lists.moveEntry(l, { key = "utility", i = 1, m = 2 }, { key = "utility", i = 1, m = 1 })
+    expect(names(s.members)).toEqual({ "Overpower", "Shield Bash" })
+end
+
+@test("moveEntry: from one shared slot to another")
+local function moveSlotToSlot()
+    local l = { buffs = {
+        slot("S1", { single("A", { 1 }), single("B", { 2 }) }, { source = "others" }),
+        slot("S2", { single("C", { 3 }) }),
+    } }
+    Lists.moveEntry(l, { key = "buffs", i = 1, m = 1 }, { key = "buffs", i = 2, m = math.huge })
+    expect(names(l.buffs[1].members)).toEqual({ "B" })
+    expect(l.buffs[1].ids).toEqual({ 2 })
+    expect(names(l.buffs[2].members)).toEqual({ "C", "A" })
+    expect(l.buffs[2].members[2].source).toBe("others")
+    expect(l.buffs[2].ids).toEqual({ 1, 3 })
+end
+
+@test("moveEntry: nothing at either end does nothing")
+local function moveNothing()
+    local l = sample()
+    local before = Lists.copy(l)
+    Lists.moveEntry(l, { key = "essential", i = 9 }, { key = "essential", i = 1 })
+    Lists.moveEntry(l, { key = "essential", i = 1 }, { key = "essential", i = 1, m = 1 })
+    Lists.moveEntry(l, { key = "procs", i = 1 }, { key = "essential", i = 1 })
+    expect(l).toEqual(before)
+end
+
+@test("combine: a cooldown shared slot in A's place, A's looks and conditions")
+local function combineCooldown()
+    local when = { match = "all", conditions = { { type = "combat" } } }
+    local l = { essential = { single("A", { 1 }, { glow = true, when = when, hidden = true }), single("X", { 9 }), single("B", { 2 }) } }
+    Lists.combine(l, { key = "essential", i = 1 }, { key = "essential", i = 3 }, "U", { "A", "B" })
+    expect(#l.essential).toBe(2)
+    local s = l.essential[1]
+    expect(s.group).toBe(true)
+    expect(s.uid).toBe("U")
+    expect(s.name).toBe("A + B")
+    expect(s.hidden).toBe(true)
+    expect(s.glow).toBe(true)
+    expect(s.when).toEqual(when)
+    expect(s.source).toBeNil()
+    expect(s.max).toBeNil()
+    expect(s.members).toEqual({ { name = "A", ids = { 1 } }, { name = "B", ids = { 2 } } })
+    expect(s.ids).toEqual({ 1, 2 })
+    expect(s.icon).toBe(1)
+end
+
+@test("combine: an aura slot takes A's whose, one at a time; conditions stay with the members")
+local function combineAura()
+    local when = { conditions = { { type = "combat" } } }
+    local l = { buffs = { single("A", { 1 }, { when = when }), slot("S", { single("B", { 2 }), single("C", { 3 }) }) } }
+    Lists.combine(l, { key = "buffs", i = 1 }, { key = "buffs", i = 2, m = 1 }, "U", { "A", "B" })
+    local s = l.buffs[1]
+    expect(s.source).toBe("any")
+    expect(s.max).toBe(1)
+    expect(s.when).toBeNil()
+    expect(s.members[1].when).toEqual(when)
+    expect(s.members[1].source).toBeNil()
+    -- B came from a slot of yours
+    expect(s.members[2].source).toBe("mine")
+    -- the slot it left regrouped
+    expect(l.buffs[2].ids).toEqual({ 3 })
+end
+
+@test("combine: nothing when the entries aren't the two named any more")
+local function combineStale()
+    local l = { essential = { single("A", { 1 }), single("B", { 2 }) } }
+    local before = Lists.copy(l)
+    Lists.combine(l, { key = "essential", i = 1 }, { key = "essential", i = 2 }, "U", { "A", "X" })
+    Lists.combine(l, { key = "essential", i = 1 }, { key = "essential", i = 2 }, "U", { "X", "B" })
+    Lists.combine(l, { key = "essential", i = 1 }, { key = "essential", i = 1 }, "U", { "A", "A" })
+    Lists.combine(l, { key = "essential", i = 1 }, { key = "essential", i = 5 }, "U", { "A", "B" })
+    Lists.combine(l, { key = "essential", i = 5 }, { key = "essential", i = 1 }, "U", { "A", "B" })
+    expect(l).toEqual(before)
+end
+
+@test("accepts: what a dragged row may land on")
+@cases({
+    -- a weapon enchant: only within Buffs on you, never in a shared slot
+    { { kind = "entry", enchant = "main", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 } }, true },
+    { { kind = "entry", enchant = "main", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "collection" }, true },
+    { { kind = "entry", enchant = "main", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "slot" }, false },
+    { { kind = "entry", enchant = "main", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2, m = 1 } }, false },
+    { { kind = "entry", enchant = "main", path = { key = "buffs", i = 1 } }, { path = { key = "debuffs", i = 1 } }, false },
+    -- onto a single entry: a new shared slot of two plain entries
+    { { kind = "entry", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "entry" }, true },
+    { { kind = "member", path = { key = "buffs", i = 1, m = 1 } }, { path = { key = "buffs", i = 2 }, onto = "entry" }, true },
+    { { kind = "entry", path = { key = "buffs", i = 2 } }, { path = { key = "buffs", i = 2 }, onto = "entry" }, false },
+    { { kind = "slot", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "entry" }, false },
+    -- onto a shared slot: plain entries, not a member onto its own slot
+    { { kind = "entry", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "slot" }, true },
+    { { kind = "member", path = { key = "buffs", i = 2, m = 1 } }, { path = { key = "buffs", i = 2 }, onto = "slot" }, false },
+    { { kind = "member", path = { key = "buffs", i = 3, m = 1 } }, { path = { key = "buffs", i = 2 }, onto = "slot" }, true },
+    { { kind = "slot", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "slot" }, false },
+    -- onto a collection: anything but a collection
+    { { kind = "slot", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "collection" }, true },
+    { { kind = "collection", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2 }, onto = "collection" }, false },
+    -- between a slot's members: plain entries only
+    { { kind = "entry", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2, m = 1 } }, true },
+    { { kind = "slot", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2, m = 1 } }, false },
+    -- inside a collection: no collection
+    { { kind = "slot", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2, j = 1 } }, true },
+    { { kind = "collection", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 2, j = 1 } }, false },
+    -- between a list's rows: anything
+    { { kind = "collection", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 3 } }, true },
+})
+local function accepts(from: { [string]: any }, to: { [string]: any }, ok: boolean)
+    expect(Lists.accepts(from, to)).toBe(ok)
+end
+
+@test("dropPath: last in a shared slot or a collection, else the place")
+local function dropPath()
+    expect(Lists.dropPath({ path = { key = "buffs", i = 2, j = 1 }, onto = "slot" })).toEqual({ key = "buffs", i = 2, j = 1, m = math.huge })
+    expect(Lists.dropPath({ path = { key = "buffs", i = 2 }, onto = "collection" })).toEqual({ key = "buffs", i = 2, j = math.huge })
+    local p: Path = { key = "buffs", i = 4 }
+    expect(Lists.dropPath({ path = p })).toBe(p)
+end
+
+@test("removeAt: an entry, a member (its slot regroups), nothing")
+local function removeAt()
+    local l = sample()
+    Lists.removeAt(l, { key = "essential", i = 1 })
+    expect(names(l.essential)).toEqual({ "Overpower" })
+    Lists.removeAt(l, { key = "utility", i = 1, m = 1 })
+    expect(names(l.utility[1].members)).toEqual({ "Shield Bash" })
+    expect(l.utility[1].ids).toEqual({ 72 })
+    local before = Lists.copy(l)
+    Lists.removeAt(l, { key = "essential", i = 7 })
+    Lists.removeAt(l, { key = "essential", i = 1, m = 1 })
+    expect(l).toEqual(before)
+end
+
+@test("moveToList: last in the other list")
+local function moveToList()
+    local l = sample()
+    Lists.moveToList(l, "essential", 1, "utility")
+    expect(names(l.utility)).toEqual({ "Interrupts", "Mortal Strike" })
+    Lists.moveToList(l, "essential", 5, "utility")
+    expect(#l.utility).toBe(2)
+end
+
+@test("addInto: a collection's entries, a shared slot's members")
+local function addInto()
+    local l = { buffs = { { collection = true, name = "C" }, slot("S", { single("A", { 5 }) }), single("X", { 1 }) } }
+    Lists.addInto(l, { key = "buffs", i = 1 }, single("B", { 2 }))
+    expect(names(l.buffs[1].entries)).toEqual({ "B" })
+    Lists.addInto(l, { key = "buffs", i = 2 }, single("C", { 3 }, { icon = 7 }))
+    expect(l.buffs[2].members[2]).toEqual({ name = "C", ids = { 3 } })
+    expect(l.buffs[2].ids).toEqual({ 3, 5 })
+    -- no weapon enchant in a shared slot, nothing into a single entry
+    Lists.addInto(l, { key = "buffs", i = 2 }, { enchant = "main", name = "Main-hand enchant", ids = {} })
+    Lists.addInto(l, { key = "buffs", i = 3 }, single("D", { 4 }))
+    Lists.addInto(l, { key = "buffs", i = 9 }, single("D", { 4 }))
+    expect(#l.buffs[2].members).toBe(2)
+    expect(l.buffs[3].entries).toBeNil()
+    -- a slot saved without members
+    local bare = { buffs = { { group = true, name = "S" } } }
+    Lists.addInto(bare, { key = "buffs", i = 1 }, single("A", { 1 }))
+    expect(bare.buffs[1].ids).toEqual({ 1 })
+end
+
+@test("newSlot and newCollection")
+local function newOnes()
+    expect(Lists.newSlot("utility", "U")).toEqual({ group = true, uid = "U", name = Lists.NEW_SLOT, members = {}, ids = {} })
+    expect(Lists.newSlot("buffs", "U")).toEqual({ group = true, uid = "U", name = "New shared slot", members = {}, ids = {}, source = "any", max = 1 })
+    expect(Lists.newSlot("debuffs", "U").source).toBe("mine")
+    expect(Lists.newCollection("C")).toEqual({ collection = true, uid = "C", name = Lists.NEW_COLLECTION, entries = {} })
+end
+
+@test("foldKey: the uid, else the place")
+local function foldKey()
+    expect(Lists.foldKey({ uid = "U" }, { key = "buffs", i = 1 })).toBe("U")
+    expect(Lists.foldKey({}, { key = "buffs", i = 2 })).toBe("buffs2.")
+    expect(Lists.foldKey({}, { key = "buffs", i = 2, j = 3 })).toBe("buffs2.3")
+end
+
+--------------------------------------------------------------------------------
+-- The Behaviour panel's entry
+--------------------------------------------------------------------------------
+
+@test("findEntry: a single entry at its path while it's the same spell")
+local function findSingle()
+    local l = sample()
+    local b = { key = "essential", path = { key = "essential", i = 2 }, entryName = "Overpower" }
+    local e, s = Lists.findEntry(l, b)
+    expect(e).toBe(l.essential[2])
+    expect(s).toBeNil()
+    table.remove(l.essential, 1)
+    e = Lists.findEntry(l, b)
+    expect(e).toBeNil()
+end
+
+@test("findEntry: a collection or slot by its uid, wherever it moved")
+local function findByUid()
+    local l = sample()
+    local uid = l.buffs[2].uid
+    local b = { key = "buffs", path = { key = "buffs", i = 2 }, uid = uid, entryName = "Shouts" }
+    table.insert(l.buffs, 1, single("New", { 1 }))
+    local e = Lists.findEntry(l, b)
+    expect(e).toBe(l.buffs[3])
+    expect(b.path).toEqual({ key = "buffs", i = 3 })
+    -- renamed: still found by uid
+    l.buffs[3].name = "Other"
+    expect(Lists.findEntry(l, b)).toBe(l.buffs[3])
+    -- gone
+    table.remove(l.buffs, 3)
+    local gone, s = Lists.findEntry(l, b)
+    expect(gone).toBeNil()
+    expect(s).toBeNil()
+end
+
+@test("findEntry: a member by its slot's uid")
+local function findMember()
+    local l = sample()
+    local slotUid = l.buffs[2].entries[2].uid
+    local b = { key = "buffs", path = { key = "buffs", i = 2, j = 2, m = 1 }, slotUid = slotUid, entryName = "Battle Stance" }
+    -- the collection moves down one
+    table.insert(l.buffs, 1, single("New", { 1 }))
+    local e, s = Lists.findEntry(l, b)
+    expect(e.name).toBe("Battle Stance")
+    expect(s).toBe(l.buffs[3].entries[2])
+    expect(b.path).toEqual({ key = "buffs", i = 3, j = 2, m = 1 })
+    -- a member renamed out of the way: not it any more
+    s.members[1].name = "Other"
+    expect(Lists.findEntry(l, b)).toBeNil()
+end
+
+@test("resetBehaviour")
+local function resetBehaviour()
+    local function entry(): { [string]: any }
+        return { name = "A", source = "others", mine = true, when = { conditions = {} }, glow = true, missing = "warn", effect = "you", hidden = true }
+    end
+    local m = entry()
+    Lists.resetBehaviour(m, "member")
+    expect(m).toEqual({ name = "A", mine = true, glow = true, missing = "warn", effect = "you", hidden = true })
+    local c = entry()
+    Lists.resetBehaviour(c, "collection")
+    expect(c.when).toBeNil()
+    expect(c.source).toBe("others")
+    local s = entry()
+    Lists.resetBehaviour(s, "single")
+    expect(s).toEqual({ name = "A", hidden = true })
+    local g = entry()
+    Lists.resetBehaviour(g, "slot")
+    expect(g).toEqual({ name = "A", source = "others", mine = true, hidden = true })
+end
+
+--------------------------------------------------------------------------------
+-- Seen recently
+--------------------------------------------------------------------------------
+
+local function recentList(n: number): { [string]: any }[]
+    local out: { [string]: any }[] = {}
+    for i = 1, n do out[i] = { name = "S" .. i, ids = { i } } end
+    return out
+end
+
+@test("pushRecent: newest first")
+local function pushNew()
+    local list = assert(Lists.pushRecent(recentList(2), "New", 99, 12))
+    expect(names(list)).toEqual({ "New", "S1", "S2" })
+    expect(list[1].ids).toEqual({ 99 })
+    expect(assert(Lists.pushRecent({}, "A", 1, 12))).toEqual({ { name = "A", ids = { 1 } } })
+end
+
+@test("pushRecent: a name near the top isn't written again")
+local function pushNearTop()
+    expect(Lists.pushRecent(recentList(5), "S3", 3, 12)).toBeNil()
+end
+
+@test("pushRecent: further down it moves up with all its IDs")
+local function pushMoves()
+    local mine = recentList(5)
+    mine[5].ids = { 50, 5 }
+    local list = assert(Lists.pushRecent(mine, "S5", 7, 12))
+    expect(names(list)).toEqual({ "S5", "S1", "S2", "S3", "S4" })
+    expect(list[1].ids).toEqual({ 5, 7, 50 })
+    -- the same ID isn't kept twice
+    list = assert(Lists.pushRecent(recentList(5), "S5", 5, 12))
+    expect(list[1].ids).toEqual({ 5 })
+end
+
+@test("pushRecent: at most max")
+local function pushMax()
+    local list = assert(Lists.pushRecent(recentList(12), "New", 1, 12))
+    expect(#list).toBe(12)
+    expect(list[12].name).toBe("S11")
+end
+
+@test("mergeRecent: the new names first, then the old, at most max")
+local function mergeNew()
+    local fresh = assert(Lists.mergeRecent(recentList(2), { { name = "S1", id = 1 }, { name = "A", id = 10 }, { name = "A", id = 11 }, { id = 12 }, { name = "B", id = 13 } }, 12))
+    expect(names(fresh)).toEqual({ "A", "B", "S1", "S2" })
+    expect(fresh[1].ids).toEqual({ 10 })
+    local many: { [string]: any }[] = {}
+    for i = 1, 14 do many[i] = { name = "N" .. i, id = i } end
+    local cut = assert(Lists.mergeRecent(recentList(3), many, 12))
+    expect(#cut).toBe(12)
+    expect(cut[12].name).toBe("N12")
+    local some = assert(Lists.mergeRecent(recentList(12), { { name = "X", id = 1 } }, 12))
+    expect(#some).toBe(12)
+    expect(some[1].name).toBe("X")
+    expect(some[12].name).toBe("S11")
+end
+
+@test("mergeRecent: nothing new")
+local function mergeNothing()
+    expect(Lists.mergeRecent(recentList(2), { { name = "S2", id = 2 }, { id = 5 } }, 12)).toBeNil()
+    expect(Lists.mergeRecent({}, {}, 12)).toBeNil()
+end

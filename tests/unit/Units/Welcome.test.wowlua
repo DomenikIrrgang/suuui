@@ -1,0 +1,143 @@
+-- Units/Welcome: the first-run welcome: shown once per account a moment
+-- after the first login, its three steps (role, colours, where things are)
+-- with Back and Next, the choices, Start playing applying them (the role's
+-- preset, colour vision), Skip and Esc, combat, /suu welcome, a theme.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors from "../../helpers"
+import * as services from "/Core/Services"
+
+local M: any = assert(SuuUI.GetModule("welcome"))
+
+local function tile(step: number, value: string): any
+    for _, b in ipairs(M.pages[step].tiles) do if b.value == value then return b end end
+    error("no tile " .. value)
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    if M.dim and M.dim:IsShown() then M.dim:Hide() end
+    SuuUI.SetColorVision("normal")
+    mock.advanceTime(0.5)
+    expectNoErrors()
+end
+
+@test("the first login: shown a moment after the world is in, once for the account")
+local function firstRun()
+    expect(SuuUI.AccountData("welcome").seen).toBeFalsy()
+    mock.advanceTime(2.5)
+    expect(M.dim).toBeShown()
+    expect(M.step).toBe(1)
+    expect(M.role).toBe("keep")
+    expect(tile(1, "keep").selected).toBe(true)
+    -- Esc skips it: seen
+    M.panel:GetScript("OnKeyDown")(M.panel, "ESCAPE")
+    expect(M.dim).never.toBeShown()
+    expect(SuuUI.AccountData("welcome").seen).toBe(true)
+end
+
+@test("the steps: Next and Back, the dots, Start playing on the last")
+local function steps()
+    M:Show()
+    expect(M.back).never.toBeShown()
+    mock.click(M.next)
+    expect(M.step).toBe(2)
+    expect(M.pages[2]).toBeShown()
+    expect(M.back).toBeShown()
+    mock.click(M.back)
+    expect(M.step).toBe(1)
+    mock.click(M.next)
+    mock.click(M.next)
+    expect(M.step).toBe(3)
+    expect(M.next).never.toBeShown()
+    expect(M.play).toBeShown()
+    expect(M.dots[3].glow).toBeShown()
+    expect(M.dots[1].glow).never.toBeShown()
+end
+
+@test("your choices: a role and the colours, summed up on the last step")
+local function choosing()
+    M:Show()
+    mock.click(tile(1, "HEALER"))
+    expect(M.role).toBe("HEALER")
+    expect(tile(1, "HEALER").selected).toBe(true)
+    expect(tile(1, "keep").selected).toBe(false)
+    M:Go(2)
+    mock.click(tile(2, "redgreen"))
+    expect(M.vision).toBe("redgreen")
+    M:Go(3)
+    local role, vision = M.pages[3].choices[1], M.pages[3].choices[2]
+    expect(role.text:GetText()).toBe("Healer layout")
+    expect(role.meta:GetText()).toBe(tostring(SuuUI.RolePresetName("HEALER")) .. ", this character")
+    expect(vision.meta:GetText()).toBe("every character")
+    -- your layout kept
+    M.role = "keep"
+    M:Go(3)
+    expect(role.text:GetText()).toBe("Your layout as it is")
+end
+
+@test("Start playing: the role's preset and the colour vision applied, seen")
+local function start()
+    M:Show()
+    mock.click(tile(1, "TANK"))
+    M:Go(2)
+    mock.click(tile(2, "blueyellow"))
+    M:Go(3)
+    local applied = mock.spy(function(_: string, _: boolean): (boolean, string?) return true end)
+    mock.stub(SuuUI, "ApplyRolePreset", applied)
+    mock.click(M.play)
+    expect(applied).toHaveBeenCalledWith("TANK", true)
+    expect((SuuUI.ColorVision())).toBe("blueyellow")
+    expect(M.dim).never.toBeShown()
+end
+
+@test("a preset that can't be made: said why, the welcome stays")
+local function failed()
+    M:Show()
+    mock.click(tile(1, "DAMAGER"))
+    M:Go(3)
+    mock.stub(SuuUI, "ApplyRolePreset", function(_: string, _: boolean): (boolean, string?) return false, "no room" end)
+    local before = #mock.printed()
+    mock.click(M.play)
+    expect(#mock.printed()).toBe(before + 1)
+    expect(M.dim).toBeShown()
+end
+
+@test("in a fight Start playing waits; Skip still closes")
+local function combat()
+    M:Show()
+    M:Go(3)
+    mock.player:enterCombat()
+    expect(M.play:IsEnabled()).toBe(false)
+    expect(M.play.tooltip.description).toBe("After the fight.")
+    M:Start()
+    expect(M.dim).toBeShown()
+    -- keys go on to the game in a fight
+    M.panel:GetScript("OnKeyDown")(M.panel, "ESCAPE")
+    expect(M.dim).toBeShown()
+    mock.player:leaveCombat()
+    expect(M.play:IsEnabled()).toBe(true)
+    M.panel:GetScript("OnKeyDown")(M.panel, "A")
+    expect(M.dim).toBeShown()
+    mock.click(M.skip)
+    expect(M.dim).never.toBeShown()
+end
+
+@test("/suu welcome and the provided Show open it again; a theme lays it out anew; off hides it")
+local function again()
+    mock.slash("/suu welcome")
+    expect(M.dim).toBeShown()
+    M:Go(2)
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(M.step).toBe(2)
+    expect(M.pages[2]).toBeShown()
+    M:Set("enabled", false)
+    expect(M.dim).never.toBeShown()
+    M:Reset("enabled")
+    local welcome = assert(services.get("welcome"))
+    welcome.Show()
+    expect(M.dim).toBeShown()
+end

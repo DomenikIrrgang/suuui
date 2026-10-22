@@ -1,0 +1,36 @@
+-- Core/Services.wowlua
+-- What one module does for the others (plan 4.3, 2026-10-18): open the bags,
+-- show a player's talents, post a notification… A module provides a service
+-- by name with a table of functions; whoever needs it asks for the name, not
+-- for the module. A plugin that replaces a module (`replaces`) provides the
+-- same services, and every caller reaches it. A module's services go away
+-- when it turns off. Built in: bags, talents, collections, professions,
+-- notifications, alerts (their functions in Docs/API.md).
+
+import * as events from "./Events"
+
+type Provider = { impl: { [string]: any }, owner: any }
+
+local providers: { [string]: Provider } = {}
+
+export function provide(name: string, impl: { [string]: any }, owner: any)
+    assert(type(name) == "string", "SuuUI Provide: a service name is required")
+    assert(type(impl) == "table", "SuuUI Provide: a table of functions is required")
+    providers[name] = { impl = impl, owner = owner }
+    events.emit("SUUUI_SERVICE_CHANGED", name)
+end
+
+-- The service's functions, or nil while nothing provides it.
+export function get(name: string): { [string]: any }?
+    local p = providers[name]
+    return p and p.impl
+end
+
+export function unregister(owner: any)
+    for name, p in pairs(providers) do
+        if p.owner == owner then
+            providers[name] = nil
+            events.emit("SUUUI_SERVICE_CHANGED", name)
+        end
+    end
+end

@@ -1,0 +1,84 @@
+-- tests/unit/UI/PrimitivesHelpers.wowlua
+-- Shared by the ui-primitives tests (Draw, Text, Icon, Bar, Panel, Layout,
+-- Controls, Inputs, Select, Pickers, SettingRow, SettingsMatrix, TabMarker,
+-- Crest, LoadingMark, Stage, Visibility).
+--
+--   paintOf(region)        what Draw keeps for a region (nil: nothing)
+--   tokenOf(region)        its token (nil: none, or set raw)
+--   near(a, b)             colour components equal within 1/255 (the
+--                          client keeps 8 bits a channel)
+--   colorIs(r, g, b, a, token, alpha?)  r, g, b, a are the token's
+--   setToken(name, r, g, b)  changes a colour token in place (undone by
+--                          restoreTokens)
+--   restoreTokens()        every changed token back, repainted
+--   pointOf(region, i?)    a region's i-th point as a table
+--   themeChanged()         what a theme change tells the components
+--   reduceMotion(on)       ui.reducedMotion on or back to its default
+
+import tokens as T, Color from "/Core/Tokens"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import internal paints from "/UI/Draw"
+import * as draw from "/UI/Draw"
+
+export type KeptPaint = {
+    kind?: string,
+    token?: string,
+    alpha?: number,
+    token2?: string,
+    alpha2?: number,
+    orientation?: string,
+}
+
+export function paintOf(region: any): KeptPaint?
+    return paints[region]
+end
+
+export function tokenOf(region: any): string?
+    local p = paints[region]
+    return p and p.token
+end
+
+export function near(a: number, b: number): boolean
+    return math.abs(a - b) <= 1.01 / 255
+end
+
+export function colorIs(r: number, g: number, b: number, a: number?, token: string, alpha: number?): boolean
+    local tr, tg, tb, ta = draw.rgba(token, alpha)
+    return near(r, tr) and near(g, tg) and near(b, tb) and (a == nil or near(a, ta))
+end
+
+local saved: { [string]: number[] } = {}
+
+export function setToken(name: string, r: number, g: number, b: number)
+    local c = (T.color :: { [string]: Color })[name] :: Color
+    if not saved[name] then saved[name] = { c[1], c[2], c[3], c[4] } end
+    c[1], c[2], c[3] = r, g, b
+end
+
+export function restoreTokens()
+    local any = false
+    for name, v in pairs(saved) do
+        local c = (T.color :: { [string]: Color })[name] :: Color
+        c[1], c[2], c[3], c[4] = v[1], v[2], v[3], v[4]
+        any = true
+    end
+    saved = {}
+    if any then draw.repaint() end
+end
+
+export type Point = { point: string, relativeTo: any, relativePoint: string, x: number, y: number }
+
+export function pointOf(region: any, i: number?): Point?
+    local point, relativeTo, relativePoint, x, y = region:GetPoint(i or 1)
+    if not point then return nil end
+    return { point = point, relativeTo = relativeTo, relativePoint = relativePoint, x = x, y = y }
+end
+
+export function themeChanged()
+    events.emit("SUUUI_THEME_CHANGED", "test")
+end
+
+export function reduceMotion(on: boolean)
+    if on then settings.set("ui", "reducedMotion", true) else settings.reset("ui", "reducedMotion") end
+end

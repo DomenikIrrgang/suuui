@@ -1,0 +1,724 @@
+-- UI/Social: the Social window's Contacts and Raid pages and its lists of
+-- people.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import contacts, raidGroups, peopleList, Contacts, ContactRow, Friend, ContactsData, RaidGroups, RaidMember, RaidSlot, RaidData, RaidGhost, PeopleList, PeopleRowData, PeopleRow from "/UI/Social"
+import SuuButton from "/UI/Controls"
+import tokens as T from "/Core/Tokens"
+import * as tooltipModule from "/UI/Tooltip"
+import expectNoErrors from "../../helpers"
+import tokenOf, host, cleanup, themeChanged from "./SocialHelpers"
+
+@afterEach
+local function done() cleanup() end
+
+local FAINT = "|cff" .. T.color["ink-faint"].hex
+
+--------------------------------------------------------------------------------
+-- Contacts
+--------------------------------------------------------------------------------
+
+local function page(): Contacts
+    local c = contacts(host(700, 500))
+    c:SetAllPoints()
+    mock.advanceFrames(1)
+    return c
+end
+
+local CHAR: Friend = { key = "c1", name = "Tamsin Ashford", color = "class-mage", online = true, detail = "Level 31 Mage, Duskwood",
+    note = "healer", whisper = true, invite = true }
+local BNET: Friend = { key = "b1", bnet = true, name = "Brannoc", character = "Brannoc Ironhand", color = "class-warrior",
+    online = true, detail = "Playing Hearthstone", away = true, whisper = true, invite = false, why = "Not in this game." }
+local OFF: Friend = { key = "o1", name = "Player", online = false, detail = "Last online 2 days ago", busy = true }
+
+local function friends(extra: ContactsData?): ContactsData
+    local d: ContactsData = { view = "friends", status = "available", me = "Player#1234", online = 2, total = 3,
+        friends = { OFF, CHAR, BNET } }
+    for k, v in pairs(extra or {}) do (d :: { [string]: any })[k] = v end
+    return d
+end
+
+@test("the top: your BattleTag, its number faint; your status; the count")
+local function top()
+    local c = page()
+    c:SetData(friends())
+    expect(c.me).toHaveText("Player" .. FAINT .. "#1234|r")
+    expect(tokenOf(c.meDot)).toBe("arcane")
+    expect(c.views.value).toBe("friends")
+    expect(c.count).toHaveText("2 of 3 online")
+    expect(c.count).toBeShown()
+    expect(c.status.value).toBe("available")
+    c:SetData(friends({ status = "busy", me = "Player" }))
+    expect(c.me).toHaveText("Player")
+    expect(tokenOf(c.meDot)).toBe("ember")
+    c:SetData(friends({ status = "away" }))
+    expect(tokenOf(c.meDot)).toBe("amber")
+    c:SetData(friends({ status = "lost" }))
+    expect(tokenOf(c.meDot)).toBe("arcane")
+    -- nothing given: friends, available, no tag
+    c:SetData({})
+    expect(c.me).toHaveText("")
+    expect(c.count).toHaveText("0 of 0 online")
+    expect(c.status.value).toBe("available")
+    expect(c.views.value).toBe("friends")
+    c:SetData({ view = "ignored" })
+    expect(c.count).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("friends: online first, then offline, each under its heading")
+local function list()
+    local c = page()
+    c:SetData(friends())
+    expect(c.heads[1].text).toHaveText("Online · 2")
+    expect(c.heads[2].text).toHaveText("Offline · 1")
+    expect(c.rows[1].row).toBe(CHAR)
+    expect(c.rows[2].row).toBe(BNET)
+    expect(c.rows[3].row).toBe(OFF)
+    local headH = T.type.caption.lineHeight + 6
+    -- two headings (each with 2 below it), three rows, a gap before Offline
+    expect(c.list.child:GetHeight()).toBe(2 * (headH + 2) + 3 * 40 + 6)
+    expect(c.empty).never.toBeShown()
+    -- only offline: no gap, one heading
+    c:SetData(friends({ friends = { OFF } }))
+    expect(c.heads[1].text).toHaveText("Offline · 1")
+    expect(c.heads[2]).never.toBeShown()
+    expect(c.rows[2]).never.toBeShown()
+    expect(c.list.child:GetHeight()).toBe(headH + 2 + 40)
+    -- none
+    c:SetData(friends({ friends = {} }))
+    expect(c.empty).toBeShown()
+    expect(c.empty).toHaveText("No friends yet: Add friend, bottom left.")
+    expect(c.list.child:GetHeight()).toBe(1)
+    expectNoErrors()
+end
+
+@test("a friend's row: the head, the name, the detail and note, the badge")
+local function rows()
+    local c = page()
+    c:SetData(friends())
+    local a, b, o = c.rows[1], c.rows[2], c.rows[3]
+    -- a character: the class diamond, the name in class colour
+    expect(a.diamond).toBeShown()
+    expect(a.glyph).never.toBeShown()
+    expect(tokenOf(a.diamond)).toBe("class-mage")
+    expect(a.name).toHaveText("Tamsin Ashford")
+    expect(tokenOf(a.name)).toBe("class-mage")
+    expect(a.detail).toHaveText("Level 31 Mage, Duskwood  " .. FAINT .. "\"healer\"|r")
+    expect(a.away).never.toBeShown()
+    expect(a.name).toBeAnchoredTo(a, "RIGHT", "RIGHT")
+    expect(a.unignore).never.toBeShown()
+    -- Battle.net: the glyph, their name in ink, the character in colour
+    expect(b.diamond).never.toBeShown()
+    expect(b.glyph).toBeShown()
+    expect(tokenOf(b.glyph)).toBe("arcane")
+    expect(b.name).toHaveText("Brannoc  |cff" .. T.color["class-warrior"].hex .. "Brannoc Ironhand|r")
+    expect(tokenOf(b.name)).toBe("ink")
+    expect(b.away).toBeShown()
+    expect(b.away.text).toHaveText("Away")
+    expect(b.name).toBeAnchoredTo(b.away, "RIGHT", "LEFT")
+    -- offline: faint, muted; busy
+    expect(tokenOf(o.diamond)).toBe("ink-faint")
+    expect(tokenOf(o.name)).toBe("ink-muted")
+    expect(o.away.text).toHaveText("Busy")
+    expect(o.detail).toHaveText("Last online 2 days ago")
+    -- a note without a detail; Battle.net offline, without a character
+    c:SetData(friends({ friends = { { key = "n", note = "hi", online = true }, { key = "z", bnet = true, name = "Tamsin", character = "" } } }))
+    expect(c.rows[1].detail).toHaveText(FAINT .. "\"hi\"|r")
+    expect(c.rows[1].name).toHaveText("")
+    expect(tokenOf(c.rows[1].name)).toBe("ink")
+    expect(tokenOf(c.rows[1].diamond)).toBe("ink")
+    expect(c.rows[2].name).toHaveText("Tamsin")
+    expect(tokenOf(c.rows[2].glyph)).toBe("ink-faint")
+    -- a Battle.net friend playing a character without a colour
+    c:SetData(friends({ friends = { { key = "y", bnet = true, name = "Tamsin", character = "Tamsin Ashford", online = true } } }))
+    expect(c.rows[1].name).toHaveText("Tamsin  |cff" .. T.color.ink.hex .. "Tamsin Ashford|r")
+    expectNoErrors()
+end
+
+@test("Whisper and Invite follow the chosen friend, saying why when off")
+local function foot()
+    local c = page()
+    local onWhisper = mock.spy(function(_r: Friend) end)
+    local onInvite = mock.spy(function(_r: Friend) end)
+    c.onWhisper, c.onInvite = onWhisper, onInvite
+    c:SetData(friends())
+    expect(c.whisper).toBeShown()
+    expect(c.invite).toBeShown()
+    expect(c.add.label).toHaveText("Add friend")
+    expect(c.whisper:IsEnabled()).toBe(false)
+    expect(c.whisper.reason).toBe("Choose a friend first.")
+    expect(c.invite.reason).toBe("Choose a friend first.")
+    expect(c.selectedRow).toBeNil()
+    c:SetData(friends({ selected = "c1" }))
+    expect(c.rows[1].sel).toBeShown()
+    expect(c.rows[1].edge).toBeShown()
+    expect(c.rows[2].sel).never.toBeShown()
+    expect(c.whisper:IsEnabled()).toBe(true)
+    expect(c.whisper.reason).toBeNil()
+    expect(c.invite:IsEnabled()).toBe(true)
+    expect(c.invite.reason).toBeNil()
+    mock.click(c.whisper)
+    mock.click(c.invite)
+    expect(onWhisper).toHaveBeenCalledWith(CHAR)
+    expect(onInvite).toHaveBeenCalledWith(CHAR)
+    c:SetData(friends({ selected = "b1" }))
+    expect(c.invite:IsEnabled()).toBe(false)
+    expect(c.invite.reason).toBe("Not in this game.")
+    c:SetData(friends({ selected = "o1" }))
+    expect(c.whisper.reason).toBe("They're offline.")
+    expect(c.invite.reason).toBe("They can't be invited.")
+    -- the reason in a tooltip, only while off
+    local tip = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.hover(nil)
+    mock.hover(c.invite)
+    expect(tip).toHaveBeenCalledWith(c.invite, { title = "Invite", description = "They can't be invited." })
+    mock.hover(nil)
+    c:SetData(friends({ selected = "c1" }))
+    mock.hover(c.invite)
+    mock.hover(nil)
+    expect(tip).toHaveBeenCalledTimes(1)
+    -- no listener, or no one chosen: nothing
+    c.onWhisper, c.onInvite = nil, nil
+    mock.click(c.whisper)
+    mock.click(c.invite)
+    c.onWhisper = onWhisper
+    c.selectedRow = nil
+    mock.script(c.whisper, "OnClick", "LeftButton")
+    expect(onWhisper).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("rows: a click selects, a right click asks for the menu, a double click whispers")
+local function rowInput()
+    local c = page()
+    local onSelect = mock.spy(function(_k: any) end)
+    local onMenu = mock.spy(function(_r: Friend, _o: ContactRow) end)
+    local onWhisper = mock.spy(function(_r: Friend) end)
+    c.onSelect, c.onMenu, c.onWhisper = onSelect, onMenu, onWhisper
+    c:SetData(friends())
+    mock.click(c.rows[1])
+    expect(onSelect).toHaveBeenCalledWith("c1")
+    mock.click(c.rows[2], "RightButton")
+    expect(onMenu).toHaveBeenCalledWith(BNET, c.rows[2])
+    mock.script(c.rows[1], "OnDoubleClick", "LeftButton")
+    expect(onWhisper).toHaveBeenCalledWith(CHAR)
+    mock.script(c.rows[3], "OnDoubleClick", "LeftButton")
+    expect(onWhisper).toHaveBeenCalledTimes(1)
+    mock.hover(c.rows[1])
+    expect(c.rows[1].hover).toBeShown()
+    mock.hover(nil)
+    expect(c.rows[1].hover).never.toBeShown()
+    -- no listeners
+    c.onSelect, c.onMenu, c.onWhisper = nil, nil, nil
+    mock.click(c.rows[1], "RightButton")
+    mock.script(c.rows[1], "OnDoubleClick", "LeftButton")
+    expect(onSelect).toHaveBeenCalledTimes(2)
+    expectNoErrors()
+end
+
+@test("ignored: a row per name with Unignore; Ignore a player")
+local function ignored()
+    local c = page()
+    local onUnignore = mock.spy(function(_n: string) end)
+    local onIgnore, onAdd, onSelect = mock.spy(), mock.spy(), mock.spy(function(_k: any) end)
+    c.onUnignore, c.onIgnore, c.onAdd, c.onSelect = onUnignore, onIgnore, onAdd, onSelect
+    c:SetData(friends({ selected = "c1" }))
+    c:SetData({ view = "ignored", ignored = { "Tamsin Ashford", "Brannoc Ironhand" } })
+    expect(c.heads[1].text).toHaveText("Ignored · 2")
+    expect(c.heads[2]).never.toBeShown()
+    local r = c.rows[1]
+    expect(r.name).toHaveText("Tamsin Ashford")
+    expect(tokenOf(r.name)).toBe("ink-muted")
+    expect(tokenOf(r.diamond)).toBe("ink-faint")
+    expect(r.diamond).toBeShown()
+    expect(r.glyph).never.toBeShown()
+    expect(r.away).never.toBeShown()
+    expect(r.detail).never.toBeShown()
+    expect(r.sel).never.toBeShown()
+    expect(r.unignore).toBeShown()
+    expect(c.rows[3]).never.toBeShown()
+    expect(c.whisper).never.toBeShown()
+    expect(c.invite).never.toBeShown()
+    expect(c.add.label).toHaveText("Ignore a player")
+    expect(c.selectedRow).toBeNil()
+    mock.click(c.rows[2].unignore)
+    expect(onUnignore).toHaveBeenCalledWith("Brannoc Ironhand")
+    mock.click(c.add)
+    expect(onIgnore).toHaveBeenCalledTimes(1)
+    expect(onAdd).toHaveBeenCalledTimes(0)
+    -- an ignored row isn't a friend: no select
+    mock.click(r)
+    expect(onSelect).toHaveBeenCalledTimes(0)
+    c:SetData({ view = "ignored" })
+    expect(c.empty).toHaveText("You aren't ignoring anyone.")
+    expect(c.empty).toBeShown()
+    -- back to friends: Add friend
+    c:SetData(friends())
+    mock.click(c.add)
+    expect(onAdd).toHaveBeenCalledTimes(1)
+    expect(c.rows[1].detail).toBeShown()
+    -- no data at all: friends' Add
+    c.data = nil
+    mock.click(c.add)
+    expect(onAdd).toHaveBeenCalledTimes(2)
+    -- no listeners
+    c.onAdd, c.onIgnore, c.onUnignore = nil, nil, nil
+    mock.click(c.add)
+    c:SetData({ view = "ignored", ignored = { "Player" } })
+    mock.click(c.add)
+    mock.click(c.rows[1].unignore)
+    c.rows[1].ignoredName = nil
+    c.onUnignore = onUnignore
+    mock.click(c.rows[1].unignore)
+    expect(onUnignore).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("the view and status controls report")
+local function controls()
+    local c = page()
+    local onView = mock.spy(function(_v: any) end)
+    local onStatus = mock.spy(function(_v: any) end)
+    c.onView, c.onStatus = onView, onStatus
+    c:SetData(friends())
+    mock.click(c.views.buttons[2])
+    expect(onView).toHaveBeenCalledWith("ignored")
+    mock.click(c.status)
+    local opened = c.status.list
+    if opened then mock.click(opened.rows[2]) end
+    expect(onStatus).toHaveBeenCalledWith("away")
+    c.onView, c.onStatus = nil, nil
+    mock.click(c.views.buttons[1])
+    expect(onView).toHaveBeenCalledTimes(1)
+    mock.click(c.status)
+    if opened then mock.click(opened.rows[3]) end
+    expect(onStatus).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("contacts: a new list size draws again once there is data; a theme change too")
+local function contactsRedraw()
+    local p = host(700, 500)
+    local c = contacts(p)
+    c:SetAllPoints()
+    mock.script(c.list, "OnSizeChanged", 1, 1)
+    expect(#c.rows).toBe(0)
+    c:SetData(friends())
+    p:SetWidth(900)
+    mock.script(c.list, "OnSizeChanged", c.list:GetWidth(), c.list:GetHeight())
+    expect(c.list.child:GetWidth()).toBe(c.list:GetWidth())
+    c.me:SetText("x")
+    c.me.value = nil
+    themeChanged()
+    expect(c.me).toHaveText("Player" .. FAINT .. "#1234|r")
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Raid
+--------------------------------------------------------------------------------
+
+local function raid(width: number = 700): RaidGroups
+    local r = raidGroups(host(width, 600))
+    r:SetAllPoints()
+    mock.script(r, "OnSizeChanged", width, 600)
+    return r
+end
+
+local LEAD: RaidMember = { index = 1, name = "Tamsin Ashford", class = "MAGE", className = "Mage", level = 60, zone = "Molten Core",
+    role = "HEALER", group = 1, leader = true, online = true, you = true }
+local TANK: RaidMember = { index = 2, name = "Brannoc Ironhand", class = "WARRIOR", role = "TANK", group = 1, assistant = true, online = true }
+local AWAY: RaidMember = { index = 3, name = "Player", role = "DAMAGER", group = 2, online = false }
+
+local function inRaid(extra: RaidData?): RaidData
+    local d: RaidData = { inRaid = true, canLead = true, members = { LEAD, TANK, AWAY } }
+    for k, v in pairs(extra or {}) do (d :: { [string]: any })[k] = v end
+    return d
+end
+
+@test("not in a raid: the explanation; Convert to raid in a party")
+local function notInRaid()
+    local r = raid()
+    r:SetData({})
+    expect(r.notIn).toBeShown()
+    expect(r.convert).never.toBeShown()
+    for _, g in ipairs(r.groups) do expect(g).never.toBeShown() end
+    expect(r.count).never.toBeShown()
+    expect(r.ready).never.toBeShown()
+    expect(r.roles).never.toBeShown()
+    expect(r.info).toBeShown()
+    expect(r.plan).never.toBeShown()
+    r:SetData({ inParty = true })
+    expect(r.convert).toBeShown()
+    expect(r.convert:IsEnabled()).toBe(false)
+    local onConvert = mock.spy()
+    r.onConvert = onConvert
+    r:SetData({ inParty = true, canLead = true })
+    mock.click(r.convert)
+    expect(onConvert).toHaveBeenCalledTimes(1)
+    r.onConvert = nil
+    mock.click(r.convert)
+    -- before any data
+    local fresh = raidGroups(host())
+    fresh:Draw()
+    expect(fresh.notIn).toBeShown()
+    expectNoErrors()
+end
+
+@test("in a raid: the count, the groups, each player's slot")
+local function groups()
+    local r = raid()
+    r:SetData(inRaid())
+    expect(r.count).toBeShown()
+    expect(r.count).toHaveText("3 of 40")
+    expect(r.notIn).never.toBeShown()
+    for g, f in ipairs(r.groups) do
+        expect(f).toBeShown()
+        expect(f.label).toHaveText("Group " .. g)
+    end
+    local lead, tank, empty = r.slots[1][1], r.slots[1][2], r.slots[1][3]
+    expect(lead.member).toBe(LEAD)
+    expect(lead.name).toHaveText("Tamsin Ashford")
+    expect(tokenOf(lead.name)).toBe("class-mage")
+    expect(lead.role:GetTexture()).toContain("RoleHealer")
+    expect(tokenOf(lead.role)).toBe("ink")
+    expect(lead.rank).toBeShown()
+    expect(lead.rank:GetTexture()).toBe("Interface\\GroupFrame\\UI-Group-LeaderIcon")
+    expect(tokenOf(lead.edge.top)).toBe("ink")
+    expect(lead:GetAlpha()).toBe(1)
+    expect(tank.rank:GetTexture()).toBe("Interface\\GroupFrame\\UI-Group-AssistantIcon")
+    expect(tokenOf(tank.edge.top)).toBe("gilt-hairline")
+    expect(empty.member).toBeNil()
+    expect(empty.fill).never.toBeShown()
+    expect(empty.role).never.toBeShown()
+    expect(empty.rank).never.toBeShown()
+    expect(empty.name).toHaveText("")
+    expect(tokenOf(empty.edge.top)).toBe("gilt-faint")
+    local away = r.slots[2][1]
+    expect(tokenOf(away.role)).toBe("ink-muted")
+    expect(away:GetAlpha()).toBeCloseTo(T.opacity["opacity-oor"])
+    expect(away.rank).never.toBeShown()
+    expect(tokenOf(away.name)).toBe("ink")
+    -- a member without a role or group; a raid size
+    r:SetData(inRaid({ size = 20, members = { { index = 9, group = 3, online = true } } }))
+    expect(r.count).toHaveText("1 of 20")
+    expect(r.slots[3][1].role).never.toBeShown()
+    expect(r.slots[3][1].name).toHaveText("")
+    expect(r.slots[1][1].member).toBeNil()
+    expectNoErrors()
+end
+
+@test("the head's buttons: the leader's, or off with the reason")
+local function headButtons()
+    local r = raid()
+    local ready, roles, info, plan = mock.spy(), mock.spy(), mock.spy(), mock.spy()
+    r.onReadyCheck, r.onRoleCheck, r.onRaidInfo, r.onPlan = ready, roles, info, plan
+    r:SetData(inRaid({ plan = true }))
+    expect(r.plan).toBeShown()
+    expect(r.ready:IsEnabled()).toBe(true)
+    expect(r.ready.reason).toBeNil()
+    for _, b in ipairs({ r.ready, r.roles, r.info, r.plan }) do mock.click(b) end
+    for _, s in ipairs({ ready, roles, info, plan }) do expect(s).toHaveBeenCalledTimes(1) end
+    r:SetData(inRaid({ canLead = false }))
+    expect(r.ready:IsEnabled()).toBe(false)
+    expect(r.roles.reason).toBe("Only the leader or an assistant can.")
+    r:SetData(inRaid({ canLead = false, reason = "Not in this raid." }))
+    expect(r.ready.reason).toBe("Not in this raid.")
+    local tip = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.hover(r.ready)
+    expect(tip).toHaveBeenCalledWith(r.ready, { title = "Ready check", description = "Not in this raid." })
+    mock.hover(r.info)
+    mock.hover(nil)
+    expect(tip).toHaveBeenCalledTimes(1)
+    r.onReadyCheck, r.onRoleCheck, r.onRaidInfo, r.onPlan = nil, nil, nil, nil
+    r:SetData(inRaid({ plan = true }))
+    for _, b in ipairs({ r.ready, r.roles, r.info, r.plan }) do mock.click(b) end
+    expect(ready).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("the head: buttons right to left; too narrow, tighter; narrower still, the count below")
+local function head()
+    local r = raid(700)
+    r:SetData(inRaid({ plan = true }))
+    expect(r.info).toBeAnchoredTo(r, "TOPRIGHT")
+    expect(r.roles).toBeAnchoredTo(r.info, "RIGHT", "LEFT")
+    expect(r.ready).toBeAnchoredTo(r.roles, "RIGHT", "LEFT")
+    expect(r.plan).toBeAnchoredTo(r.ready, "RIGHT", "LEFT")
+    expect(r.headH).toBe(30)
+    local _, _, _, _, y = r.count:GetPoint(1)
+    expect(y).toBe(-6)
+    local wide = r.info.fixedWidth or 0
+    -- narrow: the padding tightens, then the count drops below
+    local n = raid(260)
+    n:SetData(inRaid({ plan = true }))
+    expect((n.info.fixedWidth or 0) < wide).toBe(true)
+    expect(n.headH).toBe(30 + 6 + T.type.header.lineHeight)
+    local _, _, _, _, y2 = n.count:GetPoint(1)
+    expect(y2).toBe(-(30 + 6))
+    local _, _, _, _, gy = n.groups[1]:GetPoint(1)
+    expect(gy).toBe(-((n.headH or 0) + 12))
+    -- out of a raid the count isn't measured
+    n:SetData({})
+    expect(n.headH).toBe(30)
+    expectNoErrors()
+end
+
+@test("the groups: two columns of four across the page")
+local function layout()
+    local r = raid(700)
+    local colW = math.floor((700 - 12) / 2)
+    local groupH = T.type.caption.lineHeight + 4 + 5 * 22 + 4 * 2
+    expect(r.groups[1]:GetWidth()).toBe(colW)
+    expect(r.groups[1]:GetHeight()).toBe(groupH)
+    local _, _, _, x2, y2 = r.groups[2]:GetPoint(1)
+    expect(x2).toBe(colW + 12)
+    local _, _, _, x3, y3 = r.groups[3]:GetPoint(1)
+    expect(x3).toBe(0)
+    expect(y3).toBe(y2 - (groupH + 12))
+    -- no size: nothing laid out
+    local loose = raidGroups(host())
+    loose:Layout()
+    expect(loose.groups[1]:GetNumPoints()).toBe(0)
+    expectNoErrors()
+end
+
+@test("a slot: the player's tooltip; a click hands them over")
+local function slotInput()
+    local r = raid()
+    local onMember = mock.spy(function(_m: RaidMember, _b: string, _o: RaidSlot) end)
+    r.onMember = onMember
+    r:SetData(inRaid())
+    local lead = r.slots[1][1]
+    mock.hover(lead)
+    expect(GameTooltip).toHaveLines({ "Tamsin Ashford", "Level 60 Mage", "Molten Core" })
+    mock.hover(r.slots[2][1])
+    expect(GameTooltip).toHaveLines({ "Player", "Offline" })
+    expect(tokenOf(lead.edge.top)).toBe("ink")
+    mock.hover(r.slots[1][3])
+    expect(GameTooltip:IsShown()).toBe(false)
+    mock.hover(nil)
+    expect(tokenOf(r.slots[1][3].edge.top)).toBe("gilt-faint")
+    mock.click(lead, "RightButton")
+    expect(onMember).toHaveBeenCalledWith(LEAD, "RightButton", lead)
+    mock.click(r.slots[1][3])
+    expect(onMember).toHaveBeenCalledTimes(1)
+    r.onMember = nil
+    mock.click(lead)
+    expectNoErrors()
+end
+
+@test("dragging: onto an empty slot moves, onto a player swaps")
+local function drag()
+    local r = raid()
+    local onMove = mock.spy(function(_i: number, _g: number) end)
+    local onSwap = mock.spy(function(_a: number, _b: number) end)
+    r.onMove, r.onSwap = onMove, onSwap
+    r:SetData(inRaid())
+    local lead, tank = r.slots[1][1], r.slots[1][2]
+    local target = r.slots[4][2]
+    mock.script(lead, "OnDragStart", "LeftButton")
+    expect(r.dragging).toBe(lead)
+    expect(r.dragMember).toBe(LEAD)
+    expect(lead:GetAlpha()).toBeCloseTo(0.5)
+    local ghost = r.ghost :: RaidGhost
+    expect(ghost).toBeShown()
+    expect(ghost.name).toHaveText("Tamsin Ashford")
+    expect(tokenOf(ghost.name)).toBe("class-mage")
+    expect(ghost.role).toBeShown()
+    -- the slot under the cursor turns arcane
+    mock.hover(target)
+    expect(tokenOf(target.edge.top)).toBe("arcane")
+    mock.advanceFrames(1)
+    expect(r.overSlot).toBe(target)
+    mock.hover(tank)
+    mock.advanceFrames(1)
+    expect(tokenOf(target.edge.top)).toBe("gilt-faint")
+    expect(r.overSlot).toBe(tank)
+    mock.hover(target)
+    mock.advanceFrames(1)
+    expect(tokenOf(tank.edge.top)).toBe("gilt-hairline")
+    mock.script(lead, "OnDragStop", "LeftButton")
+    expect(onMove).toHaveBeenCalledWith(1, 4)
+    expect(ghost).never.toBeShown()
+    expect(lead:GetAlpha()).toBe(1)
+    expect(r.dragging).toBeNil()
+    expect(r.overSlot).toBeNil()
+    expect(tokenOf(target.edge.top)).toBe("gilt-faint")
+    -- onto a player: a swap
+    mock.script(lead, "OnDragStart", "LeftButton")
+    mock.hover(r.slots[2][1])
+    mock.advanceFrames(1)
+    mock.script(lead, "OnDragStop", "LeftButton")
+    expect(onSwap).toHaveBeenCalledWith(1, 3)
+    -- onto itself, or nowhere: drawn again, nothing asked
+    mock.script(lead, "OnDragStart", "LeftButton")
+    mock.hover(lead)
+    mock.advanceFrames(1)
+    expect(tokenOf(lead.edge.top)).toBe("ink")
+    mock.script(lead, "OnDragStop", "LeftButton")
+    mock.script(tank, "OnDragStart", "LeftButton")
+    mock.hover(nil)
+    mock.script(tank, "OnDragStop", "LeftButton")
+    expect(onMove).toHaveBeenCalledTimes(1)
+    expect(onSwap).toHaveBeenCalledTimes(1)
+    -- a drop without a drag; no listeners
+    mock.script(tank, "OnDragStop", "LeftButton")
+    r.onMove, r.onSwap = nil, nil
+    mock.script(lead, "OnDragStart", "LeftButton")
+    mock.hover(r.slots[2][1])
+    mock.script(lead, "OnDragStop", "LeftButton")
+    mock.script(lead, "OnDragStart", "LeftButton")
+    mock.hover(target)
+    mock.script(lead, "OnDragStop", "LeftButton")
+    mock.hover(nil)
+    -- a ghost for a member without a role or class
+    r:StartGhost({ index = 9, group = 1, name = "Player" })
+    expect(ghost.role).never.toBeShown()
+    expect(tokenOf(ghost.name)).toBe("ink")
+    r:StartGhost({ index = 9, group = 1 })
+    expect(ghost.name).toHaveText("")
+    r:StopGhost()
+    expectNoErrors()
+end
+
+@test("dragging needs the lead, a player, and no combat")
+local function dragGuards()
+    local r = raid()
+    r:SetData(inRaid({ canLead = false }))
+    mock.script(r.slots[1][1], "OnDragStart", "LeftButton")
+    expect(r.dragging).toBeNil()
+    r:SetData(inRaid())
+    mock.script(r.slots[1][3], "OnDragStart", "LeftButton")
+    expect(r.dragging).toBeNil()
+    mock.player:enterCombat()
+    mock.script(r.slots[1][1], "OnDragStart", "LeftButton")
+    expect(r.dragging).toBeNil()
+    mock.player:leaveCombat()
+    r.data = nil
+    mock.script(r.slots[1][1], "OnDragStart", "LeftButton")
+    expect(r.dragging).toBeNil()
+    expectNoErrors()
+end
+
+@test("a theme change places the raid page again")
+local function raidTheme()
+    local r = raid()
+    r:SetData(inRaid())
+    r.slots[1][1]:ClearAllPoints()
+    themeChanged()
+    expect(r.slots[1][1]).toBeAnchoredTo(r.groups[1], "TOPLEFT", "TOPLEFT")
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- A list of people
+--------------------------------------------------------------------------------
+
+local function people(): PeopleList
+    local l = peopleList(host(600, 400))
+    l:SetAllPoints()
+    mock.advanceFrames(1)
+    return l
+end
+
+@test("people: the heading and count, a row each, the empty text")
+local function peopleRows()
+    local l = people()
+    local clicked = mock.spy(function(_r: PeopleRowData) end)
+    local given: PeopleRowData[] = {
+        { key = "a", name = "Tamsin Ashford", color = "class-mage", online = true, detail = "Level 31", note = "met in SFK", pinned = true,
+          actions = { { label = "Invite", variant = "primary", onClick = clicked }, { label = "Whisper", onClick = clicked } } },
+        { key = "b", name = "Brannoc Ironhand", glyph = true, online = false,
+          actions = { { label = "Accept", disabled = true, onClick = clicked }, { label = "Decline" } } },
+        { key = "c" },
+    }
+    l:SetData({ title = "Recent allies", empty = "No one yet.", rows = given })
+    expect(l.head).toBeShown()
+    expect(l.head.text).toHaveText("Recent allies · 3")
+    expect(l.empty).never.toBeShown()
+    local a, b, c = l.rows[1], l.rows[2], l.rows[3]
+    expect(a.name).toHaveText("Tamsin Ashford")
+    expect(tokenOf(a.name)).toBe("class-mage")
+    expect(tokenOf(a.diamond)).toBe("class-mage")
+    expect(a.glyph).never.toBeShown()
+    expect(a.pin).toBeShown()
+    expect(a.detail).toHaveText("Level 31  |cff" .. T.color["ink-faint"].hex .. "\"met in SFK\"|r")
+    -- the buttons right to left: Whisper (quiet) at the right, Invite (primary) before it
+    local quiet, primary = a.buttons.quiet :: SuuButton[], a.buttons.primary :: SuuButton[]
+    expect(quiet[1].label).toHaveText("Whisper")
+    expect(primary[1].label).toHaveText("Invite")
+    expect(primary[1]).toBeAnchoredTo(a, "RIGHT", "RIGHT")
+    mock.click(primary[1])
+    expect(clicked).toHaveBeenCalledWith(given[1])
+    -- a glyph, offline: muted; a disabled action does nothing
+    expect(b.glyph).toBeShown()
+    expect(b.diamond).never.toBeShown()
+    expect(tokenOf(b.glyph)).toBe("ink-muted")
+    expect(tokenOf(b.name)).toBe("ink-muted")
+    expect(tokenOf(b.diamond)).toBe("ink-faint")
+    expect(b.pin).never.toBeShown()
+    local bq = b.buttons.quiet :: SuuButton[]
+    expect(bq[2]:IsEnabled()).toBe(false)
+    mock.script(bq[2], "OnClick", "LeftButton")
+    mock.click(bq[1])
+    expect(clicked).toHaveBeenCalledTimes(1)
+    -- nothing but a key: no state known reads as online
+    expect(c.name).toHaveText("")
+    expect(tokenOf(c.name)).toBe("ink")
+    expect(tokenOf(c.diamond)).toBe("ink-faint")
+    expect(tokenOf(c.glyph)).toBe("ink-muted")
+    expect(c.detail).toHaveText("")
+    expect(l.list.child:GetHeight()).toBe(T.type.caption.lineHeight + 6 + 2 + 3 * 40)
+    -- fewer rows and buttons next time; a note alone
+    l:SetData({ title = "Requests", rows = { { key = "d", note = "hi", online = true } } })
+    expect(l.rows[2]).never.toBeShown()
+    expect(l.rows[1].detail).toHaveText("|cff" .. T.color["ink-faint"].hex .. "\"hi\"|r")
+    expect(quiet[1]).never.toBeShown()
+    -- none
+    l:SetData({ title = "Requests", empty = "No requests.", rows = {} })
+    expect(l.head).never.toBeShown()
+    expect(l.empty).toBeShown()
+    expect(l.empty).toHaveText("No requests.")
+    expect(l.list.child:GetHeight()).toBe(1)
+    l:SetData({})
+    expect(l.empty).toHaveText("")
+    expect(l.head.text).toHaveText(" · 0")
+    expectNoErrors()
+end
+
+@test("people: a right click asks for the menu; a size change and a theme change draw again")
+local function peopleInput()
+    local l = people()
+    local onMenu = mock.spy(function(_r: PeopleRowData, _o: PeopleRow) end)
+    l.onMenu = onMenu
+    local row: PeopleRowData = { key = "a", name = "Player" }
+    l:SetData({ rows = { row } })
+    mock.click(l.rows[1], "RightButton")
+    expect(onMenu).toHaveBeenCalledWith(row, l.rows[1])
+    mock.hover(l.rows[1])
+    expect(l.rows[1].hover).toBeShown()
+    mock.hover(nil)
+    expect(l.rows[1].hover).never.toBeShown()
+    l.onMenu = nil
+    mock.click(l.rows[1], "RightButton")
+    l.rows[1].row = nil
+    l.onMenu = onMenu
+    mock.click(l.rows[1], "RightButton")
+    expect(onMenu).toHaveBeenCalledTimes(1)
+    l.rows[1].name:SetText("x")
+    l.rows[1].name.value = nil
+    mock.script(l.list, "OnSizeChanged", 1, 1)
+    expect(l.rows[1].name).toHaveText("Player")
+    l.rows[1].name:SetText("x")
+    l.rows[1].name.value = nil
+    themeChanged()
+    expect(l.rows[1].name).toHaveText("Player")
+    -- before data: nothing
+    local fresh = peopleList(host())
+    mock.script(fresh.list, "OnSizeChanged", 1, 1)
+    expect(#fresh.rows).toBe(0)
+    expectNoErrors()
+end

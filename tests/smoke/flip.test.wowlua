@@ -1,0 +1,29 @@
+-- Every on/off setting of every module turned the other way and back (the
+-- modules' setting watchers redraw, rebuild or tear down what they own).
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as settings from "/Core/Settings"
+import errorsSoFar from "../helpers"
+
+@test("every on/off setting flips and flips back")
+local function flipAll()
+    local failed: string[] = {}
+    local flipped = 0
+    for _, entry in ipairs(settings.list()) do
+        for _, key in ipairs(entry.keys) do
+            local v = settings.get(entry.namespace, key)
+            if type(v) ~= "boolean" or key == "enabled" then continue end
+            local before = #errorsSoFar()
+            settings.set(entry.namespace, key, not v)
+            mock.advanceFrames(1)
+            settings.set(entry.namespace, key, v)
+            mock.advanceFrames(1)
+            flipped += 1
+            local after = errorsSoFar()
+            if #after > before then failed[#failed + 1] = `{entry.namespace}.{key}: {after[#after]}` end
+        end
+    end
+    expect(failed).toEqual({})
+    expect(flipped > 100).toBe(true)
+end

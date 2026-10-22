@@ -1,0 +1,250 @@
+-- Diagnostics/MountFrameProbe.wowlua
+-- "/suu probe mountframe": where a mount's feet are in SuuUI's collections
+-- stage (2026-10-17: the game centres each mount in its model frame by its
+-- whole size, so some stand on the floor shadow and some float). It shows
+-- ten mounts one after another in a model frame the stage's size and
+-- records, once each has loaded, what the frame can say about it: which of
+-- its methods there are (once), its box, camera, scale and position. The
+-- panel shows each one for a screenshot. Saved in SuuUIProbe.mountFrame on
+-- /reload.
+--
+-- "/suu probe mountframe place": the placement test. The same frame, a red
+-- line 165px under its middle (where the stage wants every mount's feet),
+-- and each mount moved by the game's own SetPosition (not the camera: the
+-- camera route zoomed in and misplaced them) by what its camera says:
+-- Next and Previous step through the mounts, each line says the numbers.
+-- Screenshots show whether the feet meet the line.
+-- "Wider" cycles three frames (2026-10-17: the stage's 440-wide frame cuts
+-- long mounts turned sideways, and a 760-wide one with SetModelScale drew
+-- them much bigger): 440 by 470 as now; 760 wide with the camera moved back
+-- (SetCamDistanceScale 760/470); 760 wide with SetModelScale 470/760. The
+-- mount turned side on; the line says which.
+
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import panel, Panel from "/UI/Panel"
+import fill from "/UI/Draw"
+import text as uiText, Text from "/UI/Text"
+import button, SuuButton from "/UI/Controls"
+
+interface PlacePanel extends Panel
+    model?: PlayerModel
+    line?: Texture
+    label?: Text
+    mode?: number
+    prev?: SuuButton
+    next?: SuuButton
+    wider?: SuuButton
+end
+
+interface FramePanel extends Panel
+    model?: PlayerModel
+    floor?: Texture
+end
+
+local placePanel: PlacePanel? = nil
+local framePanel: FramePanel? = nil
+
+local function show(...: any): string
+    local parts = {}
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        if isSecret(v) then parts[#parts + 1] = "secret"
+        elseif type(v) == "number" then parts[#parts + 1] = ("%.3f"):format(v)
+        else parts[#parts + 1] = tostring(v) end
+    end
+    return table.concat(parts, ", ")
+end
+
+local function ask(m: any, method: string): string
+    local f = m[method]
+    if type(f) ~= "function" then return "missing" end
+    local res = { pcall(f, m) }
+    if not res[1] then return "error " .. tostring(res[2]):sub(1, 80) end
+    return show(select(2, unpack(res)))
+end
+
+local QUESTIONS = { "GetActiveBoundingBox", "GetModelScale", "GetPosition", "GetCameraPosition", "GetCameraTarget",
+                    "GetCameraDistance", "GetCameraFacing", "GetCameraRoll", "GetFacing", "GetPitch", "GetModelFileID",
+                    "GetCamDistanceScale", "GetWorldScale", "GetViewInsets" }
+
+-- how far below the frame's middle the model's origin shows (the stage's
+-- formula, calibrated on a Swift Stormsaber: 165px in a 440 by 470 frame)
+local FEET_K, W, WANT = 2.739, 440, 165
+local function dot(a: number[], b: number[]): number return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function norm(x: number, y: number, z: number): number[]?
+    local l = math.sqrt(x * x + y * y + z * z)
+    if l == 0 then return nil end
+    return { x / l, y / l, z / l }
+end
+local function feetBelow(P: number[], T: number[], lift: number, size: number?): number?
+    local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
+    if not f then return nil end
+    local right = norm(f[2], -f[1], 0)
+    if not right then return nil end
+    local u = { right[2] * f[3] - right[3] * f[2], right[3] * f[1] - right[1] * f[3], right[1] * f[2] - right[2] * f[1] }
+    if u[3] < 0 then u = { -u[1], -u[2], -u[3] } end
+    local r = { -P[1], -P[2], lift - P[3] }
+    local depth = dot(r, f)
+    if depth <= 0 then return nil end
+    return -FEET_K * W / 470 * (size or 470) * dot(r, u) / depth
+end
+
+export function place()
+    local MJ = C_MountJournal
+    local list: { name: string, display: any }[] = {}
+    for _, id in ipairs(MJ.GetMountIDs() or {}) do
+        local name, _, _, _, _, _, _, _, _, hidden = MJ.GetMountInfoByID(id)
+        if name and not hidden then list[#list + 1] = { name = name, display = (MJ.GetMountInfoExtraByID(id)) } end
+    end
+    table.sort(list, function(a, b) return a.name < b.name end)
+    local out = { at = date("%Y-%m-%d %H:%M:%S"), lines = {} :: string[] }
+    DB.probe.mountPlace = out
+    local p = placePanel or panel(UIParent, { title = "Mount placement probe", width = 800, height = 600, solid = true }) :: PlacePanel
+    placePanel = p
+    p:SetFrameStrata("DIALOG")
+    p:SetPoint("CENTER")
+    local m = p.model or CreateFrame("PlayerModel", nil, p.body)
+    p.model = m
+    m:SetSize(440, 470)
+    m:SetPoint("TOP")
+    local line = p.line or fill(p.body, "ember", "OVERLAY")
+    p.line = line
+    line:SetHeight(1)
+    line:SetPoint("LEFT", m, "CENTER", -220, -WANT)
+    line:SetPoint("RIGHT", m, "CENTER", 220, -WANT)
+    local label = p.label or uiText(p.body, "caption", "ink")
+    p.label = label
+    label:SetPoint("TOP", m, "BOTTOM", 0, -6)
+    label:SetWidth(440)
+    local MODES = { { w = 440, label = "440 as now" }, { w = 760, cam = 760 / 470, label = "760, camera back" },
+                    { w = 760, scale = 470 / 760, label = "760, model scaled" } }
+    p.mode = p.mode or 1
+    local i = 0
+    local function showMount(step: number)
+        i = (i + step - 1) % #list + 1
+        local e = list[i]
+        local mode = MODES[p.mode or 1]
+        m:SetSize(mode.w, 470)
+        pcall(m.SetPosition, m, 0, 0, 0)
+        pcall(m.SetModelScale, m, 1)
+        pcall(m.SetCamDistanceScale, m, 1)
+        m:SetScript("OnModelLoaded", function()
+            if mode.cam then pcall(m.SetCamDistanceScale, m, mode.cam) end
+            if mode.scale then pcall(m.SetModelScale, m, mode.scale) end
+            after(0.1, function()
+                local px, py, pz = m:GetCameraPosition()
+                local tx, ty, tz = m:GetCameraTarget()
+                local P, T = { px, py, pz }, { tx, ty, tz }
+                local size = math.max(mode.w, 470)
+                local before = feetBelow(P, T, 0, size)
+                -- the lift that brings the feet to the line (bisection)
+                local lo, hi = -3, 3
+                for _ = 1, 40 do
+                    local mid = (lo + hi) / 2
+                    local b = feetBelow(P, T, mid, size)
+                    if not b then break end
+                    if b > WANT then lo = mid else hi = mid end
+                end
+                local lift = (lo + hi) / 2
+                pcall(m.SetPosition, m, 0, 0, lift)
+                local text = ("[%s] %s: feet %.0f below the middle, lifted %.3f -> %.0f; position now %s"):format(mode.label, e.name, before or -1,
+                    lift, feetBelow(P, T, lift, size) or -1, tostring(select(3, m:GetPosition())))
+                label:SetValue(text)
+                out.lines[#out.lines + 1] = text
+            end)
+        end)
+        pcall(m.SetDisplayInfo, m, e.display)
+        pcall(m.SetFacing, m, p.mode == 1 and 0.5 or 1.4)
+    end
+    -- the buttons are made once: their clicks go through p.run, replaced each
+    -- run (they used to step through the first run's mounts)
+    p.run = { show = showMount }
+    if not p.next then
+        local prev = button(p.body, { text = "Previous", width = 110, onClick = function() p.run.show(-1) end })
+        p.prev = prev
+        prev:SetPoint("BOTTOMLEFT")
+        local nextButton = button(p.body, { text = "Next", width = 110, onClick = function() p.run.show(1) end })
+        p.next = nextButton
+        nextButton:SetPoint("BOTTOMRIGHT")
+        local wider = button(p.body, { text = "Wider", width = 110, onClick = function()
+            p.mode = (p.mode or 1) % #MODES + 1
+            p.run.show(0)
+        end })
+        p.wider = wider
+        wider:SetPoint("BOTTOM")
+    end
+    p:Show()
+    showMount(1)
+    print("Mount placement probe: Next and Previous step through the mounts; the red line is where the feet should be.")
+end
+
+export function command(rest: string?)
+    if rest == "place" then return place() end
+    local MJ = C_MountJournal
+    local list: { name: string, display: any }[] = {}
+    for _, id in ipairs(MJ and MJ.GetMountIDs() or {}) do
+        local name, _, _, _, _, _, _, _, _, hidden = MJ.GetMountInfoByID(id)
+        if name and not hidden and #list < 10 then
+            local display = MJ.GetMountInfoExtraByID(id)
+            list[#list + 1] = { name = name, display = display }
+        end
+    end
+    local out = { at = date("%Y-%m-%d %H:%M:%S"), mounts = {} :: { [string]: any }[], methods = "" }
+    DB.probe.mountFrame = out
+    local p = framePanel or panel(UIParent, { title = "Mount frame probe", width = 480, height = 540, solid = true }) :: FramePanel
+    framePanel = p
+    p:SetFrameStrata("DIALOG")
+    p:SetPoint("CENTER")
+    local m = p.model or CreateFrame("PlayerModel", nil, p.body)
+    p.model = m
+    m:SetSize(440, 470)
+    m:SetPoint("TOP")
+    local floor = p.floor or fill(p.body, "ember", "OVERLAY")
+    p.floor = floor
+    floor:SetHeight(1)
+    floor:SetPoint("BOTTOMLEFT", m, "BOTTOMLEFT", 0, 0)
+    floor:SetPoint("BOTTOMRIGHT", m, "BOTTOMRIGHT", 0, 0)
+    p:Show()
+    -- which methods the frame has (by name)
+    local names: string[] = {}
+    local mt = getmetatable(m)
+    local index = mt and mt.__index
+    if type(index) == "table" then
+        for k in pairs(index) do
+            local lk = k:lower()
+            if lk:find("box") or lk:find("bound") or lk:find("camera") or lk:find("position") or lk:find("scale")
+                or lk:find("center") or lk:find("transform") or lk:find("project") or lk:find("inset") then
+                names[#names + 1] = k
+            end
+        end
+    end
+    table.sort(names)
+    out.methods = table.concat(names, " ")
+    local i = 0
+    local function nextMount()
+        i = i + 1
+        local e = list[i]
+        if not e then
+            print("Mount frame probe: done; /reload to save.")
+            return
+        end
+        local done = false
+        local function record(why: string)
+            if done then return end
+            done = true
+            local r: { [string]: any } = { name = e.name, display = e.display, why = why }
+            for _, q in ipairs(QUESTIONS) do r[q] = ask(m, q) end
+            out.mounts[#out.mounts + 1] = r
+            after(1.2, nextMount)
+        end
+        m:SetScript("OnModelLoaded", function() after(0.2, function() record("loaded") end) end)
+        pcall(m.SetDisplayInfo, m, e.display)
+        pcall(m.SetFacing, m, 0)
+        after(2.5, function() record("timeout") end)
+    end
+    print("Mount frame probe: showing ten mounts, about 30 seconds.")
+    nextMount()
+end

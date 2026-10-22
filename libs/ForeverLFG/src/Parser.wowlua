@@ -1,0 +1,296 @@
+-- ForeverLFG/Parser.wowlua
+-- One chat line to what it asks for, or nothing. The parser knows no
+-- language: every word it looks for comes from a language module
+-- (Lang/*.wowlua, registered with LFG.Lang.Register); activity names in the
+-- client's language come from the tool (LFG.Parser.AddName). Pure Lua (no
+-- game API), so tools/lfg_parse.lua replays recorded chat through the same
+-- code outside the game.
+--
+--   local r, why = LFG.Parser.Parse(text, { languages = { "enUS" } })
+-- A module's Extract(hay, r, hits, norm) reads what words alone can't (hay:
+-- the line with what was matched blanked; norm: the whole line, cleaned).
+--   r = { intent = "group" | "player" | nil, activities = { key, ... },
+--         quests = { id, ... }, roles = { tank, healer, damage = true },
+--         classes = { WARRIOR = true, ... }, need = n, members = { have, max },
+--         level = { min, max }, languages = { "enUS" }, confidence = 0..1 }
+--   why: "noise:<word>" | "nothing" (r is nil then)
+--
+-- Which languages read a line: the ones asked for, plus, by script, the
+-- module for a line written in Hangul, Chinese characters or Cyrillic
+-- (an English shard carries Korean and Chinese posts, found in game).
+
+-- What a line asks for (r above).
+export type ParseResult = {
+    intent?: string,
+    activities: string[],
+    quests: number[],
+    roles: { [string]: boolean },
+    classes: { [string]: boolean },
+    need?: number,
+    members?: number[],
+    level?: { [number]: number? },
+    languages: string[],
+    confidence: number,
+}
+
+-- Which intent words a line had (a module's Extract may set them).
+export type Hits = { group: boolean, player: boolean }
+
+-- A language module's words (Lang/enUS.wowlua has every field).
+export type LangWords = {
+    group?: string[],
+    player?: string[],
+    noise?: string[],
+    roles?: { [string]: string[] },
+    classes?: { [string]: string[] },
+}
+
+export type LangModule = {
+    code?: string,          -- set by LFG.Lang.Register
+    script?: string,        -- "latin" | "hangul" | "han" | "cyrillic"
+    words?: LangWords,
+    activities?: { [string]: string[] },
+    Extract?: (hay: string, r: ParseResult, hits: Hits, norm: string) -> (),
+}
+
+export type ParseOptions = { languages: string[]? }
+
+export type ParserApi = {
+    Parse: (text: any, opts: ParseOptions?) -> (ParseResult?, string?),
+    AddName: (key: string, name: any) -> (),
+    Normalize: (s: string) -> string,
+    Scripts: (s: string) -> { [string]: number },
+}
+
+export type LangApi = {
+    modules: { [string]: LangModule },
+    Register: (code: string, def: LangModule) -> (),
+}
+
+export const parser = {} :: ParserApi
+local P = parser
+
+export const lang = { modules = {} } :: LangApi
+local Lang = lang
+
+type Phrase = { text: string, value: any, field: string, ascii: boolean }
+type Compiled = { module: LangModule, activities: Phrase[], words: Phrase[] }
+
+local compiled: { [string]: Compiled } = {}      -- per language: aliases, sorted longest first
+local names: { key: string, text: string }[] = {}  -- the tool's names (client language): { text, key }
+
+function Lang.Register(code: string, def: LangModule)
+    def.code = code
+    Lang.modules[code] = def
+    compiled[code] = nil
+end
+
+function P.AddName(key: string, name: any)
+    if type(name) ~= "string" or name == "" then return end
+    names[#names + 1] = { key = key, text = name }
+    for code in pairs(compiled) do compiled[code] = nil end
+end
+
+--------------------------------------------------------------------------------
+-- Text
+--------------------------------------------------------------------------------
+
+-- Lower case (ASCII; other scripts have no case worth folding here),
+-- links reduced to their text, punctuation to spaces except the few that
+-- carry meaning (' in names, + in "40+", / in "4/5", - in "35-40"),
+-- padded with spaces so a word can be found as " word ".
+local function normalize(s: string): string
+    s = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    s = s:gsub("|H.-|h(.-)|h", "%1")
+    s = s:gsub("|T.-|t", " "):gsub("|A.-|a", " ")
+    s = s:lower()
+    s = s:gsub("[%c%(%)%[%]{}<>!%?%.,;:\"=_~*#@&%%%$|\\]", " ")
+    -- "heal/tank", "dm-east": two words; "4/5", "35-40", "-1" stay as they are
+    s = s:gsub("(%a)[/%-]", "%1 "):gsub("[/%-](%a)", " %1")
+    s = s:gsub("%s+", " ")
+    return " " .. s .. " "
+end
+P.Normalize = normalize
+
+-- The scripts in a line: { hangul = n, han = n, cyrillic = n, latin = n }
+local function scripts(s: string): { [string]: number }
+    local out = { hangul = 0, han = 0, cyrillic = 0, latin = 0 }
+    local i, n = 1, #s
+    while i <= n do
+        local c = s:byte(i) or 0
+        local cp, len
+        if c < 0x80 then cp, len = c, 1
+        elseif c >= 0xF0 then cp, len = ((c % 0x08) * 0x40000) + (((s:byte(i + 1) or 0) % 0x40) * 0x1000) + (((s:byte(i + 2) or 0) % 0x40) * 0x40) + ((s:byte(i + 3) or 0) % 0x40), 4
+        elseif c >= 0xE0 then cp, len = ((c % 0x10) * 0x1000) + (((s:byte(i + 1) or 0) % 0x40) * 0x40) + ((s:byte(i + 2) or 0) % 0x40), 3
+        elseif c >= 0xC0 then cp, len = ((c % 0x20) * 0x40) + ((s:byte(i + 1) or 0) % 0x40), 2
+        else cp, len = 0, 1 end
+        if (cp >= 0xAC00 and cp <= 0xD7A3) or (cp >= 0x1100 and cp <= 0x11FF) or (cp >= 0x3130 and cp <= 0x318F) then
+            out.hangul = out.hangul + 1
+        elseif (cp >= 0x4E00 and cp <= 0x9FFF) or (cp >= 0x3400 and cp <= 0x4DBF) then
+            out.han = out.han + 1
+        elseif cp >= 0x0400 and cp <= 0x04FF then
+            out.cyrillic = out.cyrillic + 1
+        elseif (cp >= 0x41 and cp <= 0x5A) or (cp >= 0x61 and cp <= 0x7A) then
+            out.latin = out.latin + 1
+        end
+        i = i + len
+    end
+    return out
+end
+P.Scripts = scripts
+
+local function isAscii(s: string): boolean return not s:find("[\128-\255]") end
+
+--------------------------------------------------------------------------------
+-- A language, compiled: every phrase it knows, longest first
+--------------------------------------------------------------------------------
+
+local function phrase(list: string[]?, out: Phrase[], value: any, field: string)
+    for _, w in ipairs(list or {}) do
+        local n = normalize(w):sub(2, -2)
+        if n ~= "" then out[#out + 1] = { text = n, value = value, field = field, ascii = isAscii(n) } end
+    end
+end
+
+local function compile(code: string): Compiled?
+    local done = compiled[code]
+    if done then return done end
+    local m = Lang.modules[code]
+    if not m then return nil end
+    local c: Compiled = { module = m, activities = {}, words = {} }
+    for key, list in pairs(m.activities or {}) do phrase(list, c.activities, key, "activity") end
+    -- the tool's names count for every language (they're in the client's)
+    for _, nm in ipairs(names) do phrase({ nm.text }, c.activities, nm.key, "activity") end
+    local w: LangWords = m.words or {}
+    phrase(w.group, c.words, true, "group")
+    phrase(w.player, c.words, true, "player")
+    phrase(w.noise, c.words, true, "noise")
+    for role, list in pairs(w.roles or {}) do phrase(list, c.words, role, "role") end
+    for class, list in pairs(w.classes or {}) do phrase(list, c.words, class, "class") end
+    table.sort(c.activities, function(a: Phrase, b: Phrase) return #a.text > #b.text end)
+    table.sort(c.words, function(a: Phrase, b: Phrase) return #a.text > #b.text end)
+    compiled[code] = c
+    return c
+end
+
+-- Finds a phrase: as a whole word in Latin script, anywhere in others
+-- (Korean and Chinese write without spaces). Returns its start and end.
+local function find(hay: string, p: Phrase): (number?, number?)
+    if p.ascii then
+        local s, e = hay:find(" " .. p.text .. " ", 1, true)
+        if s and e then return s + 1, e - 1 end
+        return nil
+    end
+    return hay:find(p.text, 1, true)
+end
+
+-- Blanks what was matched, so a shorter phrase inside it doesn't match too.
+local function consume(hay: string, s: number, e: number): string
+    return hay:sub(1, s - 1) .. string.rep(" ", e - s + 1) .. hay:sub(e + 1)
+end
+
+--------------------------------------------------------------------------------
+-- Parse
+--------------------------------------------------------------------------------
+
+-- Classes that can only deal damage: a player of one offers damage.
+local DAMAGE_ONLY: { [string]: boolean } = { ROGUE = true, MAGE = true, WARLOCK = true, HUNTER = true }
+
+local function languagesFor(text: string, asked: string[]?): string[]
+    local out: string[], seen: { [string]: boolean } = {}, {}
+    local function use(code: string) if Lang.modules[code] and not seen[code] then seen[code] = true; out[#out + 1] = code end end
+    for _, code in ipairs(asked or {}) do use(code) end
+    local sc = scripts(text)
+    for code, m in pairs(Lang.modules) do
+        local script = m.script
+        if script and script ~= "latin" and (sc[script] or 0) > 0 then use(code) end
+    end
+    if #out == 0 then use("enUS") end
+    return out
+end
+
+function P.Parse(text: any, opts: ParseOptions?): (ParseResult?, string?)
+    if type(text) ~= "string" or text == "" then return nil, "nothing" end
+    local o: ParseOptions = opts or {}
+    local r: ParseResult = { activities = {}, quests = {}, roles = {}, classes = {}, languages = {} } :: any
+    -- quest links first: the quest for certain
+    for id in text:gmatch("|Hquest:(%d+)") do r.quests[#r.quests + 1] = tonumber(id) :: number end
+    local hay = normalize(text)
+    local seenAct: { [string]: boolean } = {}
+    local hits: Hits = { group = false, player = false }
+    for _, code in ipairs(languagesFor(text, o.languages)) do
+        local c = compile(code)
+        if c then
+            r.languages[#r.languages + 1] = code
+            -- noise and the other words, on what activities left
+            for _, p in ipairs(c.activities) do
+                local s, e = find(hay, p)
+                while s and e do
+                    if not seenAct[p.value] then seenAct[p.value] = true; r.activities[#r.activities + 1] = p.value end
+                    hay = consume(hay, s, e)
+                    s, e = find(hay, p)
+                end
+            end
+            for _, p in ipairs(c.words) do
+                local s, e = find(hay, p)
+                if s and e then
+                    if p.field == "noise" then return nil, "noise:" .. p.text end
+                    if p.field == "group" then hits.group = true
+                    elseif p.field == "player" then hits.player = true
+                    elseif p.field == "role" then r.roles[p.value] = true
+                    elseif p.field == "class" then r.classes[p.value] = true end
+                    hay = consume(hay, s, e)
+                end
+            end
+            -- a language's own patterns (counts written its way, ...)
+            local extract = c.module.Extract
+            if extract then extract(hay, r, hits, normalize(text)) end
+        end
+    end
+    -- numbers, the same in every language: "lf2m", "need 2", "4/5", "40+", "35-40", "lvl 28"
+    local norm = normalize(text)
+    local lfn = norm:match(" lf(%d)m ")
+    if lfn then r.need = tonumber(lfn); hits.group = true end
+    -- "2 spots", "2 more", "need 2": that many open
+    local open = norm:match(" (%d) spots? ") or norm:match(" (%d) more ") or norm:match(" need (%d) ")
+    if open then r.need = r.need or tonumber(open); hits.group = true end
+    local haveText, maxText = norm:match(" (%d%d?)/(%d%d?) ")
+    local have, max = tonumber(haveText), tonumber(maxText)
+    if have and max and max >= 2 and max <= 40 and have < max then
+        r.members = { have, max }
+        r.need = r.need or (max - have)
+        hits.group = true
+    end
+    local plus = norm:match(" (%d%d?)%+ ")
+    local loText, hiText = norm:match(" (%d%d?)%-(%d%d?) ")
+    local lo, hi = tonumber(loText), tonumber(hiText)
+    if lo and hi and lo >= 1 and hi <= 70 and lo < hi then r.level = { lo, hi }
+    elseif plus and (tonumber(plus) :: number) <= 70 then r.level = { tonumber(plus), nil } end
+    local lvl = norm:match(" lvl ?(%d%d?) ") or norm:match(" level (%d%d?) ") or norm:match(" lv ?(%d%d?) ")
+    if lvl then r.level = r.level or { tonumber(lvl), tonumber(lvl) } end
+    -- intent: group words win (a group can say "lfg" too, "lfg ... need heal" is rare)
+    if hits.group then r.intent = "group"
+    elseif hits.player then r.intent = "player" end
+    -- a player's own level next to their class ("28 rogue lfg")
+    if r.intent == "player" and not r.level then
+        local n = norm:match(" (%d%d?) %a")
+        if n and (tonumber(n) :: number) <= 70 and next(r.classes) then r.level = { tonumber(n), tonumber(n) } end
+    end
+    -- a player of a damage-only class offers damage
+    if r.intent == "player" and not next(r.roles) then
+        local only = true
+        for class in pairs(r.classes) do if not DAMAGE_ONLY[class] then only = false end end
+        if next(r.classes) and only then r.roles.damage = true end
+    end
+    -- how sure: what was found
+    local conf = 0
+    if #r.activities > 0 or #r.quests > 0 then conf = conf + 0.45 end
+    if r.intent then conf = conf + 0.35 end
+    if next(r.roles) or next(r.classes) then conf = conf + 0.1 end
+    if r.need or r.members or r.level then conf = conf + 0.1 end
+    -- an activity with roles but no intent word ("RFK tank") still reads as a group
+    if not r.intent and (#r.activities > 0) and next(r.roles) then r.intent = "group"; conf = conf + 0.1 end
+    r.confidence = math.min(1, conf)
+    if #r.activities == 0 and #r.quests == 0 and not r.intent then return nil, "nothing" end
+    return r
+end

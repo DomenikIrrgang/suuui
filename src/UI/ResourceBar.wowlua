@@ -1,0 +1,296 @@
+-- UI/ResourceBar.wowlua
+-- Your power (mana, rage or energy) as a bar, a rogue's or cat's combo points
+-- as five segments over or under it, and a druid's mana as a thin line under
+-- rage or energy. The Cooldown Manager carries it under its rows (design B:
+-- as wide as your cast bar, so bar, cast bar and swing timer make one column).
+--
+--   local r = resourceBar(parent, { width = 340, height = 14 })
+--   r:SetOptions({ show = "both"|"power"|"off", number = "value"|"pct"|"none",
+--                  low = true, druidMana = true, ooc = "show"|"fade"|"hide",
+--                  points = "over"|"under", width = 340, height = 14 })
+--   r:Start(), r:Stop()       -- events on and off; a new bar starts stopped
+--   r.onResize = fn(r)        -- its height changed (points or mana line came
+--                             -- or went, or the options)
+--   opts.api                  -- a stand-in for the game's Unit* functions
+--                             -- (tests); the game's by default
+--
+-- The game hides your power from addons (probed: UnitPower and
+-- UnitPowerPercent are secret in and out of combat, UnitPowerMax isn't):
+-- the bar takes the hidden amount straight (StatusBar:SetValue), the number
+-- is the engine's own formatting, and the amber under 25% is a second fill
+-- whose alpha comes from a step curve. Combo points read plain on Forever
+-- (probed); each segment is a StatusBar from i-1 to i anyway, so a hidden
+-- count would still light them.
+-- Out of combat "hide" keeps the bar's place (alpha 0), so the Cooldown
+-- Manager over it never jumps when a fight starts.
+
+import * as secret from "wowlua:secret"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import * as editMode from "/EditMode/EditMode"
+import * as draw from "/UI/Draw"
+import * as uiText from "/UI/Text"
+
+const S = T.space
+
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local POINTS, PIP_H, MANA_H = 5, 6, 4
+local LOW = 0.25
+local POWER_TOKEN: { [string]: string } = { MANA = "mana", RAGE = "rage", ENERGY = "energy", FOCUS = "focus" }
+const isSecret = secret.isSecret
+
+-- nil becomes 0; a secret value passes through untouched
+const amount = secret.amount
+
+local lowCurve: any
+-- 1 below LOW (a 0-1 fraction), 0 from it up
+local function belowLow(): any
+    if not lowCurve and C_CurveUtil and Enum.LuaCurveType then
+        lowCurve = C_CurveUtil.CreateCurve()
+        lowCurve:SetType(Enum.LuaCurveType.Step)
+        lowCurve:AddPoint(0, 1)
+        lowCurve:AddPoint(LOW, 0)
+    end
+    return lowCurve
+end
+
+local function statusBar(parent: Frame, color: string?, level: number?): StatusBar
+    local b = CreateFrame("StatusBar", nil, parent)
+    b:SetStatusBarTexture(WHITE)
+    b:GetStatusBarTexture():SetSnapToPixelGrid(false)
+    b:SetMinMaxValues(0, 1)
+    b:SetValue(0)
+    b:SetFrameLevel(parent:GetFrameLevel() + (level or 1))
+    if color then draw.paint(b, color) end
+    return b
+end
+
+-- A track with a hairline border and a fill (or more) inside it.
+local function well(parent: Frame): any
+    local f = CreateFrame("Frame", nil, parent)
+    f.track = draw.fill(f, "surface-sunk")
+    f.track:SetAllPoints()
+    f.border = draw.border(f, "gilt-hairline", { layer = "OVERLAY" })
+    return f
+end
+
+local function inside(b: Region, f: Region)
+    b:SetPoint("TOPLEFT", f, "TOPLEFT", 1, -1)
+    b:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
+end
+
+-- Rogues always; druids while energy is their power (cat form).
+local function usesPoints(A: any): boolean
+    local _, playerClass = A.UnitClass("player")
+    local class = secret.known(playerClass, "")
+    if class == "ROGUE" then return true end
+    if class == "DRUID" then
+        local _, token = A.UnitPowerType("player")
+        return token == "ENERGY"
+    end
+    return false
+end
+
+local RB = {}
+
+function RB:SetOptions(opts: { [string]: any })
+    for k, v in pairs(opts) do self.opts[k] = v end
+    self:Refresh()
+end
+
+-- What shows and how tall it is; tells onResize when the height changes.
+function RB:Refresh()
+    local A = self.api
+    local o = self.opts
+    local _, playerClass = A.UnitClass("player")
+    local class = secret.known(playerClass, "")
+    local _, token = A.UnitPowerType("player")
+    self.token = token
+    self.hasPoints = o.show == "both" and usesPoints(A)
+    self.hasMana = o.druidMana and class == "DRUID" and token ~= "MANA"
+    local w, h = o.width or 340, o.height or 14
+    local gap = S["space-1"]
+
+    -- bottom up: (points under) bar, (mana line), (points over)
+    local y = 0
+    local function row(f: Frame, height: number)
+        f:ClearAllPoints()
+        f:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", 0, y)
+        f:SetSize(w, height)
+        y = y + height + gap
+    end
+    self.points:SetShown(self.hasPoints)
+    self.mana:SetShown(self.hasMana)
+    if self.hasPoints and o.points == "under" then row(self.points, PIP_H) end
+    if self.hasMana then row(self.mana, MANA_H) end
+    row(self.bar, h)
+    if self.hasPoints and o.points ~= "under" then row(self.points, PIP_H) end
+    local total = y - gap
+    if self.hasPoints then
+        -- five segments, space-1 apart, sharing the width
+        local pw = (w - (POINTS - 1) * gap) / POINTS
+        for i, p in ipairs(self.pips) do
+            p:ClearAllPoints()
+            p:SetPoint("BOTTOMLEFT", self.points, "BOTTOMLEFT", (i - 1) * (pw + gap), 0)
+            p:SetSize(pw, PIP_H)
+        end
+    end
+
+    local shown = o.show ~= "off"
+    local changed = self.height ~= total or self.shownBefore ~= shown or self.width ~= w
+    self.height, self.width, self.shownBefore = total, w, shown
+    self:SetSize(w, total)
+    self:SetShown(shown)
+    self.text:SetShown(o.number ~= "none")
+    draw.paint(self.fill, POWER_TOKEN[token] or "mana")
+    self:UpdatePower()
+    self:UpdateMana()
+    self:UpdatePoints()
+    self:UpdateFade()
+    if changed and self.onResize then self.onResize(self) end
+end
+
+function RB:UpdatePower()
+    local A = self.api
+    local pType = A.UnitPowerType("player")
+    local max = amount(A.UnitPowerMax("player", pType))
+    local cur = amount(A.UnitPower("player", pType))
+    self.fill:SetMinMaxValues(0, max)
+    self.fill:SetValue(cur)
+    -- amber under 25%: mana and energy only (rage starts every fight empty)
+    local low = self.opts.low and (self.token == "MANA" or self.token == "ENERGY") and belowLow()
+    self.low:SetShown(low and true or false)
+    if low then
+        self.low:SetMinMaxValues(0, max)
+        self.low:SetValue(cur)
+        self.low:SetAlpha(amount(A.UnitPowerPercent("player", pType, true, low)))
+    end
+    -- the engine formats the hidden amount; SuuUI never reads it
+    local mode = self.opts.number
+    if mode == "pct" and CurveConstants then
+        self.text:SetFormattedText("%d%%", A.UnitPowerPercent("player", pType, true, CurveConstants.ScaleTo100))
+        self.text.value = nil
+    elseif mode == "value" then
+        self.text:SetFormattedText("%d", cur)
+        self.text.value = nil
+    end
+end
+
+function RB:UpdateMana()
+    local A = self.api
+    if not self.hasMana then return end
+    local mana = Enum.PowerType and Enum.PowerType.Mana or 0
+    self.manaFill:SetMinMaxValues(0, amount(A.UnitPowerMax("player", mana)))
+    self.manaFill:SetValue(amount(A.UnitPower("player", mana)))
+end
+
+-- The target's points; the row hides (keeping its place) without a hostile
+-- target.
+function RB:UpdatePoints()
+    local A = self.api
+    if not self.hasPoints then return end
+    local target = A.UnitExists("target") and uiText.flag(A.UnitCanAttack("player", "target"))
+    self.points:SetAlpha(target and 1 or 0)
+    if not target then return end
+    local n = A.GetComboPoints and A.GetComboPoints("player", "target")
+    if type(n) == "nil" then n = A.UnitPower("player", Enum.PowerType.ComboPoints) end
+    local hidden = isSecret(n)
+    local count = secret.known(n, 0)
+    local full = not hidden and count >= POINTS
+    for i, p in ipairs(self.pips) do
+        p.fill:SetValue(amount(n))
+        local on = not hidden and count >= i
+        draw.paint(p.fill, full and "arcane" or "ink")
+        p.border:SetColor(full and "arcane" or ((on or hidden) and "gilt-line" or "gilt-hairline"))
+        if full and not p.glow then p.glow = draw.shadow(p, "glow-arcane") end
+        if p.glow then p.glow:SetShown(full) end
+    end
+end
+
+-- Out of combat: as it is, at opacity-ooc, or invisible in its place. Edit
+-- mode always shows it.
+function RB:UpdateFade()
+    local A = self.api
+    local ooc = self.opts.ooc
+    local fighting = self.inFight or uiText.flag(A.UnitAffectingCombat("player"))
+    local alpha = 1
+    if not fighting and not editMode.isActive() then
+        if ooc == "fade" then alpha = T.opacity["opacity-ooc"]
+        elseif ooc == "hide" then alpha = 0 end
+    end
+    self:SetAlpha(alpha)
+end
+
+function RB:Start()
+    if self.running then return end
+    self.running = true
+    local function power(_: string, _: any, token: any)
+        if token == "COMBO_POINTS" then self:UpdatePoints()
+        elseif token == "MANA" and self.hasMana then self:UpdateMana()
+        else self:UpdatePower() end
+    end
+    events.onUnit("UNIT_POWER_FREQUENT", "player", power, self)
+    events.onUnit("UNIT_POWER_UPDATE", "player", power, self)
+    events.onUnit("UNIT_MAXPOWER", "player", function() self:UpdatePower(); self:UpdateMana() end, self)
+    -- a form change switches the power, and maybe the points and mana line
+    events.onUnit("UNIT_DISPLAYPOWER", "player", function() self:Refresh() end, self)
+    local valid = C_EventUtils and C_EventUtils.IsEventValid
+    if not valid or valid("UPDATE_SHAPESHIFT_FORM") then
+        events.onGame("UPDATE_SHAPESHIFT_FORM", function() self:Refresh() end, self)
+    end
+    events.onGame("PLAYER_TARGET_CHANGED", function() self:UpdatePoints() end, self)
+    events.onGame("PLAYER_ENTERING_WORLD", function() self:Refresh() end, self)
+    events.onGame("PLAYER_REGEN_DISABLED", function() self.inFight = true; self:UpdateFade() end, self)
+    events.onGame("PLAYER_REGEN_ENABLED", function() self.inFight = false; self:UpdateFade() end, self)
+    events.on("SUUUI_EDITMODE_CHANGED", function() self:UpdateFade() end, self)
+    self:Refresh()
+end
+
+function RB:Stop()
+    if not self.running then return end
+    self.running = false
+    events.offAll(self)
+end
+
+export function resourceBar(parent: Frame, opts: { [string]: any }?): any
+    opts = opts or {}
+    local r = CreateFrame("Frame", opts.name, parent)
+    Mixin(r, RB)
+    r.api = opts.api or _G
+    r.opts = { show = "both", number = "value", low = true, druidMana = true, ooc = "fade", points = "over",
+               width = opts.width or 340, height = opts.height or 14 }
+
+    r.bar = well(r)
+    r.fill = statusBar(r.bar, "mana", 1)
+    inside(r.fill, r.bar)
+    r.low = statusBar(r.bar, "amber", 2)
+    inside(r.low, r.bar)
+    r.low:Hide()
+    -- the number over the fills, space-3 from the right end
+    local over = CreateFrame("Frame", nil, r.bar)
+    over:SetAllPoints()
+    over:SetFrameLevel(r.bar:GetFrameLevel() + 3)
+    r.text = uiText.text(over, "micro", "ink")
+    r.text:SetShadowed(true)
+    r.text:SetPoint("RIGHT", over, "RIGHT", -S["space-3"], 0)
+
+    r.mana = well(r)
+    r.manaFill = statusBar(r.mana, "mana", 1)
+    inside(r.manaFill, r.mana)
+
+    r.points = CreateFrame("Frame", nil, r)
+    r.pips = {}
+    for i = 1, POINTS do
+        local p = CreateFrame("Frame", nil, r.points)
+        p.track = draw.fill(p, "surface-sunk")
+        p.track:SetAllPoints()
+        -- lit by itself from the count: min i-1, max i
+        p.fill = statusBar(p, "ink", 1)
+        p.fill:SetMinMaxValues(i - 1, i)
+        inside(p.fill, p)
+        p.border = draw.border(p, "gilt-hairline", { layer = "OVERLAY" })
+        r.pips[i] = p
+    end
+    r:Refresh()
+    return r
+end

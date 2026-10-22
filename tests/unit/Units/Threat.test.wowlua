@@ -1,0 +1,369 @@
+-- Units/Threat: the threat meter on your target's threat table (you, your
+-- pet and the group, by % or by state while the % is secret; shown always,
+-- in combat or never; as tall as the damage meter) and the warnings: about
+-- to pull (over the tank's threat, with your threat drop), aggro drawn (in
+-- a group with a tank or a pet, or solo with your pet on the mob), none for
+-- a tank, none outside instances when asked; the preview and the settings
+-- rows; the old toggle carried over; stopped.
+--
+-- The threat lists are the engine's (`mob:setThreat(value, who)`): the
+-- unit the mob targets holds it, someone above is about to pull.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, SECTION from "/Units/Threat"
+import internal migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10 })
+local tank = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
+
+-- What the meter was given last.
+local function meterRows(): (any[], { [string]: any })
+    local got: any = {}
+    mock.stub(M.meter, "SetRows", function(_: any, list: any[], opts: any) got.list, got.opts = list, opts end)
+    M:Update()
+    return got.list, got.opts
+end
+
+-- The alerts raised and taken away.
+local function alerts(): { [string]: any }
+    local shown: { [string]: any } = {}
+    mock.stub(SuuUI, "ShowAlert", function(key: string, tone: string, title: string, detail: string, ...: any)
+        shown[key] = { tone = tone, title = title, detail = detail:format(...) }
+    end)
+    mock.stub(SuuUI, "HideAlert", function(key: string) shown[key] = nil end)
+    return shown
+end
+
+-- A unit's threat on the wolf (`who`: the player by default).
+local function on(value: number?, who: mock.MockUnit?)
+    if who then wolf:setThreat(value, who) else wolf:setThreat(value) end
+end
+
+local function fight()
+    mock.player:target(wolf)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.player:target(nil)
+    wolf:setThreat(nil)
+    mock.group:leave()
+    mock.setPet(nil)
+    wolf:target(nil)
+    for _, u in ipairs({ tank }) do wolf:setThreat(nil, u) end
+    for _, k in ipairs({ "shows", "who", "marker", "raw", "warnPull", "aggroAlert", "openWorld", "position" }) do M:Reset(k) end
+    local dm: any = SuuUI.GetModule("damagemeter")
+    if dm then dm:Reset("rows") end
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+@test("solo on a hostile target: your row, the target's name, by %")
+local function solo()
+    mock.player:target(wolf)
+    wolf:setThreat(100)
+    mock.advanceFrames(1)
+    local list, opts = meterRows()
+    expect(#list).toBe(1)
+    expect(list[1].you).toBe(true)
+    expect(list[1].status).toBe(3)
+    expect(list[1].percent).toBe(100)
+    expect(opts.byState).toBe(false)
+    expect(opts.show).toBe("group")
+    expect(M.meter:IsShown()).toBe(true)
+    -- no hostile target: empty, still shown (Always)
+    mock.player:target(nil)
+    list = meterRows()
+    expect(#list).toBe(0)
+    expect(M.meter:IsShown()).toBe(true)
+end
+
+@test("shown always, in combat with a hostile target, never, or hidden in edit mode; read every 0.2s while it can change")
+local function shows()
+    M:Set("shows", "combat")
+    expect(M.meter:IsShown()).toBe(false)
+    expect(M.driver:IsShown()).toBe(false)
+    fight()
+    expect(M.meter:IsShown()).toBe(true)
+    expect(M.driver:IsShown()).toBe(true)
+    local reads = 0
+    local real = M.Update
+    mock.stub(M, "Update", function(self: any) reads = reads + 1; real(self) end)
+    mock.advanceFrames(60)
+    expect(reads >= 4).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(M.meter:IsShown()).toBe(false)
+    expect(M.driver:IsShown()).toBe(false)
+    M:Set("shows", "always")
+    expect(M.driver:IsShown()).toBe(true)
+    M:Set("position", { point = "BOTTOMRIGHT", x = -292, y = 28, hidden = true })
+    expect(M.meter:IsShown()).toBe(false)
+    M:Set("shows", "off")
+    expect(M.meter:IsShown()).toBe(false)
+end
+
+@test("the group: you, your pet, each member in group order; the options live")
+local function group()
+    tank:setRole("TANK")
+    mock.group:add(tank)
+    local pet = mock.spawnUnit({ name = "Fang", level = 30, reaction = "friendly" })
+    mock.setPet(pet)
+    mock.player:target(wolf)
+    wolf:target(tank)
+    on(2000, tank)
+    on(1800)
+    on(800, pet)
+    mock.advanceFrames(1)
+    local list, opts = meterRows()
+    expect(#list).toBe(3)
+    expect(list[1].you).toBe(true)
+    expect(list[1].status).toBe(0)
+    expect(list[2].role).toBe("PET")
+    expect(list[2].class).toBeNil()
+    expect(list[3].name).toBe("Brannoc Ironhand")
+    expect(list[3].class).toBe("WARRIOR")
+    expect(list[3].role).toBe("TANK")
+    expect(list[3].status).toBe(3)
+    expect(opts.byState).toBe(false)
+    -- off the table: no row
+    on(nil, pet)
+    list = meterRows()
+    expect(#list).toBe(2)
+    -- the options live
+    M:Set("who", "tanks")
+    M:Set("marker", "class")
+    M:Set("raw", false)
+    list, opts = meterRows()
+    expect(opts.show).toBe("tanks")
+    expect(opts.marker).toBe("class")
+    expect(opts.raw).toBe(false)
+end
+
+@test("about to pull: over the tank's threat in a group with a tank, the holder named; gone as you drop back")
+local function pull()
+    tank:setRole("TANK")
+    mock.group:add(tank)
+    local shown = alerts()
+    fight()
+    wolf:target(tank)
+    on(2000, tank)
+    on(2100)
+    M:Update()
+    expect(shown["threat-pull"] ~= nil).toBe(true)
+    expect(shown["threat-pull"].tone).toBe("warning")
+    expect(shown["threat-pull"].detail).toBe("Prowler · over Brannoc Ironhand's threat")
+    on(1000)
+    M:Update()
+    expect(shown["threat-pull"]).toBeNil()
+    -- the warning off
+    M:Set("warnPull", false)
+    on(2100)
+    M:Update()
+    expect(shown["threat-pull"]).toBeNil()
+end
+
+@test("aggro drawn: solo with your pet on the mob (not with In a group); in a group with a tank; never as the tank")
+local function aggro()
+    local shown = alerts()
+    fight()
+    wolf:target(mock.player)
+    on(2000)
+    -- solo, no pet: nothing
+    M:Update()
+    expect(shown["threat-aggro"]).toBeNil()
+    -- solo with your pet on the mob
+    local pet = mock.spawnUnit({ name = "Fang", level = 30, reaction = "friendly" })
+    mock.setPet(pet)
+    on(1200, pet)
+    M:Update()
+    expect(shown["threat-aggro"] ~= nil).toBe(true)
+    expect(shown["threat-aggro"].tone).toBe("danger")
+    expect(shown["threat-aggro"].detail).toBe("Prowler")
+    M:Set("aggroAlert", "group")
+    expect(shown["threat-aggro"]).toBeNil()
+    M:Set("aggroAlert", "off")
+    on(nil, pet)
+    mock.setPet(nil)
+    -- in a group with a tank
+    tank:setRole("TANK")
+    mock.group:add(tank)
+    on(1500, tank)
+    M:Set("aggroAlert", "group")
+    expect(shown["threat-aggro"] ~= nil).toBe(true)
+    -- you the tank: no warnings
+    mock.stub(SuuUI, "Role", function(): string return "TANK" end)
+    M:Update()
+    expect(shown["threat-aggro"]).toBeNil()
+end
+
+@test("no one to hold the mobs (two damage dealers), or the open world with Open world off: no warnings")
+local function noHolder()
+    local shown = alerts()
+    local friend = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "MAGE", level = 30, reaction = "friendly" })
+    friend:setRole("DAMAGER")
+    mock.group:add(friend)
+    fight()
+    wolf:target(mock.player)
+    on(2000)
+    on(1000, friend)
+    M:Update()
+    expect(shown["threat-aggro"]).toBeNil()
+    -- a tank, but the open world with Open world off
+    friend:setRole("TANK")
+    M:Set("openWorld", false)
+    expect(shown["threat-aggro"]).toBeNil()
+    -- in a dungeon
+    mock.enterInstance("party")
+    M:Update()
+    expect(shown["threat-aggro"] ~= nil).toBe(true)
+    mock.leaveInstance()
+    on(nil, friend)
+end
+
+@test("a raid: its members in the meter; about to pull from someone outside the group: the mob alone named")
+local function raid()
+    local shown = alerts()
+    tank:setRole("TANK")
+    mock.group:add(tank, { raid = true })
+    fight()
+    wolf:target(tank)
+    on(2000, tank)
+    on(1500)
+    local list = meterRows()
+    expect(#list).toBe(2)
+    expect(list[2].name).toBe("Brannoc Ironhand")
+    -- a stranger holds it, you over them
+    local stranger = mock.spawnUnit({ name = "Wandering Guard", level = 30, reaction = "friendly" })
+    on(nil, tank)
+    on(1000, stranger)
+    wolf:target(stranger)
+    on(1050)
+    M:Update()
+    expect(shown["threat-pull"].detail).toBe("Prowler")
+    on(nil, stranger)
+end
+
+@test("your threat drop named while it's ready (a priest's Fade)")
+local function drop()
+    mock.setPlayer({ class = "PRIEST" })
+    local npc = mock.spawnUnit({ name = "Quartermaster Hale", level = 30, reaction = "friendly", distance = 3 })
+    mock.defineTrainer(npc, { greeting = "hi", services = { { spell = 586, name = "Fade", icon = 135994, level = 1, rank = "", cost = 0 } } })
+    mock.defineGossip(npc, { text = "hello", options = { { name = "Train me", icon = 132058, gossipOptionID = 7, opens = "trainer" } } })
+    mock.player:interact(npc)
+    mock.advanceTime(1)
+    C_GossipInfo.SelectOption(7)
+    mock.advanceTime(1)
+    BuyTrainerService(1)
+    mock.advanceTime(1)
+    CloseTrainer()
+    expect(IsPlayerSpell(586)).toBe(true)
+    local shown = alerts()
+    tank:setRole("TANK")
+    mock.group:add(tank)
+    fight()
+    wolf:target(tank)
+    on(2000, tank)
+    on(2100)
+    M:Update()
+    expect(shown["threat-pull"].detail).toBe("Prowler · over Brannoc Ironhand's threat · Fade ready")
+    -- on cooldown: not named
+    mock.defineSpell(586, { cooldown = 30 })
+    mock.player:useSpell(586)
+    mock.advanceTime(2)
+    M:Update()
+    expect(shown["threat-pull"].detail).toBe("Prowler · over Brannoc Ironhand's threat")
+    mock.setPlayer({ class = "WARRIOR" })
+end
+
+@test("out of a fight, or on a friendly target: no warnings")
+local function calm()
+    local shown = alerts()
+    tank:setRole("TANK")
+    mock.group:add(tank)
+    mock.player:target(wolf)
+    wolf:target(tank)
+    on(2000, tank)
+    on(2100)
+    M:Update()
+    expect(shown["threat-pull"]).toBeNil()
+    mock.player:target(tank)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:Update()
+    expect(shown["threat-pull"]).toBeNil()
+end
+
+@test("the preview: six sample rows, the last one you; as tall as the damage meter, live")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetParent()).toBe(parent)
+    local got: any = {}
+    mock.stub(view, "SetRows", function(_: any, list: any[], opts: any) got.list, got.opts = list, opts end)
+    M:RefreshPreview()
+    expect(#got.list).toBe(6)
+    expect(got.list[6].you).toBe(true)
+    expect(got.list[1].you).toBe(false)
+    local heights: { number } = {}
+    mock.stub(M.meter, "SetMaxRows", function(_: any, n: number) heights[#heights + 1] = n end)
+    local dm: any = SuuUI.GetModule("damagemeter")
+    dm:Set("rows", 6)
+    expect(heights[1]).toBe(6)
+    M:Set("who", "self")
+    expect(got.opts.show).toBe("self")
+end
+
+@test("the settings rows wait for the meter")
+local function rowsWait()
+    local rows: { [string]: any } = {}
+    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do rows[r.key] = r end end
+    expect((rows.who.disabled())).toBe(false)
+    M:Set("shows", "off")
+    local off, why = rows.raw.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("Show the threat meter first.")
+end
+
+@test("Show the threat meter, once a toggle, carried over")
+local function migration()
+    local found = false
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "threat" and m.id == "shows" then
+            found = true
+            local shown: { [string]: any } = { shown = true }
+            m.fn(shown)
+            expect(shown.shows).toBe("combat")
+            local off: { [string]: any } = { shown = false }
+            m.fn(off)
+            expect(off.shows).toBe("off")
+            expect(off.shown).toBeNil()
+        end
+    end
+    expect(found).toBe(true)
+end
+
+-- (last: the module off)
+@test("stopped: the meter and its warnings gone")
+local function disabled()
+    local shown = alerts()
+    tank:setRole("TANK")
+    mock.group:add(tank)
+    fight()
+    wolf:target(tank)
+    on(2000, tank)
+    on(2100)
+    M:Update()
+    expect(shown["threat-pull"] ~= nil).toBe(true)
+    local m: any = M
+    m:OnDisable()
+    expect(shown["threat-pull"]).toBeNil()
+    expect(M.meter:IsShown()).toBe(false)
+    expect(M.driver:IsShown()).toBe(false)
+end

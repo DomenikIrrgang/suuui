@@ -1,0 +1,445 @@
+-- UI/Inventory: the item slot's skin (on a plain button and on a template's,
+-- empty, by quality, dimmed and locked, hover), money and its text, the
+-- inventory panel (search, sort, the grid and its sections, the foot's
+-- note, money and action), the characters view (picker, Bags/Bank, All
+-- characters, the banner, found items), columns and a theme change.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import skinItemSlot, itemSlot, moneyText, money, inventory, Inventory, FoundItem from "/UI/Inventory"
+import * as tooltipModule from "/UI/Tooltip"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, borderToken from "./WorldHelpers"
+
+local S = T.space
+local SLOT = T.size["slot"]
+local GAP = S["space-2"]
+
+local parent: Frame? = nil
+
+local function host(): Frame
+    parent = newParent(600, 600)
+    return parent :: Frame
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+-- A money text without its colour codes.
+local function plain(s: string): string
+    return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+--------------------------------------------------------------------------------
+-- The item slot
+--------------------------------------------------------------------------------
+
+@test("an empty slot: the sunk well, a faint edge, gilt under the mouse")
+local function emptySlot()
+    local b = itemSlot(host())
+    b:SetPoint("CENTER")
+    expect(b:GetWidth()).toBe(SLOT)
+    local s = b.skin
+    expect(s.item).toBeNil()
+    expect(tokenOf(s.well)).toBe("surface-sunk")
+    expect(borderToken(s.border)).toBe("gilt-faint")
+    expect(s.count:GetText()).toBe("")
+    mock.hover(b)
+    expect(borderToken(s.border)).toBe("gilt")
+    mock.hover(nil)
+    expect(borderToken(s.border)).toBe("gilt-faint")
+    expect(b:GetAlpha()).toBe(1)
+    expect(itemSlot(host(), 20):GetWidth()).toBe(20)
+end
+
+@test("an item: the raised well, its icon, a count above one, the edge by quality")
+@cases({
+    { "common", "gilt-hairline" }, { "rare", "quality-rare" }, { "epic", "quality-epic" }, { nil, "gilt-hairline" },
+})
+local function item(quality: string?, edge: string)
+    local b = itemSlot(host())
+    b:SetPoint("CENTER")
+    local s = b.skin
+    expect(s:SetItem({ icon = 134400, count = 5, quality = quality })).toBe(b)
+    expect(tokenOf(s.well)).toBe("surface-raised")
+    expect(s.icon:GetTextureFileID()).toBe(134400)
+    expect(s.icon:IsShown()).toBe(true)
+    expect(s.count:GetText()).toBe("5")
+    expect(borderToken(s.border)).toBe(edge)
+    mock.hover(b)
+    expect(borderToken(s.border)).toBe("gilt")
+    mock.hover(nil)
+    expect(borderToken(s.border)).toBe(edge)
+    s:SetItem({ icon = 1, count = 1 })
+    expect(s.count:GetText()).toBe("")
+end
+
+@test("dimmed: greyed and faded; locked: greyed only; back to full")
+local function dimLocked()
+    local b = itemSlot(host())
+    local s = b.skin
+    s:SetItem({ icon = 1, dim = true })
+    expect(s.icon:IsDesaturated()).toBe(true)
+    expect(b:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    s:SetItem({ icon = 1, locked = true })
+    expect(s.icon:IsDesaturated()).toBe(true)
+    expect(b:GetAlpha()).toBe(1)
+    s:SetItem({ icon = 1 })
+    expect(s.icon:IsDesaturated()).toBe(false)
+    local r = s.icon:GetVertexColor()
+    expect(r).toBe(1)
+    s:SetItem(nil)
+    expect(s.icon:GetTexture()).toBeNil()
+end
+
+@test("a template's button: its own icon used, its parts and textures hidden")
+local function templateButton()
+    local p = host()
+    local b: any = CreateFrame("Button", "SuuUITestSlot", p)
+    b:SetSize(SLOT, SLOT)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.IconBorder = b:CreateTexture(nil, "OVERLAY")
+    b.Count = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    b.flash = 5 -- not a region: left alone
+    local stock = b:CreateFontString("SuuUITestSlotStock", "OVERLAY", "GameFontNormal")
+    b:SetNormalTexture("Interface\\Buttons\\UI-Quickslot2")
+    b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+    local s = skinItemSlot(b)
+    expect(s.icon).toBe(b.icon)
+    expect(b.IconBorder:GetAlpha()).toBe(0)
+    expect(b.Count:GetAlpha()).toBe(0)
+    expect(stock:GetAlpha()).toBe(0)
+    expect(b:GetNormalTexture():GetAlpha()).toBe(0)
+    expect(b:GetHighlightTexture():GetAlpha()).toBe(0)
+    -- an Icon (capitalised) too; unnamed: no global parts
+    local c: any = CreateFrame("Button", nil, p)
+    c.Icon = c:CreateTexture(nil, "ARTWORK")
+    expect(skinItemSlot(c).icon).toBe(c.Icon)
+end
+
+--------------------------------------------------------------------------------
+-- Money
+--------------------------------------------------------------------------------
+
+@test("moneyText: gold with thousands, silver, copper; zero coins at the end left out")
+@cases({
+    { 0, "0c" }, { 5, "5c" }, { 100, "1s" }, { 10000, "1g" }, { 10005, "1g  0s  5c" },
+    { 123456789, "12,345g  67s  89c" }, { 1000000000, "100,000g" }, { 10100, "1g  1s" },
+    { -5, "0c" }, { 12.7, "12c" }, { "abc", "0c" }, { nil, "0c" },
+})
+local function texts(total: any, shown: string)
+    expect(plain(moneyText(total))).toBe(shown)
+end
+
+@test("moneyText: the units in the coin colours")
+local function coinColours()
+    local text = moneyText(10101)
+    local colors = T.color :: { [string]: any }
+    expect(text:find(colors["coin-gold"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(colors["coin-silver"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(colors["coin-copper"].hex, 1, true) ~= nil).toBe(true)
+end
+
+@test("money: the amount kept, as wide as its text, a numeric line high")
+local function moneyWidget()
+    local m = money(host())
+    expect(m.copper).toBe(0)
+    expect(plain(m.text:GetText() :: string)).toBe("0c")
+    m:SetCopper(123456)
+    expect(m.copper).toBe(123456)
+    expect(plain(m.text:GetText() :: string)).toBe("12g  34s  56c")
+    expect(m:GetWidth()).toBe(m.text:GetUnboundedStringWidth())
+    expect(m:GetHeight()).toBe(T.type.numeric.lineHeight)
+    m:SetCopper("x")
+    expect(m.copper).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- The inventory panel
+--------------------------------------------------------------------------------
+
+local function make(opts: { [string]: any }?): Inventory
+    local inv = inventory(host(), opts :: any)
+    inv:SetPoint("CENTER")
+    inv:Show()
+    return inv
+end
+
+local function slots(n: number): Button[]
+    local list: Button[] = {}
+    for i = 1, n do list[i] = itemSlot(host()) end
+    return list
+end
+
+@test("a new panel: Bags, ten columns, search and sort, no money until it has some")
+local function fresh()
+    local inv = make()
+    expect(inv.columns).toBe(10)
+    expect(inv:GridWidth()).toBe(10 * SLOT + 9 * GAP)
+    expect(inv.grid:GetWidth()).toBe(inv:GridWidth())
+    expect(inv.search:GetWidth()).toBe(inv:GridWidth() - 30 - S["space-3"])
+    expect(inv.money).never.toBeShown()
+    expect(inv.note:GetText()).toBeNil()
+    expect(inv.who).toBeNil()
+    expect(inv.sort.tip).toEqual({ title = "Sort", description = "Blizzard's own sort: stacks and orders your items." })
+    -- the body: the tools, the grid, the rule and the foot
+    expect(inv.body:GetHeight()).toBe(30 + S["space-4"] + SLOT + S["space-4"] + 1 + S["space-4"] + T.type.numeric.lineHeight)
+    -- options: a title, the columns, the sort's tip
+    local other = make({ title = "Bank", columns = 7, sortTip = "Sorts the bank." })
+    expect(other:GridWidth()).toBe(7 * SLOT + 6 * GAP)
+    expect(other.sort.tip.description).toBe("Sorts the bank.")
+end
+
+@test("the sort button: gilt and its tip on hover when enabled, faded when disabled")
+local function sortButton()
+    local inv = make()
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local hide = mock.stub(tooltipModule, "hideTooltip", function() end)
+    mock.hover(inv.sort)
+    expect(borderToken(inv.sort.edge)).toBe("gilt")
+    expect(show).toHaveBeenCalledWith(inv.sort, inv.sort.tip)
+    mock.hover(nil)
+    expect(borderToken(inv.sort.edge)).toBe("gilt-line")
+    expect(hide).toHaveBeenCalled()
+    inv.sort:SetEnabled(false)
+    expect(inv.sort:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    -- disabled: no gilt edge, its tip still shown (why it's off)
+    mock.hover(inv.sort)
+    expect(borderToken(inv.sort.edge)).toBe("gilt-line")
+    expect(show).toHaveBeenCalledTimes(2)
+    inv.sort:SetEnabled(true)
+    expect(inv.sort:GetAlpha()).toBe(1)
+    -- no tip: none shown
+    inv.sort.tip = nil
+    mock.hover(nil)
+    mock.hover(inv.sort)
+    expect(show).toHaveBeenCalledTimes(2)
+end
+
+@test("LayoutSlots: row by row, a column of GAP; the grid as tall as its rows")
+local function layout()
+    local inv = make({ columns = 4 })
+    local list = slots(6)
+    inv:LayoutSlots(list)
+    expect(list[1]).toBeAnchoredTo(inv.grid, "TOPLEFT", "TOPLEFT")
+    local _, _, _, x4 = list[4]:GetPoint(1)
+    local _, _, _, x5, y5 = list[5]:GetPoint(1)
+    expect(x4).toBe(3 * (SLOT + GAP))
+    expect(x5).toBe(0)
+    expect(y5).toBe(-(SLOT + GAP))
+    expect(inv.grid:GetHeight()).toBe(2 * SLOT + GAP)
+    -- a full last row: no gap after it
+    inv:LayoutSlots(slots(8))
+    expect(inv.grid:GetHeight()).toBe(2 * SLOT + GAP)
+    -- none: a slot high
+    inv:LayoutSlots({})
+    expect(inv.grid:GetHeight()).toBe(SLOT)
+end
+
+local function headH(): number return S["space-4"] + 1 + S["space-3"] + T.type.caption.lineHeight + S["space-3"] end
+
+@test("sections: a head before a button, on a new row; a note alone; one after every button")
+local function sections()
+    local inv = make({ columns = 4 })
+    local list = slots(5)
+    inv:LayoutSlots(list, {
+        { at = 1, label = "Backpack", meta = "16 slots" },
+        { at = 3, label = "Reagents", note = "a quiet note" },
+        { at = 6, note = "Nothing in the bank bag" },
+    })
+    local heads = inv.heads :: any[]
+    local a, b, c = heads[1], heads[2], heads[3]
+    expect(a.label).toHaveText("Backpack")
+    expect(tokenOf(a.label)).toBe("gilt-text")
+    expect(a.meta).toHaveText("16 slots")
+    expect(b.meta).toHaveText("a quiet note")
+    expect(c.label).toHaveText("Nothing in the bank bag")
+    expect(tokenOf(c.label)).toBe("ink-muted")
+    expect(c.meta).toHaveText("")
+    expect(tokenOf(a.rule)).toBe("gilt-faint")
+    -- each section on its own row
+    local _, _, _, _, yA = a:GetPoint(1)
+    local _, _, _, x3, y3 = list[3]:GetPoint(1)
+    expect(yA).toBe(0)
+    expect(x3).toBe(0)
+    expect(y3).toBe(-(headH() + SLOT + GAP + headH()))
+    -- fewer sections: the heads left over hidden; a section without a label
+    inv:LayoutSlots(list, { { at = 1 } })
+    expect(a.label).toHaveText("")
+    expect(b).never.toBeShown()
+    expect(c).never.toBeShown()
+end
+
+@test("the foot: the note and money; a quiet action before the note, its click and tooltip")
+local function foot()
+    local inv = make()
+    inv:SetNote("18 free of 80")
+    expect(inv.note).toHaveText("18 free of 80")
+    inv:SetNote(nil)
+    expect(inv.note).toHaveText("")
+    inv:SetMoney(10000)
+    expect(inv.money).toBeShown()
+    expect(inv.money.copper).toBe(10000)
+    inv:SetMoney(nil)
+    expect(inv.money).never.toBeShown()
+    inv:SetMeta("18 free of 80")
+    local clicked = mock.spy()
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    mock.stub(tooltipModule, "hideTooltip", function() end)
+    inv:SetAction({ text = "Sell junk", onClick = clicked, tooltip = { title = "Sell junk" } })
+    local b = inv.action :: any
+    expect(b).toBeShown()
+    expect(b.label).toHaveText("Sell junk")
+    expect(inv.note).toBeAnchoredTo(b, "LEFT", "RIGHT")
+    expect(inv.body:GetHeight()).toBe(30 + S["space-4"] + SLOT + S["space-4"] + 1 + S["space-4"] + b:GetHeight())
+    mock.click(b)
+    expect(clicked).toHaveBeenCalledTimes(1)
+    mock.hover(b)
+    expect(show).toHaveBeenCalledWith(b, { title = "Sell junk" })
+    mock.hover(nil)
+    -- the same button again, another label, no tooltip or click
+    inv:SetAction({ text = "Repair" })
+    expect(inv.action).toBe(b)
+    expect(b.label).toHaveText("Repair")
+    mock.click(b)
+    mock.hover(b)
+    expect(show).toHaveBeenCalledTimes(1)
+    inv:SetAction(nil)
+    expect(b).never.toBeShown()
+    expect(inv.note).toBeAnchoredTo(inv.rule, "TOPLEFT", "BOTTOMLEFT")
+    -- none ever: nothing to hide
+    make():SetAction(nil)
+end
+
+@test("close: onClose when set, else hidden")
+local function close()
+    local inv = make()
+    local closed = mock.spy()
+    inv.onClose = closed
+    mock.click((inv :: any).close)
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(inv).toBeShown()
+    inv.onClose = nil
+    mock.click((inv :: any).close)
+    expect(inv).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Characters
+--------------------------------------------------------------------------------
+
+@test("characters: the picker in the title's place, Bags/Bank, All characters, a row more")
+local function characters()
+    local inv = make({ characters = true })
+    expect(inv.title).never.toBeShown()
+    expect(inv.who ~= nil).toBe(true)
+    expect((inv.view :: any).value).toBe("bags")
+    expect((inv.all :: any).value).toBe(false)
+    expect(inv.allLabel).toHaveText("All characters")
+    expect(inv.banner).never.toBeShown()
+    expect(inv.results).never.toBeShown()
+    expect(inv.body:GetHeight()).toBe(2 * (30 + S["space-4"]) + SLOT + S["space-4"] + 1 + S["space-4"] + T.type.numeric.lineHeight)
+end
+
+@test("the banner: an eye and its text over the grid; empty or nil hides it")
+local function banner()
+    local inv = make({ characters = true })
+    local before = inv.body:GetHeight()
+    inv:SetBanner("Tamsin's bags as of 2 days ago · read only")
+    local b = inv.banner :: any
+    expect(b).toBeShown()
+    expect(b.text).toHaveText("Tamsin's bags as of 2 days ago · read only")
+    expect(tokenOf(b.eye)).toBe("ink-muted")
+    expect(inv.body:GetHeight()).toBe(before + T.type.caption.lineHeight + S["space-4"])
+    inv:SetBanner("")
+    expect(b).never.toBeShown()
+    inv:SetBanner(nil)
+    expect(inv.body:GetHeight()).toBe(before)
+    -- without characters: no banner, no results
+    local plainInv = make()
+    plainInv:SetBanner("x")
+    expect(plainInv:SetResults({})).toBe(0)
+end
+
+@test("found items in place of the grid: icon, label in its quality, places, a count; ten at most")
+local function results()
+    local inv = make({ characters = true })
+    inv:LayoutSlots(slots(30))
+    local gridH = inv.grid:GetHeight()
+    local list: FoundItem[] = {
+        { icon = 1, quality = "rare", label = "Linen Cloth", count = 12, places = "Bags 10 · Bank 2" },
+        { icon = 2, quality = "common", label = "Peacebloom" },
+        { icon = 3 },
+    }
+    expect(inv:SetResults(list)).toBe(0)
+    local rows = inv.resultRows :: any[]
+    expect(inv.results).toBeShown()
+    expect(inv.grid).never.toBeShown()
+    expect(rows[1].label).toHaveText("Linen Cloth")
+    expect(tokenOf(rows[1].label)).toBe("quality-rare")
+    expect(rows[1].total).toHaveText("×12")
+    expect(rows[1].places).toHaveText("Bags 10 · Bank 2")
+    expect(rows[1].slot.skin.item).toEqual({ icon = 1, quality = "rare" })
+    expect(tokenOf(rows[2].label)).toBe("ink")
+    expect(rows[3].label).toHaveText("")
+    expect(rows[3].total).toHaveText("")
+    -- never shorter than the grid it stands in for
+    expect((inv.results :: Frame):GetHeight()).toBe(gridH)
+    -- hover: the row's callbacks
+    local entered = mock.spy(function(_r: any) end)
+    local left = mock.spy(function(_r: any) end)
+    mock.hover(rows[1])
+    rows[1].onEnter, rows[1].onLeave = entered, left
+    mock.hover(nil)
+    mock.hover(rows[1])
+    expect(entered).toHaveBeenCalledWith(rows[1])
+    mock.hover(nil)
+    expect(left).toHaveBeenCalledWith(rows[1])
+    -- twelve found: ten shown, two left out; fewer: the rest hidden
+    local many: FoundItem[] = {}
+    for i = 1, 12 do many[i] = { icon = i, label = "Item " .. i } end
+    expect(inv:SetResults(many)).toBe(2)
+    expect(rows[10]).toBeShown()
+    expect(rows[11]).toBeNil()
+    inv:SetResults({ list[1] })
+    expect(rows[2]).never.toBeShown()
+    -- nil: the grid again
+    expect(inv:SetResults(nil)).toBe(0)
+    expect(inv.grid).toBeShown()
+    expect(inv.results).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Columns and a theme change
+--------------------------------------------------------------------------------
+
+@test("SetColumns: the search, grid and banner follow")
+@cases({ { false }, { true } })
+local function columns(withCharacters: boolean)
+    local inv = make({ characters = withCharacters })
+    inv:SetColumns(6)
+    local w = 6 * SLOT + 5 * GAP
+    expect(inv:GridWidth()).toBe(w)
+    expect(inv.search:GetWidth()).toBe(w - 30 - S["space-3"])
+    expect(inv.grid:GetWidth()).toBe(w)
+    if withCharacters then expect((inv.banner :: Frame):GetWidth()).toBe(w) end
+end
+
+@test("a theme change: money measured again, panels fitted again")
+local function theme()
+    local inv = make()
+    local m = money(host())
+    m:SetCopper(5)
+    local set = mock.stub(m, "SetCopper")
+    local fit = mock.stub(inv, "FitBody")
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(set).toHaveBeenCalledWith(m, 5)
+    expect(fit).toHaveBeenCalled()
+end

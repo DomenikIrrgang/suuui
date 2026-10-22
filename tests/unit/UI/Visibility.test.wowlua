@@ -1,0 +1,211 @@
+-- UI/Visibility: the four modes (always, combat through a state driver,
+-- mouseover with its hover poll and `also` frames, hidden), a change in
+-- combat waiting for its end, and edit or keybind mode showing every
+-- managed frame.
+
+import test, expect, afterEach, beforeAll from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as events from "/Core/Events"
+import * as editMode from "/EditMode/EditMode"
+import * as keybindMode from "/UI/KeybindMode"
+import setVisibility, VISIBILITY_OPTIONS from "/UI/Visibility"
+import expectNoErrors, newParent from "../../helpers"
+
+local parent: Frame? = nil
+local editing = false
+local binding = false
+
+@beforeAll
+local function fakeModes()
+    mock.module(editMode, { isActive = function(): boolean return editing end })
+    mock.module(keybindMode, { isActive = function(): boolean? return binding end })
+end
+
+local function frame(): Frame
+    parent = parent or newParent()
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetSize(50, 50)
+    f:SetPoint("CENTER")
+    return f
+end
+
+-- the poll runs every 0.1 s, the fade takes dur-base
+local function settle()
+    mock.advanceFrames(40)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if editing or binding then
+        editing, binding = false, false
+        events.emit("SUUUI_EDITMODE_CHANGED")
+    end
+    mock.player:leaveCombat()
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+@test("the options a Shows setting offers")
+local function options()
+    expect(VISIBILITY_OPTIONS).toEqual({
+        { value = "always", label = "Always" },
+        { value = "combat", label = "In combat" },
+        { value = "mouseover", label = "Mouseover" },
+    })
+end
+
+@test("always shows the frame at full alpha; nil is always")
+local function always()
+    local f = frame()
+    f:Hide()
+    f:SetAlpha(0.3)
+    setVisibility(f, "always")
+    expect(f).toBeShown()
+    expect(f:GetAlpha()).toBe(1)
+    local g = frame()
+    g:Hide()
+    setVisibility(g, nil)
+    expect(g).toBeShown()
+end
+
+@test("hidden hides the frame")
+local function hidden()
+    local f = frame()
+    setVisibility(f, "hidden")
+    expect(f).never.toBeShown()
+    setVisibility(f, "always")
+    expect(f).toBeShown()
+end
+
+@test("combat shows the frame only in combat")
+local function combat()
+    local f = frame()
+    setVisibility(f, "combat")
+    mock.advanceFrames(2)
+    expect(f).never.toBeShown()
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(f).toBeShown()
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(f).never.toBeShown()
+    setVisibility(f, "always")
+    mock.advanceFrames(2)
+    expect(f).toBeShown()
+end
+
+@test("mouseover keeps the frame shown at alpha 0 and fades it in on hover")
+local function mouseover()
+    local f = frame()
+    setVisibility(f, "mouseover")
+    expect(f).toBeShown()
+    expect(f:GetAlpha()).toBe(0)
+    mock.hover(f)
+    settle()
+    expect(f:GetAlpha()).toBe(1)
+    -- setting the mode it has changes nothing
+    setVisibility(f, "mouseover")
+    expect(f:GetAlpha()).toBe(1)
+    mock.hover(nil)
+    settle()
+    expect(f:GetAlpha()).toBe(0)
+end
+
+@test("an also frame's hover counts as the frame's own, while it is visible")
+local function alsoFrames()
+    local f, bar = frame(), frame()
+    bar:ClearAllPoints()
+    bar:SetPoint("TOPLEFT")
+    setVisibility(f, "mouseover", { bar })
+    mock.hover(bar)
+    settle()
+    expect(f:GetAlpha()).toBe(1)
+    mock.hover(nil)
+    settle()
+    bar:Hide()
+    mock.hover(bar)
+    settle()
+    expect(f:GetAlpha()).toBe(0)
+end
+
+@test("dragging something fades a mouseover frame in")
+local function dragging()
+    local f = frame()
+    setVisibility(f, "mouseover")
+    mock.fake("GetCursorInfo", function(): string? return "item" end)
+    settle()
+    expect(f:GetAlpha()).toBe(1)
+end
+
+@test("a frame that isn't visible doesn't count as hovered")
+local function invisible()
+    local f = frame()
+    setVisibility(f, "mouseover")
+    mock.hover(f)
+    local p = parent :: Frame
+    p:Hide()
+    settle()
+    expect(f:GetAlpha()).toBe(0)
+end
+
+@test("leaving mouseover drops the hover and shows it fully")
+local function leaveMouseover()
+    local f = frame()
+    setVisibility(f, "mouseover")
+    setVisibility(f, "always")
+    expect(f:GetAlpha()).toBe(1)
+    mock.hover(f)
+    settle()
+    mock.hover(nil)
+    settle()
+    expect(f:GetAlpha()).toBe(1)
+end
+
+@test("a change in combat waits for its end")
+local function inCombat()
+    local f = frame()
+    setVisibility(f, "always")
+    mock.player:enterCombat()
+    setVisibility(f, "hidden")
+    expect(f).toBeShown()
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(f).never.toBeShown()
+end
+
+@test("edit mode shows every managed frame but the hidden ones")
+local function editModeShows()
+    local m, c, h = frame(), frame(), frame()
+    setVisibility(m, "mouseover")
+    setVisibility(c, "combat")
+    setVisibility(h, "hidden")
+    mock.advanceFrames(2)
+    editing = true
+    events.emit("SUUUI_EDITMODE_CHANGED")
+    mock.advanceFrames(2)
+    expect(m:GetAlpha()).toBe(1)
+    expect(c).toBeShown()
+    expect(h).never.toBeShown()
+    -- no hover fading meanwhile
+    settle()
+    expect(m:GetAlpha()).toBe(1)
+    editing = false
+    events.emit("SUUUI_EDITMODE_CHANGED")
+    mock.advanceFrames(2)
+    expect(m:GetAlpha()).toBe(0)
+    expect(c).never.toBeShown()
+end
+
+@test("keybind mode shows them too")
+local function keybindModeShows()
+    local m = frame()
+    setVisibility(m, "mouseover")
+    binding = true
+    events.emit("SUUUI_KEYBINDMODE_CHANGED")
+    expect(m:GetAlpha()).toBe(1)
+    binding = false
+    events.emit("SUUUI_KEYBINDMODE_CHANGED")
+    expect(m:GetAlpha()).toBe(0)
+end

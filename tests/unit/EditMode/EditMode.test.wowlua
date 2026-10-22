@@ -1,0 +1,756 @@
+-- EditMode/EditMode: movers and their positions, rectangles and screen
+-- anchors, entering and leaving (combat refuses and closes it), the overlays
+-- (selection, the tag, hidden frames, frames turned off), dragging (snap,
+-- pinned anchors, a mover's own drop, the real frames following), the keys,
+-- the toolbar (anchor, X and Y, Hide, Reset, a mover's action), the panel
+-- (snap, grid size, the group preview, Reset all, Done, dragging it), clicks
+-- elsewhere, right-click settings, theme and scale changes, unregistering.
+
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import tokens as T from "/Core/Tokens"
+import root from "/Core/Root"
+import * as registry from "/SettingsUI/Registry"
+import * as settingsWindow from "/SettingsUI/Window"
+import * as editMode from "/EditMode/EditMode"
+import expectNoErrors from "../../helpers"
+import pointOf, printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
+
+local OWNER = { name = "edit mode test" }
+local TEMP = { name = "edit mode test, this test" }
+
+settings.register("emtest", {
+    position = { point = "BOTTOM", x = 0, y = 100 },
+    a = { point = "CENTER", x = 0, y = 0 },
+    b = { point = "TOPLEFT", x = 40, y = -40 },
+    c = { point = "CENTER", x = 0, y = -200 },
+    d = { point = "CENTER", x = 0, y = 0 },
+    e = { point = "CENTER", x = 0, y = 150 },
+    count = 1,
+})
+
+registry.register({ id = "em-sec", label = "Edit Mode Test", namespace = "emtest", groups = {} }, OWNER)
+
+local function frameOf(w: number, h: number, name: string?): any
+    local f = CreateFrame("Frame", name, root)
+    f:SetSize(w, h)
+    return f
+end
+
+-- Alpha: a frame with a name and settings of its own.
+local fa = frameOf(100, 50, "EmTestAlpha")
+local mA = editMode.register(fa, { namespace = "emtest", key = "a", label = "Alpha frame" }, OWNER)
+
+-- B: no owner, no label, no name.
+local fb = frameOf(80, 40)
+local mB = editMode.register(fb, { namespace = "emtest", key = "b" })
+
+-- C: places itself, takes drops over when asked, has an action and its own reset.
+local fc = frameOf(60, 30)
+local placeCalls, resets, actionClicks = 0, 0, 0
+local actionLabel = "Attach"
+local dropTakes = true
+local dropped: number[]? = nil
+local mC = editMode.register(fc, { namespace = "emtest", key = "c", label = "Charlie",
+    place = function()
+        placeCalls = placeCalls + 1
+        local pos = settings.get("emtest", "c")
+        fc:ClearAllPoints()
+        fc:SetPoint("CENTER", root, "CENTER", pos.x, pos.y)
+    end,
+    onDrop = function(l: number, b: number, w: number, h: number): any
+        dropped = { l, b, w, h }
+        return dropTakes
+    end,
+    action = { label = function(): string return actionLabel end,
+               onClick = function() actionClicks = actionClicks + 1; actionLabel = "Detach" end },
+    reset = function() resets = resets + 1 end,
+}, OWNER)
+
+local function layer(): any return (_G :: any).SuuUIEditMode end
+local function overlayOf(m: editMode.Mover): any return m.overlay end
+
+-- The toolbar: the layer's child with the anchor and the keys.
+local function bar(): any
+    for _, c in ipairs({ layer():GetChildren() }) do
+        local f: any = c
+        if f.anchor and f.keys then return f end
+    end
+    error("no toolbar")
+end
+
+local function descendants(f: any, out: any[]?): any[]
+    local list = out or {}
+    for _, c in ipairs({ f:GetChildren() }) do
+        list[#list + 1] = c
+        descendants(c, list)
+    end
+    return list
+end
+
+local function labelled(f: any, label: string): any
+    for _, c in ipairs(descendants(f)) do
+        local b: any = c
+        local l = b.label
+        if type(l) == "table" and l.GetText and l:GetText() == label then return b end
+    end
+    error("nothing labelled " .. label)
+end
+
+local function nextFrame() mock.advanceTime(0.01) end
+
+local seen: any[] = {}         -- SUUUI_EDITMODE_CHANGED's values
+local previews: any[] = {}     -- SUUUI_EDITMODE_GROUP_PREVIEW's
+
+@beforeEach
+local function listen()
+    seen, previews = {}, {}
+    events.on("SUUUI_EDITMODE_CHANGED", function(...: any) seen[#seen + 1] = select(select("#", ...), ...) end, TEMP)
+    events.on("SUUUI_EDITMODE_GROUP_PREVIEW", function(...: any)
+        local n = select("#", ...)
+        previews[#previews + 1] = { (select(n - 1, ...)), (select(n, ...)) }
+    end, TEMP)
+end
+
+@afterEach
+local function cleanup()
+    editMode.exit()
+    editMode.unregister(TEMP)
+    events.offAll(TEMP)
+    editMode.setGroupPreview(0, false)
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.setModifiers({ shift = false })
+    settings.reset("emtest")
+    settings.reset("layout")
+    placeCalls, resets, actionClicks, actionLabel, dropTakes, dropped = 0, 0, 0, "Attach", true, nil
+    mock.advanceTime(1)
+    expectNoErrors()
+end
+
+local function W(): number return root:GetWidth() end
+local function H(): number return root:GetHeight() end
+
+--------------------------------------------------------------------------------
+-- Positions
+--------------------------------------------------------------------------------
+
+@test("a frame is placed at its position; the key defaults to position, the label to the frame's name or 'Frame'")
+local function registered()
+    expect(pointOf(fa)).toEqual({ point = "CENTER", relativeTo = root, relativePoint = "CENTER", x = 0, y = 0 })
+    expect(mB.label).toBe("Frame")
+    local f = frameOf(30, 30, "EmTestNamed")
+    local m = editMode.register(f, { namespace = "emtest" }, TEMP)
+    expect(m.key).toBe("position")
+    expect(m.label).toBe("EmTestNamed")
+    expect(pointOf(f)).toEqual({ point = "BOTTOM", relativeTo = root, relativePoint = "BOTTOM", x = 0, y = 100 })
+    local calls = placeCalls
+    settings.set("emtest", "c", { point = "CENTER", x = 0, y = -100 })
+    expect(placeCalls).toBe(calls + 1)                    -- a mover that places itself
+    expect(pointOf(fc).y).toBe(-100)
+end
+
+@test("a position that isn't a table is refused")
+local function notATable()
+    expect(function() editMode.register(frameOf(10, 10), { namespace = "emtest", key = "count" }, TEMP) end)
+        .toThrow("emtest.count must be a position table in the defaults")
+end
+
+@test("position.hidden hides the frame, unless its module shows it itself")
+local function hidden()
+    settings.set("emtest", "a", { point = "CENTER", x = 0, y = 0, hidden = true })
+    expect(fa).never.toBeShown()
+    settings.reset("emtest", "a")
+    expect(fa).toBeShown()
+    local f = frameOf(30, 30)
+    f.suuManagedShow = true
+    editMode.register(f, { namespace = "emtest", key = "e" }, TEMP)
+    settings.set("emtest", "e", { point = "CENTER", x = 0, y = 150, hidden = true })
+    expect(f).toBeShown()
+end
+
+@test("a protected frame moves once combat ends")
+local function inCombat()
+    mock.player:enterCombat()
+    settings.set("emtest", "a", { point = "CENTER", x = 20, y = 0 })
+    expect(pointOf(fa).x).toBe(0)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(pointOf(fa).x).toBe(20)
+end
+
+@test("rect: a frame's rectangle in root units; nil without one")
+local function rects()
+    local l, b, w, h = editMode.rect(fa)
+    expect(l).toBeCloseTo(W() / 2 - 50)
+    expect(b).toBeCloseTo(H() / 2 - 25)
+    expect(w).toBeCloseTo(100)
+    expect(h).toBeCloseTo(50)
+    local big = frameOf(10, 10)
+    big:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 5, 5)
+    big:SetScale(2)
+    local bl, _, bw = editMode.rect(big)
+    expect(bl).toBeCloseTo(10)
+    expect(bw).toBeCloseTo(20)
+    expect((editMode.rect(frameOf(10, 10)))).toBe(nil)
+end
+
+@test("anchorFor: the screen third the centre is in, or the anchor given; the offset of the same point")
+@cases({
+    { "middle", 0.5, 0.5, nil, "CENTER", 0, 0 },
+    { "top left", 0, 1, nil, "TOPLEFT", 0, 0 },
+    { "bottom right", 1, 0, nil, "BOTTOMRIGHT", 0, 0 },
+    { "left", 0, 0.5, nil, "LEFT", 0, 0 },
+    { "top", 0.5, 1, nil, "TOP", 0, 0 },
+    { "given", 0.5, 0.5, "TOPLEFT", "TOPLEFT", 1, -1 },
+})
+local function anchors(_: string, fx: number, fy: number, given: string?, point: string, kx: number, ky: number)
+    local w, h = 100, 50
+    local l, b = (W() - w) * fx, (H() - h) * fy
+    local at, x, y = editMode.anchorFor(l, b, w, h, given)
+    expect(at).toBe(point)
+    -- (given: the frame's top left from the screen's, in halves of the room left)
+    expect(x).toBeCloseTo(kx * (W() - w) / 2)
+    expect(y).toBeCloseTo(ky * (H() - h) / 2)
+end
+
+--------------------------------------------------------------------------------
+-- Entering and leaving
+--------------------------------------------------------------------------------
+
+@test("enter: the layer, every mover's outline over its frame, its size and tag; exit puts it away")
+local function entering()
+    expect(editMode.isActive()).toBe(false)
+    expect(editMode.enter()).toBe(true)
+    expect(editMode.isActive()).toBe(true)
+    expect(layer()).toBeShown()
+    local o = overlayOf(mA)
+    expect(o).toBeShown()
+    expect(o:GetLeft()).toBeCloseTo(fa:GetLeft())
+    expect(o:GetBottom()).toBeCloseTo(fa:GetBottom())
+    expect(o.size:GetText()).toBe("100 × 50")
+    expect(o.tag:GetText()).toBe("Alpha frame")
+    expect(bar()).never.toBeShown()                -- nothing selected
+    expect(seen).toEqual({ true })
+    expect(editMode.enter()).toBe(true)            -- open already
+    expect(seen).toEqual({ true })
+    editMode.exit()
+    expect(editMode.isActive()).toBe(false)
+    expect(layer()).never.toBeShown()
+    expect(seen).toEqual({ true, false })
+    editMode.exit()
+    expect(seen).toEqual({ true, false })
+end
+
+@test("/suu edit opens and closes it")
+local function command()
+    mock.slash("/suu edit")
+    expect(editMode.isActive()).toBe(true)
+    mock.slash("/suu edit")
+    expect(editMode.isActive()).toBe(false)
+    editMode.toggle()
+    expect(editMode.isActive()).toBe(true)
+end
+
+@test("in combat it doesn't open; combat starting closes it")
+local function combatRules()
+    mock.player:enterCombat()
+    local n = printedCount()
+    expect(editMode.enter()).toBe(false)
+    expect(hasLine(printedSince(n), "Edit mode opens out of combat.")).toBe(true)
+    mock.player:leaveCombat()
+    editMode.enter()
+    n = printedCount()
+    mock.player:enterCombat()
+    expect(editMode.isActive()).toBe(false)
+    expect(hasLine(printedSince(n), "Edit mode closed: combat started.")).toBe(true)
+end
+
+@test("a hidden frame's outline is faded and says so")
+local function hiddenOutline()
+    settings.set("emtest", "a", { point = "CENTER", x = 0, y = 0, hidden = true })
+    editMode.enter()
+    local o = overlayOf(mA)
+    expect(o:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"])
+    expect(o.tag:GetText()).toBe("Alpha frame (hidden)")
+end
+
+@test("a frame turned off has no outline; refresh follows enabled()")
+local function turnedOff()
+    local on = false
+    local f = frameOf(40, 40)
+    local m = editMode.register(f, { namespace = "emtest", key = "e", enabled = function(): boolean return on end }, TEMP)
+    editMode.refresh()                             -- closed: nothing
+    editMode.enter()
+    local o = overlayOf(m)
+    expect(o).never.toBeShown()
+    on = true
+    editMode.refresh()
+    expect(o).toBeShown()
+    nextFrame()
+    expect(o:GetWidth()).toBeCloseTo(40)
+    mock.click(o)
+    expect(bar()).toBeShown()
+    on = false
+    editMode.refresh()
+    expect(o).never.toBeShown()
+    expect(bar()).never.toBeShown()                -- it was selected
+    local listed = false
+    for _, info in ipairs(editMode.movers()) do
+        if info.frame == f then listed = true; expect(info.enabled).toBe(false) end
+    end
+    expect(listed).toBe(true)
+end
+
+@test("a frame never shown is shown to be placed")
+local function neverShown()
+    local f = CreateFrame("Frame", nil, root)
+    f:Hide()
+    editMode.register(f, { namespace = "emtest", key = "e", place = function() end }, TEMP)
+    editMode.enter()
+    expect(f).toBeShown()
+end
+
+@test("a mover registered while edit mode is open gets its outline at once")
+local function registeredOpen()
+    editMode.enter()
+    local f = frameOf(44, 22)
+    local m = editMode.register(f, { namespace = "emtest", key = "e" }, TEMP)
+    expect(overlayOf(m)).toBeShown()
+    nextFrame()
+    expect(overlayOf(m):GetWidth()).toBeCloseTo(44)
+    -- a setting changed while open: the frame moves, the outline follows
+    settings.set("emtest", "e", { point = "CENTER", x = 64, y = 150 })
+    nextFrame()
+    expect(overlayOf(m):GetLeft()).toBeCloseTo(f:GetLeft())
+end
+
+@test("unregistering drops the mover (its outline, the selection); its frame gets the outline back later")
+local function unregistering()
+    local f = frameOf(44, 22)
+    local m = editMode.register(f, { namespace = "emtest", key = "e" }, TEMP)
+    editMode.enter()
+    local o = overlayOf(m)
+    mock.click(o)
+    editMode.unregister(TEMP)
+    expect(o).never.toBeShown()
+    expect(bar()).never.toBeShown()
+    for _, info in ipairs(editMode.movers()) do expect(info.frame ~= f).toBe(true) end
+    editMode.exit()
+    local again = editMode.register(f, { namespace = "emtest", key = "e" }, TEMP)
+    editMode.enter()
+    expect(overlayOf(again)).toBe(o)
+    expect(o.mover).toBe(again)
+end
+
+@test("movers(): every mover, whether it's on and whether it places itself")
+local function moverList()
+    local byLabel: { [string]: editMode.MoverInfo } = {}
+    for _, info in ipairs(editMode.movers()) do byLabel[info.label] = info end
+    expect(byLabel["Alpha frame"]).toEqual({ frame = fa, namespace = "emtest", key = "a", label = "Alpha frame",
+        enabled = true, custom = false })
+    expect((byLabel["Charlie"] :: editMode.MoverInfo).custom).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Selecting
+--------------------------------------------------------------------------------
+
+@test("a click selects: the toolbar with the position over the frame; the tag's settings hint")
+local function selecting()
+    editMode.enter()
+    local o = overlayOf(mA)
+    mock.click(o)
+    local tb = bar()
+    expect(tb).toBeShown()
+    expect(tb.anchor.value).toBe("CENTER")
+    expect(tb.x.value).toBe(0)
+    expect(tb.y.value).toBe(0)
+    expect(tb.hide.label:GetText()).toBe("Hide")
+    expect(tb.action).never.toBeShown()
+    expect(pointOf(tb).point).toBe("BOTTOMRIGHT")  -- above the frame
+    expect(o.tagHint).toBeShown()
+    expect(o.glow.holder).toBeShown()
+    -- B at the screen's top: the toolbar under it; no settings, no hint
+    mock.click(overlayOf(mB))
+    expect(pointOf(tb).point).toBe("TOPRIGHT")
+    expect(overlayOf(mB).tagHint).never.toBeShown()
+    expect(o.glow.holder).never.toBeShown()
+    -- hovering an outline brightens its edge
+    mock.hover(o)
+    mock.hover(nil)
+end
+
+@test("a click elsewhere deselects; on the toolbar, the panel or a mover it doesn't")
+local function clickAway()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    local tb = bar()
+    mock.click(tb.hide)                            -- the toolbar
+    expect(tb).toBeShown()
+    mock.click(tb.hide)
+    mock.click(layer().panel)                      -- the panel
+    expect(tb).toBeShown()
+    local away = CreateFrame("Button", nil, UIParent)
+    away:SetSize(10, 10)
+    away:SetPoint("TOPRIGHT")
+    mock.click(away)
+    expect(tb).never.toBeShown()
+    mock.click(away)                               -- nothing selected: nothing to do
+end
+
+@test("right-click: edit mode closes and the frame's settings open; a frame without any says so")
+local function rightClick()
+    local open = mock.stub(settingsWindow, "open", function(_: string?) end)
+    editMode.enter()
+    mock.click(overlayOf(mA), "RightButton")
+    expect(editMode.isActive()).toBe(false)
+    expect(open).toHaveBeenCalledWith("em-sec")
+    editMode.enter()
+    local n = printedCount()
+    mock.click(overlayOf(mB), "RightButton")
+    expect(editMode.isActive()).toBe(true)
+    expect(hasLine(printedSince(n), "Frame has no settings of its own.")).toBe(true)
+    editMode.openSettings(nil)
+    expect(hasLine(printedSince(n), "This frame has no settings of its own.")).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Dragging
+--------------------------------------------------------------------------------
+
+@test("a drop snaps to the grid in the screen third it's in; the frame follows")
+local function dropping()
+    editMode.enter()
+    local o = overlayOf(mA)
+    local s = o:GetEffectiveScale()
+    mock.drag(o, 41 * s, -21 * s)
+    expect(bar()).toBeShown()                      -- the drag selected it
+    expect(settings.get("emtest", "a")).toEqual({ point = "CENTER", x = 40, y = -20 })
+    expect(pointOf(fa).x).toBe(40)
+    nextFrame()
+    expect(o:GetLeft()).toBeCloseTo(fa:GetLeft())
+    -- no snap: to the pixel
+    settings.set("layout", "snap", false)
+    mock.drag(o, 41 * s, 0)
+    expect(settings.get("emtest", "a").x).toBe(81)
+    -- to the top left third
+    settings.set("layout", "snap", true)
+    mock.drag(o, -(W() / 2 - 20) * s, (H() / 2 - 40) * s)
+    expect(settings.get("emtest", "a").point).toBe("TOPLEFT")
+end
+
+@test("a pinned anchor stays through a drag")
+local function pinnedDrop()
+    settings.set("emtest", "a", { point = "CENTER", x = 0, y = 0, pinned = true })
+    editMode.enter()
+    local o = overlayOf(mA)
+    local s = o:GetEffectiveScale()
+    mock.drag(o, -(W() / 2 - 100) * s, 0)
+    local pos = settings.get("emtest", "a")
+    expect(pos.point).toBe("CENTER")
+    expect(pos.pinned).toBe(true)
+    expect(pos.x < -200).toBe(true)
+end
+
+@test("a mover's own drop takes it over (snapped); one that declines leaves it to edit mode")
+local function ownDrop()
+    editMode.enter()
+    local o = overlayOf(mC)
+    local s = o:GetEffectiveScale()
+    mock.drag(o, 13 * s, 0)
+    expect(settings.get("emtest", "c")).toEqual({ point = "CENTER", x = 0, y = -200 })
+    local d = dropped :: number[]
+    expect(d[1] % 4).toBe(0)
+    expect(d[3]).toBeCloseTo(60)
+    nextFrame()
+    expect(o:GetLeft()).toBeCloseTo(fc:GetLeft())
+    dropTakes = false
+    mock.drag(o, 13 * s, 0)
+    expect(settings.get("emtest", "c").x).toBe(12)
+end
+
+@test("while dragging, the real frame follows and the other outlines keep up")
+local function following()
+    editMode.enter()
+    local o = overlayOf(mA)
+    local l0, b0 = o:GetLeft(), o:GetBottom()
+    o:GetScript("OnDragStart")(o, "LeftButton")
+    o:ClearAllPoints()
+    o:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", l0 + 30, b0)
+    mock.advanceFrames(1)
+    expect(fa:GetLeft()).toBeCloseTo(l0 + 30)
+    o:GetScript("OnDragStop")(o)
+    expect(settings.get("emtest", "a").x).toBe(32)  -- 30 on the grid of 4
+end
+
+@test("a frame placed by another: the drag moves that one; its numbers are greyed and can't be typed")
+local function placedByAnother()
+    local f = frameOf(20, 20)
+    f:SetPoint("LEFT", fa, "RIGHT")
+    local m = editMode.register(f, { namespace = "emtest", key = "d", place = function() end,
+        dragFrame = function(): any return fa end }, TEMP)
+    editMode.enter()
+    local o = overlayOf(m)
+    mock.click(o)
+    local tb = bar()
+    expect(tb.anchor.disabled).toBe(true)
+    expect(tb.x.disabled).toBe(true)
+    expect(tb.anchor.tooltip().description).toBe("It moves with the frame it's attached to. Detach it to place it by number.")
+    tb.anchor.onChange("TOPLEFT")
+    tb.x.onChange(5)
+    expect(settings.get("emtest", "d")).toEqual({ point = "CENTER", x = 0, y = 0 })
+    local before = fa:GetLeft()
+    o:GetScript("OnDragStart")(o, "LeftButton")
+    local l0, b0 = o:GetLeft(), o:GetBottom()
+    o:ClearAllPoints()
+    o:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", l0 + 12, b0)
+    mock.advanceFrames(1)
+    expect(fa:GetLeft()).toBeCloseTo(before + 12)
+    o:SetScript("OnUpdate", nil)
+    o:StopMovingOrSizing()
+    layer():GetScript("OnKeyDown")(layer(), "ENTER")   -- not typed: Enter passes
+    nextFrame()
+    expect(tb.x:HasFocus()).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Keys
+--------------------------------------------------------------------------------
+
+@test("the arrows nudge the selected frame 1 px, Shift 10; a mover's own drop takes them")
+local function nudging()
+    editMode.enter()
+    layer():GetScript("OnKeyDown")(layer(), "UP")      -- nothing selected: passes
+    mock.click(overlayOf(mA))
+    mock.pressKey("UP")
+    mock.setModifiers({ shift = true })
+    mock.pressKey("RIGHT")
+    mock.setModifiers({ shift = false })
+    expect(settings.get("emtest", "a")).toEqual({ point = "CENTER", x = 10, y = 1 })
+    mock.pressKey("DOWN")
+    mock.pressKey("LEFT")
+    expect(settings.get("emtest", "a")).toEqual({ point = "CENTER", x = 9, y = 0 })
+    mock.click(overlayOf(mC))
+    mock.pressKey("LEFT")
+    expect((dropped :: number[])[1]).toBeCloseTo(fc:GetLeft() - 1)
+    expect(settings.get("emtest", "c").x).toBe(0)
+    nextFrame()
+    dropTakes = false
+    mock.pressKey("LEFT")
+    expect(settings.get("emtest", "c").x).toBe(-1)
+    layer():GetScript("OnKeyDown")(layer(), "F11")     -- not edit mode's: passes
+    expect(editMode.isActive()).toBe(true)
+end
+
+@test("Enter types X; Escape closes the anchor list, then edit mode")
+local function enterEscape()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    local tb = bar()
+    mock.pressKey("ENTER")
+    nextFrame()
+    expect(tb.x:HasFocus()).toBe(true)
+    -- the field has the keys
+    layer():GetScript("OnKeyDown")(layer(), "UP")
+    expect(settings.get("emtest", "a").y).toBe(0)
+    mock.pressKey("ESCAPE")                        -- the field's: cancels
+    expect(tb.x:HasFocus()).toBe(false)
+    tb.anchor:Open()
+    mock.pressKey("ESCAPE")
+    expect(tb.anchor:IsOpen()).toBe(false)
+    expect(editMode.isActive()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(editMode.isActive()).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- The toolbar
+--------------------------------------------------------------------------------
+
+@test("X and Y: typed values apply, kept on screen with a warning; Tab goes to the other; the keys show")
+local function typing()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    local tb = bar()
+    tb.x:Focus()
+    expect(tb.keys).toBeShown()
+    expect(tb.keys.parts[2].text:GetText()).toBe("Y")
+    tb.x.edit:SetText("")
+    mock.typeText(tb.x.edit, "12")
+    expect(tb.keys.warning).never.toBeShown()
+    mock.pressKey("ENTER")
+    expect(settings.get("emtest", "a").x).toBe(12)
+    expect(tb.keys).never.toBeShown()
+    tb.y:Focus()
+    expect(tb.keys.parts[2].text:GetText()).toBe("X")
+    tb.y.edit:SetText("")
+    mock.typeText(tb.y.edit, "99999")
+    local top = tb.y.max
+    expect(tb.keys.warning).toBeShown()
+    expect(tb.keys.warning:GetText()).toBe(("Off screen past %d: Enter keeps it at %d."):format(top, top))
+    mock.pressKey("TAB")
+    expect(tb.x:HasFocus()).toBe(true)
+    expect(settings.get("emtest", "a").y).toBe(top)
+    tb.x:Cancel()
+end
+
+@test("the anchor: a new one keeps the frame where it is and stays; its tooltip says which kind it is")
+local function anchoring()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    local tb = bar()
+    expect(tb.anchor.tooltip().description).toBe("The screen point X and Y measure from, the screen third the frame is in. Click to pick one that stays.")
+    local left = fa:GetLeft()
+    tb.anchor.onChange("TOPLEFT")
+    local pos = settings.get("emtest", "a")
+    expect(pos.point).toBe("TOPLEFT")
+    expect(pos.pinned).toBe(true)
+    expect(pos.x).toBe(math.floor(W() / 2 - 50 + 0.5))
+    expect(fa:GetLeft()).toBeCloseTo(left)
+    expect(tb.anchor.tooltip().description).toBe("The screen point X and Y measure from, picked by you: it stays when you drag the frame. Reset brings the automatic one back.")
+end
+
+@test("Hide and Show; Reset, the mover's own or the setting's default")
+local function hideReset()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    local tb = bar()
+    mock.click(tb.hide)
+    expect(settings.get("emtest", "a").hidden).toBe(true)
+    expect(fa).never.toBeShown()
+    expect(tb.hide.label:GetText()).toBe("Show")
+    mock.click(tb.hide)
+    expect(settings.get("emtest", "a").hidden).toBe(nil)
+    expect(tb.hide.label:GetText()).toBe("Hide")
+    settings.set("emtest", "a", { point = "CENTER", x = 8, y = 0 })
+    mock.click(tb.reset)
+    expect(settings.get("emtest", "a").x).toBe(0)
+    mock.click(overlayOf(mC))
+    mock.click(tb.reset)
+    expect(resets).toBe(1)
+end
+
+@test("a mover's action: its label on the toolbar, which widens; a click runs it and the label follows")
+local function action()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    local tb = bar()
+    local base = tb:GetWidth()
+    mock.click(overlayOf(mC))
+    expect(tb.action).toBeShown()
+    expect(tb.action.label:GetText()).toBe("Attach")
+    expect(tb:GetWidth()).toBeCloseTo(base + T.space["space-2"] + 120)
+    mock.click(tb.action)
+    expect(actionClicks).toBe(1)
+    nextFrame()
+    expect(tb.action.label:GetText()).toBe("Detach")
+end
+
+@test("with nothing selected the toolbar's controls do nothing")
+local function nothingSelected()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    local tb = bar()
+    editMode.exit()
+    tb.anchor.onChange("TOP")
+    tb.x.onChange(4)
+    for _, b in ipairs({ tb.hide, tb.reset, tb.action }) do b:GetScript("OnClick")(b, "LeftButton") end
+    expect(settings.get("emtest", "a")).toEqual({ point = "CENTER", x = 0, y = 0 })
+    expect(resets).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- The panel
+--------------------------------------------------------------------------------
+
+@test("the panel: snap, the grid size (4 to 32), the grid drawn again")
+local function panelGrid()
+    editMode.enter()
+    local p = layer().panel
+    local function lines(): number
+        local n = 0
+        for _, r in ipairs({ layer():GetRegions() }) do if (r :: any):IsShown() then n = n + 1 end end
+        return n
+    end
+    local fine = lines()
+    local slider: any = nil
+    local snapToggle: any = nil
+    for _, c in ipairs(descendants(p)) do
+        local f: any = c
+        if f.slider then slider = f end
+        if f.onChange and type(f.value) == "boolean" and f ~= p.previewAuras then snapToggle = f end
+    end
+    mock.click(snapToggle)
+    expect(settings.get("layout", "snap")).toBe(false)
+    mock.slide(slider.slider, 32)
+    expect(settings.get("layout", "gridSize")).toBe(32)
+    expect(lines() < fine).toBe(true)
+    local ok, why = settings.set("layout", "gridSize", 2)
+    expect(ok).toBe(false)
+    expect(why).toBe("the grid size is between 4 and 32 px")
+    expect((settings.set("layout", "gridSize", 40))).toBe(false)
+    local now = lines()
+    events.emit("SUUUI_ROOT_SCALED")
+    expect(lines()).toBe(now)
+end
+
+@test("the panel is dragged out of the way and stays there; a double-click puts it back")
+local function panelDrag()
+    editMode.enter()
+    local p = layer().panel
+    expect(pointOf(p).point).toBe("LEFT")
+    mock.drag(p, 100 * p:GetEffectiveScale(), 0)
+    local at = settings.get("layout", "panel")
+    expect(type(at.x)).toBe("number")
+    expect(pointOf(p)).toEqual({ point = "CENTER", relativeTo = root, relativePoint = "CENTER", x = at.x, y = at.y })
+    mock.click(p, "RightButton")
+    mock.click(p)
+    expect(settings.get("layout", "panel").x).toBe(at.x)
+    mock.click(p)
+    expect(settings.get("layout", "panel")).toEqual({})
+    expect(pointOf(p).point).toBe("LEFT")
+end
+
+@test("Reset all: every mover's reset; Done closes")
+local function resetAll()
+    settings.set("emtest", "a", { point = "CENTER", x = 8, y = 0 })
+    settings.set("emtest", "b", { point = "TOPLEFT", x = 4, y = -4 })
+    editMode.enter()
+    local p = layer().panel
+    mock.click(labelled(p, "Reset all"))
+    expect(settings.get("emtest", "a").x).toBe(0)
+    expect(settings.get("emtest", "b").x).toBe(40)
+    expect(resets).toBe(1)
+    mock.click(labelled(p, "Done"))
+    expect(editMode.isActive()).toBe(false)
+end
+
+@test("the group preview: chosen on the panel, told to the group frames while edit mode is open")
+local function groupPreview()
+    expect({ editMode.groupPreview() }).toEqual({ 0, false })
+    editMode.enter()
+    local p = layer().panel
+    for _, b in ipairs(p.previewPick.buttons) do
+        if b.option.value == 10 then mock.click(b) end
+    end
+    expect({ editMode.groupPreview() }).toEqual({ 10, false })
+    mock.click(p.previewAuras)
+    expect({ editMode.groupPreview() }).toEqual({ 10, true })
+    editMode.exit()
+    expect({ editMode.groupPreview() }).toEqual({ 0, true })
+    editMode.enter()
+    expect(previews).toEqual({ { 10, false }, { 10, true }, { 0, false }, { 10, true } })
+    expect(p.previewPick.value).toBe(10)
+end
+
+@test("a theme change sizes the tags, the keys and the panel again")
+local function theme()
+    editMode.enter()
+    mock.click(overlayOf(mA))
+    themeChanged()
+    expect(overlayOf(mA).tagFrame:GetHeight()).toBeCloseTo(T.type.caption.lineHeight + 2)
+    editMode.exit()
+    themeChanged()
+end

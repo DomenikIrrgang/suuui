@@ -1,0 +1,155 @@
+-- Core/Serialize: profile strings. The current "!SUU:2!" strings
+-- (wowlua:serialize) both ways, the old "SUU1:" strings read only, and the
+-- SUU1 pieces (base64, fletcher16) other share texts still use.
+
+import test, expect, cases from "wowlua:test"
+import * as serialize from "/Core/Serialize"
+import LEGACY_PROFILE_STRING from "../../compat/legacyString"
+
+-- An SUU1 string of `payload`: its checksum, then base64.
+local function legacy(payload: string, sum: string?): string
+    return "SUU1:" .. serialize.base64((sum or ("%04x"):format(serialize.fletcher16(payload))) .. payload)
+end
+
+local function why(text: string): string
+    local value, err = serialize.decode(text)
+    expect(value).toBeNil()
+    return err or ""
+end
+
+--------------------------------------------------------------------------------
+-- base64 and fletcher16
+--------------------------------------------------------------------------------
+
+@test("base64 encodes three bytes to four characters, padding the rest")
+@cases({ { "", "" }, { "M", "TQ==" }, { "Ma", "TWE=" }, { "Man", "TWFu" }, { "Many", "TWFueQ==" }, { "\0\255\128", "AP+A" } })
+local function base64(raw: string, text: string)
+    expect(serialize.base64(raw)).toBe(text)
+    expect(serialize.fromBase64(text)).toBe(raw)
+end
+
+@test("fromBase64 ignores whitespace")
+local function whitespace()
+    expect(serialize.fromBase64(" TW\nFu\tTW E=")).toBe("ManMa")
+end
+
+@test("fromBase64 refuses a broken text")
+@cases({ { "TWF" }, { "TW!u" }, { "T===" }, { "====" }, { "TW=u" } })
+local function broken(text: string)
+    expect(serialize.fromBase64(text)).toBeNil()
+end
+
+@test("every byte survives base64")
+local function allBytes()
+    local bytes: string[] = {}
+    for i = 0, 255 do bytes[#bytes + 1] = string.char(i) end
+    local raw = table.concat(bytes)
+    expect(serialize.fromBase64(serialize.base64(raw))).toBe(raw)
+end
+
+@test("fletcher16 is Fletcher's 16-bit checksum")
+@cases({ { "", 0 }, { "abcde", 0xC8F0 }, { "abcdef", 0x2057 }, { "abcdefgh", 0x0627 } })
+local function fletcher(s: string, sum: number)
+    expect(serialize.fletcher16(s)).toBe(sum)
+end
+
+--------------------------------------------------------------------------------
+-- The current strings
+--------------------------------------------------------------------------------
+
+@test("a value round-trips through an export string")
+local function roundTrip()
+    local value = { v = 1, name = "Main", data = { ui = { scale = 1.25, reducedMotion = true }, list = { 1, 2, "three" } } }
+    local text = serialize.encode(value)
+    expect(text:sub(1, 7)).toBe("!SUU:2!")
+    local back, err = serialize.decode(text)
+    expect(err).toBeNil()
+    expect(back).toEqual(value)
+end
+
+@test("spaces and line breaks around a pasted string are ignored")
+local function trimmed()
+    local text = serialize.encode({ a = 1 })
+    expect(serialize.decode("  \n" .. text .. "\n ")).toEqual({ a = 1 })
+end
+
+@test("nothing, or a text that isn't a profile string, is refused")
+@cases({ { "" }, { "hello" }, { "!WA:2!abc" }, { "SUU2:abc" } })
+local function notOurs(text: string)
+    expect(why(text)).toBe("This isn't a SuuUI profile string.")
+end
+
+@test("decode(nil) is refused")
+local function nothing()
+    local value, err = serialize.decode(nil)
+    expect(value).toBeNil()
+    expect(err).toBe("This isn't a SuuUI profile string.")
+end
+
+@test("a damaged or cut-off current string is refused")
+local function damaged()
+    local text = serialize.encode({ a = { b = "c" } })
+    expect(why(text:sub(1, #text - 4))).toBe("The string is damaged or incomplete; copy all of it.")
+    expect(why("!SUU:2!" .. "####")).toBe("The string is damaged or incomplete; copy all of it.")
+end
+
+--------------------------------------------------------------------------------
+-- SUU1 strings (before 0.6)
+--------------------------------------------------------------------------------
+
+@test("a real SUU1 profile string from before the port reads")
+local function realLegacy()
+    local value, err = serialize.decode(LEGACY_PROFILE_STRING)
+    expect(err).toBeNil()
+    expect(value.v).toBe(1)
+    expect(value.data.ui.scale).toBe(1.25)
+    expect(value.data.core.debug).toBe(true)
+end
+
+@test("SUU1 reads true, false, numbers, strings and nested tables")
+local function legacyValues()
+    local value, err = serialize.decode(legacy("{s1:aTs1:bFs1:cn-2.5;s1:d{n1;s2:xyn2;s0:}s3:e:f{}}"))
+    expect(err).toBeNil()
+    expect(value).toEqual({ a = true, b = false, c = -2.5, d = { "xy", "" }, ["e:f"] = {} })
+    expect(serialize.decode(legacy("T"))).toBe(true)
+    expect(serialize.decode(legacy("n1e3;"))).toBe(1000)
+    expect(serialize.decode(legacy("s3:{}T"))).toBe("{}T")
+end
+
+@test("an SUU1 string that isn't base64 or is too short is incomplete")
+local function legacyShort()
+    expect(why("SUU1:abc")).toBe("The string is incomplete; copy all of it.")
+    expect(why("SUU1:" .. serialize.base64("abcd"))).toBe("The string is incomplete; copy all of it.")
+    expect(why("SUU1:")).toBe("The string is incomplete; copy all of it.")
+end
+
+@test("an SUU1 string whose checksum doesn't match is damaged")
+local function legacyChecksum()
+    expect(why(legacy("T", "0000"))).toBe("The string is damaged or incomplete; copy all of it.")
+end
+
+@test("a malformed SUU1 payload says what is wrong")
+@cases({
+    { "nabc;", "bad number" }, { "n5", "bad number" },
+    { "s5:ab", "bad string" }, { "sx:a", "bad string" }, { "s-1:", "bad string" }, { "s3", "bad string" },
+    { "{s1:aT", "unterminated table" }, { "{s1:a", "unexpected ''" }, { "{TT}", "bad key" }, { "{{}T}", "bad key" },
+    { "x", "unexpected 'x'" }, { "{s1:a}", "unexpected '}'" },
+})
+local function legacyMalformed(payload: string, problem: string)
+    local err = why(legacy(payload))
+    expect(err:sub(1, 23)).toBe("The string is damaged: ")
+    if not err:find(problem, 1, true) then error(`"{err}" does not say {problem}`) end
+end
+
+@test("SUU1 tables nest at most 20 deep")
+local function legacyDepth()
+    local ok = ("{n1;"):rep(20) .. "T" .. ("}"):rep(20)
+    expect(why(legacy(("{n1;"):rep(21) .. "T" .. ("}"):rep(21))):find("too deeply nested", 1, true) ~= nil).toBe(true)
+    local value = serialize.decode(legacy(ok))
+    expect(type(value)).toBe("table")
+end
+
+@test("an SUU1 string with data after its value is refused")
+local function legacyExtra()
+    expect(why(legacy("TT"))).toBe("The string has extra data at the end.")
+end

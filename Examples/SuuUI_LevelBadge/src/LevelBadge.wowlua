@@ -1,0 +1,122 @@
+-- LevelBadge.wowlua
+-- An example SuuUI plugin that changes SuuUI's own frames: a small level
+-- badge on every party and raid frame (and, if you like, on your own and
+-- your target's). Build it with `wowlua build` (or install it with
+-- `wowlua install`) from this folder; SuuUI must be installed too.
+--
+-- What it shows:
+--   M:Each("unitframe", fn, undo)   adds the badge to every unit frame SuuUI
+--                                   has made, and to each one it makes later;
+--                                   undo hides them when the plugin turns off
+--   M:Hook("unitframe", method, fn) keeps the badge current: after SuuUI
+--                                   redraws a frame's name and level, or the
+--                                   whole frame (a new unit)
+--   SuuUI.InstanceInfo(frame)       which frame it is (party, raid, player…)
+--   merge = "unitframes"            its settings join SuuUI's own Unit frames
+--                                   page instead of a page of their own
+--   M:AddToRolePreset(role, values) the role presets (General › Profiles ›
+--                                   Role presets) set it per role
+--
+--   /suu enable levelbadge   turns it on (it starts off)
+
+local UI = SuuUI.UI
+
+local M = SuuUI.RegisterModule({
+    id = "levelbadge",
+    name = "Level badge",
+    description = "An example plugin: a level badge on party and raid frames.",
+    api = "0.17",
+    enabledByDefault = false,
+    defaults = {
+        party = true,       -- on party frames
+        raid = true,        -- on raid frames
+        own = false,        -- on your frame, your target's and the rest
+        corner = "TOPLEFT", -- where on the frame
+    },
+})
+
+-- Which frames get one, from what SuuUI says each frame is.
+local OWN = { player = true, target = true, targettarget = true, focus = true, pet = true, boss = true }
+local function wanted(info: { [string]: any }?): boolean
+    if not info then return false end
+    if info.role == "party" then return M:Get("party") end
+    if info.role == "raid" then return M:Get("raid") end
+    if OWN[info.role] then return M:Get("own") end
+    -- a settings preview's stand-ins: like the frames they stand in for
+    return info.preview and M:Get("party") or false
+end
+
+-- The badge: a dark chip with the level in gilt.
+local function badgeOf(f: any): Frame
+    if f.levelBadge then return f.levelBadge end
+    local b = CreateFrame("Frame", nil, f)
+    b:SetSize(22, 14)
+    b:SetFrameLevel(f:GetFrameLevel() + 8)
+    UI.Fill(b, "surface-sunk", "BACKGROUND"):SetAllPoints()
+    UI.Border(b, "gilt-faint")
+    b.text = UI.Text(b, "micro", "gilt-text")
+    b.text:SetPoint("CENTER", 0, 0)
+    f.levelBadge = b
+    return b
+end
+
+-- Shows the unit's level, or nothing. A frame's unit can be a stand-in
+-- (f.api answers for it) and, in combat, the game may keep a value secret:
+-- a secret level is never compared, the badge just hides.
+local function update(f: any)
+    local info = SuuUI.InstanceInfo(f)
+    local b = f.levelBadge
+    if not wanted(info) or not f.unit then
+        if b then b:Hide() end
+        return
+    end
+    local api = f.api or _G
+    local ok, level = pcall(api.UnitLevel or UnitLevel, f.unit)
+    if not ok or level == nil or not canaccessvalue(level) or level <= 0 then
+        if b then b:Hide() end
+        return
+    end
+    b = badgeOf(f)
+    local corner = M:Get("corner")
+    b:ClearAllPoints()
+    b:SetPoint(corner, f, corner, corner:find("LEFT") and 2 or -2, corner:find("TOP") and 7 or -7)
+    b.text:SetValue(tostring(level))
+    b:Show()
+end
+
+local function updateAll()
+    for _, f in ipairs(SuuUI.Instances("unitframe")) do update(f) end
+end
+
+function M:OnEnable()
+    -- every unit frame, now and later; hidden again when the plugin turns off
+    self:Each("unitframe", update, function(f: any) if f.levelBadge then f.levelBadge:Hide() end end)
+    -- after SuuUI draws a frame's identity (name, level) or the whole frame
+    self:Hook("unitframe", "UpdateIdentity", update)
+    self:Hook("unitframe", "Refresh", update)
+
+    for _, key in ipairs({ "party", "raid", "own", "corner" }) do
+        self:Watch(key, updateAll)
+    end
+
+    -- its settings on SuuUI's Unit frames page
+    self:RegisterSettings({
+        id = "levelbadge", label = "Level badge", merge = "unitframes",
+        groups = {
+            { title = "Level badge", description = "From the Level badge plugin: each unit's level in a corner of its frame.", rows = {
+                { key = "party", label = "Party frames", control = "toggle" },
+                { key = "raid", label = "Raid frames", control = "toggle" },
+                { key = "own", label = "Your own frames", control = "toggle",
+                  description = "You, your target, its target, your focus, your pet and bosses." },
+                { key = "corner", label = "Corner", control = "segmented", options = {
+                    { value = "TOPLEFT", label = "Top left" }, { value = "TOPRIGHT", label = "Top right" },
+                } },
+            } },
+        },
+    })
+
+    -- the role presets: healers watch the group's levels, others don't
+    self:AddToRolePreset("HEALER", { party = true, raid = true })
+    self:AddToRolePreset("TANK", { raid = false })
+    self:AddToRolePreset("DAMAGER", { raid = false })
+end

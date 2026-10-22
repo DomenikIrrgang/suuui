@@ -1,0 +1,646 @@
+-- UI/DamageMeter: one meter window on a stand-in C_DamageMeter and
+-- C_DeathRecap (the api/recapApi options): numbers, the list and your
+-- pinned row, spell breakdowns, death recaps, the head and the menu.
+
+import test, cases, expect, beforeAll, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import damageMeter, DamageMeter, DAMAGE_METER_TYPES from "/UI/DamageMeter"
+import internal abbr, count, clock, since, shortName, group3, sessionArg, fetch, inCombat from "/UI/DamageMeter"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, borderToken from "./HudHelpers"
+import * as tooltip from "/UI/Tooltip"
+
+-- The stand-in's data: sessions by meter type enum, sources' spells, the past fights.
+type Source = { [string]: any }
+local sessions: { [any]: any } = {}
+local spells: { [any]: any } = {}
+local past: { [string]: any }[] = {}
+local duration = 75
+local asked: { string } = {}
+
+local function typeEnum(value: string): any
+    for _, t in ipairs(DAMAGE_METER_TYPES) do
+        if t.value == value then return (Enum.DamageMeterType :: any)[t.enum :: string] end
+    end
+    return nil
+end
+
+local API = {
+    GetCombatSessionFromType = function(st: any, meterType: any): any
+        asked[#asked + 1] = "type:" .. tostring(st)
+        return sessions[meterType]
+    end,
+    GetCombatSessionFromID = function(id: number, meterType: any): any
+        asked[#asked + 1] = "id:" .. id
+        return sessions[meterType]
+    end,
+    GetCombatSessionSourceFromType = function(_: any, _: any, guid: any, creature: any): any
+        asked[#asked + 1] = "src:" .. tostring(guid) .. ":" .. tostring(creature)
+        return spells[guid]
+    end,
+    GetCombatSessionSourceFromID = function(id: number, _: any, guid: any, _: any): any
+        asked[#asked + 1] = "srcid:" .. id
+        return spells[guid]
+    end,
+    GetSessionDurationSeconds = function(_: any): number return duration end,
+    GetAvailableCombatSessions = function(): any return past end,
+}
+
+local recapEvents: any = {}
+local recapMax: any = 1000
+local RECAP = {
+    GetRecapEvents = function(_: number): any
+        if recapEvents == "error" then error("no recap") end
+        return recapEvents
+    end,
+    GetRecapMaxHealth = function(_: number): any
+        if recapMax == "error" then error("no max") end
+        return recapMax
+    end,
+}
+
+local parent: Frame? = nil
+
+-- SuuUI's tooltip, recorded (it shows after a hover intent)
+local tips: { any } = {}
+local function lastTip(): any
+    for i = #tips, 1, -1 do if type(tips[i]) == "table" then return tips[i] end end
+    return {}
+end
+@beforeAll
+local function recordTips()
+    mock.module(tooltip, {
+        showTooltip = function(_: any, data: any) tips[#tips + 1] = data end,
+        hideTooltip = function() tips[#tips + 1] = "hide" end,
+    })
+end
+
+local function meter(opts: { [string]: any }?): DamageMeter
+    local p = parent or newParent(400, 500)
+    parent = p
+    local o: { [string]: any } = opts or {}
+    if o.api == false then o.api = nil else o.api = o.api or API end
+    o.recapApi = o.recapApi or RECAP
+    local w: DamageMeter = damageMeter(p, o)
+    return w
+end
+
+local function session(meterType: string, list: Source[], total: number?)
+    sessions[typeEnum(meterType)] = { combatSources = list, totalAmount = total }
+end
+
+-- n sources of decreasing damage; `you` marks one of them.
+local function sources(n: number, you: number?): Source[]
+    local list: Source[] = {}
+    for i = 1, n do
+        list[i] = { name = "P" .. i .. "-Realm", classFilename = "MAGE", totalAmount = 1000 * (n - i + 1),
+                    amountPerSecond = 10 * (n - i + 1), isLocalPlayer = i == you, sourceGUID = "Player-1-" .. i,
+                    deathTimeSeconds = 30 + i, deathRecapID = i }
+    end
+    return list
+end
+
+@afterEach
+local function cleanup()
+    if parent then parent:Hide() end
+    parent = nil
+    sessions, spells, past, asked = {}, {}, {}, {}
+    duration, recapEvents, recapMax = 75, {}, 1000
+end
+
+@test("abbr: grouped below 10k, then k and M")
+@cases({ { 0, "0" }, { 8412.4, "8,412" }, { 48200, "48.2k" }, { 482000, "482k" }, { 1210000, "1.21M" },
+         { 12400000, "12.4M" }, { -48200, "-48.2k" } })
+local function abbrCases(v: number, out: string)
+    expect(abbr(v)).toBe(out)
+end
+
+@test("abbr, count: strings, nil and secrets")
+local function abbrOther()
+    expect(abbr("12")).toBe("12")
+    expect(abbr(nil)).toBe("0")
+    expect(issecretvalue(abbr(mock.secret(5000)))).toBe(true)
+    expect(count(3.4)).toBe("3")
+    expect(count(nil)).toBe("0")
+    expect(count(12345)).toBe("12,345")
+    expect(issecretvalue(count(mock.secret(5)))).toBe(true)
+end
+
+@test("group3 without BreakUpLargeNumbers")
+local function group3Plain()
+    local g = _G :: any -- a global the declarations type as always there
+    local was = g.BreakUpLargeNumbers
+    g.BreakUpLargeNumbers = nil
+    local out = group3(12345)
+    g.BreakUpLargeNumbers = was
+    expect(out).toBe("12345")
+end
+
+@test("clock and since")
+local function times()
+    expect(clock(75.4)).toBe("1:15")
+    expect(clock(-3)).toBe("0:00")
+    expect(clock(nil)).toBe("")
+    expect(clock(mock.secret(5))).toBe("")
+    expect(since(42)).toBe("42s")
+    expect(since(125)).toBe("2m 5s")
+    expect(since("x")).toBe("")
+end
+
+@test("shortName: the realm off; a secret through Ambiguate; not a string")
+local function names()
+    expect(shortName("Thrall-Realm")).toBe("Thrall")
+    expect(shortName(7)).toBe("")
+    expect(shortName(mock.secret("Thrall-Realm"))).never.toBeNil() -- through Ambiguate
+    mock.fake("Ambiguate", function(_: any, _: string): any error("refused") end)
+    local s = shortName(mock.secret("X"))
+    expect(issecretvalue(s)).toBe(true)
+    local g = _G :: any -- a global the declarations type as always there
+    local was = g.Ambiguate
+    g.Ambiguate = nil
+    local plain = shortName("Jaina-Other")
+    g.Ambiguate = was
+    expect(plain).toBe("Jaina")
+end
+
+@test("sessionArg and fetch")
+local function fetching()
+    local st, id = sessionArg("overall")
+    expect(st).toBe(Enum.DamageMeterSessionType.Overall)
+    expect(id).toBeNil()
+    st, id = sessionArg("current")
+    expect(st).toBe(Enum.DamageMeterSessionType.Current)
+    st, id = sessionArg(7)
+    expect(st).toBeNil()
+    expect(id).toBe(7)
+    expect(fetch(nil, "current", "damage")).toBeNil()
+    expect(fetch(API, "current", "nope")).toBeNil()
+    session("damage", sources(1))
+    expect(fetch(API, 3, "damage")).never.toBeNil()
+    expect(asked[#asked]).toBe("id:3")
+    local broken = { GetCombatSessionFromType = function(): any error("no") end }
+    expect(fetch(broken, "current", "damage")).toBeNil()
+end
+
+@test("inCombat: lockdown or the player in combat")
+local function combat()
+    expect(inCombat()).toBe(false)
+    mock.fake("UnitAffectingCombat", function(_: string): any return true end)
+    expect(inCombat()).toBe(true)
+    mock.fake("UnitAffectingCombat", function(_: string): any return mock.secret(true) end)
+    expect(inCombat()).toBe(false)
+end
+
+@test("a new window: damage, current, its height in rows")
+local function fresh()
+    local w = meter({ rows = 2 })
+    expect(w.maxRows).toBe(4)
+    expect(w.type).toBe("damage")
+    expect(w.session).toBe("current")
+    expect(w.view.numbers).toBe("compact")
+    local h = w:GetHeight()
+    w:SetMaxRows(6)
+    expect(w:GetHeight() > h).toBe(true)
+    w:SetMaxRows(nil)
+    expect(w.maxRows).toBe(8)
+    w:SetCanAddWindow(1)
+    expect(w.canAdd).toBe(true)
+    -- without an api nothing is read
+    w.api = nil
+    w:Refresh()
+    expectNoErrors()
+end
+
+@test("empty fights say so, per type")
+local function emptyLines()
+    local w = meter()
+    w:SetView("damage", nil)
+    expect(w.empty).toBeShown()
+    expect(w.empty).toHaveText("Nothing yet. The meter fills as the fight goes on.")
+    w:SetView("avoidable", "current")
+    expect(w.empty).toHaveText("No avoidable damage taken.")
+    session("deaths", {})
+    w:SetView("deaths", "current")
+    expect(w.empty).toHaveText("No deaths. Well played.")
+    w:SetView("nope", "overall")
+    expect(w.type).toBe("damage")
+    expect(asked[#asked]).toBe("type:" .. tostring(Enum.DamageMeterSessionType.Overall))
+end
+
+@test("the list: ranked rows, names without realms, class colours, fills, numbers")
+local function listRows()
+    local w = meter({ rows = 4 })
+    local list = sources(3, 2)
+    session("damage", list, 6000)
+    w:SetView("damage", "current")
+    expect(w.empty).never.toBeShown()
+    local r1, r2 = w.rows[1], w.rows[2]
+    expect(r1.name).toHaveText("P1")
+    expect(r2.name).toHaveText(UnitName("player") :: string)
+    expect(r1.rank).toHaveText("1")
+    expect(tokenOf(r1.name)).toBe("class-mage")
+    expect(r1.main).toHaveText("3,000")
+    expect(r1.paren).toHaveText("(30)")
+    expect(r1.share).never.toBeShown()
+    expect(r1.bar:GetValue()).toBe(3000)
+    local _, max = r1.bar:GetMinMaxValues()
+    expect(max).toBe(3000)
+    expect(borderToken(r2.edge)).toBe("ink")
+    expect(borderToken(r1.edge)).toBe("gilt-hairline")
+    expect(r1.icon).toBeShown()
+    expect(w.rows[4]).never.toBeShown()
+    expect(w.pinLine).never.toBeShown()
+    -- complete numbers: shares out of combat
+    w:SetOptions({ numbers = "complete" })
+    expect(r1.share).toHaveText("50%")
+    -- minimal: the main number only
+    w:SetOptions({ numbers = "minimal" })
+    expect(r1.paren).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("per second leads for DPS; counts for interrupts")
+local function perSecond()
+    local w = meter()
+    session("dps", sources(2))
+    w:SetView("dps", "current")
+    expect(w.rows[1].main).toHaveText("20")
+    expect(w.rows[1].paren).toHaveText("(2,000)")
+    session("interrupts", { { name = "A", classFilename = "ROGUE", totalAmount = 4.2, amountPerSecond = 0 } })
+    w:SetView("interrupts", "current")
+    expect(w.rows[1].main).toHaveText("4")
+    expect(w.rows[1].paren).never.toBeShown()
+end
+
+@test("a top of 0 still draws (the bar's max is 1)")
+local function zeroTop()
+    local w = meter()
+    session("damage", { { name = "A", classFilename = "MAGE", totalAmount = 0, amountPerSecond = 0 } })
+    w:SetView("damage", "current")
+    local _, max = w.rows[1].bar:GetMinMaxValues()
+    expect(max).toBe(1)
+end
+
+@test("your row past the visible ones is pinned to the last slot")
+local function pinned()
+    local w = meter({ rows = 4 })
+    session("damage", sources(6, 6))
+    w:SetView("damage", "current")
+    expect(w.rows[4].rank).toHaveText("6")
+    expect(w.pinLine).toBeShown()
+    w:SetOptions({ pinYou = false })
+    expect(w.rows[4].rank).toHaveText("4")
+    expect(w.pinLine).never.toBeShown()
+    -- fewer rows: the extra ones hide
+    w:SetOptions({ pinYou = true })
+    w:SetMaxRows(4)
+    session("damage", sources(2))
+    w:Refresh()
+    expect(w.rows[3]).never.toBeShown()
+end
+
+@test("markers, bar colours and name colours")
+local function looks()
+    local w = meter()
+    session("damage", { { name = "A", classFilename = "WARRIOR", totalAmount = 10, amountPerSecond = 1 },
+                        { name = "B", totalAmount = 5, amountPerSecond = 1 } })
+    w:SetOptions({ marker = "diamond" })
+    expect(w.rows[1].diamond).toBeShown()
+    expect(w.rows[1].icon).never.toBeShown()
+    expect(tokenOf(w.rows[2].name)).toBe("reaction-hostile") -- no class
+    w:SetOptions({ marker = "none", barColor = "class" })
+    expect(w.rows[1].diamond).never.toBeShown()
+    expect(tokenOf(w.rows[1].name)).toBe("ink")
+    w:SetOptions({ barColor = "neutral", nameColor = "ink" })
+    expect(tokenOf(w.rows[1].name)).toBe("ink")
+    -- class icons from the circles when there is no atlas
+    w:SetOptions({ marker = "icon", nameColor = "class" })
+    mock.fake("GetClassAtlas", function(_: string): any return nil end)
+    w:Refresh()
+    expect(w.rows[1].icon).toBeShown()
+end
+
+@test("enemy damage taken: hostile names, opened only with a readable creature")
+local function enemies()
+    local w = meter()
+    session("enemyDamageTaken", {
+        { name = "Hogger", totalAmount = 100, amountPerSecond = 2, sourceGUID = "Creature-1", sourceCreatureID = 448 },
+        { name = "Boss", totalAmount = 50, amountPerSecond = 1, sourceGUID = "Creature-2", sourceCreatureID = mock.secret(9) },
+    })
+    w:SetView("enemyDamageTaken", "current")
+    expect(tokenOf(w.rows[1].name)).toBe("reaction-hostile")
+    expect(w.rows[1].icon).never.toBeShown()
+    expect(w.rows[1].open).never.toBeNil()
+    expect(w.rows[2].open).toBeNil()
+    expect(w.rows[2].tip).toBe("Details of other players are secret in combat.")
+end
+
+@test("a row opens its spells; back returns")
+local function drill()
+    local w = meter()
+    local views: { string } = {}
+    session("damage", sources(2, 1))
+    spells[UnitGUID("player")] = { totalAmount = 1000, combatSpells = {
+        { spellID = 6603, totalAmount = 600, amountPerSecond = 6 },
+        { spellID = 133, totalAmount = 400, amountPerSecond = 4, creatureName = "Imp" },
+        { spellID = 999999, totalAmount = 0, amountPerSecond = 0 },
+    } }
+    mock.fake("C_Spell.GetSpellName", function(id: number): any
+        if id == 999999 then error("unknown") end
+        return "Fireball"
+    end)
+    w:SetView("damage", "current")
+    mock.click(w.rows[1])
+    expect(w.drill and w.drill.kind).toBe("spells")
+    expect(w.back).toBeShown()
+    expect(w.typeSelect).never.toBeShown()
+    expect(w.who).toHaveText(UnitName("player") :: string)
+    expect(w.what).toHaveText("Damage done")
+    expect(w.total).toHaveText("2,000") -- the row's own value
+    expect(w.rows[1].name).toHaveText("Melee")
+    expect(w.rows[2].name).toHaveText("Fireball")
+    expect(w.rows[2].sub).toBeShown()
+    expect(w.rows[2].sub).toHaveText("Imp")
+    expect(w.rows[3].name).toHaveText("Unknown")
+    expect(w.rows[1].paren).toHaveText("(6)")
+    w:SetOptions({ numbers = "complete" })
+    expect(w.rows[1].share).toHaveText("60%")
+    w:SetOptions({ numbers = "minimal" })
+    expect(w.rows[1].paren).never.toBeShown()
+    -- back
+    mock.click(w.back)
+    expect(w.drill).toBeNil()
+    expect(w.typeSelect).toBeShown()
+    expect(#views).toBe(0)
+    expectNoErrors()
+end
+
+@test("another's row: its GUID; per second and counts in the breakdown; none to show")
+local function drillOther()
+    local w = meter()
+    session("hps", sources(2))
+    spells["Player-1-1"] = { totalAmount = 10, combatSpells = { { spellID = 2061, totalAmount = 10, amountPerSecond = 0 } } }
+    w:SetView("hps", 4)
+    -- a past fight that's gone: back to current
+    expect(w.session).toBe("current")
+    w:Refresh()
+    mock.click(w.rows[1])
+    expect(asked[#asked]).toBe("src:Player-1-1:nil")
+    expect(w.rows[1].main).toHaveText("0")
+    local _, max = w.rows[1].bar:GetMinMaxValues()
+    expect(max).toBe(1)
+    w.type = "interrupts"
+    w:Refresh()
+    expect(w.rows[1].main).toHaveText("10")
+    -- nothing for the second source
+    w.drill = nil
+    w.type = "hps"
+    w:Refresh()
+    mock.click(w.rows[2])
+    expect(w.empty).toHaveText("No spells to show.")
+end
+
+@test("a past fight is read by its ID")
+local function pastFight()
+    local w = meter()
+    past = { { sessionID = 11, name = "Hogger", durationSeconds = 42 }, { sessionID = 12, name = mock.secret("x"), durationSeconds = 5 } }
+    session("damage", sources(1, 1))
+    spells[UnitGUID("player")] = { totalAmount = 1, combatSpells = { { spellID = 133, totalAmount = 1, amountPerSecond = 1 } } }
+    w:SetView("damage", 11)
+    expect(asked[#asked]).toBe("id:11")
+    expect(w.time).toHaveText("0:42")
+    mock.click(w.rows[1])
+    expect(asked[#asked]).toBe("srcid:11")
+end
+
+@test("the fight select: Current with its time, Overall, past fights newest first")
+local function sessionOptions()
+    local w = meter()
+    for i = 1, 25 do past[i] = { sessionID = i, name = i == 25 and "" or ("Fight " .. i), durationSeconds = i } end
+    local opts = w:SessionOptions()
+    expect(opts[1].value).toBe("current")
+    expect(opts[1].note).toBe("1:15")
+    expect(opts[2].value).toBe("overall")
+    expect(opts[3].heading).toBe("Past fights")
+    expect(opts[4].value).toBe(25)
+    expect(opts[4].label).toBe("Combat")
+    expect(#opts).toBe(3 + 20)
+    w:SetView("damage", "current")
+    expect(w.time).toHaveText("1:15")
+    -- unchanged: the select keeps its options while open
+    local sig = w.sessionSig
+    w:Refresh()
+    expect(w.sessionSig).toBe(sig)
+    w:SetView("damage", "overall")
+    expect(w.time).toHaveText("")
+    -- a broken list: Current and Overall only
+    local broken = setmetatable({ GetAvailableCombatSessions = function(): any error("no") end }, { __index = API })
+    w.api = broken
+    expect(#w:SessionOptions()).toBe(2)
+end
+
+@test("the selects change the view and tell onView")
+local function selects()
+    local seen: { string } = {}
+    local w = meter({ onView = function(t: string, s: any) seen[#seen + 1] = t .. "/" .. tostring(s) end })
+    ;(w.typeSelect.onChange :: (v: any) -> ())("healing")
+    expect(w.type).toBe("healing")
+    ;(w.sessionSelect.onChange :: (v: any) -> ())("overall")
+    expect(w.session).toBe("overall")
+    expect(seen).toEqual({ "healing/current", "healing/overall" })
+    local quiet = meter()
+    ;(quiet.typeSelect.onChange :: (v: any) -> ())("dps")
+    ;(quiet.sessionSelect.onChange :: (v: any) -> ())("current")
+    expect(quiet.type).toBe("dps")
+end
+
+@test("deaths: in the order they happened, each opens its recap")
+local function deaths()
+    local w = meter({ rows = 4 })
+    local list = sources(3, 1)
+    list[2].deathRecapID = 0
+    session("deaths", list)
+    w:SetView("deaths", "current")
+    -- newest first from the engine: reversed
+    expect(w.rows[1].name).toHaveText("P3")
+    expect(w.rows[1].main).toHaveText("33s")
+    expect(tokenOf(w.rows[1].rank)).toBe("ink-muted")
+    expect(w.rows[2].open).toBeNil() -- no recap
+    recapEvents = {
+        { event = "SPELL_DAMAGE", spellId = 133, spellName = "Fireball", amount = 300, currentHP = 200, timestamp = 10, overkill = 0 },
+        { event = "SPELL_HEAL", spellId = 2061, spellName = "Flash Heal", amount = 400, currentHP = 500, timestamp = 9 },
+        { event = "SWING_DAMAGE", amount = mock.secret(5), currentHP = 100, timestamp = 8 },
+        { event = "SPELL_DAMAGE", spellName = mock.secret("Secret"), currentHP = 900, timestamp = 7 },
+        { event = 5, spellId = 1, timestamp = mock.secret(6) },
+    }
+    -- the newest event is first: the death is events[1]
+    mock.click(w.rows[1])
+    expect(w.drill and w.drill.kind).toBe("recap")
+    expect(w.what).toHaveText("Death recap")
+    expect(w.total).never.toBeShown()
+    -- maxRows - 1 slots: the last three, oldest first
+    expect(w.rows[1].name).toHaveText("Melee")
+    expect(w.rows[1].main:GetText() ~= nil).toBe(true)
+    expect(w.rows[2].name).toHaveText("Flash Heal")
+    expect(w.rows[2].main).toHaveText("+400")
+    expect(tokenOf(w.rows[2].name)).toBe("fel")
+    expect(w.rows[2].rank).toHaveText("-1.0s")
+    expect(w.rows[3].name).toHaveText("Fireball")
+    expect(w.rows[3].main).toHaveText("-300")
+    expect(w.rows[3].rank).toHaveText("0s")
+    expect(borderToken(w.rows[3].edge)).toBe("ember")
+    expect(w.rows[4]).never.toBeShown()
+    expect(w.note).toHaveText("Bars show health after each hit.")
+    expectNoErrors()
+end
+
+@test("recap: the killing blow's note, low health, unknown names")
+local function recapNote()
+    local w = meter({ rows = 8 })
+    session("deaths", sources(1))
+    recapEvents = {
+        { event = "SWING_DAMAGE", amount = 50, currentHP = 0, timestamp = 10, overkill = 1234 },
+        { event = "SPELL_DAMAGE", spellId = 1, amount = 100, currentHP = 300, timestamp = 9 },
+    }
+    w:SetView("deaths", "current")
+    mock.click(w.rows[1])
+    expect(w.note).toHaveText("Killed by Melee, 1,234 overkill.")
+    expect(w.rows[1].name).toHaveText("Unknown")
+    recapEvents = { { event = "SPELL_DAMAGE", spellName = "Fireball", amount = 50, timestamp = 10, overkill = 7 } }
+    w:Refresh()
+    expect(w.note).toHaveText("Killed by Fireball, 7 overkill.")
+    recapEvents = { { event = "SPELL_DAMAGE", amount = 50, timestamp = 10, overkill = 7 } }
+    w:Refresh()
+    expect(w.note).toHaveText("Killed by ?, 7 overkill.")
+    -- no max health: no bars
+    recapMax = "error"
+    w:Refresh()
+    expect(w.rows[1].bar:GetValue()).toBe(0)
+end
+
+@test("recap: secret until combat ends, missing, empty")
+local function recapMissing()
+    local w = meter()
+    session("deaths", sources(1))
+    w:SetView("deaths", "current")
+    recapEvents = { { event = "SPELL_DAMAGE", amount = 1, timestamp = 1 } }
+    mock.click(w.rows[1])
+    recapEvents = mock.secret({})
+    w:Refresh()
+    expect(w.empty).toHaveText("The recap is secret until combat ends.")
+    recapEvents = "error"
+    w:Refresh()
+    expect(w.empty).toHaveText("No recap for this death.")
+    recapEvents = {}
+    w:Refresh()
+    expect(w.empty).toHaveText("No recap for this death.")
+end
+
+@test("hovering a row: the gilt edge if it opens, its tip")
+local function rowHover()
+    local w = meter()
+    session("damage", { { name = "A", classFilename = "MAGE", totalAmount = 10, amountPerSecond = 1, sourceGUID = mock.secret("G") } })
+    w:SetView("damage", "current")
+    local r = w.rows[1]
+    tips = {}
+    mock.hover(r)
+    expect(borderToken(r.edge)).toBe("gilt-hairline") -- not openable
+    expect(lastTip().description).toBe("Details of other players are secret in combat.")
+    mock.hover(nil)
+    expect(tips[#tips]).toBe("hide")
+    session("damage", sources(1, 1))
+    w:Refresh()
+    mock.hover(r)
+    expect(borderToken(r.edge)).toBe("gilt")
+    mock.hover(nil)
+    expect(borderToken(r.edge)).toBe("ink")
+end
+
+@test("the menu: new window (when allowed), reset, close, settings")
+local function menu()
+    local calls: { string } = {}
+    local function on(name: string): () -> () return function() calls[#calls + 1] = name end end
+    local w = meter({ onNewWindow = on("new"), onReset = on("reset"), onClose = on("close"), onSettings = on("settings") })
+    tips = {}
+    mock.hover(w.more)
+    expect(w.more.hover).toBeShown()
+    expect(lastTip().title).toBe("Meter options")
+    mock.hover(nil)
+    expect(w.more.hover).never.toBeShown()
+    mock.click(w.more)
+    expect(w.menu).toBeShown()
+    expect(w.catcher).toBeShown()
+    local items = w.menu.items
+    expect(items[1].label).toHaveText("New window")
+    expect(items[1].enabled).toBe(false)
+    expect(items[3].label).toHaveText("Close this window")
+    expect(items[4].enabled).toBe(false) -- the divider
+    mock.hover(items[1])
+    expect(items[1].hover).never.toBeShown()
+    mock.hover(items[2])
+    expect(items[2].hover).toBeShown()
+    mock.hover(nil)
+    mock.click(items[1])
+    expect(#calls).toBe(0)
+    mock.click(items[2])
+    expect(calls).toEqual({ "reset" })
+    expect(w.menu).never.toBeShown()
+    expect(w.catcher).never.toBeShown()
+    -- allowed now; the more button closes an open menu; the catcher too
+    w:SetCanAddWindow(true)
+    mock.click(w.more)
+    mock.click(items[1])
+    expect(calls).toEqual({ "reset", "new" })
+    mock.click(w.more)
+    mock.click(w.more)
+    expect(w.menu).never.toBeShown()
+    mock.click(w.more)
+    mock.click(w.catcher :: Button)
+    expect(w.menu).never.toBeShown()
+    -- hiding the window closes the menu
+    mock.click(w.more)
+    w:Hide()
+    expect(w.menu).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("the menu of a main window has no close, and an item without action")
+local function menuMain()
+    local w = meter()
+    mock.click(w.more)
+    expect(w.menu.items[3].label).toHaveText("")
+    expect(w.menu.items[4].label).toHaveText("Settings")
+    mock.click(w.menu.items[4])
+    expect(w.menu).never.toBeShown()
+end
+
+@test("in combat: no shares; secret names, amounts and lists go to the engine untested")
+local function secrets()
+    local w = meter()
+    w:SetOptions({ numbers = "complete" })
+    mock.fake("UnitAffectingCombat", function(_: string): any return true end)
+    session("damage", {
+        { name = mock.secret("Foe-Realm"), classFilename = "MAGE", totalAmount = mock.secret(5000), amountPerSecond = mock.secret(50),
+          isLocalPlayer = mock.secret(false), sourceGUID = mock.secret("G") },
+        { name = "Me", classFilename = mock.secret("MAGE"), totalAmount = 100, amountPerSecond = 1, isLocalPlayer = true },
+    }, 6000)
+    spells[UnitGUID("player")] = { totalAmount = mock.secret(100), combatSpells = {
+        { spellID = mock.secret(6603), totalAmount = 100, amountPerSecond = 1, creatureName = mock.secret("Imp") } } }
+    w:Refresh()
+    expect(w.rows[1].share).never.toBeShown()
+    expect(w.rows[1].main.value).toBeNil()
+    expect(tokenOf(w.rows[2].name)).toBe("reaction-hostile") -- a secret class: none
+    mock.click(w.rows[2])
+    expect(w.rows[1].share).never.toBeShown()
+    expect(w.rows[1].name:GetText() ~= "Melee").toBe(true)
+    expectNoErrors()
+end
+
+@test("a secret source list: says so until combat ends")
+local function secretList()
+    local w = meter()
+    sessions[typeEnum("damage")] = { combatSources = mock.secret({}) }
+    w:SetView("damage", "current")
+    expect(w.empty).toHaveText("The list is secret until combat ends.")
+    expectNoErrors()
+end

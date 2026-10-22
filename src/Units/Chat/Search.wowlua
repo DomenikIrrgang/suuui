@@ -1,0 +1,175 @@
+-- Units/Chat/Search.wowlua
+-- The chat's Search tab as text (Units/Chat): which kept lines match, by
+-- player; what kind of chat a line is; where a match sits in a line and the
+-- line cut to show it. Pure text work: Blizzard's chat colours and the
+-- lines' font come in as arguments.
+
+import * as lines from "./Lines"
+
+-- A line as shown in a mirror (Units/Chat's Line; the fields the search
+-- reads).
+export type ShownLine = { text?: any, at: number, plainText?: string, [string]: any }
+-- A kept line for the search: Blizzard's text, the line as shown, where from.
+export type KeptEntry = {
+    src: string, line: ShownLine, r: any, g: any, b: any, where: string, whisper?: boolean, n: number, kind?: string,
+}
+export type Found = { key: string, who?: string, lines: KeptEntry[] }
+
+local KIND_TYPES = {
+    whisper = { "WHISPER", "WHISPER_INFORM" }, party = { "PARTY", "PARTY_LEADER" }, guild = { "GUILD", "OFFICER" },
+}
+export const KIND_LABEL: { [string]: string } = { whisper = "Whispers", party = "Party", guild = "Guild" }
+
+-- A line's numbered channel ("2. Trade"), if it's in one.
+export function channelOf(src: string): string?
+    local label = src:match("|Hchannel:[^|]*|h%[?([^%]|]*)")
+    return label and label:gsub("%s+%-%s+.*$", "") or nil
+end
+
+-- Whisper, party, guild or trade (Blizzard colours each chat type its own
+-- way; `types`: its ChatTypeInfo, the live one by default).
+export function lineKind(src: string, r: any, g: any, b: any, types: any = ChatTypeInfo): string?
+    for kind, list in pairs(KIND_TYPES) do
+        for _, t in ipairs(list) do
+            if lines.sameColor(types and types[t], r, g, b) then return kind end
+        end
+    end
+    local channel = channelOf(src)
+    if channel and channel:lower():find("trade", 1, true) then return "trade" end
+    return nil
+end
+
+-- The lines with `q` (lower case) in them, in `scope` ("all" or a kind),
+-- by player: { key, who, lines }, the newest player first (`entries` come
+-- newest first); and how many lines.
+export function findLines(entries: KeptEntry[], q: string, scope: string, types: any = ChatTypeInfo): (Found[], number)
+    local groups: Found[], byKey: { [string]: Found }, total = {}, {}, 0
+    for _, e in ipairs(entries) do
+        local line = e.line
+        line.plainText = line.plainText or lines.plainLine(line.text):lower()
+        if (line.plainText :: string):find(q, 1, true) then
+            e.kind = e.whisper and "whisper" or lineKind(e.src, e.r, e.g, e.b, types)
+            if scope == "all" or scope == e.kind then
+                local who = e.src:match("|Hplayer:([^:|]+)")
+                local key = who and who:lower():match("^([^%-]+)") or ""
+                local group = byKey[key]
+                if not group then
+                    group = { key = key, who = who, lines = {} }
+                    byKey[key] = group
+                    groups[#groups + 1] = group
+                end
+                group.lines[#group.lines + 1] = e
+                total = total + 1
+            end
+        end
+    end
+    return groups, total
+end
+
+-- Where a single line came from: "Whispers", "Party", "2. Trade" or its tab.
+export function whereOf(e: KeptEntry): string
+    return KIND_LABEL[e.kind or ""] or channelOf(e.src) or e.where
+end
+
+-- A group's header count: "1 line · Party", "3 lines · last 21:20".
+export function groupCount(group: Found): string
+    local n = #group.lines
+    return n == 1 and ("1 line · " .. whereOf(group.lines[1]))
+        or (n .. " lines · last " .. date("%H:%M", group.lines[1].line.at))
+end
+
+-- The field's count and the note under it, for a query and its matches.
+export function countText(q: string, total: number): string
+    return #q >= 2 and (total == 1 and "1 line" or (total .. " lines")) or ""
+end
+
+export function noteText(q: string, total: number): string
+    return #q < 2 and "A player's name or a word: every tab and whisper kept."
+        or (total == 0 and "Nothing kept matches." or "")
+end
+
+-- The text as shown (escape codes out), with the byte in the line of each
+-- byte shown, and for one inside a link's label that link's start.
+export function visible(text: string): (string, number[], (number?)[])
+    local shown, at, links = {}, {}, {}
+    local i, n, link = 1, #text, nil
+    -- (links by the shown byte's index: a nil left at the end of the list
+    -- would put the next byte's link in its place)
+    local function put(c: string, pos: number) shown[#shown + 1] = c; at[#at + 1] = pos; links[#at] = link end
+    while i <= n do
+        local c = text:sub(i, i)
+        if c == "|" then
+            local k = text:sub(i + 1, i + 1)
+            if k == "c" then
+                if text:sub(i + 2, i + 2) == "n" then i = (text:find(":", i + 3, true) or n) + 1 else i = i + 10 end
+            elseif k == "r" then
+                i = i + 2
+            elseif k == "h" then
+                link = nil
+                i = i + 2
+            elseif k == "H" then
+                link = i
+                i = (text:find("|h", i + 2, true) or n) + 2
+            elseif k == "T" or k == "A" or k == "K" then
+                i = (text:find("|" .. k:lower(), i + 2, true) or n) + 2
+            elseif k == "|" then
+                put("|", i)
+                i = i + 2
+            else
+                put(c, i)
+                i = i + 1
+            end
+        else
+            put(c, i)
+            i = i + 1
+        end
+    end
+    return table.concat(shown), at, links
+end
+
+-- A line too long to show its match: the time, tag and name kept, the
+-- message from two words before the match (a link whole).
+export function snippet(text: string, shown: string, at: number[], links: (number?)[], s: number): string?
+    local body = text:find("|h: ", 1, true)
+    if not body then return nil end
+    body = body + 4
+    local first
+    for k = 1, #at do
+        if at[k] >= body then first = k break end
+    end
+    if not first or s <= first then return nil end
+    local c, spaces = s, 0
+    for k = s - 1, first, -1 do
+        if shown:byte(k) == 32 then
+            spaces = spaces + 1
+            if spaces == 2 then break end
+        end
+        c = k
+    end
+    if c <= first then return nil end
+    local from = at[c]
+    local link = links[c]
+    if link then
+        from = link
+        if text:sub(from - 10, from - 1):match("^|c%x%x%x%x%x%x%x%x$") then from = from - 10 end
+    end
+    if from <= body then return nil end
+    return text:sub(1, body - 1) .. "… " .. text:sub(from)
+end
+
+-- Where the match sits in a line (x from its start, x to its end), or nil;
+-- past the time ("21:20  ": the search is in the line, not its time).
+-- `measure(text)`: a text's width in the lines' font.
+local TIME_SHOWN = 8
+export function matchSpan(text: string, q: string, measure: (text: string) -> number)
+    : (number?, number?, string?, number[]?, (number?)[]?, number?)
+    local shown, at, links = visible(text)
+    local s, e = shown:lower():find(q, TIME_SHOWN, true)
+    if not (s and e) then return nil end
+    local function upto(byte: number, k: number): number
+        local part = text:sub(1, byte)
+        if links[k] then part = part .. "|h" end
+        return measure(part)
+    end
+    return upto(at[s] - 1, s), upto(at[e], e), shown, at, links, s
+end

@@ -1,0 +1,461 @@
+-- Units/Campsite: the campfire alerts (nearby, resting, rested), the
+-- benefits read from the buff's tooltip, and the fires remembered for the
+-- world map.
+
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal clock, aura, effectOf, restLeft, SECTION from "/Units/Campsite"
+import expectNoErrors from "../../helpers"
+
+const NEARBY = 1283391
+const WELCOMING = 1229739
+const BENEFITS = 1229741
+const LIGHT_FIRE = 1307227
+
+local M = assert(SuuUI.GetModule("campsite"))
+
+-- the alerts it sends: { "show", key, tone, title, detail } / { "hide", key }
+local said: any[][] = {}
+local auras: number[] = {}
+
+local function apply(spellId: number, data: { [string]: any }?): number
+    local d: { [string]: any } = data or {}
+    d.spellId = spellId
+    d.name = d.name or ("Aura " .. spellId)
+    local id = mock.player:applyAura(d)
+    auras[#auras + 1] = id
+    return id
+end
+
+local function last(): any[]
+    return said[#said] or {}
+end
+
+@beforeEach
+local function setup()
+    said = {}
+    mock.stub(SuuUI, "ShowAlert", function(key: any, tone: any, title: any, detail: any)
+        said[#said + 1] = { "show", key, tone, title, detail }
+    end)
+    mock.stub(SuuUI, "HideAlert", function(key: any) said[#said + 1] = { "hide", key } end)
+end
+
+@afterEach
+local function undo()
+    for _, id in ipairs(auras) do pcall(mock.player.removeAura, mock.player, id) end
+    auras = {}
+    M:Alert(nil)
+    M.phase, M.near, M.litAt, M.rested = nil, nil, nil, nil
+    M:Reset("nearbyFor")
+    M:CharData().fires = nil
+    mock.advanceTime(20)
+end
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+@test("clock: seconds, minutes, hours")
+@cases({ { 0, "0:00" }, { -5, "0:00" }, { 59.6, "1:00" }, { 125, "2:05" }, { 599, "9:59" }, { 600, "10m" },
+         { 3599, "59m" }, { 3600, "1h" }, { 7300, "2h" } })
+local function clocks(s: number, want: string)
+    expect(clock(s)).toBe(want)
+end
+
+@test("aura: yours, none, or false when it can't be read")
+local function auraReads()
+    expect(aura(NEARBY)).toBeNil()
+    apply(NEARBY)
+    mock.advanceFrames(2)
+    local a: any = aura(NEARBY)
+    expect(a and a.spellId).toBe(NEARBY)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function() error("blocked") end)
+    expect(aura(NEARBY)).toBe(false)
+    local real = C_UnitAuras.GetPlayerAuraBySpellID
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function() return mock.secret({}) end)
+    expect(aura(NEARBY)).toBe(false)
+    -- (the real one back before the aura goes: other modules read it then)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", real)
+end
+
+@test("restLeft: the time to the aura's end")
+local function restLefts()
+    expect(restLeft(nil)).toBeNil()
+    expect(restLeft({ expirationTime = 0 })).toBeNil()
+    expect(restLeft({ expirationTime = mock.secret(GetTime() + 30) })).toBeNil()
+    expect(restLeft({ expirationTime = GetTime() + 30 })).toBeCloseTo(30)
+end
+
+--------------------------------------------------------------------------------
+-- Camp Benefits' tooltip
+--------------------------------------------------------------------------------
+
+local function tooltipLines(lines: string[]): (...any) -> ...any
+    return function(): any
+        local out = {}
+        for i, l in ipairs(lines) do out[i] = { leftText = l } end
+        return { lines = out }
+    end
+end
+
+@test("effectOf: each benefit a line, the heading and time left dropped")
+local function effectLines()
+    local muted = SuuUI.Tokens.color["ink-muted"].hex
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", tooltipLines({
+        "Camp Benefits",
+        "Gained the following camp benefits:\n|cffffffff- Tent: You received a tent.|r\n  • Mana Well: Mana regenerates.  ",
+        "55 minutes remaining",
+        "\n\n",
+        "Plain line without a colon",
+        string.rep("word ", 30),
+    }))
+    local text, n = effectOf({ auraInstanceID = 7 })
+    expect(n).toBe(4)
+    local lines: string[] = {}
+    for l in (text or ""):gmatch("[^\n]+") do lines[#lines + 1] = l end
+    expect(lines[1]).toBe("Tent: |cff" .. muted .. "You received a tent.|r")
+    expect(lines[2]).toBe("Mana Well: |cff" .. muted .. "Mana regenerates.|r")
+    expect(lines[3]).toBe("Plain line without a colon")
+    -- long lines cut at a word, with an ellipsis
+    expect(#lines[4] <= 110 + #"…").toBe(true)
+    expect(lines[4]:sub(-#"…")).toBe("…")
+    expect(lines[4]:sub(1, 5)).toBe("word ")
+end
+
+@test("effectOf: nothing to read")
+local function effectNone()
+    expect(effectOf(nil)).toBeNil()
+    expect(effectOf({})).toBeNil()
+    expect(effectOf({ auraInstanceID = mock.secret(3) })).toBeNil()
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", function() error("no") end)
+    expect(effectOf({ auraInstanceID = 3 })).toBeNil()
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", function() return nil end)
+    expect(effectOf({ auraInstanceID = 3 })).toBeNil()
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", function() return mock.secret({ lines = {} }) end)
+    expect(effectOf({ auraInstanceID = 3 })).toBeNil()
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", function() return { lines = "x" } end)
+    expect(effectOf({ auraInstanceID = 3 })).toBeNil()
+    -- only a heading, a secret line, a missing one and another heading
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", function()
+        return { lines = { { leftText = "Camp Benefits" }, { leftText = mock.secret("Tent: x") }, {}, { leftText = "Heading:" } } }
+    end)
+    expect(effectOf({ auraInstanceID = 3 })).toBeNil()
+    -- the game without the tooltip API
+    mock.stub(C_TooltipInfo :: any, "GetUnitBuffByAuraInstanceID", nil)
+    rawset(C_TooltipInfo :: any, "GetUnitBuffByAuraInstanceID", nil)
+    expect(effectOf({ auraInstanceID = 3 })).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Phases
+--------------------------------------------------------------------------------
+
+@test("Phase: none, nearby, resting, rested")
+local function phases()
+    expect(M:Phase()).toBeNil()
+    apply(NEARBY)
+    expect(M:Phase()).toBe("nearby")
+    apply(WELCOMING, { duration = 60, expirationTime = GetTime() + 60 })
+    local phase, a = M:Phase()
+    expect(phase).toBe("resting")
+    expect(a.spellId).toBe(WELCOMING)
+    apply(BENEFITS, { duration = 3600, expirationTime = GetTime() + 3600 })
+    phase, a = M:Phase()
+    expect(phase).toBe("rested")
+    expect(a.spellId).toBe(BENEFITS)
+end
+
+@test("Phase: benefits alone (away from the fire) is no phase")
+local function benefitsAlone()
+    apply(BENEFITS)
+    expect(M:Phase()).toBeNil()
+end
+
+@test("Phase: false while auras can't be read")
+local function phaseUnread()
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function() error("blocked") end)
+    expect(M:Phase()).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Alerts
+--------------------------------------------------------------------------------
+
+@test("Alert nearby: stays until rested; hidden on a taxi")
+local function alertNearby()
+    M:Alert("nearby")
+    expect(last()).toEqual({ "show", "suu:campfire", "info", "Campfire nearby", "Sit for a minute: an hour of Camp Benefits" })
+    mock.advanceTime(120)
+    expect(last()[1]).toBe("show")
+    mock.fake("UnitOnTaxi", function() return true end)
+    M:Alert("nearby")
+    expect(last()).toEqual({ "hide", "suu:campfire" })
+end
+
+@test("Alert nearby: only the setting's seconds")
+local function alertNearbyFor()
+    M:Set("nearbyFor", 10)
+    M:Alert("nearby")
+    mock.advanceTime(9)
+    expect(last()[1]).toBe("show")
+    mock.advanceTime(2)
+    expect(last()).toEqual({ "hide", "suu:campfire" })
+    expect(M.briefTimer).toBeNil()
+end
+
+@test("Alert resting: counts the minute down every half second")
+local function alertResting()
+    M:Alert("resting", { expirationTime = GetTime() + 42 })
+    expect(last()[4]).toBe("Resting by the fire")
+    expect(last()[5]).toBe("Camp Benefits in 0:42")
+    mock.advanceTime(2)
+    expect(last()[5]).toBe("Camp Benefits in 0:40")
+    M:Alert("resting", nil)
+    expect(last()[5]).toBe("Stay seated for a minute")
+    M:Alert(nil)
+    local n = #said
+    mock.advanceTime(2)
+    expect(#said).toBe(n)
+end
+
+@test("Alert rested: the benefits, the time in the title, longer with more to read")
+local function alertRested()
+    -- fresh: an hour
+    M:Alert("rested", { expirationTime = GetTime() + 3600 })
+    expect(last()).toEqual({ "show", "suu:campfire", "info", "Camp Benefits gained · 1h", "For the next hour" })
+    expect(M.rested.title).toBe("Camp Benefits gained · 1h")
+    mock.advanceTime(7.9)
+    expect(last()[1]).toBe("show")
+    mock.advanceTime(0.2)
+    expect(last()[1]).toBe("hide")
+    -- walked up already rested: how long is left; a sample's effect, 2 lines
+    M:Alert("rested", { expirationTime = GetTime() + 1800, effect = function(): string return "A\nB" end })
+    expect(last()[4]).toBe("Camp Benefits · 30m left")
+    expect(last()[5]).toBe("A\nB")
+    mock.advanceTime(9.9)
+    expect(last()[1]).toBe("show")
+    mock.advanceTime(0.2)
+    expect(last()[1]).toBe("hide")
+    -- no aura data at all
+    M:Alert("rested", nil)
+    expect(last()[4]).toBe("Camp Benefits gained · 1h")
+end
+
+@test("Alert rested: many benefits stay at most 16 s")
+local function alertRestedLong()
+    local lines = { "Camp Benefits" }
+    for i = 1, 8 do lines[#lines + 1] = "B" .. i .. ": does " .. i end
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", tooltipLines(lines))
+    M:Alert("rested", { auraInstanceID = 5, expirationTime = GetTime() + 3600 })
+    mock.advanceTime(15.9)
+    expect(last()[1]).toBe("show")
+    mock.advanceTime(0.2)
+    expect(last()[1]).toBe("hide")
+end
+
+@test("Update: only a change of phase alerts")
+local function update()
+    M.phase = nil
+    M:Update()
+    expect(#said).toBe(0)
+    apply(NEARBY)
+    M:Update()
+    expect(M.phase).toBe("nearby")
+    expect(last()[4]).toBe("Campfire nearby")
+    local n = #said
+    M:Update()
+    expect(#said).toBe(n)
+    -- walking up already rested
+    M.phase = nil
+    apply(BENEFITS, { expirationTime = GetTime() + 600 })
+    M:Update()
+    expect(last()[4]).toBe("Camp Benefits · 10m left")
+    -- walking away
+    M.phase = "rested"
+    mock.player:removeAura(auras[1])
+    mock.player:removeAura(auras[2])
+    auras = {}
+    M:Update()
+    expect(M.phase).toBeNil()
+    expect(last()[1]).toBe("hide")
+    -- unreadable: left as it was
+    M.phase = "nearby"
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function() error("blocked") end)
+    M:Update()
+    expect(M.phase).toBe("nearby")
+end
+
+--------------------------------------------------------------------------------
+-- Fires remembered
+--------------------------------------------------------------------------------
+
+@test("RememberFire: each fire once, at most 100")
+local function rememberFire()
+    mock.moveTo({ mapID = 1412, x = 0.40, y = 0.60 })
+    M:RememberFire()
+    local fires = M:CharData().fires
+    expect(#fires).toBe(1)
+    expect(fires[1].map).toBe(1412)
+    expect(fires[1].x).toBeCloseTo(0.40)
+    -- the same fire again: seen again, not added
+    mock.moveTo({ mapID = 1412, x = 0.405, y = 0.60 })
+    M:RememberFire()
+    expect(#fires).toBe(1)
+    -- full: the oldest goes
+    for i = 1, 100 do fires[#fires + 1] = { map = 1, x = i / 1000, y = 0, seen = 0 } end
+    mock.moveTo({ mapID = 1412, x = 0.70, y = 0.20 })
+    M:RememberFire()
+    expect(#fires).toBe(100)
+    expect(fires[100].x).toBeCloseTo(0.70)
+    expect(fires[1].map).toBe(1)
+end
+
+@test("RememberFire: not your own fire, nor without a place")
+local function rememberNot()
+    mock.moveTo({ mapID = 1412, x = 0.40, y = 0.60 })
+    M.litAt = GetTime()
+    M:RememberFire()
+    expect(M:CharData().fires).toBeNil()
+    M.litAt = nil
+    mock.fake("C_Map.GetBestMapForUnit", function() return nil end)
+    M:RememberFire()
+    mock.fake("C_Map.GetBestMapForUnit", function() return mock.secret(1412) end)
+    M:RememberFire()
+    mock.fake("C_Map.GetBestMapForUnit", function() return 1412 end)
+    mock.fake("C_Map.GetPlayerMapPosition", function() return nil end)
+    M:RememberFire()
+    mock.fake("C_Map.GetPlayerMapPosition", function(): any
+        return { GetXY = function(): (any, any) return mock.secret(0.1), 0.2 end }
+    end)
+    M:RememberFire()
+    expect(M:CharData().fires).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Samples, settings, events
+--------------------------------------------------------------------------------
+
+@test("Sample: each alert without a fire, gone after a few seconds")
+local function sample()
+    M:Sample("resting")
+    expect(last()[5]).toBe("Camp Benefits in 0:42")
+    mock.advanceTime(6.1)
+    expect(last()[1]).toBe("hide")
+    expect(M.ticker).toBeNil()
+    M:Sample(nil)
+    expect(last()[4]).toBe("Campfire nearby")
+    mock.advanceTime(6.1)
+    expect(last()[1]).toBe("hide")
+    M:Sample("rested")
+    expect(last()[4]).toBe("Camp Benefits gained · 1h")
+    expect(last()[5]).toContain("Mana Well")
+end
+
+@test("settings: the slider's text and the samples button")
+local function settingsSection()
+    local rows = SECTION.groups[1].rows
+    expect(rows[1].format(0)).toBe("Until you rest")
+    expect(rows[1].format(15)).toBe("15 s")
+    rows[2].onClick()
+    expect(last()[4]).toBe("Campfire nearby")
+    mock.advanceTime(6.6)
+    expect(last()[4]).toBe("Resting by the fire")
+    mock.advanceTime(6.6)
+    expect(last()[4]).toBe("Camp Benefits gained · 1h")
+end
+
+@test("command: /suu campsite")
+local function command()
+    mock.slash("/suu campsite rested")
+    expect(last()[4]).toBe("Camp Benefits gained · 1h")
+    mock.slash("/suu campsite resting")
+    expect(last()[4]).toBe("Resting by the fire")
+    mock.slash("/suu campsite")
+    expect(last()[4]).toBe("Campfire nearby")
+end
+
+@test("events: a fire walked up to is remembered and alerted")
+local function auraEvents()
+    mock.moveTo({ mapID = 1412, x = 0.30, y = 0.30 })
+    apply(NEARBY)
+    expect(M.near).toBe(true)
+    expect(#M:CharData().fires).toBe(1)
+    expect(last()[4]).toBe("Campfire nearby")
+    -- auras unreadable: near stays as it was
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function() error("blocked") end)
+    mock.fireUnitEvent("UNIT_AURA", "player", { isFullUpdate = true })
+    expect(M.near).toBe(true)
+    expectNoErrors()
+end
+
+@test("events: your own fire lit isn't remembered")
+local function litFire()
+    mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", LIGHT_FIRE)
+    expect(M.litAt).toBe(GetTime())
+    M.litAt = nil
+    mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", mock.secret(LIGHT_FIRE))
+    expect(M.litAt).toBeNil()
+end
+
+@test("events: after combat and on entering the world, said again")
+local function sayAgain()
+    apply(NEARBY)
+    said = {}
+    mock.fireEvent("PLAYER_REGEN_ENABLED")
+    mock.advanceTime(0.3)
+    expect(last()[4]).toBe("Campfire nearby")
+    said = {}
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
+    mock.advanceTime(1.1)
+    expect(last()[4]).toBe("Campfire nearby")
+    expect(M.near).toBe(true)
+end
+
+@test("theme change: the benefits shown again in its colours")
+local function theme()
+    M:Alert("rested", { expirationTime = GetTime() + 3600, effect = function(): string return "X" end })
+    said = {}
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(last()[5]).toBe("X")
+    -- read from the buff
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", tooltipLines({ "Camp Benefits", "Tent: a tent" }))
+    M.rested = { title = "T", a = { auraInstanceID = 4 } }
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(last()[5]).toContain("Tent: ")
+    mock.fake("C_TooltipInfo.GetUnitBuffByAuraInstanceID", function() return nil end)
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(last()[5]).toBe("For the next hour")
+    -- not once it's gone
+    mock.advanceTime(20)
+    said = {}
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(#said).toBe(0)
+    -- nor in combat
+    M:Alert("rested", { expirationTime = GetTime() + 3600 })
+    said = {}
+    mock.fake("InCombatLockdown", function() return true end)
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(#said).toBe(0)
+end
+
+@test("off and on: alerts and their timers gone")
+local function disable()
+    M:Alert("resting", { expirationTime = GetTime() + 30 })
+    M:Set("enabled", false)
+    expect(M:IsEnabled()).toBe(false)
+    expect(M.ticker).toBeNil()
+    expect(last()[1]).toBe("hide")
+    M:Set("enabled", true)
+    expect(M:IsEnabled()).toBe(true)
+    M:Alert("rested", { expirationTime = GetTime() + 3600 })
+    M:Set("enabled", false)
+    expect(M.briefTimer).toBeNil()
+    -- the login's late check while off does nothing
+    said = {}
+    mock.advanceTime(1.1)
+    expect(#said).toBe(0)
+    M:Reset("enabled")
+    expect(M:IsEnabled()).toBe(true)
+    expectNoErrors()
+end

@@ -1,0 +1,791 @@
+-- Units/ObjectiveTracker.wowlua
+-- The objective tracker (step 2.3): your tracked quests on the world under
+-- the minimap, top right (28px in, 300px down, under its clock), 260px wide. Titles in their
+-- difficulty colour (the game's own: GetQuestDifficultyColor), grouped by
+-- their quest log zone (the zone you're in first, then the nearest, sorted
+-- again every 10 seconds out of combat and on zone changes), objectives
+-- with their counts, "Ready to turn in" once a quest is done; the mouse
+-- wheel scrolls what doesn't fit the height (not in combat while quest
+-- items show: their secure buttons can't move then). Blizzard's tracker is hidden
+-- while this runs. A built-in module written against the public API only.
+--
+-- Quest items: SuuUI's secure action buttons (type "item") left of their
+-- quest's title; a click is a secure use, so they work in combat. Secure
+-- buttons are placed and set up out of combat only: in combat the quests
+-- keep their places (a quest's height only grows) so a button never ends up
+-- beside the wrong quest; everything is laid out again when combat ends.
+-- During a boss fight (a boss unit exists: a secure state driver, so it
+-- works in combat) the tracker collapses to its head and the item buttons
+-- hide, out of the boss frames' way. The head's toggle is secure too.
+-- Left click a quest: its details on the map; right click: focus, share,
+-- stop tracking.
+-- Tracked recipes (asked for in game: Blizzard's tracker showed them, this
+-- one didn't; their own category, not among the quests): a Recipes section
+-- after the quests in the same list (they scroll together within the
+-- height), its own head and toggle: each recipe's product
+-- icon and name (quality colour), "×3" when you can make it, its reagents
+-- as objectives ("Iron Bar 3/6", checked once you have them), or "Ready to
+-- craft". Left click opens it in Professions; right click: open, stop
+-- tracking.
+
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local M = SuuUI.RegisterModule({
+    id = "tracker",
+    name = "Objective tracker",
+    description = "Your tracked quests under the minimap, with quest items you can use in combat.",
+    api = "0.11",
+    reloadToToggle = true,
+    defaults = {
+        -- under the minimap's clock (it ends 271px down), space-6 clear
+        position = { point = "TOPRIGHT", x = -28, y = -300 },
+        shows = "always",
+        maxHeight = 440,
+        collapsed = false,            -- the head's toggle
+        collapseInBossFights = true,
+        items = true,                 -- quest items beside their quests
+        recipes = true,               -- tracked recipes, their own block under the quests
+        recipesCollapsed = false,     -- that block's head toggle
+        autoTrack = true,             -- a quest you accept is tracked (asked 2026-10-18)
+    },
+})
+
+local WIDTH = 260
+-- a tracked quest or recipe as the tracker draws it, a zone's sort keys
+export type Quest = { [string]: any }
+local isSecret = issecretvalue or function() return false end
+local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
+
+--------------------------------------------------------------------------------
+-- Quests from the game
+--------------------------------------------------------------------------------
+
+-- The game's difficulty colour, by its font name, as the design's token.
+local DIFFICULTY_FONTS = {
+    { "VeryDifficult", "very-difficult" }, { "Impossible", "impossible" }, { "Difficult", "difficult" },
+    { "Standard", "standard" }, { "Trivial", "trivial" },
+}
+local function difficultyOf(level: any): string
+    if not (plain(level) and GetQuestDifficultyColor) then return "standard" end
+    local ok, c = pcall(GetQuestDifficultyColor, level)
+    local font = ok and type(c) == "table" and c.font
+    if type(font) ~= "string" then return "standard" end
+    for _, d in ipairs(DIFFICULTY_FONTS) do
+        if font:find(d[1], 1, true) then return d[2] end
+    end
+    return "standard"
+end
+
+-- "0/2 Handful of Cattails" or "Cattails: 0/2" → the text and its count.
+local function splitObjective(text: string): (string?, string?)
+    local count, rest = text:match("^(%d+%s*/%s*%d+)%s+(.+)$")
+    if count then return rest, count end
+    rest, count = text:match("^(.-):?%s+(%d+%s*/%s*%d+)$")
+    if count then return rest, count end
+    return text, nil
+end
+
+local function objectivesOf(questID: number): Quest[]
+    local out: Quest[] = {}
+    local ok, list = pcall(C_QuestLog.GetQuestObjectives, questID)
+    if not ok or type(list) ~= "table" then return out end
+    for _, o in ipairs(list) do
+        local text = plain(o.text) and o.text or ""
+        local shown, count = splitObjective(text)
+        out[#out + 1] = { text = shown, progress = count, done = plain(o.finished) and o.finished == true }
+    end
+    return out
+end
+
+-- One tracked quest as the tracker draws it (nil: not in the log).
+local function questOf(questID: number): Quest?
+    local logIndex = C_QuestLog.GetLogIndexForQuestID(questID)
+    if not plain(logIndex) or not logIndex then return nil end
+    local info = C_QuestLog.GetInfo(logIndex)
+    if type(info) ~= "table" or info.isHeader or info.isHidden then return nil end
+    local q: Quest = {
+        questID = questID,
+        logIndex = logIndex,
+        title = plain(info.title) and info.title or "",
+        difficulty = difficultyOf(info.difficultyLevel or info.level),
+    }
+    local complete = C_QuestLog.IsComplete(questID) or C_QuestLog.ReadyForTurnIn(questID)
+    q.complete = plain(complete) and complete == true
+    local failed = C_QuestLog.IsFailed and C_QuestLog.IsFailed(questID)
+    q.failed = plain(failed) and failed == true
+    if not q.complete then q.objectives = objectivesOf(questID) end
+    -- a quest with nothing to count, not complete (rare): its text instead
+    if q.complete and GetQuestLogCompletionText then
+        local text = (GetQuestLogCompletionText :: any)(logIndex)
+        if plain(text) and text and text ~= "" then q.tooltip = { title = q.title, description = text } end
+    end
+    -- its usable item
+    if GetQuestLogSpecialItemInfo then
+        local ok, link, icon, charges, showWhenComplete = pcall(GetQuestLogSpecialItemInfo, logIndex)
+        if ok and plain(link) and link and (not q.complete or showWhenComplete) then
+            q.item = { link = link, icon = icon, charges = plain(charges) and charges or 0 }
+        end
+    end
+    return q
+end
+
+-- The quest log's heading over a quest (its zone, or a group such as a
+-- class or "Dungeon").
+local function zoneOf(questID: number, logIndex: number): string?
+    local header = C_QuestLog.GetHeaderIndexForQuest and C_QuestLog.GetHeaderIndexForQuest(questID)
+    if not (plain(header) and header) then
+        -- walk up the log to the heading above
+        for i = logIndex - 1, 1, -1 do
+            local info = C_QuestLog.GetInfo(i)
+            if type(info) == "table" and info.isHeader then header = i break end
+        end
+    end
+    local info = header and C_QuestLog.GetInfo(header)
+    return type(info) == "table" and plain(info.title) and info.title or nil
+end
+
+-- How far a quest is (squared), when it's on your continent; nil otherwise.
+local function distanceOf(questID: number): number?
+    if not C_QuestLog.GetDistanceSqToQuest then return nil end
+    local ok, d, onContinent = pcall(C_QuestLog.GetDistanceSqToQuest, questID)
+    if ok and plain(d) and d and plain(onContinent) and onContinent then return d end
+    return nil
+end
+
+-- The zone you're in, by both names the game uses.
+local function hereNames()
+    local here = {}
+    for _, name in ipairs({ GetRealZoneText and GetRealZoneText(), GetZoneText and GetZoneText() }) do
+        if plain(name) and name ~= "" then here[name] = true end
+    end
+    local map = C_Map.GetBestMapForUnit("player")
+    local info = nil
+    if plain(map) and map then info = C_Map.GetMapInfo(map) end
+    if info and plain(info.name) then here[info.name] = true end
+    return here
+end
+
+-- The quests by zone: the zone you're in (`here`, by name) first, then the
+-- zones by their nearest quest, then the rest (another continent, nothing
+-- to point at) in quest log order; inside a zone the nearest first. Sorts
+-- `list` in place (each quest: zone, distance, logIndex).
+export function sortQuests(list: Quest[], here: { [string]: boolean })
+    local zones: { [string]: any } = {}
+    for _, q in ipairs(list) do
+        local key = q.zone or ""
+        local z = zones[key]
+        if not z then
+            z = { here = here[key] and true or false, first = q.logIndex }
+            zones[key] = z
+        end
+        if q.distance and (not z.nearest or q.distance < z.nearest) then z.nearest = q.distance end
+        if q.logIndex < z.first then z.first = q.logIndex end
+    end
+    table.sort(list, function(a: Quest, b: Quest): boolean
+        local za, zb = zones[a.zone or ""], zones[b.zone or ""]
+        if za ~= zb then
+            if za.here ~= zb.here then return za.here end
+            local da, db = za.nearest or math.huge, zb.nearest or math.huge
+            if da ~= db then return da < db end
+            return za.first < zb.first
+        end
+        local da, db = a.distance or math.huge, b.distance or math.huge
+        if da ~= db then return da < db end
+        return a.logIndex < b.logIndex
+    end)
+end
+
+-- Your tracked quests, sorted by zone (sortQuests).
+function M:TrackedQuests(): Quest[]
+    local list: Quest[] = {}
+    local n = C_QuestLog.GetNumQuestWatches()
+    if not plain(n) then return list end
+    for i = 1, n do
+        local id = C_QuestLog.GetQuestIDForQuestWatchIndex(i)
+        if plain(id) and id then
+            local q = questOf(id)
+            if q then
+                q.zone = zoneOf(id, q.logIndex)
+                q.distance = distanceOf(id)
+                list[#list + 1] = q
+            end
+        end
+    end
+    sortQuests(list, hereNames())
+    return list
+end
+
+--------------------------------------------------------------------------------
+-- Quest item buttons (secure)
+--------------------------------------------------------------------------------
+
+local function itemCooldown(b: any)
+    if not b.logIndex or not GetQuestLogSpecialItemCooldown then return end
+    local ok, start, duration = pcall(GetQuestLogSpecialItemCooldown, b.logIndex)
+    if ok and start and duration then
+        pcall(b.cooldown.SetCooldown, b.cooldown, start, duration)
+        local on = plain(duration) and duration > 1.5
+        b.coolingDown = on and true or false
+    else
+        b.cooldown:Clear()
+        b.coolingDown = false
+    end
+    b:UpdateArt()
+end
+
+-- In the quest's area: the design's "suggested" look (an arcane border, its
+-- glow and an arcane ring just inside).
+local function setSuggested(b: any, on: any)
+    on = on and true or false
+    if b.suggested == on then return end
+    b.suggested = on
+    if not b.suggest then
+        b.suggest = CreateFrame("Frame", nil, b.over)
+        b.suggest:SetAllPoints()
+        UI.Border(b.suggest, "arcane", { layer = "OVERLAY" })
+        UI.Border(b.suggest, "arcane", { inset = 2, layer = "OVERLAY" })
+        UI.Shadow(b.suggest, "glow-arcane")
+    end
+    b.suggest:SetShown(on)
+end
+
+function M:ItemButton(i: number): any
+    self.itemButtons = self.itemButtons or {}
+    local b = self.itemButtons[i]
+    if b then return b end
+    b = UI.ActionButton(self.holder, "SuuUIQuestItem" .. i, "icon-md")
+    -- both: a secure button acts on the one the game's ActionButtonUseKeyDown names
+    b:RegisterForClicks("AnyDown", "AnyUp")
+    b:SetAttribute("type", "item")
+    b:SetHotkey("")
+    -- an item, not an action slot: the button would draw itself empty
+    -- (an empty slot hides its face)
+    b.hasAction = true
+    b:UpdateEmpty()
+    b.UpdateCooldown = itemCooldown
+    b.ShowTooltip = function(self: any)
+        if self.logIndex and GameTooltip.SetQuestLogSpecialItem then
+            pcall(GameTooltip.SetQuestLogSpecialItem, GameTooltip, self.logIndex)
+        elseif self.link then
+            GameTooltip:SetHyperlink(self.link)
+        end
+    end
+    self.itemButtons[i] = b
+    return b
+end
+
+-- The buttons beside their quests (out of combat only).
+function M:LayoutItems(quests: Quest[])
+    if InCombatLockdown() then self.pendingItems = true return end
+    self.pendingItems = nil
+    local used = 0
+    -- placed even while collapsed: the holder hides them, and shows them
+    -- in place when the tracker opens again, in combat too
+    if self:Get("items") then
+        for _, q in ipairs(quests) do
+            local top = q.item and self.tracker:QuestTop(q.questID)
+            if top then
+                used = used + 1
+                local b = self:ItemButton(used)
+                b.logIndex, b.link = q.logIndex, q.item.link
+                b:SetAttribute("item", q.item.link)
+                b.art:SetTexture(q.item.icon)
+                b.art:Show()
+                b.count:SetText((q.item.charges or 0) > 1 and q.item.charges or "")
+                b:ClearAllPoints()
+                b:SetPoint("TOPRIGHT", self.holder, "TOPLEFT", -S["space-3"], -(top - 2))
+                b:Show()
+                itemCooldown(b)
+            end
+        end
+    end
+    for i = used + 1, #(self.itemButtons or {}) do
+        local b = self.itemButtons[i]
+        b:Hide()
+        b:SetAttribute("item", nil)
+        b.logIndex, b.link = nil, nil
+    end
+    self.itemsShown = used
+end
+
+-- Cooldowns and range, a few times a second while items show.
+function M:TickItems()
+    for i = 1, self.itemsShown or 0 do
+        local b = self.itemButtons[i]
+        if b.logIndex and IsQuestLogSpecialItemInRange then
+            local ok, r = pcall(IsQuestLogSpecialItemInRange, b.logIndex)
+            setSuggested(b, ok and plain(r) and r == 1)
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Collapsing: the head's toggle and boss fights (secure, so in combat too)
+--------------------------------------------------------------------------------
+
+local function bossDriver(on: any): string
+    return on and "[@boss1,exists] 1; 0" or "0"
+end
+
+function M:BuildSecure()
+    -- the item buttons' holder at the tracker's top left; it hides while a
+    -- boss exists or the tracker is collapsed
+    local h = CreateFrame("Frame", "SuuUIObjectiveTrackerItems", self.frame, "SecureHandlerStateTemplate")
+    h:SetPoint("TOPLEFT")
+    h:SetSize(1, 1)
+    -- (the state driver gives "1" as the number 1: SecureStateDriver.lua
+    -- turns a number-like state into a number)
+    h:SetAttribute("_onstate-boss", [=[
+        if newstate == 1 or self:GetAttribute("usercollapsed") then self:Hide() else self:Show() end
+    ]=])
+    self.holder = h
+    -- the head's toggle
+    local b = CreateFrame("Button", "SuuUIObjectiveTrackerToggle", self.frame, "SecureHandlerClickTemplate")
+    b:SetPoint("TOPLEFT")
+    b:RegisterForClicks("LeftButtonUp")
+    b:SetFrameRef("holder", h)
+    b:SetAttribute("_onclick", [=[
+        local h = self:GetFrameRef("holder")
+        local collapsed = not h:GetAttribute("usercollapsed")
+        h:SetAttribute("usercollapsed", collapsed)
+        if collapsed or h:GetAttribute("state-boss") == 1 then h:Hide() else h:Show() end
+    ]=])
+    b:HookScript("OnClick", function()
+        self:Set("collapsed", h:GetAttribute("usercollapsed") and true or false)
+        self:ApplyCollapse()
+    end)
+    h:HookScript("OnAttributeChanged", function(_, name)
+        if name == "state-boss" then self:ApplyCollapse() end
+    end)
+    self.toggle = b
+end
+
+function M:InBossFight()
+    return self.holder:GetAttribute("state-boss") == 1 or (self.encounter and self:Get("collapseInBossFights"))
+end
+
+-- The head's toggle folds the quests only (the Recipes section stays:
+-- asked for in game); a boss fight folds everything.
+function M:ApplyCollapse()
+    self.tracker:SetCollapsed(self:InBossFight() and true or false)
+    self.tracker:SetQuestsCollapsed(self:Get("collapsed"))
+    self:QueueRefresh()
+end
+
+-- The saved collapse and the boss setting, into the secure side (out of combat).
+function M:ApplySecure()
+    if InCombatLockdown() then self.pendingSecure = true return end
+    self.pendingSecure = nil
+    self.holder:SetAttribute("usercollapsed", self:Get("collapsed") and true or false)
+    UnregisterStateDriver(self.holder, "boss")
+    RegisterStateDriver(self.holder, "boss", bossDriver(self:Get("collapseInBossFights")))
+    self:ApplyCollapse()
+end
+
+--------------------------------------------------------------------------------
+-- Clicks on a quest
+--------------------------------------------------------------------------------
+
+function M:QuestClick(questID: number, button: string, row: any)
+    if button == "LeftButton" then
+        if QuestMapFrame_OpenToQuestDetails then pcall(QuestMapFrame_OpenToQuestDetails, questID) end
+        return
+    end
+    -- SuuUI's menu, in the tooltip's look (asked for in game)
+    UI.ContextMenuFrom(row, function(_, root)
+        local title = C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(questID)
+        if plain(title) and title then root:CreateTitle(title) end
+        if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
+            local focused = C_SuperTrack.GetSuperTrackedQuestID and C_SuperTrack.GetSuperTrackedQuestID() == questID
+            root:CreateButton(focused and "Stop focusing" or "Focus", function()
+                pcall(C_SuperTrack.SetSuperTrackedQuestID, focused and 0 or questID)
+            end)
+        end
+        local pushable = C_QuestLog.IsPushableQuest and C_QuestLog.IsPushableQuest(questID)
+        if plain(pushable) and pushable and IsInGroup() and QuestLogPushQuest then
+            root:CreateButton("Share", function()
+                if C_QuestLog.SetSelectedQuest then C_QuestLog.SetSelectedQuest(questID) end
+                pcall(QuestLogPushQuest)
+            end)
+        end
+        root:CreateButton("Open in quest log", function()
+            if QuestMapFrame_OpenToQuestDetails then pcall(QuestMapFrame_OpenToQuestDetails, questID) end
+        end)
+        root:CreateButton("Stop tracking", function()
+            pcall(C_QuestLog.RemoveQuestWatch, questID)
+        end)
+    end, "quest", { questID = questID })
+end
+
+--------------------------------------------------------------------------------
+-- Tracked recipes
+--------------------------------------------------------------------------------
+
+local QUALITY = { [0] = "quality-poor", "ink", "quality-uncommon", "quality-rare", "quality-epic", "quality-legendary" }
+
+local function call(fn: any, ...: any): ...any
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c, d, e, f, g, h, i, j = pcall(fn, ...)
+    if ok then return a, b, c, d, e, f, g, h, i, j end
+end
+
+-- The tracked recipes as tracker entries.
+function M:TrackedRecipes()
+    local out = {}
+    if not self:Get("recipes") or not C_TradeSkillUI then return out end
+    for _, id in ipairs(call(C_TradeSkillUI.GetRecipesTracked, false) or {}) do
+        local sch = call(C_TradeSkillUI.GetRecipeSchematic, id, false)
+        if sch then
+            local entry = { questID = id, objectives = {} }
+            local out_ = sch.outputItemID
+            local name, quality, icon
+            if out_ then
+                local n, _, q, _, _, _, _, _, _, ic = call(C_Item.GetItemInfo, out_)
+                name, quality, icon = n, q, ic
+                if not n then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, out_) end
+            end
+            entry.title = name or sch.name or ("Recipe " .. id)
+            entry.color = QUALITY[quality or 1] or "ink"
+            entry.icon = icon or call(C_Spell.GetSpellTexture, id) or 134400
+            local can = math.huge
+            for _, slot in ipairs(sch.reagentSlotSchematics or {}) do
+                local reagent = slot.reagents and slot.reagents[1]
+                if reagent and reagent.itemID and slot.required ~= false then
+                    local need = slot.quantityRequired or 1
+                    local have = call(C_Item.GetItemCount, reagent.itemID) or 0
+                    local rName = call(C_Item.GetItemNameByID, reagent.itemID)
+                    if not rName then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, reagent.itemID) end
+                    entry.objectives[#entry.objectives + 1] = { text = rName or "…", progress = math.min(have, need) .. "/" .. need,
+                                                                done = have >= need }
+                    can = math.min(can, math.floor(have / math.max(1, need)))
+                end
+            end
+            if can == math.huge then can = 0 end
+            entry.complete = can > 0
+            entry.turnIn = "Ready to craft"
+            entry.count = can > 0 and ("×" .. can) or nil
+            out[#out + 1] = entry
+        end
+    end
+    return out
+end
+
+-- Opening a profession from an addon is protected (blocked from the
+-- tracker, found in game): out of combat a secure button lies over the
+-- recipe under the mouse and casts the spell that opens its profession, as
+-- an action bar would; the Professions window then chooses the recipe. A
+-- right click on it is SuuUI's menu. In combat the rows take the clicks.
+local function recipeSkillLine(recipeID: number): any
+    local line, _, parent = call(C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
+    return (parent and parent ~= 0) and parent or line
+end
+
+function M:RecipeOpener()
+    if self.opener then return self.opener end
+    local b = CreateFrame("Button", "SuuUIRecipeOpener", self.frame, "SecureActionButtonTemplate")
+    -- down and up: the action fires on the one ActionButtonUseKeyDown picks
+    b:RegisterForClicks("LeftButtonDown", "LeftButtonUp", "RightButtonUp")
+    b:SetAttribute("type1", "spell")
+    b:HookScript("PreClick", function(_, button)
+        if button == "LeftButton" and b.recipeID then SuuUI.ExpectRecipe(b.recipeID) end
+    end)
+    b:HookScript("PostClick", function(_, button)
+        if button == "RightButton" and b.row then
+            self:RecipeMenu(b.recipeID, b.row)
+        elseif button == "LeftButton" and not b.casting and b.recipeID then
+            -- its profession already open: only the recipe chosen
+            SuuUI.OpenRecipe(b.recipeID)
+        end
+        -- the next click decides afresh (opened, closed, chosen by now)
+        after(0.3, function()
+            if b:IsShown() and b.row and b:IsMouseOver() and not InCombatLockdown() then self:RowEnter(b.row) end
+        end)
+    end)
+    b:SetScript("OnEnter", function() if b.row then b.row:LockHighlight() end end)
+    b:SetScript("OnLeave", function()
+        if b.row then b.row:UnlockHighlight() end
+        if not InCombatLockdown() then b:Hide() end
+    end)
+    b:Hide()
+    self.opener = b
+    return b
+end
+
+-- The mouse onto a tracked recipe: the secure opener over it (out of combat).
+function M:RowEnter(row: any)
+    if not (row.quest and row.quest.recipe) or InCombatLockdown() then return end
+    local id = row.quest.questID
+    local line = recipeSkillLine(id)
+    local spell = SuuUI.ProfessionOpener(line)
+    if not spell then return end
+    local b = self:RecipeOpener()
+    b.recipeID, b.row = id, row
+    -- its profession already open: no cast (it would close the window, found
+    -- in game), the click only chooses the recipe; unless it's the one shown
+    -- already: then the cast closes the window, a toggle (asked for)
+    local base = call(C_TradeSkillUI.GetBaseProfessionInfo)
+    local open = base and base.professionID == line and call(C_TradeSkillUI.IsTradeSkillReady)
+        and ProfessionsFrame and ProfessionsFrame:IsShown()
+    b.casting = not open or SuuUI.ShownRecipe() == id
+    b:SetAttribute("type1", b.casting and "spell" or nil)
+    b:SetAttribute("spell1", spell)
+    b:ClearAllPoints()
+    b:SetAllPoints(row)
+    b:SetFrameLevel(row:GetFrameLevel() + 5)
+    b:Show()
+end
+
+function M:RecipeMenu(recipeID: number, row: any)
+    UI.ContextMenuFrom(row, function(_, root)
+        if row.quest and row.quest.title then root:CreateTitle(row.quest.title) end
+        root:CreateButton("Stop tracking", function()
+            pcall(C_TradeSkillUI.SetRecipeTracked, recipeID, false, false)
+        end)
+    end, "trackedRecipe", { recipeID = recipeID })
+end
+
+-- The row's own clicks: in combat (no opener then), or the profession
+-- already open (choosing the recipe needs no cast).
+function M:RecipeClick(recipeID: number, button: string, row: any)
+    if button == "LeftButton" then
+        local base = call(C_TradeSkillUI.GetBaseProfessionInfo)
+        if base and base.professionID == recipeSkillLine(recipeID) and call(C_TradeSkillUI.IsTradeSkillReady) then
+            SuuUI.OpenRecipe(recipeID)
+        elseif InCombatLockdown() then
+            self:Print("Professions open out of combat.")
+        end
+        return
+    end
+    self:RecipeMenu(recipeID, row)
+end
+
+--------------------------------------------------------------------------------
+-- Drawing
+--------------------------------------------------------------------------------
+
+function M:Refresh()
+    self.refreshQueued = nil
+    if not self.tracker then return end
+    local quests = self:TrackedQuests()
+    local combat = InCombatLockdown()
+    -- in combat, with item buttons placed: keep everyone where they are
+    local freeze = combat and (self.itemsShown or 0) > 0
+    -- the tracked recipes: their own section after the quests, in the same
+    -- list, so they scroll together within the tracker's height (asked for
+    -- in game: a block of their own sat too low on the screen)
+    local recipes = self:TrackedRecipes()
+    self.tracker:SetRecipes(recipes, self:Get("recipesCollapsed"),
+        #recipes == 1 and "1 recipe" or (#recipes .. " recipes"))
+    self.tracker:SetQuests(quests, freeze)
+    local n = #quests
+    self.tracker:SetMeta(n == 1 and "1 quest" or (n .. " quests"))
+    self.quests = quests
+    if combat then
+        self.pendingItems = true
+        -- the ones placed keep their cooldowns current
+        for i = 1, self.itemsShown or 0 do itemCooldown(self.itemButtons[i]) end
+    else
+        self:LayoutItems(quests)
+    end
+    -- nothing tracked: nothing shown (the frame itself stays: it holds
+    -- secure buttons, and its visibility is the Shows setting's)
+    -- the list moved under it: the opener waits for the mouse again
+    if self.opener and self.opener:IsShown() and not combat then self.opener:Hide() end
+    local empty = n == 0 and #recipes == 0
+    self.tracker:SetAlpha(empty and 0 or 1)
+    self.toggle:SetAlpha(empty and 0 or 1)
+end
+
+-- Many quest events come at once: one refresh on the next frame.
+function M:QueueRefresh()
+    if self.refreshQueued then return end
+    self.refreshQueued = true
+    after(0, function() if self:IsEnabled() then self:Refresh() end end)
+end
+
+function M:ApplySize()
+    if InCombatLockdown() then self.pendingSize = true return end
+    self.pendingSize = nil
+    local h = self:Get("maxHeight")
+    self.frame:SetSize(WIDTH, h)
+    self.tracker:SetMaxHeight(h)
+    self:Refresh()
+end
+
+function M:ApplyShows()
+    UI.SetVisibility(self.frame, self:Get("position").hidden and "hidden" or self:Get("shows"))
+end
+
+--------------------------------------------------------------------------------
+-- Settings
+--------------------------------------------------------------------------------
+
+local PREVIEW_QUESTS = {
+    { questID = 1, zone = "Duskwater Hollow", title = "The Ashmaw Den", difficulty = "difficult", objectives = {
+        { text = "Ashmaw Ravager slain", progress = "3/8" },
+        { text = "Ember Pelt", progress = "5/5", done = true },
+    }, item = { preview = true, icon = 134075 } },
+    { questID = 2, zone = "Duskwater Hollow", title = "Letters for the Crossroads", difficulty = "standard", complete = true },
+    { questID = 3, zone = "Durotar", title = "Speargrass Cuttings", difficulty = "trivial", objectives = {
+        { text = "Handful of Cattails", progress = "0/2" },
+        { text = "Speargrass Cuttings", progress = "1/4" },
+    } },
+}
+
+function M:PreviewView(parent: any): any
+    if not self.preview then
+        self.preview = UI.ObjectiveTracker(parent, { width = WIDTH })
+        self.preview:SetQuests(PREVIEW_QUESTS)
+        self.preview:SetMeta("3 quests")
+    end
+    self.preview:SetParent(parent)
+    return self.preview
+end
+
+local SECTION = {
+    id = "tracker", label = "Objective tracker", category = "World", order = 15,
+    preview = function(parent: any): any return M:PreviewView(parent) end,
+    groups = {
+        { title = "Objective tracker", description = "Your tracked quests under the minimap. Left click a quest for its details on the map; right click to focus, share or stop tracking it. Move it in edit mode.", rows = {
+            { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
+              description = "Always, only in combat, or when the mouse is over it." },
+            { key = "maxHeight", label = "Height", control = "slider", min = 160, max = 800, step = 10, unit = "px", combat = true,
+              description = "The most it takes down the screen; scroll with the mouse wheel for the quests below." },
+            { key = "autoTrack", label = "Track accepted quests", control = "toggle",
+              description = "A quest you accept goes on the tracker at once." },
+            { key = "items", label = "Quest items", control = "toggle", combat = true,
+              description = "A quest's usable item left of its title: click it to use, in combat too." },
+            { key = "collapseInBossFights", label = "Collapse in boss fights", control = "toggle", combat = true,
+              description = "Only the head while a boss is up (its quest items hide too); back after the fight." },
+            { key = "recipes", label = "Tracked recipes", control = "toggle", combat = true,
+              description = "Recipes you track in Professions, under the quests: their reagents and whether you can craft them." },
+        } },
+    },
+}
+
+--------------------------------------------------------------------------------
+-- Lifecycle
+--------------------------------------------------------------------------------
+
+function M:OnEnable()
+    if not C_QuestLog or not C_QuestLog.GetNumQuestWatches then return end
+    if not self.frame then
+        -- the placed frame: the tracker's whole height, so its secure parts'
+        -- anchors never move in combat
+        self.frame = CreateFrame("Frame", "SuuUIObjectiveTracker", SuuUI.Root)
+        self.frame:SetFrameStrata("LOW")
+        self:BuildSecure()
+        self.tracker = UI.ObjectiveTracker(self.frame, { width = WIDTH, toggle = self.toggle })
+        self.tracker:SetPoint("TOPLEFT")
+        self.tracker.onQuestClick = function(id: number, button: string, row: any) self:QuestClick(id, button, row) end
+        -- the items follow the list (out of combat: in combat it's locked
+        -- while items show)
+        self.tracker.onScroll = function()
+            if not InCombatLockdown() and self.quests then self:LayoutItems(self.quests) end
+        end
+        self.toggle:SetFrameLevel(self.tracker:GetFrameLevel() + 5)
+        self.tracker.onRecipeClick = function(id: number, button: string, row: any) self:RecipeClick(id, button, row) end
+        self.tracker.onRowEnter = function(row: any) self:RowEnter(row) end
+        self.tracker.onSectionToggle = function()
+            self:Set("recipesCollapsed", not self:Get("recipesCollapsed"))
+            self:Refresh()
+        end
+        local wait, resort = 0, 10
+        self.frame:SetScript("OnUpdate", function(_, elapsed)
+            -- as you move, the nearest quests come up (not in combat: the
+            -- list holds still then)
+            resort = resort - elapsed
+            if resort <= 0 then
+                resort = 10
+                -- (nor while you're reading it with the mouse on it)
+                if not InCombatLockdown() and not self.tracker:IsMouseOver() then self:QueueRefresh() end
+            end
+            wait = wait - elapsed
+            if wait > 0 then return end
+            wait = 0.25
+            self:TickItems()
+        end)
+    end
+    self.frame.suuManagedShow = true
+    -- Blizzard's tracker out of sight while this runs
+    if ObjectiveTrackerFrame and not self.blizzardHidden then
+        self.blizzardHidden = true
+        SuuUI.SuppressBlizzard(ObjectiveTrackerFrame)
+    end
+    self:RegisterMover(self.frame, { key = "position", label = "Objective tracker" })
+    self:RegisterSettings(SECTION)
+    self:ApplyShows()
+    self:ApplySize()
+    self:ApplySecure()
+    self:Watch("shows", function() self:ApplyShows() end)
+    self:Watch("position", function() self:ApplyShows() end)
+    self:Watch("maxHeight", function() self:ApplySize() end)
+    self:Watch("items", function() self:Refresh() end)
+    self:Watch("recipes", function() self:Refresh() end)
+    self:Watch("collapseInBossFights", function() self:ApplySecure() end)
+    -- a theme's line heights: laid out again (the preview too)
+    self:On("SUUUI_THEME_CHANGED", function()
+        self:QueueRefresh()
+        if self.preview then self.preview:SetQuests(PREVIEW_QUESTS) end
+    end)
+    local valid = C_EventUtils and C_EventUtils.IsEventValid
+    -- a quest you accept goes on the tracker
+    self:OnGameEvent("QUEST_ACCEPTED", function(_, a, b)
+        if not self:Get("autoTrack") then return end
+        -- (questLogIndex, questID) on older clients, (questID) on newer ones
+        local questID = b or a
+        if not (plain(questID) and questID and C_QuestLog.AddQuestWatch) then return end
+        local watched = C_QuestLog.GetQuestWatchType and C_QuestLog.GetQuestWatchType(questID)
+        if watched == nil then pcall(C_QuestLog.AddQuestWatch, questID) end
+    end)
+    for _, e in ipairs({ "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED", "QUEST_WATCH_UPDATE", "QUEST_ACCEPTED",
+                         "QUEST_REMOVED", "QUEST_TURNED_IN", "QUEST_ITEM_UPDATE", "PLAYER_LEVEL_UP",
+                         "PLAYER_ENTERING_WORLD",
+                         -- tracked recipes: tracking changes, reagents come and go
+                         "TRACKED_RECIPE_UPDATE", "BAG_UPDATE_DELAYED" }) do
+        if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end
+    end
+    -- an item's cooldown: only the quest items' own (it comes with every
+    -- potion and trinket; a whole redraw each time was most of SuuUI's
+    -- garbage, 175 KB a redraw: /suu probe garbage, 2026-10-18)
+    self:OnGameEvent("BAG_UPDATE_COOLDOWN", function()
+        for i = 1, self.itemsShown or 0 do itemCooldown(self.itemButtons[i]) end
+    end)
+    -- a new zone: sorted again (the zone you're in goes first)
+    for _, e in ipairs({ "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "QUEST_POI_UPDATE" }) do
+        if not valid or valid(e) then self:OnGameEvent(e, function() self:QueueRefresh() end) end
+    end
+    -- item names the game hadn't loaded yet (tracked recipes' reagents)
+    self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
+        if self.waitingItems then self.waitingItems = false; self:QueueRefresh() end
+    end)
+    -- a boss fight without a boss unit: the tracker (not its items) collapses
+    for _, e in ipairs({ "ENCOUNTER_START", "ENCOUNTER_END" }) do
+        if not valid or valid(e) then
+            self:OnGameEvent(e, function(event)
+                self.encounter = event == "ENCOUNTER_START"
+                self:ApplyCollapse()
+            end)
+        end
+    end
+    -- secure item buttons can't move in combat: neither does the list then
+    self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+        -- the recipe opener away (a profession can't open in combat)
+        if self.opener then self.opener:Hide() end
+        self.tracker:SetScrollLocked((self.itemsShown or 0) > 0)
+    end)
+    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+        self.tracker:SetScrollLocked(false)
+        if self.pendingSecure then self:ApplySecure() end
+        if self.pendingSize then self:ApplySize() end
+        self:Refresh()
+    end)
+end
+
+function M:OnDisable()
+    if self.frame then self.frame:Hide() end
+end

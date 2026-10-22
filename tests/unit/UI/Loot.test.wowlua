@@ -1,0 +1,195 @@
+-- UI/Loot: the loot window's rows (items and money), its source, its
+-- callbacks and the first slot's offset.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import lootWindow from "/UI/Loot"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf from "./WindowsHelpers"
+
+local S = T.space
+local SLOT = T.size["slot"]
+local GAP = S["space-2"]
+local BODY_W = 260 - S["space-5"] * 2
+
+local parent: Frame? = nil
+
+local function make(opts: { name?: string }?)
+    parent = newParent()
+    return lootWindow(parent, opts)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local ITEMS: { [string]: any }[] = {
+    { icon = 134400, count = 3, quality = "rare", label = "Ember Fang" },
+    { icon = 133784, copper = 4203 },
+    { icon = 134401, label = "Linen Cloth" },
+}
+
+@test("a new window: titled Loot, no rows, one slot high")
+local function fresh()
+    local lw = make()
+    expect(lw.title).toHaveText("Loot")
+    expect(lw.meta:GetText()).toBe("")
+    expect(#lw.rows).toBe(0)
+    expect(lw.body:GetWidth()).toBe(BODY_W)
+    expect(lw.body:GetHeight()).toBe(SLOT)
+end
+
+@test("a name names the frame")
+local function named()
+    local lw = make({ name = "SuuUITestLoot" })
+    expect(_G["SuuUITestLoot"]).toBe(lw)
+end
+
+@test("SetSource puts the corpse's name in the meta")
+local function source()
+    local lw = make()
+    lw:SetSource("Cinder Hound")
+    expect(lw.title).toHaveText("Loot")
+    expect(lw.meta).toHaveText("Cinder Hound")
+    lw:SetSource(nil)
+    expect(lw.meta:GetText()).toBe("")
+end
+
+@test("SetItems: one row per entry, items by name in quality colour, money as coins")
+local function items()
+    local lw = make()
+    lw:SetItems(ITEMS)
+    expect(#lw.rows).toBe(3)
+    local item, coin, plain = lw.rows[1], lw.rows[2], lw.rows[3]
+    expect(item).toBeShown()
+    expect(item.label).toBeShown()
+    expect(item.label).toHaveText("Ember Fang")
+    expect(tokenOf(item.label)).toBe("quality-rare")
+    expect(item.money).never.toBeShown()
+    expect(item.slot.skin.item.quality).toBe("rare")
+    expect(item.slot.skin.count:GetText()).toBe("3")
+    -- money: the coins, no label
+    expect(coin.label).never.toBeShown()
+    expect(coin.money).toBeShown()
+    expect(coin.money.copper).toBe(4203)
+    -- no quality: common, the label in ink
+    expect(tokenOf(plain.label)).toBe("ink")
+    expect(plain.slot.skin.item.quality).toBe("common")
+    -- the index defaults to the position
+    expect(item.index).toBe(1)
+    expect(plain.index).toBe(3)
+    -- stacked SLOT + GAP apart, the body as tall as the rows
+    local _, _, _, _, y = plain:GetPoint(1)
+    expect(y).toBe(-2 * (SLOT + GAP))
+    expect(lw.body:GetHeight()).toBe(3 * SLOT + 2 * GAP)
+end
+
+@test("a common item reads in ink, a missing label as empty")
+local function commonItem()
+    local lw = make()
+    lw:SetItems({ { icon = 1, quality = "common" } })
+    expect(tokenOf(lw.rows[1].label)).toBe("ink")
+    expect(lw.rows[1].label:GetText()).toBe("")
+end
+
+@test("a row's index is the loot slot when given")
+local function lootIndex()
+    local lw = make()
+    lw:SetItems({ { index = 4, label = "A" }, { index = 7, label = "B" } })
+    expect(lw.rows[1].index).toBe(4)
+    expect(lw.rows[2].index).toBe(7)
+end
+
+@test("fewer items hide the rows left over and reuse the others")
+local function fewer()
+    local lw = make()
+    lw:SetItems(ITEMS)
+    local first = lw.rows[1]
+    lw:SetItems({ { label = "Only" } })
+    expect(lw.rows[1]).toBe(first)
+    expect(lw.rows[1]).toBeShown()
+    expect(lw.rows[2]).never.toBeShown()
+    expect(lw.rows[3]).never.toBeShown()
+    expect(lw.body:GetHeight()).toBe(SLOT)
+    -- a money row turned into an item row
+    lw:SetItems({ { label = "X" }, { label = "Y" } })
+    expect(lw.rows[2].money).never.toBeShown()
+    expect(lw.rows[2].label).toBeShown()
+    lw:SetItems({})
+    expect(lw.rows[1]).never.toBeShown()
+    expect(lw.body:GetHeight()).toBe(SLOT)
+end
+
+@test("a click reports the row's index and the mouse button")
+local function clicks()
+    local lw = make()
+    lw:SetItems({ { index = 5, label = "A" } })
+    local onClick = mock.spy()
+    lw.onClick = onClick
+    mock.click(lw.rows[1], "RightButton")
+    expect(onClick).toHaveBeenCalledWith(5, "RightButton")
+    mock.click(lw.rows[1])
+    expect(onClick).toHaveBeenCalledWith(5, "LeftButton")
+end
+
+@test("a click without onClick does nothing")
+local function clickNoHandler()
+    local lw = make()
+    lw:SetItems({ { label = "A" } })
+    mock.click(lw.rows[1])
+end
+
+@test("hovering a row: the hover band, the slot's hover edge and the callbacks")
+local function hovering()
+    local lw = make()
+    lw:SetItems({ { index = 2, label = "A", quality = "epic" } })
+    local r = lw.rows[1]
+    local onEnter, onLeave = mock.spy(), mock.spy()
+    lw.onEnter, lw.onLeave = onEnter, onLeave
+    mock.hover(r)
+    expect(r.hover).toBeShown()
+    expect(r.slot.skin.hover).toBe(true)
+    expect(tokenOf(r.slot.skin.border.top)).toBe("gilt")
+    expect(onEnter).toHaveBeenCalledWith(2, r)
+    mock.hover(nil)
+    expect(r.hover).never.toBeShown()
+    expect(r.slot.skin.hover).toBe(false)
+    expect(tokenOf(r.slot.skin.border.top)).toBe("quality-epic")
+    expect(onLeave).toHaveBeenCalledWith(2, r)
+end
+
+@test("hovering without callbacks only draws")
+local function hoverNoHandlers()
+    local lw = make()
+    lw:SetItems({ { label = "A" } })
+    mock.hover(lw.rows[1])
+    expect(lw.rows[1].hover).toBeShown()
+    mock.hover(nil)
+    expect(lw.rows[1].hover).never.toBeShown()
+end
+
+@test("the close button calls onClose, else hides the window")
+local function closing()
+    local lw = make()
+    local onClose = mock.spy()
+    lw.onClose = onClose
+    mock.click(lw.close)
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(lw).toBeShown()
+    lw.onClose = nil
+    mock.click(lw.close)
+    expect(lw).never.toBeShown()
+end
+
+@test("FirstSlotOffset: the first slot's centre from the top left")
+local function firstSlot()
+    local lw = make()
+    local x, y = lw:FirstSlotOffset()
+    expect(x).toBe(S["space-5"] + SLOT / 2)
+    expect(y).toBe(lw:BodyTop() + SLOT / 2)
+end

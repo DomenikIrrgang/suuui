@@ -1,0 +1,379 @@
+-- UI/FilterMenu: the filter field (and its button style), the value against
+-- the defaults, the panel (single choices, chips, toggles, columns, the
+-- foot), opening and closing, and a theme change.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import filterMenu from "/UI/FilterMenu"
+import internal copyList, has, catcher, buttonWidth from "/UI/FilterMenu"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, themeChanged from "./WindowsHelpers"
+
+local S = T.space
+
+local parent: Frame? = nil
+local made: any[] = {}
+
+type Group = { [string]: any }
+
+local GROUPS: Group[] = {
+    { key = "show", label = "Show", kind = "one", options = {
+        { value = "all", label = "All" }, { value = "learned", label = "Learned" }, { value = "unlearned", label = "Unlearned" } } },
+    { key = "difficulty", label = "Difficulty", kind = "many", options = {
+        { value = "orange", label = "Orange", color = "amber" }, { value = "yellow", label = "Yellow" }, { value = "green", label = "Green" } } },
+    { key = "other", label = "Other", kind = "toggles", options = {
+        { value = "mats", label = "Have materials" }, { value = "skill", label = "Skill ups" } } },
+}
+
+local function make(opts: { [string]: any }?)
+    parent = parent or newParent()
+    local o: { [string]: any } = opts or {}
+    if o.groups == nil then o.groups = GROUPS end
+    if o.defaults == nil then o.defaults = { show = "learned", difficulty = {}, other = {} } end
+    local m = filterMenu(parent, o)
+    made[#made + 1] = m
+    return m
+end
+
+@afterEach
+local function cleanup()
+    for _, m in ipairs(made) do m:Close() end
+    made = {}
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+@test("copyList and has")
+local function lists()
+    local src = { 1, 2 }
+    local copy = copyList(src)
+    expect(copy).toEqual({ 1, 2 })
+    expect(copy == src).toBe(false)
+    expect(copyList(nil)).toEqual({})
+    expect(has({ "a", "b" }, "b")).toBe(true)
+    expect(has({ "a" }, "c")).toBe(false)
+    expect(has(nil, "a")).toBe(false)
+end
+
+@test("a new field: Filters, the glyph muted, the defaults as its value")
+local function fresh()
+    local m = make()
+    expect(m.text).toHaveText("Filters")
+    expect(tokenOf(m.glyph)).toBe("ink-muted")
+    expect(m:Count()).toBe(0)
+    expect(m:GetValue()).toEqual({ show = "learned", difficulty = {}, other = {} })
+    expect(m).toHaveSize(140, 30)
+    expect(m.panel).toBeNil()
+end
+
+@test("options: a placeholder, a size, a value")
+local function options()
+    local m = make({ placeholder = "Recipes", width = 200, height = 24, value = { show = "all", difficulty = { "green" } } })
+    expect(m).toHaveSize(200, 24)
+    expect(m:Count()).toBe(2)
+    expect(m.text).toHaveText("Recipes · 2")
+    expect(tokenOf(m.glyph)).toBe("arcane")
+end
+
+@test("no groups, no defaults: an empty value")
+local function empty()
+    parent = newParent()
+    local m = filterMenu(parent, {})
+    made[#made + 1] = m
+    expect(m:GetValue()).toEqual({})
+    expect(m:Count()).toBe(0)
+    m:Open()
+    expect(m.panel).toBeShown()
+end
+
+@test("Full fills what is missing from the defaults and copies lists")
+local function full()
+    local m = make()
+    local diff = { "orange" }
+    local v = m:Full({ difficulty = diff })
+    expect(v).toEqual({ show = "learned", difficulty = { "orange" }, other = {} })
+    expect(v.difficulty == diff).toBe(false)
+    expect(m:Full(nil)).toEqual({ show = "learned", difficulty = {}, other = {} })
+end
+
+@test("Count: each choice that differs from the defaults")
+@cases({
+    { "learned", {}, {}, 0 },
+    { "all", {}, {}, 1 },
+    { "learned", { "orange", "green" }, {}, 2 },
+    { "learned", {}, { "mats" }, 1 },
+    { "all", { "yellow" }, { "mats", "skill" }, 4 },
+})
+local function counts(show: string, difficulty: string[], other: string[], n: number)
+    local m = make()
+    m:SetValue({ show = show, difficulty = difficulty, other = other })
+    expect(m:Count()).toBe(n)
+end
+
+@test("Count: a default that is taken away counts too")
+local function removedDefault()
+    local m = make({ defaults = { show = "learned", difficulty = { "orange" }, other = {} } })
+    expect(m:Count()).toBe(0)
+    m:SetValue({ difficulty = {} })
+    expect(m:Count()).toBe(1)
+end
+
+@test("a click opens the panel under the field, again closes it")
+local function toggle()
+    local m = make()
+    mock.click(m)
+    local p = m.panel
+    expect(p).toBeShown()
+    expect(p:GetFrameStrata()).toBe("FULLSCREEN_DIALOG")
+    expect(p).toBeAnchoredTo(m, "TOPLEFT", "BOTTOMLEFT")
+    expect(catcher).toBeShown()
+    expect(tokenOf(m.edge.top)).toBe("arcane")
+    expect(p:GetWidth()).toBe(292)
+    mock.click(m)
+    expect(p).never.toBeShown()
+    expect(catcher).never.toBeShown()
+    expect(tokenOf(m.edge.top)).toBe("gilt-line")
+    -- opened again: the same panel
+    m:Open()
+    expect(m.panel).toBe(p)
+end
+
+@test("one panel open at a time")
+local function oneOpen()
+    local a = make()
+    local b = make()
+    a:Open()
+    b:Open()
+    expect(a.panel).never.toBeShown()
+    expect(b.panel).toBeShown()
+    expect(catcher).toBeShown()
+    -- closing one that isn't open leaves the other
+    a:Close()
+    expect(b.panel).toBeShown()
+    expect(catcher).toBeShown()
+end
+
+@test("a click outside, Esc or hiding the field closes it")
+local function closing()
+    local m = make()
+    m:Open()
+    mock.click(catcher)
+    expect(m.panel).never.toBeShown()
+    -- with nothing open, the catcher's click does nothing
+    mock.script(catcher, "OnClick", "LeftButton")
+    m:Open()
+    mock.script(m.panel, "OnKeyDown", "A")
+    expect(m.panel:GetPropagateKeyboardInput()).toBe(true)
+    expect(m.panel).toBeShown()
+    mock.script(m.panel, "OnKeyDown", "ESCAPE")
+    expect(m.panel:GetPropagateKeyboardInput()).toBe(false)
+    expect(m.panel).never.toBeShown()
+    m:Open()
+    m:Hide()
+    expect(m.panel).never.toBeShown()
+end
+
+@test("in combat the keys are left alone")
+local function combatKeys()
+    local m = make()
+    m:Open()
+    mock.player:enterCombat()
+    mock.script(m.panel, "OnKeyDown", "ESCAPE")
+    expect(m.panel).toBeShown()
+    mock.player:leaveCombat()
+end
+
+@test("hovering the field: a gilt edge, unless it is open")
+local function hover()
+    local m = make()
+    mock.hover(m)
+    expect(tokenOf(m.edge.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(m.edge.top)).toBe("gilt-line")
+    m:Open()
+    mock.hover(m)
+    expect(tokenOf(m.edge.top)).toBe("arcane")
+    mock.hover(nil)
+    expect(tokenOf(m.edge.top)).toBe("arcane")
+end
+
+@test("a single choice: the segmented row, its change applied at once")
+local function single()
+    local onChange = mock.spy()
+    local m = make({ onChange = onChange })
+    m:Open()
+    local row = m.panel.rows[1]
+    expect(row.control.value).toBe("learned")
+    mock.click(row.control.buttons[1])
+    expect(onChange).toHaveBeenCalledWith({ show = "all", difficulty = {}, other = {} })
+    expect(m.text).toHaveText("Filters · 1")
+    expect(m.panel.count).toHaveText("1 filter on")
+    expect(m.panel.reset:IsEnabled()).toBe(true)
+end
+
+@test("chips: on and off, several at once, in arcane while on")
+local function chips()
+    local onChange = mock.spy()
+    local m = make({ onChange = onChange })
+    m:Open()
+    local row = m.panel.rows[2]
+    local orange, yellow = row.chips[1], row.chips[2]
+    expect(orange.dot).never.toBeNil()
+    expect(tokenOf(orange.dot)).toBe("amber")
+    expect(yellow.dot).toBeNil()
+    expect(orange.bg).never.toBeShown()
+    expect(tokenOf(orange.label)).toBe("ink-muted")
+    mock.click(orange)
+    mock.click(yellow)
+    expect(m:GetValue().difficulty).toEqual({ "orange", "yellow" })
+    expect(orange.bg).toBeShown()
+    expect(orange.edgeOn).toBeShown()
+    expect(tokenOf(orange.label)).toBe("ink")
+    expect(m.panel.count).toHaveText("2 filters on")
+    mock.click(orange)
+    expect(m:GetValue().difficulty).toEqual({ "yellow" })
+    expect(orange.bg).never.toBeShown()
+    expect(onChange).toHaveBeenCalledTimes(3)
+end
+
+@test("chips wrap onto the next line")
+local function wrap()
+    local opts: Group[] = {}
+    for i = 1, 8 do opts[i] = { value = i, label = "Option number " .. i } end
+    local m = make({ groups = { { key = "k", label = "Many", kind = "many", options = opts } }, defaults = {} })
+    m:Open()
+    local chipsRow = m.panel.rows[1].chips
+    local _, _, _, x1, y1 = chipsRow[1]:GetPoint(1)
+    local wrapped = false
+    for i = 2, #chipsRow do
+        local _, _, _, x, y = chipsRow[i]:GetPoint(1)
+        if y < y1 then
+            wrapped = true
+            expect(x).toBe(x1)
+            break
+        end
+    end
+    expect(wrapped).toBe(true)
+end
+
+@test("toggles: checkboxes, on adds the value and off takes it away")
+local function toggles()
+    local m = make()
+    m:Open()
+    local boxes = m.panel.rows[3].boxes
+    mock.click(boxes[1])
+    expect(m:GetValue().other).toEqual({ "mats" })
+    expect(boxes[1].value).toBe(true)
+    mock.click(boxes[2])
+    expect(m:GetValue().other).toEqual({ "mats", "skill" })
+    mock.click(boxes[1])
+    expect(m:GetValue().other).toEqual({ "skill" })
+    expect(boxes[1].value).toBe(false)
+    -- turned on while already there: not twice
+    boxes[2].onChange(true)
+    expect(m:GetValue().other).toEqual({ "skill" })
+end
+
+@test("SetValue redraws the open panel's controls")
+local function setValueDraws()
+    local m = make()
+    m:Open()
+    m:SetValue({ show = "unlearned", difficulty = { "green" }, other = { "skill" } })
+    local rows = m.panel.rows
+    expect(rows[1].control.value).toBe("unlearned")
+    expect(rows[2].chips[3].bg).toBeShown()
+    expect(rows[3].boxes[2].value).toBe(true)
+    expect(rows[3].boxes[1].value).toBe(false)
+end
+
+@test("Reset puts the defaults back; the foot says Defaults")
+local function reset()
+    local onChange = mock.spy()
+    local m = make({ onChange = onChange, value = { show = "all", other = { "mats" } } })
+    m:Open()
+    expect(m.panel.count).toHaveText("2 filters on")
+    mock.click(m.panel.reset)
+    expect(m:GetValue()).toEqual({ show = "learned", difficulty = {}, other = {} })
+    expect(m.panel.count).toHaveText("Defaults")
+    expect(m.panel.reset:IsEnabled()).toBe(false)
+    expect(onChange).toHaveBeenCalledWith({ show = "learned", difficulty = {}, other = {} })
+end
+
+@test("done: a Done button in the foot closes the panel")
+local function done()
+    local m = make({ done = true })
+    m:Open()
+    local d = m.panel.done
+    expect(d).toBeShown()
+    expect(m.panel.reset).toBeAnchoredTo(d, "RIGHT", "LEFT")
+    mock.click(d)
+    expect(m.panel).never.toBeShown()
+end
+
+@test("columns: a group with column starts the next one; the panel spans them")
+local function columns()
+    local groups: Group[] = {
+        { key = "a", label = "A", kind = "toggles", options = { { value = 1, label = "One" } } },
+        { key = "b", label = "B", kind = "toggles", column = true, options = { { value = 2, label = "Two" } } },
+    }
+    local m = make({ groups = groups, defaults = {} })
+    m:Open()
+    local p = m.panel
+    expect(p:GetWidth()).toBe(S["space-5"] + 180 + S["space-6"] + 180 + S["space-5"])
+    -- the first group's column=true does not split
+    local m2 = make({ groups = { { key = "a", label = "A", kind = "toggles", column = true, options = {} } }, defaults = {} })
+    m2:Open()
+    expect(m2.panel:GetWidth()).toBe(292)
+end
+
+@test("SetGroups: other groups, the panel built again when it next opens")
+local function setGroups()
+    local m = make({ value = { show = "all" } })
+    m:Open()
+    local old = m.panel
+    m:SetGroups({ { key = "show", label = "Show", kind = "one", options = { { value = "all", label = "All" } } } })
+    expect(old).never.toBeShown()
+    expect(m.panel).toBeNil()
+    expect(m:GetValue()).toEqual({ show = "all" })
+    m:Open()
+    expect(m.panel == old).toBe(false)
+    expect(#m.panel.rows).toBe(1)
+    m:SetGroups(nil)
+    expect(m:GetValue()).toEqual({})
+end
+
+@test("the button style: glyph, placeholder, a diamond while changed, sized to fit")
+local function buttonStyle()
+    local m = make({ style = "button", placeholder = "Map filters" })
+    expect(m.text).toHaveText("Map filters")
+    expect(m.changed).never.toBeShown()
+    expect(m.chevron).toBeNil()
+    expect(m.autoWidth).toBe(true)
+    expect(m:GetWidth()).toBe(buttonWidth(m))
+    expect(m:GetHeight()).toBe(30)
+    m:SetValue({ show = "all" })
+    expect(m.changed).toBeShown()
+    expect(m.text).toHaveText("Map filters")
+    local fixed = make({ style = "button", width = 90 })
+    expect(fixed.autoWidth).toBe(false)
+    expect(fixed:GetWidth()).toBe(90)
+    expect(fixed.text).toHaveText("Filters")
+end
+
+@test("a theme change closes the panels, drops them, measures the buttons again")
+local function theme()
+    local m = make()
+    local b = make({ style = "button" })
+    local fixed = make({ style = "button", width = 90 })
+    m:Open()
+    local old = m.panel
+    b:SetWidth(10)
+    themeChanged()
+    expect(old).never.toBeShown()
+    expect(m.panel).toBeNil()
+    expect(b:GetWidth()).toBe(buttonWidth(b))
+    expect(fixed:GetWidth()).toBe(90)
+end

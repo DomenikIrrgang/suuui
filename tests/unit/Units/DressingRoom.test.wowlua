@@ -1,0 +1,425 @@
+-- Units/DressingRoom: SuuUI's dressing room over the game's (kept shown,
+-- out of sight; its model scene moved onto SuuUI's stage). The pieces the
+-- doll wears (tried on or yours), taking one off, the tooltips and links;
+-- the saved outfits (choosing, Save, Save as new, Delete, Link); Reset and
+-- Undress; a mount or pet preview's card; closing with the game's window.
+--
+-- The engine's wardrobe answers the recorded "nothing collected" state (a
+-- dressed model has no pieces, outfits can't be saved): the doll's actor
+-- and the transmog calls are stubbed (see the units-character notes).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, outfitOptions, saveWhy, countText from "/Units/DressingRoom"
+import expectNoErrors from "../../helpers"
+import tokenOf from "../SettingsUI/UiSettingsHelpers"
+
+local G: any = _G
+local TC: any = C_TransmogCollection
+
+-- the game's own ItemTransmogInfo
+local function info(source: number): any return G.ItemUtil.CreateItemTransmogInfo(source) end
+
+-- every slot, as the client lists them: nothing in the others
+local function dressed(pieces: { [number]: number }): { [number]: any }
+    local list: { [number]: any } = {}
+    for slot = 1, 19 do list[slot] = info(pieces[slot] or 0) end
+    return list
+end
+
+-- The doll: what it wears by slot; the stubbed actor and game.
+local worn: { [number]: any } = {}
+local actor: any = nil
+local outfits: { [number]: { name: string, list: any } } = {}
+local confirmed: any = nil
+
+mock.defineItem(990501, { name = "Test Helm", quality = 3, equipLoc = "INVTYPE_HEAD", icon = 133071 })
+
+local SOURCES: { [number]: any } = {
+    [101] = { name = "Test Helm", quality = 3, itemID = 990501, link = "|cnIQ3:|Hitem:990501::|h[Test Helm]|h|r", icon = 133071 },
+    [102] = { name = "Test Robe", quality = 4, itemID = 990502, icon = 132644 },
+    [103] = { name = nil, quality = 1, itemID = 990503, icon = 135274 },
+}
+
+@beforeEach
+local function start()
+    worn = dressed({ [1] = 101, [5] = 102 })
+    outfits = { [7] = { name = "Raid", list = dressed({ [1] = 101, [5] = 102 }) }, [8] = { name = "alpha", list = dressed({}) } }
+    confirmed = nil
+    actor = {
+        GetItemTransmogInfoList = function() return worn end,
+        Undress = mock.spy(),
+        UndressSlot = mock.spy(function(_: any, slot: number) worn[slot] = nil end),
+    }
+    mock.stub(G.DressUpFrame.ModelScene, "GetPlayerActor", function() return actor end)
+    mock.stub(TC, "GetSourceInfo", function(s: number): any return SOURCES[s] end)
+    mock.stub(TC, "GetAppearanceSourceInfo", function(s: number): any return SOURCES[s] and SOURCES[s].link and { itemLink = SOURCES[s].link } end)
+    mock.stub(TC, "GetSourceIcon", function(s: number): any return SOURCES[s] and SOURCES[s].icon end)
+    -- you wear the helm (its appearance 101), nothing else
+    mock.stub(C_Item, "GetCurrentItemTransmogInfo", function(loc: any): any
+        local slot = loc:GetEquipmentSlot()
+        return { appearanceID = slot == 1 and 101 or 0 }
+    end)
+    mock.stub(TC, "GetCustomSets", function(): any
+        local ids = {}
+        for id in pairs(outfits) do ids[#ids + 1] = id end
+        return ids
+    end)
+    mock.stub(TC, "GetCustomSetInfo", function(id: number): any local o = outfits[id] return o and o.name end)
+    mock.stub(TC, "GetCustomSetItemTransmogInfoList", function(id: number): any local o = outfits[id] return o and o.list end)
+    mock.stub(TC, "GetNumMaxCustomSets", function() return 20 end)
+    mock.stub(TC, "IsValidCustomSetName", function() return true end)
+    mock.stub(G, "DressUpItemTransmogInfoList", function() end)
+    mock.player:equip(1, 990501)
+    mock.stub(SuuUI.UI, "Confirm", function(opts: any) confirmed = opts end)
+end
+
+@afterEach
+local function cleanup()
+    mock.player:equip(1, nil)
+    if M.window:IsShown() then M.window:Hide() end
+    mock.advanceTime(0.1)
+    M.chosen = nil
+    expectNoErrors()
+end
+
+local function open()
+    ShowUIPanel(G.DressUpFrame)
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+end
+
+local function rows(): any[]
+    local out: any[] = {}
+    for _, r in ipairs(M.rows) do if r:IsShown() then out[#out + 1] = r end end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- The parts
+--------------------------------------------------------------------------------
+
+@test("the outfits by name (any case), unnamed ones by their number; why Save is off; the count")
+local function parts()
+    local names: { [number]: any } = { [1] = "beta", [2] = "Alpha", [3] = nil, [4] = mock.secret("x") }
+    local options = outfitOptions({ 1, 2, 3, 4 }, function(id: number): any return names[id] end)
+    local labels: string[] = {}
+    for _, o in ipairs(options) do labels[#labels + 1] = o.label end
+    expect(labels).toEqual({ "Alpha", "beta", "Outfit 3", "Outfit 4" })
+    expect(saveWhy(7, false, false)).toBe("Nothing changed.")
+    expect(saveWhy(7, true, true)).toBe(nil)
+    expect(saveWhy(nil, true, true)).toBe("You have as many outfits as the game keeps; delete one first.")
+    expect(saveWhy(nil, true, false)).toBe(nil)
+    expect(countText(1)).toBe("1 piece")
+    expect(countText(3)).toBe("3 pieces")
+end
+
+--------------------------------------------------------------------------------
+-- Opening, the pieces
+--------------------------------------------------------------------------------
+
+@test("the game's dressing room opens SuuUI's over it (out of sight); its model on SuuUI's stage")
+local function opening()
+    open()
+    expect(M.window).toBeShown()
+    local f = G.DressUpFrame
+    expect(f:GetAlpha()).toBe(0)
+    expect(f:GetLeft() > UIParent:GetRight()).toBe(true)
+    expect(f.ModelScene:GetParent()).toBe(M.stage)
+    -- the game placing or showing it again: away again
+    f:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    expect(f:GetLeft() > UIParent:GetRight()).toBe(true)
+    f:SetAlpha(1)
+    mock.advanceTime(0.01)
+    expect(f:GetAlpha()).toBe(0)
+    if f.ModelScene.ControlFrame then
+        f.ModelScene.ControlFrame:Show()
+        expect(f.ModelScene.ControlFrame).never.toBeShown()
+    end
+    -- closing either closes both
+    M.window:Hide()
+    expect(f).never.toBeShown()
+    open()
+    HideUIPanel(f)
+    expect(M.window).never.toBeShown()
+end
+
+@test("the pieces: each with its icon, name in its quality colour and slot; tried-on ones marked")
+local function pieces()
+    worn[16] = info(103)
+    open()
+    local list = rows()
+    expect(#list).toBe(3)
+    expect(list[1].name:GetText()).toBe("Test Helm")
+    expect(tokenOf(list[1].name)).toBe("quality-rare")
+    expect(list[1].sub:GetText()).toBe("Head")
+    expect(list[1].edge).never.toBeShown()
+    expect(list[2].name:GetText()).toBe("Test Robe")
+    expect(list[2].sub:GetText()).toBe("Chest · tried on")
+    expect(list[2].edge).toBeShown()
+    -- no name in its source: the item's
+    expect(list[3].sub:GetText()).toBe("Main hand · tried on")
+    expect(M.list.count:GetText()).toBe("3 pieces")
+    expect(M.list.empty).never.toBeShown()
+    -- nothing on
+    worn = dressed({})
+    M:Draw()
+    expect(#rows()).toBe(0)
+    expect(M.list.empty).toBeShown()
+    expect(M.list.count:GetText()).toBe("0 pieces")
+end
+
+@test("what you wear, read from your item's link when the game can't tell its look")
+local function yoursByLink()
+    mock.setField(C_Item, "GetCurrentItemTransmogInfo", nil)
+    mock.stub(G, "GetInventoryItemLink", function(_: any, slot: number): any return slot == 5 and "|cnIQ4:|Hitem:990502::|h[Test Robe]|h|r" or nil end)
+    mock.stub(TC, "GetItemInfo", function(): ...any return 50, 102 end)
+    open()
+    local list = rows()
+    expect(list[1].sub:GetText()).toBe("Head · tried on")
+    expect(list[2].sub:GetText()).toBe("Chest")
+end
+
+@test("a piece's tooltip, its link, and × to take it off")
+local function rowsActions()
+    open()
+    local list = rows()
+    local link = mock.stub(GameTooltip, "SetHyperlink", function() end)
+    local lines: string[] = {}
+    mock.stub(GameTooltip, "AddLine", function(_: any, text: string) lines[#lines + 1] = text end)
+    mock.hover(list[1])
+    expect(link).toHaveBeenCalledWith(GameTooltip, SOURCES[101].link)
+    expect(lines[#lines]).toBe("What you wear")
+    expect(list[1].bg).toBeShown()
+    mock.hover(nil)
+    expect(list[1].bg).never.toBeShown()
+    local byID = mock.stub(GameTooltip, "SetItemByID", function() end)
+    mock.hover(list[2])
+    expect(byID).toHaveBeenCalledWith(GameTooltip, 990502)
+    expect(lines[#lines]).toBe("Tried on · not worn")
+    mock.hover(nil)
+    -- a click links it
+    local click = mock.stub(G, "HandleModifiedItemClick", function() end)
+    mock.click(list[1])
+    expect(click).toHaveBeenCalledWith(SOURCES[101].link)
+    mock.resetSpies()
+    mock.click(list[2])
+    expect(click).never.toHaveBeenCalled()
+    -- ×: takes it off
+    mock.hover(list[2].x)
+    expect(tokenOf(list[2].x.glyph)).toBe("ember-text")
+    mock.hover(nil)
+    expect(tokenOf(list[2].x.glyph)).toBe("ink-faint")
+    mock.click(list[2].x)
+    expect(actor.UndressSlot).toHaveBeenCalledWith(actor, 5)
+    -- a row with nothing to show: its name
+    local r = list[1]
+    r.data = { name = "Plain" }
+    local text = mock.stub(GameTooltip, "SetText", function() end)
+    mock.hover(r)
+    expect(text).toHaveBeenCalledWith(GameTooltip, "Plain")
+    mock.hover(nil)
+    r.data = nil
+    mock.hover(r)
+    mock.hover(nil)
+end
+
+--------------------------------------------------------------------------------
+-- Outfits
+--------------------------------------------------------------------------------
+
+@test("the saved outfits: choose one to dress it; unchanged, Save is off; changed, Save keeps the changes")
+local function outfitsSave()
+    local dress = mock.stub(G, "DressUpItemTransmogInfoList", function() end)
+    local modify = mock.stub(TC, "ModifyCustomSet", function() end)
+    open()
+    local labels: string[] = {}
+    for _, o in ipairs(M.outfit.options) do labels[#labels + 1] = o.label end
+    expect(labels).toEqual({ "alpha", "Raid" })
+    M.outfit.onChange(7)
+    expect(dress).toHaveBeenCalledWith(assert(outfits[7]).list)
+    M:Draw()
+    expect(M.outfit.value).toBe(7)
+    expect(M.save:IsEnabled()).toBe(false)
+    expect(M.save.tooltip.description).toBe("Nothing changed.")
+    expect(M.delete:IsEnabled()).toBe(true)
+    expect(M.delete.tooltip.description).toBe("Delete Raid.")
+    -- changed: shown unsaved, Save on
+    worn[1] = info(103)
+    M:Draw()
+    expect(M.outfit.value).toBe(nil)
+    expect(M.save.tooltip.description).toBe("Save the changes to Raid.")
+    mock.click(M.save)
+    expect(modify).toHaveBeenCalledWith(7, worn)
+    -- an outfit no longer there: none chosen
+    outfits[7] = nil
+    M:Draw()
+    expect(M.chosen).toBe(nil)
+    expect(M.delete.tooltip.description).toBe("Pick a saved outfit first.")
+    -- an outfit without its pieces known: dressed as far as can be told
+    M.chosen = 8
+    mock.stub(TC, "GetCustomSetItemTransmogInfoList", function(): any return nil end)
+    expect(M:Dressed()).toBe(true)
+    M.outfit.onChange(nil)
+end
+
+@test("Save as a new outfit: a name asked; its icon its first piece's; a name the game refuses; full")
+local function saveNew()
+    local new = mock.stub(TC, "NewCustomSet", function(name: string): any outfits[9] = { name = name, list = worn } return 9 end)
+    open()
+    expect(M.save.tooltip.title).toBe("Save as a new outfit")
+    mock.click(M.save)
+    expect(confirmed.title).toBe("Save outfit")
+    local ask = confirmed
+    ask.onConfirm("  ")
+    expect(new).never.toHaveBeenCalled()
+    ask.onConfirm(" Dungeon ")
+    expect(new).toHaveBeenCalledWith("Dungeon", 133071, worn)
+    expect(M.chosen).toBe(9)
+    -- refused
+    M.chosen = nil
+    mock.stub(TC, "IsValidCustomSetName", function() return false end)
+    ask.onConfirm("Bad")
+    expect(confirmed.title).toBe("Choose another name")
+    -- nothing worn with an icon: the default one
+    mock.stub(TC, "IsValidCustomSetName", function() return true end)
+    mock.stub(TC, "GetSourceIcon", function(): any return nil end)
+    mock.resetSpies()
+    ask.onConfirm("Plain")
+    expect(new).toHaveBeenCalledWith("Plain", 134400, worn)
+    -- as many as the game keeps
+    M.chosen = nil
+    mock.stub(TC, "GetNumMaxCustomSets", function() return 2 end)
+    M:Draw()
+    expect(M.save:IsEnabled()).toBe(false)
+    -- no doll: nothing to save
+    actor = nil
+    M:Save()
+end
+
+@test("Delete asks first; Link puts the outfit into chat, or opens the chat with it")
+local function deleteLink()
+    local del = mock.stub(TC, "DeleteCustomSet", function() end)
+    open()
+    M:Delete()
+    expect(confirmed).toBe(nil)
+    M.outfit.onChange(7)
+    mock.click(M.delete)
+    expect(confirmed.title).toBe("Delete Raid?")
+    confirmed.onConfirm()
+    expect(del).toHaveBeenCalledWith(7)
+    expect(M.chosen).toBe(nil)
+    -- Link
+    mock.stub(TC, "GetCustomSetHyperlinkFromItemTransmogInfoList", function(): any return "|Houtfit:1|h[Outfit]|h" end)
+    local insert = mock.stub(ChatFrameUtil, "InsertLink", function() return false end)
+    local openChat = mock.stub(ChatFrameUtil, "OpenChat", function() end)
+    mock.click(M.link)
+    expect(insert).toHaveBeenCalledWith("|Houtfit:1|h[Outfit]|h")
+    expect(openChat).toHaveBeenCalledWith("|Houtfit:1|h[Outfit]|h")
+    mock.stub(ChatFrameUtil, "InsertLink", function() return true end)
+    mock.resetSpies()
+    mock.click(M.link)
+    expect(openChat).never.toHaveBeenCalled()
+    -- an older client: the chat's older calls
+    mock.setField(ChatFrameUtil, "InsertLink", nil)
+    local oldInsert = mock.stub(G, "ChatEdit_InsertLink", function() return false end)
+    local oldOpen = mock.stub(G, "ChatFrame_OpenChat", function() end)
+    mock.click(M.link)
+    expect(oldInsert).toHaveBeenCalledWith("|Houtfit:1|h[Outfit]|h")
+    expect(oldOpen).toHaveBeenCalledWith("|Houtfit:1|h[Outfit]|h")
+    mock.stub(TC, "GetCustomSetHyperlinkFromItemTransmogInfoList", function(): any return nil end)
+    mock.click(M.link)
+end
+
+@test("Reset dresses what you wear and drops the outfit; Undress takes everything off")
+local function resetUndress()
+    open()
+    M.outfit.onChange(7)
+    local reset = mock.stub(G.DressUpFrame.ResetButton, "Click", function() end)
+    mock.click(M.reset)
+    expect(reset).toHaveBeenCalled()
+    expect(M.chosen).toBe(nil)
+    mock.click(M.undress)
+    expect(actor.Undress).toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- A mount or pet preview
+--------------------------------------------------------------------------------
+
+@test("a mount preview: its card (name, icon, collected), Open in Collections; a pet's; the stage beside it")
+local function previews()
+    open()
+    local f = G.DressUpFrame
+    mock.stub(f, "GetMode", function() return "mount" end)
+    mock.stub(f, "GetLastLink", function() return "|cnIQ4:|Hitem:990510::|h[Reins of Testing]|h|r" end)
+    mock.stub(C_MountJournal, "GetMountFromItem", function() return 55 end)
+    mock.stub(C_MountJournal, "GetMountInfoByID", function(): ...any return "Test Steed", 0, 132261, false, true, 0, false, false, 0, false, true end)
+    mock.stub(C_Item, "GetItemInfo", function(): ...any return "Reins of Testing", "", 4 end)
+    M:Draw()
+    expect(M.card).toBeShown()
+    expect(M.list).never.toBeShown()
+    expect(M.card.head:GetText()).toBe("Mount")
+    expect(M.card.name:GetText()).toBe("Test Steed")
+    expect(tokenOf(M.card.name)).toBe("quality-epic")
+    expect(M.card.state:GetText()).toBe("Collected")
+    expect(M.hint:GetText()).toBe("Previewing a mount")
+    local toggle = mock.stub(SuuUI, "ToggleCollections", function() end)
+    mock.stub(SuuUI, "CollectionsShown", function() return false end)
+    mock.click(M.card.open)
+    expect(toggle).toHaveBeenCalledWith("mounts")
+    mock.stub(SuuUI, "CollectionsShown", function() return true end)
+    mock.resetSpies()
+    mock.click(M.card.open)
+    expect(toggle).never.toHaveBeenCalled()
+    -- by its spell, not collected
+    mock.stub(f, "GetLastLink", function() return "|cff71d5ff|Hspell:123|h[Summon Testing]|h|r" end)
+    mock.stub(C_MountJournal, "GetMountFromSpell", function() return 56 end)
+    mock.stub(C_MountJournal, "GetMountInfoByID", function(): ...any return "Test Spirit", 0, 132262, false, true, 0, false, false, 0, false, false end)
+    M:Draw()
+    expect(M.card.state:GetText()).toBe("Not collected")
+    -- a mount the journal doesn't know: the link's name
+    mock.stub(C_MountJournal, "GetMountFromSpell", function(): any return nil end)
+    M:Draw()
+    expect(M.card.name:GetText()).toBe("Summon Testing")
+    expect(M.card.state:GetText()).toBe("")
+    -- a pet
+    mock.stub(f, "GetMode", function() return "pet" end)
+    mock.stub(f, "GetLastLink", function() return "|cff0070dd|Hbattlepet:1|h[Test Pup]|h|r" end)
+    M:Draw()
+    expect(M.card.head:GetText()).toBe("Pet")
+    expect(M.card.open).never.toBeShown()
+    expect(M.card.name:GetText()).toBe("Test Pup")
+    expect(M.hint:GetText()).toBe("Previewing a pet")
+end
+
+--------------------------------------------------------------------------------
+-- Drawing, off
+--------------------------------------------------------------------------------
+
+@test("a burst of changes is drawn once, a frame later; not while the window is closed")
+local function bursts()
+    open()
+    local draw = mock.stub(M, "Draw")
+    mock.fireEvent("TRANSMOG_CUSTOM_SETS_CHANGED")
+    mock.fireEvent("PLAYER_EQUIPMENT_CHANGED", 1, false)
+    expect(draw).never.toHaveBeenCalled()
+    mock.advanceTime(0.01)
+    expect(draw).toHaveBeenCalledTimes(1)
+end
+
+@test("off: the window closes; the game's dressing room is left as the game shows it")
+local function off()
+    open()
+    assert(M.OnDisable)(M)
+    expect(M.window).never.toBeShown()
+    mock.stub(M, "IsEnabled", function() return false end)
+    HideUIPanel(G.DressUpFrame)
+    ShowUIPanel(G.DressUpFrame)
+    mock.advanceTime(0.01)
+    expect(M.window).never.toBeShown()
+    M:PutAway(G.DressUpFrame)
+    HideUIPanel(G.DressUpFrame)
+end

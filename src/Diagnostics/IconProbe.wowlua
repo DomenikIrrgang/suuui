@@ -1,0 +1,31 @@
+-- Diagnostics/IconProbe.wowlua
+-- "/suu probe icons": the art (icon file ID) of every spell ID the Cooldown
+-- Manager presets use, every class's (Diagnostics/PresetSpellIDs.wowlua, written
+-- by tools/gen_presets.lua). The generator then gives every preset entry the
+-- art most of its ranks share: a name's lowest ID is often an NPC version
+-- with other art (Seal of Wisdom). Saved in SuuUIProbe.icons on /reload.
+--
+--   /suu probe icons      read them now (a moment, out of combat)
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import presetSpellIDs from "/Diagnostics/PresetSpellIDs"
+import isSecret from "wowlua:secret"
+
+export function command()
+    local ids = presetSpellIDs
+    if InCombatLockdown() then
+        print("Icon probe: out of combat, please.")
+        return
+    end
+    local icons: { [number]: any }, n = {}, 0
+    for _, id in ipairs(ids) do
+        local ok, file = pcall(C_Spell.GetSpellTexture, id)
+        if ok and file ~= nil and not isSecret(file) then
+            icons[id] = file
+            n = n + 1
+        end
+    end
+    DB.probe.icons = { at = date("%Y-%m-%d %H:%M"), icons = icons }
+    print(("Icon probe: the art of %d of %d spells read. /reload to save."):format(n, #ids))
+end

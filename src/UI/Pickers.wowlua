@@ -1,0 +1,387 @@
+-- UI/Pickers.wowlua
+-- Small choice controls from the design system (0.9):
+--
+--   anchorPicker(parent, { value = "TOPRIGHT", onChange = fn(point) })
+--       the 3×3 grid of diamonds: the chosen point a larger arcane diamond,
+--       the rest small ink-muted ones (no offsets: AnchorPicker offsets={false})
+--   anchorButton(parent, { value = "BOTTOM", note, onChange = fn(point) }) (0.17)
+--       the nine points in a 30px button; a click opens the grid under it
+--   swatchRow(parent, { options = { { value = "fel", label = "Green" }, … },
+--                          value, onChange = fn(token) })
+--       token colours only, the chosen one ringed in arcane; the name is the tooltip
+--   toggleChips(parent, { options = { { value, label }, … }, value = { … },
+--                            onChange = fn(values) })
+--       on/off chips for choices that combine (the value is a list)
+--
+-- Each has :SetValue(v) and :SetDisabled(disabled) (opacity-disabled, no input).
+
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import root from "/Core/Root"
+import * as draw from "./Draw"
+import text, Text from "./Text"
+import panel, Panel from "./Panel"
+import showTooltip, hideTooltip from "./Tooltip"
+
+local S = T.space
+
+local function setDisabled(self: any, disabled: any)
+    self.disabled = disabled and true or false
+    self:SetAlpha(self.disabled and T.opacity["opacity-disabled"] or 1)
+end
+
+--------------------------------------------------------------------------------
+-- AnchorPicker (grid only)
+--------------------------------------------------------------------------------
+
+local POINT_NAMES: { [string]: string } = {
+    TOPLEFT = "Top left", TOP = "Top", TOPRIGHT = "Top right", LEFT = "Left", CENTER = "Centre",
+    RIGHT = "Right", BOTTOMLEFT = "Bottom left", BOTTOM = "Bottom", BOTTOMRIGHT = "Bottom right",
+}
+local GRID = { { "TOPLEFT", "TOP", "TOPRIGHT" }, { "LEFT", "CENTER", "RIGHT" }, { "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT" } }
+local CELL = 20
+
+export type PickerOptions = { value?: any, onChange?: (value: any) -> () }
+
+export interface AnchorPicker extends Frame
+    value: string
+    disabled?: boolean
+    cells: { [string]: Button }
+    onChange?: (point: string) -> ()
+    function SetValue(point: string)
+    function SetDisabled(disabled: any)
+end
+
+local AnchorPicker: AnchorPicker = {} :: any
+function AnchorPicker:SetValue(point: string)
+    self.value = point
+    for p, cell in pairs(self.cells) do
+        local on = p == point
+        cell.dot:SetSize(on and 10 or 6, on and 10 or 6)
+        draw.paint(cell.dot, on and "arcane" or "ink-muted")
+    end
+end
+AnchorPicker.SetDisabled = setDisabled
+
+export function anchorPicker(parent: Frame, opts: PickerOptions?): AnchorPicker
+    opts = opts or {}
+    local f: AnchorPicker = CreateFrame("Frame", nil, parent) :: any
+    Mixin(f, AnchorPicker)
+    f:SetSize(CELL * 3 + 8, CELL * 3 + 8)
+    draw.fill(f, "surface-sunk"):SetAllPoints()
+    draw.border(f, "gilt-line")
+    f.cells, f.onChange = {}, opts.onChange
+    for row, points in ipairs(GRID) do
+        for col, point in ipairs(points) do
+            local b = CreateFrame("Button", nil, f)
+            b:SetSize(CELL, CELL)
+            b:SetPoint("TOPLEFT", 4 + (col - 1) * CELL, -4 - (row - 1) * CELL)
+            b.dot = draw.diamond(b, 6, "ink-muted")
+            b.dot:SetPoint("CENTER")
+            b:SetScript("OnClick", function()
+                if f.disabled then return end
+                f:SetValue(point)
+                if f.onChange then f.onChange(point) end
+            end)
+            b:SetScript("OnEnter", function(self) showTooltip(self, { title = POINT_NAMES[point] }) end)
+            b:SetScript("OnLeave", function() hideTooltip() end)
+            f.cells[point] = b
+        end
+    end
+    f:SetValue(opts.value or "TOPRIGHT")
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- AnchorButton (0.17): a 30px button with the nine points in small, the
+-- chosen one lit. Its tooltip names the point (opts.tooltip(point) -> data
+-- says more); a click opens the AnchorPicker as a popover under it, with
+-- opts.note under the grid. A pick, a click outside or :Close() closes it.
+--   { value, note, tooltip, onChange = fn(point) }
+-- :SetValue(point), :SetDisabled(disabled) (the tooltip still shows: say
+-- why), :IsOpen(), :Close(), :PopoverHasMouse().
+--------------------------------------------------------------------------------
+
+local MINI = 8 -- between the small points
+
+export type AnchorButtonOptions = {
+    value?: string,
+    note?: string,
+    tooltip?: (point: string) -> { [string]: any }?,
+    onChange?: (point: string) -> (),
+}
+
+-- the popover: a Panel with the grid's note under it
+export interface AnchorPopover extends Panel
+    note: Text
+end
+
+export interface AnchorButton extends Button
+    value: string
+    disabled?: boolean
+    note?: string
+    tooltip?: (point: string) -> { [string]: any }?
+    onChange?: (point: string) -> ()
+    border: draw.Border
+    dots: { [string]: Texture }
+    picker?: AnchorPicker
+    pop?: AnchorPopover
+    function SetValue(point: string)
+    function SetDisabled(disabled: any)
+    function Tooltip(): { [string]: any }
+    function IsOpen(): boolean
+    function PopoverHasMouse(): boolean
+    function Close()
+    function Open()
+end
+
+local AnchorButton: AnchorButton = {} :: any
+local openButtons: { [AnchorButton]: boolean } = setmetatable({}, { __mode = "k" })
+
+function AnchorButton:SetValue(point: string)
+    self.value = point
+    for p, dot in pairs(self.dots) do
+        local on = p == point
+        dot:SetSize(on and 6 or 4, on and 6 or 4)
+        draw.paint(dot, on and "arcane" or "ink-faint")
+    end
+    if self.picker then self.picker:SetValue(point) end
+    if self:IsVisible() and self:IsMouseOver() then showTooltip(self, self:Tooltip()) end
+end
+
+function AnchorButton:SetDisabled(disabled: any)
+    setDisabled(self, disabled)
+    if self.disabled then self:Close() end
+end
+
+function AnchorButton:Tooltip(): { [string]: any }
+    local data: { [string]: any } = self.tooltip and self.tooltip(self.value) or {}
+    data.title = data.title or ("Anchor: " .. (POINT_NAMES[self.value] or self.value or ""))
+    return data
+end
+
+function AnchorButton:IsOpen(): boolean
+    local pop = self.pop
+    return pop ~= nil and pop:IsShown()
+end
+
+function AnchorButton:PopoverHasMouse(): boolean
+    return self:IsOpen() and (self.pop :: AnchorPopover):IsMouseOver()
+end
+
+function AnchorButton:Close()
+    if self.pop then self.pop:Hide() end
+    self.border:SetColor(self:IsMouseOver() and "gilt" or "gilt-line")
+end
+
+function AnchorButton:Open()
+    if self.disabled then return end
+    if not self.pop then
+        local pop = panel(root, { solid = true, shadow = true }) :: AnchorPopover
+        pop.body:SetScript("OnSizeChanged", nil)
+        pop.body:Hide()
+        pop:SetFrameStrata("FULLSCREEN_DIALOG")
+        pop:SetToplevel(true)
+        pop:SetClampedToScreen(true)
+        pop:EnableMouse(true)
+        local pad, w = S["space-5"], 196
+        local picker = anchorPicker(pop, { value = self.value, onChange = function(point: string)
+            self:Close()
+            self:SetValue(point)
+            if self.onChange then self.onChange(point) end
+        end })
+        self.picker = picker
+        picker:SetPoint("TOPLEFT", pad, -pad)
+        pop.note = text(pop, "caption", "ink-muted")
+        pop.note:SetWordWrap(true)
+        pop.note:SetJustifyH("LEFT")
+        pop.note:SetFixedWidth(w - pad * 2)
+        pop.note:SetPoint("TOPLEFT", picker, "BOTTOMLEFT", 0, -S["space-4"])
+        pop:SetWidth(w)
+        self.pop = pop
+    end
+    local pop, picker = self.pop :: AnchorPopover, self.picker :: AnchorPicker
+    pop.note:SetValue(self.note or "")
+    pop.note:SetShown(self.note ~= nil)
+    pop:SetHeight(S["space-5"] * 2 + picker:GetHeight()
+        + (self.note and S["space-4"] + pop.note:GetStringHeight() or 0))
+    picker:SetValue(self.value)
+    pop:ClearAllPoints()
+    pop:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
+    pop:Show()
+    openButtons[self] = true
+    self.border:SetColor("arcane")
+end
+
+export function anchorButton(parent: Frame, opts: AnchorButtonOptions?): AnchorButton
+    opts = opts or {}
+    local b: AnchorButton = CreateFrame("Button", nil, parent) :: any
+    Mixin(b, AnchorButton)
+    b:SetSize(30, 30)
+    draw.fill(b, "surface-raised"):SetAllPoints()
+    b.border = draw.border(b, "gilt-line")
+    b.onChange, b.note, b.tooltip = opts.onChange, opts.note, opts.tooltip
+    b.dots = {}
+    for row, points in ipairs(GRID) do
+        for col, point in ipairs(points) do
+            local d = draw.diamond(b, 4, "ink-faint")
+            d:SetPoint("CENTER", (col - 2) * MINI, (2 - row) * MINI)
+            b.dots[point] = d
+        end
+    end
+    b:SetScript("OnClick", function(self: AnchorButton)
+        if self:IsOpen() then self:Close() else self:Open() end
+    end)
+    b:SetScript("OnEnter", function(self: AnchorButton)
+        if not self.disabled and not self:IsOpen() then self.border:SetColor("gilt") end
+        showTooltip(self, self:Tooltip())
+    end)
+    b:SetScript("OnLeave", function(self: AnchorButton)
+        if not self:IsOpen() then self.border:SetColor("gilt-line") end
+        hideTooltip()
+    end)
+    b:HookScript("OnHide", function(self: AnchorButton) self:Close() end)
+    b:SetValue(opts.value or "CENTER")
+    return b
+end
+
+-- A click outside an open popover and its button closes it.
+events.onGame("GLOBAL_MOUSE_DOWN", function()
+    for b in pairs(openButtons) do
+        if not b:IsOpen() then
+            openButtons[b] = nil
+        elseif not (b:IsMouseOver() or (b.pop :: AnchorPopover):IsMouseOver()) then
+            b:Close()
+            openButtons[b] = nil
+        end
+    end
+end, "UI.AnchorButton")
+
+--------------------------------------------------------------------------------
+-- SwatchRow
+--------------------------------------------------------------------------------
+
+local SWATCH = 20
+
+export type ChipOption = { value: any, label: string }
+export type SwatchRowOptions = { options: ChipOption[], value?: string, onChange?: (token: string) -> () }
+
+export interface SwatchRow extends Frame
+    value?: string
+    disabled?: boolean
+    swatches: Button[]
+    onChange?: (token: string) -> ()
+    function SetValue(token: string?)
+    function SetDisabled(disabled: any)
+end
+
+local SwatchRow: SwatchRow = {} :: any
+function SwatchRow:SetValue(token: string?)
+    self.value = token
+    for _, b in ipairs(self.swatches) do b.ring:SetShown(b.option.value == token) end
+end
+SwatchRow.SetDisabled = setDisabled
+
+export function swatchRow(parent: Frame, opts: SwatchRowOptions): SwatchRow
+    local f: SwatchRow = CreateFrame("Frame", nil, parent) :: any
+    Mixin(f, SwatchRow)
+    f.swatches, f.onChange = {}, opts.onChange
+    local x = 0
+    for _, option in ipairs(opts.options) do
+        local b = CreateFrame("Button", nil, f)
+        b.option = option
+        b:SetSize(SWATCH, SWATCH)
+        b:SetPoint("LEFT", x, 0)
+        local fill = draw.fill(b, option.value)
+        fill:SetPoint("TOPLEFT", 3, -3)
+        fill:SetPoint("BOTTOMRIGHT", -3, 3)
+        draw.border(b, "gilt-hairline", { inset = 2 })
+        b.ring = CreateFrame("Frame", nil, b)
+        b.ring:SetAllPoints()
+        draw.border(b.ring, "arcane", { width = 2 })
+        b:SetScript("OnClick", function()
+            if f.disabled then return end
+            f:SetValue(option.value)
+            if f.onChange then f.onChange(option.value) end
+        end)
+        b:SetScript("OnEnter", function(self) showTooltip(self, { title = option.label }) end)
+        b:SetScript("OnLeave", function() hideTooltip() end)
+        f.swatches[#f.swatches + 1] = b
+        x = x + SWATCH + S["space-2"]
+    end
+    f:SetSize(math.max(1, x - S["space-2"]), SWATCH)
+    f:SetValue(opts.value)
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- ToggleChips
+--------------------------------------------------------------------------------
+
+export type ToggleChipsOptions = { options: ChipOption[], value?: any[], onChange?: (values: any[]) -> () }
+
+export interface ToggleChips extends Frame
+    set: { [any]: boolean }
+    disabled?: boolean
+    chips: Button[]
+    onChange?: (values: any[]) -> ()
+    function SetValue(values: any[]?)
+    function GetValue(): any[]
+    function SetDisabled(disabled: any)
+end
+
+local ToggleChips: ToggleChips = {} :: any
+function ToggleChips:SetValue(values: any[]?)
+    local set: { [any]: boolean } = {}
+    for _, v in ipairs(values or {}) do set[v] = true end
+    self.set = set
+    for _, b in ipairs(self.chips) do
+        local on = set[b.option.value] and true or false
+        b.bg:SetShown(on)
+        b.edgeOn:SetShown(on)
+        b.label:SetColor(on and "arcane" or "ink-muted")
+    end
+end
+
+function ToggleChips:GetValue(): any[]
+    local out: any[] = {}
+    for _, b in ipairs(self.chips) do
+        if self.set[b.option.value] then out[#out + 1] = b.option.value end
+    end
+    return out
+end
+ToggleChips.SetDisabled = setDisabled
+
+export function toggleChips(parent: Frame, opts: ToggleChipsOptions): ToggleChips
+    local f: ToggleChips = CreateFrame("Frame", nil, parent) :: any
+    Mixin(f, ToggleChips)
+    f.chips, f.onChange, f.set = {}, opts.onChange, {}
+    local x = 0
+    for _, option in ipairs(opts.options) do
+        local b = CreateFrame("Button", nil, f)
+        b.option = option
+        draw.fill(b, "surface-sunk"):SetAllPoints()
+        draw.border(b, "gilt-line")
+        b.bg = draw.fill(b, "arcane-soft", "BACKGROUND", 1)
+        b.bg:SetAllPoints()
+        b.edgeOn = CreateFrame("Frame", nil, b)
+        b.edgeOn:SetAllPoints()
+        draw.border(b.edgeOn, "arcane")
+        b.label = text(b, "label", "ink-muted")
+        b.label:SetPoint("CENTER")
+        b.label:SetValue(option.label)
+        b:SetSize(math.max(40, b.label:GetUnboundedStringWidth() + S["space-5"] * 2), 26)
+        b:SetPoint("LEFT", x, 0)
+        b:SetScript("OnClick", function()
+            if f.disabled then return end
+            f.set[option.value] = not f.set[option.value] or nil
+            f:SetValue(f:GetValue())
+            if f.onChange then f.onChange(f:GetValue()) end
+        end)
+        f.chips[#f.chips + 1] = b
+        x = x + b:GetWidth() + S["space-2"]
+    end
+    f:SetSize(math.max(1, x - S["space-2"]), 26)
+    f:SetValue(opts.value)
+    return f
+end

@@ -1,0 +1,210 @@
+-- Units/Minimap: SuuUI's minimap: the game's map moved into SuuUI's round
+-- disc a frame after login (and kept there), Blizzard's cluster out of
+-- sight; the zone lines, the instance line, the clock (24 hours or AM/PM,
+-- server or local), mail with its senders, zoom by the buttons and the
+-- wheel, right click for tracking, the Jewel, the clock's clicks; the
+-- settings and the preview; combat and a theme change.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Minimap"
+import expectNoErrors from "../../helpers"
+
+local G: any = _G
+
+local function block(): any return M.block end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, k in ipairs({ "size", "zone", "clock", "wheelZoom" }) do M:Reset(k) end
+    mock.setNewMail(nil)
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+@test("the game's minimap in SuuUI's round disc, at the set size; Blizzard's cluster out of sight; the shape for other addons")
+local function placed()
+    mock.advanceFrames(2)
+    expect(Minimap:GetParent()).toBe(block().disc)
+    expect(Minimap:GetWidth()).toBe(M:Get("size"))
+    expect(G.MinimapCluster:GetAlpha()).toBe(0)
+    expect(G.GetMinimapShape()).toBe("ROUND")
+    M:Set("size", 200)
+    expect(Minimap:GetWidth()).toBe(200)
+    expect(block().disc:GetWidth()).toBe(200)
+    -- something else takes it: back a frame later
+    Minimap:SetParent(UIParent)
+    mock.advanceFrames(2)
+    expect(Minimap:GetParent()).toBe(block().disc)
+end
+
+@test("the zone and the subzone above the map; a subzone named as the zone left out")
+local function zone()
+    mock.stub(G, "GetZoneText", function(): string return "Elwynn Forest" end)
+    mock.stub(G, "GetSubZoneText", function(): string return "Goldshire" end)
+    mock.fireEvent("ZONE_CHANGED")
+    expect(block().zone.value).toBe("Elwynn Forest")
+    expect(block().sub.value).toBe("Goldshire")
+    mock.stub(G, "GetSubZoneText", function(): string return "Elwynn Forest" end)
+    mock.fireEvent("ZONE_CHANGED")
+    expect(block().sub.value).toBe("")
+    -- unreadable: left as it was
+    -- (SuuUI's own update only: the game's zone text would read it too)
+    mock.stub(G, "GetZoneText", function(): any return mock.secret("Hidden") end)
+    M:UpdateZone()
+    expect(block().zone.value).toBe("Elwynn Forest")
+    mock.stub(G, "GetZoneText", function(): string return "Elwynn Forest" end)
+    -- off: no lines
+    M:Set("zone", false)
+    expect(block().zone:IsShown()).toBe(false)
+end
+
+@test("inside a dungeon or a raid: the instance line with its size")
+local function instance()
+    mock.enterInstance("party", { maxPlayers = 5 })
+    mock.advanceFrames(1)
+    M:UpdateDifficulty()
+    expect(block().instance.value:find("Dungeon", 1, true) ~= nil).toBe(true)
+    expect(block().instance.value:find("5 players", 1, true) ~= nil).toBe(true)
+    mock.leaveInstance()
+    mock.enterInstance("raid", { maxPlayers = 40 })
+    M:UpdateDifficulty()
+    expect(block().instance.value:find("Raid", 1, true) ~= nil).toBe(true)
+    expect(block().instance.value:find("40 players", 1, true) ~= nil).toBe(true)
+    mock.leaveInstance()
+    M:UpdateDifficulty()
+    expect(block().instance.value).toBe("")
+end
+
+@test("the clock: 24 hours or AM/PM, the server's time or yours; off by the setting")
+local function clock()
+    mock.stub(G, "GetGameTime", function(): (number, number) return 21, 5 end)
+    mock.setCVar("timeMgrUseLocalTime", "0")
+    mock.setCVar("timeMgrUseMilitaryTime", "1")
+    M:UpdateClock()
+    expect(block().time.value).toBe("21:05")
+    mock.setCVar("timeMgrUseMilitaryTime", "0")
+    M:UpdateClock()
+    expect(block().time.value).toBe("9:05 PM")
+    mock.stub(G, "GetGameTime", function(): (number, number) return 0, 30 end)
+    M:UpdateClock()
+    expect(block().time.value).toBe("12:30 AM")
+    mock.setCVar("timeMgrUseLocalTime", "1")
+    M:UpdateClock()
+    local t = date("*t")
+    local want = ("%d:%02d %s"):format((t.hour - 1) % 12 + 1, t.min, t.hour >= 12 and "PM" or "AM")
+    expect(block().time.value).toBe(want)
+    mock.setCVar("timeMgrUseLocalTime", "0")
+    -- every ten seconds
+    local drawn = mock.spy(function(_: any) end)
+    mock.stub(M, "UpdateClock", drawn)
+    mock.advanceTime(10.1)
+    expect(drawn).toHaveBeenCalled()
+    M:Set("clock", false)
+    expect(block().time:IsShown()).toBe(false)
+end
+
+@test("the clock's clicks: the game's clock, the calendar")
+local function clockClicks()
+    local timeManager = mock.spy(function() end)
+    local calendar = mock.spy(function() end)
+    mock.stub(G, "ToggleTimeManager", timeManager)
+    mock.stub(G, "ToggleCalendar", calendar)
+    mock.click(block().timeButton)
+    expect(timeManager).toHaveBeenCalled()
+    mock.click(block().timeButton, "RightButton")
+    expect(calendar).toHaveBeenCalled()
+end
+
+@test("mail: the marker while it waits, its senders in the tooltip")
+local function mail()
+    local d = block().deco
+    expect(d.mail:IsShown()).toBe(false)
+    mock.setNewMail({ "Brannoc Ironhand", "Tamsin Ashford" })
+    mock.fireEvent("UPDATE_PENDING_MAIL")
+    expect(d.mail:IsShown()).toBe(true)
+    local tip = d.mail.tip()
+    expect(tip.title).toBe("New mail")
+    expect(tip.subtitle).toBe("From")
+    expect(tip.lines[1][1]).toBe("Brannoc Ironhand")
+    mock.hover(d.mail)
+    mock.hover(nil)
+    mock.setNewMail(nil)
+    mock.fireEvent("UPDATE_PENDING_MAIL")
+    expect(d.mail:IsShown()).toBe(false)
+end
+
+@test("zoom: the buttons, the wheel (off by the setting), never past the ends")
+local function zoom()
+    mock.advanceFrames(2)
+    local d = block().deco
+    Minimap:SetZoom(0)
+    mock.click(d.zoomIn)
+    expect(Minimap:GetZoom()).toBe(1)
+    mock.click(d.zoomOut)
+    mock.click(d.zoomOut)
+    expect(Minimap:GetZoom()).toBe(0)
+    local top = Minimap:GetZoomLevels() - 1
+    for _ = 1, top + 3 do M:Zoom(1) end
+    expect(Minimap:GetZoom()).toBe(top)
+    Minimap:SetZoom(0)
+    mock.wheel(M.overlay, 1)
+    expect(Minimap:GetZoom()).toBe(1)
+    mock.wheel(M.overlay, -1)
+    expect(Minimap:GetZoom()).toBe(0)
+    M:Set("wheelZoom", false)
+    expect(M.overlay:IsMouseWheelEnabled()).toBe(false)
+end
+
+@test("right click on the map: the tracking menu; the Jewel: settings, or edit mode on a right click")
+local function clicks()
+    mock.advanceFrames(2)
+    local opened = mock.spy(function(_: any) end)
+    local tracking = G.MinimapCluster.Tracking.Button
+    mock.stub(tracking, "OpenMenu", opened)
+    M.overlay:GetScript("OnMouseUp")(M.overlay, "RightButton")
+    expect(opened).toHaveBeenCalled()
+    M.overlay:GetScript("OnMouseUp")(M.overlay, "LeftButton")
+    expect(opened).toHaveBeenCalledTimes(1)
+    local settings = mock.spy(function() end)
+    local editMode = mock.spy(function() end)
+    mock.stub(SuuUI, "ToggleSettings", settings)
+    mock.stub(SuuUI.EditMode, "Enter", editMode)
+    local jewel = block().deco.jewel
+    mock.click(jewel)
+    expect(settings).toHaveBeenCalled()
+    mock.click(jewel, "RightButton")
+    expect(editMode).toHaveBeenCalled()
+    mock.hover(jewel)
+    mock.hover(nil)
+end
+
+@test("in a fight: the map is placed, and a theme laid out, when it ends")
+local function combat()
+    mock.advanceFrames(2)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:PlaceMinimap()
+    expect(M.pendingPlace).toBe(true)
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(M.pendingTheme).toBe(true)
+    mock.player:leaveCombat()
+    expect(M.pendingPlace).toBeNil()
+    expect(M.pendingTheme).toBeNil()
+end
+
+@test("the settings' preview: a stand-in map at the set size, with the zone, mail and an instance line")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetParent()).toBe(parent)
+    expect(view.zone.value).toBe("Wailing Caverns")
+    expect(view.deco.mail:IsShown()).toBe(true)
+    view:Show()
+    M:Set("size", 160)
+    expect(view.disc:GetWidth()).toBe(160)
+    M:Emit("SUUUI_THEME_CHANGED")
+    expect(M:PreviewView(UIParent)).toBe(view)
+end

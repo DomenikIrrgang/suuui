@@ -1,0 +1,179 @@
+-- Core/Themes: registering themes, and applying the chosen one (then colour
+-- vision) over the design's tokens, in place.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as themes from "/Core/Themes"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as vision from "/Core/Vision"
+import * as draw from "/UI/Draw"
+import expectNoErrors from "../../helpers"
+
+const OWNER = "ThemesTest"
+
+local changed: string[] = {}
+events.on("SUUUI_THEME_CHANGED", function(_: string, id: string) changed[#changed + 1] = id end, OWNER)
+
+local design = {
+    gilt = { T.color.gilt[1], T.color.gilt[2], T.color.gilt[3], T.color.gilt[4], hex = T.color.gilt.hex },
+    ember = { T.color.ember[1], T.color.ember[2], T.color.ember[3], hex = T.color.ember.hex },
+    label = { file = T.type.label.file, size = T.type.label.size, lineHeight = T.type.label.lineHeight },
+}
+
+local function use(id: string?, colorVision: string?)
+    settings.setAccount("theme", id)
+    settings.setAccount("colorVision", colorVision)
+    themes.apply()
+end
+
+@afterEach
+local function back()
+    use(nil, nil)
+    changed = {}
+end
+
+@test("SuuUI's own theme is the default and comes first")
+local function default()
+    expect(themes.DEFAULT).toBe("suuui")
+    local first = themes.all()[1]
+    expect(first.id).toBe("suuui")
+    expect(first.name).toBe("SuuUI")
+    expect(themes.get("suuui")).toBe(first)
+    expect(themes.appliedTheme()).toBe("suuui")
+    expect(themes.get("no-such-theme")).toBeNil()
+end
+
+@test("a registered theme is listed and found; its name defaults to its id")
+local function register()
+    local n = #themes.all()
+    local t = themes.register({ id = "test-plain" })
+    expect(t.id).toBe("test-plain")
+    expect(t.name).toBe("test-plain")
+    expect(t.description).toBeNil()
+    expect(t.colors).toEqual({})
+    expect(t.fonts).toEqual({})
+    expect(#themes.all()).toBe(n + 1)
+    expect(themes.all()[n + 1]).toBe(t)
+    expect(themes.get("test-plain")).toBe(t)
+    local named = themes.register({ id = "test-named", name = "Named", description = "One line." })
+    expect(named.name).toBe("Named")
+    expect(named.description).toBe("One line.")
+end
+
+@test("a theme needs a free id, real colour tokens and real text styles")
+local function refused()
+    themes.register({ id = "test-taken" })
+    expect(function() themes.register(nil) end).toThrow("SuuUI.RegisterTheme: a theme needs an id")
+    expect(function() themes.register("x") end).toThrow("SuuUI.RegisterTheme: a theme needs an id")
+    expect(function() themes.register({ name = "No id" }) end).toThrow("SuuUI.RegisterTheme: a theme needs an id")
+    expect(function() themes.register({ id = "" }) end).toThrow("SuuUI.RegisterTheme: a theme needs an id")
+    expect(function() themes.register({ id = "test-taken" }) end).toThrow("SuuUI.RegisterTheme: the theme test-taken is taken")
+    expect(function() themes.register({ id = "test-bad", colors = { glitter = { 1, 1, 1 } } }) end)
+        .toThrow('SuuUI.RegisterTheme: test-bad has no colour token "glitter"')
+    expect(function() themes.register({ id = "test-bad", fonts = { shouting = { size = 30 } } }) end)
+        .toThrow('SuuUI.RegisterTheme: test-bad has no text style "shouting"')
+    expect(themes.get("test-bad")).toBeNil()
+end
+
+@test("applying a theme sets its colours in place, with their hex, keeping alpha unless given")
+local function colors()
+    themes.register({ id = "test-colors", colors = {
+        gilt = { 1, 0, 0.5 },
+        ["gilt-line"] = { 0, 1, 0, 0.25 },
+    } })
+    local gilt = T.color.gilt
+    use("test-colors")
+    expect(themes.appliedTheme()).toBe("test-colors")
+    expect(T.color.gilt).toBe(gilt)
+    expect({ gilt[1], gilt[2], gilt[3], gilt[4] }).toEqual({ 1, 0, 0.5, design.gilt[4] })
+    expect(gilt.hex).toBe("ff0080")
+    expect(T.color["gilt-line"][4]).toBe(0.25)
+    expect(T.color["gilt-line"].hex).toBe("00ff00")
+    expect(changed).toEqual({ "test-colors" })
+    -- back to the design's
+    use(nil)
+    expect({ gilt[1], gilt[2], gilt[3], gilt[4] }).toEqual({ design.gilt[1], design.gilt[2], design.gilt[3], design.gilt[4] })
+    expect(gilt.hex).toBe(design.gilt.hex)
+    expect(changed).toEqual({ "test-colors", "suuui" })
+    expectNoErrors()
+end
+
+@test("a theme's fonts set a style's face, size and line height, each only if given")
+local function fonts()
+    themes.register({ id = "test-fonts", fonts = { label = { size = 30 }, caption = { file = T.type.alert.file, lineHeight = 40 } } })
+    use("test-fonts")
+    expect(T.type.label.size).toBe(30)
+    expect(T.type.label.file).toBe(design.label.file)
+    expect(T.type.label.lineHeight).toBe(design.label.lineHeight)
+    expect(T.type.caption.file).toBe(T.type.alert.file)
+    expect(T.type.caption.lineHeight).toBe(40)
+    -- the Font objects follow
+    local _, size = _G.SuuUIFont_label:GetFont()
+    expect(size).toBeCloseTo(30, 4)
+    use(nil)
+    expect(T.type.label.size).toBe(design.label.size)
+end
+
+@test("a style a theme names that is gone by the time it applies is skipped")
+local function fontsGone()
+    local t = themes.register({ id = "test-fonts-gone" })
+    t.fonts = { ["no-such-style"] = { size = 99 } }
+    use("test-fonts-gone")
+    expect(themes.appliedTheme()).toBe("test-fonts-gone")
+    expectNoErrors()
+end
+
+@test("a chosen theme that isn't registered (a plugin gone) applies SuuUI's")
+local function missing()
+    use("test-uninstalled")
+    expect(themes.appliedTheme()).toBe("suuui")
+    expect(T.color.gilt.hex).toBe(design.gilt.hex)
+    expect(changed).toEqual({ "suuui" })
+end
+
+@test("worked-out colours are asked for your class")
+local function worked()
+    local asked: string[] = {}
+    local _, class = UnitClass("player")
+    themes.register({ id = "test-worked", colors = function(c: string?): { [string]: number[] }
+        asked[#asked + 1] = c or "?"
+        return { gilt = { 0, 0, 1 }, ["not-a-token"] = { 1, 1, 1 } }
+    end })
+    use("test-worked")
+    expect(asked).toEqual({ class :: string })
+    expect(T.color.gilt.hex).toBe("0000ff")
+    expectNoErrors()
+end
+
+@test("worked-out colours that error or aren't a table leave the design's")
+local function workedBroken()
+    themes.register({ id = "test-erroring", colors = function(_: string?): { [string]: number[] } error("broken") end })
+    themes.register({ id = "test-not-table", colors = function(_: string?): any return "red" end })
+    use("test-erroring")
+    expect(themes.appliedTheme()).toBe("test-erroring")
+    expect(T.color.gilt.hex).toBe(design.gilt.hex)
+    use("test-not-table")
+    expect(T.color.gilt.hex).toBe(design.gilt.hex)
+    expectNoErrors()
+end
+
+@test("colour vision applies on top of the theme")
+local function visionOnTop()
+    themes.register({ id = "test-ember", colors = { ember = { 0, 0, 0 }, gilt = { 0, 0, 0 } } })
+    use("test-ember", "redgreen")
+    expect(vision.appliedMode()).toBe("redgreen")
+    expect(T.color.ember.hex).toBe("ec6b00")
+    expect(T.color.gilt.hex).toBe("000000")
+    use(nil, nil)
+    expect(vision.appliedMode()).toBe("normal")
+    expect(T.color.ember.hex).toBe(design.ember.hex)
+end
+
+@test("applying repaints what UI.Paint keeps")
+local function repaint()
+    local spy = mock.stub(draw, "repaint", function() end)
+    themes.apply()
+    expect(spy).toHaveBeenCalledTimes(1)
+end

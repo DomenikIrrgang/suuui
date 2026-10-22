@@ -1,0 +1,471 @@
+-- UI/Draw: token colours (rgba), kept paints and their repaint after a theme
+-- change, letting go when the code sets a colour otherwise, sizes, fills,
+-- borders, hairlines, the diamond, soft edges and shadows, the cross, and
+-- the rescale that keeps lines one pixel.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T, Color from "/Core/Tokens"
+import * as pixel from "/Core/Pixel"
+import * as events from "/Core/Events"
+import * as draw from "/UI/Draw"
+import expectNoErrors, newParent from "../../helpers"
+import paintOf, tokenOf, colorIs, setToken, restoreTokens, pointOf from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function host(): Frame
+    parent = newParent()
+    return parent :: Frame
+end
+
+@afterEach
+local function cleanup()
+    restoreTokens()
+    if parent then
+        parent:SetScale(1)
+        parent:Hide()
+    end
+    parent = nil
+    expectNoErrors()
+end
+
+type Call = { [number]: any }
+
+-- the calls of a region's method after now (a post-hook)
+local function record(region: any, method: string): Call[]
+    local calls: Call[] = {}
+    hooksecurefunc(region, method, function(_: any, ...: any) calls[#calls + 1] = { ... } end)
+    return calls
+end
+
+--------------------------------------------------------------------------------
+-- rgba and size
+--------------------------------------------------------------------------------
+
+@test("rgba gives a token's colour, its alpha multiplied")
+local function rgbaToken()
+    local c: Color = T.color.arcane
+    local r, g, b, a = draw.rgba("arcane")
+    expect({ r, g, b, a }).toEqual({ c[1], c[2], c[3], c[4] })
+    local _, _, _, half = draw.rgba("arcane", 0.5)
+    expect(half).toBe(c[4] * 0.5)
+end
+
+@test("rgba of an unknown token is an error")
+local function rgbaUnknown()
+    expect(function() draw.rgba("no-such-token") end).toThrow("unknown colour token no-such-token")
+end
+
+@test("size passes numbers through and reads size and space tokens")
+local function sizes()
+    expect(draw.size(17)).toBe(17)
+    expect(draw.size("icon-md")).toBe(T.size["icon-md"])
+    expect(draw.size("space-4")).toBe(T.space["space-4"])
+    expect(function() draw.size("nope") end).toThrow("unknown size token nope")
+end
+
+--------------------------------------------------------------------------------
+-- paint and repaint
+--------------------------------------------------------------------------------
+
+@test("paint picks the kind from the region: text, bar or vertex colour")
+local function paintKinds()
+    local p = host()
+    local fs = p:CreateFontString(nil, "OVERLAY")
+    local edit = CreateFrame("EditBox", nil, p)
+    local bar = CreateFrame("StatusBar", nil, p)
+    bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+    local tex = p:CreateTexture()
+    draw.paint(fs, "ink")
+    draw.paint(edit, "arcane", 0.5)
+    draw.paint(bar, "ember")
+    draw.paint(tex, "gilt")
+    expect((paintOf(fs) :: any).kind).toBe("text")
+    expect((paintOf(edit) :: any).kind).toBe("text")
+    expect((paintOf(edit) :: any).alpha).toBe(0.5)
+    expect((paintOf(bar) :: any).kind).toBe("bar")
+    expect((paintOf(tex) :: any).kind).toBe("vertex")
+    local r, g, b, a = fs:GetTextColor()
+    expect(colorIs(r, g, b, a, "ink")).toBe(true)
+    r, g, b, a = bar:GetStatusBarColor()
+    expect(colorIs(r, g, b, a, "ember")).toBe(true)
+    r, g, b, a = tex:GetVertexColor()
+    expect(colorIs(r, g, b, a, "gilt")).toBe(true)
+end
+
+@test("a kept colour follows the token on repaint")
+local function repaintFollows()
+    local p = host()
+    local fs = p:CreateFontString(nil, "OVERLAY")
+    local tex = p:CreateTexture()
+    local bar = CreateFrame("StatusBar", nil, p)
+    bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+    draw.paint(fs, "ink")
+    draw.paint(tex, "ink", 0.5)
+    draw.paint(bar, "ink")
+    setToken("ink", 0.2, 0.4, 0.6)
+    draw.repaint()
+    local r, g, b = fs:GetTextColor()
+    expect(colorIs(r, g, b, nil, "ink")).toBe(true)
+    expect(colorIs(r, g, b, nil, "arcane")).toBe(false)
+    local vr, vg, vb, va = tex:GetVertexColor()
+    expect(colorIs(vr, vg, vb, va, "ink", 0.5)).toBe(true)
+    local br, bg, bb = bar:GetStatusBarColor()
+    expect(colorIs(br, bg, bb, nil, "ink")).toBe(true)
+end
+
+@test("setting a colour another way lets the kept one go")
+@cases({
+    { "FontString", "SetTextColor" },
+    { "Texture", "SetVertexColor" },
+    { "StatusBar", "SetStatusBarColor" },
+})
+local function letsGo(kind: string, setter: string)
+    local p = host()
+    local region: any
+    if kind == "FontString" then region = p:CreateFontString(nil, "OVERLAY")
+    elseif kind == "Texture" then region = p:CreateTexture()
+    else
+        region = CreateFrame("StatusBar", nil, p)
+        region:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+    end
+    draw.paint(region, "ink")
+    region[setter](region, 1, 0, 0, 1)
+    expect(paintOf(region)).toBeNil()
+    -- a repaint leaves the raw colour alone
+    setToken("ink", 0.2, 0.4, 0.6)
+    draw.repaint()
+    local get = kind == "FontString" and "GetTextColor" or kind == "Texture" and "GetVertexColor" or "GetStatusBarColor"
+    local r, g, b = region[get](region)
+    expect({ r, g, b }).toEqual({ 1, 0, 0 })
+end
+
+@test("paintFill keeps a solid colour; a texture or atlas lets it go")
+local function fills()
+    local p = host()
+    local t = p:CreateTexture()
+    local calls = record(t, "SetColorTexture")
+    draw.paintFill(t, "arcane", 0.5)
+    expect(paintOf(t)).toEqual({ kind = "fill", token = "arcane", alpha = 0.5 })
+    expect(#calls).toBe(1)
+    local c = calls[1]
+    expect(colorIs(c[1], c[2], c[3], c[4], "arcane", 0.5)).toBe(true)
+    setToken("arcane", 0.1, 0.2, 0.3)
+    draw.repaint()
+    expect(#calls).toBe(2)
+    expect(colorIs(calls[2][1], calls[2][2], calls[2][3], nil, "arcane")).toBe(true)
+    t:SetTexture("Interface\\Buttons\\WHITE8X8")
+    expect(paintOf(t)).toBeNil()
+    draw.paintFill(t, "ink")
+    t:SetAtlas("UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold")
+    expect(paintOf(t)).toBeNil()
+end
+
+@test("paintGradient keeps both ends and repaints them")
+local function gradients()
+    local p = host()
+    local t = p:CreateTexture()
+    local calls = record(t, "SetGradient")
+    draw.paintGradient(t, "VERTICAL", "ink", "arcane", 0.2, 0.8)
+    expect(paintOf(t)).toEqual({ kind = "gradient", token = "ink", alpha = 0.2, token2 = "arcane", alpha2 = 0.8, orientation = "VERTICAL" })
+    expect(#calls).toBe(1)
+    expect(calls[1][1]).toBe("VERTICAL")
+    local from, to = calls[1][2], calls[1][3]
+    expect(colorIs(from.r, from.g, from.b, from.a, "ink", 0.2)).toBe(true)
+    expect(colorIs(to.r, to.g, to.b, to.a, "arcane", 0.8)).toBe(true)
+    draw.repaint()
+    expect(#calls).toBe(2)
+    t:SetColorTexture(1, 1, 1, 1)
+    expect(paintOf(t)).toBeNil()
+end
+
+@test("bind runs its function now and on every repaint, until the colour is set otherwise")
+local function binds()
+    local p = host()
+    local t = p:CreateTexture()
+    local seen: any[] = {}
+    draw.bind(t, function(tex: Texture)
+        seen[#seen + 1] = tex
+        tex:SetVertexColor(0.5, 0.5, 0.5, 1) -- painting: not a let-go
+    end)
+    expect(seen).toEqual({ t })
+    expect((paintOf(t) :: any).kind).toBe("fn")
+    draw.repaint()
+    expect(#seen).toBe(2)
+    t:SetVertexColor(1, 1, 1, 1)
+    draw.repaint()
+    expect(#seen).toBe(2)
+end
+
+@test("a bind whose function errors keeps nothing and raises the error")
+local function bindErrors()
+    local p = host()
+    local t = p:CreateTexture()
+    expect(function() draw.bind(t, function(_: Texture) error("boom") end) end).toThrow("boom")
+    expect(paintOf(t)).toBeNil()
+end
+
+@test("a paint with an unknown token keeps nothing and raises the error")
+local function paintErrors()
+    local p = host()
+    local t = p:CreateTexture()
+    expect(function() draw.paint(t, "no-such-token") end).toThrow("unknown colour token")
+    expect(paintOf(t)).toBeNil()
+end
+
+@test("repaint reports a failing paint and still repaints the others")
+local function repaintIsolates()
+    local p = host()
+    local bad, good = p:CreateTexture(), p:CreateFontString(nil, "OVERLAY")
+    local fail = false
+    draw.bind(bad, function(_: Texture) if fail then error("bound failed") end end)
+    draw.paint(good, "ink")
+    fail = true
+    setToken("ink", 0.3, 0.3, 0.3)
+    -- the error handler, faked: what reaches the real one stays in
+    -- mock.errors() for the rest of the file
+    local reported: string[] = {}
+    mock.fake("geterrorhandler", function(): (err: any) -> ()
+        return function(err: any) reported[#reported + 1] = tostring(err) end
+    end)
+    draw.repaint()
+    expect(#reported).toBe(1)
+    expect(reported[1]).toContain("bound failed")
+    local r, g, b = good:GetTextColor()
+    expect(colorIs(r, g, b, nil, "ink")).toBe(true)
+    fail = false
+    bad:SetVertexColor(1, 1, 1, 1) -- let it go
+end
+
+@test("a bind that paints another region during a repaint keeps both")
+local function repaintAddsRegions()
+    local p = host()
+    local a, b = p:CreateTexture(), p:CreateTexture()
+    draw.bind(a, function(_: Texture) draw.paint(b, "arcane") end)
+    draw.repaint()
+    expect(tokenOf(b)).toBe("arcane")
+    expect((paintOf(a) :: any).kind).toBe("fn")
+end
+
+--------------------------------------------------------------------------------
+-- fill, border, hairline
+--------------------------------------------------------------------------------
+
+@test("fill makes a painted texture on the background layer, or the one asked for")
+local function fillTexture()
+    local p = host()
+    local t = draw.fill(p, "surface")
+    expect(tokenOf(t)).toBe("surface")
+    expect(t:GetDrawLayer()).toBe("BACKGROUND")
+    local o = draw.fill(p, "ink", "OVERLAY", 3)
+    local layer, sub = o:GetDrawLayer()
+    expect({ layer, sub }).toEqual({ "OVERLAY", 3 })
+end
+
+@test("a border is four one-pixel lines in from the frame's edges")
+local function borderLayout()
+    local p = host()
+    local b = draw.border(p, "gilt-line")
+    expect(b.width).toBe(1)
+    expect(b.inset).toBe(0)
+    expect(#b.parts).toBe(4)
+    local px = pixel.size(p)
+    expect(b.top:GetHeight()).toBeCloseTo(px, 4)
+    expect(b.left:GetWidth()).toBeCloseTo(px, 4)
+    expect(pointOf(b.top)).toEqual({ point = "TOPLEFT", relativeTo = p, relativePoint = "TOPLEFT", x = 0, y = 0 })
+    for _, t in ipairs(b.parts) do
+        expect(tokenOf(t)).toBe("gilt-line")
+        expect(t:GetDrawLayer()).toBe("BORDER")
+    end
+end
+
+@test("a border's width and inset are physical pixels")
+local function borderOptions()
+    local p = host()
+    local b = draw.border(p, "ink", { width = 3, inset = 2, layer = "OVERLAY", sublevel = 2 })
+    local px = pixel.size(p)
+    expect(b.bottom:GetHeight()).toBeCloseTo(3 * px, 4)
+    local top = pointOf(b.top) :: any
+    expect(top.x).toBeCloseTo(2 * px, 4)
+    expect(top.y).toBeCloseTo(-2 * px, 4)
+    local left = pointOf(b.left) :: any
+    expect(left.y).toBeCloseTo(-5 * px, 4)
+    local layer, sub = b.right:GetDrawLayer()
+    expect({ layer, sub }).toEqual({ "OVERLAY", 2 })
+end
+
+@test("a border takes a token, a colour table or r, g, b, a, and shows and hides")
+local function borderColors()
+    local p = host()
+    local b = draw.border(p, "ink")
+    b:SetColor("arcane", 0.5)
+    expect(paintOf(b.right)).toEqual({ kind = "fill", token = "arcane", alpha = 0.5 })
+    local calls = record(b.top, "SetColorTexture")
+    b:SetColor({ 1, 0, 0, 0.5 })
+    expect(calls[1]).toEqual({ 1, 0, 0, 0.5 })
+    expect(paintOf(b.top)).toBeNil()
+    b:SetColor(0, 1, 0, 1)
+    expect(calls[2]).toEqual({ 0, 1, 0, 1 })
+    b:SetShown(false)
+    for _, t in ipairs(b.parts) do expect(t).never.toBeShown() end
+    b:SetShown(true)
+    for _, t in ipairs(b.parts) do expect(t).toBeShown() end
+end
+
+@test("a rescale lays borders and hairlines out again at one physical pixel")
+local function rescale()
+    local p = host()
+    local b = draw.border(p, "ink")
+    local line = draw.hairline(p, "ink")
+    p:SetScale(2)
+    events.emit("SUUUI_ROOT_SCALED", 2)
+    expect(b.top:GetHeight()).toBeCloseTo(pixel.size(p), 4)
+    expect(line:GetHeight()).toBeCloseTo(pixel.size(line), 4)
+    expect(b.top:GetHeight()).toBeCloseTo(pixel.size(UIParent) / 2, 4)
+end
+
+@test("a solid hairline is one filled texture one pixel high")
+local function hairlineSolid()
+    local p = host()
+    local line = draw.hairline(p, "gilt-line")
+    expect(line:GetParent()).toBe(p)
+    expect(line:GetHeight()).toBeCloseTo(pixel.size(line), 4)
+    local regions = { line:GetRegions() }
+    expect(#regions).toBe(1)
+    expect(paintOf(regions[1])).toEqual({ kind = "fill", token = "gilt-line" })
+end
+
+@test("a hairline fading out is one gradient, full to clear")
+local function hairlineOut()
+    local p = host()
+    local line = draw.hairline(p, "gilt", "out")
+    local regions = { line:GetRegions() }
+    expect(#regions).toBe(1)
+    expect(paintOf(regions[1])).toEqual({ kind = "gradient", token = "gilt", alpha = 1, token2 = "gilt", alpha2 = 0, orientation = "HORIZONTAL" })
+end
+
+@test("a hairline fading both ways is two gradients meeting in the middle")
+local function hairlineBoth()
+    local p = host()
+    local line = draw.hairline(p, "gilt", "both")
+    local regions = { line:GetRegions() }
+    expect(#regions).toBe(2)
+    expect((paintOf(regions[1]) :: any).alpha).toBe(0)
+    expect((paintOf(regions[1]) :: any).alpha2).toBe(1)
+    expect((paintOf(regions[2]) :: any).alpha).toBe(1)
+    expect((paintOf(regions[2]) :: any).alpha2).toBe(0)
+    expect(regions[1]).toBeAnchoredTo(line, "BOTTOMRIGHT", "BOTTOM")
+end
+
+--------------------------------------------------------------------------------
+-- diamond, soft edges, shadow, cross
+--------------------------------------------------------------------------------
+
+@test("a diamond is a square turned 45 degrees in gilt by default")
+local function diamonds()
+    local p = host()
+    local d = draw.diamond(p, 7)
+    expect(d).toHaveSize(7, 7)
+    expect(d:GetRotation()).toBeCloseTo(math.rad(45), 4)
+    expect(tokenOf(d)).toBe("gilt")
+    local layer, sub = d:GetDrawLayer()
+    expect({ layer, sub }).toEqual({ "OVERLAY", 7 })
+    local e = draw.diamond(p, 4, "arcane", "ARTWORK", 2)
+    expect(tokenOf(e)).toBe("arcane")
+    layer, sub = e:GetDrawLayer()
+    expect({ layer, sub }).toEqual({ "ARTWORK", 2 })
+end
+
+@test("a soft edge is a nine-slice behind its frame, blurred 8 in white")
+local function softEdgeDefaults()
+    local p = host()
+    p:SetFrameLevel(5)
+    local e = draw.softEdge(p)
+    expect(e.holder:GetParent()).toBe(p)
+    expect(e.holder:GetFrameLevel()).toBe(4)
+    expect(#e.parts).toBe(9)
+    expect(#e.corners).toBe(4)
+    expect(e.corners[1]).toHaveSize(12, 12)
+    expect(pointOf(e.holder)).toEqual({ point = "TOPLEFT", relativeTo = p, relativePoint = "TOPLEFT", x = -12, y = 12 })
+    local r, g, b, a = e.parts[5]:GetVertexColor()
+    expect({ r, g, b, a }).toEqual({ 1, 1, 1, 1 })
+end
+
+@test("a soft edge's blur and offset move its holder; tiny blurs are a pixel")
+local function softEdgeBlur()
+    local p = host()
+    local e = draw.softEdge(p)
+    e:SetBlur(4, 2, -3)
+    expect(e.corners[4]).toHaveSize(6, 6)
+    expect(pointOf(e.holder)).toEqual({ point = "TOPLEFT", relativeTo = p, relativePoint = "TOPLEFT", x = -4, y = 3 })
+    expect(pointOf(e.holder, 2)).toEqual({ point = "BOTTOMRIGHT", relativeTo = p, relativePoint = "BOTTOMRIGHT", x = 8, y = -9 })
+    e:SetBlur(0)
+    expect(e.corners[1]).toHaveSize(1, 1)
+end
+
+@test("a soft edge's colour: a token, a kept colour table, or raw r, g, b, a")
+local function softEdgeColors()
+    local p = host()
+    local e = draw.softEdge(p)
+    e:SetColor("arcane", 0.4)
+    expect(paintOf(e.parts[1])).toEqual({ kind = "vertex", token = "arcane", alpha = 0.4 })
+    -- a shadow layer's colour table: changed in place, followed on repaint
+    local c = { 0.2, 0.3, 0.4, 0.5 }
+    e:SetColor(c)
+    local r, g, b, a = e.parts[2]:GetVertexColor()
+    expect(colorIs(r, g, b, a, "ink")).toBe(false)
+    expect(math.abs(r - 0.2) < 0.01 and math.abs(a - 0.5) < 0.01).toBe(true)
+    c[1] = 0.9
+    draw.repaint()
+    r = e.parts[2]:GetVertexColor()
+    expect(math.abs(r - 0.9) < 0.01).toBe(true)
+    e:SetColor(1, 0, 0, 1)
+    expect(paintOf(e.parts[3])).toBeNil()
+    r, g, b, a = e.parts[3]:GetVertexColor()
+    expect({ r, g, b, a }).toEqual({ 1, 0, 0, 1 })
+    e:SetShown(false)
+    expect(e.holder).never.toBeShown()
+    e:SetShown(true)
+    expect(e.holder).toBeShown()
+end
+
+@test("shadow draws a shadow token's first outer layer")
+local function shadowToken()
+    local p = host()
+    local e = draw.shadow(p, "glow-arcane")
+    local layer = T.shadow["glow-arcane"][1]
+    local s = math.max(1, layer.blur * 1.5)
+    expect(e.corners[1]).toHaveSize(s, s)
+    local r, g, b, a = e.parts[1]:GetVertexColor()
+    expect(math.abs(r - layer.color[1]) < 0.01 and math.abs(a - layer.color[4]) < 0.01).toBe(true)
+    expect(g).toBeCloseTo(layer.color[2], 2)
+    expect(b).toBeCloseTo(layer.color[3], 2)
+    -- shadow-panel sits 12 below
+    local panel = draw.shadow(p, "shadow-panel")
+    local pl = T.shadow["shadow-panel"][1]
+    expect((pointOf(panel.holder) :: any).y).toBe(pl.blur * 1.5 - pl.y)
+end
+
+@test("shadow of an unknown token, or one with inset layers only, is an error")
+local function shadowErrors()
+    local p = host()
+    expect(function() draw.shadow(p, "nope") end).toThrow("unknown shadow token nope")
+    expect(function() draw.shadow(p, "inset-anchor") end).toThrow()
+end
+
+@test("the cross is two crossed strokes in a square, recoloured together")
+local function crosses()
+    local p = host()
+    local c = draw.cross(p, 10)
+    expect(c).toHaveSize(10, 10)
+    expect(#c.strokes).toBe(2)
+    expect(c.strokes[1]:GetRotation()).toBeCloseTo(math.rad(45), 4)
+    expect(c.strokes[2]:GetRotation()).toBeCloseTo(math.rad(-45), 4)
+    expect(c.strokes[1]:GetWidth()).toBeCloseTo(11.5, 4)
+    expect(tokenOf(c.strokes[1])).toBe("ink-muted")
+    c:SetColor("ink")
+    expect(tokenOf(c.strokes[2])).toBe("ink")
+    local d = draw.cross(p, 8, "ember")
+    expect(tokenOf(d.strokes[1])).toBe("ember")
+end

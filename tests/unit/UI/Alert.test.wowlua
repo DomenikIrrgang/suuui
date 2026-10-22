@@ -1,0 +1,201 @@
+-- UI/Alert: the alert band's tones, its title and detail (plain, several
+-- lines, formatted, with a secret argument), its size and a theme change.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import measureText from "/UI/Text"
+import alert from "/UI/Alert"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, themeChanged from "./WindowsHelpers"
+
+local S = T.space
+
+local parent: Frame? = nil
+
+local function make()
+    parent = newParent()
+    return alert(parent)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function bandHeight(lines: number?): number
+    local h = S["space-4"] * 2 + T.type.alert.lineHeight
+    if lines then h = h + S["space-1"] + T.type.caption.lineHeight * lines end
+    return h
+end
+
+@test("a new alert is an empty danger band")
+local function fresh()
+    local a = make()
+    expect(a.tone).toBe("danger")
+    expect(a.titleText).toBe("")
+    expect(a.title:GetText()).toBe("")
+    expect(a.detail).never.toBeShown()
+    expect(a.glow.holder).toBeShown()
+    expect(tokenOf(a.ground)).toBe("ember-soft")
+    expect(tokenOf(a.left)).toBe("ember")
+    expect(tokenOf(a.right)).toBe("ember")
+    expect(tokenOf(a.title)).toBe("ember-text")
+    expect(a.rules.left).never.toBeShown()
+    expect(a.rules.right).never.toBeShown()
+    expect(a.rules.top).toBeShown()
+    -- nothing to measure: only the padding, one line high
+    expect(a:GetWidth()).toBe(S["space-6"] * 2)
+    expect(a:GetHeight()).toBe(bandHeight())
+end
+
+@test("each tone paints its ground, rules, diamonds and title")
+@cases({
+    { "danger", "ember-soft", "ember", "ember", "ember-text", true },
+    { "warning", "surface-glass", "amber", "amber", "amber", false },
+    { "info", "surface-glass", "gilt-line", "gilt", "gilt-text", false },
+})
+local function tones(tone: string, ground: string, line: string, jewel: string, title: string, glow: boolean)
+    local a = make()
+    a:SetTone(tone)
+    expect(a.tone).toBe(tone)
+    expect(tokenOf(a.ground)).toBe(ground)
+    expect(tokenOf(a.rules.top)).toBe(line)
+    expect(tokenOf(a.rules.bottom)).toBe(line)
+    expect(tokenOf(a.left)).toBe(jewel)
+    expect(tokenOf(a.right)).toBe(jewel)
+    expect(tokenOf(a.title)).toBe(title)
+    -- the glow (a soft edge) shows for danger only
+    expect(a.glow.holder:IsShown()).toBe(glow)
+end
+
+@test("an unknown tone is danger")
+local function unknownTone()
+    local a = make()
+    a:SetTone("info")
+    a:SetTone("nonsense")
+    expect(a.tone).toBe("danger")
+    expect(tokenOf(a.ground)).toBe("ember-soft")
+    expect(a.glow.holder:IsShown()).toBe(true)
+end
+
+@test("a title and a plain detail: as wide as the wider, two lines high")
+local function plainDetail()
+    local a = make()
+    a:SetAlert("warning", "Tamsin has drawn aggro", "Taunt it back")
+    expect(a.tone).toBe("warning")
+    expect(a.title).toHaveText("Tamsin has drawn aggro")
+    expect(a.titleText).toBe("Tamsin has drawn aggro")
+    expect(a.detail).toBeShown()
+    expect(a.detail).toHaveText("Taunt it back")
+    expect(a.detailText).toBe("Taunt it back")
+    local inner = math.max(measureText("alert", "Tamsin has drawn aggro"), measureText("caption", "Taunt it back"))
+    expect(a:GetWidth()).toBe(math.ceil(inner) + S["space-6"] * 2)
+    expect(a:GetHeight()).toBe(bandHeight(1))
+    -- one line: no wrapping, the detail sized by its text
+    expect(a.detail:CanWordWrap()).toBe(false)
+    expect(a.detail:GetWidth()).toBe(a.detail:GetStringWidth())
+end
+
+@test("a long detail makes the band wider than its title")
+local function longDetail()
+    local a = make()
+    local detail = "A detail that is much longer than the short title above it, by far"
+    a:SetAlert("info", "Hi", detail)
+    local inner = math.max(measureText("alert", "Hi"), measureText("caption", detail))
+    expect(inner).toBe(measureText("caption", detail))
+    expect(a:GetWidth()).toBe(math.ceil(inner) + S["space-6"] * 2)
+end
+
+@test("a detail of several lines: as wide as the longest, the band grows down")
+local function severalLines()
+    local a = make()
+    a:SetAlert("info", "Ready check", "Tamsin\nBrannoc is away from the keyboard\nEdda")
+    local longest = measureText("caption", "Brannoc is away from the keyboard")
+    expect(a:GetHeight()).toBe(bandHeight(3))
+    expect(a.detail:CanWordWrap()).toBe(true)
+    expect(a.detail:GetWidth()).toBe(math.ceil(longest) + 2)
+    local inner = math.max(measureText("alert", "Ready check"), longest)
+    expect(a:GetWidth()).toBe(math.ceil(inner) + S["space-6"] * 2)
+end
+
+@test("a format with arguments: the formatted text, measured")
+local function formatted()
+    local a = make()
+    a:SetAlert("danger", "Interrupt", "%s casts %s", "Cinder Maw", "Shadow Volley")
+    expect(a.detail).toHaveText("Cinder Maw casts Shadow Volley")
+    -- a formatted text is not kept as the text's value
+    expect(a.detail.value).toBeNil()
+    expect(a.detailText).toBe("Cinder Maw casts Shadow Volley")
+    local inner = math.max(measureText("alert", "Interrupt"), measureText("caption", "Cinder Maw casts Shadow Volley"))
+    expect(a:GetWidth()).toBe(math.ceil(inner) + S["space-6"] * 2)
+end
+
+@test("a secret argument: not measured, notice-w wide and cut at the edge")
+local function secretArgument()
+    local a = make()
+    a:SetAlert("danger", "Aggro", "%s has aggro", mock.secret("Cinder Maw"))
+    expect(a.detail).toBeShown()
+    expect(a.detailText).toBeNil()
+    local inner = math.max(measureText("alert", "Aggro"), draw.size("notice-w"))
+    expect(a:GetWidth()).toBe(math.ceil(inner) + S["space-6"] * 2)
+    expect(a:GetHeight()).toBe(bandHeight(1))
+    -- a fixed width, no wrapping: a longer text is cut
+    expect(a.detail:GetWidth()).toBe(inner)
+    expect(a.detail:CanWordWrap()).toBe(false)
+end
+
+@test("a secret after readable arguments counts too")
+local function secretLater()
+    local a = make()
+    a:SetAlert("danger", "Aggro", "%s %s", "plain", mock.secret("hidden"))
+    expect(a.detailText).toBeNil()
+end
+
+@test("no detail or an empty one hides it: one line high")
+@cases({ { "nil" }, { "" } })
+local function noDetail(which: string)
+    local a = make()
+    a:SetAlert("info", "First", "a detail")
+    expect(a.detail).toBeShown()
+    a:SetAlert("info", "Second", which == "" and "" or nil)
+    expect(a.detail).never.toBeShown()
+    expect(a.detailText).toBe("")
+    expect(a:GetHeight()).toBe(bandHeight())
+end
+
+@test("a missing title is empty")
+local function noTitle()
+    local a = make()
+    a:SetAlert("info", "Something", "x")
+    a:SetAlert("info", nil, "x")
+    expect(a.titleText).toBe("")
+    expect(a.title:GetText()).toBe("")
+end
+
+@test("a plain detail after a formatted one shows the new text")
+local function plainAfterFormat()
+    local a = make()
+    a:SetAlert("info", "T", "%d left", 3)
+    a:SetAlert("info", "T", "3 left")
+    expect(a.detail).toHaveText("3 left")
+    expect(a.detail.value).toBe("3 left")
+end
+
+@test("a theme change fits every alert again")
+local function themeRefits()
+    local a = make()
+    local b = alert(parent)
+    a:SetAlert("info", "One", "x")
+    local fa = mock.spy()
+    local fb = mock.spy()
+    mock.stub(a, "Fit", fa)
+    mock.stub(b, "Fit", fb)
+    themeChanged()
+    expect(fa).toHaveBeenCalledTimes(1)
+    expect(fb).toHaveBeenCalledTimes(1)
+end

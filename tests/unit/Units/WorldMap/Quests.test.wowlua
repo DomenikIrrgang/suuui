@@ -1,0 +1,223 @@
+-- Units/WorldMap/Quests: which quests the world map offers to pick up (the
+-- original game's difficulty colours, race and class masks, the quests
+-- before and after one, skills, reputation and the holidays), and a quest
+-- pin's look.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as quests from "/Units/WorldMap/Quests"
+
+-- The quests in your log for these tests.
+local logged: { [number]: boolean } = {}
+local function inLog(...: number)
+    logged = {}
+    for _, id in ipairs({ ... }) do logged[id] = true end
+    mock.fake("C_QuestLog.IsOnQuest", function(id: number): boolean return logged[id] == true end)
+end
+
+-- A level 15 Orc (race 2) Warrior (class bit 1).
+local function me(): quests.Me
+    return { level = 15, raceBit = quests.raceBit(2), classBit = 1, mapID = 1412 }
+end
+
+@test("a quest pin: the hardest ring for one, a split ring easiest first for several, the bar for a group quest")
+local function pins()
+    local one = quests.questPin({ { difficulty = "standard" } }, { difficulty = "standard" })
+    expect(one.char).toBe("!")
+    expect(one.edge).toBe("quest-standard")
+    expect(one.arcs).toBeNil()
+    expect(one.bar).toBeNil()
+    local many = quests.questPin({ { difficulty = "impossible" }, { difficulty = "trivial", group = true }, { difficulty = "difficult" } },
+        { difficulty = "difficult" })
+    expect(many.arcs).toEqual({ "quest-trivial", "quest-difficult", "quest-impossible" })
+    expect(many.bar).toBe("quest-trivial")
+    expect(many.edge).toBe("quest-difficult")
+end
+
+@test("the original game's grey level and difficulty colours")
+local function difficulty()
+    expect(quests.grayLevel(5)).toBe(0)
+    expect(quests.grayLevel(15)).toBe(9)
+    expect(quests.grayLevel(40)).toBe(31)
+    expect(quests.grayLevel(60)).toBe(51)
+    expect(quests.questDifficulty(20, 15)).toBe("impossible")
+    expect(quests.questDifficulty(18, 15)).toBe("very-difficult")
+    expect(quests.questDifficulty(13, 15)).toBe("difficult")
+    expect(quests.questDifficulty(12, 15)).toBe("standard")
+    expect(quests.questDifficulty(9, 15)).toBe("trivial")
+end
+
+@test("race and class masks: a race's bit, Skyborne's on 32 and 33; no mask allows all")
+local function masks()
+    expect(quests.raceBit(1)).toBe(1)
+    expect(quests.raceBit(2)).toBe(2)
+    expect(quests.raceBit(95)).toBe(2 ^ 32)
+    expect(quests.raceBit(96)).toBe(2 ^ 33)
+    expect(quests.maskHas(nil, 4)).toBe(true)
+    expect(quests.maskHas(0, 4)).toBe(true)
+    expect(quests.maskHas(5, 4)).toBe(true)
+    expect(quests.maskHas(5, 2)).toBe(false)
+    expect(quests.maskHas(5, 0)).toBe(true)
+    expect(quests.maskHas(2 ^ 32 + 1, 2 ^ 32)).toBe(true)
+end
+
+@test("the quests turned in, and the ones in your log")
+local function logAndDone()
+    -- a character who has turned none in
+    expect(quests.completedSet()).toEqual({})
+    mock.fake("C_QuestLog.GetAllCompletedQuestIDs", function(): number[] return { 7, 9 } end)
+    expect(quests.completedSet()).toEqual({ [7] = true, [9] = true })
+    mock.fake("C_QuestLog.GetAllCompletedQuestIDs", function() error("not now") end)
+    expect(quests.completedSet()).toEqual({})
+    inLog(42)
+    expect(quests.onQuest(42)).toBe(true)
+    expect(quests.onQuest(43)).toBe(false)
+end
+
+@test("without IsOnQuest: a quest in the log by its place in it")
+local function byIndex()
+    mock.setField(C_QuestLog, "IsOnQuest", nil)
+    mock.fake("C_QuestLog.GetLogIndexForQuestID", function(id: number): number? return id == 42 and 3 or nil end)
+    expect(quests.onQuest(42)).toBe(true)
+    expect(quests.onQuest(43)).toBe(false)
+end
+
+@test("your profession skills by skill line")
+local function skills()
+    mock.fake("GetProfessions", function(): (number?, number?) return 1, 4 end)
+    mock.fake("GetProfessionInfo", function(i: number): ...any
+        if i == 1 then return "Cooking", 133971, 150, 300, 0, 0, 185 end
+        return "Skinning", 134366, 75, 150, 0, 0, 393
+    end)
+    expect(quests.skillLines()).toEqual({ [185] = 150, [393] = 75 })
+end
+
+@test("your standing with a faction, read once; none you've met: 0")
+local function standing()
+    local read = mock.spy(function(id: number): any return id == 76 and { currentStanding = 3200 } or nil end)
+    mock.fake("C_Reputation.GetFactionDataByID", read)
+    local who = me()
+    expect(quests.standing(who, 76)).toBe(3200)
+    expect(quests.standing(who, 76)).toBe(3200)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(quests.standing(who, 530)).toBe(0)
+end
+
+@test("holidays from the calendar: today's events on, the Darkmoon Faire on its site's map only")
+local function holidays()
+    local now = { year = 2026, month = 10, monthDay = 21, hour = 12, minute = 0 }
+    mock.fake("C_DateAndTime.GetCurrentCalendarTime", function(): any return now end)
+    local shown = { month = 10, year = 2026 }
+    mock.fake("C_Calendar.GetMonthInfo", function(_: number): any return shown end)
+    local function day(d: number, h: number?): any return { year = 2026, month = 10, monthDay = d, hour = h or 0, minute = 0 } end
+    local events = {
+        { calendarType = "HOLIDAY", eventID = 324, startTime = day(18), endTime = day(31) },
+        { calendarType = "HOLIDAY", eventID = 264, startTime = day(21, 6), endTime = day(21, 23) },
+        -- over already, and not a holiday
+        { calendarType = "HOLIDAY", eventID = 141, startTime = day(1), endTime = day(21, 11) },
+        { calendarType = "PLAYER", eventID = 327, startTime = day(1), endTime = day(31) },
+    }
+    mock.fake("C_Calendar.GetNumDayEvents", function(_: number, _: number): number return #events end)
+    mock.fake("C_Calendar.GetDayEvent", function(_: number, _: number, i: number): any return events[i] end)
+    expect(quests.readCalendar()).toBe(true)
+    expect(quests.eventOn("hallowsEnd")).toBe(true)
+    expect(quests.eventOn("winterVeil")).toBe(false)
+    expect(quests.eventOn("lunarFestival")).toBe(false)
+    expect(quests.eventOn("darkmoonFaire", 1412)).toBe(true)
+    expect(quests.eventOn("darkmoonFaire", 1429)).toBe(false)
+    -- another month shown in the calendar: what was read stays
+    shown = { month = 11, year = 2026 }
+    events = {}
+    expect(quests.readCalendar()).toBe(false)
+    expect(quests.eventOn("hallowsEnd")).toBe(true)
+end
+
+@test("a quest's name: the data's, the game's title, else its ID")
+local function names()
+    mock.fake("C_QuestLog.GetTitleForQuestID", function(id: number): string? return id == 5 and "Lazy Peons" or "" end)
+    expect(quests.questName({ "Vile Familiars" }, 5)).toBe("Vile Familiars")
+    expect(quests.questName(nil, 5)).toBe("Lazy Peons")
+    expect(quests.questName({}, 6)).toBe("Quest 6")
+end
+
+@test("a quest to pick up: level, repeatable, in the log, turned in, and its difficulty")
+local function basics()
+    inLog(900)
+    local done: { [number]: boolean } = { [800] = true }
+    expect({ quests.questState({ "A", 10, 12 }, 1, me(), done) }).toEqual({ "available", "standard", 12 })
+    expect({ quests.questState({ "A", nil, 0 }, 1, me(), done) }).toEqual({ "available", "difficult", 15 })
+    expect({ quests.questState({ "A" }, 900, me(), done) }).toEqual({})
+    expect({ quests.questState({ "A" }, 800, me(), done) }).toEqual({})
+    local daily: any[] = { "A" }
+    daily[10] = 1
+    expect({ quests.questState(daily, 800, me(), done) }).toEqual({ "repeatable", "difficult", 15 })
+    -- above you, or far above (the data lacks its minimum)
+    expect({ quests.questState({ "A", 20 }, 1, me(), done) }).toEqual({})
+    expect({ quests.questState({ "A", nil, 21 }, 1, me(), done) }).toEqual({})
+end
+
+@test("a quest to pick up: race and class, the quests before it and the ones it excludes")
+local function chains()
+    inLog(50, 61)
+    local done: { [number]: boolean } = { [10] = true, [11] = true, [20] = true }
+    local function q(i: number, v: any): any[]
+        local t: any[] = { "A" }
+        t[i] = v
+        return t
+    end
+    expect({ quests.questState(q(4, 4), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(q(4, 2 + 4), 1, me(), done) }).never.toEqual({})
+    expect({ quests.questState(q(5, 2), 1, me(), done) }).toEqual({})
+    -- all of a group before it, or one of a choice
+    expect({ quests.questState(q(6, { 10, 11 }), 1, me(), done) }).never.toEqual({})
+    expect({ quests.questState(q(6, { 10, 12 }), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(q(7, { 12, 20 }), 1, me(), done) }).never.toEqual({})
+    expect({ quests.questState(q(7, { 12, 13 }), 1, me(), done) }).toEqual({})
+    -- one it excludes turned in or taken; past it in its chain
+    expect({ quests.questState(q(8, { 30, 50 }), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(q(8, { 30 }), 1, me(), done) }).never.toEqual({})
+    expect({ quests.questState(q(9, 20), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(q(9, 61), 1, me(), done) }).toEqual({})
+    -- its parent in your log; a breadcrumb while its quest isn't taken
+    expect({ quests.questState(q(11, 61), 1, me(), done) }).never.toEqual({})
+    expect({ quests.questState(q(11, 62), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(q(12, 50), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(q(12, 11), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(q(12, 70), 1, me(), done) }).never.toEqual({})
+end
+
+@test("a quest to pick up: a skill, a reputation, an event")
+local function needs()
+    inLog()
+    local done: { [number]: boolean } = {}
+    local who = me()
+    who.skills = { [185] = 50 }
+    who.reps = { [76] = 3200 }
+    local function q(i: number, v: any): any[]
+        local t: any[] = { "A" }
+        t[i] = v
+        return t
+    end
+    expect({ quests.questState(q(13, { 185, 100 }), 1, who, done) }).toEqual({})
+    expect({ quests.questState(q(13, { 185, 40 }), 1, who, done) }).never.toEqual({})
+    expect({ quests.questState(q(13, { 393 }), 1, who, done) }).toEqual({})
+    expect({ quests.questState(q(14, { 76, 3000 }), 1, who, done) }).never.toEqual({})
+    expect({ quests.questState(q(14, { 76, 9000 }), 1, who, done) }).toEqual({})
+    expect({ quests.questState(q(15, { 76, 3000 }), 1, who, done) }).toEqual({})
+    expect({ quests.questState(q(15, { 76, 9000 }), 1, who, done) }).never.toEqual({})
+    -- an event's quest while it's on; a quest needing one we can't tell: never
+    expect({ quests.questState(q(16, "noblegarden"), 1, who, done) }).toEqual({})
+    expect({ quests.questState(q(10, 2), 1, who, done) }).toEqual({})
+end
+
+@test("your standing on a client without C_Reputation's faction data: the old call's bar value")
+local function oldStanding()
+    mock.setField(C_Reputation, "GetFactionDataByID", nil)
+    mock.fake("GetFactionInfoByID", function(id: number): ...any
+        if id == 76 then return "Orgrimmar", "", 5, 3000, 9000, 4200 end
+        return nil
+    end)
+    local who = me()
+    expect(quests.standing(who, 76)).toBe(4200)
+    expect(quests.standing(who, 81)).toBe(0)
+end

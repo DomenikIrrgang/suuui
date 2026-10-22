@@ -1,0 +1,384 @@
+-- UI/SwingTimer: rows per weapon, the countdown, Auto Shot's window and what
+-- it learns, the queued on-next-swing attack, the events.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import swingTimer, SwingTimer from "/UI/SwingTimer"
+import internal canSwing from "/UI/SwingTimer"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, borderToken from "./HudHelpers"
+
+const SWING = Enum.PlayerSwingType
+const OOR = T.opacity["opacity-oor"]
+
+local parent: Frame? = nil
+local made: SwingTimer[] = {}
+
+local function timer(opts: { [string]: any }?): SwingTimer
+    local p = newParent(400, 100)
+    parent = p
+    local t: SwingTimer = swingTimer(p, opts)
+    made[#made + 1] = t
+    return t
+end
+
+@afterEach
+local function cleanup()
+    for _, t in ipairs(made) do t:Deactivate(); t:Hide() end
+    made = {}
+    if parent then parent:Hide() end
+    parent = nil
+end
+
+-- Two weapons: main hand 2.0 s, off hand 1.5 s.
+local function dualWield()
+    mock.fake("UnitAttackSpeed", function(_: string): (number, number) return 2.0, 1.5 end)
+end
+
+@test("a new timer: three idle rows, nothing queued")
+local function fresh()
+    local t = timer()
+    expect(t.barW).toBe(340)
+    for _, r in pairs(t.rows) do
+        expect(r:GetAlpha()).toBeCloseTo(OOR)
+        expect(r.digits).toHaveText("–")
+        expect(r.live).toBeNil()
+    end
+    expect(t.rows[SWING.MainHand]).toBe(t.mainHand)
+    expect(t.rows[SWING.OffHand]).toBe(t.offHand)
+    expect(t.rows[SWING.Ranged]).toBe(t.ranged)
+    expect(t.ranged.window).toBe(t.window)
+    expect(t.window).never.toBeShown()
+    expect(t.queued).never.toBeShown()
+    expect(t.autoShotWindow).toBe(true)
+    expect(timer({ autoShotWindow = false, width = 200 }).autoShotWindow).toBe(false)
+    expectNoErrors()
+end
+
+@test("canSwing: only the off hand can lack a weapon")
+local function swings()
+    expect(canSwing(SWING.MainHand)).toBe(true)
+    expect(canSwing(SWING.Ranged)).toBe(true)
+    dualWield()
+    expect(canSwing(SWING.OffHand)).toBe(true)
+    mock.fake("UnitAttackSpeed", function(_: string): (number, number?) return 2.0, nil end)
+    expect(canSwing(SWING.OffHand)).toBe(false)
+    mock.fake("UnitAttackSpeed", function(_: string): (number, number) return 2.0, 0 end)
+    expect(canSwing(SWING.OffHand)).toBe(false)
+    mock.fake("UnitAttackSpeed", function(_: string): (number, any) return 2.0, mock.secret(1.5) end)
+    expect(canSwing(SWING.OffHand)).toBeNil()
+end
+
+@test("UpdateRows: the off hand shows with a weapon; a secret answer keeps the last")
+local function rows()
+    local t = timer()
+    dualWield()
+    t:UpdateRows()
+    expect(t.mainHand).toBeShown()
+    expect(t.offHand).toBeShown()
+    expect(t.offHand.digits).toBeShown()
+    expect(t.ranged).never.toBeShown()
+    mock.fake("UnitAttackSpeed", function(_: string): (number, any) return 2.0, mock.secret(1.5) end)
+    t:UpdateRows()
+    expect(t.offHand.canSwing).toBe(true)
+    expect(t.offHand).toBeShown()
+    mock.fake("UnitAttackSpeed", function(_: string): (number, number?) return 2.0, nil end)
+    t:UpdateRows()
+    expect(t.offHand).never.toBeShown()
+    expect(t.offHand.digits).never.toBeShown()
+end
+
+@test("a swing counts down, flashes the next one, then rests")
+local function mainHand()
+    local t = timer()
+    t:Swing(2, SWING.MainHand)
+    local r = t.mainHand
+    expect(r.live).toBe(true)
+    expect(r.length).toBe(2)
+    expect(r:GetAlpha()).toBe(1)
+    t:Tick()
+    expect(r.digits).toHaveText("2.0")
+    mock.advanceTime(0.5)
+    t:Tick()
+    expect(r.digits).toHaveText("1.5")
+    -- the next swing lands: the sliver flashes and fades over dur-fast
+    t:Swing(2, SWING.MainHand)
+    expect(r.flash:GetAlpha()).toBe(1)
+    expect(r.flashAt).never.toBeNil()
+    mock.advanceTime(T.duration["dur-fast"] / 2)
+    t:Tick()
+    expect(r.flash:GetAlpha()).toBeCloseTo(0.5)
+    mock.advanceTime(T.duration["dur-fast"])
+    t:Tick()
+    expect(r.flash:GetAlpha()).toBe(0)
+    expect(r.flashAt).toBeNil()
+    -- past its end: idle again
+    mock.advanceTime(2)
+    t:Tick()
+    expect(r.live).toBe(false)
+    expect(r.digits).toHaveText("–")
+    expect(r:GetAlpha()).toBeCloseTo(OOR)
+    expect(r.bar:GetValue()).toBe(0)
+    expectNoErrors()
+end
+
+@test("Swing ignores secret, unknown and empty swings")
+local function ignored()
+    local t = timer()
+    t:Swing(mock.secret(2), SWING.MainHand)
+    t:Swing(2, mock.secret(SWING.MainHand))
+    t:Swing(2, 99)
+    t:Swing("2", SWING.MainHand)
+    t:Swing(0, SWING.MainHand)
+    t:Swing(-1, SWING.MainHand)
+    for _, r in pairs(t.rows) do expect(r.live).toBeNil() end
+    expectNoErrors()
+end
+
+@test("the ranged row: its window, shown while shooting, ends standing still")
+local function ranged()
+    local t = timer()
+    t.shooting = true
+    t:Swing(2, SWING.Ranged)
+    local r = t.ranged
+    expect(r).toBeShown()
+    expect(t.mainHand).never.toBeShown()
+    expect(r.digits).toBeShown()
+    expect(t.window).toBeShown()
+    expect(t.window:GetWidth()).toBeCloseTo((340 - 2) * 0.25)
+    expect(r.delayed).toBe(false)
+    expect(tokenOf(t.window.edge)).toBe("ink-muted")
+    t:Tick()
+    expect(r.digits).toHaveText("2.0")
+    -- a bar width change keeps the window's share
+    t:SetBarWidth(202)
+    expect(t:GetWidth()).toBe(202)
+    expect(r:GetWidth()).toBe(202)
+    expect(t.window:GetWidth()).toBeCloseTo(50)
+    -- past the end standing still: within the grace it waits
+    mock.advanceTime(2.1)
+    t:Tick()
+    expect(r.live).toBe(true)
+    mock.advanceTime(0.5)
+    t:Tick()
+    expect(r.live).toBe(false)
+    expect(t.window).never.toBeShown()
+    expect(r.digits).toHaveText("–")
+    expect(r).never.toBeShown()
+    expect(t.mainHand).toBeShown()
+    expectNoErrors()
+end
+
+@test("moving inside the window: amber and 'Moving'")
+local function moving()
+    local t = timer()
+    t.shooting = true
+    t:Swing(1, SWING.Ranged)
+    local r = t.ranged
+    t.moving = true
+    t:Tick() -- 1 s left: outside the window
+    expect(r.delayed).toBe(false)
+    expect(r.digits).toHaveText("1.0")
+    mock.advanceTime(0.6)
+    t:Tick()
+    expect(r.delayed).toBe(true)
+    expect(r.digits).toHaveText("Moving")
+    expect(tokenOf(t.window.edge)).toBe("amber")
+    expect(borderToken(r.border)).toBe("amber")
+    expect(tokenOf(r.spark)).toBe("amber")
+    expect(tokenOf(r.digits)).toBe("amber")
+    -- still moving past the end: the shot waits
+    mock.advanceTime(2)
+    t:Tick()
+    expect(r.live).toBe(true)
+    -- stopped: the cast runs from then
+    t.moving, t.stoppedAt = false, GetTime()
+    t:Tick()
+    expect(r.live).toBe(true)
+    expect(r.delayed).toBe(false)
+    mock.advanceTime(0.9)
+    t:Tick()
+    expect(r.live).toBe(false)
+end
+
+@test("without the window the ranged row counts down like the others")
+local function noWindow()
+    local t = timer({ autoShotWindow = false })
+    t.shooting = true
+    t:Swing(1, SWING.Ranged)
+    expect(t.window).never.toBeShown()
+    t:Tick()
+    expect(t.ranged.digits).toHaveText("1.0")
+    mock.advanceTime(1.1)
+    t:Tick()
+    expect(t.ranged.live).toBe(false)
+    expect(t.ranged.delayed).toBe(false)
+end
+
+@test("SetAutoShotWindow(false) hides a shown window")
+local function windowOff()
+    local t = timer()
+    t:Swing(2, SWING.Ranged)
+    t:SetDelayed(t.ranged, true)
+    t:SetAutoShotWindow(false)
+    expect(t.autoShotWindow).toBe(false)
+    expect(t.window).never.toBeShown()
+    expect(t.ranged.delayed).toBe(false)
+    t:SetAutoShotWindow(1)
+    expect(t.autoShotWindow).toBe(true)
+end
+
+@test("shots on time while running through the window twice: no stand-still cast")
+local function learns()
+    local learned = mock.spy(function() end)
+    local t = timer({ onNoAutoShotCast = learned })
+    t:Swing(2, SWING.Ranged)
+    -- not moving: nothing learned
+    mock.advanceTime(2)
+    t:Swing(2, SWING.Ranged)
+    expect(t.onTimeWhileMoving).toBeNil()
+    -- ran through the whole window, the shot on time: once
+    t.movingSince = GetTime()
+    mock.advanceTime(2.1)
+    t:Swing(2, SWING.Ranged)
+    expect(t.onTimeWhileMoving).toBe(1)
+    -- a late shot: the cast is real
+    t.movingSince = GetTime()
+    mock.advanceTime(2.5)
+    t:Swing(2, SWING.Ranged)
+    expect(t.onTimeWhileMoving).toBe(0)
+    -- twice on time in a row
+    for _ = 1, 2 do
+        t.movingSince = GetTime()
+        mock.advanceTime(2)
+        t:Swing(2, SWING.Ranged)
+    end
+    expect(t.autoShotWindow).toBe(false)
+    expect(learned).toHaveBeenCalledTimes(1)
+    -- with the window off nothing more is learned
+    t.movingSince = GetTime()
+    mock.advanceTime(2)
+    t:Swing(2, SWING.Ranged)
+    expect(learned).toHaveBeenCalledTimes(1)
+end
+
+@test("learning without a callback")
+local function learnsQuietly()
+    local t = timer()
+    t:Swing(2, SWING.Ranged)
+    for _ = 1, 2 do
+        t.movingSince = GetTime()
+        mock.advanceTime(2)
+        t:Swing(2, SWING.Ranged)
+    end
+    expect(t.autoShotWindow).toBe(false)
+    expectNoErrors()
+end
+
+@test("the queued attack shows before the main hand's digits")
+local function queued()
+    mock.setPlayer({ class = "WARRIOR" })
+    local t = timer()
+    t:Activate()
+    expect(t.nextSwing).never.toBeNil()
+    local current = 0
+    mock.fake("C_Spell.IsCurrentSpell", function(id: number): any
+        if current == -1 then return mock.secret(true) end
+        return id == current
+    end)
+    current = 284
+    t:UpdateQueued()
+    expect(t.queued).toBeShown()
+    local _, _, _, x = t.mainHand.digits:GetPoint(1)
+    expect(x).toBe(T.space["space-2"] * 2 + 16)
+    -- the event re-checks it
+    current = 0
+    mock.fireEvent("ACTIONBAR_UPDATE_STATE")
+    expect(t.queued).never.toBeShown()
+    local _, _, _, x2 = t.mainHand.digits:GetPoint(1)
+    expect(x2).toBe(T.space["space-2"])
+    -- a secret answer counts as not queued
+    current = -1
+    t:UpdateQueued()
+    expect(t.queued).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("a class without on-next-swing attacks queues nothing")
+local function noQueue()
+    mock.setPlayer({ class = "MAGE" })
+    local t = timer()
+    t:Activate()
+    expect(t.nextSwing).toBeNil()
+    t:UpdateQueued()
+    expect(t.queued).never.toBeShown()
+end
+
+@test("the events drive it while active, not after Deactivate")
+local function events()
+    local t = timer()
+    t:Activate()
+    t:Activate() -- once only
+    expect(t.active).toBe(true)
+    mock.fireEvent("PLAYER_SWING", 2, SWING.MainHand)
+    expect(t.mainHand.live).toBe(true)
+    mock.fireEvent("START_AUTOREPEAT_SPELL")
+    expect(t.shooting).toBe(true)
+    mock.fireEvent("STOP_AUTOREPEAT_SPELL")
+    expect(t.shooting).toBe(false)
+    mock.player:setMoving(true)
+    expect(t.moving).toBe(true)
+    expect(t.movingSince).toBe(GetTime())
+    mock.player:setMoving(false)
+    expect(t.moving).toBe(false)
+    expect(t.movingSince).toBeNil()
+    expect(t.stoppedAt).toBe(GetTime())
+    dualWield()
+    mock.fireUnitEvent("UNIT_ATTACK_SPEED", "player")
+    expect(t.offHand).toBeShown()
+    mock.fake("UnitAttackSpeed", function(_: string): (number, number) return 2.0, 0 end)
+    mock.fireEvent("WEAPON_SLOT_CHANGED")
+    expect(t.offHand).never.toBeShown()
+    dualWield()
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
+    expect(t.offHand).toBeShown()
+    -- the frame's own OnUpdate ticks
+    mock.advanceFrames(3)
+    expect(t.mainHand.digits).never.toHaveText("–")
+    t:Deactivate()
+    t:Deactivate()
+    expect(t.active).toBe(false)
+    mock.fireEvent("START_AUTOREPEAT_SPELL")
+    expect(t.shooting).toBe(false)
+    expectNoErrors()
+end
+
+@test("the remaining cases: off hand while shooting, Auto Shot without shooting, the queue")
+local function remaining()
+    local t = timer()
+    dualWield()
+    t:Swing(2, SWING.Ranged) -- not shooting: counts down like a swing
+    expect(t.offHand).never.toBeShown()
+    t:Tick()
+    expect(t.ranged.digits).toHaveText("2.0")
+    -- a secret or missing class: nothing queues
+    mock.fake("UnitClass", function(_: string): (any, any) return "x", mock.secret("WARRIOR") end)
+    t:Activate()
+    expect(t.nextSwing).toBeNil()
+    t:Deactivate()
+    mock.fake("UnitClass", function(_: string): (any, any) return "Warrior", "WARRIOR" end)
+    t:Activate()
+    -- shown already: no second pop
+    mock.fake("C_Spell.IsCurrentSpell", function(id: number): any return id == 78 end)
+    t:UpdateQueued()
+    t:UpdateQueued()
+    expect(t.queued).toBeShown()
+    -- a client without IsCurrentSpell
+    local api = C_Spell :: any -- remove a function the declarations type as present
+    local was = api.IsCurrentSpell
+    api.IsCurrentSpell = nil
+    t:UpdateQueued()
+    api.IsCurrentSpell = was
+    expect(t.queued).never.toBeShown()
+end

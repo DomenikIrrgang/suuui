@@ -1,0 +1,275 @@
+-- UI/KeybindMode.wowlua
+-- Keybind mode: hover any SuuUI action, stance or pet button and press a key
+-- (with Shift, Ctrl or Alt as you like), a mouse button (middle, 4, 5) or turn
+-- the wheel to bind it. Delete clears the hovered button's keys; Esc or Done
+-- closes. "/suu keybind" toggles it.
+--
+-- Bindings go to the game's own commands (ACTIONBUTTON3, MULTIACTIONBAR1BUTTON5,
+-- SHAPESHIFTBUTTON2, BONUSACTIONBUTTON4), so they show in the game's Key
+-- Bindings window too, and SuuUI's bars pick them up from there. Binding a key
+-- that did something else says what it replaced. Bindings can't change in
+-- combat, so the mode closes when combat starts.
+
+import tokens as T from "/Core/Tokens"
+import print, registerCommand from "/Core/Init"
+import root from "/Core/Root"
+import * as events from "/Core/Events"
+import * as editMode from "/EditMode/EditMode"
+import * as settingsWindow from "/SettingsUI/Window"
+import * as draw from "/UI/Draw"
+import text, Text from "/UI/Text"
+import panel as uiPanel, Panel from "/UI/Panel"
+import button as uiButton from "/UI/Controls"
+import stack as layoutStack from "/UI/Layout"
+import actionButtons, ActionButton from "/UI/ActionButton"
+
+const S = T.space
+
+-- (was the table ns.KeybindMode; its functions are this module's exports)
+
+-- The mode's state: whether it is on, the hovered button, and its frames
+-- (built the first time it opens).
+type KeybindState = {
+    active?: boolean,
+    target?: ActionButton,
+    panel?: Panel,
+    status?: Text,
+    highlight?: Button,
+    catcher?: Frame,
+}
+local state: KeybindState = {}
+local hooked: { [ActionButton]: boolean } = {}
+
+local IGNORED: { [string]: boolean } = { LSHIFT = true, RSHIFT = true, LCTRL = true, RCTRL = true, LALT = true, RALT = true,
+                  LMETA = true, RMETA = true, UNKNOWN = true }
+local MOUSE: { [string]: string } = { MiddleButton = "BUTTON3", Button4 = "BUTTON4", Button5 = "BUTTON5" }
+
+-- The key with its modifiers, as the binding API spells it ("SHIFT-1").
+local function withModifiers(key: string?): string?
+    if not key or IGNORED[key] then return nil end
+    local mods = ""
+    if IsAltKeyDown() then mods = mods .. "ALT-" end
+    if IsControlKeyDown() then mods = mods .. "CTRL-" end
+    if IsShiftKeyDown() then mods = mods .. "SHIFT-" end
+    if IsMetaKeyDown and IsMetaKeyDown() then mods = mods .. "META-" end
+    return mods .. key
+end
+
+local function commandName(cmd: string): string
+    return _G["BINDING_NAME_" .. cmd] or cmd
+end
+
+local function keyText(key: string): string
+    return GetBindingText and GetBindingText(key) or key
+end
+
+local function setStatus(line: string?)
+    local status = state.status
+    if status then status:SetValue(line or "") end
+end
+
+-- A tooltip line in a token's colour. It wraps: the colour's alpha used to
+-- go in as AddLine's wrap argument (draw.rgba's fourth value), always a number.
+local function tipLine(line: string, token: string)
+    local r, g, b = draw.rgba(token)
+    GameTooltip:AddLine(line, r, g, b, true)
+end
+
+local function showTip()
+    local target = state.target
+    if not target then return end
+    GameTooltip:SetOwner(state.highlight :: Button, "ANCHOR_TOP") -- (built before any target)
+    GameTooltip:AddLine((target.bindLabel or target.bindCommand) :: string, 1, 1, 1)
+    local keys = { GetBindingKey(target.bindCommand :: string) }
+    if #keys == 0 then
+        tipLine("Not bound", "ink-muted")
+    else
+        for _, key in ipairs(keys) do tipLine(keyText(key), "ink") end
+    end
+    tipLine("Press a key to bind it. Delete clears.", "ink-muted")
+    GameTooltip:Show()
+end
+
+local function save()
+    SaveBindings(GetCurrentBindingSet())
+end
+
+local function bind(key: string?)
+    local target = state.target
+    if not (target and key) or InCombatLockdown() then return end
+    local cmd = target.bindCommand :: string -- (only buttons with a command are hooked)
+    local was = GetBindingAction(key)
+    if was == cmd then return end
+    if not SetBinding(key, cmd) then
+        setStatus(("%s can't be bound."):format(keyText(key)))
+        return
+    end
+    save()
+    local line = ("%s → %s"):format(keyText(key), target.bindLabel or cmd)
+    if was and was ~= "" then line = line .. (" (was %s)"):format(commandName(was)) end
+    setStatus(line)
+    showTip()
+end
+
+local function clear()
+    local target = state.target
+    if not target or InCombatLockdown() then return end
+    local keys = { GetBindingKey(target.bindCommand :: string) }
+    if #keys == 0 then return end
+    for _, key in ipairs(keys) do SetBinding(key) end
+    save()
+    setStatus(("%s: no keys."):format(target.bindLabel or target.bindCommand))
+    showTip()
+end
+
+--------------------------------------------------------------------------------
+-- The hovered button
+--------------------------------------------------------------------------------
+
+local function setTarget(b: ActionButton?)
+    state.target = b
+    local highlight = state.highlight :: Button -- (built before any target)
+    if not b then
+        highlight:Hide()
+        if GameTooltip:GetOwner() == highlight then GameTooltip:Hide() end
+        return
+    end
+    highlight:ClearAllPoints()
+    highlight:SetAllPoints(b)
+    highlight:Show()
+    showTip()
+end
+
+local function buildHighlight(): Button
+    -- Over the hovered button, so clicks bind instead of casting.
+    local h = CreateFrame("Button", nil, UIParent)
+    h:SetFrameStrata("FULLSCREEN_DIALOG")
+    h:EnableMouse(true)
+    h:EnableMouseWheel(true)
+    h:RegisterForClicks("AnyDown")
+    local fill = h:CreateTexture(nil, "BACKGROUND")
+    fill:SetAllPoints()
+    draw.paintFill(fill, "arcane", 0.25)
+    draw.border(h, "arcane", { layer = "OVERLAY" })
+    h:SetScript("OnMouseDown", function(_, button) bind(withModifiers(MOUSE[button])) end)
+    h:SetScript("OnMouseWheel", function(_, delta) bind(withModifiers(delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN")) end)
+    h:SetScript("OnLeave", function() setTarget(nil) end)
+    h:Hide()
+    return h
+end
+
+local function hookButtons()
+    for _, b in ipairs(actionButtons) do
+        if b.bindCommand and not hooked[b] then
+            hooked[b] = true
+            b:HookScript("OnEnter", function(self: ActionButton)
+                if state.active then
+                    GameTooltip:Hide()
+                    setTarget(self)
+                end
+            end)
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The panel and the keyboard
+--------------------------------------------------------------------------------
+
+local function buildPanel(): Panel
+    local p = uiPanel(root, { title = "Keybind mode", width = 320 })
+    p:SetFrameStrata("FULLSCREEN_DIALOG")
+    p:SetPoint("TOP", root, "TOP", 0, -160)
+    p:EnableMouse(true)
+    local stack = layoutStack(p.body, { gap = S["space-4"], autoSize = "height" })
+
+    local hint = text(p.body, "body", "ink")
+    hint:SetWordWrap(true)
+    hint:SetJustifyH("LEFT")
+    hint:SetFixedWidth(296)
+    hint:SetValue("Hover a button and press a key, a mouse button or the wheel. Shift, Ctrl and Alt combine. Delete clears the button's keys.")
+    stack:Add(hint)
+
+    local status = text(p.body, "caption", "ink-muted")
+    state.status = status
+    status:SetWordWrap(true)
+    status:SetJustifyH("LEFT")
+    status:SetFixedWidth(296)
+    status:SetValue(" ")
+    stack:Add(status)
+
+    local done = uiButton(p.body, { text = "Done", variant = "primary", onClick = function() exit() end })
+    stack:Add(done)
+    return p
+end
+
+local function buildCatcher(): Frame
+    local c = CreateFrame("Frame", nil, UIParent)
+    c:SetFrameStrata("FULLSCREEN_DIALOG")
+    c:EnableKeyboard(true)
+    c:SetPropagateKeyboardInput(false)
+    c:SetScript("OnKeyDown", function(_, key)
+        if key == "ESCAPE" then exit()
+        elseif key == "PRINTSCREEN" then Screenshot()
+        elseif key == "DELETE" then clear()
+        else bind(withModifiers(key)) end
+    end)
+    c:Hide()
+    return c
+end
+
+local function setGrid(on: boolean)
+    for _, b in ipairs(actionButtons) do
+        if b.bindCommand and b.SetGrid then b:SetGrid(on) end
+    end
+end
+
+export function isActive(): boolean?
+    return state.active
+end
+
+export function enter(): boolean
+    if state.active then return true end
+    if InCombatLockdown() then
+        print("Keybind mode opens out of combat.")
+        return false
+    end
+    if editMode.isActive() then editMode.exit() end
+    settingsWindow.close()
+    local panel = state.panel or buildPanel()
+    state.panel = panel
+    state.highlight = state.highlight or buildHighlight()
+    local catcher = state.catcher or buildCatcher()
+    state.catcher = catcher
+    hookButtons()
+    state.active = true
+    setStatus(" ")
+    panel:Show()
+    catcher:Show()
+    setGrid(true) -- empty slots can take keys too
+    events.emit("SUUUI_KEYBINDMODE_CHANGED", true)
+    return true
+end
+
+export function exit()
+    if not state.active then return end
+    state.active = false
+    setTarget(nil)
+    ;(state.panel :: Panel):Hide()
+    ;(state.catcher :: Frame):Hide()
+    setGrid(false)
+    events.emit("SUUUI_KEYBINDMODE_CHANGED", false)
+end
+
+export function toggle()
+    if state.active then exit() else enter() end
+end
+
+events.onGame("PLAYER_REGEN_DISABLED", function()
+    if state.active then
+        exit()
+        print("Keybind mode closed: combat started.")
+    end
+end, "KeybindMode")
+
+registerCommand("keybind", "Bind keys to SuuUI's action bars: hover a button and press a key.", toggle)

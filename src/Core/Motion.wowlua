@@ -1,0 +1,144 @@
+-- Core/Motion.wowlua
+-- The design's motion presets as AnimationGroups. Motion only ever decorates:
+-- a value is always set at once, and an animation never delays it. With
+-- ui.reducedMotion on, every preset jumps straight to its end state.
+--
+--   fadeIn(frame[, duration])  alpha 0 -> 1 (default dur-base, ease-out)
+--   enter(frame[, duration])   the alert's enter: 6px drop and fade (dur-base)
+--   pop(frame)                 a ready cooldown: scale 0.86 -> 1, alpha 0.4 -> 1 (dur-base)
+--   stop(frame)
+
+import tokens as T from "./Tokens"
+import * as settings from "./Settings"
+import isSecret from "wowlua:secret"
+
+local function isReduced(): boolean
+    return settings.ready() and settings.get("ui", "reducedMotion") and true or false
+end
+
+-- Whether ui.reducedMotion is on: for motion of a caller's own (0.17).
+export function reduced(): boolean
+    return isReduced()
+end
+
+local function smoothing(easing: string): string
+    return (T.easing :: { [string]: any })[easing].smoothing
+end
+
+type Fade = { from: number, to: number, start: number, duration: number }
+
+-- Running alphaTo fades.
+local fades: { [any]: Fade } = {}
+
+-- One AnimationGroup per frame and preset, built on first use (kept on the
+-- frame as suuMotion).
+local function group(frame: any, preset: string, build: (g: any) -> ()): any
+    frame.suuMotion = frame.suuMotion or {}
+    local g = frame.suuMotion[preset]
+    if not g then
+        g = frame:CreateAnimationGroup()
+        build(g)
+        g:SetScript("OnFinished", function() frame:SetAlpha(1) end)
+        frame.suuMotion[preset] = g
+    end
+    return g
+end
+
+export function stop(frame: any)
+    if frame.suuMotion then
+        for _, g in pairs(frame.suuMotion) do g:Stop() end
+    end
+    fades[frame] = nil -- a running alphaTo would override the alpha set here
+    frame:SetAlpha(1)
+end
+
+export function fadeIn(frame: any, duration: number?)
+    stop(frame)
+    if isReduced() then return end
+    local g = group(frame, "fadeIn", function(g: any)
+        local a = g:CreateAnimation("Alpha")
+        a:SetFromAlpha(0)
+        a:SetToAlpha(1)
+        a:SetSmoothing(smoothing("ease-out"))
+        g.alpha = a
+    end)
+    g.alpha:SetDuration(duration or T.duration["dur-base"])
+    g:Play()
+end
+
+export function enter(frame: any, duration: number?)
+    stop(frame)
+    if isReduced() then return end
+    local g = group(frame, "enter", function(g: any)
+        -- Jump 6px up instantly, then move back down while fading in.
+        local up = g:CreateAnimation("Translation")
+        up:SetOffset(0, 6)
+        up:SetDuration(0)
+        up:SetOrder(1)
+        local down = g:CreateAnimation("Translation")
+        down:SetOffset(0, -6)
+        down:SetSmoothing(smoothing("ease-out"))
+        down:SetOrder(2)
+        local a = g:CreateAnimation("Alpha")
+        a:SetFromAlpha(0)
+        a:SetToAlpha(1)
+        a:SetSmoothing(smoothing("ease-out"))
+        a:SetOrder(2)
+        g.down, g.alpha = down, a
+    end)
+    local d = duration or T.duration["dur-base"]
+    g.down:SetDuration(d)
+    g.alpha:SetDuration(d)
+    g:Play()
+end
+
+-- Fades `frame` from its current alpha to `to` over `duration` (ease-out).
+-- One shared driver runs every fade, so it also works on secure frames,
+-- whose scripts can't be set in combat (alpha itself is never protected).
+local driver = CreateFrame("Frame")
+driver:Hide()
+driver:SetScript("OnUpdate", function(self: Frame)
+    local now, any = GetTime(), false
+    for frame, f in pairs(fades) do
+        local t = math.min(1, (now - f.start) / f.duration)
+        local e = 1 - (1 - t) ^ 3
+        frame:SetAlpha(f.from + (f.to - f.from) * e)
+        if t >= 1 then fades[frame] = nil else any = true end
+    end
+    if not any then self:Hide() end
+end)
+
+export function alphaTo(frame: any, to: number, duration: number?)
+    local d = duration or T.duration["dur-slow"]
+    local from: any = frame:GetAlpha()
+    -- once a frame's alpha was set from a secret (the unit frames' resting
+    -- alpha), the game reads it back secret for good (found in game): no
+    -- fade can start from it, so the alpha is set at once
+    if isSecret(from) or isReduced() or d <= 0 or math.abs(from - to) < 0.01 then
+        fades[frame] = nil
+        frame:SetAlpha(to)
+        return
+    end
+    local f = fades[frame]
+    if f and f.to == to then return end
+    fades[frame] = { from = from, to = to, start = GetTime(), duration = d }
+    driver:Show()
+end
+
+export function pop(frame: any)
+    stop(frame)
+    if isReduced() then return end
+    local g = group(frame, "pop", function(g: any)
+        local s = g:CreateAnimation("Scale")
+        s:SetScaleFrom(0.86, 0.86)
+        s:SetScaleTo(1, 1)
+        s:SetDuration(T.duration["dur-base"])
+        s:SetSmoothing(smoothing("ease-out"))
+        local a = g:CreateAnimation("Alpha")
+        a:SetFromAlpha(0.4)
+        a:SetToAlpha(1)
+        a:SetDuration(T.duration["dur-base"])
+        a:SetSmoothing(smoothing("ease-out"))
+    end)
+    g:Play()
+end

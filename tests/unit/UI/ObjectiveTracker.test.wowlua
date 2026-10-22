@@ -1,0 +1,528 @@
+-- UI/ObjectiveTracker: the head (toggle, title, rule, meta), quests with
+-- their objectives and states, zone headings, the Recipes section, the
+-- window scrolling within maxHeight, frozen layouts in combat, clicks,
+-- hover and the owner's own toggle.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import objectiveTracker, TRACKER_HEAD_H from "/UI/ObjectiveTracker"
+import * as tooltipModule from "/UI/Tooltip"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf from "./WorldHelpers"
+
+local S = T.space
+local HEAD_H = TRACKER_HEAD_H
+local function titleH(): number return T.type.label.lineHeight end
+local function lineH(): number return T.type.caption.lineHeight end
+
+local parent: Frame? = nil
+
+local function make(opts: { [string]: any }?): any
+    parent = newParent(400, 600)
+    local t = objectiveTracker(parent, opts)
+    t:SetPoint("TOPLEFT")
+    return t
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+-- A quest with `n` open objectives.
+local function quest(id: number, opts: { [string]: any }?): { [string]: any }
+    local q: { [string]: any } = { questID = id, title = "Quest " .. id, objectives = { { text = "Slay a wolf", progress = "0/3" } } }
+    for k, v in pairs(opts or {}) do q[k] = v end
+    return q
+end
+
+-- The rows in use, in list order.
+local function rowsOf(t: any): any[]
+    local out: any[] = {}
+    for _, r in ipairs(t.rows) do if r.inUse then out[#out + 1] = r end end
+    table.sort(out, function(a: any, b: any) return a.top < b.top end)
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- The head
+--------------------------------------------------------------------------------
+
+@test("a new tracker: 260 wide, only its head, Quests, the minus shown")
+local function fresh()
+    local t = make()
+    expect(t:GetWidth()).toBe(260)
+    expect(t:GetHeight()).toBe(HEAD_H)
+    expect(t.label).toHaveText("Quests")
+    expect(tokenOf(t.label)).toBe("gilt-text")
+    expect(t.meta).toHaveText("")
+    expect(t.rule).toBeAnchoredTo(t.head, "RIGHT", "RIGHT")
+    expect(t.minus).toBeShown()
+    expect(t.plus).never.toBeShown()
+    expect(t.thumb).never.toBeShown()
+    expect(t.toggle:GetWidth()).toBe(HEAD_H)
+    expect(t.list).toBeShown()
+end
+
+@test("a title, a width and a meta caption")
+local function head()
+    local t = make({ width = 300, title = "Recipes", meta = "3/25", name = "SuuUITestTracker" })
+    expect(t:GetName()).toBe("SuuUITestTracker")
+    expect(t:GetWidth()).toBe(300)
+    expect(t.label).toHaveText("Recipes")
+    expect(t.meta).toHaveText("3/25")
+    expect(t.rule).toBeAnchoredTo(t.meta, "RIGHT", "LEFT")
+    t:SetTitle(nil)
+    expect(t.label).toHaveText("Quests")
+    t:SetMeta(nil)
+    expect(t.meta).toHaveText("")
+    expect(t.rule).toBeAnchoredTo(t.head, "RIGHT", "RIGHT")
+end
+
+@test("the toggle: onToggle on a click, the gilt edge on hover")
+local function toggle()
+    local t = make()
+    local toggled = mock.spy()
+    mock.click(t.toggle)
+    t.onToggle = toggled
+    mock.click(t.toggle)
+    expect(toggled).toHaveBeenCalledTimes(1)
+    mock.hover(t.toggle)
+    expect(tokenOf(t.toggle.edge.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(t.toggle.edge.top)).toBe("gilt-line")
+end
+
+@test("the owner's own toggle: sized and drawn here, its click left to the owner")
+local function ownToggle()
+    parent = newParent(400, 600)
+    local own = CreateFrame("Button", nil, parent)
+    local clicked = mock.spy()
+    own:SetScript("OnClick", clicked)
+    own:SetPoint("TOPLEFT")
+    local t = objectiveTracker(parent, { toggle = own })
+    expect(t.toggle).toBe(own)
+    expect(own:GetWidth()).toBe(HEAD_H)
+    expect((own :: any).edge ~= nil).toBe(true)
+    t.onToggle = mock.spy()
+    mock.click(own)
+    expect(clicked).toHaveBeenCalledTimes(1)
+    expect(t.onToggle).never.toHaveBeenCalled()
+end
+
+@test("collapsed: only the head, the plus shown; open again")
+local function collapsed()
+    local t = make()
+    t:SetQuests({ quest(1) })
+    expect(t:GetHeight() > HEAD_H).toBe(true)
+    t:SetCollapsed(true)
+    expect(t.collapsed).toBe(true)
+    expect(t.list).never.toBeShown()
+    expect(t.plus).toBeShown()
+    expect(t.minus).never.toBeShown()
+    expect(t:GetHeight()).toBe(HEAD_H)
+    t:SetCollapsed(false)
+    expect(t.list).toBeShown()
+    expect(t:GetHeight()).toBe(HEAD_H + S["space-4"] + t.listHeight)
+end
+
+--------------------------------------------------------------------------------
+-- Quests
+--------------------------------------------------------------------------------
+
+@test("a quest: its title, an objective's diamond, text and count")
+local function oneQuest()
+    local t = make()
+    t:SetQuests({ quest(7) })
+    local r = rowsOf(t)[1]
+    expect(r.title).toHaveText("Quest 7")
+    expect(tokenOf(r.title)).toBe("quest-standard")
+    local l = r.lines[1]
+    expect(l).toBeShown()
+    expect(l.bullet).toBeShown()
+    expect(l.check).never.toBeShown()
+    expect(l.text).toHaveText("Slay a wolf")
+    expect(l.count).toHaveText("0/3")
+    expect(tokenOf(l.text)).toBe("ink")
+    expect(tokenOf(l.count)).toBe("ink")
+    expect(r.done).never.toBeShown()
+    expect(r.icon).never.toBeShown()
+    expect(r.preview).never.toBeShown()
+    expect(r.title).toBeAnchoredTo(r, "TOPRIGHT", "TOPRIGHT")
+    -- the tracker as tall as the head, space-4 and the list
+    expect(t:GetHeight()).toBe(HEAD_H + S["space-4"] + t.listHeight)
+    expect(t.listHeight).toBe(titleH() + S["space-1"] + l:GetHeight() + 1)
+end
+
+@test("the title's colour: by difficulty, a token of the entry's own, standard otherwise")
+@cases({
+    { "impossible", nil, "quest-impossible" },
+    { "very-difficult", nil, "quest-very-difficult" },
+    { "difficult", nil, "quest-difficult" },
+    { "trivial", nil, "quest-trivial" },
+    { "unknown", nil, "quest-standard" },
+    { "trivial", "arcane", "arcane" },
+})
+local function difficulty(level: string, color: string?, token: string)
+    local t = make()
+    t:SetQuests({ quest(1, { difficulty = level, color = color }) })
+    expect(tokenOf(rowsOf(t)[1].title)).toBe(token)
+end
+
+@test("a done objective: a check, muted; one without a count takes the width")
+local function doneObjective()
+    local t = make()
+    t:SetQuests({ quest(1, { objectives = { { text = "Find the cave", done = true }, { text = "Light the brazier" } } }) })
+    local r = rowsOf(t)[1]
+    local done, open = r.lines[1], r.lines[2]
+    expect(done.check).toBeShown()
+    expect(done.bullet).never.toBeShown()
+    expect(tokenOf(done.text)).toBe("ink-muted")
+    expect(tokenOf(done.count)).toBe("ink-muted")
+    expect(done.count).toHaveText("")
+    expect(open.bullet).toBeShown()
+    expect(open.text:GetWidth()).toBe(260 - S["space-4"] - 10 - S["space-3"])
+    -- the second line under the first
+    local _, _, _, _, y1 = done:GetPoint(1)
+    local _, _, _, _, y2 = open:GetPoint(1)
+    expect(y2 < y1).toBe(true)
+end
+
+@test("a complete quest: the arcane check and Ready to turn in, or its own words")
+local function complete()
+    local t = make()
+    t:SetQuests({ quest(1, { complete = true }), quest(2, { complete = true, turnIn = "Return to Tamsin" }) })
+    local a, b = rowsOf(t)[1], rowsOf(t)[2]
+    expect(a.done).toBeShown()
+    expect(a.done.check).toBeShown()
+    expect(a.done.text).toHaveText("Ready to turn in")
+    expect(tokenOf(a.done.text)).toBe("arcane")
+    expect(a.lines[1] == nil or not a.lines[1]:IsShown()).toBe(true)
+    expect(b.done.text).toHaveText("Return to Tamsin")
+    expect(a.height).toBe(titleH() + S["space-1"] + lineH())
+end
+
+@test("a failed quest: Failed in ember, no check")
+local function failed()
+    local t = make()
+    t:SetQuests({ quest(1, { failed = true }) })
+    local r = rowsOf(t)[1]
+    expect(r.done).toBeShown()
+    expect(r.done.check).never.toBeShown()
+    expect(r.done.text).toHaveText("Failed")
+    expect(tokenOf(r.done.text)).toBe("ember-text")
+    -- a quest's objectives back once it is no longer done
+    t:SetQuests({ quest(1) })
+    expect(r.done).never.toBeShown()
+    expect(r.lines[1]).toBeShown()
+end
+
+@test("an entry's icon before the title and a count after it")
+local function iconAndCount()
+    local t = make()
+    t:SetQuests({ quest(1, { icon = 134400, count = "×3", title = "Linen Bandage" }) })
+    local r = rowsOf(t)[1]
+    expect(r.icon).toBeShown()
+    expect(r.icon.art:GetTextureFileID()).toBe(134400)
+    expect(r.count).toHaveText("×3")
+    expect(r.title).toBeAnchoredTo(r.count, "TOPRIGHT", "TOPLEFT")
+    local _, _, _, x = r.title:GetPoint(1)
+    expect(x).toBe(16 + S["space-3"])
+    -- and gone again
+    t:SetQuests({ quest(1) })
+    expect(r.icon).never.toBeShown()
+    expect(r.count).toHaveText("")
+end
+
+@test("the settings preview's item: a plain icon beside the title")
+local function preview()
+    local t = make()
+    t:SetQuests({ quest(1, { item = { preview = true, icon = 134414 } }), quest(2, { item = { icon = 1 } }) })
+    local a, b = rowsOf(t)[1], rowsOf(t)[2]
+    expect(a.preview).toBeShown()
+    expect(a.preview.art:GetTextureFileID()).toBe(134414)
+    expect(b.preview).never.toBeShown()
+end
+
+@test("quests space-4 apart; zone headings where the zone changes")
+local function zones()
+    local t = make()
+    t:SetQuests({
+        quest(1, { zone = "Elwynn Forest" }), quest(2, { zone = "Elwynn Forest" }),
+        quest(3, { zone = "Westfall" }),
+    })
+    local headings: string[] = {}
+    for _, z in ipairs(t.zoneRows) do if z.inUse then headings[#headings + 1] = z.text:GetText() end end
+    expect(headings).toEqual({ "Elwynn Forest", "Westfall" })
+    local z1, z2 = t.zoneRows[1], t.zoneRows[2]
+    expect(tokenOf(z1.text)).toBe("gilt-text")
+    local r = rowsOf(t)
+    expect(z1.top).toBe(0)
+    expect(r[1].top).toBe(lineH() + S["space-2"])
+    expect(r[2].top).toBe(r[1].top + r[1].height + S["space-4"])
+    expect(z2.top).toBe(r[2].top + r[2].height + S["space-5"])
+    expect(r[3].top).toBe(z2.top + lineH() + S["space-2"])
+    -- fewer quests: the rows left over are not used
+    t:SetQuests({ quest(9) })
+    expect(#rowsOf(t)).toBe(1)
+    expect(t.zoneRows[1]).never.toBeShown()
+    expect(t.rows[2]).never.toBeShown()
+end
+
+@test("no quests: only the head; nil quests too")
+local function empty()
+    local t = make()
+    t:SetQuests({})
+    expect(t:GetHeight()).toBe(HEAD_H)
+    t:SetQuests(nil)
+    expect(t:GetHeight()).toBe(HEAD_H)
+    expect(t.listHeight).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- Clicks and hover
+--------------------------------------------------------------------------------
+
+@test("a click: onQuestClick with the quest, the button and the row")
+local function clicks()
+    local t = make()
+    t:SetQuests({ quest(5) })
+    local r = rowsOf(t)[1]
+    local clicked = mock.spy(function(_id: any, _b: string, _r: any) end)
+    mock.click(r)
+    t.onQuestClick = clicked
+    mock.click(r, "RightButton")
+    expect(clicked).toHaveBeenCalledWith(5, "RightButton", r)
+    -- a row without a quest takes no click
+    r.quest = nil
+    mock.click(r)
+    expect(clicked).toHaveBeenCalledTimes(1)
+end
+
+@test("hover: the entry's tooltip and onRowEnter; away hides it")
+local function hover()
+    local t = make()
+    t:SetQuests({ quest(5, { tooltip = { title = "Quest 5" } }), quest(6) })
+    local a, b = rowsOf(t)[1], rowsOf(t)[2]
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local hide = mock.stub(tooltipModule, "hideTooltip", function() end)
+    local entered = mock.spy(function(_r: any) end)
+    mock.hover(a)
+    expect(show).toHaveBeenCalledWith(a, { title = "Quest 5" })
+    t.onRowEnter = entered
+    mock.hover(b)
+    expect(show).toHaveBeenCalledTimes(1)
+    expect(hide).toHaveBeenCalled()
+    expect(entered).toHaveBeenCalledWith(b)
+    -- a row without a quest: nothing
+    b.quest = nil
+    mock.hover(nil)
+    mock.hover(b)
+    expect(entered).toHaveBeenCalledTimes(1)
+end
+
+--------------------------------------------------------------------------------
+-- The Recipes section
+--------------------------------------------------------------------------------
+
+local function recipe(id: number, opts: { [string]: any }?): { [string]: any }
+    local r: { [string]: any } = { questID = id, title = "Recipe " .. id, objectives = { { text = "Linen Cloth", progress = "1/2" } } }
+    for k, v in pairs(opts or {}) do r[k] = v end
+    return r
+end
+
+@test("recipes after the quests: their own head, rows, the click to onRecipeClick")
+local function recipes()
+    local t = make()
+    t:SetRecipes({ recipe(2540), recipe(3275) }, false, "2 tracked")
+    t:SetQuests({ quest(1) })
+    local h = t.sectionRows[1]
+    expect(h).toBeShown()
+    expect(h.label).toHaveText("Recipes")
+    expect(h.meta).toHaveText("2 tracked")
+    expect(h.minus).toBeShown()
+    expect(h.plus).never.toBeShown()
+    local rows = rowsOf(t)
+    expect(#rows).toBe(3)
+    expect(h.top).toBe(rows[1].top + rows[1].height + S["space-6"])
+    expect(rows[2].top).toBe(h.top + HEAD_H + S["space-4"])
+    expect(rows[3].top).toBe(rows[2].top + rows[2].height + S["space-4"])
+    local onRecipe = mock.spy(function(_id: any, _b: string, _r: any) end)
+    local onQuest = mock.spy(function(_id: any, _b: string, _r: any) end)
+    t.onQuestClick = onQuest
+    mock.click(rows[2])
+    t.onRecipeClick = onRecipe
+    mock.click(rows[2])
+    expect(onRecipe).toHaveBeenCalledWith(2540, "LeftButton", rows[2])
+    expect(onQuest).never.toHaveBeenCalled()
+end
+
+@test("recipes folded: their head alone, the plus; its toggle to onSectionToggle")
+local function recipesFolded()
+    local t = make()
+    t:SetRecipes({ recipe(2540) }, true, nil)
+    t:SetQuests({})
+    local h = t.sectionRows[1]
+    expect(h.top).toBe(0)
+    expect(h.plus).toBeShown()
+    expect(h.minus).never.toBeShown()
+    expect(h.meta).toHaveText("")
+    expect(#rowsOf(t)).toBe(0)
+    local toggled = mock.spy(function(_k: string) end)
+    mock.click(h.toggle)
+    t.onSectionToggle = toggled
+    mock.click(h.toggle)
+    expect(toggled).toHaveBeenCalledWith("recipes")
+    mock.hover(h.toggle)
+    expect(tokenOf(h.toggle.edge.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(h.toggle.edge.top)).toBe("gilt-line")
+    -- no recipes: no section
+    t:SetRecipes(nil, false, nil)
+    t:SetQuests({ quest(1) })
+    expect(h).never.toBeShown()
+end
+
+@test("the quests folded: only the recipes after the next SetQuests, the plus shown")
+local function questsFolded()
+    local t = make()
+    t:SetRecipes({ recipe(2540) }, false, nil)
+    t:SetQuestsCollapsed(true)
+    expect(t.plus).toBeShown()
+    t:SetQuests({ quest(1), quest(2) })
+    local rows = rowsOf(t)
+    expect(#rows).toBe(1)
+    expect(rows[1].quest.recipe).toBe(true)
+    expect(t.sectionRows[1].top).toBe(0)
+    t:SetQuestsCollapsed(false)
+    expect(t.minus).toBeShown()
+    t:SetQuests({ quest(1), quest(2) })
+    expect(#rowsOf(t)).toBe(3)
+end
+
+--------------------------------------------------------------------------------
+-- Scrolling within maxHeight
+--------------------------------------------------------------------------------
+
+local function many(n: number): { [string]: any }[]
+    local list: { [string]: any }[] = {}
+    for i = 1, n do list[i] = quest(i) end
+    return list
+end
+
+@test("taller than maxHeight: the window's height, a thumb, the quests a gutter narrower")
+local function window()
+    local t = make({ maxHeight = 200 })
+    t:SetQuests(many(10))
+    local view = 200 - HEAD_H - S["space-4"]
+    expect(t:ViewHeight()).toBe(view)
+    expect(t:GetHeight()).toBe(HEAD_H + S["space-4"] + view)
+    expect(t.clip:GetHeight()).toBe(view)
+    expect(t.contentWidth).toBe(260 - S["space-5"] - 1)
+    expect(t.list:GetWidth()).toBe(t.contentWidth)
+    expect(t.thumb).toBeShown()
+    expect(t.thumb:GetHeight()).toBe(math.max(16, view * view / t.listHeight))
+    -- the rows past the window hidden
+    local last = rowsOf(t)[10]
+    expect(last).never.toBeShown()
+    expect(rowsOf(t)[1]).toBeShown()
+end
+
+@test("scrolling: clamped, rounded, onScroll; locked in combat; the wheel")
+local function scrolling()
+    local t = make({ maxHeight = 200 })
+    t:SetQuests(many(10))
+    local max = t.listHeight - t:ViewHeight()
+    local scrolled = mock.spy()
+    t.onScroll = scrolled
+    t:ScrollBy(10.4)
+    expect(t.scroll).toBe(10)
+    expect(scrolled).toHaveBeenCalledTimes(1)
+    t:SetScroll(10)
+    expect(scrolled).toHaveBeenCalledTimes(1)
+    t:SetScroll(-50)
+    expect(t.scroll).toBe(0)
+    t:SetScroll(100000)
+    expect(t.scroll).toBe(max)
+    expect(rowsOf(t)[10]).toBeShown()
+    expect(rowsOf(t)[1]).never.toBeShown()
+    t:SetScrollLocked(true)
+    t:ScrollBy(-50)
+    expect(t.scroll).toBe(max)
+    t:SetScrollLocked(false)
+    -- a wheel turn up: a title and two lines
+    mock.wheel(t, 1)
+    expect(t.scroll).toBe(math.floor(max - (titleH() + lineH() * 2) + 0.5))
+end
+
+@test("QuestTop: a title's place under the head, nil out of sight or unknown")
+local function questTop()
+    local t = make({ maxHeight = 200 })
+    t:SetQuests(many(10))
+    expect(t:QuestTop(1)).toBe(HEAD_H + S["space-4"])
+    local second = t.tops[2]
+    expect(t:QuestTop(2)).toBe(HEAD_H + S["space-4"] + second)
+    expect(t:QuestTop(10)).toBeNil()
+    expect(t:QuestTop(99)).toBeNil()
+    t:SetScroll(second + 1)
+    expect(t:QuestTop(2)).toBeNil()
+end
+
+@test("SetMaxHeight: the window follows; without one, all of the list")
+local function maxHeight()
+    local t = make()
+    t:SetQuests(many(10))
+    expect(t:ViewHeight()).toBe(t.listHeight)
+    expect(t.thumb).never.toBeShown()
+    t:SetMaxHeight(150)
+    expect(t:GetHeight()).toBe(HEAD_H + S["space-4"] + (150 - HEAD_H - S["space-4"]))
+    expect(t.thumb).toBeShown()
+    -- a window smaller than a line: a line high
+    t:SetMaxHeight(10)
+    expect(t:ViewHeight()).toBe(lineH())
+    t:SetMaxHeight(nil)
+    expect(t:ViewHeight()).toBe(t.listHeight)
+    expect(t.thumb).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Frozen in combat
+--------------------------------------------------------------------------------
+
+@test("frozen: places kept, heights only grow, new quests at the end, a gone one leaves its space")
+local function frozen()
+    local t = make()
+    t:SetQuests({
+        quest(1, { zone = "Elwynn Forest" }),
+        quest(2, { zone = "Elwynn Forest", objectives = { { text = "a" }, { text = "b" } } }),
+    })
+    local top1, top2, h2 = t.tops[1], t.tops[2], t.heights[2]
+    -- quest 2 shrinks, quest 1 is gone, quest 3 and a new zone come
+    t:SetQuests({ quest(2), quest(3, { zone = "Westfall" }) }, true)
+    expect(t.tops[2]).toBe(top2)
+    expect(t.heights[2]).toBe(h2)
+    expect(t.tops[1]).toBe(top1)
+    local gone = t.rows[1]
+    expect(gone.inUse).toBe(false)
+    expect(gone).never.toBeShown()
+    expect(t.tops[3] > top2).toBe(true)
+    local headings: string[] = {}
+    for _, z in ipairs(t.zoneRows) do if z.inUse then headings[#headings + 1] = z.text:GetText() end end
+    expect(headings).toEqual({ "Elwynn Forest", "Westfall" })
+    -- the next layout without freeze: everything anew
+    t:SetQuests({ quest(2), quest(3) })
+    expect(t.tops[2]).toBe(0)
+end
+
+@test("frozen before any layout: laid out as usual")
+local function frozenFirst()
+    local t = make()
+    t.contentWidth = nil
+    t:SetQuests({ quest(1) }, true)
+    expect(t.contentWidth).toBe(260)
+    expect(#rowsOf(t)).toBe(1)
+end

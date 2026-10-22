@@ -1,0 +1,301 @@
+-- Units/CharacterWindow: Blizzard's Character window restyled in place.
+-- The header and the mode tabs; the identity line; the gear slots (quality,
+-- empty), their popout arrows and the item flyout; the new-set popup; the
+-- stats as a StatList (heads, labels, values in their colours, resistance
+-- icons); the Stats | Sets | Titles row; New Set lined up with Equip and
+-- Save; the right pane's toggle; the other tabs reskinned; the window's
+-- addon loading late. The gear's wear (bars, the Durability block) is
+-- tested with the Durability module.
+--
+-- Blizzard's window is driven as a player does (the key, clicks), and its
+-- fields are changed only with mock.setField: anything the test writes or
+-- calls into it directly runs tainted, and Blizzard's code would read it
+-- tainted for the rest of the file.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, identityLine, statColor from "/Units/CharacterWindow"
+import expectNoErrors from "../../helpers"
+import tokenOf from "../SettingsUI/UiSettingsHelpers"
+
+local G: any = _G
+
+local HELM, RING = 990301, 990302
+mock.defineItem(HELM, { name = "Test Helm", quality = 4, equipLoc = "INVTYPE_HEAD", icon = 133071 })
+mock.defineItem(RING, { name = "Test Band", quality = 1, equipLoc = "INVTYPE_FINGER", icon = 133344 })
+
+local function open()
+    if not G.CharacterFrame:IsShown() then mock.pressBinding("TOGGLECHARACTER0") end
+    mock.advanceFrames(2)
+end
+
+local function tab(i: number) mock.click(G["CharacterFrameModeTab" .. i]); mock.advanceFrames(2) end
+
+@afterEach
+local function cleanup()
+    if G.CharacterFrame:IsShown() then mock.pressBinding("TOGGLECHARACTER0") end
+    mock.advanceTime(0.1)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The shell, the identity
+--------------------------------------------------------------------------------
+
+@test("the header and the mode tabs in the design's order; the chosen tab by Blizzard's look, else its pane")
+local function tabs()
+    open()
+    local labels: string[] = {}
+    for _, t in ipairs(M.chrome.tabs) do labels[#labels + 1] = t.label end
+    expect(labels).toEqual({ "Character", "Reputation", "Currency", "Player vs. Player", "Skills", "Statistics" })
+    expect(M.chrome.tabs[1].selected()).toBe(true)
+    expect(M.chrome.tabs[2].selected()).toBe(false)
+    -- a tab without Blizzard's selected texture: chosen while its pane shows
+    local rep = M.chrome.tabs[2]
+    mock.setField(rep.button, "SelectedTexture", nil)
+    expect(rep.selected()).toBe(false)
+    tab(2)
+    expect(rep.selected()).toBe(true)
+    tab(1)
+    -- a pane the client lacks: not chosen
+    local gone = M.chrome.tabs[6]
+    mock.setField(gone.button, "SelectedTexture", nil)
+    mock.setField(G, "StatisticsFrame", nil)
+    expect(gone.selected()).toBe(false)
+end
+
+@test("the identity line: the class diamond, the name, level, race and class; again at a level up")
+local function identity()
+    open()
+    local id = M.identity
+    expect(id).toBeShown()
+    expect(id.name:GetText()).toBe(SuuUI.FullName("player"))
+    expect(id.line:GetText()).toBe(identityLine(UnitLevel("player"), UnitRace("player"), (UnitClass("player"))))
+    local _, class: any = UnitClass("player")
+    expect(tokenOf(id.diamond)).toBe("class-" .. class:lower())
+    expect(identityLine(nil, nil, nil)).toBe("Level ?")
+    expect(identityLine(5, "Orc", nil)).toBe("Level 5 · Orc")
+    -- a level up: drawn again
+    local update = mock.stub(M, "UpdateIdentity")
+    mock.fireEvent("PLAYER_LEVEL_UP", 61, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    expect(update).toHaveBeenCalled()
+    -- off the Character tab: hidden
+    tab(2)
+    expect(id).never.toBeShown()
+    tab(1)
+    expect(id).toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The gear
+--------------------------------------------------------------------------------
+
+@test("a gear slot: its quality edge, an empty one dimmed; a piece equipped or taken off redraws it")
+local function slots()
+    open()
+    local skin = M.slotSkins[G.CharacterHeadSlot]
+    mock.player:equip(1, HELM)
+    mock.advanceTime(0.1)
+    expect(skin.item.quality).toBe("epic")
+    expect(skin.item.dim).toBe(false)
+    mock.player:equip(1, nil)
+    mock.advanceTime(0.1)
+    expect(skin.item.dim).toBe(true)
+    -- a plain item: common
+    mock.player:equip(11, RING)
+    mock.advanceTime(0.1)
+    expect(M.slotSkins[G.CharacterFinger0Slot].item.quality).toBe("common")
+    mock.player:equip(11, nil)
+end
+
+local function glyphOf(slot: string): any
+    local p = G["Character" .. slot .. "Slot"].popoutButton
+    for _, r in ipairs({ p:GetRegions() }) do
+        if r:GetObjectType() == "Texture" and r:GetTexture() and tostring(r:GetTexture()):find("Glyphs") then return r end
+    end
+end
+
+@test("the popout arrows point away from their slot (down for weapons) and light up on hover")
+local function popouts()
+    open()
+    expect(tostring(glyphOf("Head"):GetTexture()):find("chevronRight") ~= nil).toBe(true)
+    expect(tostring(glyphOf("Hands"):GetTexture()):find("chevronLeft") ~= nil).toBe(true)
+    expect(tostring(glyphOf("MainHand"):GetTexture()):find("chevronDown") ~= nil).toBe(true)
+    -- in Sets mode the arrows show
+    mock.click(M.sidebar.buttons[2])
+    mock.advanceFrames(2)
+    local p = G.CharacterHeadSlot.popoutButton
+    mock.hover(p)
+    expect(tokenOf(glyphOf("Head"))).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(glyphOf("Head"))).toBe("gilt-text")
+    mock.click(M.sidebar.buttons[1])
+end
+
+@test("the item flyout: glass in a gilt edge, its items as SuuUI slots")
+local function flyout()
+    mock.setBag(0, { slots = 16, items = { [1] = { id = HELM } } })
+    open()
+    mock.click(M.sidebar.buttons[2])
+    mock.advanceFrames(2)
+    mock.click(G.CharacterHeadSlot.popoutButton)
+    mock.advanceFrames(2)
+    local fly = G.EquipmentFlyoutFrame
+    expect(fly).toBeShown()
+    local holder = fly.buttonFrame or fly
+    expect(tokenOf(holder.suuBg)).toBe("surface-glass")
+    expect(M.flyoutSkins[G.EquipmentFlyoutFrameButton1] ~= nil).toBe(true)
+    mock.click(G.CharacterHeadSlot.popoutButton)
+    mock.click(M.sidebar.buttons[1])
+    mock.setBag(0, { slots = 16, items = {} })
+end
+
+@test("the new-set popup: glass, beside the window, its icon grid above Okay and Cancel")
+local function setPopup()
+    open()
+    mock.click(M.sidebar.buttons[2])
+    mock.advanceFrames(2)
+    mock.click(G.PaperDollFrameNewSet)
+    mock.advanceFrames(2)
+    local pop = G.GearManagerPopupFrame or G.PaperDollFrame.GearManagerPopupFrame
+    expect(pop).toBeShown()
+    local point, rel, relPoint = pop:GetPoint(1)
+    expect(point).toBe("TOPLEFT")
+    expect(rel).toBe(G.CharacterFrame)
+    expect(relPoint).toBe("TOPRIGHT")
+    mock.pressKey("ESCAPE")
+    mock.advanceFrames(2)
+    mock.click(M.sidebar.buttons[1])
+end
+
+--------------------------------------------------------------------------------
+-- The stats
+--------------------------------------------------------------------------------
+
+local function statRow(texts: { { any } }, height: number?): any
+    local row: any = CreateFrame("Frame", nil, UIParent)
+    row:SetSize(200, height or 16)
+    for i, t in ipairs(texts) do
+        local fs = row:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+        fs:SetText(t[1])
+        fs:SetTextColor(t[2], t[3], t[4])
+        fs:SetPoint("LEFT", (i - 1) * 100, 0)
+        row["t" .. i] = fs
+    end
+    return row
+end
+
+@test("a stat row: a head in gilt-text; a label ink-muted, a value fel for a bonus, ember for a malus, else ink")
+local function statRows()
+    -- a head: one text
+    local head = statRow({ { "Attributes", 1, 1, 1 } })
+    M:SkinStatRow(head)
+    expect(tokenOf(head.t1)).toBe("gilt-text")
+    expect(head.suuRule).never.toBeShown()
+    -- a stat: label and value found left to right
+    local row = statRow({ { "Strength", 1, 1, 1 }, { "42", 0.1, 1, 0.1 } })
+    M:SkinStatRow(row)
+    expect(tokenOf(row.t1)).toBe("ink-muted")
+    expect(tokenOf(row.t2)).toBe("fel")
+    expect(row.suuRule).toBeShown()
+    expect(statColor(1, 0.1, 0.1)).toBe("ember-text")
+    expect(statColor(1, 1, 1)).toBe("ink")
+    -- Blizzard's own keys, and a resistance's icon in a child frame: kept, made 18 px
+    local res = statRow({ { "Fire", 1, 1, 1 }, { "10", 1, 1, 1 } })
+    res.Label, res.Value = res.t1, res.t2
+    local holder = CreateFrame("Frame", nil, res)
+    local icon = holder:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(23, 23)
+    local text = holder:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    text:SetText("x")
+    local banner = holder:CreateTexture(nil, "BACKGROUND")
+    banner:SetSize(200, 16)
+    M:SkinStatRow(res)
+    expect(icon:GetWidth()).toBe(18)
+    expect(icon:GetAlpha()).toBe(1)
+    expect(banner:GetAlpha()).toBe(0)
+    -- texts whose places can't be read (secret, in combat): taken in order
+    local secret = statRow({ { "Agility", 1, 1, 1 }, { "7", 1, 1, 1 } })
+    mock.stub(secret.t1, "GetLeft", function(): any return mock.secret(5) end)
+    M:SkinStatRow(secret)
+    expect(tokenOf(secret.t1)).toBe("ink-muted")
+end
+
+@test("the stats pane without a view: its rows from the box's children")
+local function statsPane()
+    local pane: any = CreateFrame("Frame", nil, UIParent)
+    pane.ScrollBox = CreateFrame("Frame", nil, pane)
+    pane.ScrollBox.ScrollTarget = CreateFrame("Frame", nil, pane.ScrollBox)
+    local row = statRow({ { "Stamina", 1, 1, 1 }, { "9", 1, 1, 1 } })
+    row:SetParent(pane.ScrollBox.ScrollTarget)
+    mock.setField(G, "CharacterStatsPaneScrollBox", pane)
+    M:SkinStatsPane()
+    expect(tokenOf(row.t1)).toBe("ink-muted")
+end
+
+--------------------------------------------------------------------------------
+-- The side row, the sets, the right pane, the other tabs
+--------------------------------------------------------------------------------
+
+@test("Stats | Sets | Titles: the chosen one arcane, a hovered one ink; New Set as wide as Equip and Save")
+local function sidebar()
+    open()
+    local b = M.sidebar.buttons
+    expect(tokenOf(b[1].suuLabel)).toBe("arcane")
+    mock.hover(b[2])
+    expect(tokenOf(b[2].suuLabel)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(b[2].suuLabel)).toBe("ink-muted")
+    mock.click(b[2])
+    mock.advanceFrames(2)
+    expect(tokenOf(b[2].suuLabel)).toBe("arcane")
+    -- the sets: New Set lined up
+    local new, equip, save = G.PaperDollFrameNewSet, G.PaperDollFrameEquipSet, G.PaperDollFrameSaveSet
+    expect(math.abs(new:GetWidth() - (save:GetRight() - equip:GetLeft())) < 0.5).toBe(true)
+    -- in combat the edges read secret: left as it is
+    mock.stub(equip, "GetLeft", function(): any return mock.secret(1) end)
+    M:AlignSetList()
+    mock.click(b[1])
+end
+
+@test("the right pane's toggle: a chevron the way the pane goes, lit on hover")
+local function rightToggle()
+    open()
+    local toggle = G.CharacterFrameRightPaneToggleButton
+    local chev = toggle.suuChevron
+    local right = G.CharacterFrameRightPaneHost
+    local function pointsLeft(): boolean return tostring(chev:GetTexture()):find("chevronLeft") ~= nil end
+    expect(pointsLeft()).toBe(right:IsShown())
+    mock.click(toggle)
+    mock.advanceFrames(2)
+    expect(pointsLeft()).toBe(right:IsShown())
+    mock.click(toggle)
+    mock.advanceFrames(2)
+    expect(pointsLeft()).toBe(right:IsShown())
+    mock.hover(toggle)
+    expect(tokenOf(chev)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(chev)).toBe("ink-muted")
+end
+
+@test("the other tabs and the titles: Blizzard's lists reskinned when shown")
+local function panes()
+    open()
+    local reskin = mock.stub(SuuUI.UI, "Reskin", function() end)
+    tab(2)
+    expect(reskin).toHaveBeenCalledWith(G.ReputationFrame)
+    tab(1)
+end
+
+@test("the window's addon loading after SuuUI: skinned then")
+local function lateWindow()
+    local skin = mock.stub(M, "Skin", function() end)
+    local cf = G.CharacterFrame
+    mock.setField(G, "CharacterFrame", nil)
+    assert(M.OnEnable)(M)
+    expect(skin).never.toHaveBeenCalled()
+    mock.setField(G, "CharacterFrame", cf)
+    mock.fireEvent("ADDON_LOADED", "Blizzard_CharacterUI", false)
+    expect(skin).toHaveBeenCalled()
+end

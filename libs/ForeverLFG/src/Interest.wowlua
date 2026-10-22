@@ -1,0 +1,274 @@
+-- ForeverLFG/Interest.wowlua
+-- What you're after, and which entries concern you.
+--   your listing (its activities), your roles (GetLFGRoles), the quests in
+--   your log, your level and zone, activities you watch, your friends and
+--   guild; your languages (Forever's preferred play settings, the client's,
+--   extras).
+--
+--   LFG.Interest()            -- { listed, roles, quests, level, zone, watches }
+--   LFG.Watch(key, on)        -- an activity to hear about without listing
+--   LFG.Watches()             -- { key = true } of those
+--   LFG.Languages()           -- the language modules to read with
+--   LFG.MatchReasons(entry)   -- { "role", "activity", ... } for one entry
+--   LFG.ContactedAt(key)      -- when you whispered that leader (LFG.Now()), or nil
+--   LFG.Social(name)          -- "friend", "guild" or nil
+--   (here: interest, watch, watches, languages, matchReasons, contactedAt, social)
+--   events: Match(entry, newReasons), Contacted(entry, what)
+--     reasons: "role" (a group for your activity needs your role),
+--     "activity" (a group for your activity), "player" (a player for your
+--     group), "quest" (a quest in your log), "zone" (open world in your
+--     zone, near your level), "boss" (a world boss or event), "friend" (a
+--     friend or guild member)
+--     what (a group you whispered): "full", "gone", "reposted"
+
+import * as events from "wowlua:events"
+import config, fire, on, off, now from "./LFG"
+import catalogue from "./Catalogue"
+import entry from "./Store"
+import listing from "./Tool"
+import type Entry from "./Store"
+import type Listing from "./Tool"
+import type Listener, Part from "./LFG"
+
+-- What you're after (LFG.Interest()).
+export type Interest = {
+    listed: string[],
+    listing?: Listing,
+    roles: { [string]: boolean },
+    quests: { [number]: boolean },
+    level: number,
+    zone?: string,
+    watches: { [string]: boolean },
+}
+
+type State = {
+    watches: { [string]: boolean },
+    preferred?: string,
+    onAdded?: Listener,
+    onUpdated?: Listener,
+    onRefreshed?: Listener,
+    onRemoved?: Listener,
+}
+
+local I: State = { watches = {} }
+
+-- the events' owner (wowlua:events), for Stop
+local OWNER = {}
+
+--------------------------------------------------------------------------------
+-- Languages
+--------------------------------------------------------------------------------
+
+-- Forever's preferred play locales by the names its API gives (probed:
+-- English, LatAm Spanish, Brazilian Portuguese on NA).
+local LOCALE_BY_NAME: { [string]: string } = { ["English"] = "enUS", ["LatAm Spanish"] = "esMX", ["Brazilian Portuguese"] = "ptBR" }
+
+local function readPreferred()
+    local acc = C_AccountServices :: any
+    if not (acc and acc.GetPreferredPlaySettings and acc.GetPreferredLocales) then return end
+    local ok, loaded, localeID = pcall(acc.GetPreferredPlaySettings)
+    if not (ok and loaded and localeID) then return end
+    local okL, ids, names = pcall(acc.GetPreferredLocales)
+    if not okL or type(ids) ~= "table" then return end
+    for i, id in ipairs(ids :: any[]) do
+        if id == localeID then I.preferred = LOCALE_BY_NAME[names and names[i] or ""] end
+    end
+end
+
+export function languages(): string[]
+    local out: string[], seen: { [string]: boolean } = {}, {}
+    local function use(code: string?) if code and not seen[code] then seen[code] = true; out[#out + 1] = code end end
+    use(I.preferred)
+    use(GetLocale and GetLocale())
+    for code, isOn in pairs(config.extraLanguages or {}) do if isOn then use(code) end end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- What you're after
+--------------------------------------------------------------------------------
+
+local quests: { [number]: boolean } = {}
+local socials: { [string]: string } = {}
+
+local function readQuests()
+    wipe(quests)
+    local ql = C_QuestLog :: any
+    if not (ql and ql.GetNumQuestLogEntries and ql.GetInfo) then return end
+    for i = 1, (ql.GetNumQuestLogEntries()) or 0 do
+        local ok, info = pcall(ql.GetInfo, i)
+        if ok and type(info) == "table" and not info.isHeader and info.questID then quests[info.questID] = true end
+    end
+end
+
+-- Friends' characters (Battle.net) and guild members, by whole name.
+local function readSocial()
+    wipe(socials)
+    if IsInGuild() then
+        for i = 1, (GetNumGuildMembers()) or 0 do
+            local ok, name = pcall(GetGuildRosterInfo, i)
+            if ok and type(name) == "string" then socials[Ambiguate(name, "short")] = "guild" end
+        end
+    end
+    local bn = C_BattleNet :: any
+    if bn and bn.GetFriendAccountInfo and BNGetNumFriends then
+        for i = 1, (BNGetNumFriends()) or 0 do
+            local ok, info = pcall(bn.GetFriendAccountInfo, i)
+            local game = ok and type(info) == "table" and info.gameAccountInfo
+            if game and type(game.characterName) == "string" then socials[game.characterName] = "friend" end
+        end
+    end
+end
+
+export function social(name: any): string?
+    if type(name) ~= "string" then return nil end
+    return socials[name] or socials[Ambiguate and Ambiguate(name, "short") or name]
+end
+
+local function zoneKey(): string?
+    local name = GetRealZoneText and GetRealZoneText()
+    if type(name) ~= "string" then return nil end
+    for _, a in ipairs(catalogue.All("zone")) do
+        if a.name == name then return a.key end
+    end
+    return nil
+end
+
+export function interest(): Interest
+    local mine = listing()
+    local roles: { [string]: boolean } = {}
+    local ok, _, tank, healer, dps = pcall(GetLFGRoles)
+    if ok then roles = { tank = tank or nil, healer = healer or nil, damage = dps or nil } :: { [string]: boolean } end
+    return {
+        listed = mine and mine.activities or {}, listing = mine, roles = roles, quests = quests,
+        level = UnitLevel("player"), zone = zoneKey(), watches = I.watches,
+    }
+end
+
+export function watch(key: string, isOn: any)
+    I.watches[key] = isOn and true or nil
+end
+
+export function watches(): { [string]: boolean } return I.watches end
+
+--------------------------------------------------------------------------------
+-- Matching
+--------------------------------------------------------------------------------
+
+local function expandSet(list: string[]?, extra: { [string]: boolean }?): { [string]: boolean }
+    local set: { [string]: boolean } = {}
+    for _, key in ipairs(list or {}) do for _, k in ipairs(catalogue.Expand(key)) do set[k] = true end end
+    for key in pairs(extra or {}) do for _, k in ipairs(catalogue.Expand(key)) do set[k] = true end end
+    return set
+end
+
+local function anyIn(list: string[]?, set: { [string]: boolean }): boolean
+    for _, key in ipairs(list or {}) do
+        for _, k in ipairs(catalogue.Expand(key)) do if set[k] then return true end end
+    end
+    return false
+end
+
+export function matchReasons(e: Entry?, given: Interest?): string[]
+    if not e or e.you then return {} end
+    local mine: Interest = given or interest()
+    local set = expandSet(mine.listed, mine.watches)
+    local reasons: string[] = {}
+    local forMine = anyIn(e.activities, set)
+    if e.intent == "group" and forMine then
+        reasons[#reasons + 1] = "activity"
+        for role in pairs(e.roles.needed) do
+            if mine.roles[role] then reasons[#reasons + 1] = "role" break end
+        end
+    end
+    -- a player for your group: you're listed and lead a group (listed alone,
+    -- you're a player looking yourself, found in game)
+    if e.intent == "player" and forMine and mine.listing and IsInGroup() and UnitIsGroupLeader("player") then
+        reasons[#reasons + 1] = "player"
+    end
+    for _, q in ipairs(e.quests) do if mine.quests[q] then reasons[#reasons + 1] = "quest" break end end
+    for _, key in ipairs(e.activities) do
+        local a = catalogue.Get(key)
+        if a and a.kind == "zone" and key == mine.zone then
+            local lvl = e.level and e.level[1]
+            if not lvl or math.abs(lvl - (mine.level or lvl)) <= 6 then reasons[#reasons + 1] = "zone" end
+        elseif a and a.kind == "boss" then
+            reasons[#reasons + 1] = "boss"
+        end
+    end
+    local who = e.leader and e.leader.name or e.key
+    if socials[who] or socials[Ambiguate and Ambiguate(who, "short") or who] then reasons[#reasons + 1] = "friend" end
+    return reasons
+end
+
+-- Each entry's reasons so far: Match fires for new ones only.
+local matched: { [Entry]: { [string]: boolean } } = setmetatable({}, { __mode = "k" })
+
+local function check(e: Entry)
+    local reasons = matchReasons(e)
+    local had = matched[e] or {}
+    local new: string[] = {}
+    for _, r in ipairs(reasons) do if not had[r] then new[#new + 1] = r; had[r] = true end end
+    matched[e] = had
+    if #new > 0 then fire("Match", e, new) end
+end
+
+-- The groups you whispered: what happens to them.
+local contacted: { [string]: number } = {}
+
+export function contactedAt(key: string?): number? return key and contacted[key] or nil end
+
+local function contactedUpdate(e: Entry, removed: boolean?)
+    if not contacted[e.key] then return end
+    if removed then
+        contacted[e.key] = nil
+        fire("Contacted", e, "gone")
+    elseif e.intent == "group" and e.need == 0 then
+        fire("Contacted", e, "full")
+    end
+end
+
+local function onEvent(event: string, _: any, a2: any)
+    if event == "QUEST_LOG_UPDATE" then readQuests()
+    elseif event == "PREFERRED_PLAY_SETTINGS_UPDATED" then readPreferred()
+    elseif event == "CHAT_MSG_WHISPER_INFORM" then
+        -- you whispered someone: a leader you contacted
+        if type(a2) == "string" and entry(a2) then contacted[a2] = now() end
+    else readSocial() end
+end
+
+-- Started and stopped with the library (init adds it with LFG.AddPart).
+export const part = {
+    Start = function()
+        readQuests()
+        readSocial()
+        readPreferred()
+        local acc = C_AccountServices :: any
+        if acc and acc.RequestPreferredPlaySettings then
+            pcall(acc.RequestPreferredPlaySettings)
+        end
+        for _, ev in ipairs({ "QUEST_LOG_UPDATE", "GUILD_ROSTER_UPDATE", "BN_FRIEND_INFO_CHANGED",
+                              "PREFERRED_PLAY_SETTINGS_UPDATED", "CHAT_MSG_WHISPER_INFORM" }) do
+            events.on(ev, function(...: any) onEvent(ev, ...) end, OWNER)
+        end
+        local onAdded: Listener = I.onAdded or function(e: Entry) check(e) end
+        local onUpdated: Listener = I.onUpdated or function(e: Entry) check(e); contactedUpdate(e) end
+        local onRefreshed: Listener = I.onRefreshed or function(e: Entry)
+            if contacted[e.key] and e.intent == "group" and (e.need or 1) > 0 then fire("Contacted", e, "reposted") end
+        end
+        local onRemoved: Listener = I.onRemoved or function(e: Entry) contactedUpdate(e, true) end
+        I.onAdded, I.onUpdated, I.onRefreshed, I.onRemoved = onAdded, onUpdated, onRefreshed, onRemoved
+        on("EntryAdded", onAdded)
+        on("EntryUpdated", onUpdated)
+        on("EntryRefreshed", onRefreshed)
+        on("EntryRemoved", onRemoved)
+    end,
+    Stop = function()
+        events.offAll(OWNER)
+        local onAdded, onUpdated, onRefreshed, onRemoved = I.onAdded, I.onUpdated, I.onRefreshed, I.onRemoved
+        if onAdded then off("EntryAdded", onAdded) end
+        if onUpdated then off("EntryUpdated", onUpdated) end
+        if onRefreshed then off("EntryRefreshed", onRefreshed) end
+        if onRemoved then off("EntryRemoved", onRemoved) end
+    end,
+} :: Part

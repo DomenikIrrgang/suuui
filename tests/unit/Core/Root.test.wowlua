@@ -1,0 +1,160 @@
+-- Core/Root: SuuUIRoot at pixel-perfect scale times ui.scale, a rescale
+-- waiting for the end of combat, and the beta's issue reporter kept hidden.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as root from "/Core/Root"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as pixel from "/Core/Pixel"
+import expectNoErrors from "../../helpers"
+
+const OWNER = "RootTest"
+
+local scaled: number[] = {}
+events.on("SUUUI_ROOT_SCALED", function(_: string, s: number) scaled[#scaled + 1] = s end, OWNER)
+
+local function screen(height: number)
+    mock.fake("GetPhysicalScreenSize", function(): (number, number) return height * 16 / 9, height end)
+end
+
+@afterEach
+local function restore()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    settings.reset("ui", "scale")
+    settings.reset("ui", "hideIssueReporter")
+    mock.fireEvent("DISPLAY_SIZE_CHANGED")
+    scaled = {}
+end
+
+@test("the root is SuuUIRoot over all of UIParent")
+local function frame()
+    expect(root.root:GetName()).toBe("SuuUIRoot")
+    expect(_G.SuuUIRoot).toBe(root.root)
+    expect(root.root:GetParent()).toBe(UIParent)
+    expect(root.root:GetNumPoints()).toBe(2)
+end
+
+@test("the root ignores UIParent's scale")
+local function ignoresParentScale()
+    expect(root.root:IsIgnoringParentScale()).toBe(true)
+    local outer = CreateFrame("Frame", nil, UIParent)
+    outer:SetScale(2)
+    local inner = CreateFrame("Frame", nil, outer)
+    inner:SetIgnoreParentScale(true)
+    expect(inner:GetEffectiveScale()).toBe(1)
+    outer:Hide()
+end
+
+@test("the ui settings' defaults")
+local function defaults()
+    expect(settings.defaultOf("ui", "scale")).toBe(0)
+    expect(settings.defaultOf("ui", "reducedMotion")).toBe(false)
+    expect(settings.defaultOf("ui", "hideIssueReporter")).toBe(true)
+end
+
+@test("ui.scale is 0 or between 0.5 and 2")
+@cases({ { 0, true }, { 0.5, true }, { 1.25, true }, { 2, true }, { 0.4, false }, { 2.1, false }, { -1, false } })
+local function veto(value: number, ok: boolean)
+    local done, why = settings.set("ui", "scale", value)
+    expect(done).toBe(ok)
+    if not ok then expect(why).toBe("the scale is 0 (automatic) or between 0.5 and 2") end
+end
+
+@test("automatic scale: 1 up to 1440p, then in quarter steps")
+@cases({ { 768, 1 }, { 1080, 1 }, { 1440, 1 }, { 1600, 1 }, { 1800, 1.25 }, { 2160, 1.5 }, { 2880, 2 } })
+local function auto(height: number, scale: number)
+    screen(height)
+    expect(root.userScale()).toBe(scale)
+end
+
+@test("a set ui.scale is used as it is")
+local function userScale()
+    screen(2160)
+    settings.set("ui", "scale", 0.75)
+    expect(root.userScale()).toBe(0.75)
+end
+
+@test("before the settings are ready the scale is automatic")
+local function notReady()
+    screen(2160)
+    settings.set("ui", "scale", 0.75)
+    mock.stub(settings, "ready", function(): boolean return false end)
+    expect(root.userScale()).toBe(1.5)
+end
+
+@test("the root runs at pixel-perfect scale times ui.scale, and says so")
+local function applies()
+    settings.set("ui", "scale", 1.5)
+    local want = pixel.perfectScale() * 1.5
+    expect(root.root:GetScale()).toBeCloseTo(want, 6)
+    expect(scaled[#scaled]).toBeCloseTo(want, 6)
+    local n = #scaled
+    -- nothing changed: no rescale
+    events.emit("SUUUI_PIXEL_CHANGED")
+    expect(#scaled).toBe(n)
+    expectNoErrors()
+end
+
+@test("a new screen rescales the root")
+local function newScreen()
+    settings.set("ui", "scale", 1)
+    screen(1080)
+    mock.fireEvent("DISPLAY_SIZE_CHANGED")
+    expect(root.root:GetScale()).toBeCloseTo(768 / 1080, 6)
+    screen(2160)
+    mock.fireEvent("DISPLAY_SIZE_CHANGED")
+    expect(root.root:GetScale()).toBeCloseTo(768 / 2160, 6)
+end
+
+@test("in combat the rescale waits for its end, and takes the latest value")
+local function combat()
+    settings.set("ui", "scale", 1)
+    local before = root.root:GetScale()
+    mock.player:enterCombat()
+    settings.set("ui", "scale", 1.5)
+    settings.set("ui", "scale", 1.25)
+    expect(root.root:GetScale()).toBe(before)
+    mock.player:leaveCombat()
+    expect(root.root:GetScale()).toBeCloseTo(pixel.perfectScale() * 1.25, 6)
+    expectNoErrors()
+end
+
+-- The issue reporter is Blizzard_PTRFeedback's; a stand-in where the
+-- client doesn't have it.
+local function reporter(): Frame
+    local f = _G.PTR_IssueReporter
+    if not f then f = CreateFrame("Frame", "PTR_IssueReporter", UIParent) end
+    return f
+end
+
+@test("the issue reporter is hidden while ui.hideIssueReporter is on, shown when off")
+local function issueReporter()
+    local f = reporter()
+    f:Show()
+    -- it loads after SuuUI: hidden when its addon loads
+    mock.fireEvent("ADDON_LOADED", "Blizzard_PTRFeedback", false)
+    expect(f:IsShown()).toBe(false)
+    settings.set("ui", "hideIssueReporter", false)
+    expect(f:IsShown()).toBe(true)
+    settings.set("ui", "hideIssueReporter", true)
+    expect(f:IsShown()).toBe(false)
+    -- Blizzard's code showing it again: hidden at once
+    f:Show()
+    expect(f:IsShown()).toBe(false)
+    settings.set("ui", "hideIssueReporter", false)
+    f:Hide()
+    f:Show()
+    expect(f:IsShown()).toBe(true)
+    expectNoErrors()
+end
+
+@test("without the issue reporter (its addon not loaded) nothing happens")
+local function noReporter()
+    local all: { [string]: any } = _G :: any
+    local saved = all.PTR_IssueReporter
+    all.PTR_IssueReporter = nil
+    settings.set("ui", "hideIssueReporter", false)
+    all.PTR_IssueReporter = saved
+    expectNoErrors()
+end

@@ -1,0 +1,290 @@
+-- tests/unit/UI/Timeline.test.wowlua
+-- UI/Timeline: the encounter timeline, as a track and as a list.
+
+import test, expect, cases, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as draw from "/UI/Draw"
+import tokens as T from "/Core/Tokens"
+import * as timeline from "/UI/Timeline"
+import newParent, expectNoErrors from "../../helpers"
+import tokenOf, pointOf, themeChanged from "../SettingsUI/UiSettingsHelpers"
+import internal fmtTime, remainingOf, alignEvent, trackEvent from "/UI/Timeline"
+
+type Timeline = timeline.EncounterTimeline
+type Event = timeline.TimelineEvent
+
+local S = T.space
+local built: Timeline[] = {}
+local parents: Frame[] = {}
+
+local function make(opts: { variant?: string, window?: number, soonAt?: number }?): Timeline
+    local parent = newParent()
+    local t = timeline.encounterTimeline(parent, opts)
+    built[#built + 1] = t
+    parents[#parents + 1] = parent
+    return t
+end
+
+@afterEach
+local function cleanUp()
+    for _, t in ipairs(built) do t:SetEvents(nil) end
+    for _, p in ipairs(parents) do p:Hide() end
+    built, parents = {}, {}
+end
+
+-- An event `left` seconds from now.
+local function inSec(id: any, label: string?, left: number, extra: { [string]: any }?): Event
+    local e: Event = { id = id, label = label, endsAt = GetTime() + left }
+    for k, v in pairs(extra or {}) do (e :: any)[k] = v end
+    return e
+end
+
+--------------------------------------------------------------------------------
+-- Times
+--------------------------------------------------------------------------------
+
+@test("times: tenths under 10 s, seconds under a minute, then m:ss")
+@cases({
+    { 0, "0.0s" }, { -3, "0.0s" }, { 9.94, "9.9s" }, { 10, "10s" }, { 59.9, "59s" },
+    { 60, "1:00" }, { 125.7, "2:05" }, { 3600, "60:00" },
+})
+local function times(left: number, shown: string)
+    expect(fmtTime(left)).toBe(shown)
+end
+
+@test("the time left: paused as it was, else until endsAt, never below 0")
+local function remaining()
+    expect(remainingOf({ id = 1, paused = 7, endsAt = 100 }, 0)).toBe(7)
+    expect(remainingOf({ id = 1, endsAt = 110 }, 100)).toBe(10)
+    expect(remainingOf({ id = 1, endsAt = 90 }, 100)).toBe(0)
+    expect(remainingOf({ id = 1 }, 100)).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- The track
+--------------------------------------------------------------------------------
+
+@test("a new timeline: a track, 30 s, ticks every 5 s")
+local function defaults()
+    local t = make()
+    expect(t.variant).toBe("track")
+    expect(t.window).toBe(30)
+    expect(t.soonAt).toBe(5)
+    expect(t).toHaveSize(draw.size("timeline-w"), 70)
+    expect(#t.ticks).toBe(5)
+    expect(t.endLabel).toHaveText("30s")
+    expect(t.later:IsShown()).toBe(false)
+    expect(t.list).toBeNil()
+    local w = (t.track :: Frame):GetWidth()
+    expect(pointOf(t.ticks[1]).x).toBe(math.floor(5 / 30 * w + 0.5))
+end
+
+@test("a timeline with its own window and warning time")
+local function options()
+    local t = make({ window = 20, soonAt = 3 })
+    expect(#t.ticks).toBe(3)
+    expect(t.endLabel).toHaveText("20s")
+    t:SetEvents({ inSec(1, "Soon", 4) })
+    expect(tokenOf(t.evs[1].time)).toBe("ink")
+end
+
+@test("events in the window ride the line, soonest first")
+local function trackEvents()
+    local t = make()
+    local w = (t.track :: Frame):GetWidth()
+    t:SetEvents({
+        inSec("b", "Breath", 12, { badge = { tone = "danger", text = "Tank" }, icon = 1234 }),
+        inSec("a", "Axe", 3),
+        { id = "c", label = "Cleave", paused = 20 },
+    })
+    expect(#t.evs).toBe(3)
+    local a, b, c = t.evs[1], t.evs[2], t.evs[3]
+    expect(a.name).toHaveText("Axe")
+    expect(a.time).toHaveText("3.0s")
+    expect(b.name).toHaveText("Breath")
+    expect(b.time).toHaveText("12s")
+    expect(c.name).toHaveText("Cleave")
+    expect(c.time).toHaveText("20s")
+    -- under 5 s: amber; later: ink
+    expect(tokenOf(a.time)).toBe("amber")
+    expect(tokenOf(a.name)).toBe("ink")
+    expect(tokenOf(b.time)).toBe("ink")
+    expect(tokenOf(b.name)).toBe("ink-muted")
+    -- the badge only where there is one
+    expect(a.badge:IsShown()).toBe(false)
+    expect(b.badge:IsShown()).toBe(true)
+    expect(b.badge.text).toBe("Tank")
+    expect(b.badge.tone).toBe("danger")
+    -- the icon, or the question mark
+    expect(b.icon.art:GetTextureFileID()).toBe(1234)
+    expect(a.icon.art:GetTextureFileID()).toBe(134400)
+    -- where: its share of the window along the line, centred
+    local p = pointOf(a)
+    expect(p.point).toBe("TOP")
+    expect(p.relativeTo).toBe(t.track)
+    expect(p.relativePoint).toBe("TOPLEFT")
+    expect(p.x).toBe(math.floor(3 / 30 * w + 0.5))
+    expect(pointOf(c).x).toBe(math.floor(20 / 30 * w + 0.5))
+    -- centred under the icon
+    expect(a.align).toBe("mid")
+    expect(a.time:GetJustifyH()).toBe("CENTER")
+    expect(t.later:IsShown()).toBe(false)
+    expectNoErrors()
+end
+
+@test("what comes after the window is named right of the line")
+local function later()
+    local t = make()
+    t:SetEvents({ inSec(1, "Inferno", 52), inSec(2, "Rain", 100), inSec(3, "Bolt", 2) })
+    expect(t.later:IsShown()).toBe(true)
+    expect(t.later).toHaveText("then Inferno in 52s · +1 more")
+    expect(t.evs[1].name).toHaveText("Bolt")
+    t:SetEvents({ inSec(1, nil, 45) })
+    expect(t.later).toHaveText("then ? in 45s")
+    expect(t.evs[1]:IsShown()).toBe(false)
+end
+
+@test("the positions move every frame while something is on it")
+local function moving()
+    local t = make()
+    t:SetEvents({ inSec(1, "Axe", 8) })
+    expect(t:GetScript("OnUpdate") ~= nil).toBe(true)
+    expect(tokenOf(t.evs[1].time)).toBe("ink")
+    mock.advanceTime(4)
+    mock.nextFrame()
+    expect(t.evs[1].time).toHaveText("4.0s")
+    expect(tokenOf(t.evs[1].time)).toBe("amber")
+    expect(t.evs[1].ring ~= nil).toBe(true)
+    mock.advanceTime(10)
+    mock.nextFrame()
+    expect(t.evs[1].time).toHaveText("0.0s")
+    -- nothing on it: no more updates
+    t:SetEvents({})
+    expect(t:GetScript("OnUpdate")).toBeNil()
+    expect(t.evs[1]:IsShown()).toBe(false)
+    expect(t.evs[1].id).toBeNil()
+    t:SetEvents(nil)
+    expect(t.events).toEqual({})
+end
+
+@test("an event keeps its frame's name and icon while its id stays")
+local function sameId()
+    local t = make()
+    t:SetEvents({ inSec(7, "First", 10) })
+    -- (the name, icon and badge are set when the id on the frame changes)
+    t:SetEvents({ inSec(7, "Renamed", 10) })
+    expect(t.evs[1].name).toHaveText("First")
+    t:SetEvents({ inSec(8, "Other", 10) })
+    expect(t.evs[1].name).toHaveText("Other")
+end
+
+@test("the alignments: under its icon, or held inside either end")
+@cases({
+    { "start", "TOPLEFT", "BOTTOMLEFT", "LEFT" },
+    { "end", "TOPRIGHT", "BOTTOMRIGHT", "RIGHT" },
+    { "mid", "TOP", "BOTTOM", "CENTER" },
+    { "anything", "TOP", "BOTTOM", "CENTER" },
+})
+local function aligns(align: string, point: string, below: string, justify: string)
+    local t = make()
+    local f = trackEvent(t)
+    alignEvent(f, align)
+    expect(pointOf(f.icon).point).toBe(point)
+    local tp = pointOf(f.time)
+    expect(tp.point).toBe(point)
+    expect(tp.relativeTo).toBe(f.icon)
+    expect(tp.relativePoint).toBe(below)
+    expect(f.time:GetJustifyH()).toBe(justify)
+    expect(f.name:GetJustifyH()).toBe(justify)
+    expect(pointOf(f.badge).relativeTo).toBe(f.name)
+end
+
+--------------------------------------------------------------------------------
+-- The list
+--------------------------------------------------------------------------------
+
+@test("the list: soonest first, a draining line, the panel's height")
+local function list()
+    local t = make({ variant = "list" })
+    expect(t.variant).toBe("list")
+    expect(t.track).toBeNil()
+    expect(t:GetWidth()).toBe(280)
+    local panel = t.list :: timeline.TimelineList
+    expect(panel.title).toHaveText("Timeline")
+    t:SetEvents({
+        inSec(1, "Breath", 12, { badge = { tone = "warning", text = "Move" } }),
+        inSec(2, "Axe", 2),
+        inSec(3, "Wipe", 90),
+    })
+    expect(#t.rows).toBe(3)
+    expect(t.rows[1].name).toHaveText("Axe")
+    expect(t.rows[1].time).toHaveText("2.0s")
+    expect(t.rows[2].name).toHaveText("Breath")
+    expect(t.rows[3].time).toHaveText("1:30")
+    expect(tokenOf(t.rows[1].time)).toBe("amber")
+    expect(tokenOf(t.rows[1].drain)).toBe("amber")
+    expect(tokenOf(t.rows[2].time)).toBe("ink")
+    expect(tokenOf(t.rows[2].drain)).toBe("ink-muted")
+    -- the badge, and the name up to it (or up to the time)
+    expect(t.rows[2].badge:IsShown()).toBe(true)
+    expect(t.rows[1].badge:IsShown()).toBe(false)
+    local inner = 280 - S["space-5"] * 2
+    expect(t.rows[2].drain:GetWidth()).toBeCloseTo(12 / 30 * inner)
+    expect(t.rows[3].drain:GetWidth()).toBeCloseTo(inner) -- (past the window: full)
+    -- the rows one under another
+    expect(pointOf(t.rows[1]).y).toBe(-t.listTop)
+    expect(pointOf(t.rows[2]).y).toBe(-(t.listTop + 30 + S["space-3"]))
+    local h = t.listTop + 3 * (30 + S["space-3"]) - S["space-3"] + S["space-5"]
+    expect(panel:GetHeight()).toBeCloseTo(h)
+    expect(t:GetHeight()).toBeCloseTo(h)
+    -- fewer: the rest hide; none: the panel's least height
+    t:SetEvents({ inSec(1, "Axe", 2) })
+    expect(t.rows[2]:IsShown()).toBe(false)
+    t:SetEvents({})
+    expect(t.rows[1]:IsShown()).toBe(false)
+    expect(panel:GetHeight()).toBeCloseTo(t.listTop + S["space-5"])
+end
+
+@test("the list's meta line")
+local function meta()
+    local t = make()
+    t:SetMeta("Heroic") -- (no list yet: nothing)
+    t:SetVariant("list")
+    local panel = t.list :: timeline.TimelineList
+    t:SetMeta("Heroic")
+    expect(panel.meta).toHaveText("Heroic")
+    t:SetMeta(nil)
+    expect(panel.meta).toHaveText("")
+end
+
+@test("switching variants keeps both parts, one shown")
+local function switching()
+    local t = make()
+    t:SetEvents({ inSec(1, "Axe", 4) })
+    t:SetVariant("list")
+    expect((t.track :: Frame):IsShown()).toBe(false)
+    expect((t.list :: Frame):IsShown()).toBe(true)
+    expect(t.rows[1].name).toHaveText("Axe")
+    t:SetVariant("nonsense")
+    expect(t.variant).toBe("track")
+    expect((t.track :: Frame):IsShown()).toBe(true)
+    expect((t.list :: Frame):IsShown()).toBe(false)
+    expect(t).toHaveSize(draw.size("timeline-w"), 70)
+    t:SetVariant(nil)
+    expect(t.variant).toBe("track")
+end
+
+@test("a theme change places the list's rule and rows again")
+local function theme()
+    local t = make({ variant = "list" })
+    t:SetEvents({ inSec(1, "Axe", 4) })
+    local before = t.listTop
+    expect(before).toBe(S["space-4"] * 2 + T.type.header.lineHeight + 1 + S["space-4"])
+    themeChanged()
+    expect(t.listTop).toBe(before)
+    expect(pointOf(t.rows[1]).y).toBe(-t.listTop)
+    -- a list that is a track now: placed, not laid out
+    t:SetVariant("track")
+    themeChanged()
+    expectNoErrors()
+end

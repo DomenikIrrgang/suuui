@@ -1,0 +1,743 @@
+-- UI/Professions: the rail of tabs, the overview's cards (learned,
+-- untrained, empty; spells, skill and recipe bars, Unlearn), the crafting
+-- page's head and recipe list (categories, folding, difficulty colours,
+-- counts, tracked, selection, Shift-click links), the chosen recipe (its
+-- product, tools, source, reagents, cooldown, scrolling back to the top)
+-- and the foot (Track, quantity, Create all, Create, why not), the filters
+-- and sort, and a theme change.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import professions, PROFESSIONS_W, PROFESSIONS_H, PROFESSION_FILTER_DEFAULTS from "/UI/Professions"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, borderToken from "./WorldHelpers"
+
+local S = T.space
+
+local parent: Frame? = nil
+
+local function make(opts: { [string]: any }?): any
+    parent = newParent(PROFESSIONS_W, PROFESSIONS_H)
+    local p = professions(parent, opts)
+    p:SetAllPoints()
+    mock.advanceFrames(1)
+    return p
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    mock.setModifiers({ shift = false })
+    GameTooltip:Hide()
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function shownRows(p: any): any[]
+    local out: any[] = {}
+    for _, r in ipairs(p.listRows) do if r:IsShown() then out[#out + 1] = r end end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- The rail
+--------------------------------------------------------------------------------
+
+@test("the rail: a tab per entry, the chosen one gilt, the rest hairline; centred by edgeInset")
+local function rail()
+    local p = make({ edgeInset = 30 })
+    local onTab = mock.spy(function(_k: any) end)
+    p:SetTabs({
+        { key = "overview", label = "Overview", glyph = "compass" },
+        { key = "alchemy", label = "Alchemy", icon = 136240 },
+        { key = "cooking", label = "Cooking" },
+    }, "alchemy")
+    local a, b, c = p.tabs[1], p.tabs[2], p.tabs[3]
+    expect(a.glyph).toBeShown()
+    expect(a.glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\compass.tga")
+    expect(tokenOf(a.glyph)).toBe("gilt-text")
+    expect(c.glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\book.tga")
+    expect(b.glyph).never.toBeShown()
+    expect(b.icon.art:GetTextureFileID()).toBe(136240)
+    expect(b.icon.borderToken).toBe("gilt")
+    expect(a.icon.borderToken).toBe("gilt-hairline")
+    expect(p.tabMarker.chosen).toBe(b)
+    local _, _, _, x, y = c:GetPoint(1)
+    expect(x).toBe(15)
+    expect(y).toBe(-2 * (32 + S["space-4"]))
+    -- a click: onTab with its key (none set: nothing)
+    mock.click(a)
+    p.onTab = onTab
+    mock.click(a)
+    expect(onTab).toHaveBeenCalledWith("overview")
+    -- hover: its label as the tooltip's title
+    mock.hover(c)
+    expect(GameTooltip).toHaveLines({ "Cooking" })
+    mock.hover(nil)
+    expect(GameTooltip:IsShown()).toBe(false)
+    -- fewer tabs: the rest hidden; none chosen
+    p:SetTabs({ { key = "overview", label = "Overview" } }, "nothing")
+    expect(b).never.toBeShown()
+    expect(c).never.toBeShown()
+    expect(p.tabMarker.chosen).toBeNil()
+    p:SetTabs(nil, nil)
+    expect(a).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- Overview
+--------------------------------------------------------------------------------
+
+local ALCHEMY: { [string]: any } = {
+    name = "Alchemy", rank = "Journeyman", icon = 136240, skill = 83, max = 150, crafting = true,
+    recipes = { learned = 12, total = 40 },
+}
+
+@test("the overview: Primary professions with a count, two cards, the secondary row")
+local function overview()
+    local p = make()
+    p:SetOverview({ primary = { ALCHEMY }, secondary = { { name = "Cooking", rank = "Apprentice", icon = 133971, skill = 10, max = 75 } } })
+    expect(p.mode).toBe("overview")
+    expect(p.overview).toBeShown()
+    expect(p.crafting).never.toBeShown()
+    expect(p.primaryHead).toHaveText("Primary professions")
+    expect(p.primaryCount).toHaveText("1 of 2")
+    expect(p.secondaryHead).toHaveText("Secondary professions")
+    local a, empty, cook = p.cards[1], p.cards[2], p.cards[3]
+    expect(a.name).toHaveText("Alchemy")
+    expect(tokenOf(a.name)).toBe("gilt-text")
+    expect(a.rank).toHaveText("Journeyman")
+    expect(a.open).toBeShown()
+    expect(a.open).toHaveText("Recipes")
+    expect(a.skill.num).toHaveText("83 / 150")
+    expect(a.recipes).toBeShown()
+    expect(a.recipes.num).toHaveText("12 / 40")
+    expect(a.recipesHint).never.toBeShown()
+    expect(a.hint).never.toBeShown()
+    expect(a.icon.state).toBe("rest")
+    expect(a.unlearn).never.toBeShown()
+    -- the second primary slot: an empty card
+    expect(empty).toBeShown()
+    expect(empty.empty).toBeShown()
+    expect(empty.empty).toHaveText("Learn a profession from a trainer")
+    expect(empty.name).never.toBeShown()
+    -- a secondary one: no Recipes, the others' slots hidden
+    expect(cook.name).toHaveText("Cooking")
+    expect(cook.open).never.toBeShown()
+    expect(cook.recipes).never.toBeShown()
+    expect(p.cards[4]).never.toBeShown()
+    expect(p.cards[5]).never.toBeShown()
+    -- side by side: half and a third of the width
+    local w = p.overview:GetWidth()
+    expect(a:GetWidth()).toBe(math.floor((w - S["space-5"]) / 2))
+    expect(cook:GetWidth()).toBe(math.floor((w - S["space-5"] * 2) / 3))
+end
+
+@test("the skill bar's fill: the share of its track, none at zero")
+local function skillFill()
+    local p = make()
+    p:SetOverview({ primary = { ALCHEMY } })
+    mock.advanceFrames(1)
+    local bar = p.cards[1].skill
+    local w = bar.track:GetWidth()
+    expect(w > 0).toBe(true)
+    expect(bar.fill).toBeShown()
+    expect(bar.fill:GetWidth()).toBeCloseTo(w * 83 / 150)
+    bar:SetSkill(0, 150)
+    expect(bar.fill).never.toBeShown()
+    -- (the numbers wider now: the track a little shorter)
+    bar:SetSkill(200, 150)
+    expect(bar.fill:GetWidth()).toBeCloseTo(bar.track:GetWidth())
+    bar:SetSkill(nil, nil)
+    expect(bar.num).toHaveText("0 / 0")
+    expect(bar.fill).never.toBeShown()
+end
+
+@test("an untrained card: dimmed, its hint where the bar goes; recipes not counted yet")
+local function untrained()
+    local p = make()
+    p:SetOverview({ primary = {
+        { name = "Mining", rank = "", icon = 136248, untrained = true, hint = "Learn it from a trainer in town" },
+        { name = "Tailoring", rank = "Apprentice", icon = 136249, skill = 5, max = 75, crafting = true },
+    } })
+    local m, t = p.cards[1], p.cards[2]
+    expect(m.icon.state).toBe("dim")
+    expect(tokenOf(m.name)).toBe("ink-muted")
+    expect(m.skill).never.toBeShown()
+    expect(m.hint).toBeShown()
+    expect(m.hint).toHaveText("Learn it from a trainer in town")
+    expect(m.recipes).never.toBeShown()
+    expect(m.recipesHint).never.toBeShown()
+    expect(t.recipes).never.toBeShown()
+    expect(t.recipesHint).toBeShown()
+    expect(t.recipesHint).toHaveText("Recipes: open it once to count them")
+    expect(p.primaryCount).toHaveText("2 of 2")
+end
+
+@test("spells: under the bars, active ones arcane, clickable ink, the rest muted; hover, click and drag")
+local function spells()
+    local p = make()
+    local clicked, entered, left, dragged = mock.spy(), mock.spy(function(_o: any) end), mock.spy(), mock.spy()
+    p:SetOverview({ primary = { {
+        name = "Enchanting", rank = "Apprentice", icon = 136244, skill = 1, max = 75, crafting = true,
+        spells = {
+            { name = "Disenchant", icon = 132885, onClick = clicked, onEnter = entered, onLeave = left, onDrag = dragged },
+            { name = "Enchanting", icon = 136244, active = true },
+            { name = "Runed Copper Rod", icon = 135225 },
+        },
+    } } })
+    local c = p.cards[1]
+    local de, active, plain = c.spells[1], c.spells[2], c.spells[3]
+    expect(de.label).toHaveText("Disenchant")
+    expect(tokenOf(de.label)).toBe("ink")
+    expect(tokenOf(active.label)).toBe("arcane")
+    expect(active.icon.borderToken).toBe("arcane")
+    expect(active.icon.glowToken).toBe("glow-arcane")
+    expect(tokenOf(plain.label)).toBe("ink-muted")
+    expect(de:GetWidth()).toBe(20 + S["space-3"] + math.ceil(de.label:GetUnboundedStringWidth()) + 2)
+    -- below the recipes bar (a crafting one), one under another
+    expect(de).toBeAnchoredTo(c.recipes, "TOPLEFT", "BOTTOMLEFT")
+    local _, _, _, _, y1 = de:GetPoint(1)
+    local _, _, _, _, y2 = active:GetPoint(1)
+    expect(y1 - y2).toBe(22 + S["space-2"])
+    -- the card as tall as three rows of spells
+    expect(c:GetHeight() > p.cards[2]:GetHeight() - 1).toBe(true)
+    mock.hover(de)
+    expect(de.icon.borderToken).toBe("gilt")
+    expect(entered).toHaveBeenCalledWith(de)
+    mock.hover(active)
+    expect(left).toHaveBeenCalledTimes(1)
+    expect(de.icon.borderToken).toBeNil()
+    mock.hover(nil)
+    expect(active.icon.borderToken).toBe("arcane")
+    mock.click(de)
+    expect(clicked).toHaveBeenCalledTimes(1)
+    mock.click(plain)
+    mock.dragTo(de, de)
+    expect(dragged).toHaveBeenCalledTimes(1)
+    mock.dragTo(plain, plain)
+    -- fewer spells next time: the rest hidden; none: the spells under the skill bar
+    p:SetOverview({ primary = { { name = "Herbalism", rank = "", icon = 1, skill = 1, max = 75,
+        spells = { { name = "Find Herbs", icon = 2 } } } } })
+    expect(c.spells[1]).toBeAnchoredTo(c.skill, "TOPLEFT", "BOTTOMLEFT")
+    expect(c.spells[2]).never.toBeShown()
+    expect(c.spells[3]).never.toBeShown()
+end
+
+@test("a card: hover gilds a crafting one, a click opens it, a drag its spell, Unlearn its own")
+local function cardInput()
+    local p = make()
+    local opened = mock.spy(function(_c: any) end)
+    local dragged, unlearned = mock.spy(), mock.spy()
+    local card: { [string]: any } = { name = "Alchemy", rank = "", icon = 1, skill = 1, max = 75, crafting = true,
+        onDrag = dragged, onUnlearn = unlearned }
+    p:SetOverview({ primary = { card, { name = "Mining", rank = "", icon = 2, skill = 1, max = 75 } } })
+    local c, mining = p.cards[1], p.cards[2]
+    mock.hover(c)
+    expect(borderToken(c.border)).toBe("gilt-line")
+    expect(c.icon.borderToken).toBe("gilt")
+    mock.hover(mining)
+    expect(borderToken(c.border)).toBe("gilt-faint")
+    expect(c.icon.borderToken).toBeNil()
+    expect(borderToken(mining.border)).toBe("gilt-faint")
+    mock.click(c)
+    p.onOpen = opened
+    mock.click(c)
+    mock.click(mining)
+    expect(opened).toHaveBeenCalledTimes(1)
+    expect(opened).toHaveBeenCalledWith(card)
+    mock.dragTo(c, c)
+    mock.dragTo(mining, mining)
+    expect(dragged).toHaveBeenCalledTimes(1)
+    -- Unlearn: only on the learned one with onUnlearn; ember on hover
+    expect(c.unlearn).toBeShown()
+    expect(mining.unlearn).never.toBeShown()
+    mock.hover(c.unlearn)
+    expect(c.unlearn.edge.top).toBeShown()
+    expect(tokenOf(c.unlearn.glyph)).toBe("ember-text")
+    expect(GameTooltip).toHaveLines({ "Unlearn Alchemy", "You lose your skill and the recipes you know." })
+    mock.hover(nil)
+    expect(c.unlearn.edge.top).never.toBeShown()
+    expect(tokenOf(c.unlearn.glyph)).toBe("ink-faint")
+    mock.click(c.unlearn)
+    expect(unlearned).toHaveBeenCalledTimes(1)
+    -- an emptied card keeps nothing
+    p:SetOverview({})
+    expect(c.unlearn).never.toBeShown()
+    expect(c.empty).toBeShown()
+    expect(p.primaryCount).toHaveText("0 of 2")
+end
+
+@test("the secondary row wraps after three; the overview before it has a width")
+local function secondaryRows()
+    local p = make()
+    local sec: { [string]: any }[] = {}
+    for i = 1, 4 do sec[i] = { name = "Secondary " .. i, rank = "", icon = i, skill = 1, max = 75 } end
+    p:SetOverview({ secondary = sec })
+    local first, fourth = p.cards[3], p.cards[6]
+    expect(fourth).toBeShown()
+    local _, _, _, x1, y1 = first:GetPoint(1)
+    local _, _, _, x4, y4 = fourth:GetPoint(1)
+    expect(x4).toBe(x1)
+    expect(y1 - y4).toBe(first:GetHeight() + S["space-5"])
+    -- two secondary ones now: the third and fourth hidden
+    p:SetOverview({ secondary = { sec[1], sec[2] } })
+    expect(p.cards[5]).never.toBeShown()
+    expect(p.cards[6]).never.toBeShown()
+    -- an overview with no width yet: the design's width
+    local q = professions(UIParent, nil)
+    q:SetOverview(nil)
+    expect(q.cards[1]:GetWidth()).toBe(math.floor((PROFESSIONS_W - 40 - 44 - S["space-5"] - S["space-5"]) / 2))
+    q:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Crafting: the head and the list
+--------------------------------------------------------------------------------
+
+local function craft(over: { [string]: any }?): { [string]: any }
+    local d: { [string]: any } = {
+        name = "Alchemy", rank = "Journeyman", skill = 83, max = 150, recipes = { learned = 3, total = 10 },
+        categories = {
+            { name = "Potions", recipes = {
+                { id = 2330, name = "Minor Healing Potion", difficulty = 3, canMake = 5, tracked = true },
+                { id = 2331, name = "Minor Mana Potion", difficulty = 0, canMake = 0 },
+            } },
+            { name = "Elixirs", recipes = {
+                { id = 2332, name = "Elixir of Minor Defense", difficulty = 1, learned = false },
+                { id = 2333, name = "Elixir of Lion's Strength", difficulty = 2 },
+            } },
+        },
+        selected = 2331,
+    }
+    for k, v in pairs(over or {}) do d[k] = v end
+    return d
+end
+
+@test("crafting: the head (name, rank, the two bars), the overview hidden")
+local function craftingHead()
+    local p = make()
+    p:SetOverview({ primary = { ALCHEMY } })
+    p:SetCrafting(craft())
+    expect(p.mode).toBe("crafting")
+    expect(p.crafting).toBeShown()
+    expect(p.overview).never.toBeShown()
+    expect(p.craftName).toHaveText("Alchemy")
+    expect(p.craftRank).toHaveText("Journeyman")
+    expect(p.craftSkill.num).toHaveText("83 / 150")
+    expect(p.craftRecipes).toBeShown()
+    expect(p.craftRecipes.num).toHaveText("3 / 10")
+    expect(p.craftSkill:GetWidth() >= 80).toBe(true)
+    -- no recipes counted, no rank: one bar, the room to it
+    local plain = craft({ rank = "" })
+    plain.recipes = nil
+    p:SetCrafting(plain)
+    expect(p.craftRecipes).never.toBeShown()
+    p:SetCrafting(nil)
+    expect(p.craftName).toHaveText("")
+    expect(p.listEmpty).toBeShown()
+end
+
+@test("the list: category heads with counts, recipes in the game's colours, counts, the eye, the selection")
+local function list()
+    local p = make()
+    p:SetCrafting(craft())
+    local rows = shownRows(p)
+    expect(#rows).toBe(6)
+    local head, heal, mana, defense, lion = rows[1], rows[2], rows[3], rows[5], rows[6]
+    expect(head.category).toBe("Potions")
+    expect(head.label).toHaveText("Potions")
+    expect(tokenOf(head.label)).toBe("gilt-text")
+    expect(head.count).toHaveText("2")
+    expect(head.chevron).toBeShown()
+    expect(head.chevron:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronDown.tga")
+    expect(head.eye).never.toBeShown()
+    expect(head.sel).never.toBeShown()
+    expect(heal.label).toHaveText("Minor Healing Potion")
+    expect(tokenOf(heal.label)).toBe("quest-trivial")
+    expect(heal.count).toHaveText("[5]")
+    expect(heal.eye).toBeShown()
+    expect(heal.chevron).never.toBeShown()
+    expect(heal.sel).never.toBeShown()
+    expect(tokenOf(mana.label)).toBe("quest-very-difficult")
+    expect(mana.count).toHaveText("")
+    expect(mana.sel).toBeShown()
+    expect(mana.selEdge).toBeShown()
+    expect(tokenOf(defense.label)).toBe("ink-faint")
+    expect(tokenOf(lion.label)).toBe("quest-standard")
+    expect(p.listEmpty).never.toBeShown()
+    -- space-2 after each category
+    local _, _, _, _, yElixirs = rows[4]:GetPoint(1)
+    expect(yElixirs).toBe(-(3 * 20 + S["space-2"]))
+end
+
+@test("a category head folds and opens; a flat list has no heads")
+local function folding()
+    local p = make()
+    p:SetCrafting(craft())
+    local head = shownRows(p)[1]
+    mock.click(head)
+    expect(p.folded.Potions).toBe(true)
+    expect(#shownRows(p)).toBe(4)
+    expect(shownRows(p)[1].chevron:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronRight.tga")
+    mock.click(shownRows(p)[1])
+    expect(#shownRows(p)).toBe(6)
+    -- flat: never folded, no head
+    p.folded.Flat = true
+    p:SetCrafting(craft({ categories = { { name = "Flat", flat = true, recipes = {
+        { id = 1, name = "A" }, { id = 2, name = "B" } } } } }))
+    local rows = shownRows(p)
+    expect(#rows).toBe(2)
+    expect(rows[1].recipe.name).toBe("A")
+    -- a recipe without a difficulty: trivial
+    expect(tokenOf(rows[1].label)).toBe("quest-trivial")
+end
+
+@test("a recipe row: hover to onRecipeEnter, a click to onSelect, Shift-click to onLinkRecipe")
+local function rowInput()
+    local p = make()
+    p:SetCrafting(craft())
+    local heal = shownRows(p)[2]
+    local entered = mock.spy(function(_r: any, _o: any) end)
+    local selected = mock.spy(function(_id: any) end)
+    local linked = mock.spy(function(_id: any) end)
+    mock.hover(heal)
+    expect(heal.hover).toBeShown()
+    p.onRecipeEnter = entered
+    mock.hover(nil)
+    expect(heal.hover).never.toBeShown()
+    mock.hover(heal)
+    expect(entered).toHaveBeenCalledWith(heal.recipe, heal)
+    mock.click(heal)
+    p.onSelect = selected
+    mock.click(heal)
+    expect(selected).toHaveBeenCalledWith(2330)
+    mock.setModifiers({ shift = true })
+    mock.click(heal)
+    -- (Shift-click without onLinkRecipe: it selects)
+    expect(selected).toHaveBeenCalledTimes(2)
+    p.onLinkRecipe = linked
+    mock.click(heal)
+    expect(linked).toHaveBeenCalledWith(2330)
+    expect(selected).toHaveBeenCalledTimes(2)
+end
+
+@test("DrawList before any crafting data: nothing")
+local function noData()
+    local p = make()
+    p:DrawList()
+    expect(#shownRows(p)).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- Crafting: the chosen recipe
+--------------------------------------------------------------------------------
+
+local function recipe(over: { [string]: any }?): { [string]: any }
+    local r: { [string]: any } = {
+        name = "Minor Healing Potion", quality = 1, qualityName = "common", icon = 134829, makes = 1,
+        desc = "Restores 70 to 90 health.",
+        reagents = {
+            { name = "Peacebloom", icon = 133939, quality = 1, qualityName = "common", have = 3, need = 1 },
+            { name = "Silverleaf", icon = 134190, quality = 1, qualityName = "common", have = 0, need = 1 },
+        },
+        canMake = 3, ready = true,
+    }
+    for k, v in pairs(over or {}) do r[k] = v end
+    return r
+end
+
+@test("no recipe chosen: Choose a recipe, nothing else")
+local function noneChosen()
+    local p = make()
+    local v = p.recipe
+    expect(v.none).toBeShown()
+    expect(v.none).toHaveText("Choose a recipe")
+    expect(v.product).never.toBeShown()
+    expect(v.foot).never.toBeShown()
+    expect(v.cooldown).never.toBeShown()
+    expect(v.why).never.toBeShown()
+end
+
+@test("a recipe: its product, title in its quality, makes, description, reagents have / need")
+local function chosen()
+    local p = make()
+    p:SetCrafting(craft())
+    p:SetRecipe(recipe({ makes = 5, quality = 2, qualityName = "uncommon" }))
+    local v = p.recipe
+    expect(v.none).never.toBeShown()
+    expect(v.product).toBeShown()
+    expect(v.product.skin.item).toEqual({ icon = 134829, quality = "uncommon" })
+    expect(v.title).toHaveText("Minor Healing Potion")
+    expect(tokenOf(v.title)).toBe("quality-uncommon")
+    expect(v.makes).toHaveText("Makes 5")
+    expect(v.desc).toHaveText("Restores 70 to 90 health.")
+    expect(v.reagentHead).toHaveText("Reagents")
+    local a, b = v.reagents[1], v.reagents[2]
+    expect(a.name).toHaveText("Peacebloom")
+    expect(tokenOf(a.name)).toBe("quality-common")
+    expect(a.count).toHaveText("3 / 1")
+    expect(tokenOf(a.count)).toBe("ink")
+    expect(a.slot.skin.item.dim).toBe(false)
+    -- short of one: muted, the count ember, the slot dimmed
+    expect(tokenOf(b.name)).toBe("ink-muted")
+    expect(b.count).toHaveText("0 / 1")
+    expect(tokenOf(b.count)).toBe("ember-text")
+    expect(b.slot.skin.item.dim).toBe(true)
+    -- one product: no Makes
+    p:SetRecipe(recipe())
+    expect(v.makes).toHaveText("")
+    -- a reagent's and the product's hover to their callbacks
+    local onReagent = mock.spy(function(_i: number, _o: any) end)
+    local onProduct = mock.spy(function(_o: any) end)
+    mock.hover(a.slot)
+    p:SetRecipe(recipe({ onReagent = onReagent, onProduct = onProduct }))
+    mock.hover(b.slot)
+    expect(onReagent).toHaveBeenCalledWith(2, b.slot)
+    mock.hover(v.product)
+    expect(onProduct).toHaveBeenCalledWith(v.product)
+    mock.hover(nil)
+end
+
+@test("tools: a check in fel when met, a cross in ember when not; fewer next time")
+local function tools()
+    local p = make()
+    p:SetRecipe(recipe({ tools = { { name = "Blacksmith Hammer", met = true }, { name = "Anvil", met = false } } }))
+    local v = p.recipe
+    local met, missing = v.tools[1], v.tools[2]
+    expect(met.text).toHaveText("Requires Blacksmith Hammer")
+    expect(met.glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\check.tga")
+    expect(tokenOf(met.glyph)).toBe("fel")
+    expect(tokenOf(met.text)).toBe("ink-muted")
+    expect(missing.glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\close.tga")
+    expect(tokenOf(missing.text)).toBe("ember-text")
+    p:SetRecipe(recipe({ tools = { { name = "Anvil" } } }))
+    expect(missing).never.toBeShown()
+    p:SetRecipe(nil)
+    expect(met).never.toBeShown()
+    expect(v.reagents[1]).never.toBeShown()
+end
+
+@test("a source: its head, the recipe item with its note, where it is; or only lines, or only the item")
+local function source()
+    local p = make()
+    local entered = mock.spy(function(_o: any) end)
+    p:SetRecipe(recipe({ source = {
+        item = { icon = 134939, name = "Recipe: Swiftness Potion", quality = 1, qualityName = "common", note = "Vendor", onEnter = entered },
+        lines = { "Sold by Tamsin Ashford", "Elwynn Forest" },
+    } }))
+    local v = p.recipe
+    expect(v.sourceHead).toBeShown()
+    expect(v.sourceHead).toHaveText("Source")
+    expect(v.sourceItem).toBeShown()
+    expect(v.sourceItem.name).toHaveText("Recipe: Swiftness Potion")
+    expect(v.sourceItem.count).toHaveText("Vendor")
+    expect(tokenOf(v.sourceItem.count)).toBe("fel")
+    expect(v.source).toBeShown()
+    expect(v.source).toHaveText("Sold by Tamsin Ashford\nElwynn Forest")
+    mock.hover(v.sourceItem.slot)
+    expect(entered).toHaveBeenCalledWith(v.sourceItem.slot)
+    mock.hover(nil)
+    -- the reagents under the source
+    local _, _, _, _, yHead = v.reagentHead:GetPoint(1)
+    local _, _, _, _, ySource = v.sourceHead:GetPoint(1)
+    expect(yHead < ySource).toBe(true)
+    -- only lines
+    p:SetRecipe(recipe({ source = { lines = { "A trainer in a city" } } }))
+    expect(v.sourceItem).never.toBeShown()
+    expect(v.source).toBeShown()
+    -- only an item, unnamed and without a quality or note
+    p:SetRecipe(recipe({ source = { item = { icon = 1 } } }))
+    expect(v.sourceItem.name).toHaveText("…")
+    expect(tokenOf(v.sourceItem.name)).toBe("quality-common")
+    expect(v.sourceItem.count).toHaveText("")
+    expect(v.source).never.toBeShown()
+    -- the item's hover without onEnter: nothing
+    mock.hover(v.sourceItem.slot)
+    p:SetRecipe(recipe())
+    expect(v.sourceHead).never.toBeShown()
+end
+
+@test("a cooldown under the reagents; a reagent unnamed, a quality unknown")
+local function cooldown()
+    local p = make()
+    p:SetRecipe(recipe({ cooldown = "2 h 14 m", reagents = { { icon = 1, quality = 9 } }, quality = 9 }))
+    local v = p.recipe
+    expect(v.cooldown).toBeShown()
+    expect(v.cooldown).toHaveText("Cooldown 2 h 14 m")
+    expect(v.reagents[1].name).toHaveText("…")
+    expect(v.reagents[1].count).toHaveText("0 / 0")
+    expect(tokenOf(v.reagents[1].name)).toBe("ink")
+    expect(tokenOf(v.title)).toBe("ink")
+    p:SetRecipe(recipe())
+    expect(v.cooldown).never.toBeShown()
+end
+
+@test("a new recipe starts at the top; the same one keeps the scroll")
+local function scrollBack()
+    local p = make()
+    local many: { [string]: any }[] = {}
+    for i = 1, 20 do many[i] = { name = "Reagent " .. i, icon = i, have = 1, need = 1 } end
+    p:SetRecipe(recipe({ reagents = many }))
+    local v = p.recipe
+    v.scroll:SetVerticalScroll(100)
+    p:SetRecipe(recipe({ reagents = many }))
+    expect(v.scroll:GetVerticalScroll()).toBe(100)
+    p:SetRecipe(recipe({ name = "Elixir of Minor Defense", reagents = many }))
+    expect(v.scroll:GetVerticalScroll()).toBe(0)
+end
+
+@test("the foot: Track's box, Create and Create all by what you can make, the quantity's limit, why not")
+local function foot()
+    local p = make()
+    local v = p.recipe
+    p:SetRecipe(recipe({ tracked = true }))
+    expect(v.track.value).toBe(true)
+    expect(v.create:IsEnabled()).toBe(true)
+    expect(v.createAll:IsEnabled()).toBe(true)
+    expect(v.createAll.label).toHaveText("Create all (3)")
+    expect(v.qty.max).toBe(3)
+    expect(v.qty.disabled).toBe(false)
+    expect(v.why).never.toBeShown()
+    v.qty:SetValue(3)
+    -- one to make: Create all off; the quantity back to 1
+    p:SetRecipe(recipe({ canMake = 1 }))
+    expect(v.track.value).toBe(false)
+    expect(v.createAll:IsEnabled()).toBe(false)
+    expect(v.createAll.label).toHaveText("Create all")
+    expect(v.qty.value).toBe(1)
+    -- not ready: both off, the reason under the foot
+    local notReady = recipe({ ready = false, why = "Requires Anvil" })
+    notReady.canMake = nil
+    p:SetRecipe(notReady)
+    expect(v.create:IsEnabled()).toBe(false)
+    expect(v.qty.disabled).toBe(true)
+    expect(v.qty.max).toBe(1)
+    expect(v.why).toBeShown()
+    expect(v.why).toHaveText("Requires Anvil")
+    p:SetRecipe(recipe({ ready = false }))
+    expect(v.why).never.toBeShown()
+end
+
+@test("the foot's callbacks: Create with the quantity, Create all, Track")
+local function footCallbacks()
+    local p = make()
+    local v = p.recipe
+    p:SetCrafting(craft())
+    p:SetRecipe(recipe())
+    local created = mock.spy(function(_n: number) end)
+    local all, tracked = mock.spy(), mock.spy(function(_on: boolean) end)
+    mock.click(v.create)
+    mock.click(v.createAll)
+    mock.click(v.track)
+    p.onCreate, p.onCreateAll, p.onTrack = created, all, tracked
+    v.qty:SetValue(2)
+    mock.click(v.create)
+    expect(created).toHaveBeenCalledWith(2)
+    mock.click(v.createAll)
+    expect(all).toHaveBeenCalledTimes(1)
+    mock.click(v.track)
+    -- (the first click, without onTrack, ticked it: this one unticks it)
+    expect(tracked).toHaveBeenCalledWith(false)
+end
+
+@test("the product Shift-clicked: the selected recipe linked")
+local function productLink()
+    local p = make()
+    local linked = mock.spy(function(_id: any) end)
+    p:SetCrafting(craft())
+    p:SetRecipe(recipe())
+    local v = p.recipe
+    mock.click(v.product)
+    mock.setModifiers({ shift = true })
+    mock.click(v.product)
+    p.onLinkRecipe = linked
+    mock.click(v.product)
+    expect(linked).toHaveBeenCalledWith(2331)
+    expect(linked).toHaveBeenCalledTimes(1)
+    mock.hover(v.product)
+    mock.hover(nil)
+end
+
+--------------------------------------------------------------------------------
+-- Link, search, filters, sort
+--------------------------------------------------------------------------------
+
+@test("Link: its tooltip names the profession, a click to onLink")
+local function link()
+    local p = make()
+    local onLink = mock.spy()
+    mock.hover(p.link)
+    expect(p.link.edge.top).toBeShown()
+    expect(tokenOf(p.link.glyph)).toBe("ink")
+    expect(GameTooltip).toHaveLines({ "Link this profession in chat", "Whoever clicks it sees your recipes.", " ",
+        "Shift-click a recipe, in the list or its product, to link that recipe." })
+    mock.hover(nil)
+    expect(p.link.edge.top).never.toBeShown()
+    expect(tokenOf(p.link.glyph)).toBe("ink-muted")
+    p:SetCrafting(craft())
+    mock.hover(p.link)
+    expect(GameTooltip).toHaveLines({ "Link Alchemy in chat", "Whoever clicks it sees your recipes.", " ",
+        "Shift-click a recipe, in the list or its product, to link that recipe." })
+    mock.click(p.link)
+    p.onLink = onLink
+    mock.click(p.link)
+    expect(onLink).toHaveBeenCalledTimes(1)
+end
+
+@test("search, filters and sort: their callbacks; the saved choices back in them")
+local function filters()
+    local p = make()
+    p:SetCrafting(craft())
+    local searched = mock.spy(function(_t: string) end)
+    local filtered = mock.spy(function(_v: any) end)
+    local sorted = mock.spy(function(_v: any) end)
+    mock.typeText(p.search.edit, "po")
+    p.onSearch, p.onFilters, p.onSort = searched, filtered, sorted
+    mock.typeText(p.search.edit, "t")
+    expect(searched).toHaveBeenCalledWith("pot")
+    p:SetFilters({ show = "all", difficulty = { "optimal" } })
+    expect(p.filterMenu:GetValue().show).toBe("all")
+    expect(p.filterMenu:GetValue().difficulty).toEqual({ "optimal" })
+    p.filterMenu.onChange({ show = "unlearned" })
+    expect(filtered).toHaveBeenCalledWith({ show = "unlearned" })
+    p:SetSort("name")
+    expect(p.sort.value).toBe("name")
+    p:SetSort(nil)
+    expect(p.sort.value).toBe("category")
+    p.sort.onChange("skill")
+    expect(sorted).toHaveBeenCalledWith("skill")
+    expect(PROFESSION_FILTER_DEFAULTS.show).toBe("learned")
+    -- without callbacks: nothing
+    p.onSearch, p.onFilters, p.onSort = nil, nil, nil
+    mock.typeText(p.search.edit, "x")
+    p.filterMenu.onChange({})
+    p.sort.onChange("name")
+end
+
+--------------------------------------------------------------------------------
+-- A theme change
+--------------------------------------------------------------------------------
+
+@test("a theme change lays the shown page out again: the overview, or crafting and its recipe")
+@cases({ { "overview" }, { "crafting" }, { "none" } })
+local function theme(mode: string)
+    local p = make()
+    if mode == "overview" then
+        p:SetOverview({ primary = { ALCHEMY } })
+    elseif mode == "crafting" then
+        p:SetCrafting(craft())
+        p:SetRecipe(recipe())
+    end
+    local set = mock.spy(function(_d: any) end)
+    local crafting = mock.spy(function(_d: any) end)
+    mock.stub(p, "SetOverview", set)
+    mock.stub(p, "SetCrafting", crafting)
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(p.craftSkill:GetHeight()).toBe(T.type.numeric.lineHeight)
+    expect(set).toHaveBeenCalledTimes(mode == "overview" and 1 or 0)
+    expect(crafting).toHaveBeenCalledTimes(mode == "crafting" and 1 or 0)
+end

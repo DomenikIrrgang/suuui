@@ -1,0 +1,156 @@
+-- Units/Chat/Search: the Search tab's text work (kinds of lines, matching
+-- and grouping, where a match sits, the cut line).
+
+import test, expect from "wowlua:test"
+import * as search from "/Units/Chat/Search"
+
+local TYPES = {
+    WHISPER = { r = 1, g = 0.5, b = 1 }, WHISPER_INFORM = { r = 1, g = 0.5, b = 1 },
+    PARTY = { r = 0.6, g = 0.6, b = 1 }, PARTY_LEADER = { r = 0.4, g = 0.8, b = 1 },
+    GUILD = { r = 0.2, g = 1, b = 0.2 }, OFFICER = { r = 0.2, g = 0.7, b = 0.2 },
+}
+
+local function entry(src: string, n: number, at: number, colour: { r: number, g: number, b: number }?,
+                     whisper: boolean?): search.KeptEntry
+    local c = colour or { r = 1, g = 1, b = 1 }
+    return { src = src, line = { text = src, at = at }, r = c.r, g = c.g, b = c.b, where = "General", whisper = whisper, n = n }
+end
+
+@test("a line's numbered channel")
+local function channels()
+    expect(search.channelOf("|Hchannel:channel:2|h[2. Trade - City]|h |Hplayer:A|h[A]|h: x")).toBe("2. Trade")
+    expect(search.channelOf("|Hchannel:channel:2|h2. Trade|h: x")).toBe("2. Trade")
+    expect(search.channelOf("no channel")).toBeNil()
+end
+
+@test("a line's kind by its colour, trade by its channel")
+local function kinds()
+    expect(search.lineKind("x", 1, 0.5, 1, TYPES)).toBe("whisper")
+    expect(search.lineKind("x", 0.4, 0.8, 1, TYPES)).toBe("party")
+    expect(search.lineKind("x", 0.2, 0.7, 0.2, TYPES)).toBe("guild")
+    expect(search.lineKind("|Hchannel:c:2|h[2. Trade - City]|h: x", 1, 1, 1, TYPES)).toBe("trade")
+    expect(search.lineKind("|Hchannel:c:1|h[1. General]|h: x", 1, 1, 1, TYPES)).toBeNil()
+    expect(search.lineKind("x", 1, 1, 1, {})).toBeNil()
+    -- the live colours by default
+    local p = ChatTypeInfo.PARTY
+    expect(search.lineKind("x", p.r, p.g, p.b)).toBe("party")
+end
+
+@test("matching lines grouped by player, newest player first; Other lines without a name")
+local function find()
+    local entries = {
+        entry("|Hplayer:Bob-Realm|h[Bob]|h: hello there", 1, 30),
+        entry("|Hplayer:Ann|h[Ann]|h: Hello", 2, 20, TYPES.PARTY),
+        entry("|Hplayer:bob|h[bob]|h: hello again", 3, 10, nil, true),
+        entry("System: hello world", 4, 5),
+        entry("|Hplayer:Cy|h[Cy]|h: nothing", 5, 1),
+    }
+    local groups, total = search.findLines(entries, "hello", "all", TYPES)
+    expect(total).toBe(4)
+    expect(#groups).toBe(3)
+    expect(groups[1].key).toBe("bob")
+    expect(groups[1].who).toBe("Bob-Realm")
+    expect(#groups[1].lines).toBe(2)
+    expect(groups[1].lines[2].kind).toBe("whisper")
+    expect(groups[2].key).toBe("ann")
+    expect(groups[2].lines[1].kind).toBe("party")
+    expect(groups[3].key).toBe("")
+    expect(groups[3].who).toBeNil()
+    -- the plain text is kept on the line for the next search
+    expect(entries[1].line.plainText).toBe("[bob]: hello there")
+    local party, n = search.findLines(entries, "hello", "party", TYPES)
+    expect(n).toBe(1)
+    expect(party[1].key).toBe("ann")
+    local none, zero = search.findLines(entries, "zzz", "all", TYPES)
+    expect(none).toEqual({})
+    expect(zero).toBe(0)
+end
+
+@test("where a line came from and a group's count")
+local function counts()
+    local e = entry("|Hchannel:c:2|h[2. Trade - City]|h: x", 1, 0)
+    expect(search.whereOf(e)).toBe("2. Trade")
+    e.kind = "party"
+    expect(search.whereOf(e)).toBe("Party")
+    expect(search.whereOf(entry("plain", 1, 0))).toBe("General")
+    local one: search.Found = { key = "a", lines = { entry("x", 1, 0) } }
+    expect(search.groupCount(one)).toBe("1 line · General")
+    local at = time()
+    local two: search.Found = { key = "a", lines = { entry("x", 1, at), entry("y", 2, at - 60) } }
+    expect(search.groupCount(two)).toBe("2 lines · last " .. date("%H:%M", at))
+end
+
+@test("the field's count and note")
+local function notes()
+    expect(search.countText("a", 0)).toBe("")
+    expect(search.countText("ab", 1)).toBe("1 line")
+    expect(search.countText("ab", 3)).toBe("3 lines")
+    expect(search.noteText("a", 0)).toBe("A player's name or a word: every tab and whisper kept.")
+    expect(search.noteText("ab", 0)).toBe("Nothing kept matches.")
+    expect(search.noteText("ab", 2)).toBe("")
+end
+
+@test("the text as shown, each byte's place in the line and its link")
+local function visible()
+    local text = "|cff112233A|r|Hplayer:B|hB|h|Ti.tga:0|t|Aat:0|a|Kq1|k||x|cnIQ1:Y|r"
+    local shown, at, links = search.visible(text)
+    expect(shown).toBe("AB|xY")
+    expect(at).toEqual({ 11, 26, 54, 56, 64 })
+    expect(links[2]).toBe(14)
+    expect(links[1]).toBeNil()
+    expect(links[3]).toBeNil()
+    -- a bar that starts no escape code is shown as it is
+    local bare, bareAt = search.visible("a|zb")
+    expect(bare).toBe("a|zb")
+    expect(bareAt).toEqual({ 1, 2, 3, 4 })
+end
+
+@test("a long line cut two words before its match")
+local function snippets()
+    local text = "21:20  |Hplayer:A|hA|h: one two three four five six"
+    local shown, at, links = search.visible(text)
+    local s = (shown:find("six", 1, true)) :: number
+    expect(search.snippet(text, shown, at, links, s)).toBe("21:20  |Hplayer:A|hA|h: … five six")
+    -- no message part
+    expect(search.snippet("no colon", "no colon", { 1 }, {}, 1)).toBeNil()
+    -- the match in the first word of the message: nothing to cut
+    local first = (shown:find("one", 1, true)) :: number
+    expect(search.snippet(text, shown, at, links, first)).toBeNil()
+    -- the match in the second word: the cut would start at the message
+    local second = (shown:find("two", 1, true)) :: number
+    expect(search.snippet(text, shown, at, links, second)).toBeNil()
+end
+
+@test("a cut starting in a link keeps the whole link and its colour")
+local function snippetLink()
+    local text = "21:20  |Hplayer:A|hA|h: aa bb |cff00ff00|Hitem:1|h[Long Sword]|h|r cc dd"
+    local shown, at, links = search.visible(text)
+    local s = (shown:find("cc", 1, true)) :: number
+    expect(search.snippet(text, shown, at, links, s)).toBe("21:20  |Hplayer:A|hA|h: … |cff00ff00|Hitem:1|h[Long Sword]|h|r cc dd")
+    local plain = "21:20  |Hplayer:A|hA|h: aa |Hitem:1|h[Sword]|h cc"
+    local shown2, at2, links2 = search.visible(plain)
+    local s2 = (shown2:find("cc", 1, true)) :: number
+    expect(search.snippet(plain, shown2, at2, links2, s2)).toBe("21:20  |Hplayer:A|hA|h: … |Hitem:1|h[Sword]|h cc")
+    -- a link that starts the message: the cut would start at the message
+    local lead = "21:20  |Hplayer:A|hA|h: |Hitem:1|h[A B]|h x"
+    local shown3, at3, links3 = search.visible(lead)
+    local s3 = ((shown3:find(" x", 1, true)) :: number) + 1
+    expect(search.snippet(lead, shown3, at3, links3, s3)).toBeNil()
+end
+
+@test("where the match sits, past the time")
+local function spans()
+    local measure = function(part: string): number return #part end
+    local text = "21:20  |Hplayer:A|hAnn|h: hello"
+    local x1, x2, shown, _, _, s = search.matchSpan(text, "hello", measure)
+    expect(shown).toBe("21:20  Ann: hello")
+    expect(s).toBe(13)
+    expect(x1).toBe(#"21:20  |Hplayer:A|hAnn|h: ")
+    expect(x2).toBe(#text)
+    -- inside a link's label: measured with the link closed
+    local a1, a2 = search.matchSpan(text, "nn", measure)
+    expect(a1).toBe(#"21:20  |Hplayer:A|hA" + 2)
+    expect(a2).toBe(#"21:20  |Hplayer:A|hAnn" + 2)
+    -- in the time only: no match
+    expect(search.matchSpan(text, "21:20", measure)).toBeNil()
+end

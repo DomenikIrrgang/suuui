@@ -1,7 +1,7 @@
 #!/bin/sh
 # tools/update_quest_starts.sh
-# Refreshes src/Data/QuestStarts.lua (where quests are picked up, and the
-# dungeon entrances, for the world map) and src/Data/MapPlaces.lua (town
+# Refreshes src/Data/QuestStarts.wowlua (where quests are picked up, and the
+# dungeon entrances, for the world map) and src/Data/MapPlaces.wowlua (town
 # services, mailboxes, rares, treasure chests) from QuestieDB's latest Forever data:
 # fetches it into a cache outside the repo, then regenerates the data file.
 #   sh tools/update_quest_starts.sh
@@ -14,4 +14,4 @@ cd "$(dirname "$0")/.."
 PULLS="103"
 CACHE=${TMPDIR:-/tmp}/suuui-questiedb-$(date +%Y%m%d%H%M%S)
 sh tools/fetch_quest_starts.sh "$CACHE" $PULLS
-lua tools/gen_quest_starts.lua "$CACHE" src/Data/QuestStarts.lua src/Data/MapPlaces.lua
+lua tools/gen_quest_starts.lua "$CACHE" src/Data/QuestStarts.wowlua src/Data/MapPlaces.wowlua

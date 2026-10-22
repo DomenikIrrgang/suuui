@@ -1,0 +1,946 @@
+-- UI/Inputs: the glyphs and check mark, Toggle, Checkbox, Segmented,
+-- Slider, Stepper, TextField, NumberField and MoneyInput: built, driven by
+-- clicks, typing, keys and the slider's drag, what they show, their
+-- callbacks, and disabled.
+
+import test, expect, afterEach, beforeAll, beforeEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as tooltip from "/UI/Tooltip"
+import measureText from "/UI/Text"
+import chevron, minus, plus, check, toggle, checkbox, segmented, slider, stepper, textField, numberField, moneyInput,
+    Toggle, Segmented, Slider, Stepper, NumberField, MoneyInput,
+    SegmentedOption, SliderOptions, StepperOptions, NumberFieldOptions from "/UI/Inputs"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, pointOf, themeChanged, reduceMotion from "./PrimitivesHelpers"
+
+local S = T.space
+local DISABLED = T.opacity["opacity-disabled"]
+local parent: Frame? = nil
+local shown = mock.spy(function(_owner: any, _data: any) end)
+local hidden = mock.spy(function() end)
+
+@beforeAll
+local function fakeTooltips()
+    mock.module(tooltip, { showTooltip = shown, hideTooltip = hidden })
+end
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(600, 300)
+end
+
+@afterEach
+local function cleanup()
+    local focus = GetCurrentKeyBoardFocus()
+    if focus then focus:ClearFocus() end
+    mock.hover(nil)
+    mock.setModifiers({})
+    reduceMotion(false)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+local function host(): Frame
+    return parent :: Frame
+end
+
+--------------------------------------------------------------------------------
+-- glyphs
+--------------------------------------------------------------------------------
+
+@test("the chevron, minus and plus are 12px glyphs of strokes in one colour")
+@cases({ { "chevron", 2 }, { "minus", 1 }, { "plus", 2 } })
+local function glyphs(kind: string, strokes: number)
+    local make = kind == "chevron" and chevron or kind == "minus" and minus or plus
+    local g = make(host())
+    expect(g).toHaveSize(12, 12)
+    expect(#g.parts).toBe(strokes)
+    for _, t in ipairs(g.parts) do expect(tokenOf(t)).toBe("ink-muted") end
+    g:SetColor("arcane")
+    for _, t in ipairs(g.parts) do expect(tokenOf(t)).toBe("arcane") end
+    local c = make(host(), "ink")
+    expect(tokenOf(c.parts[1])).toBe("ink")
+end
+
+@test("the plus's second stroke stands upright; the chevron's lean")
+local function strokeAngles()
+    local p = plus(host())
+    expect(p.parts[2]:GetRotation()).toBeCloseTo(math.rad(90), 4)
+    expect(p.parts[1]:GetWidth()).toBe(9)
+    local c = chevron(host())
+    expect(c.parts[1]:GetRotation()).toBeCloseTo(math.rad(-45), 4)
+    expect((pointOf(c.parts[2]) :: any).x).toBe(2)
+end
+
+@test("a check mark: the game's check, desaturated, in a token")
+local function checks()
+    local t = check(host(), 14)
+    expect(t).toHaveSize(14, 14)
+    expect(t:GetTexture()).toBe("Interface\\Buttons\\UI-CheckBox-Check")
+    expect(t:IsDesaturated()).toBe(true)
+    expect(tokenOf(t)).toBe("on-signal")
+    expect(tokenOf(check(host(), 10, "arcane"))).toBe("arcane")
+end
+
+--------------------------------------------------------------------------------
+-- Toggle
+--------------------------------------------------------------------------------
+
+local function knobX(t: Toggle): number
+    return (pointOf(t.knob) :: any).x
+end
+
+@test("a toggle starts off: sunk track, gilt-line edge, the knob left")
+local function toggleOff()
+    local t = toggle(host())
+    expect(t).toHaveSize(34, 18)
+    expect(t.value).toBe(false)
+    expect(tokenOf(t.bg)).toBe("surface-sunk")
+    expect(tokenOf(t.border.top)).toBe("gilt-line")
+    expect(tokenOf(t.knob)).toBe("ink-muted")
+    expect(knobX(t)).toBe(9)
+end
+
+@test("a toggle made on: arcane, the knob right, at once")
+local function toggleOn()
+    local t = toggle(host(), { value = 1 })
+    expect(t.value).toBe(true)
+    expect(tokenOf(t.bg)).toBe("arcane-soft")
+    expect(tokenOf(t.border.top)).toBe("arcane")
+    expect(tokenOf(t.knob)).toBe("arcane")
+    expect(knobX(t)).toBe(25)
+end
+
+@test("a click flips it, slides the knob and calls onChange")
+local function toggleClick()
+    local s = mock.spy(function(_v: boolean) end)
+    local t = toggle(host(), { onChange = s })
+    mock.click(t)
+    expect(t.value).toBe(true)
+    expect(s).toHaveBeenCalledWith(true)
+    expect(knobX(t)).toBe(9)
+    mock.advanceFrames(3)
+    local mid = knobX(t)
+    expect(mid > 9 and mid < 25).toBe(true)
+    mock.advanceFrames(30)
+    expect(knobX(t)).toBe(25)
+    expect(t:GetScript("OnUpdate")).toBeNil()
+    mock.click(t)
+    expect(s).toHaveBeenCalledWith(false)
+    mock.advanceFrames(30)
+    expect(knobX(t)).toBe(9)
+end
+
+@test("with reduced motion, or set from code, the knob jumps")
+local function toggleJumps()
+    reduceMotion(true)
+    local t = toggle(host())
+    mock.click(t)
+    expect(knobX(t)).toBe(25)
+    reduceMotion(false)
+    t:SetValue(false)
+    expect(knobX(t)).toBe(9)
+    t:SetValue(false, true) -- no change: no slide
+    expect(t:GetScript("OnUpdate")).toBeNil()
+end
+
+@test("hover lights an off toggle's edge gilt; an on one stays arcane")
+local function toggleHover()
+    local t = toggle(host())
+    t:SetPoint("CENTER") -- (placed: the mouse is measured against it)
+    mock.hover(t)
+    expect(tokenOf(t.border.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(t.border.top)).toBe("gilt-line")
+    t:SetValue(true)
+    mock.hover(t)
+    expect(tokenOf(t.border.top)).toBe("arcane")
+    -- turned off under the mouse: gilt
+    t:SetValue(false)
+    expect(tokenOf(t.border.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(t.border.top)).toBe("gilt-line")
+end
+
+@test("a disabled toggle is dimmed and ignores clicks")
+local function toggleDisabled()
+    local s = mock.spy(function(_v: boolean) end)
+    local t = toggle(host(), { onChange = s })
+    t:SetDisabled(true)
+    expect(t.disabled).toBe(true)
+    expect(t:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    expect(t:IsMouseEnabled()).toBe(false)
+    mock.script(t, "OnClick", "LeftButton")
+    expect(t.value).toBe(false)
+    expect(s).never.toHaveBeenCalled()
+    t:SetDisabled(nil)
+    expect(t:GetAlpha()).toBe(1)
+    expect(t:IsMouseEnabled()).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Checkbox
+--------------------------------------------------------------------------------
+
+@test("a checkbox: a 16px box, its label right of it, the row as wide as both")
+local function checkboxBuild()
+    local c = checkbox(host(), { label = "Show names" })
+    expect(c.boxFrame).toHaveSize(16, 16)
+    expect(c.label).toHaveText("Show names")
+    expect(c).toHaveSize(16 + S["space-4"] + measureText("body", "Show names"), 22)
+    expect(c.value).toBe(false)
+    expect(c.check).never.toBeShown()
+    expect(tokenOf(c.box)).toBe("surface-sunk")
+    local bare = checkbox(host())
+    expect(bare.label).toBeNil()
+    expect(bare).toHaveSize(16, 22)
+    local big = checkbox(host(), { size = 30, width = 200, value = true })
+    expect(big).toHaveSize(200, 30)
+    expect(big.check).toHaveSize(28, 28)
+end
+
+@test("a click checks it, arcane, and calls onChange")
+local function checkboxClick()
+    local s = mock.spy(function(_v: boolean) end)
+    local c = checkbox(host(), { label = "A", onChange = s })
+    mock.click(c)
+    expect(c.value).toBe(true)
+    expect(c.check).toBeShown()
+    expect(tokenOf(c.box)).toBe("arcane")
+    expect(tokenOf(c.boxBorder.top)).toBe("arcane")
+    expect(s).toHaveBeenCalledWith(true)
+    mock.click(c)
+    expect(c.value).toBe(false)
+    expect(s).toHaveBeenCalledWith(false)
+    -- no onChange: fine
+    local plain = checkbox(host())
+    mock.click(plain)
+    expect(plain.value).toBe(true)
+end
+
+@test("hover: an unchecked box's edge turns gilt; a checked one stays")
+local function checkboxHover()
+    local c = checkbox(host())
+    mock.hover(c)
+    expect(tokenOf(c.boxBorder.top)).toBe("gilt")
+    mock.hover(nil)
+    expect(tokenOf(c.boxBorder.top)).toBe("gilt-line")
+    c:SetValue(true)
+    mock.hover(c)
+    expect(tokenOf(c.boxBorder.top)).toBe("arcane")
+    mock.hover(nil)
+    expect(tokenOf(c.boxBorder.top)).toBe("arcane")
+end
+
+@test("a disabled checkbox ignores clicks")
+local function checkboxDisabled()
+    local c = checkbox(host())
+    c:SetDisabled(true)
+    mock.script(c, "OnClick", "LeftButton")
+    expect(c.value).toBe(false)
+    expect(c:GetAlpha()).toBeCloseTo(DISABLED, 2)
+end
+
+--------------------------------------------------------------------------------
+-- Segmented
+--------------------------------------------------------------------------------
+
+local OPTIONS: SegmentedOption[] = {
+    { value = 1, label = "Bar 1" },
+    { value = 2, label = "Bars 1 and 2" },
+    { value = 3, label = "None", disabled = true, reason = "Not here" },
+}
+
+local function seg(value: any, onChange: ((v: any) -> ())?): Segmented
+    return segmented(host(), { options = OPTIONS, value = value, onChange = onChange })
+end
+
+local function segLabel(f: Segmented, i: number): any
+    return (f.buttons[i] :: any).label
+end
+
+@test("a segmented control: one button per option, the chosen one arcane")
+local function segBuild()
+    local f = seg(2)
+    expect(#f.buttons).toBe(3)
+    expect(f.value).toBe(2)
+    expect(tokenOf(segLabel(f, 1))).toBe("ink-muted")
+    expect(tokenOf(segLabel(f, 2))).toBe("arcane")
+    expect(tokenOf(segLabel(f, 3))).toBe("ink-faint")
+    expect(f.marker.chosen).toBe(f.buttons[2])
+    local w1 = measureText("label", "Bar 1") + S["space-5"] * 2
+    expect(f.buttons[1]).toHaveSize(w1, 24)
+    expect((pointOf(f.buttons[2]) :: any).x).toBe(3 + w1 + 2)
+    local total = 3
+    for _, b in ipairs(f.buttons) do total += b:GetWidth() + 2 end
+    expect(f).toHaveSize(total + 1, 30)
+end
+
+@test("a click chooses an option and calls onChange")
+local function segClick()
+    local s = mock.spy(function(_v: any) end)
+    local f = seg(1, s)
+    mock.click(f.buttons[2])
+    expect(f.value).toBe(2)
+    expect(s).toHaveBeenCalledWith(2)
+    expect(tokenOf(segLabel(f, 2))).toBe("arcane")
+    expect(f.marker.chosen).toBe(f.buttons[2])
+    -- without onChange
+    local g = seg(nil)
+    expect(g.marker.chosen).toBeNil()
+    mock.click(g.buttons[1])
+    expect(g.value).toBe(1)
+end
+
+@test("a disabled option, or a disabled control, takes no click")
+local function segDisabled()
+    local s = mock.spy(function(_v: any) end)
+    local f = seg(1, s)
+    mock.click(f.buttons[3])
+    expect(f.value).toBe(1)
+    f:SetDisabled(true)
+    expect(f:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    mock.script(f.buttons[2], "OnClick", "LeftButton")
+    expect(f.value).toBe(1)
+    expect(s).never.toHaveBeenCalled()
+end
+
+@test("hover inks an option you could choose; a disabled one says why")
+local function segHover()
+    local f = seg(1)
+    mock.hover(f.buttons[2])
+    expect(tokenOf(segLabel(f, 2))).toBe("ink")
+    expect(shown).never.toHaveBeenCalled()
+    mock.hover(f.buttons[1]) -- the chosen one stays arcane
+    expect(tokenOf(segLabel(f, 1))).toBe("arcane")
+    expect(tokenOf(segLabel(f, 2))).toBe("ink-muted")
+    expect(hidden).toHaveBeenCalled()
+    mock.hover(f.buttons[3])
+    expect(tokenOf(segLabel(f, 3))).toBe("ink-faint")
+    expect(shown).toHaveBeenCalledWith(f.buttons[3], { title = "None", description = "Not here" })
+    mock.hover(nil)
+    f:SetDisabled(true)
+    mock.hover(f.buttons[2])
+    expect(tokenOf(segLabel(f, 2))).toBe("ink-muted")
+end
+
+--------------------------------------------------------------------------------
+-- Slider
+--------------------------------------------------------------------------------
+
+local function sl(opts: SliderOptions): Slider
+    return slider(host(), opts)
+end
+
+@test("a slider: 200 wide, the value on top right, min by default")
+local function sliderBuild()
+    local f = sl({ min = 2, max = 10 })
+    expect(f).toHaveSize(200, T.type.numeric.lineHeight + S["space-2"] + 18)
+    expect(f.value).toBe(2)
+    expect(f.valueText).toHaveText("2")
+    expect(f.label).toBeNil()
+    local min, max = f.slider:GetMinMaxValues()
+    expect({ min, max }).toEqual({ 2, 10 })
+    expect(f.slider:GetValue()).toBe(2)
+    expect(f.live).toBe(true)
+    local d = sl({})
+    expect({ d.min, d.max, d.value }).toEqual({ 0, 1, 0 })
+end
+
+@test("a label, a unit or a format for the value")
+local function sliderText()
+    local f = sl({ min = 0, max = 100, value = 40, width = 300, unit = "px", label = "Width" })
+    expect(f:GetWidth()).toBe(300)
+    expect(f.valueText).toHaveText("40px")
+    expect(f.label).toHaveText("Width")
+    local g = sl({ min = 0, max = 1, value = 0.5, format = function(v: number): string return ("%d%%"):format(v * 100) end })
+    expect(g.valueText).toHaveText("50%")
+end
+
+@test("dragging snaps to the step, shows it and calls onChange live")
+local function sliderDrag()
+    local s = mock.spy(function(_v: number) end)
+    local f = sl({ min = 0, max = 10, step = 2, value = 4, onChange = s })
+    expect(f.slider:GetValueStep()).toBe(2)
+    expect(f.slider:GetObeyStepOnDrag()).toBe(true)
+    mock.script(f.slider, "OnValueChanged", 6.7, true)
+    expect(f.value).toBe(6)
+    expect(f.valueText).toHaveText("6")
+    expect(s).toHaveBeenCalledWith(6)
+    expect(f.committed).toBe(6)
+    mock.script(f.slider, "OnValueChanged", 6.2, true) -- the same step: nothing
+    expect(s).toHaveBeenCalledTimes(1)
+    mock.slide(f.slider, 10)
+    expect(f.value).toBe(10)
+    expect(s).toHaveBeenCalledWith(10)
+end
+
+@test("without a step any value goes")
+local function sliderNoStep()
+    local f = sl({ min = 0, max = 1, value = 0 })
+    mock.script(f.slider, "OnValueChanged", 0.37, true)
+    expect(f.value).toBe(0.37)
+end
+
+@test("live = false calls onChange once, when the drag ends")
+local function sliderNotLive()
+    local s = mock.spy(function(_v: number) end)
+    local f = sl({ min = 0, max = 10, step = 1, value = 2, live = false, onChange = s })
+    mock.script(f.slider, "OnValueChanged", 5, true)
+    mock.script(f.slider, "OnValueChanged", 7, true)
+    expect(f.valueText).toHaveText("7")
+    expect(s).never.toHaveBeenCalled()
+    mock.script(f.slider, "OnMouseUp", "LeftButton")
+    expect(s).toHaveBeenCalledWith(7)
+    expect(s).toHaveBeenCalledTimes(1)
+    -- dragged back to where it was: no change
+    mock.script(f.slider, "OnValueChanged", 3, true)
+    mock.script(f.slider, "OnValueChanged", 7, true)
+    mock.script(f.slider, "OnMouseUp", "LeftButton")
+    expect(s).toHaveBeenCalledTimes(1)
+    -- a release with nothing dragged
+    mock.script(f.slider, "OnMouseUp", "LeftButton")
+    expect(f.pending).toBeNil()
+end
+
+@test("SetValue moves it without onChange")
+local function sliderSetValue()
+    local s = mock.spy(function(_v: number) end)
+    local f = sl({ min = 0, max = 10, step = 1, onChange = s })
+    f:SetValue(8)
+    expect(f.slider:GetValue()).toBe(8)
+    expect(f.valueText).toHaveText("8")
+    expect(f.committed).toBe(8)
+    expect(s).never.toHaveBeenCalled()
+end
+
+@test("a disabled slider ignores drags")
+local function sliderDisabled()
+    local s = mock.spy(function(_v: number) end)
+    local f = sl({ min = 0, max = 10, onChange = s })
+    f:SetDisabled(true)
+    expect(f:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    expect(f.slider:IsEnabled()).toBe(false)
+    expect(f.slider:IsMouseEnabled()).toBe(false)
+    mock.script(f.slider, "OnValueChanged", 5, true)
+    expect(f.value).toBe(0)
+    expect(s).never.toHaveBeenCalled()
+    f:SetDisabled(false)
+    expect(f.slider:IsEnabled()).toBe(true)
+end
+
+@test("a theme change sets the slider's height again")
+local function sliderTheme()
+    local f = sl({})
+    f:SetHeight(1)
+    themeChanged()
+    expect(f:GetHeight()).toBe(T.type.numeric.lineHeight + S["space-2"] + 18)
+end
+
+--------------------------------------------------------------------------------
+-- Stepper
+--------------------------------------------------------------------------------
+
+local function st(opts: StepperOptions): Stepper
+    return stepper(host(), opts)
+end
+
+@test("Clamp: to whole steps from min, without float noise, within min..max")
+@cases({
+    { 0, 10, 0.1, 0.30000000000000004, 0.3 },
+    { 2, 100, 5, 9, 7 },
+    { 0, 10, 1, -4, 0 },
+    { 0, 10, 1, 99, 10 },
+    { 0, 10, 1, "6", 6 },
+})
+local function clamps(min: number, max: number, step: number, v: any, out: number)
+    local f = st({ min = min, max = max, step = step })
+    expect(f:Clamp(v)).toBe(out)
+end
+
+@test("Clamp of something that isn't a number is the value, else 0; no bounds")
+local function clampOther()
+    local f = st({ step = 0 })
+    expect(f:Clamp("abc")).toBe(0)
+    f:SetValue(4.25)
+    expect(f:Clamp(nil)).toBe(4.25)
+    expect(f:Clamp(-1e6)).toBe(-1e6)
+end
+
+@test("a stepper: minus, the number, plus; with a unit between")
+local function stepperBuild()
+    local f = st({ min = 0, max = 10, value = 3 })
+    expect(f).toHaveSize(98, 30)
+    expect(f.edit:GetText()).toBe("3")
+    expect(f.step).toBe(1)
+    expect(f.unitText).toBeNil()
+    expect(f.plus).toBeAnchoredTo(f.edit, "LEFT", "RIGHT")
+    local u = st({ unit = "px" })
+    local unitText = u.unitText :: any
+    expect(unitText).toHaveText("px")
+    expect(u:GetWidth()).toBe(98 + unitText:GetUnboundedStringWidth() + S["space-2"])
+    expect(u.plus).toBeAnchoredTo(unitText, "LEFT", "RIGHT")
+    expect(u.edit:GetText()).toBe("")
+end
+
+@test("minus and plus nudge by the step, clamped, calling onChange")
+local function stepperNudge()
+    local s = mock.spy(function(_v: number) end)
+    local f = st({ min = 0, max = 10, step = 2, value = 8, onChange = s })
+    mock.click(f.plus)
+    expect(f.value).toBe(10)
+    expect(s).toHaveBeenCalledWith(10)
+    mock.click(f.plus) -- at max: no change
+    expect(s).toHaveBeenCalledTimes(1)
+    mock.click(f.minus)
+    expect(f.value).toBe(8)
+    expect(f.edit:GetText()).toBe("8")
+    local empty = st({})
+    mock.click(empty.plus)
+    expect(empty.value).toBe(1)
+    mock.click(empty.minus)
+    mock.click(empty.minus)
+    expect(empty.value).toBe(-1)
+end
+
+@test("typing a number and Enter commits it, clamped")
+local function stepperType()
+    local s = mock.spy(function(_v: number) end)
+    local f = st({ min = 0, max = 50, value = 5, onChange = s })
+    mock.typeText(f.edit, "0") -- appended: "50"
+    mock.pressKey("ENTER")
+    expect(f.edit:HasFocus()).toBe(false)
+    expect(f.value).toBe(50)
+    expect(s).toHaveBeenCalledWith(50)
+    expect(s).toHaveBeenCalledTimes(1)
+    f.edit:SetText("")
+    mock.typeText(f.edit, "99")
+    f.edit:ClearFocus() -- focus lost commits too
+    expect(f.value).toBe(50)
+    expect(f.edit:GetText()).toBe("50")
+end
+
+@test("Escape puts the value back")
+local function stepperEscape()
+    local s = mock.spy(function(_v: number) end)
+    local f = st({ value = 5, onChange = s })
+    mock.typeText(f.edit, "7")
+    mock.pressKey("ESCAPE")
+    expect(f.edit:HasFocus()).toBe(false)
+    expect(f.edit:GetText()).toBe("5")
+    expect(s).never.toHaveBeenCalled()
+end
+
+@test("a disabled stepper drops what's typed and ignores the buttons")
+local function stepperDisabled()
+    local s = mock.spy(function(_v: number) end)
+    local f = st({ value = 5, onChange = s })
+    mock.typeText(f.edit, "1")
+    f:SetDisabled(true)
+    expect(f.edit:HasFocus()).toBe(false)
+    expect(f.edit:GetText()).toBe("5")
+    expect(f.edit:IsMouseEnabled()).toBe(false)
+    expect(f.minus:IsMouseEnabled()).toBe(false)
+    expect(f.plus:IsMouseEnabled()).toBe(false)
+    mock.script(f.plus, "OnClick", "LeftButton")
+    mock.script(f.minus, "OnClick", "LeftButton")
+    f:Commit("9")
+    expect(f.value).toBe(5)
+    expect(s).never.toHaveBeenCalled()
+    f:SetDisabled(false)
+    expect(f.plus:IsMouseEnabled()).toBe(true)
+end
+
+@test("the buttons light on hover")
+local function stepperHover()
+    local f = st({})
+    mock.hover(f.plus)
+    expect(f.plus.hover).toBeShown()
+    expect(tokenOf(f.plus.glyph.parts[1])).toBe("ink")
+    mock.hover(nil)
+    expect(f.plus.hover).never.toBeShown()
+    expect(tokenOf(f.plus.glyph.parts[1])).toBe("ink-muted")
+end
+
+@test("an edit box shown again draws its text again, from the start")
+local function redrawOnShow()
+    local f = st({ value = 123 })
+    f:Hide()
+    f.edit:SetCursorPosition(2)
+    f:Show()
+    expect(f.edit:GetText()).toBe("123")
+    expect(f.edit:GetCursorPosition()).toBe(0)
+    -- with the focus it is left alone
+    mock.typeText(f.edit, "4")
+    f.edit:Hide()
+    f.edit:Show()
+    expect(f.edit:GetText()).toBe("1234")
+end
+
+--------------------------------------------------------------------------------
+-- TextField
+--------------------------------------------------------------------------------
+
+@test("a text field: 200 by 30, its placeholder while empty")
+local function fieldBuild()
+    local f = textField(host(), { placeholder = "Search" })
+    expect(f).toHaveSize(200, 30)
+    expect(f.placeholder).toHaveText("Search")
+    expect(f.placeholder).toBeShown()
+    expect(f:GetValue()).toBe("")
+    local g = textField(host(), { width = 120, value = "abc" })
+    expect(g:GetWidth()).toBe(120)
+    expect(g:GetValue()).toBe("abc")
+    expect(g.placeholder).never.toBeShown()
+    local bare = textField(host())
+    expect(bare.placeholder).toHaveText("")
+end
+
+@test("typing reports each change, hides the placeholder and lights the edge")
+local function fieldTyping()
+    local typed = mock.spy(function(_t: string) end)
+    local changed = mock.spy(function(_t: string) end)
+    local f = textField(host(), { placeholder = "Name", onTextChanged = typed, onChange = changed })
+    mock.typeText(f.edit, "ab")
+    expect(typed).toHaveBeenCalledTimes(2)
+    expect(typed).toHaveBeenCalledWith("ab")
+    expect(f.placeholder).never.toBeShown()
+    expect(tokenOf(f.border.top)).toBe("arcane")
+    expect(changed).never.toHaveBeenCalled()
+    mock.pressKey("ENTER")
+    expect(changed).toHaveBeenCalledWith("ab")
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(f.edit:HasFocus()).toBe(false)
+    expect(tokenOf(f.border.top)).toBe("gilt-line")
+    expect(f.value).toBe("ab")
+end
+
+@test("focus lost commits; nothing new, no onChange; emptied, the placeholder")
+local function fieldFocusLost()
+    local changed = mock.spy(function(_t: string) end)
+    local f = textField(host(), { placeholder = "P", value = "x", onChange = changed })
+    mock.typeText(f.edit, "y")
+    f.edit:ClearFocus()
+    expect(changed).toHaveBeenCalledWith("xy")
+    mock.typeText(f.edit, "")
+    f.edit:ClearFocus()
+    expect(changed).toHaveBeenCalledTimes(1)
+    f.edit:SetText("")
+    f.edit:SetFocus()
+    f.edit:ClearFocus()
+    expect(f.placeholder).toBeShown()
+    expect(changed).toHaveBeenCalledWith("")
+end
+
+@test("Escape leaves the field (what's typed stays and commits)")
+local function fieldEscape()
+    local changed = mock.spy(function(_t: string) end)
+    local f = textField(host(), { onChange = changed })
+    mock.typeText(f.edit, "z")
+    mock.pressKey("ESCAPE")
+    expect(f.edit:HasFocus()).toBe(false)
+    expect(changed).toHaveBeenCalledWith("z")
+end
+
+@test("SetValue shows a text without reporting it")
+local function fieldSetValue()
+    local typed = mock.spy(function(_t: string) end)
+    local changed = mock.spy(function(_t: string) end)
+    local f = textField(host(), { placeholder = "P", onTextChanged = typed, onChange = changed })
+    f:SetValue("hello")
+    expect(f:GetValue()).toBe("hello")
+    expect(f.placeholder).never.toBeShown()
+    f:SetValue(nil)
+    expect(f.value).toBe("")
+    expect(f.placeholder).toBeShown()
+    -- set while focused: the placeholder stays hidden
+    mock.typeText(f.edit, "q")
+    f:SetValue("")
+    expect(f.placeholder).never.toBeShown()
+    expect(changed).never.toHaveBeenCalled()
+    expect(typed).toHaveBeenCalledTimes(1)
+end
+
+@test("a disabled field drops the focus and the mouse")
+local function fieldDisabled()
+    local f = textField(host())
+    mock.typeText(f.edit, "a")
+    f:SetDisabled(true)
+    expect(f.edit:HasFocus()).toBe(false)
+    expect(f.edit:IsMouseEnabled()).toBe(false)
+    expect(f:GetAlpha()).toBeCloseTo(DISABLED, 2)
+    f:SetDisabled(false)
+    expect(f.edit:IsMouseEnabled()).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- NumberField
+--------------------------------------------------------------------------------
+
+local function nf(opts: NumberFieldOptions?): NumberField
+    return numberField(host(), opts)
+end
+
+@test("a number field: its letter, the value right-aligned, six digits at most")
+local function numberBuild()
+    local f = nf({ letter = "X", value = 12, min = 0, max = 100 })
+    expect(f).toHaveSize(S["space-4"] + 10 + 5 + 44 + S["space-4"], 30)
+    expect(f.letter).toHaveText("X")
+    expect(f.edit:GetText()).toBe("12")
+    expect(f.edit:GetMaxLetters()).toBe(6)
+    expect(tokenOf(f.border.top)).toBe("gilt-line")
+    local bare = nf()
+    expect(bare.edit:GetText()).toBe("")
+    expect(bare.letter).toHaveText("")
+    expect(nf({ width = 60 }):GetWidth()).toBe(S["space-4"] + 10 + 5 + 60 + S["space-4"])
+end
+
+@test("only digits and a leading minus go in; onTyping hears each number")
+local function numberTyping()
+    local typing = mock.spy(function(_n: number?) end)
+    local f = nf({ onTyping = typing })
+    mock.typeText(f.edit, "1a2")
+    expect(f.edit:GetText()).toBe("12")
+    expect(typing).toHaveBeenCalledWith(1)
+    expect(typing).toHaveBeenCalledWith(12)
+    expect(typing).toHaveBeenCalledTimes(2)
+    f.edit:SetText("")
+    mock.typeText(f.edit, "-5-")
+    expect(f.edit:GetText()).toBe("-5")
+    expect(typing).toHaveBeenCalledWith(nil)
+    expect(typing).toHaveBeenCalledWith(-5)
+end
+
+@test("the edge: arcane with focus, amber while what's typed is out of range")
+local function numberTone()
+    local f = nf({ min = 0, max = 10 })
+    mock.typeText(f.edit, "5")
+    expect(tokenOf(f.border.top)).toBe("arcane")
+    mock.typeText(f.edit, "0") -- 50
+    expect(tokenOf(f.border.top)).toBe("amber")
+    f:Cancel()
+    expect(tokenOf(f.border.top)).toBe("gilt-line")
+end
+
+@test("Enter applies what's typed, clamped and rounded")
+local function numberEnter()
+    local changed = mock.spy(function(_v: number) end)
+    local focus = mock.spy(function(_f: boolean) end)
+    local f = nf({ min = 0, max = 10, value = 3, onChange = changed, onFocus = focus })
+    f:Focus()
+    expect(f:HasFocus()).toBe(true)
+    expect(focus).toHaveBeenCalledWith(true)
+    f.edit:SetText("40")
+    mock.pressKey("ENTER")
+    expect(f:HasFocus()).toBe(false)
+    expect(focus).toHaveBeenCalledWith(false)
+    expect(f.value).toBe(10)
+    expect(f.edit:GetText()).toBe("10")
+    expect(changed).toHaveBeenCalledWith(10)
+    f:Commit("10")
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(f:Clamp(2.5)).toBe(3)
+    f:SetRange(nil, nil)
+    expect(f:Clamp(99)).toBe(99)
+end
+
+@test("Escape puts the value back without applying")
+local function numberEscape()
+    local changed = mock.spy(function(_v: number) end)
+    local f = nf({ value = 3, onChange = changed })
+    mock.typeText(f.edit, "9")
+    mock.pressKey("ESCAPE")
+    expect(f:HasFocus()).toBe(false)
+    expect(f.edit:GetText()).toBe("3")
+    expect(f.cancelling).toBeNil()
+    expect(changed).never.toHaveBeenCalled()
+    -- Cancel without the focus just shows the value again
+    f.edit:SetText("77")
+    f:Cancel()
+    expect(f.edit:GetText()).toBe("3")
+end
+
+@test("Up and Down step 1, with Shift 10, and apply")
+local function numberArrows()
+    local changed = mock.spy(function(_v: number) end)
+    local f = nf({ value = 5, onChange = changed })
+    mock.script(f.edit, "OnArrowPressed", "UP")
+    expect(f.value).toBe(6)
+    mock.script(f.edit, "OnArrowPressed", "DOWN")
+    expect(f.value).toBe(5)
+    mock.setModifiers({ shift = true })
+    mock.script(f.edit, "OnArrowPressed", "UP")
+    expect(f.value).toBe(15)
+    expect(f.edit:GetCursorPosition()).toBe(2)
+    mock.script(f.edit, "OnArrowPressed", "LEFT")
+    expect(f.value).toBe(15)
+    expect(changed).toHaveBeenCalledTimes(3)
+    mock.setModifiers({})
+    local empty = nf()
+    mock.script(empty.edit, "OnArrowPressed", "DOWN")
+    expect(empty.value).toBe(-1)
+end
+
+@test("Tab asks for the next field, Shift-Tab the one before")
+local function numberTab()
+    local tab = mock.spy(function(_shift: boolean) end)
+    local f = nf({ onTab = tab })
+    mock.script(f.edit, "OnTabPressed")
+    expect(tab).toHaveBeenCalledWith(false)
+    mock.setModifiers({ shift = true })
+    mock.script(f.edit, "OnTabPressed")
+    expect(tab).toHaveBeenCalledWith(true)
+    mock.script(nf().edit, "OnTabPressed")
+end
+
+@test("a click on the letter's side focuses the field")
+local function numberClickFocus()
+    local f = nf()
+    mock.script(f, "OnMouseDown", "LeftButton")
+    expect(f:HasFocus()).toBe(true)
+end
+
+@test("something that isn't a number puts the value back")
+local function numberNotANumber()
+    local changed = mock.spy(function(_v: number) end)
+    local f = nf({ value = 4, onChange = changed })
+    f:Commit("")
+    f:Commit(nil)
+    expect(f.value).toBe(4)
+    expect(changed).never.toHaveBeenCalled()
+end
+
+@test("disabled: what's typed is dropped, no focus, no commits")
+local function numberDisabled()
+    local changed = mock.spy(function(_v: number) end)
+    local f = nf({ value = 4, onChange = changed })
+    mock.typeText(f.edit, "2")
+    f:SetDisabled(true)
+    expect(f:HasFocus()).toBe(false)
+    expect(f.edit:GetText()).toBe("4")
+    expect(f.edit:IsMouseEnabled()).toBe(false)
+    f:Focus()
+    expect(f:HasFocus()).toBe(false)
+    f:Commit("8")
+    expect(f.value).toBe(4)
+    expect(changed).never.toHaveBeenCalled()
+    f:SetDisabled(false)
+    expect(f.edit:IsMouseEnabled()).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- MoneyInput
+--------------------------------------------------------------------------------
+
+local function texts(m: MoneyInput): string[]
+    local out: string[] = {}
+    for i, t in ipairs(m.fields) do out[i] = t.edit:GetText() end
+    return out
+end
+
+@test("a money input: gold, silver and copper fields with their letters")
+local function moneyBuild()
+    local m = moneyInput(host())
+    expect(m).toHaveSize(200, 30)
+    expect(#m.fields).toBe(3)
+    expect(m.fields[1]:GetWidth()).toBe(70)
+    expect(m.fields[1].edit:IsNumeric()).toBe(true)
+    expect(m.fields[1].edit:GetMaxLetters()).toBe(6)
+    expect(m.fields[3].edit:GetMaxLetters()).toBe(2)
+    expect(texts(m)).toEqual({ "", "", "" })
+    expect(m:GetCopper()).toBe(0)
+end
+
+@test("SetCopper splits an amount; GetCopper adds it up")
+@cases({
+    { 123456, { "12", "34", "56" } },
+    { 10000, { "1", "0", "0" } },
+    { 250, { "", "2", "50" } },
+    { 5, { "", "", "5" } },
+    { -3, { "", "", "0" } },
+    { 7.9, { "", "", "7" } },
+})
+local function money(copper: number, shownTexts: string[])
+    local m = moneyInput(host())
+    m:SetCopper(copper)
+    expect(texts(m)).toEqual(shownTexts)
+    expect(m:GetCopper()).toBe(math.max(0, math.floor(copper)))
+end
+
+@test("SetCopper(nil) is 0; a first value; Clear empties")
+local function moneyMore()
+    local m = moneyInput(host(), { value = 10101 })
+    expect(texts(m)).toEqual({ "1", "1", "1" })
+    m:SetCopper(nil)
+    expect(texts(m)).toEqual({ "", "", "0" })
+    m:Clear()
+    expect(texts(m)).toEqual({ "", "", "" })
+end
+
+@test("silver and copper count at most 99")
+local function moneyCapped()
+    local m = moneyInput(host())
+    mock.stub(m.fields[2].edit, "GetText", function(): string return "150" end)
+    mock.stub(m.fields[3].edit, "GetText", function(): string return "120" end)
+    expect(m:GetCopper()).toBe(99 * 100 + 99)
+end
+
+@test("typing in any field reports the amount")
+local function moneyTyping()
+    local s = mock.spy(function(_c: number) end)
+    local m = moneyInput(host(), { onChange = s })
+    mock.typeText(m.fields[1].edit, "3")
+    expect(s).toHaveBeenCalledWith(30000)
+    mock.typeText(m.fields[3].edit, "7")
+    expect(s).toHaveBeenCalledWith(30007)
+    local quiet = moneyInput(host())
+    mock.typeText(quiet.fields[2].edit, "1")
+    expect(quiet:GetCopper()).toBe(100)
+end
+
+@test("SetDisabled disables every field")
+local function moneyDisabled()
+    local m = moneyInput(host())
+    m:SetDisabled(true)
+    for _, t in ipairs(m.fields) do
+        expect(t.disabled).toBe(true)
+        expect(t.edit:IsMouseEnabled()).toBe(false)
+    end
+    m:SetDisabled(false)
+    expect(m.fields[2].disabled).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- more edges
+--------------------------------------------------------------------------------
+
+@test("leaving an on toggle keeps its arcane edge")
+local function toggleLeaveOn()
+    local t = toggle(host(), { value = true })
+    mock.hover(t)
+    mock.hover(nil)
+    expect(tokenOf(t.border.top)).toBe("arcane")
+end
+
+@test("a disabled option without a reason shows no tooltip")
+local function segNoReason()
+    local f = segmented(host(), { options = { { value = 1, label = "A" }, { value = 2, label = "B", disabled = true } } })
+    mock.hover(f.buttons[2])
+    expect(shown).never.toHaveBeenCalled()
+end
+
+@test("VM probe: SetText runs OnTextChanged without user input")
+local function probeSetText()
+    local e = CreateFrame("EditBox", nil, host())
+    e:SetSize(100, 20)
+    e:SetAutoFocus(false)
+    local seen: any[] = {}
+    e:SetScript("OnTextChanged", function(_e: EditBox, userInput: boolean) seen[#seen + 1] = userInput end)
+    e:SetText("abc")
+    -- (with the next frame)
+    mock.advanceFrames(1)
+    expect(seen).toEqual({ false })
+end

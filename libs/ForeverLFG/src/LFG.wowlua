@@ -1,0 +1,182 @@
+-- ForeverLFG/LFG.wowlua
+-- ForeverLFG: groups and players looking for groups, from the game's group
+-- finder ("the tool") and the public chat channels, as one list. A library
+-- package in SuuUI's workspace with no UI of its own (Docs/ForeverLFG.md):
+-- SuuUI's Group Finder module and its notifications are built on it through
+-- SuuUI.LFG, like any plugin would be.
+--
+-- Nothing runs until LFG.Start() (the Group Finder module calls it when
+-- enabled), so a disabled module leaves the channels and the tool alone.
+--
+--   LFG.On(event, fn) / LFG.Off(event, fn)       (on, off)
+--   LFG.Configure({ ... })      -- see LFG.config (configure, config)
+--   LFG.Start() / LFG.Stop()                     (start, stop)
+-- The rest lives in the other files: Catalogue, Parser, Lang/*, Store,
+-- Chat, Tool, Interest. init (the package's main module) puts them
+-- together as the public table, LFG (SuuUI.LFG).
+
+import type CatalogueApi from "./Catalogue"
+import type ChatApi from "./Chat"
+import type Interest from "./Interest"
+import type ParserApi, LangApi from "./Parser"
+import type StoreApi, Entry, Filter from "./Store"
+import type ToolApi, Listing from "./Tool"
+
+export const version = "0.1.0"
+
+-- What LFG.config holds.
+export type Config = {
+    channels: { [string]: boolean },
+    joinLookingForGroup: boolean,
+    hideLookingForGroup: boolean,
+    chatExpiry: number,
+    staleAfter: number,
+    expiringSoon: number,
+    minConfidence: number,
+    extraLanguages: { [string]: boolean },
+}
+
+-- Settings the library works by; the Group Finder module passes the
+-- player's own through LFG.Configure.
+export const config = {
+    channels = { LookingForGroup = true, General = true, Trade = true, Services = true, SAY = true, YELL = true },
+    joinLookingForGroup = true,   -- join it at start
+    hideLookingForGroup = true,   -- and keep it off every chat window
+    chatExpiry = 300,             -- seconds a chat post stays without a new one
+    staleAfter = 300,             -- tool results older than this are stale (while listed or watching)
+    expiringSoon = 120,           -- your listing's seconds left that count as "runs out soon"
+    minConfidence = 0.5,          -- chat lines read below this are dropped
+    extraLanguages = {},          -- { deDE = true, ... }: Latin-script modules besides yours
+} :: Config
+
+-- A part of the library that runs only while it's started.
+export type Part = { Start?: () -> (), Stop?: () -> () }
+
+export const parts = {} :: Part[]       -- { Start = fn, Stop = fn } each, registered by the other files
+
+-- The public table (SuuUI.LFG): the names stay as published.
+export type ForeverLFG = {
+    version: string,
+    config: Config,
+    parts: Part[],
+    running: boolean,
+    OnConfigure?: () -> (),
+    Configure: (t: { [string]: any }?) -> (),
+    On: (event: string, fn: Listener) -> Listener,
+    Off: (event: string, fn: Listener) -> (),
+    Fire: (event: string, ...any) -> (),
+    AddPart: (part: Part) -> (),
+    Start: () -> (),
+    Stop: () -> (),
+    Now: () -> number,
+    Catalogue: CatalogueApi,
+    Chat: ChatApi,
+    IsHiddenChannel: (name: any) -> boolean,
+    Interest: () -> Interest,
+    Watch: (key: string, on: any) -> (),
+    Watches: () -> { [string]: boolean },
+    Languages: () -> string[],
+    MatchReasons: (e: Entry?, interest: Interest?) -> string[],
+    ContactedAt: (key: string?) -> number?,
+    Social: (name: any) -> string?,
+    Parser: ParserApi,
+    Lang: LangApi,
+    Store: StoreApi,
+    Entries: (filter: Filter?) -> Entry[],
+    Entry: (key: string) -> Entry?,
+    Tool: ToolApi,
+    Refresh: (category: number?) -> boolean,
+    ToolAge: (category: number?) -> number?,
+    Listing: () -> Listing?,
+    Delist: () -> (boolean?, any),
+    CanInvite: (e: Entry?) -> boolean,
+    Invite: (e: Entry?) -> (),
+    Whisper: (e: Entry?) -> (),
+}
+
+-- The public table (SuuUI.LFG): the fields from here; init adds the other
+-- files' (Catalogue, Chat, ..., Whisper). LFG.running and LFG.OnConfigure
+-- stay on it as before.
+export const lfg = { version = version, config = config, parts = parts, running = false } :: ForeverLFG
+
+export function configure(t: { [string]: any }?)
+    local into = config :: any
+    for k, v in pairs(t or {}) do into[k] = v end
+    -- LFG.OnConfigure: a hook on the public table, set by whoever wants it
+    local hook = lfg.OnConfigure
+    if hook then hook() end
+end
+
+--------------------------------------------------------------------------------
+-- Events
+--------------------------------------------------------------------------------
+
+export type Listener = (...any) -> ()
+
+local listeners: { [string]: Listener[] } = {}
+
+export function on(event: string, fn: Listener): Listener
+    local list: Listener[] = listeners[event] or {}
+    listeners[event] = list
+    table.insert(list, fn)
+    return fn
+end
+
+export function off(event: string, fn: Listener)
+    local list = listeners[event]
+    if not list then return end
+    for i = #list, 1, -1 do if list[i] == fn then table.remove(list, i) end end
+end
+
+-- Every listener runs, whatever another one does.
+export function fire(event: string, ...: any)
+    local list = listeners[event]
+    if not list then return end
+    for _, fn in ipairs({ unpack(list) }) do
+        local ok, err = pcall(fn, ...)
+        if not ok and geterrorhandler then geterrorhandler()(err) end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Start and stop
+--------------------------------------------------------------------------------
+
+-- Whether LFG.Start() ran: LFG.running, kept on the public table as before.
+export function isRunning(): boolean
+    return lfg.running
+end
+
+export function addPart(part: Part)
+    parts[#parts + 1] = part
+    if isRunning() and part.Start then part.Start() end
+end
+
+export function start()
+    if isRunning() then return end
+    lfg.running = true
+    for _, part in ipairs(parts) do if part.Start then part.Start() end end
+end
+
+export function stop()
+    if not isRunning() then return end
+    lfg.running = false
+    for i = #parts, 1, -1 do
+        local part = parts[i]
+        if part.Stop then part.Stop() end
+    end
+end
+
+-- A clock that works in game and in the offline tools.
+export function now(): number
+    return (GetTime and GetTime()) or (_G :: any).os.time()
+end
+
+lfg.Configure = configure
+lfg.On = on
+lfg.Off = off
+lfg.Fire = fire
+lfg.AddPart = addPart
+lfg.Start = start
+lfg.Stop = stop
+lfg.Now = now

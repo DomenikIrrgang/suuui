@@ -1,0 +1,342 @@
+-- Diagnostics/MapProbe.wowlua
+-- "/suu probe map": what Forever's world map is made of and what an addon
+-- can read for SuuUI's world map (step 3.5). Saved in SuuUIProbe.map on
+-- /reload. Open the map once first (M), ideally in a zone with quests in
+-- your log, and in a group if you can.
+--   * WorldMapFrame: its parts, size, whether it's protected, its quest
+--     panel, the pin kinds the game draws (its pin pools) and its data
+--     providers
+--   * where you are: the map, its parents and children, your position
+--     (secret or not), group members' positions
+--   * quests: the log's entries (fields), quests on this map with their
+--     positions (C_QuestLog.GetQuestsOnMap), quest lines to pick up
+--     (C_QuestLine), the next waypoint
+--   * places: flight masters (C_TaxiMap), dungeon entrances
+--     (C_EncounterJournal), user waypoints (C_Map), map areas
+--   * the map's own filters (its tracking menu's CVars)
+
+import isSecret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import print from "/Core/Init"
+import SuuUI from "/Core/API"
+
+-- the zones test's triangles, by key ("tri1", "tri2")
+local triangles: { [string]: Texture } = {}
+
+
+local function show(v: any, depth: number?): string
+    depth = depth or 0
+    if isSecret(v) then return "<secret>" end
+    if type(v) ~= "table" then return tostring(v) end
+    if depth > 1 then return "{…}" end
+    local parts = {}
+    for k, x in pairs(v) do
+        parts[#parts + 1] = tostring(k) .. "=" .. (isSecret(x) and "<secret>" or (type(x) == "table" and show(x, depth + 1) or tostring(x)))
+    end
+    table.sort(parts)
+    return "{" .. table.concat(parts, ", ") .. "}"
+end
+
+local function call(t: any, name: string, ...: any): (any, any, any)
+    if not (t and type(t[name]) == "function") then return "missing" end
+    local ok, a, b, c = pcall(t[name], ...)
+    if not ok then return "error: " .. tostring(a) end
+    return a, b, c
+end
+
+export function snapshot()
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.map = s
+
+    -- the window
+    local f = _G.WorldMapFrame
+    s.frame = { exists = f ~= nil }
+    if f then
+        local w = s.frame
+        w.protected = f:IsProtected() and true or false
+        w.shown = f:IsShown()
+        w.size = math.floor(f:GetWidth()) .. "x" .. math.floor(f:GetHeight())
+        w.keys = {}
+        for k, v in pairs(f) do
+            if type(k) == "string" and type(v) == "table" and v.GetObjectType then w.keys[#w.keys + 1] = k .. " (" .. v:GetObjectType() .. ")" end
+        end
+        table.sort(w.keys)
+        w.pinPools = {}
+        for template in pairs(f.pinPools or {}) do w.pinPools[#w.pinPools + 1] = tostring(template) end
+        table.sort(w.pinPools)
+        w.providers = 0
+        for _ in pairs(f.dataProviders or {}) do w.providers = w.providers + 1 end
+        w.mapID = call(f, "GetMapID", f)
+        w.quest = { QuestMapFrame = _G.QuestMapFrame ~= nil, QuestLogFrame = _G.QuestLogFrame ~= nil,
+                    QuestScrollFrame = _G.QuestScrollFrame ~= nil }
+        w.overlays = {}
+        for _, frame in ipairs(f.overlayFrames or {}) do w.overlays[#w.overlays + 1] = frame:GetName() or frame:GetObjectType() end
+    end
+
+    -- where you are
+    local cm = C_Map
+    local map = call(cm, "GetBestMapForUnit", "player")
+    s.mapID = show(map)
+    if type(map) == "number" and not isSecret(map) then
+        s.mapInfo = show((call(cm, "GetMapInfo", map)))
+        local pos = call(cm, "GetPlayerMapPosition", map, "player")
+        s.position = type(pos) == "table" and show({ pos:GetXY() }) or show(pos)
+        local kids = call(cm, "GetMapChildrenInfo", map)
+        s.children = type(kids) == "table" and #kids or show(kids)
+        local groups = call(cm, "GetMapGroupID", map)
+        s.mapGroup = show(groups)
+        s.party = {}
+        for i = 1, 4 do
+            if UnitExists("party" .. i) then
+                local p = call(cm, "GetPlayerMapPosition", map, "party" .. i)
+                s.party[#s.party + 1] = "party" .. i .. " " .. (type(p) == "table" and show({ p:GetXY() }) or show(p))
+            end
+        end
+        -- quests on this map
+        local ql = C_QuestLog
+        local on = call(ql, "GetQuestsOnMap", map)
+        s.questsOnMap = type(on) == "table" and { count = #on, first = on[1] and show(on[1]) or "none" } or show(on)
+        local lines = C_QuestLine and call(C_QuestLine, "GetAvailableQuestLines", map)
+        s.questLines = type(lines) == "table" and { count = #lines, first = lines[1] and show(lines[1]) or "none" } or show(lines)
+        local poi = C_QuestLine and call(C_QuestLine, "GetQuestLineQuests")
+        s.questLineFn = poi ~= "missing"
+        -- places
+        local taxi = C_TaxiMap and call(C_TaxiMap, "GetTaxiNodesForMap", map)
+        s.taxi = type(taxi) == "table" and { count = #taxi, first = taxi[1] and show(taxi[1]) or "none" } or show(taxi)
+        local ej = C_EncounterJournal and call(C_EncounterJournal, "GetDungeonEntrancesForMap", map)
+        s.dungeons = type(ej) == "table" and { count = #ej, first = ej[1] and show(ej[1]) or "none" } or show(ej)
+        s.userWaypoint = { can = show((call(cm, "CanSetUserWaypointOnMap", map))), has = show((call(cm, "HasUserWaypoint"))) }
+        local explored = C_MapExplorationInfo and call(C_MapExplorationInfo, "GetExploredAreaIDsAtPosition", map, CreateVector2D and CreateVector2D(0.5, 0.5))
+        s.exploration = show(explored)
+    end
+
+    -- the quest log
+    local ql = C_QuestLog
+    local n = call(ql, "GetNumQuestLogEntries")
+    s.questLog = { entries = show(n), sample = {} }
+    if type(n) == "number" and not isSecret(n) then
+        for i = 1, math.min(n, 12) do
+            local info = call(ql, "GetInfo", i)
+            if type(info) == "table" and not info.isHeader then
+                local id = info.questID
+                local entry = { info = show(info) }
+                entry.difficultyLevel = show(info.difficultyLevel)
+                entry.objectives = show((call(ql, "GetQuestObjectives", id)))
+                entry.complete = show((call(ql, "IsComplete", id)))
+                entry.waypoint = show({ call(C_QuestLog, "GetNextWaypoint", id) })
+                entry.uiMap = show((call(GetQuestUiMapID and _G or {}, "GetQuestUiMapID", id)))
+                s.questLog.sample[#s.questLog.sample + 1] = entry
+                if #s.questLog.sample >= 4 then break end
+            end
+        end
+    end
+
+    -- the map's filters (its tracking menu)
+    s.cvars = {}
+    for _, cv in ipairs({ "questPOI", "showQuestObjectivesOnMap", "trivialQuests", "showDungeonEntrancesOnMap",
+                          "questHelper", "mapFade", "showTamers", "primaryProfessionsFilter", "worldQuestFilterResources" }) do
+        local ok, v = pcall(GetCVar, cv)
+        s.cvars[cv] = ok and show(v) or "error"
+    end
+    print(("Map probe: %s pin kinds, %s quests on this map, %s flight masters; /reload."):format(
+        tostring(s.frame.pinPools and #s.frame.pinPools or 0),
+        tostring(type(s.questsOnMap) == "table" and s.questsOnMap.count or s.questsOnMap),
+        tostring(type(s.taxi) == "table" and s.taxi.count or s.taxi)))
+end
+
+-- "/suu probe map areas": why the game draws no quest objective area (it
+-- draws the followed quest's and the one hovered in the log).
+export function areas()
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.mapAreas = s
+    local f = _G.WorldMapFrame
+    s.mapID = f and show((call(f, "GetMapID", f)))
+    s.questPOI = show((call(_G, "GetCVar", "questPOI")))
+    s.superTracked = show((call(C_SuperTrack, "GetSuperTrackedQuestID")))
+    s.superTrackingWaypoint = show((call(C_SuperTrack, "IsSuperTrackingUserWaypoint")))
+    s.highestType = show((call(C_SuperTrack, "GetHighestPrioritySuperTrackingType")))
+    s.pins = {}
+    if f and f.EnumeratePinsByTemplate then
+        for pin in f:EnumeratePinsByTemplate("QuestBlobPinTemplate") do
+            s.pins[#s.pins + 1] = {
+                shown = pin:IsShown(), visible = pin:IsVisible(), alpha = pin:GetAlpha(), level = pin:GetFrameLevel(),
+                size = math.floor(pin:GetWidth()) .. "x" .. math.floor(pin:GetHeight()),
+                questID = show(pin.questID), focused = show(pin.focusedQuestID), highlighted = show(pin.highlightedQuestID),
+                mapAllowsBlobs = show(pin.mapAllowsBlobs), map = show((call(pin, "GetMapID", pin))),
+            }
+        end
+    end
+    -- the quests on this map: do they have an area here?
+    local map = f and f:GetMapID()
+    local on = map and call(C_QuestLog, "GetQuestsOnMap", map)
+    s.questsOnMap = {}
+    for _, q in ipairs((type(on) == "table" and on or {}) :: any[]) do
+        s.questsOnMap[#s.questsOnMap + 1] = show(q)
+        if #s.questsOnMap >= 8 then break end
+    end
+    local getModule: any = SuuUI.GetModule
+    s.ourLayer = getModule and getModule("worldmap") and getModule("worldmap").layer
+        and getModule("worldmap").layer:GetFrameLevel() or "none"
+    print(("Areas: questPOI %s, followed quest %s, %d area pins (%s); /reload saves it."):format(
+        s.questPOI, s.superTracked, #s.pins, s.pins[1] and ((s.pins[1].visible and "visible" or "hidden") .. ", allowed " .. s.pins[1].mapAllowsBlobs) or "none"))
+end
+
+-- "/suu probe map log": where the quest log's parts sit, to line them up
+-- (the list centred, the search box with it): each part's left and right
+-- from the panel's left (the map's right edge), its width, whether it
+-- shows, and its anchors.
+local function where(obj: any, x0: number): any
+    if not (obj and obj.GetLeft) then return nil end
+    local ok, l, r = pcall(function() return obj:GetLeft(), obj:GetRight() end)
+    local out = { shown = obj.IsShown and obj:IsShown() or false, kind = obj.GetObjectType and obj:GetObjectType() or "?" }
+    if ok and l and r then
+        out.left, out.right, out.width = math.floor(l - x0 + 0.5), math.floor(r - x0 + 0.5), math.floor(r - l + 0.5)
+    end
+    local points = {}
+    for i = 1, (obj.GetNumPoints and obj:GetNumPoints() or 0) do
+        local pt, rel, relPt, x, y = obj:GetPoint(i)
+        local name = rel and (rel.GetName and rel:GetName()) or nil
+        if not name and rel and rel.GetParent and rel:GetParent() then
+            for k, v in pairs(rel:GetParent()) do if v == rel then name = "$parent." .. tostring(k) end end
+        end
+        points[#points + 1] = ("%s>%s %s %s,%s"):format(pt, tostring(relPt), tostring(name or rel), tostring(x and math.floor(x + 0.5)), tostring(y and math.floor(y + 0.5)))
+    end
+    out.points = table.concat(points, "; ")
+    return out
+end
+
+export function log()
+    local f, q = _G.WorldMapFrame, _G.QuestMapFrame
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.mapLog = s
+    local x0 = f.ScrollContainer and f.ScrollContainer:GetRight() or 0
+    s.window = where(f, x0)
+    s.mapArea = where(f.ScrollContainer, x0)
+    local windows: any = SuuUI.GetModule("windows")
+    s.enlarged = windows and windows:Get("mapEnlarged")
+    if not q then print("Map log: no quest log.") return end
+    s.questMapFrame = where(q, x0)
+    -- each part one level down, by its key, in the log, its quests frame and its list
+    local function walk(label: string, t: any)
+        if not t then return end
+        s[label] = {}
+        for k, v in pairs(t) do
+            if type(v) == "table" and type(k) == "string" and v.GetLeft and k ~= "GetParent" then
+                s[label][k] = where(v, x0)
+            end
+        end
+    end
+    walk("log", q)
+    walk("quests", q.QuestsFrame)
+    walk("list", q.QuestsFrame and q.QuestsFrame.ScrollFrame or _G.QuestScrollFrame)
+    local list = _G.QuestScrollFrame
+    walk("contents", list and list.Contents)
+    -- the first rows of each kind
+    s.rows = {}
+    for _, key in ipairs({ "headerFramePool", "campaignHeaderMinimalFramePool", "titleFramePool", "objectiveFramePool" }) do
+        local pool = list and list[key]
+        if pool and pool.EnumerateActive then
+            for row in pool:EnumerateActive() do s.rows[key] = where(row, x0) break end
+        end
+    end
+    local sb = list and list.SearchBox
+    print(("Map log: panel %s px wide; list %s..%s; search box %s..%s; /reload saves it."):format(
+        tostring(s.window and s.window.right), tostring(s.rows.headerFramePool and s.rows.headerFramePool.left),
+        tostring(s.rows.headerFramePool and s.rows.headerFramePool.right),
+        tostring(sb and where(sb, x0).left), tostring(sb and where(sb, x0).right)))
+end
+
+-- "/suu probe map zones": for SuuUI's objective zones where the game shows
+-- no marker. Open the map on a zone with your quests first.
+--   * each quest in your log: what the game reports about its markers (the
+--     log's fields, the quests on this map, its marker in the log, its POI
+--     icon, its next waypoint)
+--   * can a texture be drawn as a triangle (SetVertexOffset)? Draws a
+--     test: a blue triangle and a skewed one in the map's middle, until
+--     /reload. A screenshot of the map shows how they came out.
+export function zones()
+    local s: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    DB.probe.mapZones = s
+    local f = _G.WorldMapFrame
+    local map = f:GetMapID()
+    s.mapID = show(map)
+    local onMap = {}
+    local on = map and call(C_QuestLog, "GetQuestsOnMap", map)
+    for _, q in ipairs((type(on) == "table" and on or {}) :: any[]) do if q.questID then onMap[q.questID] = q end end
+    local logPins = {}
+    local contents = _G.QuestScrollFrame and _G.QuestScrollFrame.Contents
+    local pool = contents and contents.buttonPool
+    if pool and pool.EnumerateActive then
+        for pin in pool:EnumerateActive() do if pin.questID then logPins[pin.questID] = true end end
+    end
+    s.quests = {}
+    local n = call(C_QuestLog, "GetNumQuestLogEntries")
+    for i = 1, type(n) == "number" and n or 0 do
+        local info = call(C_QuestLog, "GetInfo", i)
+        if type(info) == "table" and not info.isHeader and info.questID then
+            local id = info.questID
+            s.quests[id] = {
+                title = show(info.title), hasLocalPOI = show(info.hasLocalPOI), isOnMap = show(info.isOnMap),
+                onThisMap = onMap[id] and show(onMap[id]) or "no", logMarker = logPins[id] and "yes" or "no",
+                poiIcon = show({ call(_G, "QuestPOIGetIconInfo", id) }),
+                waypoint = show({ call(C_QuestLog, "GetNextWaypoint", id) }),
+                waypointHere = show({ call(C_QuestLog, "GetNextWaypointForMap", id, map) }),
+                complete = show((call(C_QuestLog, "IsComplete", id))),
+            }
+        end
+    end
+    -- the triangle test, on the map's canvas
+    local canvas = f.ScrollContainer and f.ScrollContainer.Child
+    s.hasVertexOffset = canvas and type(canvas.CreateTexture) == "function"
+        and type(UIParent:CreateTexture().SetVertexOffset) == "function" or false
+    if canvas and s.hasVertexOffset then
+        local w, h = canvas:GetWidth(), canvas:GetHeight()
+        local function tri(key: string, x: number, y: number, size: number, skew: boolean, r: number, g: number, b: number): string
+            local t = triangles[key] or canvas:CreateTexture(nil, "OVERLAY", nil, 7)
+            triangles[key] = t
+            t:SetColorTexture(r, g, b, 0.55)
+            t:ClearAllPoints()
+            t:SetPoint("TOPLEFT", canvas, "TOPLEFT", w * x, -h * y)
+            t:SetSize(w * size, w * size)
+            -- the lower right corner onto the upper right one: a triangle;
+            -- skewed, the upper right moved left too
+            local ok1, e1 = pcall(t.SetVertexOffset, t, 4, 0, w * size)
+            local ok2, e2 = true, nil
+            if skew then ok2, e2 = pcall(t.SetVertexOffset, t, 3, -w * size * 0.5, 0) end
+            t:Show()
+            return ok1 and ok2 and "ok" or ("error: " .. tostring(e1 or e2))
+        end
+        s.triangle = tri("tri1", 0.40, 0.40, 0.08, false, 0.25, 0.8, 1)
+        s.skewed = tri("tri2", 0.52, 0.40, 0.08, true, 0.9, 0.8, 0.5)
+    end
+    local none, total = 0, 0
+    for _, q in pairs(s.quests) do
+        total = total + 1
+        if q.logMarker == "no" then none = none + 1 end
+    end
+    print(("Map zones: %d quests in your log, %d without a marker in the log; triangles %s; take a screenshot of the map, then /reload."):format(
+        total, none, tostring(s.triangle or "not possible")))
+end
+
+export function command(rest: string?)
+    if rest == "log" then
+        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then print("Map probe: open the map with its quest log, then run it again.") return end
+        log()
+        return
+    end
+    if rest == "zones" then
+        if not (_G.WorldMapFrame and _G.WorldMapFrame:IsShown()) then print("Map probe: open the map with its quest log, then run it again.") return end
+        zones()
+        return
+    end
+    if rest == "areas" then
+        if not _G.WorldMapFrame then print("Map probe: open the map once (M), then run it again.") return end
+        areas()
+        return
+    end
+    if not _G.WorldMapFrame then
+        print("Map probe: open the map once (M), then run it again.")
+        return
+    end
+    snapshot()
+end

@@ -1,0 +1,469 @@
+-- Core/Modules.wowlua
+-- Every SuuUI feature is a module, built in or from a plugin addon, and every
+-- module goes through this registry:
+--
+--   local M = SuuUI.RegisterModule({
+--       id = "hello",                 -- lower case; also its settings namespace
+--       name = "Hello",
+--       description = "One line for the module list.",
+--       api = "0.1",                  -- the oldest SuuUI API it works with
+--       defaults = { greeting = "Hi" },
+--       enabledByDefault = true,
+--       reloadToToggle = false,       -- true for modules that replace protected frames
+--       combatSafe = false,           -- true when it makes no secure or protected
+--                                     -- frames: it starts at once after a reload
+--                                     -- in combat instead of when the fight ends
+--       OnInitialize = function(self) end,  -- once, before the first enable
+--       OnEnable = function(self) end,
+--       OnDisable = function(self) end,
+--   })
+--   M:Migrate("renameFoo", function(values) ... end) -- once per profile, at file load
+--
+-- A module that is off is never initialised: no frames, no events. Its
+-- "enabled" setting lives in its own namespace, so it is saved per profile.
+-- Everything a module registers through its own methods (events, setting
+-- watchers, chat commands) belongs to it and is removed when it turns off;
+-- register those in OnEnable. Turning a module on or off waits for the end
+-- of combat. A module whose callback errors is marked errored and turned off;
+-- SuuUI and the other modules keep running.
+
+import onLogin from "wowlua:lifecycle"
+import print, name as ADDON, registerCommand, unregisterCommands from "./Init"
+import * as events from "./Events"
+import * as settings from "./Settings"
+import * as fault from "./Fault"
+import * as combat from "./Combat"
+import * as util from "./Util"
+import * as extend from "./Extend"
+import * as services from "./Services"
+import * as themes from "./Themes"
+import * as settingsRegistry from "/SettingsUI/Registry"
+import * as editMode from "/EditMode/EditMode"
+
+export const API_VERSION = "0.18.0"
+
+local RESERVED: { [string]: boolean } = { core = true, ui = true, layout = true }
+
+--- A SuuUI module as plugins see it: SuuUI's own fields (read only), the
+--- methods below, and whatever the module keeps on itself.
+export type Module = {
+    id: string,
+    name: string,
+    description: string?,
+    api: string?,
+    source: string,
+    builtIn: boolean,
+    state: string,
+    error: string?,
+    pendingReload: boolean?,
+    enabledAtLoad: boolean?,
+    initialized: boolean?,
+    reloadToToggle: boolean,
+    combatSafe: boolean,
+    replaces: string?,
+    replacedBy: string?,
+    OnInitialize: ((self: Module) -> ())?,
+    OnEnable: ((self: Module) -> ())?,
+    OnDisable: ((self: Module) -> ())?,
+    [string]: any,
+}
+
+local list: Module[] = {}
+local byId: { [string]: Module } = {}
+local started = false
+
+--------------------------------------------------------------------------------
+-- API versions
+--------------------------------------------------------------------------------
+
+local function parseVersion(v: any): (number?, number, number)
+    local major, minor, patch = tostring(v):match("^(%d+)%.?(%d*)%.?(%d*)$")
+    if not major then return nil, 0, 0 end
+    return tonumber(major), tonumber(minor) or 0, tonumber(patch) or 0
+end
+
+-- True when this SuuUI's API can serve a module written for `wanted`: the
+-- same major version, and at least that minor and patch.
+export function apiAtLeast(wanted: any): boolean
+    local a, b, c = parseVersion(API_VERSION)
+    local x, y, z = parseVersion(wanted)
+    if not x then return false end
+    if a ~= x then return false end
+    if b ~= y then return b > y end
+    return c >= z
+end
+
+--------------------------------------------------------------------------------
+-- The module object
+--------------------------------------------------------------------------------
+
+local Module: { [string]: any } = {}
+
+-- SuuUI's own fields on a module: read like any field, but set only here.
+-- A module (or anyone) writing one gets an error naming it (Inspect once set
+-- self.id to a frame, and the settings search broke far away, 2026-10-17).
+-- They live in a table of their own, so a write always reaches __newindex.
+local OWN: { [string]: boolean } = { id = true, name = true, description = true, api = true, source = true, builtIn = true,
+              state = true, error = true, pendingReload = true, enabledAtLoad = true, initialized = true,
+              reloadToToggle = true, combatSafe = true, replaces = true, replacedBy = true }
+local fields: { [any]: { [string]: any } } = setmetatable({}, { __mode = "k" })
+
+local ModuleMeta = {
+    __index = function(m: any, key: string): any
+        local mine = fields[m]
+        local v = mine and mine[key]
+        if v ~= nil then return v end
+        return Module[key]
+    end,
+    __newindex = function(m: any, key: string, value: any)
+        if OWN[key] then
+            local mine = fields[m]
+            error(("SuuUI: %q is the module's own field and can't be set (module %s); keep your value under another name")
+                :format(tostring(key), tostring(mine and mine.id)), 2)
+        end
+        rawset(m, key, value)
+    end,
+}
+
+-- Sets one of SuuUI's own fields (this file only).
+local function own(m: Module, key: string, value: any)
+    (fields[m] :: { [string]: any })[key] = value
+end
+
+function Module.Get(self: Module, key: string): any return settings.get(self.id, key) end
+-- 0.17: the value itself, not a copy, to read only (large tables read often)
+function Module.Peek(self: Module, key: string): any return settings.peek(self.id, key) end
+function Module.Set(self: Module, key: string, value: any): (boolean, string?) return settings.set(self.id, key, value) end
+function Module.Reset(self: Module, key: string?): boolean return settings.reset(self.id, key) end
+-- 0.11: the module's own data for this character (a table it fills;
+-- saved, never part of a profile)
+function Module.CharData(self: Module): { [any]: any } return settings.charData(self.id) end
+function Module.AllCharData(self: Module): { [string]: { [any]: any } } return settings.allCharData(self.id) end
+function Module.CharKey(self: Module): string? return settings.getCharKey() end
+function Module.ForgetCharData(self: Module, key: string): boolean return settings.forgetCharData(self.id, key) end
+-- fn wrapped so an error in it is reported (SuuUIDB.errors, /suu errors)
+-- under the module's name, as errors in its events are: for UI callbacks.
+function Module.Guard(self: Module, fn: (...any) -> ...any): (...any) -> ...any
+    return function(...: any): ...any return fault.call(self.name, fn, ...) end
+end
+function Module.Watch(self: Module, key: string, fn: settings.Watcher) settings.watch(self.id, key, fn, self) end
+function Module.Veto(self: Module, key: string, fn: settings.Veto) settings.veto(self.id, key, fn, self) end
+
+-- fn(values) reshapes one profile's stored values of this module (a renamed
+-- key, a changed type), once per profile. Call it right after RegisterModule,
+-- at file load, so it runs before the old values are judged by type.
+function Module.Migrate(self: Module, id: string, fn: (values: settings.Values) -> ()) settings.migrate(self.id, id, fn, self) end
+
+function Module.On(self: Module, message: string, fn: events.Listener) events.on(message, fn, self) end
+function Module.Off(self: Module, message: string) events.off(message, self) end
+function Module.Emit(self: Module, message: string, ...: any) events.emit(message, ...) end
+function Module.OnGameEvent(self: Module, event: string, fn: events.Listener) events.onGame(event, fn, self) end
+function Module.OnUnitEvent(self: Module, event: string, units: string | string[], fn: events.Listener) events.onUnit(event, units, fn, self) end
+
+-- Keys get an "m:" prefix so a module's never collide with the core's own.
+function Module.RunOutOfCombat(self: Module, key: any, fn: () -> ())
+    combat.run("m:" .. self.id .. ":" .. tostring(key), fn, self.name)
+end
+
+function Module.RegisterCommand(self: Module, cmd: string, help: string, fn: (rest: string) -> (), args: any)
+    registerCommand(cmd, help, fn, self, args)
+end
+
+-- A settings section for this module: its rows read and write the module's
+-- own namespace, and the section goes away when the module turns off.
+function Module.RegisterSettings(self: Module, def: { [string]: any }): any
+    def.namespace = def.namespace or self.id
+    return settingsRegistry.register(def, self)
+end
+
+-- An edit-mode handle for one of the module's frames. opts.key names a
+-- position setting in the module's defaults (default "position").
+function Module.RegisterMover(self: Module, frame: any, opts: { [string]: any }?): any
+    local o: { [string]: any } = opts or {}
+    o.namespace = self.id
+    o.label = o.label or self.name
+    return editMode.register(frame, o, self)
+end
+
+-- 0.17: SuuUI's own UI (Core/Extend.wowlua). fn(object, info) for every
+-- instance of a kind, now and later (undo(object, info) for each when the
+-- module turns off); fn(object, ...) after a method; fn(object, original,
+-- ...) instead of one. All removed when the module turns off.
+function Module.Each(self: Module, kind: string, fn: (obj: any, info: extend.Info) -> (), undo: ((obj: any, info: extend.Info) -> ())?) extend.each(kind, fn, undo, self) end
+function Module.Hook(self: Module, kind: string, method: string, fn: (...any) -> ...any) extend.hook(kind, method, fn, self) end
+function Module.Override(self: Module, kind: string, method: string, fn: (...any) -> ...any) extend.override(kind, method, fn, self) end
+
+-- 0.17: a service other modules reach by name (Core/Services.wowlua); gone
+-- when the module turns off.
+function Module.Provide(self: Module, serviceName: string, impl: { [string]: any }) services.provide(serviceName, impl, self) end
+
+-- 0.17: entries in SuuUI's own menus and lists (Core/Extend.wowlua): before one
+-- of SuuUI's right-click menus opens, fn(menu, context); a micro menu
+-- button; a game menu entry; a game popup shown as a notification card;
+-- this module's own settings in a role's preset. Gone when it turns off.
+function Module.ExtendMenu(self: Module, id: string, fn: (menu: any, context: any) -> ()) extend.extendMenu(id, fn, self) end
+function Module.AddMicroItem(self: Module, item: any) extend.addTo("micromenu", item, self) end
+function Module.AddGameMenuItem(self: Module, item: any) extend.addTo("gamemenu", item, self) end
+function Module.AddNotificationKind(self: Module, which: string, def: { [string]: any }?)
+    local d: { [string]: any } = def or {}
+    d.which = which
+    extend.addTo("notificationkinds", d, self)
+end
+function Module.AddToRolePreset(self: Module, role: string, values: { [string]: any })
+    extend.addTo("rolepresets", { role = role, namespace = self.id, values = values }, self)
+end
+
+function Module.Print(self: Module, ...: any)
+    print("|cffa39b8b" .. self.name .. ":|r", ...)
+end
+
+function Module.IsEnabled(self: Module): boolean
+    return self.state == "enabled"
+end
+
+--------------------------------------------------------------------------------
+-- Lifecycle
+--------------------------------------------------------------------------------
+
+local function cleanup(m: Module)
+    events.offAll(m)
+    settings.unwatch(m)
+    unregisterCommands(m)
+    settingsRegistry.unregister(m)
+    editMode.unregister(m)
+    extend.unregister(m)
+    services.unregister(m)
+end
+
+local function fail(m: Module, phase: string)
+    own(m, "state", "errored")
+    own(m, "error", phase .. " failed")
+    -- Undo what a failed OnEnable got as far as building (frames shown,
+    -- anchors published). fault.call reports an error here and carries on.
+    local onDisable = m.OnDisable
+    if phase == "OnEnable" and onDisable then fault.call(m.name, onDisable, m) end
+    cleanup(m)
+    events.emit("SUUUI_MODULE_ERRORED", m.id)
+end
+
+local function enable(m: Module)
+    if m.state == "enabled" or m.state == "incompatible" then return end
+    if not m.initialized then
+        local onInit = m.OnInitialize
+        if onInit and not fault.call(m.name, onInit, m) then return fail(m, "OnInitialize") end
+        own(m, "initialized", true)
+    end
+    local onEnable = m.OnEnable
+    if onEnable and not fault.call(m.name, onEnable, m) then return fail(m, "OnEnable") end
+    own(m, "state", "enabled")
+    own(m, "error", nil)
+    events.emit("SUUUI_MODULE_ENABLED", m.id)
+end
+
+local function disable(m: Module)
+    if m.state ~= "enabled" then
+        if m.state ~= "incompatible" then own(m, "state", "disabled") end
+        return
+    end
+    local onDisable = m.OnDisable
+    if onDisable then fault.call(m.name, onDisable, m) end
+    cleanup(m)
+    own(m, "state", "disabled")
+    events.emit("SUUUI_MODULE_DISABLED", m.id)
+end
+
+-- Brings the module in line with its "enabled" setting.
+local function apply(m: Module)
+    if m.state == "incompatible" or m.replacedBy then return end
+    local want = settings.get(m.id, "enabled")
+    if m.reloadToToggle then
+        -- an errored module that is still on retries at the next load
+        own(m, "pendingReload", (want ~= m.enabledAtLoad or (want and m.state == "errored")) or nil)
+        return
+    end
+    combat.run("module:" .. m.id, function()
+        if settings.get(m.id, "enabled") then enable(m) else disable(m) end
+    end, m.name)
+end
+
+-- The module standing in for `m` this session (0.17: `replaces`): one that
+-- is on and can load. Decided at login, so a change takes a reload.
+local function replacer(m: Module): Module?
+    for _, o in ipairs(list) do
+        if o.replaces == m.id and o ~= m and o.state ~= "incompatible" and settings.get(o.id, "enabled") then return o end
+    end
+    return nil
+end
+
+local function start(m: Module)
+    local by = replacer(m)
+    if by then
+        own(m, "replacedBy", by.name)
+        own(m, "enabledAtLoad", false)
+        own(m, "state", "disabled")
+        settings.watch(m.id, "enabled", function() end, "Modules")
+        return
+    end
+    own(m, "enabledAtLoad", settings.get(m.id, "enabled"))
+    settings.watch(m.id, "enabled", function() apply(m) end, "Modules")
+    if m.state == "incompatible" then return end
+    if m.enabledAtLoad then
+        -- after a reload in combat a module waits for the fight's end, unless
+        -- it makes no secure frames (found in game: buffs and the Cooldown
+        -- Manager were missing until the fight ended)
+        if m.combatSafe and InCombatLockdown() then
+            fault.call(m.name, function() enable(m) end)
+        else
+            combat.run("module:" .. m.id, function() enable(m) end, m.name)
+        end
+    else
+        own(m, "state", "disabled")
+    end
+end
+
+@onLogin
+local function startAll()
+    -- the chosen theme first: plugins' themes are registered by now, and no
+    -- module has built a frame yet
+    fault.call("Themes", themes.apply)
+    started = true
+    for _, m in ipairs(list) do start(m) end
+end
+
+--------------------------------------------------------------------------------
+-- Registration
+--------------------------------------------------------------------------------
+
+-- The addon whose file called RegisterModule, from the call stack: the first
+-- frame of another addon, else SuuUI itself. SuuUI's own frames are skipped
+-- by addon, not by file, so this also holds when wowlua bundles SuuUI into
+-- one file.
+local function sourceAddon(): string
+    local stack = debugstack(1, 8, 0) or ""
+    local mine = false
+    for addon in stack:gmatch("AddOns[/\\]([^/\\]+)[/\\]") do
+        if addon ~= ADDON then return addon end
+        mine = true
+    end
+    return mine and ADDON or "?"
+end
+
+export function register(def: { [string]: any }): Module
+    assert(type(def) == "table", "SuuUI.RegisterModule takes a table")
+    local id = def.id
+    assert(type(id) == "string" and id:find("^%l[%l%d_]*$"),
+        "SuuUI.RegisterModule: id must be lower case letters, digits and _, starting with a letter")
+    assert(not byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
+    local defaults: { [string]: any } = util.copy(def.defaults or {})
+    assert(defaults.enabled == nil, "SuuUI.RegisterModule: \"enabled\" is SuuUI's own setting; use enabledByDefault")
+    assert(def.replaces == nil or (type(def.replaces) == "string" and def.replaces ~= id),
+        "SuuUI.RegisterModule: replaces names another module's id")
+    defaults.enabled = def.enabledByDefault ~= false
+
+    local m: Module = setmetatable({
+        OnInitialize = def.OnInitialize,
+        OnEnable = def.OnEnable,
+        OnDisable = def.OnDisable,
+    }, ModuleMeta) :: any
+    local source = def.addon or sourceAddon()
+    fields[m] = {
+        id = id,
+        name = def.name or id,
+        description = def.description,
+        api = def.api,
+        reloadToToggle = def.reloadToToggle and true or false,
+        combatSafe = def.combatSafe and true or false,
+        source = source,
+        builtIn = source == ADDON,
+        state = "registered",
+        replaces = def.replaces,
+    }
+
+    settings.register(id, defaults)
+    if def.api and not apiAtLeast(def.api) then
+        own(m, "state", "incompatible")
+        own(m, "error", ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(def.api), API_VERSION))
+        print(("%s (%s) can't load: it %s."):format(m.name, m.source, tostring(m.error)))
+    end
+
+    list[#list + 1] = m
+    byId[id] = m
+    events.emit("SUUUI_MODULE_REGISTERED", id)
+    if started then start(m) end
+    return m
+end
+
+export function get(id: string): Module?
+    return byId[id]
+end
+
+export function all(): Module[]
+    return list
+end
+
+-- The module `text` names: its id or name, in any letter case.
+export function find(text: string?): Module?
+    local wanted = strtrim(text or ""):lower()
+    for _, m in ipairs(list) do
+        if m.id == wanted or m.name:lower() == wanted then return m end
+    end
+    return nil
+end
+
+--------------------------------------------------------------------------------
+-- Chat commands
+--------------------------------------------------------------------------------
+
+local STATE_TEXT: { [string]: string } = {
+    enabled = "|cff3fd0ffon|r",
+    disabled = "|cffa39b8boff|r",
+    errored = "|cffff9a80errored|r",
+    incompatible = "|cffff9a80incompatible|r",
+    registered = "|cffa39b8bwaiting for login|r",
+}
+
+local function describe(m: Module): string
+    local state = STATE_TEXT[m.state] or m.state
+    if m.replacedBy then state = "|cffa39b8breplaced by " .. m.replacedBy .. "|r" end
+    if m.pendingReload then
+        local retry = m.state == "errored" and settings.get(m.id, "enabled")
+        local afterReload = (retry and "retries") or (m.enabledAtLoad and "off") or "on"
+        state = state .. (" |cffffb23f(%s after /reload)|r"):format(afterReload)
+    end
+    local line = ("  %s  %s  %s  - %s"):format(m.id, m.name, state, m.builtIn and "built in" or m.source)
+    if m.error then line = line .. "  (" .. m.error .. ")" end
+    return line
+end
+
+registerCommand("modules", "List every module, built in and from plugins, with its state.", function()
+    print(("%d modules, API %s:"):format(#list, API_VERSION))
+    for _, m in ipairs(list) do _G.print(describe(m)) end
+end)
+
+local function toggle(arg: string, on: boolean)
+    local m = find(arg)
+    if not m then return print(("No module called \"%s\". /suu modules lists them."):format(arg)) end
+    if m.state == "incompatible" then return print(m.name .. " " .. tostring(m.error) .. ".") end
+    if on and m.state == "errored" then
+        -- Turning an errored module on again is a retry; one that replaces
+        -- protected frames can only retry from a fresh load.
+        if m.reloadToToggle then
+            settings.set(m.id, "enabled", true)
+            own(m, "pendingReload", true)
+            print(("%s tries again after a /reload."):format(m.name))
+            return _G.print(describe(m))
+        end
+        own(m, "state", "disabled")
+        if settings.get(m.id, "enabled") then apply(m) end
+    end
+    settings.set(m.id, "enabled", on)
+    if m.reloadToToggle and m.pendingReload then
+        print(("%s turns %s after a /reload."):format(m.name, on and "on" or "off"))
+    elseif InCombatLockdown() then
+        print(("%s turns %s when combat ends."):format(m.name, on and "on" or "off"))
+    end
+    _G.print(describe(m))
+end
+
+registerCommand("enable", "Turn a module on: /suu enable <id>", function(arg: string) toggle(arg, true) end)
+registerCommand("disable", "Turn a module off: /suu disable <id>", function(arg: string) toggle(arg, false) end)

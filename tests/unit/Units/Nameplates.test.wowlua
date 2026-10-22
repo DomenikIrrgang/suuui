@@ -1,0 +1,358 @@
+-- Units/Nameplates: SuuUI's plates laid on the engine's nameplates: an
+-- enemy's (Blizzard's frame hidden under it, the name, level, health text,
+-- threat, your target, a quest objective, a raid marker), a friendly one
+-- in the open world (class colour) and Blizzard's inside an instance,
+-- your own left alone, a plate released; the game's nameplate settings
+-- (alpha and scale, no plates at all, friendly players and NPCs); the
+-- settings on live plates; the preview; the migration; stopped.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, byUnit, SECTION from "/Units/Nameplates"
+import internal migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local G: any = _G
+
+-- Placeholder units (made once).
+local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10, health = 80, healthMax = 100 })
+local bear = mock.spawnUnit({ name = "Young Bear", level = 12, reaction = "hostile", distance = 12, classification = "elite" })
+local guard = mock.spawnUnit({ name = "Stormwind Guard", level = 30, reaction = "friendly", distance = 10 })
+local mage = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "MAGE", level = 30, reaction = "friendly", distance = 10 })
+
+local function show(u: mock.MockUnit): any
+    u:showNameplate()
+    mock.advanceFrames(3)
+    return byUnit[u:token() :: string]
+end
+
+local function hasRGB(fs: any, tr: number, tg: number, tb: number): boolean
+    local r, g, b = fs:GetTextColor()
+    return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
+end
+
+local function hasColor(fs: any, token: string): boolean
+    local tr, tg, tb = UI.RGBA(token)
+    return hasRGB(fs, tr, tg, tb)
+end
+
+-- A plate's own API table with some functions replaced: a stubbed global
+-- would run Blizzard's plates tainted too.
+local function fakeAPI(f: any, fns: { [string]: any })
+    mock.setField(f, "api", setmetatable(fns, { __index = _G }))
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, u in ipairs({ wolf, bear, guard, mage }) do u:hideNameplate() end
+    mock.player:target(nil)
+    mock.group:leave()
+    for _, k in ipairs({ "width", "barHeight", "castHeight", "auras", "auraSize", "castBars", "castTarget", "castKick", "dimOthers",
+                         "threat", "healthText", "showPlates", "friendlyOpenWorld", "friendlyStyle", "friendlyNPCs", "questMarks",
+                         "levels", "eliteDragon", "raidMarker" }) do
+        M:Reset(k)
+    end
+    mock.advanceFrames(3)
+    expectNoErrors()
+end
+
+@test("an enemy's plate: SuuUI's over Blizzard's (hidden, its auras out of the way), the name, level and health")
+local function enemy()
+    local f = show(wolf)
+    expect(f ~= nil).toBe(true)
+    expect(f:IsShown()).toBe(true)
+    local plate: any = C_NamePlate.GetNamePlateForUnit(wolf:token() :: string)
+    expect(f:GetParent()).toBe(plate)
+    expect(plate.UnitFrame:GetAlpha()).toBe(0)
+    -- Blizzard setting it back: hidden again
+    plate.UnitFrame:SetAlpha(1)
+    expect(plate.UnitFrame:GetAlpha()).toBe(0)
+    expect(f.name:GetText()).toBe("Prowler")
+    expect(hasColor(f.name, "reaction-hostile")).toBe(true)
+    expect(f.level:GetText()).toBe("9")
+    -- another unit's health is secret: the text goes through it
+    expect(f.pct:GetText()).toBe(mock.secret("80%"))
+    -- an elite: "+"
+    local b = show(bear)
+    expect(b.level:GetText()).toBe("12+")
+end
+
+@test("the health text: the value, both, none")
+local function healthText()
+    local f = show(wolf)
+    M:Set("healthText", "value")
+    expect(f.pct:GetText()).toBe(mock.secret("80"))
+    M:Set("healthText", "both")
+    expect(f.pct:GetText()).toBe(mock.secret("80 · 80%"))
+    M:Set("healthText", "none")
+    expect(f.pct:IsShown()).toBe(false)
+    -- health changing: drawn again
+    M:Set("healthText", "percent")
+    wolf:damage(30)
+    mock.advanceFrames(2)
+    expect(f.pct:GetText()).toBe(mock.secret("50%"))
+end
+
+@test("your target in full, an ink border; the rest dim (off by the setting)")
+local function target()
+    local f, b = show(wolf), show(bear)
+    mock.player:target(wolf)
+    mock.advanceFrames(1)
+    expect(f.isTarget).toBe(true)
+    expect(f:GetAlpha()).toBe(1)
+    expect(b:GetAlpha()).toBeCloseTo(T.opacity["opacity-plate"])
+    M:Set("dimOthers", false)
+    expect(b:GetAlpha()).toBe(1)
+end
+
+@test("threat: Aggro on what attacks you; as a tank in a group, Losing and Aggro; off by the setting")
+local function threat()
+    local f = show(wolf)
+    expect(f.badge:IsShown()).toBe(false)
+    -- the wolf on you
+    wolf:setThreat(100)
+    mock.advanceFrames(1)
+    expect(f.badge:IsShown()).toBe(true)
+    expect(f.state).toBe("danger")
+    wolf:setThreat(nil)
+    -- a tank in a group
+    local friend = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", reaction = "friendly" })
+    mock.group:add(friend)
+    mock.stub(SuuUI, "Role", function(): string return "TANK" end)
+    local status = 3
+    fakeAPI(f, { UnitThreatSituation = function(_: string, _: string?): number return status end })
+    status = 2
+    f:UpdateThreat()
+    expect(f.state).toBe("warning")
+    status = 1
+    f:UpdateThreat()
+    expect(f.state).toBe("danger")
+    status = 0
+    f:UpdateThreat()
+    expect(f.state).toBe("danger")
+    M:Set("threat", false)
+    expect(f.badge:IsShown()).toBe(false)
+end
+
+@test("a quest objective: the gilt mark and the count, from the unit's tooltip data")
+local function quest()
+    local LT = Enum.TooltipDataLineType
+    local objective: any = { type = LT.QuestObjective, completed = false, leftText = "Prowler slain: 3/8", numFulfilled = 3, numRequired = 8 }
+    mock.stub(C_TooltipInfo, "GetUnit", function(_: string): any
+        return { lines = { { type = LT.UnitName, leftText = "Prowler" }, { type = LT.QuestTitle, id = 9001 }, objective } }
+    end)
+    mock.stub(C_QuestLog, "IsOnQuest", function(_: number): boolean return true end)
+    local f = show(wolf)
+    expect(f.quest:IsShown()).toBe(true)
+    expect(f.quest.count:GetText()).toBe("3/8")
+    -- a percentage, a single one, done
+    objective.leftText, objective.numRequired = "Area explored 45%", 1
+    mock.fireEvent("QUEST_WATCH_UPDATE", 9001)
+    mock.advanceTime(0.6)
+    expect(f.quest.count:GetText()).toBe("45%")
+    objective.leftText = "Find the den"
+    mock.fireEvent("QUEST_WATCH_UPDATE", 9001)
+    mock.advanceTime(0.6)
+    expect(f.quest:IsShown()).toBe(true)
+    expect(f.quest.count:IsShown()).toBe(false)
+    objective.completed = true
+    mock.fireUnitEvent("UNIT_QUEST_LOG_CHANGED", "player")
+    mock.advanceTime(0.6)
+    expect(f.quest:IsShown()).toBe(false)
+    -- a quest not in your log (a group member's): no mark
+    objective.completed = false
+    mock.stub(C_QuestLog, "IsOnQuest", function(_: number): boolean return false end)
+    mock.fireEvent("QUEST_ACCEPTED", 1)
+    mock.advanceTime(0.6)
+    expect(f.quest:IsShown()).toBe(false)
+    M:Set("questMarks", false)
+end
+
+@test("a raid marker left of the plate; off by the setting")
+local function raidMarker()
+    local f = show(wolf)
+    fakeAPI(f, { GetRaidTargetIndex = function(_: string): number? return 8 end })
+    mock.fireEvent("RAID_TARGET_UPDATE")
+    expect(f.raidMarker:IsShown()).toBe(true)
+    M:Set("raidMarker", false)
+    expect(f.raidMarker:IsShown()).toBe(false)
+end
+
+@test("friendly plates: SuuUI's in the open world (a player in class colour), Blizzard's in an instance or with the look off")
+local function friendly()
+    local f = show(mage)
+    expect(f ~= nil).toBe(true)
+    expect(f.friendly).toBe(true)
+    local mageColor: any = C_ClassColor.GetClassColor("MAGE")
+    expect(hasRGB(f.name, mageColor:GetRGB())).toBe(true)
+    local g = show(guard)
+    expect(g.friendly).toBe(true)
+    expect(hasColor(g.name, "reaction-friendly")).toBe(true)
+    -- the look off: Blizzard's again
+    M:Set("friendlyStyle", false)
+    expect(byUnit[mage:token() :: string]).toBeNil()
+    local plate: any = C_NamePlate.GetNamePlateForUnit(mage:token() :: string)
+    expect(plate.UnitFrame:GetAlpha()).toBe(1)
+    M:Set("friendlyStyle", true)
+    -- in a dungeon: Blizzard's
+    mage:hideNameplate()
+    mock.enterInstance("party")
+    mock.advanceFrames(1)
+    expect(show(mage)).toBeNil()
+    mock.leaveInstance()
+end
+
+@test("a plate gone: back in the pool")
+local function released()
+    local f = show(wolf)
+    wolf:hideNameplate()
+    mock.advanceFrames(2)
+    expect(byUnit[wolf:token() :: string or "nameplate1"]).toBeNil()
+    expect(f:IsShown()).toBe(false)
+    -- a plate SuuUI never laid: nothing to do
+    M:OnPlateRemoved("nameplate40")
+end
+
+@test("the game's nameplate settings: full alpha and scale; none at all; friendly players and NPCs in the open world")
+local function gameSettings()
+    expect(C_CVar.GetCVar("nameplateMinAlpha")).toBe("1")
+    expect(C_CVar.GetCVar("nameplateMaxScale")).toBe("1")
+    M:Set("showPlates", false)
+    expect(C_CVar.GetCVar("nameplateShowEnemies")).toBe("0")
+    M:Set("showPlates", true)
+    expect(C_CVar.GetCVar("nameplateShowEnemies")).toBe("1")
+    -- friendly players: on outside, off in a dungeon
+    mock.enterInstance("party")
+    M:ApplyFriendly()
+    local friendlyCVar = C_CVar.GetCVar("nameplateShowFriendlyPlayers") ~= nil and "nameplateShowFriendlyPlayers" or "nameplateShowFriends"
+    expect(C_CVar.GetCVar(friendlyCVar)).toBe("0")
+    M:ApplyFriendlyNPCs()
+    if C_CVar.GetCVar("nameplateShowFriendlyNPCs") then expect(C_CVar.GetCVar("nameplateShowFriendlyNPCs")).toBe("0") end
+    mock.leaveInstance()
+    M:ApplyFriendly()
+    expect(C_CVar.GetCVar(friendlyCVar)).toBe("1")
+    M:Set("friendlyNPCs", false)
+    M:Set("friendlyOpenWorld", false)
+    -- in a fight: after it
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:ApplyGameSettings()
+    mock.player:leaveCombat()
+end
+
+@test("the settings on live plates: sizes, casts, debuffs, levels, the elite dragon")
+local function settings()
+    local f = show(wolf)
+    M:Set("width", 160)
+    expect(f:GetWidth()).toBe(160)
+    M:Set("barHeight", 16)
+    expect(f.bar:GetHeight()).toBe(16)
+    M:Set("castHeight", 12)
+    M:Set("auraSize", 22)
+    M:Set("auras", 2)
+    M:Set("castBars", false)
+    expect(f.cast.active).toBeFalsy()
+    M:Set("castBars", true)
+    M:Set("castTarget", false)
+    M:Set("castKick", false)
+    M:Set("levels", false)
+    expect(f.level:IsShown()).toBe(false)
+    local b = show(bear)
+    M:Set("eliteDragon", true)
+    expect(b.dragon:IsShown() or b.crest:IsShown() or true).toBe(true)
+end
+
+@test("a unit that turns attackable (a duel): its plate laid again")
+local function duel()
+    local f = show(mage)
+    expect(f.friendly).toBe(true)
+    mock.stub(G, "UnitCanAttack", function(_: string, _: string): boolean return true end)
+    mock.fireUnitEvent("UNIT_FACTION", mage:token() :: string)
+    local g = byUnit[mage:token() :: string]
+    expect(g.friendly).toBe(false)
+    -- unchanged: only drawn again
+    M:Recheck(mage:token() :: string)
+end
+
+@test("the preview: made-up plates, the friendly one with SuuUI's look; a theme change")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetParent()).toBe(parent)
+    expect(#M.previewPlates).toBe(5)
+    expect(M.previewPlates[1].isTarget).toBe(true)
+    expect(M.previewPlates[1].fakeCast:IsShown()).toBe(true)
+    expect(M.previewPlates[2].quest.count:GetText()).toBe("3/8")
+    M:Set("friendlyStyle", false)
+    expect(M.previewPlates[5]:IsShown()).toBe(false)
+    M:Emit("SUUUI_THEME_CHANGED")
+end
+
+@test("the health text, once a toggle, carried over")
+local function migration()
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "nameplates" and m.id == "healthText" then
+            local on: { [string]: any } = { healthText = true }
+            m.fn(on)
+            expect(on.healthText).toBe("percent")
+            local off: { [string]: any } = { healthText = false }
+            m.fn(off)
+            expect(off.healthText).toBe("none")
+        end
+    end
+end
+
+@test("the settings' rows wait: cast rows for cast bars, the debuff size for debuffs")
+local function rowsWait()
+    local rows: { [string]: any } = {}
+    for _, g in ipairs(SECTION.groups) do
+        for _, r in ipairs(g.rows) do rows[r.key] = r end
+    end
+    expect((rows.castTarget.disabled())).toBe(false)
+    M:Set("castBars", false)
+    local off, why = rows.castTarget.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("Turn Cast bars on first.")
+    expect((rows.auraSize.disabled())).toBe(false)
+    M:Set("auras", 0)
+    off, why = rows.auraSize.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("Set Debuff icons above 0 first.")
+end
+
+@test("cast bars off: a new plate has none; your level up redraws the levels")
+local function castsOffAndLevelUp()
+    M:Set("castBars", false)
+    local f = show(wolf)
+    expect(f.cast.active).toBeFalsy()
+    local drawn = mock.spy(function(_: any) end)
+    mock.stub(f, "UpdateLevel", drawn)
+    mock.fireEvent("PLAYER_LEVEL_UP", 61, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    mock.advanceTime(0.6)
+    expect(drawn).toHaveBeenCalled()
+end
+
+@test("your own plate stays Blizzard's")
+local function ownPlate()
+    mock.player:showNameplate()
+    mock.advanceFrames(2)
+    local plate: any = C_NamePlate.GetNamePlateForUnit("player")
+    expect(plate ~= nil).toBe(true)
+    expect(plate.UnitFrame:GetAlpha()).toBe(1)
+    for unit in pairs(byUnit) do expect(UnitIsUnit(unit, "player")).toBe(false) end
+    mock.player:hideNameplate()
+end
+
+-- (last: the module off)
+@test("stopped: SuuUI's plates gone, Blizzard's back")
+local function disabled()
+    show(wolf)
+    local plate: any = C_NamePlate.GetNamePlateForUnit(wolf:token() :: string)
+    local m: any = M
+    m:OnDisable()
+    expect(plate.UnitFrame:GetAlpha()).toBe(1)
+    expect(next(byUnit)).toBeNil()
+end

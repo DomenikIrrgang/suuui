@@ -1,0 +1,201 @@
+-- Core/Blizzard: standing Blizzard's frames down under a hidden parent,
+-- waiting for the end of combat (protected frames) and for Edit Mode to
+-- close, and putting a frame back when the game reparents it.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as blizzard from "/Core/Blizzard"
+import expectNoErrors from "../../helpers"
+
+local hidden: Frame = _G.SuuUIHiddenParent
+
+-- A Blizzard-like frame with events, shown on UIParent.
+local function blizzardFrame(name: string?): Frame
+    local f = CreateFrame("Frame", name, UIParent)
+    f:RegisterEvent("PLAYER_TARGET_CHANGED")
+    f:Show()
+    return f
+end
+
+@afterEach
+local function leave()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+end
+
+@test("the hidden parent is hidden")
+local function hiddenParent()
+    expect(hidden:GetName()).toBe("SuuUIHiddenParent")
+    expect(hidden:IsShown()).toBe(false)
+end
+
+@test("a suppressed frame stops its events, hides and moves under the hidden parent")
+local function suppress()
+    local f = blizzardFrame()
+    expect(blizzard.isSuppressed(f)).toBe(false)
+    blizzard.suppress(f)
+    expect(f:IsEventRegistered("PLAYER_TARGET_CHANGED")).toBe(false)
+    expect(f:IsShown()).toBe(false)
+    expect(f:GetParent()).toBe(hidden)
+    expect(blizzard.isSuppressed(f)).toBe(true)
+    expectNoErrors()
+end
+
+@test("a frame is found by its global name")
+local function byName()
+    local f = blizzardFrame("SuuUITestBlizzardFrame")
+    blizzard.suppress("SuuUITestBlizzardFrame")
+    expect(f:GetParent()).toBe(hidden)
+    expect(blizzard.isSuppressed("SuuUITestBlizzardFrame")).toBe(true)
+    expect(blizzard.isSuppressed(f)).toBe(true)
+end
+
+@test("a name that isn't a frame, or nothing, is ignored")
+local function missing()
+    blizzard.suppress("SuuUITestNoSuchFrame")
+    blizzard.suppress(nil)
+    expect(blizzard.isSuppressed("SuuUITestNoSuchFrame")).toBe(false)
+    expect(blizzard.isSuppressed(nil)).toBe(false)
+    expectNoErrors()
+end
+
+@test("suppressing twice does nothing more")
+local function twice()
+    local f = blizzardFrame()
+    blizzard.suppress(f)
+    f:Show()
+    blizzard.suppress(f)
+    expect(f:IsShown()).toBe(true)
+end
+
+@test("the named children stop their events too, by path")
+local function children()
+    -- (Blizzard's frames carry their children as fields: an untyped view)
+    local f: any = blizzardFrame()
+    local direct = CreateFrame("Frame", nil, f)
+    direct:RegisterEvent("UNIT_HEALTH")
+    local container = CreateFrame("Frame", nil, f)
+    local nested = CreateFrame("StatusBar", nil, container)
+    nested:RegisterEvent("UNIT_POWER_UPDATE")
+    f.healthbar, f.Container, container.bar = direct, container, nested
+    f.label = "not a frame"
+    f.plain = {}
+    blizzard.suppress(f, { children = { "healthbar", "Container.bar", "missing", "label.deeper", "plain" } })
+    expect(direct:IsEventRegistered("UNIT_HEALTH")).toBe(false)
+    expect(nested:IsEventRegistered("UNIT_POWER_UPDATE")).toBe(false)
+    expectNoErrors()
+end
+
+@test("keepParent stops the events and hides, but leaves the parent")
+local function keepParent()
+    local f = blizzardFrame()
+    blizzard.suppress(f, { keepParent = true })
+    expect(f:IsShown()).toBe(false)
+    expect(f:GetParent()).toBe(UIParent)
+    expect(f:IsEventRegistered("PLAYER_TARGET_CHANGED")).toBe(false)
+    -- no hook: the game may reparent it
+    f:SetParent(WorldFrame)
+    mock.advanceFrames(2)
+    expect(f:GetParent()).toBe(WorldFrame)
+end
+
+@test("noHide leaves the frame shown; the hidden parent keeps it out of sight")
+local function noHide()
+    local f = blizzardFrame()
+    blizzard.suppress(f, { noHide = true })
+    expect(f:IsShown()).toBe(true)
+    expect(f:IsVisible()).toBe(false)
+    expect(f:GetParent()).toBe(hidden)
+end
+
+@test("the game reparenting a suppressed frame puts it back on the next frame")
+local function reparented()
+    local f = blizzardFrame()
+    blizzard.suppress(f)
+    f:SetParent(UIParent)
+    f:SetParent(WorldFrame)
+    expect(f:GetParent()).toBe(WorldFrame)
+    mock.advanceFrames(1)
+    expect(f:GetParent()).toBe(hidden)
+    expectNoErrors()
+end
+
+@test("a protected frame in combat isn't hidden, and moves when the fight ends")
+local function combat()
+    local f = blizzardFrame("SuuUITestProtected")
+    mock.protect(f, true)
+    mock.player:enterCombat()
+    blizzard.suppress(f)
+    expect(f:IsEventRegistered("PLAYER_TARGET_CHANGED")).toBe(false)
+    expect(f:IsShown()).toBe(true)
+    expect(f:GetParent()).toBe(UIParent)
+    mock.player:leaveCombat()
+    expect(f:GetParent()).toBe(hidden)
+    expect(#mock.refusals()).toBe(0)
+    expectNoErrors()
+end
+
+@test("an unnamed protected frame waits too")
+local function combatUnnamed()
+    local f = blizzardFrame()
+    mock.protect(f, true)
+    mock.player:enterCombat()
+    blizzard.suppress(f)
+    expect(f:GetParent()).toBe(UIParent)
+    mock.player:leaveCombat()
+    expect(f:GetParent()).toBe(hidden)
+end
+
+@test("a frame that isn't protected moves in combat at once")
+local function combatPlain()
+    local f = blizzardFrame()
+    mock.player:enterCombat()
+    blizzard.suppress(f)
+    expect(f:IsShown()).toBe(false)
+    expect(f:GetParent()).toBe(hidden)
+end
+
+@test("while Edit Mode is open the move waits, checking again every quarter second")
+local function editMode()
+    local open = true
+    mock.stub(EditModeManagerFrame, "IsShown", function(): boolean return open end)
+    local f = blizzardFrame()
+    blizzard.suppress(f)
+    expect(f:IsShown()).toBe(false)
+    expect(f:GetParent()).toBe(UIParent)
+    -- Edit Mode reparenting it meanwhile doesn't queue a second check
+    f:SetParent(WorldFrame)
+    mock.advanceTime(0.3)
+    expect(f:GetParent()).toBe(WorldFrame)
+    open = false
+    mock.advanceTime(0.3)
+    expect(f:GetParent()).toBe(hidden)
+    expectNoErrors()
+end
+
+@test("restore never brings a frame back before a reload")
+local function restore()
+    local f = blizzardFrame()
+    expect(blizzard.restore(f)).toBe(true)
+    blizzard.suppress(f)
+    expect(blizzard.restore(f)).toBe(false)
+    expect(f:GetParent()).toBe(hidden)
+end
+
+@test("a frame already under the hidden parent stays there")
+local function alreadyHidden()
+    local f = CreateFrame("Frame", nil, hidden)
+    blizzard.suppress(f)
+    expect(f:GetParent()).toBe(hidden)
+    expect(blizzard.isSuppressed(f)).toBe(true)
+end
+
+@test("a client without Edit Mode's manager moves the frame at once")
+local function noEditMode()
+    local all: { [string]: any } = _G :: any
+    local manager = all.EditModeManagerFrame
+    all.EditModeManagerFrame = nil
+    local f = blizzardFrame()
+    blizzard.suppress(f)
+    all.EditModeManagerFrame = manager
+    expect(f:GetParent()).toBe(hidden)
+end

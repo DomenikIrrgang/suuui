@@ -1,0 +1,180 @@
+-- Units/ChatCommands/Match: the command palette's matching (commands that
+-- start with what's typed, the closest ones, the input's text read, the
+-- categories).
+
+import test, cases, expect from "wowlua:test"
+import SuuUI from "/Core/API"
+import * as match from "/Units/ChatCommands/Match"
+
+local GILT = "|cff" .. SuuUI.Tokens.color["gilt-text"].hex
+
+local function item(cmd: string, cat: string, rank: number, aliases: string[]?, extra: { [string]: any }?): match.Item
+    local names: string[] = { cmd }
+    for _, a in ipairs(aliases or {}) do names[#names + 1] = a end
+    local it: match.Item = { cmd = cmd, aliases = aliases or {}, names = names, cat = cat, src = "Game", rank = rank }
+    for k, v in pairs(extra or {}) do (it :: any)[k] = v end
+    return it
+end
+
+local CATALOG: match.Item[] = {
+    item("/invite", "group", 1, { "/inv" }, { arg = "names" }),
+    item("/roll", "group", 3, { "/random", "/rand", "/rnd" }),
+    item("/raid", "chat", 25, { "/ra" }, { chatType = true, arg = "names" }),
+    item("/reply", "chat", 23, { "/r" }),
+    item("/rw", "chat", 26),
+    item("/reload", "game", 60, { "/rl" }),
+    item("/suu", "suuui", 1, { "/suuui" }, { arg = "suu" }),
+    item("/join", "chat", 40, { "/channel" }, { arg = "join" }),
+    item("/rofl", "emote", 1100),
+    item("/roar", "emote", 1090),
+}
+
+local function byName(): { [string]: match.Item }
+    local out: { [string]: match.Item } = {}
+    for _, it in ipairs(CATALOG) do for _, n in ipairs(it.names) do out[n] = it end end
+    return out
+end
+
+local SUBS: match.SubCommand[] = {
+    { name = "probe", help = "Probe the client", args = { "chat", "taint" } },
+    { name = "help", help = "Help", args = nil },
+}
+local function subs(): match.SubCommand[] return SUBS end
+
+@test("edit distance, 99 beyond three letters' difference in length")
+@cases({ { "/rol", "/roll", 1 }, { "/roll", "/roll", 0 }, { "/rlol", "/roll", 2 }, { "", "/a", 2 },
+         { "/a", "/abcdef", 99 }, { "kitten", "sitting", 3 } })
+local function distance(a: string, b: string, d: number)
+    expect(match.distance(a, b)).toBe(d)
+end
+
+@test("which name starts with what's typed")
+local function matchOf()
+    local roll = CATALOG[2]
+    expect(match.matchOf(roll, "/ro")).toBe(1)
+    expect({ match.matchOf(roll, "/ra") }).toEqual({ 2, "/random" })
+    expect(match.matchOf(roll, "/x")).toBeNil()
+end
+
+@test("matches by category: own name first, then rank and name; emotes only when on")
+local function matches()
+    local byCat, total = match.matches(CATALOG, "/r", true)
+    expect(total).toBe(7)
+    local chat: string[] = {}
+    for _, m in ipairs(assert(byCat.chat)) do chat[#chat + 1] = m.item.cmd end
+    expect(chat).toEqual({ "/reply", "/raid", "/rw" })
+    local group: string[] = {}
+    for _, m in ipairs(assert(byCat.group)) do group[#group + 1] = m.item.cmd .. ":" .. m.score end
+    expect(group).toEqual({ "/roll:1" })
+    expect(#assert(byCat.emote)).toBe(2)
+    expect(assert(byCat.emote)[1].item.cmd).toBe("/roar")
+    local noEmotes, n = match.matches(CATALOG, "/r", false)
+    expect(noEmotes.emote).toBeNil()
+    expect(n).toBe(5)
+    -- an alias match after a main-name match in the same category
+    local raByCat = match.matches(CATALOG, "/ra", true)
+    expect(assert(raByCat.chat)[1].item.cmd).toBe("/raid")
+    expect(assert(raByCat.group)[1].alias).toBe("/random")
+    local same = match.matches({ item("/rb", "chat", 5), item("/ra", "chat", 5) }, "/r", true)
+    expect(assert(same.chat)[1].item.cmd).toBe("/ra")
+end
+
+@test("the closest commands: three at most, nearest then rank; emotes only when on")
+local function closest()
+    local out = match.closest(CATALOG, "/rolf", true)
+    local cmds: string[] = {}
+    for _, m in ipairs(out) do cmds[#cmds + 1] = m.item.cmd end
+    expect(cmds).toEqual({ "/roll", "/reload", "/roar" })
+    expect(out[1].score).toBe(1)
+    local without = match.closest(CATALOG, "/rofl", false)
+    expect(without[1].item.cmd).toBe("/roll")
+    expect(match.closest(CATALOG, "/zzzzzzzzzz", true)).toEqual({})
+end
+
+@test("the typed part in gilt (two letters or more)")
+local function hits()
+    expect(match.hit("/roll", "/ro")).toBe(GILT .. "/ro|r" .. "ll")
+    expect(match.hit("/roll", "/")).toBe("/roll")
+    expect(match.hit("/roll", "")).toBe("/roll")
+    expect(match.hit("/roll", "/x")).toBe("/roll")
+    expect(match.tint("gilt-text", "a")).toBe(GILT .. "a|r")
+end
+
+@test("a row's aliases: the first two")
+local function aliases()
+    expect(match.aliasText(CATALOG[2], "/ra")).toBe(GILT .. "/ra|rndom " .. GILT .. "/ra|rnd")
+    expect(match.aliasText(CATALOG[5], "")).toBe("")
+end
+
+@test("the matches in the other categories")
+local function elsewhere()
+    local byCat = match.matches(CATALOG, "/r", true)
+    expect(match.elsewhere(byCat, "group")).toBe("In Chat: /reply, /raid, /rw · In Game: /reload · Emotes: 2")
+    local many = match.matches({ item("/ra", "chat", 1), item("/rb", "chat", 2), item("/rc", "chat", 3),
+                                 item("/rd", "chat", 4) }, "/r", true)
+    expect(match.elsewhere(many, "group")).toBe("In Chat: /ra, /rb, /rc …")
+    expect(match.elsewhere(many, "chat")).toBe("")
+end
+
+@test("the kept category, All for none or Emotes while they're off")
+local function category()
+    expect(match.category(nil, true)).toBe("all")
+    expect(match.category("chat", true)).toBe("chat")
+    expect(match.category("emote", true)).toBe("emote")
+    expect(match.category("emote", false)).toBe("all")
+end
+
+@test("Shift-Tab steps round the categories shown")
+local function step()
+    expect(match.stepCategory("all", 1, true)).toBe("chat")
+    expect(match.stepCategory("group", 1, true)).toBe("emote")
+    expect(match.stepCategory("group", 1, false)).toBe("suuui")
+    expect(match.stepCategory("addon", 1, true)).toBe("all")
+    expect(match.stepCategory("all", -1, true)).toBe("addon")
+    expect(match.stepCategory("emote", 1, false)).toBe("chat")
+end
+
+@test("key hints without Tab's")
+local function keys()
+    local k = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Shift Tab", "category" }, { "Enter", "sends" } }
+    expect(match.withoutTab(k)).toEqual({ { "Shift Tab", "category" }, { "Enter", "sends" } })
+end
+
+@test("the input's text: a command being typed")
+local function parseCommands()
+    expect(match.parse("/Ro", true, byName, subs)).toEqual({ mode = "commands", typed = "/ro" })
+    expect(match.parse("/", false, byName, subs)).toEqual({ mode = "commands", typed = "/" })
+    expect(match.parse("hello", true, byName, subs)).toBeNil()
+    expect(match.parse(nil, true, byName, subs)).toBeNil()
+    expect(match.parse("", true, byName, subs)).toBeNil()
+end
+
+@test("the input's text: what follows a command")
+local function parseArgs()
+    local q = match.parse("/INV  bo", true, byName, subs) :: match.Query
+    expect(q.mode).toBe("args")
+    expect(q.kind).toBe("names")
+    expect(q.prefix).toBe("/inv ")
+    expect(q.typed).toBe("bo")
+    expect(q.item == CATALOG[1]).toBe(true)
+    -- off, unknown, without arguments, or a chat type: none
+    expect(match.parse("/inv bo", false, byName, subs)).toBeNil()
+    expect(match.parse("/nope bo", true, byName, subs)).toBeNil()
+    expect(match.parse("/roll 6", true, byName, subs)).toBeNil()
+    expect(match.parse("/raid hi", true, byName, subs)).toBeNil()
+    local j = match.parse("/join ", true, byName, subs) :: match.Query
+    expect(j.kind).toBe("join")
+    expect(j.typed).toBe("")
+end
+
+@test("the input's text: /suu's commands and their words")
+local function parseSuu()
+    local q = match.parse("/suu pro", true, byName, subs) :: match.Query
+    expect({ q.mode, q.kind, q.prefix, q.typed }).toEqual({ "args", "suu", "/suu ", "pro" })
+    local w = match.parse("/suu PROBE  ta", true, byName, subs) :: match.Query
+    expect({ w.kind, w.prefix, w.typed }).toEqual({ "words", "/suu probe ", "ta" })
+    expect(w.sub == SUBS[1]).toBe(true)
+    expect(match.parse("/suu help x", true, byName, subs)).toBeNil()
+    expect(match.parse("/suu nope x", true, byName, subs)).toBeNil()
+    expect(match.parse("/suu probe a b", true, byName, subs)).toBeNil()
+end

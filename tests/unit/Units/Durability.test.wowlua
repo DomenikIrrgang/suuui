@@ -1,0 +1,638 @@
+-- Units/Durability: reading the gear's wear, the texts built from it, the
+-- figure, the break alert, a broken piece's tooltip and repairing at
+-- merchants.
+
+import test, cases, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import after from "wowlua:timer"
+import SuuUI from "/Core/API"
+import * as events from "/Core/Events"
+import internal M, pieceOf, sortPieces, readPieces, summarize, signature, tooltipLines, coins, piecesText,
+    newlyBroken, figureView, repairReport, guildPays, repairsOff, figureOff, repairOff, gearOff from "/Units/Durability"
+import type Piece from "/Units/Durability"
+import expectNoErrors, newParent from "../../helpers"
+
+local T = SuuUI.Tokens
+local function hex(token: string): string return "|cff" .. T.color[token].hex end
+
+-- What GetInventoryItemDurability reads, by slot: { current, max }.
+local function wear(slots: { [number]: any[] })
+    mock.stub(_G, "GetInventoryItemDurability", function(slot: number): (any, any)
+        local s = slots[slot]
+        if s then return s[1], s[2] end
+        return nil, nil
+    end)
+end
+
+-- A piece as the module makes it (the line at 20%).
+local function piece(slot: number, cur: number, max: number?): Piece
+    return assert(pieceOf(slot, cur, max or 100, nil, nil, 20))
+end
+
+local function lastPrinted(): string
+    local p = mock.printed()
+    return p[#p] or ""
+end
+
+local parent: Frame? = nil
+
+@beforeEach
+local function fresh()
+    M.wasState = nil
+    M:Update(true)
+end
+
+@afterEach
+local function undo()
+    M:Reset()
+    if parent then parent:Hide() end
+    parent = nil
+end
+
+--------------------------------------------------------------------------------
+-- The pieces
+--------------------------------------------------------------------------------
+
+@test("pieceOf: the percent and the state against the line")
+@cases({
+    { 100, 100, 100, "fine" }, { 20, 100, 20, "damaged" }, { 21, 100, 21, "fine" },
+    { 1, 1000, 1, "damaged" }, { 0, 50, 0, "broken" }, { 33, 45, 73, "fine" },
+})
+local function percents(cur: number, max: number, pct: number, state: string)
+    local p = assert(pieceOf(5, cur, max, nil, nil, 20))
+    expect(p.percent).toBe(pct)
+    expect(p.state).toBe(state)
+    expect(p.current).toBe(cur)
+    expect(p.max).toBe(max)
+end
+
+@test("pieceOf: nothing for a piece that doesn't wear or reads secret")
+local function noPiece()
+    expect(pieceOf(5, nil, nil, nil, nil, 20)).toBeNil()
+    expect(pieceOf(5, 10, 0, nil, nil, 20)).toBeNil()
+    expect(pieceOf(5, mock.secret(10), 100, nil, nil, 20)).toBeNil()
+    expect(pieceOf(5, 10, mock.secret(100), nil, nil, 20)).toBeNil()
+end
+
+@test("pieceOf: label, part, name from the link, quality")
+local function names()
+    local p = assert(pieceOf(5, 50, 100, "|cnIQ4:|Hitem:1::|h[Robe of Tests]|h|r", 4, 20))
+    expect(p.label).toBe("Chest")
+    expect(p.part).toBe("Chest")
+    expect(p.name).toBe("Robe of Tests")
+    expect(p.link).toBe("|cnIQ4:|Hitem:1::|h[Robe of Tests]|h|r")
+    expect(p.quality).toBe("epic")
+    -- a secret link: none, the slot's label as the name; a secret quality: common
+    local s = assert(pieceOf(2, 50, 100, mock.secret("|Hitem:1|h[X]|h"), mock.secret(4), 20))
+    expect(s.link).toBeNil()
+    expect(s.name).toBe("Neck")
+    expect(s.part).toBeNil()
+    expect(s.quality).toBe("common")
+    expect(assert(pieceOf(16, 50, 100, nil, 0, 20)).quality).toBe("poor")
+    expect(assert(pieceOf(16, 50, 100, nil, 0, 20)).label).toBe("Main hand")
+    expect(assert(pieceOf(16, 50, 100, nil, nil, 20)).quality).toBe("common")
+    expect(assert(pieceOf(20, 50, 100, nil, nil, 20)).label).toBe("Slot 20")
+end
+
+@test("sortPieces: lowest first, the same percent by slot")
+local function sorting()
+    local list = sortPieces({ assert(pieceOf(8, 50, 100, nil, nil, 20)), assert(pieceOf(1, 50, 100, nil, nil, 20)),
+        assert(pieceOf(5, 0, 100, nil, nil, 20)), assert(pieceOf(7, 90, 100, nil, nil, 20)) })
+    local slots: number[] = {}
+    for _, p in ipairs(list) do slots[#slots + 1] = p.slot end
+    expect(slots).toEqual({ 5, 1, 8, 7 })
+end
+
+@test("readPieces: the worn pieces that wear, from the game, lowest first")
+local function reading()
+    wear({ [5] = { 0, 100 }, [8] = { 50, 100 }, [1] = { 50, 100 }, [3] = { mock.secret(5), 100 }, [16] = { 10, 0 } })
+    local list = readPieces(20)
+    expect(#list).toBe(3)
+    expect(list[1].slot).toBe(5)
+    expect(list[1].state).toBe("broken")
+    expect(list[2].slot).toBe(1)
+    expect(list[3].slot).toBe(8)
+    -- the boots' name and quality from what the player wears
+    expect(list[3].name).toBe("Recruit's Boots")
+    expect(list[3].quality).toBe("common")
+    expect(list[3].link).toContain("Recruit's Boots")
+end
+
+--------------------------------------------------------------------------------
+-- The texts
+--------------------------------------------------------------------------------
+
+@test("coins: gold, silver and copper in their colours, zeros left out")
+local function coinTexts()
+    local g, s, c = hex("coin-gold"), hex("coin-silver"), hex("coin-copper")
+    expect(coins(0)).toBe("0" .. c .. "c|r")
+    expect(coins(23108)).toBe("2" .. g .. "g|r 31" .. s .. "s|r 8" .. c .. "c|r")
+    expect(coins(10000)).toBe("1" .. g .. "g|r")
+    expect(coins(105)).toBe("1" .. s .. "s|r 5" .. c .. "c|r")
+end
+
+@test("piecesText: one piece, several pieces")
+local function pieceCounts()
+    expect(piecesText(1)).toBe("1 piece")
+    expect(piecesText(0)).toBe("0 pieces")
+    expect(piecesText(3)).toBe("3 pieces")
+end
+
+@test("tooltipLines: the worn pieces and the next one, then the rest")
+local function lines()
+    local list = { piece(5, 0), piece(7, 15), piece(8, 80), piece(1, 90) }
+    local label = function(name: string): string
+        return hex("ink-muted") .. name .. "|r  " .. hex("quality-common") .. name .. "|r"
+    end
+    expect(tooltipLines(list)).toEqual({
+        { label("Chest"), hex("ember-text") .. "Broken|r" },
+        { label("Legs"), hex("amber") .. "15%|r" },
+        { label("Feet"), "80%" },
+        { hex("ink-faint") .. "1 piece more at 90% or more|r" },
+    })
+    -- all well: the lowest, then how many more
+    expect(tooltipLines({ piece(8, 80), piece(1, 90), piece(10, 95) })).toEqual({
+        { label("Feet"), "80%" },
+        { hex("ink-faint") .. "2 pieces more at 90% or more|r" },
+    })
+    expect(tooltipLines({})).toEqual({})
+end
+
+@test("summarize: nothing worn that wears")
+local function summaryEmpty()
+    local d = summarize({}, 20)
+    expect(d.average).toBeNil()
+    expect(d.lowest).toBeNil()
+    expect(d.state).toBe("fine")
+    expect(d.headline).toBe("Durability")
+    expect(d.summary).toBeNil()
+    expect(d.broken).toBe(0)
+    expect(d.damaged).toBe(0)
+    expect(d.lines).toEqual({})
+end
+
+@test("summarize: counts, lowest, average and texts")
+local function summaryMixed()
+    local d = summarize({ piece(5, 0), piece(7, 15), piece(8, 80) }, 20)
+    expect(d.broken).toBe(1)
+    expect(d.damaged).toBe(1)
+    expect(d.state).toBe("broken")
+    expect(d.average).toBe(32)
+    expect(d.lowest.slot).toBe(5)
+    expect(d.bySlot[7].percent).toBe(15)
+    expect(d.headline).toBe("Durability · 1 broken, 1 damaged")
+    expect(d.summary).toBe("1 broken · 1 damaged · lowest Chest")
+    expect(#d.lines).toBe(3)
+    local damaged = summarize({ piece(7, 15), piece(8, 18) }, 20)
+    expect(damaged.state).toBe("damaged")
+    expect(damaged.headline).toBe("Durability · 2 damaged")
+    local fine = summarize({ piece(8, 80), piece(1, 90) }, 20)
+    expect(fine.state).toBe("fine")
+    expect(fine.summary).toBe("All above 20% · lowest Feet 80%")
+    expect(fine.average).toBe(85)
+end
+
+@test("signature: the line, the parts and each piece's whole percent")
+local function sig()
+    local d = summarize({ piece(5, 0), assert(pieceOf(8, 50, 100, "L", nil, 20)) }, 20)
+    d.parts = { figure = true, character = false, gear = true, gearBars = "always", note = true }
+    expect(signature(d)).toBe("20,true,false,true,always,true,5:0:,8:50:L")
+end
+
+--------------------------------------------------------------------------------
+-- Breaking, the figure, repairing: the pure parts
+--------------------------------------------------------------------------------
+
+@test("newlyBroken: only the same piece that was not broken a moment ago")
+local function breaks()
+    local chest = assert(pieceOf(5, 0, 100, nil, nil, 20))
+    local now, broke = newlyBroken({}, { chest })
+    local _: any
+    expect(broke).toEqual({})
+    expect(now[5]).toEqual({ key = "Chest", state = "broken" })
+    _, broke = newlyBroken({ [5] = { key = "Chest", state = "damaged" } }, { chest })
+    expect(#broke).toBe(1)
+    expect(broke[1].slot).toBe(5)
+    _, broke = newlyBroken({ [5] = { key = "Chest", state = "broken" } }, { chest })
+    expect(broke).toEqual({})
+    -- another piece in the slot
+    _, broke = newlyBroken({ [5] = { key = "Other robe", state = "fine" } }, { chest })
+    expect(broke).toEqual({})
+    _, broke = newlyBroken({ [5] = { key = "Chest", state = "fine" } }, { assert(pieceOf(5, 10, 100, nil, nil, 20)) })
+    expect(broke).toEqual({})
+end
+
+local SHOWS: { [string]: any } = { figure = true, figureShows = "damaged", figurePercent = true, position = {} }
+local function with(changes: { [string]: any }): { [string]: any }
+    local out: { [string]: any } = {}
+    for k, v in pairs(SHOWS) do out[k] = v end
+    for k, v in pairs(changes) do out[k] = v end
+    return out
+end
+
+@test("figureView: when the figure shows")
+local function figureShown()
+    local fine = summarize({ piece(8, 80) }, 20)
+    local damaged = summarize({ piece(7, 15) }, 20)
+    local none = summarize({}, 20)
+    expect((figureView(fine, SHOWS, false, false))).toBe(false)
+    expect((figureView(damaged, SHOWS, false, false))).toBe(true)
+    expect((figureView(fine, with({ figureShows = "always" }), false, false))).toBe(true)
+    expect((figureView(fine, SHOWS, true, false))).toBe(true)
+    expect((figureView(none, SHOWS, true, false))).toBe(true)
+    expect((figureView(none, with({ figureShows = "always" }), false, false))).toBe(false)
+    expect((figureView(damaged, SHOWS, false, true))).toBe(false)
+    expect((figureView(damaged, with({ position = { hidden = true } }), false, false))).toBe(false)
+    expect((figureView(damaged, with({ figure = false }), true, false))).toBe(false)
+end
+
+@test("figureView: the parts lit, the badge or the quiet percent")
+local function figureLook()
+    local _: any
+    local states, badge, calm
+    _, states, badge, calm = figureView(summarize({ piece(5, 0), piece(7, 15), piece(2, 10), piece(8, 80) }, 20), SHOWS, false, false)
+    expect(states).toEqual({ Chest = "broken", Legs = "damaged" })
+    expect(badge).toEqual({ "danger", "Broken" })
+    expect(calm).toBeNil()
+    _, states, badge, calm = figureView(summarize({ piece(7, 15) }, 20), SHOWS, false, false)
+    expect(badge).toEqual({ "warning", "15%" })
+    _, states, badge, calm = figureView(summarize({ piece(8, 80) }, 20), SHOWS, false, false)
+    expect(states).toEqual({})
+    expect(badge).toBeNil()
+    expect(calm).toBe("80%")
+    _, states, badge, calm = figureView(summarize({ piece(7, 15) }, 20), with({ figurePercent = false }), false, false)
+    expect(badge).toBeNil()
+    expect(calm).toBeNil()
+end
+
+@test("repairReport: refused, paid from your gold, paid by the guild")
+local function reports()
+    expect(repairReport(500, 1000, 1000, 500, 2)).toBe("The game didn't let SuuUI repair by itself here; use Repair all.")
+    expect(repairReport(500, 1000, 500, 0, 2)).toBe("Repaired 2 pieces for " .. coins(500) .. ".")
+    expect(repairReport(500, 1000, 1000, 100, 1)).toBe("Repaired 1 piece for " .. coins(400) .. " from the guild bank.")
+end
+
+@test("guildPays: the rank may repair and today's limit covers it")
+local function guild()
+    local can: boolean, left: any = false, -1
+    mock.stub(_G, "CanGuildBankRepair", function(): boolean return can end)
+    mock.stub(_G, "GetGuildBankWithdrawMoney", function(): any return left end)
+    expect(guildPays(400)).toBe(false)
+    can = true
+    expect(guildPays(400)).toBe(true)
+    left = 500
+    expect(guildPays(400)).toBe(true)
+    left = 300
+    expect(guildPays(400)).toBe(false)
+    left = mock.secret(5000)
+    expect(guildPays(400)).toBe(false)
+end
+
+@test("repairsOff: the game's rule that turns repairs off")
+local function rule()
+    local savedRules, savedRule = rawget(_G, "C_GameRules"), rawget(Enum, "GameRule")
+    local on: any = true
+    rawset(_G, "C_GameRules", { IsGameRuleActive = function(_: any): any return on end })
+    rawset(Enum, "GameRule", { RepairArmorDisabled = 7 })
+    local ok, err = pcall(function()
+        expect(repairsOff()).toBe(true)
+        on = false
+        expect(repairsOff()).toBe(false)
+        on = mock.secret(true)
+        expect(repairsOff()).toBe(false)
+        rawset(Enum, "GameRule", nil)
+        expect(repairsOff()).toBe(false)
+    end)
+    rawset(_G, "C_GameRules", savedRules)
+    rawset(Enum, "GameRule", savedRule)
+    assert(ok, err)
+end
+
+@test("the settings' disabled rules")
+local function disabledRules()
+    expect((figureOff())).toBe(false)
+    expect((repairOff())).toBe(true)
+    expect((gearOff())).toBe(false)
+    expect(select(2, figureOff())).toBe("The figure is off.")
+    expect(select(2, repairOff())).toBe("Repair at merchants is off.")
+    expect(select(2, gearOff())).toBe("On your gear is off.")
+    M:Set("figure", false)
+    M:Set("autoRepair", true)
+    M:Set("gear", false)
+    expect((figureOff())).toBe(true)
+    expect((repairOff())).toBe(false)
+    expect((gearOff())).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The module
+--------------------------------------------------------------------------------
+
+@test("Read: the pieces and the settings' parts; SuuUI.Durability() is the last reading")
+local function read()
+    wear({ [5] = { 10, 100 } })
+    M:Set("gearBars", "damaged")
+    M:Set("character", false)
+    local d = M:Read()
+    expect(d.parts).toEqual({ figure = true, character = false, gear = true, gearBars = "damaged", note = true })
+    expect(d.lowest.slot).toBe(5)
+    expect(d.state).toBe("damaged")
+    M:Update(true)
+    expect(SuuUI.Durability()).toBe(M.data)
+    expectNoErrors()
+end
+
+@test("Update tells the others only when a whole percent changes")
+local function update()
+    wear({ [5] = { 50, 100 } })
+    local emit = mock.stub(M, "Emit")
+    M:Update(true)
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(emit).toHaveBeenCalledWith(M, "SUUUI_DURABILITY_CHANGED")
+    M:Update()
+    expect(emit).toHaveBeenCalledTimes(1)
+    wear({ [5] = { 101, 200 } })
+    M:Update()
+    expect(emit).toHaveBeenCalledTimes(1)
+    wear({ [5] = { 99, 200 } })
+    M:Update()
+    expect(emit).toHaveBeenCalledTimes(2)
+    expect(M.data.lowest.percent).toBe(49)
+end
+
+@test("a piece breaking in combat: one alert, gone 4 s later")
+local function breakAlert()
+    local show = mock.stub(SuuUI, "ShowAlert")
+    local hide = mock.stub(SuuUI, "HideAlert")
+    wear({ [5] = { 10, 100 }, [7] = { 10, 100 } })
+    M:Update()
+    mock.player:enterCombat()
+    wear({ [5] = { 0, 100 }, [7] = { 10, 100 } })
+    M:Update()
+    expect(show).toHaveBeenCalledTimes(1)
+    expect(show).toHaveBeenCalledWith("durability", "danger", "Your Chest broke", "Chest · no stats until repaired")
+    -- still broken: no second alert
+    M:Update()
+    expect(show).toHaveBeenCalledTimes(1)
+    -- another one: the alert again, its timer from now
+    mock.advanceTime(3)
+    wear({ [5] = { 0, 100 }, [7] = { 0, 100 } })
+    M:Update()
+    expect(show).toHaveBeenCalledTimes(2)
+    mock.advanceTime(3)
+    expect(hide).never.toHaveBeenCalled()
+    mock.advanceTime(1.5)
+    expect(hide).toHaveBeenCalledWith("durability")
+    expect(M.alertTimer).toBeNil()
+    mock.player:leaveCombat()
+end
+
+@test("no break alert out of combat or with the alert off")
+local function noAlert()
+    local show = mock.stub(SuuUI, "ShowAlert")
+    wear({ [5] = { 10, 100 } })
+    M:Update()
+    wear({ [5] = { 0, 100 } })
+    M:Update()
+    M:Set("breakAlert", false)
+    mock.player:enterCombat()
+    wear({ [5] = { 10, 100 } })
+    M:Update()
+    wear({ [5] = { 0, 100 } })
+    M:Update()
+    mock.player:leaveCombat()
+    expect(show).never.toHaveBeenCalled()
+end
+
+@test("the figure: shown while a piece is worn, its badge and crack")
+local function figure()
+    local f = M.figure
+    wear({ [8] = { 80, 100 } })
+    M:Update(true)
+    expect(f).never.toBeShown()
+    M:Set("figureShows", "always")
+    expect(f).toBeShown()
+    expect(f.calm).toHaveText("80%")
+    expect(f.calm).toBeShown()
+    expect(f.badge).never.toBeShown()
+    expect(f.crack).never.toBeShown()
+    wear({ [5] = { 0, 100 }, [8] = { 80, 100 } })
+    M:Update()
+    expect(f.badge).toBeShown()
+    expect(f.calm).never.toBeShown()
+    expect(f.crack).toBeShown()
+    M:Set("figurePercent", false)
+    expect(f.badge).never.toBeShown()
+    M:Set("figure", false)
+    expect(f).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("edit mode and a theme change draw the figure again")
+local function redraws()
+    local draw = mock.stub(M, "DrawFigure")
+    events.emit("SUUUI_EDITMODE_CHANGED")
+    expect(draw).toHaveBeenCalledTimes(1)
+    local emit = mock.stub(M, "Emit")
+    events.emit("SUUUI_THEME_CHANGED")
+    expect(emit).toHaveBeenCalledWith(M, "SUUUI_DURABILITY_CHANGED")
+end
+
+@test("the game's durability events read the gear again")
+local function gameEvents()
+    local upd = mock.stub(M, "Update")
+    mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
+    expect(upd).toHaveBeenCalledTimes(1)
+end
+
+@test("TooltipData: nothing worn, worn, broken")
+local function tooltipData()
+    local saved = M.data
+    M.data = nil
+    expect(M:TooltipData()).toEqual({ title = "Durability", subtitle = "Nothing you wear wears down." })
+    M.data = saved
+    wear({ [7] = { 15, 100 } })
+    M:Update(true)
+    local t = M:TooltipData()
+    expect(t.subtitle).toBe("1 damaged · lowest Legs")
+    expect(t.description).toBeNil()
+    expect(t.maxWidth).toBe(320)
+    expect(t.lines).toBe(M.data.lines)
+    wear({ [7] = { 0, 100 } })
+    M:Update(true)
+    expect(M:TooltipData().description).toBe("A broken piece gives none of its stats until it's repaired.")
+end
+
+@test("hovering the figure shows its tooltip")
+local function hover()
+    local show = mock.stub(SuuUI.UI, "ShowTooltip")
+    local hide = mock.stub(SuuUI.UI, "HideTooltip")
+    wear({ [7] = { 15, 100 } })
+    M:Update(true)
+    mock.hover(M.figure)
+    expect(show).toHaveBeenCalledTimes(1)
+    mock.hover(nil)
+    expect(hide).toHaveBeenCalled()
+end
+
+@test("the game's figure stands down once, only while SuuUI's is on")
+local function standDown()
+    local suppress = mock.stub(SuuUI, "SuppressBlizzard")
+    M.blizzardDown = nil
+    M:Set("figure", false)
+    expect(suppress).never.toHaveBeenCalled()
+    M:Set("figure", true)
+    if _G.DurabilityFrame then
+        expect(suppress).toHaveBeenCalledWith(_G.DurabilityFrame)
+        M:StandDownBlizzard()
+        expect(suppress).toHaveBeenCalledTimes(1)
+    end
+    M.blizzardDown = true
+end
+
+@test("a broken piece's tooltip says it gives no stats")
+local function itemTooltip()
+    mock.defineItem(90001, { name = "Robe of Tests", quality = 2, equipLoc = "INVTYPE_CHEST", classID = 4 })
+    mock.player:equip(5, 90001)
+    mock.player:setDurability(5, 0, 80)
+    M:Update(true)
+    expect(M.data.bySlot[5].state).toBe("broken")
+    local shown = mock.showTooltip("item", { slot = 5 })
+    expect(shown).toContain("Broken: none of its stats count until repaired")
+    M:Set("gear", false)
+    shown = mock.showTooltip("item", { slot = 5 })
+    expect(shown).never.toContain("Broken: none of its stats count until repaired")
+    GameTooltip:Hide()
+    mock.player:equip(5, nil)
+    M:Update(true)
+end
+
+--------------------------------------------------------------------------------
+-- Repairing at merchants
+--------------------------------------------------------------------------------
+
+type Shop = { canRepair: boolean, cost: number, money: number, guildCan: boolean, guildLeft: number }
+
+-- A merchant's repair as the game answers it; returns RepairAllItems' spy.
+local function shop(s: Shop): (...any) -> ...any
+    mock.stub(_G, "CanMerchantRepair", function(): boolean return s.canRepair end)
+    mock.stub(_G, "GetRepairAllCost", function(): (number, boolean) return s.cost, s.cost > 0 end)
+    mock.stub(_G, "GetMoney", function(): number return s.money end)
+    mock.stub(_G, "CanGuildBankRepair", function(): boolean return s.guildCan end)
+    mock.stub(_G, "GetGuildBankWithdrawMoney", function(): number return s.guildLeft end)
+    return mock.stub(_G, "RepairAllItems")
+end
+
+@test("AutoRepair: off, no repairs here, nothing to repair")
+local function noRepair()
+    local s: Shop = { canRepair = true, cost = 500, money = 10000, guildCan = false, guildLeft = 0 }
+    local repair = shop(s)
+    M:AutoRepair()
+    M:Set("autoRepair", true)
+    s.canRepair = false
+    M:AutoRepair()
+    s.canRepair, s.cost = true, 0
+    M:AutoRepair()
+    expect(repair).never.toHaveBeenCalled()
+end
+
+@test("AutoRepair: not enough gold")
+local function poor()
+    local repair = shop({ canRepair = true, cost = 500, money = 100, guildCan = false, guildLeft = 0 })
+    M:Set("autoRepair", true)
+    M:AutoRepair()
+    expect(repair).never.toHaveBeenCalled()
+    expect(lastPrinted()).toContain("Not enough gold to repair here: it costs " .. coins(500) .. ".")
+end
+
+@test("AutoRepair: your own gold, then what it cost")
+local function ownGold()
+    local s: Shop = { canRepair = true, cost = 500, money = 10000, guildCan = true, guildLeft = -1 }
+    local repair = shop(s)
+    wear({ [5] = { 50, 100 }, [8] = { 100, 100 } })
+    M:Set("autoRepair", true)
+    M:AutoRepair()
+    expect(repair).toHaveBeenCalledWith(false)
+    s.cost, s.money = 0, 9500
+    mock.advanceTime(1)
+    expect(lastPrinted()).toContain("Repaired 1 piece for " .. coins(500) .. ".")
+end
+
+@test("AutoRepair: the guild pays")
+local function guildPaid()
+    local s: Shop = { canRepair = true, cost = 500, money = 100, guildCan = true, guildLeft = -1 }
+    local repair = shop(s)
+    wear({ [5] = { 50, 100 }, [7] = { 10, 100 } })
+    M:Set("autoRepair", true)
+    M:Set("guildFirst", true)
+    M:AutoRepair()
+    expect(repair).toHaveBeenCalledWith(true)
+    s.cost = 0
+    mock.advanceTime(1)
+    expect(lastPrinted()).toContain("Repaired 2 pieces for " .. coins(500) .. " from the guild bank.")
+end
+
+@test("AutoRepair: the guild didn't pay after all, your own gold then")
+local function guildRefused()
+    local s: Shop = { canRepair = true, cost = 500, money = 10000, guildCan = true, guildLeft = 1000 }
+    local repair = shop(s)
+    M:Set("autoRepair", true)
+    M:Set("guildFirst", true)
+    M:AutoRepair()
+    expect(repair).toHaveBeenCalledWith(true)
+    mock.advanceTime(1)
+    expect(repair).toHaveBeenCalledWith(false)
+    expect(repair).toHaveBeenCalledTimes(2)
+    s.cost, s.money = 0, 9500
+    mock.advanceTime(1)
+    expect(lastPrinted()).toContain("Repaired 0 pieces for " .. coins(500) .. ".")
+end
+
+@test("ReportRepair: the game refused")
+local function refused()
+    shop({ canRepair = true, cost = 500, money = 10000, guildCan = false, guildLeft = 0 })
+    M:ReportRepair(500, 10000, 1)
+    expect(lastPrinted()).toContain("The game didn't let SuuUI repair by itself here; use Repair all.")
+end
+
+@test("a merchant who repairs: repaired as the window opens")
+local function atMerchant()
+    local auto = mock.stub(M, "AutoRepair")
+    mock.openMerchant({ name = "Smith", canRepair = true, repairCost = 500, damaged = 1 })
+    expect(auto).toHaveBeenCalled()
+    mock.closeMerchant()
+end
+
+--------------------------------------------------------------------------------
+-- The settings' preview and the lifecycle
+--------------------------------------------------------------------------------
+
+@test("the preview: the board's broken example, made once")
+local function preview()
+    local p = newParent(200, 200)
+    parent = p
+    local v = M:PreviewView(p)
+    expect(M:PreviewView(p)).toBe(v)
+    expect(v:GetParent()).toBe(p)
+    expect(v.crack).toBeShown()
+    expect(v.badge).toBeShown()
+    -- a watched setting while it shows: drawn again
+    M:Set("figurePercent", false)
+    expect(v.badge).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("turned off: the figure hidden, the alert gone, no reading")
+local function disable()
+    local hide = mock.stub(SuuUI, "HideAlert")
+    M.alertTimer = after(10, function() end)
+    mock.slash("/suu disable durability")
+    expect(SuuUI.Durability()).toBeNil()
+    expect(M.figure).never.toBeShown()
+    expect(M.alertTimer).toBeNil()
+    expect(hide).toHaveBeenCalledWith("durability")
+    mock.slash("/suu enable durability")
+    expect(M:IsEnabled()).toBe(true)
+    expect(SuuUI.Durability()).toBe(M.data)
+    expectNoErrors()
+end

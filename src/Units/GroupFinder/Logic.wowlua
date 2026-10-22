@@ -1,0 +1,305 @@
+-- Units/GroupFinder/Logic.wowlua
+-- The Group Finder's logic without its frames (Units/GroupFinder.wowlua
+-- draws with it): a group's role spots, the level that fits, the words of
+-- rows, notes and the chat ad, the channel an ad goes to. Plain functions:
+-- what they read of the world comes in as parameters (with the live read as
+-- the default where one is needed); the library is SuuUI.LFG.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+
+-- ForeverLFG's entries and listings, read untyped (as the module does).
+export type Entry = { [string]: any }
+
+local function lfg(): any return SuuUI.LFG end
+
+-- "now", "12m", "3h": how long ago, short.
+export function ago(seconds: number?): string
+    if not seconds then return "" end
+    seconds = math.max(0, seconds)
+    if seconds < 60 then return "now" end
+    if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
+    return math.floor(seconds / 3600) .. "h"
+end
+
+local ROLE_WORD = { tank = "Tank", healer = "Healer", damage = "Damage" }
+
+-- A group's spots (design: RoleSlots, capped with your role first): what it
+-- has, greyed (its members by the role each chose, then members with no
+-- role; chat gives only a count), what it needs (tank, healer, damage, your
+-- roles first, no more than its free spots: the game's needed roles aren't
+-- capped and roles aren't enforced), then open spots. Groups above 10: no
+-- member slots ("12/40" says it). Also the hover text: all it has and needs.
+export function groupSlots(e: Entry, mine: { [string]: any }): (string[], string)
+    local slots: string[] = {}
+    local have = e.members and e.members[1] or 0
+    local max = e.members and e.members[2]
+    local small = not max or max <= 10
+    local has = e.roles.has
+    local shown = 0
+    if small then
+        for _, role in ipairs({ "tank", "healer", "damage", "none" }) do
+            for _ = 1, has and has[role] or 0 do slots[#slots + 1] = "has:" .. role; shown = shown + 1 end
+        end
+        for _ = shown + 1, have do slots[#slots + 1] = "has:none" end
+    end
+    local needed: string[] = {}
+    local function add(role: string)
+        local n = e.roles.needed[role]
+        n = (type(n) == "number" and n) or (n and 1) or 0
+        for _ = 1, n do needed[#needed + 1] = role end
+    end
+    for _, role in ipairs({ "tank", "healer", "damage" }) do if mine[role] then add(role) end end
+    for _, role in ipairs({ "tank", "healer", "damage" }) do if not mine[role] then add(role) end end
+    local free = max and math.max(0, max - have)
+    local fit = free and math.min(#needed, free) or #needed
+    for i = 1, fit do slots[#slots + 1] = "need:" .. needed[i] end
+    if max and small then
+        for _ = 1, free - fit do slots[#slots + 1] = "open" end
+    end
+    -- the hover text
+    local function list(counts: { [string]: number }): string
+        local out: string[] = {}
+        for _, role in ipairs({ "tank", "healer", "damage" }) do
+            local n = counts[role] or 0
+            if n > 0 then out[#out + 1] = n .. " " .. ROLE_WORD[role] end
+        end
+        local none = counts.none or 0
+        if none > 0 then out[#out + 1] = none .. " without a role" end
+        return table.concat(out, ", ")
+    end
+    local hasCounts: { [string]: number } = {}
+    if has then for k, v in pairs(has) do hasCounts[k] = v end else hasCounts.none = have end
+    local needCounts: { [string]: number } = {}
+    for _, role in ipairs(needed) do needCounts[role] = (needCounts[role] or 0) + 1 end
+    local tip: string[] = {}
+    if have > 0 then tip[#tip + 1] = "Has: " .. list(hasCounts) end
+    if #needed > 0 then tip[#tip + 1] = "Needs: " .. list(needCounts) end
+    if free and #needed > free then
+        tip[#tip + 1] = ("%d free %s: any of these"):format(free, free == 1 and "spot" or "spots")
+    end
+    return slots, table.concat(tip, "\n")
+end
+
+-- A class file's name ("MAGE" -> "Mage").
+export function className(file: string?): string?
+    return file and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[file] or nil
+end
+
+-- The level that fits: an activity's range around yours.
+export function fits(e: Entry, interest: { [string]: any }): boolean
+    local LFG = lfg()
+    local lvl = interest.level or 0
+    for _, key in ipairs(e.activities) do
+        for _, k in ipairs(LFG.Catalogue.Expand(key)) do
+            local a = LFG.Catalogue.Get(k)
+            local range = a and a.level
+            if range and range[2] and lvl >= (range[1] or 0) - 3 and lvl <= range[2] + 3 then return true end
+            if a and not range then return true end
+        end
+    end
+    if e.level and e.level[1] then return math.abs(e.level[1] - lvl) <= 6 end
+    return #e.activities == 0
+end
+
+-- The Browse page's "Fits me": the level fits, and a group that names the
+-- roles it needs needs one of yours.
+export function fitsMe(e: Entry, interest: { [string]: any }): boolean
+    local ok = fits(e, interest)
+    if ok and e.intent == "group" and next(e.roles.needed) then
+        ok = false
+        for role in pairs(e.roles.needed) do if interest.roles[role] then ok = true end end
+    end
+    return ok
+end
+
+-- The Browse page's order: matches first, then the newest.
+export function rowOrder(a: { [string]: any }, b: { [string]: any }): boolean
+    if a.match ~= b.match then return a.match end
+    return (a.entry.lastSeen or 0) > (b.entry.lastSeen or 0)
+end
+
+-- "a, b or c"
+export function joinWith(list: string[], last: string): string
+    if #list <= 1 then return list[1] or "" end
+    return table.concat(list, ", ", 1, #list - 1) .. " " .. last .. " " .. list[#list]
+end
+
+-- "a, b and c"
+export function joinAnd(list: string[]): string
+    return joinWith(list, "and")
+end
+
+-- "a moment", "12m", "1h 5m"
+export function minutesText(seconds: number?): string?
+    if not seconds then return nil end
+    local m = math.floor(seconds / 60)
+    if m < 1 then return "a moment" end
+    if m < 60 then return m .. "m" end
+    return math.floor(m / 60) .. "h " .. (m % 60) .. "m"
+end
+
+-- Who you are for the ad: in a group (each member's assigned role, you
+-- first), or alone (your level and class file).
+export type AdContext = { inGroup: boolean, roles: string[], level: number, class?: string }
+
+export function adContext(): AdContext
+    if IsInGroup() then
+        local units: string[] = { "player" }
+        for i = 1, (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0) do units[#units + 1] = "party" .. i end
+        local roles: string[] = {}
+        for i, u in ipairs(units) do roles[i] = secret.known(UnitGroupRolesAssigned(u), "NONE") end
+        return { inGroup = true, roles = roles, level = UnitLevel("player") }
+    end
+    local _, class = UnitClass("player")
+    return { inGroup = false, roles = {}, level = UnitLevel("player"), class = secret.known(class, "") }
+end
+
+-- Your listing as one chat line, in English: what you're after, for what,
+-- and your details. A group asks for the roles a 1 / 1 / 3 group still
+-- lacks by its members' roles; alone, the roles you offer and who you are.
+export function adText(listing: Entry?, ctx: AdContext): string
+    if not listing then return "" end
+    local LFG = lfg()
+    local names: string[] = {}
+    for _, key in ipairs(listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
+    local acts = joinWith(names, "or")
+    local text
+    if ctx.inGroup then
+        local have = { TANK = 0, HEALER = 0, DAMAGER = 0 }
+        for _, r in ipairs(ctx.roles) do
+            if have[r] then have[r] = have[r] + 1 end
+        end
+        local need: string[] = {}
+        if have.TANK < 1 then need[#need + 1] = "Tank" end
+        if have.HEALER < 1 then need[#need + 1] = "Healer" end
+        local dps = math.max(0, 3 - have.DAMAGER)
+        if dps > 0 then need[#need + 1] = dps .. " DPS" end
+        text = ("LFM %sfor %s (%d/5)."):format(#need > 0 and (joinWith(need, "and") .. " ") or "", acts, #ctx.roles)
+    else
+        local roles: string[] = {}
+        local r = listing.roles or {}
+        if r.tank then roles[#roles + 1] = "Tank" end
+        if r.healer then roles[#roles + 1] = "Healer" end
+        if r.damage then roles[#roles + 1] = "DPS" end
+        local class = ctx.class
+        local cname = class and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class]
+        text = ("LFG %s(%d %s) for %s."):format(#roles > 0 and (joinWith(roles, "or") .. " ") or "", ctx.level,
+            (cname or ""):lower(), acts)
+    end
+    local comment = listing.comment
+    if type(comment) == "string" and not secret.isSecret(comment) and comment ~= "" then
+        text = text .. " " .. comment
+    end
+    return text
+end
+
+-- A channel's number by its name ("General" is "General - Orgrimmar"):
+-- in `list` (GetChannelList's id, name, disabled triples), else by
+-- GetChannelName.
+export function channelId(name: string, list: any[]?): number?
+    list = list or { GetChannelList() }
+    for i = 1, #list, 3 do
+        local id, n = list[i], list[i + 1]
+        if type(n) == "string" and (n == name or n:find("^" .. name .. " %-")) then return id end
+    end
+    local id = GetChannelName(name)
+    return (type(id) == "number" and id > 0) and id or nil
+end
+
+-- An entry's activities: two names, then "+N".
+export function activityText(e: Entry): string
+    local LFG = lfg()
+    local names: string[] = {}
+    for i, key in ipairs(e.activities) do
+        if i > 2 then names[#names + 1] = "+" .. (#e.activities - 2) break end
+        names[#names + 1] = LFG.Catalogue.Name(key)
+    end
+    return table.concat(names, ", ")
+end
+
+-- The first quest's title ("Quest 123" when the game has none).
+export function questTitle(e: Entry): string?
+    local id = e.quests[1]
+    local t = id and C_QuestLog and C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(id)
+    return t or (id and ("Quest " .. id)) or nil
+end
+
+local A_ROLE = { tank = "a tank", healer = "a healer", damage = "a damage dealer" }
+
+-- "a tank", "a healer", "a damage dealer"
+export function aRole(role: string?): string?
+    return role and A_ROLE[role] or nil
+end
+
+-- "needs a healer and 2 damage"
+export function needsText(e: Entry): string?
+    local out: string[] = {}
+    for _, role in ipairs({ "tank", "healer", "damage" }) do
+        local n = e.roles.needed[role]
+        n = (type(n) == "number" and n) or (n and 1) or 0
+        if n == 1 then out[#out + 1] = A_ROLE[role]
+        elseif n > 1 then out[#out + 1] = n .. (role == "damage" and " damage" or (" " .. role .. "s")) end
+    end
+    return #out > 0 and ("needs " .. joinAnd(out)) or nil
+end
+
+-- "offers tank or healer"
+export function offersText(e: Entry): string?
+    local out: string[] = {}
+    for _, role in ipairs({ "tank", "healer", "damage" }) do
+        if e.roles.offered[role] then out[#out + 1] = role end
+    end
+    return #out > 0 and ("offers " .. table.concat(out, " or ")) or nil
+end
+
+-- The parts given that say something, joined by " · ".
+export function lines(...: any): string
+    local out: string[] = {}
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        if v and v ~= "" then out[#out + 1] = v end
+    end
+    return table.concat(out, " · ")
+end
+
+-- A chat source's channel as shown ("SAY" -> "Say").
+export function channelName(channel: string?): string?
+    return channel and (channel == "SAY" and "Say" or (channel == "YELL" and "Yell" or channel))
+end
+
+-- Where it came from: the tool and/or the channel, the post as written.
+export function sourceOf(e: Entry): { [string]: any }
+    local tool, chat = e.sources.tool, e.sources.chat
+    local channel = chat and channelName(chat.channel)
+    local text = chat and chat.text
+    if text and secret.isSecret(text) then text = nil end
+    return { tool = tool and true or nil, channel = channel, text = text }
+end
+
+-- A class's icon from the character creation sheet.
+export function classIcon(class: string?): { [string]: any }?
+    local coords = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
+    if not coords then return nil end
+    return { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes", coords = coords }
+end
+
+-- What you're listed for, in words ("Shadowfang Keep and 2 more"; `all`:
+-- every name).
+export function listedText(listing: Entry?, all: boolean?): string
+    local LFG = lfg()
+    local names: string[] = {}
+    for _, key in ipairs(listing and listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
+    if all then return joinAnd(names) end
+    if #names > 1 then return names[1] .. " and " .. (#names - 1) .. " more" end
+    return names[1] or "your activity"
+end
+
+-- Opening the game's Group Finder at its listing panel is a secure click
+-- (opened from addon code, the panel's listing would be refused): the
+-- micro menu's button when it's closed, then the listing tab.
+export function openListingMacro(): string
+    local f = _G.LFGParentFrame
+    if f and f:IsShown() then return "/click LFGParentFrameTab1" end
+    return "/click LFDMicroButton\n/click LFGParentFrameTab1"
+end

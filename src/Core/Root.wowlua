@@ -1,0 +1,88 @@
+-- Core/Root.wowlua
+-- SuuUIRoot: the frame every SuuUI frame on the screen lives in.
+--
+-- The design is drawn in pixels on a 2560x1440 reference and places each
+-- cluster from the screen edge or the centre it belongs to. The root runs at
+-- pixel-perfect scale, so one unit is one physical pixel and design sizes can
+-- be used as they are: on another resolution the frames keep their size and
+-- only the space between clusters changes. ui.scale multiplies that (0 is
+-- automatic: 1 up to 1440p, larger on taller screens).
+--
+-- The root will hold secure frames, so a rescale waits for the end of combat.
+
+import onLogin, onAddonLoaded from "wowlua:lifecycle"
+import hook from "wowlua:hooks"
+import * as settings from "./Settings"
+import * as events from "./Events"
+import * as combat from "./Combat"
+import * as pixel from "./Pixel"
+
+export const root: Frame = CreateFrame("Frame", "SuuUIRoot", UIParent)
+root:SetIgnoreParentScale(true)
+root:SetAllPoints(UIParent)
+
+settings.register("ui", {
+    scale = 0,             -- 0: automatic; otherwise 0.5 to 2
+    reducedMotion = false, -- drop decorative motion, keep every value change
+    hideIssueReporter = true,  -- the beta's bug report button (Blizzard_PTRFeedback)
+})
+
+settings.veto("ui", "scale", function(v: any): (boolean?, string?)
+    if v ~= 0 and (v < 0.5 or v > 2) then return false, "the scale is 0 (automatic) or between 0.5 and 2" end
+    return nil
+end, "Root")
+
+-- The scale ui.scale = 0 picks: 1 up to 1440p, then in quarter steps.
+local function autoScale(): number
+    local h = pixel.screenHeight()
+    if h <= 1440 then return 1 end
+    return math.floor(h / 1440 * 4 + 0.5) / 4
+end
+
+export function userScale(): number
+    local s: number = settings.ready() and settings.get("ui", "scale") or 0
+    return s == 0 and autoScale() or s
+end
+
+local applied: number? = nil
+
+-- The scale is read when the job runs, so a change queued in combat and then
+-- changed back still ends on the latest value.
+local function apply()
+    combat.run("root:scale", function()
+        local scale = pixel.perfectScale() * userScale()
+        if scale == applied then return end
+        root:SetScale(scale)
+        applied = scale
+        events.emit("SUUUI_ROOT_SCALED", scale)
+    end, "Root")
+end
+
+events.on("SUUUI_SETTINGS_READY", apply, "Root")
+events.on("SUUUI_PIXEL_CHANGED", apply, "Root")
+settings.watch("ui", "scale", apply, "Root")
+
+-- The beta's issue reporter (Blizzard_PTRFeedback's PTR_IssueReporter, the
+-- bug report button): kept hidden while ui.hideIssueReporter is on, shown
+-- again when it's turned off. It may load after SuuUI.
+local reporterHooked = false
+local function issueReporter()
+    local f: any = _G.PTR_IssueReporter
+    if not f then return end
+    local hide = settings.get("ui", "hideIssueReporter")
+    if not reporterHooked then
+        reporterHooked = true
+        hook(f, "Show", function(self: any)
+            if settings.get("ui", "hideIssueReporter") then self:Hide() end
+        end)
+    end
+    if hide then f:Hide() else f:Show() end
+end
+
+@onLogin
+local function atLogin()
+    issueReporter()
+    onAddonLoaded("Blizzard_PTRFeedback", issueReporter)
+end
+
+settings.watch("ui", "hideIssueReporter", issueReporter, "Root")

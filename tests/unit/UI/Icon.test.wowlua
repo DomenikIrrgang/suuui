@@ -1,0 +1,151 @@
+-- UI/Icon: the cropped art on its well, the state borders and glows, a
+-- border override, the glows kept per token, the stack count and the pop.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as draw from "/UI/Draw"
+import icon, Icon from "/UI/Icon"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, reduceMotion from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function make(size: (number | string)?): Icon
+    parent = newParent()
+    return icon(parent :: Frame, size)
+end
+
+local function borderOf(i: Icon): string?
+    return tokenOf(i.border.top)
+end
+
+@afterEach
+local function cleanup()
+    reduceMotion(false)
+    if parent then parent:Hide() end
+    parent = nil
+    expectNoErrors()
+end
+
+@test("a new icon: icon-md, cropped art on a sunk well, at rest")
+local function defaults()
+    local i = make()
+    local px = draw.size("icon-md")
+    expect(i).toHaveSize(px, px)
+    expect(tokenOf(i.well)).toBe("surface-sunk")
+    -- the corners: upper left, lower left, upper right, lower right
+    local coords: number[] = {}
+    for n, v in ipairs({ i.art:GetTexCoord() }) do coords[n] = math.floor(v * 100 + 0.5) / 100 end
+    expect(coords).toEqual({ 0.08, 0.08, 0.08, 0.92, 0.92, 0.08, 0.92, 0.92 })
+    expect(i.art).toBeAnchoredTo(i, "TOPLEFT", "TOPLEFT")
+    expect(i.state).toBe("rest")
+    expect(borderOf(i)).toBe("gilt-hairline")
+    expect(i.glow).toBeNil()
+    expect(i.count).toBeNil()
+end
+
+@test("an icon's size: a token or px")
+local function sizes()
+    local i = make("icon-lg")
+    local px = draw.size("icon-lg")
+    expect(i).toHaveSize(px, px)
+    local j = icon(parent :: Frame, 20)
+    expect(j).toHaveSize(20, 20)
+end
+
+@test("SetArt sets the art's texture")
+local function art()
+    local i = make()
+    i:SetArt(136243)
+    expect(i.art:GetTextureFileID()).toBe(136243)
+end
+
+@test("each state's border, glow and art")
+@cases({
+    { "rest", "gilt-hairline", false, false },
+    { "ready", "arcane", true, false },
+    { "dim", "gilt-hairline", false, true },
+    { "active", "ink", false, false },
+})
+local function states(state: string, border: string, glows: boolean, dim: boolean)
+    local i = make()
+    i:SetState(state)
+    expect(i.state).toBe(state)
+    expect(borderOf(i)).toBe(border)
+    expect(i.glowToken).toBe(glows and "glow-arcane" or nil)
+    expect(i.art:IsDesaturated()).toBe(dim)
+    local r = i.art:GetVertexColor()
+    expect(r).toBeCloseTo(dim and 0.5 or 1, 2)
+end
+
+@test("an unknown or missing state is rest")
+local function unknownState()
+    local i = make()
+    i:SetState("ready")
+    i:SetState("sparkly")
+    expect(i.state).toBe("rest")
+    i:SetState("ready")
+    i:SetState(nil)
+    expect(i.state).toBe("rest")
+    expect(i.glowToken).toBeNil()
+    expect((i.glows :: any)["glow-arcane"].holder).never.toBeShown()
+end
+
+@test("SetBorder overrides the state's border until cleared")
+local function borderOverride()
+    local i = make()
+    i:SetBorder("dispel-poison")
+    expect(borderOf(i)).toBe("dispel-poison")
+    i:SetState("ready")
+    expect(borderOf(i)).toBe("dispel-poison")
+    i:SetBorder(nil)
+    expect(borderOf(i)).toBe("arcane")
+    i.state = nil
+    i:SetBorder(nil)
+    expect(borderOf(i)).toBe("gilt-hairline")
+end
+
+@test("glows are made once per token and swapped")
+local function glows()
+    local i = make()
+    i:SetGlow("glow-ember")
+    local ember = i.glow :: draw.SoftEdge
+    expect(ember.holder).toBeShown()
+    i:SetGlow("glow-ember") -- the same: nothing
+    expect(i.glow).toBe(ember)
+    i:SetGlow("glow-ward")
+    local ward = i.glow :: draw.SoftEdge
+    expect(ember.holder).never.toBeShown()
+    expect(ward.holder).toBeShown()
+    i:SetGlow("glow-ember")
+    expect(i.glow).toBe(ember)
+    expect(ward.holder).never.toBeShown()
+    i:SetGlow(nil)
+    expect(i.glow).toBeNil()
+    expect(ember.holder).never.toBeShown()
+end
+
+@test("SetCount shows counts above one, made on first use")
+@cases({ { 5, "5" }, { "12", "12" }, { 1, "" }, { 0, "" }, { nil, "" } })
+local function counts(n: any, shown: string)
+    local i = make()
+    i:SetCount(n)
+    local count = i.count :: any
+    expect(count).toHaveText(shown)
+    local x, y = count:GetShadowOffset()
+    expect({ x, y }).toEqual({ 0, -1 })
+    i:SetCount(3)
+    expect(i.count).toBe(count)
+    expect(count).toHaveText("3")
+end
+
+@test("Pop plays the ready pop, or nothing with reduced motion")
+local function pops()
+    local i = make()
+    i:Pop()
+    local g = (i :: any).suuMotion.pop
+    expect(g:IsPlaying()).toBe(true)
+    local j = icon(parent :: Frame)
+    reduceMotion(true)
+    j:Pop()
+    expect((j :: any).suuMotion).toBeNil()
+end

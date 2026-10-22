@@ -1,27 +1,38 @@
 -- tools/lfg_parse.lua
 -- Replays chat through ForeverLFG's parser outside the game: the same
--- Parser.lua and language modules SuuUI loads, fed with the lines the LFG
--- recorder kept (/suu probe lfg record) or with lines given on the command
--- line. Prints what the parser made of each one. The SavedVariables run in
--- an empty sandbox (no io, no os).
+-- Parser and language modules SuuUI loads (libs/ForeverLFG), compiled to
+-- plain Lua with `wowlua compile --release` into a temporary folder, fed
+-- with the lines the LFG recorder kept (/suu probe lfg record) or with lines
+-- given on the command line. Prints what the parser made of each one. The
+-- SavedVariables run in an empty sandbox (no io, no os). Needs wowlua and
+-- lua (5.1 or later) on the PATH.
 --
 --   lua tools/lfg_parse.lua <SuuUI.lua SavedVariables>       -- the recorded lines
 --   lua tools/lfg_parse.lua -e "LFM tank RFK" "lfg sfk healer" -- lines of your own
 --   add --lang koKR,zhTW to read with more languages than enUS
 
-local root = (arg[0]:match("^(.*)/tools/") or ".") .. "/src/Libs/ForeverLFG/"
+local root = (arg[0]:match("^(.*)/tools/") or ".") .. "/libs/ForeverLFG"
+local out = os.tmpname()
+os.remove(out)
+local LANGS = { "enUS", "koKR", "zhCN" }
+local files = { "src/Parser.wowlua" }
+for _, l in ipairs(LANGS) do files[#files + 1] = "src/Lang/" .. l .. ".wowlua" end
+local cmd = ('cd "%s" && wowlua compile --release --no-bundle -o "%s" %s >/dev/null 2>&1'):format(root, out, table.concat(files, " "))
+assert(os.execute(cmd), "wowlua compile failed: " .. cmd)
 
-local ns = { LFG = {} }
+-- the compiled modules register with the wowlua runtime in the addon table
+local ns = {}
 local function load(path)
-    local chunk = assert(loadfile(root .. path))
+    local chunk = assert(loadfile(out .. "/" .. path))
     chunk("SuuUI", ns)
 end
-load("Parser.lua")
--- every language module there is
-local p = io.popen('ls "' .. root .. 'Lang"')
-for file in p:lines() do if file:match("%.lua$") then load("Lang/" .. file) end end
-p:close()
-local P = ns.LFG.Parser
+load("wowlua/runtime.lua")
+load("src/Parser.lua")
+for _, l in ipairs(LANGS) do load("src/Lang/" .. l .. ".lua") end
+os.execute(('rm -rf "%s"'):format(out))
+local parse = ns.__wowlua.require("Parser")
+for _, l in ipairs(LANGS) do parse.lang.Register(l, ns.__wowlua.require("Lang/" .. l)[l]) end
+local P = parse.parser
 
 local languages = { "enUS" }
 local lines = {}

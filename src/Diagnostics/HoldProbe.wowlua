@@ -1,0 +1,74 @@
+-- Diagnostics/HoldProbe.wowlua
+-- "/suu probe hold": why the level-up card stays (found in game: it never
+-- went once held past its time). From now until /reload, every Hide and
+-- StopHolding on the Alerts module, with the alert showing and the card's
+-- state, and every 0.2 s while the card shows: hovered, the mouse foci,
+-- mouselook, IsMouseOver, the hold ticker. Saved in SuuUIProbe.hold.
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as modules from "/Core/Modules"
+import hook from "wowlua:hooks"
+
+-- armed once; note and state are the current run's
+local hooked = false
+local currentNote: ((s: string) -> ())?
+local currentState: (() -> string)?
+
+local function name(f: any): string
+    if not f then return "nil" end
+    local ok, n = pcall(function() return f:GetDebugName() end)
+    if ok and n then return n end
+    ok, n = pcall(function() return f:GetName() end)
+    return (ok and n) or tostring(f)
+end
+
+export function command()
+    local m: any = modules.get("alerts")
+    if not m or not m.card then print("Hold probe: the Alerts module isn't up.") return end
+    local log: string[] = {}
+    DB.probe.hold = { at = date("%H:%M:%S"), log = log }
+    local t0 = GetTime()
+    local function note(s: string)
+        if #log < 400 then log[#log + 1] = ("%.1f %s"):format(GetTime() - t0, s) end
+    end
+    local function state(): string
+        local card = m.card
+        local foci: string[] = {}
+        local list = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
+        for _, f in ipairs(list) do foci[#foci + 1] = name(f) end
+        local okH, hovered = pcall(card.IsHovered, card)
+        return ("current=%s shown=%s visible=%s frameShown=%s hovered=%s over=%s look=%s holding=%s under=%s foci=[%s]"):format(
+            tostring(m.current), tostring(card:IsShown()), tostring(card:IsVisible()), tostring(m.frame:IsShown()),
+            okH and tostring(hovered) or ("ERR " .. tostring(hovered)), tostring(card:IsMouseOver()),
+            tostring(IsMouselooking and IsMouselooking()), tostring(m.holding ~= nil),
+            tostring(m.under and m.under.key), table.concat(foci, ", "))
+    end
+    if not hooked then
+        hooked = true
+        hook(m, "Hide", function(_: any, key: any, now: any)
+            local n, st = currentNote, currentState
+            if n and st and (key == nil or key == m.current or key == "suu:levelup") then n(("Hide(%s, %s) -> %s"):format(tostring(key), tostring(now), st())) end
+        end)
+        hook(m, "StopHolding", function()
+            local n, st = currentNote, currentState
+            if n and st and m.holding then n("StopHolding -> " .. st()) end
+        end)
+        hook(m, "ShowLevelUp", function(_: any, key: any)
+            local n, st = currentNote, currentState
+            if n and st then n(("ShowLevelUp(%s) -> %s"):format(tostring(key), st())) end
+        end)
+        local ticker = CreateFrame("Frame")
+        local acc = 0
+        ticker:SetScript("OnUpdate", function(_, dt)
+            acc = acc + dt
+            local n, st = currentNote, currentState
+            if acc < 0.2 or not n or not st or not m.card:IsShown() then return end
+            acc = 0
+            n("tick " .. st())
+        end)
+    end
+    currentNote, currentState = note, state
+    note("armed " .. state())
+    print("Hold probe: on. /suu levelup 20, hover past its time, move off, wait 5 s, then /reload.")
+end

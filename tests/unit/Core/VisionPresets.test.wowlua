@@ -1,0 +1,51 @@
+-- Core/VisionPresets: the colour vision presets' values, put on T.vision.
+
+import test, expect from "wowlua:test"
+import tokens as T, Color from "/Core/Tokens"
+
+local function presets(): { [string]: { [string]: Color } }
+    return assert(T.vision, "T.vision is not set")
+end
+
+local function names(set: { [string]: Color }): string[]
+    local out: string[] = {}
+    for k in pairs(set) do out[#out + 1] = k end
+    table.sort(out)
+    return out
+end
+
+@test("both presets replace the same signal tokens, each a design token")
+local function sameTokens()
+    local rg, by = assert(presets().redgreen), assert(presets().blueyellow)
+    expect(names(rg)).toEqual(names(by))
+    for name in pairs(rg) do
+        expect(T.color[name]).toBeTruthy()
+    end
+    expect(#names(rg)).toBe(20)
+end
+
+@test("a preset colour is r, g, b in 0-1 (alpha where the token has its own) and its hex")
+local function values()
+    for mode, set in pairs(presets()) do
+        for name, c in pairs(set) do
+            expect(#c == 3 or #c == 4).toBe(true)
+            for i = 1, #c do
+                if c[i] < 0 or c[i] > 1 then error(`{mode} {name}: component {i} out of range`) end
+            end
+            for i = 1, 3 do
+                local byte = (tonumber(c.hex:sub(i * 2 - 1, i * 2), 16) :: number) / 255
+                if math.abs(byte - c[i]) > 0.0025 then error(`{mode} {name}: hex {c.hex} vs component {i}`) end
+            end
+        end
+    end
+end
+
+@test("the tokens with their own alpha keep one in the presets")
+local function alphas()
+    local rg = assert(presets().redgreen)
+    local function alpha(name: string): number? return assert(rg[name], name)[4] end
+    expect(alpha("fel-incoming")).toBe(0.4)
+    expect(alpha("arcane-glow")).toBe(0.4)
+    expect(alpha("ward-absorb")).toBe(0.45)
+    expect(alpha("ember")).toBeNil()
+end

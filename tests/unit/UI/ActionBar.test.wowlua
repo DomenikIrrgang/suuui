@@ -1,0 +1,506 @@
+-- UI/ActionBar: the secure bar's observable state (attributes, paging,
+-- layout, bindings, lock) and the shared dispatcher (slots, range, cooldown
+-- passes, grid, pushed spells). No secure code is changed here.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import actionBar, actionBarPaging, ActionBar from "/UI/ActionBar"
+import internal bars, bySlot, rangeRefs, HANDLERS, onSlotChanged, pollRange from "/UI/ActionBar"
+import actionButtons, ActionButton from "/UI/ActionButton"
+import expectNoErrors, newParent from "../../helpers"
+
+const BASE = 133 -- slots 133-144: no SuuUI bar uses them
+const S1 = T.space["space-1"]
+
+local parent: Frame? = nil
+local made: ActionBar[] = {}
+
+local function bar(opts: { [string]: any }?): ActionBar
+    local p = parent or newParent(600, 200)
+    parent = p
+    local o: { [string]: any } = opts or {}
+    o.name = o.name or ("SuuUITestBar" .. (#made + 1))
+    o.slot = o.slot or BASE
+    local b: ActionBar = actionBar(p, o)
+    made[#made + 1] = b
+    return b
+end
+
+-- One of the dispatcher's handlers, called as the event would.
+local function handle(event: string, ...: any)
+    local h = assert(HANDLERS[event], event)
+    h(...)
+end
+
+local function forget(b: ActionBar)
+    for i = #bars, 1, -1 do if bars[i] == b then table.remove(bars, i) end end
+    for _, btn in ipairs(b.buttons) do
+        btn:SetSlot(nil)
+        for i = #actionButtons, 1, -1 do if actionButtons[i] == btn then table.remove(actionButtons, i) end end
+    end
+    b.header:Hide()
+end
+
+@afterEach
+local function cleanup()
+    for _, b in ipairs(made) do forget(b) end
+    made = {}
+    if parent then parent:Hide() end
+    parent = nil
+    for i = BASE, BASE + 11 do mock.setAction(i, nil) end
+end
+
+@test("actionBarPaging: override, vehicle, manual pages, bonus bars, else 1")
+local function paging()
+    local p = actionBarPaging()
+    expect(p:find("[bar:2] 2", 1, true) ~= nil).toBe(true)
+    expect(p:find("[bar:6] 6", 1, true) ~= nil).toBe(true)
+    expect(p:find("[bonusbar:1] 7", 1, true) ~= nil).toBe(true)
+    expect(p:find("[bonusbar:4] 10", 1, true) ~= nil).toBe(true)
+    expect(p:find("[bonusbar:5] 11", 1, true) ~= nil).toBe(true)
+    expect(p:sub(-3)).toBe("; 1")
+    expect(p:find("[overridebar] " .. GetOverrideBarIndex(), 1, true) ~= nil).toBe(true)
+    expect(p:find("[vehicleui][possessbar] " .. GetVehicleBarIndex(), 1, true) ~= nil).toBe(true)
+end
+
+@test("actionBarPaging without override or vehicle bars")
+local function pagingOld()
+    local g = _G :: any -- functions an older client lacks
+    local o, v = g.GetOverrideBarIndex, g.GetVehicleBarIndex
+    g.GetOverrideBarIndex, g.GetVehicleBarIndex = nil, nil
+    local p = actionBarPaging()
+    g.GetOverrideBarIndex, g.GetVehicleBarIndex = o, v
+    expect(p:find("overridebar", 1, true)).toBeNil()
+    expect(p:find("vehicleui", 1, true)).toBeNil()
+    expect(p:sub(1, 9)).toBe("[bar:2] 2")
+end
+
+@test("a bar: secure buttons with their action attributes, laid out in a row")
+local function built()
+    local b = bar({ binding = "MULTIACTIONBAR4BUTTON", label = "Bar 6" })
+    expect(#b.buttons).toBe(12)
+    expect(bars[#bars]).toBe(b)
+    expect(b.page).toBe(1)
+    local first = b.buttons[1]
+    expect(first:GetName()).toBe(b.name .. "Button1")
+    expect(first:GetAttribute("type")).toBe("action")
+    expect(first:GetAttribute("action")).toBe(BASE)
+    expect(b.buttons[12]:GetAttribute("action")).toBe(BASE + 11)
+    expect(first:GetAttribute("checkselfcast")).toBe(true)
+    expect(first:GetAttribute("checkfocuscast")).toBe(true)
+    expect(first:GetAttribute("_childupdate-page"):find(tostring(BASE), 1, true) ~= nil).toBe(true)
+    expect(first.slot).toBe(BASE)
+    expect(first.bindCommand).toBe("MULTIACTIONBAR4BUTTON1")
+    expect(first.bindLabel).toBe("Bar 6 button 1")
+    expect(b.header:GetAttribute("_onstate-page")).toBeNil()
+    -- one row of 12, space-1 apart
+    local px = first:GetWidth()
+    expect(b.header:GetWidth()).toBe(12 * px + 11 * S1)
+    expect(b.header:GetHeight()).toBe(px)
+    expect(b.buttons[2]).toBeAnchoredTo(b.header, "TOPLEFT", "TOPLEFT")
+    local _, _, _, x = b.buttons[2]:GetPoint(1)
+    expect(x).toBe(px + S1)
+    expect((bySlot[BASE] or {})[first]).toBe(true)
+    expectNoErrors()
+end
+
+@test("a bar without a binding, fewer buttons, a label from its name")
+local function small()
+    local b = bar({ count = 3, columns = 2, gap = 4, size = "action-sm" })
+    expect(#b.buttons).toBe(3)
+    expect(b.buttons[1].bindCommand).toBeNil()
+    local px = b.buttons[1]:GetWidth()
+    expect(px).toBe(T.size["action-sm"])
+    expect(b.header:GetWidth()).toBe(2 * px + 4)
+    expect(b.header:GetHeight()).toBe(2 * px + 4)
+    -- UpdateBindings does nothing without a binding
+    b:UpdateBindings()
+    local named = bar({ count = 1, binding = "MULTIACTIONBAR3BUTTON" })
+    expect(named.buttons[1].bindLabel).toBe(named.name .. " button 1")
+    expect(#bar({ count = 20 }).buttons).toBe(12)
+end
+
+@test("Layout: columns, rows, count and size; extra buttons hide")
+local function layout()
+    local b = bar()
+    b:Layout(4, 2, 6, 30)
+    expect(b.columns).toBe(4)
+    expect(b.count).toBe(6)
+    expect(b.buttons[1]:GetWidth()).toBe(30)
+    expect(b.buttons[6]).toBeShown()
+    expect(b.buttons[7]).never.toBeShown()
+    expect(b.header:GetWidth()).toBe(4 * 30 + 3 * 2)
+    expect(b.header:GetHeight()).toBe(2 * 30 + 2)
+    local _, _, _, x, y = b.buttons[5]:GetPoint(1)
+    expect(x).toBe(0)
+    expect(y).toBe(-32)
+    -- the rest stays; the count is clamped
+    b:Layout(nil, nil, 99)
+    expect(b.count).toBe(12)
+    expect(b.columns).toBe(4)
+    b:Layout(nil, nil, 0)
+    expect(b.count).toBe(1)
+    expect(b.header:GetWidth()).toBe(30)
+end
+
+@test("Layout waits for the end of combat")
+local function layoutCombat()
+    local b = bar()
+    mock.player:enterCombat()
+    b:Layout(6)
+    expect(b.header:GetHeight()).toBe(b.buttons[1]:GetWidth())
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(b.header:GetHeight()).toBe(2 * b.buttons[1]:GetWidth() + S1)
+end
+
+@test("bindings: each bound key clicks its button; the hotkey shows the first")
+local function bindings()
+    local clicks: { string } = {}
+    mock.fake("SetOverrideBindingClick", function(_: Frame, _: boolean, key: string, name: string, _: string)
+        clicks[#clicks + 1] = key .. "=" .. name
+    end)
+    local b = bar({ binding = "MULTIACTIONBAR4BUTTON" })
+    clicks = {}
+    SetBinding("SHIFT-F1", "MULTIACTIONBAR4BUTTON1")
+    SetBinding("F2", "MULTIACTIONBAR4BUTTON1")
+    SetBinding("F3", "MULTIACTIONBAR4BUTTON12")
+    -- (SetBinding tells UPDATE_BINDINGS, as the client does: every bar
+    -- binds again; this bar's own calls are counted)
+    clicks = {}
+    b:UpdateBindings()
+    local mine = 0
+    for _, c in ipairs(clicks) do if c:find("=" .. b.name, 1, true) then mine += 1 end end
+    expect(mine).toBe(3)
+    expect(clicks).toContain("F3=" .. b.name .. "Button12")
+    local h = b.buttons[1].hotkeyText
+    expect(h == "SF1" or h == "F2").toBe(true)
+    expect(b.buttons[12].hotkeyText).toBe("F3")
+    expect(b.buttons[2].hotkeyText).toBe("")
+    -- a button past the count keeps its text but not its key
+    clicks = {}
+    b:Layout(nil, nil, 11)
+    expect(clicks).never.toContain("F3=" .. b.name .. "Button12")
+    -- UPDATE_BINDINGS reads them again
+    SetBinding("F3")
+    mock.fireEvent("UPDATE_BINDINGS")
+    expect(b.buttons[12].hotkeyText).toBe("")
+    SetBinding("SHIFT-F1"); SetBinding("F2")
+end
+
+@test("a hidden bar gives its keys back; SetShown maps to always/hidden")
+local function hidden()
+    -- (every bar binds again on UPDATE_BINDINGS: only this bar's calls count)
+    local clicks = 0
+    local header: Frame? = nil
+    mock.fake("SetOverrideBindingClick", function(owner: Frame, _: boolean, _: string, _: string, _: string)
+        if owner == header then clicks = clicks + 1 end
+    end)
+    local cleared = mock.spy(function(_: Frame) end)
+    mock.fake("ClearOverrideBindings", cleared)
+    SetBinding("F4", "MULTIACTIONBAR4BUTTON2")
+    local b = bar({ binding = "MULTIACTIONBAR4BUTTON" })
+    header = b.header
+    clicks = 0
+    b:SetShown(false)
+    expect(b.hidden).toBe(true)
+    expect(cleared).toHaveBeenCalledWith(b.header)
+    expect(clicks).toBe(0)
+    b:SetShown(true)
+    expect(b.hidden).toBe(false)
+    expect(clicks).toBe(1)
+    b:SetVisibility("combat")
+    expect(b.hidden).toBe(false)
+    SetBinding("F4")
+end
+
+@test("the drag lock follows lockActionBars")
+local function lock()
+    SetCVar("lockActionBars", "1")
+    local b = bar()
+    expect(b.buttons[1]:GetAttribute("suu-locked")).toBe(true)
+    SetCVar("lockActionBars", "0")
+    mock.fireEvent("CVAR_UPDATE", "lockActionBars", "0")
+    expect(b.buttons[1]:GetAttribute("suu-locked")).toBe(false)
+    mock.setCVar("lockActionBars", "1") -- (silently: SetCVar tells CVAR_UPDATE)
+    mock.fireEvent("CVAR_UPDATE", "SOMETHING_ELSE", "1")
+    expect(b.buttons[1]:GetAttribute("suu-locked")).toBe(false)
+    mock.fireEvent("CVAR_UPDATE", "LOCK_ACTIONBAR", "1")
+    expect(b.buttons[1]:GetAttribute("suu-locked")).toBe(true)
+end
+
+@test("hotkeys and empty slots for the whole bar")
+local function shownFlags()
+    local b = bar()
+    b:SetHotkeysShown(false)
+    expect(b.hotkeysShown).toBe(false)
+    expect(b.buttons[3].hotkeyShown).toBe(false)
+    b:SetHotkeysShown(1)
+    expect(b.buttons[3].hotkeyShown).toBe(true)
+    expect(b.buttons[3].face:GetAlpha()).toBe(0)
+    b:SetShowEmpty(true)
+    expect(b.buttons[3].showEmpty).toBe(true)
+    expect(b.buttons[3].face:GetAlpha()).toBe(1)
+    b:SetShowEmpty(nil)
+    expect(b.buttons[3].face:GetAlpha()).toBe(0)
+end
+
+@test("paging: the secure driver pages the attributes, the art follows")
+local function pagingBar()
+    local pages: { number } = {}
+    local b = bar({ slot = 1, paging = actionBarPaging(), onPage = function(_: ActionBar, page: number) pages[#pages + 1] = page end })
+    expect(b.header:GetAttribute("_onstate-page")).never.toBeNil()
+    expect(b.page).toBe(1)
+    expect(pages).toEqual({ 1 })
+    expect(b:Page()).toBe(1)
+    ChangeActionBarPage(3)
+    mock.advanceFrames(2)
+    expect(b:Page()).toBe(3)
+    expect(b.page).toBe(3)
+    expect(b.buttons[1].slot).toBe(25)
+    expect(b.buttons[1]:GetAttribute("action")).toBe(25)
+    expect(b.buttons[12]:GetAttribute("action")).toBe(36)
+    expect(pages).toEqual({ 1, 3 })
+    -- the same page: nothing
+    b:UpdatePage()
+    expect(#pages).toBe(2)
+    ChangeActionBarPage(1)
+    mock.advanceFrames(2)
+    expect(b.buttons[1].slot).toBe(1)
+    -- a page the parser can't read is 1
+    mock.fake("SecureCmdOptionParse", function(_: string): any return nil end)
+    expect(b:Page()).toBe(1)
+    expectNoErrors()
+end
+
+@test("range checks are counted per slot")
+local function rangeRefsCount()
+    local calls: { string } = {}
+    mock.fake("C_ActionBar.EnableActionRangeCheck", function(slot: number, on: boolean)
+        calls[#calls + 1] = slot .. ":" .. tostring(on)
+    end)
+    local b = bar()
+    expect(rangeRefs[BASE]).toBe(1)
+    expect(calls).toContain(BASE .. ":true")
+    local fake: ActionButton = b.buttons[2]
+    onSlotChanged(fake, BASE + 1, BASE) -- a second button on BASE
+    expect(rangeRefs[BASE]).toBe(2)
+    expect(rangeRefs[BASE + 1]).toBeNil()
+    calls = {}
+    onSlotChanged(fake, BASE, nil)
+    expect(rangeRefs[BASE]).toBe(1)
+    expect(#calls).toBe(0)
+    onSlotChanged(fake, BASE, nil)
+    expect(rangeRefs[BASE]).toBeNil()
+    expect(calls).toEqual({ BASE .. ":false" })
+    -- a slot never counted
+    onSlotChanged(fake, 999, nil)
+    expect(rangeRefs[999]).toBeNil()
+    -- (put it back)
+    onSlotChanged(fake, nil, BASE + 1)
+end
+
+@test("range: the first state is read; range events dim the slot's buttons")
+local function range()
+    mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
+    mock.fake("IsActionInRange", function(slot: number): any
+        if slot == BASE then return false end
+        return nil
+    end)
+    local b = bar()
+    local first = b.buttons[1]
+    expect(first.outOfRange).toBe(true)
+    mock.fireEvent("ACTION_RANGE_CHECK_UPDATE", BASE, true, true)
+    expect(first.outOfRange).toBe(false)
+    mock.fireEvent("ACTION_RANGE_CHECK_UPDATE", BASE, false, true)
+    expect(first.outOfRange).toBe(true)
+    mock.fireEvent("ACTION_RANGE_CHECK_UPDATE", BASE, false, false)
+    expect(first.outOfRange).toBe(false)
+    -- secret answers never dim
+    handle("ACTION_RANGE_CHECK_UPDATE", BASE, mock.secret(false), true)
+    expect(first.outOfRange).toBe(false)
+    handle("ACTION_RANGE_CHECK_UPDATE", BASE, false, mock.secret(true))
+    expect(first.outOfRange).toBe(false)
+    -- a new target reads it again
+    mock.fake("IsActionInRange", function(_: number): any return mock.secret(false) end)
+    first:SetOutOfRange(true)
+    local hogger = mock.spawnUnit({ name = "Hogger", reaction = "hostile" })
+    mock.player:target(hogger)
+    expect(first.outOfRange).toBe(false)
+    mock.player:target(nil)
+    expectNoErrors()
+end
+
+@test("a slot change updates that slot's buttons, 0 every button")
+local function slotChanged()
+    local b = bar()
+    local first = b.buttons[1]
+    expect(first.hasAction).toBe(false)
+    mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
+    expect(first.hasAction).toBe(true)
+    expect(first.art:GetTextureFileID()).toBe(136243)
+    mock.setAction(BASE + 1, { type = "spell", id = 133, texture = 136243 })
+    expect(b.buttons[2].hasAction).toBe(true)
+    first.hasAction = false
+    b.buttons[2].hasAction = false
+    mock.fireEvent("ACTIONBAR_SLOT_CHANGED", 0)
+    expect(first.hasAction).toBe(true)
+    expect(b.buttons[2].hasAction).toBe(true)
+    first.hasAction = false
+    handle("ACTIONBAR_SLOT_CHANGED", nil)
+    expect(first.hasAction).toBe(true)
+    -- macros and icons update every button
+    first.hasAction = false
+    mock.fireEvent("UPDATE_MACROS")
+    expect(first.hasAction).toBe(true)
+    first.hasAction = false
+    mock.fireEvent("SPELL_UPDATE_ICON")
+    expect(first.hasAction).toBe(true)
+    first.hasAction = false
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
+    expect(first.hasAction).toBe(true)
+end
+
+@test("cooldown, usable and active passes run once, on the next frame")
+local function passes()
+    local b = bar()
+    mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
+    local first = b.buttons[1]
+    local reads = 0
+    -- (other bars read their own slots too: count this bar's first)
+    mock.fake("C_ActionBar.GetActionCooldown", function(slot: number): any
+        if slot == BASE then reads = reads + 1 end
+        return nil
+    end)
+    mock.advanceFrames(1)
+    reads = 0
+    mock.fireEvent("ACTIONBAR_UPDATE_COOLDOWN")
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    -- (another module may read the slot at once: count from here)
+    local before = reads
+    mock.advanceFrames(1)
+    expect(reads).toBe(before + 1)
+    mock.advanceFrames(2)
+    expect(reads).toBe(before + 1)
+    -- usable
+    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (boolean, boolean) return false, false end)
+    mock.fireEvent("ACTIONBAR_UPDATE_USABLE")
+    expect(first.unusable).toBe(false)
+    mock.advanceFrames(1)
+    expect(first.unusable).toBe(true)
+    -- active
+    mock.fake("IsCurrentAction", function(_: number): any return true end)
+    mock.fireEvent("ACTIONBAR_UPDATE_STATE")
+    mock.advanceFrames(1)
+    expect(first.active).toBe(true)
+    mock.fake("IsCurrentAction", function(_: number): any return false end)
+    for _, e in ipairs({ "PLAYER_ENTER_COMBAT", "PLAYER_LEAVE_COMBAT", "START_AUTOREPEAT_SPELL", "STOP_AUTOREPEAT_SPELL" }) do
+        first.active = true
+        mock.fireEvent(e)
+        expect(first.active).toBe(false)
+    end
+    -- a form change: usable and active at once
+    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (boolean, boolean) return true, false end)
+    mock.fireEvent("UPDATE_SHAPESHIFT_FORM")
+    expect(first.unusable).toBe(false)
+    expectNoErrors()
+end
+
+@test("counts follow charges and bags")
+local function counts()
+    local b = bar()
+    mock.setAction(BASE, { type = "item", id = 6948, texture = 134414, count = "3" })
+    local first = b.buttons[1]
+    first.count:SetText("")
+    mock.fireEvent("SPELL_UPDATE_CHARGES")
+    expect(first.count).toHaveText("3")
+    first.count:SetText("")
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    expect(first.count).toHaveText("3")
+end
+
+@test("dragging something shows the grid of empty slots")
+local function grid()
+    local b = bar()
+    local kind: string? = "spell"
+    mock.fake("GetCursorInfo", function(): any return kind end)
+    mock.fireEvent("ACTIONBAR_SHOWGRID")
+    expect(b.buttons[1].grid).toBe(true)
+    expect(b.buttons[1].face:GetAlpha()).toBe(1)
+    kind = "money"
+    mock.fireEvent("CURSOR_CHANGED", false, 0, 0, 0)
+    expect(b.buttons[1].grid).toBe(false)
+    kind = "item"
+    handle("CURSOR_CHANGED")
+    expect(b.buttons[1].grid).toBe(true)
+    kind = nil
+    mock.fireEvent("ACTIONBAR_HIDEGRID")
+    expect(b.buttons[1].grid).toBe(false)
+end
+
+@test("a spell pushed to the bar pops its button")
+local function pushed()
+    local b = bar()
+    mock.setAction(BASE + 2, { type = "spell", id = 133, texture = 136243 })
+    local btn = b.buttons[3]
+    handle("SPELL_PUSHED_TO_ACTIONBAR", 133, BASE + 2, 0)
+    expect(btn.flash:GetAlpha() > 0.9).toBe(true)
+    expect(b.buttons[1].flash:GetAlpha()).toBe(0)
+    -- not a slot: nothing
+    handle("SPELL_PUSHED_TO_ACTIONBAR", 133, nil)
+    mock.fireEvent("SPELL_PUSHED_TO_ACTIONBAR", 133, BASE, 0)
+    expectNoErrors()
+end
+
+@test("paging events update every paged bar")
+local function pageEvents()
+    local b = bar({ slot = 1, paging = actionBarPaging() })
+    for _, e in ipairs({ "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORMS", "UPDATE_OVERRIDE_ACTIONBAR",
+                         "UPDATE_VEHICLE_ACTIONBAR", "UPDATE_POSSESS_BAR" }) do
+        mock.fake("SecureCmdOptionParse", function(_: string): any return "2" end)
+        mock.fireEvent(e)
+        expect(b.page).toBe(2)
+        mock.fake("SecureCmdOptionParse", function(_: string): any return "1" end)
+        handle("ACTIONBAR_PAGE_CHANGED")
+        expect(b.page).toBe(1)
+    end
+end
+
+@test("without any bar the dispatcher does nothing")
+local function noBars()
+    local saved: ActionBar[] = {}
+    for i, b in ipairs(bars) do saved[i] = b end
+    for i = #bars, 1, -1 do table.remove(bars, i) end
+    mock.fireEvent("ACTIONBAR_SLOT_CHANGED", 0)
+    mock.fireEvent("UPDATE_BINDINGS")
+    for i, b in ipairs(saved) do bars[i] = b end
+    expectNoErrors()
+end
+
+@test("the range poll of older clients: every 0.2 s, only with bars")
+local function poll()
+    local b = bar()
+    mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
+    local out = false
+    mock.fake("IsActionInRange", function(_: number): any return not out end)
+    out = true
+    pollRange(0.1)
+    expect(b.buttons[1].outOfRange).never.toBe(true)
+    pollRange(0.15)
+    expect(b.buttons[1].outOfRange).toBe(true)
+    -- a button without a slot is never out of range
+    b.buttons[1]:SetSlot(nil)
+    handle("PLAYER_TARGET_CHANGED")
+    expect(b.buttons[1].outOfRange).toBe(false)
+end
+
+@test("a bar without a slot starts at slot 1")
+local function defaultSlot()
+    local p = parent or newParent(600, 200)
+    parent = p
+    local b: ActionBar = actionBar(p, { name = "SuuUITestBarSlot1", count = 1 })
+    made[#made + 1] = b
+    expect(b.slot).toBe(1)
+    expect(b.buttons[1]:GetAttribute("action")).toBe(1)
+end

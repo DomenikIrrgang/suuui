@@ -1,0 +1,255 @@
+-- Units/Auras: your buffs top right (Blizzard's frames stood down; off, or
+-- hidden in edit mode: gone, with what sits under them), their size, row
+-- and growth (fewer to a row beside the encounter timeline, out of combat
+-- only); weapon enchants first in the row, a line after them; your debuffs
+-- over the player frame; the target's buffs and debuffs (everyone's or
+-- yours, see-through while it's offline, half the frame each, following
+-- the frame's width and a plugin's own frame), the focus's and the
+-- bosses'; edit mode's made-up auras; the settings rows; the old target
+-- setting carried over; stopped.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, SECTION from "/Units/Auras"
+import internal G as enchantAPI, reset as resetEnchants, scan as scanEnchants from "/UI/WeaponEnchants"
+import internal migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+local friend = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "MAGE", level = 30, reaction = "friendly" })
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    mock.player:target(nil)
+    friend:setOnline(true)
+    for _, k in ipairs({ "buffPosition", "showBuffs", "showEnchants", "showDebuffs", "showTarget", "targetDebuffs", "targetBuffs",
+                         "showFocus", "showBoss", "buffSize", "buffsPerRow", "buffGrowth", "debuffSize" }) do
+        M:Reset(k)
+    end
+    mock.advanceTime(0.2)
+    expectNoErrors()
+end
+
+local function rows(): { [string]: any }
+    local out: { [string]: any } = {}
+    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do out[r.key] = r end end
+    return out
+end
+
+@test("your buffs top right in their holder, Blizzard's stood down; off or hidden in edit mode: gone, and what sits under them")
+local function buffs()
+    expect((_G :: any).BuffFrame:IsShown()).toBe(false)
+    local c = M.buffs.container
+    expect(c:IsShown()).toBe(true)
+    expect(SuuUI.GetAnchor("playerBuffs")).toBe(M.buffHolder)
+    M:Set("showBuffs", false)
+    expect(c:IsShown()).toBe(false)
+    expect(SuuUI.GetAnchor("playerBuffs")).toBeNil()
+    M:Set("showBuffs", true)
+    M:Set("buffPosition", { point = "TOPRIGHT", x = -224, y = -28, hidden = true })
+    expect(c:IsShown()).toBe(false)
+end
+
+@test("your buffs' size, row and growth, out of combat; fewer to a row where the encounter timeline shares the top")
+local function layout()
+    local holder = M.buffHolder
+    M:Set("buffSize", 30)
+    M:Set("buffsPerRow", 10)
+    expect(M.buffs.sizes.buffs).toBe(30)
+    expect(holder:GetWidth()).toBe(10 * (30 + SuuUI.Tokens.space["space-2"]))
+    M:Set("buffGrowth", "right")
+    expect(M.buffs.flow.anchor).toBe("TOPLEFT")
+    local p = M.buffs.container:GetPoint(1)
+    expect(p).toBe("TOPLEFT")
+    -- in a fight: after it
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:Set("buffSize", 40)
+    expect(M.buffs.sizes.buffs).toBe(30)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(M.buffs.sizes.buffs).toBe(40)
+    M:Reset("buffSize")
+    M:Reset("buffGrowth")
+    -- the timeline beside the row (left of it): the row stops short of it
+    local tl = CreateFrame("Frame", nil, UIParent)
+    local l, b, w, h = SuuUI.EditMode.Rect(holder)
+    local hl, hb, hw, hh = l :: number, b :: number, w :: number, h :: number
+    tl:SetSize(200, hh)
+    tl:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", hl - 120, hb)
+    SuuUI.PublishAnchor("encounterTimeline", tl)
+    mock.advanceFrames(1)
+    expect(M.buffRowW < hw).toBe(true)
+    -- growing right, the timeline to the right
+    M:Set("buffGrowth", "right")
+    tl:ClearAllPoints()
+    tl:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", hl + 200, hb)
+    M:ApplyLayout()
+    -- elsewhere on the screen: the full row
+    tl:ClearAllPoints()
+    tl:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 10, 10)
+    M:ApplyLayout()
+    expect(M.buffRowW).toBe(M:Get("buffsPerRow") * (M:Get("buffSize") + SuuUI.Tokens.space["space-2"]))
+    SuuUI.PublishAnchor("encounterTimeline", nil)
+    mock.advanceFrames(1)
+end
+
+@test("weapon enchants first in the row, a line after them, the buffs moved past; off by the setting")
+local function enchants()
+    local slots: { [number]: any } = {}
+    mock.setField(enchantAPI, "C_Item", {
+        GetWeaponEnchantInfo = function(ws: number): any return slots[ws] end,
+        GetItemInfoInstant = function(id: number): ...any return id, nil, nil, nil, nil, 2 end,
+    })
+    mock.setField(enchantAPI, "GetInventoryItemID", function(_: string, inv: number): number? return inv == 16 and 1001 or nil end)
+    mock.setField(enchantAPI, "GetInventoryItemTexture", function(_: string, _: number): number return 135000 end)
+    resetEnchants()
+    slots[0] = { { hasEnchant = true, timeLeft = 600000, charges = 0, enchantID = 29, enchantIconID = 136086 } }
+    scanEnchants()
+    expect(M.enchantIcons.main:IsShown()).toBe(true)
+    expect(M.enchantLine:IsShown()).toBe(true)
+    expect(M.enchantOffset > 0).toBe(true)
+    -- in a fight: the row keeps its places
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    slots[0] = nil
+    scanEnchants()
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(M.enchantIcons.main:IsShown()).toBe(false)
+    expect(M.enchantLine:IsShown()).toBe(false)
+    slots[0] = { { hasEnchant = true, timeLeft = 600000, charges = 0, enchantID = 29, enchantIconID = 136086 } }
+    scanEnchants()
+    expect(M.enchantIcons.main:IsShown()).toBe(true)
+    M:Set("showEnchants", false)
+    expect(M.enchantIcons.main:IsShown()).toBe(false)
+    resetEnchants()
+end
+
+@test("your debuffs over the player frame at their size; the target's buffs and debuffs, everyone's or only yours")
+local function attached()
+    local a = M.attached
+    expect(a.player.container:GetParent()).toBe(SuuUI.GetAnchor("player"))
+    M:Set("debuffSize", 30)
+    expect(a.player.sizes.debuffs).toBe(30)
+    M:Set("showDebuffs", false)
+    expect(a.player.container:IsShown()).toBe(false)
+    expect(a.targetDebuffs.groups.all.max).toBe(12)
+    expect(a.targetDebuffs.groups.mine.max).toBe(0)
+    M:Set("targetDebuffs", "mine")
+    expect(a.targetDebuffs.groups.all.max).toBe(0)
+    expect(a.targetDebuffs.groups.mine.max).toBe(12)
+    M:Set("targetBuffs", "mine")
+    expect(a.targetBuffs.groups.myBuffs.max).toBe(6)
+    expect(a.targetBuffs.groups.theirBuffs.max).toBe(0)
+    M:Set("showTarget", false)
+    expect(a.targetBuffs.container:IsShown()).toBe(false)
+    M:Set("showFocus", false)
+    if a.focusBuffs then expect(a.focusBuffs.container:IsShown()).toBe(false) end
+    M:Set("showBoss", false)
+    if a.boss1 then expect(a.boss1.container:IsShown()).toBe(false) end
+end
+
+@test("the target's sides: half its frame each, following its width; on a plugin's own target frame")
+local function halves()
+    local a = M.attached
+    local frame = SuuUI.GetAnchor("target")
+    local frames: any = SuuUI.GetModule("unitframes")
+    frames:Set("width", 300)
+    mock.advanceFrames(2)
+    expect(a.targetBuffs.lineWidth).toBe(math.floor((frame:GetWidth() - SuuUI.Tokens.space["space-4"]) / 2))
+    frames:Reset("width")
+    mock.advanceFrames(2)
+    -- a plugin's target frame
+    local own = CreateFrame("Frame", nil, UIParent)
+    own:SetSize(240, 40)
+    own:SetPoint("CENTER")
+    SuuUI.PublishAnchor("target", own)
+    expect(a.targetDebuffs.container:GetParent()).toBe(own)
+    SuuUI.PublishAnchor("target", frame)
+    expect(a.targetDebuffs.container:GetParent()).toBe(frame)
+end
+
+@test("an offline player's auras see-through")
+local function offline()
+    -- (the game tells a group member's connection)
+    mock.group:add(friend)
+    mock.player:target(friend)
+    mock.advanceFrames(1)
+    expect(M.attached.targetBuffs.container:GetAlpha()).toBe(1)
+    friend:setOnline(false)
+    mock.advanceFrames(1)
+    expect(M.attached.targetBuffs.container:GetAlpha()).toBe(0)
+    expect(M.attached.targetDebuffs.container:GetAlpha()).toBe(0)
+    friend:setOnline(true)
+    mock.advanceFrames(1)
+    expect(M.attached.targetBuffs.container:GetAlpha()).toBe(1)
+    mock.group:leave()
+end
+
+@test("edit mode's With buffs and debuffs: made-up auras everywhere, two made-up enchants first")
+local function preview()
+    M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", nil, true)
+    expect(M.buffs.preview:IsShown()).toBe(true)
+    expect(M.attached.targetDebuffs.preview:IsShown()).toBe(true)
+    expect(M.enchantIcons.main:IsShown()).toBe(true)
+    expect(M.enchantIcons.off:IsShown()).toBe(true)
+    M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", nil, false)
+    expect(M.buffs.preview:IsShown()).toBe(false)
+    expect(M.enchantIcons.main:IsShown()).toBe(false)
+    -- growing right, enchants off
+    M:Set("buffGrowth", "right")
+    M:Set("showEnchants", false)
+    M:AuraPreview(true)
+    M:AuraPreview(false)
+end
+
+@test("the settings rows wait for what they change")
+local function rowsWait()
+    local r = rows()
+    expect((r.buffSize.disabled())).toBeNil()
+    M:Set("showBuffs", false)
+    local off, why = r.buffSize.disabled()
+    expect(off).toBe(true)
+    expect(why).toBe("Your buffs are off.")
+    M:Set("showDebuffs", false)
+    off, why = r.debuffSize.disabled()
+    expect(why).toBe("Your debuffs are off.")
+    expect((r.debuffSize.disabled())).toBe(true)
+    M:Set("showTarget", false)
+    off, why = r.targetDebuffs.disabled()
+    expect(why).toBe("Auras on your target are off.")
+    off, why = r.targetBuffs.disabled()
+    expect(off).toBe(true)
+    M:Reset("showDebuffs")
+    M:Reset("showTarget")
+    expect((r.debuffSize.disabled())).toBeNil()
+    expect((r.targetBuffs.disabled())).toBeNil()
+end
+
+@test("the target's one setting, now two, carried over")
+local function migration()
+    local found = false
+    for _, m in ipairs(settingMigrations :: any[]) do
+        if m.namespace == "auras" and m.id == "targetSplit" then
+            found = true
+            local old: { [string]: any } = { targetAuras = "mine" }
+            m.fn(old)
+            expect(old.targetDebuffs).toBe("mine")
+            expect(old.targetBuffs).toBe("mine")
+            expect(old.targetAuras).toBeNil()
+        end
+    end
+    expect(found).toBe(true)
+end
+
+-- (last: the module off)
+@test("stopped: every container gone")
+local function disabled()
+    local m: any = M
+    m:OnDisable()
+    expect(M.buffs.container:IsShown()).toBe(false)
+    for _, c in pairs(M.attached) do expect(c.container:IsShown()).toBe(false) end
+    expect(SuuUI.GetAnchor("playerBuffs")).toBeNil()
+end
