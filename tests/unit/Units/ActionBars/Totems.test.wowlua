@@ -1,0 +1,53 @@
+-- Units/ActionBars/Totems: a shaman's totem bar in the stance bar's place,
+-- Ghost Wolf's stance bar on its right (where the stance bar was while the
+-- totem bar is off); the set it works on kept for the character
+-- (tests/profiles/shaman.json: a level 20 shaman).
+
+import test, expect, config, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/ActionBars"
+import expectNoErrors from "../../../helpers"
+
+config({ profile = "shaman" })
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, k in ipairs({ "showTotem", "showStance", "stancePosition", "dockSize" }) do M:Reset(k) end
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+@test("the totem bar in the stance bar's place, the stance bar on its right")
+local function totems()
+    local totem = M.totem
+    expect(totem ~= nil).toBe(true)
+    local stance = M.stance.header
+    local _, rel, relPoint = stance:GetPoint(1)
+    expect(rel).toBe(totem.header)
+    if totem.enabled and totem.header:IsShown() then expect(relPoint).toBe("BOTTOMRIGHT") end
+    M:Set("dockSize", 30)
+    expect(totem.size).toBe(27)
+    -- the totem bar off: the stance bar in its place
+    M:Set("showTotem", false)
+    _, rel, relPoint = stance:GetPoint(1)
+    expect(relPoint).toBe("BOTTOMLEFT")
+    -- in a fight: left where it is
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:FollowTotems()
+    mock.player:leaveCombat()
+end
+
+@test("its mover: the totem and stance bar, shown while either is on; the set kept for the character")
+local function mover()
+    local a: any
+    for _, x in ipairs(M.attachable) do if x.key == "Stance" then a = x end end
+    expect(a.label).toBe("Totem and stance bar")
+    expect(a.enabled()).toBe(true)
+    M:Set("showTotem", false)
+    M:Set("showStance", false)
+    expect(a.enabled()).toBe(false)
+    M.totem.onPage(3)
+    expect(M:CharData().totemPage).toBe(3)
+end
