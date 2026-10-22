@@ -92,14 +92,13 @@ protected call, combat guard or secret guard, or a public name.
   matched. The rules now list `BACKSPACE` before `SPACE`. A Backspace binding
   now shows `Bs` on the button, as intended. The test is in
   `ActionButton.test.wowlua`, under the `shortKey` cases.
-- **Skipped: DamageMeter with a secret `combatSources` table.**
-  - The test is `@skip("bug: …")` "a secret source list".
-  - `RefreshList` guards with `not isSecret(sources) and #sources == 0`, so a
-    secret list passes the empty check. It then takes `#sources` and errors:
+- **Fixed later (final pass): DamageMeter with a secret `combatSources`
+  table.**
+  - `RefreshList` guarded with `not isSecret(sources) and #sources == 0`, so
+    a secret list passed the empty check, then `#sources` errored:
     "attempt to get length of local 'sources' (a secret table value)".
-  - The guard shows the author expected a secret list. Whether the client
-    ever returns one, and what the meter should then show, is open, so the
-    code is left alone.
+  - It now says "The list is secret until combat ends.", as the death
+    recap does. Whether the client ever returns a secret list is open.
 
 ## VM suspicions
 

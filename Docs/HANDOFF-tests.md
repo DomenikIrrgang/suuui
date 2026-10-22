@@ -67,7 +67,7 @@ pass) and committed, with notes in `Docs/test-notes/<area>.md`:
 | core-a | src/Core: Util, DB, Services, Combat, Events, Init, Fault, Extend, Settings, Modules | 100% lines; no source changes |
 | core-b | src/Core: API, Themes, ThemesBuiltin, Vision, VisionPresets, Fonts, Pixel, Root, Anchors, Blizzard, Motion, Roles, RolePresets, Serialize, Perf, Tokens | 100% lines; fixed SuuUI.UI.CooldownConditionMet missing, OpenRecipe fallback |
 | ui-units | src/UI: UnitFrame, Auras, CastBar, ClassBars, ResourceBar, RestedSign, WeaponEnchants | 100% lines; stand-in APIs injected; fixed levelColor |
-| ui-hud | src/UI: ActionBar, ActionButton, CooldownTracker, SwingTimer, ThreatMeter, DamageMeter, Readiness, KeybindMode | 100% lines; fixed shortKey("BACKSPACE"); 1 skipped bug (DamageMeter secret source list) |
+| ui-hud | src/UI: ActionBar, ActionButton, CooldownTracker, SwingTimer, ThreatMeter, DamageMeter, Readiness, KeybindMode | 100% lines; fixed shortKey("BACKSPACE"); DamageMeter's secret source list fixed later |
 | ui-primitives | src/UI: Draw, Text, Icon, Bar, Panel, Layout, Controls, Inputs, Select, Pickers, SettingRow, SettingsMatrix, TabMarker, Crest, LoadingMark, Stage, Visibility | 100% lines; no source changes |
 | ui-windows | src/UI: Reskin, WindowSkin, Tooltip, ContextMenu, FilterMenu, Notification, Alert, Loot, LevelUp, MicroMenu | 100% lines; fixed Reskin hooks lost on Blizzard's pooled menu frames |
 | ui-social | src/UI: GroupFinder, GroupFinderListed, GroupFinderListing, GroupFinderWho, Guild, GuildControl, Social | 100% lines; typed view data |
@@ -85,19 +85,16 @@ box lets go of the keyboard), Tooltips' T245 (tooltips in combat),
 Windows' T246 (`mock.postLFGListing`), Threat's T247 (group threat lists)
 and T248 (a trained spell known), Auras' T249 (`UNIT_CONNECTION`).
 
-Then:
-
-1. Run every test file one at a time (`for f in tests/**/*.test.wowlua; do
-   wowlua test -j 2 <path>; done`), fix or `@skip` failures (with a reason),
-   then `wowlua test -j 2 --coverage` for the totals and set
-   `test.coverage.lines` (and branches) in `wowlua.json` to what's reached.
-2. Grep the tests for `--!nocheck`, `--!basic`, `@nocheck`; review `:: any`.
-3. Bring `Docs/wowlua-test-findings.md` up to date: it was written after
-   the first 7 areas; add the new findings of the remaining areas (from
-   their `Docs/test-notes/*.md`) in the same format, keeping the ids.
-4. Update `CLAUDE.md` (tests now exist: `wowlua test`, layout, strict tests).
-5. Commit, push `wowlua-tests`. Don't merge or push to `main` unless the
-   user asks.
+The final pass is done too (2026-10-22): every file passes on its own and
+the whole suite in one run (3,590 tests in 174 files, none skipped: the six
+skips that waited on wowlua's fixed VM issues run again, and the one
+skipped bug, DamageMeter's secret source list, is fixed); `wowlua.json`
+sets the coverage minimums a little under what the suite reaches (lines
+88.1%, branches 64.0%, functions 84.6%, conditions 60.6%; they apply to a
+run without filters only, wowlua T250); no test file opts out of checking
+(`:: any` casts are stand-ins of Blizzard frames given extra fields);
+`Docs/wowlua-test-findings.md` covers every area with each finding's
+status; CLAUDE.md describes the tests. Nothing is merged to `main`.
 
 ## Rules that bit before
 
@@ -112,8 +109,8 @@ Then:
 - Commit only after the scan is clean (gate the commit on it; a scan that only
   prints doesn't stop anything).
 - `git mv` keeps history; agents must not run other git commands.
-- `wowlua test` with a filter still type-checks every test file: one broken
-  test file blocks every run.
+- A test file that doesn't compile fails alone now (wowlua 0.9.3), and a
+  filter loads only the files it matches (0.9.4).
 - `tests/mocks/gc.wowlua` (GC stopped in tests) works around the coverage
   crash (report C40); keep it until wowlua is fixed.
 - Test profile `runtime-checks = "exports"` (wowlua.json): "all" fails on
@@ -125,7 +122,9 @@ Then:
 - In-game checks of taint-sensitive paths after the port (list in
   `Docs/wowlua-port-notes.md`, "In game checks"), and of the Reskin menu-hook
   fix (ui-windows).
-- The skipped bug in DamageMeter (secret `combatSources`), and the `plain(v)`
-  nil-vs-secret order question (needs a probe in game).
+- The `plain(v)` nil-vs-secret order question (needs a probe in game).
+- Design questions from the tests: `autoQuestWatch` and "Track accepted
+  quests" (units-notices); the unit frames' out-of-combat fade can't tell
+  "hurt" since your health is secret (units-hud).
 - wowlua issues to report: `Docs/wowlua-0.9.1-report.md` (the port) and
-  `Docs/wowlua-test-findings.md` (the tests; first 7 areas).
+  `Docs/wowlua-test-findings.md` (the tests; every area, with status).
