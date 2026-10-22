@@ -8,36 +8,77 @@
 -- when combat starts again mid-flush waits for the next end); the keys are
 -- SuuUI's: the first request for a key takes the place in the queue, the
 -- latest one's function runs.
+--
+-- The queue is a CombatQueue: whether the client is in lockdown and what
+-- runs work after it (a CombatState) and what reports errors (a Reporter)
+-- come in through interfaces, so a test drives a fight of its own. `queue`
+-- is SuuUI's; the module's functions are its methods.
 
 import inCombat, defer from "wowlua:combat"
 import * as fault from "./Fault"
 
+-- Whether the client is in combat lockdown, and what runs work once it
+-- ends (`@deferred`: later, never during the call).
+export interface CombatState
+    function inCombat(): boolean
+    function defer(@deferred fn: () -> ())
+end
+
+-- wowlua:combat's.
+export class GameCombat implements CombatState
+    function inCombat(): boolean
+        return inCombat()
+    end
+
+    function defer(fn: () -> ())
+        defer(fn)
+    end
+end
+
 type Job = { fn: () -> (), source: string }
 
-local waiting: { [any]: Job } = {}
-local pending = 0
+export class CombatQueue
+    private waiting: { [any]: Job } = {}
+    private pending: number = 0
 
--- Runs fn now or after combat. `source` names it in error reports.
+    constructor(private combat: CombatState = GameCombat.new(), private reporter: fault.Reporter = fault.log)
+    end
+
+    -- Runs fn now or after combat. `source` names it in error reports.
+    function run(key: any, fn: () -> (), source: string?)
+        local from = source or tostring(key)
+        if not self.combat:inCombat() then
+            self.reporter:call(from, fn)
+            return
+        end
+        local job: Job = { fn = fn, source = from }
+        if self.waiting[key] then
+            self.waiting[key] = job
+            return
+        end
+        self.waiting[key] = job
+        self.pending += 1
+        self.combat:defer(function()
+            local latest = self.waiting[key]
+            self.waiting[key] = nil
+            self.pending -= 1
+            if latest then self.reporter:call(latest.source, latest.fn) end
+        end)
+    end
+
+    -- How much work waits for the end of combat.
+    function pendingCount(): number
+        return self.pending
+    end
+end
+
+-- SuuUI's queue, and its methods as the module's functions.
+export const queue = CombatQueue.new()
+
 export function run(key: any, fn: () -> (), source: string?)
-    local from = source or tostring(key)
-    if not inCombat() then
-        fault.call(from, fn)
-        return
-    end
-    if waiting[key] then
-        waiting[key] = { fn = fn, source = from }
-        return
-    end
-    waiting[key] = { fn = fn, source = from }
-    pending += 1
-    defer(function()
-        local job = waiting[key]
-        waiting[key] = nil
-        pending -= 1
-        if job then fault.call(job.source, job.fn) end
-    end)
+    queue:run(key, fn, source)
 end
 
 export function pendingCount(): number
-    return pending
+    return queue:pendingCount()
 end

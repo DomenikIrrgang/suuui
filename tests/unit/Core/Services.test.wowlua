@@ -69,3 +69,32 @@ local function needsNameAndTable()
     expect(function() services.provide("coreatest.x", "impl" :: any, OWNER) end).toThrow()
     expect(services.get("coreatest.x")).toBeNil()
 end
+
+--------------------------------------------------------------------------------
+-- A registry of its own
+--------------------------------------------------------------------------------
+
+-- Records what a registry tells.
+class Heard implements services.Notifier
+    told: string[] = {}
+
+    function emit(name: string, ...: any)
+        self.told[#self.told + 1] = `{name} {tostring((...))}`
+    end
+end
+
+@test("a registry of its own: provide, get, unregister by owner, each change told")
+local function ownRegistry()
+    local heard = Heard.new()
+    local reg = services.ServiceRegistry.new(heard)
+    local owner = {}
+    reg:provide("ownBags", { Open = function() end }, owner)
+    reg:provide("talents", { Show = function() end }, {})
+    expect(reg:get("ownBags") ~= nil).toBe(true)
+    reg:unregister(owner)
+    expect(reg:get("ownBags")).toBeNil()
+    expect(reg:get("talents") ~= nil).toBe(true)
+    expect(heard.told).toEqual({ "SUUUI_SERVICE_CHANGED ownBags", "SUUUI_SERVICE_CHANGED talents", "SUUUI_SERVICE_CHANGED ownBags" })
+    -- (SuuUI's own registry saw none of it)
+    expect(services.get("ownBags")).toBeNil()
+end

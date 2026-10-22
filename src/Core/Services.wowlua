@@ -6,31 +6,63 @@
 -- same services, and every caller reaches it. A module's services go away
 -- when it turns off. Built in: bags, talents, collections, professions,
 -- notifications, alerts (their functions in Docs/API.md).
+--
+-- A service locator: the ServiceRegistry, which tells each change through
+-- a Notifier (SuuUI's event bus: SUUUI_SERVICE_CHANGED). `registry` is
+-- SuuUI's; the module's functions are its methods.
 
 import * as events from "./Events"
 
-type Provider = { impl: { [string]: any }, owner: any }
-
-local providers: { [string]: Provider } = {}
-
-export function provide(name: string, impl: { [string]: any }, owner: any)
-    assert(type(name) == "string", "SuuUI Provide: a service name is required")
-    assert(type(impl) == "table", "SuuUI Provide: a table of functions is required")
-    providers[name] = { impl = impl, owner = owner }
-    events.emit("SUUUI_SERVICE_CHANGED", name)
+-- What hears that a service changed.
+export interface Notifier
+    function emit(name: string, ...: any)
 end
 
--- The service's functions, or nil while nothing provides it.
+-- The message a change is told with.
+export const SERVICE_CHANGED = "SUUUI_SERVICE_CHANGED"
+
+type Provider = { impl: { [string]: any }, owner: any }
+
+export class ServiceRegistry
+    private providers: { [string]: Provider } = {}
+
+    constructor(private notifier: Notifier = events.bus) end
+
+    function provide(name: string, impl: { [string]: any }, owner: any)
+        assert(type(name) == "string", "SuuUI Provide: a service name is required")
+        assert(type(impl) == "table", "SuuUI Provide: a table of functions is required")
+        self.providers[name] = { impl = impl, owner = owner }
+        self.notifier:emit(SERVICE_CHANGED, name)
+    end
+
+    -- The service's functions, or nil while nothing provides it.
+    function get(name: string): { [string]: any }?
+        local p = self.providers[name]
+        return p and p.impl
+    end
+
+    -- Every service `owner` provides gone.
+    function unregister(owner: any)
+        for name, p in pairs(self.providers) do
+            if p.owner == owner then
+                self.providers[name] = nil
+                self.notifier:emit(SERVICE_CHANGED, name)
+            end
+        end
+    end
+end
+
+-- SuuUI's registry, and its methods as the module's functions.
+export const registry = ServiceRegistry.new()
+
+export function provide(name: string, impl: { [string]: any }, owner: any)
+    registry:provide(name, impl, owner)
+end
+
 export function get(name: string): { [string]: any }?
-    local p = providers[name]
-    return p and p.impl
+    return registry:get(name)
 end
 
 export function unregister(owner: any)
-    for name, p in pairs(providers) do
-        if p.owner == owner then
-            providers[name] = nil
-            events.emit("SUUUI_SERVICE_CHANGED", name)
-        end
-    end
+    registry:unregister(owner)
 end

@@ -4,6 +4,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as combat from "/Core/Combat"
 import * as fault from "/Core/Fault"
+import FakeCombat, FakeReporter from "../../fakes"
 
 @afterEach
 local function cleanup()
@@ -105,4 +106,39 @@ local function again()
     expect(combat.pendingCount()).toBe(1)
     mock.player:leaveCombat()
     expect(runs).toBe(2)
+end
+
+--------------------------------------------------------------------------------
+-- A queue of its own: a fight the test runs
+--------------------------------------------------------------------------------
+
+@test("a queue of its own: now out of combat; in a fight the latest request per key runs at its end, in the first's place")
+local function ownQueue()
+    local fight, r = FakeCombat.new(), FakeReporter.new()
+    local q = combat.CombatQueue.new(fight, r)
+    local ran: string[] = {}
+    q:run("a", function() ran[#ran + 1] = "a now" end)
+    expect(ran).toEqual({ "a now" })
+    fight.fighting = true
+    q:run("bar", function() ran[#ran + 1] = "bar 1" end)
+    q:run("other", function() ran[#ran + 1] = "other" end)
+    q:run("bar", function() ran[#ran + 1] = "bar 2" end)
+    expect(q:pendingCount()).toBe(2)
+    expect(#ran).toBe(1)
+    fight:finish()
+    expect(ran).toEqual({ "a now", "bar 2", "other" })
+    expect(q:pendingCount()).toBe(0)
+end
+
+@test("a queue of its own: an error in waiting work reported under its source; the rest still runs")
+local function ownQueueError()
+    local fight, r = FakeCombat.new(), FakeReporter.new()
+    local q = combat.CombatQueue.new(fight, r)
+    fight.fighting = true
+    local ran = false
+    q:run("x", function() error("queue-boom") end, "Bars")
+    q:run("y", function() ran = true end)
+    fight:finish()
+    expect(r.errors).toEqual({ "Bars: queue-boom" })
+    expect(ran).toBe(true)
 end

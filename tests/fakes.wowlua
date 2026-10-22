@@ -7,10 +7,13 @@
 --   FakeDispatcher   events.Dispatcher: keeps registrations, delivers
 --                    synchronously (`send`, `deliver`)
 --   FakeSubscription what the dispatcher hands out: cancel() ends it
+--   FakeCombat       combat.CombatState: `fighting` set by the test,
+--                    end() runs what waited, first queued first
 
 import * as wl from "wowlua:events"
 import * as fault from "/Core/Fault"
 import * as events from "/Core/Events"
+import * as combat from "/Core/Combat"
 
 export class FakeReporter implements fault.Reporter
     errors: string[] = {}
@@ -85,5 +88,26 @@ export class FakeDispatcher implements events.Dispatcher
             if r.sub.active then n += 1 end
         end
         return n
+    end
+end
+
+export class FakeCombat implements combat.CombatState
+    fighting: boolean = false
+    waiting: (() -> ())[] = {}
+
+    function inCombat(): boolean
+        return self.fighting
+    end
+
+    function defer(fn: () -> ())
+        self.waiting[#self.waiting + 1] = fn
+    end
+
+    -- The fight ends: what waited runs, first queued first.
+    function finish()
+        self.fighting = false
+        local list = self.waiting
+        self.waiting = {}
+        for _, fn in ipairs(list) do fn() end
     end
 end
