@@ -8,7 +8,7 @@ import tokens as T from "/Core/Tokens"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
 import * as tooltip from "/UI/Tooltip"
-import microMenu from "/UI/MicroMenu"
+import microMenu, MicroMenu, MenuButton from "/UI/MicroMenu"
 import internal keyOf, pill from "/UI/MicroMenu"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, themeChanged from "./WindowsHelpers"
@@ -24,6 +24,11 @@ mock.module(tooltip, {
 })
 
 local parent: Frame? = nil
+
+-- A button the menu has (an error if it hasn't).
+local function btn(m: MicroMenu, key: string): MenuButton
+    return (assert(m.buttons[key], key))
+end
 
 local function make(name: string?)
     parent = newParent()
@@ -110,7 +115,7 @@ local function layout()
     local pad, gap = S["space-2"], S["space-2"]
     expect(m:GetWidth()).toBe(pad + px + gap + px + pad)
     expect(m:GetHeight()).toBe(px + pad * 2)
-    local char, bags = m.buttons.char, m.buttons.bags
+    local char, bags = btn(m, "char"), btn(m, "bags")
     expect(char:GetName()).toBe("SuuUITestMicroRowchar")
     expect(char).toHaveSize(px, px)
     local _, _, _, x1, y1 = char:GetPoint(1)
@@ -129,7 +134,7 @@ end
 local function secure()
     local m = make()
     m:SetItems({ { key = "char", glyph = "person", label = "Character", click = "CharacterMicroButton" } })
-    local b = m.buttons.char
+    local b = btn(m, "char")
     expect(b:GetAttribute("type")).toBe("click")
     expect(b:GetAttribute("clickbutton")).toBe(CharacterMicroButton)
     expect(b:GetName()).toBeNil()
@@ -141,9 +146,9 @@ local function secureClick()
     m:SetItems({ { key = "char", glyph = "person", label = "Character", click = "CharacterMicroButton" } })
     -- (the click the key-down CVar acts on: mock.click sends only the up
     -- click; see the notes)
-    mock.script(m.buttons.char, "OnClick", "LeftButton", true)
+    mock.script(btn(m, "char"), "OnClick", "LeftButton", true)
     expect(CharacterFrame).toBeShown()
-    mock.script(m.buttons.char, "OnClick", "LeftButton", true)
+    mock.script(btn(m, "char"), "OnClick", "LeftButton", true)
     expect(CharacterFrame).never.toBeShown()
 end
 
@@ -152,8 +157,8 @@ local function plain()
     local m = make()
     local onClick = mock.spy()
     m:SetItems({ { key = "bags", glyph = "bag", label = "Bags", onClick = onClick }, { key = "none", glyph = "bag", label = "None" } })
-    expect(m.buttons.bags:GetAttribute("type")).toBeNil()
-    mock.click(m.buttons.bags)
+    expect(btn(m, "bags"):GetAttribute("type")).toBeNil()
+    mock.click(btn(m, "bags"))
     expect(onClick).toHaveBeenCalledTimes(1)
     -- neither click nor onClick: a click does nothing
     mock.click(m.buttons.none)
@@ -163,11 +168,11 @@ end
 local function again()
     local m = make()
     m:SetItems({ { key = "a", glyph = "bag", label = "A" }, { key = "b", glyph = "bag", label = "B" } })
-    local a = m.buttons.a
+    local a = btn(m, "a")
     m:SetItems({ { key = "a", glyph = "bag", label = "A" } })
-    expect(m.buttons.a).toBe(a)
+    expect(btn(m, "a")).toBe(a)
     expect(a).toBeShown()
-    expect(m.buttons.b).never.toBeShown()
+    expect(btn(m, "b")).never.toBeShown()
     m:SetItems({})
     expect(a).never.toBeShown()
     expect(m:GetWidth()).toBe(S["space-2"])
@@ -189,7 +194,7 @@ local function hovering()
     blizzardButton("SuuUITestMicroChar", "Character Info |cffffd200(C)|r")
     m:SetItems({ { key = "char", glyph = "person", label = "Character", click = "SuuUITestMicroChar" },
         { key = "bags", glyph = "bag", label = "Bags", onClick = function() end } })
-    local b = m.buttons.char
+    local b = btn(m, "char")
     mock.hover(b)
     expect(b.hover).toBeShown()
     expect(b.edge.top).toBeShown()
@@ -197,21 +202,21 @@ local function hovering()
     -- lines and an alert's text join it
     m:SetLines("bags", { { "Free", "12" } })
     m:SetAlert("bags", "Your bags are full")
-    mock.hover(m.buttons.bags)
-    expect(showSpy).toHaveBeenCalledWith(m.buttons.bags, { title = "Bags", lines = { { "Free", "12" } }, maxWidth = 320,
+    mock.hover(btn(m, "bags"))
+    expect(showSpy).toHaveBeenCalledWith(btn(m, "bags"), { title = "Bags", lines = { { "Free", "12" } }, maxWidth = 320,
         description = "Your bags are full" })
     expect(b.hover).never.toBeShown()
     expect(b.edge.top).never.toBeShown()
     expect(hideSpy).toHaveBeenCalled()
     m:SetLines("bags", nil)
-    expect(m.buttons.bags.lines).toBeNil()
+    expect(btn(m, "bags").lines).toBeNil()
 end
 
 @test("pressing moves the glyph a pixel down, letting go back")
 local function pressing()
     local m = make()
     m:SetItems({ { key = "a", glyph = "bag", label = "A" } })
-    local b = m.buttons.a
+    local b = btn(m, "a")
     mock.script(b, "OnMouseDown", "LeftButton")
     local _, _, _, _, y = b.glyph:GetPoint(1)
     expect(y).toBe(-1)
@@ -224,7 +229,7 @@ end
 local function active()
     local m = make()
     m:SetItems({ { key = "a", glyph = "bag", label = "A" } })
-    local b = m.buttons.a
+    local b = btn(m, "a")
     m:SetActive("a", true)
     expect(b.active).toBe(true)
     expect(b.hover).toBeShown()
@@ -246,7 +251,7 @@ local function activeHovered()
     local m = make()
     m:SetPoint("CENTER") -- (placed: the mouse is measured against it)
     m:SetItems({ { key = "a", glyph = "bag", label = "A" } })
-    local b = m.buttons.a
+    local b = btn(m, "a")
     mock.hover(b)
     m:SetActive("a", false)
     m:SetActive("a", true)
@@ -263,7 +268,7 @@ end
 local function alerts()
     local m = make()
     m:SetItems({ { key = "a", glyph = "bag", label = "A" } })
-    local b = m.buttons.a
+    local b = btn(m, "a")
     m:SetAlert("a", "Something to do")
     expect(b.alert).toBeShown()
     expect(b.alertText).toBe("Something to do")
@@ -279,7 +284,7 @@ end
 local function counts()
     local m = make()
     m:SetItems({ { key = "bags", glyph = "bag", label = "Bags" } })
-    local b = m.buttons.bags
+    local b = btn(m, "bags")
     m:SetCount("bags", "12")
     expect(b.badge).toBeShown()
     expect(b.count:GetText()).toBe("12")
@@ -304,7 +309,7 @@ end
 local function theme()
     local m = make()
     m:SetItems({ { key = "bags", glyph = "bag", label = "Bags" } })
-    local b = m.buttons.bags
+    local b = btn(m, "bags")
     m:SetCount("bags", "12")
     b.badge:SetWidth(99)
     themeChanged()

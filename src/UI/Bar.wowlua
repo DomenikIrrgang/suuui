@@ -25,56 +25,9 @@ export type StatusBarOptions = {
     ghost?: boolean,
 }
 
-export interface Bar extends Frame
-    track: Texture
-    border?: draw.Border
-    bar: StatusBar
-    ghost?: StatusBar
-    ghostTarget: any
-    ghostTimer?: TimerHandle
-    function SetFill(fill: string, deep: string?)
-    function SetMinMax(min: any, max: any)
-    function SetValue(v: any)
-    function SetValueNow(v: any)
-end
-
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local HOLD = 0.15
 local INTERPOLATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
-
-local Bar: Bar = {} :: any
-function Bar:SetFill(fill: string, deep: string?)
-    draw.paintGradient(self.bar:GetStatusBarTexture(), "HORIZONTAL", deep or fill, fill)
-end
-
-function Bar:SetMinMax(min: any, max: any)
-    self.bar:SetMinMaxValues(min, max)
-    if self.ghost then self.ghost:SetMinMaxValues(min, max) end
-end
-
-function Bar:SetValue(v: any)
-    self.bar:SetValue(v)
-    local ghost = self.ghost
-    if not ghost then return end
-    self.ghostTarget = v
-    if not self.ghostTimer then
-        self.ghostTimer = after(HOLD, function()
-            self.ghostTimer = nil
-            ghost:SetValue(self.ghostTarget, INTERPOLATE)
-        end)
-    end
-end
-
--- Sets the value with no ghost, e.g. when the bar switches unit.
-function Bar:SetValueNow(v: any)
-    self.bar:SetValue(v)
-    local ghost = self.ghost
-    if ghost then
-        local timer = self.ghostTimer
-        if timer then timer:Cancel() self.ghostTimer = nil end
-        ghost:SetValue(v)
-    end
-end
 
 local function makeBar(parent: Frame, color: string?): StatusBar
     local b = CreateFrame("StatusBar", nil, parent)
@@ -86,27 +39,72 @@ local function makeBar(parent: Frame, color: string?): StatusBar
     return b
 end
 
-export function statusBar(parent: Frame, opts: StatusBarOptions?): Bar
-    opts = opts or {}
-    local f: Bar = CreateFrame("Frame", nil, parent) :: any
-    Mixin(f, Bar)
-    f:SetSize(draw.size(opts.width or "bar-lg"), draw.size(opts.height or "unit-lg"))
-    f.track = draw.fill(f, opts.track or "surface-sunk")
-    f.track:SetAllPoints()
-    if opts.border ~= false then f.border = draw.border(f, opts.border or "gilt-hairline", { layer = "OVERLAY" }) end
-    local inset = opts.border ~= false and 1 or 0
-    local ghost: StatusBar? = nil
-    if opts.ghost then
-        ghost = makeBar(f, "ghost")
-        ghost:SetPoint("TOPLEFT", inset, -inset)
-        ghost:SetPoint("BOTTOMRIGHT", -inset, inset)
-        f.ghost = ghost
+-- (a widget class: its methods are on each bar; Raw.Mixins.Bar is the class)
+export class Bar extends Frame
+    track: Texture
+    border?: draw.Border
+    bar: StatusBar
+    ghost?: StatusBar
+    ghostTarget: any = nil
+    ghostTimer?: TimerHandle
+
+    constructor(parent: Frame, opts: StatusBarOptions?)
+        super(nil, parent)
+        local o: StatusBarOptions = opts or {}
+        self:SetSize(draw.size(o.width or "bar-lg"), draw.size(o.height or "unit-lg"))
+        self.track = draw.fill(self, o.track or "surface-sunk")
+        self.track:SetAllPoints()
+        if o.border ~= false then self.border = draw.border(self, o.border or "gilt-hairline", { layer = "OVERLAY" }) end
+        local inset = o.border ~= false and 1 or 0
+        local ghost: StatusBar? = nil
+        if o.ghost then
+            ghost = makeBar(self, "ghost")
+            ghost:SetPoint("TOPLEFT", inset, -inset)
+            ghost:SetPoint("BOTTOMRIGHT", -inset, inset)
+            self.ghost = ghost
+        end
+        self.bar = makeBar(self)
+        self.bar:SetPoint("TOPLEFT", inset, -inset)
+        self.bar:SetPoint("BOTTOMRIGHT", -inset, inset)
+        self.bar:SetFrameLevel(self:GetFrameLevel() + 2)
+        if ghost then ghost:SetFrameLevel(self:GetFrameLevel() + 1) end
+        self:SetFill(o.fill or "unit-fill", o.deep or (o.fill == nil and "unit-fill-deep") or nil)
     end
-    f.bar = makeBar(f)
-    f.bar:SetPoint("TOPLEFT", inset, -inset)
-    f.bar:SetPoint("BOTTOMRIGHT", -inset, inset)
-    f.bar:SetFrameLevel(f:GetFrameLevel() + 2)
-    if ghost then ghost:SetFrameLevel(f:GetFrameLevel() + 1) end
-    f:SetFill(opts.fill or "unit-fill", opts.deep or (opts.fill == nil and "unit-fill-deep") or nil)
-    return f
+
+    function SetFill(fill: string, deep: string?)
+        draw.paintGradient(self.bar:GetStatusBarTexture(), "HORIZONTAL", deep or fill, fill)
+    end
+
+    function SetMinMax(min: any, max: any)
+        self.bar:SetMinMaxValues(min, max)
+        if self.ghost then self.ghost:SetMinMaxValues(min, max) end
+    end
+
+    function SetValue(v: any)
+        self.bar:SetValue(v)
+        local ghost = self.ghost
+        if not ghost then return end
+        self.ghostTarget = v
+        if not self.ghostTimer then
+            self.ghostTimer = after(HOLD, function()
+                self.ghostTimer = nil
+                ghost:SetValue(self.ghostTarget, INTERPOLATE)
+            end)
+        end
+    end
+
+    -- Sets the value with no ghost, e.g. when the bar switches unit.
+    function SetValueNow(v: any)
+        self.bar:SetValue(v)
+        local ghost = self.ghost
+        if ghost then
+            local timer = self.ghostTimer
+            if timer then timer:Cancel() self.ghostTimer = nil end
+            ghost:SetValue(v)
+        end
+    end
+end
+
+export function statusBar(parent: Frame, opts: StatusBarOptions?): Bar
+    return Bar.new(parent, opts)
 end
