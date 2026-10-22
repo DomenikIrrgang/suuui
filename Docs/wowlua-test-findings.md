@@ -65,7 +65,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V8](#v8) | VM | low | fixed 0.9.3 | `IsIgnoringParentAlpha()` stays false after `SetIgnoreParentAlpha(true)` |
 | [V9](#v9) | VM | low | fixed 0.9.3 | The width of secret text reads as a plain number |
 | [V10](#v10) | VM | low | open | A frame never anchored lays its children out against the screen |
-| [V11](#v11) | VM | low | open | *Unverified:* a Blizzard menu's submenu doesn't open on hover |
+| [V11](#v11) | VM | low | not a bug | *Unverified:* a Blizzard menu's submenu doesn't open on hover |
 | [R14](#r14) | mock | medium | fixed after 0.9.6 (T264) | `mock.drag` runs no frame between `OnDragStart` and `OnDragStop` |
 | [R15](#r15) | mock | low | fixed after 0.9.6 (T261) | No "any value" matcher for `toHaveBeenCalledWith` |
 | [R16](#r16) | mock | low | open | Long event payloads have no defaults |
@@ -631,7 +631,10 @@ the game a frame without anchors has no rect, nor do its children. (ui-units)
 
 ### V11. *Unverified:* a Blizzard menu's submenu doesn't open on hover
 
-*Status: open.*
+*Status: not a bug.* The menu's hover timer is an `OnUpdate`, and
+`mock.advanceTime` runs no frames: `mock.hover(row)` then
+`mock.advanceFrames(30)` opens it (with `IsMouseOver` measuring the
+cursor since T257). Reskin's test opens it that way now.
 
 Neither `mock.hover(row)` nor `mock.script(row, "OnEnter")` with
 `mock.advanceTime(0.5)` opened a submenu; `description:ForceOpenSubmenu()`
