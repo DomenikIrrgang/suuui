@@ -66,8 +66,6 @@ local DIFFICULTY: { [string]: string } = {
     difficult = "quest-difficult", standard = "quest-standard", trivial = "quest-trivial",
 }
 
-local Tracker: { [string]: any } = {}
-mixins.ObjectiveTracker = Tracker
 export const TRACKER_HEAD_H = HEAD_H
 
 -- A diamond bullet: 4px, turned 45°, 3px either side.
@@ -131,69 +129,6 @@ local function questRow(t: any): any
     return r
 end
 
--- One quest drawn into its row; the row's natural height.
-function Tracker:DrawQuest(r: any, q: any): number
-    r.quest = q
-    r.title:SetValue(q.title or "")
-    r.title:SetColor(q.color or DIFFICULTY[q.difficulty or "standard"] or "quest-standard")
-    local titleHeight, lineHeight = titleH(), lineH()
-    r.icon:SetShown(q.icon ~= nil)
-    if q.icon then
-        r.icon:SetArt(q.icon)
-        r.icon:SetPoint("TOPLEFT", 0, -(titleHeight - ICON) / 2)
-    end
-    r.count:SetValue(q.count or "")
-    r.title:ClearAllPoints()
-    r.title:SetPoint("TOPLEFT", q.icon and (ICON + S["space-3"]) or 0, 0)
-    if q.count and q.count ~= "" then
-        r.title:SetPoint("TOPRIGHT", r.count, "TOPLEFT", -S["space-3"], 0)
-    else
-        r.title:SetPoint("TOPRIGHT")
-    end
-    local w = self.contentWidth or self.width
-    local y = titleHeight + S["space-1"]
-    for _, l in ipairs(r.lines) do l:Hide() end
-    if q.complete or q.failed then
-        r.done:ClearAllPoints()
-        r.done:SetPoint("TOPLEFT", 0, -y)
-        r.done:SetPoint("TOPRIGHT", 0, -y)
-        r.done:SetHeight(lineHeight)
-        r.done.check:SetShown(not q.failed)
-        r.done.text:SetColor(q.failed and "ember-text" or "arcane")
-        r.done.text:ClearAllPoints()
-        if q.failed then r.done.text:SetPoint("LEFT", INDENT, 0)
-        else r.done.text:SetPoint("LEFT", r.done.check, "RIGHT", S["space-2"], 0) end
-        r.done.text:SetValue(q.failed and "Failed" or (q.turnIn or "Ready to turn in"))
-        r.done:Show()
-        y = y + lineHeight
-    else
-        r.done:Hide()
-        for i, o in ipairs(q.objectives or {}) do
-            local l = r.lines[i] or objectiveLine(r)
-            r.lines[i] = l
-            l.bullet:SetShown(not o.done)
-            l.bullet:SetPoint("TOPLEFT", 3, -(lineHeight - 4) / 2)
-            l.check:SetShown(o.done and true or false)
-            l.check:SetPoint("TOPLEFT", -1, -(lineHeight - 11) / 2)
-            l.text:SetColor(o.done and "ink-muted" or "ink")
-            l.count:SetColor(o.done and "ink-muted" or "ink")
-            l.count:SetValue(o.progress or "")
-            local countW = (o.progress and o.progress ~= "") and (l.count:GetUnboundedStringWidth() + S["space-3"]) or 0
-            local textW = w - INDENT - 10 - S["space-3"] - countW
-            l.text:SetWidth(textW)
-            l.text:SetValue(o.text or "")
-            local h = math.max(lineHeight, math.ceil(l.text:GetStringHeight()))
-            l:ClearAllPoints()
-            l:SetPoint("TOPLEFT", INDENT, -y)
-            l:SetSize(w - INDENT, h)
-            l:Show()
-            y = y + h + 1
-        end
-    end
-    r.preview:SetShown(q.item and q.item.preview and true or false)
-    if q.item and q.item.preview then r.preview:SetArt(q.item.icon) end
-    return y
-end
 
 -- A zone's heading over its quests: caption in gilt-text, a gilt-line
 -- hairline fading out after it.
@@ -238,12 +173,6 @@ local function sectionRow(t: any): any
     return h
 end
 
--- The recipes section (shown after the quests): t:SetRecipes(list, collapsed, meta)
-function Tracker:SetRecipes(list: any, collapsed: any, meta: string?)
-    self.recipes = list or {}
-    self.recipesCollapsed = collapsed and true or false
-    self.recipesMeta = meta
-end
 
 type Entry = { zone?: string, id?: any, section?: string, recipe?: any }
 
@@ -264,247 +193,20 @@ end
 -- While the quests scroll they make room for the thumb at the right edge.
 local GUTTER = S["space-5"] + 1
 
-function Tracker:SetQuests(quests: any, freeze: any)
-    if freeze and self.contentWidth then
-        -- frozen: the width stays too
-        self:LayOut(quests, freeze)
-    else
-        self.contentWidth = self.width
-        self:LayOut(quests, freeze)
-        if self.maxHeight and (self.listHeight or 0) > self:ViewHeight() then
-            self.contentWidth = self.width - GUTTER
-            self:LayOut(quests, freeze)
-        end
-    end
-    self.list:SetWidth(self.contentWidth)
-    self:Fit()
-    self:ApplyScroll()
-end
 
-function Tracker:LayOut(quests: any, freeze: any)
-    quests = quests or {}
-    local byID: { [any]: any } = {}
-    for _, q in ipairs(quests) do byID[q.questID] = q end
-    -- the entries: as given, or (frozen) the last ones with new quests after
-    local entries: Entry[]
-    if freeze and self.entries then
-        entries = {}
-        local seen: { [any]: boolean }, last: string? = {}, nil
-        for _, e in ipairs(self.entries) do
-            entries[#entries + 1] = e
-            if e.id then seen[e.id] = true end
-            last = e.zone
-        end
-        for _, q in ipairs(quests) do
-            if not seen[q.questID] then
-                if q.zone and q.zone ~= last then entries[#entries + 1] = { zone = q.zone }; last = q.zone end
-                entries[#entries + 1] = { id = q.questID, zone = q.zone }
-            end
-        end
-    else
-        entries = entriesOf(quests)
-        self.heights = {}
-    end
-    -- the recipes after the quests (frozen too: they sit below every quest);
-    -- the quests folded away: only the recipes
-    local kept: Entry[] = {}
-    for _, e in ipairs(entries) do
-        if not (e.section or e.recipe) and not self.questsCollapsed then kept[#kept + 1] = e end
-    end
-    entries = kept
-    local byRecipe: { [any]: any } = {}
-    if self.recipes and #self.recipes > 0 then
-        entries[#entries + 1] = { section = "recipes" }
-        if not self.recipesCollapsed then
-            for _, rcp in ipairs(self.recipes) do
-                byRecipe[rcp.questID] = rcp
-                entries[#entries + 1] = { recipe = rcp.questID }
-            end
-        end
-    end
-    self.entries = entries
-    for _, r in ipairs(self.rows) do r.inUse = false end
-    for _, z in ipairs(self.zoneRows) do z.inUse = false end
-    for _, h in ipairs(self.sectionRows) do h.inUse = false end
-    self.tops = {}
-    local y: number, prev: string? = 0, nil
-    local nQuest, nZone, nSection = 0, 0, 0
-    for _, e in ipairs(entries) do
-        if e.section then
-            nSection = nSection + 1
-            local h = self.sectionRows[nSection] or sectionRow(self)
-            self.sectionRows[nSection] = h
-            -- space-6 over a section after the quests
-            if prev then y = y + S["space-6"] end
-            h.key = e.section
-            h.label:SetValue("Recipes")
-            h.meta:SetValue(self.recipesMeta or "")
-            h.plus:SetShown(self.recipesCollapsed)
-            h.minus:SetShown(not self.recipesCollapsed)
-            h:SetWidth(self.contentWidth)
-            h.top, h.height, h.inUse = y, HEAD_H, true
-            y = y + HEAD_H
-            prev = "section"
-        elseif e.recipe then
-            nQuest = nQuest + 1
-            local r = self.rows[nQuest] or questRow(self)
-            self.rows[nQuest] = r
-            local rcp = byRecipe[e.recipe]
-            rcp.recipe = true
-            local h = self:DrawQuest(r, rcp)
-            if prev == "quest" then y = y + S["space-4"] elseif prev == "section" then y = y + S["space-4"] end
-            r.top, r.height, r.inUse = y, h, true
-            r:SetSize(self.contentWidth, math.max(1, h))
-            y = y + h
-            prev = "quest"
-        elseif e.id then
-            nQuest = nQuest + 1
-            local r = self.rows[nQuest] or questRow(self)
-            self.rows[nQuest] = r
-            local q = byID[e.id]
-            local h = q and self:DrawQuest(r, q) or 0
-            if freeze then h = math.max(h, self.heights[e.id] or 0) end
-            -- space-4 between quests, space-2 under a zone's heading
-            if prev == "quest" then y = y + S["space-4"] elseif prev == "zone" then y = y + S["space-2"] end
-            self.heights[e.id] = h
-            self.tops[e.id] = y
-            r.top, r.height, r.inUse = y, h, q ~= nil
-            r:SetSize(self.contentWidth, math.max(1, h))
-            y = y + h
-            prev = "quest"
-        else
-            nZone = nZone + 1
-            local z = self.zoneRows[nZone] or zoneRow(self)
-            self.zoneRows[nZone] = z
-            -- space-5 over a zone's heading after the one before
-            if prev then y = y + S["space-5"] end
-            z.text:SetValue(e.zone)
-            z:SetSize(self.contentWidth, lineH())
-            z.top, z.height, z.inUse = y, lineH(), true
-            y = y + lineH()
-            prev = "zone"
-        end
-    end
-    self.listHeight = y
-    self.list:SetHeight(math.max(1, y))
-end
 
--- The quests' window: maxHeight less the head (all of them without one).
-function Tracker:ViewHeight()
-    if not self.maxHeight then return self.listHeight or 0 end
-    return math.max(lineH(), self.maxHeight - HEAD_H - S["space-4"])
-end
 
-function Tracker:ScrollBy(px: number)
-    if self.scrollLocked then return end
-    self:SetScroll((self.scroll or 0) + px)
-end
 
-function Tracker:SetScroll(v: number)
-    local max = math.max(0, (self.listHeight or 0) - self:ViewHeight())
-    v = math.max(0, math.min(max, math.floor(v + 0.5)))
-    if v == self.scroll then return end
-    self.scroll = v
-    self:ApplyScroll()
-    if self.onScroll then self.onScroll() end
-end
 
--- In combat with secure item buttons beside the titles: the list stays put.
-function Tracker:SetScrollLocked(on: any)
-    self.scrollLocked = on and true or false
-end
 
--- The rows in the window shown, the rest hidden (so nothing out of sight
--- takes a click); the thumb at the right edge while there's more.
-function Tracker:ApplyScroll()
-    local view = self:ViewHeight()
-    local max = math.max(0, (self.listHeight or 0) - view)
-    self.scroll = math.max(0, math.min(max, self.scroll or 0))
-    local scroll = self.scroll
-    for _, pool in ipairs({ self.rows, self.zoneRows, self.sectionRows }) do
-        for _, r in ipairs(pool) do
-            local visible = r.inUse and (r.top + r.height > scroll) and (r.top < scroll + view)
-            if visible then
-                r:ClearAllPoints()
-                r:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -(r.top - scroll))
-                r:Show()
-            else
-                r:Hide()
-            end
-        end
-    end
-    if max > 0 then
-        local trackH = view
-        local thumbH = math.max(16, trackH * view / (self.listHeight or 1))
-        self.thumb:ClearAllPoints()
-        -- at the tracker's right edge, the quests GUTTER clear of it
-        self.thumb:SetPoint("TOPRIGHT", self.list, "TOPLEFT", self.width, -((trackH - thumbH) * scroll / max))
-        self.thumb:SetHeight(thumbH)
-        self.thumb:Show()
-    else
-        self.thumb:Hide()
-    end
-end
 
--- Where a quest's title starts, down from the tracker's top (nil: not shown).
-function Tracker:QuestTop(questID: any): number?
-    local top = self.tops and self.tops[questID]
-    if not top then return nil end
-    top = top - (self.scroll or 0)
-    -- the title scrolled out of the window (its item, 24px from 2px over the
-    -- title, would hang past the window's bottom)
-    if top < 0 or top - 2 + 24 > self:ViewHeight() then return nil end
-    return HEAD_H + S["space-4"] + top
-end
 
-function Tracker:SetMeta(text: string?)
-    self.meta:SetValue(text or "")
-    self.rule:ClearAllPoints()
-    self.rule:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
-    if text and text ~= "" then
-        self.rule:SetPoint("RIGHT", self.meta, "LEFT", -S["space-3"], 0)
-    else
-        self.rule:SetPoint("RIGHT", self.head, "RIGHT")
-    end
-end
 
-function Tracker:SetTitle(text: string?)
-    self.label:SetValue(text or "Quests")
-end
 
-function Tracker:SetCollapsed(on: any)
-    self.collapsed = on and true or false
-    self.list:SetShown(not self.collapsed)
-    self:DrawToggle()
-    self:Fit()
-end
 
--- 0.13: only the quests folded away; the sections after them (Recipes)
--- stay (asked for in game). Takes effect with the next SetQuests.
-function Tracker:SetQuestsCollapsed(on: any)
-    self.questsCollapsed = on and true or false
-    self:DrawToggle()
-end
 
-function Tracker:DrawToggle()
-    local folded = self.collapsed or self.questsCollapsed
-    self.plus:SetShown(folded and true or false)
-    self.minus:SetShown(not folded)
-end
 
-function Tracker:Fit()
-    local h = HEAD_H
-    local list = math.min(self.listHeight or 0, self:ViewHeight())
-    if not self.collapsed and list > 0 then h = h + S["space-4"] + list end
-    self.clip:SetHeight(math.max(1, list))
-    self:SetHeight(h)
-end
 
-function Tracker:SetMaxHeight(h: number?)
-    self.maxHeight = h
-    self:Fit()
-    self:ApplyScroll()
-end
 
 -- The toggle's look (the toggle itself may be a secure button the owner
 -- made: t.toggle).
@@ -515,70 +217,416 @@ local function toggleArt(b: any)
     b:HookScript("OnLeave", function(self) self.edge:SetColor("gilt-line") end)
 end
 
-export function objectiveTracker(parent: any, opts: { [string]: any }?): any
-    opts = opts or {}
-    local t: any = CreateFrame("Frame", opts.name, parent)
-    Mixin(t, Tracker)
-    t.width = opts.width or 260
-    t.maxHeight = opts.maxHeight
-    t:SetSize(t.width, HEAD_H)
-    t.rows = {}
-    t.zoneRows = {}
-    t.sectionRows = {}
-    t.heights = {}
+export class ObjectiveTracker extends Frame
+    width: any
+    maxHeight: any
+    rows: any
+    zoneRows: any
+    sectionRows: any
+    heights: any
+    head: Frame
+    toggle: any
+    plus: any
+    minus: any
+    label: any
+    meta: any
+    rule: any
+    clip: Frame
+    list: Frame
+    thumb: Texture
+    scroll: number
+    recipes: any = nil
+    recipesCollapsed: any = nil
+    recipesMeta: any = nil
+    contentWidth: any = nil
+    entries: any = nil
+    tops: any = nil
+    listHeight: any = nil
+    scrollLocked: any = nil
+    collapsed: any = nil
+    questsCollapsed: any = nil
 
-    t.head = CreateFrame("Frame", nil, t)
-    t.head:SetPoint("TOPLEFT")
-    t.head:SetPoint("TOPRIGHT")
-    t.head:SetHeight(HEAD_H)
-    -- the toggle: a plain button, or the owner's (a secure one, placed by
-    -- the owner over the head's left end: anchored into the tracker, which
-    -- changes height in combat, it would lock the tracker's layout)
-    local toggle = opts.toggle
-    if not toggle then
-        toggle = CreateFrame("Button", nil, t.head)
-        toggle:SetPoint("LEFT")
-        toggle:SetScript("OnClick", function() if t.onToggle then t.onToggle() end end)
+    constructor(parent: any, opts: { [string]: any }?)
+        opts = opts or {}
+        super(opts.name, parent)
+        self.width = opts.width or 260
+        self.maxHeight = opts.maxHeight
+        self:SetSize(self.width, HEAD_H)
+        self.rows = {}
+        self.zoneRows = {}
+        self.sectionRows = {}
+        self.heights = {}
+
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT")
+        self.head:SetPoint("TOPRIGHT")
+        self.head:SetHeight(HEAD_H)
+        -- the toggle: a plain button, or the owner's (a secure one, placed by
+        -- the owner over the head's left end: anchored into the tracker, which
+        -- changes height in combat, it would lock the tracker's layout)
+        local toggle = opts.toggle
+        if not toggle then
+            toggle = CreateFrame("Button", nil, self.head)
+            toggle:SetPoint("LEFT")
+            toggle:SetScript("OnClick", function() if self.onToggle then self.onToggle() end end)
+        end
+        toggle:SetSize(HEAD_H, HEAD_H)
+        toggleArt(toggle)
+        self.toggle = toggle
+        self.plus = inputs.plus(toggle, "gilt-text")
+        self.plus:SetPoint("CENTER")
+        self.minus = inputs.minus(toggle, "gilt-text")
+        self.minus:SetPoint("CENTER")
+        self.plus:Hide()
+        self.label = uiText.text(self.head, "header", "gilt-text")
+        self.label:SetShadowed(true)
+        self.label:SetPoint("LEFT", self.head, "LEFT", HEAD_H + S["space-3"], 0)
+        self.meta = uiText.text(self.head, "caption", "ink-muted")
+        self.meta:SetShadowed(true)
+        self.meta:SetPoint("RIGHT")
+        self.rule = draw.hairline(self.head, "gilt-line", "out")
+
+        -- the quests' window: clips them (wide enough on the left for the
+        -- preview's item icons beside the titles)
+        local itemRoom = draw.size("icon-md") + S["space-3"] + 2
+        self.clip = CreateFrame("Frame", nil, self)
+        self.clip:SetPoint("TOPLEFT", -itemRoom, -(HEAD_H + S["space-4"]))
+        self.clip:SetPoint("TOPRIGHT", S["space-3"], -(HEAD_H + S["space-4"]))
+        self.clip:SetHeight(1)
+        self.clip:SetClipsChildren(true)
+        self.list = CreateFrame("Frame", nil, self.clip)
+        self.list:SetPoint("TOPLEFT", itemRoom, 0)
+        self.list:SetWidth(self.width)
+        self.list:SetHeight(1)
+        -- where the window is in the list: a gilt-line thumb, 1px, right of the quests
+        self.thumb = self.clip:CreateTexture(nil, "OVERLAY")
+        draw.paintFill(self.thumb, "gilt-line")
+        self.thumb:SetWidth(1)
+        self.thumb:Hide()
+        self.scroll = 0
+        self:SetTitle(opts.title)
+        self:SetMeta(opts.meta)
+        self:EnableMouseWheel(true)
+        self:SetScript("OnMouseWheel", function(_: Frame, delta: number) self:ScrollBy(-delta * (titleH() + lineH() * 2)) end)
+        self:SetCollapsed(false)
+        extend.add(extend.Kind.Tracker, self, {})
     end
-    toggle:SetSize(HEAD_H, HEAD_H)
-    toggleArt(toggle)
-    t.toggle = toggle
-    t.plus = inputs.plus(toggle, "gilt-text")
-    t.plus:SetPoint("CENTER")
-    t.minus = inputs.minus(toggle, "gilt-text")
-    t.minus:SetPoint("CENTER")
-    t.plus:Hide()
-    t.label = uiText.text(t.head, "header", "gilt-text")
-    t.label:SetShadowed(true)
-    t.label:SetPoint("LEFT", t.head, "LEFT", HEAD_H + S["space-3"], 0)
-    t.meta = uiText.text(t.head, "caption", "ink-muted")
-    t.meta:SetShadowed(true)
-    t.meta:SetPoint("RIGHT")
-    t.rule = draw.hairline(t.head, "gilt-line", "out")
-    t:SetTitle(opts.title)
-    t:SetMeta(opts.meta)
 
-    -- the quests' window: clips them (wide enough on the left for the
-    -- preview's item icons beside the titles)
-    local itemRoom = draw.size("icon-md") + S["space-3"] + 2
-    t.clip = CreateFrame("Frame", nil, t)
-    t.clip:SetPoint("TOPLEFT", -itemRoom, -(HEAD_H + S["space-4"]))
-    t.clip:SetPoint("TOPRIGHT", S["space-3"], -(HEAD_H + S["space-4"]))
-    t.clip:SetHeight(1)
-    t.clip:SetClipsChildren(true)
-    t.list = CreateFrame("Frame", nil, t.clip)
-    t.list:SetPoint("TOPLEFT", itemRoom, 0)
-    t.list:SetWidth(t.width)
-    t.list:SetHeight(1)
-    -- where the window is in the list: a gilt-line thumb, 1px, right of the quests
-    t.thumb = t.clip:CreateTexture(nil, "OVERLAY")
-    draw.paintFill(t.thumb, "gilt-line")
-    t.thumb:SetWidth(1)
-    t.thumb:Hide()
-    t.scroll = 0
-    t:EnableMouseWheel(true)
-    t:SetScript("OnMouseWheel", function(self, delta) self:ScrollBy(-delta * (titleH() + lineH() * 2)) end)
-    t:SetCollapsed(false)
-    extend.add(extend.Kind.Tracker, t, {})
-    return t
+    -- One quest drawn into its row; the row's natural height.
+    function DrawQuest(r: any, q: any): number
+        r.quest = q
+        r.title:SetValue(q.title or "")
+        r.title:SetColor(q.color or DIFFICULTY[q.difficulty or "standard"] or "quest-standard")
+        local titleHeight, lineHeight = titleH(), lineH()
+        r.icon:SetShown(q.icon ~= nil)
+        if q.icon then
+            r.icon:SetArt(q.icon)
+            r.icon:SetPoint("TOPLEFT", 0, -(titleHeight - ICON) / 2)
+        end
+        r.count:SetValue(q.count or "")
+        r.title:ClearAllPoints()
+        r.title:SetPoint("TOPLEFT", q.icon and (ICON + S["space-3"]) or 0, 0)
+        if q.count and q.count ~= "" then
+            r.title:SetPoint("TOPRIGHT", r.count, "TOPLEFT", -S["space-3"], 0)
+        else
+            r.title:SetPoint("TOPRIGHT")
+        end
+        local w = self.contentWidth or self.width
+        local y = titleHeight + S["space-1"]
+        for _, l in ipairs(r.lines) do l:Hide() end
+        if q.complete or q.failed then
+            r.done:ClearAllPoints()
+            r.done:SetPoint("TOPLEFT", 0, -y)
+            r.done:SetPoint("TOPRIGHT", 0, -y)
+            r.done:SetHeight(lineHeight)
+            r.done.check:SetShown(not q.failed)
+            r.done.text:SetColor(q.failed and "ember-text" or "arcane")
+            r.done.text:ClearAllPoints()
+            if q.failed then r.done.text:SetPoint("LEFT", INDENT, 0)
+            else r.done.text:SetPoint("LEFT", r.done.check, "RIGHT", S["space-2"], 0) end
+            r.done.text:SetValue(q.failed and "Failed" or (q.turnIn or "Ready to turn in"))
+            r.done:Show()
+            y = y + lineHeight
+        else
+            r.done:Hide()
+            for i, o in ipairs(q.objectives or {}) do
+                local l = r.lines[i] or objectiveLine(r)
+                r.lines[i] = l
+                l.bullet:SetShown(not o.done)
+                l.bullet:SetPoint("TOPLEFT", 3, -(lineHeight - 4) / 2)
+                l.check:SetShown(o.done and true or false)
+                l.check:SetPoint("TOPLEFT", -1, -(lineHeight - 11) / 2)
+                l.text:SetColor(o.done and "ink-muted" or "ink")
+                l.count:SetColor(o.done and "ink-muted" or "ink")
+                l.count:SetValue(o.progress or "")
+                local countW = (o.progress and o.progress ~= "") and (l.count:GetUnboundedStringWidth() + S["space-3"]) or 0
+                local textW = w - INDENT - 10 - S["space-3"] - countW
+                l.text:SetWidth(textW)
+                l.text:SetValue(o.text or "")
+                local h = math.max(lineHeight, math.ceil(l.text:GetStringHeight()))
+                l:ClearAllPoints()
+                l:SetPoint("TOPLEFT", INDENT, -y)
+                l:SetSize(w - INDENT, h)
+                l:Show()
+                y = y + h + 1
+            end
+        end
+        r.preview:SetShown(q.item and q.item.preview and true or false)
+        if q.item and q.item.preview then r.preview:SetArt(q.item.icon) end
+        return y
+    end
+
+    -- The recipes section (shown after the quests): t:SetRecipes(list, collapsed, meta)
+    function SetRecipes(list: any, collapsed: any, meta: string?)
+        self.recipes = list or {}
+        self.recipesCollapsed = collapsed and true or false
+        self.recipesMeta = meta
+    end
+
+    function SetQuests(quests: any, freeze: any)
+        if freeze and self.contentWidth then
+            -- frozen: the width stays too
+            self:LayOut(quests, freeze)
+        else
+            self.contentWidth = self.width
+            self:LayOut(quests, freeze)
+            if self.maxHeight and (self.listHeight or 0) > self:ViewHeight() then
+                self.contentWidth = self.width - GUTTER
+                self:LayOut(quests, freeze)
+            end
+        end
+        self.list:SetWidth(self.contentWidth)
+        self:Fit()
+        self:ApplyScroll()
+    end
+
+    function LayOut(quests: any, freeze: any)
+        quests = quests or {}
+        local byID: { [any]: any } = {}
+        for _, q in ipairs(quests) do byID[q.questID] = q end
+        -- the entries: as given, or (frozen) the last ones with new quests after
+        local entries: Entry[]
+        if freeze and self.entries then
+            entries = {}
+            local seen: { [any]: boolean }, last: string? = {}, nil
+            for _, e in ipairs(self.entries) do
+                entries[#entries + 1] = e
+                if e.id then seen[e.id] = true end
+                last = e.zone
+            end
+            for _, q in ipairs(quests) do
+                if not seen[q.questID] then
+                    if q.zone and q.zone ~= last then entries[#entries + 1] = { zone = q.zone }; last = q.zone end
+                    entries[#entries + 1] = { id = q.questID, zone = q.zone }
+                end
+            end
+        else
+            entries = entriesOf(quests)
+            self.heights = {}
+        end
+        -- the recipes after the quests (frozen too: they sit below every quest);
+        -- the quests folded away: only the recipes
+        local kept: Entry[] = {}
+        for _, e in ipairs(entries) do
+            if not (e.section or e.recipe) and not self.questsCollapsed then kept[#kept + 1] = e end
+        end
+        entries = kept
+        local byRecipe: { [any]: any } = {}
+        if self.recipes and #self.recipes > 0 then
+            entries[#entries + 1] = { section = "recipes" }
+            if not self.recipesCollapsed then
+                for _, rcp in ipairs(self.recipes) do
+                    byRecipe[rcp.questID] = rcp
+                    entries[#entries + 1] = { recipe = rcp.questID }
+                end
+            end
+        end
+        self.entries = entries
+        for _, r in ipairs(self.rows) do r.inUse = false end
+        for _, z in ipairs(self.zoneRows) do z.inUse = false end
+        for _, h in ipairs(self.sectionRows) do h.inUse = false end
+        self.tops = {}
+        local y: number, prev: string? = 0, nil
+        local nQuest, nZone, nSection = 0, 0, 0
+        for _, e in ipairs(entries) do
+            if e.section then
+                nSection = nSection + 1
+                local h = self.sectionRows[nSection] or sectionRow(self)
+                self.sectionRows[nSection] = h
+                -- space-6 over a section after the quests
+                if prev then y = y + S["space-6"] end
+                h.key = e.section
+                h.label:SetValue("Recipes")
+                h.meta:SetValue(self.recipesMeta or "")
+                h.plus:SetShown(self.recipesCollapsed)
+                h.minus:SetShown(not self.recipesCollapsed)
+                h:SetWidth(self.contentWidth)
+                h.top, h.height, h.inUse = y, HEAD_H, true
+                y = y + HEAD_H
+                prev = "section"
+            elseif e.recipe then
+                nQuest = nQuest + 1
+                local r = self.rows[nQuest] or questRow(self)
+                self.rows[nQuest] = r
+                local rcp = byRecipe[e.recipe]
+                rcp.recipe = true
+                local h = self:DrawQuest(r, rcp)
+                if prev == "quest" then y = y + S["space-4"] elseif prev == "section" then y = y + S["space-4"] end
+                r.top, r.height, r.inUse = y, h, true
+                r:SetSize(self.contentWidth, math.max(1, h))
+                y = y + h
+                prev = "quest"
+            elseif e.id then
+                nQuest = nQuest + 1
+                local r = self.rows[nQuest] or questRow(self)
+                self.rows[nQuest] = r
+                local q = byID[e.id]
+                local h = q and self:DrawQuest(r, q) or 0
+                if freeze then h = math.max(h, self.heights[e.id] or 0) end
+                -- space-4 between quests, space-2 under a zone's heading
+                if prev == "quest" then y = y + S["space-4"] elseif prev == "zone" then y = y + S["space-2"] end
+                self.heights[e.id] = h
+                self.tops[e.id] = y
+                r.top, r.height, r.inUse = y, h, q ~= nil
+                r:SetSize(self.contentWidth, math.max(1, h))
+                y = y + h
+                prev = "quest"
+            else
+                nZone = nZone + 1
+                local z = self.zoneRows[nZone] or zoneRow(self)
+                self.zoneRows[nZone] = z
+                -- space-5 over a zone's heading after the one before
+                if prev then y = y + S["space-5"] end
+                z.text:SetValue(e.zone)
+                z:SetSize(self.contentWidth, lineH())
+                z.top, z.height, z.inUse = y, lineH(), true
+                y = y + lineH()
+                prev = "zone"
+            end
+        end
+        self.listHeight = y
+        self.list:SetHeight(math.max(1, y))
+    end
+
+    -- The quests' window: maxHeight less the head (all of them without one).
+    function ViewHeight()
+        if not self.maxHeight then return self.listHeight or 0 end
+        return math.max(lineH(), self.maxHeight - HEAD_H - S["space-4"])
+    end
+
+    function ScrollBy(px: number)
+        if self.scrollLocked then return end
+        self:SetScroll((self.scroll or 0) + px)
+    end
+
+    function SetScroll(v: number)
+        local max = math.max(0, (self.listHeight or 0) - self:ViewHeight())
+        v = math.max(0, math.min(max, math.floor(v + 0.5)))
+        if v == self.scroll then return end
+        self.scroll = v
+        self:ApplyScroll()
+        if self.onScroll then self.onScroll() end
+    end
+
+    -- In combat with secure item buttons beside the titles: the list stays put.
+    function SetScrollLocked(on: any)
+        self.scrollLocked = on and true or false
+    end
+
+    -- The rows in the window shown, the rest hidden (so nothing out of sight
+    -- takes a click); the thumb at the right edge while there's more.
+    function ApplyScroll()
+        local view = self:ViewHeight()
+        local max = math.max(0, (self.listHeight or 0) - view)
+        self.scroll = math.max(0, math.min(max, self.scroll or 0))
+        local scroll = self.scroll
+        for _, pool in ipairs({ self.rows, self.zoneRows, self.sectionRows }) do
+            for _, r in ipairs(pool) do
+                local visible = r.inUse and (r.top + r.height > scroll) and (r.top < scroll + view)
+                if visible then
+                    r:ClearAllPoints()
+                    r:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -(r.top - scroll))
+                    r:Show()
+                else
+                    r:Hide()
+                end
+            end
+        end
+        if max > 0 then
+            local trackH = view
+            local thumbH = math.max(16, trackH * view / (self.listHeight or 1))
+            self.thumb:ClearAllPoints()
+            -- at the tracker's right edge, the quests GUTTER clear of it
+            self.thumb:SetPoint("TOPRIGHT", self.list, "TOPLEFT", self.width, -((trackH - thumbH) * scroll / max))
+            self.thumb:SetHeight(thumbH)
+            self.thumb:Show()
+        else
+            self.thumb:Hide()
+        end
+    end
+
+    -- Where a quest's title starts, down from the tracker's top (nil: not shown).
+    function QuestTop(questID: any): number?
+        local top = self.tops and self.tops[questID]
+        if not top then return nil end
+        top = top - (self.scroll or 0)
+        -- the title scrolled out of the window (its item, 24px from 2px over the
+        -- title, would hang past the window's bottom)
+        if top < 0 or top - 2 + 24 > self:ViewHeight() then return nil end
+        return HEAD_H + S["space-4"] + top
+    end
+
+    function SetMeta(text: string?)
+        self.meta:SetValue(text or "")
+        self.rule:ClearAllPoints()
+        self.rule:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
+        if text and text ~= "" then
+            self.rule:SetPoint("RIGHT", self.meta, "LEFT", -S["space-3"], 0)
+        else
+            self.rule:SetPoint("RIGHT", self.head, "RIGHT")
+        end
+    end
+
+    function SetTitle(text: string?)
+        self.label:SetValue(text or "Quests")
+    end
+
+    function SetCollapsed(on: any)
+        self.collapsed = on and true or false
+        self.list:SetShown(not self.collapsed)
+        self:DrawToggle()
+        self:Fit()
+    end
+
+    -- 0.13: only the quests folded away; the sections after them (Recipes)
+    -- stay (asked for in game). Takes effect with the next SetQuests.
+    function SetQuestsCollapsed(on: any)
+        self.questsCollapsed = on and true or false
+        self:DrawToggle()
+    end
+
+    function DrawToggle()
+        local folded = self.collapsed or self.questsCollapsed
+        self.plus:SetShown(folded and true or false)
+        self.minus:SetShown(not folded)
+    end
+
+    function Fit()
+        local h = HEAD_H
+        local list = math.min(self.listHeight or 0, self:ViewHeight())
+        if not self.collapsed and list > 0 then h = h + S["space-4"] + list end
+        self.clip:SetHeight(math.max(1, list))
+        self:SetHeight(h)
+    end
+
+    function SetMaxHeight(h: number?)
+        self.maxHeight = h
+        self:Fit()
+        self:ApplyScroll()
+    end
+end
+mixins.ObjectiveTracker = ObjectiveTracker
+
+export function objectiveTracker(parent: any, opts: { [string]: any }?): ObjectiveTracker
+    return ObjectiveTracker.new(parent, opts)
 end
