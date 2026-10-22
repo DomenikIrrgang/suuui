@@ -77,7 +77,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [R22](#r22) | mock | medium | fixed after 0.9.6 (T246) | A test could not be listed in the group finder |
 | [R23](#r23) | mock | low | fixed after 0.9.6 (T257) | `mock.hover` doesn't move the cursor |
 | [K4](#k4) | checker | medium | done 0.9.6 (W2061) | `a and nil or b` is always `b` |
-| [K5](#k5) | checker | medium | done after 0.9.6 (W2062, S40) | A value read past what a function gives |
+| [K5](#k5) | checker | medium | done after 0.9.6 (W2062, S40, S41) | A value read past what a function gives |
 | [K6](#k6) | checker | low | fixed after 0.9.6 (T259) | `GetCursorInfo` is declared without its results |
 | [K7](#k7) | checker | low | fixed after 0.9.6 (T260) | The closing line of a multi-line `return f(...)` reads as not run |
 | [V12](#v12) | VM | medium | fixed 0.9.4 | `IsModifiedClick("CHATLINK")` was always false |
@@ -438,7 +438,7 @@ A new warning; it found two SuuUI bugs and one in wowlua's dev console. (units-m
 
 *Status: done after 0.9.6 (W2062, S40).*
 
-Reading the 9th value of a `pcall` helper that returns 8 type-checked (`...any`) and was always nil (Raid Info's details, the junk's sell price). W2062 counts a local function's returns; global, cross-file and API functions are not covered yet. (units-social)
+Reading the 9th value of a `pcall` helper that returns 8 type-checked (`...any`) and was always nil (Raid Info's details, the junk's sell price). W2062 counts a local function's returns; since S41 also a module's functions, imported ones and a file-level table's methods (`M:f()`, `self:f()`): no new warning in SuuUI. API functions stay out (their declarations can be incomplete). (units-social)
 
 <a id="k6"></a>
 
