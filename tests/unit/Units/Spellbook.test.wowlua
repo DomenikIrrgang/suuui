@@ -144,10 +144,29 @@ local function learnedCell()
     expect(GameTooltip:IsShown()).toBe(true)
     M.book.onLeave()
     expect(GameTooltip:IsShown()).toBe(false)
-    M.book.onDragStart(i)
-    -- (GetCursorInfo is declared without its results: wowlua's finding)
-    expect((GetCursorInfo :: any)()).toBe("spell")
+    -- dragged onto an action button: the slot holds it
+    local target = G.SuuUIActionBar1Button12
+    mock.dragTo(c.button, target)
+    local kind, id = GetActionInfo(target:GetAttribute("action"))
+    expect(kind).toBe("spell")
+    expect(id).toBe(c.button:GetAttribute("spell"))
     ClearCursor()
+end
+
+@test("in combat a learned spell drags onto an action button too (the game's secure drag handler picks it up)")
+local function dragInCombat()
+    open()
+    M.book.onSchool(1)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    local c = M.book.cells[1]
+    local target = G.SuuUIActionBar1Button11
+    mock.dragTo(c.button, target)
+    local kind, id = GetActionInfo(target:GetAttribute("action"))
+    expect(kind).toBe("spell")
+    expect(id).toBe(c.button:GetAttribute("spell"))
+    ClearCursor()
+    expectNoErrors()
 end
 
 @test("a spell still to train: SuuUI's tooltip with when and what it costs; no click")
@@ -161,7 +180,8 @@ local function unlearnedCell()
                 expect(c.button:GetAttribute("type")).toBeNil()
                 M.book.onEnter(j, c)
                 M.book.onLeave()
-                M.book.onDragStart(j)
+                -- a drag picks nothing up
+                mock.dragTo(c.button, G.SuuUIActionBar1Button12)
                 expect((GetCursorInfo :: any)()).toBeNil()
                 return
             end
@@ -350,7 +370,6 @@ end
 local function flyouts()
     -- (the game's answers for a warrior with a stances flyout: the default
     -- character has none)
-    local BANK = Enum.SpellBookSpellBank.Player
     mock.fake("C_SpellBook.GetNumSpellBookSkillLines", function(): number return 1 end)
     mock.fake("C_SpellBook.GetSpellBookSkillLineInfo", function(_: number): any
         return { name = "Protection", iconID = 1, itemIndexOffset = 0, numSpellBookItems = 2 }
@@ -368,17 +387,9 @@ local function flyouts()
     local names: string[] = {}
     for i, s in ipairs(list) do names[i] = s.label end
     expect(names).toEqual({ "Battle Stance", "Defensive Stance" })
+    -- (a flyout's spell has no slot of its own: cast and dragged by its ID)
     expect(list[2].slot).toBeNil()
-    -- dragged by its spell
-    M.slice = { list[2] }
-    local picked = mock.spy(function(_: number) end)
-    mock.fake("C_Spell.PickupSpell", picked)
-    list[2].status = "learned"
-    M:Build()
-    if M.book then M.book.onDragStart(1) end
-    expect(picked).toHaveBeenCalledWith(71)
-    M.slice = nil
-    local _ = BANK
+    expect(list[2].spellID).toBe(71)
 end
 
 @test("a spell to train without its ID known: SuuUI's own tooltip")

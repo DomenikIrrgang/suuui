@@ -20,7 +20,9 @@
 --   book.cells[i].button   -- a SecureActionButton (the owner sets what it casts)
 --   book:FitRows()         -- rows to the page's height (a page holds rows × 2)
 --   book:SetWidest(px)     -- the longest name anywhere: columns as wide on every page
---   book.onEnter / onLeave / onDragStart = fn(i, cell)
+--   book.onEnter / onLeave = fn(i, cell)
+--   (a drag picks up what the cell casts: the game's secure drag handler,
+--   in combat too)
 --   book:SetCooldown(i, active, gcd, duration)   -- the sweep over a spell's
 --                          -- icon: the engine's duration object (secret-safe);
 --                          -- the global cooldown sweeps without digits
@@ -58,7 +60,9 @@ local function cell(book: any, i: number): any
     if c then return c end
     c = CreateFrame("Frame", nil, book.grid)
     c:SetHeight(ICON)
-    local b = CreateFrame("Button", nil, c, "SecureActionButtonTemplate")
+    -- (the secure drag template: a drag picks the spell up through the
+    -- game's own code; an addon's pickup is blocked in combat, found in game)
+    local b = CreateFrame("Button", nil, c, "SecureActionButtonTemplate,SecureHandlerDragTemplate")
     b:SetSize(ICON, ICON)
     b:SetPoint("LEFT")
     -- down and up registered (up alone never cast, found in game), acting
@@ -90,7 +94,10 @@ local function cell(book: any, i: number): any
         book:DrawCell(c)
         if book.onLeave then book.onLeave(i, c) end
     end)
-    b:SetScript("OnDragStart", function() if book.onDragStart then book.onDragStart(i, c) end end)
+    b:SetAttribute("_ondragstart", [=[
+        local id = self:GetAttribute("spell")
+        if id then return "spell", id end
+    ]=])
     c.cooldown = CreateFrame("Cooldown", nil, c.icon, "CooldownFrameTemplate")
     c.cooldown:SetAllPoints(c.icon.art)
     c.cooldown:SetDrawEdge(false)

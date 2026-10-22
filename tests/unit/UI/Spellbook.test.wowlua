@@ -284,27 +284,30 @@ local function fitRows()
     loose:Hide()
 end
 
-@test("a cell's hover gilds it and calls onEnter; away it's drawn again, onLeave; a drag to onDragStart")
+@test("a cell's hover gilds it and calls onEnter; away it's drawn again, onLeave; a drag picks up what it casts")
 local function cellInput()
     local b = make()
     b:SetSpells({ { label = "Fireball", icon = 1, status = "trainable", rank = 2 } })
     local c = b.cells[1]
     local entered = mock.spy(function(_i: number, _c: any) end)
     local left = mock.spy(function(_i: number, _c: any) end)
-    local dragged = mock.spy(function(_i: number, _c: any) end)
     mock.hover(c.button)
     expect(c.icon.borderToken).toBe("gilt")
     mock.hover(nil)
     expect(c.icon.borderToken).toBe("arcane")
-    b.onEnter, b.onLeave, b.onDragStart = entered, left, dragged
+    b.onEnter, b.onLeave = entered, left
     mock.hover(c.button)
     mock.hover(nil)
     expect(entered).toHaveBeenCalledWith(1, c)
     expect(left).toHaveBeenCalledWith(1, c)
-    mock.script(c.button, "OnDragStart", "LeftButton")
-    expect(dragged).toHaveBeenCalledWith(1, c)
-    b.onDragStart = nil
-    mock.script(c.button, "OnDragStart", "LeftButton")
+    -- a drag: the game's secure drag handler, picking up the cell's spell
+    expect(c.button:GetAttribute("_ondragstart") ~= nil).toBe(true)
+    c.button:SetAttribute("spell", 116)
+    mock.drag(c.button, 5, 0)
+    local kind = (GetCursorInfo :: any)()
+    expect(kind).toBe("spell")
+    ClearCursor()
+    c.button:SetAttribute("spell", nil)
     -- a cell without a spell: drawn as it was
     c.spell = nil
     b:DrawCell(c)
