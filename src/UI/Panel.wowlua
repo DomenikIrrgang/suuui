@@ -94,71 +94,6 @@ export type PanelOptions = {
     height?: number,
 }
 
-export interface Panel extends Frame
-    bg: Texture
-    border: draw.Border
-    shadow?: draw.SoftEdge
-    ring?: draw.Border
-    ring2?: draw.Border
-    ornTL?: Texture
-    ornBR?: Texture
-    -- the header (titled panels only)
-    title?: Text
-    meta?: Text
-    close?: Button
-    key?: KeyChip
-    headRight?: Region
-    divider?: Frame
-    jewel?: Texture
-    -- content goes here
-    body: Frame
-    fixedWidth?: number
-    fixedHeight?: number
-    function SetTitle(title: string?, meta: string?)
-    function BodyTop(): number
-    function Fit()
-    function PlaceHead()
-    function PlaceBody()
-end
-
-local Panel: Panel = {} :: any
-mixins.Panel = Panel
-
-function Panel:SetTitle(title: string?, meta: string?)
-    if self.title then self.title:SetValue(title or "") end
-    if self.meta then self.meta:SetValue(meta or "") end
-end
-
--- The offset of the body's top edge from the panel's top edge.
-function Panel:BodyTop(): number
-    if self.title then return headH() + S["space-4"] + 1 + S["space-4"] end
-    return S["space-4"]
-end
-
-function Panel:Fit()
-    if self.fixedWidth and self.fixedHeight then return end
-    local w, h = self.body:GetSize()
-    if not self.fixedWidth then self:SetWidth(w + S["space-5"] * 2) end
-    if not self.fixedHeight then self:SetHeight(self:BodyTop() + h + S["space-5"]) end
-end
-
--- The head and the body from the title's line height: at build, and again
--- when a theme changes it.
-function Panel:PlaceHead()
-    if not self.title then return end
-    local headRight, divider = self.headRight :: Region, self.divider :: Frame
-    headRight:SetPoint("RIGHT", self, "TOPRIGHT", -S["space-5"], -(S["space-5"] + T.type.header.lineHeight / 2))
-    divider:SetPoint("TOPLEFT", S["space-5"], -(headH() + S["space-4"]))
-    divider:SetPoint("TOPRIGHT", -S["space-5"], -(headH() + S["space-4"]))
-end
-
-function Panel:PlaceBody()
-    local top = self:BodyTop()
-    self.body:SetPoint("TOPLEFT", S["space-5"], -top)
-    if self.fixedWidth then self.body:SetPoint("TOPRIGHT", -S["space-5"], -top) end
-    self:Fit()
-end
-
 local function buildHead(f: Panel, opts: PanelOptions)
     local title = text(f, "header", "gilt-text")
     f.title = title
@@ -222,51 +157,113 @@ relayoutWait:SetScript("OnEvent", function(self)
 end)
 events.on("SUUUI_THEME_CHANGED", relayout, "UI.Panel")
 
+-- A panel (Raw.Mixins.Panel is the class: a method changed there reaches
+-- the panels built afterwards).
+export class Panel extends Frame
+    bg: Texture
+    border: draw.Border
+    shadow?: draw.SoftEdge
+    ring?: draw.Border
+    ring2?: draw.Border
+    ornTL?: Texture
+    ornBR?: Texture
+    -- the header (titled panels only)
+    title?: Text
+    meta?: Text
+    close?: Button
+    key?: KeyChip
+    headRight?: Region
+    divider?: Frame
+    jewel?: Texture
+    -- content goes here
+    body: Frame
+    fixedWidth?: number
+    fixedHeight?: number
+
+    constructor(parent: Frame, opts: PanelOptions?)
+        super(opts and opts.name, parent)
+        local o: PanelOptions = opts or {}
+        self.bg = draw.fill(self, o.solid and "surface" or "surface-glass")
+        self.bg:SetAllPoints()
+        self.border = draw.border(self, "gilt-line")
+        if o.shadow ~= false then self.shadow = draw.shadow(self, "shadow-panel") end
+
+        if o.anchor then
+            -- inset-anchor: a 3px dark ring inside the border, then a faint gilt line.
+            local rings = T.shadow["inset-anchor"]
+            self.ring = draw.border(self, rings[1].color, { width = rings[1].spread, inset = 1 })
+            self.ring2 = draw.border(self, rings[2].color, { width = 1, inset = 1 + rings[1].spread })
+            local tl = draw.diamond(self, 7, "gilt")
+            self.ornTL = tl
+            tl:SetPoint("CENTER", self, "TOPLEFT", 0, 0)
+            local br = draw.diamond(self, 7, "gilt")
+            self.ornBR = br
+            br:SetPoint("CENTER", self, "BOTTOMRIGHT", 0, 0)
+        elseif o.ornament then
+            local tl = draw.diamond(self, 7, "gilt")
+            self.ornTL = tl
+            tl:SetPoint("CENTER", self, "TOPLEFT", 0, 0)
+        end
+
+        if o.title then buildHead(self, o) end
+
+        self.body = CreateFrame("Frame", nil, self)
+        self.body:SetPoint("TOPLEFT", S["space-5"], -self:BodyTop())
+        self.body:SetSize(1, 1)
+
+        self.fixedWidth, self.fixedHeight = o.width, o.height
+        if o.width then
+            self:SetWidth(o.width)
+            self.body:SetPoint("TOPRIGHT", -S["space-5"], -self:BodyTop())
+        end
+        if o.height then
+            self:SetHeight(o.height)
+            self.body:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
+        end
+        self.body:SetScript("OnSizeChanged", function() self:Fit() end)
+        self:Fit()
+        if o.title then titled[self] = true end
+    end
+
+    function SetTitle(title: string?, meta: string?)
+        if self.title then self.title:SetValue(title or "") end
+        if self.meta then self.meta:SetValue(meta or "") end
+    end
+
+    -- The offset of the body's top edge from the panel's top edge.
+    function BodyTop(): number
+        if self.title then return headH() + S["space-4"] + 1 + S["space-4"] end
+        return S["space-4"]
+    end
+
+    function Fit()
+        if self.fixedWidth and self.fixedHeight then return end
+        local w, h = self.body:GetSize()
+        if not self.fixedWidth then self:SetWidth(w + S["space-5"] * 2) end
+        if not self.fixedHeight then self:SetHeight(self:BodyTop() + h + S["space-5"]) end
+    end
+
+    -- The head and the body from the title's line height: at build, and
+    -- again when a theme changes it.
+    function PlaceHead()
+        if not self.title then return end
+        local headRight, divider = self.headRight :: Region, self.divider :: Frame
+        headRight:SetPoint("RIGHT", self, "TOPRIGHT", -S["space-5"], -(S["space-5"] + T.type.header.lineHeight / 2))
+        divider:SetPoint("TOPLEFT", S["space-5"], -(headH() + S["space-4"]))
+        divider:SetPoint("TOPRIGHT", -S["space-5"], -(headH() + S["space-4"]))
+    end
+
+    function PlaceBody()
+        local top = self:BodyTop()
+        self.body:SetPoint("TOPLEFT", S["space-5"], -top)
+        if self.fixedWidth then self.body:SetPoint("TOPRIGHT", -S["space-5"], -top) end
+        self:Fit()
+    end
+end
+mixins.Panel = Panel
+
 export function panel(parent: Frame, opts: PanelOptions?): Panel
-    opts = opts or {}
-    local f: Panel = CreateFrame("Frame", opts.name, parent) :: any
-    Mixin(f, Panel)
-    f.bg = draw.fill(f, opts.solid and "surface" or "surface-glass")
-    f.bg:SetAllPoints()
-    f.border = draw.border(f, "gilt-line")
-    if opts.shadow ~= false then f.shadow = draw.shadow(f, "shadow-panel") end
-
-    if opts.anchor then
-        -- inset-anchor: a 3px dark ring inside the border, then a faint gilt line.
-        local rings = T.shadow["inset-anchor"]
-        f.ring = draw.border(f, rings[1].color, { width = rings[1].spread, inset = 1 })
-        f.ring2 = draw.border(f, rings[2].color, { width = 1, inset = 1 + rings[1].spread })
-        local tl = draw.diamond(f, 7, "gilt")
-        f.ornTL = tl
-        tl:SetPoint("CENTER", f, "TOPLEFT", 0, 0)
-        local br = draw.diamond(f, 7, "gilt")
-        f.ornBR = br
-        br:SetPoint("CENTER", f, "BOTTOMRIGHT", 0, 0)
-    elseif opts.ornament then
-        local tl = draw.diamond(f, 7, "gilt")
-        f.ornTL = tl
-        tl:SetPoint("CENTER", f, "TOPLEFT", 0, 0)
-    end
-
-    if opts.title then buildHead(f, opts) end
-
-    f.body = CreateFrame("Frame", nil, f)
-    f.body:SetPoint("TOPLEFT", S["space-5"], -f:BodyTop())
-    f.body:SetSize(1, 1)
-
-    f.fixedWidth, f.fixedHeight = opts.width, opts.height
-    if opts.width then
-        f:SetWidth(opts.width)
-        f.body:SetPoint("TOPRIGHT", -S["space-5"], -f:BodyTop())
-    end
-    if opts.height then
-        f:SetHeight(opts.height)
-        f.body:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
-    end
-    f.body:SetScript("OnSizeChanged", function() f:Fit() end)
-    f:Fit()
-    if opts.title then titled[f] = true end
-    return f
+    return Panel.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -648,118 +645,164 @@ export type WindowOptions = {
     onTab?: (key: any) -> (),
 }
 
-export interface WindowFrame extends Panel
+-- A window tab: its key and label, what it was made from, and while it is
+-- disabled a cover that takes the click and says why.
+export class TabButton extends Button
+    key: any
+    label: Text
+    def: WindowTab
+    cover: Frame
+    markLeft?: number
+    markWidth?: number
+
+    constructor(row: Frame, window: WindowFrame, t: WindowTab, height: number)
+        super(nil, row)
+        self.key = t.key
+        self.def = t
+        self.label = text(self, "header", "ink-muted")
+        self.label:SetPoint("CENTER", 0, 2)
+        self.label:SetValue(t.label)
+        self:SetHeight(height)
+        self.cover = CreateFrame("Frame", nil, self)
+        self.cover:SetAllPoints()
+        self.cover:SetFrameLevel(self:GetFrameLevel() + 5)
+        self.cover:EnableMouse(true)
+        self.cover:SetScript("OnEnter", function(c: Frame) showTooltip(c, { title = t.label, description = t.reason }) end)
+        self.cover:SetScript("OnLeave", function() hideTooltip() end)
+        self.cover:Hide()
+        self:SetScript("OnEnter", function() if window.tab ~= self.key then draw.paint(self.label, "ink") end end)
+        self:SetScript("OnLeave", function() if window.tab ~= self.key then draw.paint(self.label, "ink-muted") end end)
+        self:SetScript("OnClick", function() window:SetTab(self.key) end)
+    end
+
+    function IsOff(): boolean
+        local d = self.def.disabled
+        if type(d) == "function" then return d() and true or false end
+        return d and true or false
+    end
+end
+
+local TAB_H = 28
+
+-- A window: a movable panel with a scrolling body, optional tabs under the
+-- head and a footer (Raw.Mixins.WindowFrame is the class).
+export class WindowFrame extends Panel
     -- the scrolling content frame
     content: Frame
     scroll: ScrollFrame
     footer?: Frame
     tabRow?: Frame
-    tabButtons?: Button[]
+    tabButtons?: TabButton[]
     tabMarker?: TabMarker
-    tab: any
-    -- with tabs only (0.16)
-    function DrawTabs()
-    function SetTab(key: any)
-end
+    tab: any = nil
+    onTab?: (key: any) -> ()
 
-export function windowFrame(parent: Frame, opts: WindowOptions): WindowFrame
-    local f = panel(parent, {
-        name = opts.name, title = opts.title, meta = opts.meta, keybind = opts.keybind,
-        closable = true, onClose = opts.onClose, ornament = true, solid = false,
-        width = opts.width, height = opts.height,
-    }) :: WindowFrame
-    f:SetFrameStrata("HIGH")
-    f:SetToplevel(true)
-    f:SetClampedToScreen(true)
-    f:EnableMouse(true)
-    f:SetMovable(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetScript("OnShow", function(self) motion.enter(self, T.duration["dur-fast"]) end)
+    constructor(parent: Frame, opts: WindowOptions)
+        super(parent, {
+            name = opts.name, title = opts.title, meta = opts.meta, keybind = opts.keybind,
+            closable = true, onClose = opts.onClose, ornament = true, solid = false,
+            width = opts.width, height = opts.height,
+        })
+        self.onTab = opts.onTab
+        self:SetFrameStrata("HIGH")
+        self:SetToplevel(true)
+        self:SetClampedToScreen(true)
+        self:EnableMouse(true)
+        self:SetMovable(true)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", self.StartMoving)
+        self:SetScript("OnDragStop", self.StopMovingOrSizing)
+        self:SetScript("OnShow", function(f: Frame) motion.enter(f, T.duration["dur-fast"]) end)
 
-    local TAB_H = 28
-    local tabs = opts.tabs
-    if tabs then
-        local tabRow = CreateFrame("Frame", nil, f)
-        f.tabRow = tabRow
-        tabRow:SetHeight(TAB_H)
-        local tabButtons: Button[] = {}
-        f.tabButtons = tabButtons
-        -- the chosen tab's underline and jewel, gliding (TabMarker)
-        local marker = tabMarker(tabRow)
-        f.tabMarker = marker
-        for _, t in ipairs(tabs) do
-            local b = CreateFrame("Button", nil, tabRow)
-            b.key = t.key
-            b.label = text(b, "header", "ink-muted")
-            b.label:SetPoint("CENTER", 0, 2)
-            b.label:SetValue(t.label)
-            b:SetHeight(TAB_H)
-            b.def = t
-            -- while disabled: a cover takes the click and says why
-            b.cover = CreateFrame("Frame", nil, b)
-            b.cover:SetAllPoints()
-            b.cover:SetFrameLevel(b:GetFrameLevel() + 5)
-            b.cover:EnableMouse(true)
-            b.cover:SetScript("OnEnter", function(c) showTooltip(c, { title = t.label, description = t.reason }) end)
-            b.cover:SetScript("OnLeave", function() hideTooltip() end)
-            b.cover:Hide()
-            b:SetScript("OnEnter", function(self) if f.tab ~= self.key then draw.paint(self.label, "ink") end end)
-            b:SetScript("OnLeave", function(self) if f.tab ~= self.key then draw.paint(self.label, "ink-muted") end end)
-            b:SetScript("OnClick", function(self) f:SetTab(self.key) end)
-            marker:Track(b)
-            tabButtons[#tabButtons + 1] = b
-        end
-        local function off(b: any): boolean
-            local d = b.def.disabled
-            if type(d) == "function" then return d() and true or false end
-            return d and true or false
-        end
-        function f:DrawTabs()
-            local chosen: Button? = nil
-            for _, b in ipairs(tabButtons) do
-                local dis = off(b)
-                local on = not dis and b.key == self.tab
-                draw.paint(b.label, dis and "ink-faint" or on and "gilt-text" or "ink-muted")
-                b.label:SetAlpha(dis and T.opacity["opacity-disabled"] or 1)
-                b.cover:SetShown(dis)
-                if on then chosen = b end
+        local tabs = opts.tabs
+        if tabs then
+            local tabRow = CreateFrame("Frame", nil, self)
+            self.tabRow = tabRow
+            tabRow:SetHeight(TAB_H)
+            local tabButtons: TabButton[] = {}
+            self.tabButtons = tabButtons
+            -- the chosen tab's underline and jewel, gliding (TabMarker)
+            local marker = tabMarker(tabRow)
+            self.tabMarker = marker
+            for _, t in ipairs(tabs) do
+                local b = TabButton.new(tabRow, self, t, TAB_H)
+                marker:Track(b)
+                tabButtons[#tabButtons + 1] = b
             end
-            marker:SetChosen(chosen)
         end
-        function f:SetTab(key: any)
-            self.tab = key
-            self:DrawTabs()
-            if opts.onTab then opts.onTab(key) end
+
+        local bottom = 0
+        if opts.footer then
+            local footH = 30 + S["space-4"] * 2
+            local footer = CreateFrame("Frame", nil, self)
+            self.footer = footer
+            footer:SetPoint("BOTTOMLEFT", S["space-5"], 0)
+            footer:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
+            footer:SetHeight(footH)
+            local rule = draw.hairline(self, "gilt-faint")
+            rule:SetPoint("BOTTOMLEFT", 0, footH)
+            rule:SetPoint("BOTTOMRIGHT", 0, footH)
+            -- the content ends space-4 above the footer's rule
+            bottom = footH - S["space-5"] + S["space-4"]
         end
+
+        -- The body becomes a scroll frame; content goes into window.content.
+        self.body:SetScript("OnSizeChanged", nil)
+        local scroll = CreateFrame("ScrollFrame", nil, self.body)
+        scroll:SetAllPoints()
+        local content = CreateFrame("Frame", nil, scroll)
+        self.content = content
+        content:SetSize(1, 1)
+        scroll:SetScrollChild(content)
+        scroll:EnableMouseWheel(true)
+        scroll:SetScript("OnMouseWheel", function(sf: ScrollFrame, delta: number)
+            local max = math.max(0, content:GetHeight() - sf:GetHeight())
+            sf:SetVerticalScroll(math.min(max, math.max(0, sf:GetVerticalScroll() - delta * 40)))
+        end)
+        scroll:SetScript("OnSizeChanged", function(_: ScrollFrame, w: number) content:SetWidth(w) end)
+        self.scroll = scroll
+        self.body:ClearAllPoints()
+        self.body:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"] + bottom)
+        self:PlaceBody()
+
+        if opts.name then tinsert(UISpecialFrames, opts.name) end
+        extend.add(extend.Kind.Window, self, { name = opts.name })
     end
 
-    local bottom = 0
-    if opts.footer then
-        local footH = 30 + S["space-4"] * 2
-        local footer = CreateFrame("Frame", nil, f)
-        f.footer = footer
-        footer:SetPoint("BOTTOMLEFT", S["space-5"], 0)
-        footer:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
-        footer:SetHeight(footH)
-        local rule = draw.hairline(f, "gilt-faint")
-        rule:SetPoint("BOTTOMLEFT", 0, footH)
-        rule:SetPoint("BOTTOMRIGHT", 0, footH)
-        -- the content ends space-4 above the footer's rule
-        bottom = footH - S["space-5"] + S["space-4"]
+    -- With tabs only (0.16): the tabs drawn again after what they depend on
+    -- changed.
+    function DrawTabs()
+        local tabButtons, marker = self.tabButtons, self.tabMarker
+        if not (tabButtons and marker) then return end
+        local chosen: Button? = nil
+        for _, b in ipairs(tabButtons) do
+            local dis = b:IsOff()
+            local on = not dis and b.key == self.tab
+            draw.paint(b.label, dis and "ink-faint" or on and "gilt-text" or "ink-muted")
+            b.label:SetAlpha(dis and T.opacity["opacity-disabled"] or 1)
+            b.cover:SetShown(dis)
+            if on then chosen = b end
+        end
+        marker:SetChosen(chosen)
+    end
+
+    function SetTab(key: any)
+        if not self.tabButtons then return end
+        self.tab = key
+        self:DrawTabs()
+        if self.onTab then self.onTab(key) end
     end
 
     -- The tabs under the head, the body under them: at build, and again
     -- when a theme changes the header style (Panel:PlaceHead).
-    function f:PlaceBody()
+    override function PlaceBody()
         local top = self:BodyTop()
         local tabRow = self.tabRow
         if tabRow then
             tabRow:SetPoint("TOPLEFT", S["space-5"], -top)
             tabRow:SetPoint("TOPRIGHT", -S["space-5"], -top)
             local x = 0
-            for _, b in ipairs(self.tabButtons :: Button[]) do
+            for _, b in ipairs(self.tabButtons :: TabButton[]) do
                 local w = measureText("header", b.def.label) + 2 * S["space-4"]
                 b:SetWidth(w)
                 b:SetPoint("LEFT", x, 0)
@@ -771,26 +814,9 @@ export function windowFrame(parent: Frame, opts: WindowOptions): WindowFrame
         end
         self.body:SetPoint("TOPLEFT", S["space-5"], -top)
     end
+end
+mixins.WindowFrame = WindowFrame
 
-    -- The body becomes a scroll frame; content goes into window.content.
-    f.body:ClearAllPoints()
-    f.body:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"] + bottom)
-    f:PlaceBody()
-    f.body:SetScript("OnSizeChanged", nil)
-    local scroll = CreateFrame("ScrollFrame", nil, f.body)
-    scroll:SetAllPoints()
-    f.content = CreateFrame("Frame", nil, scroll)
-    f.content:SetSize(1, 1)
-    scroll:SetScrollChild(f.content)
-    scroll:EnableMouseWheel(true)
-    scroll:SetScript("OnMouseWheel", function(self, delta)
-        local max = math.max(0, f.content:GetHeight() - self:GetHeight())
-        self:SetVerticalScroll(math.min(max, math.max(0, self:GetVerticalScroll() - delta * 40)))
-    end)
-    scroll:SetScript("OnSizeChanged", function(self, w) f.content:SetWidth(w) end)
-    f.scroll = scroll
-
-    if opts.name then tinsert(UISpecialFrames, opts.name) end
-    extend.add(extend.Kind.Window, f, { name = opts and opts.name })
-    return f
+export function windowFrame(parent: Frame, opts: WindowOptions): WindowFrame
+    return WindowFrame.new(parent, opts)
 end
