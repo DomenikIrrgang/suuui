@@ -8,12 +8,16 @@
 --                    synchronously (`send`, `deliver`)
 --   FakeSubscription what the dispatcher hands out: cancel() ends it
 --   FakeCombat       combat.CombatState: `fighting` set by the test,
---                    end() runs what waited, first queued first
+--                    finish() runs what waited, first queued first
+--   FakeNotifier     events.Notifier: keeps each message told, as
+--                    "name first-argument"
+--   FakeNextFrame    extend.NextFrame: step() runs what waited
 
 import * as wl from "wowlua:events"
 import * as fault from "/Core/Fault"
 import * as events from "/Core/Events"
 import * as combat from "/Core/Combat"
+import * as extend from "/Core/Extend"
 
 export class FakeReporter implements fault.Reporter
     errors: string[] = {}
@@ -106,6 +110,29 @@ export class FakeCombat implements combat.CombatState
     -- The fight ends: what waited runs, first queued first.
     function finish()
         self.fighting = false
+        local list = self.waiting
+        self.waiting = {}
+        for _, fn in ipairs(list) do fn() end
+    end
+end
+
+export class FakeNotifier implements events.Notifier
+    told: string[] = {}
+
+    function emit(name: string, ...: any)
+        self.told[#self.told + 1] = `{name} {tostring((...))}`
+    end
+end
+
+export class FakeNextFrame implements extend.NextFrame
+    waiting: (() -> ())[] = {}
+
+    function run(fn: () -> ())
+        self.waiting[#self.waiting + 1] = fn
+    end
+
+    -- The next frame: what waited runs, first queued first.
+    function step()
         local list = self.waiting
         self.waiting = {}
         for _, fn in ipairs(list) do fn() end

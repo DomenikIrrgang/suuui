@@ -10,6 +10,7 @@ import * as mock from "wowlua:mock"
 import * as extend from "/Core/Extend"
 import * as events from "/Core/Events"
 import * as fault from "/Core/Fault"
+import FakeReporter, FakeNextFrame, FakeNotifier from "../../fakes"
 
 const OWNER = { name = "Extend Test" }
 const OTHER = { name = "Extend Test Other" }
@@ -372,4 +373,74 @@ local function additions()
     expect(heard).toHaveBeenCalledTimes(5)
     extend.unregister(OWNER)
     expect(heard).toHaveBeenCalledTimes(5)
+end
+
+--------------------------------------------------------------------------------
+-- A registry of its own
+--------------------------------------------------------------------------------
+
+-- A registry over fakes: nothing of SuuUI's in it, so no filtering by `mine`.
+local function own(): (extend.ExtendRegistry, FakeReporter, FakeNextFrame, FakeNotifier)
+    local reporter, frame, notifier = FakeReporter.new(), FakeNextFrame.new(), FakeNotifier.new()
+    return extend.ExtendRegistry.new(reporter, frame, notifier), reporter, frame, notifier
+end
+
+@test("a registry of its own: each runs on new instances when its next frame comes, once per frame")
+local function ownEach()
+    local reg, _, frame = own()
+    local a = newThing()
+    reg:add(extend.Kind.Meter, a)
+    local seen: any[] = {}
+    reg:each(extend.Kind.Meter, function(obj: any) seen[#seen + 1] = obj end, nil, OWNER)
+    expect(seen).toEqual({ a })
+    -- nothing waits while no each is registered for the kind
+    reg:add(extend.Kind.Tracker, newThing())
+    expect(#frame.waiting).toBe(0)
+    local b, c = newThing(), newThing()
+    reg:add(extend.Kind.Meter, b)
+    reg:add(extend.Kind.Meter, c)
+    -- one request for the frame, both instances in it
+    expect(#frame.waiting).toBe(1)
+    expect(#seen).toBe(1)
+    frame:step()
+    expect(seen).toEqual({ a, b, c })
+    expect(reg:list(extend.Kind.Meter)).toEqual({ a, b, c })
+    -- SuuUI's own registry saw none of it
+    expect(extend.info(a)).toBeNil()
+end
+
+@test("a registry of its own: errors go to its reporter under the owner's name")
+local function ownErrors()
+    local reg, reporter = own()
+    local t = newThing()
+    reg:add(extend.Kind.CastBar, t)
+    reg:hook(extend.Kind.CastBar, "CoreATestPaint", function() error("own-hook") end, OWNER)
+    reg:override(extend.Kind.CastBar, "CoreATestPaint", function() error("own-override") end, OTHER)
+    expect((t:CoreATestPaint(2))).toBe("r1")
+    expect(reporter.errors).toEqual({ "Extend Test Other: own-override", "Extend Test: own-hook" })
+    expect(function() reg:add("bogus", {}) end).toThrow("unknown kind \"bogus\"")
+    reg:unregister(OWNER)
+    reg:unregister(OTHER)
+    expect(rawget(t, "CoreATestPaint") == paint).toBe(true)
+end
+
+@test("a registry of its own: additions told to its notifier")
+local function ownAdditions()
+    local reg, _, _, notifier = own()
+    reg:addTo(extend.List.GameMenu, "a", OWNER)
+    reg:addTo(extend.List.GameMenu, "b", OTHER)
+    reg:unregister(OWNER)
+    expect(reg:additions(extend.List.GameMenu)).toEqual({ "b" })
+    expect(notifier.told).toEqual({
+        "SUUUI_ADDITIONS_CHANGED gamemenu", "SUUUI_ADDITIONS_CHANGED gamemenu", "SUUUI_ADDITIONS_CHANGED gamemenu",
+    })
+    expect(extend.additions(extend.List.GameMenu)).toEqual({})
+end
+
+@test("Kind: SuuUI.KINDS are its values, in order; any of them is accepted as a string")
+local function kindEnum()
+    expect(extend.KINDS[1]).toBe(extend.Kind.UnitFrame)
+    expect(extend.KINDS[#extend.KINDS]).toBe(extend.Kind.Notification)
+    local reg = own()
+    for _, k in ipairs(extend.KINDS) do expect(reg:list(k)).toEqual({}) end
 end
