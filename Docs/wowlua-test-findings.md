@@ -64,7 +64,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V7](#v7) | VM | medium | not a bug | `ADDON_ACTION_BLOCKED` for `UNKNOWN()` out of combat when showing a Blizzard frame |
 | [V8](#v8) | VM | low | fixed 0.9.3 | `IsIgnoringParentAlpha()` stays false after `SetIgnoreParentAlpha(true)` |
 | [V9](#v9) | VM | low | fixed 0.9.3 | The width of secret text reads as a plain number |
-| [V10](#v10) | VM | low | open | A frame never anchored lays its children out against the screen |
+| [V10](#v10) | VM | low | fixed after 0.9.6 | A frame never anchored lays its children out against the screen |
 | [V11](#v11) | VM | low | not a bug | *Unverified:* a Blizzard menu's submenu doesn't open on hover |
 | [R14](#r14) | mock | medium | fixed after 0.9.6 (T264) | `mock.drag` runs no frame between `OnDragStart` and `OnDragStop` |
 | [R15](#r15) | mock | low | fixed after 0.9.6 (T261) | No "any value" matcher for `toHaveBeenCalledWith` |
@@ -622,7 +622,7 @@ is false; in the game it is secret. (ui-units)
 
 ### V10. A frame never anchored lays its children out against the screen
 
-*Status: open.*
+*Status: fixed after 0.9.6: a region anchored to a frame without a rectangle has none either (recorded by SuuUI's probe trees); a wowlua test guards it.*
 
 A `SetAllPoints()` child of an unplaced 200 px button reports 1920 wide; in
 the game a frame without anchors has no rect, nor do its children. (ui-units)
