@@ -23,6 +23,7 @@
 - Loot rolls show in the notifications again, with votes, roll numbers and the winner; "You passed on" and "You won" lines are read right.
 - Bags opened SuuUI's way stay open when a merchant or the mailbox closes.
 - The character window's item flyout no longer errors.
+- `/suu errors` says "Blocked" for an action the game refused out of combat (one that needs your click or key press), instead of "Blocked in combat".
 - Cooldown Manager: the Defensives editor saves your changes; the Timer and Stacks switches can be turned off.
 - Raid planner: specs are shared and asked for in game, and a setup no longer breaks when someone has no slot.
 - Marks: the minimap's marks go away when the Marks module stops.

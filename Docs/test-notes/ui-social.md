@@ -128,6 +128,10 @@ New:
    end
    ```
    The tests run the hooked OnShow scripts with `mock.script` instead.
+   *Later: not a bug.* It is SuuUI's own search on open, which the game
+   allows only from the user's click or key press (recorded in wowlua);
+   through `pcall` the event names `UNKNOWN()`. SuuUI's log now says
+   "Blocked" for a call refused out of combat.
 2. (Not a suspicion, for the next reader) `GetAlpha()` after `SetAlpha(0.5)`
    reads 0.50196 (a byte): the tests compare alphas with `toBeCloseTo`.
 

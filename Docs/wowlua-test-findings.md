@@ -61,7 +61,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V4](#v4) | VM | medium | fixed 0.9.3 | `ScrollFrame:SetVerticalScroll` doesn't run `OnVerticalScroll` |
 | [V5](#v5) | VM | medium | fixed 0.9.3 | `SetIgnoreParentScale(true)` has no effect |
 | [V6](#v6) | VM | medium | fixed 0.9.3 | `Texture:GetAtlas()` keeps the old atlas after `SetTexture(file)` |
-| [V7](#v7) | VM | medium | open | `ADDON_ACTION_BLOCKED` for `UNKNOWN()` out of combat when showing a Blizzard frame |
+| [V7](#v7) | VM | medium | not a bug | `ADDON_ACTION_BLOCKED` for `UNKNOWN()` out of combat when showing a Blizzard frame |
 | [V8](#v8) | VM | low | fixed 0.9.3 | `IsIgnoringParentAlpha()` stays false after `SetIgnoreParentAlpha(true)` |
 | [V9](#v9) | VM | low | fixed 0.9.3 | The width of secret text reads as a plain number |
 | [V10](#v10) | VM | low | open | A frame never anchored lays its children out against the screen |
@@ -570,7 +570,14 @@ print(t:GetAtlas())   -- emulator: "ui-hud-minus"; client: nil
 
 ### V7. `ADDON_ACTION_BLOCKED` for `UNKNOWN()` when showing a Blizzard frame out of combat
 
-*Status: open.*
+*Status: not a bug.* The refused call is SuuUI's own: the group finder's
+`OnShow` hook searches (`foreverlfg`'s `Refresh`, `C_LFGList.Search`
+through `pcall`), and the game lets an addon search only from the user's
+click, key press or slash command; through `pcall` the event names
+`UNKNOWN()`. Both are recorded in wowlua (`lfg.rs`). A test's plain
+`Show()` has no click behind it; `mock.script`, a key press or a click
+does. SuuUI's Fault log said "Blocked in combat" for every blocked call;
+it says "Blocked" out of combat now.
 
 Showing the group finder's parent frame from a test, out of combat, makes the
 emulator fire `ADDON_ACTION_BLOCKED` naming `UNKNOWN()`. In the game an
