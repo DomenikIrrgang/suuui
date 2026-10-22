@@ -114,66 +114,65 @@ end
 
 export type ToggleOptions = { value?: any, onChange?: (value: boolean) -> () }
 
-export interface Toggle extends Button
-    value?: boolean
-    disabled?: boolean
+local KNOB_OFF, KNOB_ON = 9, 25
+
+export class Toggle extends Button
     bg: Texture
     border: draw.Border
     knob: Texture
-    onChange?: (value: boolean) -> ()
-    function SetValue(on: any, animate: boolean?)
-    function SetDisabled(disabled: any)
-end
+    onChange: ((value: boolean) -> ())? = nil
+    value: boolean? = nil
+    disabled: boolean? = nil
 
-local Toggle: Toggle = {} :: any
-local KNOB_OFF, KNOB_ON = 9, 25
-
-function Toggle:SetValue(on: any, animate: boolean?)
-    on = on and true or false
-    local was = self.value
-    self.value = on
-    draw.paintFill(self.bg, on and "arcane-soft" or "surface-sunk")
-    self.border:SetColor(on and "arcane" or (self:IsMouseOver() and "gilt" or "gilt-line"))
-    draw.paint(self.knob, on and "arcane" or "ink-muted")
-    local to = on and KNOB_ON or KNOB_OFF
-    self:SetScript("OnUpdate", nil)
-    self.knob:ClearAllPoints()
-    if animate and was ~= nil and was ~= on and not reduced() then
-        -- Slide over dur-fast with an ease-out (a cubic).
-        local from, start, dur = on and KNOB_OFF or KNOB_ON, GetTime(), T.duration["dur-fast"]
-        self.knob:SetPoint("CENTER", self, "TOPLEFT", from, -9)
-        self:SetScript("OnUpdate", function(b: Toggle)
-            local t = math.min(1, (GetTime() - start) / dur)
-            local e = 1 - (1 - t) ^ 3
-            b.knob:SetPoint("CENTER", b, "TOPLEFT", from + (to - from) * e, -9)
-            if t >= 1 then b:SetScript("OnUpdate", nil) end
+    constructor(parent: Frame, opts: ToggleOptions?)
+        opts = opts or {}
+        super(nil, parent)
+        self:SetSize(34, 18)
+        self.bg = draw.fill(self, "surface-sunk")
+        self.bg:SetAllPoints()
+        self.border = draw.border(self, "gilt-line")
+        self.knob = draw.diamond(self, 8, "ink-muted")
+        self.onChange = opts.onChange
+        self:SetScript("OnClick", function()
+            if self.disabled then return end
+            self:SetValue(not self.value, true)
+            if self.onChange then self.onChange(self.value :: boolean) end
         end)
-    else
-        self.knob:SetPoint("CENTER", self, "TOPLEFT", to, -9)
+        self:SetScript("OnEnter", function() if not self.value then self.border:SetColor("gilt") end end)
+        self:SetScript("OnLeave", function() if not self.value then self.border:SetColor("gilt-line") end end)
+        self:SetValue(opts.value)
     end
-end
 
-Toggle.SetDisabled = setDisabled
+    function SetValue(on: any, animate: boolean?)
+        on = on and true or false
+        local was = self.value
+        self.value = on
+        draw.paintFill(self.bg, on and "arcane-soft" or "surface-sunk")
+        self.border:SetColor(on and "arcane" or (self:IsMouseOver() and "gilt" or "gilt-line"))
+        draw.paint(self.knob, on and "arcane" or "ink-muted")
+        local to = on and KNOB_ON or KNOB_OFF
+        self:SetScript("OnUpdate", nil)
+        self.knob:ClearAllPoints()
+        if animate and was ~= nil and was ~= on and not reduced() then
+            -- Slide over dur-fast with an ease-out (a cubic).
+            local from, start, dur = on and KNOB_OFF or KNOB_ON, GetTime(), T.duration["dur-fast"]
+            self.knob:SetPoint("CENTER", self, "TOPLEFT", from, -9)
+            self:SetScript("OnUpdate", function(b: Toggle)
+                local t = math.min(1, (GetTime() - start) / dur)
+                local e = 1 - (1 - t) ^ 3
+                b.knob:SetPoint("CENTER", b, "TOPLEFT", from + (to - from) * e, -9)
+                if t >= 1 then b:SetScript("OnUpdate", nil) end
+            end)
+        else
+            self.knob:SetPoint("CENTER", self, "TOPLEFT", to, -9)
+        end
+    end
+
+    function SetDisabled(...: any): ...any return setDisabled(self, ...) end
+end
 
 export function toggle(parent: Frame, opts: ToggleOptions?): Toggle
-    opts = opts or {}
-    local b: Toggle = CreateFrame("Button", nil, parent) :: any
-    Mixin(b, Toggle)
-    b:SetSize(34, 18)
-    b.bg = draw.fill(b, "surface-sunk")
-    b.bg:SetAllPoints()
-    b.border = draw.border(b, "gilt-line")
-    b.knob = draw.diamond(b, 8, "ink-muted")
-    b.onChange = opts.onChange
-    b:SetScript("OnClick", function(self)
-        if self.disabled then return end
-        self:SetValue(not self.value, true)
-        if self.onChange then self.onChange(self.value :: boolean) end
-    end)
-    b:SetScript("OnEnter", function(self) if not self.value then self.border:SetColor("gilt") end end)
-    b:SetScript("OnLeave", function(self) if not self.value then self.border:SetColor("gilt-line") end end)
-    b:SetValue(opts.value)
-    return b
+    return Toggle.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -188,61 +187,60 @@ export type CheckboxOptions = {
     onChange?: (value: boolean) -> (),
 }
 
-export interface Checkbox extends Button
-    value: boolean
-    disabled?: boolean
+export class Checkbox extends Button
     boxFrame: Frame
     box: Texture
     boxBorder: draw.Border
     check: Texture
-    label?: Text
-    onChange?: (value: boolean) -> ()
+    label: Text? = nil
+    onChange: ((value: boolean) -> ())? = nil
+    value: boolean = false
+    disabled: boolean? = nil
+
+    constructor(parent: Frame, opts: CheckboxOptions?)
+        opts = opts or {}
+        local size = opts.size or 16
+        super(nil, parent)
+        self.boxFrame = CreateFrame("Frame", nil, self)
+        self.boxFrame:SetSize(size, size)
+        self.boxFrame:SetPoint("LEFT")
+        self.box = draw.fill(self.boxFrame, "surface-sunk")
+        self.box:SetAllPoints()
+        self.boxBorder = draw.border(self.boxFrame, "gilt-line")
+        self.check = check(self.boxFrame, size - 2, "on-signal")
+        self.check:SetPoint("CENTER")
+        local w = size
+        if opts.label then
+            local label = text(self, "body", "ink")
+            self.label = label
+            label:SetPoint("LEFT", self.boxFrame, "RIGHT", S["space-4"], 0)
+            label:SetValue(opts.label)
+            w = w + S["space-4"] + label:GetUnboundedStringWidth()
+        end
+        self:SetSize(opts.width or w, math.max(22, size))
+        self.onChange = opts.onChange
+        self:SetScript("OnClick", function()
+            if self.disabled then return end
+            self:SetValue(not self.value)
+            if self.onChange then self.onChange(self.value) end
+        end)
+        self:SetScript("OnEnter", function() if not self.value then self.boxBorder:SetColor("gilt") end end)
+        self:SetScript("OnLeave", function() if not self.value then self.boxBorder:SetColor("gilt-line") end end)
+        self:SetValue(opts.value)
+    end
+
     function SetValue(on: any)
-    function SetDisabled(disabled: any)
-end
+        self.value = on and true or false
+        draw.paintFill(self.box, self.value and "arcane" or "surface-sunk")
+        self.boxBorder:SetColor(self.value and "arcane" or "gilt-line")
+        self.check:SetShown(self.value)
+    end
 
-local Checkbox: Checkbox = {} :: any
-function Checkbox:SetValue(on: any)
-    self.value = on and true or false
-    draw.paintFill(self.box, self.value and "arcane" or "surface-sunk")
-    self.boxBorder:SetColor(self.value and "arcane" or "gilt-line")
-    self.check:SetShown(self.value)
+    function SetDisabled(...: any): ...any return setDisabled(self, ...) end
 end
-
-Checkbox.SetDisabled = setDisabled
 
 export function checkbox(parent: Frame, opts: CheckboxOptions?): Checkbox
-    opts = opts or {}
-    local size = opts.size or 16
-    local b: Checkbox = CreateFrame("Button", nil, parent) :: any
-    Mixin(b, Checkbox)
-    b.boxFrame = CreateFrame("Frame", nil, b)
-    b.boxFrame:SetSize(size, size)
-    b.boxFrame:SetPoint("LEFT")
-    b.box = draw.fill(b.boxFrame, "surface-sunk")
-    b.box:SetAllPoints()
-    b.boxBorder = draw.border(b.boxFrame, "gilt-line")
-    b.check = check(b.boxFrame, size - 2, "on-signal")
-    b.check:SetPoint("CENTER")
-    local w = size
-    if opts.label then
-        local label = text(b, "body", "ink")
-        b.label = label
-        label:SetPoint("LEFT", b.boxFrame, "RIGHT", S["space-4"], 0)
-        label:SetValue(opts.label)
-        w = w + S["space-4"] + label:GetUnboundedStringWidth()
-    end
-    b:SetSize(opts.width or w, math.max(22, size))
-    b.onChange = opts.onChange
-    b:SetScript("OnClick", function(self)
-        if self.disabled then return end
-        self:SetValue(not self.value)
-        if self.onChange then self.onChange(self.value) end
-    end)
-    b:SetScript("OnEnter", function(self) if not self.value then self.boxBorder:SetColor("gilt") end end)
-    b:SetScript("OnLeave", function(self) if not self.value then self.boxBorder:SetColor("gilt-line") end end)
-    b:SetValue(opts.value)
-    return b
+    return Checkbox.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -253,72 +251,71 @@ end
 export type SegmentedOption = { value: any, label: string, disabled?: boolean, reason?: string }
 export type SegmentedOptions = { options: SegmentedOption[], value?: any, onChange?: (value: any) -> () }
 
-export interface Segmented extends Frame
-    value: any
-    disabled?: boolean
+export class Segmented extends Frame
     buttons: Button[]
+    onChange: ((value: any) -> ())? = nil
     marker: TabMarker
-    onChange?: (value: any) -> ()
-    function SetValue(v: any)
-    function SetDisabled(disabled: any)
-end
+    value: any = nil
+    disabled: boolean? = nil
 
-local Segmented: Segmented = {} :: any
-function Segmented:SetValue(v: any)
-    self.value = v
-    local chosen: Button? = nil
-    for _, o in ipairs(self.buttons) do
-        local on = o.option.value == v
-        if on then chosen = o end
-        o.label:SetColor(on and "arcane" or (o.option.disabled and "ink-faint" or "ink-muted"))
+    constructor(parent: Frame, opts: SegmentedOptions)
+        super(nil, parent)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.buttons = {}
+        self.onChange = opts.onChange
+        -- the chosen option's fill and edge, gliding to the next (TabMarker)
+        self.marker = tabMarker(self, { box = { fill = "arcane-soft", border = "arcane" }, level = 1 })
+        local x = 3
+        for _, option in ipairs(opts.options) do
+            local b = CreateFrame("Button", nil, self)
+            b:SetFrameLevel(self:GetFrameLevel() + 3)
+            b.option = option
+            b.label = text(b, "label", "ink-muted")
+            b.label:SetPoint("CENTER")
+            b.label:SetValue(option.label)
+            b:SetSize(b.label:GetUnboundedStringWidth() + S["space-5"] * 2, 24)
+            b:SetPoint("TOPLEFT", x, -3)
+            x = x + b:GetWidth() + 2
+            b:SetScript("OnClick", function(obj)
+                if self.disabled or obj.option.disabled then return end
+                self:SetValue(obj.option.value)
+                if self.onChange then self.onChange(obj.option.value) end
+            end)
+            b:SetScript("OnEnter", function(obj)
+                if obj.option.value ~= self.value and not obj.option.disabled and not self.disabled then
+                    obj.label:SetColor("ink")
+                end
+                if obj.option.disabled and obj.option.reason then
+                    showTooltip(obj, { title = obj.option.label, description = obj.option.reason })
+                end
+            end)
+            b:SetScript("OnLeave", function()
+                self:SetValue(self.value)
+                hideTooltip()
+            end)
+            self.buttons[#self.buttons + 1] = b
+        end
+        self:SetSize(x + 1, 30)
+        self:SetValue(opts.value)
     end
-    self.marker:SetChosen(chosen)
-end
 
-Segmented.SetDisabled = setDisabled
+    function SetValue(v: any)
+        self.value = v
+        local chosen: Button? = nil
+        for _, o in ipairs(self.buttons) do
+            local on = o.option.value == v
+            if on then chosen = o end
+            o.label:SetColor(on and "arcane" or (o.option.disabled and "ink-faint" or "ink-muted"))
+        end
+        self.marker:SetChosen(chosen)
+    end
+
+    function SetDisabled(...: any): ...any return setDisabled(self, ...) end
+end
 
 export function segmented(parent: Frame, opts: SegmentedOptions): Segmented
-    local f: Segmented = CreateFrame("Frame", nil, parent) :: any
-    Mixin(f, Segmented)
-    draw.fill(f, "surface-sunk"):SetAllPoints()
-    draw.border(f, "gilt-line")
-    f.buttons = {}
-    f.onChange = opts.onChange
-    -- the chosen option's fill and edge, gliding to the next (TabMarker)
-    f.marker = tabMarker(f, { box = { fill = "arcane-soft", border = "arcane" }, level = 1 })
-    local x = 3
-    for _, option in ipairs(opts.options) do
-        local b = CreateFrame("Button", nil, f)
-        b:SetFrameLevel(f:GetFrameLevel() + 3)
-        b.option = option
-        b.label = text(b, "label", "ink-muted")
-        b.label:SetPoint("CENTER")
-        b.label:SetValue(option.label)
-        b:SetSize(b.label:GetUnboundedStringWidth() + S["space-5"] * 2, 24)
-        b:SetPoint("TOPLEFT", x, -3)
-        x = x + b:GetWidth() + 2
-        b:SetScript("OnClick", function(self)
-            if f.disabled or self.option.disabled then return end
-            f:SetValue(self.option.value)
-            if f.onChange then f.onChange(self.option.value) end
-        end)
-        b:SetScript("OnEnter", function(self)
-            if self.option.value ~= f.value and not self.option.disabled and not f.disabled then
-                self.label:SetColor("ink")
-            end
-            if self.option.disabled and self.option.reason then
-                showTooltip(self, { title = self.option.label, description = self.option.reason })
-            end
-        end)
-        b:SetScript("OnLeave", function()
-            f:SetValue(f.value)
-            hideTooltip()
-        end)
-        f.buttons[#f.buttons + 1] = b
-    end
-    f:SetSize(x + 1, 30)
-    f:SetValue(opts.value)
-    return f
+    return Segmented.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -342,54 +339,13 @@ export type SliderOptions = {
     onChange?: (v: number) -> (),
 }
 
-export interface Slider extends Frame
-    min: number
-    max: number
-    step?: number
-    unit?: string
-    format?: (v: number) -> string
-    onChange?: (v: number) -> ()
-    live: boolean
-    value: number
-    committed: number
-    pending?: number
-    updating?: boolean
-    disabled?: boolean
-    valueText: Text
-    label?: Text
-    slider: Slider
-    function ShowValue(v: number)
-    function SetValue(v: number)
-    function SetDisabled(disabled: any)
-end
-
-local Slider: Slider = {} :: any
 local function snap(v: number, min: number, step: number?): number
     if not step or step <= 0 then return v end
     return min + math.floor((v - min) / step + 0.5) * step
 end
 
-function Slider:ShowValue(v: number)
-    local value = self.format and self.format(v) or (self.unit and (v .. self.unit) or tostring(v))
-    self.valueText:SetValue(value)
-end
-
-function Slider:SetValue(v: number)
-    self.value, self.committed = v, v
-    self.updating = true
-    self.slider:SetValue(v)
-    self.updating = false
-    self:ShowValue(v)
-end
-
-Slider.SetDisabled = function(self: Slider, disabled: any)
-    setDisabled(self, disabled)
-    self.slider:SetEnabled(not self.disabled)
-    self.slider:EnableMouse(not self.disabled)
-end
-
 -- the value line's height comes from the numeric style, which a theme can change
-local sliders: { [Slider]: boolean } = setmetatable({}, { __mode = "k" })
+local sliders: { [SliderInput]: boolean } = setmetatable({}, { __mode = "k" })
 local function sliderHeight(): number
     return T.type.numeric.lineHeight + S["space-2"] + 18
 end
@@ -397,74 +353,113 @@ events.on("SUUUI_THEME_CHANGED", function()
     for f in pairs(sliders) do f:SetHeight(sliderHeight()) end
 end, "UI.Slider")
 
-export function slider(parent: Frame, opts: SliderOptions): Slider
-    local f: Slider = CreateFrame("Frame", nil, parent) :: any
-    Mixin(f, Slider)
-    local width = opts.width or 200
-    f:SetSize(width, sliderHeight())
-    sliders[f] = true
-    f.min, f.max, f.step = opts.min or 0, opts.max or 1, opts.step
-    f.unit, f.format, f.onChange = opts.unit, opts.format, opts.onChange
-    f.live = opts.live ~= false
+export class SliderInput extends Frame
+    min: number
+    max: number
+    step: number? = nil
+    unit: string? = nil
+    format: (((v: number) -> string))? = nil
+    onChange: ((v: number) -> ())? = nil
+    live: boolean
+    valueText: Text
+    label: Text? = nil
+    committed: number = 0
+    pending: number? = nil
+    value: number = 0
+    slider: Slider
+    updating: boolean? = nil
+    disabled: boolean? = nil
 
-    f.valueText = text(f, "numeric", "ink")
-    f.valueText:SetPoint("TOPRIGHT")
-    if opts.label then
-        local label = text(f, "label", "ink")
-        f.label = label
-        label:SetPoint("TOPLEFT")
-        label:SetValue(opts.label)
-    end
+    constructor(parent: Frame, opts: SliderOptions)
+        super(nil, parent)
+        local width = opts.width or 200
+        self:SetSize(width, sliderHeight())
+        sliders[self] = true
+        self.min, self.max, self.step = opts.min or 0, opts.max or 1, opts.step
+        self.unit, self.format, self.onChange = opts.unit, opts.format, opts.onChange
+        self.live = opts.live ~= false
 
-    local s = CreateFrame("Slider", nil, f)
-    s:SetOrientation("HORIZONTAL")
-    s:SetPoint("BOTTOMLEFT")
-    s:SetPoint("BOTTOMRIGHT")
-    s:SetHeight(18)
-    s:SetMinMaxValues(f.min, f.max)
-    if f.step then
-        s:SetValueStep(f.step)
-        s:SetObeyStepOnDrag(true)
-    end
-    local thumb = s:CreateTexture(nil, "OVERLAY")
-    thumb:SetSize(13, 13)
-    thumb:SetColorTexture(0, 0, 0, 0)
-    s:SetThumbTexture(thumb)
-    local track = draw.fill(s, "track", "BACKGROUND")
-    track:SetHeight(4)
-    track:SetPoint("LEFT", 6, 0)
-    track:SetPoint("RIGHT", -6, 0)
-    local fill = draw.fill(s, "arcane", "ARTWORK")
-    fill:SetHeight(4)
-    fill:SetPoint("LEFT", track, "LEFT")
-    fill:SetPoint("RIGHT", thumb, "CENTER")
-    -- The thumb: an ink diamond with a 1px surface border and a 1px arcane edge.
-    for i, d in ipairs({ { 13, "arcane" }, { 11, "surface" }, { 9, "ink" } } :: any[]) do
-        local dia = draw.diamond(s, d[1], d[2], "OVERLAY", 4 + i)
-        dia:SetPoint("CENTER", thumb, "CENTER")
-    end
-    -- No mouse wheel: it belongs to the page the slider sits on, which scrolls.
-    local function commit()
-        local pending = f.pending
-        if pending ~= nil and pending ~= f.committed then
-            f.committed = pending
-            if f.onChange then f.onChange(pending) end
+        self.valueText = text(self, "numeric", "ink")
+        self.valueText:SetPoint("TOPRIGHT")
+        if opts.label then
+            local label = text(self, "label", "ink")
+            self.label = label
+            label:SetPoint("TOPLEFT")
+            label:SetValue(opts.label)
         end
-        f.pending = nil
+
+        local s = CreateFrame("Slider", nil, self)
+        s:SetOrientation("HORIZONTAL")
+        s:SetPoint("BOTTOMLEFT")
+        s:SetPoint("BOTTOMRIGHT")
+        s:SetHeight(18)
+        s:SetMinMaxValues(self.min, self.max)
+        if self.step then
+            s:SetValueStep(self.step)
+            s:SetObeyStepOnDrag(true)
+        end
+        local thumb = s:CreateTexture(nil, "OVERLAY")
+        thumb:SetSize(13, 13)
+        thumb:SetColorTexture(0, 0, 0, 0)
+        s:SetThumbTexture(thumb)
+        local track = draw.fill(s, "track", "BACKGROUND")
+        track:SetHeight(4)
+        track:SetPoint("LEFT", 6, 0)
+        track:SetPoint("RIGHT", -6, 0)
+        local fill = draw.fill(s, "arcane", "ARTWORK")
+        fill:SetHeight(4)
+        fill:SetPoint("LEFT", track, "LEFT")
+        fill:SetPoint("RIGHT", thumb, "CENTER")
+        -- The thumb: an ink diamond with a 1px surface border and a 1px arcane edge.
+        for i, d in ipairs({ { 13, "arcane" }, { 11, "surface" }, { 9, "ink" } } :: any[]) do
+            local dia = draw.diamond(s, d[1], d[2], "OVERLAY", 4 + i)
+            dia:SetPoint("CENTER", thumb, "CENTER")
+        end
+        -- No mouse wheel: it belongs to the page the slider sits on, which scrolls.
+        local function commit()
+            local pending = self.pending
+            if pending ~= nil and pending ~= self.committed then
+                self.committed = pending
+                if self.onChange then self.onChange(pending) end
+            end
+            self.pending = nil
+        end
+        s:SetScript("OnMouseUp", commit)
+        s:SetScript("OnValueChanged", function(_, v: number)
+            if self.updating or self.disabled then return end
+            v = snap(v, self.min, self.step)
+            if v == self.value then return end
+            self.value = v
+            self:ShowValue(v)
+            self.pending = v
+            if self.live then commit() end
+        end)
+        self.slider = s
+        self:SetValue(opts.value or self.min)
     end
-    s:SetScript("OnMouseUp", commit)
-    s:SetScript("OnValueChanged", function(_, v: number)
-        if f.updating or f.disabled then return end
-        v = snap(v, f.min, f.step)
-        if v == f.value then return end
-        f.value = v
-        f:ShowValue(v)
-        f.pending = v
-        if f.live then commit() end
-    end)
-    f.slider = s
-    f:SetValue(opts.value or f.min)
-    return f
+
+    function ShowValue(v: number)
+        local value = self.format and self.format(v) or (self.unit and (v .. self.unit) or tostring(v))
+        self.valueText:SetValue(value)
+    end
+
+    function SetValue(v: number)
+        self.value, self.committed = v, v
+        self.updating = true
+        self.slider:SetValue(v)
+        self.updating = false
+        self:ShowValue(v)
+    end
+
+    function SetDisabled(disabled: any)
+        setDisabled(self, disabled)
+        self.slider:SetEnabled(not self.disabled)
+        self.slider:EnableMouse(not self.disabled)
+    end
+end
+
+export function slider(parent: Frame, opts: SliderOptions): SliderInput
+    return SliderInput.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -482,65 +477,10 @@ export type StepperOptions = {
     onChange?: (v: number) -> (),
 }
 
-export interface Stepper extends Frame
-    min?: number
-    max?: number
-    step: number
-    value?: number
-    disabled?: boolean
-    onChange?: (v: number) -> ()
-    minus: StepButton
-    plus: StepButton
-    edit: EditBox
-    unitText?: Text
-    function Clamp(v: any): number
-    function SetValue(v: number?)
-    function Commit(v: any)
-    function SetDisabled(disabled: any)
-end
-
 -- a Stepper's minus or plus
 export interface StepButton extends Button
     hover: Texture
     glyph: Glyph
-end
-
-local Stepper: Stepper = {} :: any
-function Stepper:Clamp(v: any): number
-    local n: number = tonumber(v) or self.value or 0
-    local step = self.step
-    if step and step > 0 then
-        local base = self.min or 0
-        n = base + math.floor((n - base) / step + 0.5) * step
-        n = tonumber(("%.4f"):format(n)) :: number -- no float noise (0.1 steps make 0.30000000000000004)
-    end
-    if self.min then n = math.max(self.min, n) end
-    if self.max then n = math.min(self.max, n) end
-    return n
-end
-
-function Stepper:SetValue(v: number?)
-    self.value = v
-    showText(self.edit, tostring(v or ""))
-end
-
-function Stepper:Commit(v: any)
-    if self.disabled then
-        self:SetValue(self.value) -- drop what was typed
-        return
-    end
-    v = self:Clamp(v)
-    local changed = v ~= self.value
-    self:SetValue(v)
-    if changed and self.onChange then self.onChange(v) end
-end
-
-Stepper.SetDisabled = function(self: Stepper, disabled: any)
-    setDisabled(self, disabled)
-    self.edit:EnableMouse(not self.disabled)
-    self.minus:EnableMouse(not self.disabled)
-    self.plus:EnableMouse(not self.disabled)
-    if self.disabled then self.edit:ClearFocus() end
 end
 
 local function stepButton(parent: Frame, make: (parent: Frame, color: string?) -> Glyph): StepButton
@@ -556,46 +496,98 @@ local function stepButton(parent: Frame, make: (parent: Frame, color: string?) -
     return b
 end
 
-export function stepper(parent: Frame, opts: StepperOptions): Stepper
-    local f: Stepper = CreateFrame("Frame", nil, parent) :: any
-    Mixin(f, Stepper)
-    f.min, f.max, f.step, f.onChange = opts.min, opts.max, opts.step or 1, opts.onChange
-    draw.fill(f, "surface-sunk"):SetAllPoints()
-    draw.border(f, "gilt-line")
+export class Stepper extends Frame
+    min: number? = nil
+    max: number? = nil
+    step: number
+    onChange: ((v: number) -> ())? = nil
+    minus: StepButton
+    edit: EditBox
+    unitText: Text? = nil
+    plus: StepButton
+    value: number? = nil
+    disabled: boolean? = nil
 
-    f.minus = stepButton(f, minus)
-    f.minus:SetPoint("LEFT", 1, 0)
-    f.minus:SetScript("OnClick", function() if not f.disabled then f:Commit((f.value or 0) - f.step) end end)
+    constructor(parent: Frame, opts: StepperOptions)
+        super(nil, parent)
+        self.min, self.max, self.step, self.onChange = opts.min, opts.max, opts.step or 1, opts.onChange
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        draw.border(self, "gilt-line")
 
-    local e = CreateFrame("EditBox", nil, f)
-    e:SetAutoFocus(false)
-    e:SetFontObject(fonts.get("numeric"))
-    e:SetJustifyH("CENTER")
-    e:SetSize(44, 28)
-    e:SetPoint("LEFT", f.minus, "RIGHT")
-    e:SetScript("OnEnterPressed", function(self) f:Commit(self:GetText()); self:ClearFocus() end)
-    e:SetScript("OnEscapePressed", function(self) f:SetValue(f.value); self:ClearFocus() end)
-    e:SetScript("OnEditFocusLost", function(self) f:Commit(self:GetText()) end)
-    redrawOnShow(e)
-    f.edit = e
+        self.minus = stepButton(self, minus)
+        self.minus:SetPoint("LEFT", 1, 0)
+        self.minus:SetScript("OnClick", function() if not self.disabled then self:Commit((self.value or 0) - self.step) end end)
 
-    local right: Region = e
-    if opts.unit then
-        local unitText = text(f, "caption", "ink-muted")
-        f.unitText = unitText
-        unitText:SetValue(opts.unit)
-        unitText:SetPoint("LEFT", e, "RIGHT", 0, 0)
-        right = unitText
+        local e = CreateFrame("EditBox", nil, self)
+        e:SetAutoFocus(false)
+        e:SetFontObject(fonts.get("numeric"))
+        e:SetJustifyH("CENTER")
+        e:SetSize(44, 28)
+        e:SetPoint("LEFT", self.minus, "RIGHT")
+        e:SetScript("OnEnterPressed", function(obj) self:Commit(obj:GetText()); obj:ClearFocus() end)
+        e:SetScript("OnEscapePressed", function(obj) self:SetValue(self.value); obj:ClearFocus() end)
+        e:SetScript("OnEditFocusLost", function(obj) self:Commit(obj:GetText()) end)
+        redrawOnShow(e)
+        self.edit = e
+
+        local right: Region = e
+        if opts.unit then
+            local unitText = text(self, "caption", "ink-muted")
+            self.unitText = unitText
+            unitText:SetValue(opts.unit)
+            unitText:SetPoint("LEFT", e, "RIGHT", 0, 0)
+            right = unitText
+        end
+        self.plus = stepButton(self, plus)
+        self.plus:SetPoint("LEFT", right, "RIGHT", opts.unit and S["space-2"] or 0, 0)
+        self.plus:SetScript("OnClick", function() if not self.disabled then self:Commit((self.value or 0) + self.step) end end)
+
+        local unitText = self.unitText
+        local w = 26 + 44 + 26 + 2 + (opts.unit and unitText and (unitText:GetUnboundedStringWidth() + S["space-2"]) or 0)
+        self:SetSize(w, 30)
+        self:SetValue(opts.value)
     end
-    f.plus = stepButton(f, plus)
-    f.plus:SetPoint("LEFT", right, "RIGHT", opts.unit and S["space-2"] or 0, 0)
-    f.plus:SetScript("OnClick", function() if not f.disabled then f:Commit((f.value or 0) + f.step) end end)
 
-    local unitText = f.unitText
-    local w = 26 + 44 + 26 + 2 + (opts.unit and unitText and (unitText:GetUnboundedStringWidth() + S["space-2"]) or 0)
-    f:SetSize(w, 30)
-    f:SetValue(opts.value)
-    return f
+    function Clamp(v: any): number
+        local n: number = tonumber(v) or self.value or 0
+        local step = self.step
+        if step and step > 0 then
+            local base = self.min or 0
+            n = base + math.floor((n - base) / step + 0.5) * step
+            n = tonumber(("%.4f"):format(n)) :: number -- no float noise (0.1 steps make 0.30000000000000004)
+        end
+        if self.min then n = math.max(self.min, n) end
+        if self.max then n = math.min(self.max, n) end
+        return n
+    end
+
+    function SetValue(v: number?)
+        self.value = v
+        showText(self.edit, tostring(v or ""))
+    end
+
+    function Commit(v: any)
+        if self.disabled then
+            self:SetValue(self.value) -- drop what was typed
+            return
+        end
+        v = self:Clamp(v)
+        local changed = v ~= self.value
+        self:SetValue(v)
+        if changed and self.onChange then self.onChange(v) end
+    end
+
+    function SetDisabled(disabled: any)
+        setDisabled(self, disabled)
+        self.edit:EnableMouse(not self.disabled)
+        self.minus:EnableMouse(not self.disabled)
+        self.plus:EnableMouse(not self.disabled)
+        if self.disabled then self.edit:ClearFocus() end
+    end
+end
+
+export function stepper(parent: Frame, opts: StepperOptions): Stepper
+    return Stepper.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -612,87 +604,85 @@ export type TextFieldOptions = {
     onTextChanged?: (text: string) -> (),
 }
 
-export interface TextField extends Frame
-    value: string
-    lastTyped?: string
-    disabled?: boolean
+export class TextField extends Frame
     border: draw.Border
+    onChange: ((text: string) -> ())? = nil
+    onTextChanged: ((text: string) -> ())? = nil
     edit: EditBox
     placeholder: Text
-    onChange?: (text: string) -> ()
-    onTextChanged?: (text: string) -> ()
-    function SetValue(text: string?)
+    value: string = ""
+    lastTyped: string? = nil
+    disabled: boolean? = nil
+
+    constructor(parent: Frame, opts: TextFieldOptions?)
+        opts = opts or {}
+        super(nil, parent)
+        self:SetSize(opts.width or 200, 30)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        self.border = draw.border(self, "gilt-line")
+        self.onChange, self.onTextChanged = opts.onChange, opts.onTextChanged
+
+        local e = CreateFrame("EditBox", nil, self)
+        e:SetAutoFocus(false)
+        e:SetFontObject(fonts.get("body"))
+        e:SetPoint("TOPLEFT", S["space-4"], 0)
+        e:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
+        e:SetTextInsets(0, 0, 0, 0)
+        redrawOnShow(e)
+        self.edit = e
+
+        self.placeholder = text(self, "body", "ink-muted")
+        self.placeholder:SetPoint("LEFT", S["space-4"], 0)
+        self.placeholder:SetValue(opts.placeholder or "")
+
+        local function commit(obj: EditBox)
+            local value = obj:GetText()
+            if value ~= self.value then
+                self.value = value
+                if self.onChange then self.onChange(value) end
+            end
+        end
+        e:SetScript("OnEditFocusGained", function() self.placeholder:Hide(); self.border:SetColor("arcane") end)
+        e:SetScript("OnEditFocusLost", function(obj)
+            self.border:SetColor("gilt-line")
+            self.placeholder:SetShown(obj:GetText() == "")
+            commit(obj)
+        end)
+        e:SetScript("OnEnterPressed", function(obj) commit(obj); obj:ClearFocus() end)
+        e:SetScript("OnEscapePressed", function(obj) obj:ClearFocus() end)
+        -- what's typed, live: any change while the field has focus (the game
+        -- doesn't always flag typing as user input on Forever)
+        e:SetScript("OnTextChanged", function(obj)
+            local value = obj:GetText()
+            if obj:HasFocus() and value ~= self.lastTyped then
+                self.lastTyped = value
+                if self.onTextChanged then self.onTextChanged(value) end
+            end
+            if obj:HasFocus() then self.placeholder:Hide() end
+        end)
+        self:SetValue(opts.value or "")
+    end
+
+    function SetValue(value: string?)
+        self.value = value or ""
+        self.lastTyped = self.value -- set from code: not typing
+        showText(self.edit, self.value)
+        self.placeholder:SetShown(self.value == "" and not self.edit:HasFocus())
+    end
+
     function GetValue(): string
+        return self.edit:GetText()
+    end
+
     function SetDisabled(disabled: any)
-end
-
-local TextField: TextField = {} :: any
-function TextField:SetValue(value: string?)
-    self.value = value or ""
-    self.lastTyped = self.value -- set from code: not typing
-    showText(self.edit, self.value)
-    self.placeholder:SetShown(self.value == "" and not self.edit:HasFocus())
-end
-
-function TextField:GetValue(): string
-    return self.edit:GetText()
-end
-
-TextField.SetDisabled = function(self: TextField, disabled: any)
-    setDisabled(self, disabled)
-    self.edit:EnableMouse(not self.disabled)
-    if self.disabled then self.edit:ClearFocus() end
+        setDisabled(self, disabled)
+        self.edit:EnableMouse(not self.disabled)
+        if self.disabled then self.edit:ClearFocus() end
+    end
 end
 
 export function textField(parent: Frame, opts: TextFieldOptions?): TextField
-    opts = opts or {}
-    local f: TextField = CreateFrame("Frame", nil, parent) :: any
-    Mixin(f, TextField)
-    f:SetSize(opts.width or 200, 30)
-    draw.fill(f, "surface-sunk"):SetAllPoints()
-    f.border = draw.border(f, "gilt-line")
-    f.onChange, f.onTextChanged = opts.onChange, opts.onTextChanged
-
-    local e = CreateFrame("EditBox", nil, f)
-    e:SetAutoFocus(false)
-    e:SetFontObject(fonts.get("body"))
-    e:SetPoint("TOPLEFT", S["space-4"], 0)
-    e:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
-    e:SetTextInsets(0, 0, 0, 0)
-    redrawOnShow(e)
-    f.edit = e
-
-    f.placeholder = text(f, "body", "ink-muted")
-    f.placeholder:SetPoint("LEFT", S["space-4"], 0)
-    f.placeholder:SetValue(opts.placeholder or "")
-
-    local function commit(self: EditBox)
-        local value = self:GetText()
-        if value ~= f.value then
-            f.value = value
-            if f.onChange then f.onChange(value) end
-        end
-    end
-    e:SetScript("OnEditFocusGained", function() f.placeholder:Hide(); f.border:SetColor("arcane") end)
-    e:SetScript("OnEditFocusLost", function(self)
-        f.border:SetColor("gilt-line")
-        f.placeholder:SetShown(self:GetText() == "")
-        commit(self)
-    end)
-    e:SetScript("OnEnterPressed", function(self) commit(self); self:ClearFocus() end)
-    e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    -- what's typed, live: any change while the field has focus (the game
-    -- doesn't always flag typing as user input on Forever)
-    e:SetScript("OnTextChanged", function(self)
-        local value = self:GetText()
-        if self:HasFocus() and value ~= f.lastTyped then
-            f.lastTyped = value
-            if f.onTextChanged then f.onTextChanged(value) end
-        end
-        if self:HasFocus() then f.placeholder:Hide() end
-    end)
-    f:SetValue(opts.value or "")
-    return f
+    return TextField.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
@@ -718,157 +708,149 @@ export type NumberFieldOptions = {
     onTyping?: (n: number?) -> (),
 }
 
-export interface NumberField extends Frame
-    value?: number
-    lastTyped: string
-    min?: number
-    max?: number
-    disabled?: boolean
-    cancelling?: boolean
+export class NumberField extends Frame
     border: draw.Border
+    min: number? = nil
+    max: number? = nil
+    onChange: ((v: number) -> ())? = nil
+    onFocus: ((focused: boolean) -> ())? = nil
+    onTab: ((shift: boolean) -> ())? = nil
+    onTyping: ((n: number?) -> ())? = nil
     letter: Text
     edit: EditBox
-    onChange?: (v: number) -> ()
-    onFocus?: (focused: boolean) -> ()
-    onTab?: (shift: boolean) -> ()
-    onTyping?: (n: number?) -> ()
-    function SetValue(v: number?)
-    function SetRange(min: number?, max: number?)
-    function Clamp(v: number): number
-    function Tone()
-    function Commit(text: any)
-    function Focus()
-    function HasFocus(): boolean
-    function Cancel()
-    function SetDisabled(disabled: any)
-end
+    lastTyped: string = ""
+    value: number? = nil
+    cancelling: boolean? = nil
+    disabled: boolean? = nil
 
-local NumberField: NumberField = {} :: any
-function NumberField:SetValue(v: number?)
-    self.value = v
-    self.lastTyped = v and tostring(v) or ""
-    showText(self.edit, self.lastTyped)
-    self:Tone()
-end
+    constructor(parent: Frame, opts: NumberFieldOptions?)
+        opts = opts or {}
+        super(nil, parent)
+        local width = opts.width or 44
+        self:SetSize(S["space-4"] + 10 + 5 + width + S["space-4"], 30)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        self.border = draw.border(self, "gilt-line")
+        self.min, self.max = opts.min, opts.max
+        self.onChange, self.onFocus, self.onTab, self.onTyping = opts.onChange, opts.onFocus, opts.onTab, opts.onTyping
 
-function NumberField:SetRange(min: number?, max: number?)
-    self.min, self.max = min, max
-end
+        self.letter = text(self, "caption", "ink-faint")
+        self.letter:SetPoint("LEFT", S["space-4"], 0)
+        self.letter:SetValue(opts.letter or "")
 
-function NumberField:Clamp(v: number): number
-    v = math.floor(v + 0.5)
-    if self.min then v = math.max(self.min, v) end
-    if self.max then v = math.min(self.max, v) end
-    return v
-end
+        local e = CreateFrame("EditBox", nil, self)
+        e:SetAutoFocus(false)
+        e:SetFontObject(fonts.get("numeric"))
+        e:SetJustifyH("RIGHT")
+        e:SetMaxLetters(6)
+        e:SetSize(width, 28)
+        e:SetPoint("RIGHT", -S["space-4"], 0)
+        redrawOnShow(e)
+        self.edit = e
+        -- the letter's side takes clicks too
+        self:EnableMouse(true)
+        self:SetScript("OnMouseDown", function() self:Focus() end)
 
--- The edge: arcane with focus, amber while what's typed is out of range.
-function NumberField:Tone()
-    local e = self.edit
-    local n = tonumber(e:GetText())
-    local focus = e:HasFocus()
-    self.border:SetColor((focus and n and n ~= self:Clamp(n) and "amber") or (focus and "arcane") or "gilt-line")
-end
-
-function NumberField:Commit(value: any)
-    local n = tonumber(value)
-    if self.disabled or not n then return self:SetValue(self.value) end
-    n = self:Clamp(n)
-    local changed = n ~= self.value
-    self:SetValue(n)
-    if changed and self.onChange then self.onChange(n) end
-end
-
-function NumberField:Focus()
-    if not self.disabled then self.edit:SetFocus() end
-end
-
-function NumberField:HasFocus(): boolean
-    return self.edit:HasFocus()
-end
-
-function NumberField:Cancel()
-    if self.edit:HasFocus() then
-        self.cancelling = true
-        self.edit:ClearFocus()
+        e:SetScript("OnEditFocusGained", function(obj)
+            obj:HighlightText()
+            self:Tone()
+            if self.onFocus then self.onFocus(true) end
+        end)
+        e:SetScript("OnEditFocusLost", function(obj)
+            obj:HighlightText(0, 0)
+            if self.cancelling then self.cancelling = nil else self:Commit(obj:GetText()) end
+            self:Tone()
+            if self.onFocus then self.onFocus(false) end
+        end)
+        e:SetScript("OnEnterPressed", function(obj) obj:ClearFocus() end)
+        e:SetScript("OnEscapePressed", function() self:Cancel() end)
+        e:SetScript("OnTabPressed", function() if self.onTab then self.onTab(IsShiftKeyDown()) end end)
+        e:SetScript("OnArrowPressed", function(obj, key)
+            local dir: number | false = (key == "UP" and 1) or (key == "DOWN" and -1)
+            if not dir then return end
+            self:Commit((tonumber(obj:GetText()) or self.value or 0) + dir * (IsShiftKeyDown() and 10 or 1))
+            obj:SetCursorPosition(#obj:GetText())
+        end)
+        -- letters dropped as they're typed (compared, not gated on userInput:
+        -- the game doesn't always flag typing as user input on Forever)
+        e:SetScript("OnTextChanged", function(obj)
+            local typed = obj:GetText()
+            local digits = typed:gsub("[^%d]", "")
+            local clean = (typed:sub(1, 1) == "-" and "-" or "") .. digits
+            if clean ~= typed then
+                local cursor = obj:GetCursorPosition() - (#typed - #clean)
+                obj:SetText(clean)
+                obj:SetCursorPosition(math.max(0, cursor))
+                return
+            end
+            self:Tone()
+            if obj:HasFocus() and typed ~= self.lastTyped then
+                self.lastTyped = typed
+                if self.onTyping then self.onTyping(tonumber(typed)) end
+            end
+        end)
+        self:SetValue(opts.value)
     end
-    self:SetValue(self.value)
-end
 
-NumberField.SetDisabled = function(self: NumberField, disabled: any)
-    if disabled then self:Cancel() end
-    setDisabled(self, disabled)
-    self.edit:EnableMouse(not self.disabled)
+    function SetValue(v: number?)
+        self.value = v
+        self.lastTyped = v and tostring(v) or ""
+        showText(self.edit, self.lastTyped)
+        self:Tone()
+    end
+
+    function SetRange(min: number?, max: number?)
+        self.min, self.max = min, max
+    end
+
+    function Clamp(v: number): number
+        v = math.floor(v + 0.5)
+        if self.min then v = math.max(self.min, v) end
+        if self.max then v = math.min(self.max, v) end
+        return v
+    end
+
+    -- The edge: arcane with focus, amber while what's typed is out of range.
+    function Tone()
+        local e = self.edit
+        local n = tonumber(e:GetText())
+        local focus = e:HasFocus()
+        self.border:SetColor((focus and n and n ~= self:Clamp(n) and "amber") or (focus and "arcane") or "gilt-line")
+    end
+
+    function Commit(value: any)
+        local n = tonumber(value)
+        if self.disabled or not n then return self:SetValue(self.value) end
+        n = self:Clamp(n)
+        local changed = n ~= self.value
+        self:SetValue(n)
+        if changed and self.onChange then self.onChange(n) end
+    end
+
+    function Focus()
+        if not self.disabled then self.edit:SetFocus() end
+    end
+
+    function HasFocus(): boolean
+        return self.edit:HasFocus()
+    end
+
+    function Cancel()
+        if self.edit:HasFocus() then
+            self.cancelling = true
+            self.edit:ClearFocus()
+        end
+        self:SetValue(self.value)
+    end
+
+    function SetDisabled(disabled: any)
+        if disabled then self:Cancel() end
+        setDisabled(self, disabled)
+        self.edit:EnableMouse(not self.disabled)
+    end
 end
 
 export function numberField(parent: Frame, opts: NumberFieldOptions?): NumberField
-    opts = opts or {}
-    local f: NumberField = CreateFrame("Frame", nil, parent) :: any
-    Mixin(f, NumberField)
-    local width = opts.width or 44
-    f:SetSize(S["space-4"] + 10 + 5 + width + S["space-4"], 30)
-    draw.fill(f, "surface-sunk"):SetAllPoints()
-    f.border = draw.border(f, "gilt-line")
-    f.min, f.max = opts.min, opts.max
-    f.onChange, f.onFocus, f.onTab, f.onTyping = opts.onChange, opts.onFocus, opts.onTab, opts.onTyping
-
-    f.letter = text(f, "caption", "ink-faint")
-    f.letter:SetPoint("LEFT", S["space-4"], 0)
-    f.letter:SetValue(opts.letter or "")
-
-    local e = CreateFrame("EditBox", nil, f)
-    e:SetAutoFocus(false)
-    e:SetFontObject(fonts.get("numeric"))
-    e:SetJustifyH("RIGHT")
-    e:SetMaxLetters(6)
-    e:SetSize(width, 28)
-    e:SetPoint("RIGHT", -S["space-4"], 0)
-    redrawOnShow(e)
-    f.edit = e
-    -- the letter's side takes clicks too
-    f:EnableMouse(true)
-    f:SetScript("OnMouseDown", function(self: NumberField) self:Focus() end)
-
-    e:SetScript("OnEditFocusGained", function(self)
-        self:HighlightText()
-        f:Tone()
-        if f.onFocus then f.onFocus(true) end
-    end)
-    e:SetScript("OnEditFocusLost", function(self)
-        self:HighlightText(0, 0)
-        if f.cancelling then f.cancelling = nil else f:Commit(self:GetText()) end
-        f:Tone()
-        if f.onFocus then f.onFocus(false) end
-    end)
-    e:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-    e:SetScript("OnEscapePressed", function() f:Cancel() end)
-    e:SetScript("OnTabPressed", function() if f.onTab then f.onTab(IsShiftKeyDown()) end end)
-    e:SetScript("OnArrowPressed", function(self, key)
-        local dir: number | false = (key == "UP" and 1) or (key == "DOWN" and -1)
-        if not dir then return end
-        f:Commit((tonumber(self:GetText()) or f.value or 0) + dir * (IsShiftKeyDown() and 10 or 1))
-        self:SetCursorPosition(#self:GetText())
-    end)
-    -- letters dropped as they're typed (compared, not gated on userInput:
-    -- the game doesn't always flag typing as user input on Forever)
-    e:SetScript("OnTextChanged", function(self)
-        local typed = self:GetText()
-        local digits = typed:gsub("[^%d]", "")
-        local clean = (typed:sub(1, 1) == "-" and "-" or "") .. digits
-        if clean ~= typed then
-            local cursor = self:GetCursorPosition() - (#typed - #clean)
-            self:SetText(clean)
-            self:SetCursorPosition(math.max(0, cursor))
-            return
-        end
-        f:Tone()
-        if self:HasFocus() and typed ~= f.lastTyped then
-            f.lastTyped = typed
-            if f.onTyping then f.onTyping(tonumber(typed)) end
-        end
-    end)
-    f:SetValue(opts.value)
-    return f
+    return NumberField.new(parent, opts)
 end
 
 --------------------------------------------------------------------------------
