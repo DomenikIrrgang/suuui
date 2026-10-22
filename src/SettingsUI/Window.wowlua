@@ -148,96 +148,113 @@ end
 -- Pages
 --------------------------------------------------------------------------------
 
-local Page: { [string]: any } = {}
+export class SettingsPage
+    section: any
+    frame: any
+    groups: any
+    rows: any
+    width: any
+    stack: any
+    title: any
+    merged: any
+    changed: any? = nil
 
--- `section`: the section the group comes from, when it was merged in from
--- another (its rows use that section's namespace).
-function Page:AddGroup(def: { [string]: any }, section: registry.Section?): any
-    local g = settingRow.settingsGroup(self.frame, { title = def.title, description = def.description, width = self.width })
-    g.def, g.section = def, section or self.section
-    g.boundRows = {} -- not g.rows: that is the group's own row frame
-    for _, rdef in ipairs(def.rows or {}) do
-        local row = bindRow(self, rdef, g.section)
-        g:AddRow(row)
-        g.boundRows[#g.boundRows + 1] = row
-        self.rows[#self.rows + 1] = row
-    end
-    self.groups[#self.groups + 1] = g
-    self.stack:Add(g)
-    return g
-end
-
--- Drops every group, for sections that rebuild themselves (the module list).
-function Page:Clear()
-    for _, g in ipairs(self.groups) do
-        self.stack:Remove(g)
-        g:Hide()
-    end
-    wipe(self.groups)
-    wipe(self.rows)
-end
-
-function Page:Refresh()
-    local changed = 0
-    for _, g in ipairs(self.groups) do
-        local n = 0
-        for _, row in ipairs(g.boundRows) do
-            row.refresh()
-            if row.isModified() then n = n + 1 end
+    constructor(section: registry.Section)
+        local width = section.preview and CONTENT_W or WIDE_W
+        local f = CreateFrame("Frame", nil, frame.content.child)
+        f:SetWidth(width)
+        self.section = section
+        self.frame = f
+        self.groups = {}
+        self.rows = {}
+        self.width = width
+        self.stack = layout.stack(f, { gap = S["space-7"], autoSize = "height" })
+        self.title = panel.sectionHeader(f, section.label, nil, width)
+        self.title:Hide()
+        self.stack:Add(self.title)
+        for _, g in ipairs(section.groups or {}) do self:AddGroup(g) end
+        local build = section.build
+        if build then build(self) end
+        -- then the groups of the sections merged into this one
+        local merged: string[] = {}
+        for _, m in ipairs(registry.merged(section.id)) do
+            merged[#merged + 1] = m.id
+            for _, g in ipairs(m.groups or {}) do self:AddGroup(g, m) end
         end
-        g:SetMeta(n > 0 and (n == 1 and "1 changed" or n .. " changed") or "")
-        changed = changed + n
+        self.merged = table.concat(merged, ",")
+        self:Refresh()
+        f:Hide()
+        frame.pagesStack:Add(f)
     end
-    self.changed = changed
-end
 
--- Shows the rows matching `q` (everything when q is empty); returns the count.
--- A match on the section's label (or a merged group's own section's label) or
--- a group's title or description shows all the rows under it.
-function Page:Filter(q: string): number
-    local total = 0
-    local sectionHit = q == "" or (self.section.label or ""):lower():find(q, 1, true)
-    for _, g in ipairs(self.groups) do
-        local groupHit = sectionHit or (g.section.label or ""):lower():find(q, 1, true)
-            or (g.def.title or ""):lower():find(q, 1, true)
-            or (tostring(describe(g.def.description) or "")):lower():find(q, 1, true)
-        local shown = 0
-        for _, row in ipairs(g.boundRows) do
-            local d = row.def
-            local hit = groupHit or (d.label or ""):lower():find(q, 1, true)
-                or (tostring(rowDescription(d) or "")):lower():find(q, 1, true)
-            row:SetShown(hit and true or false)
-            if hit then shown = shown + 1 end
+    -- `section`: the section the group comes from, when it was merged in from
+    -- another (its rows use that section's namespace).
+    function AddGroup(def: { [string]: any }, section: registry.Section?): any
+        local g = settingRow.settingsGroup(self.frame, { title = def.title, description = def.description, width = self.width })
+        g.def, g.section = def, section or self.section
+        g.boundRows = {} -- not g.rows: that is the group's own row frame
+        for _, rdef in ipairs(def.rows or {}) do
+            local row = bindRow(self, rdef, g.section)
+            g:AddRow(row)
+            g.boundRows[#g.boundRows + 1] = row
+            self.rows[#self.rows + 1] = row
         end
-        g:SetShown(shown > 0)
-        total = total + shown
+        self.groups[#self.groups + 1] = g
+        self.stack:Add(g)
+        return g
     end
-    return total
+
+    -- Drops every group, for sections that rebuild themselves (the module list).
+    function Clear()
+        for _, g in ipairs(self.groups) do
+            self.stack:Remove(g)
+            g:Hide()
+        end
+        wipe(self.groups)
+        wipe(self.rows)
+    end
+
+    function Refresh()
+        local changed = 0
+        for _, g in ipairs(self.groups) do
+            local n = 0
+            for _, row in ipairs(g.boundRows) do
+                row.refresh()
+                if row.isModified() then n = n + 1 end
+            end
+            g:SetMeta(n > 0 and (n == 1 and "1 changed" or n .. " changed") or "")
+            changed = changed + n
+        end
+        self.changed = changed
+    end
+
+    -- Shows the rows matching `q` (everything when q is empty); returns the count.
+    -- A match on the section's label (or a merged group's own section's label) or
+    -- a group's title or description shows all the rows under it.
+    function Filter(q: string): number
+        local total = 0
+        local sectionHit = q == "" or (self.section.label or ""):lower():find(q, 1, true)
+        for _, g in ipairs(self.groups) do
+            local groupHit = sectionHit or (g.section.label or ""):lower():find(q, 1, true)
+                or (g.def.title or ""):lower():find(q, 1, true)
+                or (tostring(describe(g.def.description) or "")):lower():find(q, 1, true)
+            local shown = 0
+            for _, row in ipairs(g.boundRows) do
+                local d = row.def
+                local hit = groupHit or (d.label or ""):lower():find(q, 1, true)
+                    or (tostring(rowDescription(d) or "")):lower():find(q, 1, true)
+                row:SetShown(hit and true or false)
+                if hit then shown = shown + 1 end
+            end
+            g:SetShown(shown > 0)
+            total = total + shown
+        end
+        return total
+    end
 end
 
-local function buildPage(section: registry.Section): any
-    local width = section.preview and CONTENT_W or WIDE_W
-    local f = CreateFrame("Frame", nil, frame.content.child)
-    f:SetWidth(width)
-    local page: any = setmetatable({ section = section, frame = f, groups = {}, rows = {}, width = width }, { __index = Page })
-    page.stack = layout.stack(f, { gap = S["space-7"], autoSize = "height" })
-    page.title = panel.sectionHeader(f, section.label, nil, width)
-    page.title:Hide()
-    page.stack:Add(page.title)
-    for _, g in ipairs(section.groups or {}) do page:AddGroup(g) end
-    local build = section.build
-    if build then build(page) end
-    -- then the groups of the sections merged into this one
-    local merged: string[] = {}
-    for _, m in ipairs(registry.merged(section.id)) do
-        merged[#merged + 1] = m.id
-        for _, g in ipairs(m.groups or {}) do page:AddGroup(g, m) end
-    end
-    page.merged = table.concat(merged, ",")
-    page:Refresh()
-    f:Hide()
-    frame.pagesStack:Add(f)
-    return page
+local function buildPage(section: registry.Section): SettingsPage
+    return SettingsPage.new(section)
 end
 
 local function getPage(section: registry.Section): any

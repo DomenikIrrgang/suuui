@@ -88,7 +88,7 @@ local function circle(parent: any, file: string, color: string, layer: string, s
     return t
 end
 
-local function glyph(parent: any, name: string, size: number, color: string, layer: string?)
+local function glyph(parent: any, name: string, size: number, color: string, layer: string?): Texture
     local t = parent:CreateTexture(nil, layer or "ARTWORK")
     t:SetTexture(GLYPHS .. name .. ".tga")
     t:SetSize(size, size)
@@ -320,443 +320,445 @@ end
 
 -- The skinned panel. `frame` is the game's LFGListingFrame (its parts are
 -- the game's: read by name, typed loosely).
-export interface ListingSkin
+
+local skinned: ListingSkin? = nil
+
+-- The parts SuuUI adds to the listing's activity step.
+type ActivityParts = { psLabel: Text, tree: Frame, detailsLabel: Text, field: Frame, count: Text }
+
+export class ListingSkin
     frame: any
     topRule: Texture
     footRule: Texture
     npfRule: Texture
-    hint?: Text
-    psLabel: Text
-    psMissing?: Frame
-    tree: Frame
-    detailsLabel: Text
-    field: Frame
-    count: Text
-    lockGlyph: Texture
-    placing?: boolean
-    queued?: boolean
+    hint: Text? = nil
+    psMissing: Frame? = nil
+    -- the activity step's parts (where the frame has its ActivityView)
+    activity: ActivityParts? = nil
+    -- the locked view's glyph (where it has one)
+    lockGlyph: Texture? = nil
+    placing: boolean? = nil
+    queued: boolean? = nil
+
+    constructor(f: any)
+        self.frame = f
+        skinned = self
+
+        -- the rules under the top and over the foot, and between the roles and New player friendly
+        self.topRule = draw.fill(f, "gilt-faint", "ARTWORK")
+        self.topRule:SetHeight(1)
+        self.topRule:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -RULE_Y)
+        self.topRule:SetPoint("TOPRIGHT", f, "TOPRIGHT", -SIDE, -RULE_Y)
+        self.footRule = draw.fill(f, "gilt-faint", "ARTWORK")
+        self.footRule:SetHeight(1)
+        self.footRule:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE, FOOT_RULE)
+        self.footRule:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, FOOT_RULE)
+        self.npfRule = draw.fill(f, "gilt-faint", "ARTWORK")
+
+        -- the top: the role toggles, your role in a group, New player friendly
+        local solo = f.SoloRoleButtons
+        for key, role in pairs({ Tank = "TANK", Healer = "HEALER", DPS = "DAMAGER" }) do
+            if solo and solo[key] and solo[key].CheckButton then toggle(solo[key], ROLE_TEX[role], ROLE_WORD[role]) end
+        end
+        local group = f.GroupRoleButtons
+        if group then
+            if group.RoleIcon then
+                local icon = group.RoleIcon
+                local p = roundIcon(icon, ROLE_TEX.DAMAGER, "")
+                draw.paint(p.edge, "arcane")
+                draw.paint(p.fill, "surface-raised")
+                draw.paint(p.glyph, "ink")
+                p.word:SetColor("ink")
+                local function update()
+                    local role = icon.roleID
+                    p.glyph:SetTexture(ROLE_TEX[role] or ROLE_TEX.DAMAGER)
+                    p.word:SetValue(ROLE_WORD[role] or "")
+                    -- the game sets its own art again
+                    local n = ask(icon, "GetNormalTexture")
+                    if n then n:SetAlpha(0) end
+                end
+                hook(_G, "LFGListingRoleIcon_UpdateRoleTexture", function(b: any) if b == icon then update() end end, ON_DEMAND)
+                hookScript(icon, "OnShow", update)
+                update()
+                parts[icon] = p
+            end
+            if group.RoleDropdown then reskin.reskinDropdown(group.RoleDropdown) end
+            if group.RolePollButton then reskin.reskinButton(group.RolePollButton) end
+            hookScript(group, "OnShow", function() self:Queue() end)
+            hookScript(group, "OnHide", function() self:Queue() end)
+        end
+        local npf = f.NewPlayerFriendlyButton
+        if npf and npf.CheckButton then
+            toggle(npf, GLYPHS .. "leaf.tga", _G.LFG_LIST_NEW_PLAYER_FRIENDLY or "New player friendly", 16)
+        end
+
+        -- step 1: the hint over the cards
+        local view = f.CategoryView
+        if view then
+            view:ClearAllPoints()
+            view:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -(RULE_Y + S["space-5"]))
+            view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BODY_BOTTOM)
+            local hint = uiText.text(view, "caption", "ink-muted")
+            self.hint = hint
+            hint:SetPoint("TOPLEFT")
+            hint:SetValue("Step 1 of 2 · What are you listing for?")
+            hookScript(view, "OnShow", function() self:Queue() end)
+            if _G.LFGListingCategorySelection_UpdateCategoryButtons then
+                hook(_G, "LFGListingCategorySelection_UpdateCategoryButtons", function() self:Queue() end, ON_DEMAND)
+            end
+        end
+
+        -- step 2
+        local av = f.ActivityView
+        if av then
+            local act = {} :: ActivityParts
+            av:ClearAllPoints()
+            av:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -BODY_TOP)
+            av:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BODY_BOTTOM)
+            for _, key in ipairs({ "BarTop", "BarMiddle" }) do if av[key] then av[key]:SetAlpha(0) end end
+            for _, t in ipairs(av.BarComponents or {}) do t:SetAlpha(0) end
+            act.psLabel = uiText.text(av, "caption", "ink-muted")
+            if av.PlayStyleDropdown then
+                reskin.reskinDropdown(av.PlayStyleDropdown)
+                -- amber until a play style is chosen
+                local _, holder = edgeOver(av.PlayStyleDropdown, "amber", 3)
+                self.psMissing = holder
+            end
+            local lr = av.LevelRangesCheckbox
+            if lr then
+                if lr.Checkbox then reskin.reskinCheckButton(lr.Checkbox) end
+                font(lr.Text, "body", "ink")
+            end
+            act.tree = CreateFrame("Frame", nil, av)
+            act.tree:SetFrameLevel(math.max(0, (av.ScrollBox and av.ScrollBox:GetFrameLevel() or av:GetFrameLevel() + 1) - 1))
+            draw.fill(act.tree, "surface-sunk"):SetAllPoints()
+            draw.border(act.tree, "gilt-faint")
+            if av.ScrollBox then
+                hook(av.ScrollBox, "SetPoint", function() self:PlaceScrollBox() end)
+            end
+            if av.ScrollBar then reskin.reskinScrollBar(av.ScrollBar) end
+            -- the details
+            act.detailsLabel = uiText.text(av, "caption", "ink-muted")
+            act.field = CreateFrame("Frame", nil, av)
+            draw.fill(act.field, "surface-sunk"):SetAllPoints()
+            local edge = draw.border(act.field, "gilt-line")
+            act.count = uiText.text(av, "caption", "ink-faint")
+            local c = av.Comment
+            if c then
+                act.field:SetFrameLevel(math.max(0, c:GetFrameLevel() - 1))
+                for _, r in ipairs({ c:GetRegions() }) do
+                    if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+                end
+                if c.ScrollBar then reskin.reskinScrollBar(c.ScrollBar) end
+                local e = c.EditBox
+                if e then
+                    e:SetFontObject(fonts.get("body"))
+                    draw.paint(e, "ink")
+                    font(e.Instructions, "body", "ink-muted")
+                    hookScript(e, "OnTextChanged", function() self:UpdateCount() end)
+                    hookScript(e, "OnEditFocusGained", function() edge:SetColor("arcane") end)
+                    hookScript(e, "OnEditFocusLost", function() edge:SetColor("gilt-line") end)
+                end
+            end
+            if av.VoiceChatDropdown then reskin.reskinDropdown(av.VoiceChatDropdown) end
+            font(av.VoiceChatLabel, "caption", "ink-muted")
+            -- the game places its parts again on show; after it
+            hookScript(av, "OnShow", function() self:LayoutActivities(); self:Queue() end)
+            hook(_G, "LFGListingActivityView_OnPlayStyleSelectedInternal", function() self:LayoutActivities() end, ON_DEMAND)
+            self.activity = act
+        end
+        -- the tree's rows, each time the game sets one up
+        hook(_G, "LFGListingActivityView_InitActivityGroupButton", skinGroupRow, ON_DEMAND)
+        hook(_G, "LFGListingActivityView_InitActivityButton", skinActivityRow, ON_DEMAND)
+
+        -- locked: the game's text in a sunk panel under a lock
+        local lv = f.LockedView
+        if lv then
+            lv:ClearAllPoints()
+            lv:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -(RULE_Y + S["space-5"]))
+            lv:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BOTTOM)
+            local bg = draw.fill(lv, "surface-sunk", "BACKGROUND", -8)
+            bg:SetAllPoints()
+            draw.border(lv, "gilt-faint")
+            self.lockGlyph = glyph(lv, "lock", 24, "ink-faint")
+            self.lockGlyph:SetPoint("TOP", lv, "TOP", 0, -S["space-6"] * 2)
+            hookScript(lv, "OnShow", function() self:Queue() end)
+            if _G.LFGListingLockedView_RefreshContent then
+                hook(_G, "LFGListingLockedView_RefreshContent", function() self:Queue() end, ON_DEMAND)
+            end
+        end
+
+        -- the foot
+        reskin.reskinButton(f.BackButton)
+        primaryButton(f.PostButton)
+        for _, name in ipairs({ "LFGListingPostButton_UpdateText", "LFGListingBackButton_UpdateText" }) do
+            if _G[name] then hook(name, function() self:LayoutFoot() end) end
+        end
+        hook(f, "UpdatePostButtonEnableState", function()
+            if parts[f.PostButton] then parts[f.PostButton].draw() end
+            self:LayoutActivities()
+        end)
+        hook(f, "UpdateFrameView", function() self:Queue() end)
+        hookScript(f, "OnShow", function() self:Layout(); self:Queue() end)
+        if f:IsShown() then self:Layout() end
+        -- the labels' colour codes (Playstyle, More details) follow the theme
+        events.on("SUUUI_THEME_CHANGED", function() if f:IsShown() then self:Queue() end end, "GroupFinderListing")
+    end
+
     function LayoutTop()
+        local f = self.frame
+        local solo = f.SoloRoleButtons
+        local group = f.GroupRoleButtons
+        local inGroup = group and group:IsShown()
+        local slot = 60
+        local x
+        if solo then
+            solo:ClearAllPoints()
+            solo:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -TOP)
+            solo:SetSize(slot * 3, TOP_H)
+            for i, key in ipairs({ "Tank", "Healer", "DPS" }) do
+                local b = solo[key]
+                if b then
+                    b:ClearAllPoints()
+                    b:SetPoint("TOP", solo, "TOPLEFT", slot * (i - 0.5), 0)
+                end
+            end
+        end
+        if group then
+            group:ClearAllPoints()
+            group:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -TOP)
+            local icon, dd, poll = group.RoleIcon, group.RoleDropdown, group.RolePollButton
+            if icon then
+                icon:ClearAllPoints()
+                icon:SetPoint("TOP", group, "TOPLEFT", slot / 2, 0)
+            end
+            if dd then
+                dd:ClearAllPoints()
+                dd:SetSize(120, 30)
+                dd:SetPoint("LEFT", group, "TOPLEFT", slot + S["space-4"], -TOGGLE / 2)
+            end
+            if poll then
+                fitButton(poll)
+                poll:ClearAllPoints()
+                poll:SetPoint("LEFT", dd or group, "RIGHT", S["space-5"], 0)
+            end
+            local w = slot + S["space-4"] + 120 + S["space-5"] + (poll and poll:GetWidth() or 0)
+            group:SetSize(w, TOP_H)
+        end
+        -- New player friendly past a rule, after whichever role row shows
+        x = (inGroup and group:GetWidth() or slot * 3) + S["space-6"]
+        self.npfRule:ClearAllPoints()
+        self.npfRule:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE + x, -TOP)
+        self.npfRule:SetSize(1, TOP_H)
+        local npf = f.NewPlayerFriendlyButton
+        if npf then
+            npf:ClearAllPoints()
+            npf:SetPoint("TOP", f, "TOPLEFT", SIDE + x + 1 + S["space-6"] + 55, -TOP)
+        end
+    end
+
     function LayoutCategories()
-    function LayoutActivities()
-    function PlaceScrollBox()
-    function UpdateCount()
-    function LayoutLocked()
-    function LayoutFoot()
-    function Layout()
-    function Queue()
-end
-
-local L: ListingSkin = {} :: any
-
-function L:LayoutTop()
-    local f = self.frame
-    local solo = f.SoloRoleButtons
-    local group = f.GroupRoleButtons
-    local inGroup = group and group:IsShown()
-    local slot = 60
-    local x
-    if solo then
-        solo:ClearAllPoints()
-        solo:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -TOP)
-        solo:SetSize(slot * 3, TOP_H)
-        for i, key in ipairs({ "Tank", "Healer", "DPS" }) do
-            local b = solo[key]
-            if b then
-                b:ClearAllPoints()
-                b:SetPoint("TOP", solo, "TOPLEFT", slot * (i - 0.5), 0)
+        local view = self.frame.CategoryView
+        if not (view and view:IsShown()) then return end
+        local shown = {}
+        for _, b in ipairs(view.CategoryButtons or {}) do if b:IsShown() then shown[#shown + 1] = b end end
+        local gap = S["space-5"]
+        local width = view:GetWidth()
+        if not width or width < 10 then return end
+        local cw = math.floor((width - gap * (#shown - 1)) / math.max(1, #shown))
+        for i, b in ipairs(shown) do
+            local p = parts[b]
+            if not p then
+                p = {}
+                for _, key in ipairs({ "Icon", "Cover" }) do if b[key] then b[key]:SetAlpha(0) end end
+                hideArt(b)
+                p.fill = draw.fill(b, "surface-sunk", "BACKGROUND", 7)
+                p.fill:SetAllPoints()
+                p.edge = edgeOver(b, "gilt-line")
+                p.glyph = glyph(b, "flag", 22, "gilt-text", "OVERLAY")
+                p.glyph:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+                p.line = uiText.text(b, "caption", "ink-muted")
+                p.line:SetJustifyH("LEFT")
+                p.line:SetWordWrap(true)
+                hookScript(b, "OnEnter", function() p.edge:SetColor("gilt"); draw.paintFill(p.fill, "surface-raised") end)
+                hookScript(b, "OnLeave", function() p.edge:SetColor("gilt-line"); draw.paintFill(p.fill, "surface-sunk") end)
+                -- a ResizeLayoutFrame: its own size, not its children's
+                b.fixedWidth, b.fixedHeight = cw, 132
+                parts[b] = p
+            end
+            local card = CARDS[b.categoryID] or {}
+            p.glyph:SetTexture(GLYPHS .. (card.glyph or "flag") .. ".tga")
+            p.line:SetValue(card.text or "")
+            b:ClearAllPoints()
+            b:SetSize(cw, 132)
+            b:SetPoint("TOPLEFT", view, "TOPLEFT", (i - 1) * (cw + gap), -(14 + S["space-4"]))
+            local label = b.Label or ask(b, "GetFontString")
+            if label then
+                font(label, "header", "gilt-text")
+                label:ClearAllPoints()
+                label:SetPoint("TOPLEFT", p.glyph, "BOTTOMLEFT", 0, -S["space-3"])
+                p.line:ClearAllPoints()
+                p.line:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -S["space-3"])
+                p.line:SetWidth(cw - S["space-5"] * 2)
             end
         end
     end
-    if group then
-        group:ClearAllPoints()
-        group:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -TOP)
-        local icon, dd, poll = group.RoleIcon, group.RoleDropdown, group.RolePollButton
-        if icon then
-            icon:ClearAllPoints()
-            icon:SetPoint("TOP", group, "TOPLEFT", slot / 2, 0)
-        end
+
+    function LayoutActivities()
+        local act = self.activity
+        if not act then return end
+        local f = self.frame
+        local av = f.ActivityView
+        if not av then return end
+        local width = f:GetWidth() - SIDE * 2
+        local custom = av.ScrollBox and not av.ScrollBox:IsShown()
+        local left = custom and width or math.floor((width - S["space-6"]) * 0.56)
+        local rightX = custom and 0 or (left + S["space-6"])
+        local rightW = width - rightX
+        -- Playstyle (required by the game in every category) and Show All Level Ranges
+        local missing = av.PlayStyleDropdown and not av.generalPlaystyle
+        act.psLabel:SetValue("Playstyle |cff" .. T.color[missing and "amber" or "ink-muted"].hex .. "· required|r")
+        act.psLabel:ClearAllPoints()
+        act.psLabel:SetPoint("TOPLEFT", av, "TOPLEFT", 0, 0)
+        local dd = av.PlayStyleDropdown
         if dd then
             dd:ClearAllPoints()
-            dd:SetSize(120, 30)
-            dd:SetPoint("LEFT", group, "TOPLEFT", slot + S["space-4"], -TOGGLE / 2)
+            dd:SetSize(200, 30)
+            dd:SetPoint("TOPLEFT", av, "TOPLEFT", 0, -(14 + S["space-1"]))
+            if self.psMissing then self.psMissing:SetShown(missing and true or false) end
         end
-        if poll then
-            fitButton(poll)
-            poll:ClearAllPoints()
-            poll:SetPoint("LEFT", dd or group, "RIGHT", S["space-5"], 0)
+        local lr = av.LevelRangesCheckbox
+        if lr and lr.Text and lr.Checkbox then
+            lr.Text:ClearAllPoints()
+            lr.Text:SetPoint("RIGHT", av, "TOPLEFT", left, -(14 + S["space-1"] + 15))
+            lr.Checkbox:ClearAllPoints()
+            lr.Checkbox:SetPoint("RIGHT", lr.Text, "LEFT", -S["space-2"], 0)
+            lr:SetShown(not custom)
         end
-        local w = slot + S["space-4"] + 120 + S["space-5"] + (poll and poll:GetWidth() or 0)
-        group:SetSize(w, TOP_H)
-    end
-    -- New player friendly past a rule, after whichever role row shows
-    x = (inGroup and group:GetWidth() or slot * 3) + S["space-6"]
-    self.npfRule:ClearAllPoints()
-    self.npfRule:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE + x, -TOP)
-    self.npfRule:SetSize(1, TOP_H)
-    local npf = f.NewPlayerFriendlyButton
-    if npf then
-        npf:ClearAllPoints()
-        npf:SetPoint("TOP", f, "TOPLEFT", SIDE + x + 1 + S["space-6"] + 55, -TOP)
-    end
-end
-
-function L:LayoutCategories()
-    local view = self.frame.CategoryView
-    if not (view and view:IsShown()) then return end
-    local shown = {}
-    for _, b in ipairs(view.CategoryButtons or {}) do if b:IsShown() then shown[#shown + 1] = b end end
-    local gap = S["space-5"]
-    local width = view:GetWidth()
-    if not width or width < 10 then return end
-    local cw = math.floor((width - gap * (#shown - 1)) / math.max(1, #shown))
-    for i, b in ipairs(shown) do
-        local p = parts[b]
-        if not p then
-            p = {}
-            for _, key in ipairs({ "Icon", "Cover" }) do if b[key] then b[key]:SetAlpha(0) end end
-            hideArt(b)
-            p.fill = draw.fill(b, "surface-sunk", "BACKGROUND", 7)
-            p.fill:SetAllPoints()
-            p.edge = edgeOver(b, "gilt-line")
-            p.glyph = glyph(b, "flag", 22, "gilt-text", "OVERLAY")
-            p.glyph:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
-            p.line = uiText.text(b, "caption", "ink-muted")
-            p.line:SetJustifyH("LEFT")
-            p.line:SetWordWrap(true)
-            hookScript(b, "OnEnter", function() p.edge:SetColor("gilt"); draw.paintFill(p.fill, "surface-raised") end)
-            hookScript(b, "OnLeave", function() p.edge:SetColor("gilt-line"); draw.paintFill(p.fill, "surface-sunk") end)
-            -- a ResizeLayoutFrame: its own size, not its children's
-            b.fixedWidth, b.fixedHeight = cw, 132
-            parts[b] = p
+        -- under the Playstyle / Voice Chat row and room for the details' label
+        -- (it overlapped Voice Chat), so the tree and the field start level
+        local treeTop = 14 + S["space-1"] + 30 + S["space-4"] + 14 + S["space-1"]
+        act.tree:ClearAllPoints()
+        act.tree:SetPoint("TOPLEFT", av, "TOPLEFT", 0, -treeTop)
+        act.tree:SetPoint("BOTTOMLEFT", av, "BOTTOMLEFT", 0, 0)
+        act.tree:SetWidth(left)
+        act.tree:SetShown(not custom)
+        self:PlaceScrollBox()
+        -- Voice Chat in the Playstyle row (asked for in game): at the right
+        -- column's start, or at the page's right in Custom
+        local vlabel, vdd = av.VoiceChatLabel, av.VoiceChatDropdown
+        if vlabel and vdd then
+            local vx = custom and (width - 200) or rightX
+            vlabel:ClearAllPoints()
+            vlabel:SetPoint("TOPLEFT", av, "TOPLEFT", vx, 0)
+            vlabel:SetJustifyH("LEFT")
+            vdd:ClearAllPoints()
+            vdd:SetSize(200, 30)
+            vdd:SetPoint("TOPLEFT", av, "TOPLEFT", vx, -(14 + S["space-1"]))
         end
-        local card = CARDS[b.categoryID] or {}
-        p.glyph:SetTexture(GLYPHS .. (card.glyph or "flag") .. ".tga")
-        p.line:SetValue(card.text or "")
-        b:ClearAllPoints()
-        b:SetSize(cw, 132)
-        b:SetPoint("TOPLEFT", view, "TOPLEFT", (i - 1) * (cw + gap), -(14 + S["space-4"]))
-        local label = b.Label or ask(b, "GetFontString")
-        if label then
-            font(label, "header", "gilt-text")
-            label:ClearAllPoints()
-            label:SetPoint("TOPLEFT", p.glyph, "BOTTOMLEFT", 0, -S["space-3"])
-            p.line:ClearAllPoints()
-            p.line:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -S["space-3"])
-            p.line:SetWidth(cw - S["space-5"] * 2)
+        -- the details: a sunk field from the activity tree's top to its foot
+        -- (asked for in game), its label over it with the count at the right;
+        -- in Custom (no tree) across the page from the same top
+        local detailsTop = treeTop - (14 + S["space-1"])
+        act.detailsLabel:ClearAllPoints()
+        act.detailsLabel:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -detailsTop)
+        act.detailsLabel:SetValue("More details about your group" .. (custom and "" or
+            (" |cff" .. T.color["ink-faint"].hex .. "· optional|r")))
+        act.field:ClearAllPoints()
+        act.field:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -treeTop)
+        act.field:SetPoint("BOTTOMLEFT", av, "BOTTOMLEFT", rightX, 0)
+        act.field:SetWidth(rightW)
+        local c = av.Comment
+        -- the placeholder: the label says what the field is (the game's
+        -- authenticator note stays as it is)
+        local instr = c and c.EditBox and c.EditBox.Instructions
+        local said = instr and instr:GetText()
+        if said and (said == _G.DESCRIPTION_OF_YOUR_GROUP or said == _G.DESCRIPTION_OF_YOUR_GROUP_MANDATORY) then
+            instr:SetText(custom and "What you’re after, for a Custom listing" or "Route, quests, gear check: anything people should know")
+        end
+        if c then
+            c:ClearAllPoints()
+            c:SetPoint("TOPLEFT", act.field, "TOPLEFT", S["space-4"], -S["space-3"])
+            c:SetPoint("BOTTOMRIGHT", act.field, "BOTTOMRIGHT", -S["space-4"] - 12, S["space-3"])
+            if c.EditBox then c.EditBox:SetWidth(rightW - S["space-4"] * 2 - 16) end
+        end
+        act.count:ClearAllPoints()
+        act.count:SetPoint("BOTTOMRIGHT", act.field, "TOPRIGHT", 0, S["space-1"])
+        self:UpdateCount()
+    end
+
+    -- The game anchors its list again whenever its scrollbar comes or goes:
+    -- inside the sunk tree, every time.
+    function PlaceScrollBox()
+        local act = self.activity
+        if not act then return end
+        local box = self.frame.ActivityView and self.frame.ActivityView.ScrollBox
+        if not box or self.placing then return end
+        self.placing = true
+        box:ClearAllPoints()
+        box:SetPoint("TOPLEFT", act.tree, "TOPLEFT", 1, -S["space-2"])
+        box:SetPoint("BOTTOMRIGHT", act.tree, "BOTTOMRIGHT", -14, S["space-2"])
+        self.placing = false
+        local bar = self.frame.ActivityView.ScrollBar
+        if bar then
+            bar:ClearAllPoints()
+            bar:SetPoint("TOPLEFT", act.tree, "TOPRIGHT", -10, -S["space-3"])
+            bar:SetPoint("BOTTOMLEFT", act.tree, "BOTTOMRIGHT", -10, S["space-3"])
         end
     end
-end
 
-function L:LayoutActivities()
-    local f = self.frame
-    local av = f.ActivityView
-    if not av then return end
-    local width = f:GetWidth() - SIDE * 2
-    local custom = av.ScrollBox and not av.ScrollBox:IsShown()
-    local left = custom and width or math.floor((width - S["space-6"]) * 0.56)
-    local rightX = custom and 0 or (left + S["space-6"])
-    local rightW = width - rightX
-    -- Playstyle (required by the game in every category) and Show All Level Ranges
-    local missing = av.PlayStyleDropdown and not av.generalPlaystyle
-    self.psLabel:SetValue("Playstyle |cff" .. T.color[missing and "amber" or "ink-muted"].hex .. "· required|r")
-    self.psLabel:ClearAllPoints()
-    self.psLabel:SetPoint("TOPLEFT", av, "TOPLEFT", 0, 0)
-    local dd = av.PlayStyleDropdown
-    if dd then
-        dd:ClearAllPoints()
-        dd:SetSize(200, 30)
-        dd:SetPoint("TOPLEFT", av, "TOPLEFT", 0, -(14 + S["space-1"]))
-        if self.psMissing then self.psMissing:SetShown(missing and true or false) end
+    function UpdateCount()
+        local act = self.activity
+        if not act then return end
+        local e = self.frame.ActivityView and self.frame.ActivityView.Comment and self.frame.ActivityView.Comment.EditBox
+        local text = e and ask(e, "GetText")
+        local n = type(text) == "string" and (strlenutf8 and strlenutf8(text) or #text) or 0
+        act.count:SetValue(n .. " / 255")
     end
-    local lr = av.LevelRangesCheckbox
-    if lr and lr.Text and lr.Checkbox then
-        lr.Text:ClearAllPoints()
-        lr.Text:SetPoint("RIGHT", av, "TOPLEFT", left, -(14 + S["space-1"] + 15))
-        lr.Checkbox:ClearAllPoints()
-        lr.Checkbox:SetPoint("RIGHT", lr.Text, "LEFT", -S["space-2"], 0)
-        lr:SetShown(not custom)
-    end
-    -- under the Playstyle / Voice Chat row and room for the details' label
-    -- (it overlapped Voice Chat), so the tree and the field start level
-    local treeTop = 14 + S["space-1"] + 30 + S["space-4"] + 14 + S["space-1"]
-    self.tree:ClearAllPoints()
-    self.tree:SetPoint("TOPLEFT", av, "TOPLEFT", 0, -treeTop)
-    self.tree:SetPoint("BOTTOMLEFT", av, "BOTTOMLEFT", 0, 0)
-    self.tree:SetWidth(left)
-    self.tree:SetShown(not custom)
-    self:PlaceScrollBox()
-    -- Voice Chat in the Playstyle row (asked for in game): at the right
-    -- column's start, or at the page's right in Custom
-    local vlabel, vdd = av.VoiceChatLabel, av.VoiceChatDropdown
-    if vlabel and vdd then
-        local vx = custom and (width - 200) or rightX
-        vlabel:ClearAllPoints()
-        vlabel:SetPoint("TOPLEFT", av, "TOPLEFT", vx, 0)
-        vlabel:SetJustifyH("LEFT")
-        vdd:ClearAllPoints()
-        vdd:SetSize(200, 30)
-        vdd:SetPoint("TOPLEFT", av, "TOPLEFT", vx, -(14 + S["space-1"]))
-    end
-    -- the details: a sunk field from the activity tree's top to its foot
-    -- (asked for in game), its label over it with the count at the right;
-    -- in Custom (no tree) across the page from the same top
-    local detailsTop = treeTop - (14 + S["space-1"])
-    self.detailsLabel:ClearAllPoints()
-    self.detailsLabel:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -detailsTop)
-    self.detailsLabel:SetValue("More details about your group" .. (custom and "" or
-        (" |cff" .. T.color["ink-faint"].hex .. "· optional|r")))
-    self.field:ClearAllPoints()
-    self.field:SetPoint("TOPLEFT", av, "TOPLEFT", rightX, -treeTop)
-    self.field:SetPoint("BOTTOMLEFT", av, "BOTTOMLEFT", rightX, 0)
-    self.field:SetWidth(rightW)
-    local c = av.Comment
-    -- the placeholder: the label says what the field is (the game's
-    -- authenticator note stays as it is)
-    local instr = c and c.EditBox and c.EditBox.Instructions
-    local said = instr and instr:GetText()
-    if said and (said == _G.DESCRIPTION_OF_YOUR_GROUP or said == _G.DESCRIPTION_OF_YOUR_GROUP_MANDATORY) then
-        instr:SetText(custom and "What you’re after, for a Custom listing" or "Route, quests, gear check: anything people should know")
-    end
-    if c then
-        c:ClearAllPoints()
-        c:SetPoint("TOPLEFT", self.field, "TOPLEFT", S["space-4"], -S["space-3"])
-        c:SetPoint("BOTTOMRIGHT", self.field, "BOTTOMRIGHT", -S["space-4"] - 12, S["space-3"])
-        if c.EditBox then c.EditBox:SetWidth(rightW - S["space-4"] * 2 - 16) end
-    end
-    self.count:ClearAllPoints()
-    self.count:SetPoint("BOTTOMRIGHT", self.field, "TOPRIGHT", 0, S["space-1"])
-    self:UpdateCount()
-end
 
--- The game anchors its list again whenever its scrollbar comes or goes:
--- inside the sunk tree, every time.
-function L:PlaceScrollBox()
-    local box = self.frame.ActivityView and self.frame.ActivityView.ScrollBox
-    if not box or self.placing then return end
-    self.placing = true
-    box:ClearAllPoints()
-    box:SetPoint("TOPLEFT", self.tree, "TOPLEFT", 1, -S["space-2"])
-    box:SetPoint("BOTTOMRIGHT", self.tree, "BOTTOMRIGHT", -14, S["space-2"])
-    self.placing = false
-    local bar = self.frame.ActivityView.ScrollBar
-    if bar then
-        bar:ClearAllPoints()
-        bar:SetPoint("TOPLEFT", self.tree, "TOPRIGHT", -10, -S["space-3"])
-        bar:SetPoint("BOTTOMLEFT", self.tree, "BOTTOMRIGHT", -10, S["space-3"])
+    function LayoutLocked()
+        local lv = self.frame.LockedView
+        if not (lv and lv:IsShown()) then return end
+        reskin.reskin(lv)
+        if lv.ErrorText then
+            font(lv.ErrorText, "label", "ink")
+            lv.ErrorText:ClearAllPoints()
+            lv.ErrorText:SetPoint("TOP", self.lockGlyph, "BOTTOM", 0, -S["space-3"])
+            lv.ErrorText:SetWidth(lv:GetWidth() - S["space-6"] * 2)
+            lv.ErrorText:SetJustifyH("CENTER")
+        end
+        if lv.ActivityText then font(lv.ActivityText, "caption", "ink-muted") end
+    end
+
+    function LayoutFoot()
+        local f = self.frame
+        for _, b in ipairs({ f.BackButton, f.PostButton }) do fitButton(b) end
+        f.BackButton:ClearAllPoints()
+        f.BackButton:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE, BOTTOM)
+        f.PostButton:ClearAllPoints()
+        f.PostButton:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BOTTOM)
+    end
+
+    function Layout()
+        self:LayoutTop()
+        self:LayoutCategories()
+        self:LayoutActivities()
+        self:LayoutLocked()
+        self:LayoutFoot()
+    end
+
+    -- Again after the game's next redraw (a frame later, once it has drawn).
+    function Queue()
+        if self.queued then return end
+        self.queued = true
+        after(0, function()
+            self.queued = false
+            if self.frame:IsShown() then self:Layout() end
+        end)
     end
 end
-
-function L:UpdateCount()
-    local e = self.frame.ActivityView and self.frame.ActivityView.Comment and self.frame.ActivityView.Comment.EditBox
-    local text = e and ask(e, "GetText")
-    local n = type(text) == "string" and (strlenutf8 and strlenutf8(text) or #text) or 0
-    self.count:SetValue(n .. " / 255")
-end
-
-function L:LayoutLocked()
-    local lv = self.frame.LockedView
-    if not (lv and lv:IsShown()) then return end
-    reskin.reskin(lv)
-    if lv.ErrorText then
-        font(lv.ErrorText, "label", "ink")
-        lv.ErrorText:ClearAllPoints()
-        lv.ErrorText:SetPoint("TOP", self.lockGlyph, "BOTTOM", 0, -S["space-3"])
-        lv.ErrorText:SetWidth(lv:GetWidth() - S["space-6"] * 2)
-        lv.ErrorText:SetJustifyH("CENTER")
-    end
-    if lv.ActivityText then font(lv.ActivityText, "caption", "ink-muted") end
-end
-
-function L:LayoutFoot()
-    local f = self.frame
-    for _, b in ipairs({ f.BackButton, f.PostButton }) do fitButton(b) end
-    f.BackButton:ClearAllPoints()
-    f.BackButton:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE, BOTTOM)
-    f.PostButton:ClearAllPoints()
-    f.PostButton:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BOTTOM)
-end
-
-function L:Layout()
-    self:LayoutTop()
-    self:LayoutCategories()
-    self:LayoutActivities()
-    self:LayoutLocked()
-    self:LayoutFoot()
-end
-
--- Again after the game's next redraw (a frame later, once it has drawn).
-function L:Queue()
-    if self.queued then return end
-    self.queued = true
-    after(0, function()
-        self.queued = false
-        if self.frame:IsShown() then self:Layout() end
-    end)
-end
-
-local skinned: ListingSkin? = nil
 
 export function skinGroupFinderListing(f: any): ListingSkin?
     if not f or skinned then return skinned end
-    local s: ListingSkin = setmetatable({ frame = f }, { __index = L }) :: any
-    skinned = s
-
-    -- the rules under the top and over the foot, and between the roles and New player friendly
-    s.topRule = draw.fill(f, "gilt-faint", "ARTWORK")
-    s.topRule:SetHeight(1)
-    s.topRule:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -RULE_Y)
-    s.topRule:SetPoint("TOPRIGHT", f, "TOPRIGHT", -SIDE, -RULE_Y)
-    s.footRule = draw.fill(f, "gilt-faint", "ARTWORK")
-    s.footRule:SetHeight(1)
-    s.footRule:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE, FOOT_RULE)
-    s.footRule:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, FOOT_RULE)
-    s.npfRule = draw.fill(f, "gilt-faint", "ARTWORK")
-
-    -- the top: the role toggles, your role in a group, New player friendly
-    local solo = f.SoloRoleButtons
-    for key, role in pairs({ Tank = "TANK", Healer = "HEALER", DPS = "DAMAGER" }) do
-        if solo and solo[key] and solo[key].CheckButton then toggle(solo[key], ROLE_TEX[role], ROLE_WORD[role]) end
-    end
-    local group = f.GroupRoleButtons
-    if group then
-        if group.RoleIcon then
-            local icon = group.RoleIcon
-            local p = roundIcon(icon, ROLE_TEX.DAMAGER, "")
-            draw.paint(p.edge, "arcane")
-            draw.paint(p.fill, "surface-raised")
-            draw.paint(p.glyph, "ink")
-            p.word:SetColor("ink")
-            local function update()
-                local role = icon.roleID
-                p.glyph:SetTexture(ROLE_TEX[role] or ROLE_TEX.DAMAGER)
-                p.word:SetValue(ROLE_WORD[role] or "")
-                -- the game sets its own art again
-                local n = ask(icon, "GetNormalTexture")
-                if n then n:SetAlpha(0) end
-            end
-            hook(_G, "LFGListingRoleIcon_UpdateRoleTexture", function(b: any) if b == icon then update() end end, ON_DEMAND)
-            hookScript(icon, "OnShow", update)
-            update()
-            parts[icon] = p
-        end
-        if group.RoleDropdown then reskin.reskinDropdown(group.RoleDropdown) end
-        if group.RolePollButton then reskin.reskinButton(group.RolePollButton) end
-        hookScript(group, "OnShow", function() s:Queue() end)
-        hookScript(group, "OnHide", function() s:Queue() end)
-    end
-    local npf = f.NewPlayerFriendlyButton
-    if npf and npf.CheckButton then
-        toggle(npf, GLYPHS .. "leaf.tga", _G.LFG_LIST_NEW_PLAYER_FRIENDLY or "New player friendly", 16)
-    end
-
-    -- step 1: the hint over the cards
-    local view = f.CategoryView
-    if view then
-        view:ClearAllPoints()
-        view:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -(RULE_Y + S["space-5"]))
-        view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BODY_BOTTOM)
-        local hint = uiText.text(view, "caption", "ink-muted")
-        s.hint = hint
-        hint:SetPoint("TOPLEFT")
-        hint:SetValue("Step 1 of 2 · What are you listing for?")
-        hookScript(view, "OnShow", function() s:Queue() end)
-        if _G.LFGListingCategorySelection_UpdateCategoryButtons then
-            hook(_G, "LFGListingCategorySelection_UpdateCategoryButtons", function() s:Queue() end, ON_DEMAND)
-        end
-    end
-
-    -- step 2
-    local av = f.ActivityView
-    if av then
-        av:ClearAllPoints()
-        av:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -BODY_TOP)
-        av:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BODY_BOTTOM)
-        for _, key in ipairs({ "BarTop", "BarMiddle" }) do if av[key] then av[key]:SetAlpha(0) end end
-        for _, t in ipairs(av.BarComponents or {}) do t:SetAlpha(0) end
-        s.psLabel = uiText.text(av, "caption", "ink-muted")
-        if av.PlayStyleDropdown then
-            reskin.reskinDropdown(av.PlayStyleDropdown)
-            -- amber until a play style is chosen
-            local _, holder = edgeOver(av.PlayStyleDropdown, "amber", 3)
-            s.psMissing = holder
-        end
-        local lr = av.LevelRangesCheckbox
-        if lr then
-            if lr.Checkbox then reskin.reskinCheckButton(lr.Checkbox) end
-            font(lr.Text, "body", "ink")
-        end
-        s.tree = CreateFrame("Frame", nil, av)
-        s.tree:SetFrameLevel(math.max(0, (av.ScrollBox and av.ScrollBox:GetFrameLevel() or av:GetFrameLevel() + 1) - 1))
-        draw.fill(s.tree, "surface-sunk"):SetAllPoints()
-        draw.border(s.tree, "gilt-faint")
-        if av.ScrollBox then
-            hook(av.ScrollBox, "SetPoint", function() s:PlaceScrollBox() end)
-        end
-        if av.ScrollBar then reskin.reskinScrollBar(av.ScrollBar) end
-        -- the details
-        s.detailsLabel = uiText.text(av, "caption", "ink-muted")
-        s.field = CreateFrame("Frame", nil, av)
-        draw.fill(s.field, "surface-sunk"):SetAllPoints()
-        local edge = draw.border(s.field, "gilt-line")
-        s.count = uiText.text(av, "caption", "ink-faint")
-        local c = av.Comment
-        if c then
-            s.field:SetFrameLevel(math.max(0, c:GetFrameLevel() - 1))
-            for _, r in ipairs({ c:GetRegions() }) do
-                if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-            end
-            if c.ScrollBar then reskin.reskinScrollBar(c.ScrollBar) end
-            local e = c.EditBox
-            if e then
-                e:SetFontObject(fonts.get("body"))
-                draw.paint(e, "ink")
-                font(e.Instructions, "body", "ink-muted")
-                hookScript(e, "OnTextChanged", function() s:UpdateCount() end)
-                hookScript(e, "OnEditFocusGained", function() edge:SetColor("arcane") end)
-                hookScript(e, "OnEditFocusLost", function() edge:SetColor("gilt-line") end)
-            end
-        end
-        if av.VoiceChatDropdown then reskin.reskinDropdown(av.VoiceChatDropdown) end
-        font(av.VoiceChatLabel, "caption", "ink-muted")
-        -- the game places its parts again on show; after it
-        hookScript(av, "OnShow", function() s:LayoutActivities(); s:Queue() end)
-        hook(_G, "LFGListingActivityView_OnPlayStyleSelectedInternal", function() s:LayoutActivities() end, ON_DEMAND)
-    end
-    -- the tree's rows, each time the game sets one up
-    hook(_G, "LFGListingActivityView_InitActivityGroupButton", skinGroupRow, ON_DEMAND)
-    hook(_G, "LFGListingActivityView_InitActivityButton", skinActivityRow, ON_DEMAND)
-
-    -- locked: the game's text in a sunk panel under a lock
-    local lv = f.LockedView
-    if lv then
-        lv:ClearAllPoints()
-        lv:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -(RULE_Y + S["space-5"]))
-        lv:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BOTTOM)
-        local bg = draw.fill(lv, "surface-sunk", "BACKGROUND", -8)
-        bg:SetAllPoints()
-        draw.border(lv, "gilt-faint")
-        s.lockGlyph = glyph(lv, "lock", 24, "ink-faint")
-        s.lockGlyph:SetPoint("TOP", lv, "TOP", 0, -S["space-6"] * 2)
-        hookScript(lv, "OnShow", function() s:Queue() end)
-        if _G.LFGListingLockedView_RefreshContent then
-            hook(_G, "LFGListingLockedView_RefreshContent", function() s:Queue() end, ON_DEMAND)
-        end
-    end
-
-    -- the foot
-    reskin.reskinButton(f.BackButton)
-    primaryButton(f.PostButton)
-    for _, name in ipairs({ "LFGListingPostButton_UpdateText", "LFGListingBackButton_UpdateText" }) do
-        if _G[name] then hook(name, function() s:LayoutFoot() end) end
-    end
-    hook(f, "UpdatePostButtonEnableState", function()
-        if parts[f.PostButton] then parts[f.PostButton].draw() end
-        s:LayoutActivities()
-    end)
-    hook(f, "UpdateFrameView", function() s:Queue() end)
-    hookScript(f, "OnShow", function() s:Layout(); s:Queue() end)
-    if f:IsShown() then s:Layout() end
-    -- the labels' colour codes (Playstyle, More details) follow the theme
-    events.on("SUUUI_THEME_CHANGED", function() if f:IsShown() then s:Queue() end end, "GroupFinderListing")
-    return s
+    return ListingSkin.new(f)
 end
