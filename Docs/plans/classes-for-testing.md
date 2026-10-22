@@ -174,3 +174,8 @@ instances in tests) so the remaining test areas use it.
 - The step 1 result is recorded, and components are either widget classes
   (if `Raw.Mixins` semantics hold) or documented as staying builders.
 - All gates pass.
+
+## Status
+
+Done on `wowlua-classes` (2026-10-23): steps 1 to 4. The record, with the
+wowlua findings and their fixes, is `Docs/test-notes/classes.md`.

@@ -81,9 +81,46 @@ Code is shaped so its logic can be tested without the frames around it:
   clock, a CVar or a unit can take the value as a parameter (with the live
   read as its default) instead of reading it inside, when faking it
   otherwise takes more than one `mock.fake`.
-- **Classes where state lives.** State scattered over upvalues of a big
-  module can become a class with methods (constructed per instance, testable
-  alone); a module object's public methods keep their names.
+- **Classes where state lives, their dependencies as interfaces.** State
+  lives in a class whose collaborators come in through its constructor as
+  parameter properties, typed by interfaces, with the live ones as defaults:
+
+  ```wowlua
+  export interface CombatState
+      function inCombat(): boolean
+      function defer(@deferred fn: () -> ())   -- runs later: the load-order check knows
+  end
+
+  export class CombatQueue
+      constructor(private combat: CombatState = GameCombat.new(),
+                  private reporter: fault.Reporter = fault.log) end
+      function run(key: any, fn: () -> (), source: string?) … end
+  end
+
+  export const queue = CombatQueue.new()          -- SuuUI's own
+  export function run(key: any, fn: () -> (), source: string?) queue:run(key, fn, source) end
+  ```
+
+  The module's functions forward to its default instance, so callers don't
+  change. A test builds an instance of its own over fakes and touches
+  nothing global: `CombatQueue.new(FakeCombat.new(), FakeReporter.new())`.
+  The shared fakes are in `tests/fakes.wowlua` (FakeReporter, FakeDispatcher,
+  FakeCombat, FakeNotifier, FakeNextFrame); Core's FaultLog, EventBus,
+  CombatQueue, ServiceRegistry, ExtendRegistry, SettingsStore (bound to saved
+  data the test makes) and ModuleRegistry, and ForeverLFG's EntryStore, are
+  built this way, each with "of its own" tests.
+- **Components are widget classes.** `class Panel extends Frame`, `class
+  WindowFrame extends Panel`, `class Text extends FontString`: fields
+  declared and typed, methods on each frame as before, `Raw.Mixins` holding
+  the classes. A frame the game makes (a secure header's unit button, a font
+  string a frame creates) becomes an instance with `Class.adopt(frame, …)`.
+  Handlers are `@script` methods or closures; a closure inside a method that
+  needs the frame it's on names it (`function(row) … end`): its own `self`
+  would hide the instance (wowlua warns, W1004).
+- **Enums for fixed sets of strings.** `ModuleState`, `Kind`, `Role`,
+  `MatchReason`…: compare against `Role.Tank`, and turn a string from the
+  game into one with `reflect.enumFrom(Role, raw)` (nil when it isn't one).
+  Tests compare against the members too (`expect(m.state).toBe(State.Enabled)`).
 - **Never changed by it:** what the player sees and when, combat and taint
   behaviour (secure frames, protected calls, hooks), the public API
   (`Docs/API.md`), saved data, addon messages. `tests/smoke` and
