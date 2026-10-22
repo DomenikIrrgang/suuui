@@ -179,106 +179,7 @@ local function gradient(bar: any, deep: string, fill: string)
     UI.PaintGradient(bar:GetStatusBarTexture(), "HORIZONTAL", deep, fill)
 end
 
-local Plate: { [string]: any } = {}
-
 -- Builds a plate. `api` (previews) stands in for the game's Unit* functions.
-local function buildPlate(parent: any, api: any?): any
-    local f = CreateFrame("Frame", nil, parent)
-    Mixin(f, Plate)
-    f.api = api or _G
-    f:EnableMouse(false)
-    local w = M:Get("width")
-    f:SetSize(w, plateH())
-
-    -- the name row: name (reaction colour), badge, health text
-    f.name = UI.Text(f, "unit-name-sm", "ink")
-    f.name:SetShadowed(true)
-    f.name:SetWordWrap(false)
-    f.name:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, -NAME_H)
-    -- the level before the name (after a quest mark), by difficulty
-    f.level = UI.Text(f, "micro", "ink")
-    f.level:SetShadowed(true)
-    f.levelW = 0
-    f.pct = UI.Text(f, "micro", "ink")
-    f.pct:SetShadowed(true)
-    f.pct:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", 0, -NAME_H)
-    -- the raid target marker, just left of the plate, centred on what shows
-    -- of it: the name's capitals sit in the lower ~9px of their row, so the
-    -- plate's own middle would put the marker high
-    f.raidMarker = UI.RaidMarker(f, 18)
-    f.raidMarker:SetPoint("RIGHT", f, "LEFT", -S["space-2"], -math.floor((NAME_H - 9) / 2 + 0.5))
-    -- a quest objective: the gilt diamond and what you have of it
-    f.quest = CreateFrame("Frame", nil, f)
-    f.quest:SetHeight(NAME_H)
-    f.quest:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, -NAME_H)
-    f.quest.mark = UI.Diamond(f.quest, 8, "gilt")
-    f.quest.mark:SetPoint("LEFT", 0, 0)
-    f.quest.count = UI.Text(f.quest, "micro", "gilt-text")
-    f.quest.count:SetShadowed(true)
-    f.quest.count:SetPoint("LEFT", f.quest.mark, "RIGHT", 3, 0)
-    f.quest:Hide()
-    f.questW = 0
-    f.badge = UI.StateBadge(f, "danger", "")
-    f.badge:SetPoint("RIGHT", f.pct, "LEFT", -S["space-2"], 0)
-    f.badge:Hide()
-
-    -- the bar
-    local bar = CreateFrame("Frame", nil, f)
-    bar:SetPoint("BOTTOMLEFT")
-    bar:SetPoint("BOTTOMRIGHT")
-    bar:SetHeight(barH())
-    UI.Fill(bar, "surface-sunk"):SetAllPoints()
-    f.bar = bar
-    local inner = CreateFrame("Frame", nil, bar)
-    inner:SetPoint("TOPLEFT", 1, -1)
-    inner:SetPoint("BOTTOMRIGHT", -1, 1)
-    inner:SetClipsChildren(true)
-    -- the damage ghost behind the fill, as on the unit frames: it trails the
-    -- health after a hold and the engine eases it down (asked 2026-10-19)
-    f.ghost = CreateFrame("StatusBar", nil, inner)
-    f.ghost:SetAllPoints()
-    f.ghost:SetStatusBarTexture(WHITE)
-    f.ghost:GetStatusBarTexture():SetSnapToPixelGrid(false)
-    UI.Paint(f.ghost, "ghost")
-    f.health = CreateFrame("StatusBar", nil, inner)
-    f.health:SetAllPoints()
-    f.health:SetStatusBarTexture(WHITE)
-    f.health:SetFrameLevel(f.ghost:GetFrameLevel() + 1)
-    gradient(f.health, "unit-fill-deep", "unit-fill")
-    f.healthLow = CreateFrame("StatusBar", nil, inner)
-    f.healthLow:SetAllPoints()
-    f.healthLow:SetStatusBarTexture(WHITE)
-    gradient(f.healthLow, "unit-fill-low-deep", "unit-fill-low")
-    f.healthLow:SetFrameLevel(f.health:GetFrameLevel() + 1)
-    f.healthLow:SetAlpha(0)
-    local edge = CreateFrame("Frame", nil, bar)
-    edge:SetAllPoints()
-    edge:SetFrameLevel(f.healthLow:GetFrameLevel() + 1)
-    f.border = UI.Border(edge, "gilt-hairline")
-    -- rare and elite: the small crest just outside the bar's right end, as
-    -- the raid marker sits outside the left (design "Rare and elite units" B)
-    f.crest = UI.Crest(edge, "plate")
-    f.crest:SetPoint("CENTER", bar, "RIGHT", 7.5, 0)
-    -- or the game's elite dragon round the right end, over the bar as on
-    -- the target frame (design "Elite dragon (with crest B)" D)
-    local dragonHost = CreateFrame("Frame", nil, bar)
-    dragonHost:SetAllPoints()
-    dragonHost:SetFrameLevel(edge:GetFrameLevel() + 1)
-    f.dragon = dragonHost:CreateTexture(nil, "ARTWORK")
-    f.dragon:Hide()
-    f.glow = UI.Shadow(bar, "glow-ember")
-    f.glow:SetShown(false)
-
-    -- the cast, under the bar
-    f.cast = UI.CastBar(f, "none", { size = "plate", width = w, icon = false, target = true })
-    f.cast:SetBarHeight(M:Get("castHeight"))
-    f.cast:SetTargetShown(M:Get("castTarget"))
-    f.cast:SetKickShown(M:Get("castKick"))
-    f.cast:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -S["space-1"])
-    SuuUI.TagInstance(f.cast, { module = M.id, role = "nameplate" })
-    SuuUI.AddInstance("nameplate", f, { module = M.id, preview = api ~= nil or nil })
-    return f
-end
 
 -- Your debuffs on it, above the name (the engine fills them).
 local function buildAuras(f: any)
@@ -291,25 +192,6 @@ local function buildAuras(f: any)
     if f.auras then
         f.auras.container:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, S["space-1"])
     end
-end
-
-function Plate:SetPlateWidth(w: number)
-    self:SetSize(w, plateH())
-    self.bar:SetHeight(barH())
-    local mode = M:Get("healthText")
-    local textW = PCT_W[mode] or PCT_W.percent
-    -- the badge left of the health text, or at the row's end without one
-    if self.textMode ~= mode then
-        self.textMode = mode
-        self.badge:ClearAllPoints()
-        if textW > 0 then
-            self.badge:SetPoint("RIGHT", self.pct, "LEFT", -S["space-2"], 0)
-        else
-            self.badge:SetPoint("RIGHT", self, "TOPRIGHT", 0, -NAME_H / 2)
-        end
-    end
-    self.name:SetWidth(math.max(20, w - (self.questW or 0) - (self.levelW or 0) - (textW > 0 and textW + S["space-2"] or 0)
-        - (self.badge:IsShown() and (self.badge.knownWidth or 0) + S["space-2"] or 0)))
 end
 
 -- Is this mob one of your quest objectives, still open? Its tooltip data says:
@@ -365,207 +247,353 @@ local function questText(unit: string): string | false
     return result
 end
 
-function Plate:UpdateQuest()
-    local text = false
-    if M:Get("questMarks") and not self.friendly then
-        if self.preview then text = self.previewQuest or false else text = questText(self.unit) end
-    end
-    local w = 0
-    if text then
-        self.quest.count:SetValue(text)
-        self.quest.count:SetShown(text ~= "")
-        local qw = 8 + (text ~= "" and (3 + math.ceil(self.quest.count:GetUnboundedStringWidth())) or 0)
-        self.quest:SetWidth(qw)
-        w = qw + S["space-2"]
-    end
-    self.quest:SetShown(text and true or false)
-    self.questW = w
-    self:PlaceName()
-end
-
--- The quest mark, the level, then the name.
-function Plate:PlaceName()
-    local x = self.questW or 0
-    self.level:ClearAllPoints()
-    self.level:SetPoint("BOTTOMLEFT", self, "TOPLEFT", x, -NAME_H + 1)
-    self.name:ClearAllPoints()
-    self.name:SetPoint("BOTTOMLEFT", self, "TOPLEFT", x + (self.levelW or 0), -NAME_H)
-    self:SetPlateWidth(M:Get("width"))
-end
-
 -- The unit's level before its name in its difficulty's colour, "+" for an
 -- elite (asked 2026-10-18; design "Nameplate level options", A): after a
 -- quest mark, before the name; on friendly plates too (asked); not when
 -- it's secret.
 local ELITE = { elite = true, rareelite = true }
-function Plate:UpdateLevel()
-    local A, u = self.api, self.unit
-    local text
-    -- the rare and elite crest (or the dragon), whether the level shows or not
-    local okCrest, kind = pcall(A.UnitClassification or UnitClassification, u)
-    if not okCrest then kind = nil end
-    local okBoss, boss = pcall(A.UnitIsBossMob or UnitIsBossMob or function() end, u)
-    local art = M:Get("eliteDragon") and UI.DragonArt(kind, okBoss and boss or nil)
-    self.crest:SetClassification(not art and kind or nil)
-    UI.PlaceDragon(self.dragon, art, self.bar, self.bar:GetHeight())
-    if M:Get("levels") and A.UnitLevel then
-        local ok, level = pcall(A.UnitLevel, u)
-        if ok and level ~= nil and not isSecret(level) then
-            local okC, c = pcall(A.UnitClassification or UnitClassification, u)
-            local elite = okC and not isSecret(c) and ELITE[c]
-            -- "25+" an elite, "??" a boss or one far above you (the design's
-            -- direction A, chosen 2026-10-18; after a quest mark, as asked)
-            local isBoss = (okC and not isSecret(c) and c == "worldboss") or level <= 0
-            text = isBoss and "??" or (tostring(level) .. (elite and "+" or ""))
-            self.level:SetColor(UI.LevelColor(level))
-        end
-    end
-    self.level:SetValue(text or "")
-    self.level:SetShown(text ~= nil)
-    -- space-2 to the name, as after a quest mark (space-1 read cramped in game)
-    self.levelW = text and (math.ceil(self.level:GetUnboundedStringWidth()) + S["space-2"]) or 0
-    self:PlaceName()
-end
-
--- `instant`: a plate given a unit (the ghost isn't the last mob's).
-function Plate:UpdateHealth(instant: boolean?)
-    local A, u = self.api, self.unit
-    local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
-    self.health:SetMinMaxValues(0, amount(max, 1))
-    self.health:SetValue(amount(cur))
-    self.ghost:SetMinMaxValues(0, amount(max, 1))
-    if instant or not INTERPOLATE then
-        if self.ghostTimer then self.ghostTimer:Cancel() self.ghostTimer = nil end
-        self.ghost:SetValue(amount(cur))
-    else
-        self.ghostValue = amount(cur)
-        if not self.ghostTimer then
-            self.ghostTimer = after(GHOST_HOLD, function()
-                self.ghostTimer = nil
-                self.ghost:SetValue(self.ghostValue, INTERPOLATE)
-            end)
-        end
-    end
-    self.healthLow:SetMinMaxValues(0, amount(max, 1))
-    self.healthLow:SetValue(amount(cur))
-    local curve = belowLow()
-    if curve then
-        self.healthLow:SetAlpha(amount(A.UnitHealthPercent(u, true, curve)))
-    else
-        self.healthLow:SetAlpha(0)
-    end
-    -- The health text: the percentage through a curve, the value through
-    -- AbbreviateNumbers (a secret health gives a secret string). Neither is
-    -- ever tested: they go to the engine's formatting as they are.
-    local mode = M:Get("healthText")
-    local pct, value
-    local hasPct = (mode == "percent" or mode == "both") and A.UnitHealthPercent ~= nil and CurveConstants ~= nil
-    local hasValue = false -- a plain flag: the value itself may be secret
-    if hasPct then
-        pct = A.UnitHealthPercent(u, true, CurveConstants.ScaleTo100)
-        if not isSecret(pct) then pct = (pct or 0) + 0.5 end
-    end
-    if mode == "value" or mode == "both" then
-        local ok, text = pcall(AbbreviateNumbers, amount(cur))
-        if ok then value, hasValue = text, true end
-    end
-    if mode == "both" and hasPct and hasValue then
-        self.pct:SetFormattedText("%s · %d%%", value, pct)
-    elseif mode ~= "percent" and hasValue then
-        self.pct:SetText(value)
-    elseif hasPct then
-        self.pct:SetFormattedText("%d%%", pct)
-    else
-        self.pct:Hide()
-        return
-    end
-    self.pct:Show()
-end
 
 local REACTION = { [1] = "reaction-hostile", [2] = "reaction-hostile", [3] = "reaction-hostile", [4] = "reaction-neutral" }
 
-function Plate:UpdateName()
-    local A, u = self.api, self.unit
-    self.name:SetText(A.UnitName(u))
-    local r = A.UnitReaction(u, "player")
-    local color = "reaction-hostile"
-    if not isSecret(r) and r ~= nil then color = REACTION[r] or "reaction-friendly" end
-    self.name:SetColor(color)
-    -- friendly players in their class colour (never tested: may be secret)
-    if self.friendly then
-        local okPlayer, player = pcall(A.UnitIsPlayer, u)
-        if okPlayer and not isSecret(player) and player then
-            local _, class = A.UnitClass(u)
-            if type(class) ~= "nil" and C_ClassColor then
-                local ok, c = pcall(C_ClassColor.GetClassColor, class)
-                if ok and c then pcall(self.name.SetTextColor, self.name, c:GetRGB()) end
+export class Nameplate extends Frame
+    api: any
+    name: any
+    level: any
+    levelW: number
+    pct: any
+    raidMarker: any
+    quest: Frame
+    questW: number
+    badge: any
+    bar: any
+    ghost: StatusBar
+    health: StatusBar
+    healthLow: StatusBar
+    border: any
+    crest: any
+    dragon: Texture
+    glow: any
+    cast: any
+    textMode: any? = nil
+    ghostValue: any? = nil
+    ghostTimer: any? = nil
+    state: any? = nil
+    isTarget: any? = nil
+
+    constructor(parent: any, api: any?)
+        super(nil, parent)
+        self.api = api or _G
+        self:EnableMouse(false)
+        local w = M:Get("width")
+        self:SetSize(w, plateH())
+
+        -- the name row: name (reaction colour), badge, health text
+        self.name = UI.Text(self, "unit-name-sm", "ink")
+        self.name:SetShadowed(true)
+        self.name:SetWordWrap(false)
+        self.name:SetPoint("BOTTOMLEFT", self, "TOPLEFT", 0, -NAME_H)
+        -- the level before the name (after a quest mark), by difficulty
+        self.level = UI.Text(self, "micro", "ink")
+        self.level:SetShadowed(true)
+        self.levelW = 0
+        self.pct = UI.Text(self, "micro", "ink")
+        self.pct:SetShadowed(true)
+        self.pct:SetPoint("BOTTOMRIGHT", self, "TOPRIGHT", 0, -NAME_H)
+        -- the raid target marker, just left of the plate, centred on what shows
+        -- of it: the name's capitals sit in the lower ~9px of their row, so the
+        -- plate's own middle would put the marker high
+        self.raidMarker = UI.RaidMarker(self, 18)
+        self.raidMarker:SetPoint("RIGHT", self, "LEFT", -S["space-2"], -math.floor((NAME_H - 9) / 2 + 0.5))
+        -- a quest objective: the gilt diamond and what you have of it
+        self.quest = CreateFrame("Frame", nil, self)
+        self.quest:SetHeight(NAME_H)
+        self.quest:SetPoint("BOTTOMLEFT", self, "TOPLEFT", 0, -NAME_H)
+        self.quest.mark = UI.Diamond(self.quest, 8, "gilt")
+        self.quest.mark:SetPoint("LEFT", 0, 0)
+        self.quest.count = UI.Text(self.quest, "micro", "gilt-text")
+        self.quest.count:SetShadowed(true)
+        self.quest.count:SetPoint("LEFT", self.quest.mark, "RIGHT", 3, 0)
+        self.quest:Hide()
+        self.questW = 0
+        self.badge = UI.StateBadge(self, "danger", "")
+        self.badge:SetPoint("RIGHT", self.pct, "LEFT", -S["space-2"], 0)
+        self.badge:Hide()
+
+        -- the bar
+        local bar = CreateFrame("Frame", nil, self)
+        bar:SetPoint("BOTTOMLEFT")
+        bar:SetPoint("BOTTOMRIGHT")
+        bar:SetHeight(barH())
+        UI.Fill(bar, "surface-sunk"):SetAllPoints()
+        self.bar = bar
+        local inner = CreateFrame("Frame", nil, bar)
+        inner:SetPoint("TOPLEFT", 1, -1)
+        inner:SetPoint("BOTTOMRIGHT", -1, 1)
+        inner:SetClipsChildren(true)
+        -- the damage ghost behind the fill, as on the unit frames: it trails the
+        -- health after a hold and the engine eases it down (asked 2026-10-19)
+        self.ghost = CreateFrame("StatusBar", nil, inner)
+        self.ghost:SetAllPoints()
+        self.ghost:SetStatusBarTexture(WHITE)
+        self.ghost:GetStatusBarTexture():SetSnapToPixelGrid(false)
+        UI.Paint(self.ghost, "ghost")
+        self.health = CreateFrame("StatusBar", nil, inner)
+        self.health:SetAllPoints()
+        self.health:SetStatusBarTexture(WHITE)
+        self.health:SetFrameLevel(self.ghost:GetFrameLevel() + 1)
+        gradient(self.health, "unit-fill-deep", "unit-fill")
+        self.healthLow = CreateFrame("StatusBar", nil, inner)
+        self.healthLow:SetAllPoints()
+        self.healthLow:SetStatusBarTexture(WHITE)
+        gradient(self.healthLow, "unit-fill-low-deep", "unit-fill-low")
+        self.healthLow:SetFrameLevel(self.health:GetFrameLevel() + 1)
+        self.healthLow:SetAlpha(0)
+        local edge = CreateFrame("Frame", nil, bar)
+        edge:SetAllPoints()
+        edge:SetFrameLevel(self.healthLow:GetFrameLevel() + 1)
+        self.border = UI.Border(edge, "gilt-hairline")
+        -- rare and elite: the small crest just outside the bar's right end, as
+        -- the raid marker sits outside the left (design "Rare and elite units" B)
+        self.crest = UI.Crest(edge, "plate")
+        self.crest:SetPoint("CENTER", bar, "RIGHT", 7.5, 0)
+        -- or the game's elite dragon round the right end, over the bar as on
+        -- the target frame (design "Elite dragon (with crest B)" D)
+        local dragonHost = CreateFrame("Frame", nil, bar)
+        dragonHost:SetAllPoints()
+        dragonHost:SetFrameLevel(edge:GetFrameLevel() + 1)
+        self.dragon = dragonHost:CreateTexture(nil, "ARTWORK")
+        self.dragon:Hide()
+        self.glow = UI.Shadow(bar, "glow-ember")
+        self.glow:SetShown(false)
+
+        -- the cast, under the bar
+        self.cast = UI.CastBar(self, "none", { size = "plate", width = w, icon = false, target = true })
+        self.cast:SetBarHeight(M:Get("castHeight"))
+        self.cast:SetTargetShown(M:Get("castTarget"))
+        self.cast:SetKickShown(M:Get("castKick"))
+        self.cast:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
+        SuuUI.TagInstance(self.cast, { module = M.id, role = "nameplate" })
+        SuuUI.AddInstance("nameplate", self, { module = M.id, preview = api ~= nil or nil })
+    end
+
+    function SetPlateWidth(w: number)
+        self:SetSize(w, plateH())
+        self.bar:SetHeight(barH())
+        local mode = M:Get("healthText")
+        local textW = PCT_W[mode] or PCT_W.percent
+        -- the badge left of the health text, or at the row's end without one
+        if self.textMode ~= mode then
+            self.textMode = mode
+            self.badge:ClearAllPoints()
+            if textW > 0 then
+                self.badge:SetPoint("RIGHT", self.pct, "LEFT", -S["space-2"], 0)
+            else
+                self.badge:SetPoint("RIGHT", self, "TOPRIGHT", 0, -NAME_H / 2)
+            end
+        end
+        self.name:SetWidth(math.max(20, w - (self.questW or 0) - (self.levelW or 0) - (textW > 0 and textW + S["space-2"] or 0)
+            - (self.badge:IsShown() and (self.badge.knownWidth or 0) + S["space-2"] or 0)))
+    end
+
+    function UpdateQuest()
+        local text = false
+        if M:Get("questMarks") and not self.friendly then
+            if self.preview then text = self.previewQuest or false else text = questText(self.unit) end
+        end
+        local w = 0
+        if text then
+            self.quest.count:SetValue(text)
+            self.quest.count:SetShown(text ~= "")
+            local qw = 8 + (text ~= "" and (3 + math.ceil(self.quest.count:GetUnboundedStringWidth())) or 0)
+            self.quest:SetWidth(qw)
+            w = qw + S["space-2"]
+        end
+        self.quest:SetShown(text and true or false)
+        self.questW = w
+        self:PlaceName()
+    end
+
+    -- The quest mark, the level, then the name.
+    function PlaceName()
+        local x = self.questW or 0
+        self.level:ClearAllPoints()
+        self.level:SetPoint("BOTTOMLEFT", self, "TOPLEFT", x, -NAME_H + 1)
+        self.name:ClearAllPoints()
+        self.name:SetPoint("BOTTOMLEFT", self, "TOPLEFT", x + (self.levelW or 0), -NAME_H)
+        self:SetPlateWidth(M:Get("width"))
+    end
+
+    function UpdateLevel()
+        local A, u = self.api, self.unit
+        local text
+        -- the rare and elite crest (or the dragon), whether the level shows or not
+        local okCrest, kind = pcall(A.UnitClassification or UnitClassification, u)
+        if not okCrest then kind = nil end
+        local okBoss, boss = pcall(A.UnitIsBossMob or UnitIsBossMob or function() end, u)
+        local art = M:Get("eliteDragon") and UI.DragonArt(kind, okBoss and boss or nil)
+        self.crest:SetClassification(not art and kind or nil)
+        UI.PlaceDragon(self.dragon, art, self.bar, self.bar:GetHeight())
+        if M:Get("levels") and A.UnitLevel then
+            local ok, level = pcall(A.UnitLevel, u)
+            if ok and level ~= nil and not isSecret(level) then
+                local okC, c = pcall(A.UnitClassification or UnitClassification, u)
+                local elite = okC and not isSecret(c) and ELITE[c]
+                -- "25+" an elite, "??" a boss or one far above you (the design's
+                -- direction A, chosen 2026-10-18; after a quest mark, as asked)
+                local isBoss = (okC and not isSecret(c) and c == "worldboss") or level <= 0
+                text = isBoss and "??" or (tostring(level) .. (elite and "+" or ""))
+                self.level:SetColor(UI.LevelColor(level))
+            end
+        end
+        self.level:SetValue(text or "")
+        self.level:SetShown(text ~= nil)
+        -- space-2 to the name, as after a quest mark (space-1 read cramped in game)
+        self.levelW = text and (math.ceil(self.level:GetUnboundedStringWidth()) + S["space-2"]) or 0
+        self:PlaceName()
+    end
+
+    -- `instant`: a plate given a unit (the ghost isn't the last mob's).
+    function UpdateHealth(instant: boolean?)
+        local A, u = self.api, self.unit
+        local max, cur = A.UnitHealthMax(u), A.UnitHealth(u)
+        self.health:SetMinMaxValues(0, amount(max, 1))
+        self.health:SetValue(amount(cur))
+        self.ghost:SetMinMaxValues(0, amount(max, 1))
+        if instant or not INTERPOLATE then
+            if self.ghostTimer then self.ghostTimer:Cancel() self.ghostTimer = nil end
+            self.ghost:SetValue(amount(cur))
+        else
+            self.ghostValue = amount(cur)
+            if not self.ghostTimer then
+                self.ghostTimer = after(GHOST_HOLD, function()
+                    self.ghostTimer = nil
+                    self.ghost:SetValue(self.ghostValue, INTERPOLATE)
+                end)
+            end
+        end
+        self.healthLow:SetMinMaxValues(0, amount(max, 1))
+        self.healthLow:SetValue(amount(cur))
+        local curve = belowLow()
+        if curve then
+            self.healthLow:SetAlpha(amount(A.UnitHealthPercent(u, true, curve)))
+        else
+            self.healthLow:SetAlpha(0)
+        end
+        -- The health text: the percentage through a curve, the value through
+        -- AbbreviateNumbers (a secret health gives a secret string). Neither is
+        -- ever tested: they go to the engine's formatting as they are.
+        local mode = M:Get("healthText")
+        local pct, value
+        local hasPct = (mode == "percent" or mode == "both") and A.UnitHealthPercent ~= nil and CurveConstants ~= nil
+        local hasValue = false -- a plain flag: the value itself may be secret
+        if hasPct then
+            pct = A.UnitHealthPercent(u, true, CurveConstants.ScaleTo100)
+            if not isSecret(pct) then pct = (pct or 0) + 0.5 end
+        end
+        if mode == "value" or mode == "both" then
+            local ok, text = pcall(AbbreviateNumbers, amount(cur))
+            if ok then value, hasValue = text, true end
+        end
+        if mode == "both" and hasPct and hasValue then
+            self.pct:SetFormattedText("%s · %d%%", value, pct)
+        elseif mode ~= "percent" and hasValue then
+            self.pct:SetText(value)
+        elseif hasPct then
+            self.pct:SetFormattedText("%d%%", pct)
+        else
+            self.pct:Hide()
+            return
+        end
+        self.pct:Show()
+    end
+
+    function UpdateName()
+        local A, u = self.api, self.unit
+        self.name:SetText(A.UnitName(u))
+        local r = A.UnitReaction(u, "player")
+        local color = "reaction-hostile"
+        if not isSecret(r) and r ~= nil then color = REACTION[r] or "reaction-friendly" end
+        self.name:SetColor(color)
+        -- friendly players in their class colour (never tested: may be secret)
+        if self.friendly then
+            local okPlayer, player = pcall(A.UnitIsPlayer, u)
+            if okPlayer and not isSecret(player) and player then
+                local _, class = A.UnitClass(u)
+                if type(class) ~= "nil" and C_ClassColor then
+                    local ok, c = pcall(C_ClassColor.GetClassColor, class)
+                    if ok and c then pcall(self.name.SetTextColor, self.name, c:GetRGB()) end
+                end
             end
         end
     end
-end
 
--- Threat (readable on plates): non-tank Aggro, tank Losing / Aggro; solo
--- as a non-tank.
-function Plate:UpdateThreat()
-    local A, u = self.api, self.unit
-    local tone, word
-    -- never on players or their pets and totems (no threat table: an enemy
-    -- player's pet showed Aggro in a battleground, 2026-10-18)
-    local controlled = not self.preview and UnitPlayerControlled and UI.Flag(UnitPlayerControlled(u))
-    if M:Get("threat") and not self.friendly and not controlled then
-        local status = A.UnitThreatSituation("player", u)
-        if not isSecret(status) and status ~= nil then
-            local tank
-            if self.preview then tank = self.previewRole == "TANK" else tank = IsInGroup() and SuuUI.Role() == "TANK" end
-            if tank then
-                if status == 2 then tone, word = "warning", "Losing"
-                elseif status <= 1 then tone, word = "danger", "Aggro" end
-            elseif status >= 2 then
-                tone, word = "danger", "Aggro"
+    -- Threat (readable on plates): non-tank Aggro, tank Losing / Aggro; solo
+    -- as a non-tank.
+    function UpdateThreat()
+        local A, u = self.api, self.unit
+        local tone, word
+        -- never on players or their pets and totems (no threat table: an enemy
+        -- player's pet showed Aggro in a battleground, 2026-10-18)
+        local controlled = not self.preview and UnitPlayerControlled and UI.Flag(UnitPlayerControlled(u))
+        if M:Get("threat") and not self.friendly and not controlled then
+            local status = A.UnitThreatSituation("player", u)
+            if not isSecret(status) and status ~= nil then
+                local tank
+                if self.preview then tank = self.previewRole == "TANK" else tank = IsInGroup() and SuuUI.Role() == "TANK" end
+                if tank then
+                    if status == 2 then tone, word = "warning", "Losing"
+                    elseif status <= 1 then tone, word = "danger", "Aggro" end
+                elseif status >= 2 then
+                    tone, word = "danger", "Aggro"
+                end
             end
         end
+        self.state = tone
+        -- the state first, while a new badge is still hidden: it fades in each
+        -- time it appears
+        if tone then self.badge:SetState(tone, word) end
+        self.badge:SetShown(tone ~= nil)
+        self:SetPlateWidth(M:Get("width"))
+        self:UpdateBorder()
     end
-    self.state = tone
-    -- the state first, while a new badge is still hidden: it fades in each
-    -- time it appears
-    if tone then self.badge:SetState(tone, word) end
-    self.badge:SetShown(tone ~= nil)
-    self:SetPlateWidth(M:Get("width"))
-    self:UpdateBorder()
+
+    function UpdateBorder()
+        local color = "gilt-hairline"
+        if self.state == "danger" then color = "ember"
+        elseif self.state == "warning" then color = "amber"
+        elseif self.isTarget then color = "ink" end
+        self.border:SetColor(color)
+        self.glow:SetShown(self.state == "danger")
+    end
+
+    -- Your target at full opacity with an ink border; with a target, the rest dim.
+    function UpdateTarget()
+        local A, u = self.api, self.unit
+        local is = A.UnitIsUnit(u, "target")
+        self.isTarget = not isSecret(is) and is or false
+        local dim = M:Get("dimOthers") and not self.isTarget and (self.preview or UnitExists("target"))
+        self:SetAlpha(dim and T.opacity["opacity-plate"] or 1)
+        self:UpdateBorder()
+    end
+
+    function UpdateRaidMarker()
+        if not M:Get("raidMarker") then return self.raidMarker:Hide() end
+        UI.ShowRaidMarker(self.raidMarker, self.unit, self.api)
+    end
+
+    function Refresh()
+        self:UpdateRaidMarker()
+        self:UpdateQuest()
+        self:UpdateLevel()
+        self:UpdateName()
+        self:UpdateHealth(true)
+        self:UpdateThreat()
+        self:UpdateTarget()
+    end
 end
 
-function Plate:UpdateBorder()
-    local color = "gilt-hairline"
-    if self.state == "danger" then color = "ember"
-    elseif self.state == "warning" then color = "amber"
-    elseif self.isTarget then color = "ink" end
-    self.border:SetColor(color)
-    self.glow:SetShown(self.state == "danger")
-end
-
--- Your target at full opacity with an ink border; with a target, the rest dim.
-function Plate:UpdateTarget()
-    local A, u = self.api, self.unit
-    local is = A.UnitIsUnit(u, "target")
-    self.isTarget = not isSecret(is) and is or false
-    local dim = M:Get("dimOthers") and not self.isTarget and (self.preview or UnitExists("target"))
-    self:SetAlpha(dim and T.opacity["opacity-plate"] or 1)
-    self:UpdateBorder()
-end
-
-function Plate:UpdateRaidMarker()
-    if not M:Get("raidMarker") then return self.raidMarker:Hide() end
-    UI.ShowRaidMarker(self.raidMarker, self.unit, self.api)
-end
-
-function Plate:Refresh()
-    self:UpdateRaidMarker()
-    self:UpdateQuest()
-    self:UpdateLevel()
-    self:UpdateName()
-    self:UpdateHealth(true)
-    self:UpdateThreat()
-    self:UpdateTarget()
+local function buildPlate(parent: any, api: any?): Nameplate
+    return Nameplate.new(parent, api)
 end
 
 --------------------------------------------------------------------------------

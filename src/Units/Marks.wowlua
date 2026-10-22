@@ -425,7 +425,6 @@ end
 -- glyph in the mark's colour; out of range it sits on the ring (0.86 of the
 -- radius, MinimapPlaces) with a 6 px arrow in its colour just outside,
 -- pointing at the mark.
-local MiniPin = {}
 
 -- One screen pixel in the pin's units: at 16 px a disc's 1.5 px edge fell on
 -- one or two pixels as it moved, and its thicker side jumped about while
@@ -435,60 +434,78 @@ local function screenPixel(region: any): number
     local factor = PixelUtil and PixelUtil.GetPixelToUIUnitFactor and PixelUtil.GetPixelToUIUnitFactor() or 1
     return factor / region:GetEffectiveScale()
 end
-function MiniPin:Fit()
-    local px = screenPixel(self)
-    if self.px == px then return end
-    self.px = px
-    -- (an even count of pixels: its middle falls between two)
-    local size = 2 * math.floor(16 / px / 2 + 0.5) * px
-    self:SetSize(size, size)
-    self.fill:SetSize(size - 4 * px, size - 4 * px)
+
+export class MiniPin extends Frame
+    edge: Texture
+    fill: Texture
+    glyph: Texture
+    arrow: Texture
+    px: any? = nil
+    mark: any? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(16, 16)
+        self.edge = self:CreateTexture(nil, "BORDER", nil, 1)
+        self.edge:SetTexture(DISC)
+        self.edge:SetAllPoints()
+        self.fill = self:CreateTexture(nil, "BORDER", nil, 2)
+        self.fill:SetTexture(DISC)
+        self.fill:SetPoint("CENTER")
+        self.fill:SetSize(13, 13)
+        UI.Paint(self.fill, "surface")
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetPoint("CENTER")
+        self.glyph:SetSize(11, 11)
+        self.arrow = self:CreateTexture(nil, "ARTWORK")
+        self.arrow:SetTexture(GLYPHS .. "markArrow.tga")
+        self.arrow:SetSize(8, 8)
+        self:EnableMouse(true)
+        self:SetScript("OnEnter", function()
+            local m = self.mark
+            if not m then return end
+            UI.ShowTooltip(self, { title = m.name ~= "" and m.name or "Mark",
+                subtitle = ("%s · %.1f, %.1f"):format(M:MapName(m.map) or "", m.x * 100, m.y * 100),
+                lines = m.from and { { "Shared by " .. m.from } } or nil })
+        end)
+        self:SetScript("OnLeave", function() UI.HideTooltip() end)
+    end
+
+    function Fit()
+        local px = screenPixel(self)
+        if self.px == px then return end
+        self.px = px
+        -- (an even count of pixels: its middle falls between two)
+        local size = 2 * math.floor(16 / px / 2 + 0.5) * px
+        self:SetSize(size, size)
+        self.fill:SetSize(size - 4 * px, size - 4 * px)
+    end
+
+    function SetMark(mark: Mark, edge: boolean, angle: number)
+        self:Fit()
+        local c = colorOf(mark.symbol)
+        UI.Paint(self.edge, c)
+        self.glyph:SetTexture(GLYPHS .. glyphOf(mark.symbol) .. ".tga")
+        UI.Paint(self.glyph, c)
+        self.arrow:SetShown(edge)
+        if edge then
+            UI.Paint(self.arrow, c)
+            -- (the arrow points up at angle 0; SetRotation turns counter-clockwise)
+            self.arrow:SetRotation(-angle)
+            self.arrow:ClearAllPoints()
+            self.arrow:SetPoint("CENTER", self, "CENTER", math.sin(angle) * 12, math.cos(angle) * 12)
+        end
+        self.mark = mark
+    end
 end
 
-function MiniPin:SetMark(mark: Mark, edge: boolean, angle: number)
-    self:Fit()
-    local c = colorOf(mark.symbol)
-    UI.Paint(self.edge, c)
-    self.glyph:SetTexture(GLYPHS .. glyphOf(mark.symbol) .. ".tga")
-    UI.Paint(self.glyph, c)
-    self.arrow:SetShown(edge)
-    if edge then
-        UI.Paint(self.arrow, c)
-        -- (the arrow points up at angle 0; SetRotation turns counter-clockwise)
-        self.arrow:SetRotation(-angle)
-        self.arrow:ClearAllPoints()
-        self.arrow:SetPoint("CENTER", self, "CENTER", math.sin(angle) * 12, math.cos(angle) * 12)
-    end
-    self.mark = mark
+local function newMinimapPin(parent: Frame): MiniPin
+    return MiniPin.new(parent)
 end
-function M:MinimapPin(parent: Frame)
-    local b = CreateFrame("Frame", nil, parent)
-    Mixin(b, MiniPin)
-    b:SetSize(16, 16)
-    b.edge = b:CreateTexture(nil, "BORDER", nil, 1)
-    b.edge:SetTexture(DISC)
-    b.edge:SetAllPoints()
-    b.fill = b:CreateTexture(nil, "BORDER", nil, 2)
-    b.fill:SetTexture(DISC)
-    b.fill:SetPoint("CENTER")
-    b.fill:SetSize(13, 13)
-    UI.Paint(b.fill, "surface")
-    b.glyph = b:CreateTexture(nil, "ARTWORK")
-    b.glyph:SetPoint("CENTER")
-    b.glyph:SetSize(11, 11)
-    b.arrow = b:CreateTexture(nil, "ARTWORK")
-    b.arrow:SetTexture(GLYPHS .. "markArrow.tga")
-    b.arrow:SetSize(8, 8)
-    b:EnableMouse(true)
-    b:SetScript("OnEnter", function(self)
-        local m = self.mark
-        if not m then return end
-        UI.ShowTooltip(self, { title = m.name ~= "" and m.name or "Mark",
-            subtitle = ("%s · %.1f, %.1f"):format(M:MapName(m.map) or "", m.x * 100, m.y * 100),
-            lines = m.from and { { "Shared by " .. m.from } } or nil })
-    end)
-    b:SetScript("OnLeave", function() UI.HideTooltip() end)
-    return b
+
+-- A minimap pin (a MiniPin).
+function M:MinimapPin(parent: Frame): MiniPin
+    return newMinimapPin(parent)
 end
 
 --------------------------------------------------------------------------------
