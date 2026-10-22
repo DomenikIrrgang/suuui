@@ -13,6 +13,7 @@ import * as fault from "/Core/Fault"
 import * as DB from "/Core/DB"
 import * as util from "/Core/Util"
 import internal parse, show, splitPath, bind from "/Core/Settings"
+import FakeReporter, FakeNotifier from "../../fakes"
 
 config({ lifecycle = "manual" })
 
@@ -899,4 +900,68 @@ local function profileCommand()
     local usage = { P .. "Usage: /suu profile [use|new|delete <name>]" }
     expect(printedBy(function() mock.slash("/suu profile list") end)).toEqual(usage)
     expect(printedBy(function() mock.slash("/suu profile rename a") end)).toEqual(usage)
+end
+
+--------------------------------------------------------------------------------
+-- A store of its own
+--------------------------------------------------------------------------------
+
+const CHAR = "Tamsin Ashford - Realm"
+
+-- A store over fakes, its namespace registered and a migration in, bound
+-- to data data the test made: SuuUIDB is never touched.
+local function ownStore(data: { [string]: any }): (settings.SettingsStore, FakeReporter, FakeNotifier)
+    local reporter, notifier = FakeReporter.new(), FakeNotifier.new()
+    local store = settings.SettingsStore.new(reporter, notifier)
+    store:register("bars", { scale = 1, shown = true })
+    store:migrate("bars", "size", function(values: settings.Values)
+        if values.size then values.scale, values.size = values.size, nil end
+    end)
+    store:bind(data, CHAR)
+    return store, reporter, notifier
+end
+
+@test("a store of its own: bound to its data, migrated at bind, its changes told to its notifier")
+local function ownBind()
+    local data: { [string]: any } = { profiles = { [CHAR] = { bars = { size = 2 } }, Raid = { bars = { shown = false } } } }
+    local store, _, notifier = ownStore(data)
+    expect(store:ready()).toBe(true)
+    expect(store:currentProfile()).toBe(CHAR)
+    expect(data.chars[CHAR]).toBe(CHAR)
+    -- the migration reshaped every profile
+    expect(store:get("bars", "scale")).toBe(2)
+    expect(data.profiles[CHAR].bars.size).toBeNil()
+    expect(notifier.told).toEqual({ "SUUUI_SETTINGS_READY nil" })
+    store:set("bars", "scale", 3)
+    expect(data.profiles[CHAR].bars.scale).toBe(3)
+    expect(store:useProfile("raid")).toBe(true)
+    expect(store:get("bars", "shown")).toBe(false)
+    expect(store:get("bars", "scale")).toBe(1)
+    expect(notifier.told).toEqual({
+        "SUUUI_SETTINGS_READY nil", "SUUUI_SETTING_CHANGED bars",
+        "SUUUI_SETTING_CHANGED bars", "SUUUI_SETTING_CHANGED bars", "SUUUI_PROFILE_CHANGED Raid",
+    })
+    -- SuuUI's own store knows nothing of it
+    expect(settings.has("bars")).toBe(false)
+    expect(settings.profiles.current()).toBe("Main")
+end
+
+@test("a store of its own: a failing watcher or veto goes to its reporter")
+local function ownErrors()
+    local store, reporter = ownStore({})
+    store:watch("bars", "scale", function() error("own-watch") end, "Own Watcher")
+    store:veto("bars", "scale", function() error("own-veto") end, "Own Veto")
+    expect(store:set("bars", "scale", 2)).toBe(true)
+    expect(reporter.errors).toEqual({ "Own Veto: own-veto", "Own Watcher: own-watch" })
+    expect(store:migrations()[1].id).toBe("size")
+end
+
+@test("a store before bind: reading works from the defaults, writing is an error")
+local function ownUnbound()
+    local store = settings.SettingsStore.new(FakeReporter.new(), FakeNotifier.new())
+    store:register("bars", { scale = 1 })
+    expect(store:ready()).toBe(false)
+    expect(store:get("bars", "scale")).toBe(1)
+    expect(store:profileNames()).toEqual({})
+    expect(function() store:set("bars", "scale", 2) end).toThrow("data settings have not loaded yet")
 end
