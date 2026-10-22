@@ -14,8 +14,12 @@ import expectNoErrors from "../../helpers"
 local M: any = assert(SuuUI.GetModule("spellbook"))
 local G: any = _G
 
+-- Opened by its key, as the player does (the game's code opening it from
+-- the test would leave the window's tab tainted).
 local function open()
-    PlayerSpellsUtil.OpenToSpellBookTab()
+    if not G.PlayerSpellsFrame or not G.PlayerSpellsFrame:IsShown() then
+        mock.pressKey(GetBindingKey("TOGGLESPELLBOOK") :: string)
+    end
     mock.advanceFrames(2)
 end
 
@@ -433,4 +437,31 @@ local function redraws()
     M:PreviewView(parent)
     M:Emit("SUUUI_THEME_CHANGED")
     expect(render).toHaveBeenCalledTimes(2)
+end
+
+@test("opened in a fight (by its key): at the Spellbook's size and in its place, as out of combat (the window's secure placer)")
+local function openedInCombat()
+    local f = G.PlayerSpellsFrame
+    mock.pressKey(GetBindingKey("TOGGLESPELLBOOK") :: string)
+    mock.advanceFrames(3)
+    expect(f:IsShown()).toBe(true)
+    local w, h = f:GetWidth(), f:GetHeight()
+    local point, rel, relPoint, x, y = f:GetPoint(1)
+    mock.pressKey(GetBindingKey("TOGGLESPELLBOOK") :: string)
+    mock.advanceFrames(2)
+    expect(f:IsShown()).toBe(false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    mock.pressKey(GetBindingKey("TOGGLESPELLBOOK") :: string)
+    mock.advanceFrames(3)
+    expect(f:IsShown()).toBe(true)
+    local p2, r2, rp2, x2, y2 = f:GetPoint(1)
+    expect(f:GetWidth()).toBeCloseTo(w)
+    expect(f:GetHeight()).toBeCloseTo(h)
+    expect(p2).toBe(point)
+    expect(r2).toBe(rel)
+    expect(rp2).toBe(relPoint)
+    expect(x2).toBeCloseTo(x)
+    expect(y2).toBeCloseTo(y)
+    expectNoErrors()
 end

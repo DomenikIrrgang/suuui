@@ -4,7 +4,31 @@
 
 ### New
 
+- The spellbook: in a fight, switch between schools and pages; your spells now cast when you let go of the mouse, so pressing one to drag it to a bar no longer casts it; and dragging a spell to a bar works in a fight too.
+- Plugin API 0.18: `SuuUI.UI.SecurePlacement`, a protected window opened in combat at its tab's size and place.
 - Unit frames: while you rest in an inn or a city, a small "z Z Z" drifts up from your frame's top-right corner (a full moon once your rested XP is full), and hovering your frame shows your rested XP and what it means. Settings › Unit frames › Rested: show it also while carrying rested XP, keep it still, hide it in combat or at max level. The Unit frames settings now preview your frame.
+
+### Fixed
+
+- The spells window opened in a fight at Blizzard's size and place, its header against the top of the screen: it now opens where and as large as out of combat.
+- Unit frames: out of combat they dimmed even while you were hurt; they now dim only at full health (the change is immediate instead of a fade).
+- Your buffs no longer run under the encounter timeline when they grow left (the default).
+- The damage meter no longer errors when the game hides a fight's list; it says the list is secret until combat ends.
+- Tooltips: the caster line on aura tooltips shows again.
+- Social: Raid Info shows each lockout's difficulty, size and progress again.
+- Merchant: Sell junk shows the real price instead of 0c.
+- Guild: Remove removes the member again; editing the message of the day or the guild info says when the game's own box isn't available instead of failing.
+- Game menu: Reload UI, Log Out, Exit Game and Edit Mode are blocked from the moment a fight starts.
+- Notes stay hidden during a fight; the objective tracker's quest items hide in boss fights.
+- Loot rolls show in the notifications again, with votes, roll numbers and the winner; "You passed on" and "You won" lines are read right.
+- Bags opened SuuUI's way stay open when a merchant or the mailbox closes.
+- The character window's item flyout no longer errors.
+- Cooldown Manager: the Defensives editor saves your changes; the Timer and Stacks switches can be turned off.
+- Raid planner: specs are shared and asked for in game, and a setup no longer breaks when someone has no slot.
+- Marks: the minimap's marks go away when the Marks module stops.
+- World map: no gap under a quest tooltip's first objective; the Convergences blessing reads right in combat.
+- Talents: a new or imported build shows to plan right away, and Start playing turns off when a fight begins.
+- Auction house: "Bought." and "Posted" stay on screen, a bid no longer carries over to the next auction, Scan all's results draw properly, Post comes back after the game refuses a post, and "1 seller" reads right.
 
 ## 0.5.0-beta.7 (2026-10-20)
 

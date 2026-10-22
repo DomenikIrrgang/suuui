@@ -399,8 +399,11 @@ local function centerAll(list: any[])
     end
 end
 
+local updatePlacers: () -> ()
+
 export function layout()
     if Row.placing then return end
+    updatePlacers()
     local open: any[], middle: any[] = {}, {}
     for _, c in ipairs(Row.list) do
         if c.frame:IsShown() then
@@ -496,5 +499,113 @@ export function add(chrome: any)
 end
 
 events.onGame("PLAYER_REGEN_ENABLED", function() queue() end, "UI.WindowRow")
+
+--------------------------------------------------------------------------------
+-- Secure placement (0.18): a protected window opened in combat lands where
+-- SuuUI puts it, at the size its tab wants. SuuUI can't move or size a
+-- protected window in combat; the game's own code can. So what each tab
+-- wants (its size, the row or the middle) is handed out of combat to a
+-- secure handler inside the window, which applies it whenever the window
+-- shows: a child of the window made after Blizzard's tabs, so its OnShow
+-- runs after theirs (children before their parent, in the order they were
+-- made: recorded in the client), after the tab sized the window and after
+-- Blizzard's panel manager placed it.
+--------------------------------------------------------------------------------
+
+local PLACE = [=[
+    local win = self:GetFrameRef("window")
+    local screen = self:GetFrameRef("screen")
+    local n = self:GetAttribute("count") or 0
+    local pick
+    for i = 1, n do
+        local mark = self:GetFrameRef("tab" .. i)
+        if mark and mark:IsVisible() then pick = i break end
+    end
+    if not pick then return end
+    local w, h = self:GetAttribute("w" .. pick), self:GetAttribute("h" .. pick)
+    if w and h then
+        win:SetWidth(w)
+        win:SetHeight(h)
+    end
+    if self:GetAttribute("centered" .. pick) then
+        local y = self:GetAttribute("centerY")
+        if y then
+            win:ClearAllPoints()
+            win:SetPoint("CENTER", screen, "CENTER", 0, y)
+        end
+    else
+        local x, y = self:GetAttribute("rowX"), self:GetAttribute("rowY")
+        if x and y then
+            win:ClearAllPoints()
+            win:SetPoint("TOPLEFT", screen, "BOTTOMLEFT", x, y)
+        end
+    end
+]=]
+
+local placers: any[] = {}
+
+-- Where the window goes, for its placer: the row's first place under its
+-- anchor, or the middle (out of combat).
+local function place(p: any)
+    if InCombatLockdown() then return end
+    local chrome = p.chrome
+    local f = chrome.frame
+    local es = f:GetEffectiveScale()
+    local anchor = chrome.under and anchors.get(chrome.under)
+    local left, bottom = anchor and anchor:GetLeft(), anchor and anchor:GetBottom()
+    if left and bottom then
+        local as = anchor:GetEffectiveScale()
+        p:SetAttribute("rowX", left * as / es)
+        p:SetAttribute("rowY", (bottom * as - S["space-5"] * as) / es - (chrome.rise or 0))
+    end
+    p:SetAttribute("centerY", -(chrome.rise or 0) / 2)
+end
+
+updatePlacers = function()
+    for _, p in ipairs(placers) do place(p) end
+end
+
+-- The placer of a skinned protected window (one per window).
+export function securePlacement(frame: any): any
+    local chrome = frame and frame.suuChrome
+    if not chrome then return nil end
+    if chrome.placer then return chrome.placer end
+    if InCombatLockdown() then return nil end
+    local p = CreateFrame("Frame", nil, frame, "SecureHandlerShowHideTemplate")
+    p:SetSize(1, 1)
+    p:SetPoint("TOPLEFT")
+    p:SetFrameRef("window", frame)
+    p:SetFrameRef("screen", UIParent)
+    p:SetAttribute("count", 0)
+    p:SetAttribute("_onshow", PLACE)
+    p.chrome, p.keys = chrome, {}
+    -- What a tab wants: `tab` its frame (the first shown one decides),
+    -- `centered` the middle instead of the row. Out of combat.
+    function p:Track(key: string, tab: any, opts: { [string]: any }?)
+        if InCombatLockdown() or self.keys[key] then return end
+        local i = (self:GetAttribute("count") or 0) + 1
+        self.keys[key] = i
+        self:SetAttribute("count", i)
+        -- (a protected mark inside the tab: secure code reads only a
+        -- protected frame's visibility in combat, and Blizzard's tab may
+        -- not be one)
+        local mark = CreateFrame("Frame", nil, tab, "SecureFrameTemplate")
+        mark:SetSize(1, 1)
+        mark:SetPoint("TOPLEFT")
+        self:SetFrameRef("tab" .. i, mark)
+        self:SetAttribute("centered" .. i, opts and opts.centered or nil)
+    end
+    -- The size the tab gives the window. Out of combat.
+    function p:SetTabSize(key: string, w: number, h: number)
+        local i = self.keys[key]
+        if not i or InCombatLockdown() then return end
+        self:SetAttribute("w" .. i, w)
+        self:SetAttribute("h" .. i, h)
+    end
+    chrome.placer = p
+    placers[#placers + 1] = p
+    place(p)
+    return p
+end
 
 export const WINDOW_HEAD_H = HEAD_H
