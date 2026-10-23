@@ -3,6 +3,7 @@
 import test, expect, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as sort from "/Units/Bags/Sort"
+import * as tbl from "wowlua:table"
 import expectNoErrors from "../../../helpers"
 
 type SortItem = sort.SortItem
@@ -10,10 +11,9 @@ type SortSlot = sort.SortSlot
 
 local HERBS, SHARDS = 32, 4
 
-local function item(id: any, count: number?, extra: { [string]: any }?): SortItem
+local function item(id: number | string, count: number?, extra: { [string]: unknown }?): SortItem
     local it: SortItem = { id = id, count = count or 1, classID = 7, maxStack = 20 }
-    for k, v in pairs(extra or {}) do (it :: any)[k] = v end
-    return it
+    return tbl.merge(it, extra or {})
 end
 
 local function slot(bag: number, n: number, it: SortItem?, family: sort.Family?, locked: boolean?): SortSlot
@@ -289,7 +289,7 @@ end
 
 @test("a conjured item, by its tooltip")
 local function conjured()
-    mock.fake("C_TooltipInfo.GetItemByID", function(id: number): any
+    mock.fake("C_TooltipInfo.GetItemByID", function(id: number): unknown
         if id == 1 then return { lines = { { leftText = "Mana Biscuit" }, { leftText = ITEM_CONJURED or "Conjured Item" } } } end
         if id == 2 then return { lines = { { leftText = mock.secret("Conjured Item") } } } end
         if id == 3 then return { lines = "none" } end
@@ -324,7 +324,7 @@ end
 local function itemOfLink()
     mock.defineItem(91002, { name = "Worn Axe", quality = 2, itemLevel = 9, stackCount = 1, sellPrice = 50, classID = 2,
         subclassID = 0, equipLoc = "INVTYPE_2HWEAPON", icon = 135421 }, { cached = true })
-    mock.fake("C_Item.GetDetailedItemLevelInfo", function(_: any): number return 12 end)
+    mock.fake("C_Item.GetDetailedItemLevelInfo", function(_: unknown): number return 12 end)
     mock.setBag(4, { slots = 4, items = { [1] = 91002 } })
     local link = assert(assert(C_Container.GetContainerItemInfo(4, 1)).hyperlink)
     local a = sort.itemOf({ itemID = 91002, hyperlink = link, quality = 2 })
@@ -336,7 +336,7 @@ end
 
 @test("an item the game hasn't loaded: what it knows at once, and it's asked for")
 local function itemNotLoaded()
-    local asked = mock.fake("C_Item.RequestLoadItemDataByID", function(_: any) end)
+    local asked = mock.fake("C_Item.RequestLoadItemDataByID", function(_: unknown) end)
     local a = sort.itemOf({ itemID = 91999, stackCount = 2, quality = 3, hyperlink = mock.secret("x") })
     expect(a.name).toBeNil()
     expect(a.link).toBeNil()
@@ -348,6 +348,6 @@ end
 @test("an item's family, when the game tells it")
 local function itemFamily()
     mock.defineItem(91003, { name = "Peacebloom", quality = 1, stackCount = 20, sellPrice = 1, classID = 7, subclassID = 9, icon = 1 }, { cached = true })
-    mock.fake("C_Item.GetItemFamily", function(_: any): number return HERBS end)
+    mock.fake("C_Item.GetItemFamily", function(_: unknown): number return HERBS end)
     expect(sort.itemOf({ itemID = 91003 }).family).toBe(HERBS)
 end
