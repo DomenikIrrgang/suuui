@@ -4,8 +4,10 @@
 
 import test, expect, beforeEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
 import SuuUI from "/Core/API"
 import * as logic from "/Units/GroupFinder/Logic"
+import type Interest, Listing from "foreverlfg"
 
 type Entry = logic.Entry
 
@@ -25,7 +27,7 @@ local function holdCatalogue()
         if key == "dungeon:sm" then return { "dungeon:wc", "dungeon:rfk" } end
         return { key }
     end)
-    mock.stub(cat, "Get", function(key: string): { [string]: any }?
+    mock.stub(cat, "Get", function(key: string): { key: string, kind: string, level?: number[] }?
         if LEVELS[key] then return { key = key, kind = "dungeon", level = LEVELS[key] } end
         if key == "custom:x" then return { key = key, kind = "custom" } end
         if key == "dungeon:open" then return { key = key, kind = "dungeon", level = { 10 } } end
@@ -34,16 +36,28 @@ local function holdCatalogue()
 end
 
 -- An entry with the fields the library always fills.
-local function entry(t: { [string]: any }): Entry
-    t.key = t.key or "Kessra"
-    t.activities = t.activities or {}
-    t.quests = t.quests or {}
-    t.roles = t.roles or {}
-    t.roles.needed = t.roles.needed or {}
-    t.roles.offered = t.roles.offered or {}
-    t.sources = t.sources or {}
-    t.text = t.text or ""
-    return t
+local function entry(t: { [string]: unknown }): Entry
+    local e: Entry = mock.partial({ key = "Kessra", activities = {}, quests = {}, roles = {}, classes = {}, sources = {}, text = "",
+                                    leader = {}, confidence = 1, you = false, firstSeen = 0, lastSeen = 0 })
+    for k, v in pairs(t) do rawset(e, k, v) end
+    for _, part in ipairs({ "needed", "offered" }) do
+        if rawget(e.roles, part) == nil then rawset(e.roles, part, {}) end
+    end
+    return e
+end
+
+-- What you're after, with the fields a test gives.
+local function interest(t: { [string]: unknown }): Interest
+    local i: Interest = mock.partial({ listed = {}, roles = {}, quests = {}, level = 0, watches = {} })
+    for k, v in pairs(t) do rawset(i, k, v) end
+    return i
+end
+
+-- Your listing, with the fields a test gives.
+local function listing(t: { [string]: unknown }): Listing
+    local l: Listing = mock.partial({ activities = {}, roles = {} })
+    for k, v in pairs(t) do rawset(l, k, v) end
+    return l
 end
 
 @test("ago: now, minutes, hours, never below zero, empty for nil")
@@ -75,7 +89,7 @@ end
 
 @test("lines keeps what says something")
 local function linesJoin()
-    expect(logic.lines("a", nil, "", "b", false, "c")).toBe("a · b · c")
+    expect(logic.lines("a", nil, "", "b", "c")).toBe("a · b · c")
     expect(logic.lines()).toBe("")
 end
 
@@ -165,49 +179,49 @@ end
 @test("fits: an activity's range give or take 3 levels")
 @cases({ { 22, true }, { 37, true }, { 38, true }, { 21, false }, { 39, false } })
 local function fitsRange(level: number, want: boolean)
-    expect(logic.fits(entry({ activities = { "dungeon:rfk" } }), { level = level })).toBe(want)
+    expect(logic.fits(entry({ activities = { "dungeon:rfk" } }), interest({ level = level }))).toBe(want)
 end
 
 @test("fits: an umbrella fits by any part; an activity with no range always fits")
 local function fitsUmbrella()
-    expect(logic.fits(entry({ activities = { "dungeon:sm" } }), { level = 14 })).toBe(true)
-    expect(logic.fits(entry({ activities = { "dungeon:sm" } }), { level = 60 })).toBe(false)
-    expect(logic.fits(entry({ activities = { "custom:x" } }), { level = 1 })).toBe(true)
+    expect(logic.fits(entry({ activities = { "dungeon:sm" } }), interest({ level = 14 }))).toBe(true)
+    expect(logic.fits(entry({ activities = { "dungeon:sm" } }), interest({ level = 60 }))).toBe(false)
+    expect(logic.fits(entry({ activities = { "custom:x" } }), interest({ level = 1 }))).toBe(true)
 end
 
 @test("fits: unknown activities fall back to the entry's level (6 either way), else no activity at all fits")
 local function fitsFallback()
-    expect(logic.fits(entry({ activities = { "unknown" }, level = { 30 } }), { level = 36 })).toBe(true)
-    expect(logic.fits(entry({ activities = { "unknown" }, level = { 30 } }), { level = 37 })).toBe(false)
-    expect(logic.fits(entry({ activities = { "unknown" } }), { level = 30 })).toBe(false)
-    expect(logic.fits(entry({}), {})).toBe(true)
+    expect(logic.fits(entry({ activities = { "unknown" }, level = { 30 } }), interest({ level = 36 }))).toBe(true)
+    expect(logic.fits(entry({ activities = { "unknown" }, level = { 30 } }), interest({ level = 37 }))).toBe(false)
+    expect(logic.fits(entry({ activities = { "unknown" } }), interest({ level = 30 }))).toBe(false)
+    expect(logic.fits(entry({}), interest({}))).toBe(true)
     -- a range without its top: not a fit by range, falls through
-    expect(logic.fits(entry({ activities = { "dungeon:open" } }), { level = 10 })).toBe(false)
+    expect(logic.fits(entry({ activities = { "dungeon:open" } }), interest({ level = 10 }))).toBe(false)
 end
 
 @test("fitsMe: a group naming its needs must need one of your roles")
 local function fitsMeRoles()
     local g = entry({ intent = "group", activities = { "dungeon:rfk" }, roles = { needed = { healer = 1 } } })
-    expect(logic.fitsMe(g, { level = 30, roles = { healer = true } })).toBe(true)
-    expect(logic.fitsMe(g, { level = 30, roles = { tank = true } })).toBe(false)
-    expect(logic.fitsMe(g, { level = 60, roles = { healer = true } })).toBe(false)
+    expect(logic.fitsMe(g, interest({ level = 30, roles = { healer = true } }))).toBe(true)
+    expect(logic.fitsMe(g, interest({ level = 30, roles = { tank = true } }))).toBe(false)
+    expect(logic.fitsMe(g, interest({ level = 60, roles = { healer = true } }))).toBe(false)
     local open = entry({ intent = "group", activities = { "dungeon:rfk" } })
-    expect(logic.fitsMe(open, { level = 30, roles = {} })).toBe(true)
+    expect(logic.fitsMe(open, interest({ level = 30, roles = {} }))).toBe(true)
     local player = entry({ intent = "player", activities = { "dungeon:rfk" }, roles = { needed = { tank = 1 } } })
-    expect(logic.fitsMe(player, { level = 30, roles = {} })).toBe(true)
+    expect(logic.fitsMe(player, interest({ level = 30, roles = {} }))).toBe(true)
 end
 
 @test("rowOrder: matches first, then the newest, missing times as 0")
 local function order()
-    local rows: { [string]: any }[] = {
-        { key = "old", match = false, entry = { lastSeen = 1 } },
-        { key = "new", match = false, entry = { lastSeen = 5 } },
-        { key = "match", match = true, entry = { lastSeen = 0 } },
-        { key = "never", match = false, entry = {} },
+    local rows: logic.Row[] = {
+        mock.partial({ key = "old", match = false, entry = { lastSeen = 1 } }),
+        mock.partial({ key = "new", match = false, entry = { lastSeen = 5 } }),
+        mock.partial({ key = "match", match = true, entry = { lastSeen = 0 } }),
+        mock.partial({ key = "never", match = false, entry = {} }),
     }
     table.sort(rows, logic.rowOrder)
     local keys: string[] = {}
-    for i, r in ipairs(rows) do keys[i] = r.key end
+    for i, r in ipairs(rows) do keys[i] = r.key or "" end
     expect(keys).toEqual({ "match", "new", "old", "never" })
 end
 
@@ -272,16 +286,16 @@ end
 @test("listedText: one name, the first and how many more, all of them, or your activity")
 local function listed()
     expect(logic.listedText(nil)).toBe("your activity")
-    expect(logic.listedText({ activities = {} })).toBe("your activity")
-    expect(logic.listedText({ activities = { "dungeon:sfk" } })).toBe("Shadowfang Keep")
-    expect(logic.listedText({ activities = { "dungeon:sfk", "dungeon:dm", "dungeon:wc" } })).toBe("Shadowfang Keep and 2 more")
-    expect(logic.listedText({ activities = { "dungeon:sfk", "dungeon:dm", "dungeon:wc" } }, true))
+    expect(logic.listedText(listing({ activities = {} }))).toBe("your activity")
+    expect(logic.listedText(listing({ activities = { "dungeon:sfk" } }))).toBe("Shadowfang Keep")
+    expect(logic.listedText(listing({ activities = { "dungeon:sfk", "dungeon:dm", "dungeon:wc" } }))).toBe("Shadowfang Keep and 2 more")
+    expect(logic.listedText(listing({ activities = { "dungeon:sfk", "dungeon:dm", "dungeon:wc" } }), true))
         .toBe("Shadowfang Keep, Deadmines and Wailing Caverns")
 end
 
 @test("openListingMacro: the micro button first while the window is closed")
 local function macro()
-    local f = assert(_G.LFGParentFrame)
+    local f = assert(frames.find("LFGParentFrame"))
     mock.stub(f, "IsShown", function(): boolean return false end)
     expect(logic.openListingMacro()).toBe("/click LFDMicroButton\n/click LFGParentFrameTab1")
     mock.stub(f, "IsShown", function(): boolean return true end)
@@ -295,25 +309,25 @@ end
 @test("adText: alone, the roles you offer and who you are, the comment after")
 local function adAlone()
     local ctx: logic.AdContext = { inGroup = false, roles = {}, level = 27, class = "PRIEST" }
-    expect(logic.adText({ activities = { "dungeon:rfk", "dungeon:sfk" }, roles = { healer = true, damage = true }, comment = "chill run" }, ctx))
+    expect(logic.adText(listing({ activities = { "dungeon:rfk", "dungeon:sfk" }, roles = { healer = true, damage = true }, comment = "chill run" }), ctx))
         .toBe("LFG Healer or DPS (27 priest) for Razorfen Kraul or Shadowfang Keep. chill run")
-    expect(logic.adText({ activities = { "dungeon:rfk" }, roles = { tank = true } }, ctx)).toBe("LFG Tank (27 priest) for Razorfen Kraul.")
+    expect(logic.adText(listing({ activities = { "dungeon:rfk" }, roles = { tank = true } }), ctx)).toBe("LFG Tank (27 priest) for Razorfen Kraul.")
     -- no roles, no class known, an empty or secret comment left out
     local bare: logic.AdContext = { inGroup = false, roles = {}, level = 10 }
-    expect(logic.adText({ activities = { "dungeon:wc" }, comment = "" }, bare)).toBe("LFG (10 ) for Wailing Caverns.")
-    expect(logic.adText({ activities = { "dungeon:wc" }, comment = mock.secret("x") }, bare)).toBe("LFG (10 ) for Wailing Caverns.")
+    expect(logic.adText(listing({ activities = { "dungeon:wc" }, comment = "" }), bare)).toBe("LFG (10 ) for Wailing Caverns.")
+    expect(logic.adText(listing({ activities = { "dungeon:wc" }, comment = mock.secret("x") }), bare)).toBe("LFG (10 ) for Wailing Caverns.")
 end
 
 @test("adText: in a group, the roles a 1/1/3 group still lacks and its size")
 local function adGroup()
-    local listing = { activities = { "dungeon:dm" } }
-    expect(logic.adText(listing, { inGroup = true, roles = { "TANK", "NONE" }, level = 20 }))
+    local dm = listing({ activities = { "dungeon:dm" } })
+    expect(logic.adText(dm, { inGroup = true, roles = { "TANK", "NONE" }, level = 20 }))
         .toBe("LFM Healer and 3 DPS for Deadmines (2/5).")
-    expect(logic.adText(listing, { inGroup = true, roles = { "TANK", "HEALER", "DAMAGER", "DAMAGER" }, level = 20 }))
+    expect(logic.adText(dm, { inGroup = true, roles = { "TANK", "HEALER", "DAMAGER", "DAMAGER" }, level = 20 }))
         .toBe("LFM 1 DPS for Deadmines (4/5).")
-    expect(logic.adText(listing, { inGroup = true, roles = { "TANK", "HEALER", "DAMAGER", "DAMAGER", "DAMAGER" }, level = 20 }))
+    expect(logic.adText(dm, { inGroup = true, roles = { "TANK", "HEALER", "DAMAGER", "DAMAGER", "DAMAGER" }, level = 20 }))
         .toBe("LFM for Deadmines (5/5).")
-    expect(logic.adText(listing, { inGroup = true, roles = { "DAMAGER", "NONE" }, level = 20 }))
+    expect(logic.adText(dm, { inGroup = true, roles = { "DAMAGER", "NONE" }, level = 20 }))
         .toBe("LFM Tank, Healer and 2 DPS for Deadmines (2/5).")
 end
 
