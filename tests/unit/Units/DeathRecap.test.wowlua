@@ -5,12 +5,12 @@ import test, expect, cases, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, group3, spellOf, extras from "/Units/DeathRecap"
-import recapOf, Recap from "/Units/DeathRecap"
+import recapOf, Recap, DeathEvent from "/Units/DeathRecap"
 import expectNoErrors from "../../helpers"
 
 -- three hits, newest first as the game gives them: a fall, a wolf's swing
 -- (partly absorbed), a mage's critical Fireball that killed
-local function threeHits(): any[]
+local function threeHits(): DeathEvent[]
     return {
         { timestamp = 103, amount = 500, currentHP = 300, spellId = 133, spellName = "Fireball", sourceName = "Mage",
           school = 4, critical = true, overkill = 200, event = "SPELL_DAMAGE" },
@@ -19,19 +19,20 @@ local function threeHits(): any[]
     }
 end
 
-local recapEvents: any = nil
-local recapMax: any = nil
+local recapEvents: unknown = nil
+local recapMax: unknown = nil
 
 @beforeEach
 local function world()
     recapEvents, recapMax = threeHits(), 1000
-    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): any return recapEvents end)
-    mock.stub(C_DeathRecap, "GetRecapMaxHealth", function(_: number?): any return recapMax end)
+    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): unknown return recapEvents end)
+    mock.stub(C_DeathRecap, "GetRecapMaxHealth", function(_: number?): unknown return recapMax end)
 end
 
 @afterEach
 local function clean()
-    if M.window then M.window:Hide() end
+    local parts = M.parts
+    if parts then parts.window:Hide() end
     expectNoErrors()
 end
 
@@ -184,29 +185,29 @@ end
 local function onAtLogin()
     expect(M:IsEnabled()).toBe(true)
     expect(M.hooked).toBe(true)
-    expect(M.window).toBeNil()
+    expect(M.parts).toBeNil()
     M:Emit("SUUUI_THEME_CHANGED", "suuui") -- nothing built yet: nothing to do
     M:ShowRecap(nil)
-    expect(M.window).toBe(_G.SuuUIDeathRecap)
+    expect(M:Window().window:GetName()).toBe("SuuUIDeathRecap")
 end
 
 @test("ShowRecap draws the head, the line and a row per hit")
 local function draws()
     M:ShowRecap(7)
-    expect(M.window).toBeShown()
-    expect(M.empty).never.toBeShown()
-    expect(M.head).toBeShown()
-    expect(M.head.spell).toHaveText("Fireball")
-    expect(M.head.by).toHaveText("· Mage")
-    expect(M.head.detail).toHaveText("500 Fire · critical · 200 overkill")
-    expect(M.head.health).toHaveText("1,000 health to 0")
-    expect(M.head.span).toHaveText("in 3.0 s, 3 hits")
-    expect(M.line).toBeShown()
+    expect(M:Window().window).toBeShown()
+    expect(M:Window().empty).never.toBeShown()
+    expect(M:Window().head).toBeShown()
+    expect(M:Window().head.spell).toHaveText("Fireball")
+    expect(M:Window().head.by).toHaveText("· Mage")
+    expect(M:Window().head.detail).toHaveText("500 Fire · critical · 200 overkill")
+    expect(M:Window().head.health).toHaveText("1,000 health to 0")
+    expect(M:Window().head.span).toHaveText("in 3.0 s, 3 hits")
+    expect(M:Window().line).toBeShown()
     -- four steps, the last (at zero) hidden; two time marks
-    expect(M.line.steps[3]).toBeShown()
-    expect(M.line.steps[4]).never.toBeShown()
-    expect(M.line.marks[2]).toHaveText("−2 s")
-    local r1, r3 = M.rows[1], M.rows[3]
+    expect(M:Window().line.steps[3]).toBeShown()
+    expect(M:Window().line.steps[4]).never.toBeShown()
+    expect(M:Window().line.marks[2]).toHaveText("−2 s")
+    local r1, r3 = M:Window().rows[1], M:Window().rows[3]
     expect(r1).toBeShown()
     expect(r1.time).toHaveText("−3.0 s")
     expect(r1.hp).toHaveText("700")
@@ -225,45 +226,45 @@ local function fewer()
     M:ShowRecap(1)
     recapEvents = { { timestamp = 10, amount = 100, currentHP = 100, spellName = "Bite", event = "SPELL_DAMAGE" } }
     M:ShowRecap(2)
-    expect(M.rows[1]).toBeShown()
-    expect(M.rows[2]).never.toBeShown()
-    expect(M.line.steps[2]).never.toBeShown()
-    expect(M.head.span).toHaveText("in 0.0 s, 1 hit")
+    expect(M:Window().rows[1]).toBeShown()
+    expect(M:Window().rows[2]).never.toBeShown()
+    expect(M:Window().line.steps[2]).never.toBeShown()
+    expect(M:Window().head.span).toHaveText("in 0.0 s, 1 hit")
 end
 
 @test("an unknown maximum: no health line, no health bars")
 local function noMax()
     recapMax = 0
     M:ShowRecap(1)
-    expect(M.line.steps[1]).never.toBeShown()
-    expect(M.rows[1].hpFill).never.toBeShown()
-    expect(M.rows[1].hp).toHaveText("700")
+    expect(M:Window().line.steps[1]).never.toBeShown()
+    expect(M:Window().rows[1].hpFill).never.toBeShown()
+    expect(M:Window().rows[1].hp).toHaveText("700")
     recapMax = mock.secret(1000)
     M:ShowRecap(1)
-    expect(M.rows[1].hpFill).never.toBeShown()
+    expect(M:Window().rows[1].hpFill).never.toBeShown()
 end
 
 @test("no recap: an empty window says so")
 local function empty()
     recapEvents = {}
     M:ShowRecap(1)
-    expect(M.window).toBeShown()
-    expect(M.head).never.toBeShown()
-    expect(M.line).never.toBeShown()
-    expect(M.empty).toHaveText("No recap for this death. The game recorded no hits for it.")
+    expect(M:Window().window).toBeShown()
+    expect(M:Window().head).never.toBeShown()
+    expect(M:Window().line).never.toBeShown()
+    expect(M:Window().empty).toHaveText("No recap for this death. The game recorded no hits for it.")
     recapEvents = nil
     M:ShowRecap(1)
-    expect(M.empty).toBeShown()
-    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): any error("no recap") end)
+    expect(M:Window().empty).toBeShown()
+    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): unknown error("no recap") end)
     M:ShowRecap(1)
-    expect(M.empty).toBeShown()
+    expect(M:Window().empty).toBeShown()
 end
 
 @test("a secret recap: shown as secret until combat ends")
 local function secretRecap()
-    mock.fake("issecrettable", function(_: any): boolean return true end)
+    mock.fake("issecrettable", function(_: unknown): boolean return true end)
     M:ShowRecap(1)
-    expect(M.empty).toHaveText("The recap is secret until combat ends.")
+    expect(M:Window().empty).toHaveText("The recap is secret until combat ends.")
 end
 
 @test("a row's tooltip: the spell's own, else ours")
@@ -272,49 +273,49 @@ local function rowTooltips()
     local spellTip, ourTip = mock.spy(), mock.spy()
     mock.stub(SuuUI.UI, "SpellTooltip", spellTip)
     mock.stub(SuuUI.UI, "ShowTooltip", ourTip)
-    mock.script(M.rows[3], "OnEnter")
-    expect(spellTip).toHaveBeenCalledWith(M.rows[3], 133)
-    mock.script(M.rows[2], "OnEnter")
-    expect(ourTip).toHaveBeenCalledWith(M.rows[2], { title = "Melee", subtitle = "Wolf · 50 absorbed" })
-    mock.script(M.rows[1], "OnEnter")
-    expect(ourTip).toHaveBeenCalledWith(M.rows[1], { title = ACTION_ENVIRONMENTAL_DAMAGE_FALLING })
-    mock.script(M.rows[1], "OnLeave")
+    mock.script(M:Window().rows[3], "OnEnter")
+    expect(spellTip).toHaveBeenCalledWith(M:Window().rows[3], 133)
+    mock.script(M:Window().rows[2], "OnEnter")
+    expect(ourTip).toHaveBeenCalledWith(M:Window().rows[2], { title = "Melee", subtitle = "Wolf · 50 absorbed" })
+    mock.script(M:Window().rows[1], "OnEnter")
+    expect(ourTip).toHaveBeenCalledWith(M:Window().rows[1], { title = ACTION_ENVIRONMENTAL_DAMAGE_FALLING })
+    mock.script(M:Window().rows[1], "OnLeave")
     expect(GameTooltip).never.toBeShown()
 end
 
 @test("Toggle: the same recap again closes it, another one shows")
 local function toggles()
     M:Toggle(nil)
-    expect(M.window).toBeShown()
+    expect(M:Window().window).toBeShown()
     expect(M.shownID).toBe(false)
     M:Toggle(nil)
-    expect(M.window).never.toBeShown()
+    expect(M:Window().window).never.toBeShown()
     M:Toggle(4)
     expect(M.shownID).toBe(4)
     M:Toggle(5)
-    expect(M.window).toBeShown()
+    expect(M:Window().window).toBeShown()
     expect(M.shownID).toBe(5)
 end
 
 @test("/suu recap toggles the last death's recap")
 local function command()
     mock.slash("/suu recap")
-    expect(M.window).toBeShown()
+    expect(M:Window().window).toBeShown()
     expect(M.shownID).toBe(false)
 end
 
 @test("the game's recap opens this one instead")
 local function gameRecap()
     OpenDeathRecapUI(3)
-    expect(M.window).toBeShown()
+    expect(M:Window().window).toBeShown()
     expect(M.shownID).toBe(3)
-    local f: any = _G.DeathRecapFrame
+    local f = DeathRecapFrame
     if f then expect(f).never.toBeShown() end
     -- turned off (until the reload): left to the game
-    M.window:Hide()
+    M:Window().window:Hide()
     mock.stub(M, "IsEnabled", function(): boolean return false end)
     OpenDeathRecapUI(3)
-    expect(M.window).never.toBeShown()
+    expect(M:Window().window).never.toBeShown()
     if f then f:Hide() end
 end
 
@@ -323,19 +324,19 @@ local function themeChange()
     M:ShowRecap(1)
     recapEvents = { { timestamp = 10, amount = 100, currentHP = 100, spellName = "Bite" } }
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
-    expect(M.head.spell).toHaveText("Bite")
-    M.window:Hide()
+    expect(M:Window().head.spell).toHaveText("Bite")
+    M:Window().window:Hide()
     recapEvents = threeHits()
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
-    expect(M.head.spell).toHaveText("Bite") -- hidden: not drawn again
+    expect(M:Window().head.spell).toHaveText("Bite") -- hidden: not drawn again
 end
 
 @test("Fit: as tall as the content, at most the screen less 80")
 local function fit()
     M:ShowRecap(1)
     M:Fit(100000)
-    expect(M.window:GetHeight()).toBeCloseTo(UIParent:GetHeight() - 80)
+    expect(M:Window().window:GetHeight()).toBeCloseTo(UIParent:GetHeight() - 80)
     M:Fit(100)
-    expect(M.window.content:GetHeight()).toBeCloseTo(100)
-    expect(M.window:GetHeight() < UIParent:GetHeight() - 80).toBe(true)
+    expect(M:Window().window.content:GetHeight()).toBeCloseTo(100)
+    expect(M:Window().window:GetHeight() < UIParent:GetHeight() - 80).toBe(true)
 end
