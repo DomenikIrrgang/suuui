@@ -46,7 +46,7 @@
 --                                -- icon, border = token } }) laid out as the engine
 --                                -- would, the engine's own out of sight (edit
 --                                -- mode's "Buffs and debuffs on every frame");
---                                -- place = { point, relativeTo, relativePoint, x, y }:
+--                                -- place = { point =, relativeTo =, relativePoint =, x =, y = }:
 --                                -- where you put the container (the game won't
 --                                -- anchor to it or say where it is)
 --
@@ -63,16 +63,99 @@ import * as fonts from "/Core/Fonts"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
 import * as iconModule from "/UI/Icon"
+import Icon from "/UI/Icon"
 
 const S = T.space
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-local dispelCandidates: (types: string[]) -> { [string]: any } -- below, with the spell lists
 local CROP = 0.08
 local EXPIRING = 3 -- seconds: the duration digits turn amber below this
 
+--------------------------------------------------------------------------------
+-- The options (see the header) and the engine's parts
+--------------------------------------------------------------------------------
+
+-- One of a container's groups.
+export type AuraGroup = {
+    key: string,
+    filter: string[],
+    max?: number,
+    dispel?: boolean,
+    cancel?: boolean,
+    drain?: string,
+    include?: number[],
+    exclude?: number[],
+    index?: number,
+    gap?: number,
+    harmfulEdge?: boolean,
+    border?: string,
+    glow?: string,
+    digits?: boolean,
+    stacks?: boolean,
+    expiring?: number,
+    size?: number | string,
+    dispelTypes?: string[],
+    initialize?: (button: AuraButton) -> (),
+}
+
+export type AuraOptions = {
+    size?: number | string,
+    spacing?: number,
+    anchor?: FramePoint,
+    growth?: string[],
+    lineWidth?: number,
+    lazy?: boolean,
+    groups: AuraGroup[],
+}
+
+-- A made-up icon for ShowPreview, and where the caller put the container.
+export type PreviewItem = { icon: number | string | nil, border?: string }
+export type AuraPlace = { point: FramePoint, relativeTo: Region, relativePoint?: FramePoint, x?: number, y?: number }
+
+-- Spell lists and dispel types as the engine takes them.
+export type AuraCandidates = {
+    includeSpellIDs?: { [number]: boolean },
+    excludeSpellIDs?: { [number]: boolean },
+    includeDispelTypes?: { [string]: boolean },
+}
+
+-- A group's layout as the engine takes it.
+export type AuraGroupLayout = { elementWidth: number, elementHeight: number, elementSpacing: number, lineSpacing: number,
+    layoutIndex?: number, groupSpacing?: number }
+
+-- The engine's aura button (a container makes them for its groups): the
+-- registrations SuuUI makes, each pcall-guarded; the duration bar and the
+-- dispel textures only on a client that has them.
+export interface AuraButton extends Button
+    function SetIcon(t: Texture)
+    function SetApplicationCount(fs: FontString, opts: CustomAuraButtonApplicationCountOptions)
+    function SetDurationText(fs: FontString, opts: CustomAuraButtonDurationTextOptions)
+    function SetCancelAuraButtons(buttons: string)
+    SetDurationBar?: (b: AuraButton, bar: StatusBar, opts: CustomAuraButtonDurationBarOptions) -> ()
+    AddDispelTypeTexture?: (b: AuraButton, t: Texture, opts: CustomAuraButtonDispelTypeTextureOptions) -> ()
+    SetAuraBorder?: (b: AuraButton, t: Texture, opts: CustomAuraButtonDispelTypeTextureOptions) -> ()
+end
+
+-- What a group gives the engine when it is added.
+export type AuraGroupSpec = { maxFrameCount: number, candidateFilters?: AuraCandidates,
+    initializeFrame: (button: AuraButton) -> (), layout: AuraGroupLayout }
+
+-- The engine's aura container (CustomAuraContainerTemplate): its calls,
+-- each pcall-guarded (an error inside one aborts the engine's whole batch).
+export interface AuraEngine extends Frame
+    function SetUnit(unit: string)
+    function UpdateAllAuras()
+    function AddAuraGroup(key: string, filter: string, spec: AuraGroupSpec)
+    function SetAuraGroupLayout(key: string, layout: AuraGroupLayout)
+    function SetAuraGroupMaxFrameCount(key: string, n: number)
+    function SetAuraGroupFilterString(key: string, filter: string)
+    function SetAuraGroupCandidateFilters(key: string, candidates: AuraCandidates)
+end
+
 -- (addons: the game's C_AddOns, a parameter for tests)
-local function loadEngine(addons: any = C_AddOns)
+type AddOns = { IsAddOnLoaded: (name: string) -> boolean, LoadAddOn: (name: string) -> ...unknown }
+
+local function loadEngine(addons: AddOns = C_AddOns)
     if not addons.IsAddOnLoaded("Blizzard_AuraContainer") then
         pcall(addons.LoadAddOn, "Blizzard_AuraContainer")
     end
@@ -96,10 +179,12 @@ end
 -- under ten minutes, then minutes, then hours.
 --------------------------------------------------------------------------------
 
-local formatter: any
-local colorCurves: { [number]: any } = {}
+-- the formatter (false: the client has none)
+local formatter: NumericRuleFormatter | false | nil = nil
+-- the colour curves by their seconds (false: the client has none)
+local colorCurves: { [number]: LuaColorCurveObject | false } = {}
 
-local function durationFormatter(): any
+local function durationFormatter(): NumericRuleFormatter?
     if formatter ~= nil then return formatter or nil end
     formatter = false
     if not (C_StringUtil and C_StringUtil.CreateNumericRuleFormatter and Enum.NumericRuleFormatRounding) then return nil end
@@ -116,7 +201,7 @@ local function durationFormatter(): any
     return formatter or nil
 end
 
-local function expiringPoints(c: any, seconds: number)
+local function expiringPoints(c: LuaColorCurveObject, seconds: number)
     c:ClearPoints()
     c:AddPoint(0, CreateColor(draw.rgba("amber")))
     c:AddPoint(seconds, CreateColor(draw.rgba("ink")))
@@ -124,7 +209,7 @@ end
 
 -- amber below `seconds` (EXPIRING by default), ink above: a step curve over
 -- the remaining time
-local function expiringColor(seconds: number?): any
+local function expiringColor(seconds: number?): LuaColorCurveObject?
     local at = seconds or EXPIRING
     local known = colorCurves[at]
     if known ~= nil then return known or nil end
@@ -145,23 +230,21 @@ events.on("SUUUI_THEME_CHANGED", function()
     end
 end, "Auras")
 
-local function durationOptions(seconds: number?): { [string]: any }
-    local opts: { [string]: any } = { textFormatter = durationFormatter() }
+local function textColorProperty(): DurationTextBindingProperty
+    local prop = Enum.DurationTextBindingProperty and Enum.DurationTextBindingProperty.RemainingDuration
+    if prop == nil then return 0 end
+    return prop
+end
+
+local function durationOptions(seconds: number?): CustomAuraButtonDurationTextOptions
+    local opts: CustomAuraButtonDurationTextOptions = { textFormatter = durationFormatter() }
     local curve = expiringColor(seconds)
-    if curve then
-        local prop = Enum.DurationTextBindingProperty and Enum.DurationTextBindingProperty.RemainingDuration
-        if prop == nil then prop = 0 end
-        opts.textColor = { curve = curve, property = prop }
-    end
+    if curve then opts.textColor = { curve = curve, property = textColorProperty() } end
     return opts
 end
 
--- A duration text binding's methods SuuUI calls (the game's declarations
--- leave the object untyped).
-export interface DurationText
-    function SetDuration(d: LuaDurationObject)
-    function SetEnabled(on: boolean)
-end
+-- A duration text binding (the engine's object).
+export type DurationText = DurationTextBindingObject
 
 -- 0.17: a text line the engine keeps showing a duration's time left (the
 -- aura icons' format: "42", "1:30", "5m"; amber below `seconds`), in combat
@@ -175,10 +258,7 @@ export function durationTextBinding(fontString: FontString, seconds: number?): D
     local f = durationFormatter()
     if f then pcall(b.SetFormatter, b, f) end
     local curve = expiringColor(seconds)
-    if curve then
-        local prop = Enum.DurationTextBindingProperty and Enum.DurationTextBindingProperty.RemainingDuration
-        pcall(b.SetTextColorCurve, b, curve, prop or 0)
-    end
+    if curve then pcall(b.SetTextColorCurve, b, curve, textColorProperty()) end
     pcall(b.SetZeroDurationText, b, "")
     pcall(b.SetExpiredText, b, "")
     return b
@@ -186,7 +266,7 @@ end
 
 -- Registers the duration text, dropping options step by step if the engine
 -- refuses them (never let it throw).
-local function setDurationText(button: any, fs: FontString, seconds: number?)
+local function setDurationText(button: AuraButton, fs: FontString, seconds: number?)
     local opts = durationOptions(seconds)
     if pcall(button.SetDurationText, button, fs, opts) then return end
     opts.textColor = nil
@@ -201,10 +281,16 @@ end
 local DISPEL_STYLE = Enum.CustomAuraButtonDispelTypeTextureStyle
     and Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
 
-local function makeInitializer(group: { [string]: any }, size: number, owner: any): (button: any) -> ()
-    return function(button: any)
+-- An engine button SuuUI styled: kept, so SetGroupSize can resize it.
+export type StyledButton = { button: AuraButton, key: string, scrim: Texture }
+
+-- The initializer of a group's buttons. `sizes` and `buttons` are the
+-- container's (the group's size when a button is made; the buttons made).
+local function makeInitializer(group: AuraGroup, size: number, sizes: { [string]: number },
+                               buttons: StyledButton[]): (button: AuraButton) -> ()
+    return function(button: AuraButton)
         -- the group's size now (SetGroupSize may have changed it)
-        size = owner.sizes[group.key] or size
+        size = sizes[group.key] or size
         -- The engine's layout only anchors its buttons; their size is ours to
         -- set, and an unsized button renders nothing.
         pcall(button.SetSize, button, size, size)
@@ -230,7 +316,8 @@ local function makeInitializer(group: { [string]: any }, size: number, owner: an
         -- The dispel border: white edges the engine shows and tints per
         -- debuff type; hidden until it does.
         local edges: Texture[] = {}
-        if group.dispel and DISPEL_STYLE ~= nil and (button.AddDispelTypeTexture or button.SetAuraBorder) then
+        local addDispel = button.AddDispelTypeTexture or button.SetAuraBorder
+        if group.dispel and DISPEL_STYLE ~= nil and addDispel then
             local holder = CreateFrame("Frame", nil, button)
             holder:SetAllPoints()
             holder:EnableMouse(false)
@@ -275,7 +362,7 @@ local function makeInitializer(group: { [string]: any }, size: number, owner: an
         scrim:SetColorTexture(1, 1, 1, 1)
         scrim:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.8), CreateColor(0, 0, 0, 0))
         -- kept, so SetGroupSize can resize the buttons the engine already made
-        owner.buttons[#owner.buttons + 1] = { button = button, key = group.key, scrim = scrim }
+        buttons[#buttons + 1] = { button = button, key = group.key, scrim = scrim }
         local duration = text:CreateFontString(nil, "OVERLAY")
         fonts.apply(duration, size >= 30 and "numeric" or "micro")
         duration:SetShadowColor(0, 0, 0, 1)
@@ -304,19 +391,20 @@ local function makeInitializer(group: { [string]: any }, size: number, owner: an
         pcall(button.SetIcon, button, icon)
         if group.stacks ~= false then pcall(button.SetApplicationCount, button, stacks, {}) else stacks:Hide() end
         if group.digits ~= false then setDurationText(button, duration, group.expiring) else duration:Hide(); scrim:Hide() end
-        if button.SetDurationBar then
-            local opts: { [string]: any } = {}
+        local setBar = button.SetDurationBar
+        if setBar then
+            local opts: CustomAuraButtonDurationBarOptions = {}
             if Enum.StatusBarInterpolation then opts.interpolation = Enum.StatusBarInterpolation.Immediate end
             if Enum.StatusBarTimerDirection then opts.direction = Enum.StatusBarTimerDirection.RemainingTime end
-            pcall(button.SetDurationBar, button, drain, opts)
+            pcall(setBar, button, drain, opts)
         else
             drain:Hide()
         end
-        if #edges > 0 then
-            local add = button.AddDispelTypeTexture or button.SetAuraBorder
-            local opts = { style = DISPEL_STYLE, showWhenHarmful = true, showWhenHelpful = false }
+        if addDispel and #edges > 0 then
+            local opts: CustomAuraButtonDispelTypeTextureOptions = { style = DISPEL_STYLE, showWhenHarmful = true,
+                showWhenHelpful = false }
             for _, t in ipairs(edges) do
-                if not pcall(add, button, t, opts) then break end
+                if not pcall(addDispel, button, t, opts) then break end
             end
         end
     end
@@ -326,12 +414,16 @@ end
 -- The container
 --------------------------------------------------------------------------------
 
-local FLOW = AnchorUtil and AnchorUtil.FlowDirection or {}
+-- the engine's flow directions by name ("Left", "Up", …)
+local FLOW: { [string]: unknown } = AnchorUtil and AnchorUtil.FlowDirection or {}
 
-local function call(container: any, names: string[], ...: any): (boolean, ...any)
+-- The first of these methods the container has, pcall-guarded; false when
+-- it has none.
+local function call(container: unknown, names: string[], ...: unknown): (boolean, ...unknown)
+    if type(container) ~= "table" then return false end
     for _, name in ipairs(names) do
-        local f = container[name]
-        if f then return pcall(f, container, ...) end
+        local f = (container :: { [string]: unknown })[name]
+        if type(f) == "function" then return pcall(f, container, ...) end
     end
     return false
 end
@@ -341,16 +433,6 @@ local RESCAN: { [string]: EventName } = {
     focus = "PLAYER_FOCUS_CHANGED",
 }
 
--- A group's icon size, live: the engine's layout, then the buttons it
--- already made (theirs is ours to set). New buttons take it when made.
--- A group's whole layout as the engine takes it: its icon size, the
--- spacing, and its place (SetGroupPlace).
-local function groupLayout(self: any, key: string, px: number): { [string]: any }
-    local place = self.places[key] or {}
-    return { elementWidth = px, elementHeight = px, elementSpacing = self.spacing, lineSpacing = self.spacing,
-        layoutIndex = place.index, groupSpacing = place.gap }
-end
-
 -- Spell lists as the engine takes them: { includeSpellIDs = { [id] = true },
 -- excludeSpellIDs = { … } } (an empty include list lets nothing through).
 local function idSet(ids: number[]): { [number]: boolean }
@@ -358,39 +440,51 @@ local function idSet(ids: number[]): { [number]: boolean }
     for _, id in ipairs(ids) do set[id] = true end
     return set
 end
-local function candidates(ids: number[]?, exclude: number[]?): { [string]: any }?
+local function candidates(ids: number[]?, exclude: number[]?): AuraCandidates?
     if not ids and not exclude then return nil end
     return { includeSpellIDs = ids and idSet(ids) or nil, excludeSpellIDs = exclude and idSet(exclude) or nil }
 end
 
 -- Only debuffs of these types: { includeDispelTypes = { Curse = true } }.
 -- The engine matches them, in combat too.
-dispelCandidates = function(types: string[]): { [string]: any }
+local function dispelCandidates(types: string[]): AuraCandidates
     local set: { [string]: boolean } = {}
     for _, t in ipairs(types) do set[t] = true end
     return { includeDispelTypes = set }
 end
 
+-- A group as the container keeps it: its count, filter and spells (they wait
+-- here until a lazy group goes into the engine), and whether it has.
+export type GroupState = { group: AuraGroup, max: number, filter: string, candidates?: AuraCandidates, added?: boolean }
+
+-- The made-up icons of ShowPreview.
+class AuraPreview extends Frame
+    readonly icons: Icon[] = {}
+
+    constructor(parent: Frame?)
+        super(nil, parent)
+        self:SetSize(1, 1)
+    end
+end
+
 -- A unit's auras: the engine's aura container and the groups SuuUI puts in it
 -- (Raw.Mixins.AuraContainer is the class).
 export class UnitAuras
-    container: any
-    opts: { [string]: any }
+    container: AuraEngine
+    opts: AuraOptions
     sizes: { [string]: number } = {}
-    buttons: any[] = {}
-    places: { [string]: { index: number?, gap: number? } } = {}
-    groups: { [string]: { [string]: any } } = {}
+    buttons: StyledButton[] = {}
+    places: { [string]: { index?: number, gap?: number } } = {}
+    groups: { [string]: GroupState } = {}
     spacing: number = 0
     unit: string? = nil
-    rescan: string? = nil
+    rescan: EventName? = nil
     released: boolean? = nil
-    preview: any = nil
+    preview: AuraPreview? = nil
     lineWidth: number? = nil
-    flow: { anchor: string, growth: string[] }? = nil
-    -- the owner's (a unit frame's indicator)
-    ind: any = nil
+    flow: { anchor: FramePoint, growth: string[] }? = nil
 
-    constructor(container: any, unit: string, opts: { [string]: any })
+    constructor(container: AuraEngine, unit: string, opts: AuraOptions)
         self.container = container
         self.opts = opts
         -- a renderable rect from the start: the engine lays out from an OnUpdate
@@ -406,12 +500,14 @@ export class UnitAuras
 
         self.spacing = opts.spacing or S["space-2"]
         for i, group in ipairs(opts.groups) do
-            self.sizes[group.key] = group.size and draw.size(group.size) or size
+            local groupSize = group.size
+            self.sizes[group.key] = groupSize and draw.size(groupSize) or size
             -- its place by its position when it has none: a group added later
             -- (addGroup) keeps the place it has in the list
             self.places[group.key] = { index = group.index or i, gap = group.gap }
+            local types = group.dispelTypes
             self.groups[group.key] = { group = group, max = group.max or 16, filter = filterString(group.filter),
-                candidates = group.dispelTypes and dispelCandidates(group.dispelTypes) or candidates(group.include, group.exclude) }
+                candidates = types and dispelCandidates(types) or candidates(group.include, group.exclude) }
             self:addGroup(group.key)
         end
         self:SetUnit(unit)
@@ -440,8 +536,9 @@ export class UnitAuras
     function Release()
         if self.released then return end
         self:SetUnit("none")
-        if self.rescan then
-            events.off(self.rescan, self)
+        local rescan = self.rescan
+        if rescan then
+            events.off(rescan, self)
             self.rescan = nil
         end
         self.container:Hide()
@@ -455,7 +552,7 @@ export class UnitAuras
     end
 
     -- The corner the icons start from and the way they grow, after creation.
-    function SetFlow(anchor: string?, growth: string[]?)
+    function SetFlow(anchor: FramePoint?, growth: string[]?)
         self.flow = { anchor = anchor or "TOPLEFT", growth = growth or { "RIGHT", "DOWN" } }
         local c = self.container
         call(c, { "SetFlowLayoutAnchorPoint", "SetAuraLayoutAnchorPoint" }, anchor or "TOPLEFT")
@@ -466,13 +563,23 @@ export class UnitAuras
         self:Refresh()
     end
 
-    function SetGroupSize(key: string, size: any)
+    -- A group's whole layout as the engine takes it: its icon size, the
+    -- spacing, and its place (SetGroupPlace).
+    private function layoutOf(key: string, px: number): AuraGroupLayout
+        local place = self.places[key]
+        return { elementWidth = px, elementHeight = px, elementSpacing = self.spacing, lineSpacing = self.spacing,
+            layoutIndex = place and place.index, groupSpacing = place and place.gap }
+    end
+
+    -- A group's icon size, live: the engine's layout, then the buttons it
+    -- already made (theirs is ours to set). New buttons take it when made.
+    function SetGroupSize(key: string, size: number | string)
         local px = draw.size(size)
         if self.sizes[key] == px then return end
         self.sizes[key] = px
         local g = self.groups[key]
         if not (g and g.added) then return end
-        pcall(self.container.SetAuraGroupLayout, self.container, key, groupLayout(self, key, px))
+        pcall(self.container.SetAuraGroupLayout, self.container, key, self:layoutOf(key, px))
         for _, b in ipairs(self.buttons) do
             if b.key == key then
                 pcall(b.button.SetSize, b.button, px, px)
@@ -491,7 +598,7 @@ export class UnitAuras
         self.places[key] = { index = index, gap = gap }
         local g = self.groups[key]
         if not (g and g.added) then return end
-        pcall(self.container.SetAuraGroupLayout, self.container, key, groupLayout(self, key, self.sizes[key] :: number))
+        pcall(self.container.SetAuraGroupLayout, self.container, key, self:layoutOf(key, self.sizes[key] :: number))
         self:Refresh()
     end
 
@@ -527,35 +634,36 @@ export class UnitAuras
     function SetGroupSpells(key: string, ids: number[]?, exclude: number[]?): boolean
         local g = self.groups[key]
         if not g then return false end
-        g.candidates = candidates(ids, exclude) or {}
+        local list = candidates(ids, exclude) or {}
+        g.candidates = list
         if not g.added then return true end
-        return pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, g.candidates)
+        return (pcall(self.container.SetAuraGroupCandidateFilters, self.container, key, list))
     end
 
     -- 0.17: made-up icons in the container's place, laid out as the engine lays
     -- out its own (the corner, the growth, the line width, the first group's
     -- size); the engine's icons out of sight meanwhile.
-    function ShowPreview(items: { [string]: any }[], place: any[]?)
+    function ShowPreview(items: PreviewItem[], place: AuraPlace?)
         local c = self.container
+        local parent = c:GetParent()
         local pv = self.preview
         if not pv then
-            pv = CreateFrame("Frame", nil, c:GetParent())
-            pv:SetSize(1, 1)
-            pv.icons = {}
+            pv = AuraPreview.new(parent)
             self.preview = pv
         end
-        local flow = self.flow or { anchor = self.opts.anchor or "TOPLEFT", growth = self.opts.growth or { "RIGHT", "DOWN" } }
+        local flow: { anchor: FramePoint, growth: string[] } = self.flow
+            or { anchor = self.opts.anchor or "TOPLEFT", growth = self.opts.growth or { "RIGHT", "DOWN" } }
         local anchor = flow.anchor
-        pv:SetParent(c:GetParent())
+        pv:SetParent(parent)
         pv:SetFrameLevel(c:GetFrameLevel() + 2)
         pv:ClearAllPoints()
         -- where the container is: the caller's place for it (anchoring to the
         -- engine's container is refused, "would inherit forbidden aspects", and
         -- its GetPoint gives nothing usable: found in game)
-        if place and place[1] and place[2] then
-            pv:SetPoint(place[1], place[2], place[3] or place[1], place[4] or 0, place[5] or 0)
+        if place then
+            pv:SetPoint(place.point, place.relativeTo, place.relativePoint or place.point, place.x or 0, place.y or 0)
         else
-            pv:SetPoint(anchor, c:GetParent(), anchor)
+            pv:SetPoint(anchor, parent, anchor)
         end
         local first = self.opts.groups[1]
         local size = (first and self.sizes[first.key]) or draw.size(self.opts.size or "icon-md")
@@ -611,8 +719,8 @@ export class UnitAuras
         local added = pcall(self.container.AddAuraGroup, self.container, key, g.filter, {
             maxFrameCount = g.max,
             candidateFilters = g.candidates,
-            initializeFrame = group.initialize or makeInitializer(group, gsize, self),
-            layout = groupLayout(self, key, gsize),
+            initializeFrame = group.initialize or makeInitializer(group, gsize, self.sizes, self.buttons),
+            layout = self:layoutOf(key, gsize),
         })
         -- one that failed is tried again with its next count
         g.added = added
@@ -621,17 +729,19 @@ export class UnitAuras
 end
 mixins.AuraContainer = UnitAuras
 
--- (create: the game's CreateFrame, a parameter for tests)
-local function newContainer(parent: Frame, unit: string, opts: { [string]: any }, create: any): UnitAuras?
+-- How a container frame is made (the game's CreateFrame; a stand-in in tests).
+type Create = (frameType: string, name: string?, parent: Frame?, template: string?) -> Frame
+
+local function newContainer(parent: Frame, unit: string, opts: AuraOptions, create: Create): UnitAuras?
     loadEngine()
     local ok, container = pcall(create, "AuraContainer", nil, parent, "CustomAuraContainerTemplate")
     if not ok then
         fault.report("Auras", "the client has no aura containers: " .. tostring(container))
         return nil
     end
-    return UnitAuras.new(container, unit, opts)
+    return UnitAuras.new(container :: AuraEngine, unit, opts)
 end
 
-export function auraContainer(parent: Frame, unit: string, opts: { [string]: any }): UnitAuras?
+export function auraContainer(parent: Frame, unit: string, opts: AuraOptions): UnitAuras?
     return newContainer(parent, unit, opts, CreateFrame)
 end

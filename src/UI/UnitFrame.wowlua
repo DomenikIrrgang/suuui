@@ -63,7 +63,7 @@ import * as uiText from "/UI/Text"
 import * as controls from "/UI/Controls"
 import * as iconModule from "/UI/Icon"
 import * as crest from "/UI/Crest"
-import auraContainer from "/UI/Auras"
+import auraContainer, UnitAuras, AuraGroup, AuraOptions from "/UI/Auras"
 
 const S = T.space
 
@@ -90,6 +90,8 @@ local MARKERS = "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
 local LOW_HEALTH = 0.35 -- the design's lowAt
 local LOW_MANA = 0.25
 local GHOST_HOLD = 0.15
+-- the indicator each live indicator container shows
+local indicatorOf: { [UnitAuras]: any } = setmetatable({}, { __mode = "k" })
 local INTERPOLATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 
 local POWER_TOKEN: { [string]: string } = { MANA = "mana", RAGE = "rage", ENERGY = "energy", FOCUS = "focus" }
@@ -1071,12 +1073,12 @@ export class UnitFrame extends Button
             elseif cached then
                 cached.container:Show()
                 cached:SetUnit(self.unit or "none")
-                cached.ind = ind
+                indicatorOf[cached] = ind
                 self.indicatorContainers[#self.indicatorContainers + 1] = cached
             elseif ind.ids and #ind.ids > 0 then
                 local filter = ind.source == "any" and { "HELPFUL" } or { "HELPFUL", "PLAYER" }
-                local group = { key = "i" .. i, filter = filter, max = 1, include = ind.ids }
-                local opts = { size = ind.size or 10, anchor = "TOPLEFT", groups = { group } }
+                local group: AuraGroup = { key = "i" .. i, filter = filter, max = 1, include = ind.ids }
+                local opts: AuraOptions = { size = ind.size or 10, anchor = "TOPLEFT", groups = { group } }
                 if ind.kind == "icon" then
                     group.stacks, group.digits = false, (ind.size or 10) >= 16
                 else
@@ -1103,7 +1105,7 @@ export class UnitFrame extends Button
                         c.container:SetFrameLevel(self.over:GetFrameLevel() + 2)
                     end
                     self.indicatorCache[key] = c
-                    c.ind = ind
+                    indicatorOf[c] = ind
                     self.indicatorContainers[#self.indicatorContainers + 1] = c
                 end
             end
@@ -1153,7 +1155,8 @@ export class UnitFrame extends Button
         if not fight then
             for _, c in ipairs(self.indicatorContainers or {}) do
                 local scoped = true
-                if exists and c.ind and (c.ind.on or c.ind.missingOn) == "group" then
+                local ind = indicatorOf[c]
+                if exists and ind and (ind.on or ind.missingOn) == "group" then
                     if mine == nil then mine = inYourGroup(u) end
                     scoped = mine
                 end
