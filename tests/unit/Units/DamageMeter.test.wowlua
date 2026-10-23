@@ -10,6 +10,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/DamageMeter"
+import type MeterViewChange, RecapEvent from "/UI/DamageMeter"
 import expectNoErrors from "../../helpers"
 
 @afterEach
@@ -25,7 +26,7 @@ end
 local function countRefreshes(): { n: number }
     local count = { n = 0 }
     local real = M.Refresh
-    mock.stub(M, "Refresh", function(self: any) count.n = count.n + 1; real(self) end)
+    mock.stub(M, "Refresh", function(self: typeof(M)) count.n = count.n + 1; real(self) end)
     return count
 end
 
@@ -39,24 +40,24 @@ end
 local function windows()
     expect(M.windows[1]:IsShown()).toBe(true)
     local w1 = M.windows[1]
-    w1.opts.onNewWindow()
+    assert(w1.opts.onNewWindow)()
     expect(M:Get("windowCount")).toBe(2)
     local w2 = M.windows[2]
     expect(w2:IsShown()).toBe(true)
     expect(w2.type).toBe("healing")
     local _, _, _, _, y = w2:GetPoint(1)
     expect(y > 0).toBe(true)
-    w1.opts.onNewWindow()
-    w1.opts.onNewWindow()
+    assert(w1.opts.onNewWindow)()
+    assert(w1.opts.onNewWindow)()
     expect(M:Get("windowCount")).toBe(3)
     -- a view chosen: kept; Overall kept, a past fight not
-    w2.opts.onView("dps", "overall")
+    assert(w2.opts.onView)("dps", "overall")
     expect(M:Get("views")[2].type).toBe("dps")
     expect(M:Get("views")[2].session).toBe("overall")
-    w2.opts.onView("interrupts", 31)
+    assert(w2.opts.onView)("interrupts", 31)
     expect(M:Get("views")[2].session).toBeNil()
     -- window 2 closed: window 3's view moves down
-    w2.opts.onClose()
+    assert(w2.opts.onClose)()
     expect(M:Get("windowCount")).toBe(2)
     expect(M:Get("views")[2].type).toBe("deaths")
     expect(M.windows[3]:IsShown()).toBe(false)
@@ -70,15 +71,15 @@ local function menu()
     mock.stub(C_DamageMeter, "ResetAllCombatSessions", reset)
     local opened = mock.spy(function(_: string) end)
     mock.stub(SuuUI, "OpenSettings", opened)
-    M.windows[1].opts.onReset()
+    assert(M.windows[1].opts.onReset)()
     expect(reset).toHaveBeenCalled()
-    M.windows[1].opts.onSettings()
+    assert(M.windows[1].opts.onSettings)()
     expect(opened).toHaveBeenCalledWith("damagemeter")
 end
 
 @test("shown always, in a group, in combat, or hidden (and hidden in edit mode); read every second in combat")
 local function shows()
-    local f = M.frame
+    local f = assert(M.frame)
     expect(f:IsShown()).toBe(true)
     M:Set("shows", "group")
     expect(f:IsShown()).toBe(false)
@@ -91,7 +92,7 @@ local function shows()
     mock.player:enterCombat()
     mock.advanceFrames(1)
     expect(f:IsShown()).toBe(true)
-    expect(M.driver:IsShown()).toBe(true)
+    expect(assert(M.driver):IsShown()).toBe(true)
     count.n = 0
     mock.advanceFrames(150)
     expect(count.n >= 2).toBe(true)
@@ -133,21 +134,21 @@ end
 @test("the options live on every window; rows and windows lay the stack out again")
 local function options()
     M:Set("windowCount", 2)
-    local got: any[] = {}
+    local got: { [number]: MeterViewChange } = {}
     for i, w in ipairs(M.windows) do
-        mock.stub(w, "SetOptions", function(_: any, o: any) got[i] = o end)
+        mock.stub(w, "SetOptions", function(_: unknown, o: MeterViewChange) got[i] = o end)
     end
     M:Set("numbers", "complete")
     M:Set("barColor", "neutral")
     M:Set("marker", "diamond")
     M:Set("nameColor", "ink")
     M:Set("pinYou", false)
-    expect(got[1].numbers).toBe("complete")
-    expect(got[2].marker).toBe("diamond")
-    expect(got[2].pinYou).toBe(false)
-    local h = M.frame:GetHeight()
+    expect(assert(got[1]).numbers).toBe("complete")
+    expect(assert(got[2]).marker).toBe("diamond")
+    expect(assert(got[2]).pinYou).toBe(false)
+    local h = assert(M.frame):GetHeight()
     M:Set("rows", 5)
-    expect(M.frame:GetHeight() < h).toBe(true)
+    expect(assert(M.frame):GetHeight() < h).toBe(true)
 end
 
 @test("the preview: a made-up raid fight with you in it, its breakdowns, fights and death recap; the threat meter above")
@@ -155,44 +156,52 @@ local function preview()
     local parent = CreateFrame("Frame", nil, UIParent)
     local view = M:PreviewView(parent)
     expect(view:GetParent()).toBe(parent)
-    local meter = M.previewMeter
-    local api, recap = meter.api, meter.recapApi
+    local meter = assert(M.previewMeter)
+    local api, recap = assert(meter.api), assert(meter.recapApi)
     local DT = Enum.DamageMeterType
-    local s = api.GetCombatSessionFromType(nil, DT.DamageDone)
+    local s = api.GetCombatSessionFromType(0, DT.DamageDone)
     expect(#s.combatSources).toBe(12)
-    local you: any
+    local you: DamageMeterCombatSourceSecret? = nil
     for _, src in ipairs(s.combatSources) do if src.isLocalPlayer then you = src end end
-    expect(you.name).toBe(UnitName("player"))
-    expect(api.GetCombatSessionFromID(nil, DT.HealingDone).combatSources[1].name).toBe("Ysolde")
+    expect(assert(you).name).toBe((UnitName("player")) or "")
+    expect(api.GetCombatSessionFromID(0, DT.HealingDone).combatSources[1].name).toBe("Ysolde")
     -- a source's spells: damage, or heals
-    local spells = api.GetCombatSessionSourceFromType(nil, DT.DamageDone, s.combatSources[1].sourceGUID)
+    local first = s.combatSources[1].sourceGUID
+    local spells = api.GetCombatSessionSourceFromType(0, DT.DamageDone, not issecretvalue(first) and first or nil)
     expect(spells.combatSpells[1].spellID).toBe(116)
-    local heals = api.GetCombatSessionSourceFromID(nil, DT.HealingDone, UnitGUID("player"))
+    local mine = UnitGUID("player")
+    local heals = api.GetCombatSessionSourceFromID(0, DT.HealingDone, not issecretvalue(mine) and mine or nil)
     expect(heals.combatSpells[1].spellID).toBe(2060)
-    expect(#api.GetCombatSessionSourceFromType(nil, DT.DamageDone, "nobody").combatSpells).toBe(0)
+    expect(#api.GetCombatSessionSourceFromType(0, DT.DamageDone, "nobody").combatSpells).toBe(0)
     expect(#api.GetAvailableCombatSessions()).toBe(3)
     expect(api.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall)).toBe(385)
     expect(api.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current)).toBe(102)
     -- the death recap: newest first
-    local events = recap.GetRecapEvents(1)
+    local events = recap.GetRecapEvents(1) :: RecapEvent[]
     expect(events[1].spellName).toBe("Magma Blast")
     expect(events[1].overkill).toBe(1018)
     expect(recap.GetRecapMaxHealth(1)).toBe(4000)
     -- the options and rows live on it; with the threat meter off, alone
     M:Set("numbers", "minimal")
     M:Set("rows", 6)
-    local threat: any = SuuUI.GetModule("threat")
+    local threat = assert(SuuUI.GetModule("threat"))
     mock.stub(threat, "IsEnabled", function(): boolean return false end)
     M:PreviewView(parent)
 end
 
 @test("the settings rows wait for the meter")
 local function rowsWait()
-    local rows: { [string]: any } = {}
-    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do rows[r.key] = r end end
-    expect((rows.numbers.disabled())).toBe(false)
+    local function disabled(key: string): (boolean, string?)
+        for _, g in ipairs(SECTION.groups) do
+            for _, r in ipairs(g.rows) do
+                if r.key == key then return assert(r.disabled)() end
+            end
+        end
+        error("no row " .. key)
+    end
+    expect((disabled("numbers"))).toBe(false)
     M:Set("shows", "hidden")
-    local off, why = rows.rows.disabled()
+    local off, why = disabled("rows")
     expect(off).toBe(true)
     expect(why).toBe("Show the damage meter first.")
 end
@@ -201,9 +210,8 @@ end
 @test("stopped: the meter gone, Blizzard's setting back")
 local function disabled()
     local was = M:Get("blizzardWas")
-    local m: any = M
-    m:OnDisable()
-    expect(M.frame:IsShown()).toBe(false)
+    M:OnDisable()
+    expect(assert(M.frame):IsShown()).toBe(false)
     expect(C_CVar.GetCVar("damageMeterEnabled")).toBe(was)
     expect(M:Get("blizzardWas")).toBe("")
     -- on again: off again, kept again

@@ -13,6 +13,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/Threat"
+import type ThreatEntry, ThreatOptions from "/UI/ThreatMeter"
 import migrations as settingMigrations from "/Core/Settings"
 import expectNoErrors from "../../helpers"
 
@@ -20,17 +21,18 @@ local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile",
 local tank = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
 
 -- What the meter was given last.
-local function meterRows(): (any[], { [string]: any })
-    local got: any = {}
-    mock.stub(M.meter, "SetRows", function(_: any, list: any[], opts: any) got.list, got.opts = list, opts end)
+local function meterRows(): (ThreatEntry[], ThreatOptions)
+    local list: ThreatEntry[], opts: ThreatOptions = {}, {}
+    mock.stub(assert(M.meter), "SetRows", function(_: unknown, l: ThreatEntry[]?, o: ThreatOptions?) list, opts = l or {}, o or {} end)
     M:Update()
-    return got.list, got.opts
+    return list, opts
 end
 
 -- The alerts raised and taken away.
-local function alerts(): { [string]: any }
-    local shown: { [string]: any } = {}
-    mock.stub(SuuUI, "ShowAlert", function(key: string, tone: string, title: string, detail: string, ...: any)
+type Shown = { tone: string, title: string, detail: string }
+local function alerts(): { [string]: Shown }
+    local shown: { [string]: Shown } = {}
+    mock.stub(SuuUI, "ShowAlert", function(key: string, tone: string, title: string, detail: string, ...: string | number)
         shown[key] = { tone = tone, title = title, detail = detail:format(...) }
     end)
     mock.stub(SuuUI, "HideAlert", function(key: string) shown[key] = nil end)
@@ -58,7 +60,7 @@ local function cleanup()
     wolf:target(nil)
     for _, u in ipairs({ tank }) do wolf:setThreat(nil, u) end
     M:ResetAll({ "shows", "who", "marker", "raw", "warnPull", "aggroAlert", "openWorld", "position" })
-    local dm: any = SuuUI.GetModule("damagemeter")
+    local dm = SuuUI.GetModule("damagemeter")
     if dm then dm:Reset("rows") end
     mock.advanceFrames(2)
     expectNoErrors()
@@ -76,37 +78,37 @@ local function solo()
     expect(list[1].percent).toBe(100)
     expect(opts.byState).toBe(false)
     expect(opts.show).toBe("group")
-    expect(M.meter:IsShown()).toBe(true)
+    expect(assert(M.meter):IsShown()).toBe(true)
     -- no hostile target: empty, still shown (Always)
     mock.player:target(nil)
     list = meterRows()
     expect(#list).toBe(0)
-    expect(M.meter:IsShown()).toBe(true)
+    expect(assert(M.meter):IsShown()).toBe(true)
 end
 
 @test("shown always, in combat with a hostile target, never, or hidden in edit mode; read every 0.2s while it can change")
 local function shows()
     M:Set("shows", "combat")
-    expect(M.meter:IsShown()).toBe(false)
-    expect(M.driver:IsShown()).toBe(false)
+    expect(assert(M.meter):IsShown()).toBe(false)
+    expect(assert(M.driver):IsShown()).toBe(false)
     fight()
-    expect(M.meter:IsShown()).toBe(true)
-    expect(M.driver:IsShown()).toBe(true)
+    expect(assert(M.meter):IsShown()).toBe(true)
+    expect(assert(M.driver):IsShown()).toBe(true)
     local reads = 0
     local real = M.Update
-    mock.stub(M, "Update", function(self: any) reads = reads + 1; real(self) end)
+    mock.stub(M, "Update", function(self: typeof(M)) reads = reads + 1; real(self) end)
     mock.advanceFrames(60)
     expect(reads >= 4).toBe(true)
     mock.player:leaveCombat()
     mock.advanceFrames(1)
-    expect(M.meter:IsShown()).toBe(false)
-    expect(M.driver:IsShown()).toBe(false)
+    expect(assert(M.meter):IsShown()).toBe(false)
+    expect(assert(M.driver):IsShown()).toBe(false)
     M:Set("shows", "always")
-    expect(M.driver:IsShown()).toBe(true)
+    expect(assert(M.driver):IsShown()).toBe(true)
     M:Set("position", { point = "BOTTOMRIGHT", x = -292, y = 28, hidden = true })
-    expect(M.meter:IsShown()).toBe(false)
+    expect(assert(M.meter):IsShown()).toBe(false)
     M:Set("shows", "off")
-    expect(M.meter:IsShown()).toBe(false)
+    expect(assert(M.meter):IsShown()).toBe(false)
 end
 
 @test("the group: you, your pet, each member in group order; the options live")
@@ -157,8 +159,8 @@ local function pull()
     on(2100)
     M:Update()
     expect(shown["threat-pull"] ~= nil).toBe(true)
-    expect(shown["threat-pull"].tone).toBe("warning")
-    expect(shown["threat-pull"].detail).toBe("Prowler · over Brannoc Ironhand's threat")
+    expect(assert(shown["threat-pull"]).tone).toBe("warning")
+    expect(assert(shown["threat-pull"]).detail).toBe("Prowler · over Brannoc Ironhand's threat")
     on(1000)
     M:Update()
     expect(shown["threat-pull"]).toBeNil()
@@ -184,8 +186,8 @@ local function aggro()
     on(1200, pet)
     M:Update()
     expect(shown["threat-aggro"] ~= nil).toBe(true)
-    expect(shown["threat-aggro"].tone).toBe("danger")
-    expect(shown["threat-aggro"].detail).toBe("Prowler")
+    expect(assert(shown["threat-aggro"]).tone).toBe("danger")
+    expect(assert(shown["threat-aggro"]).detail).toBe("Prowler")
     M:Set("aggroAlert", "group")
     expect(shown["threat-aggro"]).toBeNil()
     M:Set("aggroAlert", "off")
@@ -246,7 +248,7 @@ local function raid()
     wolf:target(stranger)
     on(1050)
     M:Update()
-    expect(shown["threat-pull"].detail).toBe("Prowler")
+    expect(assert(shown["threat-pull"]).detail).toBe("Prowler")
     on(nil, stranger)
 end
 
@@ -272,13 +274,13 @@ local function drop()
     on(2000, tank)
     on(2100)
     M:Update()
-    expect(shown["threat-pull"].detail).toBe("Prowler · over Brannoc Ironhand's threat · Fade ready")
+    expect(assert(shown["threat-pull"]).detail).toBe("Prowler · over Brannoc Ironhand's threat · Fade ready")
     -- on cooldown: not named
     mock.defineSpell(586, { cooldown = 30 })
     mock.player:useSpell(586)
     mock.advanceTime(2)
     M:Update()
-    expect(shown["threat-pull"].detail).toBe("Prowler · over Brannoc Ironhand's threat")
+    expect(assert(shown["threat-pull"]).detail).toBe("Prowler · over Brannoc Ironhand's threat")
     mock.setPlayer({ class = "WARRIOR" })
 end
 
@@ -305,28 +307,34 @@ local function preview()
     local parent = CreateFrame("Frame", nil, UIParent)
     local view = M:PreviewView(parent)
     expect(view:GetParent()).toBe(parent)
-    local got: any = {}
-    mock.stub(view, "SetRows", function(_: any, list: any[], opts: any) got.list, got.opts = list, opts end)
+    local list: ThreatEntry[], opts: ThreatOptions = {}, {}
+    mock.stub(view, "SetRows", function(_: unknown, l: ThreatEntry[]?, o: ThreatOptions?) list, opts = l or {}, o or {} end)
     M:RefreshPreview()
-    expect(#got.list).toBe(6)
-    expect(got.list[6].you).toBe(true)
-    expect(got.list[1].you).toBe(false)
+    expect(#list).toBe(6)
+    expect(list[6].you).toBe(true)
+    expect(list[1].you).toBe(false)
     local heights: { number } = {}
-    mock.stub(M.meter, "SetMaxRows", function(_: any, n: number) heights[#heights + 1] = n end)
-    local dm: any = SuuUI.GetModule("damagemeter")
+    mock.stub(assert(M.meter), "SetMaxRows", function(_: unknown, n: number) heights[#heights + 1] = n end)
+    local dm = assert(SuuUI.GetModule("damagemeter"))
     dm:Set("rows", 6)
     expect(heights[1]).toBe(6)
     M:Set("who", "self")
-    expect(got.opts.show).toBe("self")
+    expect(opts.show).toBe("self")
 end
 
 @test("the settings rows wait for the meter")
 local function rowsWait()
-    local rows: { [string]: any } = {}
-    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do rows[r.key] = r end end
-    expect((rows.who.disabled())).toBe(false)
+    local function disabled(key: string): (boolean, string?)
+        for _, g in ipairs(SECTION.groups) do
+            for _, r in ipairs(g.rows) do
+                if r.key == key then return assert(r.disabled)() end
+            end
+        end
+        error("no row " .. key)
+    end
+    expect((disabled("who"))).toBe(false)
     M:Set("shows", "off")
-    local off, why = rows.raw.disabled()
+    local off, why = disabled("raw")
     expect(off).toBe(true)
     expect(why).toBe("Show the threat meter first.")
 end
@@ -337,10 +345,10 @@ local function migration()
     for _, m in ipairs(settingMigrations()) do
         if m.namespace == "threat" and m.id == "shows" then
             found = true
-            local shown: { [string]: any } = { shown = true }
+            local shown: { [string]: unknown } = { shown = true }
             m.fn(shown)
             expect(shown.shows).toBe("combat")
-            local off: { [string]: any } = { shown = false }
+            local off: { [string]: unknown } = { shown = false }
             m.fn(off)
             expect(off.shows).toBe("off")
             expect(off.shown).toBeNil()
@@ -361,9 +369,8 @@ local function disabled()
     on(2100)
     M:Update()
     expect(shown["threat-pull"] ~= nil).toBe(true)
-    local m: any = M
-    m:OnDisable()
+    M:OnDisable()
     expect(shown["threat-pull"]).toBeNil()
-    expect(M.meter:IsShown()).toBe(false)
-    expect(M.driver:IsShown()).toBe(false)
+    expect(assert(M.meter):IsShown()).toBe(false)
+    expect(assert(M.driver):IsShown()).toBe(false)
 end

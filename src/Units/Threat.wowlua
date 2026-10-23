@@ -19,36 +19,27 @@
 -- Both go when the reason does.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type ThreatMeter, ThreatEntry, ThreatOptions from "/UI/ThreatMeter"
+import type AlertTone, FormatArg from "/UI/Alert"
 import type Position from "/EditMode/EditMode"
 import isSecret as isSecretValue from "wowlua:secret"
 
 local UI = SuuUI.UI
 
-local M = SuuUI.RegisterModule({
-    id = "threat",
-    name = "Threat meter",
-    description = "Your target's threat in combat, and a warning before you pull.",
-    api = "0.10",
-    combatSafe = true,
-    defaults = {
-        position = { point = "BOTTOMRIGHT", x = -292, y = 28 } :: Position,
-        shows = "always",  -- "off" | "combat" | "always"
-        who = "group",     -- "group" | "tanks" | "self"
-        marker = "role",   -- "role" | "class" | "none"
-        raw = true,
-        warnPull = true,
-        aggroAlert = "pet", -- "off" | "group" | "pet" (in a group, or with your pet on the mob)
-        openWorld = true,  -- the alerts outside instances too
-    },
-})
+local DEFAULTS = {
+    position = { point = "BOTTOMRIGHT", x = -292, y = 28 } :: Position,
+    shows = "always",  -- "off" | "combat" | "always"
+    who = "group",     -- "group" | "tanks" | "self"
+    marker = "role",   -- "role" | "class" | "none"
+    raw = true,
+    warnPull = true,
+    aggroAlert = "pet", -- "off" | "group" | "pet" (in a group, or with your pet on the mob)
+    openWorld = true,  -- the alerts outside instances too
+}
 
--- The toggle "Show the threat meter" became the choice Show: Off / In combat / Always.
-M:Migrate("shows", function(values)
-    if type(values.shown) == "boolean" then
-        values.shows = values.shown and "combat" or "off"
-    end
-    values.shown = nil
-end)
+local M: ThreatModule
+
 
 -- isSecret with its type: strict mode reads a named stdlib import as `any`
 -- while the project has an import cycle (Core has some), so the stdlib's own
@@ -58,7 +49,7 @@ local function readable(v: unknown): v is number return not isSecret(v) and type
 local TICK = 0.2
 
 -- What saves you from a mob you pulled, by class (the first one ready shows).
-local THREAT_DROPS = {
+local THREAT_DROPS: { [string]: string[] } = {
     HUNTER = { "Feign Death" },
     ROGUE = { "Feint", "Vanish" },
     PRIEST = { "Fade" },
@@ -78,7 +69,7 @@ end
 -- spell read as running: while it runs (spell 29515, Forever's GCD
 -- reference) each drop keeps what it read before it started.
 local GCD_SPELL = 29515
-local dropReady = {}
+local dropReady: { [string]: boolean } = {}
 
 local function running(id: number): boolean?
     local cd = C_Spell.GetSpellCooldown(id) :: SpellCooldownInfo? -- a table; its fields may be secret
@@ -89,7 +80,7 @@ local function running(id: number): boolean?
     return nil
 end
 
-local function readyDrop()
+local function readyDrop(): string?
     local gcd = running(GCD_SPELL)
     for _, name in ipairs(THREAT_DROPS[playerClass()] or {}) do
         local info = C_Spell.GetSpellInfo(name)
@@ -102,6 +93,7 @@ local function readyDrop()
             if dropReady[name] then return name end
         end
     end
+    return nil
 end
 
 --------------------------------------------------------------------------------
@@ -116,21 +108,22 @@ local function roleOf(unit: string): string?
 end
 
 -- A row of the threat table (the name and the % may be secret).
-type Row = { name: any, class: string?, role: string?, status: number?, percent: any, raw: any, you: boolean, unit: string }
+type Row = { name?: string | Secret<string>, class?: string, role?: string, status?: number, percent?: number | Secret<number>,
+             raw?: number | Secret<number>, you: boolean, unit: string }
 
 -- One unit's row, or nil while it isn't on the target's threat table.
 local function sample(unit: string, pet: boolean?): Row?
     if not UnitExists(unit) then return nil end
-    local status = UnitThreatSituation(unit, "target")
-    if isSecret(status) then status = nil end
+    local given = UnitThreatSituation(unit, "target")
+    local status = readable(given) and given or nil
     local ok, _, _, scaled, _, value = pcall(UnitDetailedThreatSituation, unit, "target")
     if not ok then return nil end
     -- off the table: no status and no % (a secret % may still be someone's)
     if status == nil and not isSecret(scaled) and scaled == nil then return nil end
-    local _, class = UnitClass(unit)
-    if isSecret(class) then class = nil end
+    local _, given = UnitClass(unit)
+    local class = not isSecret(given) and given or nil
     return {
-        name = UnitName(unit), class = (not pet) and class or nil,
+        name = (UnitName(unit)), class = (not pet) and class or nil,
         role = pet and "PET" or roleOf(unit), status = status,
         percent = scaled, raw = value, you = unit == "player", unit = unit,
     }
@@ -138,8 +131,8 @@ end
 
 -- Every row of the group (you first, pets after their owners), and whether
 -- any % is secret.
-local function readRows()
-    local rows, secret = {}, false
+local function readRows(): (Row[], boolean)
+    local rows: Row[], secret = {}, false
     local function add(unit: string, pet: boolean?)
         local r = sample(unit, pet)
         if r then
@@ -173,37 +166,42 @@ end
 -- An enemy with a threat table: never a player or a player's pet or
 -- totem (player-controlled: a tester in a battleground got aggro warnings
 -- from an enemy player's pet, 2026-10-18).
-local function hostileTarget()
+local function hostileTarget(): boolean
     return UnitExists("target") and UI.Flag(UnitCanAttack("player", "target")) and not UI.Flag(UnitIsDeadOrGhost("target"))
         and not UI.Flag(UnitPlayerControlled("target"))
 end
 
-local function inCombat()
+local function inCombat(): boolean
     return InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
-end
-
-function M:MeterOpts(byState: boolean): { [string]: any }
-    return { show = self:Get("who"), marker = self:Get("marker"), raw = self:Get("raw"), byState = byState }
 end
 
 -- The alerts this module raised: only those are taken away again (the
 -- driver runs every tick, out of combat too while the meter always shows:
 -- it told the Alerts module "no aggro" five times a second, found in game).
-local raised = {}
-function M.Alert(key: string, ...: any)
+local raised: { [string]: boolean } = {}
+
+local function alert(key: string, tone: AlertTone, title: string, detail: string, ...: FormatArg)
     raised[key] = true
-    SuuUI.ShowAlert(key, ...)
+    SuuUI.ShowAlert(key, tone, title, detail, ...)
 end
-function M.Unalert(key: string)
+
+local function unalert(key: string)
     if not raised[key] then return end
     raised[key] = nil
     SuuUI.HideAlert(key)
 end
 
+-- Rows as the meter takes them.
+local function entries(rows: Row[]): ThreatEntry[]
+    local out: ThreatEntry[] = {}
+    for i, r in ipairs(rows) do out[i] = r end
+    return out
+end
+
 -- Someone in your group meant to hold the mobs: a tank (by role) or a pet,
 -- yours or a group member's. Without one (two damage dealers questing
 -- together) the alerts fired at every pull (asked in game).
-local function groupHasHolder()
+local function groupHasHolder(): boolean
     if UnitExists("pet") then return true end
     local raid = UI.Flag(IsInRaid())
     local n = raid and 40 or 4
@@ -217,93 +215,11 @@ local function groupHasHolder()
     return false
 end
 
--- Whether the alerts apply here: in an instance, or anywhere with Open
--- world on; in a group with someone to hold the mobs; solo (the aggro
--- alert's With my pet) with your pet on the mob.
-function M:AlertsApply(rows: Row[], aggro: boolean?): boolean
-    if not self:Get("openWorld") and not UI.Flag(IsInInstance()) then return false end
-    if UI.Flag(IsInGroup()) then return groupHasHolder() end
-    if aggro and self:Get("aggroAlert") ~= "pet" then return false end
-    for _, r in ipairs(rows) do
-        if r.unit == "pet" then return true end
-    end
-    return false
-end
-
-function M:AggroApplies(rows: Row[]): boolean
-    if self:Get("aggroAlert") == "off" then return false end
-    return self:AlertsApply(rows, true)
-end
-
-function M:Warn(rows: Row[])
-    local me
-    for _, r in ipairs(rows) do if r.you then me = r end end
-    local status = me and me.status
-    local tank = me and me.role == "TANK"
-    if not readable(status) or tank then
-        M.Unalert("threat-pull")
-        M.Unalert("threat-aggro")
-        return
-    end
-    local drop = readyDrop()
-    local dropText = drop and (" · " .. drop .. " ready") or ""
-    if status == 1 and self:Get("warnPull") and self:AlertsApply(rows) then
-        M.Unalert("threat-aggro")
-        -- whoever holds the mob: the first other row at 2-3
-        local holder
-        for _, r in ipairs(rows) do
-            if not r.you and readable(r.status) and r.status >= 2 then holder = r break end
-        end
-        if holder then
-            M.Alert("threat-pull", "warning", "You're about to pull", "%s · over %s's threat%s",
-                UnitName("target"), holder.name, dropText)
-        else
-            M.Alert("threat-pull", "warning", "You're about to pull", "%s%s", UnitName("target"), dropText)
-        end
-    elseif status >= 2 and self:AggroApplies(rows) then
-        M.Unalert("threat-pull")
-        M.Alert("threat-aggro", "danger", "You have drawn aggro", "%s%s", UnitName("target"), dropText)
-    else
-        M.Unalert("threat-pull")
-        M.Unalert("threat-aggro")
-    end
-end
-
-function M:Update()
-    local hostile = hostileTarget()
-    local fighting = hostile and inCombat()
-    local shows = self:Get("shows")
-    local wantMeter = not self:Get("position").hidden and (shows == "always" or (shows == "combat" and fighting))
-    local rows, secret = {}, false
-    if hostile then rows, secret = readRows() end
-    if wantMeter then
-        -- the name may be secret: passed on, never tested
-        if hostile then self.meter:SetTarget(UnitName("target")) else self.meter:SetTarget(nil) end
-        self.meter:SetRows(rows, self:MeterOpts(secret))
-        self.meter:Show()
-    else
-        self.meter:Hide()
-    end
-    if fighting then
-        self:Warn(rows)
-    else
-        M.Unalert("threat-pull")
-        M.Unalert("threat-aggro")
-    end
-end
-
--- A driver reads the table every TICK (threat moves all the time) in combat,
--- and out of combat too while the meter always shows.
-function M:Refresh()
-    self.driver:SetShown(inCombat() or self:Get("shows") == "always")
-    self:Update()
-end
-
 --------------------------------------------------------------------------------
 -- Settings and the preview
 --------------------------------------------------------------------------------
 
-local SAMPLE = {
+local SAMPLE: ThreatEntry[] = {
     { name = "Brannoc", class = "WARRIOR", role = "TANK", status = 2, percent = 100, raw = 1842000 },
     { name = "Morrow", class = "ROGUE", role = "DAMAGER", status = 1, percent = 93, raw = 1931000 },
     { name = "Lisset", class = "MAGE", role = "DAMAGER", status = 0, percent = 70, raw = 1674000 },
@@ -319,37 +235,13 @@ local function meterRows(): number
     return type(rows) == "number" and rows or 8
 end
 
-function M:PreviewView(parent: any): any
-    if not self.preview then
-        self.preview = UI.ThreatMeter(parent, { rows = meterRows() })
-        self.preview:SetTarget("Lava Surger")
-    end
-    self.preview:SetParent(parent)
-    self.preview:SetMaxRows(meterRows())
-    self:RefreshPreview()
-    return self.preview
-end
-
-function M:RefreshPreview()
-    if not self.preview then return end
-    -- you: the healer, or yourself by name with your class
-    local rows = {}
-    for i, r in ipairs(SAMPLE) do
-        local copy = {}
-        for k, v in pairs(r) do copy[k] = v end
-        copy.you = i == #SAMPLE
-        rows[i] = copy
-    end
-    self.preview:SetRows(rows, self:MeterOpts(false))
-end
-
-local function meterOff()
+local function meterOff(): (boolean, string)
     return M:Get("shows") == "off", "Show the threat meter first."
 end
 
 local SECTION = {
     id = "threat", label = "Damage & threat", category = "Insights", order = 50, merge = "damagemeter",
-    preview = function(parent: any) return M:PreviewView(parent) end,
+    preview = function(parent: Frame): ThreatMeter return M:PreviewView(parent) end,
     previewTitle = "Live preview · Threat",
     groups = {
         { title = "Threat meter", description = "Your target, in combat. On bosses the client lets SuuUI show each player's threat but not compare it, so the list orders by threat state.", rows = {
@@ -373,46 +265,196 @@ local SECTION = {
     },
 }
 
-function M:OnEnable()
-    if not self.meter then
-        self.meter = UI.ThreatMeter(SuuUI.Root, { rows = meterRows() })
-        self.meter:SetFrameStrata("MEDIUM")
-        self.meter:Hide()
-        self.driver = CreateFrame("Frame")
-        self.driver:Hide()
-        local wait = 0
-        self.driver:SetScript("OnUpdate", function(_, elapsed)
-            wait = wait - elapsed
-            if wait > 0 then return end
-            wait = TICK
-            self:Update()
-        end)
+class ThreatModule extends Module<typeof(DEFAULTS)>
+    driver: Frame? = nil
+    meter: ThreatMeter? = nil
+    preview: ThreatMeter? = nil
+
+    constructor()
+        super({
+            id = "threat",
+            name = "Threat meter",
+            description = "Your target's threat in combat, and a warning before you pull.",
+            api = "0.10",
+            combatSafe = true,
+            defaults = DEFAULTS,
+        })
     end
-    self.meter.suuManagedShow = true
-    self:RegisterMover(self.meter, { key = "position", label = "Threat meter",
-        enabled = function() return self:Get("shows") ~= "off" end })
-    self:RegisterSettings(SECTION)
-    self:Watch("shows", function() SuuUI.EditMode.Refresh(); self:Refresh() end)
-    self:WatchAll({ "who", "marker", "raw" }, function() self:RefreshPreview(); if self.driver:IsShown() then self:Update() end end)
-    self:WatchAll({ "warnPull", "aggroAlert", "openWorld", "position" }, function() if self.driver:IsShown() then self:Update() end end)
-    -- as tall as the damage meter
-    self.meter:SetMaxRows(meterRows())
-    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
-        if namespace == "damagemeter" and key == "rows" then
-            self.meter:SetMaxRows(meterRows())
-            if self.preview then self.preview:SetMaxRows(meterRows()); self:RefreshPreview() end
-            if self.driver:IsShown() then self:Update() end
+
+    function MeterOpts(byState: boolean): ThreatOptions
+        return { show = self:Get("who"), marker = self:Get("marker"), raw = self:Get("raw"), byState = byState }
+    end
+
+    -- Whether the alerts apply here: in an instance, or anywhere with Open
+    -- world on; in a group with someone to hold the mobs; solo (the aggro
+    -- alert's With my pet) with your pet on the mob.
+    function AlertsApply(rows: Row[], aggro: boolean?): boolean
+        if not self:Get("openWorld") and not UI.Flag(IsInInstance()) then return false end
+        if UI.Flag(IsInGroup()) then return groupHasHolder() end
+        if aggro and self:Get("aggroAlert") ~= "pet" then return false end
+        for _, r in ipairs(rows) do
+            if r.unit == "pet" then return true end
         end
-    end)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Refresh() end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Refresh() end)
-    self:OnGameEvent("PLAYER_TARGET_CHANGED", function() if self.driver:IsShown() then self:Update() end end)
-    self:Refresh()
+        return false
+    end
+
+    function AggroApplies(rows: Row[]): boolean
+        if self:Get("aggroAlert") == "off" then return false end
+        return self:AlertsApply(rows, true)
+    end
+
+    function Warn(rows: Row[])
+        local me: Row? = nil
+        for _, r in ipairs(rows) do if r.you then me = r end end
+        local status = me and me.status
+        local tank = me and me.role == "TANK"
+        if not readable(status) or tank then
+            unalert("threat-pull")
+            unalert("threat-aggro")
+            return
+        end
+        local drop = readyDrop()
+        local dropText = drop and (" · " .. drop .. " ready") or ""
+        if status == 1 and self:Get("warnPull") and self:AlertsApply(rows) then
+            unalert("threat-aggro")
+            -- whoever holds the mob: the first other row at 2-3
+            local holder: Row? = nil
+            for _, r in ipairs(rows) do
+                if not r.you and readable(r.status) and r.status >= 2 then holder = r break end
+            end
+            if holder then
+                alert("threat-pull", "warning", "You're about to pull", "%s · over %s's threat%s",
+                    (UnitName("target")) or "", holder.name or "", dropText)
+            else
+                alert("threat-pull", "warning", "You're about to pull", "%s%s", (UnitName("target")) or "", dropText)
+            end
+        elseif status >= 2 and self:AggroApplies(rows) then
+            unalert("threat-pull")
+            alert("threat-aggro", "danger", "You have drawn aggro", "%s%s", (UnitName("target")) or "", dropText)
+        else
+            unalert("threat-pull")
+            unalert("threat-aggro")
+        end
+    end
+
+    function Update()
+        local meter = self.meter
+        if not meter then return end
+        local hostile = hostileTarget()
+        local fighting = hostile and inCombat()
+        local shows = self:Get("shows")
+        local wantMeter = not self:Get("position").hidden and (shows == "always" or (shows == "combat" and fighting))
+        local rows: Row[], secret = {}, false
+        if hostile then rows, secret = readRows() end
+        if wantMeter then
+            -- the name may be secret: passed on, never tested
+            if hostile then meter:SetTarget((UnitName("target"))) else meter:SetTarget(nil) end
+            meter:SetRows(entries(rows), self:MeterOpts(secret))
+            meter:Show()
+        else
+            meter:Hide()
+        end
+        if fighting then
+            self:Warn(rows)
+        else
+            unalert("threat-pull")
+            unalert("threat-aggro")
+        end
+    end
+
+    -- A driver reads the table every TICK (threat moves all the time) in combat,
+    -- and out of combat too while the meter always shows.
+    function Refresh()
+        local driver = self.driver
+        if driver then driver:SetShown(inCombat() or self:Get("shows") == "always") end
+        self:Update()
+    end
+
+    -- Whether the driver runs (the table is read).
+    function Driving(): boolean
+        local driver = self.driver
+        return driver ~= nil and driver:IsShown()
+    end
+
+    function PreviewView(parent: Frame): ThreatMeter
+        local preview = self.preview
+        if not preview then
+            preview = UI.ThreatMeter(parent, { rows = meterRows() })
+            preview:SetTarget("Lava Surger")
+            self.preview = preview
+        end
+        preview:SetParent(parent)
+        preview:SetMaxRows(meterRows())
+        self:RefreshPreview()
+        return preview
+    end
+
+    function RefreshPreview()
+        local preview = self.preview
+        if not preview then return end
+        -- you: the healer, or yourself by name with your class
+        local rows: ThreatEntry[] = {}
+        for i, r in ipairs(SAMPLE) do
+            rows[i] = { name = r.name, class = r.class, role = r.role, status = r.status, percent = r.percent, raw = r.raw,
+                        you = i == #SAMPLE }
+        end
+        preview:SetRows(rows, self:MeterOpts(false))
+    end
+
+    override function OnEnable()
+        local meter = self.meter
+        if not meter then
+            meter = UI.ThreatMeter(SuuUI.Root, { rows = meterRows() })
+            meter:SetFrameStrata("MEDIUM")
+            meter:Hide()
+            self.meter = meter
+            local driver = CreateFrame("Frame")
+            driver:Hide()
+            local wait = 0
+            driver:SetScript("OnUpdate", function(_: Frame, elapsed: number)
+                wait = wait - elapsed
+                if wait > 0 then return end
+                wait = TICK
+                self:Update()
+            end)
+            self.driver = driver
+        end
+        self:RegisterMover(meter, { key = "position", label = "Threat meter", managedShow = true,
+            enabled = function() return self:Get("shows") ~= "off" end })
+        self:RegisterSettings(SECTION)
+        self:Watch("shows", function() SuuUI.EditMode.Refresh(); self:Refresh() end)
+        self:WatchAll({ "who", "marker", "raw" }, function() self:RefreshPreview(); if self:Driving() then self:Update() end end)
+        self:WatchAll({ "warnPull", "aggroAlert", "openWorld", "position" }, function() if self:Driving() then self:Update() end end)
+        -- as tall as the damage meter
+        meter:SetMaxRows(meterRows())
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+            if namespace == "damagemeter" and key == "rows" then
+                meter:SetMaxRows(meterRows())
+                local preview = self.preview
+                if preview then preview:SetMaxRows(meterRows()); self:RefreshPreview() end
+                if self:Driving() then self:Update() end
+            end
+        end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Refresh() end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Refresh() end)
+        self:OnGameEvent("PLAYER_TARGET_CHANGED", function() if self:Driving() then self:Update() end end)
+        self:Refresh()
+    end
+
+    override function OnDisable()
+        if self.driver then self.driver:Hide() end
+        if self.meter then self.meter:Hide() end
+        unalert("threat-pull")
+        unalert("threat-aggro")
+    end
 end
 
-function M:OnDisable()
-    if self.driver then self.driver:Hide() end
-    if self.meter then self.meter:Hide() end
-    M.Unalert("threat-pull")
-    M.Unalert("threat-aggro")
-end
+M = SuuUI.AddModule(ThreatModule.new())
+
+-- The toggle "Show the threat meter" became the choice Show: Off / In combat / Always.
+M:Migrate("shows", function(values)
+    if type(values.shown) == "boolean" then
+        values.shows = values.shown and "combat" or "off"
+    end
+    values.shown = nil
+end)
