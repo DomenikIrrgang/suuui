@@ -6,6 +6,7 @@
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as rb from "/UI/ResourceBar"
+import type ResourceApi, ResourceBar, ResourceBarOptions from "/UI/ResourceBar"
 import * as editMode from "/EditMode/EditMode"
 import * as events from "/Core/Events"
 import tokens as T from "/Core/Tokens"
@@ -36,29 +37,29 @@ local function world(w: { [string]: any }?): World
     return d
 end
 
-local function api(d: World): { [string]: any }
-    local a: { [string]: any } = {
-        UnitClass = function(_: string): (string, string) return d.class, d.class end,
-        UnitPowerType = function(_: string): (number, string) return d.pType, d.token end,
-        UnitPowerMax = function(_: string, _: number?): any return d.max end,
-        UnitPower = function(_: string, p: number?): any
+local function api(d: World): ResourceApi
+    local a: ResourceApi = {
+        UnitClass = function(_) return d.class, d.class end,
+        UnitPowerType = function(_) return d.pType, d.token end,
+        UnitPowerMax = function(_, _) return d.max end,
+        UnitPower = function(_, p)
             if p == Enum.PowerType.ComboPoints then return d.combo end
             return d.power
         end,
-        UnitPowerPercent = function(_: string, _: number, _: boolean, curve: any): number
+        UnitPowerPercent = function(_, _, _, curve)
             if curve == CurveConstants.ScaleTo100 then return d.pct end
             return d.pct < 25 and 1 or 0
         end,
-        UnitExists = function(_: string): boolean return d.target end,
-        UnitCanAttack = function(_: string, _: string): any return d.hostile end,
-        UnitAffectingCombat = function(_: string): boolean return d.fighting end,
+        UnitExists = function(_) return d.target end,
+        UnitCanAttack = function(_, _) return d.hostile end,
+        UnitAffectingCombat = function(_) return d.fighting end,
     }
-    if d.comboAPI then a.GetComboPoints = function(_: string, _: string): any return d.combo end end
+    if d.comboAPI then a.GetComboPoints = function(_, _) return d.combo end end
     return a
 end
 
-local function resource(d: World, opts: { [string]: any }?): any
-    local o: { [string]: any } = opts or {}
+local function resource(d: World, opts: ResourceBarOptions?): ResourceBar
+    local o = opts or {}
     o.api = api(d)
     local r = rb.resourceBar(parent, o)
     r:SetPoint("CENTER")

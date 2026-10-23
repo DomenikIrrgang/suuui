@@ -30,6 +30,7 @@ import * as events from "/Core/Events"
 import * as editMode from "/EditMode/EditMode"
 import * as draw from "/UI/Draw"
 import * as uiText from "/UI/Text"
+import type Text from "/UI/Text"
 
 const S = T.space
 
@@ -42,9 +43,9 @@ const isSecret = secret.isSecret
 -- nil becomes 0; a secret value passes through untouched
 const amount = secret.amount
 
-local lowCurve: any
+local lowCurve: LuaCurveObject? = nil
 -- 1 below LOW (a 0-1 fraction), 0 from it up
-local function belowLow(): any
+local function belowLow(): LuaCurveObject?
     if not lowCurve and C_CurveUtil and Enum.LuaCurveType then
         lowCurve = C_CurveUtil.CreateCurve()
         lowCurve:SetType(Enum.LuaCurveType.Step)
@@ -66,12 +67,20 @@ local function statusBar(parent: Frame, color: string?, level: number?): StatusB
 end
 
 -- A track with a hairline border and a fill (or more) inside it.
-local function well(parent: Frame): any
-    local f = CreateFrame("Frame", nil, parent)
-    f.track = draw.fill(f, "surface-sunk")
-    f.track:SetAllPoints()
-    f.border = draw.border(f, "gilt-hairline", { layer = "OVERLAY" })
-    return f
+class Well extends Frame
+    readonly track: Texture
+    readonly border: draw.Border
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.track = draw.fill(self, "surface-sunk")
+        self.track:SetAllPoints()
+        self.border = draw.border(self, "gilt-hairline", { layer = "OVERLAY" })
+    end
+end
+
+local function well(parent: Frame): Well
+    return Well.new(parent)
 end
 
 local function inside(b: Region, f: Region)
@@ -79,8 +88,56 @@ local function inside(b: Region, f: Region)
     b:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
 end
 
+-- The game's functions the bar reads (tests give their own).
+export type ResourceApi = {
+    UnitClass: typeof(UnitClass),
+    UnitPowerType: typeof(UnitPowerType),
+    UnitPowerMax: typeof(UnitPowerMax),
+    UnitPower: typeof(UnitPower),
+    UnitPowerPercent: typeof(UnitPowerPercent),
+    UnitExists: typeof(UnitExists),
+    UnitCanAttack: typeof(UnitCanAttack),
+    UnitAffectingCombat: typeof(UnitAffectingCombat),
+    GetComboPoints?: typeof(GetComboPoints),
+}
+
+-- What shows: both (the bar and the points), the bar, or nothing; the number
+-- (value, pct or none); the amber under 25%; a druid's mana line; out of
+-- combat (as it is, fade or hide); the points over or under the bar; its size.
+export type ResourceSettings = {
+    show: string,
+    number: string,
+    low: boolean,
+    druidMana: boolean,
+    ooc: string,
+    points: string,
+    width: number,
+    height: number,
+}
+
+export type ResourceBarOptions = { name?: string, api?: ResourceApi, width?: number, height?: number }
+
+-- A combo point: a track, the fill lit from the count, its edge and glow.
+class Pip extends Frame
+    readonly track: Texture
+    readonly fill: StatusBar
+    readonly border: draw.Border
+    glow?: draw.SoftEdge
+
+    constructor(parent: Frame, i: number)
+        super(nil, parent)
+        self.track = draw.fill(self, "surface-sunk")
+        self.track:SetAllPoints()
+        -- lit by itself from the count: min i-1, max i
+        self.fill = statusBar(self, "ink", 1)
+        self.fill:SetMinMaxValues(i - 1, i)
+        inside(self.fill, self)
+        self.border = draw.border(self, "gilt-hairline", { layer = "OVERLAY" })
+    end
+end
+
 -- Rogues always; druids while energy is their power (cat form).
-local function usesPoints(A: any): boolean
+local function usesPoints(A: ResourceApi): boolean
     local _, playerClass = A.UnitClass("player")
     local class = secret.known(playerClass, "")
     if class == "ROGUE" then return true end
@@ -92,28 +149,31 @@ local function usesPoints(A: any): boolean
 end
 
 export class ResourceBar extends Frame
-    api: any
-    opts: any
-    bar: any
-    fill: any
-    low: any
-    text: any
-    mana: any
-    manaFill: any
+    api: ResourceApi
+    opts: ResourceSettings
+    bar: Well
+    fill: StatusBar
+    low: StatusBar
+    text: Text
+    mana: Well
+    manaFill: StatusBar
     points: Frame
-    pips: any
-    token: any? = nil
-    hasPoints: any? = nil
-    hasMana: any? = nil
-    height: any? = nil
-    width: any? = nil
-    shownBefore: any? = nil
+    pips: Pip[]
+    token: string? = nil
+    hasPoints: boolean? = nil
+    hasMana: boolean? = nil
+    height: number? = nil
+    width: number? = nil
+    shownBefore: boolean? = nil
     running: boolean? = nil
+    inFight: boolean? = nil
+    -- its height changed (the points or the mana line came or went)
+    onResize: ((bar: ResourceBar) -> ())? = nil
 
-    constructor(parent: Frame, opts: { [string]: any }?)
-        opts = opts or {}
+    constructor(parent: Frame, options: ResourceBarOptions?)
+        local opts = options or {}
         super(opts.name, parent)
-        self.api = opts.api or _G
+        self.api = opts.api or (_G :: ResourceApi)
         self.opts = { show = "both", number = "value", low = true, druidMana = true, ooc = "fade", points = "over",
                    width = opts.width or 340, height = opts.height or 14 }
 
@@ -137,22 +197,22 @@ export class ResourceBar extends Frame
 
         self.points = CreateFrame("Frame", nil, self)
         self.pips = {}
-        for i = 1, POINTS do
-            local p = CreateFrame("Frame", nil, self.points)
-            p.track = draw.fill(p, "surface-sunk")
-            p.track:SetAllPoints()
-            -- lit by itself from the count: min i-1, max i
-            p.fill = statusBar(p, "ink", 1)
-            p.fill:SetMinMaxValues(i - 1, i)
-            inside(p.fill, p)
-            p.border = draw.border(p, "gilt-hairline", { layer = "OVERLAY" })
-            self.pips[i] = p
-        end
+        for i = 1, POINTS do self.pips[i] = Pip.new(self.points, i) end
         self:Refresh()
     end
 
-    function SetOptions(opts: { [string]: any })
-        for k, v in pairs(opts) do self.opts[k] = v end
+    -- Settings to change (the others stay).
+    function SetOptions(opts: { show?: string, number?: string, low?: boolean, druidMana?: boolean, ooc?: string,
+                                points?: string, width?: number, height?: number })
+        local o = self.opts
+        o.show = opts.show or o.show
+        o.number = opts.number or o.number
+        if opts.low ~= nil then o.low = opts.low end
+        if opts.druidMana ~= nil then o.druidMana = opts.druidMana end
+        o.ooc = opts.ooc or o.ooc
+        o.points = opts.points or o.points
+        o.width = opts.width or o.width
+        o.height = opts.height or o.height
         self:Refresh()
     end
 
@@ -282,7 +342,7 @@ export class ResourceBar extends Frame
     function Start()
         if self.running then return end
         self.running = true
-        local function power(_: string, _: any, token: any)
+        local function power(_: string, _: string, token: string)
             if token == "COMBO_POINTS" then self:UpdatePoints()
             elseif token == "MANA" and self.hasMana then self:UpdateMana()
             else self:UpdatePower() end
@@ -311,6 +371,6 @@ export class ResourceBar extends Frame
     end
 end
 
-export function resourceBar(parent: Frame, opts: { [string]: any }?): ResourceBar
+export function resourceBar(parent: Frame, opts: ResourceBarOptions?): ResourceBar
     return ResourceBar.new(parent, opts)
 end
