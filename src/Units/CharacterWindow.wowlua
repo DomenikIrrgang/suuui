@@ -17,27 +17,31 @@
 --         rules), the side buttons (Stats, Titles, Sets) as a segmented row.
 -- A built-in module written against the public API only.
 
+
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type DurabilityInfo, DurabilityPiece from "/Core/ServiceKeys"
+import type TabMarker from "/UI/TabMarker"
+import type WindowChrome, SkinTab from "/UI/WindowSkin"
+import type ItemSlotSkin from "/UI/Inventory"
+import type Text from "/UI/Text"
+import type Color from "/Core/Tokens"
+import named, part, ask, asFrame, asButton, asRegion, asTexture, asFontString from "/UI/Reskin"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
-local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local function plain(v: unknown): boolean return v ~= nil and not isSecret(v) end
+local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 local SLOTS = { "Head", "Neck", "Shoulder", "Back", "Chest", "Shirt", "Tabard", "Wrist", "Hands", "Waist", "Legs",
                 "Feet", "Finger0", "Finger1", "Trinket0", "Trinket1", "MainHand", "SecondaryHand", "Ranged" }
 
-local M = SuuUI.RegisterModule({
-    id = "character",
-    name = "Character window",
-    description = "The Character window (C) and its tabs in SuuUI's look.",
-    api = "0.12",
-    reloadToToggle = true,
-    defaults = {},
-})
+local DEFAULTS = {}
+
+local M: CharacterWindowModule
 
 -- Blizzard's mode tabs (CharacterFrameModeTab1-6) by the pane they open, in
 -- the design's order.
@@ -50,50 +54,36 @@ local TABS = {
     { index = 6, pane = "StatisticsFrame", label = "Statistics", short = "Stats" },
 }
 
+-- One of the game's frames by its global name.
+local function frame(name: string): Frame? return asFrame(named(name)) end
+
 local function shown(name: string): boolean
-    local f = _G[name]
+    local f = asRegion(named(name))
     return f and f:IsShown() or false
 end
 
-function M:Skin()
-    local cf = _G.CharacterFrame
-    if not cf or self.chrome then return end
-    -- the panes' own backgrounds (the first texture of each host)
-    local hide = { cf.NineSlice, cf.PortraitContainer, cf.TitleContainer }
-    for _, host in ipairs({ _G.CharacterFrameLeftPaneHost, _G.CharacterFrameRightPaneHost }) do
-        if host then
-            for _, r in ipairs({ host:GetRegions() }) do hide[#hide + 1] = r end
-            -- the right pane's divider strip
-            for _, c in ipairs({ host:GetChildren() }) do hide[#hide + 1] = c end
-        end
+-- What each of the game's frames got already (a frame skinned once).
+local done: { [unknown]: boolean } = {}
+setmetatable(done, { __mode = "k" })
+local function once(f: unknown): boolean
+    if f == nil or done[f] then return false end
+    done[f] = true
+    return true
+end
+
+-- Its button textures (normal, pushed, highlight, …) out of sight.
+local function hideButtonArt(b: Button, getters: string[])
+    for _, get in ipairs(getters) do
+        local t = asRegion(ask(b, get))
+        if t then t:SetAlpha(0) end
     end
-    self.chrome = UI.SkinWindow(cf, {
-        title = "Character", icon = "person", binding = "TOGGLECHARACTER0",
-        close = _G.CharacterFrameCloseButton, hide = hide, topInset = 20, under = "microMenu",
-    })
-    local list = {}
-    for _, t in ipairs(TABS) do
-        local button = _G["CharacterFrameModeTab" .. t.index]
-        if button then
-            list[#list + 1] = { button = button, label = t.label, short = t.short,
-                selected = function()
-                    if button.SelectedTexture then return button.SelectedTexture:IsShown() end
-                    return shown(t.pane)
-                end }
-        end
-    end
-    self.chrome:SetTabs(list)
-    -- a tab switched: the selected look follows
-    hook("ToggleCharacter", function() if self.chrome then self.chrome:UpdateTabs() end end)
-    hookScript(cf, "OnShow", function() self.chrome:LayoutTabs(); self:UpdateIdentity() end)
-    self:SkinPaperDoll()
 end
 
 --------------------------------------------------------------------------------
 -- The Character tab
 --------------------------------------------------------------------------------
 
-local function alphaRegions(f: any, keep: any?)
+local function alphaRegions(f: Frame?, keep: Region?)
     if not f then return end
     for _, r in ipairs({ f:GetRegions() }) do
         if r ~= keep then r:SetAlpha(0) end
@@ -101,266 +91,38 @@ local function alphaRegions(f: any, keep: any?)
 end
 
 -- "Level 21 · Undead · Paladin" (an unknown level: "?").
-local function identityLine(level: any, race: any, className: any): string
-    local parts: any[] = { "Level " .. (level or "?") }
+local function identityLine(level: number?, race: string?, className: string?): string
+    local parts: string[] = { "Level " .. (level or "?") }
     if race then parts[#parts + 1] = race end
     if className then parts[#parts + 1] = className end
     return table.concat(parts, " · ")
 end
 
--- "◆ Suther   Level 21 · Undead · Paladin", over the left pane.
-function M:BuildIdentity()
-    local host = _G.CharacterFrameLeftPaneHost
-    if not host or self.identity then return end
-    local id = CreateFrame("Frame", nil, host)
-    id:SetPoint("TOPLEFT", S["space-5"], -S["space-3"])
-    id:SetPoint("TOPRIGHT", -44, -S["space-3"])
-    id:SetHeight(T.type["unit-name-lg"].lineHeight)
-    id:SetFrameLevel(host:GetFrameLevel() + 520)
-    -- the class diamond, centred on the name's line
-    id.diamond = UI.Diamond(id, 7, "ink", "OVERLAY")
-    id.diamond:SetPoint("CENTER", id, "LEFT", 4, 0)
-    id.name = UI.Text(id, "unit-name-lg", "ink")
-    id.name:SetPoint("LEFT", 8 + S["space-3"], 0)
-    id.line = UI.Text(id, "caption", "ink-muted")
-    id.line:SetPoint("LEFT", id.name, "RIGHT", S["space-4"], -1)
-    self.identity = id
-    -- Blizzard's strip and its "Level 21 Paladin"
-    local strip = _G.PaperDollFrame and _G.PaperDollFrame.TopBackgroundStripHost
-    if strip then strip:SetAlpha(0) end
-    if _G.PaperDollLevelInfo then _G.PaperDollLevelInfo:SetAlpha(0) end
-    if _G.PaperDollPetLevelInfo then _G.PaperDollPetLevelInfo:SetAlpha(0) end
-    -- only on the Character tab
-    if _G.PaperDollFrame then
-        hookScript(_G.PaperDollFrame, "OnShow", function() id:Show(); self:UpdateIdentity() end)
-        hookScript(_G.PaperDollFrame, "OnHide", function() id:Hide() end)
-        id:SetShown(_G.PaperDollFrame:IsShown())
-    end
-end
-
-function M:UpdateIdentity()
-    local id = self.identity
-    if not id then return end
-    local _, class = UnitClass("player")
-    local token = class and not isSecret(class) and "class-" .. (class :: string):lower()
-    if token and T.color[token] then UI.Paint(id.diamond, token) end
-    id.name:SetValue(SuuUI.FullName("player") or "")
-    id.line:SetValue(identityLine(UnitLevel("player"), UnitRace("player"), (UnitClass("player"))))
-end
-
--- An equipment slot in SuuUI's look; its border follows what Blizzard shows.
-function M:SkinSlot(b: any)
-    if self.slotSkins[b] then return end
-    local skin = UI.SkinItemSlot(b)
-    self.slotSkins[b] = skin
-    local updating = false
-    local function update()
-        if updating then return end
-        updating = true
-        local id = b:GetID()
-        local link = GetInventoryItemLink("player", id)
-        local q = GetInventoryItemQuality("player", id)
-        local icon = skin.icon:GetTexture()
-        -- a broken piece dimmed (the Durability module's "On your gear")
-        local wear = self:WearOf(id)
-        skin:SetItem({ icon = icon, quality = (plain(q) and q and QUALITY[q]) or "common",
-            dim = not link or (wear ~= nil and wear.state == "broken") })
-        updating = false
-    end
-    hook(skin.icon, "SetTexture", update)
-    hookScript(b, "OnShow", update)
-    self.slotUpdates[#self.slotUpdates + 1] = update
-    self:WearBar(b)
-    update()
-end
-
 -- The arrows beside the slots in Sets mode (each slot's popout button): a
 -- gilt chevron pointing away from the slot.
-local LEFT_COLUMN = { Head = true, Neck = true, Shoulder = true, Back = true, Chest = true, Shirt = true, Tabard = true, Wrist = true }
-local WEAPONS = { MainHand = true, SecondaryHand = true, Ranged = true }
+local LEFT_COLUMN: { [string]: boolean } = { Head = true, Neck = true, Shoulder = true, Back = true, Chest = true, Shirt = true, Tabard = true, Wrist = true }
+local WEAPONS: { [string]: boolean } = { MainHand = true, SecondaryHand = true, Ranged = true }
 local GLYPH_DIR = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 
-function M:SkinPopout(slotName: string, b: any)
-    local p = b.popoutButton
-    if not p or p.suuSkinned then return end
-    p.suuSkinned = true
-    local glyph = p:CreateTexture(nil, "OVERLAY", nil, 7)
-    glyph:SetSize(12, 12)
-    glyph:SetPoint("CENTER")
-    UI.Paint(glyph, "gilt-text")
-    if WEAPONS[slotName] then
-        glyph:SetTexture(GLYPH_DIR .. "chevronDown.tga")
-        glyph:SetRotation(math.pi)
-    else
-        glyph:SetTexture(GLYPH_DIR .. (LEFT_COLUMN[slotName] and "chevronRight" or "chevronLeft") .. ".tga")
-    end
-    local function hideArt()
-        for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-            local t = p[get] and p[get](p)
-            if t then t:SetAlpha(0) end
-        end
-        for _, r in ipairs({ p:GetRegions() }) do
-            if r ~= glyph and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-        end
-    end
-    hideArt()
-    hookScript(p, "OnShow", hideArt)
-    hookScript(p, "OnEnter", function() UI.Paint(glyph, "gilt") end)
-    hookScript(p, "OnLeave", function() UI.Paint(glyph, "gilt-text") end)
-end
+-- "◆ Suther   Level 21 · Undead · Paladin", over the left pane.
+class Identity extends Frame
+    readonly diamond: Texture
+    readonly name: Text
+    readonly line: Text
 
--- The flyout of items for a slot: glass behind, SuuUI item slots.
-function M:SkinFlyout()
-    local fly = _G.EquipmentFlyoutFrame
-    if not fly or self.flyoutSkinned then return end
-    self.flyoutSkinned = true
-    local function skinButtons()
-        local holder = fly.buttonFrame or fly
-        for _, r in ipairs({ holder:GetRegions() }) do
-            if r:GetObjectType() == "Texture" and not r.suuArt then r:SetAlpha(0) end
-        end
-        -- (Blizzard's highlight is a texture: no regions of its own)
-        if fly.Highlight then fly.Highlight:SetAlpha(0) end
-        if not holder.suuBg then
-            holder.suuBg = holder:CreateTexture(nil, "BACKGROUND", nil, -8)
-            holder.suuBg.suuArt = true
-            UI.PaintFill(holder.suuBg, "surface-glass")
-            holder.suuBg:SetAllPoints()
-            UI.Border(holder, "gilt-line")
-        end
-        for i = 1, 40 do
-            local b = _G["EquipmentFlyoutFrameButton" .. i]
-            if not b then break end
-            if not self.flyoutSkins[b] then self.flyoutSkins[b] = UI.SkinItemSlot(b) end
-            local icon = self.flyoutSkins[b].icon
-            self.flyoutSkins[b]:SetItem(icon and icon:GetTexture() and { icon = icon:GetTexture() } or nil)
-        end
-    end
-    self.flyoutSkins = {}
-    hookScript(fly, "OnShow", function() after(0, skinButtons) end)
-    if type(_G.EquipmentFlyout_DisplayButton) == "function" then
-        hook("EquipmentFlyout_DisplayButton", function() after(0, skinButtons) end)
-    end
-end
-
--- The new-set popup (name, icon, Okay, Cancel): glass in a gilt edge, its
--- input, buttons and scrollbar through UI.Reskin; the icons stay.
-function M:SkinSetPopup()
-    local pop = _G.GearManagerPopupFrame or (_G.PaperDollFrame and _G.PaperDollFrame.GearManagerPopupFrame)
-    if not pop or pop.suuSkinned then return end
-    pop.suuSkinned = true
-    local function art(f: any)
-        if not f then return end
-        if f.NineSlice then f.NineSlice:SetAlpha(0) end
-        for _, r in ipairs({ f:GetRegions() }) do
-            if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-        end
-    end
-    art(pop)
-    art(pop.BorderBox)
-    if pop.BorderBox then
-        for _, c in ipairs({ pop.BorderBox:GetChildren() }) do
-            if c:GetObjectType() == "Frame" then art(c) end
-        end
-    end
-    local bg = pop:CreateTexture(nil, "BACKGROUND", nil, -8)
-    UI.PaintFill(bg, "surface-glass")
-    bg:SetAllPoints()
-    local edge = CreateFrame("Frame", nil, pop)
-    edge:SetAllPoints()
-    edge:EnableMouse(false)
-    UI.Border(edge, "gilt-line")
-    local jewel = UI.Diamond(edge, 7, "gilt")
-    jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
-    -- the chosen icon (top right) and the grid's icons: SuuUI's icon buttons
-    -- (the chosen icon: whichever button with an Icon sits outside the grid)
-    local function findChosen(f: any, depth: number): any
-        if depth > 4 or f == pop.IconSelector then return nil end
-        if f ~= pop and f:GetObjectType() == "Button" and (f.Icon or f.icon) then return f end
-        for _, c in ipairs({ f:GetChildren() }) do
-            local hit = findChosen(c, depth + 1)
-            if hit then return hit end
-        end
-    end
-    local chosen
-    local function icons()
-        chosen = chosen or findChosen(pop, 0)
-        if chosen then UI.ReskinIconButton(chosen) end
-        local sb = pop.IconSelector and (pop.IconSelector.ScrollBox or pop.IconSelector)
-        -- (no view yet: the box updates as it is sized, before its list is set)
-        if sb and sb.ForEachFrame and (not sb.GetView or sb:GetView()) then
-            sb:ForEachFrame(function(b) UI.ReskinIconButton(b) end)
-        end
-    end
-    local sb = pop.IconSelector and pop.IconSelector.ScrollBox
-    if sb then
-        if sb.Update then hook(sb, "Update", icons) end
-        if sb.RegisterCallback and sb.Event and sb.Event.OnDataRangeChanged then
-            sb:RegisterCallback(sb.Event.OnDataRangeChanged, icons, self)
-        end
-    end
-    -- lined up with the window: its header's top, its bottom, space-4 beside it
-    local cf = _G.CharacterFrame
-    local placing = false
-    local function place()
-        if placing or not cf then return end
-        placing = true
-        pop:ClearAllPoints()
-        pop:SetPoint("TOPLEFT", cf, "TOPRIGHT", S["space-4"], (UI.WINDOW_HEAD_H or 61) - 20)
-        pop:SetPoint("BOTTOMLEFT", cf, "BOTTOMRIGHT", S["space-4"], 0)
-        placing = false
-    end
-    hook(pop, "SetPoint", function() if not placing then after(0, place) end end)
-    -- the icon grid ends above Okay and Cancel (Blizzard's art hid the overlap)
-    local box = pop.BorderBox
-    local okay = box and (box.OkayButton or box.OkButton)
-    local grid = pop.IconSelector
-    local function fit()
-        if grid and okay then
-            local top, bottom = okay:GetTop(), pop:GetBottom()
-            grid:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -S["space-5"], (plain(top) and plain(bottom))
-                and (top - bottom + S["space-4"]) or 44)
-        end
-    end
-    hookScript(pop, "OnShow", function()
-        place()
-        after(0, function()
-            UI.Reskin(pop)
-            fit()
-            icons()
-        end)
-    end)
-end
-
-function M:UpdateSlots()
-    for _, u in ipairs(self.slotUpdates) do u() end
-end
-
--- The model in a gilt-faint box between the slot columns, without the
--- zoom and turn buttons (drag the model to turn it).
-function M:SkinModel()
-    local scene = _G.CharacterModelScene
-    local head, hands = _G.CharacterHeadSlot, _G.CharacterHandsSlot
-    if not (scene and head and hands) or self.modelBox then return end
-    local box = CreateFrame("Frame", nil, _G.CharacterFrameLeftPaneHost)
-    box:SetPoint("TOPLEFT", head, "TOPRIGHT", S["space-4"], 0)
-    box:SetPoint("BOTTOMRIGHT", _G.CharacterTrinket1Slot or hands, "BOTTOMLEFT", -S["space-4"], 0)
-    box:SetFrameLevel(math.max(1, scene:GetFrameLevel() - 1))
-    UI.Fill(box, "surface-sunk"):SetAllPoints()
-    UI.Border(box, "gilt-faint")
-    self.modelBox = box
-    local controls = scene.ControlFrame
-    if controls then
-        controls:SetAlpha(0)
-        controls:EnableMouse(false)
-        for _, c in ipairs({ controls:GetChildren() }) do
-            c:EnableMouse(false)
-        end
-    end
-    if _G.PaperDollFrame then
-        hookScript(_G.PaperDollFrame, "OnShow", function() box:Show() end)
-        hookScript(_G.PaperDollFrame, "OnHide", function() box:Hide() end)
-        box:SetShown(_G.PaperDollFrame:IsShown())
+    constructor(host: Frame)
+        super(nil, host)
+        self:SetPoint("TOPLEFT", S["space-5"], -S["space-3"])
+        self:SetPoint("TOPRIGHT", -44, -S["space-3"])
+        self:SetHeight(T.type["unit-name-lg"].lineHeight)
+        self:SetFrameLevel(host:GetFrameLevel() + 520)
+        -- the class diamond, centred on the name's line
+        self.diamond = UI.Diamond(self, 7, "ink", "OVERLAY")
+        self.diamond:SetPoint("CENTER", self, "LEFT", 4, 0)
+        self.name = UI.Text(self, "unit-name-lg", "ink")
+        self.name:SetPoint("LEFT", 8 + S["space-3"], 0)
+        self.line = UI.Text(self, "caption", "ink-muted")
+        self.line:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], -1)
     end
 end
 
@@ -372,39 +134,14 @@ end
 -- block under the stats: the lowest piece, the damaged ones, the average.
 --------------------------------------------------------------------------------
 
--- A slot's piece as SuuUI.Durability() reads it, while the gear part is on.
-function M:WearOf(slot: number): (any, any)
-    local d = SuuUI.Durability()
-    if not (d and d.parts.gear) then return nil, d end
-    return d.bySlot[slot], d
-end
+-- A slot's bar for its piece: broken (all ember, no fill), the fill's token
+-- and width (px of the bar), the percent shown and its colour.
+export type WearView = { broken: boolean, fill?: string, width?: number, pct?: string, pctColor: string }
 
-function M:WearBar(b: any)
-    if self.wear[b] then return end
-    local o = CreateFrame("Frame", nil, b)
-    o:SetAllPoints()
-    o:SetFrameLevel(b:GetFrameLevel() + 3)
-    o.bar = CreateFrame("Frame", nil, o)
-    o.bar:SetPoint("BOTTOMLEFT", 3, 3)
-    o.bar:SetPoint("BOTTOMRIGHT", -3, 3)
-    o.bar:SetHeight(3)
-    o.bg = o.bar:CreateTexture(nil, "BACKGROUND")
-    o.bg:SetAllPoints()
-    o.fill = o.bar:CreateTexture(nil, "ARTWORK")
-    o.fill:SetPoint("TOPLEFT")
-    o.fill:SetPoint("BOTTOMLEFT")
-    o.pct = UI.Text(o, "micro", "amber")
-    o.pct:SetPoint("TOPLEFT", 3, -2)
-    o.pct:SetShadowed(true)
-    o:Hide()
-    self.wear[b] = o
-end
-
--- A slot's bar for its piece (nil: none): { fill = token or nil (broken:
--- all ember, no fill), width (px of `barW`), pct = text or nil, pctColor }.
-local function wearView(p: any, gearBars: string?, barW: any): { [string]: any }?
+-- (nil: no bar)
+export function wearView(p: DurabilityPiece?, gearBars: string?, barW: number?): WearView?
     if not (p ~= nil and (gearBars == "always" or p.state ~= "fine")) then return nil end
-    local w = (plain(barW) and barW > 0) and barW or 30
+    local w = (plain(barW) and barW and barW > 0) and barW or 30
     local broken = p.state == "broken"
     return {
         broken = broken,
@@ -415,109 +152,96 @@ local function wearView(p: any, gearBars: string?, barW: any): { [string]: any }
     }
 end
 
-function M:UpdateWear()
-    if not self.wear then return end
-    for b, o in pairs(self.wear) do
-        local p, d = self:WearOf(b:GetID())
-        local v = wearView(p, p and d.parts.gearBars, p and o.bar:GetWidth())
-        o:SetShown(v ~= nil)
-        if v then
-            if v.broken then
-                UI.PaintFill(o.bg, "ember")
-                o.fill:Hide()
-            else
-                UI.PaintFill(o.bg, "on-signal", 0.7)
-                UI.PaintFill(o.fill, v.fill)
-                o.fill:SetWidth(v.width)
-                o.fill:Show()
-            end
-            o.pct:SetColor(v.pctColor)
-            o.pct:SetValue((p :: any).percent .. "%")
-            o.pct:SetShown(v.pct ~= nil)
-        end
-    end
-    self:UpdateWearBlock()
-    if self.slotUpdates then self:UpdateSlots() end
-end
-
 -- The block at the foot of the stats (the stats' list ends above it).
 local WEAR_ROWS = { "Lowest", "Damaged", "Average" }
 
-function M:BuildWearBlock()
-    local pane = _G.CharacterStatsPaneScrollBox
-    if not (pane and pane.ScrollBox) or self.wearBlock then return end
-    local blk = CreateFrame("Frame", nil, pane)
-    blk:SetPoint("BOTTOMLEFT", 10, 8)
-    blk:SetPoint("BOTTOMRIGHT", -12, 8)
-    blk.rule = UI.Hairline(blk, "gilt-faint")
-    blk.rule:SetPoint("TOPLEFT")
-    blk.rule:SetPoint("TOPRIGHT")
-    blk.head = UI.Text(blk, "header", "gilt-text")
-    blk.head:SetValue("Durability")
-    blk.rows = {}
-    for i, label in ipairs(WEAR_ROWS) do
-        local r = {}
-        r.label = UI.Text(blk, "body", "ink-muted")
-        r.label:SetValue(label)
-        r.value = UI.Text(blk, "body", "ink")
-        r.value:SetJustifyH("RIGHT")
-        r.value:SetWordWrap(false)
-        blk.rows[i] = r
-    end
-    blk:Hide()
-    self.wearBlock = blk
-end
-
--- Laid out by the text styles' line heights (again after a theme change).
-function M:LayoutWearBlock()
-    local blk = self.wearBlock
-    local y = S["space-3"]
-    blk.head:ClearAllPoints()
-    blk.head:SetPoint("TOPLEFT", 0, -y)
-    y = y + T.type.header.lineHeight + S["space-2"]
-    local lh = T.type.body.lineHeight
-    for _, r in ipairs(blk.rows) do
-        r.label:ClearAllPoints()
-        r.label:SetPoint("TOPLEFT", 0, -y)
-        r.value:ClearAllPoints()
-        r.value:SetPoint("TOPRIGHT", 0, -y)
-        r.value:SetPoint("LEFT", r.label, "RIGHT", S["space-3"], 0)
-        y = y + lh + S["space-1"]
-    end
-    blk:SetHeight(y)
-    return y
-end
-
 -- The block's Lowest, Damaged and Average values for a reading.
-local function wearRows(d: { [string]: any }): (string, string, string)
-    local function c(token: string, text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
-    local low = d.lowest
+export function wearRows(d: DurabilityInfo): (string, string, string)
+    local colors: { [string]: Color } = T.color
+    local function c(token: string, text: string): string return "|cff" .. assert(colors[token]).hex .. text .. "|r" end
+    local low = assert(d.lowest)
     local lowest = low.label .. " · " .. (low.state == "broken" and c("ember-text", "Broken")
         or low.state == "damaged" and c("amber", low.percent .. "%") or (low.percent .. "%"))
-    local worn = {}
+    local worn: string[] = {}
     for _, p in ipairs(d.pieces) do
         if p.state == "damaged" then worn[#worn + 1] = p.label .. " " .. p.percent .. "%" end
     end
     return lowest, #worn > 0 and c("amber", table.concat(worn, " · ")) or c("ink-faint", "None"), (d.average or 0) .. "%"
 end
 
-function M:UpdateWearBlock()
-    local blk = self.wearBlock
-    local box = blk and _G.CharacterStatsPaneScrollBox.ScrollBox
-    if not blk then return end
-    local d = SuuUI.Durability()
-    if not (d and d.parts.gear and d.lowest) then
-        blk:Hide()
-        box:SetPoint("BOTTOMRIGHT", -30, 30)
-        return
+-- A gear slot's wear bar and percent, over the slot.
+class WearOverlay extends Frame
+    readonly bar: Frame
+    readonly bg: Texture
+    readonly fill: Texture
+    readonly pct: Text
+
+    constructor(b: Frame)
+        super(nil, b)
+        self:SetAllPoints()
+        self:SetFrameLevel(b:GetFrameLevel() + 3)
+        self.bar = CreateFrame("Frame", nil, self)
+        self.bar:SetPoint("BOTTOMLEFT", 3, 3)
+        self.bar:SetPoint("BOTTOMRIGHT", -3, 3)
+        self.bar:SetHeight(3)
+        self.bg = self.bar:CreateTexture(nil, "BACKGROUND")
+        self.bg:SetAllPoints()
+        self.fill = self.bar:CreateTexture(nil, "ARTWORK")
+        self.fill:SetPoint("TOPLEFT")
+        self.fill:SetPoint("BOTTOMLEFT")
+        self.pct = UI.Text(self, "micro", "amber")
+        self.pct:SetPoint("TOPLEFT", 3, -2)
+        self.pct:SetShadowed(true)
+        self:Hide()
     end
-    local h = self:LayoutWearBlock()
-    box:SetPoint("BOTTOMRIGHT", -30, 8 + h + S["space-4"])
-    blk:Show()
-    local lowest, damaged, average = wearRows(d)
-    blk.rows[1].value:SetValue(lowest)
-    blk.rows[2].value:SetValue(damaged)
-    blk.rows[3].value:SetValue(average)
+end
+
+-- The Durability block under the stats; the stats' list ends above it.
+class WearBlock extends Frame
+    readonly box: Frame
+    readonly rule: Frame
+    readonly head: Text
+    readonly rows: { label: Text, value: Text }[] = {}
+
+    constructor(pane: Frame, box: Frame)
+        super(nil, pane)
+        self.box = box
+        self:SetPoint("BOTTOMLEFT", 10, 8)
+        self:SetPoint("BOTTOMRIGHT", -12, 8)
+        self.rule = UI.Hairline(self, "gilt-faint")
+        self.rule:SetPoint("TOPLEFT")
+        self.rule:SetPoint("TOPRIGHT")
+        self.head = UI.Text(self, "header", "gilt-text")
+        self.head:SetValue("Durability")
+        for i, label in ipairs(WEAR_ROWS) do
+            local name = UI.Text(self, "body", "ink-muted")
+            name:SetValue(label)
+            local value = UI.Text(self, "body", "ink")
+            value:SetJustifyH("RIGHT")
+            value:SetWordWrap(false)
+            self.rows[i] = { label = name, value = value }
+        end
+        self:Hide()
+    end
+
+    -- Laid out by the text styles' line heights (again after a theme change).
+    function Layout(): number
+        local y = S["space-3"]
+        self.head:ClearAllPoints()
+        self.head:SetPoint("TOPLEFT", 0, -y)
+        y = y + T.type.header.lineHeight + S["space-2"]
+        local lh = T.type.body.lineHeight
+        for _, r in ipairs(self.rows) do
+            r.label:ClearAllPoints()
+            r.label:SetPoint("TOPLEFT", 0, -y)
+            r.value:ClearAllPoints()
+            r.value:SetPoint("TOPRIGHT", 0, -y)
+            r.value:SetPoint("LEFT", r.label, "RIGHT", S["space-3"], 0)
+            y = y + lh + S["space-1"]
+        end
+        self:SetHeight(y)
+        return y
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -529,137 +253,17 @@ local function isRed(r: number?, g: number, b: number): boolean? return r and r 
 
 -- A stat value's colour from Blizzard's: green (a bonus) fel, red (a
 -- malus) ember, the rest ink.
-local function statColor(r: number?, g: number, b: number): string
+export function statColor(r: number?, g: number, b: number): string
     if isGreen(r, g, b) then return "fel" end
     if isRed(r, g, b) then return "ember-text" end
     return "ink"
 end
 
--- A row of the stats pane: a category head (one text, a banner) or a stat
--- (its label left, its value right).
-function M:SkinStatRow(row: any)
-    local texts = {}
-    -- a small square texture is an icon (a resistance's school): kept, the
-    -- rest (banners, backgrounds) away
-    local function texture(r: any)
-        local atlas = (r.GetAtlas and r:GetAtlas() or ""):lower()
-        local w, h = r:GetSize()
-        local isIcon = (r.GetParentKey and r:GetParentKey() == "Icon") or atlas:find("resistance") or atlas:find("icon")
-            or (w and h and w > 0 and w <= 24 and math.abs(w - h) < 3)
-        if isIcon then
-            -- (the resistances' are 33px in a 23px row: 18px)
-            r:SetAlpha(1)
-            if w and w > 20 then r:SetSize(18, 18) end
-        else
-            r:SetAlpha(0)
-        end
-    end
-    for _, r in ipairs({ row:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then
-            texture(r)
-        elseif r:GetObjectType() == "FontString" and r:IsShown() then
-            texts[#texts + 1] = r
-        end
-    end
-    for _, c in ipairs({ row:GetChildren() }) do
-        for _, r in ipairs({ c:GetRegions() }) do
-            if r:GetObjectType() == "Texture" then
-                texture(r)
-            elseif r:GetObjectType() == "FontString" and r:IsShown() then
-                texts[#texts + 1] = r
-            end
-        end
-    end
-    if not row.suuRule then
-        row.suuRule = row:CreateTexture(nil, "ARTWORK")
-        UI.PaintFill(row.suuRule, "gilt-faint")
-        row.suuRule:SetHeight(1)
-        row.suuRule:SetPoint("TOPLEFT")
-        row.suuRule:SetPoint("TOPRIGHT")
-    end
-    -- geometry can be secret (in combat): read only when it isn't (found in
-    -- game: comparing a secret left edge errored)
-    local function num(v: any): any return plain(v) and v or nil end
-    local head = #texts == 1 or (num(row:GetHeight()) or 0) > 30
-    row.suuRule:SetShown(not head)
-    if head then
-        for _, t in ipairs(texts) do
-            SuuUI.Fonts.Apply(t, "header")
-            UI.Paint(t, "gilt-text")
-            t:SetShadowOffset(0, 0)
-        end
-        return
-    end
-    -- the label and the value: Blizzard's own keys, else left to right
-    local label, value = row.Label, row.Value
-    if not (label and value) then
-        local readable = true
-        for _, t in ipairs(texts) do if num(t:GetLeft()) == nil then readable = false end end
-        if readable then table.sort(texts, function(a, b) return a:GetLeft() < b:GetLeft() end) end
-        label, value = texts[1], texts[#texts]
-    end
-    if label then
-        SuuUI.Fonts.Apply(label, "body")
-        UI.Paint(label, "ink-muted")
-        label:SetShadowOffset(0, 0)
-    end
-    if value and value ~= label then
-        local r, g, b = value:GetTextColor()
-        SuuUI.Fonts.Apply(value, "numeric")
-        UI.Paint(value, statColor(r, g, b))
-        value:SetShadowOffset(0, 0)
-    end
-end
-
-function M:SkinStatsPane()
-    for _, name in ipairs({ "CharacterStatsPaneScrollBox", "CharacterStatsPanePetScrollBox" }) do
-        local pane = _G[name]
-        if pane and not pane.suuSkinned then
-            pane.suuSkinned = true
-            alphaRegions(pane)
-            local box = pane.ScrollBox
-            if box then
-                local function skinAll()
-                    -- (no view yet: the box updates as it is sized, before its list is set)
-                    if box.ForEachFrame and box.GetView and not box:GetView() then return end
-                    if box.ForEachFrame then
-                        box:ForEachFrame(function(row) self:SkinStatRow(row) end)
-                    else
-                        for _, row in ipairs({ box.ScrollTarget and box.ScrollTarget:GetChildren() }) do self:SkinStatRow(row) end
-                    end
-                end
-                if box.Update then hook(box, "Update", skinAll) end
-                if box.RegisterCallback and box.Event and box.Event.OnDataRangeChanged then
-                    box:RegisterCallback(box.Event.OnDataRangeChanged, skinAll, self)
-                end
-                hookScript(pane, "OnShow", function() after(0, skinAll) end)
-                skinAll()
-            end
-            self:SkinScrollBar(pane.ScrollBar)
-        end
-    end
-end
-
--- Blizzard's thin scrollbar: no track art, a gilt-line thumb.
-function M:SkinScrollBar(bar: any)
-    if not bar or bar.suuSkinned then return end
-    bar.suuSkinned = true
-    local track = bar.Track
-    if track then
-        alphaRegions(track)
-        local thumb = track.Thumb
-        if thumb then
-            alphaRegions(thumb)
-            local t = thumb:CreateTexture(nil, "OVERLAY")
-            UI.PaintFill(t, "gilt-line")
-            t:SetPoint("TOP")
-            t:SetPoint("BOTTOM")
-            t:SetWidth(2)
-        end
-    end
-    for _, key in ipairs({ "Back", "Forward" }) do
-        if bar[key] then bar[key]:SetAlpha(0) end
-    end
+-- geometry can be secret (in combat): read only when it isn't (found in
+-- game: comparing a secret left edge errored)
+local function num(v: unknown): number?
+    if type(v) == "number" and not isSecret(v) then return v end
+    return nil
 end
 
 --------------------------------------------------------------------------------
@@ -670,150 +274,9 @@ end
 -- titles (found in game); shown as Stats | Sets | Titles.
 local SIDE = { { tab = 1, label = "Stats" }, { tab = 2, label = "Sets" }, { tab = 3, label = "Titles" } }
 
-function M:SkinSidebar()
-    local tabs = _G.PaperDollSidebarTabs
-    if not tabs or self.sidebar then return end
-    alphaRegions(tabs)
-    local row = CreateFrame("Frame", nil, tabs)
-    row:SetHeight(26)
-    row:SetPoint("TOPLEFT", S["space-5"], -S["space-4"])
-    row:SetPoint("TOPRIGHT", -S["space-5"], -S["space-4"])
-    UI.Fill(row, "surface-sunk"):SetAllPoints()
-    UI.Border(row, "gilt-line")
-    -- the chosen one's fill and edge, gliding to the next (UI.TabMarker)
-    local marker = UI.TabMarker(row, { box = { fill = "arcane-soft", border = "arcane" }, level = 1 })
-    self.sidebar = { row = row, buttons = {}, marker = marker }
-    for _, def in ipairs(SIDE) do
-        local b = _G["PaperDollSidebarTab" .. def.tab]
-        if b then
-            b.suuNoCheck = true
-            alphaRegions(b)
-            if b.Icon then b.Icon:SetAlpha(0) end
-            for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture" }) do
-                local t = b[get] and b[get](b)
-                if t then t:SetAlpha(0) end
-            end
-            b.suuLabel = UI.Text(b, "label", "ink-muted")
-            b.suuLabel:SetPoint("CENTER")
-            b.suuLabel:SetValue(def.label)
-            b.suuSelected = select(3, b:GetRegions())
-            b:SetFrameLevel(row:GetFrameLevel() + 2)
-            hookScript(b, "OnEnter", function() self:UpdateSidebar(b) end)
-            hookScript(b, "OnLeave", function() self:UpdateSidebar() end)
-            self.sidebar.buttons[#self.sidebar.buttons + 1] = b
-        end
-    end
-    local function layout()
-        local n = #self.sidebar.buttons
-        local inner = row:GetWidth() - 6
-        if inner <= 0 then return end
-        local each = (inner - (n - 1) * 2) / n
-        for i, b in ipairs(self.sidebar.buttons) do
-            self.placingSide = true
-            b:ClearAllPoints()
-            b:SetSize(each, 20)
-            b:SetPoint("TOPLEFT", row, "TOPLEFT", 3 + (i - 1) * (each + 2), -3)
-            self.placingSide = false
-        end
-        marker:Aim()
-    end
-    row:SetScript("OnSizeChanged", layout)
-    for _, b in ipairs(self.sidebar.buttons) do
-        hook(b, "SetPoint", function()
-            if self.placingSide then return end
-            after(0, layout)
-        end)
-    end
-    layout()
-    hook("PaperDollFrame_SetSidebar", function(_, index)
-        self.sideIndex = index
-        self:UpdateSidebar()
-    end)
-    self.sideIndex = 1
-    self:UpdateSidebar()
-end
-
-function M:UpdateSidebar(hover: any?)
-    if not self.sidebar then return end
-    local chosen
-    for i, b in ipairs(self.sidebar.buttons) do
-        local on = (SIDE[i] and SIDE[i].tab) == self.sideIndex
-        if on then chosen = b end
-        b.suuLabel:SetColor(on and "arcane" or (b == hover and "ink" or "ink-muted"))
-    end
-    self.sidebar.marker:SetChosen(chosen)
-end
-
--- New Set (its own button, centred above Equip and Save: probed 2026-10-13)
--- exactly as wide as the two together, so the edges line up (asked for).
-function M:AlignSetList()
-    local new, equip, save = _G.PaperDollFrameNewSet, _G.PaperDollFrameEquipSet, _G.PaperDollFrameSaveSet
-    if not (new and equip and save) then return end
-    local left, right = equip:GetLeft(), save:GetRight()
-    if not (plain(left) and plain(right)) then return end -- (secret in combat)
-    new:SetWidth(right - left)
-end
-
-function M:SkinPaperDoll()
-    self.slotSkins, self.slotUpdates, self.wear = {}, {}, {}
-    self:BuildIdentity()
-    self:UpdateIdentity()
-    for _, s in ipairs(SLOTS) do
-        local b = _G["Character" .. s .. "Slot"]
-        if b then
-            self:SkinSlot(b)
-            self:SkinPopout(s, b)
-        end
-    end
-    self:SkinFlyout()
-    self:SkinSetPopup()
-    local pane = _G.PaperDollFrame and _G.PaperDollFrame.EquipmentManagerPane
-    if pane then
-        hookScript(pane, "OnShow", function() after(0, function() self:AlignSetList() end) end)
-    end
-    self:SkinModel()
-    self:SkinStatsPane()
-    self:BuildWearBlock()
-    self:UpdateWear()
-    self:SkinSidebar()
-    -- the toggle for the right pane: a small square with SuuUI's edge and a
-    -- chevron pointing the way the pane goes
-    local toggle = _G.CharacterFrameRightPaneToggleButton
-    if toggle then
-        local function hideArt()
-            for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-                local t = toggle[get] and toggle[get](toggle)
-                if t then t:SetAlpha(0) end
-            end
-            for _, r in ipairs({ toggle:GetRegions() }) do
-                if r ~= toggle.suuChevron and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-            end
-        end
-        local edge = UI.Border(toggle, "gilt-line")
-        local chev = toggle:CreateTexture(nil, "OVERLAY", nil, 7)
-        chev:SetSize(14, 14)
-        chev:SetPoint("CENTER")
-        UI.Paint(chev, "ink-muted")
-        toggle.suuChevron = chev
-        local right = _G.CharacterFrameRightPaneHost
-        local function draw()
-            hideArt()
-            chev:SetAlpha(1)
-            local open = right and right:IsShown()
-            chev:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. (open and "chevronLeft" or "chevronRight") .. ".tga")
-        end
-        toggle:SetSize(22, 22)
-        hookScript(toggle, "OnEnter", function() edge:SetColor("gilt"); UI.Paint(chev, "ink") end)
-        hookScript(toggle, "OnLeave", function() edge:SetColor("gilt-line"); UI.Paint(chev, "ink-muted") end)
-        hookScript(toggle, "OnClick", function() after(0, draw) end)
-        if right then
-            hookScript(right, "OnShow", draw)
-            hookScript(right, "OnHide", draw)
-        end
-        draw()
-    end
-    self:SkinPanes()
-end
+-- The row, its buttons (Blizzard's, with SuuUI's labels) and the marker.
+export type SideTab = { button: Button, label: Text }
+export type Sidebar = { row: Frame, tabs: SideTab[], marker: TabMarker }
 
 --------------------------------------------------------------------------------
 -- The other tabs, the titles and the equipment sets: Blizzard's lists and
@@ -822,31 +285,688 @@ end
 
 local PANES = { "ReputationFrame", "SkillsFrame", "PVPRankFrame", "TokenFrame", "StatisticsFrame" }
 
-function M:SkinPanes()
-    local function watch(f: any)
-        if not f or f.suuPane then return end
-        f.suuPane = true
-        hookScript(f, "OnShow", function() after(0, function() UI.Reskin(f) end) end)
-        if f:IsShown() then UI.Reskin(f) end
+class CharacterWindowModule extends Module<typeof(DEFAULTS)>
+    chrome: WindowChrome? = nil
+    flyoutSkinned: boolean? = nil
+    -- the flyout's item buttons, the glass behind them
+    readonly flyoutSkins: { [Frame]: ItemSlotSkin } = {}
+    readonly flyoutGlass: { [Frame]: Texture } = {}
+    identity: Identity? = nil
+    modelBox: Frame? = nil
+    placingSide: boolean = false
+    sideIndex: number? = nil
+    sidebar: Sidebar? = nil
+    readonly slotSkins: { [Frame]: ItemSlotSkin } = {}
+    readonly slotUpdates: (() -> ())[] = {}
+    readonly wear: { [Frame]: WearOverlay } = {}
+    wearBlock: WearBlock? = nil
+    -- a stat row's rule (stat rows have it shown, heads hidden)
+    readonly statRules: { [Frame]: Texture } = {}
+    -- the right pane toggle's chevron
+    toggleChevron: Texture? = nil
+
+    constructor()
+        super({
+            id = "character",
+            name = "Character window",
+            description = "The Character window (C) and its tabs in SuuUI's look.",
+            api = "0.12",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
     end
-    for _, name in ipairs(PANES) do watch(_G[name]) end
-    local pd = _G.PaperDollFrame
-    if pd then
-        watch(pd.TitleManagerPane)
-        watch(pd.EquipmentManagerPane)
+
+    function Skin()
+        local cf = frame("CharacterFrame")
+        if not cf or self.chrome then return end
+        -- the panes' own backgrounds (the first texture of each host)
+        local hide: { [number]: unknown } = { part(cf, "NineSlice"), part(cf, "PortraitContainer"), part(cf, "TitleContainer") }
+        for _, name in ipairs({ "CharacterFrameLeftPaneHost", "CharacterFrameRightPaneHost" }) do
+            local host = frame(name)
+            if host then
+                for _, r in ipairs({ host:GetRegions() }) do hide[#hide + 1] = r end
+                -- the right pane's divider strip
+                for _, c in ipairs({ host:GetChildren() }) do hide[#hide + 1] = c end
+            end
+        end
+        local chrome = UI.SkinWindow(cf, {
+            title = "Character", icon = "person", binding = "TOGGLECHARACTER0",
+            close = asButton(named("CharacterFrameCloseButton")), hide = hide, topInset = 20, under = "microMenu",
+        })
+        self.chrome = chrome
+        local list: SkinTab[] = {}
+        for _, t in ipairs(TABS) do
+            local button = frame("CharacterFrameModeTab" .. t.index)
+            if button then
+                list[#list + 1] = { button = button, label = t.label, short = t.short,
+                    selected = function(): boolean
+                        local sel = asRegion(part(button, "SelectedTexture"))
+                        if sel then return sel:IsShown() end
+                        return shown(t.pane)
+                    end }
+            end
+        end
+        chrome:SetTabs(list)
+        -- a tab switched: the selected look follows
+        hook("ToggleCharacter", function() chrome:UpdateTabs() end)
+        hookScript(cf, "OnShow", function() chrome:LayoutTabs(); self:UpdateIdentity() end)
+        self:SkinPaperDoll()
+    end
+
+    function BuildIdentity()
+        local host = frame("CharacterFrameLeftPaneHost")
+        if not host or self.identity then return end
+        local id = Identity.new(host)
+        self.identity = id
+        -- Blizzard's strip and its "Level 21 Paladin"
+        local paperDoll = frame("PaperDollFrame")
+        local strip = asRegion(part(paperDoll, "TopBackgroundStripHost"))
+        if strip then strip:SetAlpha(0) end
+        for _, name in ipairs({ "PaperDollLevelInfo", "PaperDollPetLevelInfo" }) do
+            local r = asRegion(named(name))
+            if r then r:SetAlpha(0) end
+        end
+        -- only on the Character tab
+        if paperDoll then
+            hookScript(paperDoll, "OnShow", function() id:Show(); self:UpdateIdentity() end)
+            hookScript(paperDoll, "OnHide", function() id:Hide() end)
+            id:SetShown(paperDoll:IsShown())
+        end
+    end
+
+    function UpdateIdentity()
+        local id = self.identity
+        if not id then return end
+        local className, class = UnitClass("player")
+        local token = class and not isSecret(class) and "class-" .. (class :: string):lower()
+        local colors: { [string]: Color } = T.color
+        if token and colors[token] then UI.Paint(id.diamond, token) end
+        local name = SuuUI.FullName("player")
+        id.name:SetValue(type(name) == "string" and not isSecret(name) and name or "")
+        local race = UnitRace("player")
+        id.line:SetValue(identityLine(num(UnitLevel("player")), type(race) == "string" and not isSecret(race) and race or nil,
+            type(className) == "string" and not isSecret(className) and className or nil))
+    end
+
+    -- An equipment slot in SuuUI's look; its border follows what Blizzard shows.
+    function SkinSlot(b: Frame)
+        if self.slotSkins[b] then return end
+        local skin = UI.SkinItemSlot(b)
+        self.slotSkins[b] = skin
+        local updating = false
+        local function update()
+            if updating then return end
+            updating = true
+            local id = b:GetID()
+            local link = GetInventoryItemLink("player", id)
+            local q = GetInventoryItemQuality("player", id)
+            local icon = skin.icon:GetTexture()
+            -- a broken piece dimmed (the Durability module's "On your gear")
+            local wear = self:WearOf(id)
+            skin:SetItem({ icon = icon, quality = (plain(q) and q and QUALITY[q]) or "common",
+                dim = not link or (wear ~= nil and wear.state == "broken") })
+            updating = false
+        end
+        hook(skin.icon, "SetTexture", update)
+        hookScript(b, "OnShow", update)
+        self.slotUpdates[#self.slotUpdates + 1] = update
+        self:WearBar(b)
+        update()
+    end
+
+    function SkinPopout(slotName: string, b: Frame)
+        local p = asButton(part(b, "popoutButton"))
+        if not p or not once(p) then return end
+        local glyph = p:CreateTexture(nil, "OVERLAY", nil, 7)
+        glyph:SetSize(12, 12)
+        glyph:SetPoint("CENTER")
+        UI.Paint(glyph, "gilt-text")
+        if WEAPONS[slotName] then
+            glyph:SetTexture(GLYPH_DIR .. "chevronDown.tga")
+            glyph:SetRotation(math.pi)
+        else
+            glyph:SetTexture(GLYPH_DIR .. (LEFT_COLUMN[slotName] and "chevronRight" or "chevronLeft") .. ".tga")
+        end
+        local function hideArt()
+            hideButtonArt(p, { "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" })
+            for _, r in ipairs({ p:GetRegions() }) do
+                if r ~= glyph and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+            end
+        end
+        hideArt()
+        hookScript(p, "OnShow", hideArt)
+        hookScript(p, "OnEnter", function() UI.Paint(glyph, "gilt") end)
+        hookScript(p, "OnLeave", function() UI.Paint(glyph, "gilt-text") end)
+    end
+
+    -- The flyout of items for a slot: glass behind, SuuUI item slots.
+    function SkinFlyout()
+        local fly = frame("EquipmentFlyoutFrame")
+        if not fly or self.flyoutSkinned then return end
+        self.flyoutSkinned = true
+        local function skinButtons()
+            local holder = asFrame(part(fly, "buttonFrame")) or fly
+            local glass = self.flyoutGlass[holder]
+            for _, r in ipairs({ holder:GetRegions() }) do
+                if r:GetObjectType() == "Texture" and r ~= glass then r:SetAlpha(0) end
+            end
+            -- (Blizzard's highlight is a texture: no regions of its own)
+            local highlight = asRegion(part(fly, "Highlight"))
+            if highlight then highlight:SetAlpha(0) end
+            if not glass then
+                glass = holder:CreateTexture(nil, "BACKGROUND", nil, -8)
+                self.flyoutGlass[holder] = glass
+                UI.PaintFill(glass, "surface-glass")
+                glass:SetAllPoints()
+                UI.Border(holder, "gilt-line")
+            end
+            for i = 1, 40 do
+                local b = frame("EquipmentFlyoutFrameButton" .. i)
+                if not b then break end
+                local skin = self.flyoutSkins[b]
+                if not skin then
+                    skin = UI.SkinItemSlot(b)
+                    self.flyoutSkins[b] = skin
+                end
+                local icon = skin.icon
+                local art = icon and icon:GetTexture()
+                skin:SetItem(art and { icon = art } or nil)
+            end
+        end
+        hookScript(fly, "OnShow", function() after(0, skinButtons) end)
+        if type(named("EquipmentFlyout_DisplayButton")) == "function" then
+            hook("EquipmentFlyout_DisplayButton", function() after(0, skinButtons) end)
+        end
+    end
+
+    -- The new-set popup (name, icon, Okay, Cancel): glass in a gilt edge, its
+    -- input, buttons and scrollbar through UI.Reskin; the icons stay.
+    function SkinSetPopup()
+        local pop = frame("GearManagerPopupFrame") or asFrame(part(frame("PaperDollFrame"), "GearManagerPopupFrame"))
+        if not pop or not once(pop) then return end
+        local function art(f: Frame?)
+            if not f then return end
+            local nine = asRegion(part(f, "NineSlice"))
+            if nine then nine:SetAlpha(0) end
+            for _, r in ipairs({ f:GetRegions() }) do
+                if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+            end
+        end
+        local box = asFrame(part(pop, "BorderBox"))
+        art(pop)
+        art(box)
+        if box then
+            for _, c in ipairs({ box:GetChildren() }) do
+                if c:GetObjectType() == "Frame" then art(c) end
+            end
+        end
+        local bg = pop:CreateTexture(nil, "BACKGROUND", nil, -8)
+        UI.PaintFill(bg, "surface-glass")
+        bg:SetAllPoints()
+        local edge = CreateFrame("Frame", nil, pop)
+        edge:SetAllPoints()
+        edge:EnableMouse(false)
+        UI.Border(edge, "gilt-line")
+        local jewel = UI.Diamond(edge, 7, "gilt")
+        jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
+        -- the chosen icon (top right) and the grid's icons: SuuUI's icon buttons
+        -- (the chosen icon: whichever button with an Icon sits outside the grid)
+        local grid = asFrame(part(pop, "IconSelector"))
+        local function findChosen(f: Frame, depth: number): Frame?
+            if depth > 4 or f == grid then return nil end
+            if f ~= pop and f:GetObjectType() == "Button" and (part(f, "Icon") or part(f, "icon")) then return f end
+            for _, c in ipairs({ f:GetChildren() }) do
+                local hit = findChosen(c, depth + 1)
+                if hit then return hit end
+            end
+            return nil
+        end
+        local chosen: Frame? = nil
+        local function icons()
+            chosen = chosen or findChosen(pop, 0)
+            if chosen then UI.ReskinIconButton(chosen) end
+            local sb = grid and (part(grid, "ScrollBox") or grid)
+            -- (no view yet: the box updates as it is sized, before its list is set)
+            if sb and part(sb, "ForEachFrame") and (not part(sb, "GetView") or ask(sb, "GetView")) then
+                ask(sb, "ForEachFrame", function(b: unknown) UI.ReskinIconButton(b) end)
+            end
+        end
+        local sb = part(grid, "ScrollBox")
+        if type(sb) == "table" then
+            if part(sb, "Update") then hook(sb, "Update", icons) end
+            local changed = part(part(sb, "Event"), "OnDataRangeChanged")
+            if part(sb, "RegisterCallback") and changed then
+                ask(sb, "RegisterCallback", changed, icons, self)
+            end
+        end
+        -- lined up with the window: its header's top, its bottom, space-4 beside it
+        local cf = frame("CharacterFrame")
+        local placing = false
+        local function place()
+            if placing or not cf then return end
+            placing = true
+            pop:ClearAllPoints()
+            pop:SetPoint("TOPLEFT", cf, "TOPRIGHT", S["space-4"], UI.WINDOW_HEAD_H - 20)
+            pop:SetPoint("BOTTOMLEFT", cf, "BOTTOMRIGHT", S["space-4"], 0)
+            placing = false
+        end
+        hook(pop, "SetPoint", function() if not placing then after(0, place) end end)
+        -- the icon grid ends above Okay and Cancel (Blizzard's art hid the overlap)
+        local okay = asRegion(part(box, "OkayButton")) or asRegion(part(box, "OkButton"))
+        local function fit()
+            if grid and okay then
+                local top, bottom = num(okay:GetTop()), num(pop:GetBottom())
+                grid:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -S["space-5"], (top and bottom)
+                    and (top - bottom + S["space-4"]) or 44)
+            end
+        end
+        hookScript(pop, "OnShow", function()
+            place()
+            after(0, function()
+                UI.Reskin(pop)
+                fit()
+                icons()
+            end)
+        end)
+    end
+
+    function UpdateSlots()
+        for _, u in ipairs(self.slotUpdates) do u() end
+    end
+
+    -- The model in a gilt-faint box between the slot columns, without the
+    -- zoom and turn buttons (drag the model to turn it).
+    function SkinModel()
+        local scene = frame("CharacterModelScene")
+        local head, hands = frame("CharacterHeadSlot"), frame("CharacterHandsSlot")
+        if not (scene and head and hands) or self.modelBox then return end
+        local box = CreateFrame("Frame", nil, frame("CharacterFrameLeftPaneHost"))
+        box:SetPoint("TOPLEFT", head, "TOPRIGHT", S["space-4"], 0)
+        box:SetPoint("BOTTOMRIGHT", frame("CharacterTrinket1Slot") or hands, "BOTTOMLEFT", -S["space-4"], 0)
+        box:SetFrameLevel(math.max(1, scene:GetFrameLevel() - 1))
+        UI.Fill(box, "surface-sunk"):SetAllPoints()
+        UI.Border(box, "gilt-faint")
+        self.modelBox = box
+        local controls = asFrame(part(scene, "ControlFrame"))
+        if controls then
+            controls:SetAlpha(0)
+            controls:EnableMouse(false)
+            for _, c in ipairs({ controls:GetChildren() }) do
+                c:EnableMouse(false)
+            end
+        end
+        local paperDoll = frame("PaperDollFrame")
+        if paperDoll then
+            hookScript(paperDoll, "OnShow", function() box:Show() end)
+            hookScript(paperDoll, "OnHide", function() box:Hide() end)
+            box:SetShown(paperDoll:IsShown())
+        end
+    end
+
+    -- A slot's piece as SuuUI.Durability() reads it, while the gear part is on.
+    function WearOf(slot: number): (DurabilityPiece?, DurabilityInfo?)
+        local d = SuuUI.Durability()
+        if not (d and d.parts.gear) then return nil, d end
+        return d.bySlot[slot], d
+    end
+
+    function WearBar(b: Frame)
+        if self.wear[b] then return end
+        self.wear[b] = WearOverlay.new(b)
+    end
+
+    function UpdateWear()
+        for b, o in pairs(self.wear) do
+            local p, d = self:WearOf(b:GetID())
+            local v = wearView(p, p and d and d.parts.gearBars, p and o.bar:GetWidth())
+            o:SetShown(v ~= nil)
+            if p and v then
+                if v.broken then
+                    UI.PaintFill(o.bg, "ember")
+                    o.fill:Hide()
+                else
+                    UI.PaintFill(o.bg, "on-signal", 0.7)
+                    UI.PaintFill(o.fill, assert(v.fill))
+                    o.fill:SetWidth(assert(v.width))
+                    o.fill:Show()
+                end
+                o.pct:SetColor(v.pctColor)
+                o.pct:SetValue(p.percent .. "%")
+                o.pct:SetShown(v.pct ~= nil)
+            end
+        end
+        self:UpdateWearBlock()
+        self:UpdateSlots()
+    end
+
+    function BuildWearBlock()
+        local pane = frame("CharacterStatsPaneScrollBox")
+        local box = asFrame(part(pane, "ScrollBox"))
+        if not (pane and box) or self.wearBlock then return end
+        self.wearBlock = WearBlock.new(pane, box)
+    end
+
+    function UpdateWearBlock()
+        local blk = self.wearBlock
+        if not blk then return end
+        local box = blk.box
+        local d = SuuUI.Durability()
+        if not (d and d.parts.gear and d.lowest) then
+            blk:Hide()
+            box:SetPoint("BOTTOMRIGHT", -30, 30)
+            return
+        end
+        local h = blk:Layout()
+        box:SetPoint("BOTTOMRIGHT", -30, 8 + h + S["space-4"])
+        blk:Show()
+        local lowest, damaged, average = wearRows(d)
+        blk.rows[1].value:SetValue(lowest)
+        blk.rows[2].value:SetValue(damaged)
+        blk.rows[3].value:SetValue(average)
+    end
+
+    -- A row of the stats pane: a category head (one text, a banner) or a stat
+    -- (its label left, its value right).
+    function SkinStatRow(row: Frame)
+        local texts: FontString[] = {}
+        -- a small square texture is an icon (a resistance's school): kept, the
+        -- rest (banners, backgrounds) away
+        local function texture(r: Texture)
+            local atlasName = ask(r, "GetAtlas")
+            local atlas = (type(atlasName) == "string" and atlasName or ""):lower()
+            local w, h = r:GetSize()
+            local isIcon = ask(r, "GetParentKey") == "Icon" or atlas:find("resistance") or atlas:find("icon")
+                or (w and h and w > 0 and w <= 24 and math.abs(w - h) < 3)
+            if isIcon then
+                -- (the resistances' are 33px in a 23px row: 18px)
+                r:SetAlpha(1)
+                if w and w > 20 then r:SetSize(18, 18) end
+            else
+                r:SetAlpha(0)
+            end
+        end
+        local function take(r: Region)
+            local tex = asTexture(r)
+            local fs = asFontString(r)
+            if tex then
+                texture(tex)
+            elseif fs and fs:IsShown() then
+                texts[#texts + 1] = fs
+            end
+        end
+        for _, r in ipairs({ row:GetRegions() }) do take(r) end
+        for _, c in ipairs({ row:GetChildren() }) do
+            for _, r in ipairs({ c:GetRegions() }) do take(r) end
+        end
+        local rule = self.statRules[row]
+        if not rule then
+            rule = row:CreateTexture(nil, "ARTWORK")
+            self.statRules[row] = rule
+            UI.PaintFill(rule, "gilt-faint")
+            rule:SetHeight(1)
+            rule:SetPoint("TOPLEFT")
+            rule:SetPoint("TOPRIGHT")
+        end
+        local head = #texts == 1 or (num(row:GetHeight()) or 0) > 30
+        rule:SetShown(not head)
+        if head then
+            for _, t in ipairs(texts) do
+                SuuUI.Fonts.Apply(t, "header")
+                UI.Paint(t, "gilt-text")
+                t:SetShadowOffset(0, 0)
+            end
+            return
+        end
+        -- the label and the value: Blizzard's own keys, else left to right
+        local label, value = asFontString(part(row, "Label")), asFontString(part(row, "Value"))
+        if not (label and value) then
+            local readable = true
+            for _, t in ipairs(texts) do if num(t:GetLeft()) == nil then readable = false end end
+            if readable then
+                table.sort(texts, function(a: FontString, b: FontString): boolean return assert(a:GetLeft()) < assert(b:GetLeft()) end)
+            end
+            label, value = texts[1], texts[#texts]
+        end
+        if label then
+            SuuUI.Fonts.Apply(label, "body")
+            UI.Paint(label, "ink-muted")
+            label:SetShadowOffset(0, 0)
+        end
+        if value and value ~= label then
+            local r, g, b = value:GetTextColor()
+            SuuUI.Fonts.Apply(value, "numeric")
+            UI.Paint(value, statColor(r, g, b))
+            value:SetShadowOffset(0, 0)
+        end
+    end
+
+    function SkinStatsPane()
+        for _, name in ipairs({ "CharacterStatsPaneScrollBox", "CharacterStatsPanePetScrollBox" }) do
+            local pane = frame(name)
+            if pane and once(pane) then
+                alphaRegions(pane)
+                local box = part(pane, "ScrollBox")
+                if type(box) == "table" then
+                    local function skinAll()
+                        -- (no view yet: the box updates as it is sized, before its list is set)
+                        if part(box, "ForEachFrame") and part(box, "GetView") and not ask(box, "GetView") then return end
+                        if part(box, "ForEachFrame") then
+                            ask(box, "ForEachFrame", function(row: unknown)
+                                local f = asFrame(row)
+                                if f then self:SkinStatRow(f) end
+                            end)
+                        else
+                            local target = asFrame(part(box, "ScrollTarget"))
+                            if target then
+                                for _, row in ipairs({ target:GetChildren() }) do self:SkinStatRow(row) end
+                            end
+                        end
+                    end
+                    if part(box, "Update") then hook(box, "Update", skinAll) end
+                    local changed = part(part(box, "Event"), "OnDataRangeChanged")
+                    if part(box, "RegisterCallback") and changed then
+                        ask(box, "RegisterCallback", changed, skinAll, self)
+                    end
+                    hookScript(pane, "OnShow", function() after(0, skinAll) end)
+                    skinAll()
+                end
+                self:SkinScrollBar(part(pane, "ScrollBar"))
+            end
+        end
+    end
+
+    -- Blizzard's thin scrollbar: no track art, a gilt-line thumb.
+    function SkinScrollBar(given: unknown)
+        local bar = asFrame(given)
+        if not bar or not once(bar) then return end
+        local track = asFrame(part(bar, "Track"))
+        if track then
+            alphaRegions(track)
+            local thumb = asFrame(part(track, "Thumb"))
+            if thumb then
+                alphaRegions(thumb)
+                local t = thumb:CreateTexture(nil, "OVERLAY")
+                UI.PaintFill(t, "gilt-line")
+                t:SetPoint("TOP")
+                t:SetPoint("BOTTOM")
+                t:SetWidth(2)
+            end
+        end
+        for _, key in ipairs({ "Back", "Forward" }) do
+            local r = asRegion(part(bar, key))
+            if r then r:SetAlpha(0) end
+        end
+    end
+
+    function SkinSidebar()
+        local tabs = frame("PaperDollSidebarTabs")
+        if not tabs or self.sidebar then return end
+        alphaRegions(tabs)
+        local row = CreateFrame("Frame", nil, tabs)
+        row:SetHeight(26)
+        row:SetPoint("TOPLEFT", S["space-5"], -S["space-4"])
+        row:SetPoint("TOPRIGHT", -S["space-5"], -S["space-4"])
+        UI.Fill(row, "surface-sunk"):SetAllPoints()
+        UI.Border(row, "gilt-line")
+        -- the chosen one's fill and edge, gliding to the next (UI.TabMarker)
+        local marker = UI.TabMarker(row, { box = { fill = "arcane-soft", border = "arcane" }, level = 1 })
+        local sidebar: Sidebar = { row = row, tabs = {}, marker = marker }
+        self.sidebar = sidebar
+        for _, def in ipairs(SIDE) do
+            local b = asButton(named("PaperDollSidebarTab" .. def.tab))
+            if b then
+                -- (UI.Reskin leaves it a button, not a check box)
+                (b :: { [string]: unknown }).suuNoCheck = true
+                alphaRegions(b)
+                local icon = asRegion(part(b, "Icon"))
+                if icon then icon:SetAlpha(0) end
+                hideButtonArt(b, { "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture" })
+                local label = UI.Text(b, "label", "ink-muted")
+                label:SetPoint("CENTER")
+                label:SetValue(def.label)
+                b:SetFrameLevel(row:GetFrameLevel() + 2)
+                hookScript(b, "OnEnter", function() self:UpdateSidebar(b) end)
+                hookScript(b, "OnLeave", function() self:UpdateSidebar() end)
+                sidebar.tabs[#sidebar.tabs + 1] = { button = b, label = label }
+            end
+        end
+        local function layout()
+            local n = #sidebar.tabs
+            local inner = row:GetWidth() - 6
+            if inner <= 0 then return end
+            local each = (inner - (n - 1) * 2) / n
+            for i, t in ipairs(sidebar.tabs) do
+                self.placingSide = true
+                t.button:ClearAllPoints()
+                t.button:SetSize(each, 20)
+                t.button:SetPoint("TOPLEFT", row, "TOPLEFT", 3 + (i - 1) * (each + 2), -3)
+                self.placingSide = false
+            end
+            marker:Aim()
+        end
+        row:SetScript("OnSizeChanged", layout)
+        for _, t in ipairs(sidebar.tabs) do
+            hook(t.button, "SetPoint", function()
+                if self.placingSide then return end
+                after(0, layout)
+            end)
+        end
+        layout()
+        hook("PaperDollFrame_SetSidebar", function(_: unknown, index: unknown)
+            self.sideIndex = index :: number?
+            self:UpdateSidebar()
+        end)
+        self.sideIndex = 1
+        self:UpdateSidebar()
+    end
+
+    function UpdateSidebar(hover: Button?)
+        local sidebar = self.sidebar
+        if not sidebar then return end
+        local chosen: Button? = nil
+        for i, t in ipairs(sidebar.tabs) do
+            local side = SIDE[i]
+            local on = (side and side.tab) == self.sideIndex
+            if on then chosen = t.button end
+            t.label:SetColor(on and "arcane" or (t.button == hover and "ink" or "ink-muted"))
+        end
+        sidebar.marker:SetChosen(chosen)
+    end
+
+    -- New Set (its own button, centred above Equip and Save: probed 2026-10-13)
+    -- exactly as wide as the two together, so the edges line up (asked for).
+    function AlignSetList()
+        local new, equip, save = frame("PaperDollFrameNewSet"), frame("PaperDollFrameEquipSet"), frame("PaperDollFrameSaveSet")
+        if not (new and equip and save) then return end
+        local left, right = num(equip:GetLeft()), num(save:GetRight())
+        if not (left and right) then return end -- (secret in combat)
+        new:SetWidth(right - left)
+    end
+
+    function SkinPaperDoll()
+        self:BuildIdentity()
+        self:UpdateIdentity()
+        for _, s in ipairs(SLOTS) do
+            local b = frame("Character" .. s .. "Slot")
+            if b then
+                self:SkinSlot(b)
+                self:SkinPopout(s, b)
+            end
+        end
+        self:SkinFlyout()
+        self:SkinSetPopup()
+        local pane = asFrame(part(frame("PaperDollFrame"), "EquipmentManagerPane"))
+        if pane then
+            hookScript(pane, "OnShow", function() after(0, function() self:AlignSetList() end) end)
+        end
+        self:SkinModel()
+        self:SkinStatsPane()
+        self:BuildWearBlock()
+        self:UpdateWear()
+        self:SkinSidebar()
+        -- the toggle for the right pane: a small square with SuuUI's edge and a
+        -- chevron pointing the way the pane goes
+        local toggle = asButton(named("CharacterFrameRightPaneToggleButton"))
+        if toggle then
+            local edge = UI.Border(toggle, "gilt-line")
+            local chev = toggle:CreateTexture(nil, "OVERLAY", nil, 7)
+            chev:SetSize(14, 14)
+            chev:SetPoint("CENTER")
+            UI.Paint(chev, "ink-muted")
+            self.toggleChevron = chev
+            local function hideArt()
+                hideButtonArt(toggle, { "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" })
+                for _, r in ipairs({ toggle:GetRegions() }) do
+                    if r ~= chev and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+                end
+            end
+            local right = frame("CharacterFrameRightPaneHost")
+            local function draw()
+                hideArt()
+                chev:SetAlpha(1)
+                local open = right and right:IsShown()
+                chev:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. (open and "chevronLeft" or "chevronRight") .. ".tga")
+            end
+            toggle:SetSize(22, 22)
+            hookScript(toggle, "OnEnter", function() edge:SetColor("gilt"); UI.Paint(chev, "ink") end)
+            hookScript(toggle, "OnLeave", function() edge:SetColor("gilt-line"); UI.Paint(chev, "ink-muted") end)
+            hookScript(toggle, "OnClick", function() after(0, draw) end)
+            if right then
+                hookScript(right, "OnShow", draw)
+                hookScript(right, "OnHide", draw)
+            end
+            draw()
+        end
+        self:SkinPanes()
+    end
+
+    function SkinPanes()
+        local function watch(f: Frame?)
+            if not f or not once(f) then return end
+            hookScript(f, "OnShow", function() after(0, function() UI.Reskin(f) end) end)
+            if f:IsShown() then UI.Reskin(f) end
+        end
+        for _, name in ipairs(PANES) do watch(frame(name)) end
+        local pd = frame("PaperDollFrame")
+        if pd then
+            watch(asFrame(part(pd, "TitleManagerPane")))
+            watch(asFrame(part(pd, "EquipmentManagerPane")))
+        end
+    end
+
+    override function OnEnable()
+        self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function() self:UpdateSlots() end)
+        self:OnGameEvent("PLAYER_LEVEL_UP", function() self:UpdateIdentity() end)
+        -- the Durability module's reading (it sends again on a theme change)
+        self:On("SUUUI_DURABILITY_CHANGED", function() self:UpdateWear() end)
+        self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:UpdateWear() end end)
+        if named("CharacterFrame") then
+            self:Skin()
+        else
+            -- the window's addon loads later on some clients
+            self:OnGameEvent("ADDON_LOADED", function() if named("CharacterFrame") then self:Skin() end end)
+        end
     end
 end
 
-function M:OnEnable()
-    self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function() if self.slotUpdates then self:UpdateSlots() end end)
-    self:OnGameEvent("PLAYER_LEVEL_UP", function() self:UpdateIdentity() end)
-    -- the Durability module's reading (it sends again on a theme change)
-    self:On("SUUUI_DURABILITY_CHANGED", function() self:UpdateWear() end)
-    self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:UpdateWear() end end)
-    if _G.CharacterFrame then
-        self:Skin()
-    else
-        -- the window's addon loads later on some clients
-        self:OnGameEvent("ADDON_LOADED", function() if _G.CharacterFrame then self:Skin() end end)
-    end
-end
+M = SuuUI.AddModule(CharacterWindowModule.new())

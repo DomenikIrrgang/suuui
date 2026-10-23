@@ -30,6 +30,7 @@
 -- size at every zoom. A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
+import MARKS, WORLD_MAP from "/Core/ServiceKeys"
 import chromeOf from "/UI/WindowSkin"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
@@ -783,15 +784,17 @@ function M:Collect(mapID: number): Item[]
     end
     -- your marks and shared ones (the marks module's), on their map and the
     -- maps above it; they keep their spot, and a click opens their card
-    local marks = SuuUI.GetModule and SuuUI.GetModule("marks")
-    if marks and marks:IsEnabled() and (on.marks.yours or on.marks.shared) then
-        for _, mark in ipairs(marks:Marks()) do
+    local marks = SuuUI.UseService(MARKS)
+    local list, placeOn, mapName, pinLook = marks and marks.Marks, marks and marks.PlaceOn, marks and marks.MapName,
+        marks and marks.PinLook
+    if list and placeOn and mapName and pinLook and (on.marks.yours or on.marks.shared) then
+        for _, mark in ipairs(list()) do
             if (mark.from and on.marks.shared) or (not mark.from and on.marks.yours) then
-                local x, y = marks:PlaceOn(mark, mapID)
-                if x then
-                    local where = ("%s %.1f, %.1f"):format(marks:MapName(mark.map) or "", mark.x * 100, mark.y * 100)
+                local x, y = placeOn(mark, mapID)
+                if x and y then
+                    local where = ("%s %.1f, %.1f"):format(mapName(mark.map) or "", mark.x * 100, mark.y * 100)
                     items[#items + 1] = { x = x, y = y, fixed = true, uid = "m" .. mark.id, mark = mark.id,
-                        pin = marks:PinLook(mark), name = mark.name ~= "" and mark.name or "Mark", detail = where,
+                        pin = pinLook(mark), name = mark.name ~= "" and mark.name or "Mark", detail = where,
                         kindName = "Marks",
                         more = mark.from and { { muted .. "Shared by " .. mark.from .. "|r" } } or nil }
                 end
@@ -840,8 +843,9 @@ function M:Pin()
             local g = p.group
             -- a mark: its card
             if g and g.distinct == 1 and g.items[1].mark then
-                local marks = SuuUI.GetModule("marks")
-                if marks then marks:OpenCard(g.items[1].mark, p) end
+                local marks = SuuUI.UseService(MARKS)
+                local open = marks and marks.OpenCard
+                if open then open(g.items[1].mark, p) end
                 return
             end
             if not (g and g.distinct > 1) then return end
@@ -1004,8 +1008,9 @@ function M:Layout()
         self.pins[#self.pins + 1] = pin
     end
     -- a mark's open card follows its pin
-    local marks = SuuUI.GetModule and SuuUI.GetModule("marks")
-    if marks and marks.cardMark then marks:AnchorCard(self:PinForMark(marks.cardMark)) end
+    local marks = SuuUI.UseService(MARKS)
+    local cardMark = marks and marks.CardMark and marks.CardMark()
+    if marks and cardMark and marks.AnchorCard then marks.AnchorCard(self:PinForMark(cardMark)) end
     -- the game's quest markers sized again for the zoom (it scales its own)
     if self.map.EnumeratePinsByTemplate then
         for pin in self.map:EnumeratePinsByTemplate("QuestPinTemplate") do
@@ -1454,6 +1459,11 @@ function M:QuestObjectivesOnce()
 end
 
 function M:OnEnable()
+    -- the Marks filters and the marks' pins, for the marks module
+    self:ProvideService(WORLD_MAP, {
+        MarksShown = function() return self:MarksShown() end,
+        PinForMark = function(id: number): Region? return self:PinForMark(id) end,
+    })
     self:QuestObjectivesOnce()
     self:Attach()
     if not self.map then

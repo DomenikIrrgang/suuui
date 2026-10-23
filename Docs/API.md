@@ -177,6 +177,8 @@ What one module does for others goes through a **service**, named, with a table 
 | `alerts` | `Show(key, tone, title, detail, ...)`, `ShowLevelUp(key, def)`, `Hide(key)`, `AllowOutOfCombat(key)` | `SuuUI.ShowAlert`, `ShowLevelUp`, `HideAlert`, `AllowAlertOutOfCombat` |
 | `durability` (0.17) | `Get()` | `SuuUI.Durability()` |
 | `raidplanner` (0.17) | `Toggle()`, `Show()`, `IsShown()` | the Social window's Raid › Plan |
+| `marks` (0.19) | `Marks()`, `PlaceOn(mark, mapID)`, `MapName(map)`, `PinLook(mark)`, `OpenCard(id, anchor)`, `CardMark()`, `AnchorCard(anchor)` | the world map's marks |
+| `worldmap` (0.19) | `MarksShown()` → `{ yours, shared }`, `PinForMark(id)` | the minimap's marks, the mark card |
 
 `SUUUI_SERVICE_CHANGED(name)` fires when a service comes or goes.
 

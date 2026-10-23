@@ -7,16 +7,23 @@
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
-import internal M, minimapPlace, decodeMark, isOwnSender from "/Units/Marks"
+import internal M from "/Units/Marks"
+import minimapPlace, decodeMark, isOwnSender from "/Units/Marks"
+import type TooltipData from "/UI/Tooltip"
 import expectNoErrors from "../../helpers"
+import part, asRegion from "/UI/Reskin"
 
-local G: any = _G
 local ELWYNN, KINGDOMS = 1429, 1415
+
+-- the world map's scroll frame
+local function scroll(): Region
+    return assert(asRegion(part(WorldMapFrame, "ScrollContainer")))
+end
 
 local function clear()
     for _, m in ipairs(M:Marks()) do M:Remove(m.id) end
     local list = M:Marks()
-    for i = #list, 1, -1 do list[i] = nil end
+    for i = #list, 1, -1 do table.remove(list, i) end
 end
 
 @afterEach
@@ -27,7 +34,7 @@ local function cleanup()
     clear()
     mock.group:leave()
     if InCombatLockdown() then mock.player:leaveCombat() end
-    if G.WorldMapFrame:IsShown() then G.WorldMapFrame:Hide() end
+    if WorldMapFrame:IsShown() then WorldMapFrame:Hide() end
     mock.advanceTime(0.2)
     expectNoErrors()
 end
@@ -90,16 +97,16 @@ end
 local function post()
     local m = M:Add(ELWYNN, 0.42, 0.65, { name = "Herbs\there", symbol = "moon" })
     expect(M:Post(m.id)).toBe(false)
-    local sent: any[] = {}
-    mock.stub(C_ChatInfo, "SendChatMessage", function(text: string, channel: string) sent[#sent + 1] = { text, channel } end)
+    local sent: { text: string, channel: string }[] = {}
+    mock.stub(C_ChatInfo, "SendChatMessage", function(text: string, channel: string) sent[#sent + 1] = { text = text, channel = channel } end)
     local friend = mock.spawnUnit({ name = "Tamsin Ashford", player = true, reaction = "friendly" })
     mock.group:add(friend)
     expect(M:GroupChannel()).toBe("PARTY")
     expect(M:Post(m.id)).toBe(true)
-    expect(sent[1][2]).toBe("PARTY")
-    expect(sent[1][1]:find("^Herbs here · ") ~= nil).toBe(true)
+    expect(sent[1].channel).toBe("PARTY")
+    expect(sent[1].text:find("^Herbs here · ") ~= nil).toBe(true)
     local msgs = mock.sentAddonMessages()
-    local last: any = msgs[#msgs]
+    local last = msgs[#msgs]
     expect(last.prefix).toBe("SuuUI")
     expect(last.message).toBe(("MARK\t%d\t0.4200\t0.6500\tmoon\tHerbs here"):format(ELWYNN))
     mock.player:enterCombat()
@@ -151,48 +158,50 @@ local function minimap()
     local places = M:MinimapPlaces()
     expect(#places).toBe(2)
     M:UpdateMinimap()
-    expect(M.mmLayer.pins[1]).toBeShown()
+    local layer = assert(M.mmLayer)
+    expect(layer.pins[1]).toBeShown()
     C_CVar.SetCVar("rotateMinimap", "1")
     expect(#M:MinimapPlaces()).toBe(2)
     C_CVar.SetCVar("rotateMinimap", "0")
     -- a pin's tooltip
-    local pin = M.mmLayer.pins[1]
-    local shown: any = nil
-    mock.stub(SuuUI.UI, "ShowTooltip", function(_: any, def: any) shown = def end)
-    pin:GetScript("OnEnter")(pin)
-    expect(shown.title ~= nil).toBe(true)
-    pin:GetScript("OnLeave")(pin)
+    local pin = layer.pins[1]
+    local shown: TooltipData? = nil
+    mock.stub(SuuUI.UI, "ShowTooltip", function(_: unknown, def: TooltipData) shown = def end)
+    mock.script(pin, "OnEnter")
+    expect(assert(shown).title ~= nil).toBe(true)
+    mock.script(pin, "OnLeave")
     -- only the shown kinds
-    local wm: any = SuuUI.GetModule("worldmap")
-    mock.stub(wm, "MarksShown", function(): any return { yours = true } end)
+    local wm = assert(SuuUI.GetModule("worldmap"))
+    mock.stub(wm, "MarksShown", function(): { yours: boolean } return { yours = true } end)
     expect(#M:Filtered(places)).toBe(1)
 end
 
 @test("the card of your mark: its name, its symbol, showing the way, Delete, Post by your group")
 local function card()
-    G.WorldMapFrame:Show()
-    G.WorldMapFrame:SetMapID(ELWYNN)
+    WorldMapFrame:Show()
+    WorldMapFrame:SetMapID(ELWYNN)
     mock.advanceFrames(2)
     local m = M:Add(ELWYNN, 0.42, 0.65, { name = "Copper" })
-    local c = M:OpenCard(m.id, G.WorldMapFrame.ScrollContainer)
+    local c = assert(M:OpenCard(m.id, scroll()))
     expect(c).toBeShown()
     expect(c.name:GetValue()).toBe("Copper")
     expect(c.post:IsEnabled()).toBe(false)
-    expect(c.post.tooltip.title).toBe("Join a group to post it.")
+    expect((c.post.tooltip :: TooltipData).title).toBe("Join a group to post it.")
     mock.typeText(c.name.edit, " vein")
     mock.pressKey("ENTER")
     expect(m.name).toBe("Copper vein")
     mock.click(c.symbols[5])
     expect(m.symbol).toBe("moon")
     expect(M.lastSymbol).toBe("moon")
-    c.way.onChange(true)
+    local onChange = assert(c.way.onChange)
+    onChange(true)
     expect(M:Following()).toBe(m.id)
-    c.way.onChange(false)
+    onChange(false)
     expect(M:PinLook(m).ring).toBe("mark-moon")
     -- a raid's label
     local friend = mock.spawnUnit({ name = "Tamsin Ashford", player = true, reaction = "friendly" })
     mock.group:add(friend, true)
-    M:OpenCard(m.id, G.WorldMapFrame.ScrollContainer)
+    M:OpenCard(m.id, scroll())
     expect(c.post.label:GetText()).toBe("Post to raid")
     mock.click(c.delete)
     expect(c).never.toBeShown()
@@ -201,44 +210,44 @@ end
 
 @test("a shared mark's card: who shared it, Remove; the card goes with the map, or with no pin")
 local function sharedCard()
-    G.WorldMapFrame:Show()
+    WorldMapFrame:Show()
     mock.advanceFrames(2)
     local m = M:Add(ELWYNN, 0.42, 0.65, { name = "", symbol = "skull", from = "Brannoc" })
-    local c = M:OpenCard(m.id, G.WorldMapFrame.ScrollContainer)
+    local c = assert(M:OpenCard(m.id, scroll()))
     expect(c.sharedName:GetText()).toBe("Mark")
     expect(c.sharedBy:GetText()).toBe("Shared by Brannoc")
     expect(c.delete.label:GetText()).toBe("Remove")
     mock.advanceFrames(1)
     M:AnchorCard(nil)
     expect(c).never.toBeShown()
-    M:OpenCard(m.id, G.WorldMapFrame.ScrollContainer)
-    G.WorldMapFrame:Hide()
+    M:OpenCard(m.id, scroll())
+    WorldMapFrame:Hide()
     expect(c).never.toBeShown()
     expect(M:OpenCard(9999, nil)).toBeNil()
 end
 
 @test("Ctrl+click on the world map: a mark there, its card to name it; a plain click closes the card")
 local function ctrlClick()
-    G.WorldMapFrame:Show()
-    G.WorldMapFrame:SetMapID(ELWYNN)
+    WorldMapFrame:Show()
+    WorldMapFrame:SetMapID(ELWYNN)
     mock.advanceFrames(2)
-    local handler = M.clickHandler
-    expect(handler(G.WorldMapFrame, "RightButton", 0.5, 0.5)).toBe(false)
+    local handler = assert(M.clickHandler)
+    expect(handler(WorldMapFrame, "RightButton", 0.5, 0.5)).toBe(false)
     mock.setModifiers({ ctrl = true })
-    expect(handler(G.WorldMapFrame, "LeftButton", 0.5, 0.5)).toBe(true)
+    expect(handler(WorldMapFrame, "LeftButton", 0.5, 0.5)).toBe(true)
     mock.setModifiers({})
     expect(#M:Marks()).toBe(1)
     mock.advanceTime(0.1)
     mock.advanceFrames(2)
     expect(M.card).toBeShown()
-    expect(handler(G.WorldMapFrame, "LeftButton", 0.5, 0.5)).toBe(false)
+    expect(handler(WorldMapFrame, "LeftButton", 0.5, 0.5)).toBe(false)
     expect(M.card).never.toBeShown()
 end
 
 @test("while a mark shows the way the game's own waypoint pin goes; a waypoint of your own stays")
 local function gamePin()
     local alpha = 1
-    local provider: any = { pin = { SetAlpha = function(_: any, a: number) alpha = a end, EnableMouse = function(_: any, _: boolean) end } }
+    local provider = { pin = { SetAlpha = function(_: unknown, a: number) alpha = a end, EnableMouse = function(_: unknown, _: boolean) end } }
     local m = M:Add(ELWYNN, 0.42, 0.65)
     M:Follow(m.id)
     M:HideGamePin(provider)
@@ -254,13 +263,12 @@ local function reloaded()
     local m = M:Add(ELWYNN, 0.42, 0.65)
     M:Follow(m.id)
     M.following = nil
-    local enable: any = M.OnEnable
-    enable(M)
+    M:OnEnable()
     expect(M:Following()).toBe(m.id)
     -- the waypoint gone: the setting back
     C_Map.ClearUserWaypoint()
     M.following = nil
-    enable(M)
+    M:OnEnable()
     expect(M:Following()).toBeNil()
 end
 

@@ -7,10 +7,16 @@
 --                     handler)
 --   expectNoErrors()  none of either
 --   newParent()       a fresh, shown frame on UIParent to build a component in
+--   captureMenus()    SuuUI's context menus caught: their buttons by label
+--   choose(menu, l)   runs the caught button with that label
+--   captureConfirm()  UI.Confirm caught: its options, last one first
 
 import expect from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as fault from "/Core/Fault"
+import SuuUI from "/Core/API"
+import type MenuDescription from "/UI/ContextMenu"
+import type ConfirmOptions from "/UI/Panel"
 
 export function errorsSoFar(): string[]
     local out: string[] = {}
@@ -31,4 +37,34 @@ export function newParent(width: number = 400, height: number = 300): Frame
     f:SetPoint("CENTER")
     f:Show()
     return f
+end
+
+-- What a context menu offered: its buttons by label (cleared at each menu).
+export function captureMenus(): { [string]: () -> () }
+    local menu: { [string]: () -> () } = {}
+    mock.stub(SuuUI.UI, "ContextMenuFrom", function<O>(owner: O, describe: (owner: O, root: MenuDescription) -> ())
+        for k in pairs(menu) do menu[k] = nil end
+        local root = {
+            CreateTitle = function(_: unknown, _: string) end,
+            CreateDivider = function(_: unknown) end,
+            CreateButton = function(_: unknown, label: string, fn: () -> ()) menu[label] = fn end,
+        }
+        describe(owner, root :: unknown :: MenuDescription)
+    end)
+    return menu
+end
+
+-- Runs the menu button with this label (it must be there).
+export function choose(menu: { [string]: () -> () }, label: string)
+    local fn = menu[label]
+    assert(fn, "no menu button " .. label)
+    fn()
+end
+
+-- UI.Confirm's options as asked (the dialog never shows): `last()` the latest.
+export type Confirms = { last: () -> ConfirmOptions }
+export function captureConfirm(): Confirms
+    local asked: ConfirmOptions[] = {}
+    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions): nil asked[#asked + 1] = opts; return nil end)
+    return { last = function(): ConfirmOptions return (assert(asked[#asked], "no confirm asked")) end }
 end
