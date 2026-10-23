@@ -4,7 +4,7 @@
 import test, expect, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import skinGroupFinderListing, ListingSkin from "/UI/GroupFinderListing"
-import internal parts, skinGroupRow, skinActivityRow, fitButton from "/UI/GroupFinderListing"
+import internal toggles, rows, cards, skinGroupRow, skinActivityRow, fitButton from "/UI/GroupFinderListing"
 import tokens as T from "/Core/Tokens"
 import expectNoErrors from "../../helpers"
 import tokenOf, themeChanged from "./SocialHelpers"
@@ -49,7 +49,7 @@ end
 @test("a role toggle: round, the box on its corner, arcane when on")
 local function roleToggle()
     local tank = f.SoloRoleButtons.Tank
-    local p = parts[tank]
+    local p = assert(toggles[tank])
     expect(p ~= nil).toBe(true)
     expect(tank:GetWidth()).toBe(36)
     expect(p.word).toHaveText(g.TANK or "Tank")
@@ -85,26 +85,26 @@ local function roleToggle()
         p.draw()
     end
     -- New player friendly is one too
-    local npf = parts[f.NewPlayerFriendlyButton]
+    local npf = assert(toggles[f.NewPlayerFriendlyButton])
     expect(npf ~= nil).toBe(true)
-    expect(npf.glyph:GetTexture()).toContain("leaf")
+    expect(tostring(npf.glyph:GetTexture())).toContain("leaf")
     expectNoErrors()
 end
 
 @test("your role in a group: its glyph and word")
 local function groupRole()
     local icon = f.GroupRoleButtons.RoleIcon
-    local p = parts[icon]
+    local p = assert(s().roleIcon)
     expect(p ~= nil).toBe(true)
     -- (the panel is out of sight: its OnShow run as the game would)
     icon.roleID = "HEALER"
     mock.script(icon, "OnShow")
-    expect(p.glyph:GetTexture()).toContain("RoleHealer")
+    expect(tostring(p.glyph:GetTexture())).toContain("RoleHealer")
     expect(p.word).toHaveText(g.HEALER or "Healer")
     -- no role: the damage glyph, no word
     icon.roleID = nil
     mock.script(icon, "OnShow")
-    expect(p.glyph:GetTexture()).toContain("RoleDamage")
+    expect(tostring(p.glyph:GetTexture())).toContain("RoleDamage")
     expect(p.word).toHaveText("")
     -- the game's own update
     mock.fake("UnitGroupRolesAssigned", function(_u: string): string return "TANK" end)
@@ -151,12 +151,12 @@ local function categories()
     for i = 4, #buttons do buttons[i]:Hide() end
     s():LayoutCategories()
     local cw = math.floor((view:GetWidth() - 12 * 2) / 3)
-    local p1, p2, p3 = parts[buttons[1]], parts[buttons[2]], parts[buttons[3]]
+    local p1, p2, p3 = assert(cards[buttons[1]]), assert(cards[buttons[2]]), assert(cards[buttons[3]])
     expect(buttons[1]:GetWidth()).toBe(cw)
-    expect(p1.glyph:GetTexture()).toContain("door")
+    expect(tostring(p1.glyph:GetTexture())).toContain("door")
     expect(p1.line).toHaveText("Instances for five. Pick every one you’d go to.")
-    expect(p2.glyph:GetTexture()).toContain("chat")
-    expect(p3.glyph:GetTexture()).toContain("flag")
+    expect(tostring(p2.glyph:GetTexture())).toContain("chat")
+    expect(tostring(p3.glyph:GetTexture())).toContain("flag")
     expect(p3.line).toHaveText("")
     expect(s().hint).toHaveText("Step 1 of 2 · What are you listing for?")
     -- hover: gilt; leave: back
@@ -166,7 +166,7 @@ local function categories()
     expect(tokenOf(p1.edge.top)).toBe("gilt-line")
     -- again: the same parts
     s():LayoutCategories()
-    expect(parts[buttons[1]]).toBe(p1)
+    expect(cards[buttons[1]]).toBe(p1)
     -- hidden, or too narrow: left alone
     view:SetWidth(5)
     s():LayoutCategories()
@@ -265,17 +265,17 @@ local function groupRow()
     end
     row.GetElementData = function(_r: any): any return { nodes = { child(11), child(12), child(nil) } } end
     skinGroupRow(row, { activityGroupID = 5 }, false)
-    local p = parts[row]
+    local p = assert(rows[row])
     expect(p.tick).toBeShown()
     expect(p.mixed).never.toBeShown()
     expect(tokenOf(p.fill)).toBe("arcane")
-    expect(p.chevron:GetTexture()).toContain("chevronDown")
+    expect(tostring(p.chevron:GetTexture())).toContain("chevronDown")
     expect(p.count).toHaveText("1 chosen")
     all, any = false, true
     skinGroupRow(row, { activityGroupID = 5 }, true)
     expect(p.mixed).toBeShown()
     expect(p.tick).never.toBeShown()
-    expect(p.chevron:GetTexture()).toContain("chevronRight")
+    expect(tostring(p.chevron:GetTexture())).toContain("chevronRight")
     all, any = false, false
     mock.stub(f, "IsActivitySelected", function(_s: any, _id: number): boolean return false end)
     skinGroupRow(row, { activityGroupID = 5 })
@@ -299,7 +299,7 @@ local function activityRow()
     mock.setPlayer({ level = 30 })
     row.Level:SetText("(20 - 30)")
     skinActivityRow(row, { activityID = 7, minLevel = 20, maxLevel = 30 })
-    local p = parts[row]
+    local p = assert(rows[row])
     expect(p.count).never.toBeShown()
     expect(p.tick).never.toBeShown()
     expect(tokenOf(row.NameButton.Name)).toBe("ink")
@@ -330,7 +330,7 @@ local function gameRows()
     mock.stub(f, "AreAllActivitiesForActivityGroupSelected", function(_s: any, _id: number): boolean return false end)
     mock.stub(f, "IsAnyActivityForActivityGroupSelected", function(_s: any, _id: number): boolean return false end)
     g.LFGListingActivityView_InitActivityGroupButton(row, { activityGroupID = 3, name = "Dungeons", showExpandCollapseButton = true }, false)
-    expect(parts[row] ~= nil).toBe(true)
+    expect(rows[row] ~= nil).toBe(true)
     expectNoErrors()
 end
 
@@ -411,9 +411,9 @@ local function redraws()
     -- a toggle's hover
     local tank = f.SoloRoleButtons.Tank
     mock.script(tank, "OnEnter")
-    expect(parts[tank].hover).toBe(true)
+    expect(assert(toggles[tank]).hover).toBe(true)
     mock.script(tank, "OnLeave")
-    expect(parts[tank].hover).toBe(false)
+    expect(assert(toggles[tank]).hover).toBe(false)
     -- the parts that show and hide, each queueing a layout (the game's own
     -- OnShow reads the chosen category)
     mock.fake("C_LFGList.GetLfgCategoryInfo", function(_id: any): any return { name = "Dungeons", separateRecommended = false } end)

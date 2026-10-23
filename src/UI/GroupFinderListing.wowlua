@@ -35,8 +35,9 @@ local S = T.space
 
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = TEX .. "Glyphs\\"
-local ROLE_TEX = { TANK = TEX .. "RoleTank.tga", HEALER = TEX .. "RoleHealer.tga", DAMAGER = TEX .. "RoleDamage.tga" }
-local ROLE_WORD = { TANK = TANK or "Tank", HEALER = HEALER or "Healer", DAMAGER = DAMAGER or "Damage" }
+local TANK_TEX, HEALER_TEX, DAMAGE_TEX = TEX .. "RoleTank.tga", TEX .. "RoleHealer.tga", TEX .. "RoleDamage.tga"
+local ROLE_TEX: { [string]: string } = { TANK = TANK_TEX, HEALER = HEALER_TEX, DAMAGER = DAMAGE_TEX }
+local ROLE_WORD: { [string]: string } = { TANK = TANK or "Tank", HEALER = HEALER or "Healer", DAMAGER = DAMAGER or "Damage" }
 
 -- the page inside the window (as the Browse page): 20px in, 24px under the
 -- tab rule, 16px above the foot
@@ -50,7 +51,7 @@ local BODY_TOP = RULE_Y + S["space-4"]
 local BODY_BOTTOM = FOOT_RULE + S["space-4"]
 
 -- the categories' cards (the game's category IDs on Forever)
-local CARDS = {
+local CARDS: { [number]: { glyph: string, text: string } } = {
     [2] = { glyph = "door", text = "Instances for five. Pick every one you’d go to." },
     [116] = { glyph = "scroll", text = "Group quests and elites, one activity per zone." },
     [120] = { glyph = "chat", text = "Anything else, in your own words." },
@@ -61,26 +62,170 @@ local CARDS = {
 -- page is skinned, so the hooks go in at once)
 local ON_DEMAND = { addon = "Blizzard_GroupFinder_VanillaStyle" }
 
-local parts: { [any]: any } = setmetatable({}, { __mode = "k" })
+--------------------------------------------------------------------------------
+-- The game's panel: the parts SuuUI reads and lays out (each may be missing
+-- on a client without it)
+--------------------------------------------------------------------------------
 
-local function ask(r: any, method: string, ...: any): (any, any)
-    if not r or type(r[method]) ~= "function" then return nil end
-    local ok, a, b = pcall(r[method], r, ...)
-    if ok then return a, b end
+-- A round button of the top row: a role, New player friendly, your role.
+export interface RoundButton extends Frame
+    Background?: Region
+    cover?: Region
 end
 
-local function hideArt(b: any, keep: { [any]: boolean }?)
-    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture",
-                           "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
-        local t = ask(b, get)
-        if t then t:SetAlpha(0) end
+-- A role toggle or New player friendly: the round button and its check.
+export interface CheckToggle extends RoundButton
+    CheckButton?: CheckButton
+end
+
+-- Your role in a group.
+export interface RoleIcon extends RoundButton
+    roleID?: string
+end
+
+export interface SoloRoles extends Frame
+    Tank?: CheckToggle
+    Healer?: CheckToggle
+    DPS?: CheckToggle
+end
+
+export interface GroupRoles extends Frame
+    RoleIcon?: RoleIcon
+    RoleDropdown?: Frame
+    RolePollButton?: Button
+end
+
+-- A category's card (a ResizeLayoutFrame: it keeps its fixed size).
+export interface CategoryButton extends Button
+    categoryID?: number
+    Label?: FontString
+    Icon?: Region
+    Cover?: Region
+    fixedWidth?: number
+    fixedHeight?: number
+end
+
+export interface CategoryView extends Frame
+    CategoryButtons?: CategoryButton[]
+end
+
+export interface LevelRanges extends Frame
+    Checkbox?: CheckButton
+    Text?: FontString
+end
+
+export interface CommentBox extends EditBox
+    Instructions?: FontString
+end
+
+export interface CommentField extends Frame
+    ScrollBar?: Frame
+    EditBox?: CommentBox
+end
+
+export interface ActivityView extends Frame
+    BarTop?: Region
+    BarMiddle?: Region
+    BarComponents?: Region[]
+    PlayStyleDropdown?: Frame
+    generalPlaystyle?: unknown
+    LevelRangesCheckbox?: LevelRanges
+    ScrollBox?: Frame
+    ScrollBar?: Frame
+    Comment?: CommentField
+    VoiceChatDropdown?: Frame
+    VoiceChatLabel?: FontString
+end
+
+export interface LockedView extends Frame
+    ErrorText?: FontString
+    ActivityText?: FontString
+end
+
+-- A panel button of the game's (UIPanelButtonTemplate).
+export interface PanelButton extends Button
+    Left?: Region
+    Middle?: Region
+    Right?: Region
+end
+
+-- Whether the panel has an activity group's (or an activity's) ID chosen.
+type Selected = (f: ListingFrame, id: number) -> boolean
+
+-- The game's LFGListingFrame.
+export interface ListingFrame extends Frame
+    SoloRoleButtons?: SoloRoles
+    GroupRoleButtons?: GroupRoles
+    NewPlayerFriendlyButton?: CheckToggle
+    CategoryView?: CategoryView
+    ActivityView?: ActivityView
+    LockedView?: LockedView
+    BackButton: Button
+    PostButton: PanelButton
+    AreAllActivitiesForActivityGroupSelected?: Selected
+    IsAnyActivityForActivityGroupSelected?: Selected
+    IsActivitySelected?: Selected
+    function UpdatePostButtonEnableState()
+    function UpdateFrameView()
+end
+
+-- The activity tree's rows (LFGListingActivityRowTemplate) and the data the
+-- game sets them up with.
+export interface NameButton extends Button
+    Name?: FontString
+end
+
+export type ActivityData = { activityID?: number, minLevel?: number, maxLevel?: number }
+export type GroupData = { activityGroupID?: number }
+export type TreeChild = { GetData?: (c: TreeChild) -> ActivityData? }
+export type TreeNode = { nodes?: TreeChild[] }
+
+export interface ActivityRow extends Frame
+    CheckButton?: CheckButton
+    ExpandOrCollapseButton?: Button
+    NameButton?: NameButton
+    InstanceLockWarningIcon?: Frame
+    Level?: FontString
+    GetElementData?: (row: ActivityRow) -> TreeNode?
+end
+
+--------------------------------------------------------------------------------
+-- Pieces
+--------------------------------------------------------------------------------
+
+local skinned: ListingSkin? = nil
+
+local function fade(r: Region?)
+    if r then r:SetAlpha(0) end
+end
+
+-- A frame's own art: a button's textures (and a check button's), its textures.
+local function hideArt(f: Frame)
+    if f:IsObjectType("Button") then
+        local b = f :: Button
+        fade(b:GetNormalTexture())
+        fade(b:GetPushedTexture())
+        fade(b:GetHighlightTexture())
+        fade(b:GetDisabledTexture())
+        if f:IsObjectType("CheckButton") then
+            local c = f :: CheckButton
+            fade(c:GetCheckedTexture())
+            fade(c:GetDisabledCheckedTexture())
+        end
     end
-    for _, r in ipairs({ b:GetRegions() }) do
-        if r:GetObjectType() == "Texture" and not (keep and keep[r]) then r:SetAlpha(0) end
+    for _, r in ipairs({ f:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
     end
 end
 
-local function circle(parent: any, file: string, color: string, layer: string, sub: number?)
+-- The panel's answer, false when it has no such question or errs.
+local function asks(f: ListingFrame?, question: Selected?, id: number?): boolean
+    if not (f and question and id) then return false end
+    local ok, yes = pcall(question, f, id)
+    return ok and yes == true
+end
+
+local function circle(parent: Frame, file: string, color: string, layer: DrawLayer, sub: number?): Texture
     local t = parent:CreateTexture(nil, layer, nil, sub)
     t:SetTexture(TEX .. file)
     draw.paint(t, color)
@@ -88,7 +233,7 @@ local function circle(parent: any, file: string, color: string, layer: string, s
     return t
 end
 
-local function glyph(parent: any, name: string, size: number, color: string, layer: string?): Texture
+local function glyph(parent: Frame, name: string, size: number, color: string, layer: DrawLayer?): Texture
     local t = parent:CreateTexture(nil, layer or "ARTWORK")
     t:SetTexture(GLYPHS .. name .. ".tga")
     t:SetSize(size, size)
@@ -96,7 +241,7 @@ local function glyph(parent: any, name: string, size: number, color: string, lay
     return t
 end
 
-local function font(fs: any, style: string, color: string?)
+local function font(fs: FontString?, style: string, color: string?)
     if not fs then return end
     fonts.apply(fs, style)
     if color then draw.paint(fs, color) end
@@ -104,7 +249,7 @@ local function font(fs: any, style: string, color: string?)
 end
 
 -- A small frame for an edge (a texture's frame level can't rise above its own).
-local function edgeOver(parent: any, color: string, level: number?)
+local function edgeOver(parent: Frame, color: string, level: number?): (draw.Border, Frame)
     local h = CreateFrame("Frame", nil, parent)
     h:SetAllPoints()
     h:EnableMouse(false)
@@ -116,50 +261,61 @@ end
 -- The round toggles (RoleToggle): a role's checkbox button, or your role
 --------------------------------------------------------------------------------
 
+type CornerBox = { fill: Texture, edge: draw.Border, tick: Texture }
+
 -- A 14px box over the game's check button, which keeps the click.
-local function cornerBox(check: any, owner: any)
+local function cornerBox(check: CheckButton, owner: Frame): CornerBox
     hideArt(check)
     check:SetSize(14, 14)
     check:ClearAllPoints()
     check:SetPoint("BOTTOMRIGHT", owner, "BOTTOMRIGHT", 3, -3)
     check:SetFrameLevel(owner:GetFrameLevel() + 4)
-    local box = {}
-    box.fill = draw.fill(check, "surface-sunk", "BACKGROUND", 7)
-    box.fill:SetAllPoints()
-    box.edge = edgeOver(check, "gilt-line")
-    box.tick = glyph(check, "check", 10, "on-signal", "OVERLAY")
-    box.tick:SetPoint("CENTER")
-    return box
+    local fill = draw.fill(check, "surface-sunk", "BACKGROUND", 7)
+    fill:SetAllPoints()
+    local edge = edgeOver(check, "gilt-line")
+    local tick = glyph(check, "check", 10, "on-signal", "OVERLAY")
+    tick:SetPoint("CENTER")
+    return { fill = fill, edge = edge, tick = tick }
 end
 
--- The round icon, its edge, the glyph and the word under it.
-local function roundIcon(b: any, texture: string, word: string, glyphSize: number?)
+-- A round icon's parts: its fill, its edge, the glyph and the word under it.
+export type Round = { fill: Texture, edge: Texture, glyph: Texture, word: Text }
+
+local function roundIcon(b: RoundButton, texture: string, word: string, glyphSize: number?): Round
     hideArt(b)
-    for _, key in ipairs({ "Background", "cover" }) do if b[key] then b[key]:SetAlpha(0) end end
+    fade(b.Background)
+    fade(b.cover)
     b:SetSize(TOGGLE, TOGGLE)
-    local p = {}
-    p.fill = circle(b, "CircleFill.tga", "surface-sunk", "BACKGROUND", 7)
+    local fill = circle(b, "CircleFill.tga", "surface-sunk", "BACKGROUND", 7)
     -- the band: the thin edge texture broke into dots at 36px (found in game)
-    p.edge = circle(b, "CircleBand.tga", "gilt-line", "BORDER", 7)
-    p.glyph = b:CreateTexture(nil, "ARTWORK", nil, 7)
-    p.glyph:SetTexture(texture)
-    p.glyph:SetSize(glyphSize or 18, glyphSize or 18)
-    p.glyph:SetPoint("CENTER")
-    p.word = uiText.text(b, "caption", "ink-muted")
-    p.word:SetPoint("TOP", b, "BOTTOM", 0, -S["space-2"])
-    p.word:SetWordWrap(false)
-    p.word:SetValue(word)
-    return p
+    local edge = circle(b, "CircleBand.tga", "gilt-line", "BORDER", 7)
+    local g = b:CreateTexture(nil, "ARTWORK", nil, 7)
+    g:SetTexture(texture)
+    g:SetSize(glyphSize or 18, glyphSize or 18)
+    g:SetPoint("CENTER")
+    local w = uiText.text(b, "caption", "ink-muted")
+    w:SetPoint("TOP", b, "BOTTOM", 0, -S["space-2"])
+    w:SetWordWrap(false)
+    w:SetValue(word)
+    return { fill = fill, edge = edge, glyph = g, word = w }
 end
 
-local function toggle(b: any, texture: string, word: string, glyphSize: number?)
-    if parts[b] then return parts[b] end
-    local p = roundIcon(b, texture, word, glyphSize)
-    local check = b.CheckButton
-    p.box = cornerBox(check, b)
-    function p.draw()
-        local on = ask(check, "GetChecked") and true or false
-        local usable = ask(check, "IsEnabled") ~= false and not (b.cover and b.cover:IsShown())
+-- A toggle's parts: the round icon, the corner box, hovered, its redraw.
+export type Toggle = { fill: Texture, edge: Texture, glyph: Texture, word: Text, box: CornerBox, hover: boolean,
+    draw: () -> () }
+
+local toggles: { [Frame]: Toggle } = setmetatable({}, { __mode = "k" })
+
+local function toggle(b: CheckToggle, check: CheckButton, texture: string, word: string, glyphSize: number?): Toggle
+    local made = toggles[b]
+    if made then return made end
+    local r = roundIcon(b, texture, word, glyphSize)
+    local p: Toggle = { fill = r.fill, edge = r.edge, glyph = r.glyph, word = r.word, box = cornerBox(check, b),
+        hover = false, draw = function() end }
+    p.draw = function()
+        local on = check:GetChecked()
+        local cover = b.cover
+        local usable = check:IsEnabled() and not (cover and cover:IsShown())
         draw.paint(p.edge, on and "arcane" or (p.hover and "gilt" or "gilt-line"))
         draw.paint(p.fill, on and "surface-raised" or "surface-sunk")
         draw.paint(p.glyph, on and "ink" or "ink-faint")
@@ -176,7 +332,7 @@ local function toggle(b: any, texture: string, word: string, glyphSize: number?)
     hookScript(b, "OnShow", p.draw)
     hookScript(b, "OnEnter", function() p.hover = true; p.draw() end)
     hookScript(b, "OnLeave", function() p.hover = false; p.draw() end)
-    parts[b] = p
+    toggles[b] = p
     p.draw()
     return p
 end
@@ -185,30 +341,34 @@ end
 -- Buttons
 --------------------------------------------------------------------------------
 
+-- the primary buttons, by their redraw
+local primaries: { [Button]: () -> () } = setmetatable({}, { __mode = "k" })
+
 -- The game's panel button as SuuUI's primary: arcane, on-signal label.
-local function primaryButton(b: any)
-    if parts[b] then return end
-    for _, key in ipairs({ "Left", "Middle", "Right" }) do if b[key] then b[key]:SetAlpha(0) end end
+local function primaryButton(b: PanelButton)
+    if primaries[b] then return end
+    fade(b.Left)
+    fade(b.Middle)
+    fade(b.Right)
     hideArt(b)
     local bg = draw.fill(b, "arcane", "BACKGROUND", 7)
     bg:SetAllPoints()
     local glow = draw.shadow(b, "glow-arcane")
     glow:SetShown(false)
-    local p = {}
-    function p.draw()
-        b:SetAlpha(ask(b, "IsEnabled") == false and T.opacity["opacity-disabled"] or 1)
-        font(ask(b, "GetFontString"), "label", "on-signal")
+    local function redraw()
+        b:SetAlpha(b:IsEnabled() and 1 or T.opacity["opacity-disabled"])
+        font(b:GetFontString(), "label", "on-signal")
     end
-    hookScript(b, "OnEnter", function() if ask(b, "IsEnabled") then glow:SetShown(true) end end)
+    hookScript(b, "OnEnter", function() if b:IsEnabled() then glow:SetShown(true) end end)
     hookScript(b, "OnLeave", function() glow:SetShown(false) end)
-    hook(b, "SetEnabled", p.draw)
-    parts[b] = p
-    p.draw()
+    hook(b, "SetEnabled", redraw)
+    primaries[b] = redraw
+    redraw()
 end
 
 -- As wide as its label (the game changes it: Back / Unlist, List Self / Update).
-local function fitButton(b: any)
-    local fs = ask(b, "GetFontString")
+local function fitButton(b: Button)
+    local fs = b:GetFontString()
     local w = fs and fs:GetUnboundedStringWidth() or 60
     b:SetSize(math.max(72, math.ceil(w) + S["space-5"] * 2), FOOT_H)
 end
@@ -218,99 +378,127 @@ end
 -- every redraw: restyled after each)
 --------------------------------------------------------------------------------
 
-local function rowParts(row: any)
-    local p = parts[row]
-    if p then return p end
-    p = {}
-    local check = row.CheckButton
+export type RowParts = { box: Frame, fill: Texture, edge: draw.Border, tick: Texture, mixed: Texture, chevron: Texture,
+    count: Text, lock?: Texture, redraw?: () -> () }
+
+local rows: { [Frame]: RowParts } = setmetatable({}, { __mode = "k" })
+
+local function rowParts(row: ActivityRow, check: CheckButton): RowParts
+    local made = rows[row]
+    if made then return made end
     hideArt(check)
-    p.box = CreateFrame("Frame", nil, check)
-    p.box:SetSize(16, 16)
-    p.box:SetPoint("CENTER")
-    p.box:EnableMouse(false)
-    p.fill = draw.fill(p.box, "surface-sunk")
-    p.fill:SetAllPoints()
-    p.edge = draw.border(p.box, "gilt-line")
-    p.tick = glyph(p.box, "check", 12, "on-signal", "OVERLAY")
-    p.tick:SetPoint("CENTER")
-    p.mixed = glyph(p.box, "minus", 12, "on-signal", "OVERLAY")
-    p.mixed:SetPoint("CENTER")
+    local box = CreateFrame("Frame", nil, check)
+    box:SetSize(16, 16)
+    box:SetPoint("CENTER")
+    box:EnableMouse(false)
+    local fill = draw.fill(box, "surface-sunk")
+    fill:SetAllPoints()
+    local tick = glyph(box, "check", 12, "on-signal", "OVERLAY")
+    tick:SetPoint("CENTER")
+    local mixed = glyph(box, "minus", 12, "on-signal", "OVERLAY")
+    mixed:SetPoint("CENTER")
     local ec = row.ExpandOrCollapseButton
-    hideArt(ec)
-    p.chevron = glyph(ec, "chevronDown", 12, "ink-muted", "OVERLAY")
-    p.chevron:SetPoint("CENTER")
-    p.count = uiText.text(row, "caption", "ink-faint")
-    p.count:SetPoint("RIGHT", row, "RIGHT", -S["space-4"], 0)
-    if row.InstanceLockWarningIcon then
-        for _, r in ipairs({ row.InstanceLockWarningIcon:GetRegions() }) do r:SetAlpha(0) end
-        p.lock = glyph(row.InstanceLockWarningIcon, "lock", 12, "amber", "OVERLAY")
-        p.lock:SetPoint("CENTER")
+    if ec then hideArt(ec) end
+    local chevron = glyph(ec or row, "chevronDown", 12, "ink-muted", "OVERLAY")
+    chevron:SetPoint("CENTER")
+    local count = uiText.text(row, "caption", "ink-faint")
+    count:SetPoint("RIGHT", row, "RIGHT", -S["space-4"], 0)
+    local p: RowParts = { box = box, fill = fill, edge = draw.border(box, "gilt-line"), tick = tick, mixed = mixed,
+        chevron = chevron, count = count }
+    local warning = row.InstanceLockWarningIcon
+    if warning then
+        for _, r in ipairs({ warning:GetRegions() }) do r:SetAlpha(0) end
+        local lock = glyph(warning, "lock", 12, "amber", "OVERLAY")
+        lock:SetPoint("CENTER")
+        p.lock = lock
     end
     -- after a click, the row's own box: the game redraws only the group's
     -- heading and relies on the check button's own tick, which is hidden
     -- (found in game). PostClick, since the game sets OnClick on each setup.
     hookScript(check, "PostClick", function()
-        if p.redraw then p.redraw() end
+        local redraw = p.redraw
+        if redraw then redraw() end
     end)
-    parts[row] = p
+    rows[row] = p
     return p
 end
 
-local function drawBox(p: any, state: string?)
+local function drawBox(p: RowParts, state: string?)
     draw.paintFill(p.fill, state and "arcane" or "surface-sunk")
     p.edge:SetColor(state and "arcane" or "gilt-line")
     p.tick:SetShown(state == "all")
     p.mixed:SetShown(state == "some")
 end
 
-local function skinGroupRow(row: any, data: any, collapsed: boolean?)
-    if not (row and data and row.CheckButton) then return end
-    local p = rowParts(row)
+-- The panel the rows belong to.
+local function listing(): ListingFrame?
+    local s = skinned
+    return s and s.frame
+end
+
+local function skinGroupRow(row: ActivityRow?, data: GroupData?, collapsed: boolean?)
+    if not (row and data) then return end
+    local check = row.CheckButton
+    if not check then return end
+    local p = rowParts(row, check)
     p.redraw = nil -- the game sets the heading up again after its clicks
-    local f = _G.LFGListingFrame
-    local all = f and ask(f, "AreAllActivitiesForActivityGroupSelected", data.activityGroupID)
-    local any = f and ask(f, "IsAnyActivityForActivityGroupSelected", data.activityGroupID)
-    drawBox(p, all and "all" or (any and "some") or nil)
+    local f = listing()
+    local id = data.activityGroupID
+    local all = f and asks(f, f.AreAllActivitiesForActivityGroupSelected, id)
+    local some = f and asks(f, f.IsAnyActivityForActivityGroupSelected, id)
+    drawBox(p, all and "all" or (some and "some") or nil)
     p.chevron:SetTexture(GLYPHS .. (collapsed and "chevronRight" or "chevronDown") .. ".tga")
-    font(row.NameButton and row.NameButton.Name, "header", "gilt-text")
-    if row.NameButton and row.NameButton.Name then row.NameButton:SetWidth(row.NameButton.Name:GetUnboundedStringWidth()) end
+    local nameButton = row.NameButton
+    local name = nameButton and nameButton.Name
+    font(name, "header", "gilt-text")
+    if nameButton and name then nameButton:SetWidth(name:GetUnboundedStringWidth()) end
     -- how many are chosen ("4 chosen"), else how many there are
-    local node = ask(row, "GetElementData")
+    local get = row.GetElementData
+    local ok, node = false, nil
+    if get then ok, node = pcall(get, row) end
     local chosen, total = 0, 0
-    for _, child in ipairs(node and node.nodes or {}) do
-        local d = ask(child, "GetData")
-        if d and d.activityID then
+    for _, child in ipairs(ok and node and node.nodes or {}) do
+        local getData = child.GetData
+        local gotData, d = false, nil
+        if getData then gotData, d = pcall(getData, child) end
+        local activity = gotData and d and d.activityID
+        if activity then
             total = total + 1
-            if f and ask(f, "IsActivitySelected", d.activityID) then chosen = chosen + 1 end
+            if f and asks(f, f.IsActivitySelected, activity) then chosen = chosen + 1 end
         end
     end
     p.count:SetValue(chosen > 0 and (chosen .. " chosen") or (total > 0 and tostring(total) or ""))
     p.count:Show()
 end
 
-local function skinActivityRow(row: any, data: any)
-    if not (row and data and row.CheckButton) then return end
-    local p = rowParts(row)
-    local f = _G.LFGListingFrame
-    p.redraw = function() drawBox(p, f and ask(f, "IsActivitySelected", data.activityID) and "all" or nil) end
+local function skinActivityRow(row: ActivityRow?, data: ActivityData?)
+    if not (row and data) then return end
+    local check = row.CheckButton
+    if not check then return end
+    local p = rowParts(row, check)
+    local f = listing()
+    p.redraw = function() drawBox(p, f and asks(f, f.IsActivitySelected, data.activityID) and "all" or nil) end
     p.redraw()
     p.count:Hide()
     -- the game's difficulty colours, in SuuUI's quest colours
     local lvl = UnitLevel("player")
     local color = "ink"
-    if data.maxLevel and data.maxLevel ~= 0 and data.maxLevel < lvl then color = "quest-trivial"
-    elseif data.minLevel and data.minLevel ~= 0 and data.minLevel > lvl then color = "quest-difficult" end
-    local name = row.NameButton and row.NameButton.Name
+    local maxLevel, minLevel = data.maxLevel, data.minLevel
+    if maxLevel and maxLevel ~= 0 and maxLevel < lvl then color = "quest-trivial"
+    elseif minLevel and minLevel ~= 0 and minLevel > lvl then color = "quest-difficult" end
+    local nameButton = row.NameButton
+    local name = nameButton and nameButton.Name
     font(name, "body", color)
-    if name then row.NameButton:SetWidth(name:GetUnboundedStringWidth()) end
+    if nameButton and name then nameButton:SetWidth(name:GetUnboundedStringWidth()) end
     -- "20 - 30" in caption ink-muted, at the right
-    font(row.Level, "caption", "ink-muted")
-    local text = row.Level and row.Level:GetText()
-    if type(text) == "string" then row.Level:SetText((text:gsub("[()]", ""))) end
-    if row.Level then
-        row.Level:SetJustifyH("RIGHT")
-        row.Level:ClearAllPoints()
-        row.Level:SetPoint("RIGHT", row, "RIGHT", -S["space-4"], 0)
+    local level = row.Level
+    if level then
+        font(level, "caption", "ink-muted")
+        local text = level:GetText()
+        if type(text) == "string" then level:SetText((text:gsub("[()]", ""))) end
+        level:SetJustifyH("RIGHT")
+        level:ClearAllPoints()
+        level:SetPoint("RIGHT", row, "RIGHT", -S["space-4"], 0)
     end
 end
 
@@ -318,21 +506,36 @@ end
 -- The page
 --------------------------------------------------------------------------------
 
--- The skinned panel. `frame` is the game's LFGListingFrame (its parts are
--- the game's: read by name, typed loosely).
-
-local skinned: ListingSkin? = nil
-
 -- The parts SuuUI adds to the listing's activity step.
 type ActivityParts = { psLabel: Text, tree: Frame, detailsLabel: Text, field: Frame, count: Text }
 
+-- A category card's parts.
+export type CardParts = { fill: Texture, edge: draw.Border, glyph: Texture, line: Text }
+local cards: { [Frame]: CardParts } = setmetatable({}, { __mode = "k" })
+
+-- The solo role buttons, in order, with their roles.
+local SOLO: { key: string, texture: string, word: string }[] = {
+    { key = "Tank", texture = TANK_TEX, word = TANK or "Tank" },
+    { key = "Healer", texture = HEALER_TEX, word = HEALER or "Healer" },
+    { key = "DPS", texture = DAMAGE_TEX, word = DAMAGER or "Damage" },
+}
+
+local function soloButton(solo: SoloRoles, key: string): CheckToggle?
+    if key == "Tank" then return solo.Tank end
+    if key == "Healer" then return solo.Healer end
+    return solo.DPS
+end
+
+-- The skinned panel. `frame` is the game's LFGListingFrame.
 export class ListingSkin
-    frame: any
+    frame: ListingFrame
     topRule: Texture
     footRule: Texture
     npfRule: Texture
     hint: Text? = nil
     psMissing: Frame? = nil
+    -- your role in a group (where the panel has its icon)
+    roleIcon: Round? = nil
     -- the activity step's parts (where the frame has its ActivityView)
     activity: ActivityParts? = nil
     -- the locked view's glyph (where it has one)
@@ -340,7 +543,7 @@ export class ListingSkin
     placing: boolean? = nil
     queued: boolean? = nil
 
-    constructor(f: any)
+    constructor(f: ListingFrame)
         self.frame = f
         skinned = self
 
@@ -357,30 +560,33 @@ export class ListingSkin
 
         -- the top: the role toggles, your role in a group, New player friendly
         local solo = f.SoloRoleButtons
-        for key, role in pairs({ Tank = "TANK", Healer = "HEALER", DPS = "DAMAGER" }) do
-            if solo and solo[key] and solo[key].CheckButton then toggle(solo[key], ROLE_TEX[role], ROLE_WORD[role]) end
+        if solo then
+            for _, r in ipairs(SOLO) do
+                local b = soloButton(solo, r.key)
+                local check = b and b.CheckButton
+                if b and check then toggle(b, check, r.texture, r.word) end
+            end
         end
         local group = f.GroupRoleButtons
         if group then
-            if group.RoleIcon then
-                local icon = group.RoleIcon
-                local p = roundIcon(icon, ROLE_TEX.DAMAGER, "")
+            local icon = group.RoleIcon
+            if icon then
+                local p = roundIcon(icon, DAMAGE_TEX, "")
                 draw.paint(p.edge, "arcane")
                 draw.paint(p.fill, "surface-raised")
                 draw.paint(p.glyph, "ink")
                 p.word:SetColor("ink")
                 local function update()
                     local role = icon.roleID
-                    p.glyph:SetTexture(ROLE_TEX[role] or ROLE_TEX.DAMAGER)
-                    p.word:SetValue(ROLE_WORD[role] or "")
+                    p.glyph:SetTexture(role and ROLE_TEX[role] or DAMAGE_TEX)
+                    p.word:SetValue(role and ROLE_WORD[role] or "")
                     -- the game sets its own art again
-                    local n = ask(icon, "GetNormalTexture")
-                    if n then n:SetAlpha(0) end
+                    if icon:IsObjectType("Button") then fade((icon :: Button):GetNormalTexture()) end
                 end
-                hook(_G, "LFGListingRoleIcon_UpdateRoleTexture", function(b: any) if b == icon then update() end end, ON_DEMAND)
+                hook(_G, "LFGListingRoleIcon_UpdateRoleTexture", function(b: unknown) if b == icon then update() end end, ON_DEMAND)
                 hookScript(icon, "OnShow", update)
                 update()
-                parts[icon] = p
+                self.roleIcon = p
             end
             if group.RoleDropdown then reskin.reskinDropdown(group.RoleDropdown) end
             if group.RolePollButton then reskin.reskinButton(group.RolePollButton) end
@@ -388,8 +594,10 @@ export class ListingSkin
             hookScript(group, "OnHide", function() self:Queue() end)
         end
         local npf = f.NewPlayerFriendlyButton
-        if npf and npf.CheckButton then
-            toggle(npf, GLYPHS .. "leaf.tga", _G.LFG_LIST_NEW_PLAYER_FRIENDLY or "New player friendly", 16)
+        local npfCheck = npf and npf.CheckButton
+        if npf and npfCheck then
+            local word = reskin.named("LFG_LIST_NEW_PLAYER_FRIENDLY")
+            toggle(npf, npfCheck, GLYPHS .. "leaf.tga", type(word) == "string" and word or "New player friendly", 16)
         end
 
         -- step 1: the hint over the cards
@@ -403,7 +611,7 @@ export class ListingSkin
             hint:SetPoint("TOPLEFT")
             hint:SetValue("Step 1 of 2 · What are you listing for?")
             hookScript(view, "OnShow", function() self:Queue() end)
-            if _G.LFGListingCategorySelection_UpdateCategoryButtons then
+            if reskin.named("LFGListingCategorySelection_UpdateCategoryButtons") then
                 hook(_G, "LFGListingCategorySelection_UpdateCategoryButtons", function() self:Queue() end, ON_DEMAND)
             end
         end
@@ -411,17 +619,18 @@ export class ListingSkin
         -- step 2
         local av = f.ActivityView
         if av then
-            local act = {} :: ActivityParts
             av:ClearAllPoints()
             av:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -BODY_TOP)
             av:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -SIDE, BODY_BOTTOM)
-            for _, key in ipairs({ "BarTop", "BarMiddle" }) do if av[key] then av[key]:SetAlpha(0) end end
+            fade(av.BarTop)
+            fade(av.BarMiddle)
             for _, t in ipairs(av.BarComponents or {}) do t:SetAlpha(0) end
-            act.psLabel = uiText.text(av, "caption", "ink-muted")
-            if av.PlayStyleDropdown then
-                reskin.reskinDropdown(av.PlayStyleDropdown)
+            local psLabel = uiText.text(av, "caption", "ink-muted")
+            local dd = av.PlayStyleDropdown
+            if dd then
+                reskin.reskinDropdown(dd)
                 -- amber until a play style is chosen
-                local _, holder = edgeOver(av.PlayStyleDropdown, "amber", 3)
+                local _, holder = edgeOver(dd, "amber", 3)
                 self.psMissing = holder
             end
             local lr = av.LevelRangesCheckbox
@@ -429,23 +638,24 @@ export class ListingSkin
                 if lr.Checkbox then reskin.reskinCheckButton(lr.Checkbox) end
                 font(lr.Text, "body", "ink")
             end
-            act.tree = CreateFrame("Frame", nil, av)
-            act.tree:SetFrameLevel(math.max(0, (av.ScrollBox and av.ScrollBox:GetFrameLevel() or av:GetFrameLevel() + 1) - 1))
-            draw.fill(act.tree, "surface-sunk"):SetAllPoints()
-            draw.border(act.tree, "gilt-faint")
-            if av.ScrollBox then
-                hook(av.ScrollBox, "SetPoint", function() self:PlaceScrollBox() end)
+            local tree = CreateFrame("Frame", nil, av)
+            local box = av.ScrollBox
+            tree:SetFrameLevel(math.max(0, (box and box:GetFrameLevel() or av:GetFrameLevel() + 1) - 1))
+            draw.fill(tree, "surface-sunk"):SetAllPoints()
+            draw.border(tree, "gilt-faint")
+            if box then
+                hook(box, "SetPoint", function() self:PlaceScrollBox() end)
             end
             if av.ScrollBar then reskin.reskinScrollBar(av.ScrollBar) end
             -- the details
-            act.detailsLabel = uiText.text(av, "caption", "ink-muted")
-            act.field = CreateFrame("Frame", nil, av)
-            draw.fill(act.field, "surface-sunk"):SetAllPoints()
-            local edge = draw.border(act.field, "gilt-line")
-            act.count = uiText.text(av, "caption", "ink-faint")
+            local detailsLabel = uiText.text(av, "caption", "ink-muted")
+            local field = CreateFrame("Frame", nil, av)
+            draw.fill(field, "surface-sunk"):SetAllPoints()
+            local edge = draw.border(field, "gilt-line")
+            local count = uiText.text(av, "caption", "ink-faint")
             local c = av.Comment
             if c then
-                act.field:SetFrameLevel(math.max(0, c:GetFrameLevel() - 1))
+                field:SetFrameLevel(math.max(0, c:GetFrameLevel() - 1))
                 for _, r in ipairs({ c:GetRegions() }) do
                     if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
                 end
@@ -462,10 +672,10 @@ export class ListingSkin
             end
             if av.VoiceChatDropdown then reskin.reskinDropdown(av.VoiceChatDropdown) end
             font(av.VoiceChatLabel, "caption", "ink-muted")
+            self.activity = { psLabel = psLabel, tree = tree, detailsLabel = detailsLabel, field = field, count = count }
             -- the game places its parts again on show; after it
             hookScript(av, "OnShow", function() self:LayoutActivities(); self:Queue() end)
             hook(_G, "LFGListingActivityView_OnPlayStyleSelectedInternal", function() self:LayoutActivities() end, ON_DEMAND)
-            self.activity = act
         end
         -- the tree's rows, each time the game sets one up
         hook(_G, "LFGListingActivityView_InitActivityGroupButton", skinGroupRow, ON_DEMAND)
@@ -480,10 +690,11 @@ export class ListingSkin
             local bg = draw.fill(lv, "surface-sunk", "BACKGROUND", -8)
             bg:SetAllPoints()
             draw.border(lv, "gilt-faint")
-            self.lockGlyph = glyph(lv, "lock", 24, "ink-faint")
-            self.lockGlyph:SetPoint("TOP", lv, "TOP", 0, -S["space-6"] * 2)
+            local lock = glyph(lv, "lock", 24, "ink-faint")
+            lock:SetPoint("TOP", lv, "TOP", 0, -S["space-6"] * 2)
+            self.lockGlyph = lock
             hookScript(lv, "OnShow", function() self:Queue() end)
-            if _G.LFGListingLockedView_RefreshContent then
+            if reskin.named("LFGListingLockedView_RefreshContent") then
                 hook(_G, "LFGListingLockedView_RefreshContent", function() self:Queue() end, ON_DEMAND)
             end
         end
@@ -492,10 +703,11 @@ export class ListingSkin
         reskin.reskinButton(f.BackButton)
         primaryButton(f.PostButton)
         for _, name in ipairs({ "LFGListingPostButton_UpdateText", "LFGListingBackButton_UpdateText" }) do
-            if _G[name] then hook(name, function() self:LayoutFoot() end) end
+            if reskin.named(name) then hook(name, function() self:LayoutFoot() end) end
         end
         hook(f, "UpdatePostButtonEnableState", function()
-            if parts[f.PostButton] then parts[f.PostButton].draw() end
+            local redraw = primaries[f.PostButton]
+            if redraw then redraw() end
             self:LayoutActivities()
         end)
         hook(f, "UpdateFrameView", function() self:Queue() end)
@@ -509,15 +721,13 @@ export class ListingSkin
         local f = self.frame
         local solo = f.SoloRoleButtons
         local group = f.GroupRoleButtons
-        local inGroup = group and group:IsShown()
         local slot = 60
-        local x
         if solo then
             solo:ClearAllPoints()
             solo:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE, -TOP)
             solo:SetSize(slot * 3, TOP_H)
-            for i, key in ipairs({ "Tank", "Healer", "DPS" }) do
-                local b = solo[key]
+            for i, r in ipairs(SOLO) do
+                local b = soloButton(solo, r.key)
                 if b then
                     b:ClearAllPoints()
                     b:SetPoint("TOP", solo, "TOPLEFT", slot * (i - 0.5), 0)
@@ -546,7 +756,7 @@ export class ListingSkin
             group:SetSize(w, TOP_H)
         end
         -- New player friendly past a rule, after whichever role row shows
-        x = (inGroup and group:GetWidth() or slot * 3) + S["space-6"]
+        local x = (group and group:IsShown() and group:GetWidth() or slot * 3) + S["space-6"]
         self.npfRule:ClearAllPoints()
         self.npfRule:SetPoint("TOPLEFT", f, "TOPLEFT", SIDE + x, -TOP)
         self.npfRule:SetSize(1, TOP_H)
@@ -560,39 +770,41 @@ export class ListingSkin
     function LayoutCategories()
         local view = self.frame.CategoryView
         if not (view and view:IsShown()) then return end
-        local shown = {}
+        local shown: CategoryButton[] = {}
         for _, b in ipairs(view.CategoryButtons or {}) do if b:IsShown() then shown[#shown + 1] = b end end
         local gap = S["space-5"]
         local width = view:GetWidth()
         if not width or width < 10 then return end
         local cw = math.floor((width - gap * (#shown - 1)) / math.max(1, #shown))
         for i, b in ipairs(shown) do
-            local p = parts[b]
+            local p = cards[b]
             if not p then
-                p = {}
-                for _, key in ipairs({ "Icon", "Cover" }) do if b[key] then b[key]:SetAlpha(0) end end
+                fade(b.Icon)
+                fade(b.Cover)
                 hideArt(b)
-                p.fill = draw.fill(b, "surface-sunk", "BACKGROUND", 7)
-                p.fill:SetAllPoints()
-                p.edge = edgeOver(b, "gilt-line")
-                p.glyph = glyph(b, "flag", 22, "gilt-text", "OVERLAY")
-                p.glyph:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
-                p.line = uiText.text(b, "caption", "ink-muted")
-                p.line:SetJustifyH("LEFT")
-                p.line:SetWordWrap(true)
-                hookScript(b, "OnEnter", function() p.edge:SetColor("gilt"); draw.paintFill(p.fill, "surface-raised") end)
-                hookScript(b, "OnLeave", function() p.edge:SetColor("gilt-line"); draw.paintFill(p.fill, "surface-sunk") end)
+                local fill = draw.fill(b, "surface-sunk", "BACKGROUND", 7)
+                fill:SetAllPoints()
+                local g = glyph(b, "flag", 22, "gilt-text", "OVERLAY")
+                g:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+                local line = uiText.text(b, "caption", "ink-muted")
+                line:SetJustifyH("LEFT")
+                line:SetWordWrap(true)
+                local made: CardParts = { fill = fill, edge = edgeOver(b, "gilt-line"), glyph = g, line = line }
+                hookScript(b, "OnEnter", function() made.edge:SetColor("gilt"); draw.paintFill(made.fill, "surface-raised") end)
+                hookScript(b, "OnLeave", function() made.edge:SetColor("gilt-line"); draw.paintFill(made.fill, "surface-sunk") end)
                 -- a ResizeLayoutFrame: its own size, not its children's
                 b.fixedWidth, b.fixedHeight = cw, 132
-                parts[b] = p
+                cards[b] = made
+                p = made
             end
-            local card = CARDS[b.categoryID] or {}
-            p.glyph:SetTexture(GLYPHS .. (card.glyph or "flag") .. ".tga")
-            p.line:SetValue(card.text or "")
+            local id = b.categoryID
+            local card = id and CARDS[id]
+            p.glyph:SetTexture(GLYPHS .. (card and card.glyph or "flag") .. ".tga")
+            p.line:SetValue(card and card.text or "")
             b:ClearAllPoints()
             b:SetSize(cw, 132)
             b:SetPoint("TOPLEFT", view, "TOPLEFT", (i - 1) * (cw + gap), -(14 + S["space-4"]))
-            local label = b.Label or ask(b, "GetFontString")
+            local label = b.Label or b:GetFontString()
             if label then
                 font(label, "header", "gilt-text")
                 label:ClearAllPoints()
@@ -611,28 +823,31 @@ export class ListingSkin
         local av = f.ActivityView
         if not av then return end
         local width = f:GetWidth() - SIDE * 2
-        local custom = av.ScrollBox and not av.ScrollBox:IsShown()
+        local box = av.ScrollBox
+        local custom = box ~= nil and not box:IsShown()
         local left = custom and width or math.floor((width - S["space-6"]) * 0.56)
         local rightX = custom and 0 or (left + S["space-6"])
         local rightW = width - rightX
         -- Playstyle (required by the game in every category) and Show All Level Ranges
-        local missing = av.PlayStyleDropdown and not av.generalPlaystyle
+        local dd = av.PlayStyleDropdown
+        local style = av.generalPlaystyle
+        local missing = dd ~= nil and (style == nil or style == false)
         act.psLabel:SetValue("Playstyle |cff" .. T.color[missing and "amber" or "ink-muted"].hex .. "· required|r")
         act.psLabel:ClearAllPoints()
         act.psLabel:SetPoint("TOPLEFT", av, "TOPLEFT", 0, 0)
-        local dd = av.PlayStyleDropdown
         if dd then
             dd:ClearAllPoints()
             dd:SetSize(200, 30)
             dd:SetPoint("TOPLEFT", av, "TOPLEFT", 0, -(14 + S["space-1"]))
-            if self.psMissing then self.psMissing:SetShown(missing and true or false) end
+            if self.psMissing then self.psMissing:SetShown(missing) end
         end
         local lr = av.LevelRangesCheckbox
-        if lr and lr.Text and lr.Checkbox then
-            lr.Text:ClearAllPoints()
-            lr.Text:SetPoint("RIGHT", av, "TOPLEFT", left, -(14 + S["space-1"] + 15))
-            lr.Checkbox:ClearAllPoints()
-            lr.Checkbox:SetPoint("RIGHT", lr.Text, "LEFT", -S["space-2"], 0)
+        local lrText, lrBox = lr and lr.Text, lr and lr.Checkbox
+        if lr and lrText and lrBox then
+            lrText:ClearAllPoints()
+            lrText:SetPoint("RIGHT", av, "TOPLEFT", left, -(14 + S["space-1"] + 15))
+            lrBox:ClearAllPoints()
+            lrBox:SetPoint("RIGHT", lrText, "LEFT", -S["space-2"], 0)
             lr:SetShown(not custom)
         end
         -- under the Playstyle / Voice Chat row and room for the details' label
@@ -671,16 +886,17 @@ export class ListingSkin
         local c = av.Comment
         -- the placeholder: the label says what the field is (the game's
         -- authenticator note stays as it is)
-        local instr = c and c.EditBox and c.EditBox.Instructions
+        local e = c and c.EditBox
+        local instr = e and e.Instructions
         local said = instr and instr:GetText()
-        if said and (said == _G.DESCRIPTION_OF_YOUR_GROUP or said == _G.DESCRIPTION_OF_YOUR_GROUP_MANDATORY) then
+        if instr and said and (said == DESCRIPTION_OF_YOUR_GROUP or said == DESCRIPTION_OF_YOUR_GROUP_MANDATORY) then
             instr:SetText(custom and "What you’re after, for a Custom listing" or "Route, quests, gear check: anything people should know")
         end
         if c then
             c:ClearAllPoints()
             c:SetPoint("TOPLEFT", act.field, "TOPLEFT", S["space-4"], -S["space-3"])
             c:SetPoint("BOTTOMRIGHT", act.field, "BOTTOMRIGHT", -S["space-4"] - 12, S["space-3"])
-            if c.EditBox then c.EditBox:SetWidth(rightW - S["space-4"] * 2 - 16) end
+            if e then e:SetWidth(rightW - S["space-4"] * 2 - 16) end
         end
         act.count:ClearAllPoints()
         act.count:SetPoint("BOTTOMRIGHT", act.field, "TOPRIGHT", 0, S["space-1"])
@@ -692,14 +908,15 @@ export class ListingSkin
     function PlaceScrollBox()
         local act = self.activity
         if not act then return end
-        local box = self.frame.ActivityView and self.frame.ActivityView.ScrollBox
-        if not box or self.placing then return end
+        local av = self.frame.ActivityView
+        local box = av and av.ScrollBox
+        if not av or not box or self.placing then return end
         self.placing = true
         box:ClearAllPoints()
         box:SetPoint("TOPLEFT", act.tree, "TOPLEFT", 1, -S["space-2"])
         box:SetPoint("BOTTOMRIGHT", act.tree, "BOTTOMRIGHT", -14, S["space-2"])
         self.placing = false
-        local bar = self.frame.ActivityView.ScrollBar
+        local bar = av.ScrollBar
         if bar then
             bar:ClearAllPoints()
             bar:SetPoint("TOPLEFT", act.tree, "TOPRIGHT", -10, -S["space-3"])
@@ -710,9 +927,16 @@ export class ListingSkin
     function UpdateCount()
         local act = self.activity
         if not act then return end
-        local e = self.frame.ActivityView and self.frame.ActivityView.Comment and self.frame.ActivityView.Comment.EditBox
-        local text = e and ask(e, "GetText")
-        local n = type(text) == "string" and (strlenutf8 and strlenutf8(text) or #text) or 0
+        local av = self.frame.ActivityView
+        local c = av and av.Comment
+        local e = c and c.EditBox
+        local text = e and e:GetText()
+        local n = 0
+        if type(text) == "string" then
+            local utf8len = reskin.named("strlenutf8")
+            local len = type(utf8len) == "function" and utf8len(text) or nil
+            n = type(len) == "number" and len or #text
+        end
         act.count:SetValue(n .. " / 255")
     end
 
@@ -720,19 +944,21 @@ export class ListingSkin
         local lv = self.frame.LockedView
         if not (lv and lv:IsShown()) then return end
         reskin.reskin(lv)
-        if lv.ErrorText then
-            font(lv.ErrorText, "label", "ink")
-            lv.ErrorText:ClearAllPoints()
-            lv.ErrorText:SetPoint("TOP", self.lockGlyph, "BOTTOM", 0, -S["space-3"])
-            lv.ErrorText:SetWidth(lv:GetWidth() - S["space-6"] * 2)
-            lv.ErrorText:SetJustifyH("CENTER")
+        local err = lv.ErrorText
+        if err then
+            font(err, "label", "ink")
+            err:ClearAllPoints()
+            err:SetPoint("TOP", self.lockGlyph, "BOTTOM", 0, -S["space-3"])
+            err:SetWidth(lv:GetWidth() - S["space-6"] * 2)
+            err:SetJustifyH("CENTER")
         end
-        if lv.ActivityText then font(lv.ActivityText, "caption", "ink-muted") end
+        font(lv.ActivityText, "caption", "ink-muted")
     end
 
     function LayoutFoot()
         local f = self.frame
-        for _, b in ipairs({ f.BackButton, f.PostButton }) do fitButton(b) end
+        fitButton(f.BackButton)
+        fitButton(f.PostButton)
         f.BackButton:ClearAllPoints()
         f.BackButton:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDE, BOTTOM)
         f.PostButton:ClearAllPoints()
@@ -758,7 +984,7 @@ export class ListingSkin
     end
 end
 
-export function skinGroupFinderListing(f: any): ListingSkin?
+export function skinGroupFinderListing(f: ListingFrame?): ListingSkin?
     if not f or skinned then return skinned end
     return ListingSkin.new(f)
 end
