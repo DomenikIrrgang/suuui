@@ -4,15 +4,17 @@
 import test, expect, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as Conditions from "/Units/CooldownManager/Conditions"
+import type Condition, When, EditedWhen, Choice, ClassTalent from "/Units/CooldownManager/Conditions"
+import type Entry from "/Units/CooldownManager/Lists"
 
-local function cond(t: string, extra: { [string]: any }?): { [string]: any }
-    local c: { [string]: any } = { type = t }
-    for k, v in pairs(extra or {}) do c[k] = v end
-    return c
+local function cond(t: string, extra: { [string]: unknown }?): Condition
+    local fields: { [string]: unknown } = { type = t }
+    for k, v in pairs(extra or {}) do fields[k] = v end
+    return mock.partial(fields)
 end
 
-local function values(options: any[]): any[]
-    local out: any[] = {}
+local function values(options: Choice[]): string[]
+    local out: string[] = {}
     for _, o in ipairs(options) do out[#out + 1] = o.value end
     return out
 end
@@ -49,7 +51,7 @@ end
     { "combat", "WARRIOR", { type = "combat" } },
     { "anything else", "WARRIOR", { type = "combat" } },
 })
-local function newCondition(kind: string, class: string, out: { [string]: any })
+local function newCondition(kind: string, class: string, out: Condition)
     expect(Conditions.newCondition(kind, class)).toEqual(out)
 end
 
@@ -68,7 +70,7 @@ local function firstUnused()
     expect(Conditions.firstUnusedType({ cond("group"), cond("classes") }, "WARRIOR")).toBe("role")
     expect(Conditions.firstUnusedType({ cond("group"), cond("classes"), cond("role") }, "MAGE")).toBe("combat")
     expect(Conditions.firstUnusedType({ cond("group"), cond("classes"), cond("role"), cond("combat") }, "MAGE")).toBe("instance")
-    local all: { [string]: any }[] = {}
+    local all: Condition[] = {}
     for _, t in ipairs(Conditions.CONDITION_TYPES) do all[#all + 1] = cond(t.value) end
     expect(Conditions.firstUnusedType(all, "WARRIOR")).toBe("combat")
 end
@@ -79,14 +81,14 @@ end
 
 @test("editWhen: a copy, match all by default, none left: no when")
 local function editWhen()
-    local e: { [string]: any } = { name = "A" }
-    Conditions.editWhen(e, function(w: any) table.insert(w.conditions, cond("combat")) end)
+    local e: Entry = { name = "A" }
+    Conditions.editWhen(e, function(w: EditedWhen) table.insert(w.conditions, cond("combat")) end)
     expect(e.when).toEqual({ match = "all", conditions = { { type = "combat" } } })
-    local before = e.when
-    Conditions.editWhen(e, function(w: any) w.match = "any" end)
-    expect(e.when.match).toBe("any")
+    local before = assert(e.when)
+    Conditions.editWhen(e, function(w: EditedWhen) w.match = "any" end)
+    expect(assert(e.when).match).toBe("any")
     expect(before.match).toBe("all")
-    Conditions.editWhen(e, function(w: any) table.remove(w.conditions, 1) end)
+    Conditions.editWhen(e, function(w: EditedWhen) table.remove(w.conditions, 1) end)
     expect(e.when).toBeNil()
     -- nothing added: still none
     Conditions.editWhen(e, function() end)
@@ -95,7 +97,7 @@ end
 
 @test("changeType: a new condition of the type, its Not kept")
 local function changeType()
-    local w = { conditions = { cond("combat", { ["not"] = true }), cond("group", { value = "raid" }) } }
+    local w: EditedWhen = { match = "all", conditions = { cond("combat", { ["not"] = true }), cond("group", { value = "raid" }) } }
     Conditions.changeType(w, 1, "role", "WARRIOR")
     expect(w.conditions[1]).toEqual({ type = "role", roles = { "TANK" }, ["not"] = true })
     -- the same type: unchanged
@@ -108,7 +110,7 @@ end
 
 @test("addTalent and removeTalent")
 local function talents()
-    local c: { [string]: any } = cond("talent")
+    local c = cond("talent")
     Conditions.addTalent(c, 12294)
     Conditions.addTalent(c, 12294)
     Conditions.addTalent(c, 100)
@@ -117,7 +119,7 @@ local function talents()
     expect(c.talents).toEqual({ 100 })
     Conditions.removeTalent(c, 5)
     expect(c.talents).toEqual({ 100 })
-    local none: { [string]: any } = cond("talent")
+    local none = cond("talent")
     Conditions.removeTalent(none, 1)
     expect(none.talents).toBeNil()
 end
@@ -188,7 +190,7 @@ end
     { { type = "talent" }, false, false, nil },
     { { type = "unknown" }, false, false, nil },
 })
-local function conditionPhrase(c: { [string]: any }, inGroup: boolean, short: boolean, out: string?)
+local function conditionPhrase(c: Condition, inGroup: boolean, short: boolean, out: string?)
     expect(Conditions.conditionPhrase(c, inGroup, short, "WARRIOR")).toBe(out)
 end
 
@@ -202,12 +204,13 @@ end
 
 @test("phrases: a group condition makes classes say 'in it'")
 local function phrasesInGroup()
-    local when = { conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "MAGE" } }) } }
+    local conds: Condition[] = { cond("group", { value = "raid" }), cond("classes", { classes = { "MAGE" } }) }
+    local when: When = { conditions = conds }
     expect(Conditions.phrases(when, false, "WARRIOR")).toEqual({ "in a raid", "with a mage in it" })
     -- solo or not-in-a-group doesn't
-    when.conditions[1] = cond("group", { value = "solo" })
+    conds[1] = cond("group", { value = "solo" })
     expect(Conditions.phrases(when, false, "WARRIOR")[2]).toBe("with a mage in your group")
-    when.conditions[1] = cond("group", { value = "raid", ["not"] = true })
+    conds[1] = cond("group", { value = "raid", ["not"] = true })
     expect(Conditions.phrases(when, false, "WARRIOR")[2]).toBe("with a mage in your group")
     expect(Conditions.phrases(nil, false, "WARRIOR")).toEqual({})
     expect(Conditions.phrases({}, true, "WARRIOR")).toEqual({})
@@ -217,7 +220,7 @@ end
 local function sentence()
     expect(Conditions.conditionSentence("Faerie Fire", nil, "DRUID")).toBe("Always shows.")
     expect(Conditions.conditionSentence("Faerie Fire", { conditions = {} }, "DRUID")).toBe("Always shows.")
-    local when = { match = "all", conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "DRUID", "WARLOCK" } }), cond("combat", { ["not"] = true }) } }
+    local when: When = { match = "all", conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "DRUID", "WARLOCK" } }), cond("combat", { ["not"] = true }) } }
     expect(Conditions.conditionSentence("Faerie Fire", when, "DRUID")).toBe("Faerie Fire shows in a raid, with a druid or warlock in it, out of combat.")
     expect(Conditions.conditionSentence(nil, when, "DRUID")).toBe("Shows in a raid, with a druid or warlock in it, out of combat.")
     when.match = "any"
@@ -228,7 +231,7 @@ end
 @test("conditionWords")
 local function words()
     expect(Conditions.conditionWords(nil, "WARRIOR")).toBeNil()
-    local when = { conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "WARLOCK" } }) } }
+    local when: When = { conditions = { cond("group", { value = "raid" }), cond("classes", { classes = { "WARLOCK" } }) } }
     expect(Conditions.conditionWords(when, "WARRIOR")).toBe("in a raid · with a warlock")
     when.match = "any"
     expect(Conditions.conditionWords(when, "WARRIOR")).toBe("in a raid or with a warlock")
@@ -236,7 +239,7 @@ end
 
 @test("talentOptions: by tree under its spec's name, then by name, without those chosen")
 local function talentOptions()
-    local list = {
+    local list: ClassTalent[] = {
         { id = 1, name = "Zeal", tree = 2, spec = "Fury" },
         { id = 2, name = "Anger", tree = 2, spec = "Fury" },
         { id = 3, name = "Deep Wounds", tree = 1 },
@@ -246,7 +249,7 @@ local function talentOptions()
     }
     local out = Conditions.talentOptions(list, { 6 })
     local seen: string[] = {}
-    for _, o in ipairs(out) do seen[#seen + 1] = o.heading and ("# " .. o.heading) or o.label end
+    for _, o in ipairs(out) do seen[#seen + 1] = o.heading and ("# " .. o.heading) or o.label or "" end
     expect(seen).toEqual({ "# Tree 1", "Deep Wounds", "# Fury", "Anger", "Zeal", "# Odd", "Loose", "# Other", "Nowhere" })
     expect(out[2].value).toBe(3)
     expect(#Conditions.talentOptions({}, nil)).toBe(0)

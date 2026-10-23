@@ -4,17 +4,29 @@
 import test, expect, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as Lists from "/Units/CooldownManager/Lists"
+import type Entry, ListSet, DragFrom, DropTo, Recent, EntryRef from "/Units/CooldownManager/Lists"
+import type When from "/Units/CooldownManager/Conditions"
+import type CooldownPreset from "/Data/Presets"
 
 type Path = Lists.Path
 
-local function single(name: string, ids: number[], extra: { [string]: any }?): { [string]: any }
-    local e: { [string]: any } = { name = name, ids = ids }
+-- A list of the lists; a collection's entries; a shared slot's members.
+local function listOf(l: ListSet, key: string): Entry[] return (assert(l[key], key)) end
+local function inside(e: Entry?): Entry[] return (assert(assert(e).entries)) end
+local function membersOf(e: Entry?): Entry[] return (assert(assert(e).members)) end
+-- A preset of these lists.
+local function presetOf(id: string, lists: ListSet, tree: number?, name: string?): CooldownPreset
+    return { id = id, name = name or id, tree = tree or 0, lists = lists }
+end
+
+local function single(name: string, ids: number[], extra: { [string]: unknown }?): Entry
+    local e: Entry = { name = name, ids = ids }
     for k, v in pairs(extra or {}) do e[k] = v end
     return e
 end
 
-local function slot(name: string, members: { [string]: any }[], extra: { [string]: any }?): { [string]: any }
-    local e: { [string]: any } = { group = true, name = name, members = members }
+local function slot(name: string, members: Entry[], extra: { [string]: unknown }?): Entry
+    local e: Entry = { group = true, name = name, members = members }
     for k, v in pairs(extra or {}) do e[k] = v end
     Lists.regroup(e)
     return e
@@ -22,7 +34,7 @@ end
 
 -- A preset of every kind of entry: single entries, a shared slot, a
 -- collection with a shared slot and a weapon enchant inside, an enchant.
-local function preset(): { [string]: any }
+local function preset(): CooldownPreset
     return {
         id = "arms", name = "Arms (Two-hander)", tree = 1,
         lists = {
@@ -62,9 +74,9 @@ end
 
 @test("findPreset and specPreset")
 local function presetLookup()
-    local a = { id = "a", tree = 1 }
-    local u = { id = "u" }
-    local b = { id = "b", tree = 2 }
+    local a: CooldownPreset = { id = "a", name = "A", tree = 1, lists = {} }
+    local u: CooldownPreset = { id = "u", name = "U", tree = 0, lists = {} }
+    local b: CooldownPreset = { id = "b", name = "B", tree = 2, lists = {} }
     local all = { u, a, b }
     expect(Lists.findPreset(all, "b")).toBe(b)
     expect(Lists.findPreset(all, "zz")).toBeNil()
@@ -78,7 +90,7 @@ end
 @test("specName")
 @cases({ { 0, "Unspecced" }, { 1, "Arms" }, { 2, "Fury" }, { 3, "Tree 3" } })
 local function specName(spec: number, name: string)
-    local all = { { id = "arms", name = "Arms (Two-hander)", tree = 1 }, { id = "fury", name = "Fury", tree = 2 } }
+    local all = { presetOf("arms", {}, 1, "Arms (Two-hander)"), presetOf("fury", {}, 2, "Fury") }
     expect(Lists.specName(all, spec)).toBe(name)
 end
 
@@ -86,37 +98,37 @@ end
 local function copyLists()
     local p = preset()
     local out = Lists.copyLists(p)
-    expect(#out.essential).toBe(2)
-    expect(out.essential[1].uid).toBeNil()
-    expect(out.utility[1].uid).toBe("armsutility1")
-    expect(out.buffs[1].uid).toBeNil()
-    expect(out.buffs[2].uid).toBe("armsbuffs2")
-    expect(out.buffs[2].entries[1].uid).toBeNil()
-    expect(out.buffs[2].entries[2].uid).toBe("armsbuffs2.2")
-    expect(out.buffs[2].entries[3].uid).toBe("armsbuffs2.3")
-    expect(out.buffs[3].uid).toBe("armsbuffs3")
+    expect(#listOf(out, "essential")).toBe(2)
+    expect(listOf(out, "essential")[1].uid).toBeNil()
+    expect(listOf(out, "utility")[1].uid).toBe("armsutility1")
+    expect(listOf(out, "buffs")[1].uid).toBeNil()
+    expect(listOf(out, "buffs")[2].uid).toBe("armsbuffs2")
+    expect(inside(listOf(out, "buffs")[2])[1].uid).toBeNil()
+    expect(inside(listOf(out, "buffs")[2])[2].uid).toBe("armsbuffs2.2")
+    expect(inside(listOf(out, "buffs")[2])[3].uid).toBe("armsbuffs2.3")
+    expect(listOf(out, "buffs")[3].uid).toBe("armsbuffs3")
     -- lists the preset doesn't have start empty
-    expect(out.debuffs).toEqual({})
-    expect(out.procs).toEqual({})
+    expect(listOf(out, "debuffs")).toEqual({})
+    expect(listOf(out, "procs")).toEqual({})
     -- a copy: the preset is untouched
-    out.essential[1].name = "changed"
-    expect(p.lists.essential[1].name).toBe("Mortal Strike")
-    expect(p.lists.utility[1].uid).toBeNil()
+    listOf(out, "essential")[1].name = "changed"
+    expect(listOf(p.lists, "essential")[1].name).toBe("Mortal Strike")
+    expect(listOf(p.lists, "utility")[1].uid).toBeNil()
 end
 
 @test("copyLists: a uid the preset has stays")
 local function copyListsKeepsUid()
-    local p = { id = "x", lists = { buffs = { { collection = true, uid = "C", entries = { { group = true, uid = "G", members = {} }, { group = true, members = {} } } } } } }
+    local p = presetOf("x", { buffs = { { collection = true, uid = "C", entries = { { group = true, uid = "G", members = {} }, { group = true, members = {} } } } } })
     local out = Lists.copyLists(p)
-    expect(out.buffs[1].uid).toBe("C")
-    expect(out.buffs[1].entries[1].uid).toBe("G")
-    expect(out.buffs[1].entries[2].uid).toBe("C.2")
+    expect(listOf(out, "buffs")[1].uid).toBe("C")
+    expect(inside(listOf(out, "buffs")[1])[1].uid).toBe("G")
+    expect(inside(listOf(out, "buffs")[1])[2].uid).toBe("C.2")
 end
 
 @test("copyLists: a collection without entries")
 local function copyListsEmptyCollection()
-    local out = Lists.copyLists({ id = "x", lists = { buffs = { { collection = true } } } })
-    expect(out.buffs[1].uid).toBe("xbuffs1")
+    local out = Lists.copyLists(presetOf("x", { buffs = { { collection = true } } }))
+    expect(listOf(out, "buffs")[1].uid).toBe("xbuffs1")
 end
 
 --------------------------------------------------------------------------------
@@ -165,7 +177,7 @@ end
 -- Paths
 --------------------------------------------------------------------------------
 
-local function sample(): { [string]: any }
+local function sample(): ListSet
     return Lists.copyLists(preset())
 end
 
@@ -173,20 +185,20 @@ end
 local function locatePaths()
     local l = sample()
     local t, i, s = Lists.locate(l, { key = "essential", i = 2 })
-    expect(t).toBe(l.essential)
+    expect(t).toBe(listOf(l, "essential"))
     expect(i).toBe(2)
     expect(s).toBeNil()
     t, i, s = Lists.locate(l, { key = "buffs", i = 2, j = 1 })
-    expect(t).toBe(l.buffs[2].entries)
+    expect(t).toBe(inside(listOf(l, "buffs")[2]))
     expect(i).toBe(1)
     expect(s).toBeNil()
     t, i, s = Lists.locate(l, { key = "utility", i = 1, m = 2 })
-    expect(t).toBe(l.utility[1].members)
+    expect(t).toBe(membersOf(listOf(l, "utility")[1]))
     expect(i).toBe(2)
-    expect(s).toBe(l.utility[1])
+    expect(s).toBe(listOf(l, "utility")[1])
     t, i, s = Lists.locate(l, { key = "buffs", i = 2, j = 2, m = 1 })
-    expect(t).toBe(l.buffs[2].entries[2].members)
-    expect(s).toBe(l.buffs[2].entries[2])
+    expect(t).toBe(membersOf(inside(listOf(l, "buffs")[2])[2]))
+    expect(s).toBe(inside(listOf(l, "buffs")[2])[2])
 end
 
 @test("locate: nothing there")
@@ -211,8 +223,8 @@ end
 @test("entryAt and samePath")
 local function entryAtSamePath()
     local l = sample()
-    expect(Lists.entryAt(l, { key = "essential", i = 1 }).name).toBe("Mortal Strike")
-    expect(Lists.entryAt(l, { key = "utility", i = 1, m = 2 }).name).toBe("Shield Bash")
+    expect(assert(Lists.entryAt(l, { key = "essential", i = 1 })).name).toBe("Mortal Strike")
+    expect(assert(Lists.entryAt(l, { key = "utility", i = 1, m = 2 })).name).toBe("Shield Bash")
     expect(Lists.entryAt(l, { key = "essential", i = 1, m = 1 })).toBeFalsy()
     expect(Lists.entryAt(l, { key = "procs", i = 1 })).toBeNil()
     expect(Lists.samePath({ key = "a", i = 1 }, { key = "a", i = 1 })).toBe(true)
@@ -227,7 +239,7 @@ end
 local function walkAll()
     local l = sample()
     local seen: string[] = {}
-    Lists.walk(l.buffs, "buffs", function(e: any, p: Path)
+    Lists.walk(listOf(l, "buffs"), "buffs", function(e: Entry, p: Path)
         seen[#seen + 1] = ("%s %s/%d/%s/%s"):format(e.name, p.key, p.i, tostring(p.j), tostring(p.m))
     end)
     expect(seen).toEqual({
@@ -251,7 +263,7 @@ end
 
 @test("regroup: every member's IDs once, sorted, the first member's art")
 local function regroupIds()
-    local e: { [string]: any } = { group = true, members = { { ids = { 30, 10 } }, { ids = { 20, 10 } } } }
+    local e: Entry = { group = true, members = { { ids = { 30, 10 } }, { ids = { 20, 10 } } } }
     Lists.regroup(e)
     expect(e.ids).toEqual({ 10, 20, 30 })
     expect(e.icon).toBe(30)
@@ -259,11 +271,11 @@ end
 
 @test("regroup: an icon still among the IDs, or a member's art, stays")
 local function regroupKeepsIcon()
-    local e: { [string]: any } = { group = true, icon = 20, fixedIcon = true, members = { { ids = { 10 } }, { ids = { 20 } } } }
+    local e: Entry = { group = true, icon = 20, fixedIcon = true, members = { { ids = { 10 } }, { ids = { 20 } } } }
     Lists.regroup(e)
     expect(e.icon).toBe(20)
     expect(e.fixedIcon).toBe(true)
-    local art: { [string]: any } = { group = true, icon = 99, fixedIcon = true, members = { { ids = { 10 }, icon = 99 } } }
+    local art: Entry = { group = true, icon = 99, fixedIcon = true, members = { { ids = { 10 }, icon = 99 } } }
     Lists.regroup(art)
     expect(art.icon).toBe(99)
     expect(art.fixedIcon).toBe(true)
@@ -271,15 +283,15 @@ end
 
 @test("regroup: an icon whose member left isn't fixed any more")
 local function regroupDropsIcon()
-    local e: { [string]: any } = { group = true, icon = 20, fixedIcon = true, members = { { ids = { 10 } } } }
+    local e: Entry = { group = true, icon = 20, fixedIcon = true, members = { { ids = { 10 } } } }
     Lists.regroup(e)
     expect(e.fixedIcon).toBeNil()
     expect(e.icon).toBe(10)
-    local empty: { [string]: any } = { group = true, icon = 5, fixedIcon = true, members = {} }
+    local empty: Entry = { group = true, icon = 5, fixedIcon = true, members = {} }
     Lists.regroup(empty)
     expect(empty.ids).toEqual({})
     expect(empty.icon).toBeNil()
-    local none: { [string]: any } = { group = true }
+    local none: Entry = { group = true }
     Lists.regroup(none)
     expect(none.ids).toEqual({})
 end
@@ -323,9 +335,9 @@ end
 local function changesCounted()
     local p = preset()
     local l = Lists.copyLists(p)
-    table.insert(l.essential, single("Execute", { 5308 }))   -- added
-    table.remove(l.essential, 2)                             -- Overpower removed
-    l.essential[1].glow = true                               -- changed
+    table.insert(listOf(l, "essential"), single("Execute", { 5308 }))   -- added
+    table.remove(listOf(l, "essential"), 2)                             -- Overpower removed
+    listOf(l, "essential")[1].glow = true                               -- changed
     expect(Lists.countChanges(p, l)).toBe(3)
 end
 
@@ -333,11 +345,11 @@ end
 local function collectionChanges()
     local p = preset()
     local l = Lists.copyLists(p)
-    l.buffs[2].name = "Renamed"                              -- the collection: 1
+    listOf(l, "buffs")[2].name = "Renamed"                              -- the collection: 1
     expect(Lists.countChanges(p, l)).toBe(1)
     -- an entry moved out of it: 1 more
-    local cs = table.remove(l.buffs[2].entries, 1)
-    table.insert(l.buffs, cs)
+    local cs = assert(table.remove(inside(listOf(l, "buffs")[2]), 1))
+    table.insert(listOf(l, "buffs"), cs)
     expect(Lists.countChanges(p, l)).toBe(2)
 end
 
@@ -345,7 +357,7 @@ end
 local function collectionByName()
     local p = preset()
     local l = Lists.copyLists(p)
-    l.buffs[2].uid = "other"
+    listOf(l, "buffs")[2].uid = "other"
     -- matched by name; its entries count against the matched uid
     expect(Lists.countChanges(p, l)).toBe(0)
 end
@@ -354,11 +366,11 @@ end
 local function collectionRemovedAdded()
     local p = preset()
     local l = Lists.copyLists(p)
-    local col = table.remove(l.buffs, 2)
+    local col = assert(table.remove(listOf(l, "buffs"), 2))
     -- the collection and its three entries are gone
     expect(Lists.countChanges(p, l)).toBe(4)
     col.uid, col.name = "new", "New"
-    table.insert(l.buffs, col)
+    table.insert(listOf(l, "buffs"), col)
     -- a new collection, with its entries under another parent
     expect(Lists.countChanges(p, l)).toBe(5)
 end
@@ -366,20 +378,20 @@ end
 @test("countChanges: a preset collection that has a uid of its own")
 local function presetCollectionUid()
     local p = preset()
-    p.lists.buffs[2].uid = "SHOUTS"
+    listOf(p.lists, "buffs")[2].uid = "SHOUTS"
     local l = Lists.copyLists(p)
-    expect(l.buffs[2].uid).toBe("SHOUTS")
+    expect(listOf(l, "buffs")[2].uid).toBe("SHOUTS")
     expect(Lists.countChanges(p, l)).toBe(0)
 end
 
 @test("countChanges: two collections of the same name pair off")
 local function twoCollections()
-    local p = { id = "p", lists = { buffs = {
+    local p = presetOf("p", { buffs = {
         { collection = true, name = "C", entries = {} },
         { collection = true, name = "C", entries = {} },
-    } } }
+    } })
     local l = Lists.copyLists(p)
-    l.buffs[1].uid, l.buffs[2].uid = "a", "b"
+    listOf(l, "buffs")[1].uid, listOf(l, "buffs")[2].uid = "a", "b"
     expect(Lists.countChanges(p, l)).toBe(0)
 end
 
@@ -397,7 +409,7 @@ end
 
 @test("asMember: an aura keeps whose where it differs from the slot's, and its condition")
 local function asMemberAura()
-    local when = { match = "all", conditions = { { type = "combat" } } }
+    local when: When = { match = "all", conditions = { { type = "combat" } } }
     -- a buff (anyone's) into a slot of yours
     local m = Lists.asMember(single("Renew", { 139 }, { when = when }), "buffs", nil, { group = true }, "buffs")
     expect(m.source).toBe("any")
@@ -431,9 +443,9 @@ end
 -- Moving
 --------------------------------------------------------------------------------
 
-local function names(t: any[]): string[]
+local function names<T extends { name?: string }>(t: T[]?): string[]
     local out: string[] = {}
-    for _, e in ipairs(t) do out[#out + 1] = e.name end
+    for _, e in ipairs(t or {}) do out[#out + 1] = e.name or "" end
     return out
 end
 
@@ -441,34 +453,34 @@ end
 local function moveWithin()
     local l = { essential = { single("A", { 1 }), single("B", { 2 }), single("C", { 3 }) } }
     Lists.moveEntry(l, { key = "essential", i = 1 }, { key = "essential", i = 3 })
-    expect(names(l.essential)).toEqual({ "B", "A", "C" })
+    expect(names(listOf(l, "essential"))).toEqual({ "B", "A", "C" })
     Lists.moveEntry(l, { key = "essential", i = 3 }, { key = "essential", i = 1 })
-    expect(names(l.essential)).toEqual({ "C", "B", "A" })
+    expect(names(listOf(l, "essential"))).toEqual({ "C", "B", "A" })
     -- past the end: last
     Lists.moveEntry(l, { key = "essential", i = 1 }, { key = "essential", i = 99 })
-    expect(names(l.essential)).toEqual({ "B", "A", "C" })
+    expect(names(listOf(l, "essential"))).toEqual({ "B", "A", "C" })
 end
 
 @test("moveEntry: into another list, into a collection")
 local function moveAcross()
     local l = sample()
     Lists.moveEntry(l, { key = "essential", i = 1 }, { key = "utility", i = 1 })
-    expect(names(l.essential)).toEqual({ "Overpower" })
-    expect(names(l.utility)).toEqual({ "Mortal Strike", "Interrupts" })
+    expect(names(listOf(l, "essential"))).toEqual({ "Overpower" })
+    expect(names(listOf(l, "utility"))).toEqual({ "Mortal Strike", "Interrupts" })
     Lists.moveEntry(l, { key = "buffs", i = 1 }, { key = "buffs", i = 2, j = math.huge })
-    expect(names(l.buffs[1].entries)).toEqual({ "Commanding Shout", "Stances", "Off-hand enchant", "Battle Shout" })
+    expect(names(inside(listOf(l, "buffs")[1]))).toEqual({ "Commanding Shout", "Stances", "Off-hand enchant", "Battle Shout" })
 end
 
 @test("moveEntry: into a shared slot makes a member, out of one a single entry")
 local function moveSlots()
     local l = sample()
     Lists.moveEntry(l, { key = "essential", i = 2 }, { key = "utility", i = 1, m = math.huge })
-    local s = l.utility[1]
+    local s = listOf(l, "utility")[1]
     expect(names(s.members)).toEqual({ "Pummel", "Shield Bash", "Overpower" })
     expect(s.ids).toEqual({ 72, 6552, 7384 })
     -- out again, to the top of essential
     Lists.moveEntry(l, { key = "utility", i = 1, m = 1 }, { key = "essential", i = 1 })
-    expect(names(l.essential)).toEqual({ "Pummel", "Mortal Strike" })
+    expect(names(listOf(l, "essential"))).toEqual({ "Pummel", "Mortal Strike" })
     expect(s.ids).toEqual({ 72, 7384 })
     -- within the slot: stays a member
     Lists.moveEntry(l, { key = "utility", i = 1, m = 2 }, { key = "utility", i = 1, m = 1 })
@@ -482,11 +494,11 @@ local function moveSlotToSlot()
         slot("S2", { single("C", { 3 }) }),
     } }
     Lists.moveEntry(l, { key = "buffs", i = 1, m = 1 }, { key = "buffs", i = 2, m = math.huge })
-    expect(names(l.buffs[1].members)).toEqual({ "B" })
-    expect(l.buffs[1].ids).toEqual({ 2 })
-    expect(names(l.buffs[2].members)).toEqual({ "C", "A" })
-    expect(l.buffs[2].members[2].source).toBe("others")
-    expect(l.buffs[2].ids).toEqual({ 1, 3 })
+    expect(names(membersOf(listOf(l, "buffs")[1]))).toEqual({ "B" })
+    expect(listOf(l, "buffs")[1].ids).toEqual({ 2 })
+    expect(names(membersOf(listOf(l, "buffs")[2]))).toEqual({ "C", "A" })
+    expect(membersOf(listOf(l, "buffs")[2])[2].source).toBe("others")
+    expect(listOf(l, "buffs")[2].ids).toEqual({ 1, 3 })
 end
 
 @test("moveEntry: nothing at either end does nothing")
@@ -501,11 +513,11 @@ end
 
 @test("combine: a cooldown shared slot in A's place, A's looks and conditions")
 local function combineCooldown()
-    local when = { match = "all", conditions = { { type = "combat" } } }
+    local when: When = { match = "all", conditions = { { type = "combat" } } }
     local l = { essential = { single("A", { 1 }, { glow = true, when = when, hidden = true }), single("X", { 9 }), single("B", { 2 }) } }
     Lists.combine(l, { key = "essential", i = 1 }, { key = "essential", i = 3 }, "U", { "A", "B" })
-    expect(#l.essential).toBe(2)
-    local s = l.essential[1]
+    expect(#listOf(l, "essential")).toBe(2)
+    local s = listOf(l, "essential")[1]
     expect(s.group).toBe(true)
     expect(s.uid).toBe("U")
     expect(s.name).toBe("A + B")
@@ -521,19 +533,19 @@ end
 
 @test("combine: an aura slot takes A's whose, one at a time; conditions stay with the members")
 local function combineAura()
-    local when = { conditions = { { type = "combat" } } }
-    local l = { buffs = { single("A", { 1 }, { when = when }), slot("S", { single("B", { 2 }), single("C", { 3 }) }) } }
+    local when: When = { conditions = { { type = "combat" } } }
+    local l: ListSet = { buffs = { single("A", { 1 }, { when = when }), slot("S", { single("B", { 2 }), single("C", { 3 }) }) } }
     Lists.combine(l, { key = "buffs", i = 1 }, { key = "buffs", i = 2, m = 1 }, "U", { "A", "B" })
-    local s = l.buffs[1]
+    local s = listOf(l, "buffs")[1]
     expect(s.source).toBe("any")
     expect(s.max).toBe(1)
     expect(s.when).toBeNil()
-    expect(s.members[1].when).toEqual(when)
-    expect(s.members[1].source).toBeNil()
+    expect(membersOf(s)[1].when).toEqual(when)
+    expect(membersOf(s)[1].source).toBeNil()
     -- B came from a slot of yours
-    expect(s.members[2].source).toBe("mine")
+    expect(membersOf(s)[2].source).toBe("mine")
     -- the slot it left regrouped
-    expect(l.buffs[2].ids).toEqual({ 3 })
+    expect(listOf(l, "buffs")[2].ids).toEqual({ 3 })
 end
 
 @test("combine: nothing when the entries aren't the two named any more")
@@ -578,7 +590,7 @@ end
     -- between a list's rows: anything
     { { kind = "collection", path = { key = "buffs", i = 1 } }, { path = { key = "buffs", i = 3 } }, true },
 })
-local function accepts(from: { [string]: any }, to: { [string]: any }, ok: boolean)
+local function accepts(from: DragFrom, to: DropTo, ok: boolean)
     expect(Lists.accepts(from, to)).toBe(ok)
 end
 
@@ -594,10 +606,10 @@ end
 local function removeAt()
     local l = sample()
     Lists.removeAt(l, { key = "essential", i = 1 })
-    expect(names(l.essential)).toEqual({ "Overpower" })
+    expect(names(listOf(l, "essential"))).toEqual({ "Overpower" })
     Lists.removeAt(l, { key = "utility", i = 1, m = 1 })
-    expect(names(l.utility[1].members)).toEqual({ "Shield Bash" })
-    expect(l.utility[1].ids).toEqual({ 72 })
+    expect(names(membersOf(listOf(l, "utility")[1]))).toEqual({ "Shield Bash" })
+    expect(listOf(l, "utility")[1].ids).toEqual({ 72 })
     local before = Lists.copy(l)
     Lists.removeAt(l, { key = "essential", i = 7 })
     Lists.removeAt(l, { key = "essential", i = 1, m = 1 })
@@ -608,29 +620,29 @@ end
 local function moveToList()
     local l = sample()
     Lists.moveToList(l, "essential", 1, "utility")
-    expect(names(l.utility)).toEqual({ "Interrupts", "Mortal Strike" })
+    expect(names(listOf(l, "utility"))).toEqual({ "Interrupts", "Mortal Strike" })
     Lists.moveToList(l, "essential", 5, "utility")
-    expect(#l.utility).toBe(2)
+    expect(#listOf(l, "utility")).toBe(2)
 end
 
 @test("addInto: a collection's entries, a shared slot's members")
 local function addInto()
     local l = { buffs = { { collection = true, name = "C" }, slot("S", { single("A", { 5 }) }), single("X", { 1 }) } }
     Lists.addInto(l, { key = "buffs", i = 1 }, single("B", { 2 }))
-    expect(names(l.buffs[1].entries)).toEqual({ "B" })
+    expect(names(inside(listOf(l, "buffs")[1]))).toEqual({ "B" })
     Lists.addInto(l, { key = "buffs", i = 2 }, single("C", { 3 }, { icon = 7 }))
-    expect(l.buffs[2].members[2]).toEqual({ name = "C", ids = { 3 } })
-    expect(l.buffs[2].ids).toEqual({ 3, 5 })
+    expect(membersOf(listOf(l, "buffs")[2])[2]).toEqual({ name = "C", ids = { 3 } })
+    expect(listOf(l, "buffs")[2].ids).toEqual({ 3, 5 })
     -- no weapon enchant in a shared slot, nothing into a single entry
     Lists.addInto(l, { key = "buffs", i = 2 }, { enchant = "main", name = "Main-hand enchant", ids = {} })
     Lists.addInto(l, { key = "buffs", i = 3 }, single("D", { 4 }))
     Lists.addInto(l, { key = "buffs", i = 9 }, single("D", { 4 }))
-    expect(#l.buffs[2].members).toBe(2)
-    expect(l.buffs[3].entries).toBeNil()
+    expect(#membersOf(listOf(l, "buffs")[2])).toBe(2)
+    expect(listOf(l, "buffs")[3].entries).toBeNil()
     -- a slot saved without members
-    local bare = { buffs = { { group = true, name = "S" } } }
+    local bare: ListSet = { buffs = { { group = true, name = "S" } } }
     Lists.addInto(bare, { key = "buffs", i = 1 }, single("A", { 1 }))
-    expect(bare.buffs[1].ids).toEqual({ 1 })
+    expect(listOf(bare, "buffs")[1].ids).toEqual({ 1 })
 end
 
 @test("newSlot and newCollection")
@@ -657,9 +669,9 @@ local function findSingle()
     local l = sample()
     local b = { key = "essential", path = { key = "essential", i = 2 }, entryName = "Overpower" }
     local e, s = Lists.findEntry(l, b)
-    expect(e).toBe(l.essential[2])
+    expect(e).toBe(listOf(l, "essential")[2])
     expect(s).toBeNil()
-    table.remove(l.essential, 1)
+    table.remove(listOf(l, "essential"), 1)
     e = Lists.findEntry(l, b)
     expect(e).toBeNil()
 end
@@ -667,17 +679,17 @@ end
 @test("findEntry: a collection or slot by its uid, wherever it moved")
 local function findByUid()
     local l = sample()
-    local uid = l.buffs[2].uid
+    local uid = listOf(l, "buffs")[2].uid
     local b = { key = "buffs", path = { key = "buffs", i = 2 }, uid = uid, entryName = "Shouts" }
-    table.insert(l.buffs, 1, single("New", { 1 }))
+    table.insert(listOf(l, "buffs"), 1, single("New", { 1 }))
     local e = Lists.findEntry(l, b)
-    expect(e).toBe(l.buffs[3])
+    expect(e).toBe(listOf(l, "buffs")[3])
     expect(b.path).toEqual({ key = "buffs", i = 3 })
     -- renamed: still found by uid
-    l.buffs[3].name = "Other"
-    expect(Lists.findEntry(l, b)).toBe(l.buffs[3])
+    listOf(l, "buffs")[3].name = "Other"
+    expect(Lists.findEntry(l, b)).toBe(listOf(l, "buffs")[3])
     -- gone
-    table.remove(l.buffs, 3)
+    table.remove(listOf(l, "buffs"), 3)
     local gone, s = Lists.findEntry(l, b)
     expect(gone).toBeNil()
     expect(s).toBeNil()
@@ -686,22 +698,22 @@ end
 @test("findEntry: a member by its slot's uid")
 local function findMember()
     local l = sample()
-    local slotUid = l.buffs[2].entries[2].uid
-    local b = { key = "buffs", path = { key = "buffs", i = 2, j = 2, m = 1 }, slotUid = slotUid, entryName = "Battle Stance" }
+    local slotUid = inside(listOf(l, "buffs")[2])[2].uid
+    local b: EntryRef = { key = "buffs", path = { key = "buffs", i = 2, j = 2, m = 1 }, slotUid = slotUid, entryName = "Battle Stance" }
     -- the collection moves down one
-    table.insert(l.buffs, 1, single("New", { 1 }))
+    table.insert(listOf(l, "buffs"), 1, single("New", { 1 }))
     local e, s = Lists.findEntry(l, b)
-    expect(e.name).toBe("Battle Stance")
-    expect(s).toBe(l.buffs[3].entries[2])
+    expect(assert(e).name).toBe("Battle Stance")
+    expect(s).toBe(inside(listOf(l, "buffs")[3])[2])
     expect(b.path).toEqual({ key = "buffs", i = 3, j = 2, m = 1 })
     -- a member renamed out of the way: not it any more
-    s.members[1].name = "Other"
+    membersOf(s)[1].name = "Other"
     expect(Lists.findEntry(l, b)).toBeNil()
 end
 
 @test("resetBehaviour")
 local function resetBehaviour()
-    local function entry(): { [string]: any }
+    local function entry(): Entry
         return { name = "A", source = "others", mine = true, when = { conditions = {} }, glow = true, missing = "warn", effect = "you", hidden = true }
     end
     local m = entry()
@@ -723,8 +735,8 @@ end
 -- Seen recently
 --------------------------------------------------------------------------------
 
-local function recentList(n: number): { [string]: any }[]
-    local out: { [string]: any }[] = {}
+local function recentList(n: number): Recent[]
+    local out: Recent[] = {}
     for i = 1, n do out[i] = { name = "S" .. i, ids = { i } } end
     return out
 end
@@ -766,7 +778,7 @@ local function mergeNew()
     local fresh = assert(Lists.mergeRecent(recentList(2), { { name = "S1", id = 1 }, { name = "A", id = 10 }, { name = "A", id = 11 }, { id = 12 }, { name = "B", id = 13 } }, 12))
     expect(names(fresh)).toEqual({ "A", "B", "S1", "S2" })
     expect(fresh[1].ids).toEqual({ 10 })
-    local many: { [string]: any }[] = {}
+    local many: { name?: string, id: number }[] = {}
     for i = 1, 14 do many[i] = { name = "N" .. i, id = i } end
     local cut = assert(Lists.mergeRecent(recentList(3), many, 12))
     expect(#cut).toBe(12)

@@ -16,29 +16,38 @@ import SuuUI from "/Core/API"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as registry from "/SettingsUI/Registry"
+import type ConfirmOptions from "/UI/Panel"
+import type Segmented, SegmentValue from "/UI/Inputs"
+import type Select, SelectValue from "/UI/Select"
+import type Text from "/UI/Text"
+import type Entry, ListSet, Recent from "/Units/CooldownManager/Lists"
+import type When, Condition from "/Units/CooldownManager/Conditions"
+import type ToggleChips from "/UI/Pickers"
+import internal M, PresetBar, ListEditor, EntryRow, BehaviourPanel, AddToRow from "/Units/CooldownManager"
 import expectNoErrors, newParent from "../../helpers"
 
-local M: any = assert(SuuUI.GetModule("cooldowns"))
-local UI: any = SuuUI.UI
-local G: any = _G
+local UI = SuuUI.UI
 
-local confirmed: any = nil
+local confirmed: ConfirmOptions? = nil
+local function asked(): ConfirmOptions return (assert(confirmed, "nothing asked")) end
+local function confirm() assert(asked().onConfirm)() end
+local function askedText(): string return asked().text or "" end
+-- the Behaviour panels the tests opened
+local panels: BehaviourPanel[] = {}
 
 @beforeEach
 local function start()
     confirmed = nil
-    mock.stub(UI, "Confirm", function(opts: any) confirmed = opts end)
+    mock.stub(UI, "Confirm", function(opts: ConfirmOptions): nil confirmed = opts; return nil end)
 end
 
 @afterEach
 local function cleanup()
     M.editSpec = nil
     M:ResetAll({ "setups", "recent", "lists", "preset", "shows", "position", "resource", "resourceWidth",
-                           "resourceOwnWidth", "resourcePoints", "essentialSize" })
-    for _, c in ipairs({ SuuUI.Root:GetChildren() }) do
-        local x: any = c
-        if x.sections and x.cond and x:IsShown() then x:Hide() end
-    end
+                 "resourceOwnWidth", "resourcePoints", "essentialSize" })
+    for _, b in ipairs(panels) do b:Hide() end
+    panels = {}
     if InCombatLockdown() then mock.player:leaveCombat() end
     expectNoErrors()
 end
@@ -47,65 +56,83 @@ local function section(): registry.Section
     return registry.get("cooldowns") :: registry.Section
 end
 
-local function build(n: number): any
+local function build(n: number): Frame
     local host = newParent(700, 900)
-    local f = ((section().groups or {})[1]).rows[n].build(host)
+    local f: Frame = ((section().groups or {})[1]).rows[n].build(host)
     f:SetPoint("TOPLEFT", host, "TOPLEFT")
     return f
 end
 
-local function presetBar(): any return build(1) end
-local function editor(): any return build(2) end
+local function presetBar(): PresetBar return build(1) :: unknown :: PresetBar end
+local function editor(): ListEditor return build(2) :: unknown :: ListEditor end
 
-local function rowOf(label: string): any
+local function rowOf(label: string): { disabled: () -> (boolean, string?) }
     for _, g in ipairs(section().groups or {}) do
         for _, r in ipairs(g.rows) do if r.label == label then return r end end
     end
     error("no row " .. label)
 end
 
+local function textOf(t: Text?): string return assert(t):GetText() or "" end
+local function contains(t: Text?, part: string): boolean return textOf(t):find(part, 1, true) ~= nil end
+
 -- The editor's shown row with this name (a collection's in capitals).
-local function row(f: any, name: string): any
+local function row(f: ListEditor, name: string): EntryRow
     for _, r in ipairs(f.rows) do
         if r:IsShown() and (r.name:GetText() == name or r.name:GetText() == name:upper()) then return r end
     end
     error("no row " .. name)
 end
 
-local function hasRow(f: any, name: string): boolean
+local function hasRow(f: ListEditor, name: string): boolean
     for _, r in ipairs(f.rows) do
         if r:IsShown() and (r.name:GetText() == name or r.name:GetText() == name:upper()) then return true end
     end
     return false
 end
 
-local function names(list: any[]): string[]
-    local out: string[] = {}
+local function names(list: Entry[]?): (string?)[]
+    local out: (string?)[] = {}
     for _, e in ipairs(list or {}) do out[#out + 1] = e.name end
     return out
 end
 
-local function click(seg: any, value: any)
+local function click<V extends SegmentValue>(seg: Segmented<V>, value: V)
     for _, b in ipairs(seg.buttons) do
         if b.option.value == value then mock.click(b) return end
     end
     error("no option " .. tostring(value))
 end
 
-local function auras(f: any)
+local function auras(f: ListEditor)
     click(f.tabs, "auras")
 end
 
-local function lists(): any return M:Lists(M:EditSpec()) end
-
--- The Behaviour panel for a row.
-local function behaviour(f: any, name: string): any
-    mock.click(row(f, name).behaviour)
-    assert(f.behaviour and f.behaviour:IsShown(), "no Behaviour panel")
-    return f.behaviour
+local function lists(): ListSet return M:Lists(M:EditSpec()) end
+-- A list of the edited setup; a slot's members; a collection's entries.
+local function listOf(key: string): Entry[] return (assert(lists()[key], key)) end
+local function lastOf(key: string): Entry local l = listOf(key); return l[#l] end
+local function membersOf(e: Entry?): Entry[] return (assert(assert(e).members)) end
+local function inside(e: Entry?): Entry[] return (assert(assert(e).entries)) end
+local function named(key: string, name: string): Entry?
+    for _, e in ipairs(listOf(key)) do if e.name == name then return e end end
+    return nil
+end
+-- The kinds of "Seen recently" of this warrior.
+local function recentOf(kind: string): Recent[]
+    return (assert(assert(M:Get("recent").WARRIOR)[kind]))
 end
 
-local function options(sel: any): string[]
+-- The Behaviour panel for a row.
+local function behaviour(f: ListEditor, name: string): BehaviourPanel
+    mock.click(row(f, name).behaviour)
+    local b = f.behaviour
+    assert(b and b:IsShown(), "no Behaviour panel")
+    panels[#panels + 1] = b
+    return b
+end
+
+local function options<V extends SelectValue>(sel: Select<V>): string[]
     local out: string[] = {}
     for _, o in ipairs(sel.options) do out[#out + 1] = o.heading and ("# " .. o.heading) or tostring(o.value) end
     return out
@@ -116,15 +143,48 @@ local function has(list: string[], v: string): boolean
     return false
 end
 
+-- The lists with one of them replaced.
+local function replaced(l: ListSet, key: string, list: Entry[]): ListSet
+    local out: ListSet = {}
+    for k, v in pairs(l) do out[k] = v end
+    out[key] = list
+    return out
+end
+
+-- A choice in a dropdown, as if picked (nil: cleared).
+local function pick<V extends SelectValue>(sel: Select<V>, value: V?)
+    assert(sel.onChange)(value :: unknown :: V)
+end
+
+-- Chips chosen, as if clicked.
+local function chips(c: ToggleChips, values: string[])
+    assert(c.onChange)(values)
+end
+
+-- The shown "+ Add to" row with this placeholder.
+local function addToNamed(f: ListEditor, placeholder: string): AddToRow
+    for _, a in ipairs(f.addTos) do
+        if a:IsShown() and a.select.placeholder == placeholder then return a end
+    end
+    error("no " .. placeholder)
+end
+
+-- The (last) shared slot of a list.
+local function slotOf(key: string): Entry?
+    local slot: Entry? = nil
+    for _, e in ipairs(listOf(key)) do if e.group then slot = e end end
+    return slot
+end
+
 --------------------------------------------------------------------------------
 -- Spec and setups
 --------------------------------------------------------------------------------
 
 -- Three trees side by side, `ranks` points spent in each.
 local function fakeTrees(ranks: number[])
-    mock.stub(C_Traits, "GetConfigInfo", function(_: number): any return { treeIDs = { 1 } } end)
-    mock.stub(C_Traits, "GetTreeNodes", function(_: number): any return { 11, 12, 13, 14 } end)
-    mock.stub(C_Traits, "GetNodeInfo", function(_: number, node: number): any
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): unknown return { treeIDs = { 1 } } end)
+    mock.stub(C_Traits, "GetTreeNodes", function(_: number): unknown return { 11, 12, 13, 14 } end)
+    mock.stub(C_Traits, "GetNodeInfo", function(_: number, node: number): unknown
         if node == 14 then return { posX = 30000 } end      -- off the trees: not counted
         return { posX = (node - 11) * 3000, ranksPurchased = ranks[node - 10] }
     end)
@@ -149,7 +209,7 @@ local function spec()
     mock.fireEvent("CHARACTER_POINTS_CHANGED", 0)
     mock.advanceTime(0.3)
     expect(M.spec).toBe(0)
-    mock.stub(C_Traits, "GetConfigInfo", function(_: number): any error("not ready") end)
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): unknown error("not ready") end)
     expect(M:DetectSpec()).toBe(0)
     events.offAll("cd test")
 end
@@ -157,14 +217,12 @@ end
 @test("a spec's setup starts from its preset; Load replaces it; a preset that isn't there loads nothing")
 local function setups()
     expect(M:PresetId(1)).toBe("arms")
-    expect(#M:Lists(1).essential > 0).toBe(true)
+    expect(#assert(M:Lists(1).essential) > 0).toBe(true)
     expect(M:LoadPreset("fury", 1)).toBe(true)
     expect(M:PresetId(1)).toBe("fury")
     expect(M:LoadPreset("no such preset", 1)).toBe(false)
-    local l = M:Lists(1)
-    local copy: any = { essential = {}, utility = l.utility, buffs = l.buffs, debuffs = l.debuffs, procs = l.procs }
-    M:SetLists(copy, 1)
-    expect(#M:Lists(1).essential).toBe(0)
+    M:SetLists(replaced(M:Lists(1), "essential", {}), 1)
+    expect(#assert(M:Lists(1).essential)).toBe(0)
     expect(M:EditSpec()).toBe(0)
     M.editSpec = 3
     expect(M:EditSpec()).toBe(3)
@@ -172,7 +230,7 @@ end
 
 @test("the lists from before setups go to this spec's setup once, unless it has one; another class's are dropped")
 local function migrateLists()
-    local old = { essential = { { name = "Old Spell", ids = { 1 } } } }
+    local old: ListSet = { essential = { { name = "Old Spell", ids = { 1 } } } }
     M.spec = 2                                     -- a spec without a setup yet
     M:Set("lists", old)
     M:Set("preset", "unspecced")
@@ -197,32 +255,33 @@ end
 
 @test("the tracker gets this spec's lists and options; where and when it shows; the resource bar's options")
 local function applied()
-    local setLists = mock.stub(M.tracker, "SetLists", function(_: any, _: any) end)
-    local setOptions = mock.stub(M.tracker, "SetOptions", function(_: any, _: any) end)
+    local tracker = assert(M.tracker)
+    local setLists = mock.stub(tracker, "SetLists", function(_: unknown, _: unknown) end)
+    local setOptions = mock.stub(tracker, "SetOptions", function(_: unknown, _: unknown) end)
     M:Set("essentialSize", 44)
     expect(setOptions).toHaveBeenCalledTimes(1)
     expect(setLists).toHaveBeenCalledTimes(1)
-    local vis = mock.stub(UI, "SetVisibility", function(_: any, _: string?) end)
+    local vis = mock.stub(UI, "SetVisibility", function(_: unknown, _: string?) end)
     M:Set("shows", "combat")
-    expect(vis).toHaveBeenCalledWith(M.tracker, "combat")
+    expect(vis).toHaveBeenCalledWith(tracker, "combat")
     M:Set("position", { point = "BOTTOM", x = 0, y = 322, hidden = true })
-    expect(vis).toHaveBeenCalledWith(M.tracker, "hidden")
-    local resource: any = nil
-    mock.stub(M.resource, "SetOptions", function(_: any, o: any) resource = o end)
-    local stop = mock.stub(M.resource, "Stop", function(_: any) end)
-    local start = mock.stub(M.resource, "Start", function(_: any) end)
+    expect(vis).toHaveBeenCalledWith(tracker, "hidden")
+    local width: number? = nil
+    local bar = assert(M.resource)
+    mock.stub(bar, "SetOptions", function(_: unknown, o: { width?: number }) width = o.width end)
+    local stop = mock.stub(bar, "Stop", function(_: unknown) end)
+    local start = mock.stub(bar, "Start", function(_: unknown) end)
     M:Set("resource", "off")
     expect(stop).toHaveBeenCalledTimes(1)
     M:Set("resource", "power")
     expect(start).toHaveBeenCalledTimes(1)
     M:Set("resourceWidth", "own")
-    expect(resource.width).toBe(M:Get("resourceOwnWidth"))
+    expect(width).toBe(M:Get("resourceOwnWidth"))
     M:Set("resourceWidth", "cast")
-    local cast: any = SuuUI.GetModule("castbars")
-    local was = cast:Get("playerWidth")
-    cast:Set("playerWidth", was + 20)
-    expect(resource.width).toBe(was + 20)
-    cast:Set("playerWidth", was)
+    local was = 340
+    settings.set("castbars", "playerWidth", was + 20)
+    expect(width).toBe(was + 20)
+    settings.set("castbars", "playerWidth", was)
 end
 
 --------------------------------------------------------------------------------
@@ -236,7 +295,7 @@ local function bar()
     expect(f.setup.options[1].label).toBe("Unspecced (active)")
     expect(f.active:GetText()).toBe("This character: Unspecced · talents 0 / 0 / 0")
     expect(f.status:GetText()).toBe("Based on Unspecced")
-    f.setup.onChange(1)
+    pick(f.setup, 1)
     expect(M:EditSpec()).toBe(1)
     expect(f.status:GetText()).toBe("Based on Arms")
 end
@@ -246,21 +305,20 @@ local function loading()
     local f = presetBar()
     mock.click(f.load)
     expect(confirmed).toBe(nil)
-    f.select.onChange("arms")
+    pick(f.select, "arms")
     mock.click(f.load)
-    expect(confirmed.title).toBe("Load Arms?")
-    expect(confirmed.text).toBe("Your Unspecced lists are replaced with Arms's.")
-    confirmed.onConfirm()
+    expect(asked().title).toBe("Load Arms?")
+    expect(asked().text).toBe("Your Unspecced lists are replaced with Arms's.")
+    confirm()
     expect(M:PresetId(0)).toBe("arms")
     -- one change: counted, and named in the question
     local l = M:Lists(0)
-    local changed: any = { essential = { l.essential[2] }, utility = l.utility, buffs = l.buffs, debuffs = l.debuffs, procs = l.procs }
-    M:SetLists(changed, 0)
+    M:SetLists(replaced(l, "essential", { assert(l.essential)[2] }), 0)
     expect(M:Changes() > 0).toBe(true)
-    expect(f.status:GetText():find("Based on Arms · ", 1, true) ~= nil).toBe(true)
+    expect(contains(f.status, "Based on Arms · ")).toBe(true)
     confirmed = nil
     mock.click(f.load)
-    expect(confirmed.text:find("are lost.", 1, true) ~= nil).toBe(true)
+    expect(askedText():find("are lost.", 1, true) ~= nil).toBe(true)
 end
 
 @test("Reset to preset undoes the changes, after asking; with none, nothing; no preset: none loaded")
@@ -268,11 +326,10 @@ local function resetting()
     local f = presetBar()
     mock.click(f.reset)
     expect(confirmed).toBe(nil)
-    local l = M:Lists(0)
-    M:SetLists({ essential = {}, utility = l.utility, buffs = l.buffs, debuffs = l.debuffs, procs = l.procs }, 0)
+    M:SetLists(replaced(M:Lists(0), "essential", {}), 0)
     mock.click(f.reset)
-    expect(confirmed.title).toBe("Reset to preset?")
-    confirmed.onConfirm()
+    expect(asked().title).toBe("Reset to preset?")
+    confirm()
     expect(M:Changes()).toBe(0)
     M:SaveSetup(0, { preset = "", lists = {} })
     events.emit("SUUUI_COOLDOWNS_SETUP")
@@ -290,11 +347,11 @@ end
 local function cooldownRows()
     local f = editor()
     expect(f.heads[1].title:GetText()).toBe("Essential")
-    expect(f.heads[1].count:GetText()).toBe(#lists().essential .. " spells")
+    expect(f.heads[1].count:GetText()).toBe(#listOf("essential") .. " spells")
     local overpower = row(f, "Overpower")
-    expect(overpower.rank:GetText():find("Battle", 1, true) ~= nil).toBe(true)
+    expect(contains(overpower.rank, "Battle")).toBe(true)
     expect(overpower.move).toBeShown()
-    expect(row(f, "Bloodrage").rank:GetText():find("shows its effect", 1, true) ~= nil).toBe(true)
+    expect(contains(row(f, "Bloodrage").rank, "shows its effect")).toBe(true)
     mock.hover(overpower)
     mock.hover(nil)
     expect(f.adds[1].newCollection).never.toBeShown()   -- collections are for auras
@@ -306,11 +363,11 @@ local function auraRows()
     auras(f)
     expect(f.heads[1].title:GetText()).toBe("Buffs on you")
     local coll = row(f, "Physical Debuffs")
-    expect(coll.rank:GetText():find("collection · ", 1, true) ~= nil).toBe(true)
+    expect(contains(coll.rank, "collection · ")).toBe(true)
     expect(coll.folder).toBeShown()
     local armor = row(f, "Armor Reduction")
     expect(armor.mark).toBeShown()
-    expect(armor.rank:GetText():find("1 slot · 2 auras · anyone", 1, true) ~= nil).toBe(true)
+    expect(contains(armor.rank, "1 slot · 2 auras · anyone")).toBe(true)
     expect(armor.strip[1]).toBeShown()
     expect(hasRow(f, "Sunder Armor")).toBe(false)
     mock.click(armor.fold)
@@ -322,25 +379,25 @@ local function auraRows()
     expect(hasRow(f, "Armor Reduction")).toBe(false)
     expect(row(f, "Physical Debuffs").strip[1]).toBeShown()
     local stuns = row(f, "Stuns")
-    expect(stuns.rank:GetText():find("missing: hide", 1, true) ~= nil).toBe(true)
-    expect(f.heads[2].count:GetText():find("entries · ", 1, true) ~= nil).toBe(true)
+    expect(contains(stuns.rank, "missing: hide")).toBe(true)
+    expect(contains(f.heads[2].count, "entries · ")).toBe(true)
 end
 
 @test("a row's switch hides it, Move to sends it to the other list, × removes it")
 local function rowControls()
     local f = editor()
     mock.click(row(f, "Execute").shown)
-    local function find(name: string): (any, string?)
+    local function find(name: string): (Entry?, string?)
         for _, k in ipairs({ "essential", "utility" }) do
-            for _, e in ipairs(lists()[k]) do if e.name == name then return e, k end end
+            for _, e in ipairs(listOf(k)) do if e.name == name then return e, k end end
         end
         return nil, nil
     end
-    expect(find("Execute").hidden).toBe(true)
-    row(f, "Execute").move.onChange("utility")
+    expect(assert(find("Execute")).hidden).toBe(true)
+    assert(row(f, "Execute").move.onChange)("utility")
     local _, key = find("Execute")
     expect(key).toBe("utility")
-    row(f, "Execute").move.onChange(nil)
+    assert(row(f, "Execute").move.onChange)(nil :: unknown :: string)
     mock.click(row(f, "Execute").remove)
     expect(find("Execute")).toBe(nil)
 end
@@ -354,41 +411,37 @@ local function adding()
     expect(opts[1]).toBe("# Seen recently")
     expect(opts[2]).toBe("Recent Spell")
     expect(has(opts, "# All")).toBe(true)
-    add.onChange("Recent Spell")
-    expect(lists().essential[#lists().essential].name).toBe("Recent Spell")
-    expect(add.lookup("133")[1].value).toBe("id:133")
-    expect(add.lookup("x")).toBe(nil)
-    expect(add.lookup("999999999")).toBe(nil)
-    add.onChange("id:133")
-    expect(lists().essential[#lists().essential].ids).toEqual({ 133 })
-    add.onChange(nil)
-    add.onChange("not a spell anyone knows")
+    pick(add, "Recent Spell")
+    expect(lastOf("essential").name).toBe("Recent Spell")
+    expect(assert(assert(add.lookup)("133"))[1].value).toBe("id:133")
+    expect(assert(add.lookup)("x")).toBe(nil)
+    expect(assert(add.lookup)("999999999")).toBe(nil)
+    pick(add, "id:133")
+    expect(lastOf("essential").ids).toEqual({ 133 })
+    pick(add, nil)
+    pick(add, "not a spell anyone knows")
 end
 
 @test("+ Shared slot opens a new one with its + Add to; + Collection in aura lists; adding into both")
 local function slotsAndCollections()
     local f = editor()
     mock.click(f.adds[1].newSlot)
-    local slot = lists().essential[#lists().essential]
+    local slot = lastOf("essential")
     expect(slot.group).toBe(true)
     expect(slot.name).toBe("New shared slot")
     local addTo = f.addTos[1]
     expect(addTo).toBeShown()
     expect(addTo.select.placeholder).toBe("+ Add to New shared slot…")
-    addTo.select.onChange("id:133")
-    expect(lists().essential[#lists().essential].members[1].ids).toEqual({ 133 })
-    addTo.select.onChange(nil)
-    addTo.select.onChange("not a spell")
+    pick(addTo.select, "id:133")
+    expect(membersOf(lastOf("essential"))[1].ids).toEqual({ 133 })
+    pick(addTo.select, nil)
+    pick(addTo.select, "not a spell")
     auras(f)
     mock.click(f.adds[2].newCollection)
-    local coll = lists().debuffs[#lists().debuffs]
+    local coll = lastOf("debuffs")
     expect(coll.collection).toBe(true)
-    local into: any = nil
-    for _, a in ipairs(f.addTos) do
-        if a:IsShown() and a.select.placeholder == "+ Add to New collection…" then into = a end
-    end
-    into.select.onChange("id:133")
-    expect(lists().debuffs[#lists().debuffs].entries[1].ids).toEqual({ 133 })
+    pick(addToNamed(f, "+ Add to New collection…").select, "id:133")
+    expect(inside(lastOf("debuffs"))[1].ids).toEqual({ 133 })
 end
 
 @test("a weapon enchant is offered first in Buffs on you, and stays there")
@@ -399,8 +452,8 @@ local function enchants()
     local opts = options(add)
     expect(opts[1]).toBe("# Weapon enchants")
     expect(opts[2]).toBe("enchant:main")
-    add.onChange("enchant:main")
-    local e = lists().buffs[#lists().buffs]
+    pick(add, "enchant:main")
+    local e = lastOf("buffs")
     expect(e.enchant).toBe("main")
     local r = row(f, "Main-hand enchant")
     expect(r.rank:GetText()).toBe("weapon enchant")
@@ -413,15 +466,15 @@ end
 --------------------------------------------------------------------------------
 
 -- The cursor at a row's top quarter (before), middle (onto) or bottom (after).
-local function cursorOn(r: any, where: string)
+local function cursorOn(r: Frame, where: string)
     local s = r:GetEffectiveScale()
-    local x, top = r:GetCenter(), r:GetTop()
+    local x, top = assert(r:GetCenter()), assert(r:GetTop())
     local h = r:GetHeight()
     local y = where == "before" and (top - 2) or where == "onto" and (top - h / 2) or (top - h + 1)
     mock.setCursorPosition(x * s, y * s)
 end
 
-local function drag(f: any, from: any, to: any, where: string)
+local function drag(from: EntryRow, to: Frame, where: string)
     mock.script(from, "OnDragStart")
     cursorOn(to, where)
     mock.advanceFrames(1)
@@ -431,7 +484,7 @@ end
 @test("a row dropped before or after another moves there; the line marks where")
 local function dropMove()
     local f = editor()
-    local first = lists().essential[1].name
+    local first = assert(listOf("essential")[1].name)
     local exec = row(f, "Execute")
     mock.script(exec, "OnDragStart")
     expect(f.ghost).toBeShown()
@@ -439,28 +492,27 @@ local function dropMove()
     mock.advanceFrames(1)
     expect(f.line).toBeShown()
     mock.script(exec, "OnDragStop")
-    expect(lists().essential[1].name).toBe("Execute")
+    expect(listOf("essential")[1].name).toBe("Execute")
     expect(f.ghost).never.toBeShown()
     -- onto Utility's foot: the end of that list
-    drag(f, row(f, "Execute"), f.adds[2], "before")
-    expect(lists().utility[#lists().utility].name).toBe("Execute")
+    drag(row(f, "Execute"), f.adds[2], "before")
+    expect(lastOf("utility").name).toBe("Execute")
     -- let go nowhere: nothing
     mock.script(row(f, "Execute"), "OnDragStart")
     mock.setCursorPosition(1, 1)
     mock.advanceFrames(1)
     mock.script(row(f, "Execute"), "OnDragStop")
-    expect(lists().utility[#lists().utility].name).toBe("Execute")
+    expect(lastOf("utility").name).toBe("Execute")
 end
 
 @test("onto a single spell: asks to make a shared slot of the two")
 local function dropOntoEntry()
     local f = editor()
-    drag(f, row(f, "Execute"), row(f, "Thunder Clap"), "onto")
-    expect(confirmed.title).toBe("Make a shared slot?")
-    expect(confirmed.text:find("Thunder Clap + Execute", 1, true) ~= nil).toBe(true)
-    confirmed.onConfirm()
-    local slot: any = nil
-    for _, e in ipairs(lists().essential) do if e.group then slot = e end end
+    drag(row(f, "Execute"), row(f, "Thunder Clap"), "onto")
+    expect(asked().title).toBe("Make a shared slot?")
+    expect(askedText():find("Thunder Clap + Execute", 1, true) ~= nil).toBe(true)
+    confirm()
+    local slot = assert(slotOf("essential"))
     expect(slot.name).toBe("Thunder Clap + Execute")
     expect(names(slot.members)).toEqual({ "Thunder Clap", "Execute" })
 end
@@ -470,26 +522,25 @@ local function dropOntoBoxes()
     local f = editor()
     auras(f)
     mock.click(row(f, "Armor Reduction").fold)
-    drag(f, row(f, "Rend"), row(f, "Armor Reduction"), "onto")
-    local function coll(): any
-        for _, e in ipairs(lists().debuffs) do if e.collection then return e end end
-        return nil
+    drag(row(f, "Rend"), row(f, "Armor Reduction"), "onto")
+    local function coll(): Entry
+        for _, e in ipairs(listOf("debuffs")) do if e.collection then return e end end
+        error("no collection")
     end
-    expect(names(coll().entries[1].members)).toEqual({ "Sunder Armor", "Expose Armor", "Rend" })
-    drag(f, row(f, "Hamstring"), row(f, "Physical Debuffs"), "onto")
-    local entries = coll().entries
+    expect(names(inside(coll())[1].members)).toEqual({ "Sunder Armor", "Expose Armor", "Rend" })
+    drag(row(f, "Hamstring"), row(f, "Physical Debuffs"), "onto")
+    local entries = inside(coll())
     expect(entries[#entries].name).toBe("Hamstring")
-    drag(f, row(f, "Sunder Armor"), row(f, "Stuns"), "after")
-    local last = lists().debuffs[#lists().debuffs]
+    drag(row(f, "Sunder Armor"), row(f, "Stuns"), "after")
+    local last = lastOf("debuffs")
     expect(last.name).toBe("Sunder Armor")
     expect(last.group).toBe(nil)
     -- onto an open slot's "+ Add to" row: last in the slot
     mock.click(row(f, "Stuns").fold)
-    local addTo: any = nil
-    for _, a in ipairs(f.addTos) do if a:IsShown() and a.select.placeholder == "+ Add to Stuns…" then addTo = a end end
-    drag(f, row(f, "Hamstring"), addTo, "before")
-    local stuns = lists().debuffs[#lists().debuffs - 1]
-    expect(stuns.members[#stuns.members].name).toBe("Hamstring")
+    drag(row(f, "Hamstring"), addToNamed(f, "+ Add to Stuns…"), "before")
+    local debuffs = listOf("debuffs")
+    local members = membersOf(debuffs[#debuffs - 1])
+    expect(members[#members].name).toBe("Hamstring")
     -- a collection can't go into a collection: nothing lights
     mock.script(row(f, "Physical Debuffs"), "OnDragStart")
     cursorOn(row(f, "Physical Debuffs"), "onto")
@@ -506,16 +557,13 @@ end
 local function cooldownBehaviour()
     local f = editor()
     local b = behaviour(f, "Execute")
-    expect(b.meta:GetText()).toBe("Cooldown · Essential")
+    expect(textOf(b.meta)).toBe("Cooldown · Essential")
     local played = mock.stub(UI, "TrackerSound", function(_: string) end)
-    local function exec(): any
-        for _, e in ipairs(lists().essential) do if e.name == "Execute" then return e end end
-        return nil
-    end
+    local function exec(): Entry return assert(named("essential", "Execute")) end
     click(b.ready, "glow")
     click(b.pop, "off")
     click(b.pop, "on")
-    b.sound.onChange("chime")
+    pick(b.sound, "chime")
     click(b.onCooldown, "dim")
     click(b.show, "ready")
     click(b.unusable, "hide")
@@ -532,16 +580,16 @@ local function cooldownBehaviour()
     expect(e.border).toBe("gilt")
     expect(e.effect).toBe("you")
     -- the effect: an aura by name, a spell by ID, the spell itself
-    b.effectAura.onChange("Battle Shout")
+    pick(b.effectAura, "Battle Shout")
     expect(exec().effectName).toBe("Battle Shout")
-    b.effectAura.onChange("id:133")
+    pick(b.effectAura, "id:133")
     expect(exec().effectIDs).toEqual({ 133 })
     expect(has(options(b.effectAura), "current")).toBe(true)   -- a name the presets don't know
-    b.effectAura.onChange("current")
-    b.effectAura.onChange("self")
+    pick(b.effectAura, "current")
+    pick(b.effectAura, "self")
     expect(exec().effectIDs).toBe(nil)
     click(b.pop, "default")
-    b.sound.onChange("none")
+    pick(b.sound, "none")
     mock.click(b.reset)
     expect(exec().ready).toBe(nil)
     mock.click(b.done)
@@ -551,17 +599,16 @@ end
 @test("Behaviour of a cooldown shared slot: its name and shown; the note on its order")
 local function cooldownSlot()
     local f = editor()
-    drag(f, row(f, "Execute"), row(f, "Thunder Clap"), "onto")
-    confirmed.onConfirm()
+    drag(row(f, "Execute"), row(f, "Thunder Clap"), "onto")
+    confirm()
     local b = behaviour(f, "Thunder Clap + Execute")
-    expect(b.meta:GetText()).toBe("Shared slot · 2 spells")
+    expect(textOf(b.meta)).toBe("Shared slot · 2 spells")
     expect(b.noteText:GetText()).toBe("Shows the last spell in the list you know: put upgrades last.")
     expect(b.slotShown).toBeShown()
-    b.name.onChange("Clap or Execute")
-    b.name.onChange("")
-    b.slotShown.onChange(false)
-    local slot: any = nil
-    for _, e in ipairs(lists().essential) do if e.group then slot = e end end
+    assert(b.name.onChange)("Clap or Execute")
+    assert(b.name.onChange)("")
+    assert(b.slotShown.onChange)(false)
+    local slot = assert(slotOf("essential"))
     expect(slot.name).toBe("Clap or Execute")
     expect(slot.hidden).toBe(true)
     -- its members (it opened as it was made) have no Behaviour of their own
@@ -573,21 +620,21 @@ local function auraBehaviour()
     local f = editor()
     auras(f)
     local b = behaviour(f, "Battle Shout")
-    expect(b.meta:GetText()).toBe("Single aura")
+    expect(textOf(b.meta)).toBe("Single aura")
     expect(b.missing).toBeShown()
     mock.stub(UI, "TrackerSound", function(_: string) end)
     click(b.source, "mine")
     click(b.missing, "hide")
     click(b.auEdge, "ink")
     click(b.size, "large")
-    b.glow.onChange(true)
-    b.digits.onChange(false)
-    b.stacks.onChange(false)
-    b.expiring.onChange(5)
-    b.soundAppear.onChange("proc")
-    b.soundStack.onChange("ping")
-    b.soundDrop.onChange("none")
-    local e = lists().buffs[1]
+    assert(b.glow.onChange)(true)
+    assert(b.digits.onChange)(false)
+    assert(b.stacks.onChange)(false)
+    assert(b.expiring.onChange)(5)
+    pick(b.soundAppear, "proc")
+    pick(b.soundStack, "ping")
+    pick(b.soundDrop, "none")
+    local e = listOf("buffs")[1]
     expect(e.source).toBe("mine")
     expect(e.missing).toBe("hide")
     expect(e.border).toBe("ink")
@@ -602,7 +649,7 @@ local function auraBehaviour()
     local d = behaviour(f, "Rend")
     expect(d.missingDebuff).toBeShown()
     click(d.missingDebuff, "target")
-    expect(lists().debuffs[1].missing).toBe(nil)    -- the debuffs' default
+    expect(listOf("debuffs")[1].missing).toBe(nil)    -- the debuffs' default
 end
 
 @test("Behaviour of an aura shared slot: name, how many at once, the icon; a member's whose; a collection's name")
@@ -610,103 +657,101 @@ local function auraSlot()
     local f = editor()
     auras(f)
     local b = behaviour(f, "Stuns")
-    expect(b.meta:GetText():find("Shared slot · ", 1, true) ~= nil).toBe(true)
-    b.max.onChange(3)
-    b.icon.onChange(b.icon.options[2].value)
-    local stuns = lists().debuffs[#lists().debuffs]
+    expect(contains(b.meta, "Shared slot · ")).toBe(true)
+    assert(b.max.onChange)(3)
+    pick(b.icon, b.icon.options[2].value)
+    local stuns = lastOf("debuffs")
     expect(stuns.max).toBe(3)
     expect(stuns.fixedIcon).toBe(true)
-    b.icon.onChange("auto")
-    expect(lists().debuffs[#lists().debuffs].fixedIcon).toBe(nil)
-    b.icon.onChange(nil)
+    pick(b.icon, "auto")
+    expect(lastOf("debuffs").fixedIcon).toBe(nil)
+    pick(b.icon, nil)
     click(b.source, "mine")
-    expect(lists().debuffs[#lists().debuffs].source).toBe("mine")
+    expect(lastOf("debuffs").source).toBe("mine")
     -- a member
     mock.click(row(f, "Stuns").fold)
-    local member = row(f, "Stuns").entry.members[1].name
+    local member = assert(membersOf(row(f, "Stuns").entry)[1].name)
     local mb = behaviour(f, member)
-    expect(mb.meta:GetText()).toBe("In Stuns")
+    expect(textOf(mb.meta)).toBe("In Stuns")
     click(mb.memberSource, "others")
-    expect(lists().debuffs[#lists().debuffs].members[1].source).toBe("others")
+    expect(membersOf(lastOf("debuffs"))[1].source).toBe("others")
     -- a collection
     local cb = behaviour(f, "Physical Debuffs")
-    expect(cb.meta:GetText():find("Collection · ", 1, true) ~= nil).toBe(true)
+    expect(contains(cb.meta, "Collection · ")).toBe(true)
     expect(cb.condNote:GetText()).toBe("Applies to everything inside.")
-    cb.name.onChange("Armour")
-    expect(lists().debuffs[3].name).toBe("Armour")
+    assert(cb.name.onChange)("Armour")
+    expect(listOf("debuffs")[3].name).toBe("Armour")
     local inner = behaviour(f, "Armor Reduction")
-    expect(inner.meta:GetText():find("Shared slot", 1, true) ~= nil).toBe(true)
+    expect(contains(inner.meta, "Shared slot")).toBe(true)
 end
 
 @test("Behaviour of a weapon enchant: which weapon, when missing, the warning out of combat")
 local function enchantBehaviour()
     local f = editor()
     auras(f)
-    f.adds[1].select.onChange("enchant:main")
+    pick(f.adds[1].select, "enchant:main")
     local b = behaviour(f, "Main-hand enchant")
-    expect(b.meta:GetText()).toBe("Weapon enchant")
+    expect(textOf(b.meta)).toBe("Weapon enchant")
     click(b.weapon, "off")
-    expect(lists().buffs[#lists().buffs].enchant).toBe("off")
+    expect(lastOf("buffs").enchant).toBe("off")
     click(b.weaponMissing, "grey")
-    expect(row(f, "Off-hand enchant").rank:GetText():find("missing: grey", 1, true) ~= nil).toBe(true)
+    expect(contains(row(f, "Off-hand enchant").rank, "missing: grey")).toBe(true)
     click(b.weaponMissing, "warn")
-    b.warnOoc.onChange(false)
-    expect(lists().buffs[#lists().buffs].warnCombat).toBe(true)
+    assert(b.warnOoc.onChange)(false)
+    expect(lastOf("buffs").warnCombat).toBe(true)
 end
 
 @test("conditions: added by the first unused type, turned around, retyped, each type's controls, removed")
 local function conditions()
     local f = editor()
     local b = behaviour(f, "Execute")
-    local function when(): any
-        for _, e in ipairs(lists().essential) do if e.name == "Execute" then return e.when end end
-        return nil
-    end
+    local function when(): When? return assert(named("essential", "Execute")).when end
+    local function first(): Condition return (assert(assert(assert(when()).conditions)[1])) end
     expect(b.condSentence:GetText()).toBe("Always shows.")
     mock.click(b.addCondition)
-    expect(when().conditions[1].type).toBe("group")
+    expect(first().type).toBe("group")
     local r = b.cond.rows[1]
     mock.click(r.notButton)
-    expect(when().conditions[1]["not"]).toBe(true)
+    expect(first()["not"]).toBe(true)
     click(r.group, "raid")
-    expect(when().conditions[1].value).toBe("raid")
+    expect(first().value).toBe("raid")
     for _, t in ipairs({ "classes", "role", "stance", "combat", "instance", "target", "talent" }) do
-        r.type.onChange(t)
-        expect(when().conditions[1].type).toBe(t)
-        expect(when().conditions[1]["not"]).toBe(true)  -- Not carries over
+        pick(r.type, t)
+        expect(first().type).toBe(t)
+        expect(first()["not"]).toBe(true)  -- Not carries over
     end
-    r.type.onChange(nil)
-    r.type.onChange("classes")
+    pick(r.type, nil)
+    pick(r.type, "classes")
     for _, chip in ipairs(r.classesA.chips) do if chip.option.value == "DRUID" then mock.click(chip) end end
-    expect(when().conditions[1].classes).toEqual({ "DRUID", "WARRIOR" })
+    expect(first().classes).toEqual({ "DRUID", "WARRIOR" })
     click(r.classesOthers, "others")
-    expect(when().conditions[1].others).toBe(true)
-    r.type.onChange("role")
-    r.roles.onChange({ "HEALER" })
-    r.type.onChange("stance")
-    r.stances.onChange({ "berserker" })
-    r.type.onChange("instance")
-    r.instance.onChange({ "raid" })
-    r.type.onChange("target")
-    r.target.onChange({ "boss" })
-    expect(when().conditions[1].kinds).toEqual({ "boss" })
-    r.type.onChange("combat")
+    expect(first().others).toBe(true)
+    pick(r.type, "role")
+    chips(r.roles, { "HEALER" })
+    pick(r.type, "stance")
+    chips(assert(r.stances), { "berserker" })
+    pick(r.type, "instance")
+    chips(r.instance, { "raid" })
+    pick(r.type, "target")
+    chips(r.target, { "boss" })
+    expect(first().kinds).toEqual({ "boss" })
+    pick(r.type, "combat")
     expect(r.plain:GetText()).toBe("No options: while you're in combat.")
     -- talents: added from a class's list or by ID, removed
-    r.type.onChange("talent")
-    r.talentClassSelect.onChange("PRIEST")
-    r.talentClassSelect.onChange(nil)
-    r.addTalent.onChange("id:133")
-    r.addTalent.onChange(133)
-    r.addTalent.onChange("words")
-    expect(when().conditions[1].talents).toEqual({ 133 })
+    pick(r.type, "talent")
+    pick(r.talentClassSelect, "PRIEST")
+    pick(r.talentClassSelect, nil)
+    pick(r.addTalent, "id:133")
+    pick(r.addTalent, "133")
+    pick(r.addTalent, "words")
+    expect(first().talents).toEqual({ 133 })
     mock.click(r.talentRows[1].remove)
-    expect(when().conditions[1].talents).toEqual({})
+    expect(first().talents).toEqual({})
     -- two conditions, any of them
     mock.click(b.addCondition)
     click(b.match, "any")
-    expect(when().match).toBe("any")
-    expect(b.condSentence:GetText():find("Execute shows when ", 1, true) ~= nil).toBe(true)   -- (the talent one, empty, has no words)
+    expect(assert(when()).match).toBe("any")
+    expect(contains(b.condSentence, "Execute shows when ")).toBe(true)   -- (the talent one, empty, has no words)
     mock.click(b.cond.rows[2].remove)
     mock.click(b.cond.rows[1].remove)
     expect(when()).toBe(nil)
@@ -734,22 +779,21 @@ end
 
 @test("seen recently: your spells with a cooldown as you cast them, the auras on you and your target out of combat")
 local function seenRecently()
-    mock.stub(G, "IsPlayerSpell", function(id: number): boolean return id == 100 end)
-    mock.stub(G, "GetSpellBaseCooldown", function(id: number): number return id == 100 and 15000 or 0 end)
+    mock.fake("IsPlayerSpell", function(id: number): boolean return id == 100 end)
+    mock.fake("GetSpellBaseCooldown", function(id: number): number return id == 100 and 15000 or 0 end)
     mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 100)
     mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-2", 78)   -- not known
-    local recent = M:Get("recent").WARRIOR
-    expect(recent.cooldown[1].ids).toEqual({ 100 })
+    expect(recentOf("cooldown")[1].ids).toEqual({ 100 })
     mock.player:applyAura({ spellId = 6673, name = "Battle Shout" })
     mock.advanceTime(1.1)
-    expect(M:Get("recent").WARRIOR.aura[1].name).toBe("Battle Shout")
+    expect(recentOf("aura")[1].name).toBe("Battle Shout")
     mock.fireEvent("PLAYER_TARGET_CHANGED")
     mock.advanceTime(0.6)
     -- in combat: not read
     mock.player:enterCombat()
     mock.player:applyAura({ spellId = 2457, name = "Battle Stance" })
     mock.advanceTime(1.1)
-    expect(M:Get("recent").WARRIOR.aura[1].name).toBe("Battle Shout")
+    expect(recentOf("aura")[1].name).toBe("Battle Shout")
 end
 
 --------------------------------------------------------------------------------
@@ -797,8 +841,8 @@ local function presetSlots()
     local opts = options(f.adds[2].select)
     expect(has(opts, "group:Healing Reduction")).toBe(true)     -- Arms's
     expect(has(opts, "Battle Stance") or has(options(f.adds[1].select), "Battle Stance")).toBe(true)
-    f.adds[2].select.onChange("group:Healing Reduction")
-    local slot = lists().debuffs[#lists().debuffs]
+    pick(f.adds[2].select, "group:Healing Reduction")
+    local slot = lastOf("debuffs")
     expect(slot.group).toBe(true)
     expect(slot.uid ~= nil).toBe(true)
 end
@@ -809,26 +853,26 @@ local function talentLists()
     local b = behaviour(f, "Execute")
     mock.click(b.addCondition)
     local r = b.cond.rows[1]
-    r.type.onChange("talent")
+    pick(r.type, "talent")
     expect(#r.addTalent.options > 0).toBe(true)
     expect(r.addTalent.options[1].heading ~= nil).toBe(true)     -- by tree
     -- no generated list: your class's read from the talent trees, another's none
-    mock.stub(SuuUI, "ClassTalents", function(class: string): any
+    mock.stub(SuuUI, "ClassTalents", function(class: string): { id: number }[]
         if class == "PRIEST" then return { { id = 17 } } end      -- a nameless entry: named by its spell
         return {}
     end)
-    r.talentClassSelect.onChange("PRIEST")
+    pick(r.talentClassSelect, "PRIEST")
     expect(r.addTalent.options[2].label).toBe(C_Spell.GetSpellName(17))
-    r.talentClassSelect.onChange("MAGE")
+    pick(r.talentClassSelect, "MAGE")
     expect(#r.addTalent.options).toBe(0)
     -- your own class read from the active config's trees (once, every spell once)
-    mock.stub(C_Traits, "GetConfigInfo", function(_: number): any return { treeIDs = { 1 } } end)
-    mock.stub(C_Traits, "GetTreeNodes", function(_: number): any return { 21, 22 } end)
-    mock.stub(C_Traits, "GetNodeInfo", function(_: number, _: number): any return { entryIDs = { 31 } } end)
-    mock.stub(C_Traits, "GetEntryInfo", function(_: number, _: number): any return { definitionID = 41 } end)
-    mock.stub(C_Traits, "GetDefinitionInfo", function(_: number): any return { spellID = 12294 } end)
-    r.talentClassSelect.onChange("WARRIOR")
-    expect(r.addTalent.options[2].value).toBe(12294)
-    r.talentClassSelect.onChange("WARRIOR")      -- read once, kept
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): unknown return { treeIDs = { 1 } } end)
+    mock.stub(C_Traits, "GetTreeNodes", function(_: number): unknown return { 21, 22 } end)
+    mock.stub(C_Traits, "GetNodeInfo", function(_: number, _: number): unknown return { entryIDs = { 31 } } end)
+    mock.stub(C_Traits, "GetEntryInfo", function(_: number, _: number): unknown return { definitionID = 41 } end)
+    mock.stub(C_Traits, "GetDefinitionInfo", function(_: number): unknown return { spellID = 12294 } end)
+    pick(r.talentClassSelect, "WARRIOR")
+    expect(r.addTalent.options[2].value).toBe("12294")
+    pick(r.talentClassSelect, "WARRIOR")      -- read once, kept
     mock.click(b.cond.rows[1].remove)
 end

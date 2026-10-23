@@ -18,15 +18,25 @@
 
 import * as secret from "wowlua:secret"
 import copy from "./Lists"
+import type Entry from "./Lists"
+import type TrackerCondition, TrackerWhen from "/UI/CooldownTracker"
+import type SelectOption from "/UI/Select"
 
-export const CLASSES: { value: string, label: string }[] = {
+-- A condition, an entry's `when` (UI/CooldownTracker's).
+export type Condition = TrackerCondition
+export type When = TrackerWhen
+-- A choice of a condition: its value, its chip's label, its name in a
+-- sentence.
+export type Choice = { value: string, label: string, name?: string }
+
+export const CLASSES: Choice[] = {
     { value = "DRUID", label = "Druid" }, { value = "HUNTER", label = "Hunter" }, { value = "MAGE", label = "Mage" },
     { value = "PALADIN", label = "Paladin" }, { value = "PRIEST", label = "Priest" }, { value = "ROGUE", label = "Rogue" },
     { value = "SHAMAN", label = "Shaman" }, { value = "WARLOCK", label = "Warlock" }, { value = "WARRIOR", label = "Warrior" },
 }
-export const ROLES = { { value = "TANK", label = "Tank" }, { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "Damage" } }
+export const ROLES: Choice[] = { { value = "TANK", label = "Tank" }, { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "Damage" } }
 -- Stances and forms per class: the chip, and the name in a sentence.
-export const STANCES: { [string]: { value: string, label: string, name: string }[] } = {
+export const STANCES: { [string]: Choice[] } = {
     WARRIOR = { { value = "battle", label = "Battle", name = "Battle Stance" }, { value = "defensive", label = "Defensive", name = "Defensive Stance" },
                 { value = "berserker", label = "Berserker", name = "Berserker Stance" } },
     DRUID = { { value = "caster", label = "Caster", name = "caster form" }, { value = "bear", label = "Bear", name = "Bear Form" },
@@ -35,19 +45,19 @@ export const STANCES: { [string]: { value: string, label: string, name: string }
     ROGUE = { { value = "stealth", label = "Stealth", name = "Stealth" } },
     PRIEST = { { value = "shadowform", label = "Shadowform", name = "Shadowform" } },
 }
-export const INSTANCES = { { value = "none", label = "Open world", name = "the open world" }, { value = "party", label = "Dungeon", name = "a dungeon" },
+export const INSTANCES: Choice[] = { { value = "none", label = "Open world", name = "the open world" }, { value = "party", label = "Dungeon", name = "a dungeon" },
                            { value = "raid", label = "Raid", name = "a raid" }, { value = "pvp", label = "Battleground", name = "a battleground" } }
-export const TARGETS = { { value = "boss", label = "Boss", name = "a boss" }, { value = "elite", label = "Elite", name = "an elite" },
+export const TARGETS: Choice[] = { { value = "boss", label = "Boss", name = "a boss" }, { value = "elite", label = "Elite", name = "an elite" },
                          { value = "player", label = "Player", name = "a player" }, { value = "normal", label = "Normal", name = "a normal enemy" } }
-export const CONDITION_TYPES = {
+export const CONDITION_TYPES: Choice[] = {
     { value = "group", label = "In a group or raid" }, { value = "classes", label = "Class in your group" },
     { value = "role", label = "Your role" }, { value = "stance", label = "Your stance / form" },
     { value = "combat", label = "In combat" }, { value = "instance", label = "Instance" }, { value = "target", label = "Target is" },
     { value = "talent", label = "Your talents" },
 }
 
-local function stanceOptions()
-    local all = {}
+local function stanceOptions(): Choice[]
+    local all: Choice[] = {}
     for _, list in pairs(STANCES) do for _, o in ipairs(list) do all[#all + 1] = o end end
     return all
 end
@@ -55,13 +65,14 @@ end
 export const ALL_STANCES = stanceOptions()
 
 -- A new condition of a type, with a first choice made.
-export function newCondition(kind: string, class: string): any
+export function newCondition(kind: string, class: string): Condition
     if kind == "group" then return { type = "group", value = "group" } end
     if kind == "classes" then return { type = "classes", classes = { class } } end
     if kind == "role" then return { type = "role", roles = { "TANK" } } end
     if kind == "stance" then
         local list = STANCES[class]
-        return { type = "stance", stances = { list and list[1].value } }
+        local first = list and list[1]
+        return { type = "stance", stances = first and { first.value } or {} }
     end
     if kind == "instance" then return { type = "instance", kinds = { "party" } } end
     if kind == "target" then return { type = "target", kinds = { "boss" } } end
@@ -71,8 +82,8 @@ end
 
 -- The types the editor offers: stance / form only for a class with one (or
 -- a condition that already is one, from another class's setup).
-export function conditionTypes(current: string?, class: string): any[]
-    local out = {}
+export function conditionTypes(current: string?, class: string): Choice[]
+    local out: Choice[] = {}
     for _, t in ipairs(CONDITION_TYPES) do
         if t.value ~= "stance" or STANCES[class] or current == "stance" then out[#out + 1] = t end
     end
@@ -80,9 +91,10 @@ export function conditionTypes(current: string?, class: string): any[]
 end
 
 -- "+ Add condition": the first type not used yet (combat when all are).
-export function firstUnusedType(conditions: any[], class: string): string
-    local used, pick = {}, "combat"
-    for _, c in ipairs(conditions) do used[c.type] = true end
+export function firstUnusedType(conditions: Condition[], class: string): string
+    local used: { [string]: boolean } = {}
+    local pick = "combat"
+    for _, c in ipairs(conditions) do used[c.type or ""] = true end
     for _, t in ipairs(conditionTypes(nil, class)) do
         if not used[t.value] then pick = t.value; break end
     end
@@ -91,16 +103,19 @@ end
 
 -- Changes an entry's conditions through a copy of its `when` (match "all"
 -- unless set); with none left it has no `when`.
-export function editWhen(e: any, fn: (w: any) -> ())
-    local w = copy(e.when) or {}
-    w.match, w.conditions = w.match or "all", w.conditions or {}
+-- A `when` being edited: its match and its conditions, both there.
+export type EditedWhen = { match: string, conditions: Condition[] }
+
+export function editWhen(e: Entry, fn: (w: EditedWhen) -> ())
+    local was = copy(e.when) or {}
+    local w: EditedWhen = { match = was.match or "all", conditions = was.conditions or {} }
     fn(w)
     e.when = #w.conditions > 0 and w or nil
 end
 
 -- Condition `i` of `w` turned into type `kind` (its Not kept); the same
 -- type: unchanged.
-export function changeType(w: any, i: number, kind: string, class: string)
+export function changeType(w: EditedWhen, i: number, kind: string, class: string)
     local c = w.conditions[i]
     if not c or c.type == kind then return end
     local new = newCondition(kind, class)
@@ -109,27 +124,30 @@ export function changeType(w: any, i: number, kind: string, class: string)
 end
 
 -- A talent added to a talent condition (once) and removed from it.
-export function addTalent(c: any, id: number)
-    c.talents = c.talents or {}
-    for _, x in ipairs(c.talents) do if x == id then return end end
-    c.talents[#c.talents + 1] = id
+export function addTalent(c: Condition, id: number)
+    local talents = c.talents or {}
+    c.talents = talents
+    for _, x in ipairs(talents) do if x == id then return end end
+    talents[#talents + 1] = id
 end
 
-export function removeTalent(c: any, id: any)
-    for i, x in ipairs(c.talents or {}) do
-        if x == id then table.remove(c.talents, i); break end
+export function removeTalent(c: Condition, id: unknown)
+    local talents = c.talents or {}
+    for i, x in ipairs(talents) do
+        if x == id then table.remove(talents, i); break end
     end
 end
 
 -- "a, b or c"
-export function anyOf(words: string[])
+export function anyOf(words: string[]): string?
     if #words <= 1 then return words[1] end
     return table.concat(words, ", ", 1, #words - 1) .. " or " .. words[#words]
 end
 
 -- The words for a condition's choices: `field` names them in a sentence.
-export function picked(values: any, options: any[], field: string): string[]
-    local by, out = {}, {}
+export function picked(values: string[]?, options: Choice[], field: "label" | "name"): string[]
+    local by: { [string]: Choice } = {}
+    local out: string[] = {}
     for _, o in ipairs(options) do by[o.value] = o end
     for _, v in ipairs(values or {}) do
         local o = by[v]
@@ -140,82 +158,88 @@ end
 
 -- A talent's name, or "ID 123" while the client doesn't say.
 export function talentName(id: number): string
-    local name = C_Spell.GetSpellName(id)
-    return (name and not secret.isSecret(name)) and name or ("ID " .. tostring(id))
+    return secret.asString(C_Spell.GetSpellName(id)) or ("ID " .. tostring(id))
 end
 
 -- One condition as a phrase ("in a raid", "with a druid or warlock in your
 -- group"), or nil while it has nothing chosen. `short`: the row summary's
 -- words ("with a warlock", "Defensive").
-export function conditionPhrase(c: any, inGroup: boolean, short: boolean?, class: string): string?
+export function conditionPhrase(c: Condition, inGroup: boolean, short: boolean?, class: string): string?
     local no = c["not"]
     if c.type == "group" then
         if c.value == "solo" then return no and "in a group or raid" or (short and "solo" or "while solo") end
         return (no and "not " or "") .. "in a " .. (c.value == "raid" and "raid" or "group")
     elseif c.type == "classes" then
-        local names = {}
-        for _, v in ipairs(c.classes or {}) do names[#names + 1] = tostring(v):lower() end
+        local classes = c.classes or {}
+        local names: string[] = {}
+        for _, v in ipairs(classes) do names[#names + 1] = tostring(v):lower() end
         if #names == 0 then return nil end
-        local who
+        local who: string
         if c.others then
             -- not you: "another paladin", or "a druid or paladin besides you"
-            if #names == 1 and c.classes[1] == class then
+            if #names == 1 and classes[1] == class then
                 who = (no and "without another " or "with another ") .. names[1]
             else
-                who = (no and "without a " or "with a ") .. anyOf(names) .. " besides you"
+                who = (no and "without a " or "with a ") .. (anyOf(names) or "") .. " besides you"
             end
         else
-            who = (no and "without a " or "with a ") .. anyOf(names)
+            who = (no and "without a " or "with a ") .. (anyOf(names) or "")
         end
         return short and who or (who .. (inGroup and " in it" or " in your group"))
     elseif c.type == "role" then
         local roles = picked(c.roles, ROLES, "label")
         if #roles == 0 then return nil end
         for i, r in ipairs(roles) do roles[i] = r:lower() end
-        if short then return (no and "not " or "") .. anyOf(roles) end
+        if short then return (no and "not " or "") .. (anyOf(roles) or "") end
         for i, r in ipairs(roles) do roles[i] = r == "damage" and r or ("a " .. r) end
-        return (no and "unless you play " or "while you play ") .. anyOf(roles)
+        return (no and "unless you play " or "while you play ") .. (anyOf(roles) or "")
     elseif c.type == "stance" then
         local names = picked(c.stances, ALL_STANCES, short and "label" or "name")
         if #names == 0 then return nil end
-        if short then return (no and "not " or "") .. anyOf(names) end
-        return (no and "outside " or "in ") .. anyOf(names)
+        if short then return (no and "not " or "") .. (anyOf(names) or "") end
+        return (no and "outside " or "in ") .. (anyOf(names) or "")
     elseif c.type == "combat" then
         return no and "out of combat" or "in combat"
     elseif c.type == "instance" then
         local names = picked(c.kinds, INSTANCES, "name")
         if #names == 0 then return nil end
-        return (no and "outside " or "in ") .. anyOf(names)
+        return (no and "outside " or "in ") .. (anyOf(names) or "")
     elseif c.type == "target" then
         local names = picked(c.kinds, TARGETS, "name")
         if #names == 0 then return nil end
-        if short then return (no and "target not " or "target ") .. anyOf(names) end
-        return (no and "unless your target is " or "while your target is ") .. anyOf(names)
+        if short then return (no and "target not " or "target ") .. (anyOf(names) or "") end
+        return (no and "unless your target is " or "while your target is ") .. (anyOf(names) or "")
     elseif c.type == "talent" then
-        local names = {}
-        for _, id in ipairs(c.talents or {}) do names[#names + 1] = talentName(id) end
+        local names: string[] = {}
+        for _, id in ipairs(c.talents or {}) do
+            local n = secret.asNumber(id)
+            names[#names + 1] = n and talentName(n) or ("ID " .. tostring(id))
+        end
         if #names == 0 then return nil end
-        return (no and "without " or "with ") .. anyOf(names)
+        return (no and "without " or "with ") .. (anyOf(names) or "")
     end
     return nil
 end
 
-export function phrases(when: any, short: boolean?, class: string): string[]
+export function phrases(when: When?, short: boolean?, class: string): string[]
     local conds = when and when.conditions or {}
     local inGroup = false
     for _, c in ipairs(conds) do
         if c.type == "group" and not c["not"] and c.value ~= "solo" then inGroup = true end
     end
-    local out = {}
-    for _, c in ipairs(conds) do out[#out + 1] = conditionPhrase(c, inGroup, short, class) end
+    local out: string[] = {}
+    for _, c in ipairs(conds) do
+        local phrase = conditionPhrase(c, inGroup, short, class)
+        if phrase then out[#out + 1] = phrase end
+    end
     return out
 end
 
 -- The conditions as one sentence: "Faerie Fire shows in a raid, with a druid
 -- or warlock in it, out of combat." With none: "Always shows."
-export function conditionSentence(subject: string?, when: any, class: string): string
+export function conditionSentence(subject: string?, when: When?, class: string): string
     local list = phrases(when, nil, class)
-    if #list == 0 then return "Always shows." end
+    if #list == 0 or not when then return "Always shows." end
     local lead = subject and (subject .. " shows ") or "Shows "
     if when.match == "any" then
         return lead .. "when " .. (#list > 1 and ("any of these holds: " .. table.concat(list, "; ")) or list[1]) .. "."
@@ -225,9 +249,9 @@ end
 
 -- The conditions in a row's summary: "in a raid · with a warlock", or with
 -- Any of these, "in a raid or with a warlock".
-export function conditionWords(when: any, class: string): string?
+export function conditionWords(when: When?, class: string): string?
     local list = phrases(when, true, class)
-    if #list == 0 then return nil end
+    if #list == 0 or not when then return nil end
     if when.match == "any" then return anyOf(list) end
     return table.concat(list, " · ")
 end
@@ -235,19 +259,26 @@ end
 -- "+ Add talent…": `talents` ({ id, name, tree?, spec? } each) without
 -- those in `chosen`, by tree, left to right, each under its spec's name
 -- (else the tree's number, else Other), then by name.
-export function talentOptions(talents: any[], chosen: any[]?): any[]
-    local have, options = {}, {}
-    for _, id in ipairs(chosen or {}) do have[id] = true end
-    local list = {}
+-- A class's talent: its spell, name, tree (a number, or a name) and spec.
+export type ClassTalent = { id: number, name: string, tree?: number | string, spec?: string }
+
+export function talentOptions(talents: ClassTalent[], chosen: unknown[]?): SelectOption<number>[]
+    local have: { [number]: boolean } = {}
+    local options: SelectOption<number>[] = {}
+    for _, id in ipairs(chosen or {}) do
+        local n = secret.asNumber(id)
+        if n then have[n] = true end
+    end
+    local list: ClassTalent[] = {}
     for _, t in ipairs(talents) do
         if not have[t.id] then list[#list + 1] = t end
     end
-    table.sort(list, function(x: any, y: any)
+    table.sort(list, function(x: ClassTalent, y: ClassTalent): boolean
         local a, b = tonumber(x.tree) or 9, tonumber(y.tree) or 9
         if a ~= b then return a < b end
         return x.name < y.name
     end)
-    local heading
+    local heading: string? = nil
     for _, t in ipairs(list) do
         local tree = t.spec or (t.tree and (type(t.tree) == "number" and ("Tree " .. t.tree) or tostring(t.tree))) or "Other"
         if tree ~= heading then

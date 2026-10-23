@@ -7,41 +7,42 @@
 -- directly.
 
 import * as secret from "wowlua:secret"
-import equal from "wowlua:table"
+import equal, copy as deepCopy from "wowlua:table"
+import type TrackerEntry, TrackerLists from "/UI/CooldownTracker"
+import type CooldownPreset from "/Data/Presets"
 
 export const LIST_KEYS = { "essential", "utility", "buffs", "debuffs", "procs" }
 
 -- An entry of a list: a spell (`ids`), a shared slot (`members`), a
 -- collection (`entries`) or a weapon enchant (`enchant`), with its
--- behaviour (BEHAVIOUR_KEYS) and the rest of its own settings.
-export type Entry = {
-    uid?: string, name?: string, ids?: number[], hidden?: boolean, max?: number, icon?: number | string,
-    members?: Entry[], entries?: Entry[], enchant?: string, fixedIcon?: number | string,
-    [string]: unknown,
-}
+-- behaviour (BEHAVIOUR_KEYS) and the rest of its own settings: the
+-- tracker's (UI/CooldownTracker), which shows a copy of them.
+export type Entry = TrackerEntry
 -- The lists by key (LIST_KEYS).
-export type ListSet = { [string]: Entry[] }
+export type ListSet = TrackerLists
 -- One spec's: the preset it started from, and its lists.
 export type Setup = { preset: string, lists: ListSet }
 
-export const LIST_INFO = {
+-- A list's label, kind ("cooldown" or "aura") and note.
+export type ListInfo = { label: string, kind: string, note: string }
+export const LIST_INFO: { [string]: ListInfo } = {
     essential = { label = "Essential", kind = "cooldown", note = "Your rotation and big cooldowns, the larger row." },
     utility = { label = "Utility", kind = "cooldown", note = "Interrupts, defensives, movement." },
     buffs = { label = "Buffs on you", kind = "aura", note = "From anyone, unless only yours." },
     debuffs = { label = "Your debuffs on the target", kind = "aura", note = "Only yours." },
     procs = { label = "Procs", kind = "aura", note = "Shown only while up." },
 }
-export const TABS = { cooldowns = { "essential", "utility" }, auras = { "buffs", "debuffs", "procs" } }
+export const TABS: { [string]: string[] } = { cooldowns = { "essential", "utility" }, auras = { "buffs", "debuffs", "procs" } }
 
-export const SOURCE_LABEL = { mine = "only yours", others = "only others'", any = "anyone" }
+export const SOURCE_LABEL: { [string]: string } = { mine = "only yours", others = "only others'", any = "anyone" }
 -- Whose aura a list counts unless an entry says otherwise (the tracker's
 -- defaults): buffs from anyone, your debuffs and procs only yours.
-export const LIST_SOURCE = { buffs = "any", debuffs = "mine", procs = "mine" }
+export const LIST_SOURCE: { [string]: string } = { buffs = "any", debuffs = "mine", procs = "mine" }
 
 -- While an aura isn't up, each entry's own choice (there's no list-wide
 -- one): buffs grey and debuffs "with a target" unless set.
-export const MISSING_DEFAULT = { buffs = "grey", debuffs = "target", procs = "hide" }
-export const MISSING_LABEL = { hide = "hide", grey = "grey", target = "with a target", warn = "warn", remind = "remind" }
+export const MISSING_DEFAULT: { [string]: string } = { buffs = "grey", debuffs = "target", procs = "hide" }
+export const MISSING_LABEL: { [string]: string } = { hide = "hide", grey = "grey", target = "with a target", warn = "warn", remind = "remind" }
 
 -- What the Behaviour panel sets on an entry (its Reset clears them all).
 export const BEHAVIOUR_KEYS = { "ready", "pop", "sound", "onCooldown", "show", "unusable", "border", "effect", "effectIDs", "effectName",
@@ -56,8 +57,8 @@ export const COLLECTION_KEYS = { "name", "when", "hidden" }
 -- A weapon enchant entry (buffs only): { enchant = "main"|"off"|"ranged",
 -- name, uid }, whatever is on that weapon (the tracker's own slot; no
 -- spells). It goes by its uid, as its name follows the weapon.
-export const ENCHANT_NAME = { main = "Main-hand enchant", off = "Off-hand enchant", ranged = "Ranged enchant" }
-export const ENCHANT_INV = { main = 16, off = 17, ranged = 18 }
+export const ENCHANT_NAME: { [string]: string } = { main = "Main-hand enchant", off = "Off-hand enchant", ranged = "Ranged enchant" }
+export const ENCHANT_INV: { [string]: number } = { main = 16, off = 17, ranged = 18 }
 
 -- what "+ Shared slot" and "+ Collection" are named until you rename them
 export const NEW_SLOT = "New shared slot"
@@ -65,31 +66,28 @@ export const NEW_COLLECTION = "New collection"
 
 -- A deep copy, so editing it never touches the original (a preset, the
 -- saved setting).
-export function copy(t: any): any
-    if type(t) ~= "table" then return t end
-    local out = {}
-    for k, v in pairs(t) do out[k] = copy(v) end
-    return out
+export function copy<T>(t: T): T
+    return deepCopy(t, { shared = false })
 end
 
 --------------------------------------------------------------------------------
 -- Presets
 --------------------------------------------------------------------------------
 
-export function findPreset(presets: any[], id: any): any
+export function findPreset(presets: CooldownPreset[], id: string?): CooldownPreset?
     for _, p in ipairs(presets) do if p.id == id then return p end end
     return nil
 end
 
 -- A spec's starting preset (the first of its tree).
-export function specPreset(presets: any[], spec: number?): any
+export function specPreset(presets: CooldownPreset[], spec: number?): CooldownPreset?
     for _, p in ipairs(presets) do if (p.tree or 0) == spec then return p end end
     return nil
 end
 
 -- A spec's name: its preset's without the bracket ("Arms"), Unspecced for
 -- 0, else "Tree N".
-export function specName(presets: any[], spec: number): string
+export function specName(presets: CooldownPreset[], spec: number): string
     if spec == 0 then return "Unspecced" end
     local p = specPreset(presets, spec)
     return p and (p.name:gsub("%s*%b()", "")) or ("Tree " .. spec)
@@ -98,19 +96,21 @@ end
 -- Shared slots and collections get a uid the editor follows them by (fold
 -- state, the Behaviour panel, matching the preset's in Changes): the same
 -- one for every copy of a preset, the shared slots in a collection after it.
-export function copyLists(p: any): any
-    local out = {}
+export function copyLists(p: CooldownPreset): ListSet
+    local out: ListSet = {}
     for _, key in ipairs(LIST_KEYS) do
-        out[key] = {}
+        local list: Entry[] = {}
+        out[key] = list
         for i, e in ipairs(p.lists[key] or {}) do
             local c = copy(e)
             if c.group or c.collection or c.enchant then c.uid = c.uid or (p.id .. key .. i) end
             if c.collection then
+                local uid = tostring(c.uid)
                 for j, x in ipairs(c.entries or {}) do
-                    if x.group or x.enchant then x.uid = x.uid or (c.uid .. "." .. j) end
+                    if x.group or x.enchant then x.uid = x.uid or (uid .. "." .. j) end
                 end
             end
-            out[key][#out[key] + 1] = c
+            list[#list + 1] = c
         end
     end
     return out
@@ -123,14 +123,14 @@ end
 -- Points per tree from the nodes' positions ({ x, ranks } each; trees told
 -- apart left to right, as Forever lays out its three trees in one), and
 -- the total. A secret rank counts 0.
-export function pointsByTree(nodes: { x: number, ranks: any }[]): ({ number }, number)
+export function pointsByTree(nodes: { x: number, ranks: unknown }[]): ({ number }, number)
     if #nodes == 0 then return { 0, 0, 0 }, 0 end
     local lo, hi = math.huge, -math.huge
     for _, n in ipairs(nodes) do lo, hi = math.min(lo, n.x), math.max(hi, n.x) end
     local third = (hi - lo) / 3
     local pts, total = { 0, 0, 0 }, 0
     for _, n in ipairs(nodes) do
-        local r = secret.isSecret(n.ranks) and 0 or (n.ranks or 0)
+        local r = secret.asNumber(n.ranks) or 0
         local tree = (n.x < lo + third and 1) or (n.x < lo + 2 * third and 2) or 3
         pts[tree] = pts[tree] + r
         total = total + r
@@ -160,20 +160,26 @@ export type Path = { key: string, i: number, j?: number, m?: number }
 
 -- The container a path points into (a list, a collection's entries or a
 -- shared slot's members), the index in it, and the shared slot it's in.
-export function locate(l: any, p: Path): (any, number?, any)
-    local t, i = l[p.key], p.i
-    if t and p.j then t, i = t[p.i] and t[p.i].entries, p.j end
-    if t and p.m then
+export function locate(l: ListSet, p: Path): (Entry[]?, number?, Entry?)
+    local t: Entry[]? = l[p.key]
+    local i = p.i
+    local j = p.j
+    if t and j then
+        local box = t[p.i]
+        t, i = box and box.entries, j
+    end
+    local m = p.m
+    if t and m then
         local slot = t[i]
         if not (slot and slot.group) then return nil, nil, nil end
-        return slot.members, p.m, slot
+        return slot.members, m, slot
     end
     return t, i, nil
 end
 
-export function entryAt(l: any, p: Path): any
+export function entryAt(l: ListSet, p: Path): Entry?
     local t, i = locate(l, p)
-    return t and t[i]
+    return t and i and t[i] or nil
 end
 
 export function samePath(a: Path, b: Path): boolean
@@ -182,8 +188,8 @@ end
 
 -- fn(entry, path) for every entry of a list: collections and what they
 -- hold, shared slots and their members.
-export function walk(list: any, key: string, fn: (e: any, p: Path) -> ())
-    local function one(e: any, p: Path)
+export function walk(list: Entry[]?, key: string, fn: (e: Entry, p: Path) -> ())
+    local function one(e: Entry, p: Path)
         fn(e, p)
         if e.group then
             for m, x in ipairs(e.members or {}) do fn(x, { key = key, i = p.i, j = p.j, m = m }) end
@@ -200,8 +206,10 @@ end
 -- A shared slot's IDs: every member's, once, sorted; its icon stays one of
 -- them (or a member's own icon). A fixed icon whose member left is no longer
 -- fixed.
-export function regroup(e: any)
-    local seen, ids, art = {}, {}, {}
+export function regroup(e: Entry)
+    local seen: { [number]: boolean } = {}
+    local ids: number[] = {}
+    local art: { [number]: boolean } = {}
     for _, m in ipairs(e.members or {}) do
         for _, id in ipairs(m.ids or {}) do
             if not seen[id] then seen[id] = true; ids[#ids + 1] = id end
@@ -211,17 +219,18 @@ export function regroup(e: any)
     table.sort(ids)
     e.ids = ids
     if e.icon and not (seen[e.icon] or art[e.icon]) then e.icon, e.fixedIcon = nil, nil end
-    if not e.icon and e.members and e.members[1] then e.icon = e.members[1].ids[1] end
+    local first = e.members and e.members[1]
+    if not e.icon and first then e.icon = first.ids and first.ids[1] end
 end
 
 -- Whose aura an entry counts: its own choice, else a shared slot's or an
 -- old `mine` mark, else the list's.
-export function entrySource(e: any, key: string): string
+export function entrySource(e: Entry, key: string): string
     return e.source or (e.group and "mine") or (e.mine and "mine") or LIST_SOURCE[key] or "mine"
 end
 
 -- Whether an entry differs from the preset's entry of the same name.
-export function changed(e: any, base: any, key: string): boolean
+export function changed(e: Entry, base: Entry, key: string): boolean
     if entrySource(e, key) ~= entrySource(base, key) then return true end
     for _, list in ipairs({ BEHAVIOUR_KEYS, ENTRY_KEYS }) do
         for _, k in ipairs(list) do
@@ -236,28 +245,35 @@ end
 -- of a collection. A collection counts once for itself (added, removed,
 -- renamed or its condition); it matches the preset's by uid (a preset's copy
 -- keeps the one copyLists gave it), else by name.
-export function countChanges(p: any, lists: any): number
+-- A preset's entry by name (`parent`: its collection's uid), and a
+-- preset's collection with the uid it goes by.
+type BaseEntry = { e: Entry, parent?: string | number }
+type BaseCollection = { e: Entry, uid: string | number }
+
+export function countChanges(p: CooldownPreset, lists: ListSet): number
     local n = 0
     for _, key in ipairs(LIST_KEYS) do
-        local base, cols = {}, {}
+        local base: { [string]: BaseEntry } = {}
+        local cols: BaseCollection[] = {}
         for i, e in ipairs(p.lists[key] or {}) do
             if e.collection then
                 local uid = e.uid or (p.id .. key .. i)
                 cols[#cols + 1] = { e = e, uid = uid }
-                for _, x in ipairs(e.entries or {}) do base[x.name] = { e = x, parent = uid } end
+                for _, x in ipairs(e.entries or {}) do base[x.name or ""] = { e = x, parent = uid } end
             else
-                base[e.name] = { e = e }
+                base[e.name or ""] = { e = e }
             end
         end
-        local seen, used = {}, {}
-        local function entry(e: any, parent: any)
-            local b = base[e.name]
-            seen[e.name] = true
+        local seen: { [string]: boolean } = {}
+        local used: { [BaseCollection]: boolean } = {}
+        local function entry(e: Entry, parent: string | number | nil)
+            local b = base[e.name or ""]
+            seen[e.name or ""] = true
             if not b or b.parent ~= parent or changed(e, b.e, key) then n = n + 1 end
         end
         for _, e in ipairs(lists[key] or {}) do
             if e.collection then
-                local match
+                local match: BaseCollection? = nil
                 for _, c in ipairs(cols) do
                     if not used[c] and c.uid == e.uid then match = c; break end
                 end
@@ -292,9 +308,14 @@ end
 -- An entry as a shared slot's member: its name and IDs, and in an aura list
 -- whose it counts (only where it differs from the slot's) and its condition.
 -- Its looks are the slot's.
-export function asMember(e: any, key: string, fromSlot: any, slot: any, slotKey: string): any
-    local m = { name = e.name, ids = copy(e.ids) }
-    if LIST_INFO[slotKey].kind == "aura" then
+local function kindOf(key: string): string?
+    local info = LIST_INFO[key]
+    return info and info.kind
+end
+
+export function asMember(e: Entry, key: string, fromSlot: Entry?, slot: Entry, slotKey: string): Entry
+    local m: Entry = { name = e.name, ids = copy(e.ids) }
+    if kindOf(slotKey) == "aura" then
         local src = fromSlot and (e.source or entrySource(fromSlot, key)) or entrySource(e, key)
         if src ~= entrySource(slot, slotKey) then m.source = src end
         m.when = copy(e.when)
@@ -304,9 +325,9 @@ end
 
 -- A member leaving its shared slot, as a single entry that counts the same
 -- auras (whose it was, written down where the list counts otherwise).
-export function asSingle(m: any, slotKey: string, slot: any, key: string): any
-    local e = { name = m.name, ids = copy(m.ids) }
-    if LIST_INFO[key].kind == "aura" then
+export function asSingle(m: Entry, slotKey: string, slot: Entry, key: string): Entry
+    local e: Entry = { name = m.name, ids = copy(m.ids) }
+    if kindOf(key) == "aura" then
         local src = m.source or entrySource(slot, slotKey)
         if src ~= LIST_SOURCE[key] then e.source = src end
         e.when = copy(m.when)
@@ -317,11 +338,11 @@ end
 -- Moves the entry at `from` to the position `to` (an index past the end
 -- puts it last), turning it into a member or back as it enters or leaves a
 -- shared slot.
-export function moveEntry(l: any, from: Path, to: Path)
+export function moveEntry(l: ListSet, from: Path, to: Path)
     local srcT, srcI, srcSlot = locate(l, from)
     local dstT, dstI, dstSlot = locate(l, to)
     if not (srcT and srcI and srcT[srcI] and dstT and dstI) then return end
-    local e = table.remove(srcT, srcI)
+    local e: Entry = assert(table.remove(srcT, srcI))
     if srcT == dstT and dstI > srcI then dstI = dstI - 1 end
     if dstSlot and dstSlot ~= srcSlot then
         e = asMember(e, from.key, srcSlot, dstSlot, to.key)
@@ -336,22 +357,23 @@ end
 -- "Make 'A + B' a shared slot": the slot takes A's place with A and B as its
 -- members, A's whose (aura lists, one at a time) and A's looks. Nothing
 -- happens unless A and B are still the two named.
-export function combine(l: any, ontoPath: Path, fromPath: Path, uid: string, names: any[])
+export function combine(l: ListSet, ontoPath: Path, fromPath: Path, uid: string, names: (string?)[])
     local aT, aI = locate(l, ontoPath)
     local bT, bI, bSlot = locate(l, fromPath)
-    local a, b = aT and aT[aI], bT and bT[bI]
-    if not (a and b) or a == b or a.name ~= names[1] or b.name ~= names[2] then return end
+    local a, b = aT and aI and aT[aI], bT and bI and bT[bI]
+    if not (aT and bT and bI and a and b) or a == b or a.name ~= names[1] or b.name ~= names[2] then return end
     local key = ontoPath.key
-    local slot = { group = true, uid = uid, name = a.name .. " + " .. b.name, members = {}, hidden = a.hidden }
-    if LIST_INFO[key].kind == "aura" then slot.source, slot.max = entrySource(a, key), 1 end
+    local members: Entry[] = {}
+    local slot: Entry = { group = true, uid = uid, name = (a.name or "") .. " + " .. (b.name or ""), members = members, hidden = a.hidden }
+    if kindOf(key) == "aura" then slot.source, slot.max = entrySource(a, key), 1 end
     -- (an aura's conditions stay with it as a member; a cooldown slot's
     -- members have none, so A's become the slot's)
-    local cooldown = LIST_INFO[key].kind == "cooldown"
+    local cooldown = kindOf(key) == "cooldown"
     for _, k in ipairs(BEHAVIOUR_KEYS) do
         if k ~= "when" or cooldown then slot[k] = copy(a[k]) end
     end
-    slot.members[1] = asMember(a, key, nil, slot, key)
-    slot.members[2] = asMember(b, fromPath.key, bSlot, slot, key)
+    members[1] = asMember(a, key, nil, slot, key)
+    members[2] = asMember(b, fromPath.key, bSlot, slot, key)
     table.remove(bT, bI)
     if bSlot then regroup(bSlot) end
     for n, x in ipairs(aT) do
@@ -363,8 +385,13 @@ end
 -- Whether a dragged row may land on a target: a collection only between the
 -- list's own rows, a shared slot anywhere but in another slot, a single
 -- entry (or a member) anywhere, onto a single entry (a new shared slot) too.
--- from = { kind, path, enchant? }, to = { path, onto? }
-export function accepts(from: any, to: any): boolean
+-- What is dragged (its kind: "entry", "slot", "collection", "member"; its
+-- path; a weapon enchant's weapon) and where it would land (a position, or
+-- onto a row: "entry", "slot", "collection").
+export type DragFrom = { kind: string, path: Path, enchant?: string }
+export type DropTo = { path: Path, onto?: string }
+
+export function accepts(from: DragFrom, to: DropTo): boolean
     local kind = from.kind
     local plain = kind == "entry" or kind == "member"
     -- a weapon enchant: only to another place in Buffs on you (or a
@@ -385,7 +412,7 @@ end
 
 -- Where a drop lands: at its path, or onto a shared slot (last of its
 -- members) or a collection (last inside it).
-export function dropPath(to: any): Path
+export function dropPath(to: DropTo): Path
     local dest = to.path
     if to.onto == "slot" then
         dest = { key = dest.key, i = dest.i, j = dest.j, m = math.huge }
@@ -396,7 +423,7 @@ export function dropPath(to: any): Path
 end
 
 -- Removes the entry at `path` (a member: its slot regroups).
-export function removeAt(l: any, path: Path)
+export function removeAt(l: ListSet, path: Path)
     local t, i, slot = locate(l, path)
     if t and i and t[i] then
         table.remove(t, i)
@@ -405,39 +432,44 @@ export function removeAt(l: any, path: Path)
 end
 
 -- "Move to…": a top row of list `key` goes last in list `to`.
-export function moveToList(l: any, key: string, i: number, to: string)
-    local e = table.remove(l[key], i)
-    if e then table.insert(l[to], e) end
+export function moveToList(l: ListSet, key: string, i: number, to: string)
+    local from, into = l[key], l[to]
+    if not (from and into) then return end
+    local e = table.remove(from, i)
+    if e then table.insert(into, e) end
 end
 
 -- "+ Add to <name>…": `e` goes last in the collection at `path`, or joins
 -- the shared slot there as a member (never a weapon enchant).
-export function addInto(l: any, path: Path, e: any)
+export function addInto(l: ListSet, path: Path, e: Entry)
     local box = entryAt(l, path)
     if box and box.collection then
-        box.entries = box.entries or {}
-        table.insert(box.entries, e)
+        local entries = box.entries or {}
+        box.entries = entries
+        table.insert(entries, e)
     elseif box and box.group and not e.enchant then
-        box.members = box.members or {}
-        table.insert(box.members, { name = e.name, ids = e.ids })
+        local members = box.members or {}
+        box.members = members
+        table.insert(members, { name = e.name, ids = e.ids })
         regroup(box)
     end
 end
 
 -- "+ Shared slot" and "+ Collection" in list `key`.
-export function newSlot(key: string, uid: string): any
-    local slot = { group = true, uid = uid, name = NEW_SLOT, members = {}, ids = {} }
-    if LIST_INFO[key].kind == "aura" then slot.source, slot.max = LIST_SOURCE[key], 1 end
+export function newSlot(key: string, uid: string): Entry
+    local slot: Entry = { group = true, uid = uid, name = NEW_SLOT, members = {}, ids = {} }
+    if kindOf(key) == "aura" then slot.source, slot.max = LIST_SOURCE[key], 1 end
     return slot
 end
 
-export function newCollection(uid: string): any
+export function newCollection(uid: string): Entry
     return { collection = true, uid = uid, name = NEW_COLLECTION, entries = {} }
 end
 
 -- The key a row's fold state is kept by: its uid, else its place.
-export function foldKey(e: any, p: Path): string
-    return e.uid or (p.key .. p.i .. "." .. (p.j or ""))
+export function foldKey(e: Entry, p: Path): string
+    local uid = e.uid
+    return uid and tostring(uid) or (p.key .. p.i .. "." .. (p.j or ""))
 end
 
 -- The Behaviour panel's entry in the lists, and the shared slot it's a
@@ -445,17 +477,19 @@ end
 -- slots and collections have one; a member goes by its slot's, and b.path
 -- follows it), else at its path while that is still the same spell; nil
 -- once it's gone.
-export function findEntry(l: any, b: any): (any, any)
+export type EntryRef = { key: string, path: Path, uid?: string | number, slotUid?: string | number, entryName?: string }
+
+export function findEntry(l: ListSet, b: EntryRef): (Entry?, Entry?)
     local uid = b.slotUid or b.uid
     if uid then
         local at: Path? = nil
-        walk(l[b.key], b.key, function(e: any, p: Path) if e.uid == uid and not p.m then at = p end end)
+        walk(l[b.key], b.key, function(e: Entry, p: Path) if e.uid == uid and not p.m then at = p end end)
         if not at then return nil, nil end
         local found = at :: Path
         b.path = b.slotUid and { key = found.key, i = found.i, j = found.j, m = b.path.m } or found
     end
     local t, i, slot = locate(l, b.path)
-    local e = t and t[i]
+    local e = t and i and t[i]
     if e and (b.uid or e.name == b.entryName) then return e, slot end
     return nil, nil
 end
@@ -463,7 +497,7 @@ end
 -- The Behaviour panel's Reset for an entry in context `ctx` ("member",
 -- "collection", "single", "slot"): a member's whose and conditions, a
 -- collection's conditions, else everything the panel sets.
-export function resetBehaviour(e: any, ctx: string)
+export function resetBehaviour(e: Entry, ctx: string)
     if ctx == "member" then
         e.source, e.when = nil, nil
     elseif ctx == "collection" then
@@ -478,14 +512,17 @@ end
 -- "Seen recently": newest first, `max` per kind
 --------------------------------------------------------------------------------
 
+-- A spell or aura seen lately: its name and IDs.
+export type Recent = { name: string, ids: number[] }
+
 -- `mine` with `name` (spell `id`) put first, its other IDs kept with it and
 -- the list cut to `max`; nil when the name is already among the first three
 -- (nothing to write).
-export function pushRecent(mine: any[], name: any, id: any, max: number): any[]?
+export function pushRecent(mine: Recent[], name: string, id: number, max: number): Recent[]?
     for i = 1, math.min(3, #mine) do
         if mine[i].name == name then return nil end
     end
-    local list: any[] = { { name = name, ids = { id } } }
+    local list: Recent[] = { { name = name, ids = { id } } }
     for _, r in ipairs(mine) do
         if r.name == name then
             for _, other in ipairs(r.ids) do if other ~= id then table.insert(list[1].ids, other) end end
@@ -499,13 +536,15 @@ end
 
 -- The auras just seen (`scanned`: { name, id } in scan order) put before
 -- `mine`, only names not in it yet, cut to `max`; nil when none is new.
-export function mergeRecent(mine: any[], scanned: any[], max: number): any[]?
-    local seen, fresh: any[] = {}, {}
+export function mergeRecent(mine: Recent[], scanned: { name?: string, id: number }[], max: number): Recent[]?
+    local seen: { [string]: boolean } = {}
+    local fresh: Recent[] = {}
     for _, r in ipairs(mine) do seen[r.name] = true end
     for _, a in ipairs(scanned) do
-        if a.name and not seen[a.name] then
-            seen[a.name] = true
-            fresh[#fresh + 1] = { name = a.name, ids = { a.id } }
+        local name = a.name
+        if name and not seen[name] then
+            seen[name] = true
+            fresh[#fresh + 1] = { name = name, ids = { a.id } }
         end
     end
     if #fresh == 0 then return nil end
