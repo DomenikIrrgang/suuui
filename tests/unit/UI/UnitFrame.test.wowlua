@@ -16,42 +16,51 @@ import internal shortNumber, isOffline, healthPercent, metaText, belowCurve, low
 import internal paints from "/UI/Draw"
 import expectNoErrors, newParent from "../../helpers"
 
-type Person = { [string]: any }
+type Person = uf.StandInPerson
 
 local parent: Frame
-local built: Frame[] = {}
+local built: uf.UnitFrame[] = {}
 local wolf: mock.MockUnit? = nil
 
 -- the colour token a region was painted with (UI/Draw keeps it)
-local function tokenOf(region: any): string?
+local function tokenOf(region: Region): string?
     local p = paints[region]
     return p and p.token
 end
 
-local function keep(f: any): any
+local function keep(f: uf.UnitFrame): uf.UnitFrame
     built[#built + 1] = f
     return f
 end
 
--- A stand-in API reading `person` for every unit.
-local function api(person: Person): { [string]: any }
-    return uf.unitStandIn(function(_: string): Person return person end)
+-- A stand-in API reading `person` for every unit, as a table a test can
+-- change (its functions may give what the declarations don't allow, such
+-- as a secret level: the frame checks for them).
+local function api(person: Person): { [string]: unknown }
+    local out: { [string]: unknown } = {}
+    local standIn: { [string]: unknown } = uf.unitStandIn(function(_: string): Person return person end)
+    for k, v in pairs(standIn) do out[k] = v end
+    return out
 end
 
+-- A test's table of Unit* functions as the API a frame reads.
+local function asApi(a: { [string]: unknown }): uf.UnitApi return a :: uf.UnitApi end
+local function asGroup(a: { [string]: unknown }): uf.GroupApi return a :: uf.GroupApi end
+
 -- A frame drawn from a stand-in person (refreshed, not activated).
-local function preview(person: Person, opts: { [string]: any }?, a: { [string]: any }?): any
-    local o: { [string]: any } = opts or {}
-    o.api = a or api(person)
+local function preview(person: Person, opts: uf.UnitFrameOptions?, a: { [string]: unknown }?): uf.UnitFrame
+    local o: uf.UnitFrameOptions = opts or {}
+    o.api = asApi(a or api(person))
     local f = keep(uf.unitFrame(parent, "party1", o))
     f:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, -10)
     f:Refresh()
     return f
 end
 
-local function priest(extra: Person?): Person
-    local p: Person = { name = "Anna", class = "PRIEST", health = 0.64, power = 0.6 }
+local function priest(extra: { [string]: unknown }?): Person
+    local p: { [string]: unknown } = { name = "Anna", class = "PRIEST", health = 0.64, power = 0.6 }
     for k, v in pairs(extra or {}) do p[k] = v end
-    return p
+    return p :: Person
 end
 
 @beforeEach
@@ -63,7 +72,7 @@ end
 local function tearDown()
     if InCombatLockdown() then mock.player:leaveCombat() end -- secure frames hide out of combat only
     for _, f in ipairs(built) do
-        if (f :: any).Deactivate then (f :: any):Deactivate() end
+        f:Deactivate()
         f:Hide()
     end
     built = {}
@@ -93,62 +102,62 @@ end
 @test("shortNumber: a secret value goes to the engine's formatting")
 local function shortNumberSecret()
     local out = shortNumber(mock.secret(12345))
-    expect(out ~= nil).toBe(true)
+    expect(issecretvalue(out)).toBe(true)
     expectNoErrors()
 end
 
 @test("shortNumber: a secret the engine can't abbreviate falls back to %d")
 local function shortNumberSecretFallback()
-    local out = shortNumber(mock.secret(7), function(_: any): string error("no") end)
+    local out = shortNumber(mock.secret(7), function(_: unknown): string error("no") end)
     expect(issecretvalue(out) or out == "7").toBe(true)
 end
 
 @test("isOffline: only a player whose plain answer is 'not connected'")
 local function offline()
-    local a: { [string]: any } = { UnitIsPlayer = function(_: string): boolean return true end }
-    expect(isOffline(a, "party1")).toBe(false) -- no UnitIsConnected
-    a.UnitIsConnected = function(_: string): any return false end
-    expect(isOffline(a, "party1")).toBe(true)
-    a.UnitIsConnected = function(_: string): any return true end
-    expect(isOffline(a, "party1")).toBe(false)
-    a.UnitIsConnected = function(_: string): any return mock.secret(false) end
-    expect(isOffline(a, "party1")).toBe(false)
-    a.UnitIsConnected = function(_: string): any return false end
+    local a: { [string]: unknown } = { UnitIsPlayer = function(_: string): boolean return true end }
+    expect(isOffline(asApi(a), "party1")).toBe(false) -- no UnitIsConnected
+    a.UnitIsConnected = function(_: string): unknown return false end
+    expect(isOffline(asApi(a), "party1")).toBe(true)
+    a.UnitIsConnected = function(_: string): unknown return true end
+    expect(isOffline(asApi(a), "party1")).toBe(false)
+    a.UnitIsConnected = function(_: string): unknown return mock.secret(false) end
+    expect(isOffline(asApi(a), "party1")).toBe(false)
+    a.UnitIsConnected = function(_: string): unknown return false end
     a.UnitIsPlayer = function(_: string): boolean return false end
-    expect(isOffline(a, "party1")).toBe(false)
+    expect(isOffline(asApi(a), "party1")).toBe(false)
 end
 
 @test("healthPercent: nil without UnitHealthPercent")
 local function healthPercentMissing()
-    expect(healthPercent({}, "party1")).toBeNil()
+    expect(healthPercent(asApi({}), "party1")).toBeNil()
     local a = api(priest())
-    expect(healthPercent(a, "party1")).toBeCloseTo(64)
+    expect(healthPercent(asApi(a), "party1") :: number).toBeCloseTo(64)
 end
 
 @test("metaText: level and classification")
 local function metaTexts()
-    local level: any, class: any = 10, "normal"
-    local a: { [string]: any } = {
-        UnitLevel = function(_: string): any return level end,
-        UnitClassification = function(_: string): any return class end,
+    local level: unknown, class: unknown = 10, "normal"
+    local a: { [string]: unknown } = {
+        UnitLevel = function(_: string): unknown return level end,
+        UnitClassification = function(_: string): unknown return class end,
     }
-    expect(metaText(a, "target")).toBe("10")
+    expect(metaText(asApi(a), "target")).toBe("10")
     class = "elite"
-    expect(metaText(a, "target")).toBe("10 Elite")
+    expect(metaText(asApi(a), "target")).toBe("10 Elite")
     class = "rareelite"
-    expect(metaText(a, "target")).toBe("10 Rare Elite")
+    expect(metaText(asApi(a), "target")).toBe("10 Rare Elite")
     class = "rare"
-    expect(metaText(a, "target")).toBe("10 Rare")
+    expect(metaText(asApi(a), "target")).toBe("10 Rare")
     class = "worldboss"
-    expect(metaText(a, "target")).toBe("?? Boss")
+    expect(metaText(asApi(a), "target")).toBe("?? Boss")
     class, level = "normal", -1
-    expect(metaText(a, "target")).toBe("??")
+    expect(metaText(asApi(a), "target")).toBe("??")
     level = nil
-    expect(metaText(a, "target")).toBe("??")
+    expect(metaText(asApi(a), "target")).toBe("??")
     level = mock.secret(10)
-    expect(metaText(a, "target")).toBe("")
+    expect(metaText(asApi(a), "target")).toBe("")
     level, class = 10, mock.secret("elite")
-    expect(metaText(a, "target")).toBe("")
+    expect(metaText(asApi(a), "target")).toBe("")
 end
 
 @test("levelColor: unknown levels are impossible; the client's own colours")
@@ -165,8 +174,8 @@ end
 
 @test("difficultyColor: each difficulty font's colour")
 local function difficultyColors()
-    local font: any = "QuestDifficulty_VeryDifficult"
-    local function get(_: number): any return { font = font } end
+    local font: unknown = "QuestDifficulty_VeryDifficult"
+    local function get(_: number): unknown return { font = font } end
     expect(difficultyColor(5, get)).toBe("quest-very-difficult")
     font = "QuestDifficulty_Difficult"
     expect(difficultyColor(5, get)).toBe("quest-difficult")
@@ -180,7 +189,7 @@ local function difficultyColors()
     expect(difficultyColor(5, get)).toBe("quest-standard")
     font = nil
     expect(difficultyColor(5, get)).toBe("quest-standard")
-    expect(difficultyColor(5, function(_: number): any error("refused") end)).toBe("quest-standard")
+    expect(difficultyColor(5, function(_: number): unknown error("refused") end)).toBe("quest-standard")
     -- a client without difficulty colours
     expect(difficultyColor(5, nil)).toBe("quest-standard")
 end
@@ -220,23 +229,23 @@ local function groupTiers()
     expect(uf.groupTier(8)).toBe("10")
     expect(uf.groupTier(15)).toBe("20")
     expect(uf.groupTier(30)).toBe("40")
-    local raid: { [string]: any } = {
+    local raid: { [string]: unknown } = {
         IsInRaid = function(): boolean return true end,
         GetNumGroupMembers = function(): number return 4 end,
     }
-    expect(groupTierIn(nil, raid)).toBe("10") -- a raid of four is a 10
-    expect(groupTierIn(3, raid)).toBe("10")
-    expect(groupTierIn(25, raid)).toBe("40")
+    expect(groupTierIn(nil, asGroup(raid))).toBe("10") -- a raid of four is a 10
+    expect(groupTierIn(3, asGroup(raid))).toBe("10")
+    expect(groupTierIn(25, asGroup(raid))).toBe("40")
     raid.GetNumGroupMembers = nil
-    expect(groupTierIn(nil, raid)).toBe("10")
+    expect(groupTierIn(nil, asGroup(raid))).toBe("10")
 end
 
 @test("indicatorsFor: by group size")
 local function indicatorsForTier()
-    local a: { [string]: any } = { name = "a" }
-    local b: { [string]: any } = { name = "b", sizes = {} }
-    local c: { [string]: any } = { name = "c", sizes = { ["10"] = true } }
-    local d: { [string]: any } = { name = "d", sizes = { ["40"] = true } }
+    local a: uf.Indicator = { name = "a" }
+    local b: uf.Indicator = { name = "b", sizes = {} }
+    local c: uf.Indicator = { name = "c", sizes = { ["10"] = true } }
+    local d: uf.Indicator = { name = "d", sizes = { ["40"] = true } }
     expect(uf.indicatorsFor({ a, b, c, d }, "10")).toEqual({ a, b, c })
     expect(uf.indicatorsFor(nil, "5")).toEqual({})
 end
@@ -246,10 +255,10 @@ local function groupLists()
     local list0, v0 = uf.groupIndicators()
     local d0, dv0 = uf.groupDefensives()
     local heard: string[] = {}
-    local owner: { [string]: any } = {}
+    local owner: { [string]: unknown } = {}
     events.on("SUUUI_INDICATORS_CHANGED", function(name: string) heard[#heard + 1] = name end, owner)
     events.on("SUUUI_DEFENSIVES_CHANGED", function(name: string) heard[#heard + 1] = name end, owner)
-    local mine: { [string]: any }[] = { { name = "Renew", ids = { 139 } } }
+    local mine: uf.Indicator[] = { { name = "Renew", ids = { 139 } } }
     uf.setGroupIndicators(mine)
     local l1, v1 = uf.groupIndicators()
     expect(l1).toBe(mine)
@@ -275,7 +284,7 @@ end
 local function standIn()
     local p: Person = { name = "Bo", class = "WARRIOR", health = 0.5, max = 1000, incoming = 0.1, absorb = 0.2,
         power = 0.3, role = "TANK", you = true, marker = 3, dead = true, offline = true }
-    local a = api(p)
+    local a = uf.unitStandIn(function(_: string): Person return p end)
     expect(a.UnitExists("x")).toBe(true)
     expect(a.UnitIsDeadOrGhost("x")).toBe(true)
     expect(a.UnitIsGhost("x")).toBe(false)
@@ -285,32 +294,34 @@ local function standIn()
     expect(a.UnitGetTotalAbsorbs("x")).toBe(200)
     expect({ a.UnitPowerType("x") }).toEqual({ 1, "RAGE" })
     expect(a.UnitPowerMax("x")).toBe(100)
-    expect(a.UnitPower("x")).toBeCloseTo(30)
-    expect(a.UnitHealthPercent("x", true, CurveConstants.ScaleTo100)).toBeCloseTo(50)
-    expect(a.UnitHealthPercent("x", true, {})).toBe(0)
+    expect(a.UnitPower("x") :: number).toBeCloseTo(30)
+    local percent = assert(a.UnitHealthPercent)
+    expect(percent("x", true, (CurveConstants :: { ScaleTo100: CurveObjectBase }).ScaleTo100) :: number).toBeCloseTo(50)
+    expect(percent("x", true, C_CurveUtil.CreateCurve())).toBe(0) -- a curve it doesn't know
     expect(a.UnitPowerPercent("x", 1, true, belowCurve(0.25))).toBe(0)
     expect(a.UnitLevel("x")).toBe(60)
-    expect(a.UnitClassification("x")).toBe("normal")
+    expect(assert(a.UnitClassification)("x")).toBe("normal")
     expect(a.UnitGroupRolesAssigned("x")).toBe("TANK")
     expect(a.UnitIsPlayer("x")).toBe(true)
     expect({ a.UnitClass("x") }).toEqual({ "WARRIOR", "WARRIOR" })
     expect(a.UnitName("x")).toBe("Bo")
     expect(a.UnitReaction("x", "player")).toBe(5)
-    expect(a.UnitCreatureFamily("x")).toBeNil()
+    expect(a.UnitCreatureFamily("x")).toBe("") -- none
     expect(a.UnitIsUnit("x", "player")).toBe(true)
     expect(a.UnitIsUnit("x", "target")).toBe(false)
-    expect(a.UnitIsConnected("x")).toBe(false)
-    expect(a.GetRaidTargetIndex("x")).toBe(3)
+    expect(assert(a.UnitIsConnected)("x")).toBe(false)
+    expect(assert(a.GetRaidTargetIndex)("x")).toBe(3)
     -- the defaults
-    local b = api({ name = "Cy", class = "ROGUE", health = 1 })
+    local b = uf.unitStandIn(function(_: string): Person return { name = "Cy", class = "ROGUE", health = 1 } end)
     expect(b.UnitIsDeadOrGhost("x")).toBe(false)
     expect(b.UnitHealthMax("x")).toBe(4200)
     expect(b.UnitGetIncomingHeals("x")).toBe(0)
     expect({ b.UnitPowerType("x") }).toEqual({ 3, "ENERGY" })
-    expect(b.UnitPower("x")).toBeCloseTo(60)
+    expect(b.UnitPower("x") :: number).toBeCloseTo(60)
     expect(b.UnitGroupRolesAssigned("x")).toBe("NONE")
     expect(b.UnitIsUnit("x", "player")).toBe(false)
-    expect({ api({ class = "MAGE" }).UnitPowerType("x") }).toEqual({ 0, "MANA" })
+    expect({ uf.unitStandIn(function(_: string): Person return { class = "MAGE", health = 1 } end).UnitPowerType("x") })
+        .toEqual({ 0, "MANA" })
 end
 
 @test("inYourGroup: everyone outside a raid; your raid subgroup inside one")
@@ -319,25 +330,25 @@ local function yourGroup()
     local subs: { [number]: number? } = { [1] = 1, [2] = 2, [3] = 1 }
     local me = 3
     local secretMe = false
-    local A: { [string]: any } = {
+    local A: { [string]: unknown } = {
         IsInRaid = function(): boolean return true end,
         GetNumGroupMembers = function(): number return 3 end,
         GetRaidRosterInfo = function(i: number): (string, number, number?) return "x", 0, subs[i] end,
-        UnitIsUnit = function(a: string, b: string): any
+        UnitIsUnit = function(a: string, b: string): unknown
             if secretMe then return mock.secret(true) end
             return b == "player" and a == "raid" .. me
         end,
     }
-    expect(inYourGroup("party1", A)).toBe(true) -- not a raid token
-    expect(inYourGroup("raid1", A)).toBe(true)
-    expect(inYourGroup("raid2", A)).toBe(false)
+    expect(inYourGroup("party1", asGroup(A))).toBe(true) -- not a raid token
+    expect(inYourGroup("raid1", asGroup(A))).toBe(true)
+    expect(inYourGroup("raid2", asGroup(A))).toBe(false)
     subs[3] = nil
-    expect(inYourGroup("raid2", A)).toBe(true) -- your subgroup unknown
+    expect(inYourGroup("raid2", asGroup(A))).toBe(true) -- your subgroup unknown
     subs[3] = 1
     me = 9
-    expect(inYourGroup("raid2", A)).toBe(true) -- you weren't found
+    expect(inYourGroup("raid2", asGroup(A))).toBe(true) -- you weren't found
     secretMe = true
-    expect(inYourGroup("raid2", A)).toBe(true)
+    expect(inYourGroup("raid2", asGroup(A))).toBe(true)
 end
 
 --------------------------------------------------------------------------------
@@ -349,39 +360,40 @@ local function raidMarkers()
     local t = uf.raidMarker(parent, 16)
     expect(t:IsShown()).toBe(false)
     expect({ t:GetSize() }).toEqual({ 16, 16 })
-    local index: any = 6
-    local a: { [string]: any } = {
-        UnitExists = function(_: string): boolean return true end,
-        GetRaidTargetIndex = function(_: string): any return index end,
-    }
-    uf.showRaidMarker(t, "party1", a)
+    local index: unknown = 6
+    local a = api(priest())
+    a.UnitExists = function(_: string): boolean return true end
+    a.GetRaidTargetIndex = function(_: string): unknown return index end
+    uf.showRaidMarker(t, "party1", asApi(a))
     expect(t:IsShown()).toBe(true)
     expect({ t:GetTexCoord() }).toEqual({ 0.25, 0.25, 0.25, 0.5, 0.5, 0.25, 0.5, 0.5 })
     index = 1
-    uf.showRaidMarker(t, "party1", a)
+    uf.showRaidMarker(t, "party1", asApi(a))
     expect({ t:GetTexCoord() }).toEqual({ 0, 0, 0, 0.25, 0.25, 0, 0.25, 0.25 })
     index = 9
-    uf.showRaidMarker(t, "party1", a)
+    uf.showRaidMarker(t, "party1", asApi(a))
     expect(t:IsShown()).toBe(false)
     index = 2
-    uf.showRaidMarker(t, "party1", a)
+    uf.showRaidMarker(t, "party1", asApi(a))
     index = nil
-    uf.showRaidMarker(t, "party1", a)
+    uf.showRaidMarker(t, "party1", asApi(a))
     expect(t:IsShown()).toBe(false)
     -- a secret index: the sprite sheet's cell, worked out by the engine
     index = mock.secret(4)
-    uf.showRaidMarker(t, "party1", a)
+    uf.showRaidMarker(t, "party1", asApi(a))
     expect(t:IsShown()).toBe(true)
     -- no unit, no API, no such unit
-    uf.showRaidMarker(t, nil, a)
+    uf.showRaidMarker(t, nil, asApi(a))
     expect(t:IsShown()).toBe(false)
     index = 2
-    uf.showRaidMarker(t, "party1", a)
-    uf.showRaidMarker(t, "party1", { UnitExists = a.UnitExists })
+    uf.showRaidMarker(t, "party1", asApi(a))
+    local none = api(priest())
+    none.GetRaidTargetIndex = nil
+    uf.showRaidMarker(t, "party1", asApi(none))
     expect(t:IsShown()).toBe(false)
-    uf.showRaidMarker(t, "party1", a)
+    uf.showRaidMarker(t, "party1", asApi(a))
     a.UnitExists = function(_: string): boolean return false end
-    uf.showRaidMarker(t, "party1", a)
+    uf.showRaidMarker(t, "party1", asApi(a))
     expect(t:IsShown()).toBe(false)
     -- the game's own functions by default
     uf.showRaidMarker(t, "player")
@@ -392,12 +404,11 @@ end
 
 @test("a secret index the texture can't place hides the marker")
 local function raidMarkerSecretRefused()
-    local t: any = uf.raidMarker(parent, 16)
-    t.SetSpriteSheetCell = function() error("refused") end
-    uf.showRaidMarker(t, "party1", {
-        UnitExists = function(_: string): boolean return true end,
-        GetRaidTargetIndex = function(_: string): any return mock.secret(4) end,
-    })
+    local t = uf.raidMarker(parent, 16)
+    mock.stub(t, "SetSpriteSheetCell", function() error("refused") end)
+    local a = api(priest())
+    a.GetRaidTargetIndex = function(_: string): unknown return mock.secret(4) end
+    uf.showRaidMarker(t, "party1", asApi(a))
     expect(t:IsShown()).toBe(false)
 end
 
@@ -441,7 +452,7 @@ local function headerButton()
     local b = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate")
     b:SetAttribute("unit", "raid3")
     local f = keep(uf.unitFrame(nil, "raid3", { frame = b, size = "sm" }))
-    expect(f).toBe(b)
+    expect(f :: Button).toBe(b)
     expect(f:GetAttribute("*type1")).toBeNil()
     expect(f:GetHeight()).toBe(T.size["unit-sm"])
     -- in combat a header's button keeps the size the header gave it
@@ -471,14 +482,14 @@ local function crests()
     local class = "elite"
     a.UnitClassification = function(_: string): string return class end
     local f = preview(p, { crest = true }, a)
-    expect(f.crest.kind).toBe("elite")
-    expect(f.dragon:IsShown()).toBe(false)
+    expect(assert(f.crest).kind).toBe("elite")
+    expect(assert(f.dragon):IsShown()).toBe(false)
     local g = preview(p, { crest = true, dragon = true }, a)
-    expect(g.crest.kind).toBeNil()
-    expect(g.dragon:IsShown()).toBe(true)
+    expect(assert(g.crest).kind).toBeNil()
+    expect(assert(g.dragon):IsShown()).toBe(true)
     class = "normal"
     g:UpdateIdentity()
-    expect(g.dragon:IsShown()).toBe(false)
+    expect(assert(g.dragon):IsShown()).toBe(false)
     -- ShowDragon without a crest does nothing
     local h = preview(p)
     h:ShowDragon(nil)
@@ -489,7 +500,7 @@ end
 local function tooltips()
     local f = keep(uf.unitFrame(parent, "player", {}))
     local lines = mock.spy()
-    f.onTooltip = function(self: any, tip: any) lines(self, tip) end
+    f.onTooltip = function(self: uf.UnitFrame, tip: GameTooltip) lines(self, tip) end
     mock.hover(f)
     expect(GameTooltip:IsShown()).toBe(true)
     expect(lines).toHaveBeenCalledWith(f, GameTooltip)
@@ -530,7 +541,7 @@ end
 local function healthTextSecret()
     local p = priest()
     local a = api(p)
-    a.UnitHealthPercent = function(_: string, _: boolean, curve: any): any
+    a.UnitHealthPercent = function(_: string, _: boolean, curve: unknown): unknown
         if curve == CurveConstants.ScaleTo100 then return mock.secret(64) end
         return 0
     end
@@ -539,7 +550,7 @@ local function healthTextSecret()
     expect(f.right.value).toBeNil()
     local g = preview(p, { healthText = "both" }, a)
     expect(g.right.value).toBeNil()
-    a.UnitHealth = function(_: string): any return mock.secret(2000) end
+    a.UnitHealth = function(_: string): unknown return mock.secret(2000) end
     local h = preview(p, { healthText = "value" }, a)
     expect(h.right.value).toBeNil()
     expectNoErrors()
@@ -569,7 +580,7 @@ local function deathChanges()
     local p = priest()
     local f = preview(p)
     local seen = mock.spy()
-    f.onHealth = function(self: any) seen(self) end
+    f.onHealth = function(self: uf.UnitFrame) seen(self) end
     expect(tokenOf(f.name)).toBe("class-priest")
     p.dead = true
     f:UpdateHealth(true)
@@ -655,17 +666,17 @@ end
 local function powerCases()
     expect(preview(priest(), { power = false }).power:IsShown()).toBe(false)
     local asked: string[] = {}
-    local f = preview(priest(), { powerFor = function(u: string, _: any): boolean asked[#asked + 1] = u return false end })
+    local f = preview(priest(), { powerFor = function(u: string, _: unknown): boolean asked[#asked + 1] = u return false end })
     expect(f.power:IsShown()).toBe(false)
     expect(asked[1]).toBe("party1")
-    expect(preview(priest(), { powerFor = function(_: string, _: any): boolean return true end }).power:IsShown()).toBe(true)
+    expect(preview(priest(), { powerFor = function(_: string, _: unknown): boolean return true end }).power:IsShown()).toBe(true)
     local p = priest()
     local a = api(p)
-    a.UnitPowerMax = function(_: string, _: number): any return 0 end
+    a.UnitPowerMax = function(_: string, _: number): unknown return 0 end
     expect(preview(p, {}, a).power:IsShown()).toBe(false)
-    a.UnitPowerMax = function(_: string, _: number): any return mock.secret(100) end
+    a.UnitPowerMax = function(_: string, _: number): unknown return mock.secret(100) end
     expect(preview(p, {}, a).power:IsShown()).toBe(true)
-    a.UnitPowerMax = function(_: string, _: number): any return 100 end
+    a.UnitPowerMax = function(_: string, _: number): unknown return 100 end
     a.UnitPowerType = function(_: string): (number, string) return 6, "RUNIC_POWER" end
     local r = preview(p, {}, a)
     expect(tokenOf(r.power)).toBe("mana")
@@ -691,7 +702,7 @@ local function roleMarker()
     -- a class without a colour, and a secret role: no marker
     local p = priest({ class = "NOBODY" })
     local a = api(p)
-    a.UnitGroupRolesAssigned = function(_: string): any return mock.secret("TANK") end
+    a.UnitGroupRolesAssigned = function(_: string): unknown return mock.secret("TANK") end
     local odd = preview(p, {}, a)
     expect(odd.role:IsShown()).toBe(false)
     expect(odd.classDot:IsShown()).toBe(false)
@@ -704,8 +715,8 @@ local function nameColors()
     local p = priest()
     local a = api(p)
     a.UnitIsPlayer = function(_: string): boolean return false end
-    local r: any = 2
-    a.UnitReaction = function(_: string, _: string): any return r end
+    local r: unknown = 2
+    a.UnitReaction = function(_: string, _: string): unknown return r end
     expect(tokenOf(preview(p, {}, a).name)).toBe("reaction-hostile")
     r = 4
     expect(tokenOf(preview(p, {}, a).name)).toBe("reaction-neutral")
@@ -726,12 +737,12 @@ local function metaLine()
     expect(preview(priest()).meta:GetText()).toBe("")
     local p = priest()
     local a = api(p)
-    local fam: any = "Wolf"
-    a.UnitCreatureFamily = function(_: string): any return fam end
+    local fam: unknown = "Wolf"
+    a.UnitCreatureFamily = function(_: string): unknown return fam end
     expect(preview(p, { meta = "family" }, a).meta:GetText()).toBe("Wolf")
     fam = mock.secret("Wolf")
     expect(preview(p, { meta = "family" }, a).meta:GetText()).toBe("")
-    a.UnitLevel = function(_: string): any return mock.secret(60) end
+    a.UnitLevel = function(_: string): unknown return mock.secret(60) end
     local s = preview(p, { meta = true }, a)
     expect(s.meta:GetText()).toBe("")
 end
@@ -745,10 +756,10 @@ local function youBadge()
     local p = priest()
     local a = api(p)
     local s = mock.secret(true)
-    a.UnitIsUnit = function(_: string, _: string): any return s end
+    a.UnitIsUnit = function(_: string, _: string): unknown return s end
     local f = preview(p, { youWhenPlayer = true }, a)
-    local got: any = nil
-    mock.stub(f.you, "SetAlphaFromBoolean", function(_: any, v: any) got = v end)
+    local got: unknown = nil
+    mock.stub(f.you, "SetAlphaFromBoolean", function(_: unknown, v: unknown) got = v end)
     f:UpdateIdentity()
     expect(issecretvalue(got)).toBe(true)
 end
@@ -785,11 +796,11 @@ end
 local function secretName()
     local p = priest()
     local a = api(p)
-    a.UnitName = function(_: string): any return mock.secret("Hidden") end
-    local f = keep(uf.unitFrame(parent, "party1", { meta = true, you = true, api = a }))
+    a.UnitName = function(_: string): unknown return mock.secret("Hidden") end
+    local f = keep(uf.unitFrame(parent, "party1", { meta = true, you = true, api = asApi(a) }))
     f:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, -10)
     -- (the client gives a secret width for secret text; see the next test)
-    mock.stub(f.name, "GetUnboundedStringWidth", function(): any return mock.secret(300) end)
+    mock.stub(f.name, "GetUnboundedStringWidth", function(): unknown return mock.secret(300) end)
     f:Refresh()
     expect(f.you).toBeAnchoredTo(f.row, "RIGHT", "RIGHT")
     expect(f.meta).toBeAnchoredTo(f.you, "RIGHT", "LEFT")
@@ -873,7 +884,7 @@ end
 @test("SetIndicators: one container per indicator, reused by identity")
 local function liveIndicators()
     local f = keep(uf.unitFrame(parent, "player", {}))
-    local list = {
+    local list: uf.Indicator[] = {
         { kind = "icon", ids = { 139 }, point = "TOPRIGHT", size = 16 },
         { kind = "square", ids = { 17 }, point = "BOTTOMLEFT", color = "fel" },
         { kind = "border", ids = { 774 }, source = "any" },
@@ -906,7 +917,7 @@ local function missingLooks()
     })
     expect(#f.missingLooks).toBe(2)
     expect(#f.indicatorContainers).toBe(2)
-    local missing, both = f.missingLooks[1], f.missingLooks[2]
+    local missing, both = f.missingLooks[1].look, f.missingLooks[2].look
     expect(missing:IsShown()).toBe(true)
     expect(both:IsShown()).toBe(true)
     local id = mock.player:applyAura({ spellId = 139, name = "Renew", duration = 15, sourceUnit = "player", isHelpful = true })
@@ -924,12 +935,12 @@ local function missingLooks()
     mock.player:leaveCombat()
     -- the same list again reuses the looks
     f:SetIndicators({ { kind = "icon", ids = { 139 }, show = "missing", size = 12 } })
-    expect(f.missingLooks[1]).toBe(missing)
+    expect(f.missingLooks[1].look).toBe(missing)
     -- an "any" source's aura from someone else counts
     f:SetIndicators({ { kind = "square", ids = { 139 }, show = "missing", source = "any" } })
     local id2 = mock.player:applyAura({ spellId = 139, name = "Renew", duration = 15, sourceUnit = "party1", isHelpful = true })
     f:UpdateIndicatorPresence()
-    expect(f.missingLooks[1]:IsShown()).toBe(false)
+    expect(f.missingLooks[1].look:IsShown()).toBe(false)
     mock.player:removeAura(id2)
 end
 
@@ -937,7 +948,7 @@ end
 local function previewIndicators()
     mock.defineSpell(139, { name = "Renew", iconID = 135953 })
     local f = preview(priest())
-    local list = {
+    local list: uf.Indicator[] = {
         { kind = "icon", ids = { 139 }, size = 14 },
         { kind = "icon", ids = { 139 }, show = "missing" },
         { kind = "border", color = "ward" },
@@ -963,17 +974,17 @@ end
 local function dispelBadges()
     local f = keep(uf.unitFrame(parent, "player", {}))
     f:SetDispelBadges("all")
-    expect(#f.dispelSets.all).toBe(#uf.DEBUFF_TYPES)
-    expect(f.dispelSets.all[1].container:IsShown()).toBe(true)
-    local all = f.dispelSets.all
+    expect(#assert(f.dispelSets.all)).toBe(#uf.DEBUFF_TYPES)
+    expect(assert(f.dispelSets.all)[1].container:IsShown()).toBe(true)
+    local all = assert(f.dispelSets.all)
     f:SetDispelBadges("removable")
-    expect(f.dispelSets.all[1].container:IsShown()).toBe(false)
-    expect(f.dispelSets.removable[1].container:IsShown()).toBe(true)
+    expect(assert(f.dispelSets.all)[1].container:IsShown()).toBe(false)
+    expect(assert(f.dispelSets.removable)[1].container:IsShown()).toBe(true)
     f:SetDispelBadges("all")
-    expect(f.dispelSets.all).toBe(all)
+    expect(assert(f.dispelSets.all)).toBe(all)
     f:SetDispelBadges("off")
     expect(all[1].container:IsShown()).toBe(false)
-    expect(f.dispelSets.removable[1].container:IsShown()).toBe(false)
+    expect(assert(f.dispelSets.removable)[1].container:IsShown()).toBe(false)
     expectNoErrors()
 end
 
@@ -1021,8 +1032,8 @@ local function setUnit()
     f:Activate()
     f:SetUnit("player") -- the same: nothing
     local s1 = mock.spy()
-    local c1 = f.dispelSets.all[1]
-    mock.stub(c1, "SetUnit", function(_: any, u: string) s1(u) end)
+    local c1 = assert(f.dispelSets.all)[1]
+    mock.stub(c1, "SetUnit", function(_: unknown, u: string) s1(u) end)
     f:SetUnit("target")
     expect(f.unit).toBe("target")
     expect(f:GetAttribute("unit")).toBe("target")
@@ -1173,20 +1184,17 @@ local function groupScoped()
     mock.group:add(other, { raid = true, subgroup = 2 })
     local function raidToken(u: mock.MockUnit): string
         -- (token() gives a string here, though typed string[]: see the notes)
-        local t: any = u:token()
-        if type(t) == "string" then return t end
-        for _, x in ipairs(t) do if x:find("^raid") then return x end end
-        return "none"
+        return u:token() or "none"
     end
-    local list: { [string]: any }[] = { { kind = "square", ids = { 139 }, show = "both", on = "group" },
+    local list: uf.Indicator[] = { { kind = "square", ids = { 139 }, show = "both", on = "group" },
                                          { kind = "border", ids = { 17 }, missingOn = "group" } }
     local near = keep(uf.unitFrame(parent, raidToken(mate), { secure = false }))
     near:SetIndicators(list)
-    expect(near.missingLooks[1]:IsShown()).toBe(true)
+    expect(near.missingLooks[1].look:IsShown()).toBe(true)
     expect(near.indicatorContainers[1].container:IsShown()).toBe(true)
     local far = keep(uf.unitFrame(parent, raidToken(other), { secure = false }))
     far:SetIndicators(list)
-    expect(far.missingLooks[1]:IsShown()).toBe(false)
+    expect(far.missingLooks[1].look:IsShown()).toBe(false)
     expect(far.indicatorContainers[1].container:IsShown()).toBe(false)
     expect(far.indicatorContainers[2].container:IsShown()).toBe(false)
     -- in combat the live containers keep the last answer
