@@ -11,6 +11,7 @@ import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import SuuUI from "/Core/API"
 import legacyPoints, legacyChallenges, legacyTrack, LEGACY_CARD_H, LEGACY_TRACK_H from "/UI/Legacy"
+import LegacyChallenges, Challenge, ChallengeStep, ChallengeCategory from "/UI/Legacy"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf from "./WorldHelpers"
 
@@ -60,7 +61,7 @@ local function points()
     p:SetPoints({ earned = 16, total = 81, spent = 9, cap = 16, pending = 2 })
     local rest = p.char.rest:GetText() :: string
     expect(plain(rest)).toBe(" of 16 · 2 not applied")
-    expect(rest:find((T.color :: { [string]: any }).arcane.hex, 1, true) ~= nil).toBe(true)
+    expect(rest:find(T.color.arcane.hex, 1, true) ~= nil).toBe(true)
     -- nothing known: zeros
     p:SetPoints(nil)
     expect(p.account.big:GetText()).toBe("0")
@@ -78,15 +79,15 @@ end
 -- Challenges: the cards
 --------------------------------------------------------------------------------
 
-local function items(n: number, done: number?): { [string]: any }[]
-    local list: { [string]: any }[] = {}
+local function items(n: number, done: number?): Challenge[]
+    local list: Challenge[] = {}
     for i = 1, n do
         list[i] = { name = "Challenge " .. i, done = i <= (done or 0), progress = i .. "/10", points = i }
     end
     return list
 end
 
-local function challenges(): any
+local function challenges(): LegacyChallenges
     local c = legacyChallenges(host())
     c:SetAllPoints()
     return c
@@ -143,7 +144,7 @@ end
 @test("a card row's hover to its challenge's onEnter and onLeave; a card gilds on hover")
 local function cardHover()
     local c = challenges()
-    local entered, left = mock.spy(function(_o: any) end), mock.spy()
+    local entered, left = mock.spy(function(_o: Frame) end), mock.spy()
     c:SetCategories({ { name = "Exploration", done = 0, total = 2, items = {
         { name = "A", onEnter = entered, onLeave = left }, { name = "B" } } } })
     local card = c.cards[1]
@@ -170,12 +171,12 @@ end
 -- Challenges: a category's full list
 --------------------------------------------------------------------------------
 
-local function category(): { [string]: any }
-    local stepsOf = function(): { [string]: any }[]
+local function category(): ChallengeCategory
+    local stepsOf = function(): ChallengeStep[]
         return {
             { text = "Elwynn Forest", done = true },
             { text = "Westfall", count = { 2, 5 } },
-            { id = "deep", text = "Deepest delves", stepsN = 2, stepsDone = 1, steps = function(): { [string]: any }[]
+            { id = "deep", text = "Deepest delves", stepsN = 2, stepsDone = 1, steps = function(): ChallengeStep[]
                 return { { text = "The Stockade", done = true }, { text = "The Deadmines" } }
             end },
         }
@@ -307,8 +308,9 @@ end
 local function refresh()
     local c = challenges()
     local big = category()
+    local groups = assert(big.groups)
     for i = 1, 6 do
-        big.groups[#big.groups + 1] = { name = "Group " .. i, done = 0, items = items(6) }
+        groups[#groups + 1] = { name = "Group " .. i, done = 0, items = items(6) }
     end
     c:SetCategories({ big })
     c:Open(1)
@@ -334,7 +336,7 @@ local function back()
     c:SetCategories({ category() })
     c:Open(1)
     local b = c.back
-    expect(tokenOf(b.chevron)).toBe("gilt-text")
+    expect(tokenOf(c.backChevron)).toBe("gilt-text")
     mock.script(b, "OnMouseDown", "LeftButton")
     local _, _, _, x, y = b.label:GetPoint(1)
     expect(x).toBe(7)
@@ -352,7 +354,7 @@ end
 @test("a detail row's hover to its challenge's callbacks")
 local function detailHover()
     local c = challenges()
-    local entered, left = mock.spy(function(_o: any) end), mock.spy()
+    local entered, left = mock.spy(function(_o: Frame) end), mock.spy()
     c:SetCategories({ { name = "A", done = 0, total = 1, groups = {
         { name = "G", done = 0, items = { { id = "x", name = "X", onEnter = entered, onLeave = left } } } } } })
     c:Open(1)
@@ -378,7 +380,7 @@ local function track()
     local t = legacyTrack(host(1000, 100))
     expect(t:GetHeight()).toBe(LEGACY_TRACK_H)
     t:SetAllPoints()
-    local entered, left = mock.spy(function(_o: any) end), mock.spy()
+    local entered, left = mock.spy(function(_o: Frame) end), mock.spy()
     t:SetTrack({ earned = 30, total = 81, max = 60, next = "Next: Riding Crop at 40",
         stops = {
             { at = 10, icon = 1, quality = "rare", collected = true, onEnter = entered, onLeave = left },
@@ -397,7 +399,7 @@ local function track()
     expect(tokenOf(a.at)).toBe("gilt-text")
     expect(a.at).toHaveText("10")
     expect(a.check).toBeShown()
-    expect(b.slot.skin.item.dim).toBe(true)
+    expect(assert(b.slot.skin.item).dim).toBe(true)
     expect(tokenOf(b.mark)).toBe("gilt-line")
     expect(tokenOf(b.at)).toBe("ink-muted")
     expect(b.check).never.toBeShown()
@@ -447,12 +449,12 @@ local function theme()
     c:Open(1)
     local t = legacyTrack(h)
     t:SetTrack({ stops = { { at = 1 } } })
-    local open = mock.spy(function(_s: any, _i: number, _k: boolean?) end)
+    local open = mock.spy(function(_s: LegacyChallenges, _i: number, _k: boolean?) end)
     mock.stub(c, "Open", open)
     events.emit("SUUUI_THEME_CHANGED", "suuui")
     expect(open).toHaveBeenCalledWith(c, 1, true)
-    expect((SuuUI.UI :: any).LEGACY_CARD_H).toBe(LEGACY_CARD_H)
-    expect((SuuUI.UI :: any).LEGACY_TRACK_H).toBe(LEGACY_TRACK_H)
+    expect(SuuUI.UI.LEGACY_CARD_H).toBe(LEGACY_CARD_H)
+    expect(SuuUI.UI.LEGACY_TRACK_H).toBe(LEGACY_TRACK_H)
     expect(p.account.big:GetText()).toBe("1")
     expect(bare.data).toBeNil()
     expect(t.stops[1]:GetHeight()).toBe(LEGACY_TRACK_H)
