@@ -38,7 +38,7 @@ import Select from "/UI/Select"
 import ScrollArea from "/UI/Panel"
 
 export type Friend = {
-    key?: any,
+    key?: string,
     bnet?: boolean,
     name?: string,
     character?: string,
@@ -61,36 +61,22 @@ export type ContactsData = {
     total?: number,
     friends?: Friend[],
     ignored?: string[],
-    selected?: any,
+    selected?: string,
 }
 
-export interface StatusBadge extends Frame
-    text: Text
-end
-
-export interface ContactRow extends Button
-    row?: Friend
-    ignoredName?: string
-    sel: Texture
-    edge: Texture
-    hover: Texture
-    diamond: Texture
-    glyph: Texture
-    name: Text
-    detail: Text
-    away: StatusBadge
-    unignore: SuuButton
-end
-
-export interface ListHead extends Frame
-    text: Text
-    rule: Frame
-end
-
 -- A foot or head button: why it's off, for its tooltip.
-export interface ReasonButton extends SuuButton
+export class ReasonButton extends SuuButton
     reason?: string
-    text: string
+    readonly text: string
+
+    constructor(parent: Frame, label: string, variant: string, onClick: () -> ())
+        super(parent, { text = label, variant = variant, onClick = onClick })
+        self.text = label
+        self:HookScript("OnEnter", function()
+            if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = label, description = self.reason }) end
+        end)
+        self:HookScript("OnLeave", function() tooltip.hideTooltip() end)
+    end
 end
 
 local S = T.space
@@ -113,86 +99,113 @@ local function placeDiamond(r: ContactRow | PeopleRow)
     r.diamond:SetPoint("CENTER", r, "TOPLEFT", S["space-5"], -(S["space-3"] + T.type.label.lineHeight / 2))
 end
 
+export class StatusBadge extends Frame
+    text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(16)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.text = uiText.text(self, "micro", "ink-muted")
+        self.text:SetPoint("CENTER")
+    end
+end
+
 local function badge(parent: Frame): StatusBadge
-    local b: StatusBadge = CreateFrame("Frame", nil, parent) :: any
-    b:SetHeight(16)
-    draw.fill(b, "surface-raised"):SetAllPoints()
-    draw.border(b, "gilt-line")
-    b.text = uiText.text(b, "micro", "ink-muted")
-    b.text:SetPoint("CENTER")
-    return b
+    return StatusBadge.new(parent)
+end
+
+export class ContactRow extends Button
+    row?: Friend
+    ignoredName?: string
+    sel: Texture
+    edge: Texture
+    hover: Texture
+    diamond: Texture
+    glyph: Texture
+    name: Text
+    detail: Text
+    away: StatusBadge
+    unignore: SuuButton
+
+    constructor(c: Contacts)
+        super(nil, c.list.child)
+        self:SetHeight(ROW_H)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.sel = draw.fill(self, "arcane-soft", "BACKGROUND")
+        self.sel:SetAllPoints()
+        self.edge = draw.fill(self, "arcane", "ARTWORK")
+        self.edge:SetWidth(2)
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.hover = draw.fill(self, "gilt-faint", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        -- the head: a diamond (character) or the Battle.net glyph
+        self.diamond = draw.diamond(self, 7, "ink")
+        placeDiamond(self)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "people.tga")
+        self.glyph:SetSize(14, 14)
+        self.glyph:SetPoint("CENTER", self.diamond, "CENTER")
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("TOPLEFT", S["space-5"] + S["space-4"] + 2, -S["space-3"])
+        self.name:SetJustifyH("LEFT")
+        self.detail = uiText.text(self, "caption", "ink-muted")
+        self.detail:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -1)
+        self.detail:SetPoint("RIGHT", self, "RIGHT", -S["space-4"], 0)
+        self.detail:SetJustifyH("LEFT")
+        self.away = badge(self)
+        self.away:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
+        -- ignored: Unignore on the row
+        self.unignore = controls.button(self, { text = "Unignore", variant = "quiet", onClick = function()
+            local name = self.ignoredName
+            if name and c.onUnignore then c.onUnignore(name) end
+        end })
+        self.unignore:SetPoint("RIGHT", -S["space-4"], 0)
+        self:SetScript("OnEnter", function() self.hover:Show() end)
+        self:SetScript("OnLeave", function() self.hover:Hide() end)
+        self:SetScript("OnClick", function(_: ContactRow, button: string)
+            local row = self.row
+            if not row then return end
+            if c.onSelect then c.onSelect(row.key) end
+            if button == "RightButton" and c.onMenu then c.onMenu(row, self) end
+        end)
+        self:SetScript("OnDoubleClick", function()
+            local row = self.row
+            if row and row.whisper and c.onWhisper then c.onWhisper(row) end
+        end)
+    end
 end
 
 local function makeRow(c: Contacts): ContactRow
-    local r: ContactRow = CreateFrame("Button", nil, c.list.child) :: any
-    r:SetHeight(ROW_H)
-    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    r.sel = draw.fill(r, "arcane-soft", "BACKGROUND")
-    r.sel:SetAllPoints()
-    r.edge = draw.fill(r, "arcane", "ARTWORK")
-    r.edge:SetWidth(2)
-    r.edge:SetPoint("TOPLEFT")
-    r.edge:SetPoint("BOTTOMLEFT")
-    r.hover = draw.fill(r, "gilt-faint", "BACKGROUND", 1)
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    -- the head: a diamond (character) or the Battle.net glyph
-    r.diamond = draw.diamond(r, 7, "ink")
-    placeDiamond(r)
-    r.glyph = r:CreateTexture(nil, "ARTWORK")
-    r.glyph:SetTexture(GLYPHS .. "people.tga")
-    r.glyph:SetSize(14, 14)
-    r.glyph:SetPoint("CENTER", r.diamond, "CENTER")
-    r.name = uiText.text(r, "label", "ink")
-    r.name:SetPoint("TOPLEFT", S["space-5"] + S["space-4"] + 2, -S["space-3"])
-    r.name:SetJustifyH("LEFT")
-    r.detail = uiText.text(r, "caption", "ink-muted")
-    r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
-    r.detail:SetPoint("RIGHT", r, "RIGHT", -S["space-4"], 0)
-    r.detail:SetJustifyH("LEFT")
-    r.away = badge(r)
-    r.away:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
-    -- ignored: Unignore on the row
-    r.unignore = controls.button(r, { text = "Unignore", variant = "quiet", onClick = function()
-        local name = r.ignoredName
-        if name and c.onUnignore then c.onUnignore(name) end
-    end })
-    r.unignore:SetPoint("RIGHT", -S["space-4"], 0)
-    r:SetScript("OnEnter", function(self: ContactRow) self.hover:Show() end)
-    r:SetScript("OnLeave", function(self: ContactRow) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self: ContactRow, button: string)
-        local row = self.row
-        if not row then return end
-        if c.onSelect then c.onSelect(row.key) end
-        if button == "RightButton" and c.onMenu then c.onMenu(row, self) end
-    end)
-    r:SetScript("OnDoubleClick", function(self: ContactRow)
-        local row = self.row
-        if row and row.whisper and c.onWhisper then c.onWhisper(row) end
-    end)
-    return r
+    return ContactRow.new(c)
+end
+
+export class ListHead extends Frame
+    text: Text
+    rule: Frame
+
+    constructor(c: Contacts | PeopleList)
+        super(nil, c.list.child)
+        self:SetHeight(headH())
+        self.text = uiText.text(self, "caption", "gilt-text")
+        self.text:SetPoint("BOTTOMLEFT", S["space-4"], S["space-1"])
+        self.rule = draw.hairline(self, "gilt-line", "out")
+        self.rule:SetPoint("LEFT", self.text, "RIGHT", S["space-3"], 0)
+        self.rule:SetPoint("RIGHT", -S["space-4"], 0)
+    end
 end
 
 local function makeHead(c: Contacts | PeopleList): ListHead
-    local h: ListHead = CreateFrame("Frame", nil, c.list.child) :: any
-    h:SetHeight(headH())
-    h.text = uiText.text(h, "caption", "gilt-text")
-    h.text:SetPoint("BOTTOMLEFT", S["space-4"], S["space-1"])
-    h.rule = draw.hairline(h, "gilt-line", "out")
-    h.rule:SetPoint("LEFT", h.text, "RIGHT", S["space-3"], 0)
-    h.rule:SetPoint("RIGHT", -S["space-4"], 0)
-    return h
+    return ListHead.new(c)
 end
 
 local STATUS_COLOR = { available = "arcane", away = "amber", busy = "ember" }
 
 local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ()): ReasonButton
-    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick }) :: ReasonButton
-    b:HookScript("OnEnter", function(self: ReasonButton)
-        if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = text, description = self.reason }) end
-    end)
-    b:HookScript("OnLeave", function() tooltip.hideTooltip() end)
-    return b
+    return ReasonButton.new(parent, text, variant, onClick)
 end
 
 export class Contacts extends Frame
@@ -211,9 +224,9 @@ export class Contacts extends Frame
     empty: Text
     selectedRow: Friend? = nil
     data: ContactsData? = nil
-    onView: ((view: any) -> ())? = nil
-    onStatus: ((status: any) -> ())? = nil
-    onSelect: ((key: any) -> ())? = nil
+    onView: ((view: string) -> ())? = nil
+    onStatus: ((status: string) -> ())? = nil
+    onSelect: ((key: string?) -> ())? = nil
     onWhisper: ((row: Friend) -> ())? = nil
     onInvite: ((row: Friend) -> ())? = nil
     onAdd: (() -> ())? = nil
@@ -231,13 +244,13 @@ export class Contacts extends Frame
         self.me = uiText.text(self, "unit-name-lg", "ink")
         self.me:SetPoint("LEFT", self, "TOPLEFT", 6 + S["space-4"] + 2, -TOP_H / 2)
         self.views = inputs.segmented(self, { options = { { value = "friends", label = "Friends" }, { value = "ignored", label = "Ignored" } },
-            onChange = function(v: any) if self.onView then self.onView(v) end end })
+            onChange = function(v: string) if self.onView then self.onView(v) end end })
         self.views:SetPoint("TOPLEFT", 0, -(TOP_H + S["space-4"]))
         self.count = uiText.text(self, "caption", "ink-muted")
         self.count:SetPoint("LEFT", self.views, "RIGHT", S["space-5"], 0)
         self.status = uiSelect.select(self, { width = 120, value = "available", options = {
             { value = "available", label = "Available" }, { value = "away", label = "Away" }, { value = "busy", label = "Busy" } },
-            onChange = function(v: any) if self.onStatus then self.onStatus(v) end end })
+            onChange = function(v: string) if self.onStatus then self.onStatus(v) end end })
         self.status:SetPoint("TOPRIGHT")
         -- the foot
         self.add = footButton(self, "Add friend", "quiet", function()
@@ -459,7 +472,39 @@ export type RaidData = {
     members?: RaidMember[],
 }
 
-export interface RaidSlot extends Button
+-- The member you drag, following the cursor.
+export class RaidGhost extends Frame
+    readonly role: Texture
+    readonly name: Text
+
+    constructor()
+        super(nil, UIParent)
+        self:SetFrameStrata("TOOLTIP")
+        self:SetSize(160, SLOT_H)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "arcane")
+        self.role = self:CreateTexture(nil, "ARTWORK")
+        self.role:SetSize(12, 12)
+        self.role:SetPoint("LEFT", S["space-3"], 0)
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.role, "RIGHT", S["space-3"], 0)
+    end
+end
+
+-- A raid group's box, its label at the top.
+export class RaidGroupFrame extends Frame
+    readonly label: Text
+
+    constructor(parent: Frame, g: number)
+        super(nil, parent)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        self.label = uiText.text(self, "caption", "gilt-text")
+        self.label:SetPoint("TOPLEFT", S["space-3"], -S["space-1"])
+        self.label:SetValue("Group " .. g)
+    end
+end
+
+export class RaidSlot extends Button
     group: number
     pos: number
     member?: RaidMember
@@ -468,93 +513,81 @@ export interface RaidSlot extends Button
     role: Texture
     name: Text
     rank: Texture
-end
 
-export interface RaidGhost extends Frame
-    role: Texture
-    name: Text
-end
-
-export interface RaidGroupFrame extends Frame
-    label: Text
+    constructor(r: RaidGroups, g: number, i: number)
+        super(nil, r.groups[g])
+        self:SetHeight(SLOT_H)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self:RegisterForDrag("LeftButton")
+        self.group, self.pos = g, i
+        self.fill = draw.fill(self, "surface-raised")
+        self.fill:SetAllPoints()
+        self.edge = draw.border(self, "gilt-faint")
+        self.role = self:CreateTexture(nil, "ARTWORK")
+        self.role:SetSize(12, 12)
+        self.role:SetPoint("LEFT", S["space-3"], 0)
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.role, "RIGHT", S["space-3"], 0)
+        self.name:SetPoint("RIGHT", self, "RIGHT", -22, 0)
+        self.name:SetJustifyH("LEFT")
+        self.rank = self:CreateTexture(nil, "ARTWORK")
+        self.rank:SetSize(12, 12)
+        self.rank:SetPoint("RIGHT", -S["space-3"], 0)
+        self:SetScript("OnEnter", function()
+            if r.dragging and r.dragging ~= self then self.edge:SetColor("arcane") end
+            local m = self.member
+            if m then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip_SetTitle(GameTooltip, m.name or "")
+                local line = (m.level and m.level > 0 and ("Level " .. m.level .. " ") or "") .. (m.className or "")
+                if line ~= "" then GameTooltip_AddNormalLine(GameTooltip, line) end
+                if m.zone and m.zone ~= "" then GameTooltip_AddNormalLine(GameTooltip, m.zone) end
+                if not m.online then GameTooltip_AddNormalLine(GameTooltip, "Offline") end
+                GameTooltip:Show()
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            local m = self.member
+            self.edge:SetColor(m and (m.you and "ink" or "gilt-hairline") or "gilt-faint")
+            GameTooltip:Hide()
+        end)
+        self:SetScript("OnClick", function(_: RaidSlot, button: string)
+            local m = self.member
+            if m and r.onMember then r.onMember(m, button, self) end
+        end)
+        -- dragging: the member kept from the start (a roster update can redraw
+        -- the slots meanwhile: their member was gone at the drop, found in
+        -- game), a card following the cursor, the slot under it in arcane
+        self:SetScript("OnDragStart", function()
+            local m, data = self.member, r.data
+            if not (m and data and data.canLead) or InCombatLockdown() then return end
+            r.dragging, r.dragMember = self, m
+            self:SetAlpha(0.5)
+            r:StartGhost(m)
+        end)
+        self:SetScript("OnDragStop", function()
+            self:SetAlpha(1)
+            local member = r.dragMember
+            local to = r:StopGhost()
+            r.dragging, r.dragMember = nil, nil
+            if not member then return end
+            if not (to and to.group and to.pos) or to.member == member then r:Draw() return end
+            local other = to.member
+            if other then
+                if r.onSwap then r.onSwap(member.index, other.index) end
+            elseif r.onMove then
+                r.onMove(member.index, to.group)
+            end
+        end)
+    end
 end
 
 local function slot(r: RaidGroups, g: number, i: number): RaidSlot
-    local b: RaidSlot = CreateFrame("Button", nil, r.groups[g]) :: any
-    b:SetHeight(SLOT_H)
-    b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    b:RegisterForDrag("LeftButton")
-    b.group, b.pos = g, i
-    b.fill = draw.fill(b, "surface-raised")
-    b.fill:SetAllPoints()
-    b.edge = draw.border(b, "gilt-faint")
-    b.role = b:CreateTexture(nil, "ARTWORK")
-    b.role:SetSize(12, 12)
-    b.role:SetPoint("LEFT", S["space-3"], 0)
-    b.name = uiText.text(b, "label", "ink")
-    b.name:SetPoint("LEFT", b.role, "RIGHT", S["space-3"], 0)
-    b.name:SetPoint("RIGHT", b, "RIGHT", -22, 0)
-    b.name:SetJustifyH("LEFT")
-    b.rank = b:CreateTexture(nil, "ARTWORK")
-    b.rank:SetSize(12, 12)
-    b.rank:SetPoint("RIGHT", -S["space-3"], 0)
-    b:SetScript("OnEnter", function(self: RaidSlot)
-        if r.dragging and r.dragging ~= self then self.edge:SetColor("arcane") end
-        local m = self.member
-        if m then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip_SetTitle(GameTooltip, m.name or "")
-            local line = (m.level and m.level > 0 and ("Level " .. m.level .. " ") or "") .. (m.className or "")
-            if line ~= "" then GameTooltip_AddNormalLine(GameTooltip, line) end
-            if m.zone and m.zone ~= "" then GameTooltip_AddNormalLine(GameTooltip, m.zone) end
-            if not m.online then GameTooltip_AddNormalLine(GameTooltip, "Offline") end
-            GameTooltip:Show()
-        end
-    end)
-    b:SetScript("OnLeave", function(self: RaidSlot)
-        local m = self.member
-        self.edge:SetColor(m and (m.you and "ink" or "gilt-hairline") or "gilt-faint")
-        GameTooltip:Hide()
-    end)
-    b:SetScript("OnClick", function(self: RaidSlot, button: string)
-        local m = self.member
-        if m and r.onMember then r.onMember(m, button, self) end
-    end)
-    -- dragging: the member kept from the start (a roster update can redraw
-    -- the slots meanwhile: their member was gone at the drop, found in
-    -- game), a card following the cursor, the slot under it in arcane
-    b:SetScript("OnDragStart", function(self: RaidSlot)
-        local m, data = self.member, r.data
-        if not (m and data and data.canLead) or InCombatLockdown() then return end
-        r.dragging, r.dragMember = self, m
-        self:SetAlpha(0.5)
-        r:StartGhost(m)
-    end)
-    b:SetScript("OnDragStop", function(self: RaidSlot)
-        self:SetAlpha(1)
-        local member = r.dragMember
-        local to = r:StopGhost()
-        r.dragging, r.dragMember = nil, nil
-        if not member then return end
-        if not (to and to.group and to.pos) or to.member == member then r:Draw() return end
-        local other = to.member
-        if other then
-            if r.onSwap then r.onSwap(member.index, other.index) end
-        elseif r.onMove then
-            r.onMove(member.index, to.group)
-        end
-    end)
-    return b
+    return RaidSlot.new(r, g, i)
 end
 
 local function headButton(parent: Frame, text: string, variant: string, onClick: () -> ()): ReasonButton
-    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick }) :: ReasonButton
-    b.text = text
-    b:HookScript("OnEnter", function(self: ReasonButton)
-        if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = text, description = self.reason }) end
-    end)
-    b:HookScript("OnLeave", function() tooltip.hideTooltip() end)
-    return b
+    return ReasonButton.new(parent, text, variant, onClick)
 end
 
 export class RaidGroups extends Frame
@@ -594,11 +627,7 @@ export class RaidGroups extends Frame
         self.plan:Hide()
         self.groups, self.slots = {}, {}
         for g = 1, 8 do
-            local f: RaidGroupFrame = CreateFrame("Frame", nil, self) :: any
-            draw.fill(f, "surface-sunk"):SetAllPoints()
-            f.label = uiText.text(f, "caption", "gilt-text")
-            f.label:SetPoint("TOPLEFT", S["space-3"], -S["space-1"])
-            f.label:SetValue("Group " .. g)
+            local f = RaidGroupFrame.new(self, g)
             self.groups[g] = f
             self.slots[g] = {}
             for i = 1, 5 do
@@ -636,16 +665,7 @@ export class RaidGroups extends Frame
     function StartGhost(m: RaidMember)
         local gh = self.ghost
         if not gh then
-            gh = CreateFrame("Frame", nil, UIParent) :: RaidGhost
-            gh:SetFrameStrata("TOOLTIP")
-            gh:SetSize(160, SLOT_H)
-            draw.fill(gh, "surface-raised"):SetAllPoints()
-            draw.border(gh, "arcane")
-            gh.role = gh:CreateTexture(nil, "ARTWORK")
-            gh.role:SetSize(12, 12)
-            gh.role:SetPoint("LEFT", S["space-3"], 0)
-            gh.name = uiText.text(gh, "label", "ink")
-            gh.name:SetPoint("LEFT", gh.role, "RIGHT", S["space-3"], 0)
+            gh = RaidGhost.new()
             gh:SetScript("OnUpdate", function(f: RaidGhost)
                 local scale = f:GetEffectiveScale()
                 local x, y = GetCursorPosition()
@@ -838,7 +858,7 @@ end
 export type PeopleAction = { label: string, variant?: string, disabled?: boolean, onClick?: (row: PeopleRowData) -> () }
 
 export type PeopleRowData = {
-    key?: any,
+    key?: string,
     name?: string,
     color?: string,
     glyph?: boolean,
@@ -851,7 +871,7 @@ export type PeopleRowData = {
 
 export type PeopleData = { title?: string, empty?: string, rows?: PeopleRowData[] }
 
-export interface PeopleRow extends Button
+export class PeopleRow extends Button
     row?: PeopleRowData
     hover: Texture
     diamond: Texture
@@ -860,40 +880,43 @@ export interface PeopleRow extends Button
     name: Text
     detail: Text
     buttons: { [string]: SuuButton[] }
+
+    constructor(l: PeopleList)
+        super(nil, l.list.child)
+        self:SetHeight(ROW_H)
+        self:RegisterForClicks("RightButtonUp")
+        self.hover = draw.fill(self, "gilt-faint", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.diamond = draw.diamond(self, 7, "ink")
+        placeDiamond(self)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "people.tga")
+        self.glyph:SetSize(14, 14)
+        self.glyph:SetPoint("CENTER", self.diamond, "CENTER")
+        self.pin = self:CreateTexture(nil, "ARTWORK")
+        self.pin:SetTexture(GLYPHS .. "flag.tga")
+        self.pin:SetSize(11, 11)
+        draw.paint(self.pin, "gilt-text")
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("TOPLEFT", S["space-5"] + S["space-4"] + 2, -S["space-3"])
+        self.name:SetJustifyH("LEFT")
+        self.pin:SetPoint("LEFT", self.name, "RIGHT", S["space-3"], 0)
+        self.detail = uiText.text(self, "caption", "ink-muted")
+        self.detail:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -1)
+        self.detail:SetJustifyH("LEFT")
+        self.buttons = {}
+        self:SetScript("OnEnter", function() self.hover:Show() end)
+        self:SetScript("OnLeave", function() self.hover:Hide() end)
+        self:SetScript("OnClick", function()
+            local row = self.row
+            if row and l.onMenu then l.onMenu(row, self) end
+        end)
+    end
 end
 
 local function plRow(l: PeopleList): PeopleRow
-    local r: PeopleRow = CreateFrame("Button", nil, l.list.child) :: any
-    r:SetHeight(ROW_H)
-    r:RegisterForClicks("RightButtonUp")
-    r.hover = draw.fill(r, "gilt-faint", "BACKGROUND")
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.diamond = draw.diamond(r, 7, "ink")
-    placeDiamond(r)
-    r.glyph = r:CreateTexture(nil, "ARTWORK")
-    r.glyph:SetTexture(GLYPHS .. "people.tga")
-    r.glyph:SetSize(14, 14)
-    r.glyph:SetPoint("CENTER", r.diamond, "CENTER")
-    r.pin = r:CreateTexture(nil, "ARTWORK")
-    r.pin:SetTexture(GLYPHS .. "flag.tga")
-    r.pin:SetSize(11, 11)
-    draw.paint(r.pin, "gilt-text")
-    r.name = uiText.text(r, "label", "ink")
-    r.name:SetPoint("TOPLEFT", S["space-5"] + S["space-4"] + 2, -S["space-3"])
-    r.name:SetJustifyH("LEFT")
-    r.pin:SetPoint("LEFT", r.name, "RIGHT", S["space-3"], 0)
-    r.detail = uiText.text(r, "caption", "ink-muted")
-    r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
-    r.detail:SetJustifyH("LEFT")
-    r.buttons = {}
-    r:SetScript("OnEnter", function(self: PeopleRow) self.hover:Show() end)
-    r:SetScript("OnLeave", function(self: PeopleRow) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self: PeopleRow)
-        local row = self.row
-        if row and l.onMenu then l.onMenu(row, self) end
-    end)
-    return r
+    return PeopleRow.new(l)
 end
 
 local function plButton(r: PeopleRow, i: number, variant: string): SuuButton

@@ -22,7 +22,8 @@ import * as events from "/Core/Events"
 import * as extend from "/Core/Extend"
 import * as fonts from "/Core/Fonts"
 import * as draw from "/UI/Draw"
-import showTooltip, hideTooltip from "/UI/Tooltip"
+import showTooltip, hideTooltip, TooltipLine from "/UI/Tooltip"
+import * as blizzardFrames from "/Core/Blizzard"
 
 local S = T.space
 
@@ -31,8 +32,8 @@ local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
 -- The tooltip: the item's label, and the key from Blizzard's own tooltip.
 local function keyOf(blizzard: string?): string?
-    local b = blizzard and _G[blizzard]
-    local tip = b and b.tooltipText
+    local b = blizzard and blizzardFrames.frame(blizzard)
+    local tip = b and (b :: { tooltipText?: unknown }).tooltipText
     if type(tip) ~= "string" then return nil end
     local key = tip:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):match("%(([^%)]+)%)%s*$")
     return key
@@ -40,42 +41,58 @@ end
 
 -- A pill's shape, `inset` px in from its frame: two half discs and the
 -- middle between them, apart, so a see-through colour stays even.
-type Pill = { left: Texture, right: Texture, mid: Texture, Paint: (token: string) -> () }
+class Pill
+    readonly left: Texture
+    readonly right: Texture
+    readonly mid: Texture
 
-local function pill(f: any, inset: number, layer: DrawLayer): Pill
-    local r = 7 - inset
-    local p: Pill = {} :: any
-    p.left = f:CreateTexture(nil, layer)
-    p.left:SetTexture(DISC)
-    p.left:SetTexCoord(0, 0.5, 0, 1)
-    p.left:SetSize(r, r * 2)
-    p.left:SetPoint("LEFT", inset, 0)
-    p.right = f:CreateTexture(nil, layer)
-    p.right:SetTexture(DISC)
-    p.right:SetTexCoord(0.5, 1, 0, 1)
-    p.right:SetSize(r, r * 2)
-    p.right:SetPoint("RIGHT", -inset, 0)
-    p.mid = f:CreateTexture(nil, layer)
-    p.mid:SetTexture("Interface\\Buttons\\WHITE8X8")
-    p.mid:SetPoint("TOPLEFT", p.left, "TOPRIGHT")
-    p.mid:SetPoint("BOTTOMRIGHT", p.right, "BOTTOMLEFT")
-    function p.Paint(token: string)
-        draw.paint(p.left, token)
-        draw.paint(p.right, token)
-        draw.paint(p.mid, token)
+    constructor(f: Frame, inset: number, layer: DrawLayer)
+        local r = 7 - inset
+        self.left = f:CreateTexture(nil, layer)
+        self.left:SetTexture(DISC)
+        self.left:SetTexCoord(0, 0.5, 0, 1)
+        self.left:SetSize(r, r * 2)
+        self.left:SetPoint("LEFT", inset, 0)
+        self.right = f:CreateTexture(nil, layer)
+        self.right:SetTexture(DISC)
+        self.right:SetTexCoord(0.5, 1, 0, 1)
+        self.right:SetSize(r, r * 2)
+        self.right:SetPoint("RIGHT", -inset, 0)
+        self.mid = f:CreateTexture(nil, layer)
+        self.mid:SetTexture("Interface\\Buttons\\WHITE8X8")
+        self.mid:SetPoint("TOPLEFT", self.left, "TOPRIGHT")
+        self.mid:SetPoint("BOTTOMRIGHT", self.right, "BOTTOMLEFT")
     end
-    return p
+
+    function Paint(token: string)
+        draw.paint(self.left, token)
+        draw.paint(self.right, token)
+        draw.paint(self.mid, token)
+    end
 end
 
-local menus: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+local menus: { [MicroMenu]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- A pill as a count's badge: its outline and its fill.
-type Badge = Frame & { edge: Pill, fill: Pill }
+class Badge extends Frame
+    readonly edge: Pill
+    readonly fill: Pill
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.edge = Pill.new(self, 0, "BACKGROUND")
+        self.fill = Pill.new(self, 1, "ARTWORK")
+    end
+end
+
+-- A button of the menu: its key, label and glyph; a Blizzard micro button
+-- it clicks (secure), or what a click calls.
+export type MicroMenuItem = { key: string, label: string, glyph: string, click?: string, onClick?: () -> () }
 
 -- One button: a secure one clicking a Blizzard micro button (`item.click`),
 -- else a plain one calling `item.onClick`.
 export class MenuButton extends Button
-    item: { [string]: any }
+    item: MicroMenuItem
     hover: Texture
     edge: draw.Border
     glyph: Texture
@@ -87,9 +104,9 @@ export class MenuButton extends Button
     count: FontString
     active: boolean? = nil
     alertText: string? = nil
-    lines: any[]? = nil
+    lines: TooltipLine[]? = nil
 
-    constructor(menu: MicroMenu, item: { [string]: any })
+    constructor(menu: MicroMenu, item: MicroMenuItem)
         super(menu.name and (menu.name .. item.key) or nil, menu, item.click ~= nil and "SecureActionButtonTemplate" or nil)
         self.item = item
         local px = draw.size("menu-button")
@@ -98,7 +115,7 @@ export class MenuButton extends Button
         if item.click ~= nil then
             self:RegisterForClicks("AnyDown", "AnyUp")
             self:SetAttribute("type", "click")
-            self:SetAttribute("clickbutton", _G[item.click])
+            self:SetAttribute("clickbutton", blizzardFrames.frame(item.click))
         else
             self:RegisterForClicks("LeftButtonUp")
             self:SetScript("OnClick", function() if item.onClick then item.onClick() end end)
@@ -128,12 +145,10 @@ export class MenuButton extends Button
         -- (design "Micro menu: Collections glyph and bag count" D): 14 px
         -- tall, hanging into the panel's padding, a gilt-line edge around
         -- its fill
-        local badge: Badge = CreateFrame("Frame", nil, self) :: any
+        local badge = Badge.new(self)
         badge:SetHeight(14)
         badge:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 4, -3)
         badge:SetFrameLevel(self:GetFrameLevel() + 2)
-        badge.edge = pill(badge, 0, "BACKGROUND")
-        badge.fill = pill(badge, 1, "ARTWORK")
         self.badge = badge
         self.count = badge:CreateFontString(nil, "OVERLAY")
         fonts.apply(self.count, "label")
@@ -173,9 +188,9 @@ end
 export class MicroMenu extends Frame
     name: string?
     buttons: { [string]: MenuButton } = {}
-    items: { [string]: any }[] = {}
+    items: MicroMenuItem[] = {}
 
-    constructor(parent: any, opts: { name?: string }?)
+    constructor(parent: Frame, opts: { name?: string }?)
         super(opts and opts.name, parent)
         self.name = opts and opts.name
         draw.fill(self, "surface-glass", "BACKGROUND"):SetAllPoints()
@@ -186,7 +201,7 @@ export class MicroMenu extends Frame
         extend.add(extend.Kind.MicroMenu, self, { name = self.name })
     end
 
-    function SetItems(items: { [string]: any }[]): boolean
+    function SetItems(items: MicroMenuItem[]): boolean
         if InCombatLockdown() then return false end
         self.items = items
         local px, gap, pad = draw.size("menu-button"), S["space-2"], S["space-2"]
@@ -207,9 +222,9 @@ export class MicroMenu extends Frame
         return true
     end
 
-    function SetActive(key: string, active: any)
+    function SetActive(key: string, active: unknown)
         local b = self.buttons[key]
-        local on = active and true or false
+        local on = active ~= nil and active ~= false
         if not b or b.active == on then return end
         b.active = on
         if not b:IsMouseOver() then
@@ -227,7 +242,7 @@ export class MicroMenu extends Frame
 
     -- 0.17: lines in a button's tooltip, under its key (showTooltip's
     -- lines: { left, right }); nil takes them away.
-    function SetLines(key: string, lines: any[]?)
+    function SetLines(key: string, lines: TooltipLine[]?)
         local b = self.buttons[key]
         if not b then return end
         b.lines = lines
@@ -245,8 +260,8 @@ export class MicroMenu extends Frame
         end
         b.count:SetText(text)
         draw.paint(b.count, color or "ink")
-        b.badge.edge.Paint("gilt-line")
-        b.badge.fill.Paint(fill or "surface")
+        b.badge.edge:Paint("gilt-line")
+        b.badge.fill:Paint(fill or "surface")
         b:fitBadge()
         b.badge:Show()
     end
@@ -256,10 +271,10 @@ mixins.MicroMenu = MicroMenu
 -- a theme's label size: the counts' pills fitted again
 events.on("SUUUI_THEME_CHANGED", function()
     for m in pairs(menus) do
-        for _, b in pairs((m :: MicroMenu).buttons) do b:fitBadge() end
+        for _, b in pairs(m.buttons) do b:fitBadge() end
     end
 end, "MicroMenu")
 
-export function microMenu(parent: any, opts: { name?: string }?): MicroMenu
+export function microMenu(parent: Frame, opts: { name?: string }?): MicroMenu
     return MicroMenu.new(parent, opts)
 end
