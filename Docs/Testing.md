@@ -129,7 +129,10 @@ Code is shaped so its logic can be tested without the frames around it:
 ## Coverage
 
 `wowlua test --coverage` measures lines, branches, functions and conditions
-of `src/` (reports with `--reporter html`). The aim is all of it covered;
+of `src/` but the developer probes (`src/Diagnostics`, left out of release
+builds too) and fails below the minimums in `wowlua.json`'s `test.coverage`,
+kept just under the current figures so a drop shows (reports with
+`--reporter html`). The aim is all of it covered;
 code that can only run in the real client (a probe of a client quirk, a
 branch for a client without an API) gets `-- wowlua: coverage ignore` with a
 reason on the same line.
