@@ -21,163 +21,102 @@
 --             Blizzard's reward page, when it opens, switches to the tree
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+import type LegacyPoints, LegacyChallenges, LegacyTrack, Challenge, ChallengeStep, ChallengeGroup,
+    ChallengeCategory, TrackStop, TrackData from "/UI/Legacy"
+import type TalentTree, TalentNode, TalentLink, TalentTreeData from "/UI/TalentTree"
+import asFrame, named, part from "/UI/Reskin"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "legacy",
-    name = "Legacy",
-    description = "SuuUI's Legacy pages: the trees, the challenges and the reward track.",
-    api = "0.12",
-    reloadToToggle = true,
-    defaults = {},
-})
+local DEFAULTS = {}
 
-local isSecret = issecretvalue or function(_: any) return false end
-local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
+local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not issecretvalue(v) end
+local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
+local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
 
 local FACTION = 2802
 local CURRENCY = 4225
-local TREES = {
-    { id = 1187, name = function() return _G.LEGACY_TREE_PROFESSIONS or "Professions" end },
-    { id = 1188, name = function() return _G.LEGACY_TREE_ADVENTURE or "Adventure" end },
-    { id = 1189, name = function() return _G.LEGACY_TREE_PROGRESSION or "Progression" end },
+type TreeDef = { id: number, name: () -> string }
+local TREES: TreeDef[] = {
+    { id = 1187, name = function(): string return str(named("LEGACY_TREE_PROFESSIONS")) or "Professions" end },
+    { id = 1188, name = function(): string return str(named("LEGACY_TREE_ADVENTURE")) or "Adventure" end },
+    { id = 1189, name = function(): string return str(named("LEGACY_TREE_PROGRESSION")) or "Progression" end },
 }
+local FIRST_TREE = 1187
 local STEP = 750
 
--- fn(...) safely, every value it returns (GetAchievementInfo returns a dozen)
-local function results(ok: boolean, ...: any): ...any if ok then return ... end end
-local function call(fn: any, ...: any): ...any
+-- One of the game's functions, if it has it: every value it returns, as it
+-- comes (read each with `str` or `num`; GetAchievementInfo returns a dozen).
+local function results(ok: boolean, ...: unknown): ...unknown if ok then return ... end return nil end
+local function call(fn: unknown, ...: unknown): ...unknown
     if type(fn) ~= "function" then return nil end
-    return results(pcall(fn, ...))
+    return results(pcall(fn :: (...unknown) -> ...unknown, ...))
 end
 
-local function hex(token: string): string return (T.color :: any)[token].hex end
+local function hex(token: keyof typeof(T.color)): string return T.color[token].hex end
+
+-- The game's Legacy window (its addon loads on demand).
+local function legacyFrame(): Frame? return asFrame(named("LegacySystemFrame")) end
 
 --------------------------------------------------------------------------------
 -- Points
 --------------------------------------------------------------------------------
 
-function M:ConfigID()
-    local id = call(C_Traits.GetConfigIDByTreeID, TREES[1].id)
-    return plain(id) and id or nil
-end
-
-function M:Points()
-    local earned = call(C_MajorFactions and C_MajorFactions.GetCurrentRenownLevel, FACTION) or 0
-    local total = call(C_Traits.GetMaxAvailableTraitCurrency, CURRENCY, false) or 0
-    local configID = self:ConfigID()
-    local spent, cap, quantity = 0, 0, 0
-    if configID then
-        local c = call(C_Traits.GetTreeCurrencyInfo, configID, TREES[1].id, false)
-        c = c and c[1]
-        if c then
-            spent = plain(c.spent) and c.spent or 0
-            cap = plain(c.maxQuantity) and c.maxQuantity or 0
-            quantity = plain(c.quantity) and c.quantity or 0
-        end
-    end
-    return { earned = plain(earned) and earned or 0, total = plain(total) and total or 0,
-        spent = spent, cap = cap, available = quantity, character = UnitName("player") }
-end
+-- What this character has: renown earned, the most there is, spent and left.
+export type Points = { earned: number, total: number, spent: number, cap: number, available: number, character?: string, pending?: number }
 
 --------------------------------------------------------------------------------
 -- The trees
 --------------------------------------------------------------------------------
 
-local function isPlaceholder(ni: any, name: string): boolean
+-- A Legacy talent: the game's node as the trees draw it.
+export type LegacyNode = {
+    id: number, x: number, y: number, row: number, col: number, max: number, rank: number, pending: number,
+    canPurchase: boolean, open: boolean, meetsEdges: boolean, conditions: number[], edges: TraitOutEdgeInfo[],
+    name: string, icon?: number | string, tree: LegacyTree, requires?: LegacyNode[], locked?: boolean, canSpend?: boolean,
+}
+-- One tree: its nodes, the arrows between them, what's still to come.
+export type LegacyTree = {
+    id: number, name: string, nodes: LegacyNode[], links: TalentLink[], placeholders: number, points: number,
+    byID: { [number]: LegacyNode }, more?: string,
+}
+
+-- A tree as the talent tree draws it.
+local function treeData(t: LegacyTree): TalentTreeData
+    local nodes: TalentNode[] = {}
+    for i, n in ipairs(t.nodes) do nodes[i] = n end
+    return { name = t.name, points = t.points, more = t.more, nodes = nodes, links = t.links }
+end
+
+local function isPlaceholder(ni: TraitNodeInfo, name: string): boolean
     if name == "Unknown" then return true end
-    local flags = plain(ni.flags) and ni.flags or 0
+    local flags = num(ni.flags) or 0
     return bit and bit.band and bit.band(flags, 2) ~= 0 or false
 end
 
-local function talentOf(configID: number, ni: any): any
-    local entryID = ni.activeEntry and ni.activeEntry.entryID or (ni.entryIDs and ni.entryIDs[1])
+type Talent = { entryID: number, spellID?: number, name: string, icon?: number }
+
+local function talentOf(configID: number, ni: TraitNodeInfo): Talent?
+    local active = ni.activeEntry
+    local entryID = active and active.entryID or ni.entryIDs[1]
     if not entryID then return nil end
-    local entry = call(C_Traits.GetEntryInfo, configID, entryID)
-    local def = entry and entry.definitionID and call(C_Traits.GetDefinitionInfo, entry.definitionID)
+    local okEntry, entry = pcall(C_Traits.GetEntryInfo, configID, entryID)
+    local definitionID = okEntry and entry and entry.definitionID
+    local def: TraitDefinitionInfo? = nil
+    if definitionID then
+        local ok, read = pcall(C_Traits.GetDefinitionInfo, definitionID)
+        if ok then def = read end
+    end
     local spellID = def and def.spellID
     local name = def and def.overrideName
-    if (not name or name == "") and spellID then name = C_Spell.GetSpellName(spellID) end
+    if (not name or name == "") and spellID then name = str(C_Spell.GetSpellName(spellID)) end
     local icon = def and def.overrideIcon
-    if (not icon or icon == 0) and spellID then icon = C_Spell.GetSpellTexture(spellID) end
+    if (not icon or icon == 0) and spellID then icon = num(C_Spell.GetSpellTexture(spellID)) end
     return { entryID = entryID, spellID = spellID, name = name or "?", icon = icon }
-end
-
-function M:Trees(configID: number)
-    local staged = call(C_Traits.ConfigHasStagedChanges, configID) == true
-    self.learned = self.learned or {}
-    if not staged then self.learned = {} end
-    local learned = self.learned
-    local trees, all = {}, {}
-    local minX, minY
-    for i, def in ipairs(TREES) do
-        local t = { id = def.id, name = def.name(), nodes = {}, links = {}, placeholders = 0 }
-        trees[i] = t
-        local currency = call(C_Traits.GetTreeCurrencyInfo, configID, def.id, false)
-        t.points = currency and currency[1] and plain(currency[1].spentInTree) and currency[1].spentInTree or 0
-        local byID = {}
-        for _, nodeID in ipairs(call(C_Traits.GetTreeNodes, def.id) or {}) do
-            local ni = call(C_Traits.GetNodeInfo, configID, nodeID)
-            if ni and ni.isVisible ~= false and plain(ni.posX) and plain(ni.posY) and ni.maxRanks and ni.maxRanks > 0 then
-                local talent = talentOf(configID, ni)
-                if talent and isPlaceholder(ni, talent.name) then
-                    t.placeholders = t.placeholders + 1
-                elseif talent then
-                    local current = ni.currentRank or ni.activeRank or 0
-                    if not staged then learned[nodeID] = current end
-                    local base = learned[nodeID]
-                    if base == nil then base = math.min(ni.activeRank or 0, current) end
-                    base = math.min(base, current)
-                    local n = { id = nodeID, x = ni.posX, y = ni.posY, max = ni.maxRanks, rank = base, pending = current - base,
-                        canPurchase = ni.canPurchaseRank and true or false,
-                        open = ni.isAvailable and ni.meetsEdgeRequirements and true or false,
-                        meetsEdges = ni.meetsEdgeRequirements and true or false,
-                        conditions = ni.conditionIDs or {}, edges = ni.visibleEdges or {},
-                        name = talent.name, icon = talent.icon, tree = t }
-                    t.nodes[#t.nodes + 1] = n
-                    byID[nodeID] = n
-                    all[#all + 1] = n
-                    minX = math.min(minX or n.x, n.x)
-                    minY = math.min(minY or n.y, n.y)
-                end
-            end
-        end
-        t.byID = byID
-    end
-    -- top to bottom: the game's tiers (x) as rows, its rows (y) as columns
-    local rows = 1
-    for _, n in ipairs(all) do
-        n.row = math.max(0, math.floor((n.x - minX) / STEP + 0.5))
-        n.col = math.max(0, math.min(3, math.floor((n.y - minY) / STEP + 0.5)))
-        rows = math.max(rows, n.row + 1)
-    end
-    local pending = 0
-    for _, t in ipairs(trees) do
-        for _, n in ipairs(t.nodes) do
-            pending = pending + n.pending
-            for _, e in ipairs(n.edges) do
-                local to = e.targetNode and t.byID[e.targetNode]
-                if to then
-                    table.insert(t.links, { from = n, to = to, met = (n.rank + n.pending) >= n.max })
-                    to.requires = to.requires or {}
-                    table.insert(to.requires, n)
-                end
-            end
-        end
-        if t.placeholders > 0 then
-            t.more = t.placeholders == 1 and "1 more talent in a future update" or (t.placeholders .. " more talents in a future update")
-        end
-    end
-    if staged and pending == 0 then pending = 1 end
-    return trees, rows, pending
-end
-
-function M:Editable()
-    if InCombatLockdown() then return false, "Legacy talents can't change in combat." end
-    return true
 end
 
 --------------------------------------------------------------------------------
@@ -186,11 +125,12 @@ end
 
 -- A challenge's progress: a skill or count ("45/150"), or steps done.
 local function progressOf(id: number): string?
-    local n = call(GetAchievementNumCriteria, id) or 0
+    local n = num(call(GetAchievementNumCriteria, id)) or 0
     if n == 1 then
-        local _, _, done, quantity, required = call(GetAchievementCriteriaInfo, id, 1)
+        local _, _, done, quantityR, requiredR = call(GetAchievementCriteriaInfo, id, 1)
+        local quantity, required = num(quantityR), num(requiredR)
         -- once started ("0/42000" said nothing)
-        if plain(quantity) and plain(required) and required and required > 1 and not done and quantity > 0 then
+        if quantity and required and required > 1 and not done and quantity > 0 then
             return quantity .. "/" .. required
         end
     elseif n > 1 then
@@ -201,6 +141,7 @@ local function progressOf(id: number): string?
         end
         if done > 0 and done < n then return done .. "/" .. n end
     end
+    return nil
 end
 
 -- A challenge's steps. A step that is another achievement (criteria type 8)
@@ -218,25 +159,27 @@ local function countDone(id: number, n: number): number
     return done
 end
 
-local function stepsOf(id: number, depthArg: number?): { [string]: any }[]
+local function stepsOf(id: number, depthArg: number?): ChallengeStep[]
     local depth = depthArg or 0
-    local n = call(GetAchievementNumCriteria, id) or 0
+    local n = num(call(GetAchievementNumCriteria, id)) or 0
     if n == 1 and depth < 4 then
-        local _, ctype, done, _, _, _, _, asset = call(GetAchievementCriteriaInfo, id, 1)
-        if ctype == CRITERIA_ACHIEVEMENT and plain(asset) and asset and not done then return stepsOf(asset, depth + 1) end
+        local _, ctype, done, _, _, _, _, assetR = call(GetAchievementCriteriaInfo, id, 1)
+        local asset = num(assetR)
+        if ctype == CRITERIA_ACHIEVEMENT and asset and not done then return stepsOf(asset, depth + 1) end
     end
-    local out = {}
+    local out: ChallengeStep[] = {}
     for k = 1, n do
-        local text, ctype, done, quantity, required, _, _, asset = call(GetAchievementCriteriaInfo, id, k)
-        local step = { text = text, done = done and true or false }
-        if ctype == CRITERIA_ACHIEVEMENT and plain(asset) and asset and depth < 4 then
-            local sub = call(GetAchievementNumCriteria, asset) or 0
+        local text, ctype, done, quantityR, requiredR, _, _, assetR = call(GetAchievementCriteriaInfo, id, k)
+        local step: ChallengeStep = { text = str(text), done = done and true or false }
+        local asset, quantity, required = num(assetR), num(quantityR), num(requiredR)
+        if ctype == CRITERIA_ACHIEVEMENT and asset and depth < 4 then
+            local sub = num(call(GetAchievementNumCriteria, asset)) or 0
             if sub > 1 then
                 step.id = "a" .. asset
                 step.stepsN, step.stepsDone = sub, countDone(asset, sub)
-                step.steps = function() return stepsOf(asset, depth + 1) end
+                step.steps = function(): ChallengeStep[] return stepsOf(asset, depth + 1) end
             end
-        elseif plain(quantity) and plain(required) and required and required > 1 and not done then
+        elseif quantity and required and required > 1 and not done then
             step.count = { quantity, required }
         end
         out[#out + 1] = step
@@ -244,16 +187,17 @@ local function stepsOf(id: number, depthArg: number?): { [string]: any }[]
     return out
 end
 
-local function challengeTip(owner: any, id: number, name: string?, description: string?, points: number?)
+local function challengeTip(owner: Frame, id: number, name: string?, description: string?, points: number?)
     local tip = GameTooltip
     tip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip_SetTitle(tip, name or "")
     if description and description ~= "" then GameTooltip_AddNormalLine(tip, description, true) end
-    local n = call(GetAchievementNumCriteria, id) or 0
+    local n = num(call(GetAchievementNumCriteria, id)) or 0
     if n > 1 then
         GameTooltip_AddBlankLineToTooltip(tip)
         for k = 1, math.min(n, 15) do
-            local text, _, done = call(GetAchievementCriteriaInfo, id, k)
+            local textR, _, done = call(GetAchievementCriteriaInfo, id, k)
+            local text = str(textR)
             if text and text ~= "" then
                 if done then GameTooltip_AddColoredLine(tip, text, GREEN_FONT_COLOR or HIGHLIGHT_FONT_COLOR)
                 else GameTooltip_AddDisabledLine(tip, text) end
@@ -267,203 +211,63 @@ local function challengeTip(owner: any, id: number, name: string?, description: 
     tip:Show()
 end
 
-local function itemsIn(category: number): { [string]: any }[]
-    local out = {}
-    local total = call(GetCategoryNumAchievements, category) or 0
+-- A category's challenges that earn Legacy points; how close each is (a
+-- fraction, for the cards' order).
+local function itemsIn(category: number, closeness: { [Challenge]: number }): Challenge[]
+    local out: Challenge[] = {}
+    local total = num(call(GetCategoryNumAchievements, category)) or 0
     for i = 1, total do
-        local id, name, _, completed, _, _, _, description, _, _, reward = call(GetAchievementInfo, category, i)
-        local points = plain(reward) and reward and tonumber(reward:match("(%d+) Legacy Point"))
+        local idR, nameR, _, completed, _, _, _, descriptionR, _, _, rewardR = call(GetAchievementInfo, category, i)
+        local id, name, description, reward = num(idR), str(nameR), str(descriptionR), str(rewardR)
+        local points = reward and tonumber(reward:match("(%d+) Legacy Point"))
         if id and points then
-            local item = { id = id, name = name, done = completed and true or false, points = points, order = i,
+            local item: Challenge = { id = id, name = name, done = completed and true or false, points = points,
                 progress = (not completed) and progressOf(id) or nil }
             -- the full list's detail: steps (zones, dungeons, bosses; other
             -- achievements, which open in turn) or one count
-            local n = call(GetAchievementNumCriteria, id) or 0
-            local single = n == 1 and select(2, call(GetAchievementCriteriaInfo, id, 1)) == CRITERIA_ACHIEVEMENT
+            local n = num(call(GetAchievementNumCriteria, id)) or 0
+            local _, firstType = call(GetAchievementCriteriaInfo, id, 1)
+            local single = n == 1 and firstType == CRITERIA_ACHIEVEMENT
             if (n > 1 or single) and not completed then
                 local list = stepsOf(id)
                 local done = 0
                 for _, st in ipairs(list) do if st.done then done = done + 1 end end
                 if #list > 0 then
                     item.stepsN, item.stepsDone = #list, done
-                    item.steps = function() return stepsOf(id) end
+                    item.steps = function(): ChallengeStep[] return stepsOf(id) end
                 end
             elseif n > 1 then
                 item.stepsN, item.stepsDone = n, countDone(id, n)
-                item.steps = function() return stepsOf(id) end
+                item.steps = function(): ChallengeStep[] return stepsOf(id) end
             elseif n == 1 then
-                local _, _, ok, quantity, required = call(GetAchievementCriteriaInfo, id, 1)
-                if not ok and plain(quantity) and plain(required) and required and required > 1 then
+                local _, _, ok, quantityR, requiredR = call(GetAchievementCriteriaInfo, id, 1)
+                local quantity, required = num(quantityR), num(requiredR)
+                if not ok and quantity and required and required > 1 then
                     item.count = { quantity, required }
                 end
             end
-            item.onEnter = function(owner: any) challengeTip(owner, id, name, description, points) end
+            item.onEnter = function(owner: Frame) challengeTip(owner, id, name, description, points) end
             item.onLeave = function() GameTooltip:Hide() end
-            -- how close: progress as a fraction, for the cards' order
             local a, b = (item.progress or ""):match("(%d+)/(%d+)")
-            item.closeness = (a and b and (tonumber(b) or 0) > 0) and ((tonumber(a) or 0) / (tonumber(b) or 1)) or 0
+            closeness[item] = (a and b and (tonumber(b) or 0) > 0) and ((tonumber(a) or 0) / (tonumber(b) or 1)) or 0
             out[#out + 1] = item
         end
     end
     return out
 end
 
-function M:Challenges()
-    local cats = call(GetCategoryList) or {}
-    local children, tops = {}, {}
-    for _, cat in ipairs(cats) do
-        local _, parent = call(GetCategoryInfo, cat)
-        if parent == -1 then tops[#tops + 1] = cat
-        elseif parent then children[parent] = children[parent] or {}; table.insert(children[parent], cat) end
-    end
-    local list = {}
-    for _, top in ipairs(tops) do
-        local name = call(GetCategoryInfo, top)
-        local groups = {}
-        local own = itemsIn(top)
-        if #own > 0 then groups[#groups + 1] = { name = "", items = own } end
-        for _, sub in ipairs(children[top] or {}) do
-            local items = itemsIn(sub)
-            if #items > 0 then groups[#groups + 1] = { name = call(GetCategoryInfo, sub), items = items } end
-        end
-        local all, done = {}, 0
-        for _, g in ipairs(groups) do
-            g.done = 0
-            for _, item in ipairs(g.items) do
-                all[#all + 1] = item
-                if item.done then done = done + 1; g.done = g.done + 1 end
-            end
-        end
-        if #all > 0 then
-            -- the card: what's closest first, then the rest, done last
-            -- (ties keep the game's order: Novice, Experienced, Master)
-            local short = {}
-            for k, item in ipairs(all) do item.seq = k; short[#short + 1] = item end
-            table.sort(short, function(a, b)
-                if a.done ~= b.done then return not a.done end
-                if a.closeness ~= b.closeness then return a.closeness > b.closeness end
-                return a.seq < b.seq
-            end)
-            list[#list + 1] = { name = name, done = done, total = #all, items = short, groups = groups }
-        end
-    end
-    return list
-end
-
 --------------------------------------------------------------------------------
 -- The reward track
 --------------------------------------------------------------------------------
 
-local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
-
-function M:Rewards(earned: number, total: number)
-    local mf = C_MajorFactions
-    local stops = {}
-    for _, lv in ipairs((mf and call(mf.GetRenownLevels, FACTION)) or {}) do
-        local rewards = call(mf.GetRenownRewardsForLevel, FACTION, lv.level) or {}
-        local r = rewards[1]
-        -- the item's own name when the reward has none (found in game)
-        if r and (not r.name or r.name == "") and r.itemID then
-            r.name = (C_Item.GetItemNameByID and call(C_Item.GetItemNameByID, r.itemID)) or call(GetItemInfo, r.itemID)
-            if not r.name and C_Item.RequestLoadItemDataByID then
-                call(C_Item.RequestLoadItemDataByID, r.itemID)
-                self.namesPending = true
-            end
-        end
-        if r then
-            local quality = r.itemID and C_Item.GetItemQualityByID and call(C_Item.GetItemQualityByID, r.itemID)
-            local stop = { at = lv.level, name = r.name, icon = r.icon, quality = QUALITY[quality or 3] or "rare",
-                collected = r.isCollected and true or false }
-            stop.onEnter = function(owner: any)
-                GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-                if r.itemID then GameTooltip:SetItemByID(r.itemID) else GameTooltip_SetTitle(GameTooltip, r.name or "") end
-                if r.description and r.description ~= "" then
-                    GameTooltip_AddBlankLineToTooltip(GameTooltip)
-                    GameTooltip_AddNormalLine(GameTooltip, r.description, true)
-                end
-                GameTooltip:Show()
-            end
-            stop.onLeave = function() GameTooltip:Hide() end
-            stops[#stops + 1] = stop
-        end
-    end
-    local max = stops[#stops] and stops[#stops].at or 1
-    local nextText
-    for _, s in ipairs(stops) do
-        if earned < s.at then
-            nextText = ("Next reward at %d points: %s"):format(s.at, s.name or "")
-            break
-        end
-    end
-    return { earned = earned, total = total, max = max, stops = stops,
-        next = nextText or "Every reward on the track is yours. Claim them from Innkeeper Wiley in Ratchet." }
-end
+local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
 
 --------------------------------------------------------------------------------
 -- The pages
 --------------------------------------------------------------------------------
 
-function M:Render()
-    local pages = self.pages
-    if not pages then return end
-    local points = self:Points()
-    local configID = self:ConfigID()
-    local trees, rows, pending = {}, 3, 0
-    if configID then trees, rows, pending = self:Trees(configID) end
-
-    self.configID = configID
-    points.pending = pending
-    for _, view in pairs(pages) do view.points:SetPoints(points) end
-    if pages.tree:IsVisible() then
-        local editable, why = self:Editable()
-        for _, t in ipairs(trees) do
-            for _, n in ipairs(t.nodes) do
-                n.locked = not n.open and n.rank + n.pending == 0
-                n.canSpend = editable and n.canPurchase and points.available > 0
-            end
-        end
-        self.trees = trees
-        pages.tree.body:SetData({ trees = trees, rows = rows, available = points.available, pending = pending,
-            editable = editable, hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply." })
-    end
-    if pages.challenges:IsVisible() then pages.challenges.body:SetCategories(self:Challenges()) end
-    if self.track and self.track:IsVisible() then
-        self.namesPending = nil
-        self.track:SetTrack(self:Rewards(points.earned, points.total))
-        -- item names still loading: once more in a moment
-        self.nameTries = self.namesPending and (self.nameTries or 0) + 1 or 0
-        if self.namesPending and self.nameTries <= 6 then after(0.5, function() self:QueueRender() end) end
-    end
-end
-
-function M:QueueRender()
-    if self.renderQueued then return end
-    self.renderQueued = true
-    after(0.1, function()
-        self.renderQueued = nil
-        if self:IsEnabled() then self:Render() end
-    end)
-end
-
-function M:ShowTip(button: any, n: any)
-    if not self.configID then return end
-    local needs = {}
-    if not n.meetsEdges then
-        for _, from in ipairs(n.requires or {}) do
-            if from.rank + from.pending < from.max then
-                needs[#needs + 1] = ("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name)
-            end
-        end
-    end
-    local editable, why = self:Editable()
-    UI.TraitTooltip(button, self.configID, n.id, { name = n.name, treeName = n.tree.name, conditions = n.conditions,
-        canSpend = n.canSpend, pending = n.pending, needs = needs, blocked = (not editable) and why or nil })
-end
-
--- One page: the points on top, its body under them, over Blizzard's page.
-local PAGES = { tree = "TreePage", challenges = "ChallengesPage" }
-local TREE_PAGE = 3 -- Blizzard's page numbers: reward track 1, challenges 2, tree 3
-local S = T.space
+-- Blizzard's page numbers: reward track 1, challenges 2, tree 3
+local TREE_PAGE = 3
 -- the track, a rule and room (a theme can change the track's height)
 local function stripH(): number return UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 end
 -- between a page and the strip's rule (Apply touched it: found in game): as
@@ -471,52 +275,14 @@ local function stripH(): number return UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 
 -- evenly between the two rules (asked for)
 local STRIP_GAP = 8
 
-function M:Page(f: any, kind: string)
-    local blizz = f[PAGES[kind]]
-    if not blizz then return nil end
-    local view = CreateFrame("Frame", nil, f)
+-- A page's place: the points on top, its body under them, over Blizzard's
+-- page (which stays shown, off screen: it drives this one).
+local function placePage(view: Frame, f: Frame, blizz: Frame, owner: LegacyModule)
     view:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
     view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + stripH() + STRIP_GAP)
     view:SetFrameLevel(blizz:GetFrameLevel() + 50)
     view:EnableMouse(true)
-    view.points = UI.LegacyPoints(view, { account = false })
-    view.points:SetPoint("TOPLEFT")
-    view.points:SetPoint("TOPRIGHT")
-    if kind == "tree" then
-        view.body = UI.TalentTree(view)
-        view.body.noSummary = true
-        view.body.fillPanels = true
-        -- its height settles after the first layout: again then
-        view.body:HookScript("OnSizeChanged", function() self:QueueRender() end)
-        local body = view.body
-        body.onClick = function(n: any)
-            if not (n.canSpend and self.configID) then return end
-            call(C_Traits.PurchaseRank, self.configID, n.id)
-            self:Render()
-        end
-        body.onRemove = function(n: any)
-            if not self.configID or n.pending <= 0 or not self:Editable() then return end
-            call(C_Traits.RefundRank, self.configID, n.id)
-            self:Render()
-        end
-        body.onEnter = function(b: any, n: any) self:ShowTip(b, n) end
-        body.onLeave = function() GameTooltip:Hide() end
-        body.onUndo = function()
-            if self.configID then call(C_Traits.RollbackConfig, self.configID); self:Render() end
-        end
-        body.onApply = function()
-            if not (self.configID and self:Editable()) then return end
-            if call(C_Traits.CommitConfig, self.configID) == false then self:Print("The Legacy talents couldn't be applied.") end
-            self:QueueRender()
-        end
-        body:Layout()
-    else
-        view.body = UI.LegacyChallenges(view)
-    end
-    view.body:SetPoint("TOPLEFT", view.points, "BOTTOMLEFT", 0, -S["space-6"])
-    view.body:SetPoint("BOTTOMRIGHT", view, "BOTTOMRIGHT", 0, 0)
-    -- Blizzard's page off screen (still shown: it drives this one), so none
-    -- of its buttons take the mouse outside SuuUI's page
+    -- none of Blizzard's buttons take the mouse outside SuuUI's page
     local placing = false
     local function away()
         placing = true
@@ -528,96 +294,467 @@ function M:Page(f: any, kind: string)
     away()
     hook(blizz, "SetPoint", function() if not placing then after(0, away) end end)
     view:SetShown(blizz:IsShown())
-    hookScript(blizz, "OnShow", function() view:Show(); self:Render() end)
+    hookScript(blizz, "OnShow", function() view:Show(); owner:Render() end)
     hookScript(blizz, "OnHide", function() view:Hide(); GameTooltip:Hide() end)
-    return view
 end
 
--- One height for every tab (asked for in game): the header, the points and
--- the challenges' two rows of cards; the trees' panels reach down to their
--- foot.
-function M:Size(f: any)
-    f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP + stripH() + 16)
-end
+-- The trees' page.
+export class TreePage extends Frame
+    readonly points: LegacyPoints
+    readonly body: TalentTree
 
--- The reward track along the window's foot, on every tab; Blizzard's reward
--- page out of sight, and the tree instead whenever it opens.
-function M:Strip(f: any)
-    local strip = CreateFrame("Frame", nil, f)
-    strip:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 16)
-    strip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
-    strip:SetHeight(stripH())
-    self.strip = strip
-    strip:SetFrameLevel(f:GetFrameLevel() + 150)
-    strip:EnableMouse(true)
-    local rule = UI.Fill(strip, "gilt-faint", "ARTWORK")
-    rule:SetHeight(1)
-    rule:SetPoint("TOPLEFT")
-    rule:SetPoint("TOPRIGHT")
-    self.track = UI.LegacyTrack(strip)
-    self.track:SetPoint("BOTTOMLEFT", strip, "BOTTOMLEFT", 0, 0)
-    self.track:SetPoint("BOTTOMRIGHT", strip, "BOTTOMRIGHT", 0, 0)
-    local blizz = f.RewardTrackPage
-    if blizz then
-        blizz:SetAlpha(0)
-        local placing = false
-        local function away()
-            placing = true
-            blizz:ClearAllPoints()
-            blizz:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-            placing = false
+    constructor(f: Frame, blizz: Frame, owner: LegacyModule)
+        super(nil, f)
+        self.points = UI.LegacyPoints(self, { account = false })
+        self.points:SetPoint("TOPLEFT")
+        self.points:SetPoint("TOPRIGHT")
+        local body = UI.TalentTree(self)
+        self.body = body
+        body.noSummary = true
+        body.fillPanels = true
+        -- its height settles after the first layout: again then
+        body:HookScript("OnSizeChanged", function() owner:QueueRender() end)
+        body.onClick = function(n: TalentNode) owner:Plan(n) end
+        body.onRemove = function(n: TalentNode) owner:Unplan(n) end
+        body.onEnter = function(b: Button, n: TalentNode)
+            local node = owner:NodeOf(n)
+            if node then owner:ShowTip(b, node) end
         end
-        away()
-        hook(blizz, "SetPoint", function() if not placing then after(0, away) end end)
-        local function toTree()
-            after(0, function()
-                if blizz:IsShown() and f.SelectPage then pcall(f.SelectPage, f, TREE_PAGE) end
-            end)
+        body.onLeave = function() GameTooltip:Hide() end
+        body.onUndo = function()
+            local configID = owner.configID
+            if configID then pcall(C_Traits.RollbackConfig, configID); owner:Render() end
         end
-        hookScript(blizz, "OnShow", toTree)
-        if blizz:IsShown() then toTree() end
+        body.onApply = function()
+            local configID = owner.configID
+            if not (configID and owner:Editable()) then return end
+            local ok, applied = pcall(C_Traits.CommitConfig, configID)
+            if ok and applied == false then owner:Print("The Legacy talents couldn't be applied.") end
+            owner:QueueRender()
+        end
+        body:Layout()
+        body:SetPoint("TOPLEFT", self.points, "BOTTOMLEFT", 0, -S["space-6"])
+        body:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, 0)
+        placePage(self, f, blizz, owner)
     end
 end
 
-function M:Build()
-    local f = _G.LegacySystemFrame
-    if not f or self.pages then return end
-    self.pages = {}
-    for kind in pairs(PAGES) do self.pages[kind] = self:Page(f, kind) end
-    if not (self.pages.tree and self.pages.challenges) then
-        self.pages = nil
-        return
+-- The challenges' page.
+export class ChallengesPage extends Frame
+    readonly points: LegacyPoints
+    readonly body: LegacyChallenges
+
+    constructor(f: Frame, blizz: Frame, owner: LegacyModule)
+        super(nil, f)
+        self.points = UI.LegacyPoints(self, { account = false })
+        self.points:SetPoint("TOPLEFT")
+        self.points:SetPoint("TOPRIGHT")
+        self.body = UI.LegacyChallenges(self)
+        self.body:SetPoint("TOPLEFT", self.points, "BOTTOMLEFT", 0, -S["space-6"])
+        self.body:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, 0)
+        placePage(self, f, blizz, owner)
     end
-    self:Strip(f)
-    self:Size(f)
-    hookScript(f, "OnShow", function() self:Size(f); self:QueueRender() end)
-    self:Render()
 end
 
--- A theme changed the text styles the heights are worked out from.
-function M:Restyle()
-    local f = _G.LegacySystemFrame
-    if not (f and self.pages) then return end
-    for _, view in pairs(self.pages) do
-        view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + stripH() + STRIP_GAP)
-    end
-    if self.strip then self.strip:SetHeight(stripH()) end
-    self:Size(f)
-    if f:IsVisible() then self:QueueRender() end
-end
+type Pages = { tree: TreePage, challenges: ChallengesPage }
 
-function M:OnEnable()
-    self:Build()
-    self:On("SUUUI_THEME_CHANGED", function() self:Restyle() end)
-    self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
-    for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",
-                         "MAJOR_FACTION_RENOWN_LEVEL_CHANGED", "ACHIEVEMENT_EARNED", "CRITERIA_UPDATE",
-                         "PLAYER_REGEN_ENABLED", "PLAYER_REGEN_DISABLED" }) do
-        if not valid or valid(e) then
-            self:OnGameEvent(e, function()
-                if self.pages and _G.LegacySystemFrame and _G.LegacySystemFrame:IsVisible() then self:QueueRender() end
-            end)
+class LegacyModule extends Module<typeof(DEFAULTS)>
+    pages: Pages? = nil
+    track: LegacyTrack? = nil
+    strip: Frame? = nil
+    -- the trees' config (one for all three)
+    configID: number? = nil
+    trees: LegacyTree[] = {}
+    -- every talent drawn, by node
+    nodes: { [number]: LegacyNode } = {}
+    -- each node's rank before the plan (the game's staging hides it)
+    learned: { [number]: number } = {}
+    namesPending: boolean? = nil
+    nameTries: number = 0
+    renderQueued: boolean? = nil
+
+    constructor()
+        super({
+            id = "legacy",
+            name = "Legacy",
+            description = "SuuUI's Legacy pages: the trees, the challenges and the reward track.",
+            api = "0.12",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
+    end
+
+    function ConfigID(): number?
+        local ok, id = pcall(C_Traits.GetConfigIDByTreeID, FIRST_TREE)
+        return ok and num(id) or nil
+    end
+
+    function Points(): Points
+        local earned = num(call(C_MajorFactions and C_MajorFactions.GetCurrentRenownLevel, FACTION)) or 0
+        local total = num(call(C_Traits.GetMaxAvailableTraitCurrency, CURRENCY, false)) or 0
+        local configID = self:ConfigID()
+        local spent, cap, quantity = 0, 0, 0
+        if configID then
+            local ok, list = pcall(C_Traits.GetTreeCurrencyInfo, configID, FIRST_TREE, false)
+            local c = ok and list and list[1]
+            if c then
+                spent = num(c.spent) or 0
+                cap = num(c.maxQuantity) or 0
+                quantity = num(c.quantity) or 0
+            end
+        end
+        return { earned = earned, total = total, spent = spent, cap = cap, available = quantity, character = str(UnitName("player")) }
+    end
+
+    function Trees(configID: number): (LegacyTree[], number, number)
+        local okStaged, isStaged = pcall(C_Traits.ConfigHasStagedChanges, configID)
+        local staged = okStaged and isStaged == true
+        if not staged then self.learned = {} end
+        local learned = self.learned
+        local trees: LegacyTree[], all: LegacyNode[] = {}, {}
+        local minX: number?, minY: number? = nil, nil
+        for i, def in ipairs(TREES) do
+            local okCurrency, currency = pcall(C_Traits.GetTreeCurrencyInfo, configID, def.id, false)
+            local first = okCurrency and currency and currency[1]
+            local t: LegacyTree = { id = def.id, name = def.name(), nodes = {}, links = {}, placeholders = 0,
+                points = first and num(first.spentInTree) or 0, byID = {} }
+            trees[i] = t
+            local okNodes, nodeIDs = pcall(C_Traits.GetTreeNodes, def.id)
+            for _, nodeID in ipairs(okNodes and nodeIDs or {}) do
+                local okInfo, ni = pcall(C_Traits.GetNodeInfo, configID, nodeID)
+                if okInfo and ni and ni.isVisible ~= false and ni.maxRanks > 0 then
+                    local talent = talentOf(configID, ni)
+                    if talent and isPlaceholder(ni, talent.name) then
+                        t.placeholders = t.placeholders + 1
+                    elseif talent then
+                        local current = ni.currentRank or ni.activeRank or 0
+                        if not staged then learned[nodeID] = current end
+                        local base = learned[nodeID]
+                        if base == nil then base = math.min(ni.activeRank or 0, current) end
+                        base = math.min(base, current)
+                        local n: LegacyNode = { id = nodeID, x = ni.posX, y = ni.posY, row = 0, col = 0, max = ni.maxRanks,
+                            rank = base, pending = current - base,
+                            canPurchase = ni.canPurchaseRank and true or false,
+                            open = ni.isAvailable and ni.meetsEdgeRequirements and true or false,
+                            meetsEdges = ni.meetsEdgeRequirements and true or false,
+                            conditions = ni.conditionIDs or {}, edges = ni.visibleEdges or {},
+                            name = talent.name, icon = talent.icon, tree = t }
+                        t.nodes[#t.nodes + 1] = n
+                        t.byID[nodeID] = n
+                        all[#all + 1] = n
+                        minX = math.min(minX or n.x, n.x)
+                        minY = math.min(minY or n.y, n.y)
+                    end
+                end
+            end
+        end
+        -- top to bottom: the game's tiers (x) as rows, its rows (y) as columns
+        local rows = 1
+        for _, n in ipairs(all) do
+            n.row = math.max(0, math.floor((n.x - assert(minX)) / STEP + 0.5))
+            n.col = math.max(0, math.min(3, math.floor((n.y - assert(minY)) / STEP + 0.5)))
+            rows = math.max(rows, n.row + 1)
+        end
+        local pending = 0
+        for _, t in ipairs(trees) do
+            for _, n in ipairs(t.nodes) do
+                pending = pending + n.pending
+                for _, e in ipairs(n.edges) do
+                    local to = t.byID[e.targetNode]
+                    if to then
+                        table.insert(t.links, { from = n, to = to, met = (n.rank + n.pending) >= n.max })
+                        local requires = to.requires or {}
+                        to.requires = requires
+                        table.insert(requires, n)
+                    end
+                end
+            end
+            if t.placeholders > 0 then
+                t.more = t.placeholders == 1 and "1 more talent in a future update" or (t.placeholders .. " more talents in a future update")
+            end
+        end
+        if staged and pending == 0 then pending = 1 end
+        return trees, rows, pending
+    end
+
+    function Editable(): (boolean, string?)
+        if InCombatLockdown() then return false, "Legacy talents can't change in combat." end
+        return true, nil
+    end
+
+    -- A drawn talent of the trees, as the talent tree hands it back.
+    function NodeOf(n: TalentNode): LegacyNode?
+        local id = n.id
+        return id and self.nodes[id] or nil
+    end
+
+    -- A click plans a point; the minus takes a planned one back.
+    function Plan(given: TalentNode)
+        local n, configID = self:NodeOf(given), self.configID
+        if not (n and n.canSpend and configID) then return end
+        pcall(C_Traits.PurchaseRank, configID, n.id)
+        self:Render()
+    end
+
+    function Unplan(given: TalentNode)
+        local n, configID = self:NodeOf(given), self.configID
+        if not n or not configID or n.pending <= 0 or not self:Editable() then return end
+        pcall(C_Traits.RefundRank, configID, n.id)
+        self:Render()
+    end
+
+    function Challenges(): ChallengeCategory[]
+        local okList, cats = pcall(GetCategoryList)
+        local children: { [number]: number[] }, tops: number[] = {}, {}
+        for _, cat in ipairs(okList and cats or {}) do
+            local _, parentR = call(GetCategoryInfo, cat)
+            local parent = num(parentR)
+            if parent == -1 then tops[#tops + 1] = cat
+            elseif parent then
+                local list = children[parent] or {}
+                children[parent] = list
+                table.insert(list, cat)
+            end
+        end
+        local list: ChallengeCategory[] = {}
+        for _, top in ipairs(tops) do
+            local name = str(call(GetCategoryInfo, top))
+            local closeness: { [Challenge]: number } = {}
+            local groups: ChallengeGroup[] = {}
+            local own = itemsIn(top, closeness)
+            if #own > 0 then groups[#groups + 1] = { name = "", done = 0, items = own } end
+            for _, sub in ipairs(children[top] or {}) do
+                local items = itemsIn(sub, closeness)
+                if #items > 0 then groups[#groups + 1] = { name = str(call(GetCategoryInfo, sub)) or "", done = 0, items = items } end
+            end
+            local all: Challenge[], done = {}, 0
+            for _, g in ipairs(groups) do
+                for _, item in ipairs(g.items) do
+                    all[#all + 1] = item
+                    if item.done then done = done + 1; g.done = g.done + 1 end
+                end
+            end
+            if #all > 0 then
+                -- the card: what's closest first, then the rest, done last
+                -- (ties keep the game's order: Novice, Experienced, Master)
+                local seq: { [Challenge]: number } = {}
+                local short: Challenge[] = {}
+                for k, item in ipairs(all) do seq[item] = k; short[#short + 1] = item end
+                table.sort(short, function(a: Challenge, b: Challenge): boolean
+                    if a.done ~= b.done then return not a.done end
+                    local ca, cb = closeness[a] or 0, closeness[b] or 0
+                    if ca ~= cb then return ca > cb end
+                    return (seq[a] or 0) < (seq[b] or 0)
+                end)
+                list[#list + 1] = { name = name, done = done, total = #all, items = short, groups = groups }
+            end
+        end
+        return list
+    end
+
+    function Rewards(earned: number, total: number): TrackData
+        local mf = C_MajorFactions
+        local stops: TrackStop[] = {}
+        local names: { at: number, name?: string }[] = {}
+        local okLevels, levels = pcall(mf.GetRenownLevels, FACTION)
+        for _, lv in ipairs(okLevels and levels or {}) do
+            local okRewards, rewards = pcall(mf.GetRenownRewardsForLevel, FACTION, lv.level)
+            local r = okRewards and rewards and rewards[1]
+            if r then
+                local itemID = r.itemID
+                -- the item's own name when the reward has none (found in game)
+                if (not r.name or r.name == "") and itemID then
+                    r.name = str(call(C_Item.GetItemNameByID, itemID)) or str(call(GetItemInfo, itemID))
+                    if not r.name and C_Item.RequestLoadItemDataByID then
+                        call(C_Item.RequestLoadItemDataByID, itemID)
+                        self.namesPending = true
+                    end
+                end
+                local quality = itemID and num(call(C_Item.GetItemQualityByID, itemID))
+                local name, description = r.name, r.description
+                local stop: TrackStop = { at = lv.level, icon = r.icon, quality = QUALITY[quality or 3] or "rare",
+                    collected = r.isCollected and true or false }
+                stop.onEnter = function(owner: Frame)
+                    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+                    if itemID then GameTooltip:SetItemByID(itemID) else GameTooltip_SetTitle(GameTooltip, name or "") end
+                    if description and description ~= "" then
+                        GameTooltip_AddBlankLineToTooltip(GameTooltip)
+                        GameTooltip_AddNormalLine(GameTooltip, description, true)
+                    end
+                    GameTooltip:Show()
+                end
+                stop.onLeave = function() GameTooltip:Hide() end
+                stops[#stops + 1] = stop
+                names[#names + 1] = { at = lv.level, name = name }
+            end
+        end
+        local last = names[#names]
+        local max = last and last.at or 1
+        local nextText: string? = nil
+        for _, s in ipairs(names) do
+            if earned < s.at then
+                nextText = ("Next reward at %d points: %s"):format(s.at, s.name or "")
+                break
+            end
+        end
+        return { earned = earned, total = total, max = max, stops = stops,
+            next = nextText or "Every reward on the track is yours. Claim them from Innkeeper Wiley in Ratchet." }
+    end
+
+    function Render()
+        local pages = self.pages
+        if not pages then return end
+        local points = self:Points()
+        local configID = self:ConfigID()
+        local trees: LegacyTree[], rows, pending = {}, 3, 0
+        if configID then trees, rows, pending = self:Trees(configID) end
+
+        self.configID = configID
+        points.pending = pending
+        pages.tree.points:SetPoints(points)
+        pages.challenges.points:SetPoints(points)
+        if pages.tree:IsVisible() then
+            local editable, why = self:Editable()
+            local nodes: { [number]: LegacyNode } = {}
+            local data: TalentTreeData[] = {}
+            for i, t in ipairs(trees) do
+                for _, n in ipairs(t.nodes) do
+                    n.locked = not n.open and n.rank + n.pending == 0
+                    n.canSpend = editable and n.canPurchase and points.available > 0
+                    nodes[n.id] = n
+                end
+                data[i] = treeData(t)
+            end
+            self.trees, self.nodes = trees, nodes
+            pages.tree.body:SetData({ trees = data, rows = rows, available = points.available, pending = pending,
+                editable = editable, hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply." })
+        end
+        if pages.challenges:IsVisible() then pages.challenges.body:SetCategories(self:Challenges()) end
+        local track = self.track
+        if track and track:IsVisible() then
+            self.namesPending = nil
+            track:SetTrack(self:Rewards(points.earned, points.total))
+            -- item names still loading: once more in a moment
+            self.nameTries = self.namesPending and self.nameTries + 1 or 0
+            if self.namesPending and self.nameTries <= 6 then after(0.5, function() self:QueueRender() end) end
+        end
+    end
+
+    function QueueRender()
+        if self.renderQueued then return end
+        self.renderQueued = true
+        after(0.1, function()
+            self.renderQueued = nil
+            if self:IsEnabled() then self:Render() end
+        end)
+    end
+
+    function ShowTip(button: Frame, n: LegacyNode)
+        local configID = self.configID
+        if not configID then return end
+        local needs: string[] = {}
+        if not n.meetsEdges then
+            for _, from in ipairs(n.requires or {}) do
+                if from.rank + from.pending < from.max then
+                    needs[#needs + 1] = ("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name)
+                end
+            end
+        end
+        local editable, why = self:Editable()
+        UI.TraitTooltip(button, configID, n.id, { name = n.name, treeName = n.tree.name, conditions = n.conditions,
+            canSpend = n.canSpend, pending = n.pending, needs = needs, blocked = (not editable) and why or nil })
+    end
+
+    -- One height for every tab (asked for in game): the header, the points and
+    -- the challenges' two rows of cards; the trees' panels reach down to their
+    -- foot.
+    function Size(f: Frame)
+        f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP + stripH() + 16)
+    end
+
+    -- The reward track along the window's foot, on every tab; Blizzard's reward
+    -- page out of sight, and the tree instead whenever it opens.
+    function Strip(f: Frame)
+        local strip = CreateFrame("Frame", nil, f)
+        strip:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 16)
+        strip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+        strip:SetHeight(stripH())
+        self.strip = strip
+        strip:SetFrameLevel(f:GetFrameLevel() + 150)
+        strip:EnableMouse(true)
+        local rule = UI.Fill(strip, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT")
+        rule:SetPoint("TOPRIGHT")
+        local track = UI.LegacyTrack(strip)
+        self.track = track
+        track:SetPoint("BOTTOMLEFT", strip, "BOTTOMLEFT", 0, 0)
+        track:SetPoint("BOTTOMRIGHT", strip, "BOTTOMRIGHT", 0, 0)
+        local blizz = asFrame(part(f, "RewardTrackPage"))
+        if blizz then
+            blizz:SetAlpha(0)
+            local placing = false
+            local function away()
+                placing = true
+                blizz:ClearAllPoints()
+                blizz:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+                placing = false
+            end
+            away()
+            hook(blizz, "SetPoint", function() if not placing then after(0, away) end end)
+            local function toTree()
+                after(0, function()
+                    local select = part(f, "SelectPage")
+                    if blizz:IsShown() and type(select) == "function" then pcall(select :: (f: Frame, page: number) -> (), f, TREE_PAGE) end
+                end)
+            end
+            hookScript(blizz, "OnShow", toTree)
+            if blizz:IsShown() then toTree() end
+        end
+    end
+
+    function Build()
+        local f = legacyFrame()
+        if not f or self.pages then return end
+        local treeBlizz, challengesBlizz = asFrame(part(f, "TreePage")), asFrame(part(f, "ChallengesPage"))
+        if not (treeBlizz and challengesBlizz) then return end
+        self.pages = { tree = TreePage.new(f, treeBlizz, self), challenges = ChallengesPage.new(f, challengesBlizz, self) }
+        self:Strip(f)
+        self:Size(f)
+        hookScript(f, "OnShow", function() self:Size(f); self:QueueRender() end)
+        self:Render()
+    end
+
+    -- A theme changed the text styles the heights are worked out from.
+    function Restyle()
+        local f, pages = legacyFrame(), self.pages
+        if not (f and pages) then return end
+        for _, view in ipairs({ pages.tree, pages.challenges }) do
+            view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + stripH() + STRIP_GAP)
+        end
+        local strip = self.strip
+        if strip then strip:SetHeight(stripH()) end
+        self:Size(f)
+        if f:IsVisible() then self:QueueRender() end
+    end
+
+    override function OnEnable()
+        self:Build()
+        self:On("SUUUI_THEME_CHANGED", function() self:Restyle() end)
+        self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+        local valid = C_EventUtils and C_EventUtils.IsEventValid
+        for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",
+                             "MAJOR_FACTION_RENOWN_LEVEL_CHANGED", "ACHIEVEMENT_EARNED", "CRITERIA_UPDATE",
+                             "PLAYER_REGEN_ENABLED", "PLAYER_REGEN_DISABLED" }) do
+            if not valid or valid(e) then
+                self:OnGameEvent(e, function()
+                    local f = legacyFrame()
+                    if self.pages and f and f:IsVisible() then self:QueueRender() end
+                end)
+            end
         end
     end
 end
+
+-- (the tests read it)
+export local M = SuuUI.AddModule(LegacyModule.new())
