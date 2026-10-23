@@ -19,179 +19,38 @@
 -- click on it takes it away at once.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type Alert, AlertTone, FormatArg from "/UI/Alert"
+import type LevelUpCard, LevelUpDef from "/UI/LevelUp"
+import ALERTS from "/Core/ServiceKeys"
 import type Position from "/EditMode/EditMode"
 import after, every from "wowlua:timer"
 
 local UI = SuuUI.UI
 
-local M = SuuUI.RegisterModule({
-    id = "alerts",
-    name = "Alerts",
-    description = "Short alerts in the middle of the screen when something needs you now: aggro, a pull.",
-    api = "0.10",
-    combatSafe = true,
-    defaults = {
-        position = { point = "TOP", x = 0, y = -320 } :: Position,
-        sound = true,
-    },
-})
+local DEFAULTS = {
+    position = { point = "TOP", x = 0, y = -320 } :: Position,
+    sound = true,
+}
 
-local URGENCY = { info = 1, warning = 2, danger = 3 }
+local M: AlertsModule
+
+
+local URGENCY: { info: number, warning: number, danger: number } = { info = 1, warning = 2, danger = 3 }
 local TEST_TIME = 4
 
--- May this key's alert show now, over the one showing?
-function M:Allowed(key: string, tone: string): boolean
-    if not self.frame then return false end
-    local inCombat = InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
-    if not inCombat and not self.testing and not (self.anytime and self.anytime[key]) then return false end
-    local current = self.current
-    if current and current ~= key and (URGENCY[self.tone] or 0) > (URGENCY[tone] or 0) then return false end
-    -- the one it replaces, to come back
-    if current and current ~= key and self.last then self.under = self.last end
-    return true
-end
+-- What shows (to come back when what replaced it goes): an alert with its
+-- tone, title, detail and the detail's arguments, or the level-up card.
+type ShownAlert = { key: string, kind: "alert", tone: AlertTone, title: string?, detail: string?, args: FormatArg[], n: number }
+type ShownCard = { key: string, kind: "card", def: LevelUpDef }
+type Shown = ShownAlert | ShownCard
 
-function M:Present(key: string, tone: string, shown: any, hidden: any, args: { [any]: any })
-    self:StopHolding()
-    local fresh = self.current ~= key or self.tone ~= tone
-    self.current, self.tone = key, tone
-    self.last = args
-    if self.under and self.under.key == key then self.under = nil end
-    hidden:Hide()
-    shown:Show()
-    if self:Get("position").hidden then return end
-    -- a card fading out (Hide) is back at full at once
-    if self.fading then self.fading:Cancel(); self.fading = nil end
-    SuuUI.Motion.AlphaTo(self.frame, 1, 0)
-    self.frame:Show()
-    if fresh then
-        SuuUI.Motion.Enter(shown)
-        if tone == "danger" and self:Get("sound") then UI.TrackerSound("warning") end
-    end
-end
-
-function M:Show(key: string, tone: string, title: any, detail: any, ...: any)
-    if not self:Allowed(key, tone) then return end
-    self.alert:SetAlert(tone, title, detail, ...)
-    self:Present(key, tone, self.alert, self.card,
-        { key = key, kind = "alert", n = select("#", ...) + 3, tone, title, detail, ... })
-end
-
--- The level-up card in the alert's place (tone info).
-function M:ShowLevelUp(key: string, def: any)
-    if not self:Allowed(key, "info") then return end
-    self.card:SetLevelUp(def)
-    self:Present(key, "info", self.card, self.alert, { key = key, kind = "card", def = def })
-end
-
--- A key whose alerts may show out of combat too (a pull countdown).
-function M:AllowOutOfCombat(key: string)
-    self.anytime = self.anytime or {}
-    self.anytime[key] = true
-end
-
-function M:StopHolding()
-    if self.holding then self.holding:Cancel(); self.holding = nil end
-end
-
-function M:Hide(key: string?, now: boolean?)
-    -- the card under the mouse: it goes a moment after the mouse leaves
-    if not now and key and key == self.current and self.card:IsShown() and self.card:IsHovered() then
-        if not self.holding then
-            local away = 0
-            self.holding = every(0.2, function()
-                if self.current ~= key then return self:StopHolding() end
-                away = self.card:IsHovered() and 0 or away + 0.2
-                if away >= 1 then
-                    self:StopHolding()
-                    self:Hide(key)
-                end
-            end)
-        end
-        return
-    end
-    if key and key ~= self.current then
-        -- its owner is done with it: it won't come back either (and the one
-        -- showing stays as it is: the threat meter says "no aggro" five
-        -- times a second, which cancelled the card's hold: found in game)
-        if self.under and self.under.key == key then self.under = nil end
-        return
-    end
-    self:StopHolding()
-    self.current, self.tone, self.last = nil, nil, nil
-    if self.frame then
-        -- the level-up card fades out (asked 2026-10-18); alerts go at once
-        local f = self.frame
-        if self.card:IsShown() and f:IsShown() then
-            local d = SuuUI.Tokens.duration["dur-slow"]
-            SuuUI.Motion.AlphaTo(f, 0, d)
-            if self.fading then self.fading:Cancel() end
-            self.fading = after(d, function()
-                self.fading = nil
-                if not self.current then f:Hide(); f:SetAlpha(1) end
-            end)
-        else
-            f:Hide()
-        end
-    end
-    -- the alert this one replaced, if it still holds
-    local under = self.under
-    self.under = nil
-    if key and under then
-        if under.kind == "card" then self:ShowLevelUp(under.key, under.def)
-        else self:Show(under.key, unpack(under, 1, under.n)) end
-    end
-end
-
--- An alert of each tone in turn, out of combat too (the settings' button).
-function M:Test()
-    local samples = {
-        { "danger", "You have drawn aggro", "Lava Surger · Feign Death ready" },
-        { "warning", "You're about to pull", "Lava Surger · over Brannoc's threat" },
-        { "info", "Pull in 5", "4 of 5 ready" },
-    }
-    self.testing = true
-    for i, s in ipairs(samples) do
-        after((i - 1) * TEST_TIME, function()
-            if not self:IsEnabled() then return end
-            self.testing = true
-            self.current = nil
-            self:Show("test", s[1], s[2], s[3])
-        end)
-    end
-    after(#samples * TEST_TIME, function()
-        self.testing = nil
-        self:Hide("test")
-    end)
-end
-
--- The settings' preview: the three tones at their real size.
-function M:PreviewView(parent: any): any
-    if not self.previewView then
-        local view = CreateFrame("Frame", nil, parent)
-        local list = {
-            { "danger", "You have drawn aggro", "Lava Surger · Vanish ready" },
-            { "warning", "You're about to pull", "over Brannoc's threat" },
-            { "info", "Pull in 5", "4 of 5 ready" },
-        }
-        local y, w = 0, 0
-        for _, s in ipairs(list) do
-            local a = UI.Alert(view)
-            a:SetAlert(s[1], s[2], s[3])
-            a:SetPoint("TOP", 0, -y)
-            y = y + a:GetHeight() + SuuUI.Tokens.space["space-4"] * 2
-            w = math.max(w, a:GetWidth())
-        end
-        view:SetSize(w + 10, y)
-        self.previewView = view
-    end
-    self.previewView:SetParent(parent)
-    return self.previewView
-end
+-- The frame alerts and the card show in.
+export type AlertsUI = { frame: Frame, alert: Alert, card: LevelUpCard }
 
 local SECTION = {
     id = "alerts", label = "Alerts", category = "Insights", order = 10,
-    preview = function(parent: any): any return M:PreviewView(parent) end,
+    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
     previewNote = "In combat only, one at a time, 320px down from the top of the screen.",
     groups = {
         { title = "Alerts", description = "One line in the middle of the screen when something needs you now. Only in combat; the alert goes when the reason does.", rows = {
@@ -204,37 +63,227 @@ local SECTION = {
     },
 }
 
-function M:OnEnable()
-    self:Provide("alerts", {
-        Show = function(...: any) self:Show(...) end,
-        ShowLevelUp = function(key: string, def: any) self:ShowLevelUp(key, def) end,
-        Hide = function(key: string?) self:Hide(key) end,
-        AllowOutOfCombat = function(key: string) self:AllowOutOfCombat(key) end,
-    })
-    if not self.frame then
-        local f = CreateFrame("Frame", "SuuUIAlerts", SuuUI.Root)
-        f:SetSize(400, 64)
-        f:SetFrameStrata("HIGH")
-        self.alert = UI.Alert(f)
-        self.alert:SetPoint("TOP")
-        self.card = UI.LevelUp(f)
-        self.card:SetPoint("TOP")
-        self.card:Hide()
-        self.card.onClick = function()
-            if self.current and self.card:IsShown() then self:Hide(self.current, true) end
-        end
-        f:Hide()
-        self.frame = f
+class AlertsModule extends Module<typeof(DEFAULTS)>
+    ui: AlertsUI? = nil
+    -- keys whose alerts may show out of combat too
+    anytime: { [string]: boolean } = {}
+    current: string? = nil
+    tone: AlertTone? = nil
+    last: Shown? = nil
+    under: Shown? = nil
+    testing: boolean? = nil
+    fading: TimerHandle? = nil
+    holding: TickerHandle? = nil
+    previewView: Frame? = nil
+
+    constructor()
+        super({
+            id = "alerts",
+            name = "Alerts",
+            description = "Short alerts in the middle of the screen when something needs you now: aggro, a pull.",
+            api = "0.10",
+            combatSafe = true,
+            defaults = DEFAULTS,
+        })
     end
-    self.frame.suuManagedShow = true
-    self:RegisterMover(self.frame, { key = "position", label = "Alerts" })
-    self:RegisterSettings(SECTION)
-    -- combat over: nothing stays
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        if not self.testing then self:Hide() end
-    end)
+
+    -- May this key's alert show now, over the one showing?
+    function Allowed(key: string, tone: AlertTone): boolean
+        if not self.ui then return false end
+        local inCombat = InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
+        if not inCombat and not self.testing and not self.anytime[key] then return false end
+        local current, showing = self.current, self.tone
+        if current and current ~= key and showing and URGENCY[showing] > URGENCY[tone] then return false end
+        -- the one it replaces, to come back
+        if current and current ~= key and self.last then self.under = self.last end
+        return true
+    end
+
+    function Present(ui: AlertsUI, key: string, tone: AlertTone, shown: Frame, hidden: Frame, what: Shown)
+        self:StopHolding()
+        local fresh = self.current ~= key or self.tone ~= tone
+        self.current, self.tone = key, tone
+        self.last = what
+        local under = self.under
+        if under and under.key == key then self.under = nil end
+        hidden:Hide()
+        shown:Show()
+        if self:Get("position").hidden then return end
+        -- a card fading out (Hide) is back at full at once
+        local fading = self.fading
+        if fading then fading:Cancel(); self.fading = nil end
+        SuuUI.Motion.AlphaTo(ui.frame, 1, 0)
+        ui.frame:Show()
+        if fresh then
+            SuuUI.Motion.Enter(shown)
+            if tone == "danger" and self:Get("sound") then UI.TrackerSound("warning") end
+        end
+    end
+
+    function Show(key: string, tone: AlertTone, title: string?, detail: string?, ...: FormatArg)
+        local ui = self.ui
+        if not ui or not self:Allowed(key, tone) then return end
+        ui.alert:SetAlert(tone, title, detail, ...)
+        self:Present(ui, key, tone, ui.alert, ui.card,
+            { key = key, kind = "alert", tone = tone, title = title, detail = detail, args = { ... }, n = select("#", ...) })
+    end
+
+    -- The level-up card in the alert's place (tone info).
+    function ShowLevelUp(key: string, def: LevelUpDef)
+        local ui = self.ui
+        if not ui or not self:Allowed(key, "info") then return end
+        ui.card:SetLevelUp(def)
+        self:Present(ui, key, "info", ui.card, ui.alert, { key = key, kind = "card", def = def })
+    end
+
+    -- A key whose alerts may show out of combat too (a pull countdown).
+    function AllowOutOfCombat(key: string)
+        self.anytime[key] = true
+    end
+
+    function StopHolding()
+        local holding = self.holding
+        if holding then holding:Cancel(); self.holding = nil end
+    end
+
+    function Hide(key: string?, now: boolean?)
+        local ui = self.ui
+        -- the card under the mouse: it goes a moment after the mouse leaves
+        if ui and not now and key and key == self.current and ui.card:IsShown() and ui.card:IsHovered() then
+            if not self.holding then
+                local away = 0
+                self.holding = every(0.2, function()
+                    if self.current ~= key then return self:StopHolding() end
+                    away = ui.card:IsHovered() and 0 or away + 0.2
+                    if away >= 1 then
+                        self:StopHolding()
+                        self:Hide(key)
+                    end
+                end)
+            end
+            return
+        end
+        if key and key ~= self.current then
+            -- its owner is done with it: it won't come back either (and the one
+            -- showing stays as it is: the threat meter says "no aggro" five
+            -- times a second, which cancelled the card's hold: found in game)
+            local under = self.under
+            if under and under.key == key then self.under = nil end
+            return
+        end
+        self:StopHolding()
+        self.current, self.tone, self.last = nil, nil, nil
+        if ui then
+            -- the level-up card fades out (asked 2026-10-18); alerts go at once
+            local f = ui.frame
+            if ui.card:IsShown() and f:IsShown() then
+                local d = SuuUI.Tokens.duration["dur-slow"]
+                SuuUI.Motion.AlphaTo(f, 0, d)
+                local fading = self.fading
+                if fading then fading:Cancel() end
+                self.fading = after(d, function()
+                    self.fading = nil
+                    if not self.current then f:Hide(); f:SetAlpha(1) end
+                end)
+            else
+                f:Hide()
+            end
+        end
+        -- the alert this one replaced, if it still holds
+        local under = self.under
+        self.under = nil
+        if key and under then
+            if under.kind == "card" then self:ShowLevelUp(under.key, under.def)
+            else self:Show(under.key, under.tone, under.title, under.detail, unpack(under.args, 1, under.n)) end
+        end
+    end
+
+    -- An alert of each tone in turn, out of combat too (the settings' button).
+    function Test()
+        local samples: { tone: AlertTone, title: string, detail: string }[] = {
+            { tone = "danger", title = "You have drawn aggro", detail = "Lava Surger · Feign Death ready" },
+            { tone = "warning", title = "You're about to pull", detail = "Lava Surger · over Brannoc's threat" },
+            { tone = "info", title = "Pull in 5", detail = "4 of 5 ready" },
+        }
+        self.testing = true
+        for i, s in ipairs(samples) do
+            after((i - 1) * TEST_TIME, function()
+                if not self:IsEnabled() then return end
+                self.testing = true
+                self.current = nil
+                self:Show("test", s.tone, s.title, s.detail)
+            end)
+        end
+        after(#samples * TEST_TIME, function()
+            self.testing = nil
+            self:Hide("test")
+        end)
+    end
+
+    -- The settings' preview: the three tones at their real size.
+    function PreviewView(parent: Frame): Frame
+        local view = self.previewView
+        if not view then
+            view = CreateFrame("Frame", nil, parent)
+            local list: { tone: AlertTone, title: string, detail: string }[] = {
+                { tone = "danger", title = "You have drawn aggro", detail = "Lava Surger · Vanish ready" },
+                { tone = "warning", title = "You're about to pull", detail = "over Brannoc's threat" },
+                { tone = "info", title = "Pull in 5", detail = "4 of 5 ready" },
+            }
+            local y, w = 0, 0
+            for _, s in ipairs(list) do
+                local a = UI.Alert(view)
+                a:SetAlert(s.tone, s.title, s.detail)
+                a:SetPoint("TOP", 0, -y)
+                y = y + a:GetHeight() + SuuUI.Tokens.space["space-4"] * 2
+                w = math.max(w, a:GetWidth())
+            end
+            view:SetSize(w + 10, y)
+            self.previewView = view
+        end
+        view:SetParent(parent)
+        return view
+    end
+
+    override function OnEnable()
+        self:ProvideService(ALERTS, {
+            Show = function(key: string, tone: AlertTone, title: string?, detail: string?, ...: FormatArg)
+                self:Show(key, tone, title, detail, ...)
+            end,
+            ShowLevelUp = function(key: string, def: LevelUpDef) self:ShowLevelUp(key, def) end,
+            Hide = function(key: string?) self:Hide(key) end,
+            AllowOutOfCombat = function(key: string) self:AllowOutOfCombat(key) end,
+        })
+        local ui = self.ui
+        if not ui then
+            local f = CreateFrame("Frame", "SuuUIAlerts", SuuUI.Root)
+            f:SetSize(400, 64)
+            f:SetFrameStrata("HIGH")
+            local alert = UI.Alert(f)
+            alert:SetPoint("TOP")
+            local card = UI.LevelUp(f)
+            card:SetPoint("TOP")
+            card:Hide()
+            card.onClick = function()
+                local current = self.current
+                if current and card:IsShown() then self:Hide(current, true) end
+            end
+            f:Hide()
+            ui = { frame = f, alert = alert, card = card }
+            self.ui = ui
+        end
+        ui.frame.suuManagedShow = true
+        self:RegisterMover(ui.frame, { key = "position", label = "Alerts" })
+        self:RegisterSettings(SECTION)
+        -- combat over: nothing stays
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            if not self.testing then self:Hide() end
+        end)
+    end
+
+    override function OnDisable()
+        self:Hide()
+    end
 end
 
-function M:OnDisable()
-    self:Hide()
-end
+M = SuuUI.AddModule(AlertsModule.new())

@@ -98,6 +98,7 @@ end)
 | `M:RegisterSettings(section)` | A section in the settings window for the module's own settings; it goes away when the module turns off (0.3) |
 | `M:RegisterMover(frame, { key = "position", label, enabled })` | An edit-mode handle for one of the module's frames (0.4); see *Edit mode* |
 | `M:Provide(name, functions)` (0.17) | Offers a service other modules reach by name; see *Services and replacing a module* |
+| `M:ProvideService(key, functions)` / `SuuUI.UseService(key)` (0.19) | The same for a built-in service, by its key from `Core/ServiceKeys` (wowlua): the functions are typed by the key, and every one is optional (a replacement may offer some only) |
 | `M:Print(...)` | A chat line prefixed with SuuUI and the module's name |
 | `M:IsEnabled()` | |
 | `M.id`, `M.name`, `M.description`, `M.api`, `M.source`, `M.builtIn`, `M.state`, `M.error` | SuuUI's own fields: read them, never set them. 0.17: setting one is an error naming the field and the module (keep your own values under other names) |
@@ -234,6 +235,7 @@ Settings: a module's settings section with `merge = "<section id>"` adds its gro
 | `SuuUI.Pixel.Size([region])` | One physical pixel in `region`'s units (UIParent by default) |
 | `SuuUI.Pixel.Snap(value, [region])` | `value` rounded to whole physical pixels |
 | `SuuUI.Pixel.PerfectScale()` | The effective scale at which one UI unit is one pixel |
+| `SuuUI.BlizzardFrame(name)` (0.19) | The game's frame of that global name, or nil (it checks the value is a frame) |
 | `SuuUI.SuppressBlizzard(frame, [opts])` | Stands a Blizzard frame down: stops its events, hides it and moves it under a hidden parent (after combat for protected frames, never while the game's Edit Mode is open). `opts.children`: dotted paths of children whose events stop too. `opts.keepParent`: stop events and hide, but don't reparent. `opts.noHide`: reparent without calling Hide (frames Edit Mode shows through a protected setter, such as the action bars). Only a reload brings it back |
 | `SuuUI.IsSuppressed(frame)` | Whether a frame is stood down |
 | `SuuUI.RestoreBlizzard(frame)` | Kept for compatibility: always `false` for a suppressed frame (only a reload restores it) |

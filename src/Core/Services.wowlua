@@ -16,24 +16,41 @@ import * as events from "./Events"
 -- The message a change is told with.
 export const SERVICE_CHANGED = "SUUUI_SERVICE_CHANGED"
 
-type Provider = { impl: { [string]: any }, owner: unknown }
+-- A service's name and the functions it has (`T`): providers and users
+-- of a built-in service agree on its type through its key (Core/ServiceKeys).
+-- A plugin's own services go by name.
+export class ServiceKey<T>
+    constructor(readonly name: string) end
+end
+
+type Provider = { impl: unknown, owner: unknown }
 
 export class ServiceRegistry
     private providers: { [string]: Provider } = {}
 
     constructor(private notifier: events.Notifier = events.bus) end
 
-    function provide(name: string, impl: { [string]: any }, owner: unknown)
+    function provide(name: string, impl: unknown, owner: unknown)
         assert(type(name) == "string", "SuuUI Provide: a service name is required")
         assert(type(impl) == "table", "SuuUI Provide: a table of functions is required")
         self.providers[name] = { impl = impl, owner = owner }
         self.notifier:emit(SERVICE_CHANGED, name)
     end
 
-    -- The service's functions, or nil while nothing provides it.
-    function get(name: string): { [string]: any }?
+    -- The service's functions by name, as they were given (a plugin's), or
+    -- nil while nothing provides it.
+    function get(name: string): { [string]: unknown }?
         local p = self.providers[name]
-        return p and p.impl
+        local impl = p and p.impl
+        return type(impl) == "table" and (impl :: { [string]: unknown }) or nil
+    end
+
+    -- A built-in service, typed by its key (what provides it was given as
+    -- that type: Module.Provide with the key; a plugin replacing the module
+    -- provides the same functions).
+    function use<T>(key: ServiceKey<T>): T?
+        local p = self.providers[key.name]
+        return p and (p.impl :: T) or nil
     end
 
     -- Every service `owner` provides gone.
@@ -50,12 +67,16 @@ end
 -- SuuUI's registry, and its methods as the module's functions.
 export const registry = ServiceRegistry.new()
 
-export function provide(name: string, impl: { [string]: any }, owner: unknown)
+export function provide(name: string, impl: unknown, owner: unknown)
     registry:provide(name, impl, owner)
 end
 
-export function get(name: string): { [string]: any }?
+export function get(name: string): { [string]: unknown }?
     return registry:get(name)
+end
+
+export function use<T>(key: ServiceKey<T>): T?
+    return registry:use(key)
 end
 
 export function unregister(owner: unknown)

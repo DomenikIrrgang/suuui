@@ -7,6 +7,7 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import tokens as T from "/Core/Tokens"
 import * as services from "/Core/Services"
+import type TalentNext, DurabilityInfo from "/Core/ServiceKeys"
 import * as events from "/Core/Events"
 import * as settings from "/Core/Settings"
 import * as themes from "/Core/Themes"
@@ -97,15 +98,23 @@ const DOCUMENTED_UI: string[] = {
     "WriteGameTalentString",
 }
 
--- Services stood in for: services.get answers from this table.
-local standIns: { [string]: { [string]: any } } = {}
+-- Services stood in for, provided by name as a plugin's would be: each
+-- reads its functions from this table when called.
+local standIns: { [string]: { [string]: unknown } } = {}
+local STAND_IN = "APITestServices"
 local function withServices()
-    mock.stub(services, "get", function(name: string): { [string]: any }? return standIns[name] end)
+    for _, name in ipairs({ "talents", "collections", "welcome", "bags", "professions", "notifications", "alerts", "durability" }) do
+        services.provide(name, setmetatable({}, { __index = function(_: unknown, k: string): unknown
+            local t = standIns[name]
+            return t and t[k]
+        end }), STAND_IN)
+    end
 end
 
 @afterEach
 local function cleanUp()
     standIns = {}
+    services.unregister(STAND_IN)
     settings.setAccount("colorVision", nil)
     settings.setAccount("theme", nil)
     themes.apply()
@@ -278,7 +287,7 @@ local function servicesOff()
     expect(SuuUI.Notify({ title = "x" })).toBeNil()
     expect(SuuUI.Durability()).toBeNil()
     SuuUI.ExpectRecipe(1)
-    SuuUI.DismissNotification(1)
+    SuuUI.DismissNotification("1")
     SuuUI.ShowAlert("k", "info", "Title", "Detail")
     SuuUI.ShowLevelUp("k", {})
     SuuUI.HideAlert("k")
@@ -292,17 +301,21 @@ end
 local function servicesOn()
     withServices()
     local s = mock.spy()
-    local toggleBags = mock.spy(function(): string return "bags" end)
+    local toggleBags = mock.spy()
+    local next: TalentNext = { node = 1, name = "Next", icon = 1, rank = 1, max = 1, treeName = "Arms", build = "b", index = 1 }
     standIns.talents = { Toggle = s, ShowInspect = s, IsShown = function(): boolean return true end,
-        NextTalent = function(): any return { name = "Next" } end }
-    standIns.collections = { Toggle = s, IsShown = function(): boolean return 1 :: any end }
+        NextTalent = function(): TalentNext return next end }
+    -- (a plugin's answer that is only truthy)
+    standIns.collections = { Toggle = s, IsShown = function(): number return 1 end }
     standIns.welcome = { Show = s }
     standIns.bags = { Toggle = toggleBags }
-    standIns.professions = { ExpectRecipe = s, ShownRecipe = function(): number return 77 end,
-        OpenRecipe = function(id: number): string return "opened " .. id end }
-    standIns.notifications = { Notify = function(_: any): string return "id-1" end, Dismiss = s }
+    standIns.professions = { ExpectRecipe = s, ShownRecipe = function(): number return 77 end, OpenRecipe = s }
+    standIns.notifications = { Notify = function(_: unknown): string return "id-1" end, Dismiss = s }
     standIns.alerts = { Show = s, ShowLevelUp = s, Hide = s }
-    standIns.durability = { Get = function(): any return { lowest = 40 } end }
+    local wear: DurabilityInfo = { line = 20, pieces = {}, bySlot = {}, damaged = 0, broken = 0, state = "fine",
+                                   headline = "Durability", lines = {},
+                                   parts = { figure = true, character = true, gear = true, gearBars = "always", note = true } }
+    standIns.durability = { Get = function(): DurabilityInfo return wear end }
     expect(SuuUI.ToggleTalents()).toBe(true)
     expect(SuuUI.ShowTalentsOf("target")).toBe(true)
     expect(s).toHaveBeenCalledWith("target")
@@ -310,10 +323,12 @@ local function servicesOn()
     expect(s).toHaveBeenCalledWith("toys")
     expect(SuuUI.CollectionsShown()).toBe(true)
     expect(SuuUI.TalentsShown()).toBe(true)
-    expect(SuuUI.TalentBuildNext()).toEqual({ name = "Next" })
+    expect(SuuUI.TalentBuildNext()).toBe(next)
     expect(SuuUI.ShowWelcome()).toBe(true)
-    expect(SuuUI.ToggleBags()).toBe("bags")
-    expect(SuuUI.OpenRecipe(12)).toBe("opened 12")
+    SuuUI.ToggleBags()
+    expect(toggleBags).toHaveBeenCalledTimes(1)
+    SuuUI.OpenRecipe(12)
+    expect(s).toHaveBeenCalledWith(12)
     SuuUI.ExpectRecipe(13)
     expect(s).toHaveBeenCalledWith(13)
     expect(SuuUI.ShownRecipe()).toBe(77)
@@ -325,7 +340,7 @@ local function servicesOn()
     SuuUI.ShowLevelUp("lvl", { title = "Level 20" })
     SuuUI.HideAlert("pull")
     expect(s).toHaveBeenCalledWith("pull")
-    expect(SuuUI.Durability()).toEqual({ lowest = 40 })
+    expect(SuuUI.Durability()).toBe(wear)
     -- answers that are false or nothing
     standIns.collections.IsShown = function(): boolean return false end
     standIns.talents.IsShown = function(): boolean return false end
@@ -358,7 +373,7 @@ local function partialService()
     expect(SuuUI.Notify({})).toBeNil()
     expect(SuuUI.Durability()).toBeNil()
     SuuUI.ExpectRecipe(1)
-    SuuUI.DismissNotification(1)
+    SuuUI.DismissNotification("1")
     SuuUI.ShowAlert("k")
     SuuUI.ShowLevelUp("k", {})
     SuuUI.HideAlert("k")
