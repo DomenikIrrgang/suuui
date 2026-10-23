@@ -32,6 +32,7 @@ import after from "wowlua:timer"
 import hook from "wowlua:hooks"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
+import * as secret from "wowlua:secret"
 
 type Map = { [any]: any }
 
@@ -77,7 +78,6 @@ local function get(fn: any, ...: any): (any, any)
     if ok then return a, b end
 end
 
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 local function push(list: any[], line: any, most: number?)
     if #list < (most or 60) then list[#list + 1] = line end
@@ -126,7 +126,7 @@ local function watch(name: string): any
                 or event == "CONFIG_COMMIT_FAILED" then
                 push(step.blocked, line, 20)
             end
-            if event == "TRAIT_CONFIG_CREATED" and type(a) == "table" and plain(a.ID) then
+            if event == "TRAIT_CONFIG_CREATED" and type(a) == "table" and secret.readable(a.ID) then
                 createdIDs[#createdIDs + 1] = a.ID
             end
         end)
@@ -153,25 +153,25 @@ local function mySpecID(): any
     local SI: any = C_SpecializationInfo or {}
     local index = get(SI.GetSpecialization) or get(GetSpecialization) or 1
     local id = get(SI.GetSpecializationInfo, index) or get(GetSpecializationInfo, index)
-    if plain(id) and type(id) == "number" then return id end
+    if secret.readable(id) and type(id) == "number" then return id end
     local _, _, classID = UnitClass("player")
     id = get(GetSpecializationInfoForClassID, classID, 1)
-    if plain(id) then return id end
+    if secret.readable(id) then return id end
 end
 
 local function classSpecID(classID: number): (any, string?)
     local id = get(GetSpecializationInfoForClassID, classID, 1)
-    if plain(id) and type(id) == "number" then return id, "GetSpecializationInfoForClassID" end
+    if secret.readable(id) and type(id) == "number" then return id, "GetSpecializationInfoForClassID" end
     local SI: any = C_SpecializationInfo or {}
     local list = get(SI.GetSpecIDs, classID)
-    if type(list) == "table" and plain(list[1]) then return list[1], "C_SpecializationInfo.GetSpecIDs" end
+    if type(list) == "table" and secret.readable(list[1]) then return list[1], "C_SpecializationInfo.GetSpecIDs" end
 end
 
 local function savedConfigs(specID: any): any[]
     local list = specID and get(CT.GetConfigIDsBySpecID, specID)
     local outList: any[] = {}
     if type(list) == "table" then
-        for _, id in ipairs(list :: any[]) do if plain(id) then outList[#outList + 1] = id end end
+        for _, id in ipairs(list :: any[]) do if secret.readable(id) then outList[#outList + 1] = id end end
     end
     return outList
 end
@@ -181,11 +181,11 @@ local function entriesOf(configID: any, treeID: any): Map[]
     local entries: Map[] = {}
     for _, nodeID in ipairs(get(TR.GetTreeNodes, treeID) or {}) do
         local n = get(TR.GetNodeInfo, configID, nodeID)
-        if type(n) == "table" and plain(n.ranksPurchased) and n.ranksPurchased > 0 then
+        if type(n) == "table" and secret.readable(n.ranksPurchased) and n.ranksPurchased > 0 then
             local entryID = n.activeEntry and n.activeEntry.entryID or (n.entryIDs and n.entryIDs[1])
             -- ranksGranted is required (the first run failed on it: "Current Field: [ranksGranted]")
             entries[#entries + 1] = { nodeID = nodeID, ranksPurchased = n.ranksPurchased, selectionEntryID = entryID,
-                                      ranksGranted = plain(n.ranksGranted) and n.ranksGranted or 0,
+                                      ranksGranted = secret.readable(n.ranksGranted) and n.ranksGranted or 0,
                                       isChoiceNode = n.type == (Enum.TraitNodeType and Enum.TraitNodeType.Selection) }
         end
     end
@@ -220,13 +220,13 @@ local function treeSummary(configID: any, treeID: any): Map
     local s: Map = { nodes = #nodes, withPos = 0, withSpell = 0, withInfo = 0, sample = {} }
     for i, nodeID in ipairs(nodes :: any[]) do
         local n = get(TR.GetNodeInfo, configID, nodeID)
-        if type(n) == "table" and plain(n.ID) and n.ID ~= 0 then
+        if type(n) == "table" and secret.readable(n.ID) and n.ID ~= 0 then
             s.withInfo = s.withInfo + 1
-            if plain(n.posX) and n.posX ~= 0 then s.withPos = s.withPos + 1 end
+            if secret.readable(n.posX) and n.posX ~= 0 then s.withPos = s.withPos + 1 end
             local entryID = n.entryIDs and n.entryIDs[1]
             local entry = entryID and get(TR.GetEntryInfo, configID, entryID)
             local def = entry and entry.definitionID and get(TR.GetDefinitionInfo, entry.definitionID)
-            if def and plain(def.spellID) and def.spellID ~= 0 then s.withSpell = s.withSpell + 1 end
+            if def and secret.readable(def.spellID) and def.spellID ~= 0 then s.withSpell = s.withSpell + 1 end
         end
         if i <= 3 then s.sample[#s.sample + 1] = nodeLine(configID, nodeID) end
     end
@@ -312,7 +312,7 @@ local function snapshot(): Map
     -- the export string, read only
     if activeID then
         local s = get(TR.GenerateImportString, activeID)
-        now.exportString = plain(s) and type(s) == "string" and ("%d chars: %s"):format(#s, s:sub(1, 120))
+        now.exportString = secret.readable(s) and type(s) == "string" and ("%d chars: %s"):format(#s, s:sub(1, 120))
             or ("GenerateImportString: " .. call(TR.GenerateImportString, activeID))
     end
     -- talent groups (dual spec) and respec
@@ -346,13 +346,13 @@ local function otherClasses()
     local viewTried = false
     for classID = 1, 13 do
         local name, file = get(GetClassInfo, classID)
-        if plain(name) and name then
+        if secret.readable(name) and name then
             local c: Map = { class = ("%s (%s)"):format(show(file), classID), mine = classID == myClassID }
             local specID, how = classSpecID(classID)
             c.specID = ("%s via %s"):format(show(specID), show(how))
             local treeID = specID and get(CT.GetTraitTreeForSpec, specID)
             c.treeID = show(treeID)
-            if plain(treeID) and treeID then
+            if secret.readable(treeID) and treeID then
                 c.withYourConfig = activeID and treeSummary(activeID, treeID) or "no config"
                 -- the game's view loadout: another spec's tree to look at
                 -- (and plan in?) without touching yours
@@ -423,7 +423,7 @@ end
 local function leftovers(): any[]
     local ids: any[], seen: Map = {}, {}
     local function add(id: any)
-        if not plain(id) or seen[id] then return end
+        if not secret.readable(id) or seen[id] then return end
         seen[id] = true
         local info = get(TR.GetConfigInfo, id)
         if type(info) == "table" and info.name == NAME then ids[#ids + 1] = id end
@@ -459,12 +459,12 @@ export function export()
     local treeID = activeTree(activeID)
     if not (activeID and treeID) then print("Talent builds probe: no active talent config.") return end
     local str = get(TR.GenerateImportString, activeID)
-    s.string = plain(str) and type(str) == "string" and ("%d chars: %s"):format(#str, str:sub(1, 200))
+    s.string = secret.readable(str) and type(str) == "string" and ("%d chars: %s"):format(#str, str:sub(1, 200))
         or ("GenerateImportString: " .. call(TR.GenerateImportString, activeID))
     local entries = entriesOf(activeID, treeID)
     s.entries = #entries
     -- the string as a preview (the view loadout), read only
-    s.viewFromString = call(CT.ViewLoadout, entries, plain(str) and str or nil)
+    s.viewFromString = call(CT.ViewLoadout, entries, secret.readable(str) and str or nil)
     local can = get(CT.CanCreateNewConfig)
     s.canCreateNew = show(can)
     if not can then
@@ -474,7 +474,7 @@ export function export()
     print("Talent builds probe: importing that string as a new saved loadout \"" .. NAME .. "\", then deleting it again (your talents stay).")
     local before = savedConfigs(mySpecID())
     wipe(createdIDs)
-    note("ImportLoadout(active, entries, name, string): " .. call(CT.ImportLoadout, activeID, entries, NAME, plain(str) and str or ""))
+    note("ImportLoadout(active, entries, name, string): " .. call(CT.ImportLoadout, activeID, entries, NAME, secret.readable(str) and str or ""))
     after(2, function() deleteNew(before, "import") end)
 end
 
@@ -564,7 +564,7 @@ local function talentState(): string
     if activeID and treeID then
         for _, nodeID in ipairs(get(TR.GetTreeNodes, treeID) or {}) do
             local n = get(TR.GetNodeInfo, activeID, nodeID)
-            if type(n) == "table" and plain(n.ranksPurchased) and n.ranksPurchased > 0 then
+            if type(n) == "table" and secret.readable(n.ranksPurchased) and n.ranksPurchased > 0 then
                 ranks, nodes = ranks + n.ranksPurchased, nodes + 1
             end
         end

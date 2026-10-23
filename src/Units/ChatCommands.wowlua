@@ -40,10 +40,10 @@
 -- commands; others show their aliases only.
 
 import SuuUI from "/Core/API"
-import isSecret from "wowlua:secret"
 import hookScript from "wowlua:hooks"
 -- the matching (what's typed against the catalog) in a module of its own
 import * as match from "./ChatCommands/Match"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -61,9 +61,8 @@ local M = SuuUI.RegisterModule({
     },
 })
 
--- what plain() lets through: a value that's there and not a secret
+-- what secret.readable() lets through: a value that's there and not a secret
 type Readable = string | number | boolean | table | (...any) -> ...any
-local function plain(v: unknown): v is Readable return v ~= nil and not isSecret(v) end
 local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
@@ -216,7 +215,7 @@ local function aliasesOf(key: string): string[]
     while i <= 30 do
         local s = _G["SLASH_" .. key .. i]
         if s == nil then break end
-        if plain(s) and type(s) == "string" then
+        if secret.readable(s) and type(s) == "string" then
             local low = s:lower()
             if low:sub(1, 1) == "/" and not seen[low] then
                 seen[low] = true
@@ -233,14 +232,14 @@ local function origin(key: string): true | string
     if not issecurevariable then return true end
     local ok, secure, by = pcall(issecurevariable, "SLASH_" .. key .. "1")
     if not ok or secure then return true end
-    return plain(by) and by or "an addon"
+    return secret.readable(by) and by or "an addon"
 end
 
 -- Every command: { cmd, aliases, names, desc, cat, src, key, arg, usage,
 -- chatType, rank }, by category order, rank and name.
 function M:BuildCatalog()
     local keys: { [string]: boolean } = {}
-    local function take(k: unknown) if type(k) == "string" and plain(k) then keys[k] = true end end
+    local function take(k: unknown) if type(k) == "string" and secret.readable(k) then keys[k] = true end end
     if type(SlashCmdList) == "table" then
         for k in pairs(SlashCmdList) do take(k) end
         local mt = getmetatable(SlashCmdList)
@@ -258,7 +257,7 @@ function M:BuildCatalog()
             local info = INFO[key]
             local who = origin(key)
             -- SuuUI's own /suu: by its name (wowlua registers it under its
-            -- own key, WOWLUA_SUUUI_<n>; the plain-Lua SuuUI's was SUUUI)
+            -- own key, WOWLUA_SUUUI_<n>; the secret.readable-Lua SuuUI's was SUUUI)
             local suu = false
             for _, n in ipairs(names) do if n == "/suu" then suu = true end end
             local cat, src
@@ -304,7 +303,7 @@ function M:BuildCatalog()
             while m <= 20 do
                 local s = _G["EMOTE" .. n .. "_CMD" .. m]
                 if s == nil then break end
-                if plain(s) and type(s) == "string" then
+                if secret.readable(s) and type(s) == "string" then
                     local low = s:lower()
                     if low:sub(1, 1) == "/" and not byName[low] then
                         local dup = false
@@ -354,9 +353,9 @@ function M:Names(kind: string, typed: string): Group[]
     -- (the player's own name is never secret; a secret one is not compared)
     local me: string? = nil
     local mine = SuuUI.FullName("player")
-    if plain(mine) then me = mine end
+    if secret.readable(mine) then me = mine end
     local function fits(name: unknown): name is string
-        return plain(name) and type(name) == "string" and name ~= "" and name ~= me
+        return secret.readable(name) and type(name) == "string" and name ~= "" and name ~= me
             and (typed == "" or name:lower():sub(1, #typed) == typed)
     end
     local function add(title: string, rows: Row[])
@@ -375,13 +374,13 @@ function M:Names(kind: string, typed: string): Group[]
         if not fits(name) then return nil end
         local _, file = call(UnitClass, unit)
         local level = call(UnitLevel, unit)
-        if not plain(level) then level = nil end
-        return { value = name, color = classToken(plain(file) and file), diamond = true,
+        if not secret.readable(level) then level = nil end
+        return { value = name, color = classToken(secret.readable(file) and file), diamond = true,
                  note = level and level > 0 and ("Level " .. level) or nil, right = note }
     end
     local inGroup = IsInGroup()
-    if kind == "names" and UI.Flag(call(UnitIsPlayer, "target")) then
-        local together = UI.Flag(call(UnitInParty, "target")) or UI.Flag(call(UnitInRaid, "target"))
+    if kind == "names" and secret.flag(call(UnitIsPlayer, "target")) then
+        local together = secret.flag(call(UnitInParty, "target")) or secret.flag(call(UnitInRaid, "target"))
         add("Target", { unitRow("target", together and "in your group" or nil) } :: Row[])
     end
     if (kind == "names" or kind == "group") and inGroup then
@@ -398,11 +397,11 @@ function M:Names(kind: string, typed: string): Group[]
         local rows = {}
         for i = 1, (call(GetNumGuildMembers) or 0) do
             local full, rank, _, _, _, _, _, _, online, _, file = call(GetGuildRosterInfo, i)
-            if plain(full) and full then
+            if secret.readable(full) and full then
                 local name = Ambiguate(full, "short")
                 if fits(name) and (online or kind == "guild") then
-                    rows[#rows + 1] = { value = name, color = classToken(plain(file) and file), diamond = true,
-                                        note = plain(rank) and rank or nil, online = online and true or false,
+                    rows[#rows + 1] = { value = name, color = classToken(secret.readable(file) and file), diamond = true,
+                                        note = secret.readable(rank) and rank or nil, online = online and true or false,
                                         right = online and (tint("fel", "● ") .. "Online") or "Offline" }
                 end
             end
@@ -419,7 +418,7 @@ function M:Names(kind: string, typed: string): Group[]
             local f = call(C_FriendList.GetFriendInfoByIndex, i)
             if type(f) == "table" and fits(f.name) and (f.connected or kind == "friends") then
                 rows[#rows + 1] = { value = f.name, color = classToken(f.className and f.className:upper()),
-                                    diamond = true, note = plain(f.area) and f.area or nil,
+                                    diamond = true, note = secret.readable(f.area) and f.area or nil,
                                     right = f.connected and (tint("fel", "● ") .. "Online") or "Offline" }
             end
         end
@@ -443,10 +442,10 @@ function M:Channels(kind: string, typed: string): Group[]
     local list = { call(GetChannelList) }
     for i = 1, #list, 3 do
         local id, name = list[i], list[i + 1]
-        if plain(name) and type(name) == "string" and not seen[name:lower()] then
+        if secret.readable(name) and type(name) == "string" and not seen[name:lower()] then
             seen[name:lower()] = true
             if name:lower():sub(1, #typed) == typed then
-                rows[#rows + 1] = { value = name, note = plain(id) and tostring(id) or nil, right = "joined" }
+                rows[#rows + 1] = { value = name, note = secret.readable(id) and tostring(id) or nil, right = "joined" }
             end
         end
     end
@@ -454,7 +453,7 @@ function M:Channels(kind: string, typed: string): Group[]
         local joined = rows
         rows = {}
         for _, name in ipairs({ call(EnumerateServerChannels) }) do
-            if plain(name) and type(name) == "string" and not seen[name:lower()] and name:lower():sub(1, #typed) == typed then
+            if secret.readable(name) and type(name) == "string" and not seen[name:lower()] and name:lower():sub(1, #typed) == typed then
                 seen[name:lower()] = true
                 rows[#rows + 1] = { value = name }
             end
@@ -1118,7 +1117,7 @@ function M:Tick()
         return
     end
     local text = box:GetText()
-    if not plain(text) then text = nil end
+    if not secret.readable(text) then text = nil end
     if text ~= self.text then
         self.text = text
         self:Refresh()

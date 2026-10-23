@@ -64,10 +64,8 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = secret.isSecret
 -- a value that is there and not secret (narrows: no longer nil or Secret)
 type Plain = string | number | boolean | table
-local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
 local QUALITY = chars.QUALITY
 local KEYRING = -1
 local REAGENT = 5
@@ -88,7 +86,7 @@ end
 
 local function numSlots(bag: number): number
     local n = C_Container.GetContainerNumSlots(bag)
-    return (plain(n) and n) or 0
+    return (secret.readable(n) and n) or 0
 end
 
 -- The bank tabs you own, in order (the game's list; else every tab with slots).
@@ -98,7 +96,7 @@ function M:BankBags(): number[]
         local ok, ids = pcall(C_Bank.FetchPurchasedBankTabIDs, BANK_TYPE)
         if ok and type(ids) == "table" then
             for _, id in ipairs(ids) do
-                if plain(id) and isBank(id) then list[#list + 1] = id end
+                if secret.readable(id) and isBank(id) then list[#list + 1] = id end
             end
         end
     end
@@ -154,13 +152,13 @@ function M:UpdateSlot(bag: number, slot: number)
     if not b then return end
     local info = C_Container.GetContainerItemInfo(bag, slot)
     local skin = self.skins[b]
-    if info and plain(info.iconFileID) then
+    if info and secret.readable(info.iconFileID) then
         skin:SetItem({
             icon = info.iconFileID,
-            count = plain(info.stackCount) and info.stackCount or 1,
-            quality = plain(info.quality) and QUALITY[info.quality] or "common",
-            dim = plain(info.isFiltered) and info.isFiltered or false,
-            locked = plain(info.isLocked) and info.isLocked or false,
+            count = secret.readable(info.stackCount) and info.stackCount or 1,
+            quality = secret.readable(info.quality) and QUALITY[info.quality] or "common",
+            dim = secret.readable(info.isFiltered) and info.isFiltered or false,
+            locked = secret.readable(info.isLocked) and info.isLocked or false,
         })
     else
         skin:SetItem(nil)
@@ -168,7 +166,7 @@ function M:UpdateSlot(bag: number, slot: number)
     local cd = cooldownOf(b)
     if cd then
         local ok, start, duration, enable = pcall(C_Container.GetContainerItemCooldown, bag, slot)
-        if ok and plain(duration) and duration and duration > 0 and enable ~= 0 and enable ~= false then
+        if ok and secret.readable(duration) and duration and duration > 0 and enable ~= 0 and enable ~= false then
             pcall(cd.SetCooldown, cd, start, duration)
         else
             cd:Clear()
@@ -207,7 +205,7 @@ function M:Fill(inv: any, bags: number[]): (number, number)
             elseif bag == REAGENT then
                 local f = C_Container.GetContainerNumFreeSlots(bag)
                 sections[#sections + 1] = { at = #list + 1, label = "Reagents",
-                    meta = ("%d · %d free"):format(n, (plain(f) and f) or 0) }
+                    meta = ("%d · %d free"):format(n, (secret.readable(f) and f) or 0) }
             elseif n > 0 then
                 sections[#sections + 1] = { at = #list + 1, label = "Keyring", meta = tostring(n) }
             end
@@ -221,7 +219,7 @@ function M:Fill(inv: any, bags: number[]): (number, number)
         if bag ~= REAGENT and bag ~= KEYRING then
             total = total + n
             local f = C_Container.GetContainerNumFreeSlots(bag)
-            if plain(f) and f then free = free + f end
+            if secret.readable(f) and f then free = free + f end
         end
     end
     for bag, slots in pairs(self.buttons) do
@@ -303,7 +301,7 @@ function M:BuildRail(window: any): any
     return rail
 end
 
--- One cell: a plain slot with its size bottom right, a faint glyph when empty.
+-- One cell: a secret.readable slot with its size bottom right, a faint glyph when empty.
 function M:RailCell(rail: any, i: number): any
     local b = rail.cells[i]
     if b then return b end
@@ -355,7 +353,7 @@ function M:RailTip(cell: any)
     local e = cell.entry
     if not e then return end
     local free = e.bag and C_Container.GetContainerNumFreeSlots(e.bag)
-    local sizeLine = e.size and e.size > 0 and (e.size .. " slots" .. ((plain(free) and free) and (" · " .. free .. " free") or "")) or nil
+    local sizeLine = e.size and e.size > 0 and (e.size .. " slots" .. ((secret.readable(free) and free) and (" · " .. free .. " free") or "")) or nil
     if e.fixed then
         UI.ShowTooltip(cell, { title = e.kind == "bank" and "Bank" or "Backpack", subtitle = sizeLine,
             description = e.kind == "bank" and "The bank's own slots." or "Always there; it can't be changed." })
@@ -472,7 +470,7 @@ function M:DrawBagRail()
         if icon or reagent or not emptyShown then
             if not icon and not reagent then emptyShown = true end
             entries[#entries + 1] = { kind = reagent and "reagent" or "bag", bag = bag, inv = inv, has = icon ~= nil,
-                icon = icon, size = numSlots(bag), quality = plain(q) and QUALITY[q] or nil }
+                icon = icon, size = numSlots(bag), quality = secret.readable(q) and QUALITY[q] or nil }
         end
     end
     self:LayoutRail(rail, entries)
@@ -497,20 +495,20 @@ function M:DrawBankRail()
     for n = 1, max do
         local bag = BANK_FIRST + n - 1
         local info = call(C_Container.GetContainerItemInfo, TAB_BAG, n)
-        local icon = info and plain(info.iconFileID) and info.iconFileID or nil
+        local icon = info and secret.readable(info.iconFileID) and info.iconFileID or nil
         local owned = n == 1 or bought[n]
         if owned and (n == 1 or icon or not emptyShown) then
             if n > 1 and not icon then emptyShown = true end
             entries[#entries + 1] = { kind = n == 1 and "bank" or "bankbag", tab = n, bag = bag, fixed = n == 1,
                 has = icon ~= nil or n == 1, icon = icon or BACKPACK_ICON, size = numSlots(bag),
-                quality = info and plain(info.quality) and QUALITY[info.quality] or nil }
+                quality = info and secret.readable(info.quality) and QUALITY[info.quality] or nil }
         end
     end
     local buy = {}
     local next = call(C_Bank.FetchNextPurchasableBankTabData, BANK_TYPE)
     if call(C_Bank.HasMaxBankTabs, BANK_TYPE) then
         buy.off, buy.why, buy.done = true, "Every bank slot is bought.", true
-    elseif next and plain(next.tabCost) then
+    elseif next and secret.readable(next.tabCost) then
         buy.price = next.tabCost
         buy.next = (call(C_Bank.FetchNumPurchasedBankTabs, BANK_TYPE) or 0) + 1
         if not next.canAfford then
@@ -585,16 +583,16 @@ local function snapshot(bags: number[]): Snapshot
         for slot = 1, n do
             local info = C_Container.GetContainerItemInfo(bag, slot)
             local e = false
-            if info and plain(info.iconFileID) and info.iconFileID then
-                e = { t = info.iconFileID, c = plain(info.stackCount) and info.stackCount or 1,
-                      q = plain(info.quality) and info.quality or 1, l = plain(info.hyperlink) and info.hyperlink or nil }
+            if info and secret.readable(info.iconFileID) and info.iconFileID then
+                e = { t = info.iconFileID, c = secret.readable(info.stackCount) and info.stackCount or 1,
+                      q = secret.readable(info.quality) and info.quality or 1, l = secret.readable(info.hyperlink) and info.hyperlink or nil }
             end
             slots[#slots + 1] = e
         end
         if bag ~= REAGENT and bag ~= KEYRING then
             size = size + n
             local f = C_Container.GetContainerNumFreeSlots(bag)
-            if plain(f) and f then free = free + f end
+            if secret.readable(f) and f then free = free + f end
         end
     end
     return { slots = slots, size = size, free = free, seen = time() }
@@ -617,7 +615,7 @@ function M:SaveMe()
     local worn = {}
     for slot = 1, 19 do
         local link = GetInventoryItemLink("player", slot)
-        if plain(link) and link then worn[#worn + 1] = link end
+        if secret.readable(link) and link then worn[#worn + 1] = link end
     end
     d.equipped = worn
 end
@@ -731,7 +729,7 @@ function M:Foot()
     local reagentFree
     if self:IsLive() and self:Get("reagentBag") and numSlots(REAGENT) > 0 then
         local f = C_Container.GetContainerNumFreeSlots(REAGENT)
-        reagentFree = plain(f) and f or 0
+        reagentFree = secret.readable(f) and f or 0
     end
     local note, money = chars.foot(self:Characters(), who, GetMoney(), more, reagentFree)
     inv:SetNote(note)
@@ -753,7 +751,7 @@ end
 function M:AddCounts(tooltip: any, data: any)
     if not self:Get("itemCounts") then return end
     local id = data and data.id
-    if not plain(id) or type(id) ~= "number" then return end
+    if not secret.readable(id) or type(id) ~= "number" then return end
     local counts = self:CountsFor(id)
     if #counts == 0 then return end
     local muted, gilt = T.color["ink-muted"], T.color["gilt-text"]
@@ -784,15 +782,15 @@ end
 -- A grey item the vendor will buy: its sell price per item, or nil.
 local function junkAt(bag: number, slot: number): (number?, number?)
     local info = C_Container.GetContainerItemInfo(bag, slot)
-    if not (info and plain(info.quality) and info.quality == 0) then return nil end
-    if plain(info.hasNoValue) and info.hasNoValue then return nil end
-    if plain(info.isLocked) and info.isLocked then return nil end
+    if not (info and secret.readable(info.quality) and info.quality == 0) then return nil end
+    if secret.readable(info.hasNoValue) and info.hasNoValue then return nil end
+    if secret.readable(info.isLocked) and info.isLocked then return nil end
     local price = 0
-    if info.hyperlink and plain(info.hyperlink) then
+    if info.hyperlink and secret.readable(info.hyperlink) then
         local get = (C_Item and C_Item.GetItemInfo) or GetItemInfo
         price = select(11, get(info.hyperlink)) or 0
     end
-    return price, plain(info.stackCount) and info.stackCount or 1
+    return price, secret.readable(info.stackCount) and info.stackCount or 1
 end
 
 -- The grey items in your bags and what they fetch.
@@ -1133,14 +1131,14 @@ function M:SortSlots(bank: boolean): SortSlot[]
             family = "reagent"
         else
             local _, f = C_Container.GetContainerNumFreeSlots(bag)
-            if plain(f) and type(f) == "number" then family = f end
+            if secret.readable(f) and type(f) == "number" then family = f end
         end
         for slot = 1, numSlots(bag) do
             local s = { bag = bag, slot = slot, family = family }
             local info = C_Container.GetContainerItemInfo(bag, slot)
-            if info and plain(info.itemID) and info.itemID then
+            if info and secret.readable(info.itemID) and info.itemID then
                 s.item = itemOf(info)
-                s.locked = plain(info.isLocked) and info.isLocked or false
+                s.locked = secret.readable(info.isLocked) and info.isLocked or false
             end
             slots[#slots + 1] = s
         end
@@ -1226,7 +1224,7 @@ end
 
 local function locked(s: SortSlot): boolean
     local info = C_Container.GetContainerItemInfo(s.bag, s.slot)
-    return info and plain(info.isLocked) and info.isLocked or false
+    return info and secret.readable(info.isLocked) and info.isLocked or false
 end
 
 -- One wave: read, plan, send.
@@ -1548,7 +1546,7 @@ function M:OnEnable()
     end
     -- what changes in the bags
     self:OnGameEvent("BAG_UPDATE", function(_, bag)
-        if not plain(bag) then return end
+        if not secret.readable(bag) then return end
         local inv = self:InvFor(bag)
         if inv and inv:IsShown() then self:UpdateBag(bag) end
     end)
@@ -1577,7 +1575,7 @@ function M:OnEnable()
     self:OnGameEvent("UI_ERROR_MESSAGE", function(_, _, message)
         local st = self.sorting
         if not (st and st.wait and not st.game) then return end
-        self:StopSort("the game refused a move" .. (plain(message) and message and (" (" .. tostring(message) .. ")") or ""))
+        self:StopSort("the game refused a move" .. (secret.readable(message) and message and (" (" .. tostring(message) .. ")") or ""))
     end)
     self:OnGameEvent("BANKFRAME_OPENED", function()
         self.atBank = true
@@ -1603,7 +1601,7 @@ function M:OnEnable()
     self:OnGameEvent("MERCHANT_CLOSED", function() self.atMerchant = false; self:UpdateJunk() end)
     self:OnGameEvent("PLAYER_LOGOUT", function() self:SaveMe() end)
     self:OnGameEvent("ITEM_LOCK_CHANGED", function(_, bag, slot)
-        if not (plain(bag) and plain(slot) and bag and slot) then return end
+        if not (secret.readable(bag) and secret.readable(slot) and bag and slot) then return end
         local inv = self:InvFor(bag)
         if inv and inv:IsShown() then self:UpdateSlot(bag, slot) end
     end)

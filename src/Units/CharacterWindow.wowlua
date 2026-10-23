@@ -26,14 +26,16 @@ import type WindowChrome, SkinTab from "/UI/WindowSkin"
 import type ItemSlotSkin from "/UI/Inventory"
 import type Text from "/UI/Text"
 import type Color from "/Core/Tokens"
-import named, part, ask, asFrame, asButton, asRegion, asTexture, asFontString from "/UI/Reskin"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
-local function plain(v: unknown): boolean return v ~= nil and not isSecret(v) end
 local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 local SLOTS = { "Head", "Neck", "Shoulder", "Back", "Chest", "Shirt", "Tabard", "Wrist", "Hands", "Waist", "Legs",
@@ -55,10 +57,10 @@ local TABS = {
 }
 
 -- One of the game's frames by its global name.
-local function frame(name: string): Frame? return asFrame(named(name)) end
+local function frame(name: string): Frame? return frames.find(name) end
 
 local function shown(name: string): boolean
-    local f = asRegion(named(name))
+    local f = frames.asRegion(tbl.field(_G, name))
     return f and f:IsShown() or false
 end
 
@@ -74,7 +76,7 @@ end
 -- Its button textures (normal, pushed, highlight, …) out of sight.
 local function hideButtonArt(b: Button, getters: string[])
     for _, get in ipairs(getters) do
-        local t = asRegion(ask(b, get))
+        local t = frames.asRegion(errors.tryMethod(b, get))
         if t then t:SetAlpha(0) end
     end
 end
@@ -141,7 +143,7 @@ export type WearView = { broken: boolean, fill?: string, width?: number, pct?: s
 -- (nil: no bar)
 export function wearView(p: DurabilityPiece?, gearBars: string?, barW: number?): WearView?
     if not (p ~= nil and (gearBars == "always" or p.state ~= "fine")) then return nil end
-    local w = (plain(barW) and barW and barW > 0) and barW or 30
+    local w = (secret.readable(barW) and barW and barW > 0) and barW or 30
     local broken = p.state == "broken"
     return {
         broken = broken,
@@ -259,13 +261,6 @@ export function statColor(r: number?, g: number, b: number): string
     return "ink"
 end
 
--- geometry can be secret (in combat): read only when it isn't (found in
--- game: comparing a secret left edge errored)
-local function num(v: unknown): number?
-    if type(v) == "number" and not isSecret(v) then return v end
-    return nil
-end
-
 --------------------------------------------------------------------------------
 -- The side buttons: Stats | Titles | Sets as a segmented row
 --------------------------------------------------------------------------------
@@ -320,7 +315,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         local cf = frame("CharacterFrame")
         if not cf or self.chrome then return end
         -- the panes' own backgrounds (the first texture of each host)
-        local hide: { [number]: unknown } = { part(cf, "NineSlice"), part(cf, "PortraitContainer"), part(cf, "TitleContainer") }
+        local hide: { [number]: unknown } = { tbl.field(cf, "NineSlice"), tbl.field(cf, "PortraitContainer"), tbl.field(cf, "TitleContainer") }
         for _, name in ipairs({ "CharacterFrameLeftPaneHost", "CharacterFrameRightPaneHost" }) do
             local host = frame(name)
             if host then
@@ -331,7 +326,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         end
         local chrome = UI.SkinWindow(cf, {
             title = "Character", icon = "person", binding = "TOGGLECHARACTER0",
-            close = asButton(named("CharacterFrameCloseButton")), hide = hide, topInset = 20, under = "microMenu",
+            close = frames.asButton(tbl.field(_G, "CharacterFrameCloseButton")), hide = hide, topInset = 20, under = "microMenu",
         })
         self.chrome = chrome
         local list: SkinTab[] = {}
@@ -340,7 +335,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             if button then
                 list[#list + 1] = { button = button, label = t.label, short = t.short,
                     selected = function(): boolean
-                        local sel = asRegion(part(button, "SelectedTexture"))
+                        local sel = frames.asRegion(tbl.field(button, "SelectedTexture"))
                         if sel then return sel:IsShown() end
                         return shown(t.pane)
                     end }
@@ -360,10 +355,10 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         self.identity = id
         -- Blizzard's strip and its "Level 21 Paladin"
         local paperDoll = frame("PaperDollFrame")
-        local strip = asRegion(part(paperDoll, "TopBackgroundStripHost"))
+        local strip = frames.asRegion(tbl.field(paperDoll, "TopBackgroundStripHost"))
         if strip then strip:SetAlpha(0) end
         for _, name in ipairs({ "PaperDollLevelInfo", "PaperDollPetLevelInfo" }) do
-            local r = asRegion(named(name))
+            local r = frames.asRegion(tbl.field(_G, name))
             if r then r:SetAlpha(0) end
         end
         -- only on the Character tab
@@ -384,7 +379,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         local name = SuuUI.FullName("player")
         id.name:SetValue(type(name) == "string" and not isSecret(name) and name or "")
         local race = UnitRace("player")
-        id.line:SetValue(identityLine(num(UnitLevel("player")), type(race) == "string" and not isSecret(race) and race or nil,
+        id.line:SetValue(identityLine(secret.asNumber(UnitLevel("player")), type(race) == "string" and not isSecret(race) and race or nil,
             type(className) == "string" and not isSecret(className) and className or nil))
     end
 
@@ -403,7 +398,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             local icon = skin.icon:GetTexture()
             -- a broken piece dimmed (the Durability module's "On your gear")
             local wear = self:WearOf(id)
-            skin:SetItem({ icon = icon, quality = (plain(q) and q and QUALITY[q]) or "common",
+            skin:SetItem({ icon = icon, quality = (secret.readable(q) and q and QUALITY[q]) or "common",
                 dim = not link or (wear ~= nil and wear.state == "broken") })
             updating = false
         end
@@ -415,7 +410,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     end
 
     function SkinPopout(slotName: string, b: Frame)
-        local p = asButton(part(b, "popoutButton"))
+        local p = frames.asButton(tbl.field(b, "popoutButton"))
         if not p or not once(p) then return end
         local glyph = p:CreateTexture(nil, "OVERLAY", nil, 7)
         glyph:SetSize(12, 12)
@@ -445,13 +440,13 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         if not fly or self.flyoutSkinned then return end
         self.flyoutSkinned = true
         local function skinButtons()
-            local holder = asFrame(part(fly, "buttonFrame")) or fly
+            local holder = frames.asFrame(tbl.field(fly, "buttonFrame")) or fly
             local glass = self.flyoutGlass[holder]
             for _, r in ipairs({ holder:GetRegions() }) do
                 if r:GetObjectType() == "Texture" and r ~= glass then r:SetAlpha(0) end
             end
             -- (Blizzard's highlight is a texture: no regions of its own)
-            local highlight = asRegion(part(fly, "Highlight"))
+            local highlight = frames.asRegion(tbl.field(fly, "Highlight"))
             if highlight then highlight:SetAlpha(0) end
             if not glass then
                 glass = holder:CreateTexture(nil, "BACKGROUND", nil, -8)
@@ -474,7 +469,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             end
         end
         hookScript(fly, "OnShow", function() after(0, skinButtons) end)
-        if type(named("EquipmentFlyout_DisplayButton")) == "function" then
+        if type(tbl.field(_G, "EquipmentFlyout_DisplayButton")) == "function" then
             hook("EquipmentFlyout_DisplayButton", function() after(0, skinButtons) end)
         end
     end
@@ -482,17 +477,17 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     -- The new-set popup (name, icon, Okay, Cancel): glass in a gilt edge, its
     -- input, buttons and scrollbar through UI.Reskin; the icons stay.
     function SkinSetPopup()
-        local pop = frame("GearManagerPopupFrame") or asFrame(part(frame("PaperDollFrame"), "GearManagerPopupFrame"))
+        local pop = frame("GearManagerPopupFrame") or frames.asFrame(tbl.field(frame("PaperDollFrame"), "GearManagerPopupFrame"))
         if not pop or not once(pop) then return end
         local function art(f: Frame?)
             if not f then return end
-            local nine = asRegion(part(f, "NineSlice"))
+            local nine = frames.asRegion(tbl.field(f, "NineSlice"))
             if nine then nine:SetAlpha(0) end
             for _, r in ipairs({ f:GetRegions() }) do
                 if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
             end
         end
-        local box = asFrame(part(pop, "BorderBox"))
+        local box = frames.asFrame(tbl.field(pop, "BorderBox"))
         art(pop)
         art(box)
         if box then
@@ -511,10 +506,10 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         jewel:SetPoint("CENTER", pop, "TOPLEFT", 0, 0)
         -- the chosen icon (top right) and the grid's icons: SuuUI's icon buttons
         -- (the chosen icon: whichever button with an Icon sits outside the grid)
-        local grid = asFrame(part(pop, "IconSelector"))
+        local grid = frames.asFrame(tbl.field(pop, "IconSelector"))
         local function findChosen(f: Frame, depth: number): Frame?
             if depth > 4 or f == grid then return nil end
-            if f ~= pop and f:GetObjectType() == "Button" and (part(f, "Icon") or part(f, "icon")) then return f end
+            if f ~= pop and f:GetObjectType() == "Button" and (tbl.field(f, "Icon") or tbl.field(f, "icon")) then return f end
             for _, c in ipairs({ f:GetChildren() }) do
                 local hit = findChosen(c, depth + 1)
                 if hit then return hit end
@@ -525,18 +520,18 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         local function icons()
             chosen = chosen or findChosen(pop, 0)
             if chosen then UI.ReskinIconButton(chosen) end
-            local sb = grid and (part(grid, "ScrollBox") or grid)
+            local sb = grid and (tbl.field(grid, "ScrollBox") or grid)
             -- (no view yet: the box updates as it is sized, before its list is set)
-            if sb and part(sb, "ForEachFrame") and (not part(sb, "GetView") or ask(sb, "GetView")) then
-                ask(sb, "ForEachFrame", function(b: unknown) UI.ReskinIconButton(b) end)
+            if sb and tbl.field(sb, "ForEachFrame") and (not tbl.field(sb, "GetView") or errors.tryMethod(sb, "GetView")) then
+                errors.tryMethod(sb, "ForEachFrame", function(b: unknown) UI.ReskinIconButton(b) end)
             end
         end
-        local sb = part(grid, "ScrollBox")
+        local sb = tbl.field(grid, "ScrollBox")
         if type(sb) == "table" then
-            if part(sb, "Update") then hook(sb, "Update", icons) end
-            local changed = part(part(sb, "Event"), "OnDataRangeChanged")
-            if part(sb, "RegisterCallback") and changed then
-                ask(sb, "RegisterCallback", changed, icons, self)
+            if tbl.field(sb, "Update") then hook(sb, "Update", icons) end
+            local changed = tbl.field(tbl.field(sb, "Event"), "OnDataRangeChanged")
+            if tbl.field(sb, "RegisterCallback") and changed then
+                errors.tryMethod(sb, "RegisterCallback", changed, icons, self)
             end
         end
         -- lined up with the window: its header's top, its bottom, space-4 beside it
@@ -552,10 +547,10 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         end
         hook(pop, "SetPoint", function() if not placing then after(0, place) end end)
         -- the icon grid ends above Okay and Cancel (Blizzard's art hid the overlap)
-        local okay = asRegion(part(box, "OkayButton")) or asRegion(part(box, "OkButton"))
+        local okay = frames.asRegion(tbl.field(box, "OkayButton")) or frames.asRegion(tbl.field(box, "OkButton"))
         local function fit()
             if grid and okay then
-                local top, bottom = num(okay:GetTop()), num(pop:GetBottom())
+                local top, bottom = secret.asNumber(okay:GetTop()), secret.asNumber(pop:GetBottom())
                 grid:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -S["space-5"], (top and bottom)
                     and (top - bottom + S["space-4"]) or 44)
             end
@@ -587,7 +582,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         UI.Fill(box, "surface-sunk"):SetAllPoints()
         UI.Border(box, "gilt-faint")
         self.modelBox = box
-        local controls = asFrame(part(scene, "ControlFrame"))
+        local controls = frames.asFrame(tbl.field(scene, "ControlFrame"))
         if controls then
             controls:SetAlpha(0)
             controls:EnableMouse(false)
@@ -641,7 +636,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
 
     function BuildWearBlock()
         local pane = frame("CharacterStatsPaneScrollBox")
-        local box = asFrame(part(pane, "ScrollBox"))
+        local box = frames.asFrame(tbl.field(pane, "ScrollBox"))
         if not (pane and box) or self.wearBlock then return end
         self.wearBlock = WearBlock.new(pane, box)
     end
@@ -672,10 +667,10 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         -- a small square texture is an icon (a resistance's school): kept, the
         -- rest (banners, backgrounds) away
         local function texture(r: Texture)
-            local atlasName = ask(r, "GetAtlas")
+            local atlasName = errors.tryMethod(r, "GetAtlas")
             local atlas = (type(atlasName) == "string" and atlasName or ""):lower()
             local w, h = r:GetSize()
-            local isIcon = ask(r, "GetParentKey") == "Icon" or atlas:find("resistance") or atlas:find("icon")
+            local isIcon = errors.tryMethod(r, "GetParentKey") == "Icon" or atlas:find("resistance") or atlas:find("icon")
                 or (w and h and w > 0 and w <= 24 and math.abs(w - h) < 3)
             if isIcon then
                 -- (the resistances' are 33px in a 23px row: 18px)
@@ -686,8 +681,8 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             end
         end
         local function take(r: Region)
-            local tex = asTexture(r)
-            local fs = asFontString(r)
+            local tex = frames.asTexture(r)
+            local fs = frames.asFontString(r)
             if tex then
                 texture(tex)
             elseif fs and fs:IsShown() then
@@ -707,7 +702,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             rule:SetPoint("TOPLEFT")
             rule:SetPoint("TOPRIGHT")
         end
-        local head = #texts == 1 or (num(row:GetHeight()) or 0) > 30
+        local head = #texts == 1 or (secret.asNumber(row:GetHeight()) or 0) > 30
         rule:SetShown(not head)
         if head then
             for _, t in ipairs(texts) do
@@ -718,10 +713,10 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             return
         end
         -- the label and the value: Blizzard's own keys, else left to right
-        local label, value = asFontString(part(row, "Label")), asFontString(part(row, "Value"))
+        local label, value = frames.asFontString(tbl.field(row, "Label")), frames.asFontString(tbl.field(row, "Value"))
         if not (label and value) then
             local readable = true
-            for _, t in ipairs(texts) do if num(t:GetLeft()) == nil then readable = false end end
+            for _, t in ipairs(texts) do if secret.asNumber(t:GetLeft()) == nil then readable = false end end
             if readable then
                 table.sort(texts, function(a: FontString, b: FontString): boolean return assert(a:GetLeft()) < assert(b:GetLeft()) end)
             end
@@ -745,44 +740,44 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             local pane = frame(name)
             if pane and once(pane) then
                 alphaRegions(pane)
-                local box = part(pane, "ScrollBox")
+                local box = tbl.field(pane, "ScrollBox")
                 if type(box) == "table" then
                     local function skinAll()
                         -- (no view yet: the box updates as it is sized, before its list is set)
-                        if part(box, "ForEachFrame") and part(box, "GetView") and not ask(box, "GetView") then return end
-                        if part(box, "ForEachFrame") then
-                            ask(box, "ForEachFrame", function(row: unknown)
-                                local f = asFrame(row)
+                        if tbl.field(box, "ForEachFrame") and tbl.field(box, "GetView") and not errors.tryMethod(box, "GetView") then return end
+                        if tbl.field(box, "ForEachFrame") then
+                            errors.tryMethod(box, "ForEachFrame", function(row: unknown)
+                                local f = frames.asFrame(row)
                                 if f then self:SkinStatRow(f) end
                             end)
                         else
-                            local target = asFrame(part(box, "ScrollTarget"))
+                            local target = frames.asFrame(tbl.field(box, "ScrollTarget"))
                             if target then
                                 for _, row in ipairs({ target:GetChildren() }) do self:SkinStatRow(row) end
                             end
                         end
                     end
-                    if part(box, "Update") then hook(box, "Update", skinAll) end
-                    local changed = part(part(box, "Event"), "OnDataRangeChanged")
-                    if part(box, "RegisterCallback") and changed then
-                        ask(box, "RegisterCallback", changed, skinAll, self)
+                    if tbl.field(box, "Update") then hook(box, "Update", skinAll) end
+                    local changed = tbl.field(tbl.field(box, "Event"), "OnDataRangeChanged")
+                    if tbl.field(box, "RegisterCallback") and changed then
+                        errors.tryMethod(box, "RegisterCallback", changed, skinAll, self)
                     end
                     hookScript(pane, "OnShow", function() after(0, skinAll) end)
                     skinAll()
                 end
-                self:SkinScrollBar(part(pane, "ScrollBar"))
+                self:SkinScrollBar(tbl.field(pane, "ScrollBar"))
             end
         end
     end
 
     -- Blizzard's thin scrollbar: no track art, a gilt-line thumb.
     function SkinScrollBar(given: unknown)
-        local bar = asFrame(given)
+        local bar = frames.asFrame(given)
         if not bar or not once(bar) then return end
-        local track = asFrame(part(bar, "Track"))
+        local track = frames.asFrame(tbl.field(bar, "Track"))
         if track then
             alphaRegions(track)
-            local thumb = asFrame(part(track, "Thumb"))
+            local thumb = frames.asFrame(tbl.field(track, "Thumb"))
             if thumb then
                 alphaRegions(thumb)
                 local t = thumb:CreateTexture(nil, "OVERLAY")
@@ -793,7 +788,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             end
         end
         for _, key in ipairs({ "Back", "Forward" }) do
-            local r = asRegion(part(bar, key))
+            local r = frames.asRegion(tbl.field(bar, key))
             if r then r:SetAlpha(0) end
         end
     end
@@ -813,12 +808,12 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         local sidebar: Sidebar = { row = row, tabs = {}, marker = marker }
         self.sidebar = sidebar
         for _, def in ipairs(SIDE) do
-            local b = asButton(named("PaperDollSidebarTab" .. def.tab))
+            local b = frames.asButton(tbl.field(_G, "PaperDollSidebarTab" .. def.tab))
             if b then
                 -- (UI.Reskin leaves it a button, not a check box)
                 (b :: { [string]: unknown }).suuNoCheck = true
                 alphaRegions(b)
-                local icon = asRegion(part(b, "Icon"))
+                local icon = frames.asRegion(tbl.field(b, "Icon"))
                 if icon then icon:SetAlpha(0) end
                 hideButtonArt(b, { "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture" })
                 local label = UI.Text(b, "label", "ink-muted")
@@ -878,7 +873,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     function AlignSetList()
         local new, equip, save = frame("PaperDollFrameNewSet"), frame("PaperDollFrameEquipSet"), frame("PaperDollFrameSaveSet")
         if not (new and equip and save) then return end
-        local left, right = num(equip:GetLeft()), num(save:GetRight())
+        local left, right = secret.asNumber(equip:GetLeft()), secret.asNumber(save:GetRight())
         if not (left and right) then return end -- (secret in combat)
         new:SetWidth(right - left)
     end
@@ -895,7 +890,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         end
         self:SkinFlyout()
         self:SkinSetPopup()
-        local pane = asFrame(part(frame("PaperDollFrame"), "EquipmentManagerPane"))
+        local pane = frames.asFrame(tbl.field(frame("PaperDollFrame"), "EquipmentManagerPane"))
         if pane then
             hookScript(pane, "OnShow", function() after(0, function() self:AlignSetList() end) end)
         end
@@ -906,7 +901,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         self:SkinSidebar()
         -- the toggle for the right pane: a small square with SuuUI's edge and a
         -- chevron pointing the way the pane goes
-        local toggle = asButton(named("CharacterFrameRightPaneToggleButton"))
+        local toggle = frames.asButton(tbl.field(_G, "CharacterFrameRightPaneToggleButton"))
         if toggle then
             local edge = UI.Border(toggle, "gilt-line")
             local chev = toggle:CreateTexture(nil, "OVERLAY", nil, 7)
@@ -949,8 +944,8 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         for _, name in ipairs(PANES) do watch(frame(name)) end
         local pd = frame("PaperDollFrame")
         if pd then
-            watch(asFrame(part(pd, "TitleManagerPane")))
-            watch(asFrame(part(pd, "EquipmentManagerPane")))
+            watch(frames.asFrame(tbl.field(pd, "TitleManagerPane")))
+            watch(frames.asFrame(tbl.field(pd, "EquipmentManagerPane")))
         end
     end
 
@@ -960,11 +955,11 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         -- the Durability module's reading (it sends again on a theme change)
         self:On("SUUUI_DURABILITY_CHANGED", function() self:UpdateWear() end)
         self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:UpdateWear() end end)
-        if named("CharacterFrame") then
+        if tbl.field(_G, "CharacterFrame") then
             self:Skin()
         else
             -- the window's addon loads later on some clients
-            self:OnGameEvent("ADDON_LOADED", function() if named("CharacterFrame") then self:Skin() end end)
+            self:OnGameEvent("ADDON_LOADED", function() if tbl.field(_G, "CharacterFrame") then self:Skin() end end)
         end
     end
 end

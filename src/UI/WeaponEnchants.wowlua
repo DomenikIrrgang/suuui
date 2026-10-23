@@ -1,7 +1,7 @@
 -- UI/WeaponEnchants.wowlua
 -- Temporary weapon enchants: a shaman's imbues, a rogue's poisons, stones and
 -- oils. They aren't auras, and unlike auras they stay readable in combat
--- (/suu probe weaponenchants: C_Item.GetWeaponEnchantInfo is plain), so SuuUI
+-- (/suu probe weaponenchants: C_Item.GetWeaponEnchantInfo is secret.readable), so SuuUI
 -- reads them itself and draws them as its own icons, with the buffs' look.
 --
 --   weaponEnchant(slot)           -- 0.17: "main" | "off" | "ranged": the
@@ -42,9 +42,8 @@ import * as uiText from "/UI/Text"
 import type Text from "/UI/Text"
 import * as tooltip from "/UI/Tooltip"
 
--- wowlua:secret's isSecret as a local predicate: an imported one doesn't
+-- wowlua:secret's secret.isSecret as a local predicate: an imported one doesn't
 -- narrow in wowlua 0.9.1 while the project has an import cycle (port notes)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local CROP = 0.08
 local AMBER = 60 -- seconds: the digits turn amber and blink below this
@@ -88,7 +87,6 @@ type Game = {
 }
 local G = setmetatable({}, { __index = function(_: unknown, k: string): unknown return _G[k] end }) :: Game
 
-local function plain(v: unknown): boolean return v ~= nil and not isSecret(v) end
 
 -- The temporary enchant in a weapon slot's list: the entry with time left
 -- (a permanent enchant has none).
@@ -97,10 +95,10 @@ local function read(ws: number): WeaponEnchantInfo?
     local get = items and items.GetWeaponEnchantInfo
     if not get then return nil end
     local ok, list = pcall(get, ws)
-    if not ok or isSecret(list) or type(list) ~= "table" then return nil end
+    if not ok or secret.isSecret(list) or type(list) ~= "table" then return nil end
     for _, e in pairs(list) do
-        if type(e) == "table" and not isSecret(e) and plain(e.hasEnchant) and e.hasEnchant
-            and plain(e.timeLeft) and e.timeLeft > 0 then
+        if type(e) == "table" and not secret.isSecret(e) and secret.readable(e.hasEnchant) and e.hasEnchant
+            and secret.readable(e.timeLeft) and e.timeLeft > 0 then
             return e
         end
     end
@@ -112,10 +110,10 @@ local function tooltipName(inv: number): string?
     local get = tips and tips.GetInventoryItem
     if not get then return nil end
     local ok, data = pcall(get, "player", inv)
-    if not ok or isSecret(data) or type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
+    if not ok or secret.isSecret(data) or type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
     for _, l in ipairs(data.lines) do
         local text = l.leftText
-        if plain(text) and type(text) == "string" and text:find("%(%d+ [%a ]+%)") then
+        if secret.readable(text) and type(text) == "string" and text:find("%(%d+ [%a ]+%)") then
             local name = text:gsub("%s*%(.*%)%s*$", ""):gsub("%s+%d+$", "")
             if name ~= "" then return name end
         end
@@ -124,7 +122,7 @@ end
 
 local function itemName(inv: number): string?
     local link = G.GetInventoryItemLink("player", inv)
-    return plain(link) and link and link:match("%[(.-)%]") or nil
+    return secret.readable(link) and link and link:match("%[(.-)%]") or nil
 end
 
 export function weaponEnchantable(slot: string): boolean
@@ -132,7 +130,7 @@ export function weaponEnchantable(slot: string): boolean
     if not s then return false end
     if state[slot] then return true end
     local id = G.GetInventoryItemID("player", s.inv)
-    if not plain(id) or not id then return false end
+    if not secret.readable(id) or not id then return false end
     local items = G.C_Item
     if not items then return false end
     local classID = select(6, items.GetItemInfoInstant(id))
@@ -161,10 +159,10 @@ scan = function()
         local e = read(s.ws)
         local old = state[slot]
         local weapon = G.GetInventoryItemID("player", s.inv)
-        weapon = plain(weapon) and weapon or nil
+        weapon = secret.readable(weapon) and weapon or nil
         if e then
             any = true
-            local id = plain(e.enchantID) and e.enchantID or 0
+            local id = secret.readable(e.enchantID) and e.enchantID or 0
             local left = e.timeLeft / 1000
             local prev = seen[slot]
             -- new: none before, another enchant, or put on again (more time
@@ -183,10 +181,10 @@ scan = function()
             local spellName = spell and G.C_Spell.GetSpellName(spell)
             local info = {
                 slot = slot, enchantID = id, weaponID = weapon,
-                icon = plain(e.enchantIconID) and e.enchantIconID ~= 0 and e.enchantIconID or G.GetInventoryItemTexture("player", s.inv),
+                icon = secret.readable(e.enchantIconID) and e.enchantIconID ~= 0 and e.enchantIconID or G.GetInventoryItemTexture("player", s.inv),
                 expires = now + left, duration = math.max((seen[slot] :: Seen).duration, left),
-                charges = plain(e.charges) and e.charges or 0,
-                name = (plain(spellName) and spellName) or tipNames[key] or nil,
+                charges = secret.readable(e.charges) and e.charges or 0,
+                name = (secret.readable(spellName) and spellName) or tipNames[key] or nil,
                 weapon = itemName(s.inv), spellID = spell,
             }
             if not old or old.enchantID ~= id or old.charges ~= info.charges or fresh then changed = true end
@@ -218,7 +216,7 @@ for _, e in ipairs(gameEvents) do
 end
 events.onUnit("UNIT_INVENTORY_CHANGED", "player", later, "WeaponEnchants")
 events.onUnit("UNIT_SPELLCAST_SUCCEEDED", "player", function(_, _, _, spellID)
-    if plain(spellID) and spellID then lastCast = { id = spellID, at = GetTime() } end
+    if secret.readable(spellID) and spellID then lastCast = { id = spellID, at = GetTime() } end
 end, "WeaponEnchants")
 
 --------------------------------------------------------------------------------
@@ -270,7 +268,7 @@ local function showTip(self: WeaponEnchantIcon)
     else
         local spell = spellFor[slot]
         local spellName = spell and G.C_Spell.GetSpellName(spell)
-        spellName = plain(spellName) and spellName or nil
+        spellName = secret.readable(spellName) and spellName or nil
         tooltip.showTooltip(self, { title = spellName or (s.label .. " enchant"), subtitle = sub,
             lines = { { "Not on the weapon" } },
             meta = spellName and ("Cast " .. spellName .. " to put it back.") or nil })

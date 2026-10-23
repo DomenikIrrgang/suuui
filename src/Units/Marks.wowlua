@@ -22,10 +22,12 @@ import type MapPinData from "/UI/MapPin"
 import type Text from "/UI/Text"
 import type TextField, Toggle from "/UI/Inputs"
 import type SuuButton from "/UI/Controls"
-import named, part, ask, asRegion from "/UI/Reskin"
 import * as secret from "wowlua:secret"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
 
 local DEFAULTS = {}
 
@@ -33,12 +35,6 @@ local M: MarksModule
 
 local UI = SuuUI.UI
 
--- wowlua:secret's test, as a predicate of this file's own (0.9.1 narrows
--- nothing through an imported predicate while the project has an import
--- cycle; Docs/port-notes/units-group.md)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
-type Readable = string | number | boolean | table | function
-local function plain(v: unknown): v is Readable return v ~= nil and not isSecret(v) end
 
 export type Mark = MapMark
 -- What a mark is made or changed with.
@@ -171,9 +167,9 @@ local function worldOf(mark: Mark): World?
         w = false
         if C_Map.GetWorldPosFromMapPos and CreateVector2D then
             local ok, continent, pos = pcall(C_Map.GetWorldPosFromMapPos, mark.map, CreateVector2D(mark.x, mark.y))
-            if ok and plain(continent) and pos then
+            if ok and secret.readable(continent) and pos then
                 local n, wv = pos:GetXY()
-                if plain(n) and plain(wv) then w = { continent = continent, north = n, west = wv } end
+                if secret.readable(n) and secret.readable(wv) then w = { continent = continent, north = n, west = wv } end
             end
         end
         worldCache[mark] = w
@@ -223,7 +219,7 @@ local function colorOf(symbol: string): string return "mark-" .. symbol end
 -- you ran (found in game). The disc and its edge sized in whole pixels,
 -- and its place snapped to them (PlaceMinimapPins).
 local function screenPixel(region: Region): number
-    local factor = ask(named("PixelUtil"), "GetPixelToUIUnitFactor")
+    local factor = errors.tryMethod(tbl.field(_G, "PixelUtil"), "GetPixelToUIUnitFactor")
     return (type(factor) == "number" and factor or 1) / region:GetEffectiveScale()
 end
 
@@ -581,11 +577,11 @@ class MarksModule extends Module<typeof(DEFAULTS)>
         if mark.map == mapID then return mark.x, mark.y end
         if not (C_Map.GetWorldPosFromMapPos and C_Map.GetMapPosFromWorldPos and CreateVector2D) then return nil, nil end
         local ok, continent, world = pcall(C_Map.GetWorldPosFromMapPos, mark.map, CreateVector2D(mark.x, mark.y))
-        if not (ok and plain(continent) and world) then return nil, nil end
+        if not (ok and secret.readable(continent) and world) then return nil, nil end
         local ok2, onMap, pos = pcall(C_Map.GetMapPosFromWorldPos, continent, world, mapID)
         if not (ok2 and onMap == mapID and pos) then return nil, nil end
         local x, y = pos:GetXY()
-        if plain(x) and plain(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 then return x, y end
+        if secret.readable(x) and secret.readable(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 then return x, y end
         return nil, nil
     end
 
@@ -610,9 +606,9 @@ class MarksModule extends Module<typeof(DEFAULTS)>
     -- The game's waypoint pins again (while its map shows).
     function RefreshGamePins()
         local provider = self.waypointProvider
-        local getMap, refresh = part(provider, "GetMap"), part(provider, "RefreshAllData")
+        local getMap, refresh = tbl.field(provider, "GetMap"), tbl.field(provider, "RefreshAllData")
         if type(getMap) ~= "function" or type(refresh) ~= "function" then return end
-        local map = asRegion((getMap :: (unknown) -> unknown)(provider))
+        local map = frames.asRegion((getMap :: (unknown) -> unknown)(provider))
         if map and map:IsShown() then (refresh :: (unknown) -> ())(provider) end
     end
 
@@ -628,9 +624,9 @@ class MarksModule extends Module<typeof(DEFAULTS)>
 
     -- The group's chat: instance, raid or party; nil when you're not in one.
     function GroupChannel(): ("INSTANCE_CHAT" | "RAID" | "PARTY")?
-        if UI.Flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then return "INSTANCE_CHAT" end
-        if UI.Flag(IsInRaid()) then return "RAID" end
-        if UI.Flag(IsInGroup()) then return "PARTY" end
+        if secret.flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then return "INSTANCE_CHAT" end
+        if secret.flag(IsInRaid()) then return "RAID" end
+        if secret.flag(IsInGroup()) then return "PARTY" end
         return nil
     end
 
@@ -660,7 +656,7 @@ class MarksModule extends Module<typeof(DEFAULTS)>
     -- A shared mark from a group member: kept until you remove it; the same
     -- one posted again (same place, same sender) only updates its name.
     function OnMessage(prefix: unknown, text: unknown, _channel: unknown, sender: unknown)
-        if prefix ~= PREFIX or type(text) ~= "string" or type(sender) ~= "string" or isSecret(text) or isSecret(sender) then return end
+        if prefix ~= PREFIX or type(text) ~= "string" or type(sender) ~= "string" or secret.isSecret(text) or secret.isSecret(sender) then return end
         local map, x, y, symbol, name = decodeMark(text)
         if not (map and x and y) then return end
         -- your own post coming back (the sender comes as "Name Surname" or
@@ -684,14 +680,14 @@ class MarksModule extends Module<typeof(DEFAULTS)>
         local mm = Minimap
         if not (mm and C_Minimap and C_Minimap.GetViewRadius) then return {} end
         local okP, north, west, _, instance = pcall(UnitPosition, "player")
-        if not (okP and plain(north) and plain(west) and plain(instance)) then return {} end
+        if not (okP and secret.readable(north) and secret.readable(west) and secret.readable(instance)) then return {} end
         local yards = C_Minimap.GetViewRadius()
-        if not (plain(yards) and yards > 0) then return {} end
+        if not (secret.readable(yards) and yards > 0) then return {} end
         local half = mm:GetWidth() / 2
         local turn = 0
         if GetCVar("rotateMinimap") == "1" and GetPlayerFacing then
             local f = GetPlayerFacing()
-            if plain(f) then turn = -f end
+            if secret.readable(f) then turn = -f end
         end
         local out: MinimapPlace[] = {}
         for _, mark in ipairs(self:Marks()) do
@@ -834,7 +830,7 @@ class MarksModule extends Module<typeof(DEFAULTS)>
         if not (card and card:IsShown() and map) then return end
         if not anchor then self:CloseCard() return end
         card:ClearAllPoints()
-        local scroll = asRegion(part(map, "ScrollContainer"))
+        local scroll = frames.asRegion(tbl.field(map, "ScrollContainer"))
         if scroll then
             local _, ay = anchor:GetCenter()
             local _, sy = scroll:GetCenter()
@@ -869,9 +865,9 @@ class MarksModule extends Module<typeof(DEFAULTS)>
             if not self:IsEnabled() or button ~= "LeftButton" then return false end
             -- a plain click elsewhere closes the card (and goes on to the map)
             if not IsControlKeyDown() then self:CloseCard() return false end
-            local getID = part(map, "GetMapID")
+            local getID = tbl.field(map, "GetMapID")
             local mapID = type(getID) == "function" and (getID :: (unknown) -> unknown)(map) or nil
-            if not (type(mapID) == "number" and type(cx) == "number" and type(cy) == "number" and plain(cx) and plain(cy)) then return false end
+            if not (type(mapID) == "number" and type(cx) == "number" and type(cy) == "number" and secret.readable(cx) and secret.readable(cy)) then return false end
             local mark = self:Add(mapID, cx, cy, { symbol = self.lastSymbol or "star" })
             -- its card once its pin is there, the name to type
             after(0.05, function()
@@ -889,19 +885,19 @@ class MarksModule extends Module<typeof(DEFAULTS)>
         -- the two on top of each other); a waypoint of your own stays
         -- (found by its mixin: asking every provider its pin template errors on
         -- some, the vignettes', which turned this module off; found in game)
-        local mixin = named("WaypointLocationDataProviderMixin")
-        local providers = part(f, "dataProviders")
+        local mixin = tbl.field(_G, "WaypointLocationDataProviderMixin")
+        local providers = tbl.field(f, "dataProviders")
         if type(providers) == "table" then
             for provider in pairs(providers) do
-                if mixin and part(provider, "RefreshAllData") == part(mixin, "RefreshAllData")
-                    and part(provider, "HandleClick") == part(mixin, "HandleClick") then
+                if mixin and tbl.field(provider, "RefreshAllData") == tbl.field(mixin, "RefreshAllData")
+                    and tbl.field(provider, "HandleClick") == tbl.field(mixin, "HandleClick") then
                     self.waypointProvider = provider
                     hook(provider :: { [string]: unknown }, "RefreshAllData", function(p: WaypointProvider?) self:HideGamePin(p) end)
                 end
             end
         end
         -- a quiet hint after the header's waypoint pin: how to place one
-        local pin = asRegion(part(f, "WorldMapTrackingPinButton"))
+        local pin = frames.asRegion(tbl.field(f, "WorldMapTrackingPinButton"))
         if pin then
             local hint = UI.Text(pin :: Frame, "caption", "ink-faint")
             hint:SetPoint("LEFT", pin, "RIGHT", 8, 0)

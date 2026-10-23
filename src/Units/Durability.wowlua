@@ -21,7 +21,7 @@
 -- What the other modules draw comes from SuuUI.Durability() and the
 -- message SUUUI_DURABILITY_CHANGED.
 -- Probed 2026-10-19 (/suu probe durability): GetInventoryItemDurability
--- reads plain numbers in combat too, and UPDATE_INVENTORY_DURABILITY fires
+-- reads secret.readable numbers in combat too, and UPDATE_INVENTORY_DURABILITY fires
 -- in and out of it; the game's alert states (GetInventoryAlertStatus)
 -- disagree with the percent (shoes at 20% read damaged, gloves at 15% did
 -- not), so damaged and broken are worked out here from the numbers. No
@@ -37,9 +37,10 @@ import type DurabilityInfo, DurabilityPiece, DurabilityParts from "/Core/Service
 import type StateBadge from "/UI/Controls"
 import type Text from "/UI/Text"
 import type TooltipData from "/UI/Tooltip"
-import asFrame, named, part from "/UI/Reskin"
 import after from "wowlua:timer"
-import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -62,8 +63,7 @@ local DEFAULTS = {
 
 local M: DurabilityModule
 
-local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
-local function plainNumber(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
+local function plainNumber(v: unknown): number? if secret.readable(v) and type(v) == "number" then return v end return nil end
 
 local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
@@ -102,7 +102,7 @@ local function pieceOf(slot: number, given: unknown, givenMax: unknown, givenLin
     if not (cur and max and max > 0) then return nil end
     -- a piece with a point left reads 1%, never the 0% of a broken one
     local pct = cur <= 0 and 0 or math.max(1, math.floor(cur / max * 100))
-    local link: string? = plain(givenLink) and type(givenLink) == "string" and givenLink or nil
+    local link: string? = secret.readable(givenLink) and type(givenLink) == "string" and givenLink or nil
     local label = SLOT_LABEL[slot] or ("Slot " .. slot)
     local quality = plainNumber(q)
     local state: "fine" | "damaged" | "broken" = cur <= 0 and "broken" or (pct <= line and "damaged" or "fine")
@@ -294,10 +294,10 @@ end
 
 -- The game's rule that turns repairs off hides its figure; SuuUI's follows it.
 local function repairsOff(): boolean
-    local isActive, rule = part(named("C_GameRules"), "IsGameRuleActive"), part(part(Enum, "GameRule"), "RepairArmorDisabled")
+    local isActive, rule = tbl.field(tbl.field(_G, "C_GameRules"), "IsGameRuleActive"), tbl.field(tbl.field(Enum, "GameRule"), "RepairArmorDisabled")
     if type(isActive) ~= "function" or not rule then return false end
     local ok: boolean, on: unknown = pcall(isActive :: (rule: unknown) -> unknown, rule)
-    return ok and plain(on) and on == true
+    return ok and secret.readable(on) and on == true
 end
 
 -- What the figure shows for a reading: whether it is up (`settings`:
@@ -349,11 +349,11 @@ local function repairCost(): number
     return ok and plainNumber(cost) or 0
 end
 
--- One of the game's tooltip hooks (TooltipDataProcessor, declared as a plain
+-- One of the game's tooltip hooks (TooltipDataProcessor, declared as a secret.readable
 -- table): fn after the game filled a tooltip of `kind`.
 type PostCall = (tooltip: GameTooltip, data: unknown) -> ()
 local function postCall(kind: unknown, fn: PostCall)
-    local add = part(TooltipDataProcessor, "AddTooltipPostCall")
+    local add = tbl.field(TooltipDataProcessor, "AddTooltipPostCall")
     if type(add) == "function" then (add :: (kind: unknown, fn: PostCall) -> ())(kind, fn) end
 end
 
@@ -521,7 +521,7 @@ class DurabilityModule extends Module<typeof(DEFAULTS)>
     -- The game's own figure out of sight while SuuUI's is on (only a reload
     -- brings it back: SuppressBlizzard).
     function StandDownBlizzard()
-        local frame = asFrame(named("DurabilityFrame"))
+        local frame = frames.find("DurabilityFrame")
         if self.blizzardDown or not self:Get("figure") or not frame then return end
         self.blizzardDown = true
         SuuUI.SuppressBlizzard(frame)
@@ -530,21 +530,21 @@ class DurabilityModule extends Module<typeof(DEFAULTS)>
     -- The game writes the Durability line (red when broken); SuuUI adds what
     -- that means. (No Repair line: a piece's own repair cost isn't readable.)
     function HookItemTooltip()
-        if self.tooltipHooked or not (part(TooltipDataProcessor, "AddTooltipPostCall")
+        if self.tooltipHooked or not (tbl.field(TooltipDataProcessor, "AddTooltipPostCall")
             and Enum.TooltipDataType and Enum.TooltipDataType.Item) then return end
         self.tooltipHooked = true
         postCall(Enum.TooltipDataType.Item, function(tooltip: GameTooltip, _: unknown)
             local d = self.data
             if tooltip ~= GameTooltip or not (self:IsEnabled() and self:Get("gear") and d) then return end
-            local getInfo = part(tooltip, "GetPrimaryTooltipInfo")
+            local getInfo = tbl.field(tooltip, "GetPrimaryTooltipInfo")
             local info: unknown = nil
             if type(getInfo) == "function" then
                 local ok: boolean, read: unknown = pcall(getInfo :: (tooltip: GameTooltip) -> unknown, tooltip)
                 if ok then info = read end
             end
-            local args = part(info, "getterName") == "GetInventoryItem" and part(info, "getterArgs") or nil
+            local args = tbl.field(info, "getterName") == "GetInventoryItem" and tbl.field(info, "getterArgs") or nil
             local unit, slot = at(args, 1), at(args, 2)
-            if not (plain(unit) and plain(slot) and unit == "player" and type(slot) == "number") then return end
+            if not (secret.readable(unit) and secret.readable(slot) and unit == "player" and type(slot) == "number") then return end
             local p = d.bySlot[slot]
             if p and p.state == "broken" then
                 local r, g, b = UI.RGBA("ember-text")

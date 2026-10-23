@@ -34,6 +34,7 @@ import after, every from "wowlua:timer"
 import print, name as ADDON from "/Core/Init"
 import * as DB from "/Core/DB"
 import * as apiDocs from "/Diagnostics/ApiDocs"
+import * as secret from "wowlua:secret"
 
 type Map = { [any]: any }
 
@@ -54,7 +55,6 @@ local function call(fn: any, ...: any): (any, any, any, any)
     return a, b, c, d
 end
 
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 local function nodeList(list: any): any
     if type(list) ~= "table" then return show(list) end
@@ -151,8 +151,8 @@ local function nodeIDs(zone: number?): ({ [any]: any }, { [any]: any }, any)
         local list = m and call(T.GetAllTaxiNodes, m)
         if type(list) == "table" and not isSecret(list) then
             for _, n in ipairs(list :: any[]) do
-                if plain(n.name) and plain(n.nodeID) and not byName[n.name] then byName[n.name] = n.nodeID end
-                if plain(n.slotIndex) and plain(n.nodeID) and n.slotIndex then bySlot[n.slotIndex] = n.nodeID end
+                if secret.readable(n.name) and secret.readable(n.nodeID) and not byName[n.name] then byName[n.name] = n.nodeID end
+                if secret.readable(n.slotIndex) and secret.readable(n.nodeID) and n.slotIndex then bySlot[n.slotIndex] = n.nodeID end
             end
         end
     end
@@ -178,7 +178,7 @@ local function atMaster()
                 end
             end
             local name = call(TaxiNodeName, i)
-            local id = plain(name) and byName[name]
+            local id = secret.readable(name) and byName[name]
             s.nodes[i] = ("%d %s: type %s, cost %s, at %s,%s, routes %s [%s], nodeID %s (by name), %s (by slot)"):format(i,
                 show(name), show(call(TaxiNodeGetType, i)), show(call(TaxiNodeCost, i)), show(x), show(y), show(routes),
                 table.concat(hops, " "), show(id), show(bySlot[i]))
@@ -276,7 +276,7 @@ end
 -- At the master, in take mode: the first reachable node, and the buttons.
 local function offerTake()
     local n = call(NumTaxiNodes)
-    if not (type(n) == "number" and plain(n)) then return end
+    if not (type(n) == "number" and secret.readable(n)) then return end
     local slot, name
     for i = 1, n do
         if call(TaxiNodeGetType, i) == "REACHABLE" then slot, name = i, call(TaxiNodeName, i) break end
@@ -323,13 +323,13 @@ local land: any = nil -- this flight's land test
 local function nearestMaster(): string
     local continent = continentOf(C_Map.GetBestMapForUnit("player"))
     local me = continent and call(C_Map.GetPlayerMapPosition, continent, "player")
-    if not (type(me) == "table" and me.x and plain(me.x)) then return "no position" end
+    if not (type(me) == "table" and me.x and secret.readable(me.x)) then return "no position" end
     local best, far
     local list = call(C_TaxiMap.GetTaxiNodesForMap, continent)
     for _, n in ipairs((type(list) == "table" and list or {}) :: any) do
         local x, y
         if n.position and n.position.GetXY then x, y = n.position:GetXY() end
-        if plain(x) and plain(y) and x and y then
+        if secret.readable(x) and secret.readable(y) and x and y then
             local d = ((x - me.x) ^ 2 + (y - me.y) ^ 2) ^ 0.5
             if not far or d < far then best, far = n, d end
         end
@@ -450,7 +450,7 @@ export function command(arg: string?)
     if arg == "take" then
         takeMode = true
         local n = call(NumTaxiNodes)
-        if type(n) == "number" and plain(n) and n > 0 then
+        if type(n) == "number" and secret.readable(n) and n > 0 then
             offerTake()
         else
             print("Taxi probe: take mode on. Open a flight master's map: SuuUI's own Fly button and a hide button come up.")

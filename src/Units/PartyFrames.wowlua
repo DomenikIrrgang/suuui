@@ -29,9 +29,9 @@ import UnitFrame from "/UI/UnitFrame"
 import type StandInPerson, UnitApi, UnitFrameOptions, GroupDefensives from "/UI/UnitFrame"
 import type UnitAuras, AuraGroup from "/UI/Auras"
 import type Icon from "/UI/Icon"
-import named from "/UI/Reskin"
 import * as secret from "wowlua:secret"
 import after, every from "wowlua:timer"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -60,10 +60,6 @@ local DEFAULTS = {
 local M: PartyFramesModule
 
 local SLOTS = { "player", "party1", "party2", "party3", "party4" }
--- wowlua:secret's test, as a predicate of this file's own (0.9.1 narrows
--- nothing through an imported predicate while the project has an import
--- cycle; Docs/port-notes/units-group.md)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 
 -- Healing classes, for the power line when the group gives no roles.
 local HEALER_CLASS: { [string]: boolean } = { PRIEST = true, DRUID = true, PALADIN = true, SHAMAN = true }
@@ -73,9 +69,9 @@ local function powerFor(unit: string, A: UnitApi): boolean
     if mode == "all" then return true end
     if mode == "none" then return false end
     local role = A.UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(unit)
-    if not isSecret(role) and role and role ~= "NONE" then return role == "TANK" or role == "HEALER" end
+    if not secret.isSecret(role) and role and role ~= "NONE" then return role == "TANK" or role == "HEALER" end
     local _, class = A.UnitClass(unit)
-    return not isSecret(class) and class and HEALER_CLASS[class] == true or false
+    return not secret.isSecret(class) and class and HEALER_CLASS[class] == true or false
 end
 
 --------------------------------------------------------------------------------
@@ -221,12 +217,12 @@ local function person(unit: string): Person
     local d = PEOPLE[i or 1] or PEOPLE[1]
     if d.you and not d.name then
         local name = UnitName("player")
-        d.name = not isSecret(name) and name or nil
+        d.name = not secret.isSecret(name) and name or nil
         local _, class = UnitClass("player")
-        d.class = not isSecret(class) and class or nil
+        d.class = not secret.isSecret(class) and class or nil
         d.role = SuuUI.Role()
         local max = UnitHealthMax("player")
-        d.max = (not isSecret(max) and max and max > 0) and max or 4200
+        d.max = (not secret.isSecret(max) and max and max > 0) and max or 4200
     end
     return d
 end
@@ -358,7 +354,7 @@ local SECTION = {
 
 local function standDownBlizzard()
     for _, name in ipairs({ "PartyFrame", "CompactPartyFrame" }) do
-        if named(name) then SuuUI.SuppressBlizzard(name) end
+        if tbl.field(_G, name) then SuuUI.SuppressBlizzard(name) end
     end
 end
 
@@ -643,9 +639,9 @@ class PartyFramesModule extends Module<typeof(DEFAULTS)>
         for _, f in ipairs(self.frames) do
             local online = true
             local unit = f.unit
-            if unit and UI.Flag(UnitExists(unit)) then
+            if unit and secret.flag(UnitExists(unit)) then
                 local c = UnitIsConnected(unit)
-                if c ~= nil and not isSecret(c) then online = c and true or false end
+                if c ~= nil and not secret.isSecret(c) then online = c and true or false end
             end
             local auras = f.auras
             if auras then auras.container:SetAlpha(online and 1 or 0) end
@@ -674,7 +670,7 @@ class PartyFramesModule extends Module<typeof(DEFAULTS)>
         -- aggro: a non-tank the enemy is attacking
         local threat = UnitThreatSituation(u)
         local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(u)
-        local aggro = not isSecret(threat) and threat ~= nil and threat >= 2 and not (not isSecret(role) and role == "TANK")
+        local aggro = not secret.isSecret(threat) and threat ~= nil and threat >= 2 and not (not secret.isSecret(role) and role == "TANK")
         f:SetState(aggro and "danger" or nil, aggro and "Aggro" or nil)
     end
 
@@ -724,7 +720,7 @@ class PartyFramesModule extends Module<typeof(DEFAULTS)>
         for _, f in ipairs(self.frames) do
             local unit = f.unit
             local is = unit and UnitExists(unit) and UnitIsUnit(unit, "target")
-            if isSecret(is) then
+            if secret.isSecret(is) then
                 f.selected:SetAlphaFromBoolean(is, 1, 0)
             else
                 f.selected:SetAlpha(is and 1 or 0)
@@ -742,9 +738,9 @@ class PartyFramesModule extends Module<typeof(DEFAULTS)>
                 f:SetAlpha(1)
             else
                 local inRange, checked = UnitInRange(unit)
-                if isSecret(inRange) then
+                if secret.isSecret(inRange) then
                     f:SetAlphaFromBoolean(inRange, 1, far)
-                elseif not isSecret(checked) and checked == false then
+                elseif not secret.isSecret(checked) and checked == false then
                     f:SetAlpha(1)
                 else
                     f:SetAlpha(inRange and 1 or far)

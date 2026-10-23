@@ -94,9 +94,8 @@ local INTERPOLATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.
 
 local POWER_TOKEN: { [string]: string } = { MANA = "mana", RAGE = "rage", ENERGY = "energy", FOCUS = "focus" }
 
--- wowlua:secret's isSecret as a local predicate: an imported one doesn't
+-- wowlua:secret's secret.isSecret as a local predicate: an imported one doesn't
 -- narrow in wowlua 0.9.1 while the project has an import cycle (port notes)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 
 -- nil becomes 0; a secret value passes through untouched (never `v or 0`,
 -- which would test a secret value's truth).
@@ -201,7 +200,7 @@ end
 -- or the secret it is. A colour (never, with these curves) is 0.
 type CurveResult = LuaCurveEvaluatedResult | Secret<LuaCurveEvaluatedResult> | nil
 local function curveAmount(r: CurveResult): number | Secret<number>
-    if isSecret(r) then return r :: Secret<number> end
+    if secret.isSecret(r) then return r :: Secret<number> end
     return type(r) == "number" and r or 0
 end
 
@@ -212,7 +211,7 @@ end
 type Abbreviate = (n: Secret<number>) -> (string | Secret<string>)
 export type ShortNumber = string | Secret<string> | Secret<number>
 local function shortNumber(v: number | Secret<number> | nil, abbreviate: Abbreviate = AbbreviateNumbers): ShortNumber?
-    if isSecret(v) then
+    if secret.isSecret(v) then
         -- the answer is secret too: never tested, only returned
         local ok, text = pcall(abbreviate, v)
         if ok then return text end
@@ -234,7 +233,7 @@ local function isOffline(A: UnitApi, unit: string): boolean
     local connectedFn = A.UnitIsConnected
     if not connectedFn or not uiText.flag(A.UnitIsPlayer(unit)) then return false end
     local connected = connectedFn(unit)
-    return not isSecret(connected) and connected == false
+    return not secret.isSecret(connected) and connected == false
 end
 
 -- The health % (0-100) the engine works out, nil where the client can't.
@@ -300,7 +299,7 @@ local DIFFICULTY_FONTS: string[][] = {
 -- so the word is matched at the end (the prefix holds "Difficult" too).
 type DifficultyColor = (level: number) -> unknown
 local function difficultyColor(level: unknown, getColor: DifficultyColor?): string
-    if level == nil or isSecret(level) or type(level) ~= "number" or level <= 0 then return "quest-impossible" end
+    if level == nil or secret.isSecret(level) or type(level) ~= "number" or level <= 0 then return "quest-impossible" end
     if not getColor then return "quest-standard" end
     local ok, c = pcall(getColor, level)
     local font = ok and type(c) == "table" and (c :: { font?: unknown }).font
@@ -319,7 +318,7 @@ local function metaText(A: UnitApi, u: string): string
     local level = A.UnitLevel(u)
     local classify = A.UnitClassification
     local c = classify and classify(u)
-    if isSecret(level) or isSecret(c) then return "" end
+    if secret.isSecret(level) or secret.isSecret(c) then return "" end
     local lv = (level and level > 0) and tostring(level) or "??"
     if c == "worldboss" then return "?? Boss" end
     local word = c and CLASSIFICATION[c]
@@ -349,7 +348,7 @@ export function showRaidMarker(t: Texture, u: string?, api: UnitApi?)
         return
     end
     local index = markerOf(u)
-    if isSecret(index) then
+    if secret.isSecret(index) then
         local ok = t.SetSpriteSheetCell ~= nil and pcall(t.SetSpriteSheetCell, t, index, 4, 4, 64, 64)
         t:SetShown(ok)
     elseif index and index >= 1 and index <= 8 then
@@ -484,7 +483,7 @@ local function inYourGroup(unit: string, A: GroupApi = GROUP): boolean
     local count = A.GetNumGroupMembers and A.GetNumGroupMembers() or 0
     for i = 1, count do
         local me = A.UnitIsUnit("raid" .. i, "player")
-        if isSecret(me) then return true end
+        if secret.isSecret(me) then return true end
         if me then
             local _, _, mine = A.GetRaidRosterInfo(i)
             return sub == nil or mine == nil or sub == mine
@@ -610,7 +609,7 @@ export function unitStandIn(person: (unit: string) -> StandInPerson): UnitApi
             return c, c
         end,
         UnitName = function(u: string | Secret<string>): (string?, string?)
-            if isSecret(u) then return nil, nil end
+            if secret.isSecret(u) then return nil, nil end
             return person(u).name, nil
         end,
         UnitReaction = function(_: string, _: string): number? return 5 end,
@@ -1026,12 +1025,12 @@ export class UnitFrame extends Button
             if mode ~= "value" then pct = healthPercent(A, u) end
             if mode ~= "percent" then value = shortNumber(cur) end
             -- secret parts go to the engine's own formatting, never through Lua
-            if isSecret(pct) or isSecret(value) then
+            if secret.isSecret(pct) or secret.isSecret(value) then
                 -- (a part that is missing: empty, 0)
                 local shownValue: ShortNumber = ""
-                if isSecret(value) then shownValue = value elseif value then shownValue = value end
+                if secret.isSecret(value) then shownValue = value elseif value then shownValue = value end
                 local shownPct: number | Secret<number> = 0
-                if isSecret(pct) then shownPct = pct elseif pct then shownPct = pct end
+                if secret.isSecret(pct) then shownPct = pct elseif pct then shownPct = pct end
                 if mode == "value" then
                     self.right:SetFormattedText("%s", shownValue)
                 elseif mode == "both" then
@@ -1071,7 +1070,7 @@ export class UnitFrame extends Button
         end
         local pType, token = A.UnitPowerType(u)
         local max = A.UnitPowerMax(u, pType)
-        local shown = isSecret(max) or (max or 0) > 0
+        local shown = secret.isSecret(max) or (max or 0) > 0
         self.power:SetShown(shown)
         self.powerLow:SetShown(shown and token == "MANA")
         if not shown then return end
@@ -1100,7 +1099,7 @@ export class UnitFrame extends Button
         local isPlayer = uiText.flag(A.UnitIsPlayer(u))
         local _, class = A.UnitClass(u)
         local classColor: string? = nil
-        if isPlayer and not isSecret(class) and class then
+        if isPlayer and not secret.isSecret(class) and class then
             classColor = "class-" .. class:lower()
             local colors: { [string]: unknown } = T.color
             if not colors[classColor] then classColor = nil end
@@ -1108,7 +1107,7 @@ export class UnitFrame extends Button
         self.role:Hide()
         self.classDot:Hide()
         local marker: Texture? = nil
-        if not isSecret(role) and role and ROLE_ICON[role] then
+        if not secret.isSecret(role) and role and ROLE_ICON[role] then
             self.role:SetTexture(ROLE_ICON[role])
             draw.paint(self.role, role == "DAMAGER" and "ink-muted" or "ink")
             self.role:Show()
@@ -1130,7 +1129,7 @@ export class UnitFrame extends Button
             self.name:SetColor(classColor)
         else
             local r = A.UnitReaction(u, "player")
-            if isSecret(r) or not r then
+            if secret.isSecret(r) or not r then
                 self.name:SetColor("ink")
             elseif r <= 3 then
                 self.name:SetColor("reaction-hostile")
@@ -1151,20 +1150,20 @@ export class UnitFrame extends Button
         local meta = self.opts.meta
         if meta == "family" then
             local family = A.UnitCreatureFamily(u)
-            self.meta:SetValue((not isSecret(family) and family) or "")
+            self.meta:SetValue((not secret.isSecret(family) and family) or "")
         else
             self.meta:SetValue(meta and metaText(A, u) or "")
             -- the level in its difficulty's colour (a secret one: as it is)
             if meta then
                 local level = A.UnitLevel(u)
-                if not isSecret(level) then self.meta:SetColor(levelColor(level)) end
+                if not secret.isSecret(level) then self.meta:SetColor(levelColor(level)) end
             end
         end
         if self.opts.youWhenPlayer then
             -- "Is it you?" is a secret boolean in combat: the engine sets the
             -- badge's alpha from it. The badge keeps its place either way.
             local isYou = A.UnitIsUnit(u, "player")
-            if isSecret(isYou) then
+            if secret.isSecret(isYou) then
                 self.you:SetAlphaFromBoolean(isYou, 1, 0)
             else
                 self.you:SetAlpha(isYou and 1 or 0)
@@ -1212,8 +1211,8 @@ export class UnitFrame extends Button
         local room = self.row:GetWidth() - x - tailW - endW
         self.name:ClearAllPoints()
         self.name:SetPoint("LEFT", self.row, "LEFT", x, 0)
-        local secretName = isSecret(natural)
-        if isSecret(natural) then
+        local secretName = secret.isSecret(natural)
+        if secret.isSecret(natural) then
             self.name:SetWidth(math.max(1, room))
         elseif natural > room and room > 20 then
             self.name:SetWidth(room)
@@ -1395,9 +1394,9 @@ export class UnitFrame extends Button
                 local up = false
                 for i = 1, 40 do
                     local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, u, i, filter)
-                    if not ok or isSecret(a) or not a then break end
+                    if not ok or secret.isSecret(a) or not a then break end
                     local id = a.spellId
-                    if not isSecret(id) and id and set[id] then up = true break end
+                    if not secret.isSecret(id) and id and set[id] then up = true break end
                 end
                 show = not up
             end

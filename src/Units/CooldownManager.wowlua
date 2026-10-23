@@ -69,9 +69,6 @@ M:Migrate("missing-per-entry", migrations.missingPerEntry)
 M:Migrate("shaman-shields-auto", migrations.shamanShieldsAuto)
 M:Migrate("short-buffs-warn", migrations.shortBuffsWarn)
 
--- (a local predicate: the imported secret.isSecret doesn't narrow in this
--- project, see Docs/port-notes/units-cooldowns.md)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 local _, classFile = UnitClass("player")
 local CLASS: string = secret.known(classFile, "")
 
@@ -378,8 +375,8 @@ local function readLiveTalents()
                     local ei = C_Traits.GetEntryInfo(cfg, entryID)
                     local di = ei and ei.definitionID and C_Traits.GetDefinitionInfo(ei.definitionID)
                     local id = di and (di.spellID or di.overriddenSpellID)
-                    local name = id and not isSecret(id) and C_Spell.GetSpellName(id)
-                    if name and not isSecret(name) and not seen[id] then
+                    local name = id and not secret.isSecret(id) and C_Spell.GetSpellName(id)
+                    if name and not secret.isSecret(name) and not seen[id] then
                         seen[id] = true
                         out[#out + 1] = { id = id, name = name }
                     end
@@ -500,14 +497,14 @@ local function candidates(kind: string)
     if kind == "cooldown" then
         for name, ids in pairs(spellbookByName()) do
             local cd = GetSpellBaseCooldown and GetSpellBaseCooldown(ids[#ids])
-            if byName[name] or (cd and not isSecret(cd) and cd > 0) then add(name, ids) end
+            if byName[name] or (cd and not secret.isSecret(cd) and cd > 0) then add(name, ids) end
         end
     elseif not InCombatLockdown() then
         for _, unit in ipairs({ "player", "target" }) do
             for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
                 for i = 1, 40 do
                     local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
-                    if not ok or isSecret(a) or not a or isSecret(a.spellId) then break end
+                    if not ok or secret.isSecret(a) or not a or secret.isSecret(a.spellId) then break end
                     add(a.name, { a.spellId })
                 end
             end
@@ -523,7 +520,7 @@ end
 local RECENT_MAX = 12
 
 local function remember(kind: string, name: any, id: any)
-    if isSecret(name) or isSecret(id) or not name or not id then return end
+    if secret.isSecret(name) or secret.isSecret(id) or not name or not id then return end
     local all = M:Get("recent")
     local list = Lists.pushRecent(all[CLASS] and all[CLASS][kind] or {}, name, id, RECENT_MAX)
     if not list then return end
@@ -546,9 +543,9 @@ local function rememberAuras()
     for _, scan in ipairs({ { "player", "HELPFUL" }, { "target", "HARMFUL|PLAYER" } }) do
         for i = 1, 40 do
             local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, scan[1], i, scan[2])
-            if not ok or isSecret(a) or not a or isSecret(a.spellId) then break end
+            if not ok or secret.isSecret(a) or not a or secret.isSecret(a.spellId) then break end
             local name = a.name
-            scanned[#scanned + 1] = { name = not isSecret(name) and name or nil, id = a.spellId }
+            scanned[#scanned + 1] = { name = not secret.isSecret(name) and name or nil, id = a.spellId }
         end
     end
     local fresh = Lists.mergeRecent(recent("aura"), scanned, RECENT_MAX)
@@ -561,9 +558,9 @@ end
 
 -- A spell you cast, if it's one of yours with a cooldown (or a preset's).
 local function rememberCast(spellID: any)
-    if isSecret(spellID) or not spellID or not (IsPlayerSpell and IsPlayerSpell(spellID)) then return end
+    if secret.isSecret(spellID) or not spellID or not (IsPlayerSpell and IsPlayerSpell(spellID)) then return end
     local cd = GetSpellBaseCooldown and GetSpellBaseCooldown(spellID)
-    if cd and not isSecret(cd) and cd > 0 then
+    if cd and not secret.isSecret(cd) and cd > 0 then
         remember("cooldown", C_Spell.GetSpellName(spellID), spellID)
     end
 end
@@ -583,7 +580,7 @@ local function spellLookup(query: string): SelectOption<string>[]?
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
     if not id then return nil end
     local name = C_Spell.GetSpellName(id)
-    if isSecret(name) or not name then return nil end
+    if secret.isSecret(name) or not name then return nil end
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id), icon = C_Spell.GetSpellTexture(id) } }
 end
 

@@ -47,9 +47,10 @@ import type Panel from "/UI/Panel"
 import type Position from "/EditMode/EditMode"
 import type ActionBar from "/UI/ActionBar"
 import type ToggleChips from "/UI/Pickers"
-import asFrame, named, part from "/UI/Reskin"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -143,24 +144,24 @@ local KEY_BARS = {
 -- its main bar on every form change, and EnableMouse there is a blocked call
 -- (it stays off from the first pass out of combat anyway).
 local function noMouse(given: unknown)
-    local f = asFrame(given)
+    local f = frames.asFrame(given)
     if not f then return end
     if not f:IsMouseEnabled() then return end
     if InCombatLockdown() and f:IsProtected() then return end
     f:EnableMouse(false)
     -- (not on every client's frames)
-    if part(f, "EnableMouseClicks") then f:EnableMouseClicks(false) end
-    if part(f, "EnableMouseMotion") then f:EnableMouseMotion(false) end
+    if tbl.field(f, "EnableMouseClicks") then f:EnableMouseClicks(false) end
+    if tbl.field(f, "EnableMouseMotion") then f:EnableMouseMotion(false) end
 end
 
 -- Its buttons: no events, no mouse, and Blizzard's own pass hides them.
 local function quietButtons(prefix: string)
     for i = 1, 12 do
-        local b = asFrame(named(prefix .. i))
+        local b = frames.find(prefix .. i)
         if b then
             b:UnregisterAllEvents()
             noMouse(b)
-            if part(b, "SetAttributeNoHandler") then b:SetAttributeNoHandler("statehidden", true) end
+            if tbl.field(b, "SetAttributeNoHandler") then b:SetAttributeNoHandler("statehidden", true) end
         end
     end
 end
@@ -169,23 +170,23 @@ end
 -- addon code taints Edit Mode's next combat show).
 local function fadeMainBar(bar: Frame)
     local function hideSelection(owner: unknown)
-        local selection = asFrame(part(owner, "Selection"))
+        local selection = frames.asFrame(tbl.field(owner, "Selection"))
         if selection then selection:SetAlpha(0); noMouse(selection) end
     end
     local function silence(self: Frame)
         self:SetAlpha(0)
         noMouse(self)
-        local pager = part(self, "ActionBarPageNumber")
+        local pager = tbl.field(self, "ActionBarPageNumber")
         if pager then
             noMouse(pager)
-            noMouse(part(pager, "UpButton"))
-            noMouse(part(pager, "DownButton"))
+            noMouse(tbl.field(pager, "UpButton"))
+            noMouse(tbl.field(pager, "DownButton"))
         end
         -- Forever's end caps are Edit Mode systems with their own overlays.
-        local caps = part(self, "EndCaps")
+        local caps = tbl.field(self, "EndCaps")
         if caps then
-            hideSelection(part(caps, "LeftEndCap"))
-            hideSelection(part(caps, "RightEndCap"))
+            hideSelection(tbl.field(caps, "LeftEndCap"))
+            hideSelection(tbl.field(caps, "RightEndCap"))
         end
         hideSelection(self)
     end
@@ -218,7 +219,7 @@ local function standDownBlizzard()
     end
     -- the game's fly-in for a newly learned spell aims at its own bars:
     -- SuuUI's button pops instead (UI/ActionBar.wowlua)
-    local intro = asFrame(named("IconIntroTracker"))
+    local intro = frames.find("IconIntroTracker")
     if intro then
         intro:UnregisterEvent("SPELL_PUSHED_TO_ACTIONBAR")
         intro:UnregisterEvent("SPELL_PUSHED_TO_FLYOUT_ON_ACTIONBAR")
@@ -226,13 +227,13 @@ local function standDownBlizzard()
     local extras = { { "StanceBar", "StanceButton" }, { "PetActionBar", "PetActionButton" } }
     if M:Get("showTotem") then extras[#extras + 1] = { "MultiCastActionBarFrame", "MultiCastActionButton" } end
     for _, extra in ipairs(extras) do
-        if named(extra[1]) then
+        if tbl.field(_G, extra[1]) then
             SuuUI.SuppressBlizzard(extra[1], { noHide = true })
             quietButtons(extra[2])
         end
     end
     for _, def in ipairs(BARS) do
-        local frame = asFrame(named(def.blizzard))
+        local frame = frames.find(def.blizzard)
         if frame then
             if def.id == 1 then
                 fadeMainBar(frame)

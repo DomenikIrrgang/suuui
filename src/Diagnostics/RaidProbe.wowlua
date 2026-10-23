@@ -31,6 +31,7 @@ import name as addonName, print from "/Core/Init"
 import * as apiDocs from "/Diagnostics/ApiDocs"
 import isSecret from "wowlua:secret"
 import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
 
 -- a raid member as the roster reads them, a move a test makes, a call it runs
 type Entry = { index: number, name: string, group: number, me: boolean }
@@ -62,7 +63,6 @@ local function every(fn: any, ...: any): (string, number)
     return table.concat(parts, ", "), n
 end
 
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 local function out(): Record
     DB.probe.raid = DB.probe.raid or {}
@@ -78,18 +78,18 @@ local FUNCTIONS = { "SetRaidSubgroup", "SwapRaidSubgroup", "ConvertToRaid", "Con
 -- The roster
 --------------------------------------------------------------------------------
 
--- The roster as plain values (members whose name or group is secret are
+-- The roster as secret.readable values (members whose name or group is secret are
 -- left out), and how many are in each group.
 local function roster(): (Entry[], number[])
     local list: Entry[], counts: number[] = {}, {}
     for g = 1, GROUPS do counts[g] = 0 end
     local n = call(GetNumGroupMembers)
-    if not (type(n) == "number" and plain(n)) then return list, counts end
+    if not (type(n) == "number" and secret.readable(n)) then return list, counts end
     for i = 1, n do
         local name, _, group = call(GetRaidRosterInfo, i)
-        if type(name) == "string" and plain(name) and type(group) == "number" and plain(group) then
+        if type(name) == "string" and secret.readable(name) and type(group) == "number" and secret.readable(group) then
             local okMe, me = pcall(UnitIsUnit, "raid" .. i, "player")
-            list[#list + 1] = { index = i, name = name, group = group, me = okMe and plain(me) and (me :: any) == true }
+            list[#list + 1] = { index = i, name = name, group = group, me = okMe and secret.readable(me) and (me :: any) == true }
             counts[group] = (counts[group] or 0) + 1
         end
     end
@@ -119,7 +119,7 @@ local function snapshot(): Record
     end
     -- every return of GetRaidRosterInfo, so the planner knows what it has
     local n = call(GetNumGroupMembers)
-    if type(n) == "number" and plain(n) and call(IsInRaid) == true then
+    if type(n) == "number" and secret.readable(n) and call(IsInRaid) == true then
         for i = 1, n do
             local text, count = every(GetRaidRosterInfo, i)
             s.roster[i] = ("raid%d: %d returns: %s; role %s"):format(i, count, text,
@@ -357,18 +357,18 @@ local function talentsOf(unit: string): Record
             s.groups = show(groups)
         end
         local nodes = call(C_Traits.GetTreeNodes, treeID)
-        local ranked, total, secret = 0, 0, 0
+        local ranked, total, secrets = 0, 0, 0
         if type(nodes) == "table" then
             for _, nodeID in ipairs(nodes :: any[]) do
                 local ni = call(C_Traits.GetNodeInfo, INSPECT_CONFIG, nodeID)
                 if type(ni) == "table" then
                     total = total + 1
                     local r = ni.activeRank or ni.currentRank
-                    if isSecret(r) then secret = secret + 1 elseif type(r) == "number" and r > 0 then ranked = ranked + 1 end
+                    if isSecret(r) then secrets = secrets + 1 elseif type(r) == "number" and r > 0 then ranked = ranked + 1 end
                 end
             end
         end
-        s.nodes = ("%d nodes, %d with ranks, %d secret"):format(total, ranked, secret)
+        s.nodes = ("%d nodes, %d with ranks, %d secret"):format(total, ranked, secrets)
     end
     return s
 end
@@ -377,7 +377,7 @@ inspectReady = function(guid: any)
     local t = inspecting
     if not t then return end
     local okG, target = pcall(UnitGUID, t.unit)
-    if not (okG and plain(target) and plain(guid) and (target :: any) == guid) then
+    if not (okG and secret.readable(target) and secret.readable(guid) and (target :: any) == guid) then
         t.otherReady = (t.otherReady or 0) + 1
         return
     end

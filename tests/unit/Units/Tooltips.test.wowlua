@@ -11,34 +11,35 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M from "/Units/Tooltips"
 import expectNoErrors from "../../helpers"
-import asFrame, asFontString, asStatusBar, named, part from "/UI/Reskin"
 import type Color from "/Core/Tokens"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 -- GameTooltip's text lines, by side and number.
-local function textLeft(i: number): FontString? return asFontString(named("GameTooltipTextLeft" .. i)) end
-local function textRight(i: number): FontString? return asFontString(named("GameTooltipTextRight" .. i)) end
+local function textLeft(i: number): FontString? return frames.asFontString(tbl.field(_G, "GameTooltipTextLeft" .. i)) end
+local function textRight(i: number): FontString? return frames.asFontString(tbl.field(_G, "GameTooltipTextRight" .. i)) end
 
 -- The game's default anchor, as an ownerless tooltip gets it.
 local function defaultAnchor()
-    local set = named("GameTooltip_SetDefaultAnchor")
+    local set = tbl.field(_G, "GameTooltip_SetDefaultAnchor")
     assert(type(set) == "function")
     ;(set :: (tooltip: GameTooltip, parent: Frame) -> ())(GameTooltip, UIParent)
 end
 
 -- The game's unit menu for yourself, opened; every open menu closed.
 local function openUnitMenu()
-    local mgr = named("UnitPopupManager")
-    local open = part(mgr, "OpenMenu")
+    local mgr = tbl.field(_G, "UnitPopupManager")
+    local open = tbl.field(mgr, "OpenMenu")
     assert(type(open) == "function")
     ;(open :: (mgr: unknown, which: string, context: { unit: string }) -> ())(mgr, "SELF", { unit = "player" })
 end
 local function closeMenus()
-    local get = part(named("Menu"), "GetManager")
+    local get = tbl.field(tbl.field(_G, "Menu"), "GetManager")
     assert(type(get) == "function")
     local manager = (get :: () -> unknown)()
-    local close = part(manager, "CloseMenus")
+    local close = tbl.field(manager, "CloseMenus")
     assert(type(close) == "function")
     ;(close :: (manager: unknown) -> ())(manager)
 end
@@ -84,7 +85,7 @@ end
 @test("Blizzard's tooltips skinned, at SuuUI's scale")
 local function skinned()
     for _, name in ipairs({ "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1" }) do
-        expect(UI.IsTooltipSkinned(assert(asFrame(named(name))))).toBe(true)
+        expect(UI.IsTooltipSkinned(assert(frames.find(name)))).toBe(true)
     end
     local want = SuuUI.Root:GetEffectiveScale() / UIParent:GetEffectiveScale()
     expect(GameTooltip:GetScale()).toBeCloseTo(want)
@@ -136,7 +137,7 @@ end
 
 @test("the health bar keeps the unit fill whatever the game colours it")
 local function healthBar()
-    local bar = assert(asStatusBar(named("GameTooltipStatusBar")))
+    local bar = assert(frames.asStatusBar(tbl.field(_G, "GameTooltipStatusBar")))
     bar:SetStatusBarColor(1, 0, 0)
     local r, g, b = bar:GetStatusBarColor()
     local fr, fg, fb = UI.RGBA("unit-fill")
@@ -272,7 +273,7 @@ end
 local function auraTooltip()
     local said: string[] = {}
     mock.stub(M, "Print", function(_: unknown, text: string) said[#said + 1] = text end)
-    local inbound = named("AuraContainerInbound")
+    local inbound = tbl.field(_G, "AuraContainerInbound")
     if type(inbound) == "table" then
         mock.stub(inbound, "SetTooltipBackdrop", function(_: unknown) error("not now") end)
         M:StyleAuraTooltip()

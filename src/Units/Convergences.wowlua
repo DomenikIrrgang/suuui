@@ -31,6 +31,7 @@ import Module from "/Core/Modules"
 import after from "wowlua:timer"
 import type TooltipData, TooltipLine from "/UI/Tooltip"
 import type MapPinData from "/UI/MapPin"
+import * as secret from "wowlua:secret"
 
 local DEFAULTS = { send = true, receive = true, minimap = true }
 
@@ -39,7 +40,6 @@ local M: ConvergencesModule
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not issecretvalue(v) end
 
 -- A convergence, as saved (see the header).
 export type Spot = { map: number, x: number, y: number, by?: string, at?: number, from?: string, confirmed?: boolean, seed?: boolean }
@@ -90,9 +90,9 @@ local function worldOf(spot: Spot): World?
         w = false
         if C_Map.GetWorldPosFromMapPos and CreateVector2D then
             local ok, continent, pos = pcall(C_Map.GetWorldPosFromMapPos, spot.map, CreateVector2D(spot.x, spot.y))
-            if ok and plain(continent) and pos then
+            if ok and secret.readable(continent) and pos then
                 local n, wv = pos:GetXY()
-                if plain(n) and plain(wv) then w = { continent = continent, north = n, west = wv } end
+                if secret.readable(n) and secret.readable(wv) then w = { continent = continent, north = n, west = wv } end
             end
         end
         worldCache[spot] = w
@@ -110,7 +110,7 @@ local function yards(a: Spot, b: Spot): number?
     end
     if a.map ~= b.map then return nil end
     local ok, w, h = pcall(C_Map.GetMapWorldSize, a.map)
-    if not (ok and plain(w) and plain(h) and w > 0 and h > 0) then return nil end
+    if not (ok and secret.readable(w) and secret.readable(h) and w > 0 and h > 0) then return nil end
     local dx, dy = (a.x - b.x) * w, (a.y - b.y) * h
     return math.sqrt(dx * dx + dy * dy)
 end
@@ -144,7 +144,7 @@ local function blessing(): AuraData | false | nil
         if InCombatLockdown() then return false end
         return nil
     end
-    if not (plain(a.expirationTime) and plain(a.duration)) then return false end
+    if not (secret.readable(a.expirationTime) and secret.readable(a.duration)) then return false end
     return a
 end
 
@@ -167,9 +167,9 @@ end
 --------------------------------------------------------------------------------
 
 local function groupChannel(): string?
-    if UI.Flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then return "INSTANCE_CHAT" end
-    if UI.Flag(IsInRaid()) then return "RAID" end
-    if UI.Flag(IsInGroup()) then return "PARTY" end
+    if secret.flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then return "INSTANCE_CHAT" end
+    if secret.flag(IsInRaid()) then return "RAID" end
+    if secret.flag(IsInGroup()) then return "PARTY" end
 end
 
 -- (names can't break the message: no tabs, newlines or escapes)
@@ -291,9 +291,9 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
     -- Skyborne: by race, or by Skysight in the spellbook.
     function IsSkyborne(): boolean
         local _, _, race = UnitRace("player")
-        if plain(race) and SKYBORNE_RACES[race] then return true end
+        if secret.readable(race) and SKYBORNE_RACES[race] then return true end
         local ok, known = pcall(IsPlayerSpell, SKYSIGHT)
-        return ok and plain(known) and known == true
+        return ok and secret.readable(known) and known == true
     end
 
     -- Whether this character sees them (Skyborne, the module on).
@@ -324,7 +324,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
         local ok, onMap, pos = pcall(C_Map.GetMapPosFromWorldPos, w.continent, CreateVector2D(w.north, w.west), mapID)
         if not (ok and onMap == mapID and pos) then return nil, nil end
         local x, y = pos:GetXY()
-        if plain(x) and plain(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 then return x, y end
+        if secret.readable(x) and secret.readable(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 then return x, y end
         return nil, nil
     end
 
@@ -350,11 +350,11 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
 
     function OnCast()
         local map = C_Map.GetBestMapForUnit("player")
-        if not plain(map) then return end
+        if not secret.readable(map) then return end
         local pos = C_Map.GetPlayerMapPosition(map, "player")
         local x: number?, y: number? = nil, nil
         if pos then x, y = pos:GetXY() end
-        if not (plain(x) and plain(y)) then return end
+        if not (secret.readable(x) and secret.readable(y)) then return end
         self.pending = { map = map, x = x, y = y, cast = GetTime() }
         after(0.5, function() self:Resolve() end)
     end
@@ -383,7 +383,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
             return
         end
         local name = UnitName("player")
-        local spot = self:Add({ map = here.map, x = here.x, y = here.y, by = plain(name) and name or nil, at = time(), confirmed = true })
+        local spot = self:Add({ map = here.map, x = here.x, y = here.y, by = secret.readable(name) and name or nil, at = time(), confirmed = true })
         self:Send(spot)
         if self:Shown() then
             SuuUI.Notify({ id = "suu:convergence:found", kind = "timed", category = "Skysight",
@@ -397,7 +397,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
         local list: string[] = {}
         local g = groupChannel()
         if g then list[#list + 1] = g end
-        if UI.Flag(IsInGuild()) then list[#list + 1] = "GUILD" end
+        if secret.flag(IsInGuild()) then list[#list + 1] = "GUILD" end
         return list
     end
 
@@ -419,7 +419,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
 
     -- A spot from someone else's SuuUI: untrusted, so checked before it's kept.
     function OnMessage(prefix: unknown, text: unknown, channel: unknown, sender: unknown)
-        if prefix ~= PREFIX or not (plain(text) and plain(sender)) or type(text) ~= "string" or type(sender) ~= "string" then return end
+        if prefix ~= PREFIX or not (secret.readable(text) and secret.readable(sender)) or type(text) ~= "string" or type(sender) ~= "string" then return end
         local tag, version, mapText, xText, yText, byText, atText = strsplit("\t", text)
         if tag ~= TAG or version ~= "1" or not self:Get("receive") or fromMe(sender) then return end
         local map, x, y, at = tonumber(mapText), tonumber(xText), tonumber(yText), tonumber(atText)
@@ -480,14 +480,14 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
         local mm = Minimap
         if not (mm and C_Minimap and C_Minimap.GetViewRadius) then return {} end
         local okP, north, west, _, instance = pcall(UnitPosition, "player")
-        if not (okP and plain(north) and plain(west) and plain(instance)) then return {} end
+        if not (okP and secret.readable(north) and secret.readable(west) and secret.readable(instance)) then return {} end
         local range = C_Minimap.GetViewRadius()
-        if not (plain(range) and range > 0) then return {} end
+        if not (secret.readable(range) and range > 0) then return {} end
         local half = mm:GetWidth() / 2
         local turn = 0
         if GetCVar("rotateMinimap") == "1" and GetPlayerFacing then
             local f = GetPlayerFacing()
-            if plain(f) then turn = -f end
+            if secret.readable(f) then turn = -f end
         end
         local out: Place[] = {}
         for _, spot in ipairs(self:Spots()) do
@@ -556,7 +556,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
         self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
         self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", { "player" }, function(_, _, _, spellID)
-            if plain(spellID) and spellID == SKYSIGHT then self:OnCast() end
+            if secret.readable(spellID) and spellID == SKYSIGHT then self:OnCast() end
         end)
         self:OnUnitEvent("UNIT_AURA", { "player" }, function()
             readBlessing(self)

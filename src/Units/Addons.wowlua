@@ -8,7 +8,7 @@
 -- "Enables on reload" / "Disables on reload" on what changed), a suite's
 -- modules under it, folded or not; a row opens to its notes, author, memory
 -- and what it needs. The foot counts the changes: Cancel, and Reload to
--- apply. Every C_AddOns call is free (/suu probe windows, 2026-10-17);
+-- apply. Every C_AddOns errors.try is free (/suu probe windows, 2026-10-17);
 -- the game's AddonList is closed and this one opens instead.
 -- A built-in module written against the public API only.
 
@@ -21,11 +21,12 @@ import type Select from "/UI/Select"
 import type Text from "/UI/Text"
 import type Border from "/UI/Draw"
 import type Panel from "/UI/Panel"
-import asFrame, named from "/UI/Reskin"
 import known from "wowlua:secret"
-import isSecret from "wowlua:secret"
 import hookScript from "wowlua:hooks"
 import every from "wowlua:timer"
+import * as errors from "wowlua:errors"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -33,19 +34,6 @@ local S = T.space
 local DEFAULTS = {}
 
 local M: AddonsModule
-
--- (secrecy tested first: comparing a secret is an error in strict mode)
-local function plain(v: unknown): v is string | number | boolean | table return not isSecret(v) and v ~= nil end
--- One of the game's functions, if it has it: its results as they come (read
--- each with `str` or `num`), nothing when it fails.
-local function call(fn: unknown, ...: unknown): ...unknown
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h = pcall(fn :: (...unknown) -> ...unknown, ...)
-    if ok then return a, b, c, d, e, f, g, h end
-    return nil
-end
-local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
-local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
 
 local WIDTH, HEIGHT = 820, 640
 local LINE_H, MODULE_H = 36, 30
@@ -63,7 +51,7 @@ local STATUS: { [string]: string[] } = {
 
 -- "1.2 MB", "340 KB"
 local function memory(given: unknown): string?
-    local kb = num(given)
+    local kb = secret.asNumber(given)
     if not kb or kb <= 0 then return nil end
     if kb >= 1024 then return ("%.1f MB"):format(kb / 1024) end
     return ("%d KB"):format(math.floor(kb + 0.5))
@@ -273,35 +261,35 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
 
     -- the character the toggles are for: this one, or nil for all
     function Character(): string?
-        return self.perChar and str(UnitGUID("player")) or nil
+        return self.perChar and secret.asString(UnitGUID("player")) or nil
     end
 
     function Enabled(i: number): boolean
-        return (num(call(A.GetAddOnEnableState, i, self:Character())) or 0) > 0
+        return (secret.asNumber(errors.try(A.GetAddOnEnableState, i, self:Character())) or 0) > 0
     end
 
     -- Every addon, its suite's modules after it.
     function Collect(): Addon[]
-        local n = num(call(A.GetNumAddOns)) or 0
+        local n = secret.asNumber(errors.try(A.GetNumAddOns)) or 0
         local byName: { [string]: Addon }, list: Addon[] = {}, {}
         for i = 1, n do
-            local nameR, titleR, notesR, _, reason = call(A.GetAddOnInfo, i)
-            local name = str(nameR)
+            local nameR, titleR, notesR, _, reason = errors.try(A.GetAddOnInfo, i)
+            local name = secret.asString(nameR)
             if name then
                 local deps: string[] = {}
-                for _, d in ipairs({ call(A.GetAddOnDependencies, i) }) do
+                for _, d in ipairs({ errors.try(A.GetAddOnDependencies, i) }) do
                     if type(d) == "string" then deps[#deps + 1] = d end
                 end
-                local title = str(titleR)
+                local title = secret.asString(titleR)
                 local shownTitle, iconPath = splitIcon(title and title ~= "" and title or name)
                 local icon: AddonIcon? = iconPath
                 if not icon then
-                    local tex = str(call(A.GetAddOnMetadata, i, "IconTexture"))
-                    local atlas = str(call(A.GetAddOnMetadata, i, "IconAtlas"))
+                    local tex = secret.asString(errors.try(A.GetAddOnMetadata, i, "IconTexture"))
+                    local atlas = secret.asString(errors.try(A.GetAddOnMetadata, i, "IconAtlas"))
                     if tex and tex ~= "" then icon = tonumber(tex) or tex
                     elseif atlas and atlas ~= "" then icon = { atlas = atlas } end
                 end
-                local e: Addon = { index = i, name = name, title = shownTitle, icon = icon, notes = str(notesR),
+                local e: Addon = { index = i, name = name, title = shownTitle, icon = icon, notes = secret.asString(notesR),
                     reason = reason, deps = deps }
                 byName[name] = e
                 list[#list + 1] = e
@@ -334,14 +322,14 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
     end
 
     function Status(e: Addon): string
-        if call(A.IsAddOnLoaded, e.index) then return "loaded" end
-        local _, reason: unknown = call(A.IsAddOnLoadable, e.index, self:Character())
+        if errors.try(A.IsAddOnLoaded, e.index) then return "loaded" end
+        local _, reason: unknown = errors.try(A.IsAddOnLoadable, e.index, self:Character())
         if reason == "INTERFACE_VERSION" then return "outdated" end
         if reason == "MISSING" or reason == "DEP_MISSING" or reason == "DEP_DISABLED" or reason == "DEP_INTERFACE_VERSION" then
             return self:Enabled(e.index) and "dependency" or "disabled"
         end
         if not self:Enabled(e.index) then return "disabled" end
-        if call(A.IsAddOnLoadOnDemand, e.index) then return "lod" end
+        if errors.try(A.IsAddOnLoadOnDemand, e.index) then return "lod" end
         return "waiting"
     end
 
@@ -350,7 +338,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         local start: { [number]: boolean } = {}
         for _, e in ipairs(self.addons) do start[e.index] = self:Enabled(e.index) end
         self.start = start
-        self.startCheck = call(A.IsAddonVersionCheckEnabled)
+        self.startCheck = errors.try(A.IsAddonVersionCheckEnabled)
     end
 
     function Changes(): number
@@ -358,7 +346,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         for _, e in ipairs(self.addons) do
             if self:Enabled(e.index) ~= self.start[e.index] then n = n + 1 end
         end
-        if call(A.IsAddonVersionCheckEnabled) ~= self.startCheck then n = n + 1 end
+        if errors.try(A.IsAddonVersionCheckEnabled) ~= self.startCheck then n = n + 1 end
         return n
     end
 
@@ -377,9 +365,9 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         w:HookScript("OnHide", function()
             self:PlaceReload()
             if self.saving then return end
-            call(A.ResetAddOns)
-            if self.startCheck ~= nil and call(A.IsAddonVersionCheckEnabled) ~= self.startCheck then
-                call(A.SetAddonVersionCheck, self.startCheck)
+            errors.try(A.ResetAddOns)
+            if self.startCheck ~= nil and errors.try(A.IsAddonVersionCheckEnabled) ~= self.startCheck then
+                errors.try(A.SetAddonVersionCheck, self.startCheck)
             end
         end)
         self.window = w
@@ -399,14 +387,14 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         self.who = who
         who:SetPoint("LEFT")
         local disable = UI.Button(bar, { text = "Disable all", onClick = function()
-            call(A.DisableAllAddOns, self:Character())
+            errors.try(A.DisableAllAddOns, self:Character())
             -- SuuUI stays: the window you're in
-            call(A.EnableAddOn, "SuuUI", self:Character())
+            errors.try(A.EnableAddOn, "SuuUI", self:Character())
             self:Draw()
         end })
         disable:SetPoint("RIGHT")
         local enable = UI.Button(bar, { text = "Enable all", onClick = function()
-            call(A.EnableAllAddOns, self:Character())
+            errors.try(A.EnableAllAddOns, self:Character())
             self:Draw()
         end })
         enable:SetPoint("RIGHT", disable, "LEFT", -S["space-4"], 0)
@@ -449,7 +437,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         sub:SetPoint("TOPRIGHT", perf, "BOTTOMRIGHT", 0, -S["space-4"])
         sub:SetHeight(20)
         local outdated = UI.Toggle(sub, { onChange = function(on: boolean)
-            call(A.SetAddonVersionCheck, not on)
+            errors.try(A.SetAddonVersionCheck, not on)
             self:Draw()
         end })
         self.outdated = outdated
@@ -509,7 +497,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
             over:SetScript("OnLeave", function() assert(apply:GetScript("OnLeave"))(apply) end)
             over:SetScript("PreClick", function()
                 self.saving = true
-                call(A.SaveAddOns)
+                errors.try(A.SaveAddOns)
             end)
             self.reloadOver = over
         end
@@ -527,28 +515,28 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
 
     function SetEnabled(e: Addon?, on: boolean)
         if not e then return end
-        if on then call(A.EnableAddOn, e.index, self:Character()) else call(A.DisableAddOn, e.index, self:Character()) end
+        if on then errors.try(A.EnableAddOn, e.index, self:Character()) else errors.try(A.DisableAddOn, e.index, self:Character()) end
         self:Draw()
     end
 
     function DrawPerf()
-        call(UpdateAddOnMemoryUsage)
+        errors.try(UpdateAddOnMemoryUsage)
         local total, enabled = 0, 0
         for _, e in ipairs(self.addons) do
-            e.memory = call(GetAddOnMemoryUsage, e.index)
-            local kb = num(e.memory)
+            e.memory = errors.try(GetAddOnMemoryUsage, e.index)
+            local kb = secret.asNumber(e.memory)
             if kb then total = total + kb end
             if self:Enabled(e.index) then enabled = enabled + 1 end
         end
         assert(self.memText):SetValue(memory(total) or "0 KB")
         local P, metric = C_AddOnProfiler, Enum.AddOnProfilerMetric and Enum.AddOnProfilerMetric.RecentAverageTime
         local cpu: number?, top: Addon? = nil, nil
-        if P and metric and call(P.IsEnabled) then
-            local app, overall = num(call(P.GetApplicationMetric, metric)), num(call(P.GetOverallMetric, metric))
+        if P and metric and errors.try(P.IsEnabled) then
+            local app, overall = secret.asNumber(errors.try(P.GetApplicationMetric, metric)), secret.asNumber(errors.try(P.GetOverallMetric, metric))
             if app and overall and app > 0 then cpu = overall / app * 100 end
             local best = 0
             for _, e in ipairs(self.addons) do
-                local v = num(call(P.GetAddOnMetric, e.name, metric))
+                local v = secret.asNumber(errors.try(P.GetAddOnMetric, e.name, metric))
                 if v and v > best then best, top = v, e end
             end
         end
@@ -562,7 +550,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         if not (w and w:IsShown()) then return end
         -- (built with the window)
         local list, none, changes, apply, close = assert(self.list), assert(self.none), assert(self.changes), assert(self.apply), assert(self.close)
-        assert(self.outdated):SetValue(not call(A.IsAddonVersionCheckEnabled))
+        assert(self.outdated):SetValue(not errors.try(A.IsAddonVersionCheckEnabled))
         local query = strtrim(assert(self.search):GetValue() or ""):lower()
         -- what shows: matches (and their suites); a folded suite hides its modules
         local shown: { [Addon]: boolean } = {}
@@ -644,7 +632,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         r.title:ClearAllPoints()
         r.title:SetPoint("LEFT", r.icon, "RIGHT", S["space-4"], 0)
         r.title:SetValue(e.title)
-        local version = str(call(A.GetAddOnMetadata, e.index, "Version"))
+        local version = secret.asString(errors.try(A.GetAddOnMetadata, e.index, "Version"))
         local subText: string[] = {}
         if suite and children then subText[#subText + 1] = #children .. " modules" end
         if version and version ~= "" then subText[#subText + 1] = version end
@@ -662,7 +650,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         if open then
             r.notes:SetValue(e.notes or "No notes.")
             local facts: string[] = {}
-            local author = str(call(A.GetAddOnMetadata, e.index, "Author"))
+            local author = secret.asString(errors.try(A.GetAddOnMetadata, e.index, "Author"))
             if author and author ~= "" then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "By|r " .. author end
             local mem = memory(e.memory)
             if mem then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "Memory|r " .. mem end
@@ -671,7 +659,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
             r.facts:SetValue(table.concat(facts, "      "))
             local deps: string[] = {}
             for _, d in ipairs(e.deps) do
-                local exists = call(A.DoesAddOnExist, d)
+                local exists = errors.try(A.DoesAddOnExist, d)
                 deps[#deps + 1] = exists == false and ("|cff" .. T.color["ember-text"].hex .. d .. " · missing|r") or d
             end
             r.deps:ClearAllPoints()
@@ -707,7 +695,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         if not self.window then self:Build() end
-        local list = asFrame(named("AddonList"))
+        local list = frames.find("AddonList")
         if list and not self.hooked then
             self.hooked = true
             hookScript(list, "OnShow", function()

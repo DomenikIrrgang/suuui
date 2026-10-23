@@ -35,6 +35,8 @@ import type ObjectiveTracker, QuestRow, TrackerQuest, TrackerObjective from "/UI
 import type TooltipSource from "/UI/Tooltip"
 import type Position from "/EditMode/EditMode"
 import after from "wowlua:timer"
+import * as errors from "wowlua:errors"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -55,24 +57,8 @@ local DEFAULTS = {
 local M: ObjectiveTrackerModule
 
 local WIDTH = 260
-local isSecret = issecretvalue or function(_: unknown): boolean return false end
-local function plain(v: unknown): boolean return v ~= nil and not isSecret(v) end
 
--- A call that may fail or not exist: its results, or nothing.
-local function call(fn: unknown, ...: unknown): ...unknown
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h, i, j = pcall(fn :: (...unknown) -> ...unknown, ...)
-    if ok then return a, b, c, d, e, f, g, h, i, j end
-    return nil
-end
-local function str(v: unknown): string?
-    if type(v) == "string" and not isSecret(v) then return v end
-    return nil
-end
-local function num(v: unknown): number?
-    if type(v) == "number" and not isSecret(v) then return v end
-    return nil
-end
+-- A errors.try that may fail or not exist: its results, or nothing.
 
 -- A tracked quest's usable item.
 export type QuestItem = { link: string, icon?: number | string, charges: number }
@@ -105,9 +91,9 @@ local DIFFICULTY_FONTS: { font: string, token: string }[] = {
     { font = "Trivial", token = "trivial" },
 }
 local function difficultyOf(level: number): string
-    if not (plain(level) and GetQuestDifficultyColor) then return "standard" end
-    local c = call(GetQuestDifficultyColor, level)
-    local font = type(c) == "table" and str((c :: { font: unknown }).font)
+    if not (secret.readable(level) and GetQuestDifficultyColor) then return "standard" end
+    local c = errors.try(GetQuestDifficultyColor, level)
+    local font = type(c) == "table" and secret.asString((c :: { font: unknown }).font)
     if not font then return "standard" end
     for _, d in ipairs(DIFFICULTY_FONTS) do
         if font:find(d.font, 1, true) then return d.token end
@@ -129,9 +115,9 @@ local function objectivesOf(questID: number): TrackerObjective[]
     local ok, list = pcall(C_QuestLog.GetQuestObjectives, questID)
     if not ok or type(list) ~= "table" then return out end
     for _, o in ipairs(list) do
-        local text = plain(o.text) and o.text or ""
+        local text = secret.readable(o.text) and o.text or ""
         local shown, count = splitObjective(text)
-        out[#out + 1] = { text = shown, progress = count, done = plain(o.finished) and o.finished == true }
+        out[#out + 1] = { text = shown, progress = count, done = secret.readable(o.finished) and o.finished == true }
     end
     return out
 end
@@ -139,7 +125,7 @@ end
 -- One tracked quest as the tracker draws it (nil: not in the log).
 local function questOf(questID: number): Quest?
     local logIndex = C_QuestLog.GetLogIndexForQuestID(questID)
-    if not plain(logIndex) or not logIndex then return nil end
+    if not secret.readable(logIndex) or not logIndex then return nil end
     local info = C_QuestLog.GetInfo(logIndex)
     if type(info) ~= "table" or info.isHeader or info.isHidden then return nil end
     local complete = C_QuestLog.IsComplete(questID) or C_QuestLog.ReadyForTurnIn(questID)
@@ -147,22 +133,22 @@ local function questOf(questID: number): Quest?
     local q: Quest = {
         questID = questID,
         logIndex = logIndex,
-        title = plain(info.title) and info.title or "",
+        title = secret.readable(info.title) and info.title or "",
         difficulty = difficultyOf(info.difficultyLevel or info.level),
-        complete = plain(complete) and complete == true,
-        failed = plain(failed) and failed == true,
+        complete = secret.readable(complete) and complete == true,
+        failed = secret.readable(failed) and failed == true,
     }
     if not q.complete then q.objectives = objectivesOf(questID) end
     -- a quest with nothing to count, not complete (rare): its text instead
     if q.complete then
-        local text = str(call(GetQuestLogCompletionText, logIndex))
+        local text = secret.asString(errors.try(GetQuestLogCompletionText, logIndex))
         if text and text ~= "" then q.tooltip = { title = q.title, description = text } end
     end
     -- its usable item
     if GetQuestLogSpecialItemInfo then
         local ok, link, icon, charges, showWhenComplete = pcall(GetQuestLogSpecialItemInfo, logIndex)
-        if ok and plain(link) and link and (not q.complete or showWhenComplete) then
-            q.item = { link = link, icon = icon, charges = plain(charges) and charges or 0 }
+        if ok and secret.readable(link) and link and (not q.complete or showWhenComplete) then
+            q.item = { link = link, icon = icon, charges = secret.readable(charges) and charges or 0 }
         end
     end
     return q
@@ -172,7 +158,7 @@ end
 -- class or "Dungeon").
 local function zoneOf(questID: number, logIndex: number): string?
     local header: number? = C_QuestLog.GetHeaderIndexForQuest and C_QuestLog.GetHeaderIndexForQuest(questID)
-    if not (plain(header) and header) then
+    if not (secret.readable(header) and header) then
         -- walk up the log to the heading above
         for i = logIndex - 1, 1, -1 do
             local info = C_QuestLog.GetInfo(i)
@@ -180,14 +166,14 @@ local function zoneOf(questID: number, logIndex: number): string?
         end
     end
     local info = header and C_QuestLog.GetInfo(header)
-    return type(info) == "table" and plain(info.title) and info.title or nil
+    return type(info) == "table" and secret.readable(info.title) and info.title or nil
 end
 
 -- How far a quest is (squared), when it's on your continent; nil otherwise.
 local function distanceOf(questID: number): number?
     if not C_QuestLog.GetDistanceSqToQuest then return nil end
     local ok, d, onContinent = pcall(C_QuestLog.GetDistanceSqToQuest, questID)
-    if ok and plain(d) and d and plain(onContinent) and onContinent then return d end
+    if ok and secret.readable(d) and d and secret.readable(onContinent) and onContinent then return d end
     return nil
 end
 
@@ -195,11 +181,11 @@ end
 local function hereNames(): { [string]: boolean }
     local here: { [string]: boolean } = {}
     for _, name in ipairs({ GetRealZoneText and GetRealZoneText(), GetZoneText and GetZoneText() }) do
-        if plain(name) and name ~= "" then here[name] = true end
+        if secret.readable(name) and name ~= "" then here[name] = true end
     end
     local map = C_Map.GetBestMapForUnit("player")
-    local info = plain(map) and map and C_Map.GetMapInfo(map) or nil
-    if info and plain(info.name) then here[info.name] = true end
+    local info = secret.readable(map) and map and C_Map.GetMapInfo(map) or nil
+    if info and secret.readable(info.name) then here[info.name] = true end
     return here
 end
 
@@ -269,7 +255,7 @@ export class QuestItemButton extends ActionButton
         local ok, start, duration = pcall(GetQuestLogSpecialItemCooldown, logIndex)
         if ok and start and duration then
             pcall(self.cooldown.SetCooldown, self.cooldown, start, duration)
-            local on = plain(duration) and duration > 1.5
+            local on = secret.readable(duration) and duration > 1.5
             self.coolingDown = on and true or false
         else
             self.cooldown:Clear()
@@ -371,15 +357,15 @@ local QUALITY: { [number]: string } = { [0] = "quality-poor", "ink", "quality-un
 -- an action bar would; the Professions window then chooses the recipe. A
 -- right click on it is SuuUI's menu. In combat the rows take the clicks.
 local function recipeSkillLine(recipeID: number): number?
-    local line, _, parent = call(C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
-    local p = num(parent)
-    return (p and p ~= 0) and p or num(line)
+    local line, _, parent = errors.try(C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
+    local p = secret.asNumber(parent)
+    return (p and p ~= 0) and p or secret.asNumber(line)
 end
 
 -- Its profession open in the Professions window, ready.
 local function professionShown(line: number?): boolean
     local ok, base = pcall(C_TradeSkillUI.GetBaseProfessionInfo)
-    return ok and type(base) == "table" and base.professionID == line and call(C_TradeSkillUI.IsTradeSkillReady) and true or false
+    return ok and type(base) == "table" and base.professionID == line and errors.try(C_TradeSkillUI.IsTradeSkillReady) and true or false
 end
 
 -- The secure button over a tracked recipe's row: a cast opens its profession.
@@ -502,10 +488,10 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     function TrackedQuests(): Quest[]
         local list: Quest[] = {}
         local n = C_QuestLog.GetNumQuestWatches()
-        if not plain(n) then return list end
+        if not secret.readable(n) then return list end
         for i = 1, n do
             local id = C_QuestLog.GetQuestIDForQuestWatchIndex(i)
-            if plain(id) and id then
+            if secret.readable(id) and id then
                 local q = questOf(id)
                 if q then
                     q.zone = zoneOf(id, q.logIndex)
@@ -568,7 +554,7 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
             local b = self.itemButtons[i]
             local logIndex = b.logIndex
             if logIndex and IsQuestLogSpecialItemInRange then
-                b:SetSuggested(num(call(IsQuestLogSpecialItemInRange, logIndex)) == 1)
+                b:SetSuggested(secret.asNumber(errors.try(IsQuestLogSpecialItemInRange, logIndex)) == 1)
             end
         end
     end
@@ -613,13 +599,13 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     function QuestClick(questID: number, button: string, row: QuestRow)
         if button == "LeftButton" then
-            call(QuestMapFrame_OpenToQuestDetails, questID)
+            errors.try(QuestMapFrame_OpenToQuestDetails, questID)
             return
         end
         -- SuuUI's menu, in the tooltip's look (asked for in game)
         UI.ContextMenuFrom(row, function(_, root)
             local title = C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(questID)
-            if plain(title) and title then root:CreateTitle(title) end
+            if secret.readable(title) and title then root:CreateTitle(title) end
             if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
                 local focused = C_SuperTrack.GetSuperTrackedQuestID and C_SuperTrack.GetSuperTrackedQuestID() == questID
                 root:CreateButton(focused and "Stop focusing" or "Focus", function()
@@ -627,14 +613,14 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                 end)
             end
             local pushable = C_QuestLog.IsPushableQuest and C_QuestLog.IsPushableQuest(questID)
-            if plain(pushable) and pushable and IsInGroup() and QuestLogPushQuest then
+            if secret.readable(pushable) and pushable and IsInGroup() and QuestLogPushQuest then
                 root:CreateButton("Share", function()
                     if C_QuestLog.SetSelectedQuest then C_QuestLog.SetSelectedQuest(questID) end
                     pcall(QuestLogPushQuest)
                 end)
             end
             root:CreateButton("Open in quest log", function()
-                call(QuestMapFrame_OpenToQuestDetails, questID)
+                errors.try(QuestMapFrame_OpenToQuestDetails, questID)
             end)
             root:CreateButton("Stop tracking", function()
                 pcall(C_QuestLog.RemoveQuestWatch, questID)
@@ -659,9 +645,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                 local product = sch.outputItemID
                 local name: string?, quality: number?, icon: number | string | nil = nil, nil, nil
                 if product then
-                    local n, _, q, _, _, _, _, _, _, ic = call(C_Item.GetItemInfo, product)
-                    name, quality, icon = str(n), num(q), num(ic)
-                    if not name then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, product) end
+                    local n, _, q, _, _, _, _, _, _, ic = errors.try(C_Item.GetItemInfo, product)
+                    name, quality, icon = secret.asString(n), secret.asNumber(q), secret.asNumber(ic)
+                    if not name then self.waitingItems = true; errors.try(C_Item.RequestLoadItemDataByID, product) end
                 end
                 local can = math.huge
                 for _, slot in ipairs(sch.reagentSlotSchematics or {}) do
@@ -669,9 +655,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                     local itemID = reagent and reagent.itemID
                     if itemID and slot.required ~= false then
                         local need = slot.quantityRequired or 1
-                        local have = num(call(C_Item.GetItemCount, itemID)) or 0
-                        local rName = str(call(C_Item.GetItemNameByID, itemID))
-                        if not rName then self.waitingItems = true; call(C_Item.RequestLoadItemDataByID, itemID) end
+                        local have = secret.asNumber(errors.try(C_Item.GetItemCount, itemID)) or 0
+                        local rName = secret.asString(errors.try(C_Item.GetItemNameByID, itemID))
+                        if not rName then self.waitingItems = true; errors.try(C_Item.RequestLoadItemDataByID, itemID) end
                         objectives[#objectives + 1] = { text = rName or "…", progress = math.min(have, need) .. "/" .. need,
                                                         done = have >= need }
                         can = math.min(can, math.floor(have / math.max(1, need)))
@@ -681,9 +667,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                 out[#out + 1] = {
                     questID = id,
                     objectives = objectives,
-                    title = name or str(sch.name) or ("Recipe " .. id),
+                    title = name or secret.asString(sch.name) or ("Recipe " .. id),
                     color = QUALITY[quality or 1] or "ink",
-                    icon = icon or num(call(C_Spell.GetSpellTexture, id)) or 134400,
+                    icon = icon or secret.asNumber(errors.try(C_Spell.GetSpellTexture, id)) or 134400,
                     complete = can > 0,
                     turnIn = "Ready to craft",
                     count = can > 0 and ("×" .. can) or nil,
@@ -891,7 +877,7 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("QUEST_ACCEPTED", function(_: unknown, a: unknown, b: unknown)
             if not self:Get("autoTrack") then return end
             -- (questLogIndex, questID) on older clients, (questID) on newer ones
-            local questID = num(b or a)
+            local questID = secret.asNumber(b or a)
             if not (questID and C_QuestLog.AddQuestWatch) then return end
             local watched = C_QuestLog.GetQuestWatchType and C_QuestLog.GetQuestWatchType(questID)
             if watched == nil then pcall(C_QuestLog.AddQuestWatch, questID) end

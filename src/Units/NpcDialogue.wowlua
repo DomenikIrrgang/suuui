@@ -27,6 +27,7 @@
 import SuuUI from "/Core/API"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -42,8 +43,6 @@ local M = SuuUI.RegisterModule({
     },
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i = pcall(fn, ...)
@@ -90,7 +89,7 @@ local EQUIP_SLOTS = {
 
 local function itemLevel(link: string?): number?
     local lvl = link and call(C_Item.GetDetailedItemLevelInfo, link)
-    return plain(lvl) and lvl or nil
+    return secret.readable(lvl) and lvl or nil
 end
 
 -- Whether an item would raise the item level of what you wear there.
@@ -425,14 +424,14 @@ end
 function M:DrawSpeaker()
     local unit = UnitExists("npc") and "npc" or nil
     local name = unit and UnitName(unit)
-    self.plate.name:SetValue(plain(name) and name or "")
+    self.plate.name:SetValue(secret.readable(name) and name or "")
     -- the role: the tooltip's line under the name (Weapons Merchant), unless
     -- it's the level line
     local role
     local info = unit and C_TooltipInfo and C_TooltipInfo.GetUnit and call(C_TooltipInfo.GetUnit, unit)
     local line = info and info.lines and info.lines[2]
     local text = line and line.leftText
-    if plain(text) and text ~= "" and not text:find("^" .. (LEVEL or "Level")) then role = text end
+    if secret.readable(text) and text ~= "" and not text:find("^" .. (LEVEL or "Level")) then role = text end
     self.plate.role:SetValue(role or "")
     self.plate:SetHeight(S["space-2"] * 2 + 20 + (role and (T.type.caption.lineHeight + 1) or 0))
     local hostile = unit and UnitCanAttack("player", unit)
@@ -440,8 +439,8 @@ function M:DrawSpeaker()
     local m = self.portrait.model
     -- a new speaker only: setting the unit again restarts the model
     local guid = unit and UnitGUID(unit)
-    if unit and (not plain(guid) or (guid :: any) ~= self.speakerGUID) then
-        self.speakerGUID = plain(guid) and guid or nil
+    if unit and (not secret.readable(guid) or (guid :: any) ~= self.speakerGUID) then
+        self.speakerGUID = secret.readable(guid) and guid or nil
         self.talking = nil
         m:ClearModel()
         m:SetUnit(unit)
@@ -587,8 +586,8 @@ end
 local function questItem(kind: string, i: number): Card
     local name, icon, count, quality, _, itemID = GetQuestItemInfo(kind, i)
     local link = GetQuestItemLink(kind, i)
-    return { kind = kind, index = i, name = plain(name) and name or nil, icon = icon, count = (count or 0) > 1 and count or nil,
-        quality = quality, itemID = itemID, link = plain(link) and link or nil }
+    return { kind = kind, index = i, name = secret.readable(name) and name or nil, icon = icon, count = (count or 0) > 1 and count or nil,
+        quality = quality, itemID = itemID, link = secret.readable(link) and link or nil }
 end
 
 -- The rewards: what to choose from, what comes anyway, money and experience.
@@ -749,7 +748,7 @@ function M:Draw()
         qhead:SetPoint("TOPLEFT", 0, 0)
         qhead:SetWidth(width)
         qhead.title:SetValue(qtitle)
-        qhead.level:SetValue((plain(qlevel) and qlevel > 0) and ("Level " .. qlevel) or "")
+        qhead.level:SetValue((secret.readable(qlevel) and qlevel > 0) and ("Level " .. qlevel) or "")
         y = y + qhead:GetHeight() + gap
     end
     -- the line

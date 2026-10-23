@@ -7,10 +7,8 @@
 
 import * as secret from "wowlua:secret"
 
-local isSecret = secret.isSecret
 -- a value that is there and not secret (narrows: no longer nil or Secret)
 type Plain = string | number | boolean | table
-local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
 
 export const WAVE = 6            -- moves sent at once, on separate slots
 export const WAVE_TIMEOUT = 4    -- s for a wave's moves to land
@@ -120,7 +118,7 @@ export function conjured(id: any): boolean
     local mark = ITEM_CONJURED or "Conjured Item"
     for _, line in ipairs(data.lines) do
         local t = line.leftText
-        if plain(t) and t == mark then return true end
+        if secret.readable(t) and t == mark then return true end
     end
     return false
 end
@@ -130,19 +128,19 @@ end
 local itemCache: { [any]: any } = {}
 export function itemOf(info: any): SortItem
     local id, link = info.itemID, info.hyperlink
-    local key = plain(link) and link or id
+    local key = secret.readable(link) and link or id
     local d = itemCache[key]
     if not d then
-        d = { id = id, link = plain(link) and link or nil }
+        d = { id = id, link = secret.readable(link) and link or nil }
         local name, _, quality, level, _, _, _, maxStack, equipLoc, _, price, classID, subclassID, _, _, _, reagent =
             C_Item.GetItemInfo(d.link or id)
         if name then
             d.name, d.quality, d.level, d.maxStack, d.equipLoc = name, quality, level, maxStack, equipLoc
-            d.price, d.conjured = plain(price) and price or 0, conjured(id)
+            d.price, d.conjured = secret.readable(price) and price or 0, conjured(id)
             d.classID, d.subclassID, d.reagent = classID, subclassID, reagent and true or false
             if d.link and C_Item.GetDetailedItemLevelInfo then
                 local ok, effective = pcall(C_Item.GetDetailedItemLevelInfo, d.link)
-                if ok and plain(effective) and type(effective) == "number" then d.level = effective end
+                if ok and secret.readable(effective) and type(effective) == "number" then d.level = effective end
             end
             itemCache[key] = d
         else
@@ -152,12 +150,12 @@ export function itemOf(info: any): SortItem
         end
         if C_Item.GetItemFamily then
             local ok, fam = pcall(C_Item.GetItemFamily, id)
-            if ok and plain(fam) then d.family = fam end
+            if ok and secret.readable(fam) then d.family = fam end
         end
     end
-    local count = plain(info.stackCount) and info.stackCount or 1
+    local count = secret.readable(info.stackCount) and info.stackCount or 1
     local quality = d.quality
-    if quality == nil and plain(info.quality) then quality = info.quality end
+    if quality == nil and secret.readable(info.quality) then quality = info.quality end
     return setmetatable({ count = count, quality = quality }, { __index = d })
 end
 

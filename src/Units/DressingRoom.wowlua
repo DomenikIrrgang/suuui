@@ -9,7 +9,7 @@
 -- and stays shown but out of sight; its model scene (the game's own camera,
 -- drag to turn, wheel to zoom) moves onto SuuUI's stage, so whatever the
 -- game dresses shows here. Outfits are the game's custom sets: every
--- C_TransmogCollection call used takes plain arguments only
+-- C_TransmogCollection errors.try used takes secret.readable arguments only
 -- (SecretArguments=AllowedWhenUntainted; nothing here is protected,
 -- /suu probe windows, 2026-10-17).
 -- A built-in module written against the public API only.
@@ -21,11 +21,15 @@ import type WindowFrame, Panel, ScrollArea from "/UI/Panel"
 import type Select, SelectOption from "/UI/Select"
 import type ItemSlot from "/UI/Inventory"
 import type ModelStage from "/UI/Stage"
-import asFrame, asButton, named, part from "/UI/Reskin"
 import type Text from "/UI/Text"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import type AwayHandle from "wowlua:frames"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -34,24 +38,15 @@ local DEFAULTS = {}
 
 local M: DressingRoomModule
 
-local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
 -- One of the game's functions, if it has it: its results as they come (read
--- each with `str` or `num`), nothing when it fails.
-local function call(fn: unknown, ...: unknown): ...unknown
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h, i = pcall(fn :: (...unknown) -> ...unknown, ...)
-    if ok then return a, b, c, d, e, f, g, h, i end
-    return nil
-end
-local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
-local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
+-- each with `secret.asString` or `secret.asNumber`), nothing when it fails.
 
 local WIDTH, HEIGHT = 900, 640
 local LIST_W = 300
 local BAR_H = 26
 local ROW_H = 36
 local TC = C_TransmogCollection
-local NONE: number = num(part(part(Constants, "Transmog"), "NoTransmogID")) or 0
+local NONE: number = secret.asNumber(tbl.field(tbl.field(Constants, "Transmog"), "NoTransmogID")) or 0
 local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 -- the pieces, top to bottom: armour as the Character window reads it, then
@@ -68,23 +63,23 @@ local SLOTS: SlotRow[] = {
 -- The game's dressing room
 --------------------------------------------------------------------------------
 
-local function dressUp(): Frame? return asFrame(named("DressUpFrame")) end
+local function dressUp(): Frame? return frames.find("DressUpFrame") end
 
 local function scene(): Frame?
-    return asFrame(part(dressUp(), "ModelScene"))
+    return frames.asFrame(tbl.field(dressUp(), "ModelScene"))
 end
 
 -- The scene's player actor (the doll).
 local function actor(): unknown
     local s = scene()
-    return s and call(part(s, "GetPlayerActor"), s)
+    return s and errors.try(tbl.field(s, "GetPlayerActor"), s)
 end
 
 -- What the doll wears now, by slot.
 type Worn = { [number]: ItemTransmogInfo }
 local function wornList(): Worn?
     local a = actor()
-    local list = a and call(part(a, "GetItemTransmogInfoList"), a)
+    local list = a and errors.try(tbl.field(a, "GetItemTransmogInfoList"), a)
     if type(list) == "table" then return list :: Worn end
     return nil
 end
@@ -94,14 +89,14 @@ local function yours(slotID: number): number?
     if ItemLocation and C_Item.GetCurrentItemTransmogInfo then
         local loc = ItemLocation:CreateFromEquipmentSlot(slotID)
         if loc and loc:IsValid() then
-            local appearance = num(part(call(C_Item.GetCurrentItemTransmogInfo, loc), "appearanceID"))
+            local appearance = secret.asNumber(tbl.field(errors.try(C_Item.GetCurrentItemTransmogInfo, loc), "appearanceID"))
             if appearance then return appearance end
         end
     end
     local link = GetInventoryItemLink("player", slotID)
     if link then
-        local _, source = call(TC.GetItemInfo, link)
-        return num(source)
+        local _, source = errors.try(TC.GetItemInfo, link)
+        return secret.asNumber(source)
     end
     return NONE
 end
@@ -113,19 +108,19 @@ type Piece = { name?: string, quality?: number, icon?: number, itemID?: number, 
 local function piece(sourceID: number): Piece
     local ok, info = pcall(TC.GetSourceInfo, sourceID)
     if not ok or isSecret(info) then info = nil end
-    local name = info and str(info.name)
+    local name = info and secret.asString(info.name)
     local itemID = info and info.itemID
-    local src = call(TC.GetAppearanceSourceInfo, sourceID)
-    if not name and itemID then name = str(C_Item.GetItemNameByID(itemID)) end
+    local src = errors.try(TC.GetAppearanceSourceInfo, sourceID)
+    if not name and itemID then name = secret.asString(C_Item.GetItemNameByID(itemID)) end
     return {
-        name = name, quality = info and info.quality, icon = num(call(TC.GetSourceIcon, sourceID)),
-        itemID = itemID, link = str(part(src, "itemLink")),
+        name = name, quality = info and info.quality, icon = secret.asNumber(errors.try(TC.GetSourceIcon, sourceID)),
+        itemID = itemID, link = secret.asString(tbl.field(src, "itemLink")),
     }
 end
 
 -- An outfit's name (nil: none, or unreadable).
 local function outfitName(id: number): string?
-    return str((call(TC.GetCustomSetInfo, id)))
+    return secret.asString((errors.try(TC.GetCustomSetInfo, id)))
 end
 
 --------------------------------------------------------------------------------
@@ -298,7 +293,7 @@ local function outfitOptions(ids: number[], nameOf: (id: number) -> unknown): Se
     local byName: { value: number, label: string }[] = {}
     for _, id in ipairs(ids) do
         local name = nameOf(id)
-        byName[#byName + 1] = { value = id, label = plain(name) and type(name) == "string" and name or ("Outfit " .. id) }
+        byName[#byName + 1] = { value = id, label = secret.readable(name) and type(name) == "string" and name or ("Outfit " .. id) }
     end
     table.sort(byName, function(a: { value: number, label: string }, b: { value: number, label: string }): boolean
         return a.label:lower() < b.label:lower()
@@ -321,9 +316,9 @@ local function countText(n: number): string return n == 1 and "1 piece" or (n ..
 -- A link's kind and its first option's number ("item", 12345).
 local function linkParts(link: string): (string?, number?)
     local ok: boolean, kind: unknown, opts: unknown = pcall(LinkUtil.ExtractLink, link)
-    if not ok or type(opts) ~= "string" then return str(kind), nil end
+    if not ok or type(opts) ~= "string" then return secret.asString(kind), nil end
     local okSplit: boolean, first: unknown = pcall(LinkUtil.SplitLinkOptions, opts)
-    return str(kind), okSplit and tonumber(first) or nil
+    return secret.asString(kind), okSplit and tonumber(first) or nil
 end
 
 --------------------------------------------------------------------------------
@@ -342,7 +337,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
     link: SuuButton? = nil
     list: PieceList? = nil
     outfit: Select<number>? = nil
-    placing: boolean? = nil
+    away: AwayHandle? = nil
     queued: boolean? = nil
     reset: SuuButton? = nil
     rows: PieceRow[] = {}
@@ -433,7 +428,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         close:SetPoint("RIGHT")
         local undress = UI.Button(foot, { text = "Undress", onClick = function()
             local a = actor()
-            if a then call(part(a, "Undress"), a) end
+            if a then errors.try(tbl.field(a, "Undress"), a) end
             PlaySound(SOUNDKIT.GS_TITLE_OPTION_OK)
         end })
         self.undress = undress
@@ -456,7 +451,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         s:SetPoint("BOTTOMRIGHT", stage, "BOTTOMRIGHT", -1, 1)
         s:SetFrameLevel(stage:GetFrameLevel() + 2)
         for _, r in ipairs({ s:GetRegions() }) do r:SetAlpha(0) end
-        local ctl = asFrame(part(s, "ControlFrame"))
+        local ctl = frames.asFrame(tbl.field(s, "ControlFrame"))
         if ctl then
             ctl:SetAlpha(0)
             hookScript(ctl, "OnShow", function(c: Frame) c:Hide() end)
@@ -465,11 +460,11 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
 
     function TakeOff(slotID: number?)
         local a = actor()
-        if a and slotID then call(part(a, "UndressSlot"), a, slotID) end
+        if a and slotID then errors.try(tbl.field(a, "UndressSlot"), a, slotID) end
     end
 
     function ResetDoll()
-        local resetButton = asButton(part(dressUp(), "ResetButton"))
+        local resetButton = frames.asButton(tbl.field(dressUp(), "ResetButton"))
         if resetButton then resetButton:Click() end
         assert(self.outfit):SetValue(nil)
         self.chosen = nil
@@ -504,7 +499,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         if not now then return end
         local chosen = self.chosen
         if chosen then
-            call(TC.ModifyCustomSet, chosen, now)
+            errors.try(TC.ModifyCustomSet, chosen, now)
             self:Draw()
             return
         end
@@ -512,7 +507,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
             confirm = "Save", onConfirm = function(given: string?)
                 local name = strtrim(given or "")
                 if name == "" then return end
-                if call(TC.IsValidCustomSetName, name) == false then
+                if errors.try(TC.IsValidCustomSetName, name) == false then
                     UI.Confirm({ title = "Choose another name", text = "That name can't be used for an outfit.", confirm = "OK" })
                     return
                 end
@@ -521,11 +516,11 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
                 for _, s in ipairs(SLOTS) do
                     local info = now[s.id]
                     if info and info.appearanceID ~= NONE then
-                        icon = num(call(TC.GetSourceIcon, info.appearanceID))
+                        icon = secret.asNumber(errors.try(TC.GetSourceIcon, info.appearanceID))
                         if icon then break end
                     end
                 end
-                local id = num(call(TC.NewCustomSet, name, icon or 134400, now))
+                local id = secret.asNumber(errors.try(TC.NewCustomSet, name, icon or 134400, now))
                 if id then self.chosen = id end
                 self:Draw()
             end })
@@ -537,7 +532,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         local name = outfitName(id) or "this outfit"
         UI.Confirm({ title = "Delete " .. name .. "?", text = "The outfit is gone for good; the doll keeps what it wears.",
             confirm = "Delete", onConfirm = function()
-                call(TC.DeleteCustomSet, id)
+                errors.try(TC.DeleteCustomSet, id)
                 self.chosen = nil
                 self:Draw()
             end })
@@ -545,11 +540,11 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
 
     function Link()
         local now = wornList()
-        local link = now and str(call(TC.GetCustomSetHyperlinkFromItemTransmogInfoList, now))
+        local link = now and secret.asString(errors.try(TC.GetCustomSetHyperlinkFromItemTransmogInfoList, now))
         if not link then return end
-        local insert, open = part(ChatFrameUtil, "InsertLink"), part(ChatFrameUtil, "OpenChat")
-        if type(insert) ~= "function" then insert, open = named("ChatEdit_InsertLink"), named("ChatFrame_OpenChat") end
-        if not call(insert, link) then call(open, link) end
+        local insert, open = tbl.field(ChatFrameUtil, "InsertLink"), tbl.field(ChatFrameUtil, "OpenChat")
+        if type(insert) ~= "function" then insert, open = tbl.field(_G, "ChatEdit_InsertLink"), tbl.field(_G, "ChatFrame_OpenChat") end
+        if not errors.try(insert, link) then errors.try(open, link) end
     end
 
     function DrawOutfits()
@@ -566,7 +561,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         local chosen = self.chosen
         -- changed: "Unsaved outfit", Save on
         outfit:SetValue((chosen and not dirty) and chosen or nil)
-        local full = #options >= (num(call(TC.GetNumMaxCustomSets)) or 999)
+        local full = #options >= (secret.asNumber(errors.try(TC.GetNumMaxCustomSets)) or 999)
         local why = saveWhy(chosen, dirty, full)
         save:SetEnabledState(why == nil)
         save.tooltip = { title = chosen and "Save" or "Save as a new outfit", description = why
@@ -584,7 +579,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         for _, s in ipairs(SLOTS) do
             local info = now[s.id]
             local source = info and info.appearanceID
-            if source and plain(source) and source ~= NONE then
+            if source and secret.readable(source) and source ~= NONE then
                 used = used + 1
                 local r = self.rows[used] or self:BuildRow(c)
                 self.rows[used] = r
@@ -615,22 +610,22 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
     function DrawCard(mode: string)
         local card = assert(self.card)
         local f = dressUp()
-        local link = str(call(part(f, "GetLastLink"), f))
+        local link = secret.asString(errors.try(tbl.field(f, "GetLastLink"), f))
         local name: string?, icon: number?, collected: boolean?, quality: number? = nil, nil, nil, nil
         if mode == "mount" then
             card.head:SetValue("Mount")
             local kind: string?, linkID: number? = nil, nil
             if link then kind, linkID = linkParts(link) end
             local id: number? = nil
-            if kind == "item" then id = num(call(C_MountJournal.GetMountFromItem, linkID))
-            elseif kind == "spell" or kind == "mount" then id = num(call(C_MountJournal.GetMountFromSpell, linkID)) end
+            if kind == "item" then id = secret.asNumber(errors.try(C_MountJournal.GetMountFromItem, linkID))
+            elseif kind == "spell" or kind == "mount" then id = secret.asNumber(errors.try(C_MountJournal.GetMountFromSpell, linkID)) end
             if id then
                 local ok, mountName, _, mountIcon, _, _, _, _, _, _, _, isCollected = pcall(C_MountJournal.GetMountInfoByID, id)
-                if ok then name, icon, collected = str(mountName), num(mountIcon), isCollected end
+                if ok then name, icon, collected = secret.asString(mountName), secret.asNumber(mountIcon), isCollected end
             end
             if link and kind == "item" and linkID then
                 local _, _, q = C_Item.GetItemInfo(link)
-                quality = num(q)
+                quality = secret.asNumber(q)
             end
             card.note:SetValue("Ctrl-click armour to go back to your outfit.")
             card.open:Show()
@@ -655,7 +650,7 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         local bar, list, card, stage = assert(self.bar), assert(self.list), assert(self.card), assert(self.stage)
         local reset, undress, hint = assert(self.reset), assert(self.undress), assert(self.hint)
         local f = dressUp()
-        local mode = str(call(part(f, "GetMode"), f)) or "player"
+        local mode = secret.asString(errors.try(tbl.field(f, "GetMode"), f)) or "player"
         local player = mode == "player"
         bar:SetShown(player)
         list:SetShown(player)
@@ -686,15 +681,6 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
-    -- The game's window out of sight: see-through and off screen, still shown.
-    function PutAway(frame: Frame)
-        if not self:IsEnabled() then return end
-        self.placing = true
-        frame:SetAlpha(0)
-        frame:ClearAllPoints()
-        frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-        self.placing = false
-    end
 
     -- The window, while it's open.
     function Open(): WindowFrame?
@@ -708,14 +694,13 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         if not f or self.hooked then return end
         self.hooked = true
         self:Borrow()
-        hook(f, "SetPoint", function() if not self.placing then after(0, function() self:PutAway(f) end) end end)
-        hook(f, "SetAlpha", function(_: Frame, a: number) if not self.placing and a ~= 0 then after(0, function() self:PutAway(f) end) end end)
+        -- the game's window out of sight while the module is on: see-through
+        -- and off screen, still shown
+        self.away = frames.keepAway(f, { fade = true, when = function(): boolean return self:IsEnabled() end })
         hookScript(f, "OnShow", function()
             if not self:IsEnabled() then return end
-            self:PutAway(f)
-            after(0, function() self:PutAway(f) end)
             -- the game's side panels stay closed (their lists are SuuUI's now)
-            local details = asFrame(part(f, "CustomSetDetailsPanel"))
+            local details = frames.asFrame(tbl.field(f, "CustomSetDetailsPanel"))
             if details then details:Hide() end
             assert(self.window):Show()
             self:QueueDraw()
@@ -726,8 +711,8 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         end)
         -- what the doll wears changed, or what it shows (player, mount, pet)
         -- (the game's frame by its declared type: the dressing room's mixin)
-        if part(f, "OnDressModel") then hook(DressUpFrame, "OnDressModel", function() self:QueueDraw() end) end
-        if part(f, "SetMode") then hook(DressUpFrame, "SetMode", function() self:QueueDraw() end) end
+        if tbl.field(f, "OnDressModel") then hook(DressUpFrame, "OnDressModel", function() self:QueueDraw() end) end
+        if tbl.field(f, "SetMode") then hook(DressUpFrame, "SetMode", function() self:QueueDraw() end) end
     end
 
     override function OnEnable()

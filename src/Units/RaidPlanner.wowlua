@@ -52,12 +52,7 @@ M:Migrate("graceOfAir", function(values)
     if type(t) == "table" and t.earth and t.graceOfAir == nil then t.graceOfAir = true end
 end)
 
--- wowlua:secret's test, as a predicate of this file's own (0.9.1 narrows
--- nothing through an imported predicate while the project has an import
--- cycle; Docs/port-notes/units-group.md)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 type Readable = string | number | boolean | table | function
-local function plain(v: unknown): v is Readable return v ~= nil and not isSecret(v) end
 
 local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
@@ -576,11 +571,11 @@ end
 -- Whether you're in a raid now: IsInRaid, else (should it read false or
 -- secret while you are in one) your own index in the raid.
 local function inRaidNow()
-    if UI.Flag(IsInRaid()) then return true end
+    if secret.flag(IsInRaid()) then return true end
     local n = call(GetNumGroupMembers)
-    if not (plain(n) and type(n) == "number" and n > 0) then return false end
+    if not (secret.readable(n) and type(n) == "number" and n > 0) then return false end
     local index = call(UnitInRaid, "player")
-    return plain(index) and index ~= nil
+    return secret.readable(index) and index ~= nil
 end
 
 -- Decides once whether you're in a raid (self.inRaid): the roster, the
@@ -598,17 +593,17 @@ function M:ReadRoster()
     local me
     for i = 1, GetNumGroupMembers() do
         local name, rank, group, _, _, file, _, online, _, _, _, combatRole = call(GetRaidRosterInfo, i)
-        if plain(name) and name and plain(file) and file and plain(group) and group then
+        if secret.readable(name) and name and secret.readable(file) and file and secret.readable(group) and group then
             local unit = "raid" .. i
-            local role = plain(combatRole) and combatRole ~= "NONE" and combatRole ~= "" and combatRole or nil
+            local role = secret.readable(combatRole) and combatRole ~= "NONE" and combatRole ~= "" and combatRole or nil
             if not role then
                 local r = call(UnitGroupRolesAssigned, unit)
-                role = plain(r) and r ~= "NONE" and r or nil
+                role = secret.readable(r) and r ~= "NONE" and r or nil
             end
-            local you = UI.Flag(UnitIsUnit(unit, "player"))
+            local you = secret.flag(UnitIsUnit(unit, "player"))
             local m = { index = i, unit = unit, name = name, key = key(name), class = file, group = group,
-                online = plain(online) and online and true or false, you = you, role = role,
-                lead = plain(rank) and rank == 2, assist = plain(rank) and rank == 1 }
+                online = secret.readable(online) and online and true or false, you = you, role = role,
+                lead = secret.readable(rank) and rank == 2, assist = secret.readable(rank) and rank == 1 }
             m.tree = self:KnownTree(name, you)
             out[#out + 1] = m
             byKey[m.key] = m
@@ -763,7 +758,7 @@ end
 -- inspect config, as the Talents window reads it); else the spec ID's name.
 local function treeByName(class: string, name: any): number?
     local c = CLASS[class]
-    if not (c and plain(name) and type(name) == "string") then return nil end
+    if not (c and secret.readable(name) and type(name) == "string") then return nil end
     local n = name:lower()
     for t, spec in ipairs(c.specs) do
         local s = spec:lower()
@@ -797,7 +792,7 @@ function M:NoteTreeIcons(class: string, displays: any)
     for _, d in ipairs(displays :: any[]) do
         local tree = type(d) == "table" and treeByName(class, d.displayName)
         local icon = tree and d.icon
-        if plain(icon) and ((type(icon) == "number" and icon > 0 and icon ~= QUESTION_MARK) or (type(icon) == "string" and icon ~= "")) then
+        if secret.readable(icon) and ((type(icon) == "number" and icon > 0 and icon ~= QUESTION_MARK) or (type(icon) == "string" and icon ~= "")) then
             icons[class] = icons[class] or {}
             icons[class][tree] = icon
         end
@@ -810,10 +805,10 @@ function M:NoteOwnTreeIcons()
     local _, class = UnitClass("player")
     local traits = C_Traits or {}
     local cfg = C_ClassTalents and call(C_ClassTalents.GetActiveConfigID)
-    if not plain(cfg) or not cfg then return end
+    if not secret.readable(cfg) or not cfg then return end
     local info = call(traits.GetConfigInfo, cfg)
     local treeID = type(info) == "table" and info.treeIDs and info.treeIDs[1]
-    if not (plain(treeID) and treeID) then return end
+    if not (secret.readable(treeID) and treeID) then return end
     local displays = call(traits.GetGroupDisplayInfoByTreeID, treeID)
     if type(displays) == "table" and #displays > 0 then
         self.ownIconsRead = true
@@ -826,7 +821,7 @@ function M:InspectedTree(unit: string, class: string): number?
     local traits = C_Traits or {}
     local info = call(traits.GetConfigInfo, INSPECT_CONFIG)
     local treeID = type(info) == "table" and info.treeIDs and info.treeIDs[1]
-    if plain(treeID) and treeID then
+    if secret.readable(treeID) and treeID then
         local ids, names = {}, {}
         local displays = call(traits.GetGroupDisplayInfoByTreeID, treeID)
         for i, d in ipairs((type(displays) == "table" and displays or {}) :: any[]) do
@@ -838,7 +833,7 @@ function M:InspectedTree(unit: string, class: string): number?
         for _, g in ipairs((type(groups) == "table" and groups or {}) :: any[]) do
             local c = g.currencyInfos and g.currencyInfos[1]
             local spent = c and c.spent
-            if plain(spent) and type(spent) == "number" and spent > (bestSpent or 0) then
+            if secret.readable(spent) and type(spent) == "number" and spent > (bestSpent or 0) then
                 best, bestSpent = names[g.traitNodeGroupID], spent
             end
         end
@@ -847,7 +842,7 @@ function M:InspectedTree(unit: string, class: string): number?
     if tree then return tree end
     local getSpec = (C_SpecializationInfo and C_SpecializationInfo.GetInspectSpecialization) or GetInspectSpecialization
     local id = call(getSpec, unit)
-    if plain(id) and type(id) == "number" and id > 0 then
+    if secret.readable(id) and type(id) == "number" and id > 0 then
         local _, name = call(GetSpecializationInfoByID, id)
         return treeByName(class, name)
     end
@@ -892,7 +887,7 @@ function M:InspectNext()
     end
     local target
     for _, m in ipairs(self:SpecQueue()) do
-        if UI.Flag(call(CanInspect, m.unit)) and key(call(GetUnitName, m.unit, true)) == m.key then target = m break end
+        if secret.flag(call(CanInspect, m.unit)) and key(call(GetUnitName, m.unit, true)) == m.key then target = m break end
         self.inspectFailed[m.key] = GetTime()
     end
     if not target then
@@ -909,7 +904,7 @@ function M:InspectNext()
         return
     end
     local guid = call(UnitGUID, target.unit)
-    if not plain(guid) then self.inspectFailed[target.key] = GetTime(); return self:InspectNext() end
+    if not secret.readable(guid) then self.inspectFailed[target.key] = GetTime(); return self:InspectNext() end
     local job = { m = target, guid = guid }
     self.inspecting = job
     call(NotifyInspect, target.unit)
@@ -923,7 +918,7 @@ end
 
 function M:OnInspectReady(guid: any)
     local job = self.inspecting
-    if not (job and plain(guid) and guid == job.guid) then return end
+    if not (job and secret.readable(guid) and guid == job.guid) then return end
     self.inspecting = nil
     local tree = self:InspectedTree(job.m.unit, job.m.class)
     if tree then
@@ -949,7 +944,7 @@ local function chatRestricted()
     local f = C_ChatInfo and C_ChatInfo.InChatMessagingLockdown
     if not f then return false end
     local r = call(f)
-    if isSecret(r) then return true end
+    if secret.isSecret(r) then return true end
     return r and true or false
 end
 
@@ -982,8 +977,8 @@ function M:AskSpecs()
 end
 
 function M:OnMessage(prefix: any, text: any, _: any, sender: any)
-    if prefix ~= PREFIX or not plain(text) or type(text) ~= "string" then return end
-    if not plain(sender) or type(sender) ~= "string" then return end
+    if prefix ~= PREFIX or not secret.readable(text) or type(text) ~= "string" then return end
+    if not secret.readable(sender) or type(sender) ~= "string" then return end
     if text == "RPSPECQ" then
         if key(sender) ~= key(SuuUI.FullName("player")) then self:ShareSoon() end
         return
@@ -1270,7 +1265,7 @@ end
 function M:CanArrange()
     if not self.inRaid then return false, "Not in a raid." end
     local me = self.me
-    local leads = UI.Flag(UnitIsGroupLeader("player")) or UI.Flag(UnitIsGroupAssistant("player"))
+    local leads = secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player"))
         or (me and (me.lead or me.assist))
     if not leads then return false, "Only the raid leader or an assistant can move players." end
     if InCombatLockdown() then return false, "Not in combat." end

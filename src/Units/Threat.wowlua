@@ -23,7 +23,7 @@ import Module from "/Core/Modules"
 import type ThreatMeter, ThreatEntry, ThreatOptions from "/UI/ThreatMeter"
 import type AlertTone, FormatArg from "/UI/Alert"
 import type Position from "/EditMode/EditMode"
-import isSecret as isSecretValue from "wowlua:secret"
+import * as secret from "wowlua:secret"
 
 local UI = SuuUI.UI
 
@@ -41,11 +41,7 @@ local DEFAULTS = {
 local M: ThreatModule
 
 
--- isSecret with its type: strict mode reads a named stdlib import as `any`
--- while the project has an import cycle (Core has some), so the stdlib's own
--- predicate wouldn't narrow here (Docs/port-notes/units-hud.md).
-local function isSecret(v: unknown): v is Secret<unknown> return isSecretValue(v) end
-local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
+local function readable(v: unknown): v is number return not secret.isSecret(v) and type(v) == "number" end
 local TICK = 0.2
 
 -- What saves you from a mob you pulled, by class (the first one ready shows).
@@ -75,7 +71,7 @@ local function running(id: number): boolean?
     local cd = C_Spell.GetSpellCooldown(id) :: SpellCooldownInfo? -- a table; its fields may be secret
     if not cd then return nil end
     local active = cd.isActive
-    if not isSecret(active) and active ~= nil then return active and true or false end
+    if not secret.isSecret(active) and active ~= nil then return active and true or false end
     if readable(cd.duration) then return cd.duration > 0 end
     return nil
 end
@@ -85,7 +81,7 @@ local function readyDrop(): string?
     for _, name in ipairs(THREAT_DROPS[playerClass()] or {}) do
         local info = C_Spell.GetSpellInfo(name)
         local id = info and info.spellID
-        if id and not isSecret(id) and IsPlayerSpell(id) then
+        if id and not secret.isSecret(id) and IsPlayerSpell(id) then
             if not gcd or dropReady[name] == nil then
                 local r = running(id)
                 if r ~= nil then dropReady[name] = not r end
@@ -103,7 +99,7 @@ end
 local function roleOf(unit: string): string?
     if unit == "player" then return (SuuUI.Role()) end
     local role = UnitGroupRolesAssigned(unit)
-    if isSecret(role) or role == "NONE" then return nil end
+    if secret.isSecret(role) or role == "NONE" then return nil end
     return role
 end
 
@@ -119,9 +115,9 @@ local function sample(unit: string, pet: boolean?): Row?
     local ok, _, _, scaled, _, value = pcall(UnitDetailedThreatSituation, unit, "target")
     if not ok then return nil end
     -- off the table: no status and no % (a secret % may still be someone's)
-    if status == nil and not isSecret(scaled) and scaled == nil then return nil end
+    if status == nil and not secret.isSecret(scaled) and scaled == nil then return nil end
     local _, given = UnitClass(unit)
-    local class = not isSecret(given) and given or nil
+    local class = not secret.isSecret(given) and given or nil
     return {
         name = (UnitName(unit)), class = (not pet) and class or nil,
         role = pet and "PET" or roleOf(unit), status = status,
@@ -132,20 +128,20 @@ end
 -- Every row of the group (you first, pets after their owners), and whether
 -- any % is secret.
 local function readRows(): (Row[], boolean)
-    local rows: Row[], secret = {}, false
+    local rows: Row[], hidden = {}, false
     local function add(unit: string, pet: boolean?)
         local r = sample(unit, pet)
         if r then
             rows[#rows + 1] = r
-            if isSecret(r.percent) then secret = true end
+            if secret.isSecret(r.percent) then hidden = true end
         end
     end
     add("player")
     add("pet", true)
-    if UI.Flag(IsInRaid()) then
+    if secret.flag(IsInRaid()) then
         for i = 1, 40 do
             local u = "raid" .. i
-            if UnitExists(u) and not UI.Flag(UnitIsUnit(u, "player")) then
+            if UnitExists(u) and not secret.flag(UnitIsUnit(u, "player")) then
                 add(u)
                 add("raidpet" .. i, true)
             end
@@ -156,7 +152,7 @@ local function readRows(): (Row[], boolean)
             add("partypet" .. i, true)
         end
     end
-    return rows, secret
+    return rows, hidden
 end
 
 --------------------------------------------------------------------------------
@@ -167,12 +163,12 @@ end
 -- totem (player-controlled: a tester in a battleground got aggro warnings
 -- from an enemy player's pet, 2026-10-18).
 local function hostileTarget(): boolean
-    return UnitExists("target") and UI.Flag(UnitCanAttack("player", "target")) and not UI.Flag(UnitIsDeadOrGhost("target"))
-        and not UI.Flag(UnitPlayerControlled("target"))
+    return UnitExists("target") and secret.flag(UnitCanAttack("player", "target")) and not secret.flag(UnitIsDeadOrGhost("target"))
+        and not secret.flag(UnitPlayerControlled("target"))
 end
 
 local function inCombat(): boolean
-    return InCombatLockdown() or UI.Flag(UnitAffectingCombat("player"))
+    return InCombatLockdown() or secret.flag(UnitAffectingCombat("player"))
 end
 
 -- The alerts this module raised: only those are taken away again (the
@@ -203,7 +199,7 @@ end
 -- together) the alerts fired at every pull (asked in game).
 local function groupHasHolder(): boolean
     if UnitExists("pet") then return true end
-    local raid = UI.Flag(IsInRaid())
+    local raid = secret.flag(IsInRaid())
     local n = raid and 40 or 4
     for i = 1, n do
         local unit = (raid and "raid" or "party") .. i
@@ -289,8 +285,8 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
     -- world on; in a group with someone to hold the mobs; solo (the aggro
     -- alert's With my pet) with your pet on the mob.
     function AlertsApply(rows: Row[], aggro: boolean?): boolean
-        if not self:Get("openWorld") and not UI.Flag(IsInInstance()) then return false end
-        if UI.Flag(IsInGroup()) then return groupHasHolder() end
+        if not self:Get("openWorld") and not secret.flag(IsInInstance()) then return false end
+        if secret.flag(IsInGroup()) then return groupHasHolder() end
         if aggro and self:Get("aggroAlert") ~= "pet" then return false end
         for _, r in ipairs(rows) do
             if r.unit == "pet" then return true end
@@ -344,12 +340,12 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
         local fighting = hostile and inCombat()
         local shows = self:Get("shows")
         local wantMeter = not self:Get("position").hidden and (shows == "always" or (shows == "combat" and fighting))
-        local rows: Row[], secret = {}, false
-        if hostile then rows, secret = readRows() end
+        local rows: Row[], hidden = {}, false
+        if hostile then rows, hidden = readRows() end
         if wantMeter then
             -- the name may be secret: passed on, never tested
             if hostile then meter:SetTarget((UnitName("target"))) else meter:SetTarget(nil) end
-            meter:SetRows(entries(rows), self:MeterOpts(secret))
+            meter:SetRows(entries(rows), self:MeterOpts(hidden))
             meter:Show()
         else
             meter:Hide()

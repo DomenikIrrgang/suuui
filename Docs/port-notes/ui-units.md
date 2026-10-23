@@ -11,6 +11,10 @@ None (the VM wasn't run for these files).
 
 ### U1. An imported type predicate stops narrowing when the project has an import cycle
 
+**Fixed** (2026-10-23): imported predicates narrow in SuuUI now; the local
+copies (`plain`, `isSecret`, `str`, `num`, `call`) are gone in favour of
+`wowlua:secret`, `wowlua:errors`' `try` and the stdlib's frame readers.
+
 `secret.isSecret` (`v is Secret<unknown>`) narrows as expected in a small
 project, but in SuuUI it doesn't narrow at all: `Core/Fault` and
 `Core/Events` import each other, and any import cycle anywhere in the

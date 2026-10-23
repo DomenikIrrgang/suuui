@@ -29,7 +29,8 @@ import type LootWindow, LootItem, LootRow from "/UI/Loot"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
-import asFrame, named from "/UI/Reskin"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -41,12 +42,8 @@ local DEFAULTS = {
 
 local M: LootModule
 
-local isSecret = secret.isSecret
 -- a value that is there and not secret (narrows: no longer nil or Secret)
 type Plain = string | number | boolean | table
-local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
-local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
-local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
 local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 local SLOT_MONEY = (Enum.LootSlotType and Enum.LootSlotType.Money) or 2
 
@@ -67,8 +64,8 @@ local function sourceName(): string
     if IsFishingLoot and IsFishingLoot() then return "Fishing" end
     local guid = GetLootSourceInfo and GetLootSourceInfo(1)
     local target = UnitGUID("target")
-    if plain(guid) and guid and plain(target) and target == guid then
-        local name = str(UnitName("target"))
+    if secret.readable(guid) and guid and secret.readable(target) and target == guid then
+        local name = secret.asString(UnitName("target"))
         if name then return name end
     end
     return ""
@@ -170,7 +167,7 @@ local function lines(): Line[]
     local list: Line[] = {}
     LINES = list
     local function add(global: string, fn: LineFn)
-        local given = named(global)
+        local given = tbl.field(_G, global)
         -- (without the loot history link: HISTORY_FORMAT)
         local fmt: unknown, shift = given, 0
         if type(given) == "string" then fmt, shift = given:gsub(HISTORY_FORMAT, "") end
@@ -219,15 +216,15 @@ end
 local function classOf(name: string): string?
     if short(name) == short(SuuUI.FullName("player")) then
         local _, class = UnitClass("player")
-        return str(class)
+        return secret.asString(class)
     end
     local prefix, n = IsInRaid() and "raid" or "party", GetNumGroupMembers()
     for i = 1, n do
         local unit = prefix .. i
         local un = SuuUI.FullName(unit)
-        if plain(un) and short(un) == short(name) then
+        if secret.readable(un) and short(un) == short(name) then
             local _, class = UnitClass(unit)
-            return str(class)
+            return secret.asString(class)
         end
     end
     return nil
@@ -248,12 +245,12 @@ local function roster(roll: Roll): string[]
     if IsInRaid() then
         for i = 1, GetNumGroupMembers() do
             local name = SuuUI.FullName("raid" .. i)
-            if plain(name) and name and not UnitIsUnit("raid" .. i, "player") then out[#out + 1] = short(name) end
+            if secret.readable(name) and name and not UnitIsUnit("raid" .. i, "player") then out[#out + 1] = short(name) end
         end
     else
         for i = 1, GetNumSubgroupMembers() do
             local name = SuuUI.FullName("party" .. i)
-            if plain(name) and name then out[#out + 1] = short(name) end
+            if secret.readable(name) and name then out[#out + 1] = short(name) end
         end
     end
     return out
@@ -324,13 +321,13 @@ class LootModule extends Module<typeof(DEFAULTS)>
     function Items(): LootItem[]
         local items: LootItem[] = {}
         local n = GetNumLootItems()
-        if not plain(n) then return items end
+        if not secret.readable(n) then return items end
         for slot = 1, n do
             local icon, name, count, _, quality, locked = GetLootSlotInfo(slot)
-            if plain(icon) and icon then
-                local item: LootItem = { index = slot, icon = icon, label = str(name) or "",
-                    count = plain(count) and count or 1, quality = plain(quality) and QUALITY[quality] or "common",
-                    locked = plain(locked) and locked or false }
+            if secret.readable(icon) and icon then
+                local item: LootItem = { index = slot, icon = icon, label = secret.asString(name) or "",
+                    count = secret.readable(count) and count or 1, quality = secret.readable(quality) and QUALITY[quality] or "common",
+                    locked = secret.readable(locked) and locked or false }
                 if GetLootSlotType(slot) == SLOT_MONEY then
                     item.copper = copperOf(name)
                     item.count = nil
@@ -376,7 +373,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
     --------------------------------------------------------------------------------
 
     function Away()
-        local f = asFrame(named("LootFrame"))
+        local f = frames.find("LootFrame")
         if not f then return end
         f:SetAlpha(0)
         self.moving = true
@@ -386,7 +383,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
     end
 
     function HideBlizzardLoot()
-        local f = asFrame(named("LootFrame"))
+        local f = frames.find("LootFrame")
         if not f or self.hooked then return end
         self.hooked = true
         f:SetClampedToScreen(false)
@@ -479,27 +476,27 @@ class LootModule extends Module<typeof(DEFAULTS)>
     end
 
     function StartRoll(rollID: unknown, rollTime: unknown)
-        if not plain(rollID) or type(rollID) ~= "number" then return end
+        if not secret.readable(rollID) or type(rollID) ~= "number" then return end
         local icon, name, _, quality, bop, canNeed, canGreed, canDE, reasonNeed, reasonGreed, reasonDE = GetLootRollItemInfo(rollID)
-        local itemName = str(name)
+        local itemName = secret.asString(name)
         if not itemName then return end
         local function reason(r: unknown): string?
-            local n = num(r)
-            return n and n > 0 and str(named("LOOT_ROLL_INELIGIBLE_REASON" .. n)) or nil
+            local n = secret.asNumber(r)
+            return n and n > 0 and secret.asString(tbl.field(_G, "LOOT_ROLL_INELIGIBLE_REASON" .. n)) or nil
         end
-        local start, duration = GetTime(), (num(rollTime) or 60000) / 1000
+        local start, duration = GetTime(), (secret.asNumber(rollTime) or 60000) / 1000
         local roll: Roll = {
-            id = rollID, icon = plain(icon) and (num(icon) or str(icon)) or nil, name = itemName,
-            quality = plain(quality) and QUALITY[quality] or "common",
-            link = str(GetLootRollItemLink(rollID)), duration = duration,
-            bind = (plain(bop) and bop) and (ITEM_BIND_ON_PICKUP or "Binds when picked up") or nil,
-            can = { need = plain(canNeed) and canNeed or false, greed = plain(canGreed) and canGreed or false, pass = true },
-            canDisenchant = plain(canDE) and canDE or false,
+            id = rollID, icon = secret.readable(icon) and (secret.asNumber(icon) or secret.asString(icon)) or nil, name = itemName,
+            quality = secret.readable(quality) and QUALITY[quality] or "common",
+            link = secret.asString(GetLootRollItemLink(rollID)), duration = duration,
+            bind = (secret.readable(bop) and bop) and (ITEM_BIND_ON_PICKUP or "Binds when picked up") or nil,
+            can = { need = secret.readable(canNeed) and canNeed or false, greed = secret.readable(canGreed) and canGreed or false, pass = true },
+            canDisenchant = secret.readable(canDE) and canDE or false,
             reason = { need = reason(reasonNeed), greed = reason(reasonGreed), disenchant = reason(reasonDE) },
             votes = { need = {}, greed = {}, disenchant = {}, pass = {} }, rolled = {},
-            group = UI.Flag(IsInGroup()) and GetNumGroupMembers() or nil,
+            group = secret.flag(IsInGroup()) and GetNumGroupMembers() or nil,
             remaining = function(): number
-                local left = num(GetLootRollTimeLeft(rollID))
+                local left = secret.asNumber(GetLootRollTimeLeft(rollID))
                 if left then return math.max(0, left / 1000) end
                 return math.max(0, duration - (GetTime() - start))
             end,
@@ -558,7 +555,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
     end
 
     function OnLootLine(given: unknown)
-        if not plain(given) or type(given) ~= "string" then return end
+        if not secret.readable(given) or type(given) ~= "string" then return end
         local text = given:gsub(HISTORY_LINE, "")
         for _, line in ipairs(lines()) do
             local caps = match(line.pattern, text)
@@ -598,7 +595,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
 
     -- Blizzard's roll frames off screen while SuuUI shows the rolls.
     function HideBlizzardRolls()
-        local f = asFrame(named("GroupLootContainer"))
+        local f = frames.find("GroupLootContainer")
         if not f or self.rollsHooked then return end
         self.rollsHooked = true
         local function away()
@@ -749,7 +746,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
         self:RegisterSettings(SECTION)
         self:OnGameEvent("LOOT_OPENED", function(_, autoLoot)
             self.open = true
-            if plain(autoLoot) and autoLoot then
+            if secret.readable(autoLoot) and autoLoot then
                 -- auto loot: only what stays behind
                 after(0.3, function() if self.open and not window:IsShown() then self:Open() end end)
             else
@@ -782,7 +779,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
         self.rollsWired = true
         self:HideBlizzardRolls()
         self:OnGameEvent("START_LOOT_ROLL", function(_, rollID, rollTime) self:StartRoll(rollID, rollTime) end)
-        self:OnGameEvent("CANCEL_LOOT_ROLL", function(_, rollID) if plain(rollID) then self:EndRoll(rollID) end end)
+        self:OnGameEvent("CANCEL_LOOT_ROLL", function(_, rollID) if secret.readable(rollID) then self:EndRoll(rollID) end end)
         self:OnGameEvent("CANCEL_ALL_LOOT_ROLLS", function()
             for id in pairs(self.rolls) do if id > 0 then self:EndRoll(id) end end
         end)
@@ -793,7 +790,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
             if ok and type(ids) == "table" then
                 for _, id in ipairs(ids :: number[]) do
                     local left = GetLootRollTimeLeft(id)
-                    self:StartRoll(id, plain(left) and left or nil)
+                    self:StartRoll(id, secret.readable(left) and left or nil)
                 end
             end
         end

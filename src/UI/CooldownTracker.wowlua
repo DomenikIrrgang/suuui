@@ -136,7 +136,6 @@ import weaponEnchantable, WeaponEnchantIcon from "/UI/WeaponEnchants"
 
 const S = T.space
 
-local isSecret = secret.isSecret
 -- A value addon code can read, or the fallback when it is secret or missing.
 local known = secret.known
 
@@ -470,8 +469,8 @@ export class TrackerCell extends Frame
         -- A reactive ability lights up only while the game says it's usable. In
         -- combat that answer can be secret: then it looks neither ready nor
         -- "use now", just neutral.
-        local unsure = self.reactive and not onCooldown and isSecret(usable)
-        local useNow = self.reactive and not onCooldown and not isSecret(usable) and usable == true
+        local unsure = self.reactive and not onCooldown and secret.isSecret(usable)
+        local useNow = self.reactive and not onCooldown and not secret.isSecret(usable) and usable == true
 
         -- whether it shows at all: only when ready / only on cooldown, and hide
         -- on cooldown or while unusable
@@ -558,12 +557,12 @@ end
 -- Stealth (every rank).
 local function currentStance(): string?
     local index = GetShapeshiftForm and GetShapeshiftForm()
-    if index == nil or isSecret(index) then return nil end
+    if index == nil or secret.isSecret(index) then return nil end
     if index == 0 then return "caster" end
     local _, class = UnitClass("player")
     if not issecretvalue(class) and class == "ROGUE" then return "stealth" end
     local _, _, _, spellID = GetShapeshiftFormInfo(index)
-    if spellID == nil or isSecret(spellID) then return nil end
+    if spellID == nil or secret.isSecret(spellID) then return nil end
     local form = FORMS[spellID]
     if form then return form end
     local name = C_Spell.GetSpellName(spellID)
@@ -624,7 +623,7 @@ local talentCache: { [number]: boolean }? = nil
 type NodeRanks = { ranksPurchased?: unknown, activeRank?: unknown, currentRank?: unknown }
 
 local function ranked(r: unknown): boolean
-    return not isSecret(r) and type(r) == "number" and r > 0
+    return not secret.isSecret(r) and type(r) == "number" and r > 0
 end
 
 local function hasRank(ni: NodeRanks): boolean
@@ -633,15 +632,15 @@ end
 
 local function readTalents(): { [number]: boolean }?
     local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
-    if cfg == nil or isSecret(cfg) or not C_Traits then return nil end
+    if cfg == nil or secret.isSecret(cfg) or not C_Traits then return nil end
     local info = C_Traits.GetConfigInfo(cfg)
     if not (info and info.treeIDs) then return nil end
     local set: { [number]: boolean } = {}
     local function addEntry(entryID: unknown)
-        if entryID == nil or isSecret(entryID) or type(entryID) ~= "number" then return end
+        if entryID == nil or secret.isSecret(entryID) or type(entryID) ~= "number" then return end
         local ei = C_Traits.GetEntryInfo(cfg, entryID)
         local def = ei and ei.definitionID
-        if not def or isSecret(def) then return end
+        if not def or secret.isSecret(def) then return end
         local di = C_Traits.GetDefinitionInfo(def)
         if not di then return end
         local spellID, overridden = di.spellID, di.overriddenSpellID
@@ -654,7 +653,7 @@ local function readTalents(): { [number]: boolean }?
             if ni and hasRank(ni) then
                 local activeEntry = ni.activeEntry
                 local active = activeEntry and activeEntry.entryID
-                if active ~= nil and not isSecret(active) then
+                if active ~= nil and not secret.isSecret(active) then
                     addEntry(active)
                 else
                     for _, entryID in ipairs(ni.entryIDs or {}) do addEntry(entryID) end
@@ -1022,7 +1021,7 @@ local function auraUp(r: TrackerReminder, ctx: CondContext): boolean
             local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, r.unit, i, check.filter)
             if not ok or issecretvalue(a) or not a then break end
             local id = a.spellId
-            if not isSecret(id) and check.ids[id] then return true end
+            if not secret.isSecret(id) and check.ids[id] then return true end
         end
     end
     return false
@@ -1752,7 +1751,7 @@ export class CooldownTracker extends Frame
         local hostile = UnitExists("target") and UnitCanAttack("player", "target")
         local function fade(f: Frame, withTarget: boolean?)
             if withTarget then
-                if f.SetAlphaFromBoolean and (isSecret(hostile) or hostile ~= nil) then
+                if f.SetAlphaFromBoolean and (secret.isSecret(hostile) or hostile ~= nil) then
                     f:SetAlphaFromBoolean(hostile, 1, 0)
                 else
                     f:SetAlpha(flag(hostile) and 1 or 0)

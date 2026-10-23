@@ -21,6 +21,7 @@
 import SuuUI from "/Core/API"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -34,8 +35,6 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function(_: any) return false end
-local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
 local _, classFile = UnitClass("player")
 -- (your own class: never secret; cast for strict mode)
 local CLASS = classFile :: string
@@ -62,7 +61,7 @@ end
 function M:SpecGroups()
     local n = call(GetNumSpecGroups) or 1
     local active = call(C_SpecializationInfo and C_SpecializationInfo.GetActiveSpecGroup) or 1
-    return plain(n) and n or 1, plain(active) and active or 1
+    return secret.readable(n) and n or 1, secret.readable(active) and active or 1
 end
 
 function M:ConfigID()
@@ -70,10 +69,10 @@ function M:ConfigID()
     local view = self.viewing or active
     if groups > 1 and view ~= active and C_SpecializationInfo and C_SpecializationInfo.GetCombatConfigIDForSpecGroup then
         local id = call(C_SpecializationInfo.GetCombatConfigIDForSpecGroup, view)
-        if plain(id) and id then return id end
+        if secret.readable(id) and id then return id end
     end
     local id = call(C_ClassTalents.GetActiveConfigID)
-    return plain(id) and id or nil
+    return secret.readable(id) and id or nil
 end
 
 -- A node's talent: name, icon, spell, entry.
@@ -149,7 +148,7 @@ function M:Collect(configID: number?)
     local minY
     for _, nodeID in ipairs(call(C_Traits.GetTreeNodes, treeID) or {}) do
         local ni = call(C_Traits.GetNodeInfo, configID, nodeID)
-        if ni and ni.isVisible ~= false and plain(ni.posX) and plain(ni.posY) and ni.maxRanks and ni.maxRanks > 0 then
+        if ni and ni.isVisible ~= false and secret.readable(ni.posX) and secret.readable(ni.posY) and ni.maxRanks and ni.maxRanks > 0 then
             local talent = talentOf(configID, ni)
             if talent then
                 local current = ni.currentRank or ni.activeRank or 0
@@ -183,7 +182,7 @@ function M:Collect(configID: number?)
     local spentBy = {}
     for _, g in ipairs((#groupIDs > 0 and call(C_Traits.GetGroupCurrencyInfo, configID, groupIDs)) or {}) do
         local c = g.currencyInfos and g.currencyInfos[1]
-        if c and plain(c.spent) then spentBy[g.traitNodeGroupID] = c.spent end
+        if c and secret.readable(c.spent) then spentBy[g.traitNodeGroupID] = c.spent end
     end
     local trees = {}
     for i, c in ipairs(clusters) do
@@ -217,7 +216,7 @@ function M:Collect(configID: number?)
     -- the points to spend
     local available = 0
     local currency = call(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
-    if currency and currency[1] and plain(currency[1].quantity) then available = currency[1].quantity end
+    if currency and currency[1] and secret.readable(currency[1].quantity) then available = currency[1].quantity end
     local pending = 0
     for _, n in ipairs(nodes) do pending = pending + n.pending end
     -- planned changes the counts can't see still make Apply and Undo work
@@ -229,7 +228,7 @@ end
 function M:Requires(configID: any, n: any)
     for _, condID in ipairs(n.conditions) do
         local c = call(C_Traits.GetConditionInfo, configID, condID)
-        if c and c.isMet == false and plain(c.spentAmountRequired) and c.spentAmountRequired > 0 then
+        if c and c.isMet == false and secret.readable(c.spentAmountRequired) and c.spentAmountRequired > 0 then
             return ("Requires %d points in %s"):format(c.spentAmountRequired, n.tree.name)
         end
     end
@@ -246,7 +245,7 @@ end
 function M:Editable()
     if InCombatLockdown() then return false, "Talents can't change in combat." end
     local can, reason = call(C_ClassTalents.CanChangeTalents)
-    if can == false then return false, plain(reason) and reason or nil end
+    if can == false then return false, secret.readable(reason) and reason or nil end
     local _, active = self:SpecGroups()
     if (self.viewing or active) ~= active then return false, "Activate this specialization to change its talents." end
     return true
@@ -315,7 +314,7 @@ function M:Fill(page: any, data: any, inspected: any)
     local editable, why = self:Editable()
     local who
     if inspected then
-        who = plain(UnitName(inspected)) and UnitName(inspected) or nil
+        who = secret.readable(UnitName(inspected)) and UnitName(inspected) or nil
         editable, why = false, ("Viewing %s's talents."):format(who or "their")
     end
     -- your builds (SuuUI's own window, your talents): the picker, the
@@ -355,8 +354,8 @@ function M:Fill(page: any, data: any, inspected: any)
         -- someone else's, read only (design InspectTalents)
         local className, class = UnitClass(inspected)
         local level = UnitLevel(inspected)
-        head = { name = who, class = plain(class) and class or nil,
-            line = ("Level %s %s"):format((plain(level) and level > 0) and level or "??", plain(className) and className or "") }
+        head = { name = who, class = secret.readable(class) and class or nil,
+            line = ("Level %s %s"):format((secret.readable(level) and level > 0) and level or "??", secret.readable(className) and className or "") }
         why = ("Viewing %s's talents. Nothing here can be changed."):format(who or "their")
     end
     page:SetData({
@@ -467,7 +466,7 @@ end
 local function charKey()
     local guid = UnitGUID("player")
     -- (your own name: never secret; cast for strict mode)
-    return (plain(guid) and guid or ((UnitName("player") or "?") .. "-" .. (GetRealmName() or "?"))) :: string
+    return (secret.readable(guid) and guid or ((UnitName("player") or "?") .. "-" .. (GetRealmName() or "?"))) :: string
 end
 
 local function copySteps(steps: any)
@@ -482,10 +481,10 @@ function M:Classes()
     local out, list = {}, {}
     for classID = 1, 13 do
         local name, file = call(GetClassInfo, classID)
-        if plain(name) and name and file then
+        if secret.readable(name) and name and file then
             local specID = call(GetSpecializationInfoForClassID, classID, 1)
-            local treeID = plain(specID) and specID and call(C_ClassTalents.GetTraitTreeForSpec, specID)
-            if plain(treeID) and treeID then
+            local treeID = secret.readable(specID) and specID and call(C_ClassTalents.GetTraitTreeForSpec, specID)
+            if secret.readable(treeID) and treeID then
                 out[file] = { classID = classID, file = file, name = name, specID = specID, treeID = treeID }
                 list[#list + 1] = out[file]
             end
@@ -518,11 +517,11 @@ function M:BuildTree(file: string)
     local order = call(C_Traits.GetTreeNodes, class.treeID) or {}
     local configID, byID, nodes, minY
     for _, cfg in ipairs(configs) do
-        if plain(cfg) and cfg then
+        if secret.readable(cfg) and cfg then
             byID, nodes, minY = {}, {}, nil
             for _, nodeID in ipairs(order) do
                 local ni = call(C_Traits.GetNodeInfo, cfg, nodeID)
-                if ni and ni.isVisible ~= false and plain(ni.posX) and plain(ni.posY) and ni.maxRanks and ni.maxRanks > 0 then
+                if ni and ni.isVisible ~= false and secret.readable(ni.posX) and secret.readable(ni.posY) and ni.maxRanks and ni.maxRanks > 0 then
                     local talent = talentOf(cfg, ni)
                     if talent then
                         local n = { id = nodeID, x = ni.posX, y = ni.posY, max = ni.maxRanks, name = talent.name,
@@ -597,10 +596,10 @@ end
 
 function M:Talented()
     local configID = call(C_ClassTalents.GetActiveConfigID)
-    local info = plain(configID) and configID and call(C_Traits.GetConfigInfo, configID)
+    local info = secret.readable(configID) and configID and call(C_Traits.GetConfigInfo, configID)
     local treeID = info and info.treeIDs and info.treeIDs[1]
     local c = treeID and call(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
-    local max = c and c[1] and plain(c[1].maxQuantity) and c[1].maxQuantity
+    local max = c and c[1] and secret.readable(c[1].maxQuantity) and c[1].maxQuantity
     local level = UnitLevel("player") or 1
     if not max or level >= 60 then return self.talented or 0 end
     self.talented = talentedPoints(max, level)
@@ -778,12 +777,12 @@ function M:NextTalent(group: number?, configID: number?)
     if not b or b.class ~= CLASS then return nil end
     local tree = self:BuildTree(CLASS)
     configID = configID or call(C_ClassTalents.GetActiveConfigID)
-    if not (tree and plain(configID) and configID) then return nil end
+    if not (tree and secret.readable(configID) and configID) then return nil end
     local have = {}
     for _, s in ipairs(b.steps) do
         if have[s.node] == nil then
             local ni = call(C_Traits.GetNodeInfo, configID, s.node)
-            have[s.node] = ni and plain(ni.currentRank) and ni.currentRank or 0
+            have[s.node] = ni and secret.readable(ni.currentRank) and ni.currentRank or 0
         end
     end
     local i, rank = nextStep(b.steps, have)
@@ -1159,7 +1158,7 @@ function M:CheckReset()
     end
     if not self:Editable() then return end
     local configID = call(C_ClassTalents.GetActiveConfigID)
-    if not plain(configID) or not configID then return end
+    if not secret.readable(configID) or not configID then return end
     -- points Use build planned before the reset: dropped once the trainer
     -- offered it (the whole build is planned after it anyway)
     if self.wipeAt and GetTime() - self.wipeAt < 120 and call(C_Traits.ConfigHasStagedChanges, configID) == true then
@@ -1317,7 +1316,7 @@ function M:GameString(b: any)
     if not tree then return nil end
     local version = call(C_Traits.GetLoadoutSerializationVersion)
     local hash: number[]? = call(C_Traits.GetTreeHash, tree.treeID)
-    if not (plain(version) and version and type(hash) == "table") then return nil end
+    if not (secret.readable(version) and version and type(hash) == "table") then return nil end
     local ranks: { [number]: number }, entries: { [number]: number } = {}, {}
     for _, s in ipairs(b.steps) do
         ranks[s.node] = (ranks[s.node] or 0) + 1
@@ -1639,7 +1638,7 @@ function M:SetInspect(unit: string?)
     self.inspectUnit, self.inspectData = unit, nil
     local who = unit and UnitName(unit)
     if self.chrome then
-        self.chrome:SetTitle((unit and plain(who)) and ("Talents · " .. who) or "Talents")
+        self.chrome:SetTitle((unit and secret.readable(who)) and ("Talents · " .. who) or "Talents")
     end
 end
 
@@ -1800,7 +1799,7 @@ function M:OnEnable()
         local mine = store().reset[charKey()]
         local _, group = self:SpecGroups()
         local b = mine and mine[group] and store().builds[mine[group]]
-        if b and plain(cost) then
+        if b and secret.readable(cost) then
             local data = self:Collect(call(C_ClassTalents.GetActiveConfigID))
             if not data then return end
             local _, conflicts = self:Fit(b, data)

@@ -24,7 +24,10 @@ import type Icon from "/UI/Icon"
 import type Border from "/UI/Draw"
 import known from "wowlua:secret"
 import hookScript from "wowlua:hooks"
-import asFrame, named, part from "/UI/Reskin"
+import * as errors from "wowlua:errors"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -33,20 +36,11 @@ local DEFAULTS = {}
 
 local M: MacrosModule
 
-local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not issecretvalue(v) end
 -- One of the game's functions, if it has it: its results as they come (read
--- each with `str` or `num`), nothing when it fails.
-local function call(fn: unknown, ...: unknown): ...unknown
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h = pcall(fn :: (...unknown) -> ...unknown, ...)
-    if ok then return a, b, c, d, e, f, g, h end
-    return nil
-end
-local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
-local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
+-- each with `secret.asString` or `secret.asNumber`), nothing when it fails.
 -- a texture: a file ID or a path
 type Art = number | string
-local function art(v: unknown): Art? return num(v) or str(v) end
+local function art(v: unknown): Art? return secret.asNumber(v) or secret.asString(v) end
 
 local WIDTH, HEIGHT = 780, 580
 local LIST_W = 270
@@ -56,8 +50,8 @@ local MAX_GENERAL = MAX_ACCOUNT_MACROS or 120
 local MAX_CHAR = MAX_CHARACTER_MACROS or 18
 local NAME_MAX, BODY_MAX = 16, 255
 local COMBAT = "Macros can't be changed in combat"
-local BANK = num(part(part(Enum, "SpellBookSpellBank"), "Player")) or 0
-local SPELL = num(part(part(Enum, "SpellBookItemType"), "Spell")) or 1
+local BANK = secret.asNumber(tbl.field(tbl.field(Enum, "SpellBookSpellBank"), "Player")) or 0
+local SPELL = secret.asNumber(tbl.field(tbl.field(Enum, "SpellBookItemType"), "Spell")) or 1
 
 --------------------------------------------------------------------------------
 -- Data
@@ -228,11 +222,11 @@ export class IconPicker extends Frame
             local icon: Art? = nil
             if kind == "spell" then
                 local spellID = c or b
-                icon = spellID and art(call(C_Spell.GetSpellTexture, spellID)) or nil
+                icon = spellID and art(errors.try(C_Spell.GetSpellTexture, spellID)) or nil
             elseif kind == "item" then
-                icon = a and art(call(C_Item.GetItemIconByID, a)) or nil
+                icon = a and art(errors.try(C_Item.GetItemIconByID, a)) or nil
             elseif kind == "macro" then
-                local _, mi = call(GetMacroInfo, a)
+                local _, mi = errors.try(GetMacroInfo, a)
                 icon = art(mi)
             end
             if icon then
@@ -330,9 +324,9 @@ class MacrosModule extends Module<typeof(DEFAULTS)>
         local first, count = 1, general or 0
         if tab == "character" then first, count = MAX_GENERAL + 1, char or 0 end
         for i = first, first + count - 1 do
-            local name, icon, body = call(GetMacroInfo, i)
-            local macroName = str(name)
-            if macroName then list[#list + 1] = { index = i, name = macroName, icon = art(icon), body = str(body) or "" } end
+            local name, icon, body = errors.try(GetMacroInfo, i)
+            local macroName = secret.asString(name)
+            if macroName then list[#list + 1] = { index = i, name = macroName, icon = art(icon), body = secret.asString(body) or "" } end
         end
         return list
     end
@@ -680,12 +674,12 @@ class MacrosModule extends Module<typeof(DEFAULTS)>
         if name == "" then return end
         local body = assert(self.body):GetText() or ""
         if self.draft then
-            local index = num(call(CreateMacro, name, self.icon or QUESTION, body, self.tab == "character"))
+            local index = secret.asNumber(errors.try(CreateMacro, name, self.icon or QUESTION, body, self.tab == "character"))
             self.draft = nil
             self.chosen = index and { index = index, name = name } or nil
         else
             local was = assert(loaded.index)
-            local index = num(call(EditMacro, was, name, self.icon or QUESTION, body))
+            local index = secret.asNumber(errors.try(EditMacro, was, name, self.icon or QUESTION, body))
             self.chosen = { index = index or was, name = name }
         end
         self:Refresh()
@@ -702,7 +696,7 @@ class MacrosModule extends Module<typeof(DEFAULTS)>
         UI.Confirm({ title = "Delete " .. m.name .. "?", text = "The macro is gone for good, and its buttons on your bars with it.",
             confirm = "Delete", onConfirm = function()
                 if InCombatLockdown() then return end
-                call(DeleteMacro, m.index)
+                errors.try(DeleteMacro, m.index)
                 self.chosen = nil
                 self:Refresh()
             end })
@@ -713,14 +707,14 @@ class MacrosModule extends Module<typeof(DEFAULTS)>
         local list: Art[] = { QUESTION }
         if kind ~= "items" then
             local spells: Art[] = {}
-            call(GetLooseMacroIcons, spells)
-            call(GetMacroIcons, spells)
+            errors.try(GetLooseMacroIcons, spells)
+            errors.try(GetMacroIcons, spells)
             for _, v in ipairs(spells) do list[#list + 1] = v end
         end
         if kind ~= "spells" then
             local items: Art[] = {}
-            call(GetLooseMacroItemIcons, items)
-            call(GetMacroItemIcons, items)
+            errors.try(GetLooseMacroItemIcons, items)
+            errors.try(GetMacroItemIcons, items)
             for _, v in ipairs(items) do list[#list + 1] = v end
         end
         return list
@@ -735,15 +729,15 @@ class MacrosModule extends Module<typeof(DEFAULTS)>
             if icon and not seen[icon] then seen[icon] = true; list[#list + 1] = icon end
         end
         if kind ~= "items" then
-            for i = 1, (num(call(C_SpellBook.GetNumSpellBookSkillLines)) or 0) do
-                local line = call(C_SpellBook.GetSpellBookSkillLineInfo, i)
-                local offset, count = num(part(line, "itemIndexOffset")), num(part(line, "numSpellBookItems"))
+            for i = 1, (secret.asNumber(errors.try(C_SpellBook.GetNumSpellBookSkillLines)) or 0) do
+                local line = errors.try(C_SpellBook.GetSpellBookSkillLineInfo, i)
+                local offset, count = secret.asNumber(tbl.field(line, "itemIndexOffset")), secret.asNumber(tbl.field(line, "numSpellBookItems"))
                 if offset and count then
                     for slot = offset + 1, offset + count do
-                        local info = call(C_SpellBook.GetSpellBookItemInfo, slot, BANK)
-                        local name = str(part(info, "name"))
-                        if part(info, "itemType") == SPELL and name and name:lower():find(text, 1, true) then
-                            add(part(info, "iconID"))
+                        local info = errors.try(C_SpellBook.GetSpellBookItemInfo, slot, BANK)
+                        local name = secret.asString(tbl.field(info, "name"))
+                        if tbl.field(info, "itemType") == SPELL and name and name:lower():find(text, 1, true) then
+                            add(tbl.field(info, "iconID"))
                         end
                     end
                 end
@@ -751,11 +745,11 @@ class MacrosModule extends Module<typeof(DEFAULTS)>
         end
         if kind ~= "spells" then
             for bag = 0, (NUM_BAG_SLOTS or 4) do
-                for slot = 1, (num(call(C_Container.GetContainerNumSlots, bag)) or 0) do
-                    local info = call(C_Container.GetContainerItemInfo, bag, slot)
-                    local itemID = part(info, "itemID")
-                    local name = itemID and str(call(C_Item.GetItemNameByID, itemID))
-                    if name and name:lower():find(text, 1, true) then add(part(info, "iconFileID")) end
+                for slot = 1, (secret.asNumber(errors.try(C_Container.GetContainerNumSlots, bag)) or 0) do
+                    local info = errors.try(C_Container.GetContainerItemInfo, bag, slot)
+                    local itemID = tbl.field(info, "itemID")
+                    local name = itemID and secret.asString(errors.try(C_Item.GetItemNameByID, itemID))
+                    if name and name:lower():find(text, 1, true) then add(tbl.field(info, "iconFileID")) end
                 end
             end
         end
@@ -827,7 +821,7 @@ class MacrosModule extends Module<typeof(DEFAULTS)>
     end
 
     function HookGame()
-        local f = asFrame(named("MacroFrame"))
+        local f = frames.find("MacroFrame")
         if not f or self.hooked then return end
         self.hooked = true
         hookScript(f, "OnShow", function()

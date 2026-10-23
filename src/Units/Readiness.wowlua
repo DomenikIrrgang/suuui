@@ -28,11 +28,8 @@ local DEFAULTS = {
 local M: ReadinessModule
 
 
--- wowlua:secret's test, as a predicate of this file's own (0.9.1 narrows
--- nothing through an imported predicate while the project has an import
--- cycle; Docs/port-notes/units-group.md)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
-local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
+-- A number that may be read (not secret).
+local function readable(v: unknown): v is number return not secret.isSecret(v) and type(v) == "number" end
 local PREFIX = "SuuUI"
 
 -- The game's functions this file reads about the group and your spells,
@@ -78,8 +75,8 @@ end
 --------------------------------------------------------------------------------
 
 local function channel(): ("RAID" | "PARTY")?
-    if UI.Flag(game.IsInRaid()) then return "RAID" end
-    if UI.Flag(game.IsInGroup()) then return "PARTY" end
+    if secret.flag(game.IsInRaid()) then return "RAID" end
+    if secret.flag(game.IsInGroup()) then return "PARTY" end
     return nil
 end
 
@@ -122,17 +119,17 @@ type Member = { name: string, class: (string | Secret<string>)?, you?: boolean }
 local function roster(): Member[]
     local out: Member[] = { { name = playerName(), class = playerClass(), you = true } }
     local function add(unit: string)
-        if game.UnitExists(unit) and not UI.Flag(game.UnitIsUnit(unit, "player")) then
+        if game.UnitExists(unit) and not secret.flag(game.UnitIsUnit(unit, "player")) then
             -- the whole name, as their messages carry it (Forever's surnames)
             local name = SuuUI.FullName(unit)
-            if not isSecret(name) and name then name = Ambiguate(name, "short") end
+            if not secret.isSecret(name) and name then name = Ambiguate(name, "short") end
             local _, class = game.UnitClass(unit)
-            if not isSecret(name) and name then
-                out[#out + 1] = { name = name, class = (not isSecret(class)) and class or nil }
+            if not secret.isSecret(name) and name then
+                out[#out + 1] = { name = name, class = (not secret.isSecret(class)) and class or nil }
             end
         end
     end
-    if UI.Flag(game.IsInRaid()) then
+    if secret.flag(game.IsInRaid()) then
         for i = 1, 40 do add("raid" .. i) end
     else
         for i = 1, 4 do add("party" .. i) end
@@ -160,7 +157,7 @@ local function wanted(shows: string, inGroup: boolean, kind: string?): boolean
 end
 
 local function canCheck(): boolean
-    return UI.Flag(game.IsInGroup()) and (UI.Flag(game.UnitIsGroupLeader("player")) or UI.Flag(game.UnitIsGroupAssistant("player")))
+    return secret.flag(game.IsInGroup()) and (secret.flag(game.UnitIsGroupLeader("player")) or secret.flag(game.UnitIsGroupAssistant("player")))
 end
 
 local SECTION = {
@@ -209,7 +206,7 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
             if readable(id) and game.IsPlayerSpell(id) then
                 local cd = game.GetSpellCooldown(id)
                 local left = 0
-                if cd and not isSecret(cd) and readable(cd.startTime) and readable(cd.duration) and cd.duration > 1.5 then
+                if cd and not secret.isSecret(cd) and readable(cd.startTime) and readable(cd.duration) and cd.duration > 1.5 then
                     left = math.max(0, cd.startTime + cd.duration - GetTime())
                 end
                 out[#out + 1] = { id = id, left = left }
@@ -222,7 +219,7 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
         local ch = channel()
         if not ch or InCombatLockdown() then return end
         local ok, result = pcall(game.SendAddonMessage, PREFIX, text, ch)
-        self.lastSend = { at = tostring(date("%H:%M:%S")), ok = ok, result = isSecret(result) and "secret" or tostring(result), text = text:sub(1, 40) }
+        self.lastSend = { at = tostring(date("%H:%M:%S")), ok = ok, result = secret.isSecret(result) and "secret" or tostring(result), text = text:sub(1, 40) }
     end
 
     function Share()
@@ -242,8 +239,8 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
     end
 
     function OnMessage(prefix: unknown, text: unknown, _: unknown, sender: unknown)
-        if prefix ~= PREFIX or isSecret(text) or type(text) ~= "string" then return end
-        if isSecret(sender) or type(sender) ~= "string" then return end
+        if prefix ~= PREFIX or secret.isSecret(text) or type(text) ~= "string" then return end
+        if secret.isSecret(sender) or type(sender) ~= "string" then return end
         local who = Ambiguate(sender, "short")
         -- whole names: Forever's characters have surnames (SuuUI.FullName)
         if who == playerName() then return end
@@ -274,8 +271,8 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
             local class = p.class
             for _, c in ipairs(spells or {}) do
                 local name = game.GetSpellName(c.id)
-                rows[#rows + 1] = { icon = (C_Spell.GetSpellTexture(c.id)), spell = not isSecret(name) and name or "?", who = p.name,
-                    class = not isSecret(class) and class or nil, endsAt = c.endsAt > now and c.endsAt or nil, order = order }
+                rows[#rows + 1] = { icon = (C_Spell.GetSpellTexture(c.id)), spell = not secret.isSecret(name) and name or "?", who = p.name,
+                    class = not secret.isSecret(class) and class or nil, endsAt = c.endsAt > now and c.endsAt or nil, order = order }
             end
         end
         table.sort(rows, rowBefore)
@@ -288,7 +285,7 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
         local panel = self.panel
         if not panel then return end
         local _, kind = game.IsInInstance()
-        local where = wanted(self:Get("shows"), UI.Flag(game.IsInGroup()), kind)
+        local where = wanted(self:Get("shows"), secret.flag(game.IsInGroup()), kind)
         local shown = where and not self:Get("position").hidden and not InCombatLockdown() and not fighting and not self.encounter
         if shown then
             local rows = self:Rows()

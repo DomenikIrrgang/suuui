@@ -17,6 +17,7 @@
 import SuuUI from "/Core/API"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -29,8 +30,6 @@ local M = SuuUI.RegisterModule({
     defaults = {},
 })
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
@@ -77,7 +76,7 @@ end
 function M:Profession(index: any): { [string]: any }?
     if not index then return nil end
     local name, icon, skill, max, numSpells, offset, skillLine = call(GetProfessionInfo, index)
-    if not plain(name) then return nil end
+    if not secret.readable(name) then return nil end
     local card = { name = name, icon = icon, skill = skill, max = max, skillLine = skillLine, spells = {} }
     local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
     local own, ownCrafts, craftSpell
@@ -183,7 +182,7 @@ local EMPTY_ICON = 134939 -- INV_Scroll_04, Blizzard's empty slot
 local function untrained(def: { skillLine: number, name: string, icon: number }): { [string]: any }
     local name = def.name
     local shown = call(C_TradeSkillUI.GetTradeSkillDisplayName, def.skillLine)
-    if plain(shown) and shown ~= "" then name = shown end
+    if secret.readable(shown) and shown ~= "" then name = shown end
     return { name = name, icon = call(C_TradeSkillUI.GetTradeSkillTexture, def.skillLine) or def.icon,
              skillLine = def.skillLine, untrained = true, rank = "Not learned",
              hint = "Learn it from " .. article(name) .. " " .. name .. " trainer" }
@@ -361,7 +360,7 @@ function M:Recipes()
     local learned, total = 0, 0
     for _, id in ipairs(call(C_TradeSkillUI.GetAllRecipeIDs) or {}) do
         local info = call(C_TradeSkillUI.GetRecipeInfo, id)
-        if info and plain(info.name) and not info.isDummyRecipe and self:InGame(info, data.name) then
+        if info and secret.readable(info.name) and not info.isDummyRecipe and self:InGame(info, data.name) then
             total = total + 1
             if info.learned then learned = learned + 1 end
             local _, can = self:Reagents(id)
@@ -934,20 +933,20 @@ function M:RecordTrainer()
         -- this client answers name, availability, icon
         local name, a, b = call(GetTrainerServiceInfo, i)
         local kind = (a == "available" or a == "unavailable" or a == "used" or a == "header") and a or b
-        if plain(name) and kind ~= "header" then
+        if secret.readable(name) and kind ~= "header" then
             local skillName, skillRank = call(GetTrainerServiceSkillReq, i)
             local link = GetTrainerServiceItemLink and call(GetTrainerServiceItemLink, i)
             local cost = call(GetTrainerServiceCost, i)
             local level = GetTrainerServiceLevelReq and call(GetTrainerServiceLevelReq, i)
             local line = GetTrainerServiceSkillLine and call(GetTrainerServiceSkillLine, i)
-            if plain(skillName) and PROFESSION_NAMES[skillName] then profession = profession or skillName end
-            if plain(line) and PROFESSION_NAMES[line] then profession = profession or line end
+            if secret.readable(skillName) and PROFESSION_NAMES[skillName] then profession = profession or skillName end
+            if secret.readable(line) and PROFESSION_NAMES[line] then profession = profession or line end
             services[#services + 1] = {
-                name = name, skill = plain(skillName) and skillName or nil,
-                rank = plain(skillRank) and tonumber(skillRank) or nil,
-                cost = plain(cost) and tonumber(cost) or nil, level = plain(level) and tonumber(level) or nil,
-                item = plain(link) and type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil,
-                line = plain(line) and line or nil,
+                name = name, skill = secret.readable(skillName) and skillName or nil,
+                rank = secret.readable(skillRank) and tonumber(skillRank) or nil,
+                cost = secret.readable(cost) and tonumber(cost) or nil, level = secret.readable(level) and tonumber(level) or nil,
+                item = secret.readable(link) and type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil,
+                line = secret.readable(line) and line or nil,
             }
         end
     end

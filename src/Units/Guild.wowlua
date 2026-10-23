@@ -28,8 +28,6 @@ local M = SuuUI.RegisterModule({
     defaults = { showOffline = false },
 })
 
-local isSecret = secret.isSecret
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 -- A guild member as the roster and the details panel draw them.
 type Member = { [string]: any }
@@ -67,13 +65,13 @@ function M:Members()
     for i = 1, (call(GetNumGuildMembers)) or 0 do
         local name, rank, rankIndex, level, className, zone, note, officerNote, isOnline, status, file = call(GetGuildRosterInfo, i)
         local guid = select(17, call(GetGuildRosterInfo, i))
-        if plain(name) and name then
+        if secret.readable(name) and name then
             local short = Ambiguate(name, "guild")
             local m: Member = { key = name, full = name, name = short, rank = rank, rankIndex = rankIndex or 0, level = level,
-                        zone = plain(zone) and zone or nil, note = plain(note) and note or nil,
-                        officerNote = plain(officerNote) and officerNote or nil, online = isOnline and true or false,
+                        zone = secret.readable(zone) and zone or nil, note = secret.readable(note) and note or nil,
+                        officerNote = secret.readable(officerNote) and officerNote or nil, online = isOnline and true or false,
                         away = status == 1, busy = status == 2, class = file, guid = guid,
-                        className = plain(className) and className or nil,
+                        className = secret.readable(className) and className or nil,
                         you = Ambiguate(name, "short") == Ambiguate(me :: string, "short") }
             if not m.online then m.lastOnline = lastOnline(i) end
             if m.online then online = online + 1 end
@@ -188,7 +186,7 @@ function M:FootOverlays(m: Member?, actions: { [string]: any })
             over:SetAttribute("macrotext1", m and (SLASH[key] .. m.full) or "")
             -- a layer over the window's own (HIGH): a window comes to the
             -- front when clicked and covered it, so the click reached the
-            -- plain button under it (found in game)
+            -- secret.readable button under it (found in game)
             over:SetFrameStrata("DIALOG")
             -- anchored only while shown: a secure button anchored to the
             -- roster made the whole guild window protected (it couldn't
@@ -525,7 +523,7 @@ function M:Act(action: string, m: Member?)
     end
     if not m then return end
     if SLASH[action] then
-        -- the click reached the plain button, not the secure one on top
+        -- the click reached the secret.readable button, not the secure one on top
         self:Print(("%s: the secure button wasn't under the mouse (%s)."):format(action,
             InCombatLockdown() and "in combat" or (self.overs and self.overs[action] and (self.overs[action]:IsShown() and "shown" or "hidden") or "not made")))
         return
@@ -702,13 +700,13 @@ function M:Motd()
         motd = self.lastMotd
     else
         motd = call(GetGuildRosterMOTD)
-        if plain(motd) then self.lastMotd = motd end
+        if secret.readable(motd) then self.lastMotd = motd end
     end
     if self.freshMotd then
-        if plain(motd) and motd == self.freshMotd then self.freshMotd = nil end
+        if secret.readable(motd) and motd == self.freshMotd then self.freshMotd = nil end
         motd = self.freshMotd or motd
     end
-    return plain(motd) and motd or nil
+    return secret.readable(motd) and motd or nil
 end
 
 -- The Chat tab's message of the day banner (design component
@@ -735,7 +733,7 @@ function M:RenderInfo()
         ranks[#ranks + 1] = { name = call(GuildControlGetRankName, i), count = counts[i - 1] or 0 }
     end
     local info = call(GetGuildInfoText)
-    page:SetData({ info = plain(info) and info or nil, canEditInfo = call(CanEditGuildInfo), ranks = ranks })
+    page:SetData({ info = secret.readable(info) and info or nil, canEditInfo = call(CanEditGuildInfo), ranks = ranks })
     self:InfoOverlays()
 end
 
@@ -876,7 +874,7 @@ end
 function M:Clubs()
     local out: { [string]: any }[] = {}
     for _, c in ipairs((C_Club and call(C_Club.GetSubscribedClubs)) or {}) do
-        if c.clubId and plain(c.name) then
+        if c.clubId and secret.readable(c.name) then
             out[#out + 1] = { value = c.clubId, label = c.name, guild = c.clubType == (Enum.ClubType and Enum.ClubType.Guild or 2) }
         end
     end
@@ -1258,7 +1256,7 @@ function M:OnEnable()
     -- (GetGuildRosterMOTD) can lag behind it
     if not valid or valid("GUILD_MOTD") then
         self:OnGameEvent("GUILD_MOTD", function(_, motd)
-            if plain(motd) then self.freshMotd = motd end
+            if secret.readable(motd) then self.freshMotd = motd end
             self:RenderInfo()
             self:RenderBanner()
         end)

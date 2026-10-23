@@ -34,12 +34,18 @@ import onLoad from "wowlua:lifecycle"
 import * as secret from "wowlua:secret"
 import print, registerCommand from "./Init"
 import * as util from "./Util"
+import * as tbl from "wowlua:table"
 import * as fault from "./Fault"
 import * as events from "./Events"
 import * as DB from "./DB"
 import * as vision from "./Vision"
 
-local copy, equal, ownerName = util.copy, util.equal, util.ownerName
+-- The keys of `t` sorted as strings (plugin data may mix key types).
+local function sortedKeys<K, V>(t: { [K]: V }): K[]
+    return tbl.keys(t, function(a: K, b: K): boolean return tostring(a) < tostring(b) end)
+end
+
+local copy, equal, ownerName = tbl.copy, tbl.equal, util.ownerName
 
 export type Values = { [string]: any }
 export type Profile = { [string]: any }
@@ -155,8 +161,8 @@ export class SettingsStore
     -- Registered namespaces and their keys, sorted, for listings.
     function list(): Listing[]
         local out: Listing[] = {}
-        for _, namespace in ipairs(util.sortedKeys(self.defaults)) do
-            out[#out + 1] = { namespace = namespace, keys = util.sortedKeys(self.defaults[namespace] :: Values) }
+        for _, namespace in ipairs(sortedKeys(self.defaults)) do
+            out[#out + 1] = { namespace = namespace, keys = sortedKeys(self.defaults[namespace] :: Values) }
         end
         return out
     end
@@ -273,11 +279,11 @@ export class SettingsStore
         if namespace and key then
             return (self:set(namespace, key, copy(self:default(namespace, key))))
         end
-        local namespaces: string[] = namespace and { namespace } or util.sortedKeys(self.defaults)
+        local namespaces: string[] = namespace and { namespace } or sortedKeys(self.defaults)
         for _, n in ipairs(namespaces) do
             local defs = self.defaults[n]
             if not defs then error(("SuuUI Settings: unknown namespace %q"):format(n), 3) end
-            for _, k in ipairs(util.sortedKeys(defs)) do
+            for _, k in ipairs(sortedKeys(defs)) do
                 self:set(n, k, copy(defs[k]))
             end
         end
@@ -381,7 +387,7 @@ export class SettingsStore
 
     function profileNames(): string[]
         local data = self.db
-        return data and util.sortedKeys(data.profiles) or {}
+        return data and sortedKeys(data.profiles) or {}
     end
 
     function currentProfile(): string?

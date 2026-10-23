@@ -48,9 +48,8 @@ const S = T.space
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local LOCK = "Interface\\LFGFrame\\UI-LFG-ICON-LOCK"
 local DIR = Enum.StatusBarTimerDirection
--- wowlua:secret's isSecret as a local predicate: an imported one doesn't
+-- wowlua:secret's secret.isSecret as a local predicate: an imported one doesn't
 -- narrow in wowlua 0.9.1 while the project has an import cycle (port notes)
-local function isSecret(v: unknown): v is Secret<unknown> return secret.isSecret(v) end
 local LINE = 13 -- a plate's spell line under the bar
 
 --------------------------------------------------------------------------------
@@ -132,14 +131,14 @@ end
 -- (what it reads of the game's answer; any part may be secret)
 type CooldownRead = { isActive?: boolean | Secret<boolean>, startTime?: number | Secret<number>, duration?: number | Secret<number> }
 local function readyFrom(cd: CooldownRead | Secret<CooldownRead> | nil): boolean?
-    if not cd or isSecret(cd) or isSecret(cd.isActive) then return nil end
+    if not cd or secret.isSecret(cd) or secret.isSecret(cd.isActive) then return nil end
     if not cd.isActive then return true end
     if not interrupt.usedAt then
         -- used before a reload: SuuUI never saw the cast, so the cooldown's
         -- own start and length stand in, when readable and longer than a
         -- global cooldown
         local start, length = cd.startTime, cd.duration
-        if not isSecret(start) and not isSecret(length) and start and length and length > 1.5 then
+        if not secret.isSecret(start) and not secret.isSecret(length) and start and length and length > 1.5 then
             interrupt.usedAt, interrupt.cooldown = start, length
         end
     end
@@ -152,9 +151,9 @@ export function ready(): boolean?
 end
 
 events.onUnit("UNIT_SPELLCAST_SUCCEEDED", "player", function(_, _, _, spellID)
-    if isSecret(spellID) or not spellID or not isInterrupt(spellID) then return end
+    if secret.isSecret(spellID) or not spellID or not isInterrupt(spellID) then return end
     local ms = GetSpellBaseCooldown and GetSpellBaseCooldown(spellID)
-    interrupt.cooldown = (not isSecret(ms) and ms and ms > 0) and ms / 1000 or BASE_COOLDOWN[spellID] or 0
+    interrupt.cooldown = (not secret.isSecret(ms) and ms and ms > 0) and ms / 1000 or BASE_COOLDOWN[spellID] or 0
     interrupt.usedAt = GetTime()
     for bar in pairs(interrupt.bars) do bar:UpdateKick() end
 end, "Interrupt")
@@ -688,7 +687,7 @@ export class CastBar extends Frame
             -- a unit frame's bar: a friendly unit's cast is neutral (a plate's
             -- owner decides that itself). Secret reads as attackable.
             local attackable = UnitCanAttack("player", u)
-            self:SetNeutral(not isSecret(attackable) and not attackable)
+            self:SetNeutral(not secret.isSecret(attackable) and not attackable)
         end
         self:SetInterruptible(notInterruptible)
         self:UpdateKick()
@@ -706,7 +705,7 @@ export class CastBar extends Frame
             return
         end
         local notInterruptible: boolean | Secret<boolean> = false
-        if isSecret(given) or given ~= nil then notInterruptible = given :: boolean | Secret<boolean> end
+        if secret.isSecret(given) or given ~= nil then notInterruptible = given :: boolean | Secret<boolean> end
         arcane:SetAlphaFromBoolean(notInterruptible, 0, 1)
         lockHost:SetAlphaFromBoolean(notInterruptible, 1, 0)
     end

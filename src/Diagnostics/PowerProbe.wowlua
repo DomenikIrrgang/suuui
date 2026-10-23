@@ -4,7 +4,7 @@
 -- your power, in and out of combat.
 --   now, 2 s into each fight (up to 6) and at the first combo point change
 --   of each fight: UnitPowerType (both returns), UnitPower, UnitPowerMax and
---          UnitPowerPercent, plain and for Mana, Rage, Energy and Combo
+--          UnitPowerPercent, secret.readable and for Mana, Rage, Energy and Combo
 --          points; GetComboPoints("player", "target"); and whether a
 --          StatusBar takes the combo points (five hidden bars, bar i at
 --          SetMinMaxValues(i - 1, i), as pips would be; SetValue in a pcall,
@@ -15,7 +15,7 @@
 --          PLAYER_TARGET_CHANGED; the time between power events per token
 --          (energy ticks every ~2 s: a rhythm may show from the timing
 --          alone, without reading the amount), with the amount when it reads
---          plain; your casts (UNIT_SPELLCAST_SUCCEEDED) with
+--          secret.readable; your casts (UNIT_SPELLCAST_SUCCEEDED) with
 --          C_Spell.GetSpellPowerCost, and for mana the seconds since your
 --          last cast at each power event (the five-second rule); form changes
 --          (UPDATE_SHAPESHIFT_FORM): whether UnitPowerType reads in combat
@@ -25,6 +25,7 @@ import isSecret from "wowlua:secret"
 import after from "wowlua:timer"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
+import * as secret from "wowlua:secret"
 
 type Map = { [any]: any }
 
@@ -42,7 +43,6 @@ local function call(fn: any, ...: any): (any, any, any, any)
     return a, b, c, d
 end
 
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 local function out(): Map
     DB.probe.power = DB.probe.power or {}
@@ -135,7 +135,7 @@ local lastCast: number? = nil
 local fight: Map? = nil
 local seconds: { [string]: { second: number, count: number } } = {}      -- [event] = { second = n, count = n }
 local lastAt: { [string]: number } = {}       -- [token] = GetTime() of its last power event
-local lastAmount: { [string]: number } = {}   -- [token] = the last plain amount
+local lastAmount: { [string]: number } = {}   -- [token] = the last secret.readable amount
 
 local function rate(e: Map, event: string)
     local now = math.floor(GetTime())
@@ -153,7 +153,7 @@ local TOKEN_TYPE: { [string]: number } = { MANA = PT.Mana or 0, RAGE = PT.Rage o
 
 local function onPower(o: Map, event: string, token: any)
     local e = o.events
-    local key = plain(token) and tostring(token) or "SECRET"
+    local key = secret.readable(token) and tostring(token) or "SECRET"
     e.byToken[event .. " " .. key] = (e.byToken[event .. " " .. key] or 0) + 1
     -- the timing per token (UNIT_POWER_FREQUENT only, so one event per change)
     if event ~= "UNIT_POWER_FREQUENT" then return end
@@ -163,7 +163,7 @@ local function onPower(o: Map, event: string, token: any)
     if id then amount = call(UnitPower, "player", id) end
     local amountText = show(amount)
     local delta = ""
-    if plain(amount) and type(amount) == "number" then
+    if secret.readable(amount) and type(amount) == "number" then
         local last = lastAmount[key]
         if last then delta = (" (%+d)"):format(amount - last) end
         lastAmount[key] = amount

@@ -15,6 +15,7 @@ import SuuUI from "/Core/API"
 import after, every from "wowlua:timer"
 import hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -33,7 +34,6 @@ local function call(fn: any, ...: any): (any, any, any, any, any, any, any, any,
     local ok, a, b, c, d, e, f, g, h, i, j, k, l, m = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k, l, m end
 end
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
 
 --------------------------------------------------------------------------------
 -- Where something comes from: the best source as one line, all of it as a
@@ -65,11 +65,11 @@ local function object(id: number): (string?, string?)
 end
 local function itemName(id: number?): string?
     local name = C_Item and C_Item.GetItemNameByID and call(C_Item.GetItemNameByID, id)
-    return plain(name) and name or nil
+    return secret.readable(name) and name or nil
 end
 local function questTitle(id: number): string?
     local t = C_QuestLog and C_QuestLog.GetTitleForQuestID and call(C_QuestLog.GetTitleForQuestID, id)
-    return plain(t) and t ~= "" and t or nil
+    return secret.readable(t) and t ~= "" and t or nil
 end
 
 local function place(name: string, zone: string?): string return zone and (name .. ", " .. zone) or name end
@@ -197,14 +197,14 @@ function M:Toys()
     local out = {}
     for _, itemID in ipairs(data().toys or {}) do
         local _, name, icon, favourite = call(TB and TB.GetToyInfo, itemID)
-        name = plain(name) and name or itemName(itemID) or ("Toy " .. itemID)
+        name = secret.readable(name) and name or itemName(itemID) or ("Toy " .. itemID)
         local has = call(PlayerHasToy, itemID) and true or false
         out[#out + 1] = {
             kind = "toy", id = itemID, itemID = itemID, name = name, icon = icon or (C_Item and call(C_Item.GetItemIconByID, itemID)),
             favourite = favourite, collected = has, usable = has and call(TB and TB.IsToyUsable, itemID) ~= false,
             source = data().toy and data().toy[itemID], learned = self:Learned("toy", itemID, has),
         }
-        if not plain(name) or name:find("^Toy %d") then self.namesPending = true end
+        if not secret.readable(name) or name:find("^Toy %d") then self.namesPending = true end
     end
     table.sort(out, function(a, b)
         if a.collected ~= b.collected then return a.collected end
@@ -294,7 +294,7 @@ function M:Appearances(category: number, slot: string?): Entry[]
                 first = first or s
             end
             if first then
-                local name = plain(first.name) and first.name or itemName(first.itemID)
+                local name = secret.readable(first.name) and first.name or itemName(first.itemID)
                 if not name then self.namesPending = true end
                 out[#out + 1] = {
                     kind = "appearance", id = a.visualID, visualID = a.visualID, sourceID = first.sourceID, itemID = first.itemID,
@@ -339,7 +339,7 @@ end
 -- A toy's cooldown: when it started and how long (0 when ready).
 local function toyCooldown(itemID: number): (number, number)
     local start, duration = call(C_Container and C_Container.GetItemCooldown, itemID)
-    if not (plain(start) and plain(duration)) then return 0, 0 end
+    if not (secret.readable(start) and secret.readable(duration)) then return 0, 0 end
     if duration and duration > 1.5 and start and start > 0 then return start, duration end
     return 0, 0
 end
@@ -519,7 +519,7 @@ function M:DrawCard(c: any, e: Entry, extra: string?)
     local card = self:SourceCard(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType)
     if not card[1] then card = { { title = "Source unknown", lines = {} } } end
     local n, prev = 0, c.rule
-    local function text(style: string, tone: string, indent: number, gap: number): any
+    local function addText(style: string, tone: string, indent: number, gap: number): any
         n = n + 1
         local t = c.texts[n]
         if not t then
@@ -539,8 +539,8 @@ function M:DrawCard(c: any, e: Entry, extra: string?)
         return t
     end
     for i, section in ipairs(card) do
-        text("micro", "gilt-text", 0, i == 1 and S["space-4"] or S["space-5"]):SetValue(section.title)
-        for _, line in ipairs(section.lines) do text("body", "ink", 15, S["space-2"]):SetValue(line) end
+        addText("micro", "gilt-text", 0, i == 1 and S["space-4"] or S["space-5"]):SetValue(section.title)
+        for _, line in ipairs(section.lines) do addText("body", "ink", 15, S["space-2"]):SetValue(line) end
     end
 end
 
@@ -1247,7 +1247,7 @@ function M:OnEnable()
     -- toys: new ones, their cooldowns, their names as the game sends them
     self:OnGameEvent("NEW_TOY_ADDED", function(_, itemID)
         local _, name = call(C_ToyBox.GetToyInfo, itemID)
-        self:NoteLast(plain(name) and name or nil, time())
+        self:NoteLast(secret.readable(name) and name or nil, time())
         self:Refresh()
     end)
     self:OnGameEvent("TOYS_UPDATED", function() if self.window and self.window:IsShown() then self:Refresh() end end)
@@ -1312,7 +1312,7 @@ local function classes()
     local out = {}
     for id = 1, 13 do
         local name = GetClassInfo and call(GetClassInfo, id)
-        if plain(name) and name then out[#out + 1] = { value = id, label = name } end
+        if secret.readable(name) and name then out[#out + 1] = { value = id, label = name } end
     end
     return out
 end
@@ -1644,7 +1644,7 @@ local function toyUse(itemID: number): string?
     local tip = C_TooltipInfo and C_TooltipInfo.GetToyByItemID and call(C_TooltipInfo.GetToyByItemID, itemID)
     for _, l in ipairs(tip and tip.lines or {}) do
         local t = l.leftText
-        if plain(t) and t and t:find("^Use:") then
+        if secret.readable(t) and t and t:find("^Use:") then
             useText[itemID] = t:gsub("^Use:%s*", "")
             return useText[itemID]
         end

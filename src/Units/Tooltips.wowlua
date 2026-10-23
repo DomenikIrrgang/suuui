@@ -26,12 +26,14 @@ import Module from "/Core/Modules"
 import type Panel from "/UI/Panel"
 import type Color from "/Core/Tokens"
 import type Position from "/EditMode/EditMode"
-import isSecret from "wowlua:secret"
 import hook, hookScript from "wowlua:hooks"
 import after from "wowlua:timer"
 import type UnitAuras from "/UI/Auras"
 import type Text from "/UI/Text"
-import asFrame, asFontString, asStatusBar, part, named, openRoot from "/UI/Reskin"
+import openRoot from "/UI/Reskin"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -46,9 +48,6 @@ local DEFAULTS = {
 
 local M: TooltipsModule
 
-
--- (secrecy tested first: comparing a secret is an error in strict mode)
-local function plain(v: unknown): v is string | number | boolean | table return not isSecret(v) and v ~= nil end
 
 local TOOLTIPS: string[] = { "GameTooltip", "ShoppingTooltip1", "ShoppingTooltip2", "ItemRefTooltip",
                    "ItemRefShoppingTooltip1", "ItemRefShoppingTooltip2" }
@@ -86,7 +85,7 @@ end
 -- The unit a tooltip shows, when it's one addon code can read.
 local function unitOf(tooltip: GameTooltip): string?
     local ok: boolean, _: unknown, unit: unknown = pcall(tooltip.GetUnit, tooltip)
-    if ok and plain(unit) and type(unit) == "string" then return unit end
+    if ok and secret.readable(unit) and type(unit) == "string" then return unit end
     return nil
 end
 
@@ -97,17 +96,17 @@ local function auraAt(unit: string, index: unknown, filter: unknown): AuraData?
     return a
 end
 
--- One of the game's tooltip hooks (TooltipDataProcessor, declared as a plain
+-- One of the game's tooltip hooks (TooltipDataProcessor, declared as a secret.readable
 -- table): fn after the game filled a tooltip of `kind`.
 type PostCall = (tooltip: GameTooltip, data: unknown) -> ()
 local function postCall(kind: unknown, fn: PostCall)
-    local add = part(TooltipDataProcessor, "AddTooltipPostCall")
+    local add = tbl.field(TooltipDataProcessor, "AddTooltipPostCall")
     if type(add) == "function" then (add :: (kind: unknown, fn: PostCall) -> ())(kind, fn) end
 end
 
 local function timeLeft(a: AuraData): string
     local d, x = a.duration, a.expirationTime
-    if not (plain(d) and plain(x)) or not d or d <= 0 or not x then return "" end
+    if not (secret.readable(d) and secret.readable(x)) or not d or d <= 0 or not x then return "" end
     local left = x - GetTime()
     if left <= 0 then return "" end
     if left < 60 then return ("%d"):format(left) end
@@ -183,8 +182,8 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
 
     function ApplyFonts()
         for object, style in pairs(FONTS) do
-            local font = named(object)
-            local setFont = part(font, "SetFont")
+            local font = tbl.field(_G, object)
+            local setFont = tbl.field(font, "SetFont")
             local types: { [string]: { file: string, size: number } } = T.type
             local s = types[style]
             if type(setFont) == "function" and s then pcall(setFont, font, s.file, s.size, "") end
@@ -198,7 +197,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         if not ui or ui == 0 then return end
         local scale = SuuUI.Root:GetEffectiveScale() / ui
         for _, name in ipairs(TOOLTIPS) do
-            local tt = asFrame(named(name))
+            local tt = frames.find(name)
             if tt then tt:SetScale(scale) end
         end
     end
@@ -209,18 +208,18 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         if not unit then return end
         local token: string? = nil
         local isPlayer = UnitIsPlayer(unit)
-        if not plain(isPlayer) then return end
+        if not secret.readable(isPlayer) then return end
         if isPlayer then
             local _, class = UnitClass(unit)
-            if plain(class) and class then token = "class-" .. class:lower() end
+            if secret.readable(class) and class then token = "class-" .. class:lower() end
         else
             local r = UnitReaction(unit, "player")
-            if plain(r) and r then token = reactionToken(r) end
+            if secret.readable(r) and r then token = reactionToken(r) end
         end
         local colors: { [string]: unknown } = T.color
         if not (token and colors[token]) then return end
         local name = tooltip:GetName()
-        local line = name and asFontString(named(name .. "TextLeft1")) or nil
+        local line = name and frames.asFontString(tbl.field(_G, name .. "TextLeft1")) or nil
         if line then line:SetTextColor(UI.RGBA(token)) end
     end
 
@@ -230,15 +229,15 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         local unit = unitOf(tooltip)
         if not unit then return end
         local level = UnitLevel(unit)
-        if not plain(level) then return end
+        if not secret.readable(level) then return end
         local colors: { [string]: Color } = T.color
         local hex = assert(colors[UI.LevelColor(level)]).hex
         local word = LEVEL or "Level"
         local name = tooltip:GetName()
         for i = 2, math.min(5, tooltip:NumLines() or 0) do
-            local line = name and asFontString(named(name .. "TextLeft" .. i)) or nil
+            local line = name and frames.asFontString(tbl.field(_G, name .. "TextLeft" .. i)) or nil
             local text = line and line:GetText()
-            if line and plain(text) and text then
+            if line and secret.readable(text) and text then
                 local before, num, rest = text:match("^(.-" .. word .. " )(%S+)(.*)$")
                 if num and not num:find("|c", 1, true) then
                     line:SetText(assert(before) .. "|cff" .. hex .. num .. "|r" .. assert(rest))
@@ -249,7 +248,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
     end
 
     function SkinStatusBar()
-        local bar = asStatusBar(named("GameTooltipStatusBar"))
+        local bar = frames.asStatusBar(tbl.field(_G, "GameTooltipStatusBar"))
         if not bar or self.barSkinned then return end
         self.barSkinned = true
         bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
@@ -273,7 +272,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
     -- (set in the engine) and the aura panel's caption line.
     function ApplyTheme()
         self:ApplyFonts()
-        local bar = asStatusBar(named("GameTooltipStatusBar"))
+        local bar = frames.asStatusBar(tbl.field(_G, "GameTooltipStatusBar"))
         if bar and self.barSkinned then bar:SetStatusBarColor(UI.RGBA("unit-fill")) end
         -- a unit's tooltip open now: its name in the new colour (the rest of
         -- its lines are the game's, set again on the next show)
@@ -296,7 +295,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
             for i = 1, 40 do
                 local a = auraAt(unit, i, filter)
                 if not a then break end
-                if plain(a.name) and a.name then list[#list + 1] = { a = a, harmful = filter == "HARMFUL" } end
+                if secret.readable(a.name) and a.name then list[#list + 1] = { a = a, harmful = filter == "HARMFUL" } end
             end
         end
         if #list == 0 then return end
@@ -304,14 +303,14 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         tooltip:AddLine(" ")
         for i = 1, math.min(#list, MAX_LINES) do
             local a, harmful = list[i].a, list[i].harmful
-            local icon = plain(a.icon) and a.icon and ("|T" .. a.icon .. ":0:0:0:0:64:64:5:59:5:59|t ") or ""
+            local icon = secret.readable(a.icon) and a.icon and ("|T" .. a.icon .. ":0:0:0:0:64:64:5:59:5:59|t ") or ""
             -- yours: you (or your pet) cast it (isFromPlayerOrPlayerPet is true for
             -- every aura on you, found in game)
             local src = a.sourceUnit
-            local mine = not harmful and plain(src) and src ~= nil and (UI.Flag(UnitIsUnit(src, "player")) or UI.Flag(UnitIsUnit(src, "pet")))
+            local mine = not harmful and secret.readable(src) and src ~= nil and (secret.flag(UnitIsUnit(src, "player")) or secret.flag(UnitIsUnit(src, "pet")))
             local c = harmful and ember or ink
             local name = a.name .. (mine and (" |cff" .. muted.hex .. "(yours)|r") or "")
-            local count = plain(a.applications) and a.applications and a.applications > 1 and (" ×" .. a.applications) or ""
+            local count = secret.readable(a.applications) and a.applications and a.applications > 1 and (" ×" .. a.applications) or ""
             tooltip:AddDoubleLine(icon .. name .. count, timeLeft(a), c[1], c[2], c[3], muted[1], muted[2], muted[3])
         end
         if #list > MAX_LINES then
@@ -355,7 +354,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         if not auras then return end
         auras:SetUnit(unit)
         p:ClearAllPoints()
-        local bar = asStatusBar(named("GameTooltipStatusBar"))
+        local bar = frames.asStatusBar(tbl.field(_G, "GameTooltipStatusBar"))
         local below: Region = (bar and bar:IsShown() and bar:GetParent() == tooltip) and bar or tooltip
         p:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -T.space["space-2"])
         p:Show()
@@ -386,7 +385,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
     -- Tooltips SuuUI doesn't know by name (the aura buttons' own one, an
     -- addon's) get the look the first time they show the game's data.
     function SkinAny(given: unknown)
-        local tooltip = asFrame(given)
+        local tooltip = frames.asFrame(given)
         if not tooltip or UI.IsTooltipSkinned(tooltip) then return end
         if tooltip:IsForbidden() then return end
         if tooltip:GetObjectType() ~= "GameTooltip" then return end
@@ -406,8 +405,8 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
     -- from the client's API documentation, 2026-10-13): surface-glass inside a
     -- 1px gilt-line edge. Its text stays the game's (no spell ID there).
     function StyleAuraTooltip()
-        local inbound = named("AuraContainerInbound")
-        local setBackdrop = part(inbound, "SetTooltipBackdrop")
+        local inbound = tbl.field(_G, "AuraContainerInbound")
+        local setBackdrop = tbl.field(inbound, "SetTooltipBackdrop")
         if not (type(setBackdrop) == "function" and CreateColor) then return end
         -- one physical pixel in UIParent units
         local _, h = GetPhysicalScreenSize()
@@ -429,8 +428,8 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
 
     function AddSpellID(tooltip: GameTooltip, data: unknown)
         if not self:Get("ids") then return end
-        local id = part(data, "id")
-        if not plain(id) or type(id) ~= "number" then return end
+        local id = tbl.field(data, "id")
+        if not secret.readable(id) or type(id) ~= "number" then return end
         local m = T.color["ink-faint"]
         tooltip:AddDoubleLine("Spell ID", tostring(id), m[1], m[2], m[3], m[1], m[2], m[3])
         tooltip:Show()
@@ -439,9 +438,9 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
     -- After SetUnitAura & co: "From" and the caster in their class colour.
     function AddSource(tooltip: GameTooltip, unit: unknown, auraInstanceID: unknown, index: unknown, filter: unknown)
         if not self:Get("ids") then return end
-        if not plain(unit) or type(unit) ~= "string" then return end
+        if not secret.readable(unit) or type(unit) ~= "string" then return end
         local a: AuraData? = nil
-        if plain(auraInstanceID) and type(auraInstanceID) == "number" then
+        if secret.readable(auraInstanceID) and type(auraInstanceID) == "number" then
             local ok, read = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, auraInstanceID)
             if ok and not issecretvalue(read) then a = read end
         else
@@ -449,18 +448,18 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         end
         if not a then return end
         local src = a.sourceUnit
-        if not plain(src) or not src then return end
+        if not secret.readable(src) or not src then return end
         local readName = UnitName(src)
-        if not plain(readName) or not readName then return end
+        if not secret.readable(readName) or not readName then return end
         local name: string = readName
         local colors: { [string]: Color } = T.color
         local color = assert(colors["ink"])
-        if UI.Flag(UnitIsPlayer(src)) then
+        if secret.flag(UnitIsPlayer(src)) then
             local _, class = UnitClass(src)
-            local own = plain(class) and class and colors["class-" .. class:lower()]
+            local own = secret.readable(class) and class and colors["class-" .. class:lower()]
             if own then color = own end
         end
-        if UI.Flag(UnitIsUnit(src, "player")) then name = name .. " (you)" end
+        if secret.flag(UnitIsUnit(src, "player")) then name = name .. " (you)" end
         local m = T.color["ink-faint"]
         tooltip:AddDoubleLine("From", name, m[1], m[2], m[3], color[1], color[2], color[3])
         tooltip:Show()
@@ -471,14 +470,14 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
     -- never sees them (hooked there, the caster line never came).
     function HookAuraSources()
         for _, name in ipairs(TOOLTIPS) do
-            local tt = asFrame(named(name))
+            local tt = frames.find(name)
             if tt then self:HookAuraSourcesOn(tt) end
         end
     end
 
     function HookAuraSourcesOn(api: Frame)
         local function hookSetter(method: string, byID: boolean, defaultFilter: string?)
-            if type(part(api, method)) ~= "function" then return end
+            if type(tbl.field(api, method)) ~= "function" then return end
             hook(api, method, function(tooltip: GameTooltip, unit: unknown, a2: unknown, a3: unknown)
                 if not self:IsEnabled() or tooltip:IsForbidden() then return end
                 if byID then
@@ -500,7 +499,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         local anchor = self.anchorFrame
         if self:Get("anchor") ~= "suuui" or tooltip ~= GameTooltip or not anchor then return end
         tooltip:ClearAllPoints()
-        local bags = asFrame(named("SuuUIBags"))
+        local bags = frames.find("SuuUIBags")
         if bags and bags:IsVisible() then
             tooltip:SetPoint("BOTTOMRIGHT", bags, "TOPRIGHT", 0, T.space["space-4"])
         else
@@ -513,8 +512,8 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
     -- look: hooked after the game opened one, so its choices stay the game's.
     -- Its submenus follow (UI.ReskinMenu restyles the menus a restyled one opens).
     function HookUnitMenus()
-        local mgr = named("UnitPopupManager")
-        if self.unitMenusHooked or not part(mgr, "OpenMenu") then return end
+        local mgr = tbl.field(_G, "UnitPopupManager")
+        if self.unitMenusHooked or not tbl.field(mgr, "OpenMenu") then return end
         self.unitMenusHooked = true
         hook(mgr, "OpenMenu", function()
             if not (self:IsEnabled() and self:Get("unitMenus")) then return end
@@ -528,7 +527,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         for _, name in ipairs(TOOLTIPS) do
-            local tt = asFrame(named(name))
+            local tt = frames.find(name)
             if tt then UI.SkinTooltip(tt) end
         end
         self:HookUnitMenus()
@@ -547,8 +546,8 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         self:RegisterSettings(SECTION)
         if not self.hooked then
             self.hooked = true
-            if part(TooltipDataProcessor, "AddTooltipPostCall") and Enum.TooltipDataType then
-                postCall(part(TooltipDataProcessor, "AllTypes") or "ALL", function(tooltip: GameTooltip, _: unknown)
+            if tbl.field(TooltipDataProcessor, "AddTooltipPostCall") and Enum.TooltipDataType then
+                postCall(tbl.field(TooltipDataProcessor, "AllTypes") or "ALL", function(tooltip: GameTooltip, _: unknown)
                     if self:IsEnabled() then pcall(self.SkinAny, self, tooltip) end
                 end)
                 for _, kind in ipairs({ Enum.TooltipDataType.Spell, Enum.TooltipDataType.UnitAura }) do

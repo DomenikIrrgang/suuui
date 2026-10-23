@@ -23,7 +23,9 @@ import type Position from "/EditMode/EditMode"
 import after, every from "wowlua:timer"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
-import asFrame, named, part from "/UI/Reskin"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI = SuuUI.UI
 
@@ -58,10 +60,10 @@ local BADGES: IconBadge[] = {
     { icon = "Enrage", tone = "warning", text = "Enrage" },
 }
 local function badgeOf(mask: unknown): Badge?
-    local set = part(Enum, "EncounterTimelineIconSet")
+    local set = tbl.field(Enum, "EncounterTimelineIconSet")
     if not readable(mask) or mask == 0 or not set then return nil end
     for _, b in ipairs(BADGES) do
-        local v = part(set, b.icon)
+        local v = tbl.field(set, b.icon)
         if readable(v) and bit.band(mask, bit.lshift(1, v)) ~= 0 then return { tone = b.tone, text = b.text } end
     end
     return nil
@@ -88,14 +90,14 @@ local function isPull(text: unknown): boolean return plain(text) and text:lower(
 
 -- A boss mod's function `key` of its global `name` (nil: not loaded).
 local function addonFn(name: string, key: string): ((...unknown) -> ...unknown)?
-    local fn = part(named(name), key)
+    local fn = tbl.field(tbl.field(_G, name), key)
     if type(fn) == "function" then return fn :: (...unknown) -> ...unknown end
     return nil
 end
 
 -- DBM's options table, while DBM is loaded.
 local function dbmOptions(): { [string]: unknown }?
-    local options = part(named("DBM"), "Options")
+    local options = tbl.field(tbl.field(_G, "DBM"), "Options")
     if type(options) == "table" then return options :: { [string]: unknown } end
     return nil
 end
@@ -116,9 +118,9 @@ local function keepHidden(frame: Frame?, test: () -> boolean)
     hideTests[frame] = test
     if not hideHooked[frame] then
         hideHooked[frame] = true
-        hook(frame, "SetAlpha", function(f: Frame, a: number)
+        hook(frame, "SetAlpha", function(f, a)
             local hidden = hideTests[f]
-            if a > 0 and hidden and hidden() then f:SetAlpha(0) end
+            if not issecretvalue(a) and a > 0 and hidden and hidden() then f:SetAlpha(0) end
         end)
     end
     if test() then frame:SetAlpha(0) end
@@ -141,9 +143,9 @@ local VOICE_PATH = "Interface\\AddOns\\SuuUI\\Media\\Sounds\\Countdown\\%s\\%s.o
 -- Who may start one for the group: the leader or an assistant (anyone in a
 -- party without a leader flag).
 local function canLead(): boolean
-    if not UI.Flag(IsInGroup()) then return true end
-    if UI.Flag(UnitIsGroupLeader("player")) or UI.Flag(UnitIsGroupAssistant("player")) then return true end
-    return not UI.Flag(IsInRaid())
+    if not secret.flag(IsInGroup()) then return true end
+    if secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player")) then return true end
+    return not secret.flag(IsInRaid())
 end
 
 local function blizzardCountdown(): ((seconds: number) -> ())?
@@ -320,32 +322,32 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     function HookDisplays()
         local hooked = self.hookedParts
         -- DBM's bars
-        local dbt = named("DBT")
+        local dbt = tbl.field(_G, "DBT")
         local create = addonFn("DBT", "CreateBar")
         if not hooked.dbt and type(dbt) == "table" and create then
             hooked.dbt = true
             ;(dbt :: { [string]: unknown }).CreateBar = function(bars: unknown, ...: unknown): unknown
                 local bar = create(bars, ...)
                 if type(bar) == "table" then
-                    keepHidden(asFrame(part(bar, "frame")), function(): boolean return M:Suppressing("dbm") end)
+                    keepHidden(frames.asFrame(tbl.field(bar, "frame")), function(): boolean return M:Suppressing("dbm") end)
                 end
                 return bar
             end
         end
         -- BigWigs' bars (LibCandyBar, shared: only bars BigWigs tags as its own)
-        local libStub = named("LibStub")
+        local libStub = tbl.field(_G, "LibStub")
         local candy: unknown = nil
         -- (LibStub is a table one calls)
         if not hooked.candy and libStub then
             local ok: boolean, lib: unknown = pcall(libStub :: (major: string, silent: boolean) -> unknown, "LibCandyBar-3.0", true)
             if ok then candy = lib end
         end
-        local proto = part(candy, "barPrototype")
-        if type(proto) == "table" and part(proto, "Start") then
+        local proto = tbl.field(candy, "barPrototype")
+        if type(proto) == "table" and tbl.field(proto, "Start") then
             hooked.candy = true
             hook(proto, "Start", function(bar: unknown)
-                local get = part(bar, "Get")
-                local frame = asFrame(bar)
+                local get = tbl.field(bar, "Get")
+                local frame = frames.asFrame(bar)
                 if type(get) == "function" and (get :: (bar: unknown, key: string) -> unknown)(bar, "bigwigs:module") ~= nil then
                     keepHidden(frame, function(): boolean return M:Suppressing("bigwigs") end)
                 elseif frame then
@@ -361,7 +363,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         self.hooked = true
         local register = addonFn("DBM", "RegisterCallback")
         if register then
-            local dbm = named("DBM")
+            local dbm = tbl.field(_G, "DBM")
             local function on(event: string, fn: (...unknown) -> ()) pcall(register, dbm, event, fn) end
             on("DBM_TimerBegin", function(_: unknown, id: unknown, msg: unknown, timer: unknown, icon: unknown, _: unknown, _: unknown, colorId: unknown)
                 self:AddonTimer("dbm", id, msg, timer, icon, readable(colorId) and DBM_BADGE[colorId] or nil)
@@ -410,7 +412,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         if not ET then return list end
         local ok, ids = pcall(ET.GetEventList)
         if not ok or type(ids) ~= "table" then return list end
-        local script = part(part(Enum, "EncounterTimelineEventSource"), "Script")
+        local script = tbl.field(tbl.field(Enum, "EncounterTimelineEventSource"), "Script")
         local SCRIPT: number? = readable(script) and script or nil
         for _, id in ipairs(ids) do
             local okS: boolean, state: unknown = pcall(ET.GetEventState, id)
@@ -540,7 +542,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
 
     function Pull(arg: unknown?)
         local seconds = math.floor(tonumber(arg) or self:Get("pullSeconds"))
-        if UI.Flag(IsInGroup()) and not canLead() then
+        if secret.flag(IsInGroup()) and not canLead() then
             self:Print("Only the leader or an assistant can start a pull countdown in a raid.")
             return
         end
@@ -563,8 +565,8 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             end
             self.awaiting = nil
         end
-        if UI.Flag(IsInGroup()) then
-            local channel = UI.Flag(IsInRaid()) and "RAID" or "PARTY"
+        if secret.flag(IsInGroup()) then
+            local channel = secret.flag(IsInRaid()) and "RAID" or "PARTY"
             pcall(C_ChatInfo.SendAddonMessage, PREFIX, ("PULL\t%d"):format(seconds), channel)
         end
         self:StartPull(seconds)
@@ -574,7 +576,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     -- BigWigs, /countdown).
     function OnCountdown(guid: unknown, seconds: unknown, ...: unknown)
         -- what the client sends (kept for /reload: SuuUIProbe.countdown)
-        local probe = named("SuuUIProbe")
+        local probe = tbl.field(_G, "SuuUIProbe")
         if type(probe) ~= "table" then
             probe = {}
             rawset(_G, "SuuUIProbe", probe)
@@ -607,7 +609,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
 
     -- Blizzard's big countdown numbers, kept away while SuuUI's alert counts.
     function BlizzardNumbers(show: boolean)
-        local tracker = asFrame(named("TimerTracker"))
+        local tracker = frames.find("TimerTracker")
         if not tracker then return end
         if show then
             if self.trackerOff then

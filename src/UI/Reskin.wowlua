@@ -29,12 +29,15 @@ import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as fonts from "/Core/Fonts"
 import * as draw from "/UI/Draw"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 
 local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-local isSecret: (v: unknown) -> boolean = issecretvalue or function(_: unknown): boolean return false end -- wowlua: coverage ignore (a client without secret values)
 
 local HIDE: string[] = { "collapseexpand", "scrollline", "insideframe", "stat%-bar%-bg", "stat%-bg", "%-info%-.*%-bg",
                "stattab", "button%-list%-header", "common%-search%-border", "plunderstorm" }
@@ -47,21 +50,12 @@ local BAR_COLORS: { [string]: string } = {
 -- Reading the game's frames: what is there is checked as it's read
 --------------------------------------------------------------------------------
 
--- Calls `method` on `r` if it has it, protected: its results, or nothing.
-export function ask(r: unknown, method: string, ...: unknown): ...unknown
-    if type(r) ~= "table" then return nil end
-    local fn = (r :: { [string]: unknown })[method]
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d = pcall(fn :: (...unknown) -> ...unknown, r, ...)
-    if ok then return a, b, c, d end
-    return nil
-end
+-- (the game's frames are read with wowlua:frames, wowlua:table's field and
+-- wowlua:errors' tryMethod: what is there is checked as it's read)
 
 -- A method's answer when it is a (readable) string.
 local function askString(r: unknown, method: string): string?
-    local v = ask(r, method)
-    if type(v) == "string" and not isSecret(v) then return v end
-    return nil
+    return secret.asString(errors.tryMethod(r, method))
 end
 
 -- A texture's atlas, lower case ("" without one).
@@ -72,8 +66,8 @@ end
 -- SuuUI's own frames inside the game's windows, and its own textures on the
 -- game's parts: a pass leaves them be (`f.suuOwn = true`, the plugins' way,
 -- counts too).
-local ownFrames: { [Region]: true } = setmetatable({}, { __mode = "k" })
-local ownArt: { [Region]: true } = setmetatable({}, { __mode = "k" })
+local ownFrames: { [Region]: true } = tbl.weakKeys()
+local ownArt: { [Region]: true } = tbl.weakKeys()
 
 export function markOwn(f: Region) ownFrames[f] = true end
 
@@ -88,42 +82,15 @@ export function isArt(t: unknown): boolean
     return type(t) == "table" and ownArt[t :: Region] == true
 end
 
--- The game's frames and their parts, read by name (`_G`) or key: a widget of
--- the asked type, or nil (the game hasn't made it, or it is something else).
-export function named(name: string): unknown return _G[name] end
-
-export function part(f: unknown, key: string): unknown
-    if type(f) ~= "table" then return nil end
-    return (f :: { [string]: unknown })[key]
-end
-
 -- A flag a plugin (or a module) set on one of the game's frames: suuOwn,
 -- suuNoCheck, suuNoButton, suuSkip.
 local function flagged(f: unknown, key: string): boolean
-    return part(f, key) == true
+    return tbl.field(f, key) == true
 end
-
-local function isA(v: unknown, kind: string): boolean
-    if type(v) ~= "table" then return false end
-    local is = (v :: { [string]: unknown }).IsObjectType
-    if type(is) ~= "function" then return false end
-    local ok: boolean, yes: unknown = pcall(is, v, kind)
-    return ok and yes == true
-end
-
-export function asRegion(v: unknown): Region? if isA(v, "Region") then return v :: Region end return nil end
-export function asFrame(v: unknown): Frame? if isA(v, "Frame") then return v :: Frame end return nil end
-export function asButton(v: unknown): Button? if isA(v, "Button") then return v :: Button end return nil end
-export function asCheckButton(v: unknown): CheckButton? if isA(v, "CheckButton") then return v :: CheckButton end return nil end
-export function asEditBox(v: unknown): EditBox? if isA(v, "EditBox") then return v :: EditBox end return nil end
-export function asScrollFrame(v: unknown): ScrollFrame? if isA(v, "ScrollFrame") then return v :: ScrollFrame end return nil end
-export function asFontString(v: unknown): FontString? if isA(v, "FontString") then return v :: FontString end return nil end
-export function asTexture(v: unknown): Texture? if isA(v, "Texture") then return v :: Texture end return nil end
-export function asStatusBar(v: unknown): StatusBar? if isA(v, "StatusBar") then return v :: StatusBar end return nil end
 
 -- A part of `f` that can be faded (anything with SetAlpha).
 local function fade(v: unknown)
-    local r = asRegion(v)
+    local r = frames.asRegion(v)
     if r then r:SetAlpha(0) end
 end
 
@@ -215,15 +182,15 @@ end
 --------------------------------------------------------------------------------
 
 export function reskinScrollBar(given: unknown)
-    local bar = asFrame(given)
+    local bar = frames.asFrame(given)
     if not bar then return end
     local s = skinOf(bar)
     if s.scrollBar then return end
     s.scrollBar = true
-    local track = asFrame(part(bar, "Track"))
+    local track = frames.asFrame(tbl.field(bar, "Track"))
     if track then
         for _, r in ipairs({ track:GetRegions() }) do r:SetAlpha(0) end
-        local thumb = asFrame(part(track, "Thumb"))
+        local thumb = frames.asFrame(tbl.field(track, "Thumb"))
         if thumb then
             for _, r in ipairs({ thumb:GetRegions() }) do r:SetAlpha(0) end
             local t = thumb:CreateTexture(nil, "OVERLAY")
@@ -237,16 +204,16 @@ export function reskinScrollBar(given: unknown)
             hookScript(thumb, "OnLeave", function() draw.paintFill(t, "gilt-line"); t:SetWidth(2) end)
         end
     end
-    for _, key in ipairs({ "Back", "Forward" }) do fade(part(bar, key)) end
+    for _, key in ipairs({ "Back", "Forward" }) do fade(tbl.field(bar, key)) end
 end
 
 -- A flat fill on a track inside a gilt-hairline edge, as tall as Blizzard's
 -- fill; the colour from the fill's atlas (standing colours kept).
 export function reskinStatusBar(given: unknown)
-    local bar = asStatusBar(given)
+    local bar = frames.asStatusBar(given)
     if not bar then return end
     local s = skinOf(bar)
-    local fill = asTexture(ask(bar, "GetStatusBarTexture"))
+    local fill = frames.asTexture(errors.tryMethod(bar, "GetStatusBarTexture"))
     local atlas = fill and askString(fill, "GetAtlas")
     if atlas and atlas ~= "" then s.atlas = atlas end
     if not s.statusBar then
@@ -273,7 +240,7 @@ export function reskinStatusBar(given: unknown)
         s.track = track
     end
     local function flatten()
-        local f = asTexture(ask(bar, "GetStatusBarTexture"))
+        local f = frames.asTexture(errors.tryMethod(bar, "GetStatusBarTexture"))
         if not f then return end
         local a = askString(f, "GetAtlas")
         if a and a ~= "" then s.atlas = a end
@@ -320,8 +287,8 @@ end, "UI.ReskinFillBar")
 -- Blizzard's tint (the standing's colour) or its atlas's colour (the skills'
 -- blue), a track in a gilt-hairline edge, the text centred.
 export function reskinFillBar(given: unknown)
-    local bar = asFrame(given)
-    local fill = asTexture(part(bar, "Fill"))
+    local bar = frames.asFrame(given)
+    local fill = frames.asTexture(tbl.field(bar, "Fill"))
     if not (bar and fill) then return end
     local s = skinOf(bar)
     if not s.fillBar then
@@ -373,8 +340,8 @@ export function reskinFillBar(given: unknown)
         -- which a texture draws at its own size (8 px of white: seen
         -- 2026-10-18, 3,210 / 6,000 as a sliver). Keep the share and size the
         -- fill again whenever the width changes; none: no fill.
-        local area = asFrame(part(bar, "FillArea"))
-        if part(bar, "SetFillPercent") and area then
+        local area = frames.asFrame(tbl.field(bar, "FillArea"))
+        if tbl.field(bar, "SetFillPercent") and area then
             -- the share Blizzard set before this: the right edge of its
             -- texture coordinates (SetTexCoord(0, p, 1, 0)), read before
             -- the flat texture goes on
@@ -436,11 +403,11 @@ local hooked: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- The open root menu, if the game has one open.
 export function openRoot(): Frame?
-    local getManager = part(named("Menu"), "GetManager")
+    local getManager = tbl.field(tbl.field(_G, "Menu"), "GetManager")
     if type(getManager) ~= "function" then return nil end
     local ok, manager = pcall(getManager :: () -> unknown)
     if not ok then return nil end
-    return asFrame(ask(manager, "GetOpenMenu"))
+    return frames.asFrame(errors.tryMethod(manager, "GetOpenMenu"))
 end
 
 -- A hook on a script of one of the game's pooled frames (its menus, menu
@@ -520,7 +487,7 @@ local function menuRow(st: MenuState, row: Frame)
     end
     for _, fs in ipairs(texts) do menuText(st, fs, "ink") end
     -- a submenu's arrow (a plain texture, the game's yellow): SuuUI's chevron
-    local arrow = asRegion(part(row, "arrow"))
+    local arrow = frames.asRegion(tbl.field(row, "arrow"))
     if arrow and arrow:IsShown() then
         hideRegion(st, arrow)
         st.nChevrons = st.nChevrons + 1
@@ -592,8 +559,8 @@ local function hasText(row: Frame): boolean
 end
 
 export function reskinMenu(given: unknown)
-    local menu = asFrame(given)
-    if not menu or ask(menu, "IsForbidden") then return end
+    local menu = frames.asFrame(given)
+    if not menu or errors.tryMethod(menu, "IsForbidden") then return end
     local st = menus[menu]
     if not st then
         local panel = CreateFrame("Frame", nil, menu)
@@ -615,7 +582,7 @@ export function reskinMenu(given: unknown)
         lastingHookScript(menu, "OnHide", function() if made.active then restoreMenu(made) end end)
         -- a choice that refreshes the menu (a sort order) sets its rows up
         -- again: marked again
-        if part(menu, "ReinitializeAll") then
+        if tbl.field(menu, "ReinitializeAll") then
             hook(menu :: unknown, "ReinitializeAll", function()
                 if made.active then after(0, function() if made.active and menu:IsShown() then reskinMenu(menu) end end) end
             end)
@@ -630,8 +597,8 @@ export function reskinMenu(given: unknown)
     for _, c in ipairs({ menu:GetChildren() }) do
         if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
     end
-    local scrollBox = asFrame(part(menu, "ScrollBox"))
-    local target = asFrame(part(scrollBox, "ScrollTarget"))
+    local scrollBox = frames.asFrame(tbl.field(menu, "ScrollBox"))
+    local target = frames.asFrame(tbl.field(scrollBox, "ScrollTarget"))
     local scrolling = scrollBox ~= nil and target ~= nil and scrollBox:IsShown()
     if target and scrolling then
         for _, c in ipairs({ target:GetChildren() }) do
@@ -677,12 +644,12 @@ end
 
 -- A submenu opened from a menu SuuUI restyled (the Who filter's Class,
 -- Race, Zone, Sort): restyled too. Every menu frame announces itself.
-local registry = named("EventRegistry")
-if part(registry, "RegisterCallback") then
+local registry = tbl.field(_G, "EventRegistry")
+if tbl.field(registry, "RegisterCallback") then
     -- (the event hands over the menu's frame, which has no GetLevel: any
     -- menu other than the open root, while the root is restyled)
-    ask(registry, "RegisterCallback", "MenuProxy.OnShow", function(_: unknown, given: unknown)
-        local menu = asFrame(given)
+    errors.tryMethod(registry, "RegisterCallback", "MenuProxy.OnShow", function(_: unknown, given: unknown)
+        local menu = frames.asFrame(given)
         if not menu then return end
         local root = openRoot()
         local st = root and root ~= menu and menus[root]
@@ -696,17 +663,17 @@ end
 -- Blizzard's dropdown (WowStyle): surface-sunk in a gilt-line edge, its text
 -- in label ink, a chevron on the right.
 export function reskinDropdown(given: unknown, opts: { glyph?: string }?)
-    local d = asButton(given)
+    local d = frames.asButton(given)
     if not d then return end
     local s = skinOf(d)
     if s.dropdown then return end
     for _, t in ipairs(textures(d)) do t:SetAlpha(0) end
-    for _, key in ipairs({ "Arrow", "Background" }) do fade(part(d, key)) end
-    local text = asFontString(part(d, "Text")) or asFontString(part(d, "text"))
+    for _, key in ipairs({ "Arrow", "Background" }) do fade(tbl.field(d, key)) end
+    local text = frames.asFontString(tbl.field(d, "Text")) or frames.asFontString(tbl.field(d, "text"))
     local glyphName = opts and opts.glyph
     if glyphName then
         -- an icon-only dropdown (the map's filter): a glyph, its edge on hover
-        fade(part(d, "Icon"))
+        fade(tbl.field(d, "Icon"))
         local edge = draw.border(d, "gilt-line")
         edge:SetShown(false)
         local glyph = d:CreateTexture(nil, "OVERLAY", nil, 7)
@@ -740,9 +707,9 @@ export function reskinDropdown(given: unknown, opts: { glyph?: string }?)
         text:SetShadowOffset(0, 0)
     end
     -- the menu it opens: in SuuUI's look while it's this dropdown's
-    local event = part(part(named("DropdownButtonMixin"), "Event"), "OnMenuOpen")
-    if event and part(d, "RegisterCallback") then
-        ask(d, "RegisterCallback", event, function()
+    local event = tbl.field(tbl.field(tbl.field(_G, "DropdownButtonMixin"), "Event"), "OnMenuOpen")
+    if event and tbl.field(d, "RegisterCallback") then
+        errors.tryMethod(d, "RegisterCallback", event, function()
             local menu = openRoot()
             if not menu then return end
             reskinMenu(menu)
@@ -758,10 +725,10 @@ end
 -- gilt-hairline edge, gilt on hover, arcane while selected (Blizzard's own
 -- SelectedTexture says when).
 export function reskinIconButton(given: unknown)
-    local b = asButton(given)
+    local b = frames.asButton(given)
     if not b then return end
     local s = skinOf(b)
-    local icon = asTexture(part(b, "Icon")) or asTexture(part(b, "icon"))
+    local icon = frames.asTexture(tbl.field(b, "Icon")) or frames.asTexture(tbl.field(b, "icon"))
     local st = s.icon
     if not st then
         local well = b:CreateTexture(nil, "BACKGROUND", nil, -8)
@@ -773,7 +740,7 @@ export function reskinIconButton(given: unknown)
         edgeHolder:EnableMouse(false)
         edgeHolder:SetFrameLevel(b:GetFrameLevel() + 2)
         local edge = draw.border(edgeHolder, "gilt-hairline")
-        local sel = asRegion(part(b, "SelectedTexture")) or asRegion(part(b, "selectedTexture"))
+        local sel = frames.asRegion(tbl.field(b, "SelectedTexture")) or frames.asRegion(tbl.field(b, "selectedTexture"))
         local made: IconSkin = { edge = edge, hover = false, draw = function() end }
         made.draw = function()
             local on = sel ~= nil and sel:IsShown()
@@ -788,7 +755,7 @@ export function reskinIconButton(given: unknown)
         end
     end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture", "GetCheckedTexture" }) do
-        local t = asRegion(ask(b, get))
+        local t = frames.asRegion(errors.tryMethod(b, get))
         if t and t ~= icon then t:SetAlpha(0) end
     end
     for _, t in ipairs(textures(b)) do
@@ -805,12 +772,12 @@ export function reskinIconButton(given: unknown)
 end
 
 export function reskinCheckButton(given: unknown)
-    local b = asCheckButton(given)
+    local b = frames.asCheckButton(given)
     if not b then return end
     local s = skinOf(b)
     if s.check then return end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
-        fade(ask(b, get))
+        fade(errors.tryMethod(b, get))
     end
     local box = CreateFrame("Frame", nil, b)
     box:SetSize(16, 16)
@@ -824,7 +791,7 @@ export function reskinCheckButton(given: unknown)
     check:SetPoint("CENTER")
     draw.paint(check, "arcane")
     local function redraw()
-        local checked = ask(b, "GetChecked")
+        local checked = errors.tryMethod(b, "GetChecked")
         local on = checked ~= nil and checked ~= false
         check:SetShown(on)
         edge:SetColor(on and "arcane" or "gilt-line")
@@ -840,17 +807,17 @@ end
 -- SuuUI's quiet button: surface-raised, gilt-line edge (gilt on hover), its
 -- label in `label` ink; dimmed while disabled.
 export function reskinButton(given: unknown)
-    local b = asButton(given)
+    local b = frames.asButton(given)
     if not b then return end
     local s = skinOf(b)
     if s.button then return end
-    for _, key in ipairs({ "Left", "Middle", "Center", "Right", "LeftSeparator", "RightSeparator" }) do fade(part(b, key)) end
+    for _, key in ipairs({ "Left", "Middle", "Center", "Right", "LeftSeparator", "RightSeparator" }) do fade(tbl.field(b, key)) end
     -- any other button art (an atlas with "button" in it)
     for _, t in ipairs(textures(b)) do
         if atlasOf(t):find("button") then t:SetAlpha(0) end
     end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-        fade(ask(b, get))
+        fade(errors.tryMethod(b, get))
     end
     local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
     draw.paintFill(bg, "surface-raised")
@@ -859,8 +826,8 @@ export function reskinButton(given: unknown)
     hookScript(b, "OnEnter", function() edge:SetColor("gilt") end)
     hookScript(b, "OnLeave", function() edge:SetColor("gilt-line") end)
     local function redraw()
-        b:SetAlpha(ask(b, "IsEnabled") == false and T.opacity["opacity-disabled"] or 1)
-        local fs = asFontString(ask(b, "GetFontString"))
+        b:SetAlpha(errors.tryMethod(b, "IsEnabled") == false and T.opacity["opacity-disabled"] or 1)
+        local fs = frames.asFontString(errors.tryMethod(b, "GetFontString"))
         if fs then
             fonts.apply(fs, "label")
             draw.paint(fs, "ink")
@@ -868,8 +835,8 @@ export function reskinButton(given: unknown)
         end
     end
     hook(b, "SetEnabled", redraw)
-    if part(b, "Enable") then hook(b, "Enable", redraw) end
-    if part(b, "Disable") then hook(b, "Disable", redraw) end
+    if tbl.field(b, "Enable") then hook(b, "Enable", redraw) end
+    if tbl.field(b, "Disable") then hook(b, "Disable", redraw) end
     s.button = { draw = redraw }
     redraw()
 end
@@ -877,31 +844,31 @@ end
 -- An input box: Blizzard's Left/Middle/Right art away, surface-sunk inside a
 -- gilt-line edge (arcane while typing), body ink.
 export function reskinEditBox(given: unknown)
-    local e = asEditBox(given)
+    local e = frames.asEditBox(given)
     if not e then return end
     local s = skinOf(e)
     if s.edit then return end
-    for _, key in ipairs({ "Left", "Middle", "Right", "Mid" }) do fade(part(e, key)) end
+    for _, key in ipairs({ "Left", "Middle", "Right", "Mid" }) do fade(tbl.field(e, key)) end
     local name = e:GetName()
     if name then
-        for _, suffix in ipairs({ "Left", "Middle", "Right", "Mid" }) do fade(named(name .. suffix)) end
+        for _, suffix in ipairs({ "Left", "Middle", "Right", "Mid" }) do fade(tbl.field(_G, name .. suffix)) end
     end
     -- whatever else Blizzard drew it with (its own art, a backdrop frame)
     for _, t in ipairs(textures(e)) do t:SetAlpha(0) end
     for _, c in ipairs({ e:GetChildren() }) do
-        fade(part(c, "NineSlice"))
+        fade(tbl.field(c, "NineSlice"))
         for _, t in ipairs(textures(c)) do t:SetAlpha(0) end
     end
-    fade(part(e, "NineSlice"))
+    fade(tbl.field(e, "NineSlice"))
     -- a search box (its magnifier and "Search" placeholder): the field is the
     -- box itself, the text and placeholder space-3 in from its left
-    local search = part(e, "searchIcon") or part(e, "Instructions")
+    local search = tbl.field(e, "searchIcon") or tbl.field(e, "Instructions")
     local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
     draw.paintFill(bg, "surface-sunk")
     if search then
         bg:SetAllPoints()
         e:SetTextInsets(S["space-3"], S["space-5"], 0, 0)
-        local hint = asFontString(part(e, "Instructions"))
+        local hint = frames.asFontString(tbl.field(e, "Instructions"))
         if hint then
             hint:ClearAllPoints()
             hint:SetPoint("LEFT", S["space-3"], 0)
@@ -930,7 +897,7 @@ end
 -- A small collapse/expand button (Statistics' sub-categories): SuuUI's
 -- minus or plus in gilt-text, following the state Blizzard sets.
 export function reskinCollapseButton(given: unknown)
-    local b = asButton(given)
+    local b = frames.asButton(given)
     if not b then return end
     local s = skinOf(b)
     if s.collapse then return end
@@ -939,36 +906,36 @@ export function reskinCollapseButton(given: unknown)
     glyph:SetPoint("CENTER")
     draw.paint(glyph, "gilt-text")
     local function redraw()
-        local t = asTexture(ask(b, "GetNormalTexture"))
+        local t = frames.asTexture(errors.tryMethod(b, "GetNormalTexture"))
         local name = ""
         if t then
-            name = (askString(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
+            name = (askString(t, "GetAtlas") or tostring(errors.tryMethod(t, "GetTexture") or "")):lower()
             t:SetAlpha(0)
         end
-        for _, get in ipairs({ "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do fade(ask(b, get)) end
+        for _, get in ipairs({ "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do fade(errors.tryMethod(b, get)) end
         for _, r in ipairs(textures(b)) do
             if r ~= glyph then r:SetAlpha(0) end
         end
         local plus = name:find("plus") or name:find("expand") and not name:find("expanded")
         glyph:SetTexture(GLYPHS .. (plus and "plus" or "minus") .. ".tga")
     end
-    if part(b, "SetNormalTexture") then hook(b, "SetNormalTexture", redraw) end
-    if part(b, "SetNormalAtlas") then hook(b, "SetNormalAtlas", redraw) end
+    if tbl.field(b, "SetNormalTexture") then hook(b, "SetNormalTexture", redraw) end
+    if tbl.field(b, "SetNormalAtlas") then hook(b, "SetNormalAtlas", redraw) end
     hookScript(b, "OnClick", function() after(0, redraw) end)
     s.collapse = { draw = redraw }
     redraw()
 end
 
 local function isPanelButton(b: Button): boolean
-    if part(b, "Left") and part(b, "Right") and (part(b, "Middle") or part(b, "Center")) then return true end
+    if tbl.field(b, "Left") and tbl.field(b, "Right") and (tbl.field(b, "Middle") or tbl.field(b, "Center")) then return true end
     -- art with "button" in its atlas (not a list's collapse bar or a minus/plus)
     for _, t in ipairs(textures(b)) do
         local a = atlasOf(t)
         if a:find("button") and not a:find("list") and not a:find("minus") and not a:find("plus") then return true end
     end
-    local t = asTexture(ask(b, "GetNormalTexture"))
+    local t = frames.asTexture(errors.tryMethod(b, "GetNormalTexture"))
     if not t then return false end
-    local name = (askString(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
+    local name = (askString(t, "GetAtlas") or tostring(errors.tryMethod(t, "GetTexture") or "")):lower()
     return (name:find("panel%-button") or name:find("redbutton") or name:find("128%-red") or name:find("common%-button")) ~= nil
 end
 
@@ -993,7 +960,7 @@ end
 
 -- A text's colour, read safely (nil: unreadable).
 local function colorOf(fs: FontString): (number?, number, number)
-    local r, g, b = ask(fs, "GetTextColor")
+    local r, g, b = errors.tryMethod(fs, "GetTextColor")
     if type(r) == "number" and type(g) == "number" and type(b) == "number" then return r, g, b end
     return nil, 0, 0
 end
@@ -1001,12 +968,12 @@ end
 local function reskinText(fs: FontString, isHead: boolean)
     if skipped(fs) then return end
     local s = skinOf(fs)
-    local _, given = ask(fs, "GetFont")
+    local _, given = errors.tryMethod(fs, "GetFont")
     local size = tonumber(given) or 12
-    local fo = ask(fs, "GetFontObject")
+    local fo = errors.tryMethod(fs, "GetFontObject")
     local foName = fo and askString(fo, "GetName") or ""
-    local text = ask(fs, "GetText")
-    local long = type(text) == "string" and not isSecret(text) and #text > 40
+    local text = errors.tryMethod(fs, "GetText")
+    local long = type(text) == "string" and not secret.isSecret(text) and #text > 40
     if isHead then
         fonts.apply(fs, "header")
         draw.paint(fs, "gilt-text")
@@ -1037,14 +1004,14 @@ end
 -- description, seen 2026-10-18). Measured again, from the top, a frame
 -- after SuuUI's pass and after each text.
 local function refitScrollingFont(f: Frame)
-    local fs = asFontString(ask(f, "GetFontString"))
-    local box = asFrame(ask(f, "GetScrollBox"))
-    local container = asFrame(ask(f, "GetFontStringContainer"))
+    local fs = frames.asFontString(errors.tryMethod(f, "GetFontString"))
+    local box = frames.asFrame(errors.tryMethod(f, "GetScrollBox"))
+    local container = frames.asFrame(errors.tryMethod(f, "GetFontStringContainer"))
     if not (fs and box and container) then return end
     container:SetHeight(fs:GetStringHeight())
     local consts = ScrollBoxConstants or {}
-    ask(box, "FullUpdate", part(consts, "UpdateImmediately"))
-    ask(box, "ScrollToBegin", part(consts, "NoScrollInterpolation"))
+    errors.tryMethod(box, "FullUpdate", tbl.field(consts, "UpdateImmediately"))
+    errors.tryMethod(box, "ScrollToBegin", tbl.field(consts, "NoScrollInterpolation"))
 end
 
 local function reskinScrollingFont(f: Frame)
@@ -1062,7 +1029,7 @@ type Ctx = { rowDepth: number, head?: boolean }
 
 local function reskinTexture(t: Texture, ctx: Ctx)
     local a = atlasOf(t)
-    local layer = ask(t, "GetDrawLayer")
+    local layer = errors.tryMethod(t, "GetDrawLayer")
     if a ~= "" and matchesAny(a, HIDE) then
         if a:find("collapseexpand") then ctx.head = true end
         t:SetAlpha(0)
@@ -1087,28 +1054,28 @@ local function reskinTexture(t: Texture, ctx: Ctx)
 end
 
 local function pass(f: Frame, depth: number, ctx: Ctx)
-    if depth > 6 or ask(f, "IsForbidden") then return end
+    if depth > 6 or errors.tryMethod(f, "IsForbidden") then return end
     -- SuuUI's own frames inside a Blizzard window (pages, the skin's header):
     -- never restyled
     if isOwn(f) then return end
     local kind = askString(f, "GetObjectType")
-    if part(f, "GetFontStringContainer") and part(f, "ScrollBox") and part(f, "SetText") then reskinScrollingFont(f) end
+    if tbl.field(f, "GetFontStringContainer") and tbl.field(f, "ScrollBox") and tbl.field(f, "SetText") then reskinScrollingFont(f) end
     -- Blizzard's coloured progress bar (a Fill it sizes itself: the
     -- reputation's and the skills' bars, the skills' a StatusBar)
-    local fill = part(f, "Fill")
-    if fill and part(f, "FillArea") and part(f, "SetFillPercent") then reskinFillBar(f); return end
+    local fill = tbl.field(f, "Fill")
+    if fill and tbl.field(f, "FillArea") and tbl.field(f, "SetFillPercent") then reskinFillBar(f); return end
     if kind == "StatusBar" then reskinStatusBar(f); return end
     if kind == "CheckButton" and not flagged(f, "suuNoCheck") then reskinCheckButton(f) end
     if kind == "EditBox" then reskinEditBox(f) end
     local s = skinOf(f)
-    if kind == "DropdownButton" or (part(f, "Arrow") and part(f, "Text") and kind == "Button" and not s.button) then
+    if kind == "DropdownButton" or (tbl.field(f, "Arrow") and tbl.field(f, "Text") and kind == "Button" and not s.button) then
         reskinDropdown(f)
         return
     end
     if askString(fill, "GetObjectType") == "Texture" then
         if atlasOf(fill):find("stat%-bar") or s.fillBar then reskinFillBar(f); return end
     end
-    local b = kind == "Button" and asButton(f) or nil
+    local b = kind == "Button" and frames.asButton(f) or nil
     if b then
         local key = askString(b, "GetParentKey") or ""
         if key:find("Collapse") or key:find("Expand") then reskinCollapseButton(b)
@@ -1118,9 +1085,9 @@ local function pass(f: Frame, depth: number, ctx: Ctx)
         if button then button.draw() end
     end
     -- a ScrollBar (Blizzard's minimal one)
-    if part(f, "Track") and part(f, "Back") and part(f, "Forward") then reskinScrollBar(f); return end
+    if tbl.field(f, "Track") and tbl.field(f, "Back") and tbl.field(f, "Forward") then reskinScrollBar(f); return end
     -- a ScrollBox: its rows, one by one, now and after every update
-    if part(f, "ScrollTarget") and part(f, "ForEachFrame") then reskinScrollBox(f); return end
+    if tbl.field(f, "ScrollTarget") and tbl.field(f, "ForEachFrame") then reskinScrollBox(f); return end
     local texts: FontString[] = {}
     for _, r in ipairs({ f:GetRegions() }) do
         local t = r:GetObjectType()
@@ -1145,14 +1112,14 @@ local function pass(f: Frame, depth: number, ctx: Ctx)
 end
 
 export function reskin(given: unknown)
-    local frame = asFrame(given)
+    local frame = frames.asFrame(given)
     if not frame then return end
     pass(frame, 0, { rowDepth = 0 })
 end
 
 -- One row: a fresh context, so a category bar marks only its own row.
 local function reskinRow(given: unknown)
-    local row = asFrame(given)
+    local row = frames.asFrame(given)
     if not row then return end
     local ctx: Ctx = { rowDepth = 0 }
     -- a category bar is a texture of the row itself: look first
@@ -1163,30 +1130,30 @@ local function reskinRow(given: unknown)
 end
 
 export function reskinScrollBox(given: unknown)
-    local box = asFrame(given)
+    local box = frames.asFrame(given)
     if not box then return end
     local s = skinOf(box)
     if s.scrollBox then return end
     s.scrollBox = true
     local function all()
         -- (no view yet: the box updates as it is sized, before its list is set)
-        if part(box, "ForEachFrame") then
-            if part(box, "GetView") and not ask(box, "GetView") then return end
-            ask(box, "ForEachFrame", reskinRow)
+        if tbl.field(box, "ForEachFrame") then
+            if tbl.field(box, "GetView") and not errors.tryMethod(box, "GetView") then return end
+            errors.tryMethod(box, "ForEachFrame", reskinRow)
         else
-            local target = asFrame(part(box, "ScrollTarget"))
+            local target = frames.asFrame(tbl.field(box, "ScrollTarget"))
             if target then
                 for _, row in ipairs({ target:GetChildren() }) do reskinRow(row) end
             end
         end
     end
-    if part(box, "Update") then hook(box :: unknown, "Update", all) end
-    local changed = part(part(box, "Event"), "OnDataRangeChanged")
-    if part(box, "RegisterCallback") and changed then
-        ask(box, "RegisterCallback", changed, all, box)
+    if tbl.field(box, "Update") then hook(box :: unknown, "Update", all) end
+    local changed = tbl.field(tbl.field(box, "Event"), "OnDataRangeChanged")
+    if tbl.field(box, "RegisterCallback") and changed then
+        errors.tryMethod(box, "RegisterCallback", changed, all, box)
     end
     hookScript(box, "OnShow", function() after(0, all) end)
-    fade(part(box, "Shadows"))
+    fade(tbl.field(box, "Shadows"))
     all()
 end
 
@@ -1201,7 +1168,7 @@ local function dialogBox(c: Frame)
     local s = skinOf(c)
     if s.box then return end
     s.box = true
-    fade(part(c, "NineSlice"))
+    fade(tbl.field(c, "NineSlice"))
     for _, t in ipairs(textures(c)) do t:SetAlpha(0) end
     local bg = c:CreateTexture(nil, "BACKGROUND", nil, -7)
     draw.paintFill(bg, "surface-sunk")
@@ -1212,7 +1179,7 @@ local function dialogBox(c: Frame)
     local function walk(fr: Frame, depth: number)
         if depth > 4 then return end
         for _, k in ipairs({ fr:GetChildren() }) do
-            local e = k:GetObjectType() == "EditBox" and asEditBox(k) or nil
+            local e = k:GetObjectType() == "EditBox" and frames.asEditBox(k) or nil
             if e then
                 skinOf(e).edit = true
                 e:SetFontObject(fonts.get("body"))
@@ -1225,8 +1192,8 @@ local function dialogBox(c: Frame)
 end
 
 export function reskinDialog(given: unknown)
-    local f = asFrame(given)
-    if not f or ask(f, "IsForbidden") then return end
+    local f = frames.asFrame(given)
+    if not f or errors.tryMethod(f, "IsForbidden") then return end
     local s = skinOf(f)
     if not s.dialog then
         s.dialog = true
@@ -1242,7 +1209,7 @@ export function reskinDialog(given: unknown)
                 skinOf(fs).skip = true
             end
         end
-        for _, key in ipairs({ "NineSlice", "Border", "Bg", "TitleBg" }) do fade(part(f, key)) end
+        for _, key in ipairs({ "NineSlice", "Border", "Bg", "TitleBg" }) do fade(tbl.field(f, key)) end
         local panel = CreateFrame("Frame", nil, f)
         panel:SetAllPoints()
         panel:SetFrameLevel(f:GetFrameLevel())
@@ -1252,16 +1219,16 @@ export function reskinDialog(given: unknown)
         draw.border(panel, "gilt-line")
         draw.shadow(panel, "shadow-panel")
         draw.diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
-        local closeButton = part(f, "CloseButton")
+        local closeButton = tbl.field(f, "CloseButton")
         for _, c in ipairs({ f:GetChildren() }) do
             local kind = c:GetObjectType()
             local name = c:GetName() or ""
-            local text = ask(c, "GetText")
-            local close = kind == "Button" and asButton(c) or nil
+            local text = errors.tryMethod(c, "GetText")
+            local close = kind == "Button" and frames.asButton(c) or nil
             if close and (name:find("Close") or c == closeButton) and (not text or text == "") then
                 -- the corner close: SuuUI's cross
                 for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-                    fade(ask(close, get))
+                    fade(errors.tryMethod(close, get))
                 end
                 for _, t in ipairs(textures(close)) do t:SetAlpha(0) end
                 close:SetSize(22, 22)
@@ -1317,10 +1284,10 @@ local function restorePopup(st: PopupState)
 end
 
 local function popupButton(st: PopupState, given: unknown, primary: boolean)
-    local b = asButton(given)
+    local b = frames.asButton(given)
     if not (b and b:IsShown()) then return end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-        local t = asRegion(ask(b, get))
+        local t = frames.asRegion(errors.tryMethod(b, get))
         if t then hideRegion(st, t) end
     end
     for _, t in ipairs(textures(b)) do hideRegion(st, t) end
@@ -1334,13 +1301,13 @@ local function popupButton(st: PopupState, given: unknown, primary: boolean)
     end
     skin.edge:SetColor(primary and "arcane" or "gilt-line")
     skin:Show()
-    local fs = asFontString(ask(b, "GetFontString"))
+    local fs = frames.asFontString(errors.tryMethod(b, "GetFontString"))
     if fs then menuText(st, fs, primary and "on-signal" or "ink"); fonts.apply(fs, "label") end
 end
 
 export function reskinPopup(given: unknown)
-    local dialog = asFrame(given)
-    if not dialog or ask(dialog, "IsForbidden") then return end
+    local dialog = frames.asFrame(given)
+    if not dialog or errors.tryMethod(dialog, "IsForbidden") then return end
     local st = popups[dialog]
     if not st then
         -- solid: it opens over windows, whose text showed through the glass
@@ -1359,16 +1326,16 @@ export function reskinPopup(given: unknown)
     if own then own:Show() end
     -- the game's frame art
     for _, key in ipairs({ "Border", "NineSlice", "BG", "Bg" }) do
-        local art = asRegion(part(dialog, key))
+        local art = frames.asRegion(tbl.field(dialog, key))
         if art then hideRegion(st, art) end
     end
     for _, t in ipairs(textures(dialog)) do hideRegion(st, t) end
-    local text = asFontString(part(dialog, "Text"))
+    local text = frames.asFontString(tbl.field(dialog, "Text"))
     if text then menuText(st, text, "ink") end
     -- the edit box: a sunk field
-    local edit = asEditBox(part(dialog, "EditBox"))
+    local edit = frames.asEditBox(tbl.field(dialog, "EditBox"))
     if edit and edit:IsShown() then
-        local nine = asRegion(part(edit, "NineSlice"))
+        local nine = frames.asRegion(tbl.field(edit, "NineSlice"))
         if nine then hideRegion(st, nine) end
         for _, t in ipairs(textures(edit)) do hideRegion(st, t) end
         local skin = st.skins[edit]
@@ -1381,9 +1348,9 @@ export function reskinPopup(given: unknown)
         end
         skin:Show()
     end
-    local container = part(dialog, "ButtonContainer")
+    local container = tbl.field(dialog, "ButtonContainer")
     for i = 1, 4 do
-        local b = part(container, "Button" .. i) or part(dialog, "button" .. i)
+        local b = tbl.field(container, "Button" .. i) or tbl.field(dialog, "button" .. i)
         popupButton(st, b, i == 1)
     end
 end

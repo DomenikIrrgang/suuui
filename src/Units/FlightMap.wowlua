@@ -46,6 +46,7 @@ import clock, coins, short, junk, fitWay, span, dashes, nearest, alongByShare, s
     viaText, stopsText, stepsText, nearestMaster from "/Units/FlightMap/Route"
 import type TaxiNode from "/Units/FlightMap/Route"
 import * as maths from "/Units/FlightMap/Route"
+import * as secret from "wowlua:secret"
 
 local M = SuuUI.RegisterModule({
     id = "flightmap",
@@ -69,11 +70,6 @@ type View = { map: number, pos: { [number]: number[] }, w: number, h: number }
 -- (placed on the continent's map; else only each master's share, at)
 type Route = { at: { [number]: number }, map?: number, w?: number, h?: number, points?: number[][], run?: number[], total?: number }
 type PlacedRoute = { at: { [number]: number }, map: number, w: number, h: number, points: number[][], run: number[], total: number }
-
--- (the secret test first: a secret isn't compared, not even with nil)
-local function plain(v: unknown): v is string | number | boolean | table
-    return not issecretvalue(v) and v ~= nil
-end
 
 local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = TEXTURES .. "Glyphs\\"
@@ -113,7 +109,7 @@ local function positions(mapID: number?): { [number]: number[] }
     for _, n in ipairs(ok and type(list) == "table" and list or {}) do
         local x, y
         if n.position and n.position.GetXY then x, y = n.position:GetXY() end
-        if plain(n.nodeID) and plain(x) and plain(y) then out[n.nodeID] = { x, y } end
+        if secret.readable(n.nodeID) and secret.readable(x) and secret.readable(y) then out[n.nodeID] = { x, y } end
     end
     return out
 end
@@ -174,15 +170,15 @@ end
 -- nil while there's none.
 function M:ReadSession()
     local n = call(NumTaxiNodes)
-    if not (plain(n) and n and n > 0) then return nil end
+    if not (secret.readable(n) and n and n > 0) then return nil end
     -- nodeIDs by slot (C_TaxiMap's nodes carry both), by name to be sure
     local ids: { [number]: number }, byName: { [string]: number } = {}, {}
     local zone = C_Map.GetBestMapForUnit("player")
     for _, m in ipairs({ zone, continentOf(zone), call(_G.GetTaxiMapID) }) do
         local list = call(C_TaxiMap.GetAllTaxiNodes, m)
         for _, node in ipairs(type(list) == "table" and (list :: any[]) or {}) do
-            if plain(node.nodeID) and plain(node.slotIndex) and node.slotIndex then ids[node.slotIndex] = ids[node.slotIndex] or node.nodeID end
-            if plain(node.nodeID) and plain(node.name) and node.name then byName[node.name] = byName[node.name] or node.nodeID end
+            if secret.readable(node.nodeID) and secret.readable(node.slotIndex) and node.slotIndex then ids[node.slotIndex] = ids[node.slotIndex] or node.nodeID end
+            if secret.readable(node.nodeID) and secret.readable(node.name) and node.name then byName[node.name] = byName[node.name] or node.nodeID end
         end
         if next(ids) then break end
     end
@@ -190,10 +186,10 @@ function M:ReadSession()
     for slot = 1, n do
         local name, kind = call(TaxiNodeName, slot), call(TaxiNodeGetType, slot)
         local id = ids[slot]
-        if not id and plain(name) then id = byName[name] end
-        if plain(kind) and kind ~= "NONE" and not junk(name) and id then
+        if not id and secret.readable(name) then id = byName[name] end
+        if secret.readable(kind) and kind ~= "NONE" and not junk(name) and id then
             local cost = call(TaxiNodeCost, slot)
-            local node: TaxiNode = { slot = slot, id = id, name = name, kind = kind, cost = plain(cost) and cost or 0 }
+            local node: TaxiNode = { slot = slot, id = id, name = name, kind = kind, cost = secret.readable(cost) and cost or 0 }
             s.nodes[#s.nodes + 1] = node
             s.byID[id] = node
             if kind == "CURRENT" then s.current = node end
@@ -205,7 +201,7 @@ function M:ReadSession()
     for _, node in ipairs(s.nodes) do
         if node.kind == "REACHABLE" then
             local hops = call(GetNumRoutes, node.slot)
-            if plain(hops) and hops and hops > 0 then
+            if secret.readable(hops) and hops and hops > 0 then
                 local first = slotID[call(TaxiGetNodeSlot, node.slot, 1, true)]
                 local path: number[] = {}
                 if first then path[1] = first end
@@ -321,7 +317,7 @@ function M:FlightEnded(at: number)
     -- (where the game doesn't say, taken as there)
     local function landedAt(id: number): boolean
         local p = spots and spots[id]
-        if not (p and plain(x) and plain(y)) then return true end
+        if not (p and secret.readable(x) and secret.readable(y)) then return true end
         return math.sqrt((p[1] - x) ^ 2 + (p[2] - y) ^ 2) < 0.03
     end
     if f.early and landedAt(f.path[f.early]) then
@@ -544,7 +540,7 @@ function M:QuestSteps(s: Session?): { [number]: number[] }
         local quests = call(C_QuestLog.GetQuestsOnMap, map)
         for _, q in ipairs(type(quests) == "table" and (quests :: any[]) or {}) do
             local id = q.questID
-            if plain(id) and plain(q.x) and plain(q.y) and not seen[id] then
+            if secret.readable(id) and secret.readable(q.x) and secret.readable(q.y) and not seen[id] then
                 seen[id] = true
                 local x, y = worldXY(map, q.x, q.y)
                 local best: TaxiNode? = nil
@@ -577,7 +573,7 @@ function M:Tip(node: TaxiNode): { [string]: any }
     -- the quests with a step near it
     for _, id in ipairs(self.steps and self.steps[node.id] or {}) do
         local title = call(C_QuestLog.GetTitleForQuestID, id)
-        if plain(title) and title then
+        if secret.readable(title) and title then
             lines[#lines + 1] = { title, call(C_QuestLog.IsComplete, id) and "turn in" or "objective" }
         end
     end
@@ -1035,7 +1031,7 @@ local function myPlace(mapID: number?): (number?, number?)
     local me = call(C_Map.GetPlayerMapPosition, mapID, "player")
     local x, y
     if me and me.GetXY then x, y = me:GetXY() end
-    if plain(x) and plain(y) and (x > 0 or y > 0) then return x, y end
+    if secret.readable(x) and secret.readable(y) and (x > 0 or y > 0) then return x, y end
 end
 
 -- How far along the flight you are: the point on the route nearest you
@@ -1177,7 +1173,7 @@ function M:StopName(fl: any, id: number): string
         local continent = continentOf(C_Map.GetBestMapForUnit("player"))
         local ok, list = pcall(C_TaxiMap.GetTaxiNodesForMap, continent :: any)
         for _, n in ipairs(ok and type(list) == "table" and list or {}) do
-            if plain(n.nodeID) and plain(n.name) and n.name and not fl.names[n.nodeID] then fl.names[n.nodeID] = short(n.name) end
+            if secret.readable(n.nodeID) and secret.readable(n.name) and n.name and not fl.names[n.nodeID] then fl.names[n.nodeID] = short(n.name) end
         end
     end
     return fl.names[id] or "?"

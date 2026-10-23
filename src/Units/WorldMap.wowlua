@@ -42,6 +42,7 @@ import type Item, Group from "/Units/WorldMap/Arrange"
 import tipFor from "/Units/WorldMap/Tips"
 import type FilterValue, FilterValues, FilterGroup, FilterOption from "/UI/FilterMenu"
 import unexploredTiles from "/Units/WorldMap/Overlays"
+import * as secret from "wowlua:secret"
 
 -- What Map filters chose: each group's values on.
 type FilterChoice = { [string]: string[] }
@@ -95,11 +96,6 @@ local M = SuuUI.RegisterModule({
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
-
--- (the secret test first: a secret isn't compared, not even with nil)
-local function plain(v: unknown): v is string | number | boolean | table
-    return not issecretvalue(v) and v ~= nil
-end
 
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
@@ -440,10 +436,10 @@ function M:Player(): Me
     local _, class, classID = UnitClass("player")
     local faction = UnitFactionGroup("player")
     return {
-        level = plain(level) and level or 1,
-        raceBit = plain(race) and race and raceBit(race) or 0,
-        classBit = plain(classID) and classID and 2 ^ (classID - 1) or 0,
-        class = plain(class) and class or nil,
+        level = secret.readable(level) and level or 1,
+        raceBit = secret.readable(race) and race and raceBit(race) or 0,
+        classBit = secret.readable(classID) and classID and 2 ^ (classID - 1) or 0,
+        class = secret.readable(class) and class or nil,
         faction = faction == "Horde" and "H" or faction == "Alliance" and "A" or nil,
     }
 end
@@ -481,7 +477,7 @@ function M:RecordTaxiNodes()
     for _, m in ipairs({ zone, continentOf(zone), _G.GetTaxiMapID and GetTaxiMapID() }) do
         local ok, nodes = pcall(C_TaxiMap.GetAllTaxiNodes, m)
         for _, n in ipairs(ok and type(nodes) == "table" and nodes or {}) do
-            if plain(n.nodeID) and plain(n.state) and (n.state == 0 or n.state == 1) and not junkTaxiNode(n.name) then
+            if secret.readable(n.nodeID) and secret.readable(n.state) and (n.state == 0 or n.state == 1) and not junkTaxiNode(n.name) then
                 taxi.known[n.nodeID] = true
                 seen = true
             end
@@ -656,9 +652,9 @@ function M:Collect(mapID: number): Item[]
         for _, n in ipairs(ok and type(nodes) == "table" and nodes or {}) do
             local x, y
             if n.position and n.position.GetXY then x, y = n.position:GetXY() end
-            if plain(x) and plain(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (n.faction == 0 or n.faction == mine)
+            if secret.readable(x) and secret.readable(y) and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (n.faction == 0 or n.faction == mine)
                 and not junkTaxiNode(n.name) then
-                local known = taxi and plain(n.nodeID) and taxi.known[n.nodeID]
+                local known = taxi and secret.readable(n.nodeID) and taxi.known[n.nodeID]
                 items[#items + 1] = { x = x, y = y, fixed = true,
                     pin = { glyph = "wing", color = known and "gilt-text" or "ink-muted" },
                     name = n.name,

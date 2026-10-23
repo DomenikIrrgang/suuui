@@ -20,12 +20,13 @@ import type Panel from "/UI/Panel"
 import type Text from "/UI/Text"
 import type Contacts, PeopleList, RaidGroups, Friend, RaidMember, PeopleRowData, PeopleAction from "/UI/Social"
 import type Color from "/Core/Tokens"
-import named, part, asFrame from "/UI/Reskin"
 import RAID_PLANNER from "/Core/ServiceKeys"
 import * as secret from "wowlua:secret"
 import after from "wowlua:timer"
 import hookScript from "wowlua:hooks"
-import hook from "wowlua:hooks"
+import * as errors from "wowlua:errors"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -33,30 +34,12 @@ local DEFAULTS = {}
 
 local M: SocialModule
 
-local isSecret = secret.isSecret
-local function plain(v: unknown): boolean return v ~= nil and not isSecret(v) end
 
--- A call that may fail or not exist: its results (every value:
+-- A errors.try that may fail or not exist: its results (every value:
 -- GetSavedInstanceInfo gives twelve, and the lockouts' difficulty and
 -- progress are its last ones), or nothing.
-local function okThen(ok: boolean, ...: unknown): ...unknown
-    if ok then return ... end
-    return nil
-end
-local function call(fn: unknown, ...: unknown): ...unknown
-    if type(fn) ~= "function" then return nil end
-    return okThen(pcall(fn :: (...unknown) -> ...unknown, ...))
-end
 -- One of the game's functions by its global name, or a table's.
-local function global(name: string): unknown return named(name) end
-local function str(v: unknown): string?
-    if type(v) == "string" and not isSecret(v) then return v end
-    return nil
-end
-local function num(v: unknown): number?
-    if type(v) == "number" and not isSecret(v) then return v end
-    return nil
-end
+local function global(name: string): unknown return tbl.field(_G, name) end
 
 local colors: { [string]: Color } = T.color
 local CLASS_FILES: { [string]: string } = {}
@@ -79,7 +62,7 @@ local GAMES: { [string]: string } = { App = "the Battle.net app", BSAp = "Battle
 
 -- "3 days ago" from a time() stamp (`now`: the clock's).
 local function ago(stamp: unknown, now: number?): string?
-    local at = num(stamp)
+    local at = secret.asNumber(stamp)
     if not at or at == 0 then return nil end
     local s = math.max(0, (now or time()) - at)
     if s < 3600 then return "less than an hour ago" end
@@ -100,20 +83,20 @@ local function bnetRow(info: BNetAccountInfo, faction: string?): Friend
     local game = info.gameAccountInfo
     local isOnline = game.isOnline and true or false
     local row: Friend = { key = "bn:" .. tostring(info.bnetAccountID), bnet = true, bnetID = info.bnetAccountID,
-                  name = info.accountName or info.battleTag or "?", sort = (str(info.battleTag) or ""):lower(),
-                  online = isOnline, note = plain(info.note) and info.note ~= "" and info.note or nil,
+                  name = info.accountName or info.battleTag or "?", sort = (secret.asString(info.battleTag) or ""):lower(),
+                  online = isOnline, note = secret.readable(info.note) and info.note ~= "" and info.note or nil,
                   away = (info.isAFK or game.isGameAFK) and true or false, busy = (info.isDND or game.isGameBusy) and true or false,
                   whisper = isOnline }
-    local character = str(game.characterName)
+    local character = secret.asString(game.characterName)
     if isOnline and game.clientProgram == (BNET_CLIENT_WOW or "WoW") and character then
         row.character = character
-        local className = str(game.className)
+        local className = secret.asString(game.className)
         row.color = classColor(className)
         local where: string[] = {}
         local level = game.characterLevel
         if level and level > 0 then where[#where + 1] = "Level " .. level end
         if className then where[#where + 1] = className end
-        local zone = str(game.areaName)
+        local zone = secret.asString(game.areaName)
         local detail = table.concat(where, " ")
         row.detail = zone and zone ~= "" and (detail .. " · " .. zone) or detail
         if game.wowProjectID == WOW_PROJECT_ID and game.gameAccountID then
@@ -123,7 +106,7 @@ local function bnetRow(info: BNetAccountInfo, faction: string?): Friend
             -- No realm check: Forever's realms are rulesets, and a
             -- realm ID that differs still groups (asked 2026-10-18:
             -- "the realm doesn't match" for a friend you could invite)
-            if not (plain(game.factionName) and game.factionName == faction) then
+            if not (secret.readable(game.factionName) and game.factionName == faction) then
                 row.why = "They're in the other faction."
             else
                 row.invite, row.gameAccountID = true, game.gameAccountID
@@ -147,11 +130,11 @@ end
 local function characterRow(f: FriendInfo): Friend
     local isOnline = f.connected and true or false
     local row: Friend = { key = "c:" .. f.name, name = f.name, sort = f.name:lower(), online = isOnline,
-                  color = classColor(f.className), note = plain(f.notes) and f.notes ~= "" and f.notes or nil,
+                  color = classColor(f.className), note = secret.readable(f.notes) and f.notes ~= "" and f.notes or nil,
                   away = f.afk, busy = f.dnd, whisper = isOnline, invite = isOnline, inviteName = f.name }
     if isOnline then
         local detail = (f.level and f.level > 0 and ("Level " .. f.level .. " ") or "") .. (f.className or "")
-        local area = str(f.area)
+        local area = secret.asString(f.area)
         row.detail = (area and area ~= "") and (detail .. " · " .. area) or detail
     else
         row.detail = "Offline"
@@ -174,12 +157,12 @@ end
 local function tellTo(name: string?)
     if not name then return end
     local util = global("ChatFrameUtil")
-    call(part(util, "SendTell") or global("ChatFrame_SendTell"), name)
+    errors.try(tbl.field(util, "SendTell") or global("ChatFrame_SendTell"), name)
 end
 
 local function whisper(row: Friend)
     if row.bnet then
-        if row.name then call(part(global("ChatFrameUtil"), "SendBNetTell") or global("ChatFrame_SendBNetTell"), row.name) end
+        if row.name then errors.try(tbl.field(global("ChatFrameUtil"), "SendBNetTell") or global("ChatFrame_SendBNetTell"), row.name) end
     else
         tellTo(row.name)
     end
@@ -188,13 +171,13 @@ end
 -- A party invite by name (C_PartyInfo's on newer clients).
 local function inviteName(name: string?)
     if not name then return end
-    call((C_PartyInfo and C_PartyInfo.InviteUnit) or global("InviteUnit"), name)
+    errors.try((C_PartyInfo and C_PartyInfo.InviteUnit) or global("InviteUnit"), name)
 end
 
 local function invite(row: Friend)
     local id = row.gameAccountID
     if id then
-        call((C_BattleNet and C_BattleNet.InviteFriend) or BNInviteFriend, id)
+        errors.try((C_BattleNet and C_BattleNet.InviteFriend) or BNInviteFriend, id)
         return
     end
     inviteName(row.inviteName)
@@ -221,7 +204,7 @@ local function metBy(a: RecentAllyData): string?
     local first = list and list[1]
     if type(first) ~= "table" then return nil end
     for _, key in ipairs({ "description", "text", "contextName", "name" }) do
-        local v = str(part(first, key))
+        local v = secret.asString(tbl.field(first, key))
         if v and v ~= "" then return v end
     end
     return nil
@@ -254,7 +237,7 @@ end
 
 local function lockoutDetail(l: Lockout): string
     local detail: string[] = {}
-    local difficulty = str(l.difficulty)
+    local difficulty = secret.asString(l.difficulty)
     if difficulty and difficulty ~= "" then detail[#detail + 1] = difficulty end
     local reset = l.reset
     if reset and reset > 0 then detail[#detail + 1] = "resets in " .. (SecondsToTime and SecondsToTime(reset, true) or (math.ceil(reset / 3600) .. " h")) end
@@ -292,11 +275,11 @@ type LockoutPanel = { panel: Panel, rows: LockoutRow[], empty: Text }
 type Window = { frame: Frame, list: Frame, raid?: Frame, allies?: Frame, requests?: Frame, bar?: Frame }
 
 local function windowOf(f: Frame): Window?
-    local allies, requests = asFrame(part(f, "RecentAlliesList")), asFrame(part(f, "FriendRequestsList"))
+    local allies, requests = frames.asFrame(tbl.field(f, "RecentAlliesList")), frames.asFrame(tbl.field(f, "FriendRequestsList"))
     for _, c in ipairs({ f:GetChildren() }) do
-        if part(c, "FilterBar") and c ~= allies and c ~= requests then
-            return { frame = f, list = c, raid = asFrame(part(f, "RaidFrame")), allies = allies, requests = requests,
-                     bar = asFrame(part(f, "BattleNetBar")) }
+        if tbl.field(c, "FilterBar") and c ~= allies and c ~= requests then
+            return { frame = f, list = c, raid = frames.asFrame(tbl.field(f, "RaidFrame")), allies = allies, requests = requests,
+                     bar = frames.asFrame(tbl.field(f, "BattleNetBar")) }
         end
     end
     return nil
@@ -304,7 +287,6 @@ end
 
 class SocialModule extends Module<typeof(DEFAULTS)>
     alliesPage: PeopleList? = nil
-    readonly awayParts: { [Frame]: boolean } = {}
     window: Window? = nil
     friends: Friend[]? = nil
     lockouts: LockoutPanel? = nil
@@ -346,8 +328,8 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         -- Battle.net friends (their account name is protected text the game
         -- draws; never read)
         local faction = UnitFactionGroup("player")
-        for i = 1, num(call(BNGetNumFriends)) or 0 do
-            local info = C_BattleNet and C_BattleNet.GetFriendAccountInfo and call(C_BattleNet.GetFriendAccountInfo, i)
+        for i = 1, secret.asNumber(errors.try(BNGetNumFriends)) or 0 do
+            local info = C_BattleNet and C_BattleNet.GetFriendAccountInfo and errors.try(C_BattleNet.GetFriendAccountInfo, i)
             if type(info) == "table" then
                 local row = bnetRow(info :: BNetAccountInfo, faction)
                 if row.online then online = online + 1 end
@@ -356,9 +338,9 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         end
         -- character friends
         local fl = C_FriendList
-        for i = 1, (fl and num(call(fl.GetNumFriends))) or 0 do
-            local f = call(fl.GetFriendInfoByIndex, i)
-            if type(f) == "table" and str((f :: FriendInfo).name) then
+        for i = 1, (fl and secret.asNumber(errors.try(fl.GetNumFriends))) or 0 do
+            local f = errors.try(fl.GetFriendInfoByIndex, i)
+            if type(f) == "table" and secret.asString((f :: FriendInfo).name) then
                 local row = characterRow(f :: FriendInfo)
                 if row.online then online = online + 1 end
                 out[#out + 1] = row
@@ -371,20 +353,20 @@ class SocialModule extends Module<typeof(DEFAULTS)>
     function Ignored(): string[]
         local out: string[] = {}
         local fl = C_FriendList
-        for i = 1, (fl and num(call(fl.GetNumIgnores))) or 0 do
-            local name = str(call(fl.GetIgnoreName, i))
+        for i = 1, (fl and secret.asNumber(errors.try(fl.GetNumIgnores))) or 0 do
+            local name = secret.asString(errors.try(fl.GetIgnoreName, i))
             if name then out[#out + 1] = name end
         end
         return out
     end
 
     function BattleTag(): string?
-        local _, tag = call(BNGetInfo)
-        return str(tag)
+        local _, tag = errors.try(BNGetInfo)
+        return secret.asString(tag)
     end
 
     function Status(): string
-        local _, _, _, _, afk, dnd = call(BNGetInfo)
+        local _, _, _, _, afk, dnd = errors.try(BNGetInfo)
         if dnd then return "busy" elseif afk then return "away" end
         return "available"
     end
@@ -413,7 +395,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
             onConfirm = function(text: string?)
                 if not text then return end
                 if row.bnet then
-                    call(global("BNSetFriendNote") or part(C_BattleNet, "SetFriendNote"), row.bnetID, text)
+                    errors.try(global("BNSetFriendNote") or tbl.field(C_BattleNet, "SetFriendNote"), row.bnetID, text)
                 else
                     pcall(C_FriendList.SetFriendNotes, row.name or "", text)
                 end
@@ -425,7 +407,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         UI.Confirm({ title = "Remove friend?", text = "They leave your friends list. You can add them again any time.",
             confirm = "Remove", onConfirm = function()
                 if row.bnet then
-                    call(global("BNRemoveFriend") or part(C_BattleNet, "RemoveFriend"), row.bnetID)
+                    errors.try(global("BNRemoveFriend") or tbl.field(C_BattleNet, "RemoveFriend"), row.bnetID)
                 else
                     pcall(C_FriendList.RemoveFriend, row.name or "")
                 end
@@ -441,8 +423,8 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         view.onInvite = invite
         view.onStatus = function(v: string)
             local bn = C_BattleNet
-            call((bn and bn.SetAFK) or global("BNSetAFK"), v == "away")
-            call((bn and bn.SetDND) or global("BNSetDND"), v == "busy")
+            errors.try((bn and bn.SetAFK) or global("BNSetAFK"), v == "away")
+            errors.try((bn and bn.SetDND) or global("BNSetDND"), v == "busy")
             after(0.3, function() self:QueueRender() end)
         end
         view.onAdd = function()
@@ -451,8 +433,8 @@ class SocialModule extends Module<typeof(DEFAULTS)>
                 onConfirm = function(text: string?)
                     if not text then return end
                     if text:find("#") then
-                        local send = global("BNSendFriendInvite") or part(C_BattleNet, "SendFriendInvite")
-                        if send then call(send, text) else self:Print("Battle.net friend requests aren't available here.") end
+                        local send = global("BNSendFriendInvite") or tbl.field(C_BattleNet, "SendFriendInvite")
+                        if send then errors.try(send, text) else self:Print("Battle.net friend requests aren't available here.") end
                     else
                         self:AddFriend(text)
                     end
@@ -483,7 +465,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
     function Pinned(guid: string?): boolean
         if not guid then return false end
         local ra = C_RecentAllies
-        local actual = (ra and call(ra.IsRecentAllyPinned, guid)) and true or false
+        local actual = (ra and errors.try(ra.IsRecentAllyPinned, guid)) and true or false
         local wanted = self.pinWanted
         local want = wanted and wanted[guid]
         if want == nil then return actual end
@@ -494,28 +476,28 @@ class SocialModule extends Module<typeof(DEFAULTS)>
     function Allies(): PeopleRowData[]
         local ra = C_RecentAllies
         local out: PeopleRowData[] = {}
-        local got = ra and call(ra.GetRecentAllies)
+        local got = ra and errors.try(ra.GetRecentAllies)
         for _, a in ipairs(type(got) == "table" and got :: RecentAllyData[] or {}) do
             local cd, sd = a.characterData, a.stateData
-            local name = str(cd.fullName) or str(cd.name)
+            local name = secret.asString(cd.fullName) or secret.asString(cd.name)
             if name then
                 local file = classFileOf(cd.classID)
                 local online = sd.isOnline and true or false
                 local detail: string[] = {}
                 local level = cd.level
                 if level and level > 0 then detail[#detail + 1] = "Level " .. level end
-                detail[#detail + 1] = online and (str(sd.currentLocation) or "Online") or "Offline"
+                detail[#detail + 1] = online and (secret.asString(sd.currentLocation) or "Online") or "Offline"
                 local met = metBy(a)
                 if met then detail[#detail + 1] = met end
-                local guid = str(cd.guid)
+                local guid = secret.asString(cd.guid)
                 local interaction = a.interactionData
-                local note = interaction and str(interaction.note)
+                local note = interaction and secret.asString(interaction.note)
                 local row: PeopleRowData = { key = guid or name, guid = guid, name = name, online = online,
                               color = classToken(file),
                               detail = table.concat(detail, " · "),
                               note = note ~= "" and note or nil,
                               pinned = self:Pinned(guid),
-                              friend = guid and C_FriendList.IsFriend and call(C_FriendList.IsFriend, guid) == true or false,
+                              friend = guid and C_FriendList.IsFriend and errors.try(C_FriendList.IsFriend, guid) == true or false,
                               sent = sd.friendRequestSentThisSession }
                 local actions: PeopleAction[] = {}
                 if online then actions[#actions + 1] = { label = "Whisper", onClick = function(r: PeopleRowData) self:Whisper(r.name) end } end
@@ -541,15 +523,15 @@ class SocialModule extends Module<typeof(DEFAULTS)>
 
     function Requests(): PeopleRowData[]
         local out: PeopleRowData[] = {}
-        for i = 1, num(call(BNGetNumFriendInvites)) or 0 do
-            local id, accountName, _, _, sent = call(BNGetFriendInviteInfo, i)
+        for i = 1, secret.asNumber(errors.try(BNGetNumFriendInvites)) or 0 do
+            local id, accountName, _, _, sent = errors.try(BNGetFriendInviteInfo, i)
             if id then
                 local when = ago(sent)
-                out[#out + 1] = { key = "inv:" .. tostring(id), glyph = true, online = true, name = str(accountName) or "?",
+                out[#out + 1] = { key = "inv:" .. tostring(id), glyph = true, online = true, name = secret.asString(accountName) or "?",
                     detail = when and ("Sent " .. when) or "Wants to be your Battle.net friend",
                     actions = {
-                        { label = "Decline", onClick = function() call(global("BNDeclineFriendInvite"), id); self:QueueRender() end },
-                        { label = "Accept", variant = "primary", onClick = function() call(global("BNAcceptFriendInvite"), id); self:QueueRender() end },
+                        { label = "Decline", onClick = function() errors.try(global("BNDeclineFriendInvite"), id); self:QueueRender() end },
+                        { label = "Accept", variant = "primary", onClick = function() errors.try(global("BNAcceptFriendInvite"), id); self:QueueRender() end },
                     } }
             end
         end
@@ -612,7 +594,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
                 end)
             end
             root:CreateButton("Ignore", function() self:Ignore(row.name) end)
-            if guid and ra and ra.SetRecentAllyNote and (not ra.CanSetRecentAllyNote or call(ra.CanSetRecentAllyNote)) then
+            if guid and ra and ra.SetRecentAllyNote and (not ra.CanSetRecentAllyNote or errors.try(ra.CanSetRecentAllyNote)) then
                 root:CreateButton("Set note", function()
                     UI.Confirm({ title = "Note", text = "A note about this ally: only you see it.",
                         input = { label = "Note", value = row.note or "" }, confirm = "Save",
@@ -630,7 +612,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         if self.raidTest then self.raidTest = nil; self:RenderRaid(); return end
         local _, class = UnitClass("player")
         local name = SuuUI.FullName("player")
-        local members: RaidMember[] = { { index = 1, name = str(name), class = str(class), role = "DAMAGER",
+        local members: RaidMember[] = { { index = 1, name = secret.asString(name), class = secret.asString(class), role = "DAMAGER",
                             group = 1, leader = true, online = true, you = true } }
         for i, t in ipairs(TEST_NAMES) do
             members[#members + 1] = { index = i + 1, name = t[1], class = t[2], role = t[3], group = math.floor(i / 5) + 1,
@@ -646,12 +628,12 @@ class SocialModule extends Module<typeof(DEFAULTS)>
     -- difficulty, how far you got and when it resets.
     function Lockouts(): Lockout[]
         local out: Lockout[] = {}
-        for i = 1, num(call(GetNumSavedInstances)) or 0 do
-            local name, _, reset, _, locked, extended, _, isRaid, maxPlayers, difficultyName, numEncounters, progress = call(GetSavedInstanceInfo, i)
-            local title = str(name)
+        for i = 1, secret.asNumber(errors.try(GetNumSavedInstances)) or 0 do
+            local name, _, reset, _, locked, extended, _, isRaid, maxPlayers, difficultyName, numEncounters, progress = errors.try(GetSavedInstanceInfo, i)
+            local title = secret.asString(name)
             if title and (locked or extended) then
-                out[#out + 1] = { name = title, difficulty = str(difficultyName), reset = num(reset), extended = extended == true,
-                                  raid = isRaid == true, size = num(maxPlayers), bosses = num(numEncounters), done = num(progress) }
+                out[#out + 1] = { name = title, difficulty = secret.asString(difficultyName), reset = secret.asNumber(reset), extended = extended == true,
+                                  raid = isRaid == true, size = secret.asNumber(maxPlayers), bosses = secret.asNumber(numEncounters), done = secret.asNumber(progress) }
             end
         end
         return out
@@ -716,15 +698,15 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         local test = self.raidTest
         if test then return test end
         local out: RaidMember[] = {}
-        if not UI.Flag(IsInRaid()) then return out end
+        if not secret.flag(IsInRaid()) then return out end
         for i = 1, GetNumGroupMembers() do
             local name, rank, group, level, className, file, zone, online, dead, _, _, combatRole = GetRaidRosterInfo(i)
-            if plain(name) and name then
+            if secret.readable(name) and name then
                 local unit = "raid" .. i
-                local role = (plain(combatRole) and combatRole ~= "NONE" and combatRole) or secret.known(UnitGroupRolesAssigned(unit), "NONE")
+                local role = (secret.readable(combatRole) and combatRole ~= "NONE" and combatRole) or secret.known(UnitGroupRolesAssigned(unit), "NONE")
                 out[#out + 1] = { index = i, unit = unit, name = name, class = file, className = className, level = level, zone = zone,
                                   role = role ~= "NONE" and role or nil, group = group, leader = rank == 2, assistant = rank == 1,
-                                  online = online and true or false, dead = dead, you = UI.Flag(UnitIsUnit(unit, "player")) }
+                                  online = online and true or false, dead = dead, you = secret.flag(UnitIsUnit(unit, "player")) }
             end
         end
         return out
@@ -734,16 +716,16 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         local page = self.raidPage
         if not (page and page:IsVisible()) then return end
         local test = self.raidTest ~= nil
-        local canLead = test or UI.Flag(UnitIsGroupLeader("player")) or UI.Flag(UnitIsGroupAssistant("player"))
-        local inRaid = UI.Flag(IsInRaid())
-        page:SetData({ inRaid = test or inRaid, inParty = UI.Flag(IsInGroup()) and not inRaid, canLead = canLead and true or false,
+        local canLead = test or secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player"))
+        local inRaid = secret.flag(IsInRaid())
+        page:SetData({ inRaid = test or inRaid, inParty = secret.flag(IsInGroup()) and not inRaid, canLead = canLead and true or false,
                        reason = InCombatLockdown() and "Not in combat." or nil, size = 40, members = self:RaidMembers(),
                        plan = SuuUI.UseService(RAID_PLANNER) ~= nil })
     end
 
     function WireRaid(page: RaidGroups)
-        page.onReadyCheck = function() call(global("DoReadyCheck")) end
-        page.onRoleCheck = function() call(global("InitiateRolePoll")) end
+        page.onReadyCheck = function() errors.try(global("DoReadyCheck")) end
+        page.onRoleCheck = function() errors.try(global("InitiateRolePoll")) end
         page.onRaidInfo = function() self:ToggleLockouts() end
         -- the raid planner (its own module), while it's on
         page.onPlan = function()
@@ -751,7 +733,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
             if planner and planner.Toggle then planner.Toggle() end
         end
         page.onConvert = function()
-            call((C_PartyInfo and C_PartyInfo.ConvertToRaid) or global("ConvertToRaid"))
+            errors.try((C_PartyInfo and C_PartyInfo.ConvertToRaid) or global("ConvertToRaid"))
         end
         page.onMove = function(index: number, group: number)
             local test = self.raidTest
@@ -788,34 +770,17 @@ class SocialModule extends Module<typeof(DEFAULTS)>
                 if lead and not m.you and unit then
                     root:CreateDivider()
                     if m.assistant then
-                        root:CreateButton("Demote from assistant", function() call(global("DemoteAssistant"), unit) end)
+                        root:CreateButton("Demote from assistant", function() errors.try(global("DemoteAssistant"), unit) end)
                     else
-                        root:CreateButton("Promote to assistant", function() call(global("PromoteToAssistant"), unit) end)
+                        root:CreateButton("Promote to assistant", function() errors.try(global("PromoteToAssistant"), unit) end)
                     end
-                    root:CreateButton("Make leader", function() call(global("PromoteToLeader"), unit) end)
+                    root:CreateButton("Make leader", function() errors.try(global("PromoteToLeader"), unit) end)
                     root:CreateButton("Remove from group", function()
-                        call((C_PartyInfo and C_PartyInfo.UninviteUnit) or global("UninviteUnit"), unit)
+                        errors.try((C_PartyInfo and C_PartyInfo.UninviteUnit) or global("UninviteUnit"), unit)
                     end)
                 end
             end, "groupMember", { member = m })
         end
-    end
-
-    -- A Blizzard part out of sight: see-through and off screen, still shown,
-    -- and back off screen whenever Blizzard places it again.
-    function Away(f: Frame?)
-        if not f or self.awayParts[f] then return end
-        self.awayParts[f] = true
-        f:SetAlpha(0)
-        local placing = false
-        local function away()
-            placing = true
-            f:ClearAllPoints()
-            f:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-            placing = false
-        end
-        away()
-        hook(f, "SetPoint", function() if not placing then after(0, away) end end)
     end
 
     -- The Contacts page while the window shows its friends list.
@@ -874,7 +839,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
     end
 
     function Build()
-        local f = asFrame(named("SocialUIFrame"))
+        local f = frames.find("SocialUIFrame")
         if not f or self.view then return end
         local w = windowOf(f)
         if not w then return end
@@ -920,7 +885,7 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         -- away, they went with it, found in game), only see-through while the
         -- page covers it. Recent Allies, Friend Requests and Raid stay
         -- Blizzard's for now.
-        self:Away(w.list)
+        frames.keepAway(w.list, { fade = true })
         -- the page follows the window's content
         hookScript(f, "OnShow", function() self:Follow() end)
         hookScript(f, "OnHide", function() GameTooltip:Hide() end)

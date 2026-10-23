@@ -17,34 +17,24 @@ import type ScrollArea, WindowFrame, Panel from "/UI/Panel"
 import type Select, SelectOption from "/UI/Select"
 import type Text from "/UI/Text"
 import after, every from "wowlua:timer"
-import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
-import asFrame, named, part from "/UI/Reskin"
+import * as errors from "wowlua:errors"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import type AwayHandle from "wowlua:frames"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
 local DEFAULTS = {}
 
-local isSecret = secret.isSecret
 -- a value that is there and not secret (narrows: no longer nil or Secret)
 type Plain = string | number | boolean | table
-local function plain(v: unknown): v is Plain return v ~= nil and not isSecret(v) end
 -- One of the game's functions, if it has it: every value it returns, as it
--- comes (read each with `str` or `num`; the junk's price is GetItemInfo's
+-- comes (read each with `secret.asString` or `secret.asNumber`; the junk's price is GetItemInfo's
 -- eleventh), nothing when it fails.
-local function okThen(ok: boolean, ...: unknown): ...unknown
-    if ok then return ... end
-    return nil
-end
-local function call(fn: unknown, ...: unknown): ...unknown
-    if type(fn) ~= "function" then return nil end
-    return okThen(pcall(fn :: (...unknown) -> ...unknown, ...))
-end
-local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
-local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
 -- a texture: a file ID or a path
-local function art(v: unknown): (number | string)? return num(v) or str(v) end
+local function art(v: unknown): (number | string)? return secret.asNumber(v) or secret.asString(v) end
 
 local WIDTH, HEIGHT = 440, 600
 local ROW_H = 46
@@ -71,12 +61,12 @@ local function icon(texture: (number | string)?): string return texture and ("|T
 
 -- "Already known" in the item's tooltip: a recipe, pet or mount you have.
 local function isKnown(index: number): boolean
-    local data = C_TooltipInfo and call(C_TooltipInfo.GetMerchantItem, index)
-    local lines = part(data, "lines")
+    local data = C_TooltipInfo and errors.try(C_TooltipInfo.GetMerchantItem, index)
+    local lines = tbl.field(data, "lines")
     if type(lines) ~= "table" then return false end
     for _, line in ipairs(lines :: unknown[]) do
-        local text = part(line, "leftText")
-        if plain(text) and text == ITEM_SPELL_KNOWN then return true end
+        local text = tbl.field(line, "leftText")
+        if secret.readable(text) and text == ITEM_SPELL_KNOWN then return true end
     end
     return false
 end
@@ -85,10 +75,10 @@ end
 local function haveOf(link: string?, isCurrency: boolean?): number
     if not link then return 0 end
     if isCurrency then
-        local info = C_CurrencyInfo and call(C_CurrencyInfo.GetCurrencyInfoFromLink, link)
-        return num(part(info, "quantity")) or 0
+        local info = C_CurrencyInfo and errors.try(C_CurrencyInfo.GetCurrencyInfoFromLink, link)
+        return secret.asNumber(tbl.field(info, "quantity")) or 0
     end
-    return num(call(C_Item.GetItemCount, link, true, false, true)) or 0
+    return secret.asNumber(errors.try(C_Item.GetItemCount, link, true, false, true)) or 0
 end
 
 -- A merchant item's other cost: an item or a currency.
@@ -251,14 +241,14 @@ type JunkSlot = { bag: number, slot: number }
 local function junkSlots(): (JunkSlot[], number)
     local list: JunkSlot[], copper = {}, 0
     for bag = 0, 4 do
-        for slot = 1, (num(call(C_Container.GetContainerNumSlots, bag)) or 0) do
-            local info = call(C_Container.GetContainerItemInfo, bag, slot)
-            local quality, noValue, locked = part(info, "quality"), part(info, "hasNoValue"), part(info, "isLocked")
-            if plain(quality) and quality == 0 and not (plain(noValue) and noValue) and not (plain(locked) and locked) then
-                local link = str(part(info, "hyperlink"))
-                local price = link and num(select(11, call(C_Item.GetItemInfo, link))) or 0
+        for slot = 1, (secret.asNumber(errors.try(C_Container.GetContainerNumSlots, bag)) or 0) do
+            local info = errors.try(C_Container.GetContainerItemInfo, bag, slot)
+            local quality, noValue, locked = tbl.field(info, "quality"), tbl.field(info, "hasNoValue"), tbl.field(info, "isLocked")
+            if secret.readable(quality) and quality == 0 and not (secret.readable(noValue) and noValue) and not (secret.readable(locked) and locked) then
+                local link = secret.asString(tbl.field(info, "hyperlink"))
+                local price = link and secret.asNumber(select(11, errors.try(C_Item.GetItemInfo, link))) or 0
                 list[#list + 1] = { bag = bag, slot = slot }
-                copper = copper + price * (num(part(info, "stackCount")) or 1)
+                copper = copper + price * (secret.asNumber(tbl.field(info, "stackCount")) or 1)
             end
         end
     end
@@ -270,7 +260,7 @@ end
 --------------------------------------------------------------------------------
 
 class MerchantModule extends Module<typeof(DEFAULTS)>
-    away: boolean? = nil
+    away: AwayHandle? = nil
     content: Frame? = nil
     empty: Text? = nil
     filter: Select<number>? = nil
@@ -311,27 +301,27 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
     end
 
     function Item(index: number): Entry?
-        local info = call(C_MerchantFrame.GetItemInfo, index)
-        local name = str(part(info, "name"))
+        local info = errors.try(C_MerchantFrame.GetItemInfo, index)
+        local name = secret.asString(tbl.field(info, "name"))
         if not name then return nil end
-        local link = str(call(GetMerchantItemLink, index))
-        local quality = link and num(select(3, call(C_Item.GetItemInfo, link))) or nil
+        local link = secret.asString(errors.try(GetMerchantItemLink, index))
+        local quality = link and secret.asNumber(select(3, errors.try(C_Item.GetItemInfo, link))) or nil
         local e: Entry = {
-            index = index, name = name, texture = art(part(info, "texture")), link = link,
+            index = index, name = name, texture = art(tbl.field(info, "texture")), link = link,
             quality = QUALITY[quality or 1] or "common",
-            price = num(part(info, "price")) or 0, stack = math.max(1, num(part(info, "stackCount")) or 1),
-            stock = num(part(info, "numAvailable")) or -1,
-            usable = part(info, "isUsable") == true, purchasable = part(info, "isPurchasable") == true,
-            maxStack = math.max(1, num(call(GetMerchantItemMaxStack, index)) or 1),
+            price = secret.asNumber(tbl.field(info, "price")) or 0, stack = math.max(1, secret.asNumber(tbl.field(info, "stackCount")) or 1),
+            stock = secret.asNumber(tbl.field(info, "numAvailable")) or -1,
+            usable = tbl.field(info, "isUsable") == true, purchasable = tbl.field(info, "isPurchasable") == true,
+            maxStack = math.max(1, secret.asNumber(errors.try(GetMerchantItemMaxStack, index)) or 1),
             costs = {}, have = 0, known = false,
         }
-        if part(info, "hasExtendedCost") then
-            for k = 1, (num(call(GetMerchantItemCostInfo, index)) or 0) do
-                local texture, valueR, costLink, currencyName = call(GetMerchantItemCostItem, index, k)
-                local value = num(valueR)
+        if tbl.field(info, "hasExtendedCost") then
+            for k = 1, (secret.asNumber(errors.try(GetMerchantItemCostInfo, index)) or 0) do
+                local texture, valueR, costLink, currencyName = errors.try(GetMerchantItemCostItem, index, k)
+                local value = secret.asNumber(valueR)
                 if value and value > 0 then
-                    local currency = str(currencyName)
-                    e.costs[#e.costs + 1] = { texture = art(texture), value = value, link = str(costLink), currency = currencyName ~= nil,
+                    local currency = secret.asString(currencyName)
+                    e.costs[#e.costs + 1] = { texture = art(texture), value = value, link = secret.asString(costLink), currency = currencyName ~= nil,
                                               name = currency }
                 end
             end
@@ -432,15 +422,15 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawBuybackRow(r: MerchantRow, i: number, undo: boolean?)
-        local nameR, texture, priceR, quantity, _, usable = call(GetBuybackItemInfo, i)
-        local link = str(call(GetBuybackItemLink, i))
-        local quality = link and num(select(3, call(C_Item.GetItemInfo, link))) or nil
-        local price = num(priceR) or 0
+        local nameR, texture, priceR, quantity, _, usable = errors.try(GetBuybackItemInfo, i)
+        local link = secret.asString(errors.try(GetBuybackItemLink, i))
+        local quality = link and secret.asNumber(select(3, errors.try(C_Item.GetItemInfo, link))) or nil
+        local price = secret.asNumber(priceR) or 0
         r.entry = nil
         r.slot.index, r.slot.buyback, r.slot.link = i, true, link
-        r.slot.skin:SetItem({ icon = art(texture), count = num(quantity), quality = QUALITY[quality or 1] or "common" })
+        r.slot.skin:SetItem({ icon = art(texture), count = secret.asNumber(quantity), quality = QUALITY[quality or 1] or "common" })
         r.tint:SetShown(usable == false)
-        r.name:SetValue(str(nameR) or "?")
+        r.name:SetValue(secret.asString(nameR) or "?")
         r.name:SetColor((quality and quality ~= 1) and ("quality-" .. (QUALITY[quality] or "common")) or "ink")
         r.costs:Hide()
         r.money:Show()
@@ -497,7 +487,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         if LE_LOOT_FILTER_CLASS then options[#options + 1] = { value = LE_LOOT_FILTER_CLASS, label = "Your class" } end
         if LE_LOOT_FILTER_BOE then options[#options + 1] = { value = LE_LOOT_FILTER_BOE, label = "Bind on equip" } end
         local filter: Select<number> = UI.Select(tools, { width = 160, options = options, onChange = function(v: number)
-            call(SetMerchantFilter, v)
+            errors.try(SetMerchantFilter, v)
             self:Refresh()
         end })
         self.filter = filter
@@ -538,20 +528,20 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         local money = UI.Money(f)
         self.money = money
         money:SetPoint("RIGHT", 0, 0)
-        local repair = UI.Button(f, { text = "Repair all", onClick = function() call(RepairAllItems, false) end })
+        local repair = UI.Button(f, { text = "Repair all", onClick = function() errors.try(RepairAllItems, false) end })
         self.repair = repair
         repair:SetPoint("LEFT", 0, 0)
         -- the same, primary while the line over the foot names worn pieces
         local repairPrimary = UI.Button(f, { text = "Repair all", variant = "primary", icon = "anvil",
-            onClick = function() call(RepairAllItems, false) end })
+            onClick = function() errors.try(RepairAllItems, false) end })
         self.repairPrimary = repairPrimary
         repairPrimary:SetPoint("LEFT", 0, 0)
         repairPrimary:Hide()
         local repairOne = UI.Button(f, { text = "One", width = 52, onClick = function()
-            if InRepairMode and InRepairMode() then call(HideRepairCursor) else call(ShowRepairCursor) end
+            if InRepairMode and InRepairMode() then errors.try(HideRepairCursor) else errors.try(ShowRepairCursor) end
         end, tooltip = { title = "Repair one item", description = "Then click the item: on your character or in your bags." } })
         self.repairOne = repairOne
-        local guild = UI.Button(f, { text = "Guild", onClick = function() call(RepairAllItems, true) end })
+        local guild = UI.Button(f, { text = "Guild", onClick = function() errors.try(RepairAllItems, true) end })
         self.guild = guild
         guild:SetPoint("LEFT", repairOne, "RIGHT", S["space-2"], 0)
         self.junk = UI.Button(f, { text = "Sell junk", onClick = function() self:SellJunk() end })
@@ -586,13 +576,13 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         local c, tools, filter, last, list = assert(self.content), assert(self.tools), assert(self.filter), assert(self.last), assert(self.list)
         local empty, wear, search = assert(self.empty), assert(self.wear), assert(self.search)
         local name = UnitName("npc")
-        w:SetTitle(plain(name) and name or "Merchant")
+        w:SetTitle(secret.readable(name) and name or "Merchant")
         local buy = (self.tab or "buy") == "buy"
         tools:SetShown(buy)
         filter:SetShown(self.hasFilter)
-        if buy then filter:SetValue(num(call(GetMerchantFilter))) end
+        if buy then filter:SetValue(secret.asNumber(errors.try(GetMerchantFilter))) end
         -- the last sold item under the list (Merchant tab, once you sold one)
-        local lastN = num(call(GetNumBuybackItems)) or 0
+        local lastN = secret.asNumber(errors.try(GetNumBuybackItems)) or 0
         local showLast = buy and lastN > 0
         last:SetShown(showLast)
         if showLast then self:DrawBuybackRow(assert(self.lastRow), lastN, true) end
@@ -620,7 +610,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         if buy then
             local query = (search.edit:GetText() or ""):lower()
             local goods: Entry[] = {}
-            for i = 1, (num(call(GetMerchantNumItems)) or 0) do
+            for i = 1, (secret.asNumber(errors.try(GetMerchantNumItems)) or 0) do
                 local e = self:Item(i)
                 if e and (query == "" or e.name:lower():find(query, 1, true)) then goods[#goods + 1] = e end
             end
@@ -637,7 +627,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
                 y = y + 40
             end
         else
-            local n = num(call(GetNumBuybackItems)) or 0
+            local n = secret.asNumber(errors.try(GetNumBuybackItems)) or 0
             local rows = self:Rows(n, y)
             for i = 1, n do self:DrawBuybackRow(rows[i], i) end
             if n > 0 then rows[n].rule:Hide() end
@@ -676,7 +666,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
     function DrawWear(): boolean
         local wear = assert(self.wear)
         local d = SuuUI.Durability()
-        local show = d ~= nil and d.parts.gear and d.state ~= "fine" and call(CanMerchantRepair) and true or false
+        local show = d ~= nil and d.parts.gear and d.state ~= "fine" and errors.try(CanMerchantRepair) and true or false
         wear:SetShown(show)
         if not (show and d) then return false end
         local broken: string[], damaged: string[], worn = {}, {}, 0
@@ -703,9 +693,9 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         local money, repair, repairPrimary, repairOne = assert(self.money), assert(self.repair), assert(self.repairPrimary), assert(self.repairOne)
         local guildButton, junk, wear = assert(self.guild), assert(self.junk), assert(self.wear)
         money:SetCopper(GetMoney() or 0)
-        local canRepair = call(CanMerchantRepair) and true or false
-        local costR, needed = call(GetRepairAllCost)
-        local cost = num(costR) or 0
+        local canRepair = errors.try(CanMerchantRepair) and true or false
+        local costR, needed = errors.try(GetRepairAllCost)
+        local cost = secret.asNumber(costR) or 0
         -- primary while the line over the foot shows
         local primary = canRepair and wear:IsShown()
         repair:SetShown(canRepair and not primary)
@@ -719,10 +709,10 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         end
         repairOne:ClearAllPoints()
         repairOne:SetPoint("LEFT", primary and repairPrimary or repair, "RIGHT", S["space-2"], 0)
-        local guild = canRepair and call(CanGuildBankRepair) and true or false
+        local guild = canRepair and errors.try(CanGuildBankRepair) and true or false
         guildButton:SetShown(guild)
         if guild then
-            local left = num(call(GetGuildBankWithdrawMoney))
+            local left = secret.asNumber(errors.try(GetGuildBankWithdrawMoney))
             guildButton.tooltip = { title = "Repair from the guild bank",
                 description = left and left >= 0 and ("The guild can still pay " .. coins(left) .. " today.") or nil }
             guildButton:SetEnabledState(needed and cost > 0)
@@ -736,11 +726,11 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         if prev then junk:SetPoint("LEFT", prev, "RIGHT", S["space-2"], 0) else junk:SetPoint("LEFT", 0, 0) end
         -- the merchant's currencies in the header
         local meta: string[] = {}
-        local currencies = C_MerchantFrame.GetMerchantCurrencies and call(C_MerchantFrame.GetMerchantCurrencies)
+        local currencies = C_MerchantFrame.GetMerchantCurrencies and errors.try(C_MerchantFrame.GetMerchantCurrencies)
         if type(currencies) == "table" then
             for _, id in ipairs(currencies :: unknown[]) do
-                local info = call(C_CurrencyInfo.GetCurrencyInfo, id)
-                if info and #meta < 6 then meta[#meta + 1] = (num(part(info, "quantity")) or 0) .. " " .. icon(art(part(info, "iconFileID"))) end
+                local info = errors.try(C_CurrencyInfo.GetCurrencyInfo, id)
+                if info and #meta < 6 then meta[#meta + 1] = (secret.asNumber(tbl.field(info, "quantity")) or 0) .. " " .. icon(art(tbl.field(info, "iconFileID"))) end
             end
         end
         local header = w.meta
@@ -757,23 +747,11 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
-    -- The game's frame out of sight: see-through and off screen, still shown,
-    -- and back off screen whenever the game places it again.
+    -- The game's frame out of sight while the module is on: see-through and
+    -- off screen, still shown (wowlua:frames' keepAway).
     function Away(frame: Frame?)
         if not frame or self.away then return end
-        self.away = true
-        local placing = false
-        local function away()
-            if not self:IsEnabled() then return end
-            placing = true
-            frame:SetAlpha(0)
-            frame:ClearAllPoints()
-            frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-            placing = false
-        end
-        away()
-        hook(frame, "SetPoint", function() if not placing then after(0, away) end end)
-        hookScript(frame, "OnShow", function() after(0, away) end)
+        self.away = frames.keepAway(frame, { fade = true, when = function(): boolean return self:IsEnabled() end })
     end
 
     override function OnEnable()
@@ -782,8 +760,8 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("MERCHANT_SHOW", function()
             self.open = true
             self.qty = {} -- quantities start over at every vendor
-            self:Away(asFrame(named("MerchantFrame")))
-            call(ResetSetMerchantFilter)
+            self:Away(frames.find("MerchantFrame"))
+            errors.try(ResetSetMerchantFilter)
             assert(self.search):SetValue("")
             local w = assert(self.window)
             w:Show()

@@ -40,6 +40,7 @@ import * as events from "/Core/Events"
 import after, every from "wowlua:timer"
 import onLogin from "wowlua:lifecycle"
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
 
 -- the owner of the recording's event handlers
 const OWNER = "SpellData"
@@ -62,9 +63,6 @@ local function store(): { [string]: any }
     return d
 end
 
-local function readable(v: any): boolean
-    return v ~= nil and not isSecret(v)
-end
 
 --------------------------------------------------------------------------------
 -- Spellbook
@@ -76,7 +74,7 @@ for name, value in pairs(((Enum :: any).SpellBookItemType or {}) :: { [any]: any
 local function baseCooldown(id: number): number?
     if not GetSpellBaseCooldown then return nil end
     local ok, ms = pcall(GetSpellBaseCooldown, id)
-    return ok and readable(ms) and ms > 0 and ms or nil
+    return ok and secret.readable(ms) and ms > 0 and ms or nil
 end
 
 local function dumpBank(d: { [string]: any }, bank: any, owner: string): number
@@ -84,7 +82,7 @@ local function dumpBank(d: { [string]: any }, bank: any, owner: string): number
     local lines = C_SpellBook.GetNumSpellBookSkillLines and C_SpellBook.GetNumSpellBookSkillLines() or 0
     local function add(index: number, tab: string?)
         local ok, it: any = pcall(C_SpellBook.GetSpellBookItemInfo, index, bank)
-        if not (ok and it and readable(it.spellID)) then return end
+        if not (ok and it and secret.readable(it.spellID)) then return end
         local id = it.spellID
         d.spellbook[id] = {
             name = it.name or C_Spell.GetSpellName(id),
@@ -130,16 +128,16 @@ end
 --------------------------------------------------------------------------------
 
 local function noteAura(d: { [string]: any }, unit: string, a: any, filter: string)
-    if not (readable(a.spellId) and readable(a.name)) then return end
+    if not (secret.readable(a.spellId) and secret.readable(a.name)) then return end
     local e = d.auras[a.spellId] or { name = a.name, seen = 0, on = {} }
     e.seen = e.seen + 1
     e.on[unit] = true
     e.kind = filter
-    e.icon = readable(a.icon) and a.icon or e.icon
-    if readable(a.duration) and a.duration > 0 then e.duration = a.duration end
-    if readable(a.isFromPlayerOrPlayerPet) and a.isFromPlayerOrPlayerPet then e.mine = true end
-    if readable(a.sourceUnit) and a.sourceUnit then e.source = a.sourceUnit end
-    if readable(a.dispelName) and a.dispelName then e.dispel = a.dispelName end
+    e.icon = secret.readable(a.icon) and a.icon or e.icon
+    if secret.readable(a.duration) and a.duration > 0 then e.duration = a.duration end
+    if secret.readable(a.isFromPlayerOrPlayerPet) and a.isFromPlayerOrPlayerPet then e.mine = true end
+    if secret.readable(a.sourceUnit) and a.sourceUnit then e.source = a.sourceUnit end
+    if secret.readable(a.dispelName) and a.dispelName then e.dispel = a.dispelName end
     e.last = date("%Y-%m-%d %H:%M")
     d.auras[a.spellId] = e
 end
@@ -170,7 +168,7 @@ local function afterCombat()
 end
 
 local function noteCast(_: string, _: any, spellID: any)
-    if not recording or not readable(spellID) then return end
+    if not recording or not secret.readable(spellID) then return end
     local d = store()
     local e = d.casts[spellID] or { name = C_Spell.GetSpellName(spellID), count = 0 }
     e.count = e.count + 1

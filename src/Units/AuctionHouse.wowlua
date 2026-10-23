@@ -13,6 +13,7 @@
 import SuuUI from "/Core/API"
 import after, every from "wowlua:timer"
 import hook from "wowlua:hooks"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -60,7 +61,6 @@ local SECTION = {
     },
 }
 
-local isSecret = issecretvalue or function() return false end
 local function call(fn: any, ...: any): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e = pcall(fn, ...)
@@ -982,15 +982,15 @@ local function stackCount(tooltip: any): any
         or tooltip.GetPrimaryTooltipInfo and tooltip:GetPrimaryTooltipInfo()
     if not (info and info.getterName == "GetBagItem" and info.getterArgs) then return nil end
     local bag, slot = info.getterArgs[1], info.getterArgs[2]
-    if isSecret(bag) or isSecret(slot) then return nil end
+    if secret.isSecret(bag) or secret.isSecret(slot) then return nil end
     local item = call(C_Container.GetContainerItemInfo, bag, slot)
     local count = item and item.stackCount
-    if isSecret(count) then return nil end
+    if secret.isSecret(count) then return nil end
     return count
 end
 
 function M:AddTooltipPrices(tooltip: any, data: any)
-    if not self:Get("tipShow") or not data or isSecret(data.id) then return end
+    if not self:Get("tipShow") or not data or secret.isSecret(data.id) then return end
     local itemID = data.id
     if type(itemID) ~= "number" then return end
     local e = self:LowestSeen(itemID)
@@ -1421,7 +1421,7 @@ end
 
 -- Time left: an owned auction's in hours or minutes, else the game's band.
 local function timeLeft(seconds: any, band: number?): string
-    if seconds and not isSecret(seconds) then
+    if seconds and not secret.isSecret(seconds) then
         if seconds >= 3600 then return math.floor(seconds / 3600) .. " h" end
         return math.max(1, math.floor(seconds / 60)) .. " min"
     end
@@ -1432,7 +1432,7 @@ end
 local function itemOf(entry: any): (any, any, any)
     local info = keyInfo(entry.itemKey) or {}
     local name, quality, icon = info.itemName, info.quality, info.iconFileID
-    if entry.itemLink and not isSecret(entry.itemLink) then
+    if entry.itemLink and not secret.isSecret(entry.itemLink) then
         local n, _, q, _, _, _, _, _, _, tex = C_Item.GetItemInfo(entry.itemLink)
         name, quality, icon = n or name, q or quality, tex or icon
     end
@@ -1565,7 +1565,7 @@ local function auctionRow(t: any, i: number, entry: any, tag: string?, tagColor:
     row.onEnter = function(btn: any)
         local e = btn.entry
         GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
-        if e.itemLink and not isSecret(e.itemLink) then GameTooltip:SetHyperlink(e.itemLink)
+        if e.itemLink and not secret.isSecret(e.itemLink) then GameTooltip:SetHyperlink(e.itemLink)
         elseif GameTooltip.SetItemKey then pcall(GameTooltip.SetItemKey, GameTooltip, e.itemKey.itemID, e.itemKey.itemLevel, e.itemKey.itemSuffix)
         else GameTooltip:SetItemByID(e.itemKey.itemID) end
         GameTooltip:Show()
@@ -1592,7 +1592,7 @@ function M:DrawAuctions()
         for i, b in ipairs(list) do
             n = i
             -- outbid: someone else holds the highest bid (unknown counts as yours)
-            local outbid = b.bidder and not isSecret(b.bidder) and b.bidder ~= me
+            local outbid = b.bidder and not secret.isSecret(b.bidder) and b.bidder ~= me
             if outbid and a.highest and a.highest[b.auctionID] then
                 local name = itemOf(b)
                 self:Note("You've been outbid on " .. (name or "an item") .. ".", "error")

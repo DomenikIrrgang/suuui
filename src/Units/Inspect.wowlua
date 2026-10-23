@@ -22,10 +22,13 @@ import type Icon from "/UI/Icon"
 import type Bar from "/UI/Bar"
 import type LoadingMark from "/UI/LoadingMark"
 import ItemSlot from "/UI/Inventory"
-import asFrame, named, part from "/UI/Reskin"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import type AwayHandle from "wowlua:frames"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -34,8 +37,7 @@ local DEFAULTS = {}
 
 local M: InspectModule
 
-local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
-local function plainNumber(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
+local function plainNumber(v: unknown): number? if secret.readable(v) and type(v) == "number" then return v end return nil end
 
 local SLOT = T.size["slot"]
 local SIDE_W = 230
@@ -61,21 +63,21 @@ local WIDTH = S["space-5"] + DOLL_W + S["space-6"] + SIDE_W + S["space-5"]
 local HEIGHT = S["space-5"] + T.type.header.lineHeight + S["space-4"] + 1 + S["space-4"] + BODY_H + S["space-5"]
 
 local function itemLevel(link: unknown): number?
-    if not plain(link) or type(link) ~= "string" then return nil end
+    if not secret.readable(link) or type(link) ~= "string" then return nil end
     local ok, lvl = pcall(C_Item.GetDetailedItemLevelInfo, link)
-    return ok and plain(lvl) and lvl and lvl > 0 and lvl or nil
+    return ok and secret.readable(lvl) and lvl and lvl > 0 and lvl or nil
 end
 
 -- the rank's name as the game's own inspect window words it
 local function rankName(unit: string, rank: number): string
     if not rank or rank <= 0 then return PVP_RANK_0_NAME or "Civilian" end
     local affix = (UnitFactionGroup(unit) == "Alliance") and "_1" or "_0"
-    local ranks = part(Enum, "PvPRanks")
-    local first = plainNumber(part(ranks, "Rank_1")) or 5
+    local ranks = tbl.field(Enum, "PvPRanks")
+    local first = plainNumber(tbl.field(ranks, "Rank_1")) or 5
     local key = "PVP_RANK_" .. tostring(first + rank - 1) .. affix
     local getText = GetText :: (token: string, gender: unknown) -> string
     local ok: boolean, name: unknown = pcall(getText, key, UnitSex(unit))
-    if not ok or not plain(name) or type(name) ~= "string" then return tostring(rank) end
+    if not ok or not secret.readable(name) or type(name) ~= "string" then return tostring(rank) end
     return PVP_RANK_NUMBER_AND_TITLE and PVP_RANK_NUMBER_AND_TITLE:format(rank, name) or name
 end
 
@@ -84,8 +86,8 @@ end
 local function identityLine(level: unknown, race: unknown, className: unknown): string
     local lvl = plainNumber(level)
     local parts = { "Level " .. ((lvl and lvl > 0) and lvl or "??") }
-    if plain(race) then parts[#parts + 1] = tostring(race) end
-    if plain(className) then parts[#parts + 1] = tostring(className) end
+    if secret.readable(race) then parts[#parts + 1] = tostring(race) end
+    if secret.readable(className) then parts[#parts + 1] = tostring(className) end
     return table.concat(parts, " · ")
 end
 
@@ -108,7 +110,7 @@ end
 
 -- "Horde · 42 members" under the guild's name (the game's own formats).
 local function guildLine(faction: unknown, members: unknown): string
-    local line = plain(faction) and INSPECT_GUILD_FACTION and INSPECT_GUILD_FACTION:format(faction) or ""
+    local line = secret.readable(faction) and INSPECT_GUILD_FACTION and INSPECT_GUILD_FACTION:format(faction) or ""
     local count = plainNumber(members)
     if count and count > 0 and INSPECT_GUILD_NUM_MEMBERS then
         line = line .. (line ~= "" and " · " or "") .. INSPECT_GUILD_NUM_MEMBERS:format(count)
@@ -339,10 +341,10 @@ class DollSlot extends ItemSlot
 end
 
 -- The game's inspect frame, once its addon is loaded.
-local function inspectFrame(): Frame? return asFrame(named("InspectFrame")) end
+local function inspectFrame(): Frame? return frames.find("InspectFrame") end
 -- The unit it inspects.
 local function inspectedUnit(f: Frame): string?
-    local unit = part(f, "unit")
+    local unit = tbl.field(f, "unit")
     if type(unit) == "string" then return unit end
     return nil
 end
@@ -352,7 +354,7 @@ end
 --------------------------------------------------------------------------------
 
 class InspectModule extends Module<typeof(DEFAULTS)>
-    away: boolean? = nil
+    away: AwayHandle? = nil
     box: ModelBox? = nil
     compare: boolean? = nil
     compareToggle: Toggle? = nil
@@ -546,11 +548,11 @@ class InspectModule extends Module<typeof(DEFAULTS)>
             UI.Paint(id.diamond, token)
             id.name:SetColor(token)
         end
-        id.name:SetValue(plain(name) and type(name) == "string" and name or "")
+        id.name:SetValue(secret.readable(name) and type(name) == "string" and name or "")
         id.line:SetValue(identityLine(UnitLevel(unit), UnitRace(unit), (UnitClass(unit))))
         local okGuild: boolean, _: unknown, members: unknown, guildRead: unknown = pcall(C_PaperDollInfo.GetInspectGuildInfo, unit)
         local guildName: string? = nil
-        if okGuild and not self.loading and plain(guildRead) and type(guildRead) == "string" and guildRead ~= "" then guildName = guildRead end
+        if okGuild and not self.loading and secret.readable(guildRead) and type(guildRead) == "string" and guildRead ~= "" then guildName = guildRead end
         id.guild:SetValue(guildName and ("<" .. guildName .. ">") or "")
         -- gear
         for _, b in ipairs(self.slots) do self:DrawSlot(b) end
@@ -565,7 +567,7 @@ class InspectModule extends Module<typeof(DEFAULTS)>
             box.loading:Hide()
             -- SetUnit says nothing on Forever: whether the game has them in sight does
             local visible = UnitIsVisible(unit)
-            local near = not plain(visible) or visible == true
+            local near = not secret.readable(visible) or visible == true
             if near then model:SetUnit(unit) end
             model:SetShown(near)
             box.note:SetValue(near and "" or "Too far away to show")
@@ -618,23 +620,11 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         talents.tooltip = why and { title = "View Talents", description = why } or nil
     end
 
-    -- The game's frame out of sight: see-through and off screen, still shown,
-    -- and back off screen whenever the game places it again.
+    -- The game's frame out of sight while the module is on: see-through and
+    -- off screen, still shown (wowlua:frames' keepAway).
     function Away(frame: Frame)
         if self.away then return end
-        self.away = true
-        local placing = false
-        local function away()
-            if not self:IsEnabled() then return end
-            placing = true
-            frame:SetAlpha(0)
-            frame:ClearAllPoints()
-            frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-            placing = false
-        end
-        away()
-        hook(frame, "SetPoint", function() if not placing then after(0, away) end end)
-        hookScript(frame, "OnShow", function() after(0, away) end)
+        self.away = frames.keepAway(frame, { fade = true, when = function(): boolean return self:IsEnabled() end })
     end
 
     -- Asked: the window opens at once, waiting for the gear.
