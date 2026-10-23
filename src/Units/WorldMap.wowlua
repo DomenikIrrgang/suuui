@@ -38,6 +38,7 @@ import type Me from "/Units/WorldMap/Quests"
 import CLOSEST_GROW, arrange from "/Units/WorldMap/Arrange"
 import type Item, Group from "/Units/WorldMap/Arrange"
 import tipFor from "/Units/WorldMap/Tips"
+import type FilterValue, FilterValues, FilterGroup, FilterOption from "/UI/FilterMenu"
 import unexploredTiles from "/Units/WorldMap/Overlays"
 
 -- What Map filters chose: each group's values on.
@@ -45,6 +46,30 @@ type FilterChoice = { [string]: string[] }
 -- The saved filters: each group's values (an earlier layout's groups too)
 -- and the layout's version.
 type SavedFilters = { v?: number, [string]: string[] | number | nil }
+
+-- Map filters' values from the choice, and back (its values: strings).
+local function menuValues(f: SavedFilters): FilterValues
+    local out: FilterValues = {}
+    for k, list in pairs(f) do
+        if type(list) == "table" then
+            local l: FilterValue[] = {}
+            for i, v in ipairs(list) do l[i] = v end
+            out[k] = l
+        end
+    end
+    return out
+end
+local function chosen(v: FilterValues): FilterChoice
+    local out: FilterChoice = {}
+    for k, c in pairs(v) do
+        local l: string[] = {}
+        if type(c) == "table" then
+            for _, x in ipairs(c) do if type(x) == "string" then l[#l + 1] = x end end
+        end
+        out[k] = l
+    end
+    return out
+end
 
 local DEFAULT_FILTERS: SavedFilters = {
     -- (objectives, levels and colours: the game's own settings)
@@ -141,10 +166,17 @@ local function convergences()
 end
 
 -- The menu's groups: Skyborne only for a Skyborne character.
-local function menuGroups()
-    if convergences() then return GROUPS end
-    local out = {}
-    for _, g in ipairs(GROUPS) do if g.key ~= "skyborne" then out[#out + 1] = g end end
+local function menuGroups(): FilterGroup[]
+    local sky = convergences() ~= nil
+    local out: FilterGroup[] = {}
+    for _, g in ipairs(GROUPS) do
+        if sky or g.key ~= "skyborne" then
+            local options: FilterOption[] = {}
+            for i, o in ipairs(g.options) do options[i] = { value = o.value, label = o.label, color = o.color } end
+            local kind: "one" | "many" | "toggles" = g.kind == "one" and "one" or g.kind == "many" and "many" or "toggles"
+            out[#out + 1] = { key = g.key, label = g.label, kind = kind, options = options, column = g.column }
+        end
+    end
     return out
 end
 
@@ -223,11 +255,11 @@ local function settingOn(cvar: string): boolean?
     return not ok or v
 end
 
-function M:MenuValue()
+function M:MenuValue(): FilterChoice
     local saved = self:Saved()
-    local value = {}
+    local value: FilterChoice = {}
     for _, g in ipairs(GROUPS) do
-        local list = {}
+        local list: string[] = {}
         if g.key == "quests" then
             for _, o in ipairs(GAME_SETTINGS) do
                 if settingOn(o.cvar) then list[#list + 1] = o.value end
@@ -279,7 +311,7 @@ function M:OpenWith(group: string, item: string)
         if not has then
             list[#list + 1] = item
             self:OnFilters(value)
-            if self.menu then self.menu:SetValue(self:MenuValue()) end
+            if self.menu then self.menu:SetValue(menuValues(self:MenuValue())) end
         end
     end
     if self.map and not self.map:IsShown() then ToggleWorldMap() end
@@ -1341,9 +1373,9 @@ function M:Attach()
     provider.OnCanvasSizeChanged = function() self:QueueLayout() end
     self.provider = provider
     self.menu = UI.FilterMenu(f, {
-        groups = menuGroups(), defaults = DEFAULT_FILTERS, value = self:MenuValue(),
+        groups = menuGroups(), defaults = menuValues(DEFAULT_FILTERS), value = menuValues(self:MenuValue()),
         placeholder = "Map filters", style = "button", height = 22, done = true,
-        onChange = function(value: FilterChoice) self:OnFilters(value) end,
+        onChange = function(value: FilterValues) self:OnFilters(chosen(value)) end,
     })
     -- every time the map opens: the game's place for its filter comes back
     self.skyborneMenu = convergences() ~= nil
@@ -1356,7 +1388,7 @@ function M:Attach()
             self.skyborneMenu = skyborne
             self.menu:SetGroups(menuGroups())
         end
-        self.menu:SetValue(self:MenuValue())
+        self.menu:SetValue(menuValues(self:MenuValue()))
         self:PlaceFilters()
     end)
     -- (a frame later: the window skin lays its row out on the same change)
@@ -1451,7 +1483,7 @@ function M:OnEnable()
     self.layer:Show()
     self.reveal:Show()
     self.menu:Show()
-    self.menu:SetValue(self:MenuValue())
+    self.menu:SetValue(menuValues(self:MenuValue()))
     self:PlaceFilters()
     -- what you can pick up changes as you level and turn quests in
     for _, event in ipairs({ "QUEST_TURNED_IN", "QUEST_ACCEPTED", "QUEST_REMOVED", "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED", "UPDATE_FACTION",

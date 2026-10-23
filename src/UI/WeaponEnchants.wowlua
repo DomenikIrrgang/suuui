@@ -39,6 +39,7 @@ import * as events from "/Core/Events"
 import * as fonts from "/Core/Fonts"
 import * as draw from "/UI/Draw"
 import * as uiText from "/UI/Text"
+import type Text from "/UI/Text"
 import * as tooltip from "/UI/Tooltip"
 
 -- wowlua:secret's isSecret as a local predicate: an imported one doesn't
@@ -60,7 +61,7 @@ local ORDER: string[] = { "main", "off", "ranged" }
 -- Reading
 --------------------------------------------------------------------------------
 
-export type Info = { slot: string, enchantID: number, weaponID: number?, icon: any, expires: number,
+export type Info = { slot: string, enchantID: number, weaponID: number?, icon: string | number, expires: number,
     duration: number, charges: number, name: string?, weapon: string?, spellID: number? }
 
 local state: { [string]: Info | false } = {}      -- slot -> info, or false
@@ -68,21 +69,34 @@ type Seen = { id: number, duration: number }
 local seen: { [string]: Seen } = {}       -- slot -> { id, duration } of the enchant on it
 local spellFor: { [string]: number } = {}   -- slot -> the spell that put its enchant on
 local tipNames: { [string]: string | false } = {}   -- "slot:enchantID" -> the tooltip's name
-local lastArt: { [string]: any } = {}    -- slot -> the art of the enchant it had last (grey while missing)
+local lastArt: { [string]: string | number } = {}    -- slot -> the art of the enchant it had last (grey while missing)
 local weapons: { [string]: number? } = {}    -- slot -> the item in it, at the last look
 local lastCast: { id: number, at: number }?        -- { id, at }: the player's last successful cast
 
 -- Where the game's functions are read from: the game's (a table, so tests
 -- can stand in for one).
-local G: { [string]: any } = setmetatable({}, { __index = function(_: any, k: string): any return _G[k] end })
+type Game = {
+    C_Item?: {
+        GetWeaponEnchantInfo?: typeof(C_Item.GetWeaponEnchantInfo),
+        GetItemInfoInstant: typeof(C_Item.GetItemInfoInstant),
+    },
+    C_TooltipInfo?: { GetInventoryItem?: typeof(C_TooltipInfo.GetInventoryItem) },
+    C_Spell: { GetSpellName: typeof(C_Spell.GetSpellName) },
+    GetInventoryItemID: typeof(GetInventoryItemID),
+    GetInventoryItemLink: typeof(GetInventoryItemLink),
+    GetInventoryItemTexture: typeof(GetInventoryItemTexture),
+}
+local G = setmetatable({}, { __index = function(_: unknown, k: string): unknown return _G[k] end }) :: Game
 
 local function plain(v: unknown): boolean return v ~= nil and not isSecret(v) end
 
 -- The temporary enchant in a weapon slot's list: the entry with time left
 -- (a permanent enchant has none).
-local function read(ws: number): any
-    if not (G.C_Item and G.C_Item.GetWeaponEnchantInfo) then return nil end
-    local ok, list = pcall(G.C_Item.GetWeaponEnchantInfo, ws)
+local function read(ws: number): WeaponEnchantInfo?
+    local items = G.C_Item
+    local get = items and items.GetWeaponEnchantInfo
+    if not get then return nil end
+    local ok, list = pcall(get, ws)
     if not ok or isSecret(list) or type(list) ~= "table" then return nil end
     for _, e in pairs(list) do
         if type(e) == "table" and not isSecret(e) and plain(e.hasEnchant) and e.hasEnchant
@@ -94,8 +108,10 @@ end
 
 -- "Rockbiter 2 (60 min)" -> "Rockbiter": the weapon tooltip's timed line.
 local function tooltipName(inv: number): string?
-    if not (G.C_TooltipInfo and G.C_TooltipInfo.GetInventoryItem) then return nil end
-    local ok, data = pcall(G.C_TooltipInfo.GetInventoryItem, "player", inv)
+    local tips = G.C_TooltipInfo
+    local get = tips and tips.GetInventoryItem
+    if not get then return nil end
+    local ok, data = pcall(get, "player", inv)
     if not ok or isSecret(data) or type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
     for _, l in ipairs(data.lines) do
         local text = l.leftText
@@ -117,7 +133,9 @@ export function weaponEnchantable(slot: string): boolean
     if state[slot] then return true end
     local id = G.GetInventoryItemID("player", s.inv)
     if not plain(id) or not id then return false end
-    local classID = select(6, G.C_Item.GetItemInfoInstant(id))
+    local items = G.C_Item
+    if not items then return false end
+    local classID = select(6, items.GetItemInfoInstant(id))
     return classID == (Enum.ItemClass and Enum.ItemClass.Weapon or 2)
 end
 
@@ -129,9 +147,7 @@ local scan: () -> ()
 
 -- Forgets everything seen (tests: each starts from a session's beginning).
 local function reset()
-    for _, t in ipairs({ state, seen, spellFor, tipNames, lastArt, weapons } :: { [string]: any }[]) do
-        for k in pairs(t) do t[k] = nil end
-    end
+    wipe(state); wipe(seen); wipe(spellFor); wipe(tipNames); wipe(lastArt); wipe(weapons)
     lastCast = nil
     if ticker then ticker:Cancel() ticker = nil end
 end
@@ -230,7 +246,7 @@ local function longTime(left: number): string
     return ("%d sec"):format(math.ceil(left))
 end
 
-local function setWarn(self: any, on: boolean)
+local function setWarn(self: WeaponEnchantIcon, on: boolean)
     self.warnEdge:SetShown(on)
     if on and not self.warnPulse:IsPlaying() then
         self.warnPulse:Play()
@@ -239,7 +255,7 @@ local function setWarn(self: any, on: boolean)
     end
 end
 
-local function showTip(self: any)
+local function showTip(self: WeaponEnchantIcon)
     local slot = self.slot
     local s = SLOTS[slot]
     if not s or self.preview then return end
@@ -261,27 +277,43 @@ local function showTip(self: any)
     end
 end
 
+-- The weapon's tag on an icon's corner (M, O, R).
+class SlotTag extends Frame
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        draw.fill(self, "surface", "BACKGROUND"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.text = uiText.text(self, "micro", "gilt-text")
+        self.text:SetPoint("CENTER", 0, 0)
+        self:SetSize(16, 11)
+    end
+end
+
 export class WeaponEnchantIcon extends Frame
-    size: any
-    body: any
+    size: number
+    body: Frame
     art: Texture
     warnEdge: draw.Border
-    warnPulse: any
+    warnPulse: AnimationGroup
     drain: StatusBar
     text: Frame
-    scrim: any
+    scrim: Texture
     duration: FontString
     stacks: FontString
-    blink: any
-    tag: any
+    blink: AnimationGroup
+    tag: SlotTag
     showTag: boolean
-    slot: any? = nil
-    info: any? = nil
-    amber: any? = nil
-    preview: any? = nil
+    slot: string? = nil
+    info: Info? = nil
+    amber: boolean? = nil
+    preview: boolean? = nil
+    -- what shows while it's missing (Cooldown Manager's setting)
+    missing: string? = nil
 
-    constructor(parent: Frame, size: any)
-        size = draw.size(size or "icon-lg")
+    constructor(parent: Frame, given: number | string | nil)
+        local size = draw.size(given or "icon-lg")
         super(nil, parent)
         self:SetSize(size, size)
         self.size = size
@@ -353,14 +385,9 @@ export class WeaponEnchantIcon extends Frame
         b:SetDuration(0.5)
 
         -- the weapon's tag on the top-left corner, over the edge
-        local tag = CreateFrame("Frame", nil, self)
+        local tag = SlotTag.new(self)
         tag:SetFrameLevel(body:GetFrameLevel() + 8)
         tag:SetPoint("TOPLEFT", self, "TOPLEFT", -2, 3)
-        draw.fill(tag, "surface", "BACKGROUND"):SetAllPoints()
-        draw.border(tag, "gilt-line")
-        tag.text = uiText.text(tag, "micro", "gilt-text")
-        tag.text:SetPoint("CENTER", 0, 0)
-        tag:SetSize(16, 11)
         self.tag = tag
         self.showTag = true
 
@@ -381,15 +408,15 @@ export class WeaponEnchantIcon extends Frame
 
     function SetMissing(mode: string?) self.missing = mode end
 
-    function SetTag(shown: any)
-        self.showTag = shown and true or false
+    function SetTag(shown: unknown)
+        self.showTag = shown ~= nil and shown ~= false
         self.tag:SetShown(self.showTag and self.body:IsShown())
     end
 
     -- Another size: the bar, the fade and the digits follow (numeric digits from
     -- 30 px, as on a buff).
-    function Resize(size: any)
-        size = draw.size(size)
+    function Resize(given: number | string)
+        local size = draw.size(given)
         if size == self.size then return end
         self.size = size
         self:SetSize(size, size)
@@ -469,8 +496,8 @@ export class WeaponEnchantIcon extends Frame
 
     -- A made-up enchant for edit mode's preview: its art, 52m, three-quarters
     -- left. Nil goes back to the real one.
-    function SetPreview(texture: any): boolean
-        self.preview = texture and true or nil
+    function SetPreview(texture: string | number | nil): boolean
+        self.preview = texture ~= nil or nil
         if not texture then return self:Refresh() end
         self:SetScript("OnUpdate", nil)
         self.info = nil
@@ -494,7 +521,7 @@ export class WeaponEnchantIcon extends Frame
     end
 end
 
-export function weaponEnchantIcon(parent: Frame, size: any): WeaponEnchantIcon
+export function weaponEnchantIcon(parent: Frame, size: number | string | nil): WeaponEnchantIcon
     return WeaponEnchantIcon.new(parent, size)
 end
 
