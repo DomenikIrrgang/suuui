@@ -36,6 +36,69 @@
 -- adds "Waits for the end of combat." to the description).
 
 import * as events from "/Core/Events"
+import type SelectOption, SelectValue from "/UI/Select"
+
+--- A row's choices (a list of one value type).
+export type Options = SelectOption<string>[] | SelectOption<number>[] | SelectOption<boolean>[] | SelectOption<SelectValue>[]
+
+--- What a row shows: a setting (`key`, or `get`/`set`/`isDefault`/`reset`),
+--- its words, its control and that control's options.
+export type RowDef = {
+    key?: string,
+    namespace?: string,
+    label?: string,
+    description?: string | () -> string,
+    control?: string,
+    checkLabel?: string,
+    options?: Options | () -> Options,
+    multiple?: boolean,
+    placeholder?: string,
+    maxShown?: number,
+    min?: number,
+    max?: number,
+    step?: number,
+    unit?: string,
+    format?: (v: number) -> string,
+    live?: boolean,
+    width?: number,
+    text?: string,
+    variant?: string,
+    onClick?: () -> (),
+    -- a custom control: made by build; bound like the others with a key or get
+    build?: (parent: Frame, onChange: (value: unknown) -> (), def: RowDef) -> Frame,
+    get?: () -> unknown,
+    set?: (value: unknown) -> (boolean?, string?),
+    isDefault?: () -> boolean,
+    reset?: () -> (),
+    stacked?: boolean,
+    disabled?: () -> (boolean?, string?),
+    combat?: boolean,
+}
+
+--- A group of rows under a title.
+export type GroupDef = { title?: string, description?: string | () -> string, rows: RowDef[] }
+
+--- A section's page, for a section that builds its own groups.
+export interface Page
+    function AddGroup(def: GroupDef): Frame
+    function Clear()
+    function Refresh()
+end
+
+--- A section as a module registers it.
+export type SectionDef = {
+    id: string,
+    label?: string,
+    category?: string,
+    order?: number,
+    namespace?: string,
+    groups?: GroupDef[],
+    build?: (page: Page) -> (),
+    preview?: (parent: Frame) -> Frame,
+    previewTitle?: string,
+    previewNote?: string | () -> string,
+    merge?: string,
+}
 
 --- A registered section, as the window reads it.
 export type Section = {
@@ -44,11 +107,11 @@ export type Section = {
     category: string,
     order: number,
     namespace: string?,
-    groups: { [string]: any }[]?,
-    build: ((page: any) -> ())?,
-    preview: ((parent: any) -> any)?,
+    groups: GroupDef[]?,
+    build: ((page: Page) -> ())?,
+    preview: ((parent: Frame) -> Frame)?,
     previewTitle: string?,
-    previewNote: any,
+    previewNote: (string | () -> string)?,
     merge: string?,
     owner: unknown,
 }
@@ -60,14 +123,14 @@ for i, c in ipairs(categories) do CATEGORY_INDEX[c] = i end
 local sections: Section[] = {}
 local byId: { [string]: Section } = {}
 
-export function register(def: { [string]: any }, owner: unknown): Section
+export function register(def: SectionDef, owner: unknown): Section
     assert(type(def) == "table" and type(def.id) == "string", "SuuUI.RegisterSettings: a section needs an id")
     assert(not byId[def.id], "SuuUI.RegisterSettings: the section id " .. def.id .. " is taken")
     assert(def.groups or def.build, "SuuUI.RegisterSettings: a section needs groups or a build function")
     local s: Section = {
         id = def.id,
         label = def.label or def.id,
-        category = CATEGORY_INDEX[def.category] and def.category or "Plugins",
+        category = def.category and CATEGORY_INDEX[def.category] and def.category or "Plugins",
         order = def.order or 100,
         namespace = def.namespace,
         groups = def.groups,

@@ -8,7 +8,7 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/SwingTimer"
 import migrations as settingMigrations from "/Core/Settings"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, testRow, TestRow from "../../helpers"
 
 @afterEach
 local function cleanup()
@@ -21,10 +21,11 @@ local function cleanup()
     expectNoErrors()
 end
 
-local function rows(): { [string]: any }
-    local out: { [string]: any } = {}
-    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do out[r.key] = r end end
-    return out
+local function row(key: string): TestRow
+    for _, g in ipairs(SECTION.groups or {}) do
+        for _, r in ipairs(g.rows) do if r.key == key then return testRow(r) end end
+    end
+    error("no row " .. key)
 end
 
 @test("as wide as your cast bar, following its width")
@@ -87,22 +88,20 @@ local function autoShot()
     M:Set("autoShotWindow", true)
     expect(t.autoShotWindow).toBe(false)
     expect(said[1]:find("no stand-still cast", 1, true) ~= nil).toBe(true)
-    local r = rows()
-    local off, why = r.autoShotWindow.disabled()
+    local off, why = row("autoShotWindow").disabled()
     expect(off).toBe(true)
     expect(why).toBe("This client's Auto Shot fires while you move, so there is no window.")
 end
 
 @test("the settings rows wait for the timer to be on")
 local function rowsWait()
-    local r = rows()
-    expect((r.hideForHealers.disabled())).toBe(false)
-    expect((r.autoShotWindow.disabled())).toBe(false)
+    expect((row("hideForHealers").disabled())).toBe(false)
+    expect((row("autoShotWindow").disabled())).toBe(false)
     M:Set("shows", "off")
-    local off, why = r.hideForHealers.disabled()
+    local off, why = row("hideForHealers").disabled()
     expect(off).toBe(true)
     expect(why).toBe("Turn the swing timer on first.")
-    expect((r.autoShotWindow.disabled())).toBe(true)
+    expect((row("autoShotWindow").disabled())).toBe(true)
 end
 
 @test("In combat only, once a toggle, carried over")
