@@ -32,11 +32,10 @@ import select as uiSelect, Select, SelectOption from "/UI/Select"
 import showTooltip, hideTooltip from "/UI/Tooltip"
 
 const S = T.space
-const COLORS = T.color :: { [string]: any }
 
 const WHITE = "Interface\\Buttons\\WHITE8X8"
-local function readable(v: any): boolean return not isSecret(v) and type(v) == "number" end
-local function plainString(v: any): boolean return not isSecret(v) and type(v) == "string" and v ~= "" end
+local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
+local function plainString(v: unknown): v is string return not isSecret(v) and type(v) == "string" and v ~= "" end
 
 -- One option of the type select: a heading, or a type (its value, label and
 -- Enum.DamageMeterType key).
@@ -65,56 +64,94 @@ local COUNTS: { [string]: boolean } = { interrupts = true, dispels = true }
 local NO_PIN: { [string]: boolean } = { deaths = true, enemyDamageTaken = true }
 local ENEMIES: { [string]: boolean } = { enemyDamageTaken = true }
 
--- A header button (more, back).
-export interface MeterHeadButton extends Button
-    edge: draw.Border
-    hover: Texture
-    art: Frame
+-- A type's Enum.DamageMeterType value (nil on a client without the meter).
+local function meterTypeOf(key: string?): DamageMeterType?
+    local E = Enum.DamageMeterType
+    if not (E and key) then return nil end
+    local byKey: { [string]: DamageMeterType } = {
+        DamageDone = E.DamageDone, Dps = E.Dps, DamageTaken = E.DamageTaken,
+        AvoidableDamageTaken = E.AvoidableDamageTaken, EnemyDamageTaken = E.EnemyDamageTaken,
+        HealingDone = E.HealingDone, Hps = E.Hps, Interrupts = E.Interrupts, Dispels = E.Dispels, Deaths = E.Deaths,
+    }
+    return byKey[key]
 end
 
--- An item of the "more" menu.
-export interface MeterMenuItem extends Button
-    hover: Texture
-    label: Text
-    line: Texture
-    enabled: boolean
-    action?: () -> ()
+-- The fight a window shows: "current", "overall" or a past fight's ID.
+export type MeterSession = string | number
+
+-- The game's meter (C_DamageMeter) and death recaps (C_DeathRecap), or a
+-- stand-in (the previews, tests).
+export type MeterApi = {
+    GetAvailableCombatSessions: typeof(C_DamageMeter.GetAvailableCombatSessions),
+    GetCombatSessionFromID: typeof(C_DamageMeter.GetCombatSessionFromID),
+    GetCombatSessionFromType: typeof(C_DamageMeter.GetCombatSessionFromType),
+    GetCombatSessionSourceFromID: typeof(C_DamageMeter.GetCombatSessionSourceFromID),
+    GetCombatSessionSourceFromType: typeof(C_DamageMeter.GetCombatSessionSourceFromType),
+    GetSessionDurationSeconds: typeof(C_DamageMeter.GetSessionDurationSeconds),
+}
+
+-- A death recap's event: what the window reads of it (the game's
+-- declarations leave the structure empty).
+export interface RecapEvent
+    event?: string | Secret<string>
+    spellId?: number | Secret<number>
+    spellName?: string | Secret<string>
+    amount?: number | Secret<number>
+    timestamp?: number | Secret<number>
+    currentHP?: number | Secret<number>
+    overkill?: number | Secret<number>
 end
 
--- The menu behind "more".
-export interface MeterMenu extends Frame
-    items: MeterMenuItem[]
-end
+export type RecapApi = {
+    GetRecapEvents: (recapID: number?) -> unknown,
+    GetRecapMaxHealth: (recapID: number?) -> (number | Secret<number>)?,
+}
 
--- A row of the window (the bar is the row).
-export interface DamageRow extends Button
-    bar: StatusBar
-    edge: draw.Border
-    glow: draw.SoftEdge
-    rank: Text
-    icon: Texture
-    diamond: Texture
-    name: Text
-    sub: Text
-    share: Text
-    paren: Text
-    main: Text
-    hover: Texture
-    edgeColor?: string
-    open?: () -> ()
-    tip?: string
-end
-
--- What a row shows (setRow; see there).
-export type MeterRowData = { [string]: any }
+-- What a row shows (setRow).
+export type MeterRowData = {
+    rank?: string | number,
+    rankWide?: boolean,
+    mark?: string,
+    class?: string,
+    spellID?: number | Secret<number>,
+    name?: string | Secret<string>,
+    nameColor?: string,
+    textName?: boolean,
+    sub?: string | Secret<string>,
+    main?: string,
+    paren?: string,
+    share?: string,
+    fill?: number | Secret<number>,
+    fillMax?: number | Secret<number>,
+    fillLow?: boolean,
+    fillClass?: string,
+    you?: boolean,
+    danger?: boolean,
+    plain?: boolean,
+    heal?: boolean,
+    open?: () -> (),
+    tip?: string,
+}
 
 -- Where the window is drilled into: a source's spells, or a death's recap.
-export type MeterDrill = { kind: string, row: MeterRowData, guid?: any, creature?: any, src?: any }
+export type MeterDrill = { kind: string, row: MeterRowData, guid?: string | Secret<string>, creature?: number,
+    src?: DamageMeterCombatSourceSecret }
 
 -- The window's options (SetOptions).
 export type MeterView = { numbers: string, barColor: string, marker: string, nameColor: string, pinYou: boolean }
+export type MeterViewChange = { numbers?: string, barColor?: string, marker?: string, nameColor?: string, pinYou?: boolean }
 
--- The window damageMeter makes.
+-- What damageMeter takes.
+export type DamageMeterOptions = {
+    rows?: number,
+    onView?: (type: string, session: MeterSession) -> (),
+    onNewWindow?: () -> (),
+    onClose?: () -> (),
+    onReset?: () -> (),
+    onSettings?: () -> (),
+    api?: MeterApi,
+    recapApi?: RecapApi,
+}
 
 const MAIN_W = 40
 const PAREN_W = 48
@@ -131,7 +168,7 @@ local function group3(n: number): string
 end
 
 -- 8,412 · 48.2k · 482k · 1.21M · 12.4M; a secret number through the engine.
-local function abbr(value: any): any
+local function abbr(value: number | string | Secret<number> | nil): string
     if isSecret(value) then return AbbreviateNumbers(value) end
     local v = tonumber(value) or 0
     local a = math.abs(v)
@@ -142,29 +179,30 @@ local function abbr(value: any): any
     return (a < 1e7 and ("%.2fM"):format(v / 1e6) or ("%.1fM"):format(v / 1e6))
 end
 
-local function count(v: any): any
+local function count(v: number | string | Secret<number> | nil): string
     if isSecret(v) then return AbbreviateNumbers(v) end
     return group3(math.floor((tonumber(v) or 0) + 0.5))
 end
 
-local function clock(s: any): string
-    if not readable(s) then return "" end
-    s = math.max(0, math.floor(s + 0.5))
+local function clock(given: unknown): string
+    if not readable(given) then return "" end
+    local s = math.max(0, math.floor(given + 0.5))
     return ("%d:%02d"):format(math.floor(s / 60), s % 60)
 end
 
-local function since(s: any): string
-    if not readable(s) then return "" end
-    s = math.max(0, math.floor(s + 0.5))
+local function since(given: unknown): string
+    if not readable(given) then return "" end
+    local s = math.max(0, math.floor(given + 0.5))
     local m = math.floor(s / 60)
     return m > 0 and ("%dm %ds"):format(m, s % 60) or ("%ds"):format(s)
 end
 
 -- A name without its realm; a secret one as it is.
-local function shortName(name: any): any
-    if isSecret(name) then
-        local ok, short = pcall(Ambiguate, name, "short")
-        return ok and short or name
+local function shortName(name: unknown): string | Secret<string>
+    if issecretvalue(name) then
+        local secretName = name :: Secret<string>
+        local ok, short = pcall(Ambiguate, secretName, "short")
+        return ok and short or secretName
     end
     if type(name) ~= "string" then return "" end
     return Ambiguate and Ambiguate(name, "short") or name:match("^[^%-]+") or name
@@ -201,106 +239,133 @@ local function backArrow(parent: Frame, color: string): Frame
 end
 
 -- A 24px square header button: transparent, a gilt-line edge on hover.
-local function headButton(parent: Frame, art: (parent: Frame, color: string) -> Frame, onClick: any, tip: string?): MeterHeadButton
-    local b: MeterHeadButton = CreateFrame("Button", nil, parent) :: any
-    b:SetSize(24, 24)
-    b.edge = draw.border(b, "gilt-line")
-    b.edge:SetShown(false)
-    b.hover = draw.fill(b, "surface-raised", "BACKGROUND")
-    b.hover:SetAllPoints()
-    b.hover:Hide()
-    b.art = art(b, "ink-muted")
-    b.art:SetPoint("CENTER")
-    b:SetScript("OnEnter", function(self)
-        self.edge:SetShown(true); self.hover:Show()
-        if tip then showTooltip(self, { title = tip }) end
-    end)
-    b:SetScript("OnLeave", function(self)
-        self.edge:SetShown(false); self.hover:Hide()
-        hideTooltip()
-    end)
-    b:SetScript("OnClick", onClick)
-    return b
+export class MeterHeadButton extends Button
+    readonly edge: draw.Border
+    readonly hover: Texture
+    readonly art: Frame
+
+    constructor(parent: Frame, art: (parent: Frame, color: string) -> Frame, onClick: () -> (), tip: string?)
+        super(nil, parent)
+        self:SetSize(24, 24)
+        self.edge = draw.border(self, "gilt-line")
+        self.edge:SetShown(false)
+        self.hover = draw.fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.art = art(self, "ink-muted")
+        self.art:SetPoint("CENTER")
+        self:SetScript("OnEnter", function()
+            self.edge:SetShown(true); self.hover:Show()
+            if tip then showTooltip(self, { title = tip }) end
+        end)
+        self:SetScript("OnLeave", function()
+            self.edge:SetShown(false); self.hover:Hide()
+            hideTooltip()
+        end)
+        self:SetScript("OnClick", onClick)
+    end
 end
 
 --------------------------------------------------------------------------------
 -- The menu behind "more"
 --------------------------------------------------------------------------------
 
-local function buildMenu(w: DamageMeter): MeterMenu
-    local m: MeterMenu = CreateFrame("Frame", nil, w) :: any
-    m:SetFrameStrata("DIALOG")
-    m:SetWidth(200)
-    draw.fill(m, "surface", "BACKGROUND"):SetAllPoints()
-    draw.border(m, "gilt-line")
-    draw.shadow(m, "shadow-panel")
-    m.items = {}
-    m:Hide()
-    m:SetScript("OnHide", function() if w.catcher then w.catcher:Hide() end end)
-    local catcher = CreateFrame("Button", nil, UIParent)
-    w.catcher = catcher
-    catcher:SetAllPoints(UIParent)
-    catcher:SetFrameStrata("DIALOG")
-    catcher:SetFrameLevel(1)
-    catcher:Hide()
-    catcher:RegisterForClicks("AnyDown")
-    catcher:SetScript("OnClick", function() m:Hide() end)
-    m:SetFrameLevel(catcher:GetFrameLevel() + 5)
-    return m
+-- An item of the "more" menu.
+export class MeterMenuItem extends Button
+    readonly hover: Texture
+    readonly label: Text
+    readonly line: Texture
+    enabled: boolean = false
+    action?: () -> ()
+
+    constructor(m: MeterMenu)
+        super(nil, m)
+        self:SetHeight(26)
+        self.hover = draw.fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.label = text(self, "body", "ink")
+        self.label:SetPoint("LEFT", S["space-4"], 0)
+        self.line = self:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(self.line, "gilt-faint")
+        self.line:SetHeight(1)
+        self.line:SetPoint("LEFT", S["space-2"], 0)
+        self.line:SetPoint("RIGHT", -S["space-2"], 0)
+        self:SetScript("OnEnter", function() if self.enabled then self.hover:Show() end end)
+        self:SetScript("OnLeave", function() self.hover:Hide() end)
+        self:SetScript("OnClick", function()
+            if not self.enabled then return end
+            m:Hide()
+            local action = self.action
+            if action then action() end
+        end)
+    end
 end
+
+-- The menu behind "more", and the catcher a click elsewhere closes it on.
+export class MeterMenu extends Frame
+    readonly items: MeterMenuItem[] = {}
+    readonly catcher: Button
+
+    constructor(w: DamageMeter)
+        super(nil, w)
+        self:SetFrameStrata("DIALOG")
+        self:SetWidth(200)
+        draw.fill(self, "surface", "BACKGROUND"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        draw.shadow(self, "shadow-panel")
+        self:Hide()
+        local catcher = CreateFrame("Button", nil, UIParent)
+        self.catcher = catcher
+        self:SetScript("OnHide", function() catcher:Hide() end)
+        catcher:SetAllPoints(UIParent)
+        catcher:SetFrameStrata("DIALOG")
+        catcher:SetFrameLevel(1)
+        catcher:Hide()
+        catcher:RegisterForClicks("AnyDown")
+        catcher:SetScript("OnClick", function() self:Hide() end)
+        self:SetFrameLevel(catcher:GetFrameLevel() + 5)
+    end
+end
+
+-- An entry of the menu: a label and what it does, or a divider.
+type MenuEntry = { label?: string, disabled?: boolean, divider?: boolean, onClick?: () -> () }
 
 local function openMenu(w: DamageMeter)
     local m = w.menu
     for _, it in ipairs(m.items) do it:Hide() end
-    local list: { [string]: any }[] = {
-        { label = "New window", disabled = not w.canAdd, onClick = w.opts.onNewWindow },
-        { label = "Reset all fights", onClick = w.opts.onReset },
+    local o = w.opts
+    local list: MenuEntry[] = {
+        { label = "New window", disabled = not w.canAdd, onClick = o.onNewWindow },
+        { label = "Reset all fights", onClick = o.onReset },
     }
-    if w.opts.onClose then list[#list + 1] = { label = "Close this window", onClick = w.opts.onClose } end
+    if o.onClose then list[#list + 1] = { label = "Close this window", onClick = o.onClose } end
     list[#list + 1] = { divider = true }
-    list[#list + 1] = { label = "Settings", onClick = w.opts.onSettings }
+    list[#list + 1] = { label = "Settings", onClick = o.onSettings }
     local y = S["space-2"]
-    for i, o in ipairs(list) do
+    for i, e in ipairs(list) do
         local it = m.items[i]
         if not it then
-            it = CreateFrame("Button", nil, m) :: any
-            it:SetHeight(26)
-            it.hover = draw.fill(it, "surface-raised", "BACKGROUND")
-            it.hover:SetAllPoints()
-            it.hover:Hide()
-            it.label = text(it, "body", "ink")
-            it.label:SetPoint("LEFT", S["space-4"], 0)
-            it.line = it:CreateTexture(nil, "ARTWORK")
-            draw.paintFill(it.line, "gilt-faint")
-            it.line:SetHeight(1)
-            it.line:SetPoint("LEFT", S["space-2"], 0)
-            it.line:SetPoint("RIGHT", -S["space-2"], 0)
-            it:SetScript("OnEnter", function(self) if self.enabled then self.hover:Show() end end)
-            it:SetScript("OnLeave", function(self) self.hover:Hide() end)
-            it:SetScript("OnClick", function(self)
-                if not self.enabled then return end
-                m:Hide()
-                if self.action then self.action() end
-            end)
+            it = MeterMenuItem.new(m)
             m.items[i] = it
         end
         it:ClearAllPoints()
         it:SetPoint("TOPLEFT", 1, -y)
         it:SetPoint("TOPRIGHT", -1, -y)
-        it.line:SetShown(o.divider and true or false)
-        it.label:SetVisible(not o.divider)
-        it:SetHeight(o.divider and (S["space-2"] * 2 + 1) or 26)
-        it.label:SetValue(o.label or "")
-        it.label:SetColor(o.disabled and "ink-faint" or "ink")
-        it.enabled = not (o.divider or o.disabled)
-        it.action = o.onClick
+        it.line:SetShown(e.divider == true)
+        it.label:SetVisible(not e.divider)
+        it:SetHeight(e.divider and (S["space-2"] * 2 + 1) or 26)
+        it.label:SetValue(e.label or "")
+        it.label:SetColor(e.disabled and "ink-faint" or "ink")
+        it.enabled = not (e.divider or e.disabled)
+        it.action = e.onClick
         it:Show()
         y = y + it:GetHeight()
     end
     m:SetHeight(y + S["space-2"])
     m:ClearAllPoints()
     m:SetPoint("TOPRIGHT", w.more, "BOTTOMRIGHT", 0, -S["space-1"])
-    ;(w.catcher :: Button):Show() -- (made with the menu)
+    m.catcher:Show()
     m:Show()
 end
 
@@ -314,12 +379,15 @@ local function mix(token: string, share: number): (number, number, number)
     return r * share + sr * (1 - share), g * share + sg * (1 - share), b * share + sb * (1 - share)
 end
 
--- The bar's fill, as the row last asked for it (tex.fill: a class token,
--- "low", or nil for unit-fill), from the tokens each time (draw.bind: again
--- after a theme change).
-local function drawFill(tex: any)
+-- the fill each bar texture last asked for: a class token, "low", or nil
+-- (false) for unit-fill
+local fills: { [Texture]: string | false } = setmetatable({}, { __mode = "k" })
+
+-- The bar's fill, from the tokens each time (draw.bind: again after a
+-- theme change).
+local function drawFill(tex: Texture)
     local r1: number, g1: number, b1: number, r2: number, g2: number, b2: number
-    local kind = tex.fill
+    local kind = fills[tex]
     if kind == "low" then
         r1, g1, b1 = draw.rgba("unit-fill-low-deep")
         r2, g2, b2 = draw.rgba("unit-fill-low")
@@ -333,217 +401,243 @@ local function drawFill(tex: any)
     tex:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
 end
 
-local function setFill(row: DamageRow, kind: string?)
-    local tex = row.bar:GetStatusBarTexture()
-    tex.fill = kind
-    draw.bind(tex, drawFill)
-end
+-- A row of the window (the bar is the row).
+export class DamageRow extends Button
+    readonly bar: StatusBar
+    readonly edge: draw.Border
+    readonly glow: draw.SoftEdge
+    readonly rank: Text
+    readonly icon: Texture
+    readonly diamond: Texture
+    readonly name: Text
+    readonly sub: Text
+    readonly share: Text
+    readonly paren: Text
+    readonly main: Text
+    readonly hover: Texture
+    edgeColor?: string
+    open?: () -> ()
+    tip?: string
 
-local function buildRow(w: DamageMeter, i: number): DamageRow
-    local h = draw.size("meter-row")
-    local r: DamageRow = CreateFrame("Button", nil, w.body) :: any
-    r:SetSize(w.innerW, h)
-    r:RegisterForClicks("LeftButtonUp")
-    draw.fill(r, "surface-sunk", "BACKGROUND"):SetAllPoints()
-    r.bar = CreateFrame("StatusBar", nil, r)
-    r.bar:SetAllPoints()
-    r.bar:SetStatusBarTexture(WHITE)
-    r.bar:SetMinMaxValues(0, 1)
-    setFill(r, nil)
-    r.edge = draw.border(r.bar, "gilt-hairline", { layer = "OVERLAY" })
-    r.glow = draw.shadow(r, "glow-ember")
-    r.glow:SetShown(false)
-    local o = CreateFrame("Frame", nil, r)
-    o:SetAllPoints()
-    o:SetFrameLevel(r.bar:GetFrameLevel() + 2)
-    r.rank = text(o, "micro", "ink")
-    r.rank:SetJustifyH("RIGHT")
-    r.icon = o:CreateTexture(nil, "OVERLAY")
-    r.diamond = draw.diamond(o, 5, "gilt")
-    r.name = text(o, "unit-name-sm", "ink")
-    r.name:SetShadowed(true)
-    r.name:SetWordWrap(false)
-    r.name:SetJustifyH("LEFT")
-    r.sub = text(o, "caption", "ink")
-    r.sub:SetShadowed(true)
-    r.sub:SetWordWrap(false)
-    r.sub:SetJustifyH("LEFT")
-    r.share = text(o, "caption", "ink")
-    r.share:SetShadowed(true)
-    r.share:SetFixedWidth(SHARE_W)
-    r.share:SetJustifyH("RIGHT")
-    r.paren = text(o, "caption", "ink")
-    r.paren:SetShadowed(true)
-    r.paren:SetFixedWidth(PAREN_W)
-    r.paren:SetJustifyH("RIGHT")
-    r.main = text(o, "numeric", "ink")
-    r.main:SetShadowed(true)
-    r.main:SetFixedWidth(MAIN_W)
-    r.main:SetJustifyH("RIGHT")
-    r.hover = r:CreateTexture(nil, "HIGHLIGHT")
-    r.hover:SetAllPoints()
-    r.hover:SetColorTexture(1, 1, 1, 0.04)
-    r:SetScript("OnClick", function(self) if self.open then self.open() end end)
-    r:SetScript("OnEnter", function(self)
-        if self.open then self.edge:SetColor("gilt") end
-        if self.tip then showTooltip(self, { description = self.tip }) end
-    end)
-    r:SetScript("OnLeave", function(self)
-        self.edge:SetColor(self.edgeColor or "gilt-hairline")
-        hideTooltip()
-    end)
-    w.rows[i] = r
-    return r
-end
-
--- One row. d: { rank, rankWide, mark = "class"|"diamond"|"spell"|nil, class,
--- spellID, name, nameColor, sub, main, paren, share, fill, fillMax, fillLow,
--- fillClass, you, danger, plain, open, tip, heal }
-local function setRow(r: DamageRow, d: MeterRowData)
-    local x = S["space-2"]
-    r.rank:SetVisible(d.rank ~= nil)
-    if d.rank ~= nil then
-        r.rank:SetValue(d.rank)
-        r.rank:SetColor(d.plain and "ink-muted" or "ink")
-        r.rank:SetWidth(d.rankWide and 30 or 12)
-        r.rank:ClearAllPoints()
-        r.rank:SetPoint("LEFT", x, 0)
-        x = x + (d.rankWide and 30 or 12) + S["space-3"]
+    constructor(w: DamageMeter)
+        super(nil, w.body)
+        local h = draw.size("meter-row")
+        self:SetSize(w.innerW, h)
+        self:RegisterForClicks("LeftButtonUp")
+        draw.fill(self, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        self.bar = CreateFrame("StatusBar", nil, self)
+        self.bar:SetAllPoints()
+        self.bar:SetStatusBarTexture(WHITE)
+        self.bar:SetMinMaxValues(0, 1)
+        self.edge = draw.border(self.bar, "gilt-hairline", { layer = "OVERLAY" })
+        self.glow = draw.shadow(self, "glow-ember")
+        self.glow:SetShown(false)
+        local o = CreateFrame("Frame", nil, self)
+        o:SetAllPoints()
+        o:SetFrameLevel(self.bar:GetFrameLevel() + 2)
+        self.rank = text(o, "micro", "ink")
+        self.rank:SetJustifyH("RIGHT")
+        self.icon = o:CreateTexture(nil, "OVERLAY")
+        self.diamond = draw.diamond(o, 5, "gilt")
+        self.name = text(o, "unit-name-sm", "ink")
+        self.name:SetShadowed(true)
+        self.name:SetWordWrap(false)
+        self.name:SetJustifyH("LEFT")
+        self.sub = text(o, "caption", "ink")
+        self.sub:SetShadowed(true)
+        self.sub:SetWordWrap(false)
+        self.sub:SetJustifyH("LEFT")
+        self.share = text(o, "caption", "ink")
+        self.share:SetShadowed(true)
+        self.share:SetFixedWidth(SHARE_W)
+        self.share:SetJustifyH("RIGHT")
+        self.paren = text(o, "caption", "ink")
+        self.paren:SetShadowed(true)
+        self.paren:SetFixedWidth(PAREN_W)
+        self.paren:SetJustifyH("RIGHT")
+        self.main = text(o, "numeric", "ink")
+        self.main:SetShadowed(true)
+        self.main:SetFixedWidth(MAIN_W)
+        self.main:SetJustifyH("RIGHT")
+        self.hover = self:CreateTexture(nil, "HIGHLIGHT")
+        self.hover:SetAllPoints()
+        self.hover:SetColorTexture(1, 1, 1, 0.04)
+        self:SetScript("OnClick", function()
+            local open = self.open
+            if open then open() end
+        end)
+        self:SetScript("OnEnter", function()
+            if self.open then self.edge:SetColor("gilt") end
+            local tip = self.tip
+            if tip then showTooltip(self, { description = tip }) end
+        end)
+        self:SetScript("OnLeave", function()
+            self.edge:SetColor(self.edgeColor or "gilt-hairline")
+            hideTooltip()
+        end)
+        self:SetFill(nil)
     end
-    r.icon:Hide()
-    r.diamond:Hide()
-    if d.mark == "class" and d.class then
-        local atlas = GetClassAtlas and GetClassAtlas(d.class)
-        if atlas then
-            r.icon:SetAtlas(atlas)
-        elseif CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[d.class] then
-            r.icon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
-            local tc: number[] = CLASS_ICON_TCOORDS[d.class]
-            r.icon:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
+
+    function SetFill(kind: string?)
+        local tex = self.bar:GetStatusBarTexture()
+        fills[tex] = kind or false
+        draw.bind(tex, drawFill)
+    end
+
+    -- What the row shows (see MeterRowData).
+    function Set(d: MeterRowData)
+        local x = S["space-2"]
+        local rank = d.rank
+        self.rank:SetVisible(rank ~= nil)
+        if rank ~= nil then
+            self.rank:SetValue(rank)
+            self.rank:SetColor(d.plain and "ink-muted" or "ink")
+            self.rank:SetWidth(d.rankWide and 30 or 12)
+            self.rank:ClearAllPoints()
+            self.rank:SetPoint("LEFT", x, 0)
+            x = x + (d.rankWide and 30 or 12) + S["space-3"]
         end
-        r.icon:SetSize(16, 16)
-        r.icon:ClearAllPoints()
-        r.icon:SetPoint("LEFT", x - 2, 0)
-        r.icon:Show()
-        x = x + 14 + S["space-3"] - S["space-1"]
-    elseif d.mark == "diamond" and d.class and COLORS["class-" .. d.class:lower()] then
-        draw.paint(r.diamond, "class-" .. d.class:lower())
-        r.diamond:ClearAllPoints()
-        r.diamond:SetPoint("CENTER", r, "LEFT", x + 3, 0)
-        r.diamond:Show()
-        x = x + 7 + S["space-3"] - S["space-1"]
-    elseif d.mark == "spell" then
-        local ok, tex = pcall(C_Spell.GetSpellTexture, d.spellID)
-        r.icon:SetTexture(ok and tex or 134400)
-        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        r.icon:SetSize(14, 14)
-        r.icon:ClearAllPoints()
-        r.icon:SetPoint("LEFT", x, 0)
-        r.icon:Show()
-        x = x + 14 + S["space-3"]
+        self.icon:Hide()
+        self.diamond:Hide()
+        local class = d.class
+        if d.mark == "class" and class then
+            local atlas: string? = GetClassAtlas and GetClassAtlas(class)
+            local coords: number[]? = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
+            if atlas then
+                self.icon:SetAtlas(atlas)
+            elseif coords then
+                self.icon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
+                self.icon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+            end
+            self.icon:SetSize(16, 16)
+            self.icon:ClearAllPoints()
+            self.icon:SetPoint("LEFT", x - 2, 0)
+            self.icon:Show()
+            x = x + 14 + S["space-3"] - S["space-1"]
+        elseif d.mark == "diamond" and class and draw.isColor("class-" .. class:lower()) then
+            draw.paint(self.diamond, "class-" .. class:lower())
+            self.diamond:ClearAllPoints()
+            self.diamond:SetPoint("CENTER", self, "LEFT", x + 3, 0)
+            self.diamond:Show()
+            x = x + 7 + S["space-3"] - S["space-1"]
+        elseif d.mark == "spell" then
+            local ok, tex = pcall(C_Spell.GetSpellTexture, d.spellID or 0)
+            self.icon:SetTexture(ok and tex or 134400)
+            self.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            self.icon:SetSize(14, 14)
+            self.icon:ClearAllPoints()
+            self.icon:SetPoint("LEFT", x, 0)
+            self.icon:Show()
+            x = x + 14 + S["space-3"]
+        end
+        -- the right end (fixed widths: secret numbers can't be measured): share,
+        -- paren, main, from the right edge in
+        local right: Text? = nil
+        local function place(t: Text, show: boolean)
+            t:SetVisible(show)
+            if not show then return end
+            t:ClearAllPoints()
+            if right then t:SetPoint("RIGHT", right, "LEFT", -S["space-2"], 0) else t:SetPoint("RIGHT", -S["space-3"], 0) end
+            right = t
+        end
+        local share, paren, main = d.share, d.paren, d.main
+        place(self.share, share ~= nil)
+        if share ~= nil then self.share:SetValue(share) end
+        place(self.paren, paren ~= nil)
+        if paren ~= nil then
+            self.paren:SetFormattedText("(%s)", paren)
+            self.paren.value = nil
+        end
+        place(self.main, main ~= nil)
+        if main ~= nil then
+            self.main:SetText(main)
+            self.main.value = nil
+            self.main:SetColor(d.heal and "fel" or "ink")
+        end
+        -- the name, then the sub line (a killing blow, a pet) filling the gap
+        self.name:SetStyle(d.textName and "label" or "unit-name-sm")
+        self.name:SetText(d.name or "")
+        self.name.value = nil
+        self.name:SetColor(d.nameColor or "ink")
+        self.name:ClearAllPoints()
+        self.name:SetPoint("LEFT", x, 0)
+        local sub = d.sub
+        local hasSub = issecretvalue(sub) or (sub ~= nil and sub ~= "")
+        if sub and hasSub then
+            self.name:SetWidth(math.floor((self:GetWidth() - x) * 0.4))
+            self.sub:SetText(sub)
+            self.sub.value = nil
+            self.sub:ClearAllPoints()
+            self.sub:SetPoint("LEFT", self.name, "RIGHT", S["space-3"], 0)
+            if right then self.sub:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0) else self.sub:SetPoint("RIGHT", -S["space-3"], 0) end
+            self.sub:Show()
+        else
+            self.sub:Hide()
+            if right then self.name:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0) else self.name:SetPoint("RIGHT", -S["space-3"], 0) end
+        end
+        -- the bar
+        local fill = d.fill
+        if issecretvalue(fill) or fill ~= nil then
+            self.bar:SetMinMaxValues(0, d.fillMax or 1)
+            self.bar:SetValue(fill)
+            self.bar:GetStatusBarTexture():Show()
+        else
+            self.bar:SetMinMaxValues(0, 1)
+            self.bar:SetValue(0)
+        end
+        local fillClass = d.fillClass
+        self:SetFill(fillClass and ("class-" .. fillClass:lower()) or d.fillLow and "low" or nil)
+        local edgeColor = d.danger and "ember" or (d.you and "ink") or "gilt-hairline"
+        self.edgeColor = edgeColor
+        self.edge:SetColor(edgeColor)
+        self.glow:SetShown(d.danger == true)
+        self.open, self.tip = d.open, d.tip
+        self:Show()
     end
-    -- the right end (fixed widths: secret numbers can't be measured): share,
-    -- paren, main, from the right edge in
-    local right = nil
-    local function place(t: any, show: boolean)
-        t:SetVisible(show)
-        if not show then return end
-        t:ClearAllPoints()
-        if right then t:SetPoint("RIGHT", right, "LEFT", -S["space-2"], 0) else t:SetPoint("RIGHT", -S["space-3"], 0) end
-        right = t
-    end
-    place(r.share, d.share ~= nil)
-    if d.share ~= nil then r.share:SetValue(d.share) end
-    place(r.paren, d.paren ~= nil)
-    if d.paren ~= nil then
-        r.paren:SetFormattedText("(%s)", d.paren)
-        r.paren.value = nil
-    end
-    place(r.main, d.main ~= nil)
-    if d.main ~= nil then
-        r.main:SetText(d.main)
-        r.main.value = nil
-        r.main:SetColor(d.heal and "fel" or "ink")
-    end
-    -- the name, then the sub line (a killing blow, a pet) filling the gap
-    r.name:SetStyle(d.textName and "label" or "unit-name-sm")
-    r.name:SetText(d.name or "")
-    r.name.value = nil
-    r.name:SetColor(d.nameColor or "ink")
-    r.name:ClearAllPoints()
-    r.name:SetPoint("LEFT", x, 0)
-    local hasSub = d.sub ~= nil and (isSecret(d.sub) or d.sub ~= "")
-    if hasSub then
-        r.name:SetWidth(math.floor((r:GetWidth() - x) * 0.4))
-        r.sub:SetText(d.sub)
-        r.sub.value = nil
-        r.sub:ClearAllPoints()
-        r.sub:SetPoint("LEFT", r.name, "RIGHT", S["space-3"], 0)
-        if right then r.sub:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0) else r.sub:SetPoint("RIGHT", -S["space-3"], 0) end
-        r.sub:Show()
-    else
-        r.sub:Hide()
-        if right then r.name:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0) else r.name:SetPoint("RIGHT", -S["space-3"], 0) end
-    end
-    -- the bar
-    if d.fill ~= nil then
-        r.bar:SetMinMaxValues(0, d.fillMax or 1)
-        r.bar:SetValue(d.fill)
-        r.bar:GetStatusBarTexture():Show()
-    else
-        r.bar:SetMinMaxValues(0, 1)
-        r.bar:SetValue(0)
-    end
-    setFill(r, d.fillClass and ("class-" .. d.fillClass:lower()) or d.fillLow and "low" or nil)
-    local edgeColor = d.danger and "ember" or (d.you and "ink") or "gilt-hairline"
-    r.edgeColor = edgeColor
-    r.edge:SetColor(edgeColor)
-    r.glow:SetShown(d.danger and true or false)
-    r.open, r.tip = d.open, d.tip
-    r:Show()
 end
 
 --------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
 
-local function sessionArg(session: any): (any, number?)
+local function sessionArg(session: MeterSession): (DamageMeterSessionType?, number?)
     local ST = Enum.DamageMeterSessionType
     if type(session) == "number" then return nil, session end
     return session == "overall" and ST.Overall or ST.Current, nil
 end
 
-local function fetch(DM: any, session: any, typeValue: string): any
+local function fetch(DM: MeterApi?, session: MeterSession, typeValue: string): DamageMeterCombatSessionSecret?
     local t = BY_VALUE[typeValue]
-    if not (DM and t and Enum.DamageMeterType) then return nil end
-    local meterType = (Enum.DamageMeterType :: any)[t.enum]
+    local meterType = t and meterTypeOf(t.enum)
+    if not (DM and meterType) then return nil end
     local st, id = sessionArg(session)
-    local ok: boolean, s: any
+    local ok: boolean, s: DamageMeterCombatSessionSecret?
     if id then ok, s = pcall(DM.GetCombatSessionFromID, id, meterType)
-    else ok, s = pcall(DM.GetCombatSessionFromType, st, meterType) end
+    else ok, s = pcall(DM.GetCombatSessionFromType, st :: DamageMeterSessionType, meterType) end
     return ok and s or nil
 end
 
-local function fetchSource(DM: any, session: any, typeValue: string, guid: any, creatureID: any): any
+local function fetchSource(DM: MeterApi, session: MeterSession, typeValue: string, guid: (string | Secret<string>)?,
+                           creatureID: number?): DamageMeterCombatSessionSourceSecret?
     local t = BY_VALUE[typeValue] :: MeterType
-    local meterType = (Enum.DamageMeterType :: any)[t.enum]
+    local meterType = meterTypeOf(t.enum) :: DamageMeterType
     local st, id = sessionArg(session)
-    local ok: boolean, s: any
-    if id then ok, s = pcall(DM.GetCombatSessionSourceFromID, id, meterType, guid, creatureID)
-    else ok, s = pcall(DM.GetCombatSessionSourceFromType, st, meterType, guid, creatureID) end
+    local ok: boolean, s: DamageMeterCombatSessionSourceSecret?
+    if id then ok, s = pcall(DM.GetCombatSessionSourceFromID, id, meterType, guid :: string?, creatureID)
+    else ok, s = pcall(DM.GetCombatSessionSourceFromType, st :: DamageMeterSessionType, meterType, guid :: string?, creatureID) end
     return ok and s or nil
 end
 
 local function inCombat(): boolean return InCombatLockdown() or flag(UnitAffectingCombat("player")) end
 
 export class DamageMeter extends Frame
-    opts: { [string]: any }
-    api: any      -- C_DamageMeter or a stand-in
-    recapApi: any -- C_DeathRecap or a stand-in
+    opts: DamageMeterOptions
+    api: MeterApi?      -- C_DamageMeter or a stand-in
+    recapApi: RecapApi? -- C_DeathRecap or a stand-in
     view: MeterView
     maxRows: number
     type: string
-    session: any  -- "current", "overall" or a session ID
+    session: MeterSession
     innerW: number
     head: Frame
     typeSelect: Select<string>
@@ -557,19 +651,21 @@ export class DamageMeter extends Frame
     what: Text
     total: Text
     body: Frame
-    rows: DamageRow[]
+    rows: DamageRow[] = {}
     pinLine: Texture
     note: Text
     empty: Text
     sessionSig: string? = nil
     canAdd: boolean? = nil
-    catcher: Button? = nil
+    -- the menu's catcher (made with the menu)
+    catcher: Button
 
-    constructor(parent: Frame, options: { [string]: any }?)
-        local opts: { [string]: any } = options or {}
+    constructor(parent: Frame, options: DamageMeterOptions?)
+        local opts = options or {}
         super(nil, parent)
         self.opts = opts
-        self.api, self.recapApi = opts.api or C_DamageMeter, opts.recapApi or C_DeathRecap
+        local game = _G :: { C_DamageMeter: MeterApi?, C_DeathRecap: RecapApi? }
+        self.api, self.recapApi = opts.api or game.C_DamageMeter, opts.recapApi or game.C_DeathRecap
         self.view = { numbers = "compact", barColor = "neutral", marker = "icon", nameColor = "class", pinYou = true }
         self.maxRows = math.max(4, opts.rows or 8)
         self.type, self.session = "damage", "current"
@@ -589,7 +685,7 @@ export class DamageMeter extends Frame
         self.head = head
         self.typeSelect = uiSelect(head, { bare = true, width = math.floor(width * 0.55), textStyle = "header", textColor = "gilt-text",
             options = TYPES, value = "damage", minListWidth = 220, maxRows = 14, search = false,
-            onChange = function(v: any)
+            onChange = function(v: string)
                 self.type = v
                 self.drill = nil
                 self:Refresh()
@@ -598,20 +694,21 @@ export class DamageMeter extends Frame
         self.typeSelect:SetPoint("LEFT", S["space-2"], 0)
         self.sessionSelect = uiSelect(head, { bare = true, width = 96, textStyle = "caption", textColor = "ink",
             options = {}, value = "current", minListWidth = 220, maxRows = 12, search = false,
-            onChange = function(v: any)
+            onChange = function(v: string | number)
                 self.session = v
                 self.drill = nil
                 self:Refresh()
                 if opts.onView then opts.onView(self.type, self.session) end
             end })
         self.sessionSelect:SetPoint("LEFT", self.typeSelect, "RIGHT", 0, 0)
-        self.menu = buildMenu(self)
-        self.more = headButton(head, dots, function() if self.menu:IsShown() then self.menu:Hide() else openMenu(self) end end, "Meter options")
+        self.menu = MeterMenu.new(self)
+        self.catcher = self.menu.catcher
+        self.more = MeterHeadButton.new(head, dots, function() if self.menu:IsShown() then self.menu:Hide() else openMenu(self) end end, "Meter options")
         self.more:SetPoint("RIGHT", -S["space-2"], 0)
         self.time = text(head, "numeric", "ink-muted")
         self.time:SetPoint("RIGHT", self.more, "LEFT", -S["space-2"], 0)
         -- the drill head: back, who, what, total
-        self.back = headButton(head, backArrow, function() self.drill = nil; self:Refresh() end, "Back")
+        self.back = MeterHeadButton.new(head, backArrow, function() self.drill = nil; self:Refresh() end, "Back")
         self.back:SetPoint("LEFT", S["space-2"], 0)
         self.who = text(head, "unit-name-sm", "ink")
         self.who:SetShadowed(true)
@@ -634,7 +731,6 @@ export class DamageMeter extends Frame
         self.body = CreateFrame("Frame", nil, self)
         self.body:SetPoint("TOPLEFT", 0, -HEAD - 1)
         self.body:SetPoint("BOTTOMRIGHT")
-        self.rows = {}
         self.pinLine = self.body:CreateTexture(nil, "ARTWORK")
         draw.paintFill(self.pinLine, "gilt-line")
         self.pinLine:SetHeight(1)
@@ -655,14 +751,25 @@ export class DamageMeter extends Frame
         extend.add(extend.Kind.Meter, self, { meter = "damage" })
     end
 
+    -- The row `i` (made the first time).
+    private function row(i: number): DamageRow
+        local r = self.rows[i]
+        if not r then
+            r = DamageRow.new(self)
+            self.rows[i] = r
+        end
+        return r
+    end
+
     -- The fight select's options: Current (its time), Overall, the past fights
     -- newest first.
     function SessionOptions(): SelectOption<string | number>[]
+        local api = self.api :: MeterApi
         local opts: SelectOption<string | number>[] = {
-            { value = "current", label = "Current", note = clock(self.api.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current)) },
+            { value = "current", label = "Current", note = clock(api.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current)) },
             { value = "overall", label = "Overall" },
         }
-        local ok, list = pcall(self.api.GetAvailableCombatSessions)
+        local ok, list = pcall(api.GetAvailableCombatSessions)
         if ok and type(list) == "table" and #list > 0 then
             opts[#opts + 1] = { heading = "Past fights" }
             for i = #list, math.max(1, #list - 19), -1 do
@@ -674,7 +781,7 @@ export class DamageMeter extends Frame
         return opts
     end
 
-    function SetView(typeValue: string?, session: any)
+    function SetView(typeValue: string?, session: MeterSession?)
         self.type = typeValue and BY_VALUE[typeValue] and typeValue or "damage"
         self.session = session or "current"
         self.drill = nil
@@ -682,12 +789,17 @@ export class DamageMeter extends Frame
         self:Refresh()
     end
 
-    function SetOptions(o: { [string]: any })
-        for k, v in pairs(o) do self.view[k] = v end
+    function SetOptions(o: MeterViewChange)
+        local v = self.view
+        if o.numbers ~= nil then v.numbers = o.numbers end
+        if o.barColor ~= nil then v.barColor = o.barColor end
+        if o.marker ~= nil then v.marker = o.marker end
+        if o.nameColor ~= nil then v.nameColor = o.nameColor end
+        if o.pinYou ~= nil then v.pinYou = o.pinYou end
         self:Refresh()
     end
 
-    function SetCanAddWindow(on: any) self.canAdd = on and true or false end
+    function SetCanAddWindow(on: unknown) self.canAdd = on ~= nil and on ~= false end
 
     -- The rows the window keeps its height for (the Rows setting), live.
     function SetMaxRows(n: number?)
@@ -698,13 +810,14 @@ export class DamageMeter extends Frame
     end
 
     -- The row data of one source in the list.
-    function SourceRow(src: any, i: number, top: any, total: any, fight: boolean): MeterRowData
+    function SourceRow(src: DamageMeterCombatSourceSecret, i: number, top: number | Secret<number>,
+                       total: (number | Secret<number>)?, fight: boolean): MeterRowData
         local v = self.view
         local typeValue = self.type
         local enemies, deaths = ENEMIES[typeValue], typeValue == "deaths"
         local you = not isSecret(src.isLocalPlayer) and src.isLocalPlayer == true
-        local class = plainString(src.classFilename) and src.classFilename or nil
-        local d: { [string]: any } = { rank = i, you = you and not enemies, plain = deaths }
+        local class: string? = plainString(src.classFilename) and src.classFilename or nil
+        local d: MeterRowData = { rank = i, you = you and not enemies, plain = deaths }
         d.name = you and UnitName("player") or shortName(src.name)
         if enemies or not class then
             d.nameColor = "reaction-hostile"
@@ -733,8 +846,9 @@ export class DamageMeter extends Frame
             d.main = abbr(main)
             if v.numbers ~= "minimal" then d.paren = abbr(ps and src.totalAmount or src.amountPerSecond) end
         end
-        if v.numbers == "complete" and not fight and readable(src.totalAmount) and readable(total) and total > 0 then
-            d.share = ("%d%%"):format(math.floor(src.totalAmount / total * 100 + 0.5))
+        local amount = src.totalAmount
+        if v.numbers == "complete" and not fight and readable(amount) and readable(total) and total > 0 then
+            d.share = ("%d%%"):format(math.floor(amount / total * 100 + 0.5))
         end
         -- its breakdown: yours always, others' while their GUID is readable
         local guid = you and UnitGUID("player") or src.sourceGUID
@@ -770,46 +884,46 @@ export class DamageMeter extends Frame
             self:ShowEmpty("The list is secret until combat ends.")
             return
         end
-        if not sources or #sources == 0 then
+        if not s or not sources or #sources == 0 then
             self:ShowEmpty(typeValue == "avoidable" and "No avoidable damage taken." or deaths and "No deaths. Well played."
                 or "Nothing yet. The meter fills as the fight goes on.")
             return
         end
         self.empty:SetVisible(false)
         self.note:SetVisible(false)
-        local list: any[] = {}
+        local list: DamageMeterCombatSourceSecret[] = {}
         for i = 1, #sources do list[i] = sources[i] end
         -- deaths come newest first: in the order they happened instead
         if deaths then
-            local rev: any[] = {}
+            local rev: DamageMeterCombatSourceSecret[] = {}
             for i = #list, 1, -1 do rev[#rev + 1] = list[i] end
             list = rev
         end
         local ps = PER_SECOND[typeValue]
-        local top = deaths and 1 or (ps and list[1].amountPerSecond or list[1].totalAmount)
+        local top: number | Secret<number> = deaths and 1 or (ps and list[1].amountPerSecond or list[1].totalAmount)
         if readable(top) and top <= 0 then top = 1 end
         local fight = inCombat()
         local max = self.maxRows
-        local youAt
+        local youAt: number? = nil
         for i, src in ipairs(list) do
             if not isSecret(src.isLocalPlayer) and src.isLocalPlayer == true then youAt = i end
         end
-        local pin = youAt and youAt > max and v.pinYou ~= false and not NO_PIN[typeValue]
+        local pin = youAt ~= nil and youAt > max and v.pinYou ~= false and not NO_PIN[typeValue]
         local h, gap = draw.size("meter-row"), S["space-1"]
         for i = 1, max do
-            local index = (pin and i == max) and youAt or i
+            local index = (pin and i == max) and (youAt :: number) or i
             local src = list[index]
-            local r = self.rows[i] or buildRow(self, i)
+            local r = self:row(i)
             if src then
                 r:ClearAllPoints()
                 r:SetPoint("TOPLEFT", self.body, "TOPLEFT", S["space-3"], -S["space-3"] - (i - 1) * (h + gap))
-                setRow(r, self:SourceRow(src, index, top, s.totalAmount, fight))
+                r:Set(self:SourceRow(src, index, top, s.totalAmount, fight))
             else
                 r:Hide()
             end
         end
         for i = max + 1, #self.rows do self.rows[i]:Hide() end
-        self.pinLine:SetShown(pin and true or false)
+        self.pinLine:SetShown(pin)
         if pin then
             self.pinLine:ClearAllPoints()
             self.pinLine:SetPoint("BOTTOMLEFT", self.rows[max], "TOPLEFT", 0, gap / 2)
@@ -821,27 +935,27 @@ export class DamageMeter extends Frame
     function RefreshSpells()
         local drill = self.drill :: MeterDrill -- (only drilled in)
         local typeValue = self.type
-        local data = fetchSource(self.api, self.session, typeValue, drill.guid, drill.creature)
+        local data = fetchSource(self.api :: MeterApi, self.session, typeValue, drill.guid, drill.creature)
         local spells = data and data.combatSpells
         self.pinLine:Hide()
         self.note:SetVisible(false)
-        if not spells or (not isSecret(spells) and #spells == 0) then
+        if not data or not spells or (not isSecret(spells) and #spells == 0) then
             self:ShowEmpty("No spells to show.")
             return
         end
         self.empty:SetVisible(false)
         local ps = PER_SECOND[typeValue]
-        local top = ps and spells[1].amountPerSecond or spells[1].totalAmount
+        local top: number | Secret<number> = ps and spells[1].amountPerSecond or spells[1].totalAmount
         if readable(top) and top <= 0 then top = 1 end
         local total = data.totalAmount
         local fight = inCombat()
         local h, gap = draw.size("meter-row"), S["space-1"]
         for i = 1, self.maxRows do
             local sp = spells[i]
-            local r = self.rows[i] or buildRow(self, i)
+            local r = self:row(i)
             if sp then
                 local main = ps and sp.amountPerSecond or sp.totalAmount
-                local d: { [string]: any } = { rank = i, mark = "spell", spellID = sp.spellID, textName = true, fill = main, fillMax = top }
+                local d: MeterRowData = { rank = i, mark = "spell", spellID = sp.spellID, textName = true, fill = main, fillMax = top }
                 local okName, name = pcall(C_Spell.GetSpellName, sp.spellID)
                 d.name = okName and name or "Unknown"
                 if not isSecret(sp.spellID) and sp.spellID == 6603 then d.name = "Melee" end
@@ -852,12 +966,13 @@ export class DamageMeter extends Frame
                     d.main = abbr(main)
                     if self.view.numbers ~= "minimal" then d.paren = abbr(ps and sp.totalAmount or sp.amountPerSecond) end
                 end
-                if self.view.numbers == "complete" and not fight and readable(sp.totalAmount) and readable(total) and total > 0 then
-                    d.share = ("%d%%"):format(math.floor(sp.totalAmount / total * 100 + 0.5))
+                local amount = sp.totalAmount
+                if self.view.numbers == "complete" and not fight and readable(amount) and readable(total) and total > 0 then
+                    d.share = ("%d%%"):format(math.floor(amount / total * 100 + 0.5))
                 end
                 r:ClearAllPoints()
                 r:SetPoint("TOPLEFT", self.body, "TOPLEFT", S["space-3"], -S["space-3"] - (i - 1) * (h + gap))
-                setRow(r, d)
+                r:Set(d)
             else
                 r:Hide()
             end
@@ -869,23 +984,25 @@ export class DamageMeter extends Frame
 
     -- A death's last moments: oldest first, health after each hit as the bar.
     function RefreshRecap()
-        local src = (self.drill :: MeterDrill).src -- (only drilled in)
+        local src = (self.drill :: MeterDrill).src :: DamageMeterCombatSourceSecret -- (only drilled in)
+        local recapApi = self.recapApi :: RecapApi
         local id = src.deathRecapID
-        local ok, events = pcall(self.recapApi.GetRecapEvents, id)
+        local ok, given = pcall(recapApi.GetRecapEvents, id)
         self.pinLine:Hide()
-        if ok and issecrettable and issecrettable(events) then
+        if ok and issecrettable and issecrettable(given) then
             self:ShowEmpty("The recap is secret until combat ends.")
             return
         end
-        if not ok or type(events) ~= "table" or #events == 0 then
+        if not ok or type(given) ~= "table" or #given == 0 then
             self:ShowEmpty("No recap for this death.")
             return
         end
+        local events = given :: RecapEvent[]
         self.empty:SetVisible(false)
-        local okMax, maxHP = pcall(self.recapApi.GetRecapMaxHealth, id)
-        if not okMax then maxHP = nil end
+        local okMax, max = pcall(recapApi.GetRecapMaxHealth, id)
+        local maxHP = okMax and max or nil
         -- newest first: the last rows, oldest first
-        local list: any[] = {}
+        local list: RecapEvent[] = {}
         for i = #events, 1, -1 do list[#list + 1] = events[i] end
         local slots = self.maxRows - 1
         local first = math.max(1, #list - slots + 1)
@@ -896,44 +1013,50 @@ export class DamageMeter extends Frame
         for i = first, #list do
             n = n + 1
             local ev = list[i]
-            local r = self.rows[n] or buildRow(self, n)
+            local r = self:row(n)
             local kind = plainString(ev.event) and ev.event or ""
             local heal = kind == "SPELL_HEAL" or kind == "SPELL_PERIODIC_HEAL"
             -- a heal: its name and amount in the healing colour
-            local d: { [string]: any } = { rankWide = true, mark = "spell", spellID = ev.spellId, textName = true, heal = heal,
+            local d: MeterRowData = { rankWide = true, mark = "spell", spellID = ev.spellId, textName = true, heal = heal,
                         nameColor = heal and "fel" or nil }
-            if readable(deathAt) and readable(ev.timestamp) then
-                local ago = deathAt - ev.timestamp
+            local at = ev.timestamp
+            if readable(deathAt) and readable(at) then
+                local ago = deathAt - at
                 d.rank = ago < 0.05 and "0s" or ("-%.1fs"):format(ago)
             end
+            local spellName = ev.spellName
             if kind == "SWING_DAMAGE" then
                 d.name = "Melee"
-            elseif isSecret(ev.spellName) or plainString(ev.spellName) then
-                d.name = ev.spellName
+            elseif isSecret(spellName) or plainString(spellName) then
+                d.name = spellName
             else
                 d.name = "Unknown"
             end
-            if readable(ev.amount) then
-                d.main = (heal and "+" or "-") .. group3(math.floor(ev.amount + 0.5))
-            elseif isSecret(ev.amount) then
-                d.main = AbbreviateNumbers(ev.amount)
+            local amount = ev.amount
+            if readable(amount) then
+                d.main = (heal and "+" or "-") .. group3(math.floor(amount + 0.5))
+            elseif isSecret(amount) then
+                d.main = AbbreviateNumbers(amount)
             end
-            if maxHP and ev.currentHP ~= nil then
-                d.fill, d.fillMax = ev.currentHP, maxHP
-                if readable(ev.currentHP) and readable(maxHP) and maxHP > 0 then d.fillLow = ev.currentHP / maxHP < 0.35 end
+            local hp = ev.currentHP
+            if maxHP and (issecretvalue(hp) or hp ~= nil) then
+                d.fill, d.fillMax = hp, maxHP
+                if readable(hp) and readable(maxHP) and maxHP > 0 then d.fillLow = hp / maxHP < 0.35 end
             end
             d.danger = i == #list
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", self.body, "TOPLEFT", S["space-3"], -S["space-3"] - (n - 1) * (h + gap))
-            setRow(r, d)
+            r:Set(d)
         end
         for i = n + 1, #self.rows do self.rows[i]:Hide() end
         -- the note in the last slot: the killing blow and when
         local noteText = "Bars show health after each hit."
-        if last and readable(last.overkill) and last.overkill > 0 then
+        local overkill = last and last.overkill
+        if last and readable(overkill) and overkill > 0 then
+            local lastName = last.spellName
             local by = (plainString(last.event) and last.event == "SWING_DAMAGE") and "Melee"
-                or (plainString(last.spellName) and last.spellName) or "?"
-            noteText = ("Killed by %s, %s overkill."):format(by, group3(last.overkill))
+                or (plainString(lastName) and lastName) or "?"
+            noteText = ("Killed by %s, %s overkill."):format(by, group3(overkill))
         end
         self.note:SetValue(noteText)
         self.note:SetVisible(true)
@@ -944,10 +1067,10 @@ export class DamageMeter extends Frame
         self.typeSelect:SetShown(not drill)
         self.sessionSelect:SetShown(not drill)
         self.time:SetShown(not drill)
-        self.back:SetShown(drill and true or false)
-        self.who:SetShown(drill and true or false)
-        self.what:SetShown(drill and true or false)
-        self.total:SetShown(drill and drill.kind == "spells" or false)
+        self.back:SetShown(drill ~= nil)
+        self.who:SetShown(drill ~= nil)
+        self.what:SetShown(drill ~= nil)
+        self.total:SetShown(drill ~= nil and drill.kind == "spells")
         if drill then
             local row = drill.row
             self.who:SetText(row.name or "")
@@ -979,20 +1102,22 @@ export class DamageMeter extends Frame
     end
 
     function Refresh()
-        if not self.api then return end
+        local api = self.api
+        if not api then return end
         -- a past fight that's gone: back to Current
         if type(self.session) == "number" then
             local found = false
-            local ok, list = pcall(self.api.GetAvailableCombatSessions)
+            local ok, list = pcall(api.GetAvailableCombatSessions)
             if ok and type(list) == "table" then
-                for _, s in ipairs(list :: any[]) do if s.sessionID == self.session then found = true end end
+                for _, s in ipairs(list) do if s.sessionID == self.session then found = true end end
             end
             if not found then self.session = "current" end
         end
         self:RefreshHead()
-        if self.drill and self.drill.kind == "spells" then
+        local drill = self.drill
+        if drill and drill.kind == "spells" then
             self:RefreshSpells()
-        elseif self.drill and self.drill.kind == "recap" then
+        elseif drill and drill.kind == "recap" then
             self:RefreshRecap()
         else
             self:RefreshList()
@@ -1001,7 +1126,7 @@ export class DamageMeter extends Frame
 end
 mixins.DamageMeter = DamageMeter
 
-export function damageMeter(parent: Frame, options: { [string]: any }?): DamageMeter
+export function damageMeter(parent: Frame, options: DamageMeterOptions?): DamageMeter
     return DamageMeter.new(parent, options)
 end
 
