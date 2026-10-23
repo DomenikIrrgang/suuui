@@ -13,6 +13,15 @@
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SuuButton from "/UI/Controls"
+import type TextField, Toggle from "/UI/Inputs"
+import type ScrollArea, WindowFrame from "/UI/Panel"
+import type Select from "/UI/Select"
+import type Text from "/UI/Text"
+import type Border from "/UI/Draw"
+import type Panel from "/UI/Panel"
+import asFrame, named from "/UI/Reskin"
 import known from "wowlua:secret"
 import isSecret from "wowlua:secret"
 import hookScript from "wowlua:hooks"
@@ -21,29 +30,29 @@ import every from "wowlua:timer"
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "addons",
-    name = "AddOns",
-    description = "SuuUI's AddOns window: search, suites with their modules, status, memory and CPU, and what changes on reload.",
-    api = "0.17",
-    reloadToToggle = true,
-    defaults = {},
-})
+local DEFAULTS = {}
+
+local M: AddonsModule
 
 -- (secrecy tested first: comparing a secret is an error in strict mode)
 local function plain(v: unknown): v is string | number | boolean | table return not isSecret(v) and v ~= nil end
-local function call(fn: any, ...: any): ...any
+-- One of the game's functions, if it has it: its results as they come (read
+-- each with `str` or `num`), nothing when it fails.
+local function call(fn: unknown, ...: unknown): ...unknown
     if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h = pcall(fn, ...)
+    local ok, a, b, c, d, e, f, g, h = pcall(fn :: (...unknown) -> ...unknown, ...)
     if ok then return a, b, c, d, e, f, g, h end
+    return nil
 end
+local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
+local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
 
 local WIDTH, HEIGHT = 820, 640
 local LINE_H, MODULE_H = 36, 30
 local ICON = 16
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local A = C_AddOns
-local STATUS = {
+local STATUS: { [string]: string[] } = {
     loaded = { "Loaded", "gilt-text", "gilt-line" },
     lod = { "Load on demand", "ink-muted", "gilt-faint" },
     disabled = { "Disabled", "ink-faint", "gilt-faint" },
@@ -53,18 +62,19 @@ local STATUS = {
 }
 
 -- "1.2 MB", "340 KB"
-local function memory(kb: any): string?
-    if not plain(kb) or kb <= 0 then return nil end
+local function memory(given: unknown): string?
+    local kb = num(given)
+    if not kb or kb <= 0 then return nil end
     if kb >= 1024 then return ("%.1f MB"):format(kb / 1024) end
     return ("%d KB"):format(math.floor(kb + 0.5))
 end
 
 -- A title's leading icon, taken out to show in the row's icon slot (inline,
 -- it sits on the text's baseline, not in the middle of the row).
-local function splitIcon(text: string): (string, any)
+local function splitIcon(text: string): (string, (string | number)?)
     local path, rest = text:match("^%s*|T([^:|]+)[^|]*|t%s*(.*)$")
     if path then return rest :: string, tonumber(path) or path end
-    return text
+    return text, nil
 end
 
 -- a title without its colour codes and icons, for the search
@@ -77,539 +87,655 @@ end
 --------------------------------------------------------------------------------
 
 -- An addon as the window lists it.
+-- (its icon: a texture, or an atlas)
+export type AddonIcon = string | number | { atlas: string }
 export type Addon = {
-    index: number, name: string, title: string, icon: any, notes?: string, reason: any, deps: any[],
-    parent?: Addon, children?: Addon[], suuui?: boolean, memory: any,
+    index: number, name: string, title: string, icon?: AddonIcon, notes?: string, reason: unknown, deps: string[],
+    parent?: Addon, children?: Addon[], suuui?: boolean, memory?: unknown,
 }
-
--- the character the toggles are for: this one, or nil for all
-function M:Character()
-    return self.perChar and UnitGUID("player") or nil
-end
-
-function M:Enabled(i: number): boolean
-    return (call(A.GetAddOnEnableState, i, self:Character()) or 0) > 0
-end
-
--- Every addon, its suite's modules after it.
-function M:Collect()
-    local n = call(A.GetNumAddOns) or 0
-    local byName, list = {}, {}
-    for i = 1, n do
-        local name, title, notes, _, reason = call(A.GetAddOnInfo, i)
-        if plain(name) then
-            local deps = { call(A.GetAddOnDependencies, i) }
-            local shownTitle, icon = splitIcon(plain(title) and title ~= "" and title or name)
-            if not icon then
-                local tex = call(A.GetAddOnMetadata, i, "IconTexture")
-                local atlas = call(A.GetAddOnMetadata, i, "IconAtlas")
-                if plain(tex) and tex ~= "" then icon = tonumber(tex) or tex
-                elseif plain(atlas) and atlas ~= "" then icon = { atlas = atlas } end
-            end
-            local e = { index = i, name = name, title = shownTitle, icon = icon, notes = plain(notes) and notes or nil,
-                reason = reason, deps = deps }
-            byName[name] = e
-            list[#list + 1] = e
-        end
-    end
-    -- a module: needs an addon its name starts with
-    for _, e in ipairs(list) do
-        for _, d in ipairs(e.deps) do
-            local p = byName[d]
-            if p and p ~= e and e.name:sub(1, #d) == d then
-                e.parent = p
-                p.children = p.children or {}
-                p.children[#p.children + 1] = e
-                break
-            end
-        end
-        e.suuui = e.name == "SuuUI" or tContains(e.deps, "SuuUI")
-    end
-    local ordered = {}
-    local function add(e: Addon)
-        ordered[#ordered + 1] = e
-        for _, c in ipairs(e.children or {}) do add(c) end
-    end
-    for _, e in ipairs(list) do
-        if not e.parent then add(e) end
-    end
-    self.byName = byName
-    return ordered
-end
-
-function M:Status(e: Addon): string
-    if call(A.IsAddOnLoaded, e.index) then return "loaded" end
-    local _, reason = call(A.IsAddOnLoadable, e.index, self:Character())
-    if reason == "INTERFACE_VERSION" then return "outdated" end
-    if reason == "MISSING" or reason == "DEP_MISSING" or reason == "DEP_DISABLED" or reason == "DEP_INTERFACE_VERSION" then
-        return self:Enabled(e.index) and "dependency" or "disabled"
-    end
-    if not self:Enabled(e.index) then return "disabled" end
-    if call(A.IsAddOnLoadOnDemand, e.index) then return "lod" end
-    return "waiting"
-end
-
--- What the window started with, to tell what changed.
-function M:Snapshot()
-    self.start = {}
-    for _, e in ipairs(self.addons) do self.start[e.index] = self:Enabled(e.index) end
-    self.startCheck = call(A.IsAddonVersionCheckEnabled)
-end
-
-function M:Changes()
-    local n = 0
-    for _, e in ipairs(self.addons) do
-        if self:Enabled(e.index) ~= self.start[e.index] then n = n + 1 end
-    end
-    if call(A.IsAddonVersionCheckEnabled) ~= self.startCheck then n = n + 1 end
-    return n
-end
 
 --------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
 
-local function chip(parent: any): any
-    local c = CreateFrame("Frame", nil, parent)
-    c:SetHeight(16)
-    c.border = UI.Border(c, "gilt-faint")
-    c.text = UI.Text(c, "micro", "ink-muted")
-    c.text:SetPoint("CENTER", 0, 0)
-    function c:Set(label: string, ink: string, edge: string)
+-- A row's status chip: the word in its ink, framed in its edge.
+class StatusChip extends Frame
+    readonly border: Border
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(16)
+        self.border = UI.Border(self, "gilt-faint")
+        self.text = UI.Text(self, "micro", "ink-muted")
+        self.text:SetPoint("CENTER", 0, 0)
+    end
+
+    function Set(label: string, ink: string, edge: string)
         self.text:SetValue(label)
         self.text:SetColor(ink)
         self.border:SetColor(edge)
         self:SetWidth(UI.MeasureText("micro", label) + 2 * S["space-3"])
     end
-    return c
 end
 
-function M:BuildRow(parent: any): any
-    local r = CreateFrame("Frame", nil, parent)
-    local line = CreateFrame("Button", nil, r)
-    line:SetPoint("TOPLEFT")
-    line:SetPoint("TOPRIGHT")
-    r.line = line
-    r.bg = UI.Fill(line, "surface-raised", "BACKGROUND")
-    r.bg:SetAllPoints()
-    r.bg:Hide()
-    r.edge = UI.Fill(r, "arcane", "ARTWORK")
-    r.edge:SetPoint("TOPLEFT")
-    r.edge:SetPoint("BOTTOMLEFT")
-    r.edge:SetWidth(2)
-    r.rule = UI.Fill(r, "gilt-faint", "ARTWORK")
-    r.rule:SetPoint("BOTTOMLEFT")
-    r.rule:SetPoint("BOTTOMRIGHT")
-    r.rule:SetHeight(1)
+-- An addon's row: its line (toggle, fold, icon, title, what it is, memory,
+-- status) and, open, the details under it.
+export class AddonRow extends Frame
+    readonly line: Button
+    readonly bg: Texture
+    -- changed: an arcane edge
+    readonly edge: Texture
+    readonly rule: Texture
     -- a module's indent: a gilt-faint line where its suite's toggle is
-    r.indent = UI.Fill(line, "gilt-faint", "ARTWORK")
-    r.indent:SetPoint("TOPLEFT", S["space-3"] + 10, 0)
-    r.indent:SetPoint("BOTTOMLEFT", S["space-3"] + 10, 0)
-    r.indent:SetWidth(1)
-    r.toggle = UI.Toggle(line, { onChange = function(on: boolean) self:SetEnabled(r.addon, on) end })
+    readonly indent: Texture
+    readonly toggle: Toggle
     -- the icon slot, in the middle of the line: the addon's own icon, or
     -- SuuUI's emblem on SuuUI and its plugins; empty keeps the titles in line
-    r.icon = line:CreateTexture(nil, "ARTWORK")
-    r.icon:SetSize(ICON, ICON)
-    r.fold = CreateFrame("Button", nil, line)
-    r.fold:SetSize(18, 18)
-    r.fold.glyph = r.fold:CreateTexture(nil, "ARTWORK")
-    r.fold.glyph:SetSize(11, 11)
-    r.fold.glyph:SetPoint("CENTER")
-    UI.Paint(r.fold.glyph, "ink-muted")
-    r.fold:SetScript("OnClick", function()
-        local name = r.addon.name
-        self.folded[name] = not self.folded[name]
-        self:Draw()
-    end)
-    r.title = UI.Text(line, "label", "ink")
-    r.title:SetWordWrap(false)
-    r.sub = UI.Text(line, "caption", "ink-muted")
-    r.more = line:CreateTexture(nil, "ARTWORK")
-    r.more:SetSize(12, 12)
-    r.more:SetPoint("RIGHT", -S["space-3"], 0)
-    UI.Paint(r.more, "ink-muted")
-    r.chip = chip(line)
-    r.chip:SetPoint("RIGHT", r.more, "LEFT", -S["space-4"], 0)
-    r.mem = UI.Text(line, "numeric", "ink-muted")
-    r.mem:SetPoint("RIGHT", r.chip, "LEFT", -S["space-4"], 0)
-    r.pending = UI.Text(line, "micro", "arcane")
-    r.pending:SetPoint("RIGHT", r.mem, "LEFT", -S["space-4"], 0)
-    r.sub:SetPoint("RIGHT", r.pending, "LEFT", -S["space-4"], 0)
+    readonly icon: Texture
+    readonly fold: Button
+    readonly foldGlyph: Texture
+    readonly title: Text
+    readonly sub: Text
+    readonly more: Texture
+    readonly chip: StatusChip
+    readonly mem: Text
+    readonly pending: Text
     -- the open row's details
-    r.detail = CreateFrame("Frame", nil, r)
-    r.detail:SetPoint("TOPLEFT", line, "BOTTOMLEFT")
-    r.detail:SetPoint("TOPRIGHT", line, "BOTTOMRIGHT")
-    UI.Fill(r.detail, "surface-raised", "BACKGROUND"):SetAllPoints()
-    r.notes = UI.Text(r.detail, "body", "ink")
-    r.notes:SetWordWrap(true)
-    r.notes:SetJustifyH("LEFT")
-    r.notes:SetPoint("TOPLEFT", 90, -S["space-3"])
-    r.notes:SetPoint("RIGHT", -S["space-5"], 0)
-    r.facts = UI.Text(r.detail, "caption", "ink")
-    r.deps = UI.Text(r.detail, "caption", "ink")
-    r.deps:SetWordWrap(true)
-    r.deps:SetJustifyH("LEFT")
-    r.deps:SetPoint("RIGHT", -S["space-5"], 0)
-    line:SetScript("OnEnter", function() r.bg:Show() end)
-    line:SetScript("OnLeave", function() if self.open ~= r.addon.name then r.bg:Hide() end end)
-    line:SetScript("OnClick", function()
-        self.open = self.open ~= r.addon.name and r.addon.name or nil
-        self:Draw()
-    end)
-    return r
-end
+    readonly detail: Frame
+    readonly notes: Text
+    readonly facts: Text
+    readonly deps: Text
+    addon: Addon? = nil
 
-function M:Build()
-    self.folded, self.rows = {}, {}
-    local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIAddonsWindow", title = "AddOns", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end })
-    w:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
-    w:Hide()
-    w.scroll:Hide()
-    -- closed without Reload to apply: nothing changes
-    w:HookScript("OnHide", function()
-        self:PlaceReload()
-        if self.saving then return end
-        call(A.ResetAddOns)
-        if self.startCheck ~= nil and call(A.IsAddonVersionCheckEnabled) ~= self.startCheck then
-            call(A.SetAddonVersionCheck, self.startCheck)
-        end
-    end)
-    self.window = w
-    local body = w.body
-
-    -- the bar: whose addons, search, all on, all off
-    local bar = CreateFrame("Frame", nil, body)
-    bar:SetPoint("TOPLEFT")
-    bar:SetPoint("TOPRIGHT")
-    bar:SetHeight(30)
-    self.who = UI.Select(bar, { width = 200, value = "me", options = {
-        { value = "me", label = known(UnitName("player"), "This character") }, { value = "all", label = "All characters" } },
-        onChange = function(v: string)
-            self.perChar = v == "me"
-            self:Draw()
-        end })
-    self.who:SetPoint("LEFT")
-    local disable = UI.Button(bar, { text = "Disable all", onClick = function()
-        call(A.DisableAllAddOns, self:Character())
-        -- SuuUI stays: the window you're in
-        call(A.EnableAddOn, "SuuUI", self:Character())
-        self:Draw()
-    end })
-    disable:SetPoint("RIGHT")
-    local enable = UI.Button(bar, { text = "Enable all", onClick = function()
-        call(A.EnableAllAddOns, self:Character())
-        self:Draw()
-    end })
-    enable:SetPoint("RIGHT", disable, "LEFT", -S["space-4"], 0)
-    self.search = UI.TextField(bar, { placeholder = "Search addons", onTextChanged = function() self:Draw() end })
-    self.search:SetPoint("LEFT", self.who, "RIGHT", S["space-4"], 0)
-    self.search:SetPoint("RIGHT", enable, "LEFT", -S["space-4"], 0)
-
-    -- the performance strip
-    local perf = CreateFrame("Frame", nil, body)
-    perf:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -S["space-4"])
-    perf:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", 0, -S["space-4"])
-    perf:SetHeight(48)
-    UI.Fill(perf, "surface-sunk"):SetAllPoints()
-    UI.Border(perf, "gilt-faint")
-    local x = S["space-5"]
-    local function metric(label: string, w2: number): any
-        local l = UI.Text(perf, "caption", "ink-muted")
-        l:SetPoint("TOPLEFT", x, -S["space-3"])
-        l:SetValue(label)
-        local v = UI.Text(perf, "numeric", "ink")
-        v:SetFont(T.type.numeric.file, 16, "")
-        v:SetPoint("TOPLEFT", l, "BOTTOMLEFT", 0, -1)
-        x = x + w2
-        return v
+    constructor(parent: Frame, owner: AddonsModule)
+        super(nil, parent)
+        local line = CreateFrame("Button", nil, self)
+        line:SetPoint("TOPLEFT")
+        line:SetPoint("TOPRIGHT")
+        self.line = line
+        self.bg = UI.Fill(line, "surface-raised", "BACKGROUND")
+        self.bg:SetAllPoints()
+        self.bg:Hide()
+        self.edge = UI.Fill(self, "arcane", "ARTWORK")
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.edge:SetWidth(2)
+        self.rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+        self.rule:SetHeight(1)
+        self.indent = UI.Fill(line, "gilt-faint", "ARTWORK")
+        self.indent:SetPoint("TOPLEFT", S["space-3"] + 10, 0)
+        self.indent:SetPoint("BOTTOMLEFT", S["space-3"] + 10, 0)
+        self.indent:SetWidth(1)
+        self.toggle = UI.Toggle(line, { onChange = function(on: boolean) owner:SetEnabled(self.addon, on) end })
+        self.icon = line:CreateTexture(nil, "ARTWORK")
+        self.icon:SetSize(ICON, ICON)
+        self.fold = CreateFrame("Button", nil, line)
+        self.fold:SetSize(18, 18)
+        self.foldGlyph = self.fold:CreateTexture(nil, "ARTWORK")
+        self.foldGlyph:SetSize(11, 11)
+        self.foldGlyph:SetPoint("CENTER")
+        UI.Paint(self.foldGlyph, "ink-muted")
+        self.fold:SetScript("OnClick", function()
+            local name = assert(self.addon).name
+            owner.folded[name] = not owner.folded[name]
+            owner:Draw()
+        end)
+        self.title = UI.Text(line, "label", "ink")
+        self.title:SetWordWrap(false)
+        self.sub = UI.Text(line, "caption", "ink-muted")
+        self.more = line:CreateTexture(nil, "ARTWORK")
+        self.more:SetSize(12, 12)
+        self.more:SetPoint("RIGHT", -S["space-3"], 0)
+        UI.Paint(self.more, "ink-muted")
+        self.chip = StatusChip.new(line)
+        self.chip:SetPoint("RIGHT", self.more, "LEFT", -S["space-4"], 0)
+        self.mem = UI.Text(line, "numeric", "ink-muted")
+        self.mem:SetPoint("RIGHT", self.chip, "LEFT", -S["space-4"], 0)
+        self.pending = UI.Text(line, "micro", "arcane")
+        self.pending:SetPoint("RIGHT", self.mem, "LEFT", -S["space-4"], 0)
+        self.sub:SetPoint("RIGHT", self.pending, "LEFT", -S["space-4"], 0)
+        self.detail = CreateFrame("Frame", nil, self)
+        self.detail:SetPoint("TOPLEFT", line, "BOTTOMLEFT")
+        self.detail:SetPoint("TOPRIGHT", line, "BOTTOMRIGHT")
+        UI.Fill(self.detail, "surface-raised", "BACKGROUND"):SetAllPoints()
+        self.notes = UI.Text(self.detail, "body", "ink")
+        self.notes:SetWordWrap(true)
+        self.notes:SetJustifyH("LEFT")
+        self.notes:SetPoint("TOPLEFT", 90, -S["space-3"])
+        self.notes:SetPoint("RIGHT", -S["space-5"], 0)
+        self.facts = UI.Text(self.detail, "caption", "ink")
+        self.deps = UI.Text(self.detail, "caption", "ink")
+        self.deps:SetWordWrap(true)
+        self.deps:SetJustifyH("LEFT")
+        self.deps:SetPoint("RIGHT", -S["space-5"], 0)
+        line:SetScript("OnEnter", function() self.bg:Show() end)
+        line:SetScript("OnLeave", function() if owner.open ~= assert(self.addon).name then self.bg:Hide() end end)
+        line:SetScript("OnClick", function()
+            local name = assert(self.addon).name
+            owner.open = owner.open ~= name and name or nil
+            owner:Draw()
+        end)
     end
-    self.memText = metric("Memory", 120)
-    self.cpuText = metric("CPU", 120)
-    self.topText = metric("Busiest", 260)
-    self.topText:SetStyle("label")
-    self.countText = UI.Text(perf, "caption", "ink-muted")
-    self.countText:SetPoint("RIGHT", -S["space-5"], 0)
-    self.perf = perf
-
-    -- load out of date addons
-    local sub = CreateFrame("Frame", nil, body)
-    sub:SetPoint("TOPLEFT", perf, "BOTTOMLEFT", 0, -S["space-4"])
-    sub:SetPoint("TOPRIGHT", perf, "BOTTOMRIGHT", 0, -S["space-4"])
-    sub:SetHeight(20)
-    self.outdated = UI.Toggle(sub, { onChange = function(on: boolean)
-        call(A.SetAddonVersionCheck, not on)
-        self:Draw()
-    end })
-    self.outdated:SetPoint("LEFT")
-    local ol = UI.Text(sub, "label", "ink")
-    ol:SetPoint("LEFT", self.outdated, "RIGHT", S["space-4"], 0)
-    ol:SetValue("Load out of date addons")
-
-    -- the list: its own sunk, framed well, apart from the controls above
-    local well = CreateFrame("Frame", nil, body)
-    well:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -S["space-5"])
-    well:SetPoint("BOTTOMRIGHT")
-    UI.Fill(well, "surface-sunk"):SetAllPoints()
-    UI.Border(well, "gilt-line")
-    local BAR = S["space-3"]
-    self.list = UI.ScrollArea(well, BAR)
-    self.list:SetPoint("TOPLEFT", 1, -1)
-    self.list:SetPoint("BOTTOMRIGHT", -(BAR + 4), 1)
-    self.list:HookScript("OnSizeChanged", function(scroll, width) scroll.child:SetWidth(width) end)
-    self.none = UI.Text(body, "body", "ink-muted")
-    self.none:SetPoint("TOP", self.list, "TOP", 0, -S["space-6"])
-    self.none:SetValue("No addons match.")
-
-    -- the foot
-    local foot = assert(w.footer)
-    self.changes = UI.Text(foot, "caption", "ink-muted")
-    self.changes:SetPoint("LEFT")
-    self.close = UI.Button(foot, { text = "Close", width = 140, onClick = function() w:Hide() end })
-    self.close:SetPoint("RIGHT")
-    -- the reload itself is a secure button on top (/reload: the game blocks
-    -- a reload from addon code, found in game); the click saves first
-    self.apply = UI.Button(foot, { text = "Reload to apply", icon = "reset", variant = "primary", width = 160 })
-    self.apply:SetPoint("RIGHT")
-    local cancel = UI.Button(foot, { text = "Cancel", onClick = function() w:Hide() end })
-    cancel:SetPoint("RIGHT", self.apply, "LEFT", -S["space-4"], 0)
 end
 
 --------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
 
--- The secure /reload button over Reload to apply: there while it shows
--- (out of combat).
-function M:PlaceReload()
-    if InCombatLockdown() then return end
-    local over, apply = self.reloadOver, self.apply
-    local on = self.window:IsShown() and apply:IsShown()
-    if not over then
-        if not on then return end
-        over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-        over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-        over:SetAttribute("type1", "macro")
-        over:SetAttribute("macrotext1", "/reload")
-        over:SetScript("OnEnter", function() apply:GetScript("OnEnter")(apply) end)
-        over:SetScript("OnLeave", function() apply:GetScript("OnLeave")(apply) end)
-        over:SetScript("PreClick", function()
-            self.saving = true
-            call(A.SaveAddOns)
-        end)
-        self.reloadOver = over
-    end
-    over:ClearAllPoints()
-    if on then
-        -- a layer above the window: a click raises the window (it's
-        -- toplevel) over anything at its own layer
-        over:SetFrameStrata("DIALOG")
-        over:SetAllPoints(apply)
-        over:Show()
-    else
-        over:Hide()
-    end
-end
-
-function M:SetEnabled(e: Addon?, on: boolean)
-    if not e then return end
-    if on then call(A.EnableAddOn, e.index, self:Character()) else call(A.DisableAddOn, e.index, self:Character()) end
-    self:Draw()
-end
-
-function M:DrawPerf()
-    call(UpdateAddOnMemoryUsage)
-    local total, enabled = 0, 0
-    for _, e in ipairs(self.addons) do
-        e.memory = call(GetAddOnMemoryUsage, e.index)
-        if plain(e.memory) then total = total + e.memory end
-        if self:Enabled(e.index) then enabled = enabled + 1 end
-    end
-    self.memText:SetValue(memory(total) or "0 KB")
-    local P, metric = C_AddOnProfiler, Enum.AddOnProfilerMetric and Enum.AddOnProfilerMetric.RecentAverageTime
-    local cpu, top
-    if P and metric and call(P.IsEnabled) then
-        local app, overall = call(P.GetApplicationMetric, metric), call(P.GetOverallMetric, metric)
-        if plain(app) and plain(overall) and app > 0 then cpu = overall / app * 100 end
-        local best = 0
-        for _, e in ipairs(self.addons) do
-            local v = call(P.GetAddOnMetric, e.name, metric)
-            if plain(v) and v > best then best, top = v, e end
-        end
-    end
-    self.cpuText:SetValue(cpu and ("%.1f%%"):format(cpu) or "—")
-    self.topText:SetValue(top and top.title or "—")
-    self.countText:SetValue(("%d addons · %d enabled"):format(#self.addons, enabled))
-end
-
-function M:Draw()
-    local w = self.window
-    if not (w and w:IsShown()) then return end
-    self.outdated:SetValue(not call(A.IsAddonVersionCheckEnabled))
-    local query = strtrim(self.search:GetValue() or ""):lower()
-    -- what shows: matches (and their suites); a folded suite hides its modules
-    local shown = {}
-    for _, e in ipairs(self.addons) do
-        local match = query == "" or e.name:lower():find(query, 1, true) or bare(e.title):lower():find(query, 1, true)
-        if match then
-            shown[e] = true
-            if e.parent then shown[e.parent] = true end
-        end
-    end
-    local c = self.list.child
-    local y, used = 0, 0
-    for _, e in ipairs(self.addons) do
-        local visible = shown[e] and not (query == "" and e.parent and self.folded[e.parent.name])
-        if visible then
-            used = used + 1
-            local r = self.rows[used] or self:BuildRow(c)
-            self.rows[used] = r
-            r.addon = e
-            self:DrawRow(r, e)
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", 0, -y)
-            r:SetPoint("RIGHT")
-            r:Show()
-            y = y + r:GetHeight()
-        end
-    end
-    for i = used + 1, #self.rows do self.rows[i]:Hide() end
-    c:SetHeight(math.max(1, y))
-    self.none:SetShown(used == 0)
-    -- the foot
-    local n = self:Changes()
-    self.changes:SetValue(n > 0 and (("%d %s · they apply after a reload"):format(n, n == 1 and "change" or "changes")) or "Changes apply after a reload")
-    self.changes:SetColor(n > 0 and "arcane" or "ink-muted")
-    self.apply:SetShown(n > 0)
-    self.close:SetShown(n == 0)
-    self:PlaceReload()
-    -- no secure button on it (it showed in combat): wait for the fight's end
-    local ready = self.reloadOver and self.reloadOver:IsShown()
-    self.apply:SetEnabledState(ready and true or false)
-    self.apply.tooltip = not ready and { title = "Reload to apply", description = "After the fight." } or nil
-end
-
-function M:DrawRow(r: any, e: Addon)
-    local module = e.parent ~= nil
-    local h = module and MODULE_H or LINE_H
-    r.line:SetHeight(h)
-    local enabled = self:Enabled(e.index)
-    local changed = enabled ~= self.start[e.index]
-    r.edge:SetShown(changed)
-    r.indent:SetShown(module)
-    r.toggle:ClearAllPoints()
-    r.toggle:SetPoint("LEFT", module and (S["space-3"] + 32) or S["space-3"], 0)
-    r.toggle:SetValue(enabled)
-    local suite = e.children and #e.children > 0
-    r.fold:SetShown(suite and true or false)
-    r.fold:ClearAllPoints()
-    r.fold:SetPoint("LEFT", r.toggle, "RIGHT", S["space-2"], 0)
-    r.fold.glyph:SetTexture(GLYPHS .. (self.folded[e.name] and "chevronRight" or "chevronDown"))
-    r.icon:ClearAllPoints()
-    r.icon:SetPoint("LEFT", r.fold, "RIGHT", S["space-2"], 0)
-    r.icon:SetTexCoord(0, 1, 0, 1)
-    r.icon:SetVertexColor(1, 1, 1)
-    if type(e.icon) == "table" then
-        r.icon:SetAtlas(e.icon.atlas)
-    elseif e.icon then
-        r.icon:SetTexture(e.icon)
-        -- the game's item icons: without their border
-        if type(e.icon) == "string" and e.icon:lower():find("^interface\\icons\\") then r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
-    elseif e.suuui then
-        r.icon:SetTexture(GLYPHS .. "markDiamond")
-        UI.Paint(r.icon, "gilt-text")
-    end
-    r.icon:SetShown(e.icon ~= nil or e.suuui)
-    r.title:ClearAllPoints()
-    r.title:SetPoint("LEFT", r.icon, "RIGHT", S["space-4"], 0)
-    r.title:SetValue(e.title)
-    local version = call(A.GetAddOnMetadata, e.index, "Version")
-    local subText = {}
-    if suite and e.children then subText[#subText + 1] = #e.children .. " modules" end
-    if plain(version) and version ~= "" then subText[#subText + 1] = version end
-    r.sub:SetValue(table.concat(subText, " · "))
-    local open = self.open == e.name
-    r.more:SetTexture(GLYPHS .. (open and "chevronDown" or "chevronRight"))
-    local status = STATUS[self:Status(e)]
-    r.chip:Set(status[1], status[2], status[3])
-    r.mem:SetValue(not open and memory(e.memory) or "")
-    r.pending:SetValue(changed and (enabled and "Enables on reload" or "Disables on reload") or "")
-    -- the title gives way to what's on the right
-    r.title:SetPoint("RIGHT", r.sub, "LEFT", -S["space-5"], 0)
-    r.bg:SetShown(open)
-    -- details
-    if open then
-        r.notes:SetValue(e.notes or "No notes.")
-        local facts = {}
-        local author = call(A.GetAddOnMetadata, e.index, "Author")
-        if plain(author) and author ~= "" then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "By|r " .. author end
-        local mem = memory(e.memory)
-        if mem then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "Memory|r " .. mem end
-        r.facts:ClearAllPoints()
-        r.facts:SetPoint("TOPLEFT", r.notes, "BOTTOMLEFT", 0, -S["space-3"])
-        r.facts:SetValue(table.concat(facts, "      "))
-        local deps = {}
-        for _, d in ipairs(e.deps) do
-            local exists = call(A.DoesAddOnExist, d)
-            deps[#deps + 1] = exists == false and ("|cff" .. T.color["ember-text"].hex .. d .. " · missing|r") or d
-        end
-        r.deps:ClearAllPoints()
-        r.deps:SetPoint("TOPLEFT", r.facts, "BOTTOMLEFT", 0, -S["space-3"])
-        r.deps:SetValue(#deps > 0 and ("|cff" .. T.color["ink-muted"].hex .. "Needs|r  " .. table.concat(deps, ", ")) or "")
-        local dh = S["space-3"] + r.notes:GetStringHeight() + S["space-3"] + T.type.caption.lineHeight
-            + (#deps > 0 and (S["space-3"] + r.deps:GetStringHeight()) or 0) + S["space-4"]
-        r.detail:SetHeight(dh)
-        r.detail:Show()
-        r:SetHeight(h + dh + 1)
-    else
-        r.detail:Hide()
-        r:SetHeight(h + 1)
-    end
-end
-
 --------------------------------------------------------------------------------
 -- Opening: instead of the game's list
 --------------------------------------------------------------------------------
 
-function M:Open()
-    self.addons = self:Collect()
-    if self.perChar == nil then self.perChar = true end
-    self.who:SetValue(self.perChar and "me" or "all")
-    self.saving = false
-    self:Snapshot()
-    self.window:Show()
-    self:DrawPerf()
-    self:Draw()
-end
+class AddonsModule extends Module<typeof(DEFAULTS)>
+    -- every addon, a suite's modules after it
+    addons: Addon[] = {}
+    apply: SuuButton? = nil
+    byName: { [string]: Addon } = {}
+    changes: Text? = nil
+    close: SuuButton? = nil
+    countText: Text? = nil
+    cpuText: Text? = nil
+    -- suites folded, by name
+    folded: { [string]: boolean } = {}
+    hooked: boolean? = nil
+    list: ScrollArea? = nil
+    memText: Text? = nil
+    none: Text? = nil
+    -- the addon whose row is open, by name
+    open: string? = nil
+    outdated: Toggle? = nil
+    perChar: boolean? = nil
+    perf: Frame? = nil
+    reloadOver: Button? = nil
+    rows: AddonRow[] = {}
+    saving: boolean? = nil
+    search: TextField? = nil
+    -- what the window started with: each addon on or off, the version check
+    start: { [number]: boolean } = {}
+    startCheck: unknown = nil
+    topText: Text? = nil
+    who: Select<string>? = nil
+    window: WindowFrame? = nil
 
-function M:OnEnable()
-    if not self.window then self:Build() end
-    local list = _G.AddonList
-    if list and not self.hooked then
-        self.hooked = true
-        hookScript(list, "OnShow", function()
-            if not self:IsEnabled() then return end
-            HideUIPanel(list)
-            self:Open()
+    constructor()
+        super({
+            id = "addons",
+            name = "AddOns",
+            description = "SuuUI's AddOns window: search, suites with their modules, status, memory and CPU, and what changes on reload.",
+            api = "0.17",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
+    end
+
+    -- the character the toggles are for: this one, or nil for all
+    function Character(): string?
+        return self.perChar and str(UnitGUID("player")) or nil
+    end
+
+    function Enabled(i: number): boolean
+        return (num(call(A.GetAddOnEnableState, i, self:Character())) or 0) > 0
+    end
+
+    -- Every addon, its suite's modules after it.
+    function Collect(): Addon[]
+        local n = num(call(A.GetNumAddOns)) or 0
+        local byName: { [string]: Addon }, list: Addon[] = {}, {}
+        for i = 1, n do
+            local nameR, titleR, notesR, _, reason = call(A.GetAddOnInfo, i)
+            local name = str(nameR)
+            if name then
+                local deps: string[] = {}
+                for _, d in ipairs({ call(A.GetAddOnDependencies, i) }) do
+                    if type(d) == "string" then deps[#deps + 1] = d end
+                end
+                local title = str(titleR)
+                local shownTitle, iconPath = splitIcon(title and title ~= "" and title or name)
+                local icon: AddonIcon? = iconPath
+                if not icon then
+                    local tex = str(call(A.GetAddOnMetadata, i, "IconTexture"))
+                    local atlas = str(call(A.GetAddOnMetadata, i, "IconAtlas"))
+                    if tex and tex ~= "" then icon = tonumber(tex) or tex
+                    elseif atlas and atlas ~= "" then icon = { atlas = atlas } end
+                end
+                local e: Addon = { index = i, name = name, title = shownTitle, icon = icon, notes = str(notesR),
+                    reason = reason, deps = deps }
+                byName[name] = e
+                list[#list + 1] = e
+            end
+        end
+        -- a module: needs an addon its name starts with
+        for _, e in ipairs(list) do
+            for _, d in ipairs(e.deps) do
+                local p = byName[d]
+                if p and p ~= e and e.name:sub(1, #d) == d then
+                    e.parent = p
+                    local children = p.children or {}
+                    p.children = children
+                    children[#children + 1] = e
+                    break
+                end
+            end
+            e.suuui = e.name == "SuuUI" or tContains(e.deps, "SuuUI")
+        end
+        local ordered: Addon[] = {}
+        local function add(e: Addon)
+            ordered[#ordered + 1] = e
+            for _, c in ipairs(e.children or {}) do add(c) end
+        end
+        for _, e in ipairs(list) do
+            if not e.parent then add(e) end
+        end
+        self.byName = byName
+        return ordered
+    end
+
+    function Status(e: Addon): string
+        if call(A.IsAddOnLoaded, e.index) then return "loaded" end
+        local _, reason: unknown = call(A.IsAddOnLoadable, e.index, self:Character())
+        if reason == "INTERFACE_VERSION" then return "outdated" end
+        if reason == "MISSING" or reason == "DEP_MISSING" or reason == "DEP_DISABLED" or reason == "DEP_INTERFACE_VERSION" then
+            return self:Enabled(e.index) and "dependency" or "disabled"
+        end
+        if not self:Enabled(e.index) then return "disabled" end
+        if call(A.IsAddOnLoadOnDemand, e.index) then return "lod" end
+        return "waiting"
+    end
+
+    -- What the window started with, to tell what changed.
+    function Snapshot()
+        local start: { [number]: boolean } = {}
+        for _, e in ipairs(self.addons) do start[e.index] = self:Enabled(e.index) end
+        self.start = start
+        self.startCheck = call(A.IsAddonVersionCheckEnabled)
+    end
+
+    function Changes(): number
+        local n = 0
+        for _, e in ipairs(self.addons) do
+            if self:Enabled(e.index) ~= self.start[e.index] then n = n + 1 end
+        end
+        if call(A.IsAddonVersionCheckEnabled) ~= self.startCheck then n = n + 1 end
+        return n
+    end
+
+    function BuildRow(parent: Frame): AddonRow
+        return AddonRow.new(parent, self)
+    end
+
+    function Build()
+        self.folded, self.rows = {}, {}
+        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIAddonsWindow", title = "AddOns", width = WIDTH, height = HEIGHT,
+            footer = true, onClose = function(win: Panel) win:Hide() end })
+        w:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
+        w:Hide()
+        w.scroll:Hide()
+        -- closed without Reload to apply: nothing changes
+        w:HookScript("OnHide", function()
+            self:PlaceReload()
+            if self.saving then return end
+            call(A.ResetAddOns)
+            if self.startCheck ~= nil and call(A.IsAddonVersionCheckEnabled) ~= self.startCheck then
+                call(A.SetAddonVersionCheck, self.startCheck)
+            end
+        end)
+        self.window = w
+        local body = w.body
+
+        -- the bar: whose addons, search, all on, all off
+        local bar = CreateFrame("Frame", nil, body)
+        bar:SetPoint("TOPLEFT")
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(30)
+        local who = UI.Select(bar, { width = 200, value = "me", options = {
+            { value = "me", label = known(UnitName("player"), "This character") }, { value = "all", label = "All characters" } },
+            onChange = function(v: string)
+                self.perChar = v == "me"
+                self:Draw()
+            end })
+        self.who = who
+        who:SetPoint("LEFT")
+        local disable = UI.Button(bar, { text = "Disable all", onClick = function()
+            call(A.DisableAllAddOns, self:Character())
+            -- SuuUI stays: the window you're in
+            call(A.EnableAddOn, "SuuUI", self:Character())
+            self:Draw()
+        end })
+        disable:SetPoint("RIGHT")
+        local enable = UI.Button(bar, { text = "Enable all", onClick = function()
+            call(A.EnableAllAddOns, self:Character())
+            self:Draw()
+        end })
+        enable:SetPoint("RIGHT", disable, "LEFT", -S["space-4"], 0)
+        local search = UI.TextField(bar, { placeholder = "Search addons", onTextChanged = function() self:Draw() end })
+        self.search = search
+        search:SetPoint("LEFT", who, "RIGHT", S["space-4"], 0)
+        search:SetPoint("RIGHT", enable, "LEFT", -S["space-4"], 0)
+
+        -- the performance strip
+        local perf = CreateFrame("Frame", nil, body)
+        perf:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -S["space-4"])
+        perf:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", 0, -S["space-4"])
+        perf:SetHeight(48)
+        UI.Fill(perf, "surface-sunk"):SetAllPoints()
+        UI.Border(perf, "gilt-faint")
+        local x = S["space-5"]
+        local function metric(label: string, w2: number): Text
+            local l = UI.Text(perf, "caption", "ink-muted")
+            l:SetPoint("TOPLEFT", x, -S["space-3"])
+            l:SetValue(label)
+            local v = UI.Text(perf, "numeric", "ink")
+            v:SetFont(T.type.numeric.file, 16, "")
+            v:SetPoint("TOPLEFT", l, "BOTTOMLEFT", 0, -1)
+            x = x + w2
+            return v
+        end
+        self.memText = metric("Memory", 120)
+        self.cpuText = metric("CPU", 120)
+        local top = metric("Busiest", 260)
+        top:SetStyle("label")
+        self.topText = top
+        local count = UI.Text(perf, "caption", "ink-muted")
+        count:SetPoint("RIGHT", -S["space-5"], 0)
+        self.countText = count
+        self.perf = perf
+
+        -- load out of date addons
+        local sub = CreateFrame("Frame", nil, body)
+        sub:SetPoint("TOPLEFT", perf, "BOTTOMLEFT", 0, -S["space-4"])
+        sub:SetPoint("TOPRIGHT", perf, "BOTTOMRIGHT", 0, -S["space-4"])
+        sub:SetHeight(20)
+        local outdated = UI.Toggle(sub, { onChange = function(on: boolean)
+            call(A.SetAddonVersionCheck, not on)
+            self:Draw()
+        end })
+        self.outdated = outdated
+        outdated:SetPoint("LEFT")
+        local ol = UI.Text(sub, "label", "ink")
+        ol:SetPoint("LEFT", outdated, "RIGHT", S["space-4"], 0)
+        ol:SetValue("Load out of date addons")
+
+        -- the list: its own sunk, framed well, apart from the controls above
+        local well = CreateFrame("Frame", nil, body)
+        well:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -S["space-5"])
+        well:SetPoint("BOTTOMRIGHT")
+        UI.Fill(well, "surface-sunk"):SetAllPoints()
+        UI.Border(well, "gilt-line")
+        local BAR = S["space-3"]
+        local list = UI.ScrollArea(well, BAR)
+        self.list = list
+        list:SetPoint("TOPLEFT", 1, -1)
+        list:SetPoint("BOTTOMRIGHT", -(BAR + 4), 1)
+        list:HookScript("OnSizeChanged", function(_: Frame, width: number) list.child:SetWidth(width) end)
+        local none = UI.Text(body, "body", "ink-muted")
+        self.none = none
+        none:SetPoint("TOP", list, "TOP", 0, -S["space-6"])
+        none:SetValue("No addons match.")
+
+        -- the foot
+        local foot = assert(w.footer)
+        local changes = UI.Text(foot, "caption", "ink-muted")
+        self.changes = changes
+        changes:SetPoint("LEFT")
+        local close = UI.Button(foot, { text = "Close", width = 140, onClick = function() w:Hide() end })
+        self.close = close
+        close:SetPoint("RIGHT")
+        -- the reload itself is a secure button on top (/reload: the game blocks
+        -- a reload from addon code, found in game); the click saves first
+        local apply = UI.Button(foot, { text = "Reload to apply", icon = "reset", variant = "primary", width = 160 })
+        self.apply = apply
+        apply:SetPoint("RIGHT")
+        local cancel = UI.Button(foot, { text = "Cancel", onClick = function() w:Hide() end })
+        cancel:SetPoint("RIGHT", apply, "LEFT", -S["space-4"], 0)
+    end
+
+    -- The secure /reload button over Reload to apply: there while it shows
+    -- (out of combat).
+    function PlaceReload()
+        if InCombatLockdown() then return end
+        local over, apply = self.reloadOver, assert(self.apply)
+        local on = assert(self.window):IsShown() and apply:IsShown()
+        if not over then
+            if not on then return end
+            over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+            over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+            over:SetAttribute("type1", "macro")
+            over:SetAttribute("macrotext1", "/reload")
+            -- (the button's own hover: its tooltip, why it's off)
+            over:SetScript("OnEnter", function() assert(apply:GetScript("OnEnter"))(apply) end)
+            over:SetScript("OnLeave", function() assert(apply:GetScript("OnLeave"))(apply) end)
+            over:SetScript("PreClick", function()
+                self.saving = true
+                call(A.SaveAddOns)
+            end)
+            self.reloadOver = over
+        end
+        over:ClearAllPoints()
+        if on then
+            -- a layer above the window: a click raises the window (it's
+            -- toplevel) over anything at its own layer
+            over:SetFrameStrata("DIALOG")
+            over:SetAllPoints(apply)
+            over:Show()
+        else
+            over:Hide()
+        end
+    end
+
+    function SetEnabled(e: Addon?, on: boolean)
+        if not e then return end
+        if on then call(A.EnableAddOn, e.index, self:Character()) else call(A.DisableAddOn, e.index, self:Character()) end
+        self:Draw()
+    end
+
+    function DrawPerf()
+        call(UpdateAddOnMemoryUsage)
+        local total, enabled = 0, 0
+        for _, e in ipairs(self.addons) do
+            e.memory = call(GetAddOnMemoryUsage, e.index)
+            local kb = num(e.memory)
+            if kb then total = total + kb end
+            if self:Enabled(e.index) then enabled = enabled + 1 end
+        end
+        assert(self.memText):SetValue(memory(total) or "0 KB")
+        local P, metric = C_AddOnProfiler, Enum.AddOnProfilerMetric and Enum.AddOnProfilerMetric.RecentAverageTime
+        local cpu: number?, top: Addon? = nil, nil
+        if P and metric and call(P.IsEnabled) then
+            local app, overall = num(call(P.GetApplicationMetric, metric)), num(call(P.GetOverallMetric, metric))
+            if app and overall and app > 0 then cpu = overall / app * 100 end
+            local best = 0
+            for _, e in ipairs(self.addons) do
+                local v = num(call(P.GetAddOnMetric, e.name, metric))
+                if v and v > best then best, top = v, e end
+            end
+        end
+        assert(self.cpuText):SetValue(cpu and ("%.1f%%"):format(cpu) or "—")
+        assert(self.topText):SetValue(top and top.title or "—")
+        assert(self.countText):SetValue(("%d addons · %d enabled"):format(#self.addons, enabled))
+    end
+
+    function Draw()
+        local w = self.window
+        if not (w and w:IsShown()) then return end
+        -- (built with the window)
+        local list, none, changes, apply, close = assert(self.list), assert(self.none), assert(self.changes), assert(self.apply), assert(self.close)
+        assert(self.outdated):SetValue(not call(A.IsAddonVersionCheckEnabled))
+        local query = strtrim(assert(self.search):GetValue() or ""):lower()
+        -- what shows: matches (and their suites); a folded suite hides its modules
+        local shown: { [Addon]: boolean } = {}
+        for _, e in ipairs(self.addons) do
+            local match = query == "" or e.name:lower():find(query, 1, true) or bare(e.title):lower():find(query, 1, true)
+            if match then
+                shown[e] = true
+                if e.parent then shown[e.parent] = true end
+            end
+        end
+        local c = list.child
+        local y, used = 0, 0
+        for _, e in ipairs(self.addons) do
+            local parent = e.parent
+            local visible = shown[e] and not (query == "" and parent and self.folded[parent.name])
+            if visible then
+                used = used + 1
+                local r = self.rows[used] or self:BuildRow(c)
+                self.rows[used] = r
+                r.addon = e
+                self:DrawRow(r, e)
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", 0, -y)
+                r:SetPoint("RIGHT")
+                r:Show()
+                y = y + r:GetHeight()
+            end
+        end
+        for i = used + 1, #self.rows do self.rows[i]:Hide() end
+        c:SetHeight(math.max(1, y))
+        none:SetShown(used == 0)
+        -- the foot
+        local n = self:Changes()
+        changes:SetValue(n > 0 and (("%d %s · they apply after a reload"):format(n, n == 1 and "change" or "changes")) or "Changes apply after a reload")
+        changes:SetColor(n > 0 and "arcane" or "ink-muted")
+        apply:SetShown(n > 0)
+        close:SetShown(n == 0)
+        self:PlaceReload()
+        -- no secure button on it (it showed in combat): wait for the fight's end
+        local over = self.reloadOver
+        local ready = over and over:IsShown()
+        apply:SetEnabledState(ready and true or false)
+        apply.tooltip = not ready and { title = "Reload to apply", description = "After the fight." } or nil
+    end
+
+    function DrawRow(r: AddonRow, e: Addon)
+        local module = e.parent ~= nil
+        local h = module and MODULE_H or LINE_H
+        r.line:SetHeight(h)
+        local enabled = self:Enabled(e.index)
+        local changed = enabled ~= self.start[e.index]
+        r.edge:SetShown(changed)
+        r.indent:SetShown(module)
+        r.toggle:ClearAllPoints()
+        r.toggle:SetPoint("LEFT", module and (S["space-3"] + 32) or S["space-3"], 0)
+        r.toggle:SetValue(enabled)
+        local children = e.children
+        local suite = children and #children > 0
+        r.fold:SetShown(suite and true or false)
+        r.fold:ClearAllPoints()
+        r.fold:SetPoint("LEFT", r.toggle, "RIGHT", S["space-2"], 0)
+        r.foldGlyph:SetTexture(GLYPHS .. (self.folded[e.name] and "chevronRight" or "chevronDown"))
+        r.icon:ClearAllPoints()
+        r.icon:SetPoint("LEFT", r.fold, "RIGHT", S["space-2"], 0)
+        r.icon:SetTexCoord(0, 1, 0, 1)
+        r.icon:SetVertexColor(1, 1, 1)
+        local icon = e.icon
+        if type(icon) == "table" then
+            r.icon:SetAtlas(icon.atlas)
+        elseif icon then
+            r.icon:SetTexture(icon)
+            -- the game's item icons: without their border
+            if type(icon) == "string" and icon:lower():find("^interface\\icons\\") then r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+        elseif e.suuui then
+            r.icon:SetTexture(GLYPHS .. "markDiamond")
+            UI.Paint(r.icon, "gilt-text")
+        end
+        r.icon:SetShown(icon ~= nil or e.suuui == true)
+        r.title:ClearAllPoints()
+        r.title:SetPoint("LEFT", r.icon, "RIGHT", S["space-4"], 0)
+        r.title:SetValue(e.title)
+        local version = str(call(A.GetAddOnMetadata, e.index, "Version"))
+        local subText: string[] = {}
+        if suite and children then subText[#subText + 1] = #children .. " modules" end
+        if version and version ~= "" then subText[#subText + 1] = version end
+        r.sub:SetValue(table.concat(subText, " · "))
+        local open = self.open == e.name
+        r.more:SetTexture(GLYPHS .. (open and "chevronDown" or "chevronRight"))
+        local status = assert(STATUS[self:Status(e)])
+        r.chip:Set(assert(status[1]), assert(status[2]), assert(status[3]))
+        r.mem:SetValue(not open and memory(e.memory) or "")
+        r.pending:SetValue(changed and (enabled and "Enables on reload" or "Disables on reload") or "")
+        -- the title gives way to what's on the right
+        r.title:SetPoint("RIGHT", r.sub, "LEFT", -S["space-5"], 0)
+        r.bg:SetShown(open)
+        -- details
+        if open then
+            r.notes:SetValue(e.notes or "No notes.")
+            local facts: string[] = {}
+            local author = str(call(A.GetAddOnMetadata, e.index, "Author"))
+            if author and author ~= "" then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "By|r " .. author end
+            local mem = memory(e.memory)
+            if mem then facts[#facts + 1] = "|cff" .. T.color["ink-muted"].hex .. "Memory|r " .. mem end
+            r.facts:ClearAllPoints()
+            r.facts:SetPoint("TOPLEFT", r.notes, "BOTTOMLEFT", 0, -S["space-3"])
+            r.facts:SetValue(table.concat(facts, "      "))
+            local deps: string[] = {}
+            for _, d in ipairs(e.deps) do
+                local exists = call(A.DoesAddOnExist, d)
+                deps[#deps + 1] = exists == false and ("|cff" .. T.color["ember-text"].hex .. d .. " · missing|r") or d
+            end
+            r.deps:ClearAllPoints()
+            r.deps:SetPoint("TOPLEFT", r.facts, "BOTTOMLEFT", 0, -S["space-3"])
+            r.deps:SetValue(#deps > 0 and ("|cff" .. T.color["ink-muted"].hex .. "Needs|r  " .. table.concat(deps, ", ")) or "")
+            local dh = S["space-3"] + r.notes:GetStringHeight() + S["space-3"] + T.type.caption.lineHeight
+                + (#deps > 0 and (S["space-3"] + r.deps:GetStringHeight()) or 0) + S["space-4"]
+            r.detail:SetHeight(dh)
+            r.detail:Show()
+            r:SetHeight(h + dh + 1)
+        else
+            r.detail:Hide()
+            r:SetHeight(h + 1)
+        end
+    end
+
+    function Open()
+        self.addons = self:Collect()
+        if self.perChar == nil then self.perChar = true end
+        assert(self.who):SetValue(self.perChar and "me" or "all")
+        self.saving = false
+        self:Snapshot()
+        assert(self.window):Show()
+        self:DrawPerf()
+        self:Draw()
+    end
+
+    -- The window, while it's open.
+    function Shown(): boolean
+        local w = self.window
+        return w ~= nil and w:IsShown()
+    end
+
+    override function OnEnable()
+        if not self.window then self:Build() end
+        local list = asFrame(named("AddonList"))
+        if list and not self.hooked then
+            self.hooked = true
+            hookScript(list, "OnShow", function()
+                if not self:IsEnabled() then return end
+                HideUIPanel(list)
+                self:Open()
+            end)
+        end
+        -- the secure reload button is placed out of combat only
+        for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+            self:OnGameEvent(e, function() if self:Shown() then self:Draw() end end)
+        end
+        -- the memory and CPU while it shows, every 15 seconds (the memory count is dear)
+        every(15, function()
+            if self:Shown() then self:DrawPerf(); self:Draw() end
+        end)
+        -- the theme: the 16px numbers' face (set apart from their style) and
+        -- the details' colour codes
+        self:On("SUUUI_THEME_CHANGED", function()
+            for _, v in ipairs({ assert(self.memText), assert(self.cpuText) }) do v:SetFont(T.type.numeric.file, 16, "") end
+            if self:Shown() then self:DrawPerf(); self:Draw() end
         end)
     end
-    -- the secure reload button is placed out of combat only
-    for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
-        self:OnGameEvent(e, function() if self.window:IsShown() then self:Draw() end end)
+
+    override function OnDisable()
+        local w = self.window
+        if w then w:Hide() end
     end
-    -- the memory and CPU while it shows, every 15 seconds (the memory count is dear)
-    every(15, function()
-        if self.window:IsShown() then self:DrawPerf(); self:Draw() end
-    end)
-    -- the theme: the 16px numbers' face (set apart from their style) and
-    -- the details' colour codes
-    self:On("SUUUI_THEME_CHANGED", function()
-        for _, v in ipairs({ self.memText, self.cpuText }) do v:SetFont(T.type.numeric.file, 16, "") end
-        if self.window:IsShown() then self:DrawPerf(); self:Draw() end
-    end)
 end
 
-function M:OnDisable()
-    if self.window then self.window:Hide() end
-end
+M = SuuUI.AddModule(AddonsModule.new())

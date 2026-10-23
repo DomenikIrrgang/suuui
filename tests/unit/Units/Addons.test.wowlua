@@ -5,7 +5,9 @@ import test, expect, cases, beforeAll, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as events from "/Core/Events"
 import internal M, plain, call, memory, splitIcon, bare, STATUS from "/Units/Addons"
-import type Addon from "/Units/Addons"
+import type Addon, AddonRow from "/Units/Addons"
+import type SuuButton from "/UI/Controls"
+import asFrame, named from "/UI/Reskin"
 import expectNoErrors from "../../helpers"
 
 -- The client's addons: SuuUI (1, loaded), then the ones defined here.
@@ -22,7 +24,7 @@ const DEPS: { [string]: string[] } = {
 }
 
 -- The player's GUID (typed possibly secret; it never is here).
-local function me(): string return UnitGUID("player") :: any end
+local function me(): string return assert(UnitGUID("player")) :: string end
 
 @beforeAll
 local function world()
@@ -42,17 +44,18 @@ local function fakeDeps()
     end)
 end
 
-local function rowFor(name: string): any
+local function rowFor(name: string): AddonRow
     for _, r in ipairs(M.rows) do
-        if r:IsShown() and r.addon and r.addon.name == name then return r end
+        local addon = r.addon
+        if r:IsShown() and addon and addon.name == name then return r end
     end
-    return nil
+    error("no row for " .. name)
 end
 
 local function shownNames(): string[]
     local out: string[] = {}
     for _, r in ipairs(M.rows) do
-        if r:IsShown() then out[#out + 1] = r.addon.name end
+        if r:IsShown() then out[#out + 1] = assert(r.addon).name end
     end
     return out
 end
@@ -63,12 +66,12 @@ local function fresh()
     M.perChar = nil
     M.open = nil
     M.folded = {}
-    M.search:SetValue("")
+    assert(M.search):SetValue("")
 end
 
 @afterEach
 local function clean()
-    M.window:Hide()
+    assert(M.window):Hide()
     if InCombatLockdown() then mock.player:leaveCombat() end
     C_AddOns.ResetAddOns()
     expectNoErrors()
@@ -151,9 +154,9 @@ local function collect()
     local names: string[] = {}
     for _, e in ipairs(list) do names[#names + 1] = e.name end
     expect(names).toEqual({ "SuuUI", "Suite", "Suite_Mod", "Suite_Other", "Gadget", "Broken" })
-    local suite, mod, gadget, broken = M.byName.Suite, M.byName.Suite_Mod, M.byName.Gadget, M.byName.Broken
+    local suite, mod, gadget, broken = assert(M.byName.Suite), assert(M.byName.Suite_Mod), assert(M.byName.Gadget), assert(M.byName.Broken)
     expect(suite.suuui).toBe(true)
-    expect(M.byName.SuuUI.suuui).toBe(true)
+    expect(assert(M.byName.SuuUI).suuui).toBe(true)
     expect(suite.icon).toBe("Interface\\Icons\\INV_Misc_QuestionMark")
     expect(suite.notes).toBe("A suite.")
     expect(#(suite.children :: Addon[])).toBe(2)
@@ -172,7 +175,7 @@ end
 @test("Collect: an addon whose name reads secret is left out; no title: its name")
 local function collectSecret()
     local real = C_AddOns.GetAddOnInfo
-    mock.fake("C_AddOns.GetAddOnInfo", function(i: any): ...any
+    mock.fake("C_AddOns.GetAddOnInfo", function(i: number): ...unknown
         if i == 6 then return mock.secret("Broken") end
         if i == 4 then
             local name = real(i)
@@ -182,7 +185,7 @@ local function collectSecret()
     end)
     M:Collect()
     expect(M.byName.Broken).toBeNil()
-    expect(M.byName.Suite_Other.title).toBe("Suite_Other")
+    expect(assert(M.byName.Suite_Other).title).toBe("Suite_Other")
 end
 
 @test("Collect: no addon API answers: an empty list")
@@ -196,21 +199,21 @@ local function status()
     M:Collect()
     M.perChar = true
     local by = M.byName
-    expect(M:Status(by.SuuUI)).toBe("loaded")
-    expect(M:Status(by.Suite)).toBe("waiting")
-    expect(M:Status(by.Suite_Mod)).toBe("lod")
+    expect(M:Status(assert(by.SuuUI))).toBe("loaded")
+    expect(M:Status(assert(by.Suite))).toBe("waiting")
+    expect(M:Status(assert(by.Suite_Mod))).toBe("lod")
     C_AddOns.DisableAddOn("Suite", me())
-    expect(M:Status(by.Suite)).toBe("disabled")
+    expect(M:Status(assert(by.Suite))).toBe("disabled")
     C_AddOns.EnableAddOn("Suite", me())
     local reason = "INTERFACE_VERSION"
     mock.fake("C_AddOns.IsAddOnLoadable", function(): (boolean, string) return false, reason end)
-    expect(M:Status(by.Suite)).toBe("outdated")
+    expect(M:Status(assert(by.Suite))).toBe("outdated")
     for _, r in ipairs({ "MISSING", "DEP_MISSING", "DEP_DISABLED", "DEP_INTERFACE_VERSION" }) do
         reason = r
-        expect(M:Status(by.Suite)).toBe("dependency")
+        expect(M:Status(assert(by.Suite))).toBe("dependency")
     end
     C_AddOns.DisableAddOn("Suite", me())
-    expect(M:Status(by.Suite)).toBe("disabled")
+    expect(M:Status(assert(by.Suite))).toBe("disabled")
 end
 
 @test("Snapshot and Changes: each addon toggled and the version check count")
@@ -224,7 +227,7 @@ local function changes()
     C_AddOns.SetAddonVersionCheck(not C_AddOns.IsAddonVersionCheckEnabled())
     expect(M:Changes()).toBe(2)
     C_AddOns.EnableAddOn("Suite", me())
-    C_AddOns.SetAddonVersionCheck(M.startCheck)
+    C_AddOns.SetAddonVersionCheck(M.startCheck == true)
     expect(M:Changes()).toBe(0)
 end
 
@@ -237,7 +240,7 @@ local function opens()
     M:Open()
     expect(M.window).toBeShown()
     expect(M.perChar).toBe(true)
-    expect(M.who.value).toBe("me")
+    expect(assert(M.who).value).toBe("me")
     expect(shownNames()).toEqual({ "SuuUI", "Suite", "Suite_Mod", "Suite_Other", "Gadget", "Broken" })
     expect(M.none).never.toBeShown()
     local suite, mod = rowFor("Suite"), rowFor("Suite_Mod")
@@ -297,12 +300,12 @@ local function toggleOff()
     expect(M.apply).toBeShown()
     expect(M.close).never.toBeShown()
     -- the secure /reload button over it, out of combat
-    local over = M.reloadOver
+    local over = assert(M.reloadOver)
     expect(over).toBeShown()
     expect(over:GetAttribute("type1")).toBe("macro")
     expect(over:GetAttribute("macrotext1")).toBe("/reload")
     expect(over:GetFrameStrata()).toBe("DIALOG")
-    expect(M.apply.tooltip).toBeNil()
+    expect(assert(M.apply).tooltip).toBeNil()
     -- back on: no change
     mock.click(rowFor("Suite").toggle)
     expect(M.changes).toHaveText("Changes apply after a reload")
@@ -329,26 +332,27 @@ end
 @test("all characters: the toggles act for every character")
 local function allCharacters()
     M:Open()
-    M.who.onChange("all")
+    assert(assert(M.who).onChange)("all")
     expect(M.perChar).toBe(false)
     expect(M:Character()).toBeNil()
     mock.click(rowFor("Gadget").toggle)
     expect(C_AddOns.GetAddOnEnableState("Gadget", nil)).toBe(0)
     -- opened again: the choice stays
-    M.window:Hide()
+    assert(M.window):Hide()
     M.perChar = false
     M:Open()
-    expect(M.who.value).toBe("all")
+    expect(assert(M.who).value).toBe("all")
 end
 
 -- The bar's buttons by their text.
-local function barButton(text: string): any
-    for _, c in ipairs({ M.who:GetParent():GetChildren() }) do
-        local b: any = c
-        if b.GetText and b:GetText() == text then return b end
-        if b.label and b.label.GetText and b.label:GetText() == text then return b end
+local function barButton(text: string): SuuButton
+    for _, c in ipairs({ assert(assert(M.who):GetParent()):GetChildren() }) do
+        if c:IsObjectType("Button") then
+            local b = c :: SuuButton
+            if b.label and b.label:GetText() == text then return b end
+        end
     end
-    return nil
+    error("no button " .. text)
 end
 
 @test("Disable all keeps SuuUI on; Enable all")
@@ -370,13 +374,13 @@ end
 @test("the search: names and bare titles; a match shows its suite; nothing matches")
 local function search()
     M:Open()
-    mock.typeText(M.search.edit, "other")
+    mock.typeText(assert(M.search).edit, "other")
     expect(shownNames()).toEqual({ "Suite", "Suite_Other" })
-    M.search.edit:ClearFocus()
-    M.search:SetValue("GADGET")
+    assert(M.search).edit:ClearFocus()
+    assert(M.search):SetValue("GADGET")
     M:Draw()
     expect(shownNames()).toEqual({ "Gadget" })
-    M.search:SetValue("zzz")
+    assert(M.search):SetValue("zzz")
     M:Draw()
     expect(shownNames()).toEqual({})
     expect(M.none).toBeShown()
@@ -388,11 +392,11 @@ local function fold()
     mock.click(rowFor("Suite").fold)
     expect(M.folded.Suite).toBe(true)
     expect(shownNames()).toEqual({ "SuuUI", "Suite", "Gadget", "Broken" })
-    expect(rowFor("Suite").fold.glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronRight")
-    M.search:SetValue("mod")
+    expect(rowFor("Suite").foldGlyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\chevronRight")
+    assert(M.search):SetValue("mod")
     M:Draw()
     expect(shownNames()).toEqual({ "Suite", "Suite_Mod" })
-    M.search:SetValue("")
+    assert(M.search):SetValue("")
     M:Draw()
     mock.click(rowFor("Suite").fold)
     expect(#shownNames()).toBe(6)
@@ -447,9 +451,9 @@ end
 local function outdated()
     M:Open()
     local before = C_AddOns.IsAddonVersionCheckEnabled()
-    M.outdated.onChange(before)
+    assert(assert(M.outdated).onChange)(before)
     expect(C_AddOns.IsAddonVersionCheckEnabled()).toBe(not before)
-    expect(M.outdated.value).toBe(before)
+    expect(assert(M.outdated).value).toBe(before)
     expect(M:Changes()).toBe(1)
 end
 
@@ -460,7 +464,7 @@ local function closeUndoes()
     mock.fake("C_AddOns.ResetAddOns", reset)
     local before = C_AddOns.IsAddonVersionCheckEnabled()
     C_AddOns.SetAddonVersionCheck(not before)
-    M.window:Hide()
+    assert(M.window):Hide()
     expect(reset).toHaveBeenCalledTimes(1)
     expect(C_AddOns.IsAddonVersionCheckEnabled()).toBe(before)
 end
@@ -472,13 +476,12 @@ local function cancelClose()
     expect(M.window).never.toBeShown()
     M:Open()
     mock.click(rowFor("Gadget").toggle)
-    local foot = M.window.footer
-    local cancel: any = nil
+    local foot = assert(assert(M.window).footer)
+    local cancel: Frame? = nil
     for _, c in ipairs({ foot:GetChildren() }) do
-        local b: any = c
-        if b ~= M.apply and b ~= M.close and b.GetObjectType and b:GetObjectType() == "Button" then cancel = b end
+        if c ~= M.apply and c ~= M.close and c:GetObjectType() == "Button" then cancel = c end
     end
-    mock.click(cancel)
+    mock.click(assert(cancel))
     expect(M.window).never.toBeShown()
 end
 
@@ -493,7 +496,7 @@ local function reloadSaves()
     mock.script(M.reloadOver, "PreClick", "LeftButton", true)
     expect(M.saving).toBe(true)
     expect(save).toHaveBeenCalledTimes(1)
-    M.window:Hide()
+    assert(M.window):Hide()
     expect(reset).never.toHaveBeenCalled()
 end
 
@@ -502,7 +505,7 @@ local function reloadHover()
     M:Open()
     mock.click(rowFor("Gadget").toggle)
     local enter, leave = mock.spy(), mock.spy()
-    mock.stub(M.apply :: table, "GetScript", function(_: any, name: string): any
+    mock.stub(assert(M.apply), "GetScript", function(_: unknown, name: string): unknown
         return name == "OnEnter" and enter or leave
     end)
     mock.script(M.reloadOver, "OnEnter")
@@ -522,11 +525,11 @@ local function combatChange()
     mock.click(rowFor("Gadget").toggle)
     expect(M.apply).toBeShown()
     expect(M.reloadOver).toBeNil()
-    expect(M.apply:IsEnabled()).toBe(false)
-    expect(M.apply.tooltip).toEqual({ title = "Reload to apply", description = "After the fight." })
+    expect(assert(M.apply):IsEnabled()).toBe(false)
+    expect(assert(M.apply).tooltip).toEqual({ title = "Reload to apply", description = "After the fight." })
     mock.player:leaveCombat()
     expect(M.reloadOver).toBeShown()
-    expect(M.apply:IsEnabled()).toBe(true)
+    expect(assert(M.apply):IsEnabled()).toBe(true)
 end
 
 @test("PlaceReload without a button and nothing to apply: none made")
@@ -545,7 +548,7 @@ end
 
 @test("DrawPerf: the memory total, how many are on, no CPU without the profiler")
 local function perfNoCPU()
-    mock.fake("GetAddOnMemoryUsage", function(i: number): any
+    mock.fake("GetAddOnMemoryUsage", function(i: number): unknown
         if i == 1 then return 1500 end
         if i == 2 then return mock.secret(10) end
         return 100
@@ -565,7 +568,7 @@ local function perfCPU()
     mock.fake("C_AddOnProfiler.IsEnabled", function(): boolean return true end)
     mock.fake("C_AddOnProfiler.GetApplicationMetric", function(): number return 200 end)
     mock.fake("C_AddOnProfiler.GetOverallMetric", function(): number return 50 end)
-    mock.fake("C_AddOnProfiler.GetAddOnMetric", function(name: string): any
+    mock.fake("C_AddOnProfiler.GetAddOnMetric", function(name: string): unknown
         if name == "Gadget" then return 30 end
         if name == "Suite" then return mock.secret(99) end
         return 5
@@ -593,7 +596,7 @@ local function ticks()
     local perf = mock.stub(M :: table, "DrawPerf")
     mock.advanceTime(15)
     expect(perf).toHaveBeenCalledTimes(1)
-    M.window:Hide()
+    assert(M.window):Hide()
     mock.advanceTime(15)
     expect(perf).toHaveBeenCalledTimes(1)
 end
@@ -604,7 +607,7 @@ local function regen()
     mock.player:enterCombat()
     mock.player:leaveCombat()
     expect(draw).never.toHaveBeenCalled()
-    M.window:Show()
+    assert(M.window):Show()
     mock.player:enterCombat()
     mock.player:leaveCombat()
     expect(draw).toHaveBeenCalledTimes(2)
@@ -615,16 +618,16 @@ local function theme()
     local perf = mock.stub(M :: table, "DrawPerf")
     events.emit("SUUUI_THEME_CHANGED", "suuui")
     expect(perf).never.toHaveBeenCalled()
-    M.window:Show()
+    assert(M.window):Show()
     events.emit("SUUUI_THEME_CHANGED", "suuui")
     expect(perf).toHaveBeenCalledTimes(1)
-    local _, size = M.memText:GetFont()
+    local _, size = assert(M.memText):GetFont()
     expect(size).toBe(16)
 end
 
 @test("Draw with the window hidden does nothing")
 local function drawHidden()
-    M.window:Hide()
+    assert(M.window):Hide()
     local changes = mock.stub(M :: table, "Changes")
     M:Draw()
     expect(changes).never.toHaveBeenCalled()
@@ -636,7 +639,7 @@ end
 
 @test("the game's AddOn list opening opens this window instead")
 local function replacesGameList()
-    local list = _G.AddonList
+    local list = assert(asFrame(named("AddonList")))
     ShowUIPanel(list)
     expect(list).never.toBeShown()
     expect(M.window).toBeShown()
@@ -656,6 +659,6 @@ end
 
 @test("the status chips' texts")
 local function chips()
-    expect(STATUS.outdated[1]).toBe("Out of date")
-    expect(STATUS.dependency[1]).toBe("Missing dependency")
+    expect(assert(STATUS.outdated)[1]).toBe("Out of date")
+    expect(assert(STATUS.dependency)[1]).toBe("Missing dependency")
 end
