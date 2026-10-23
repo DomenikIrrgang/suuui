@@ -23,7 +23,6 @@
 --   text: Blizzard's yellow and white become ink, grey ink-muted, green fel,
 --   red ember-text; the font follows the text's size (label, body, caption);
 --   big titles become `header` gilt-text
-
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import tokens as T from "/Core/Tokens"
@@ -35,7 +34,7 @@ local S = T.space
 
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-local isSecret: (v: any) -> boolean = issecretvalue or function() return false end -- wowlua: coverage ignore (a client without secret values)
+local isSecret: (v: unknown) -> boolean = issecretvalue or function(_: unknown): boolean return false end -- wowlua: coverage ignore (a client without secret values)
 
 local HIDE: string[] = { "collapseexpand", "scrollline", "insideframe", "stat%-bar%-bg", "stat%-bg", "%-info%-.*%-bg",
                "stattab", "button%-list%-header", "common%-search%-border", "plunderstorm" }
@@ -44,10 +43,30 @@ local BAR_COLORS: { [string]: string } = {
     blue = "progress-fill", purple = "arcane", gold = "gilt-text",
 }
 
-local function ask(r: any, method: string, ...: any): ...any
-    if type(r[method]) ~= "function" then return nil end
-    local ok, a, b, c, d = pcall(r[method], r, ...)
+--------------------------------------------------------------------------------
+-- Reading the game's frames: what is there is checked as it's read
+--------------------------------------------------------------------------------
+
+-- Calls `method` on `r` if it has it, protected: its results, or nothing.
+local function ask(r: unknown, method: string, ...: unknown): ...unknown
+    if type(r) ~= "table" then return nil end
+    local fn = (r :: { [string]: unknown })[method]
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c, d = pcall(fn :: (...unknown) -> ...unknown, r, ...)
     if ok then return a, b, c, d end
+    return nil
+end
+
+-- A method's answer when it is a (readable) string.
+local function askString(r: unknown, method: string): string?
+    local v = ask(r, method)
+    if type(v) == "string" and not isSecret(v) then return v end
+    return nil
+end
+
+-- A texture's atlas, lower case ("" without one).
+local function atlasOf(t: unknown): string
+    return (askString(t, "GetAtlas") or ""):lower()
 end
 
 -- SuuUI's own frames inside the game's windows, and its own textures on the
@@ -78,6 +97,12 @@ export function part(f: unknown, key: string): unknown
     return (f :: { [string]: unknown })[key]
 end
 
+-- A flag a plugin (or a module) set on one of the game's frames: suuOwn,
+-- suuNoCheck, suuNoButton, suuSkip.
+local function flagged(f: unknown, key: string): boolean
+    return part(f, key) == true
+end
+
 local function isA(v: unknown, kind: string): boolean
     if type(v) ~= "table" then return false end
     local is = (v :: { [string]: unknown }).IsObjectType
@@ -94,23 +119,111 @@ export function asEditBox(v: unknown): EditBox? if isA(v, "EditBox") then return
 export function asScrollFrame(v: unknown): ScrollFrame? if isA(v, "ScrollFrame") then return v :: ScrollFrame end return nil end
 export function asFontString(v: unknown): FontString? if isA(v, "FontString") then return v :: FontString end return nil end
 export function asTexture(v: unknown): Texture? if isA(v, "Texture") then return v :: Texture end return nil end
+local function asStatusBar(v: unknown): StatusBar? if isA(v, "StatusBar") then return v :: StatusBar end return nil end
+
+-- A part of `f` that can be faded (anything with SetAlpha).
+local function fade(v: unknown)
+    local r = asRegion(v)
+    if r then r:SetAlpha(0) end
+end
 
 local function matchesAny(s: string, list: string[]): boolean
     for _, p in ipairs(list) do if s:find(p) then return true end end
     return false
 end
 
+-- The textures and font strings among a frame's regions.
+local function textures(f: Frame): Texture[]
+    local out: Texture[] = {}
+    for _, r in ipairs({ f:GetRegions() }) do
+        if r:GetObjectType() == "Texture" then out[#out + 1] = r :: Texture end
+    end
+    return out
+end
+
+local function fontStrings(f: Frame): FontString[]
+    local out: FontString[] = {}
+    for _, r in ipairs({ f:GetRegions() }) do
+        if r:GetObjectType() == "FontString" then out[#out + 1] = r :: FontString end
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- What a pass did to each of the game's parts (kept off the game's frames)
+--------------------------------------------------------------------------------
+
+type Redraw = { draw: () -> () }
+export type IconSkin = { edge: draw.Border, hover: boolean, draw: () -> () }
+export type CheckSkin = { box: Frame, draw: () -> () }
+
+export type Skin = {
+    -- a scrollbar, status bar, dropdown, edit box, scroll box, dialog or a
+    -- dialog's box: done
+    scrollBar?: boolean,
+    statusBar?: boolean,
+    dropdown?: boolean,
+    edit?: boolean,
+    scrollBox?: boolean,
+    dialog?: boolean,
+    box?: boolean,
+    scrollingFont?: boolean,
+    -- a status bar's: its fill's atlas, its track, whether its fill is hooked
+    atlas?: string,
+    track?: Frame,
+    flattening?: boolean,
+    fillHooked?: boolean,
+    -- a fill bar's: its atlas's colour word, its share, how it's drawn again
+    fillBar?: boolean,
+    atlasWord?: string,
+    percent?: number,
+    flat?: () -> (),
+    tint?: () -> (),
+    sizeFill?: () -> (),
+    -- buttons
+    icon?: IconSkin,
+    check?: CheckSkin,
+    button?: Redraw,
+    collapse?: Redraw,
+    -- a list row's check moved to its corner; a category row's rule
+    moved?: boolean,
+    headRule?: Texture,
+    -- a text's colour token; a text left as it is
+    token?: string,
+    skip?: boolean,
+}
+
+local skins: { [Region]: Skin } = setmetatable({}, { __mode = "k" })
+
+local function skinOf(r: Region): Skin
+    local s = skins[r]
+    if not s then
+        s = {}
+        skins[r] = s
+    end
+    return s
+end
+
+-- Whether a text is left as it is: marked by a pass, or by a module (suuSkip).
+local function skipped(fs: FontString): boolean
+    local s = skins[fs]
+    return (s ~= nil and s.skip == true) or flagged(fs, "suuSkip")
+end
+
 --------------------------------------------------------------------------------
 -- Pieces
 --------------------------------------------------------------------------------
 
-export function reskinScrollBar(bar: any)
-    if not bar or bar.suuReskinned then return end
-    bar.suuReskinned = true
-    local track = bar.Track
+export function reskinScrollBar(given: unknown)
+    local bar = asFrame(given)
+    if not bar then return end
+    local s = skinOf(bar)
+    if s.scrollBar then return end
+    s.scrollBar = true
+    local track = asFrame(part(bar, "Track"))
     if track then
         for _, r in ipairs({ track:GetRegions() }) do r:SetAlpha(0) end
-        local thumb = track.Thumb
+        local thumb = asFrame(part(track, "Thumb"))
         if thumb then
             for _, r in ipairs({ thumb:GetRegions() }) do r:SetAlpha(0) end
             local t = thumb:CreateTexture(nil, "OVERLAY")
@@ -120,30 +233,28 @@ export function reskinScrollBar(bar: any)
             t:SetWidth(2)
             -- under the mouse: gilt and a little wider, so it reads as
             -- something to grab (it showed no hover, found in game)
-            if thumb.HookScript then
-                hookScript(thumb, "OnEnter", function() draw.paintFill(t, "gilt"); t:SetWidth(4) end)
-                hookScript(thumb, "OnLeave", function() draw.paintFill(t, "gilt-line"); t:SetWidth(2) end)
-            end
+            hookScript(thumb, "OnEnter", function() draw.paintFill(t, "gilt"); t:SetWidth(4) end)
+            hookScript(thumb, "OnLeave", function() draw.paintFill(t, "gilt-line"); t:SetWidth(2) end)
         end
     end
-    for _, key in ipairs({ "Back", "Forward" }) do
-        if bar[key] then bar[key]:SetAlpha(0) end
-    end
+    for _, key in ipairs({ "Back", "Forward" }) do fade(part(bar, key)) end
 end
 
 -- A flat fill on a track inside a gilt-hairline edge, as tall as Blizzard's
 -- fill; the colour from the fill's atlas (standing colours kept).
-export function reskinStatusBar(bar: any)
+export function reskinStatusBar(given: unknown)
+    local bar = asStatusBar(given)
     if not bar then return end
-    local fill = ask(bar, "GetStatusBarTexture")
-    local atlas = fill and ask(fill, "GetAtlas")
-    if atlas and atlas ~= "" then bar.suuAtlas = atlas end
-    if not bar.suuReskinned then
-        bar.suuReskinned = true
+    local s = skinOf(bar)
+    local fill = asTexture(ask(bar, "GetStatusBarTexture"))
+    local atlas = fill and askString(fill, "GetAtlas")
+    if atlas and atlas ~= "" then s.atlas = atlas end
+    if not s.statusBar then
+        s.statusBar = true
         for _, r in ipairs({ bar:GetRegions() }) do
             local t = r:GetObjectType()
             if t == "Texture" and r ~= fill then r:SetAlpha(0) end
-            if t == "MaskTexture" and fill then pcall(fill.RemoveMaskTexture, fill, r) end
+            if t == "MaskTexture" and fill then pcall(fill.RemoveMaskTexture, fill, r :: MaskTexture) end
         end
         -- the track as tall as the fill, whatever the fill's height comes to
         -- be (a bar skinned while hidden reported none and got a guess)
@@ -159,62 +270,66 @@ export function reskinStatusBar(bar: any)
         track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
         draw.fill(track, "track"):SetAllPoints()
         draw.border(track, "gilt-hairline")
-        bar.suuTrack = track
+        s.track = track
     end
     local function flatten()
-        local f = ask(bar, "GetStatusBarTexture")
+        local f = asTexture(ask(bar, "GetStatusBarTexture"))
         if not f then return end
-        local a = ask(f, "GetAtlas")
-        if a and a ~= "" then bar.suuAtlas = a end
-        bar.suuFlattening = true
+        local a = askString(f, "GetAtlas")
+        if a and a ~= "" then s.atlas = a end
+        s.flattening = true
         f:SetTexture(WHITE)
-        local word = bar.suuAtlas and bar.suuAtlas:lower():match("stat%-bar%-(%a+)")
+        local word = s.atlas and s.atlas:lower():match("stat%-bar%-(%a+)")
         draw.paint(f, BAR_COLORS[word or ""] or "progress-fill")
-        bar.suuFlattening = false
+        s.flattening = false
     end
-    if fill and not bar.suuFillHooked then
-        bar.suuFillHooked = true
+    if fill and not s.fillHooked then
+        s.fillHooked = true
         -- Blizzard sets the fill again (its standing's atlas): flat again
-        local function again() if not bar.suuFlattening then flatten() end end
+        local function again() if not s.flattening then flatten() end end
         hook(fill, "SetAtlas", again)
-        if bar.SetStatusBarTexture then hook(bar, "SetStatusBarTexture", again) end
+        hook(bar, "SetStatusBarTexture", again)
     end
     flatten()
-    for _, r in ipairs({ bar:GetRegions() }) do
-        if r:GetObjectType() == "FontString" then
-            fonts.apply(r, "numeric")
-            r:SetJustifyH("CENTER")
-            -- on the track's middle, a pixel up (the figures sit low otherwise)
-            if bar.suuTrack then
-                r:ClearAllPoints()
-                r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 1)
-                r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 1)
-            end
-            draw.paint(r, "ink")
-            r:SetShadowColor(0, 0, 0, 1)
-            r:SetShadowOffset(0, -1)
+    for _, r in ipairs(fontStrings(bar)) do
+        fonts.apply(r, "numeric")
+        r:SetJustifyH("CENTER")
+        -- on the track's middle, a pixel up (the figures sit low otherwise)
+        local track = s.track
+        if track then
+            r:ClearAllPoints()
+            r:SetPoint("LEFT", track, "LEFT", 0, 1)
+            r:SetPoint("RIGHT", track, "RIGHT", 0, 1)
         end
+        draw.paint(r, "ink")
+        r:SetShadowColor(0, 0, 0, 1)
+        r:SetShadowOffset(0, -1)
     end
 end
 
-local fillBars: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+local fillBars: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
 events.on("SUUUI_THEME_CHANGED", function()
-    for bar in pairs(fillBars) do bar.suuTint() end
+    for bar in pairs(fillBars) do
+        local tint = skinOf(bar).tint
+        if tint then tint() end
+    end
 end, "UI.ReskinFillBar")
 
 -- A bar Blizzard draws itself (a frame with a Fill texture it sizes and
 -- tints: the reputation's standing bars, the skills' bars): the fill flat in
 -- Blizzard's tint (the standing's colour) or its atlas's colour (the skills'
 -- blue), a track in a gilt-hairline edge, the text centred.
-export function reskinFillBar(bar: any)
-    local fill = bar and bar.Fill
-    if not fill then return end
-    if not bar.suuFillBar then
-        bar.suuFillBar = true
+export function reskinFillBar(given: unknown)
+    local bar = asFrame(given)
+    local fill = asTexture(part(bar, "Fill"))
+    if not (bar and fill) then return end
+    local s = skinOf(bar)
+    if not s.fillBar then
+        s.fillBar = true
         for _, r in ipairs({ bar:GetRegions() }) do
             local t = r:GetObjectType()
             if t == "Texture" and r ~= fill then r:SetAlpha(0) end
-            if t == "MaskTexture" then pcall(fill.RemoveMaskTexture, fill, r) end
+            if t == "MaskTexture" then pcall(fill.RemoveMaskTexture, fill, r :: MaskTexture) end
         end
         local h = math.max(6, math.min(14, fill:GetHeight() or 12))
         local track = CreateFrame("Frame", nil, bar)
@@ -224,7 +339,7 @@ export function reskinFillBar(bar: any)
         track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
         draw.fill(track, "track"):SetAllPoints()
         draw.border(track, "gilt-hairline")
-        bar.suuTrack = track
+        s.track = track
         fill:SetHeight(h - 2)
         -- the colour: Blizzard's tint on a white atlas (the reputation's
         -- standings); a coloured atlas (the skills' blue, tinted white on
@@ -233,7 +348,7 @@ export function reskinFillBar(bar: any)
         -- again inside a repaint; fillBars tints again on a theme change)
         local flattening = false
         local function tint()
-            local token = BAR_COLORS[bar.suuAtlasWord or ""]
+            local token = BAR_COLORS[s.atlasWord or ""]
             if not token then return end
             flattening = true
             fill:SetVertexColor(draw.rgba(token))
@@ -241,8 +356,8 @@ export function reskinFillBar(bar: any)
         end
         local function flat()
             if flattening then return end
-            local a = (fill:GetAtlas() or ""):lower()
-            if a ~= "" then bar.suuAtlasWord = a:match("stat%-bar%-(%a+)") end
+            local a = atlasOf(fill)
+            if a ~= "" then s.atlasWord = a:match("stat%-bar%-(%a+)") end
             flattening = true
             fill:SetTexture(WHITE)
             flattening = false
@@ -250,69 +365,352 @@ export function reskinFillBar(bar: any)
         end
         hook(fill, "SetAtlas", flat)
         hook(fill, "SetVertexColor", function() if not flattening then tint() end end)
-        bar.suuFlat = flat
-        bar.suuTint = tint
+        s.flat = flat
+        s.tint = tint
         fillBars[bar] = true
         -- Blizzard sizes the fill as a share of its FillArea's width once
         -- (SetFillPercent); a row filled in before it had a width got 0,
         -- which a texture draws at its own size (8 px of white: seen
         -- 2026-10-18, 3,210 / 6,000 as a sliver). Keep the share and size the
         -- fill again whenever the width changes; none: no fill.
-        if bar.SetFillPercent and bar.FillArea then
+        local area = asFrame(part(bar, "FillArea"))
+        if part(bar, "SetFillPercent") and area then
             -- the share Blizzard set before this: the right edge of its
             -- texture coordinates (SetTexCoord(0, p, 1, 0)), read before
             -- the flat texture goes on
             local _, _, _, _, right = fill:GetTexCoord()
-            bar.suuPercent = tonumber(right) and math.min(1, math.max(0, right)) or nil
+            s.percent = tonumber(right) and math.min(1, math.max(0, right)) or nil
             local function size()
-                local w = (bar.suuPercent or 0) * (bar.FillArea:GetWidth() or 0)
+                local w = (s.percent or 0) * (area:GetWidth() or 0)
                 fill:SetAlpha(w >= 0.5 and 1 or 0)
                 if w >= 0.5 then fill:SetWidth(w) end
             end
-            hook(bar, "SetFillPercent", function(_, percent: any)
-                bar.suuPercent = math.min(1, math.max(0, tonumber(percent) or 0))
+            hook(bar :: unknown, "SetFillPercent", function(_: unknown, percent: unknown)
+                s.percent = math.min(1, math.max(0, tonumber(percent) or 0))
                 size()
             end)
-            hookScript(bar.FillArea, "OnSizeChanged", size)
-            bar.suuSizeFill = size
+            hookScript(area, "OnSizeChanged", size)
+            s.sizeFill = size
         end
     end
-    bar.suuFlat()
-    if bar.suuSizeFill then bar.suuSizeFill() end
-    for _, r in ipairs({ bar:GetRegions() }) do
-        if r:GetObjectType() == "FontString" then
-            fonts.apply(r, "numeric")
-            r:SetJustifyH("CENTER")
-            -- on the track's middle (the reputation's figures sit right there;
-            -- a pixel up was too high, found in game)
-            r:ClearAllPoints()
-            r:SetPoint("LEFT", bar.suuTrack, "LEFT", 0, 0)
-            r:SetPoint("RIGHT", bar.suuTrack, "RIGHT", 0, 0)
-            draw.paint(r, "ink")
-            r:SetShadowColor(0, 0, 0, 1)
-            r:SetShadowOffset(0, -1)
+    local flat, sizeFill, track = s.flat, s.sizeFill, s.track
+    if flat then flat() end
+    if sizeFill then sizeFill() end
+    for _, r in ipairs(fontStrings(bar)) do
+        fonts.apply(r, "numeric")
+        r:SetJustifyH("CENTER")
+        -- on the track's middle (the reputation's figures sit right there;
+        -- a pixel up was too high, found in game)
+        r:ClearAllPoints()
+        if track then
+            r:SetPoint("LEFT", track, "LEFT", 0, 0)
+            r:SetPoint("RIGHT", track, "RIGHT", 0, 0)
+        end
+        draw.paint(r, "ink")
+        r:SetShadowColor(0, 0, 0, 1)
+        r:SetShadowOffset(0, -1)
+    end
+end
+
+-- One of Blizzard's menus (Menu.GetManager():GetOpenMenu(), probed
+-- 2026-10-14: a common-dropdown-bg texture, 20px rows with a radio or check
+-- and a highlight, the rows' text) in the context menu's look: glass, a
+-- gilt-line edge, the gilt corner diamond, rows in body ink on arcane-soft
+-- while hovered, the chosen one marked by an arcane check. The game reuses
+-- its menu frames for every menu, so all of it is undone when it closes.
+-- A restyled menu's state: what to undo, SuuUI's art.
+type MenuState = {
+    undo: (() -> ())[],
+    panel: Frame,
+    hover: Texture,
+    marks: Texture[],
+    nMarks: number,
+    chevrons: Texture[],
+    nChevrons: number,
+    active?: boolean,
+}
+
+local menus: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" })
+local rowMenu: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" }) -- a row: the menu state it belongs to now
+local hooked: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+
+-- The open root menu, if the game has one open.
+local function openRoot(): Frame?
+    local getManager = part(named("Menu"), "GetManager")
+    if type(getManager) ~= "function" then return nil end
+    local ok, manager = pcall(getManager :: () -> unknown)
+    if not ok then return nil end
+    return asFrame(ask(manager, "GetOpenMenu"))
+end
+
+-- A hook on a script of one of the game's pooled frames (its menus, menu
+-- rows, popups) that lasts: the game sets those scripts again whenever it
+-- reuses the frame (Menu.lua: SetScript("OnEnter", …) on each row it
+-- lays out, SetScript("OnHide", …) on each menu it opens), and SetScript
+-- drops the hooks on a script; the hook goes on again right after.
+local function lastingHookScript(f: Frame, script: string, fn: (self: Frame) -> ())
+    hookScript(f, script, fn)
+    hook(f, "SetScript", function(self: Frame, name: unknown)
+        if name == script then hookScript(self, script, fn) end
+    end)
+end
+
+local function restoreMenu(st: MenuState)
+    for i = #st.undo, 1, -1 do pcall(st.undo[i]) end
+    st.undo = {}
+    st.panel:Hide()
+    for _, t in pairs(st.marks) do t:Hide() end
+    for _, t in pairs(st.chevrons) do t:Hide() end
+    st.hover:Hide()
+    st.nMarks, st.nChevrons = 0, 0
+    st.active = false
+end
+
+-- What undoing a change needs: a list of functions.
+type Undo = { undo: (() -> ())[] }
+
+local function hideRegion(st: Undo, r: Region)
+    if isArt(r) then return end
+    local a = r:GetAlpha()
+    -- (an alpha once set from a secret reads back secret: left as it is)
+    if issecretvalue(a) or a == 0 then return end
+    r:SetAlpha(0)
+    st.undo[#st.undo + 1] = function() r:SetAlpha(a) end
+end
+
+local function menuText(st: Undo, fs: FontString, color: string)
+    local fo = fs:GetFontObject()
+    local file, size, flags = fs:GetFont()
+    local r, g, b, a = fs:GetTextColor()
+    local sx, sy = fs:GetShadowOffset()
+    st.undo[#st.undo + 1] = function()
+        if fo then fs:SetFontObject(fo) elseif file then fs:SetFont(file, size, flags) end
+        fs:SetTextColor(r, g, b, a)
+        fs:SetShadowOffset(sx, sy)
+    end
+    fonts.apply(fs, "body")
+    -- (set raw: again on every open, and the game's shared menu rows get
+    -- no hooks of SuuUI's)
+    fs:SetTextColor(draw.rgba(color))
+    fs:SetShadowOffset(0, 0)
+end
+
+local function menuRow(st: MenuState, row: Frame)
+    local chosen: boolean?, indicator: Texture? = nil, nil
+    local texts: FontString[] = {}
+    for _, r in ipairs({ row:GetRegions() }) do
+        local kind = r:GetObjectType()
+        if kind == "Texture" and not isArt(r) then
+            local t = r :: Texture
+            local atlas = atlasOf(t)
+            if atlas:find("common%-dropdown%-icon") then
+                -- the chosen row's tick
+                if t:IsShown() then chosen = true end
+                indicator = indicator or t
+                hideRegion(st, t)
+            elseif atlas:find("common%-dropdown%-tick") then
+                indicator = t
+                hideRegion(st, t)
+            elseif t:GetDrawLayer() == "HIGHLIGHT" or not t:IsShown() then
+                hideRegion(st, t)
+            end
+        elseif kind == "FontString" then
+            texts[#texts + 1] = r :: FontString
         end
     end
+    for _, fs in ipairs(texts) do menuText(st, fs, "ink") end
+    -- a submenu's arrow (a plain texture, the game's yellow): SuuUI's chevron
+    local arrow = asRegion(part(row, "arrow"))
+    if arrow and arrow:IsShown() then
+        hideRegion(st, arrow)
+        st.nChevrons = st.nChevrons + 1
+        local chev = st.chevrons[st.nChevrons]
+        if not chev then
+            chev = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
+            chev:SetTexture(GLYPHS .. "chevronRight.tga")
+            chev:SetSize(12, 12)
+            draw.paint(chev, "ink-muted")
+            st.chevrons[st.nChevrons] = chev
+        end
+        chev:ClearAllPoints()
+        chev:SetPoint("CENTER", arrow, "CENTER", 0, 0)
+        chev:Show()
+    end
+    -- SuuUI's hover and mark: on its own panel behind the rows (the game
+    -- forbids new textures on its menu rows)
+    rowMenu[row] = st
+    -- (lasting: the game sets a reused row's scripts again; the hover band
+    -- showed on a row's first menu only)
+    if not hooked[row] then
+        hooked[row] = true
+        lastingHookScript(row, "OnEnter", function(self: Frame)
+            local owner = rowMenu[self]
+            if owner and owner.active then
+                owner.hover:ClearAllPoints()
+                owner.hover:SetAllPoints(self)
+                owner.hover:Show()
+            end
+        end)
+        lastingHookScript(row, "OnLeave", function(self: Frame)
+            local owner = rowMenu[self]
+            if owner then owner.hover:Hide() end
+        end)
+    end
+    if chosen then
+        st.nMarks = st.nMarks + 1
+        local mark = st.marks[st.nMarks]
+        if not mark then
+            mark = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
+            mark:SetTexture(GLYPHS .. "check.tga")
+            mark:SetSize(12, 12)
+            draw.paint(mark, "arcane")
+            st.marks[st.nMarks] = mark
+        end
+        mark:ClearAllPoints()
+        if indicator then mark:SetPoint("CENTER", indicator, "CENTER", 0, 0) else mark:SetPoint("LEFT", row, "LEFT", 2, 0) end
+        mark:Show()
+    end
+end
+
+-- Whether a row has words in it (the game ends some menus, the unit menus,
+-- with an empty spacer: the panel stopped a row too low, found in game).
+local function hasText(row: Frame): boolean
+    local function any(f: Frame): boolean
+        for _, fs in ipairs(fontStrings(f)) do
+            if fs:IsShown() then
+                local t = fs:GetText()
+                if t and t ~= "" then return true end
+            end
+        end
+        return false
+    end
+    if any(row) then return true end
+    for _, c in ipairs({ row:GetChildren() }) do
+        if any(c) then return true end
+    end
+    return false
+end
+
+export function reskinMenu(given: unknown)
+    local menu = asFrame(given)
+    if not menu or ask(menu, "IsForbidden") then return end
+    local st = menus[menu]
+    if not st then
+        local panel = CreateFrame("Frame", nil, menu)
+        panel:SetAllPoints()
+        panel:SetFrameLevel(menu:GetFrameLevel())
+        panel:EnableMouse(false)
+        draw.fill(panel, "surface-glass"):SetAllPoints()
+        draw.border(panel, "gilt-line")
+        draw.shadow(panel, "shadow-panel")
+        draw.diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        local hover = panel:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(hover, "arcane-soft")
+        hover:Hide()
+        local made: MenuState = { undo = {}, panel = panel, hover = hover, marks = {}, nMarks = 0, chevrons = {}, nChevrons = 0 }
+        st = made
+        menus[menu] = made
+        -- (lasting: the game sets a menu frame's OnHide again each time it
+        -- opens one; the look stayed on its shared frames)
+        lastingHookScript(menu, "OnHide", function() if made.active then restoreMenu(made) end end)
+        -- a choice that refreshes the menu (a sort order) sets its rows up
+        -- again: marked again
+        if part(menu, "ReinitializeAll") then
+            hook(menu :: unknown, "ReinitializeAll", function()
+                if made.active then after(0, function() if made.active and menu:IsShown() then reskinMenu(menu) end end) end
+            end)
+        end
+    end
+    -- a second pass (the rows came later) starts from the game's look again
+    if st.active then restoreMenu(st) end
+    st.active = true
+    st.panel:Show()
+    for _, t in ipairs(textures(menu)) do hideRegion(st, t) end
+    local rows: Frame[] = {}
+    for _, c in ipairs({ menu:GetChildren() }) do
+        if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
+    end
+    local scrollBox = asFrame(part(menu, "ScrollBox"))
+    local target = asFrame(part(scrollBox, "ScrollTarget"))
+    local scrolling = scrollBox ~= nil and target ~= nil and scrollBox:IsShown()
+    if target and scrolling then
+        for _, c in ipairs({ target:GetChildren() }) do
+            if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
+        end
+    end
+    for _, row in ipairs(rows) do menuRow(st, row) end
+    -- the game's frame keeps room under its rows for its own drop shadow: the
+    -- panel ends under the last row instead, as far below it as the first
+    -- row is below the top
+    local top = menu:GetTop()
+    local first: Frame?, firstTop: number? = nil, nil
+    local last: Frame?, lastBottom: number? = nil, nil
+    -- every line with words counts for the edges: the buttons, and titles
+    -- and headings, which aren't buttons (a unit menu's name on top: the
+    -- panel's padding came out 28 instead of 8, found with /suu probe unitmenu)
+    local lines: Frame[] = {}
+    for _, c in ipairs({ menu:GetChildren() }) do
+        if c ~= st.panel then lines[#lines + 1] = c end
+    end
+    if target and scrolling then
+        for _, c in ipairs({ target:GetChildren() }) do lines[#lines + 1] = c end
+    end
+    for _, row in ipairs(lines) do
+        local t, b = row:GetTop(), row:GetBottom()
+        if row:IsShown() and t and b and hasText(row) then
+            if not firstTop or t > firstTop then first, firstTop = row, t end
+            if not lastBottom or b < lastBottom then last, lastBottom = row, b end
+        end
+    end
+    st.panel:ClearAllPoints()
+    -- (a scrolling menu's last row can sit below what shows: then all of it)
+    local bottom = menu:GetBottom()
+    if top and first and firstTop and last and lastBottom and bottom and lastBottom >= bottom then
+        local pad = math.max(0, top - firstTop)
+        st.panel:SetPoint("TOPLEFT", menu, "TOPLEFT")
+        st.panel:SetPoint("RIGHT", menu, "RIGHT")
+        st.panel:SetPoint("BOTTOM", last, "BOTTOM", 0, -pad)
+    else
+        st.panel:SetAllPoints(menu)
+    end
+end
+
+-- A submenu opened from a menu SuuUI restyled (the Who filter's Class,
+-- Race, Zone, Sort): restyled too. Every menu frame announces itself.
+local registry = named("EventRegistry")
+if part(registry, "RegisterCallback") then
+    -- (the event hands over the menu's frame, which has no GetLevel: any
+    -- menu other than the open root, while the root is restyled)
+    ask(registry, "RegisterCallback", "MenuProxy.OnShow", function(_: unknown, given: unknown)
+        local menu = asFrame(given)
+        if not menu then return end
+        local root = openRoot()
+        local st = root and root ~= menu and menus[root]
+        if st and st.active then
+            reskinMenu(menu)
+            after(0, function() if menu:IsShown() then reskinMenu(menu) end end)
+        end
+    end, "SuuUI.Reskin")
 end
 
 -- Blizzard's dropdown (WowStyle): surface-sunk in a gilt-line edge, its text
 -- in label ink, a chevron on the right.
-export function reskinDropdown(d: any, opts: { glyph?: string }?)
-    if not d or d.suuDropdown then return end
-    for _, r in ipairs({ d:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-    end
-    for _, key in ipairs({ "Arrow", "Background" }) do
-        if d[key] and d[key].SetAlpha then d[key]:SetAlpha(0) end
-    end
-    local text = d.Text or d.text
-    if opts and opts.glyph then
+export function reskinDropdown(given: unknown, opts: { glyph?: string }?)
+    local d = asButton(given)
+    if not d then return end
+    local s = skinOf(d)
+    if s.dropdown then return end
+    for _, t in ipairs(textures(d)) do t:SetAlpha(0) end
+    for _, key in ipairs({ "Arrow", "Background" }) do fade(part(d, key)) end
+    local text = asFontString(part(d, "Text")) or asFontString(part(d, "text"))
+    local glyphName = opts and opts.glyph
+    if glyphName then
         -- an icon-only dropdown (the map's filter): a glyph, its edge on hover
-        if d.Icon and d.Icon.SetAlpha then d.Icon:SetAlpha(0) end
+        fade(part(d, "Icon"))
         local edge = draw.border(d, "gilt-line")
         edge:SetShown(false)
         local glyph = d:CreateTexture(nil, "OVERLAY", nil, 7)
-        glyph:SetTexture(GLYPHS .. opts.glyph .. ".tga")
+        glyph:SetTexture(GLYPHS .. glyphName .. ".tga")
         glyph:SetSize(14, 14)
         glyph:SetPoint("CENTER")
         draw.paint(glyph, "ink-muted")
@@ -342,286 +740,30 @@ export function reskinDropdown(d: any, opts: { glyph?: string }?)
         text:SetShadowOffset(0, 0)
     end
     -- the menu it opens: in SuuUI's look while it's this dropdown's
-    local event = DropdownButtonMixin and DropdownButtonMixin.Event and DropdownButtonMixin.Event.OnMenuOpen
-    if d.RegisterCallback and event then
-        d:RegisterCallback(event, function()
-            local manager = Menu and Menu.GetManager and Menu.GetManager()
-            local menu = manager and manager.GetOpenMenu and manager:GetOpenMenu()
+    local event = part(part(named("DropdownButtonMixin"), "Event"), "OnMenuOpen")
+    if event and part(d, "RegisterCallback") then
+        ask(d, "RegisterCallback", event, function()
+            local menu = openRoot()
             if not menu then return end
             reskinMenu(menu)
             -- its rows may come a frame later
             after(0, function() if menu:IsShown() then reskinMenu(menu) end end)
         end, d)
     end
-    d.suuDropdown = true
-end
-
--- One of Blizzard's menus (Menu.GetManager():GetOpenMenu(), probed
--- 2026-10-14: a common-dropdown-bg texture, 20px rows with a radio or check
--- and a highlight, the rows' text) in the context menu's look: glass, a
--- gilt-line edge, the gilt corner diamond, rows in body ink on arcane-soft
--- while hovered, the chosen one marked by an arcane check. The game reuses
--- its menu frames for every menu, so all of it is undone when it closes.
--- A restyled menu's or popup's state: what to undo, SuuUI's art.
-type State = { [string]: any }
-
-local menus: { [any]: State } = setmetatable({}, { __mode = "k" })
-local rowMenu: { [any]: State } = setmetatable({}, { __mode = "k" }) -- a row: the menu state it belongs to now
-local hooked: { [any]: boolean } = setmetatable({}, { __mode = "k" })
-
--- A hook on a script of one of the game's pooled frames (its menus, menu
--- rows, popups) that lasts: the game sets those scripts again whenever it
--- reuses the frame (Menu.lua: SetScript("OnEnter", …) on each row it
--- lays out, SetScript("OnHide", …) on each menu it opens), and SetScript
--- drops the hooks on a script; the hook goes on again right after.
-local function lastingHookScript(f: any, script: string, fn: (...any) -> ())
-    hookScript(f, script, fn)
-    hook(f, "SetScript", function(self: any, name: any)
-        if name == script then hookScript(self, script, fn) end
-    end)
-end
-
-local function restoreMenu(st: State)
-    for i = #st.undo, 1, -1 do pcall(st.undo[i]) end
-    st.undo = {}
-    st.panel:Hide()
-    for _, t in pairs(st.marks) do t:Hide() end
-    for _, t in pairs(st.chevrons or {}) do t:Hide() end
-    st.hover:Hide()
-    st.nMarks, st.nChevrons = 0, 0
-    st.active = false
-end
-
-local function hideRegion(st: State, r: any)
-    if isArt(r) then return end
-    local a = r:GetAlpha()
-    -- (an alpha once set from a secret reads back secret: left as it is)
-    if issecretvalue(a) or a == 0 then return end
-    r:SetAlpha(0)
-    st.undo[#st.undo + 1] = function() r:SetAlpha(a) end
-end
-
-local function menuText(st: State, fs: any, color: string)
-    local fo = fs:GetFontObject()
-    local file, size, flags = fs:GetFont()
-    local r, g, b, a = fs:GetTextColor()
-    local sx, sy = fs:GetShadowOffset()
-    st.undo[#st.undo + 1] = function()
-        if fo then fs:SetFontObject(fo) elseif file then fs:SetFont(file, size, flags) end
-        fs:SetTextColor(r, g, b, a)
-        fs:SetShadowOffset(sx, sy)
-    end
-    fonts.apply(fs, "body")
-    -- (set raw: again on every open, and the game's shared menu rows get
-    -- no hooks of SuuUI's)
-    fs:SetTextColor(draw.rgba(color))
-    fs:SetShadowOffset(0, 0)
-end
-
-local function menuRow(st: State, row: any)
-    local chosen: boolean?, indicator: any = nil, nil
-    local texts: any[] = {}
-    for _, r in ipairs({ row:GetRegions() }) do
-        local kind = r:GetObjectType()
-        if kind == "Texture" and not isArt(r) then
-            local atlas = (ask(r, "GetAtlas") or ""):lower()
-            if atlas:find("common%-dropdown%-icon") then
-                -- the chosen row's tick
-                if r:IsShown() then chosen = true end
-                indicator = indicator or r
-                hideRegion(st, r)
-            elseif atlas:find("common%-dropdown%-tick") then
-                indicator = r
-                hideRegion(st, r)
-            elseif r:GetDrawLayer() == "HIGHLIGHT" or not r:IsShown() then
-                hideRegion(st, r)
-            end
-        elseif kind == "FontString" then
-            texts[#texts + 1] = r
-        end
-    end
-    for _, fs in ipairs(texts) do menuText(st, fs, "ink") end
-    -- a submenu's arrow (a plain texture, the game's yellow): SuuUI's chevron
-    local arrow = row.arrow
-    if arrow and arrow.GetObjectType and arrow:IsShown() then
-        hideRegion(st, arrow)
-        st.nChevrons = (st.nChevrons or 0) + 1
-        local chev = st.chevrons[st.nChevrons]
-        if not chev then
-            chev = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
-            chev:SetTexture(GLYPHS .. "chevronRight.tga")
-            chev:SetSize(12, 12)
-            draw.paint(chev, "ink-muted")
-            st.chevrons[st.nChevrons] = chev
-        end
-        chev:ClearAllPoints()
-        chev:SetPoint("CENTER", arrow, "CENTER", 0, 0)
-        chev:Show()
-    end
-    -- SuuUI's hover and mark: on its own panel behind the rows (the game
-    -- forbids new textures on its menu rows)
-    rowMenu[row] = st
-    -- (lasting: the game sets a reused row's scripts again; the hover band
-    -- showed on a row's first menu only)
-    if not hooked[row] then
-        hooked[row] = true
-        lastingHookScript(row, "OnEnter", function(self: any)
-            local owner = rowMenu[self]
-            if owner and owner.active then
-                owner.hover:ClearAllPoints()
-                owner.hover:SetAllPoints(self)
-                owner.hover:Show()
-            end
-        end)
-        lastingHookScript(row, "OnLeave", function(self: any)
-            local owner = rowMenu[self]
-            if owner then owner.hover:Hide() end
-        end)
-    end
-    if chosen then
-        st.nMarks = st.nMarks + 1
-        local mark = st.marks[st.nMarks]
-        if not mark then
-            mark = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
-            mark:SetTexture(GLYPHS .. "check.tga")
-            mark:SetSize(12, 12)
-            draw.paint(mark, "arcane")
-            st.marks[st.nMarks] = mark
-        end
-        mark:ClearAllPoints()
-        if indicator then mark:SetPoint("CENTER", indicator, "CENTER", 0, 0) else mark:SetPoint("LEFT", row, "LEFT", 2, 0) end
-        mark:Show()
-    end
-end
-
--- A submenu opened from a menu SuuUI restyled (the Who filter's Class,
--- Race, Zone, Sort): restyled too. Every menu frame announces itself.
-local function openRoot(): any
-    local manager = Menu and Menu.GetManager and Menu.GetManager()
-    return manager and manager.GetOpenMenu and manager:GetOpenMenu()
-end
-if EventRegistry and EventRegistry.RegisterCallback then
-    -- (the event hands over the menu's frame, which has no GetLevel: any
-    -- menu other than the open root, while the root is restyled)
-    EventRegistry:RegisterCallback("MenuProxy.OnShow", function(_, menu)
-        if not (menu and menu.GetRegions) then return end
-        local root = openRoot()
-        local st = root and root ~= menu and menus[root]
-        if st and st.active then
-            reskinMenu(menu)
-            after(0, function() if menu:IsShown() then reskinMenu(menu) end end)
-        end
-    end, "SuuUI.Reskin")
-end
-
-export function reskinMenu(menu: any)
-    if not menu or ask(menu, "IsForbidden") then return end
-    local st = menus[menu]
-    if not st then
-        st = { undo = {}, marks = {}, nMarks = 0, chevrons = {}, nChevrons = 0 }
-        local panel = CreateFrame("Frame", nil, menu)
-        panel:SetAllPoints()
-        panel:SetFrameLevel(menu:GetFrameLevel())
-        panel:EnableMouse(false)
-        draw.fill(panel, "surface-glass"):SetAllPoints()
-        draw.border(panel, "gilt-line")
-        draw.shadow(panel, "shadow-panel")
-        draw.diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
-        st.hover = panel:CreateTexture(nil, "ARTWORK")
-        draw.paintFill(st.hover, "arcane-soft")
-        st.hover:Hide()
-        st.panel = panel
-        menus[menu] = st
-        -- (lasting: the game sets a menu frame's OnHide again each time it
-        -- opens one; the look stayed on its shared frames)
-        lastingHookScript(menu, "OnHide", function() if st.active then restoreMenu(st) end end)
-        -- a choice that refreshes the menu (a sort order) sets its rows up
-        -- again: marked again
-        if menu.ReinitializeAll then
-            hook(menu, "ReinitializeAll", function()
-                if st.active then after(0, function() if st.active and menu:IsShown() then reskinMenu(menu) end end) end
-            end)
-        end
-    end
-    -- a second pass (the rows came later) starts from the game's look again
-    if st.active then restoreMenu(st) end
-    st.active = true
-    st.panel:Show()
-    for _, r in ipairs({ menu:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then hideRegion(st, r) end
-    end
-    local rows: any[] = {}
-    for _, c in ipairs({ menu:GetChildren() }) do
-        if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
-    end
-    local target = menu.ScrollBox and menu.ScrollBox.ScrollTarget
-    if target and menu.ScrollBox:IsShown() then
-        for _, c in ipairs({ target:GetChildren() }) do
-            if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
-        end
-    end
-    for _, row in ipairs(rows) do menuRow(st, row) end
-    -- the game's frame keeps room under its rows for its own drop shadow: the
-    -- panel ends under the last row instead, as far below it as the first
-    -- row is below the top
-    local top, first, last = menu:GetTop(), nil :: any, nil :: any
-    -- a row with words in it (the game ends some menus, the unit menus, with
-    -- an empty spacer: the panel stopped a row too low, found in game)
-    local function hasText(row: any): boolean
-        for _, r in ipairs({ row:GetRegions() }) do
-            if r:GetObjectType() == "FontString" and r:IsShown() then
-                local t = r:GetText()
-                if t and t ~= "" then return true end
-            end
-        end
-        for _, c in ipairs({ row:GetChildren() }) do
-            for _, r in ipairs({ c:GetRegions() }) do
-                if r:GetObjectType() == "FontString" and r:IsShown() then
-                    local t = r:GetText()
-                    if t and t ~= "" then return true end
-                end
-            end
-        end
-        return false
-    end
-    -- every line with words counts for the edges: the buttons, and titles
-    -- and headings, which aren't buttons (a unit menu's name on top: the
-    -- panel's padding came out 28 instead of 8, found with /suu probe unitmenu)
-    local lines: any[] = {}
-    for _, c in ipairs({ menu:GetChildren() }) do
-        if c ~= st.panel then lines[#lines + 1] = c end
-    end
-    if target and menu.ScrollBox:IsShown() then
-        for _, c in ipairs({ target:GetChildren() }) do lines[#lines + 1] = c end
-    end
-    for _, row in ipairs(lines) do
-        local t, b = row:GetTop(), row:GetBottom()
-        if row:IsShown() and t and b and hasText(row) then
-            if not first or t > first:GetTop() then first = row end
-            if not last or b < last:GetBottom() then last = row end
-        end
-    end
-    st.panel:ClearAllPoints()
-    -- (a scrolling menu's last row can sit below what shows: then all of it)
-    local bottom = menu:GetBottom()
-    if top and first and last and bottom and last:GetBottom() >= bottom then
-        local pad = math.max(0, top - first:GetTop())
-        st.panel:SetPoint("TOPLEFT", menu, "TOPLEFT")
-        st.panel:SetPoint("RIGHT", menu, "RIGHT")
-        st.panel:SetPoint("BOTTOM", last, "BOTTOM", 0, -pad)
-    else
-        st.panel:SetAllPoints(menu)
-    end
+    s.dropdown = true
 end
 
 -- An icon button (the set popup's grid and its chosen icon): every bit of
 -- Blizzard's frame art away, the icon cropped on a surface-sunk well in a
 -- gilt-hairline edge, gilt on hover, arcane while selected (Blizzard's own
 -- SelectedTexture says when).
-export function reskinIconButton(b: any)
+export function reskinIconButton(given: unknown)
+    local b = asButton(given)
     if not b then return end
-    local icon = b.Icon or b.icon
-    if not b.suuIcon then
+    local s = skinOf(b)
+    local icon = asTexture(part(b, "Icon")) or asTexture(part(b, "icon"))
+    local st = s.icon
+    if not st then
         local well = b:CreateTexture(nil, "BACKGROUND", nil, -8)
         draw.paintFill(well, "surface-sunk")
         well:SetAllPoints()
@@ -631,25 +773,26 @@ export function reskinIconButton(b: any)
         edgeHolder:EnableMouse(false)
         edgeHolder:SetFrameLevel(b:GetFrameLevel() + 2)
         local edge = draw.border(edgeHolder, "gilt-hairline")
-        local st: State = { edge = edge, hover = false }
-        b.suuIcon = st
-        hookScript(b, "OnEnter", function() st.hover = true; st.draw() end)
-        hookScript(b, "OnLeave", function() st.hover = false; st.draw() end)
-        local sel = b.SelectedTexture or b.selectedTexture
-        st.draw = function()
-            local on = sel and sel:IsShown()
-            edge:SetColor(on and "arcane" or (st.hover and "gilt" or "gilt-hairline"))
+        local sel = asRegion(part(b, "SelectedTexture")) or asRegion(part(b, "selectedTexture"))
+        local made: IconSkin = { edge = edge, hover = false, draw = function() end }
+        made.draw = function()
+            local on = sel ~= nil and sel:IsShown()
+            edge:SetColor(on and "arcane" or (made.hover and "gilt" or "gilt-hairline"))
         end
+        st = made
+        s.icon = made
+        hookScript(b, "OnEnter", function() made.hover = true; made.draw() end)
+        hookScript(b, "OnLeave", function() made.hover = false; made.draw() end)
         if sel then
-            for _, m in ipairs({ "Show", "Hide", "SetShown" }) do hook(sel, m, function() st.draw() end) end
+            for _, m in ipairs({ "Show", "Hide", "SetShown" }) do hook(sel, m, function() made.draw() end) end
         end
     end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture", "GetCheckedTexture" }) do
-        local t = ask(b, get)
+        local t = asRegion(ask(b, get))
         if t and t ~= icon then t:SetAlpha(0) end
     end
-    for _, r in ipairs({ b:GetRegions() }) do
-        if r:GetObjectType() == "Texture" and r ~= icon and not isArt(r) then r:SetAlpha(0) end
+    for _, t in ipairs(textures(b)) do
+        if t ~= icon and not isArt(t) then t:SetAlpha(0) end
     end
     if icon then
         icon:SetAlpha(1)
@@ -658,14 +801,16 @@ export function reskinIconButton(b: any)
         icon:SetPoint("BOTTOMRIGHT", -1, 1)
         icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     end
-    b.suuIcon.draw()
+    st.draw()
 end
 
-export function reskinCheckButton(b: any)
-    if not b or b.suuCheck then return end
+export function reskinCheckButton(given: unknown)
+    local b = asCheckButton(given)
+    if not b then return end
+    local s = skinOf(b)
+    if s.check then return end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
-        local t = ask(b, get)
-        if t then t:SetAlpha(0) end
+        fade(ask(b, get))
     end
     local box = CreateFrame("Frame", nil, b)
     box:SetSize(16, 16)
@@ -679,35 +824,33 @@ export function reskinCheckButton(b: any)
     check:SetPoint("CENTER")
     draw.paint(check, "arcane")
     local function redraw()
-        local on = ask(b, "GetChecked")
-        check:SetShown(on and true or false)
+        local checked = ask(b, "GetChecked")
+        local on = checked ~= nil and checked ~= false
+        check:SetShown(on)
         edge:SetColor(on and "arcane" or "gilt-line")
     end
     hook(b, "SetChecked", redraw)
     hookScript(b, "OnClick", redraw)
     hookScript(b, "OnShow", redraw)
-    b.suuCheck = { box = box, draw = redraw }
+    s.check = { box = box, draw = redraw }
     redraw()
 end
 
 -- Blizzard's panel button (Left/Middle/Right art, or a red button atlas) as
 -- SuuUI's quiet button: surface-raised, gilt-line edge (gilt on hover), its
 -- label in `label` ink; dimmed while disabled.
-export function reskinButton(b: any)
-    if not b or b.suuButton then return end
-    for _, key in ipairs({ "Left", "Middle", "Center", "Right", "LeftSeparator", "RightSeparator" }) do
-        if b[key] and b[key].SetAlpha then b[key]:SetAlpha(0) end
-    end
+export function reskinButton(given: unknown)
+    local b = asButton(given)
+    if not b then return end
+    local s = skinOf(b)
+    if s.button then return end
+    for _, key in ipairs({ "Left", "Middle", "Center", "Right", "LeftSeparator", "RightSeparator" }) do fade(part(b, key)) end
     -- any other button art (an atlas with "button" in it)
-    for _, r in ipairs({ b:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then
-            local a = (ask(r, "GetAtlas") or ""):lower()
-            if a:find("button") then r:SetAlpha(0) end
-        end
+    for _, t in ipairs(textures(b)) do
+        if atlasOf(t):find("button") then t:SetAlpha(0) end
     end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-        local t = ask(b, get)
-        if t then t:SetAlpha(0) end
+        fade(ask(b, get))
     end
     local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
     draw.paintFill(bg, "surface-raised")
@@ -717,7 +860,7 @@ export function reskinButton(b: any)
     hookScript(b, "OnLeave", function() edge:SetColor("gilt-line") end)
     local function redraw()
         b:SetAlpha(ask(b, "IsEnabled") == false and T.opacity["opacity-disabled"] or 1)
-        local fs = ask(b, "GetFontString")
+        local fs = asFontString(ask(b, "GetFontString"))
         if fs then
             fonts.apply(fs, "label")
             draw.paint(fs, "ink")
@@ -725,54 +868,48 @@ export function reskinButton(b: any)
         end
     end
     hook(b, "SetEnabled", redraw)
-    if b.Enable then hook(b, "Enable", redraw) end
-    if b.Disable then hook(b, "Disable", redraw) end
-    b.suuButton = { draw = redraw }
+    if part(b, "Enable") then hook(b, "Enable", redraw) end
+    if part(b, "Disable") then hook(b, "Disable", redraw) end
+    s.button = { draw = redraw }
     redraw()
 end
 
 -- An input box: Blizzard's Left/Middle/Right art away, surface-sunk inside a
 -- gilt-line edge (arcane while typing), body ink.
-export function reskinEditBox(e: any)
-    if not e or e.suuEdit then return end
-    for _, key in ipairs({ "Left", "Middle", "Right", "Mid" }) do
-        if e[key] and e[key].SetAlpha then e[key]:SetAlpha(0) end
-    end
+export function reskinEditBox(given: unknown)
+    local e = asEditBox(given)
+    if not e then return end
+    local s = skinOf(e)
+    if s.edit then return end
+    for _, key in ipairs({ "Left", "Middle", "Right", "Mid" }) do fade(part(e, key)) end
     local name = e:GetName()
     if name then
-        for _, suffix in ipairs({ "Left", "Middle", "Right", "Mid" }) do
-            local t = _G[name .. suffix]
-            if t and t.SetAlpha then t:SetAlpha(0) end
-        end
+        for _, suffix in ipairs({ "Left", "Middle", "Right", "Mid" }) do fade(named(name .. suffix)) end
     end
     -- whatever else Blizzard drew it with (its own art, a backdrop frame)
-    for _, r in ipairs({ e:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-    end
+    for _, t in ipairs(textures(e)) do t:SetAlpha(0) end
     for _, c in ipairs({ e:GetChildren() }) do
-        if c.NineSlice then c.NineSlice:SetAlpha(0) end
-        for _, r in ipairs({ c:GetRegions() }) do
-            if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-        end
+        fade(part(c, "NineSlice"))
+        for _, t in ipairs(textures(c)) do t:SetAlpha(0) end
     end
-    if e.NineSlice then e.NineSlice:SetAlpha(0) end
+    fade(part(e, "NineSlice"))
     -- a search box (its magnifier and "Search" placeholder): the field is the
     -- box itself, the text and placeholder space-3 in from its left
-    local search = e.searchIcon or e.Instructions
+    local search = part(e, "searchIcon") or part(e, "Instructions")
     local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
     draw.paintFill(bg, "surface-sunk")
     if search then
         bg:SetAllPoints()
         e:SetTextInsets(S["space-3"], S["space-5"], 0, 0)
-        local hint = e.Instructions
-        if hint and hint.ClearAllPoints then
+        local hint = asFontString(part(e, "Instructions"))
+        if hint then
             hint:ClearAllPoints()
             hint:SetPoint("LEFT", S["space-3"], 0)
             hint:SetPoint("RIGHT", -S["space-3"], 0)
             hint:SetJustifyH("LEFT")
             fonts.apply(hint, "body")
             draw.paint(hint, "ink-muted")
-            hint.suuSkip = true
+            skinOf(hint).skip = true
         end
     else
         bg:SetPoint("TOPLEFT", -4, -1)
@@ -787,61 +924,59 @@ export function reskinEditBox(e: any)
     hookScript(e, "OnEditFocusLost", function() edge:SetColor("gilt-line") end)
     e:SetFontObject(fonts.get("body"))
     draw.paint(e, "ink")
-    e.suuEdit = true
+    s.edit = true
 end
 
 -- A small collapse/expand button (Statistics' sub-categories): SuuUI's
 -- minus or plus in gilt-text, following the state Blizzard sets.
-export function reskinCollapseButton(b: any)
-    if not b or b.suuCollapse then return end
+export function reskinCollapseButton(given: unknown)
+    local b = asButton(given)
+    if not b then return end
+    local s = skinOf(b)
+    if s.collapse then return end
     local glyph = b:CreateTexture(nil, "OVERLAY", nil, 7)
     glyph:SetSize(12, 12)
     glyph:SetPoint("CENTER")
     draw.paint(glyph, "gilt-text")
     local function redraw()
-        local t = ask(b, "GetNormalTexture")
+        local t = asTexture(ask(b, "GetNormalTexture"))
         local name = ""
         if t then
-            name = (ask(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
+            name = (askString(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
             t:SetAlpha(0)
         end
-        for _, get in ipairs({ "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-            local x = ask(b, get)
-            if x then x:SetAlpha(0) end
-        end
-        for _, r in ipairs({ b:GetRegions() }) do
-            if r ~= glyph and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+        for _, get in ipairs({ "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do fade(ask(b, get)) end
+        for _, r in ipairs(textures(b)) do
+            if r ~= glyph then r:SetAlpha(0) end
         end
         local plus = name:find("plus") or name:find("expand") and not name:find("expanded")
         glyph:SetTexture(GLYPHS .. (plus and "plus" or "minus") .. ".tga")
     end
-    if b.SetNormalTexture then hook(b, "SetNormalTexture", redraw) end
-    if b.SetNormalAtlas then hook(b, "SetNormalAtlas", redraw) end
+    if part(b, "SetNormalTexture") then hook(b, "SetNormalTexture", redraw) end
+    if part(b, "SetNormalAtlas") then hook(b, "SetNormalAtlas", redraw) end
     hookScript(b, "OnClick", function() after(0, redraw) end)
-    b.suuCollapse = { draw = redraw }
+    s.collapse = { draw = redraw }
     redraw()
 end
 
-local function isPanelButton(b: any): any
-    if b.Left and b.Right and (b.Middle or b.Center) then return true end
+local function isPanelButton(b: Button): boolean
+    if part(b, "Left") and part(b, "Right") and (part(b, "Middle") or part(b, "Center")) then return true end
     -- art with "button" in its atlas (not a list's collapse bar or a minus/plus)
-    for _, r in ipairs({ b:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then
-            local a = (ask(r, "GetAtlas") or ""):lower()
-            if a:find("button") and not a:find("list") and not a:find("minus") and not a:find("plus") then return true end
-        end
+    for _, t in ipairs(textures(b)) do
+        local a = atlasOf(t)
+        if a:find("button") and not a:find("list") and not a:find("minus") and not a:find("plus") then return true end
     end
-    local t = ask(b, "GetNormalTexture")
+    local t = asTexture(ask(b, "GetNormalTexture"))
     if not t then return false end
-    local name = (ask(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
-    return name:find("panel%-button") or name:find("redbutton") or name:find("128%-red") or name:find("common%-button") or false
+    local name = (askString(t, "GetAtlas") or tostring(ask(t, "GetTexture") or "")):lower()
+    return (name:find("panel%-button") or name:find("redbutton") or name:find("128%-red") or name:find("common%-button")) ~= nil
 end
 
 --------------------------------------------------------------------------------
 -- Text
 --------------------------------------------------------------------------------
 
-local function textColor(r: any, g: any, b: any): string?
+local function textColor(r: number?, g: number, b: number): string?
     if not r then return "ink" end
     if r > 0.9 and g > 0.7 and g < 0.9 and b < 0.2 then return "ink" end -- Blizzard's yellow
     if r > 0.85 and g > 0.85 and b > 0.85 then return "ink" end
@@ -856,12 +991,20 @@ local function sameColor(token: string, r: number, g: number, b: number): boolea
     return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
 end
 
-local function reskinText(fs: any, isHead: boolean)
-    if fs.suuSkip then return end
-    local _, size = ask(fs, "GetFont")
-    size = tonumber(size) or 12
+-- A text's colour, read safely (nil: unreadable).
+local function colorOf(fs: FontString): (number?, number, number)
+    local r, g, b = ask(fs, "GetTextColor")
+    if type(r) == "number" and type(g) == "number" and type(b) == "number" then return r, g, b end
+    return nil, 0, 0
+end
+
+local function reskinText(fs: FontString, isHead: boolean)
+    if skipped(fs) then return end
+    local s = skinOf(fs)
+    local _, given = ask(fs, "GetFont")
+    local size = tonumber(given) or 12
     local fo = ask(fs, "GetFontObject")
-    local foName = fo and ask(fo, "GetName") or ""
+    local foName = fo and askString(fo, "GetName") or ""
     local text = ask(fs, "GetText")
     local long = type(text) == "string" and not isSecret(text) and #text > 40
     if isHead then
@@ -871,14 +1014,15 @@ local function reskinText(fs: any, isHead: boolean)
         fonts.apply(fs, "header")
         draw.paint(fs, "gilt-text")
     else
-        local r, g, b = ask(fs, "GetTextColor")
+        local r, g, b = colorOf(fs)
         local token = textColor(r, g, b)
         -- a text an earlier pass coloured still has its token's colour: kept
         -- (a theme's colours may read as none of Blizzard's)
-        if fs.suuToken and r and sameColor(fs.suuToken, r, g, b) then token = fs.suuToken end
-        fs.suuToken = token
+        local kept = s.token
+        if kept and r and sameColor(kept, r, g, b) then token = kept end
+        s.token = token
         fonts.apply(fs, foName:find("Number") and "numeric" or (size < 11 and "caption" or (long and "body" or "label")))
-        if token then draw.paint(fs, token) else fs:SetTextColor(r, g, b) end
+        if token then draw.paint(fs, token) elseif r then fs:SetTextColor(r, g, b) end
     end
     fs:SetShadowOffset(0, 0)
 end
@@ -892,21 +1036,22 @@ end
 -- on the box was a line short and its first line out of view (the skills'
 -- description, seen 2026-10-18). Measured again, from the top, a frame
 -- after SuuUI's pass and after each text.
-local function refitScrollingFont(f: any)
-    local fs = ask(f, "GetFontString")
-    local box = ask(f, "GetScrollBox")
-    local container = ask(f, "GetFontStringContainer")
+local function refitScrollingFont(f: Frame)
+    local fs = asFontString(ask(f, "GetFontString"))
+    local box = asFrame(ask(f, "GetScrollBox"))
+    local container = asFrame(ask(f, "GetFontStringContainer"))
     if not (fs and box and container) then return end
     container:SetHeight(fs:GetStringHeight())
     local consts = ScrollBoxConstants or {}
-    pcall(box.FullUpdate, box, consts.UpdateImmediately)
-    pcall(box.ScrollToBegin, box, consts.NoScrollInterpolation)
+    ask(box, "FullUpdate", part(consts, "UpdateImmediately"))
+    ask(box, "ScrollToBegin", part(consts, "NoScrollInterpolation"))
 end
 
-local function reskinScrollingFont(f: any)
-    if not f.suuScrollingFont then
-        f.suuScrollingFont = true
-        hook(f, "SetText", function() after(0, function() refitScrollingFont(f) end) end)
+local function reskinScrollingFont(f: Frame)
+    local s = skinOf(f)
+    if not s.scrollingFont then
+        s.scrollingFont = true
+        hook(f :: unknown, "SetText", function() after(0, function() refitScrollingFont(f) end) end)
     end
     after(0, function() refitScrollingFont(f) end)
 end
@@ -915,17 +1060,16 @@ end
 -- row is a category bar.
 type Ctx = { rowDepth: number, head?: boolean }
 
-local function reskinTexture(t: any, ctx: Ctx)
-    local atlas = ask(t, "GetAtlas")
-    local a = atlas and atlas:lower() or ""
+local function reskinTexture(t: Texture, ctx: Ctx)
+    local a = atlasOf(t)
     local layer = ask(t, "GetDrawLayer")
     if a ~= "" and matchesAny(a, HIDE) then
         if a:find("collapseexpand") then ctx.head = true end
         t:SetAlpha(0)
-    elseif a:find("checkmark") and not a:find("minimal") and not t.suuMoved then
+    elseif a:find("checkmark") and not a:find("minimal") and not skinOf(t).moved then
         -- a list row's check (the equipment set you wear): its top right corner
         local parent = t:GetParent()
-        t.suuMoved = true
+        skinOf(t).moved = true
         t:ClearAllPoints()
         t:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -S["space-2"], -S["space-2"])
         t:SetSize(12, 12)
@@ -942,53 +1086,57 @@ local function reskinTexture(t: any, ctx: Ctx)
     end
 end
 
-local function pass(f: any, depth: number, ctx: Ctx)
+local function pass(f: Frame, depth: number, ctx: Ctx)
     if depth > 6 or ask(f, "IsForbidden") then return end
     -- SuuUI's own frames inside a Blizzard window (pages, the skin's header):
     -- never restyled
     if isOwn(f) then return end
-    local kind = ask(f, "GetObjectType")
-    if f.GetFontStringContainer and f.ScrollBox and f.SetText then reskinScrollingFont(f) end
+    local kind = askString(f, "GetObjectType")
+    if part(f, "GetFontStringContainer") and part(f, "ScrollBox") and part(f, "SetText") then reskinScrollingFont(f) end
     -- Blizzard's coloured progress bar (a Fill it sizes itself: the
     -- reputation's and the skills' bars, the skills' a StatusBar)
-    if f.Fill and f.FillArea and f.SetFillPercent then reskinFillBar(f); return end
+    local fill = part(f, "Fill")
+    if fill and part(f, "FillArea") and part(f, "SetFillPercent") then reskinFillBar(f); return end
     if kind == "StatusBar" then reskinStatusBar(f); return end
-    if kind == "CheckButton" and not f.suuNoCheck then reskinCheckButton(f) end
+    if kind == "CheckButton" and not flagged(f, "suuNoCheck") then reskinCheckButton(f) end
     if kind == "EditBox" then reskinEditBox(f) end
-    if kind == "DropdownButton" or (f.Arrow and f.Text and kind == "Button" and not f.suuButton) then
+    local s = skinOf(f)
+    if kind == "DropdownButton" or (part(f, "Arrow") and part(f, "Text") and kind == "Button" and not s.button) then
         reskinDropdown(f)
         return
     end
-    if f.Fill and ask(f.Fill, "GetObjectType") == "Texture" then
-        local a = (ask(f.Fill, "GetAtlas") or ""):lower()
-        if a:find("stat%-bar") or f.suuFillBar then reskinFillBar(f); return end
+    if askString(fill, "GetObjectType") == "Texture" then
+        if atlasOf(fill):find("stat%-bar") or s.fillBar then reskinFillBar(f); return end
     end
-    if kind == "Button" then
-        local key = ask(f, "GetParentKey") or ""
-        if key:find("Collapse") or key:find("Expand") then reskinCollapseButton(f)
-        elseif not f.suuNoButton and isPanelButton(f) then reskinButton(f) end
-        if f.suuCollapse then f.suuCollapse.draw() end
-        if f.suuButton then f.suuButton.draw() end
+    local b = kind == "Button" and asButton(f) or nil
+    if b then
+        local key = askString(b, "GetParentKey") or ""
+        if key:find("Collapse") or key:find("Expand") then reskinCollapseButton(b)
+        elseif not flagged(b, "suuNoButton") and isPanelButton(b) then reskinButton(b) end
+        local collapse, button = s.collapse, s.button
+        if collapse then collapse.draw() end
+        if button then button.draw() end
     end
     -- a ScrollBar (Blizzard's minimal one)
-    if f.Track and f.Back and f.Forward then reskinScrollBar(f); return end
+    if part(f, "Track") and part(f, "Back") and part(f, "Forward") then reskinScrollBar(f); return end
     -- a ScrollBox: its rows, one by one, now and after every update
-    if f.ScrollTarget and f.ForEachFrame then reskinScrollBox(f); return end
-    local texts: any[] = {}
+    if part(f, "ScrollTarget") and part(f, "ForEachFrame") then reskinScrollBox(f); return end
+    local texts: FontString[] = {}
     for _, r in ipairs({ f:GetRegions() }) do
         local t = r:GetObjectType()
-        if t == "Texture" then reskinTexture(r, ctx)
-        elseif t == "FontString" then texts[#texts + 1] = r end
+        if t == "Texture" then reskinTexture(r :: Texture, ctx)
+        elseif t == "FontString" then texts[#texts + 1] = r :: FontString end
     end
     -- a category row: its name as a head, a rule under it
     if ctx.head and depth == ctx.rowDepth then
         for _, fs in ipairs(texts) do reskinText(fs, true) end
-        if not f.suuHeadRule then
-            f.suuHeadRule = f:CreateTexture(nil, "ARTWORK")
-            draw.paintFill(f.suuHeadRule, "gilt-faint")
-            f.suuHeadRule:SetHeight(1)
-            f.suuHeadRule:SetPoint("BOTTOMLEFT", S["space-3"], 0)
-            f.suuHeadRule:SetPoint("BOTTOMRIGHT", -S["space-3"], 0)
+        if not s.headRule then
+            local rule = f:CreateTexture(nil, "ARTWORK")
+            draw.paintFill(rule, "gilt-faint")
+            rule:SetHeight(1)
+            rule:SetPoint("BOTTOMLEFT", S["space-3"], 0)
+            rule:SetPoint("BOTTOMRIGHT", -S["space-3"], 0)
+            s.headRule = rule
         end
     else
         for _, fs in ipairs(texts) do reskinText(fs, false) end
@@ -996,42 +1144,49 @@ local function pass(f: any, depth: number, ctx: Ctx)
     for _, c in ipairs({ f:GetChildren() }) do pass(c, depth + 1, ctx) end
 end
 
-export function reskin(frame: any)
+export function reskin(given: unknown)
+    local frame = asFrame(given)
     if not frame then return end
     pass(frame, 0, { rowDepth = 0 })
 end
 
 -- One row: a fresh context, so a category bar marks only its own row.
-local function reskinRow(row: any)
+local function reskinRow(given: unknown)
+    local row = asFrame(given)
+    if not row then return end
     local ctx: Ctx = { rowDepth = 0 }
     -- a category bar is a texture of the row itself: look first
-    for _, r in ipairs({ row:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then
-            local a = ask(r, "GetAtlas")
-            if a and a:lower():find("collapseexpand") then ctx.head = true end
-        end
+    for _, t in ipairs(textures(row)) do
+        if atlasOf(t):find("collapseexpand") then ctx.head = true end
     end
     pass(row, 0, ctx)
 end
 
-export function reskinScrollBox(box: any)
-    if not box or box.suuReskinBox then return end
-    box.suuReskinBox = true
+export function reskinScrollBox(given: unknown)
+    local box = asFrame(given)
+    if not box then return end
+    local s = skinOf(box)
+    if s.scrollBox then return end
+    s.scrollBox = true
     local function all()
         -- (no view yet: the box updates as it is sized, before its list is set)
-        if box.ForEachFrame and box.GetView and not box:GetView() then return end
-        if box.ForEachFrame then
-            box:ForEachFrame(reskinRow)
-        elseif box.ScrollTarget then
-            for _, row in ipairs({ box.ScrollTarget:GetChildren() }) do reskinRow(row) end
+        if part(box, "ForEachFrame") then
+            if part(box, "GetView") and not ask(box, "GetView") then return end
+            ask(box, "ForEachFrame", reskinRow)
+        else
+            local target = asFrame(part(box, "ScrollTarget"))
+            if target then
+                for _, row in ipairs({ target:GetChildren() }) do reskinRow(row) end
+            end
         end
     end
-    if box.Update then hook(box, "Update", all) end
-    if box.RegisterCallback and box.Event and box.Event.OnDataRangeChanged then
-        box:RegisterCallback(box.Event.OnDataRangeChanged, all, box)
+    if part(box, "Update") then hook(box :: unknown, "Update", all) end
+    local changed = part(part(box, "Event"), "OnDataRangeChanged")
+    if part(box, "RegisterCallback") and changed then
+        ask(box, "RegisterCallback", changed, all, box)
     end
     hookScript(box, "OnShow", function() after(0, all) end)
-    if box.Shadows then box.Shadows:SetAlpha(0) end
+    fade(part(box, "Shadows"))
     all()
 end
 
@@ -1041,27 +1196,27 @@ end
 -- title in `header` gilt-text, its corner close as SuuUI's cross, the box
 -- inside on surface-sunk in a gilt-line edge, the rest (buttons, the text,
 -- the scrollbar) by the usual pass. Its clicks stay Blizzard's.
-local function dialogBox(c: any)
+local function dialogBox(c: Frame)
     -- a frame holding the text (Blizzard's inset box): its own art away
-    if c.suuBox then return end
-    c.suuBox = true
-    if c.NineSlice then c.NineSlice:SetAlpha(0) end
-    for _, r in ipairs({ c:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-    end
+    local s = skinOf(c)
+    if s.box then return end
+    s.box = true
+    fade(part(c, "NineSlice"))
+    for _, t in ipairs(textures(c)) do t:SetAlpha(0) end
     local bg = c:CreateTexture(nil, "BACKGROUND", nil, -7)
     draw.paintFill(bg, "surface-sunk")
     bg:SetAllPoints()
     markArt(bg)
     draw.border(c, "gilt-line")
     -- the text inside: the box is its field already (no second edge)
-    local function walk(fr: any, depth: number)
+    local function walk(fr: Frame, depth: number)
         if depth > 4 then return end
         for _, k in ipairs({ fr:GetChildren() }) do
-            if k:GetObjectType() == "EditBox" then
-                k.suuEdit = true
-                k:SetFontObject(fonts.get("body"))
-                draw.paint(k, "ink")
+            local e = k:GetObjectType() == "EditBox" and asEditBox(k) or nil
+            if e then
+                skinOf(e).edit = true
+                e:SetFontObject(fonts.get("body"))
+                draw.paint(e, "ink")
             end
             walk(k, depth + 1)
         end
@@ -1069,24 +1224,25 @@ local function dialogBox(c: any)
     walk(c, 0)
 end
 
-export function reskinDialog(f: any)
+export function reskinDialog(given: unknown)
+    local f = asFrame(given)
     if not f or ask(f, "IsForbidden") then return end
-    if not f.suuDialog then
-        f.suuDialog = true
+    local s = skinOf(f)
+    if not s.dialog then
+        s.dialog = true
         for _, r in ipairs({ f:GetRegions() }) do
             local kind = r:GetObjectType()
             if kind == "Texture" then
                 r:SetAlpha(0)
             elseif kind == "FontString" then
-                fonts.apply(r, "header")
-                draw.paint(r, "gilt-text")
-                r:SetShadowOffset(0, 0)
-                r.suuSkip = true
+                local fs = r :: FontString
+                fonts.apply(fs, "header")
+                draw.paint(fs, "gilt-text")
+                fs:SetShadowOffset(0, 0)
+                skinOf(fs).skip = true
             end
         end
-        for _, key in ipairs({ "NineSlice", "Border", "Bg", "TitleBg" }) do
-            if f[key] and f[key].SetAlpha then f[key]:SetAlpha(0) end
-        end
+        for _, key in ipairs({ "NineSlice", "Border", "Bg", "TitleBg" }) do fade(part(f, key)) end
         local panel = CreateFrame("Frame", nil, f)
         panel:SetAllPoints()
         panel:SetFrameLevel(f:GetFrameLevel())
@@ -1096,28 +1252,27 @@ export function reskinDialog(f: any)
         draw.border(panel, "gilt-line")
         draw.shadow(panel, "shadow-panel")
         draw.diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        local closeButton = part(f, "CloseButton")
         for _, c in ipairs({ f:GetChildren() }) do
             local kind = c:GetObjectType()
             local name = c:GetName() or ""
             local text = ask(c, "GetText")
-            if kind == "Button" and (name:find("Close") or c == f.CloseButton) and (not text or text == "") then
+            local close = kind == "Button" and asButton(c) or nil
+            if close and (name:find("Close") or c == closeButton) and (not text or text == "") then
                 -- the corner close: SuuUI's cross
                 for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-                    local t = ask(c, get)
-                    if t then t:SetAlpha(0) end
+                    fade(ask(close, get))
                 end
-                for _, r in ipairs({ c:GetRegions() }) do
-                    if r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-                end
-                c:SetSize(22, 22)
-                c:ClearAllPoints()
-                c:SetPoint("TOPRIGHT", f, "TOPRIGHT", -S["space-3"], -S["space-3"])
-                local border = draw.border(c, "gilt-line")
+                for _, t in ipairs(textures(close)) do t:SetAlpha(0) end
+                close:SetSize(22, 22)
+                close:ClearAllPoints()
+                close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -S["space-3"], -S["space-3"])
+                local border = draw.border(close, "gilt-line")
                 border:SetShown(false)
-                local cross = draw.cross(c, 10, "ink-muted")
+                local cross = draw.cross(close, 10, "ink-muted")
                 cross:SetPoint("CENTER")
-                hookScript(c, "OnEnter", function() border:SetShown(true); cross:SetColor("ink") end)
-                hookScript(c, "OnLeave", function() border:SetShown(false); cross:SetColor("ink-muted") end)
+                hookScript(close, "OnEnter", function() border:SetShown(true); cross:SetColor("ink") end)
+                hookScript(close, "OnLeave", function() border:SetShown(false); cross:SetColor("ink-muted") end)
             elseif kind == "Frame" or kind == "ScrollFrame" then
                 if (c:GetWidth() or 0) > 100 and (c:GetHeight() or 0) > 40 then dialogBox(c) end
             end
@@ -1132,86 +1287,93 @@ end
 -- field, Accept as the primary (arcane) button, the others quiet. The game
 -- reuses these frames for every popup, so it's all undone when it hides.
 -- SuuUI's art lives on its own child frames (shown only while it's ours).
-local popups: { [any]: State } = setmetatable({}, { __mode = "k" })
 
-local function skinFrame(parent: any, fill: string, edge: string, level: number?): any
-    local f = CreateFrame("Frame", nil, parent) :: any
-    f:SetAllPoints()
-    f:SetFrameLevel(level or parent:GetFrameLevel())
-    f:EnableMouse(false)
-    f.fill = draw.fill(f, fill)
-    f.fill:SetAllPoints()
-    f.edge = draw.border(f, edge)
-    f:Hide()
-    return f
+-- A surface and edge on a frame of its own over a part of the popup.
+export class PopupSkin extends Frame
+    readonly fill: Texture
+    readonly edge: draw.Border
+
+    constructor(parent: Frame, fill: string, edge: string, level: number?)
+        super(nil, parent)
+        self:SetAllPoints()
+        self:SetFrameLevel(level or parent:GetFrameLevel())
+        self:EnableMouse(false)
+        self.fill = draw.fill(self, fill)
+        self.fill:SetAllPoints()
+        self.edge = draw.border(self, edge)
+        self:Hide()
+    end
 end
 
-local function restorePopup(st: State)
+type PopupState = { undo: (() -> ())[], skins: { [Frame]: PopupSkin }, active?: boolean }
+
+local popups: { [Frame]: PopupState } = setmetatable({}, { __mode = "k" })
+
+local function restorePopup(st: PopupState)
     for i = #st.undo, 1, -1 do pcall(st.undo[i]) end
     st.undo = {}
     for _, f in pairs(st.skins) do f:Hide() end
     st.active = false
 end
 
-local function popupButton(st: State, b: any, primary: boolean)
+local function popupButton(st: PopupState, given: unknown, primary: boolean)
+    local b = asButton(given)
     if not (b and b:IsShown()) then return end
     for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
-        local t = ask(b, get)
+        local t = asRegion(ask(b, get))
         if t then hideRegion(st, t) end
     end
-    for _, r in ipairs({ b:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then hideRegion(st, r) end
-    end
+    for _, t in ipairs(textures(b)) do hideRegion(st, t) end
     local skin = st.skins[b]
     if not skin then
-        skin = skinFrame(b, primary and "arcane" or "surface-raised", primary and "arcane" or "gilt-line")
-        st.skins[b] = skin
-        hookScript(b, "OnEnter", function() if st.active and not primary then skin.edge:SetColor("gilt") end end)
-        hookScript(b, "OnLeave", function() if st.active and not primary then skin.edge:SetColor("gilt-line") end end)
+        local made = PopupSkin.new(b, primary and "arcane" or "surface-raised", primary and "arcane" or "gilt-line")
+        skin = made
+        st.skins[b] = made
+        hookScript(b, "OnEnter", function() if st.active and not primary then made.edge:SetColor("gilt") end end)
+        hookScript(b, "OnLeave", function() if st.active and not primary then made.edge:SetColor("gilt-line") end end)
     end
     skin.edge:SetColor(primary and "arcane" or "gilt-line")
     skin:Show()
-    local fs = ask(b, "GetFontString")
+    local fs = asFontString(ask(b, "GetFontString"))
     if fs then menuText(st, fs, primary and "on-signal" or "ink"); fonts.apply(fs, "label") end
 end
 
-export function reskinPopup(dialog: any)
+export function reskinPopup(given: unknown)
+    local dialog = asFrame(given)
     if not dialog or ask(dialog, "IsForbidden") then return end
     local st = popups[dialog]
     if not st then
-        st = { undo = {}, skins = {} }
         -- solid: it opens over windows, whose text showed through the glass
-        local panel = skinFrame(dialog, "surface", "gilt-line")
+        local panel = PopupSkin.new(dialog, "surface", "gilt-line")
         draw.shadow(panel, "shadow-panel")
         draw.diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
-        st.skins[dialog] = panel
-        popups[dialog] = st
+        local made: PopupState = { undo = {}, skins = { [dialog] = panel } }
+        st = made
+        popups[dialog] = made
         -- (lasting: the game sets a popup's OnHide while it waits on events)
-        lastingHookScript(dialog, "OnHide", function() if st.active then restorePopup(st) end end)
+        lastingHookScript(dialog, "OnHide", function() if made.active then restorePopup(made) end end)
     end
     if st.active then restorePopup(st) end
     st.active = true
-    st.skins[dialog]:Show()
+    local own = st.skins[dialog]
+    if own then own:Show() end
     -- the game's frame art
     for _, key in ipairs({ "Border", "NineSlice", "BG", "Bg" }) do
-        local art = dialog[key]
-        if art and art.SetAlpha then hideRegion(st, art) end
+        local art = asRegion(part(dialog, key))
+        if art then hideRegion(st, art) end
     end
-    for _, r in ipairs({ dialog:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then hideRegion(st, r) end
-    end
-    local text = dialog.Text
+    for _, t in ipairs(textures(dialog)) do hideRegion(st, t) end
+    local text = asFontString(part(dialog, "Text"))
     if text then menuText(st, text, "ink") end
     -- the edit box: a sunk field
-    local edit = dialog.EditBox
+    local edit = asEditBox(part(dialog, "EditBox"))
     if edit and edit:IsShown() then
-        if edit.NineSlice then hideRegion(st, edit.NineSlice) end
-        for _, r in ipairs({ edit:GetRegions() }) do
-            if r:GetObjectType() == "Texture" then hideRegion(st, r) end
-        end
+        local nine = asRegion(part(edit, "NineSlice"))
+        if nine then hideRegion(st, nine) end
+        for _, t in ipairs(textures(edit)) do hideRegion(st, t) end
         local skin = st.skins[edit]
         if not skin then
-            skin = skinFrame(edit, "surface-sunk", "gilt-line")
+            skin = PopupSkin.new(edit, "surface-sunk", "gilt-line")
             skin:ClearAllPoints()
             skin:SetPoint("TOPLEFT", -4, 2)
             skin:SetPoint("BOTTOMRIGHT", 4, -2)
@@ -1219,9 +1381,9 @@ export function reskinPopup(dialog: any)
         end
         skin:Show()
     end
-    local container = dialog.ButtonContainer
+    local container = part(dialog, "ButtonContainer")
     for i = 1, 4 do
-        local b = (container and container["Button" .. i]) or dialog["button" .. i]
+        local b = part(container, "Button" .. i) or part(dialog, "button" .. i)
         popupButton(st, b, i == 1)
     end
 end
