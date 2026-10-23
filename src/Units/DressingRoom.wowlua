@@ -15,6 +15,14 @@
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SuuButton from "/UI/Controls"
+import type WindowFrame, Panel, ScrollArea from "/UI/Panel"
+import type Select, SelectOption from "/UI/Select"
+import type ItemSlot from "/UI/Inventory"
+import type ModelStage from "/UI/Stage"
+import asFrame, asButton, named, part from "/UI/Reskin"
+import type Text from "/UI/Text"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
@@ -22,388 +30,261 @@ import isSecret from "wowlua:secret"
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "dressingroom",
-    name = "Dressing room",
-    description = "SuuUI's dressing room: the doll on the model stage, the pieces you try on, and your saved outfits.",
-    api = "0.17",
-    reloadToToggle = true,
-    defaults = {},
-})
+local DEFAULTS = {}
 
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
-local function call(fn: any, ...: any): (any, any, any, any, any, any, any, any, any)
+local M: DressingRoomModule
+
+local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
+-- One of the game's functions, if it has it: its results as they come (read
+-- each with `str` or `num`), nothing when it fails.
+local function call(fn: unknown, ...: unknown): ...unknown
     if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h, i = pcall(fn, ...)
+    local ok, a, b, c, d, e, f, g, h, i = pcall(fn :: (...unknown) -> ...unknown, ...)
     if ok then return a, b, c, d, e, f, g, h, i end
+    return nil
 end
+local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
+local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
 
 local WIDTH, HEIGHT = 900, 640
 local LIST_W = 300
 local BAR_H = 26
 local ROW_H = 36
 local TC = C_TransmogCollection
-local NONE = Constants and Constants.Transmog and Constants.Transmog.NoTransmogID or 0
-local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local NONE: number = num(part(part(Constants, "Transmog"), "NoTransmogID")) or 0
+local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 -- the pieces, top to bottom: armour as the Character window reads it, then
 -- the weapons
-local SLOTS = {
-    { 1, "Head" }, { 3, "Shoulder" }, { 15, "Back" }, { 5, "Chest" }, { 4, "Shirt" }, { 19, "Tabard" },
-    { 9, "Wrist" }, { 10, "Hands" }, { 6, "Waist" }, { 7, "Legs" }, { 8, "Feet" },
-    { 16, "Main hand" }, { 17, "Off hand" }, { 18, "Ranged" },
+type SlotRow = { id: number, label: string }
+local SLOTS: SlotRow[] = {
+    { id = 1, label = "Head" }, { id = 3, label = "Shoulder" }, { id = 15, label = "Back" }, { id = 5, label = "Chest" },
+    { id = 4, label = "Shirt" }, { id = 19, label = "Tabard" }, { id = 9, label = "Wrist" }, { id = 10, label = "Hands" },
+    { id = 6, label = "Waist" }, { id = 7, label = "Legs" }, { id = 8, label = "Feet" },
+    { id = 16, label = "Main hand" }, { id = 17, label = "Off hand" }, { id = 18, label = "Ranged" },
 }
 
 --------------------------------------------------------------------------------
 -- The game's dressing room
 --------------------------------------------------------------------------------
 
-local function scene(): any
-    local f = _G.DressUpFrame
-    return f and f.ModelScene
+local function dressUp(): Frame? return asFrame(named("DressUpFrame")) end
+
+local function scene(): Frame?
+    return asFrame(part(dressUp(), "ModelScene"))
 end
 
-local function actor(): any
+-- The scene's player actor (the doll).
+local function actor(): unknown
     local s = scene()
-    return s and call(s.GetPlayerActor, s)
+    return s and call(part(s, "GetPlayerActor"), s)
 end
 
--- What the doll wears now, by slot: { [slotID] = ItemTransmogInfo }.
-local function wornList(): any
+-- What the doll wears now, by slot.
+type Worn = { [number]: ItemTransmogInfo }
+local function wornList(): Worn?
     local a = actor()
-    return a and call(a.GetItemTransmogInfoList, a)
+    local list = a and call(part(a, "GetItemTransmogInfoList"), a)
+    if type(list) == "table" then return list :: Worn end
+    return nil
 end
 
 -- What you wear in a slot (its shown appearance), to tell what you tried on.
-local function yours(slotID: number): any
+local function yours(slotID: number): number?
     if ItemLocation and C_Item.GetCurrentItemTransmogInfo then
         local loc = ItemLocation:CreateFromEquipmentSlot(slotID)
         if loc and loc:IsValid() then
-            local info = call(C_Item.GetCurrentItemTransmogInfo, loc)
-            if info and plain(info.appearanceID) then return info.appearanceID end
+            local appearance = num(part(call(C_Item.GetCurrentItemTransmogInfo, loc), "appearanceID"))
+            if appearance then return appearance end
         end
     end
     local link = GetInventoryItemLink("player", slotID)
     if link then
         local _, source = call(TC.GetItemInfo, link)
-        return source
+        return num(source)
     end
     return NONE
 end
 
+-- A piece as its row shows it.
+type Piece = { name?: string, quality?: number, icon?: number, itemID?: number, link?: string }
+
 -- A piece's name, quality, icon and link from its appearance source.
-local function piece(sourceID: any): { [string]: any }
-    local info = call(TC.GetSourceInfo, sourceID)
-    local name = info and plain(info.name) and info.name or nil
-    local quality = info and info.quality
-    local link
+local function piece(sourceID: number): Piece
+    local ok, info = pcall(TC.GetSourceInfo, sourceID)
+    if not ok or isSecret(info) then info = nil end
+    local name = info and str(info.name)
+    local itemID = info and info.itemID
     local src = call(TC.GetAppearanceSourceInfo, sourceID)
-    if src then link = src.itemLink end
-    if not name and info and info.itemID then name = C_Item.GetItemNameByID(info.itemID) end
+    if not name and itemID then name = str(C_Item.GetItemNameByID(itemID)) end
     return {
-        name = name, quality = quality, icon = call(TC.GetSourceIcon, sourceID),
-        itemID = info and info.itemID, link = plain(link) and link or nil,
+        name = name, quality = info and info.quality, icon = num(call(TC.GetSourceIcon, sourceID)),
+        itemID = itemID, link = str(part(src, "itemLink")),
     }
+end
+
+-- An outfit's name (nil: none, or unreadable).
+local function outfitName(id: number): string?
+    return str((call(TC.GetCustomSetInfo, id)))
 end
 
 --------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
 
-function M:BuildRow(parent: Frame): any
-    local r = CreateFrame("Button", nil, parent) :: any
-    r:SetHeight(ROW_H)
-    r:RegisterForClicks("LeftButtonUp")
-    r.bg = UI.Fill(r, "surface-raised", "BACKGROUND")
-    r.bg:SetAllPoints()
-    r.bg:Hide()
-    r.edge = UI.Fill(r, "arcane", "ARTWORK")
-    r.edge:SetPoint("TOPLEFT")
-    r.edge:SetPoint("BOTTOMLEFT")
-    r.edge:SetWidth(2)
-    r.slot = UI.ItemSlot(r, 28)
-    r.slot:SetPoint("LEFT", S["space-3"], 0)
-    r.slot:EnableMouse(false)
-    r.name = UI.Text(r, "label", "ink")
-    r.name:SetWordWrap(false)
-    r.name:SetJustifyH("LEFT")
-    r.name:SetPoint("TOPLEFT", r.slot, "TOPRIGHT", S["space-4"], 1)
-    r.name:SetPoint("RIGHT", -(22 + S["space-4"]), 0)
-    r.sub = UI.Text(r, "caption", "ink-muted")
-    r.sub:SetPoint("BOTTOMLEFT", r.slot, "BOTTOMRIGHT", S["space-4"], -1)
-    -- × takes it off
-    r.x = CreateFrame("Button", nil, r)
-    r.x:SetSize(22, 22)
-    r.x:SetPoint("RIGHT", -S["space-3"], 0)
-    r.x.glyph = r.x:CreateTexture(nil, "ARTWORK")
-    r.x.glyph:SetSize(11, 11)
-    r.x.glyph:SetPoint("CENTER")
-    r.x.glyph:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\close")
-    UI.Paint(r.x.glyph, "ink-faint")
-    r.x:SetScript("OnEnter", function(b)
-        r.bg:Show()
-        UI.Paint(b.glyph, "ember-text")
-        UI.ShowTooltip(b, { title = "Take off" })
-    end)
-    r.x:SetScript("OnLeave", function(b)
-        r.bg:Hide()
-        UI.Paint(b.glyph, "ink-faint")
-        UI.HideTooltip()
-    end)
-    r.x:SetScript("OnClick", function() self:TakeOff(r.slotID) end)
-    r:SetScript("OnEnter", function(b)
-        b.bg:Show()
-        UI.Paint(b.x.glyph, "ember-text")
-        if not b.data then return end
-        GameTooltip:SetOwner(b, "ANCHOR_RIGHT", S["space-4"], 0)
-        if b.data.link then GameTooltip:SetHyperlink(b.data.link)
-        elseif b.data.itemID then GameTooltip:SetItemByID(b.data.itemID)
-        else GameTooltip:SetText(b.data.name or "") end
-        local cr, cg, cb = UI.RGBA(b.tried and "arcane" or "ink-muted")
-        GameTooltip:AddLine(b.tried and "Tried on · not worn" or "What you wear", cr, cg, cb, true)
-        GameTooltip:Show()
-    end)
-    r:SetScript("OnLeave", function(b)
-        b.bg:Hide()
-        UI.Paint(b.x.glyph, "ink-faint")
-        GameTooltip:Hide()
-    end)
-    -- shift-click links it, like the game's list
-    r:SetScript("OnClick", function(b)
-        if b.data and b.data.link then HandleModifiedItemClick(b.data.link) end
-    end)
-    return r
-end
+-- A piece's row: its slot, name in its quality's colour and slot; × takes
+-- it off; tried on: an arcane edge.
+export class PieceRow extends Button
+    readonly bg: Texture
+    readonly edge: Texture
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly sub: Text
+    readonly x: Button
+    readonly xGlyph: Texture
+    slotID: number? = nil
+    data: Piece? = nil
+    tried: boolean = false
 
-function M:Build()
-    self.rows = {}
-    local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIDressingRoom", title = "Dressing Room", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end })
-    w:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
-    w:Hide()
-    w.scroll:Hide()
-    w:HookScript("OnHide", function()
-        GameTooltip:Hide()
-        local f = _G.DressUpFrame
-        if f and f:IsShown() then HideUIPanel(f) end
-    end)
-    self.window = w
-    local body = w.body
-
-    -- the outfit bar: saved outfits, Save, Delete; Link at the right
-    local bar = CreateFrame("Frame", nil, body)
-    bar:SetPoint("TOPLEFT")
-    bar:SetPoint("TOPRIGHT")
-    bar:SetHeight(BAR_H)
-    self.bar = bar
-    self.outfit = UI.Select(bar, { width = 220, placeholder = "Unsaved outfit", options = {}, onChange = function(v: any)
-        self:LoadOutfit(v)
-    end })
-    self.outfit:SetPoint("LEFT")
-    self.save = UI.Button(bar, { text = "Save", icon = "check", onClick = function() self:Save() end })
-    self.save:SetHeight(BAR_H)
-    self.save:SetPoint("LEFT", self.outfit, "RIGHT", S["space-4"], 0)
-    self.delete = UI.Button(bar, { text = "Delete", icon = "trash", onClick = function() self:Delete() end })
-    self.delete:SetHeight(BAR_H)
-    self.delete:SetPoint("LEFT", self.save, "RIGHT", S["space-4"], 0)
-    self.link = UI.Button(bar, { text = "Link", icon = "chat", onClick = function() self:Link() end })
-    self.link:SetHeight(BAR_H)
-    self.link:SetPoint("RIGHT")
-    self.link.tooltip = { title = "Link", description = "This outfit as a link in chat." }
-
-    -- the pieces
-    local list = CreateFrame("Frame", nil, body)
-    list:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -S["space-5"])
-    list:SetPoint("BOTTOMLEFT")
-    list:SetWidth(LIST_W)
-    self.list = list
-    list.head = UI.Text(list, "header", "gilt-text")
-    list.head:SetPoint("TOPLEFT")
-    list.count = UI.Text(list, "caption", "ink-muted")
-    list.count:SetPoint("TOPRIGHT")
-    local top = T.type.header.lineHeight + S["space-3"]
-    local BARW = S["space-3"]
-    list.scroll = UI.ScrollArea(list, BARW)
-    list.scroll:SetPoint("TOPLEFT", 0, -top)
-    list.scroll:SetPoint("BOTTOMRIGHT", -(BARW + 3), 0)
-    list.scroll:HookScript("OnSizeChanged", function(sc, width) sc.child:SetWidth(width) end)
-    list.empty = UI.Text(list, "caption", "ink-muted")
-    list.empty:SetPoint("TOPLEFT", 0, -(top + S["space-5"]))
-    list.empty:SetWidth(LIST_W)
-    list.empty:SetJustifyH("LEFT")
-    list.empty:SetWordWrap(true)
-    list.empty:SetValue("Nothing on. Ctrl-click an item to try it on, or Reset to what you wear.")
-
-    -- a mount or pet: its card instead of the pieces
-    local card = CreateFrame("Frame", nil, body)
-    card:SetPoint("TOPLEFT")
-    card:SetWidth(LIST_W)
-    card:SetHeight(200)
-    card.head = UI.Text(card, "header", "gilt-text")
-    card.head:SetPoint("TOPLEFT")
-    local box = CreateFrame("Frame", nil, card)
-    box:SetPoint("TOPLEFT", 0, -(T.type.header.lineHeight + S["space-3"]))
-    box:SetPoint("RIGHT")
-    box:SetHeight(36 + 2 * S["space-3"])
-    UI.Fill(box, "surface-sunk"):SetAllPoints()
-    UI.Border(box, "gilt-faint")
-    card.slot = UI.ItemSlot(box, 36)
-    card.slot:SetPoint("LEFT", S["space-3"], 0)
-    card.slot:EnableMouse(false)
-    card.name = UI.Text(box, "label", "ink")
-    card.name:SetPoint("TOPLEFT", card.slot, "TOPRIGHT", S["space-4"], -2)
-    card.name:SetPoint("RIGHT", -S["space-3"], 0)
-    card.name:SetJustifyH("LEFT")
-    card.name:SetWordWrap(false)
-    card.state = UI.Text(box, "caption", "ink-muted")
-    card.state:SetPoint("BOTTOMLEFT", card.slot, "BOTTOMRIGHT", S["space-4"], 2)
-    card.open = UI.Button(card, { text = "Open in Collections", icon = "gem", onClick = function()
-        if SuuUI.CollectionsShown() then return end
-        SuuUI.ToggleCollections("mounts")
-    end })
-    card.open:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -S["space-4"])
-    card.note = UI.Text(card, "caption", "ink-muted")
-    card.note:SetPoint("TOPLEFT", card.open, "BOTTOMLEFT", 0, -S["space-4"])
-    card.note:SetWidth(LIST_W)
-    card.note:SetJustifyH("LEFT")
-    card.note:SetWordWrap(true)
-    card:Hide()
-    self.card = card
-
-    -- the stage, the game's model scene on it
-    local stage = CreateFrame("Frame", nil, body)
-    stage:SetPoint("TOPLEFT", list, "TOPRIGHT", S["space-5"], 0)
-    stage:SetPoint("BOTTOMRIGHT")
-    stage:SetClipsChildren(true)
-    UI.ModelStage(stage)
-    stage:Tint("gilt")
-    self.stage = stage
-
-    -- the foot
-    local foot = assert(w.footer)
-    self.hint = UI.Text(foot, "caption", "ink-muted")
-    self.hint:SetPoint("LEFT")
-    local close = UI.Button(foot, { text = "Close", onClick = function() w:Hide() end })
-    close:SetPoint("RIGHT")
-    self.undress = UI.Button(foot, { text = "Undress", onClick = function()
-        local a = actor()
-        if a then call(a.Undress, a) end
-        PlaySound(SOUNDKIT.GS_TITLE_OPTION_OK)
-    end })
-    self.undress:SetPoint("RIGHT", close, "LEFT", -S["space-4"], 0)
-    self.reset = UI.Button(foot, { text = "Reset", icon = "reset", onClick = function() self:Reset() end })
-    self.reset.tooltip = { title = "Reset", description = "Back to what you wear." }
-    self.reset:SetPoint("RIGHT", self.undress, "LEFT", -S["space-4"], 0)
-end
-
--- The game's model scene on SuuUI's stage, for as long as the module is on
--- (its own background and buttons out of sight).
-function M:Borrow()
-    local s = scene()
-    if not s or self.borrowed then return end
-    self.borrowed = true
-    s:SetParent(self.stage)
-    s:ClearAllPoints()
-    s:SetPoint("TOPLEFT", self.stage, "TOPLEFT", 1, -1)
-    s:SetPoint("BOTTOMRIGHT", self.stage, "BOTTOMRIGHT", -1, 1)
-    s:SetFrameLevel(self.stage:GetFrameLevel() + 2)
-    for _, r in ipairs({ s:GetRegions() }) do r:SetAlpha(0) end
-    local ctl = s.ControlFrame
-    if ctl then
-        ctl:SetAlpha(0)
-        hookScript(ctl, "OnShow", function(c) c:Hide() end)
+    constructor(parent: Frame, owner: DressingRoomModule)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self:RegisterForClicks("LeftButtonUp")
+        self.bg = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.bg:SetAllPoints()
+        self.bg:Hide()
+        self.edge = UI.Fill(self, "arcane", "ARTWORK")
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.edge:SetWidth(2)
+        self.slot = UI.ItemSlot(self, 28)
+        self.slot:SetPoint("LEFT", S["space-3"], 0)
+        self.slot:EnableMouse(false)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetWordWrap(false)
+        self.name:SetJustifyH("LEFT")
+        self.name:SetPoint("TOPLEFT", self.slot, "TOPRIGHT", S["space-4"], 1)
+        self.name:SetPoint("RIGHT", -(22 + S["space-4"]), 0)
+        self.sub = UI.Text(self, "caption", "ink-muted")
+        self.sub:SetPoint("BOTTOMLEFT", self.slot, "BOTTOMRIGHT", S["space-4"], -1)
+        -- × takes it off
+        self.x = CreateFrame("Button", nil, self)
+        self.x:SetSize(22, 22)
+        self.x:SetPoint("RIGHT", -S["space-3"], 0)
+        self.xGlyph = self.x:CreateTexture(nil, "ARTWORK")
+        self.xGlyph:SetSize(11, 11)
+        self.xGlyph:SetPoint("CENTER")
+        self.xGlyph:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\close")
+        UI.Paint(self.xGlyph, "ink-faint")
+        self.x:SetScript("OnEnter", function()
+            self.bg:Show()
+            UI.Paint(self.xGlyph, "ember-text")
+            UI.ShowTooltip(self.x, { title = "Take off" })
+        end)
+        self.x:SetScript("OnLeave", function()
+            self.bg:Hide()
+            UI.Paint(self.xGlyph, "ink-faint")
+            UI.HideTooltip()
+        end)
+        self.x:SetScript("OnClick", function() owner:TakeOff(self.slotID) end)
+        self:SetScript("OnEnter", function()
+            self.bg:Show()
+            UI.Paint(self.xGlyph, "ember-text")
+            local data = self.data
+            if not data then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT", S["space-4"], 0)
+            if data.link then GameTooltip:SetHyperlink(data.link)
+            elseif data.itemID then GameTooltip:SetItemByID(data.itemID)
+            else GameTooltip:SetText(data.name or "") end
+            local cr, cg, cb = UI.RGBA(self.tried and "arcane" or "ink-muted")
+            GameTooltip:AddLine(self.tried and "Tried on · not worn" or "What you wear", cr, cg, cb, true)
+            GameTooltip:Show()
+        end)
+        self:SetScript("OnLeave", function()
+            self.bg:Hide()
+            UI.Paint(self.xGlyph, "ink-faint")
+            GameTooltip:Hide()
+        end)
+        -- shift-click links it, like the game's list
+        self:SetScript("OnClick", function()
+            local data = self.data
+            if data and data.link then HandleModifiedItemClick(data.link) end
+        end)
     end
 end
 
---------------------------------------------------------------------------------
--- Actions
---------------------------------------------------------------------------------
+-- The pieces' column: its head and count, the rows, or why it's empty.
+class PieceList extends Frame
+    readonly head: Text
+    readonly count: Text
+    readonly scroll: ScrollArea
+    readonly empty: Text
 
-function M:TakeOff(slotID: number?)
-    local a = actor()
-    if a and slotID then call(a.UndressSlot, a, slotID) end
-end
-
-function M:Reset()
-    local f = _G.DressUpFrame
-    if f and f.ResetButton then f.ResetButton:Click() end
-    self.outfit:SetValue(nil)
-    self.chosen = nil
-    self:Draw()
-end
-
-function M:LoadOutfit(id: number?)
-    self.chosen = id
-    if not id then return end
-    local list = call(TC.GetCustomSetItemTransmogInfoList, id)
-    if list then DressUpItemTransmogInfoList(list) end
-    self:Draw()
-end
-
--- Whether the doll wears the chosen outfit (what's off doesn't count, as in
--- the game's own check).
-function M:Dressed()
-    if not self.chosen then return false end
-    local saved = call(TC.GetCustomSetItemTransmogInfoList, self.chosen)
-    local now = wornList()
-    if not (saved and now) then return true end
-    for slotID, info in pairs(now) do
-        if info.appearanceID ~= NONE and not (saved[slotID] and info:IsEqual(saved[slotID])) then return false end
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.head = UI.Text(self, "header", "gilt-text")
+        self.head:SetPoint("TOPLEFT")
+        self.count = UI.Text(self, "caption", "ink-muted")
+        self.count:SetPoint("TOPRIGHT")
+        local top = T.type.header.lineHeight + S["space-3"]
+        local BARW = S["space-3"]
+        local scroll = UI.ScrollArea(self, BARW)
+        self.scroll = scroll
+        scroll:SetPoint("TOPLEFT", 0, -top)
+        scroll:SetPoint("BOTTOMRIGHT", -(BARW + 3), 0)
+        scroll:HookScript("OnSizeChanged", function(_: Frame, width: number) scroll.child:SetWidth(width) end)
+        self.empty = UI.Text(self, "caption", "ink-muted")
+        self.empty:SetPoint("TOPLEFT", 0, -(top + S["space-5"]))
+        self.empty:SetWidth(LIST_W)
+        self.empty:SetJustifyH("LEFT")
+        self.empty:SetWordWrap(true)
+        self.empty:SetValue("Nothing on. Ctrl-click an item to try it on, or Reset to what you wear.")
     end
-    return true
 end
 
-function M:Save()
-    local now = wornList()
-    if not now then return end
-    if self.chosen then
-        call(TC.ModifyCustomSet, self.chosen, now)
-        self:Draw()
-        return
-    end
-    UI.Confirm({ title = "Save outfit", text = "A name for this outfit.", input = { label = "Name", placeholder = "Outfit name" },
-        confirm = "Save", onConfirm = function(name: string?)
-            name = strtrim(name or "")
-            if name == "" then return end
-            if call(TC.IsValidCustomSetName, name) == false then
-                UI.Confirm({ title = "Choose another name", text = "That name can't be used for an outfit.", confirm = "OK" })
-                return
-            end
-            -- the outfit's icon: its first piece's
-            local icon
-            for _, s in ipairs(SLOTS) do
-                local info = now[s[1]]
-                if info and info.appearanceID ~= NONE then
-                    icon = call(TC.GetSourceIcon, info.appearanceID)
-                    if icon then break end
-                end
-            end
-            local id = call(TC.NewCustomSet, name, icon or 134400, now)
-            if id then self.chosen = id end
-            self:Draw()
+-- A mount or pet: its card instead of the pieces.
+class PreviewCard extends Frame
+    readonly head: Text
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly state: Text
+    readonly open: SuuButton
+    readonly note: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetPoint("TOPLEFT")
+        self:SetWidth(LIST_W)
+        self:SetHeight(200)
+        self.head = UI.Text(self, "header", "gilt-text")
+        self.head:SetPoint("TOPLEFT")
+        local box = CreateFrame("Frame", nil, self)
+        box:SetPoint("TOPLEFT", 0, -(T.type.header.lineHeight + S["space-3"]))
+        box:SetPoint("RIGHT")
+        box:SetHeight(36 + 2 * S["space-3"])
+        UI.Fill(box, "surface-sunk"):SetAllPoints()
+        UI.Border(box, "gilt-faint")
+        self.slot = UI.ItemSlot(box, 36)
+        self.slot:SetPoint("LEFT", S["space-3"], 0)
+        self.slot:EnableMouse(false)
+        self.name = UI.Text(box, "label", "ink")
+        self.name:SetPoint("TOPLEFT", self.slot, "TOPRIGHT", S["space-4"], -2)
+        self.name:SetPoint("RIGHT", -S["space-3"], 0)
+        self.name:SetJustifyH("LEFT")
+        self.name:SetWordWrap(false)
+        self.state = UI.Text(box, "caption", "ink-muted")
+        self.state:SetPoint("BOTTOMLEFT", self.slot, "BOTTOMRIGHT", S["space-4"], 2)
+        self.open = UI.Button(self, { text = "Open in Collections", icon = "gem", onClick = function()
+            if SuuUI.CollectionsShown() then return end
+            SuuUI.ToggleCollections("mounts")
         end })
-end
-
-function M:Delete()
-    local id = self.chosen
-    if not id then return end
-    local name = call(TC.GetCustomSetInfo, id) or "this outfit"
-    UI.Confirm({ title = "Delete " .. name .. "?", text = "The outfit is gone for good; the doll keeps what it wears.",
-        confirm = "Delete", onConfirm = function()
-            call(TC.DeleteCustomSet, id)
-            self.chosen = nil
-            self:Draw()
-        end })
-end
-
-function M:Link()
-    local now = wornList()
-    local link = now and call(TC.GetCustomSetHyperlinkFromItemTransmogInfoList, now)
-    if not link then return end
-    if ChatFrameUtil and ChatFrameUtil.InsertLink then
-        if not ChatFrameUtil.InsertLink(link) then ChatFrameUtil.OpenChat(link) end
-    elseif ChatEdit_InsertLink then
-        if not ChatEdit_InsertLink(link) then ChatFrame_OpenChat(link) end
+        self.open:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -S["space-4"])
+        self.note = UI.Text(self, "caption", "ink-muted")
+        self.note:SetPoint("TOPLEFT", self.open, "BOTTOMLEFT", 0, -S["space-4"])
+        self.note:SetWidth(LIST_W)
+        self.note:SetJustifyH("LEFT")
+        self.note:SetWordWrap(true)
+        self:Hide()
     end
 end
 
@@ -413,21 +294,23 @@ end
 
 -- The saved outfits as the select's options, by name (`nameOf`: an
 -- outfit's name, or nil/secret: "Outfit <id>").
-local function outfitOptions(ids: number[], nameOf: (id: number) -> any): { value: number, label: string }[]
-    local options: { value: number, label: string }[] = {}
+local function outfitOptions(ids: number[], nameOf: (id: number) -> unknown): SelectOption<number>[]
+    local byName: { value: number, label: string }[] = {}
     for _, id in ipairs(ids) do
         local name = nameOf(id)
-        options[#options + 1] = { value = id, label = plain(name) and name or ("Outfit " .. id) }
+        byName[#byName + 1] = { value = id, label = plain(name) and type(name) == "string" and name or ("Outfit " .. id) }
     end
-    table.sort(options, function(a: { value: number, label: string }, b: { value: number, label: string }): boolean
+    table.sort(byName, function(a: { value: number, label: string }, b: { value: number, label: string }): boolean
         return a.label:lower() < b.label:lower()
     end)
+    local options: SelectOption<number>[] = {}
+    for i, o in ipairs(byName) do options[i] = { value = o.value, label = o.label } end
     return options
 end
 
 -- Why Save is off (nil: on): the chosen outfit unchanged, or no room for
 -- a new one.
-local function saveWhy(chosen: any, dirty: boolean, full: boolean): string?
+local function saveWhy(chosen: number?, dirty: boolean, full: boolean): string?
     if chosen and not dirty then return "Nothing changed." end
     if not chosen and full then return "You have as many outfits as the game keeps; delete one first." end
     return nil
@@ -435,182 +318,433 @@ end
 
 local function countText(n: number): string return n == 1 and "1 piece" or (n .. " pieces") end
 
-function M:DrawOutfits()
-    local options = outfitOptions(call(TC.GetCustomSets) or {}, function(id: number): any return (call(TC.GetCustomSetInfo, id)) end)
-    self.outfit:SetOptions(options)
-    local known = false
-    for _, o in ipairs(options) do if o.value == self.chosen then known = true end end
-    if not known then self.chosen = nil end
-    local dirty = not self:Dressed()
-    -- changed: "Unsaved outfit", Save on
-    self.outfit:SetValue((self.chosen and not dirty) and self.chosen or nil)
-    local full = #options >= (call(TC.GetNumMaxCustomSets) or 999)
-    local why = saveWhy(self.chosen, dirty, full)
-    self.save:SetEnabledState(why == nil)
-    self.save.tooltip = { title = self.chosen and "Save" or "Save as a new outfit", description = why
-        or (self.chosen and ("Save the changes to " .. (call(TC.GetCustomSetInfo, self.chosen) or "it") .. ".") or "Name it and keep it.") }
-    self.delete:SetEnabledState(self.chosen ~= nil)
-    self.delete.tooltip = { title = "Delete", description = self.chosen and ("Delete " .. (call(TC.GetCustomSetInfo, self.chosen) or "it") .. ".")
-        or "Pick a saved outfit first." }
-end
-
-function M:DrawPieces()
-    local list = self.list
-    local now = wornList() or {}
-    local c = list.scroll.child
-    local y, used = 0, 0
-    for _, s in ipairs(SLOTS) do
-        local info = now[s[1]]
-        local source = info and info.appearanceID
-        if plain(source) and source ~= NONE then
-            used = used + 1
-            local r = self.rows[used] or self:BuildRow(c)
-            self.rows[used] = r
-            local p = piece(source)
-            r.slotID, r.data = s[1], p
-            r.tried = source ~= yours(s[1] :: number)
-            r.edge:SetShown(r.tried)
-            r.slot.skin:SetItem({ icon = p.icon, quality = QUALITY[p.quality] })
-            r.name:SetValue(p.name or "…")
-            local q = QUALITY[p.quality]
-            r.name:SetColor(q and ("quality-" .. q) or "ink")
-            r.sub:SetValue(s[2] .. (r.tried and " · tried on" or ""))
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", 0, -y)
-            r:SetPoint("RIGHT")
-            r:Show()
-            y = y + ROW_H + 1
-        end
-    end
-    for i = used + 1, #self.rows do self.rows[i]:Hide() end
-    c:SetHeight(math.max(1, y))
-    list.head:SetValue("Trying on")
-    list.count:SetValue(countText(used))
-    list.empty:SetShown(used == 0)
-end
-
--- A mount (or pet) preview: its card in the column.
-function M:DrawCard(mode: string)
-    local card = self.card
-    local f = _G.DressUpFrame
-    local link = f and f.GetLastLink and f:GetLastLink()
-    local name, icon, collected, quality
-    if mode == "mount" then
-        card.head:SetValue("Mount")
-        local id
-        local kind, opts
-        if link then kind, opts = LinkUtil.ExtractLink(link) end
-        local linkID = opts and tonumber((LinkUtil.SplitLinkOptions(opts)))
-        if kind == "item" then id = call(C_MountJournal.GetMountFromItem, linkID)
-        elseif kind == "spell" or kind == "mount" then id = call(C_MountJournal.GetMountFromSpell, linkID) end
-        if id then
-            local info = { pcall(C_MountJournal.GetMountInfoByID, id) }
-            if info[1] then name, icon, collected = info[2], info[4], info[12] end
-        end
-        if kind == "item" and linkID then
-            local _, _, q = C_Item.GetItemInfo(link)
-            quality = q
-        end
-        card.note:SetValue("Ctrl-click armour to go back to your outfit.")
-        card.open:Show()
-    else
-        card.head:SetValue("Pet")
-        card.note:SetValue("Ctrl-click armour to go back to your outfit.")
-        card.open:Hide()
-    end
-    if not name and link then name = link:match("%[(.-)%]") end
-    card.slot.skin:SetItem({ icon = icon or 134400, quality = QUALITY[quality] })
-    card.name:SetValue(name or "")
-    local q = QUALITY[quality]
-    card.name:SetColor(q and ("quality-" .. q) or "ink")
-    card.state:SetValue(collected == nil and "" or (collected and "Collected" or "Not collected"))
-    card.state:SetColor(collected and "gilt-text" or "ink-muted")
-end
-
-function M:Draw()
-    local w = self.window
-    if not (w and w:IsShown()) then return end
-    local f = _G.DressUpFrame
-    local mode = f and f.GetMode and f:GetMode() or "player"
-    local player = mode == "player"
-    self.bar:SetShown(player)
-    self.list:SetShown(player)
-    self.card:SetShown(not player)
-    self.reset:SetShown(player)
-    self.undress:SetShown(player)
-    self.stage:ClearAllPoints()
-    if player then
-        self.stage:SetPoint("TOPLEFT", self.list, "TOPRIGHT", S["space-5"], 0)
-        self:DrawOutfits()
-        self:DrawPieces()
-        self.hint:SetValue("Ctrl-click any item to try it on · drag to turn, wheel to zoom")
-    else
-        self.stage:SetPoint("TOPLEFT", self.window.body, "TOPLEFT", LIST_W + S["space-5"], 0)
-        self:DrawCard(mode)
-        self.hint:SetValue(mode == "mount" and "Previewing a mount" or "Previewing a pet")
-    end
-    self.stage:SetPoint("BOTTOMRIGHT")
-end
-
--- Changes come in bursts (an outfit dresses every slot): drawn once, a frame later.
-function M:QueueDraw()
-    if self.queued then return end
-    self.queued = true
-    after(0, function()
-        self.queued = nil
-        self:Draw()
-    end)
+-- A link's kind and its first option's number ("item", 12345).
+local function linkParts(link: string): (string?, number?)
+    local ok: boolean, kind: unknown, opts: unknown = pcall(LinkUtil.ExtractLink, link)
+    if not ok or type(opts) ~= "string" then return str(kind), nil end
+    local okSplit: boolean, first: unknown = pcall(LinkUtil.SplitLinkOptions, opts)
+    return str(kind), okSplit and tonumber(first) or nil
 end
 
 --------------------------------------------------------------------------------
 -- With the game's dressing room
 --------------------------------------------------------------------------------
 
--- The game's window out of sight: see-through and off screen, still shown.
-function M:PutAway(frame: any)
-    if not self:IsEnabled() then return end
-    self.placing = true
-    frame:SetAlpha(0)
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-    self.placing = false
-end
+class DressingRoomModule extends Module<typeof(DEFAULTS)>
+    bar: Frame? = nil
+    borrowed: boolean? = nil
+    card: PreviewCard? = nil
+    -- the saved outfit chosen (its custom set ID)
+    chosen: number? = nil
+    delete: SuuButton? = nil
+    hint: Text? = nil
+    hooked: boolean? = nil
+    link: SuuButton? = nil
+    list: PieceList? = nil
+    outfit: Select<number>? = nil
+    placing: boolean? = nil
+    queued: boolean? = nil
+    reset: SuuButton? = nil
+    rows: PieceRow[] = {}
+    save: SuuButton? = nil
+    stage: ModelStage? = nil
+    undress: SuuButton? = nil
+    window: WindowFrame? = nil
 
-function M:Hook()
-    local f = _G.DressUpFrame
-    if not f or self.hooked then return end
-    self.hooked = true
-    self:Borrow()
-    hook(f, "SetPoint", function() if not self.placing then after(0, function() self:PutAway(f) end) end end)
-    hook(f, "SetAlpha", function(_, a) if not self.placing and a ~= 0 then after(0, function() self:PutAway(f) end) end end)
-    hookScript(f, "OnShow", function()
-        if not self:IsEnabled() then return end
-        self:PutAway(f)
-        after(0, function() self:PutAway(f) end)
-        -- the game's side panels stay closed (their lists are SuuUI's now)
-        if f.CustomSetDetailsPanel then f.CustomSetDetailsPanel:Hide() end
-        self.window:Show()
-        self:QueueDraw()
-    end)
-    hookScript(f, "OnHide", function()
-        if self.window:IsShown() then self.window:Hide() end
-    end)
-    -- what the doll wears changed, or what it shows (player, mount, pet)
-    if f.OnDressModel then hook(f, "OnDressModel", function() self:QueueDraw() end) end
-    if f.SetMode then hook(f, "SetMode", function() self:QueueDraw() end) end
-end
+    constructor()
+        super({
+            id = "dressingroom",
+            name = "Dressing room",
+            description = "SuuUI's dressing room: the doll on the model stage, the pieces you try on, and your saved outfits.",
+            api = "0.17",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
+    end
 
-function M:OnEnable()
-    if not self.window then self:Build() end
-    self:Hook()
-    for _, e in ipairs({ "TRANSMOG_CUSTOM_SETS_CHANGED", "TRANSMOG_COLLECTION_ITEM_UPDATE", "GET_ITEM_INFO_RECEIVED",
-                         "PLAYER_EQUIPMENT_CHANGED" }) do
-        if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid(e) then
-            self:OnGameEvent(e, function() self:QueueDraw() end)
+    function BuildRow(parent: Frame): PieceRow
+        return PieceRow.new(parent, self)
+    end
+
+    function Build()
+        self.rows = {}
+        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIDressingRoom", title = "Dressing Room", width = WIDTH, height = HEIGHT,
+            footer = true, onClose = function(win: Panel) win:Hide() end })
+        w:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
+        w:Hide()
+        w.scroll:Hide()
+        w:HookScript("OnHide", function()
+            GameTooltip:Hide()
+            local f = dressUp()
+            if f and f:IsShown() then HideUIPanel(f) end
+        end)
+        self.window = w
+        local body = w.body
+
+        -- the outfit bar: saved outfits, Save, Delete; Link at the right
+        local bar = CreateFrame("Frame", nil, body)
+        bar:SetPoint("TOPLEFT")
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(BAR_H)
+        self.bar = bar
+        local outfit: Select<number> = UI.Select(bar, { width = 220, placeholder = "Unsaved outfit", options = {}, onChange = function(v: number)
+            self:LoadOutfit(v)
+        end })
+        self.outfit = outfit
+        outfit:SetPoint("LEFT")
+        local save = UI.Button(bar, { text = "Save", icon = "check", onClick = function() self:Save() end })
+        self.save = save
+        save:SetHeight(BAR_H)
+        save:SetPoint("LEFT", outfit, "RIGHT", S["space-4"], 0)
+        local delete = UI.Button(bar, { text = "Delete", icon = "trash", onClick = function() self:Delete() end })
+        self.delete = delete
+        delete:SetHeight(BAR_H)
+        delete:SetPoint("LEFT", save, "RIGHT", S["space-4"], 0)
+        local link = UI.Button(bar, { text = "Link", icon = "chat", onClick = function() self:Link() end })
+        self.link = link
+        link:SetHeight(BAR_H)
+        link:SetPoint("RIGHT")
+        link.tooltip = { title = "Link", description = "This outfit as a link in chat." }
+
+        -- the pieces
+        local list = PieceList.new(body)
+        list:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -S["space-5"])
+        list:SetPoint("BOTTOMLEFT")
+        list:SetWidth(LIST_W)
+        self.list = list
+
+        self.card = PreviewCard.new(body)
+
+        -- the stage, the game's model scene on it
+        local frame = CreateFrame("Frame", nil, body)
+        frame:SetPoint("TOPLEFT", list, "TOPRIGHT", S["space-5"], 0)
+        frame:SetPoint("BOTTOMRIGHT")
+        frame:SetClipsChildren(true)
+        local stage = UI.ModelStage(frame)
+        stage:Tint("gilt")
+        self.stage = stage
+
+        -- the foot
+        local foot = assert(w.footer)
+        local hint = UI.Text(foot, "caption", "ink-muted")
+        self.hint = hint
+        hint:SetPoint("LEFT")
+        local close = UI.Button(foot, { text = "Close", onClick = function() w:Hide() end })
+        close:SetPoint("RIGHT")
+        local undress = UI.Button(foot, { text = "Undress", onClick = function()
+            local a = actor()
+            if a then call(part(a, "Undress"), a) end
+            PlaySound(SOUNDKIT.GS_TITLE_OPTION_OK)
+        end })
+        self.undress = undress
+        undress:SetPoint("RIGHT", close, "LEFT", -S["space-4"], 0)
+        local reset = UI.Button(foot, { text = "Reset", icon = "reset", onClick = function() self:ResetDoll() end })
+        self.reset = reset
+        reset.tooltip = { title = "Reset", description = "Back to what you wear." }
+        reset:SetPoint("RIGHT", undress, "LEFT", -S["space-4"], 0)
+    end
+
+    -- The game's model scene on SuuUI's stage, for as long as the module is on
+    -- (its own background and buttons out of sight).
+    function Borrow()
+        local s, stage = scene(), self.stage
+        if not s or not stage or self.borrowed then return end
+        self.borrowed = true
+        s:SetParent(stage)
+        s:ClearAllPoints()
+        s:SetPoint("TOPLEFT", stage, "TOPLEFT", 1, -1)
+        s:SetPoint("BOTTOMRIGHT", stage, "BOTTOMRIGHT", -1, 1)
+        s:SetFrameLevel(stage:GetFrameLevel() + 2)
+        for _, r in ipairs({ s:GetRegions() }) do r:SetAlpha(0) end
+        local ctl = asFrame(part(s, "ControlFrame"))
+        if ctl then
+            ctl:SetAlpha(0)
+            hookScript(ctl, "OnShow", function(c: Frame) c:Hide() end)
         end
+    end
+
+    function TakeOff(slotID: number?)
+        local a = actor()
+        if a and slotID then call(part(a, "UndressSlot"), a, slotID) end
+    end
+
+    function ResetDoll()
+        local resetButton = asButton(part(dressUp(), "ResetButton"))
+        if resetButton then resetButton:Click() end
+        assert(self.outfit):SetValue(nil)
+        self.chosen = nil
+        self:Draw()
+    end
+
+    function LoadOutfit(id: number?)
+        self.chosen = id
+        if not id then return end
+        local ok, list = pcall(TC.GetCustomSetItemTransmogInfoList, id)
+        if ok and list then DressUpItemTransmogInfoList(list) end
+        self:Draw()
+    end
+
+    -- Whether the doll wears the chosen outfit (what's off doesn't count, as in
+    -- the game's own check).
+    function Dressed(): boolean
+        local chosen = self.chosen
+        if not chosen then return false end
+        local ok, saved = pcall(TC.GetCustomSetItemTransmogInfoList, chosen)
+        local now = wornList()
+        if not (ok and saved and now) then return true end
+        for slotID, info in pairs(now) do
+            local same = saved[slotID]
+            if info.appearanceID ~= NONE and not (same and info:IsEqual(same)) then return false end
+        end
+        return true
+    end
+
+    function Save()
+        local now = wornList()
+        if not now then return end
+        local chosen = self.chosen
+        if chosen then
+            call(TC.ModifyCustomSet, chosen, now)
+            self:Draw()
+            return
+        end
+        UI.Confirm({ title = "Save outfit", text = "A name for this outfit.", input = { label = "Name", placeholder = "Outfit name" },
+            confirm = "Save", onConfirm = function(given: string?)
+                local name = strtrim(given or "")
+                if name == "" then return end
+                if call(TC.IsValidCustomSetName, name) == false then
+                    UI.Confirm({ title = "Choose another name", text = "That name can't be used for an outfit.", confirm = "OK" })
+                    return
+                end
+                -- the outfit's icon: its first piece's
+                local icon: number? = nil
+                for _, s in ipairs(SLOTS) do
+                    local info = now[s.id]
+                    if info and info.appearanceID ~= NONE then
+                        icon = num(call(TC.GetSourceIcon, info.appearanceID))
+                        if icon then break end
+                    end
+                end
+                local id = num(call(TC.NewCustomSet, name, icon or 134400, now))
+                if id then self.chosen = id end
+                self:Draw()
+            end })
+    end
+
+    function Delete()
+        local id = self.chosen
+        if not id then return end
+        local name = outfitName(id) or "this outfit"
+        UI.Confirm({ title = "Delete " .. name .. "?", text = "The outfit is gone for good; the doll keeps what it wears.",
+            confirm = "Delete", onConfirm = function()
+                call(TC.DeleteCustomSet, id)
+                self.chosen = nil
+                self:Draw()
+            end })
+    end
+
+    function Link()
+        local now = wornList()
+        local link = now and str(call(TC.GetCustomSetHyperlinkFromItemTransmogInfoList, now))
+        if not link then return end
+        local insert, open = part(ChatFrameUtil, "InsertLink"), part(ChatFrameUtil, "OpenChat")
+        if type(insert) ~= "function" then insert, open = named("ChatEdit_InsertLink"), named("ChatFrame_OpenChat") end
+        if not call(insert, link) then call(open, link) end
+    end
+
+    function DrawOutfits()
+        local outfit, save, delete = assert(self.outfit), assert(self.save), assert(self.delete)
+        local sets: number[] = {}
+        local ok, given = pcall(TC.GetCustomSets)
+        if ok and given then sets = given end
+        local options = outfitOptions(sets, outfitName)
+        outfit:SetOptions(options)
+        local known = false
+        for _, o in ipairs(options) do if o.value == self.chosen then known = true end end
+        if not known then self.chosen = nil end
+        local dirty = not self:Dressed()
+        local chosen = self.chosen
+        -- changed: "Unsaved outfit", Save on
+        outfit:SetValue((chosen and not dirty) and chosen or nil)
+        local full = #options >= (num(call(TC.GetNumMaxCustomSets)) or 999)
+        local why = saveWhy(chosen, dirty, full)
+        save:SetEnabledState(why == nil)
+        save.tooltip = { title = chosen and "Save" or "Save as a new outfit", description = why
+            or (chosen and ("Save the changes to " .. (outfitName(chosen) or "it") .. ".") or "Name it and keep it.") }
+        delete:SetEnabledState(chosen ~= nil)
+        delete.tooltip = { title = "Delete", description = chosen and ("Delete " .. (outfitName(chosen) or "it") .. ".")
+            or "Pick a saved outfit first." }
+    end
+
+    function DrawPieces()
+        local list = assert(self.list)
+        local now: Worn = wornList() or {}
+        local c = list.scroll.child
+        local y, used = 0, 0
+        for _, s in ipairs(SLOTS) do
+            local info = now[s.id]
+            local source = info and info.appearanceID
+            if source and plain(source) and source ~= NONE then
+                used = used + 1
+                local r = self.rows[used] or self:BuildRow(c)
+                self.rows[used] = r
+                local p = piece(source)
+                r.slotID, r.data = s.id, p
+                r.tried = source ~= yours(s.id)
+                r.edge:SetShown(r.tried)
+                local q = p.quality and QUALITY[p.quality]
+                r.slot.skin:SetItem({ icon = p.icon, quality = q })
+                r.name:SetValue(p.name or "…")
+                r.name:SetColor(q and ("quality-" .. q) or "ink")
+                r.sub:SetValue(s.label .. (r.tried and " · tried on" or ""))
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", 0, -y)
+                r:SetPoint("RIGHT")
+                r:Show()
+                y = y + ROW_H + 1
+            end
+        end
+        for i = used + 1, #self.rows do self.rows[i]:Hide() end
+        c:SetHeight(math.max(1, y))
+        list.head:SetValue("Trying on")
+        list.count:SetValue(countText(used))
+        list.empty:SetShown(used == 0)
+    end
+
+    -- A mount (or pet) preview: its card in the column.
+    function DrawCard(mode: string)
+        local card = assert(self.card)
+        local f = dressUp()
+        local link = str(call(part(f, "GetLastLink"), f))
+        local name: string?, icon: number?, collected: boolean?, quality: number? = nil, nil, nil, nil
+        if mode == "mount" then
+            card.head:SetValue("Mount")
+            local kind: string?, linkID: number? = nil, nil
+            if link then kind, linkID = linkParts(link) end
+            local id: number? = nil
+            if kind == "item" then id = num(call(C_MountJournal.GetMountFromItem, linkID))
+            elseif kind == "spell" or kind == "mount" then id = num(call(C_MountJournal.GetMountFromSpell, linkID)) end
+            if id then
+                local ok, mountName, _, mountIcon, _, _, _, _, _, _, _, isCollected = pcall(C_MountJournal.GetMountInfoByID, id)
+                if ok then name, icon, collected = str(mountName), num(mountIcon), isCollected end
+            end
+            if link and kind == "item" and linkID then
+                local _, _, q = C_Item.GetItemInfo(link)
+                quality = num(q)
+            end
+            card.note:SetValue("Ctrl-click armour to go back to your outfit.")
+            card.open:Show()
+        else
+            card.head:SetValue("Pet")
+            card.note:SetValue("Ctrl-click armour to go back to your outfit.")
+            card.open:Hide()
+        end
+        if not name and link then name = link:match("%[(.-)%]") end
+        local q = quality and QUALITY[quality]
+        card.slot.skin:SetItem({ icon = icon or 134400, quality = q })
+        card.name:SetValue(name or "")
+        card.name:SetColor(q and ("quality-" .. q) or "ink")
+        card.state:SetValue(collected == nil and "" or (collected and "Collected" or "Not collected"))
+        card.state:SetColor(collected and "gilt-text" or "ink-muted")
+    end
+
+    function Draw()
+        local w = self.window
+        if not (w and w:IsShown()) then return end
+        -- (built with the window)
+        local bar, list, card, stage = assert(self.bar), assert(self.list), assert(self.card), assert(self.stage)
+        local reset, undress, hint = assert(self.reset), assert(self.undress), assert(self.hint)
+        local f = dressUp()
+        local mode = str(call(part(f, "GetMode"), f)) or "player"
+        local player = mode == "player"
+        bar:SetShown(player)
+        list:SetShown(player)
+        card:SetShown(not player)
+        reset:SetShown(player)
+        undress:SetShown(player)
+        stage:ClearAllPoints()
+        if player then
+            stage:SetPoint("TOPLEFT", list, "TOPRIGHT", S["space-5"], 0)
+            self:DrawOutfits()
+            self:DrawPieces()
+            hint:SetValue("Ctrl-click any item to try it on · drag to turn, wheel to zoom")
+        else
+            stage:SetPoint("TOPLEFT", w.body, "TOPLEFT", LIST_W + S["space-5"], 0)
+            self:DrawCard(mode)
+            hint:SetValue(mode == "mount" and "Previewing a mount" or "Previewing a pet")
+        end
+        stage:SetPoint("BOTTOMRIGHT")
+    end
+
+    -- Changes come in bursts (an outfit dresses every slot): drawn once, a frame later.
+    function QueueDraw()
+        if self.queued then return end
+        self.queued = true
+        after(0, function()
+            self.queued = nil
+            self:Draw()
+        end)
+    end
+
+    -- The game's window out of sight: see-through and off screen, still shown.
+    function PutAway(frame: Frame)
+        if not self:IsEnabled() then return end
+        self.placing = true
+        frame:SetAlpha(0)
+        frame:ClearAllPoints()
+        frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+        self.placing = false
+    end
+
+    -- The window, while it's open.
+    function Open(): WindowFrame?
+        local w = self.window
+        if w and w:IsShown() then return w end
+        return nil
+    end
+
+    function HookGame()
+        local f = dressUp()
+        if not f or self.hooked then return end
+        self.hooked = true
+        self:Borrow()
+        hook(f, "SetPoint", function() if not self.placing then after(0, function() self:PutAway(f) end) end end)
+        hook(f, "SetAlpha", function(_: Frame, a: number) if not self.placing and a ~= 0 then after(0, function() self:PutAway(f) end) end end)
+        hookScript(f, "OnShow", function()
+            if not self:IsEnabled() then return end
+            self:PutAway(f)
+            after(0, function() self:PutAway(f) end)
+            -- the game's side panels stay closed (their lists are SuuUI's now)
+            local details = asFrame(part(f, "CustomSetDetailsPanel"))
+            if details then details:Hide() end
+            assert(self.window):Show()
+            self:QueueDraw()
+        end)
+        hookScript(f, "OnHide", function()
+            local w = self:Open()
+            if w then w:Hide() end
+        end)
+        -- what the doll wears changed, or what it shows (player, mount, pet)
+        -- (the game's frame by its declared type: the dressing room's mixin)
+        if part(f, "OnDressModel") then hook(DressUpFrame, "OnDressModel", function() self:QueueDraw() end) end
+        if part(f, "SetMode") then hook(DressUpFrame, "SetMode", function() self:QueueDraw() end) end
+    end
+
+    override function OnEnable()
+        if not self.window then self:Build() end
+        self:HookGame()
+        for _, e in ipairs({ "TRANSMOG_CUSTOM_SETS_CHANGED", "TRANSMOG_COLLECTION_ITEM_UPDATE", "GET_ITEM_INFO_RECEIVED",
+                             "PLAYER_EQUIPMENT_CHANGED" }) do
+            if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid(e) then
+                self:OnGameEvent(e, function() self:QueueDraw() end)
+            end
+        end
+    end
+
+    override function OnDisable()
+        local w = self.window
+        if w then w:Hide() end
     end
 end
 
-function M:OnDisable()
-    if self.window then self.window:Hide() end
-end
+M = SuuUI.AddModule(DressingRoomModule.new())
