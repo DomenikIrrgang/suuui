@@ -10,17 +10,36 @@ import expectNoErrors from "../../helpers"
 import * as services from "/Core/Services"
 import WELCOME from "/Core/ServiceKeys"
 
-local M: any = assert(SuuUI.GetModule("welcome"))
+import M from "/Units/Welcome"
+import type WelcomeTile, WelcomePage from "/Units/Welcome"
+import type SuuButton from "/UI/Controls"
+import type TooltipData from "/UI/Tooltip"
 
-local function tile(step: number, value: string): any
-    for _, b in ipairs(M.pages[step].tiles) do if b.value == value then return b end end
+-- what a button's tooltip shows
+local function tip(b: SuuButton?): TooltipData
+    local t = assert(b).tooltip
+    assert(type(t) == "table")
+    return t
+end
+
+-- a key pressed on the welcome
+local function keyDown(key: string)
+    local panel = assert(M.panel)
+    assert(panel:GetScript("OnKeyDown"))(panel, key)
+end
+
+local function page(step: number): WelcomePage return assert(M.pages[step]) end
+
+local function tile(step: number, value: string): WelcomeTile
+    for _, b in ipairs(page(step).tiles) do if b.value == value then return b end end
     error("no tile " .. value)
 end
 
 @afterEach
 local function cleanup()
     if InCombatLockdown() then mock.player:leaveCombat() end
-    if M.dim and M.dim:IsShown() then M.dim:Hide() end
+    local dim = M.dim
+    if dim and dim:IsShown() then dim:Hide() end
     SuuUI.SetColorVision("normal")
     mock.advanceTime(0.5)
     expectNoErrors()
@@ -35,7 +54,7 @@ local function firstRun()
     expect(M.role).toBe("keep")
     expect(tile(1, "keep").selected).toBe(true)
     -- Esc skips it: seen
-    M.panel:GetScript("OnKeyDown")(M.panel, "ESCAPE")
+    keyDown("ESCAPE")
     expect(M.dim).never.toBeShown()
     expect(SuuUI.AccountData("welcome").seen).toBe(true)
 end
@@ -46,7 +65,7 @@ local function steps()
     expect(M.back).never.toBeShown()
     mock.click(M.next)
     expect(M.step).toBe(2)
-    expect(M.pages[2]).toBeShown()
+    expect(page(2)).toBeShown()
     expect(M.back).toBeShown()
     mock.click(M.back)
     expect(M.step).toBe(1)
@@ -70,7 +89,7 @@ local function choosing()
     mock.click(tile(2, "redgreen"))
     expect(M.vision).toBe("redgreen")
     M:Go(3)
-    local role, vision = M.pages[3].choices[1], M.pages[3].choices[2]
+    local role, vision = assert(page(3).choices[1]), assert(page(3).choices[2])
     expect(role.text:GetText()).toBe("Healer layout")
     expect(role.meta:GetText()).toBe(tostring(SuuUI.RolePresetName("HEALER")) .. ", this character")
     expect(vision.meta:GetText()).toBe("every character")
@@ -112,16 +131,16 @@ local function combat()
     M:Show()
     M:Go(3)
     mock.player:enterCombat()
-    expect(M.play:IsEnabled()).toBe(false)
-    expect(M.play.tooltip.description).toBe("After the fight.")
+    expect(assert(M.play):IsEnabled()).toBe(false)
+    expect(tip(M.play).description).toBe("After the fight.")
     M:Start()
     expect(M.dim).toBeShown()
     -- keys go on to the game in a fight
-    M.panel:GetScript("OnKeyDown")(M.panel, "ESCAPE")
+    keyDown("ESCAPE")
     expect(M.dim).toBeShown()
     mock.player:leaveCombat()
-    expect(M.play:IsEnabled()).toBe(true)
-    M.panel:GetScript("OnKeyDown")(M.panel, "A")
+    expect(assert(M.play):IsEnabled()).toBe(true)
+    keyDown("A")
     expect(M.dim).toBeShown()
     mock.click(M.skip)
     expect(M.dim).never.toBeShown()
@@ -132,9 +151,9 @@ local function again()
     mock.slash("/suu welcome")
     expect(M.dim).toBeShown()
     M:Go(2)
-    M:Emit("SUUUI_THEME_CHANGED")
+    M:Emit("SUUUI_THEME_CHANGED", "suuui")
     expect(M.step).toBe(2)
-    expect(M.pages[2]).toBeShown()
+    expect(page(2)).toBeShown()
     M:Set("enabled", false)
     expect(M.dim).never.toBeShown()
     M:Reset("enabled")
