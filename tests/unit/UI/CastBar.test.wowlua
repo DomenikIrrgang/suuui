@@ -22,7 +22,7 @@ local function tokenOf(region: any): string?
     return p and p.token
 end
 
-local function bar(unit: string, opts: { [string]: any }?): any
+local function bar(unit: string, opts: castBar.CastBarOptions?): castBar.CastBar
     local b = castBar.castBar(parent, unit, opts)
     b:SetPoint("CENTER")
     bars[#bars + 1] = b
@@ -165,7 +165,7 @@ end
 local function spellTargets()
     expect(spellTarget("target")).toBeNil() -- the game's: none shown
     local shown, name: any = true, "Anna"
-    local A: { [string]: any } = {
+    local A: castBar.TargetApi = {
         UnitShouldDisplaySpellTargetName = function(_: string): boolean return shown end,
         UnitSpellTargetName = function(_: string): any return name end,
         UnitSpellTargetClass = function(_: string): string return "PRIEST" end,
@@ -190,9 +190,14 @@ end
 
 -- A region whose SetAlphaFromBoolean calls are recorded (the VM's does
 -- nothing: see the notes), or refused.
-local function region(refuse: boolean?): { [string]: any }
-    local r: { [string]: any } = { SetAlpha = mock.spy() }
-    r.SetAlphaFromBoolean = refuse and function() error("refused") end or mock.spy()
+local function region(refuse: boolean?): Frame
+    local r = CreateFrame("Frame")
+    mock.stub(r, "SetAlpha", function() end)
+    if refuse then
+        mock.stub(r, "SetAlphaFromBoolean", function() error("refused") end)
+    else
+        mock.stub(r, "SetAlphaFromBoolean", function() end)
+    end
     return r
 end
 
@@ -208,7 +213,8 @@ local function you()
     -- a secret answer handed on as it is (the matchers can't compare secrets)
     local s = mock.secret(true)
     local got: any = nil
-    local holder: { [string]: any } = { SetAlphaFromBoolean = function(_: any, v: any) got = v end }
+    local holder = CreateFrame("Frame")
+    mock.stub(holder, "SetAlphaFromBoolean", function(_: Frame, v: unknown) got = v end)
     showYou(s, holder, line)
     expect(issecretvalue(got)).toBe(true)
     -- refused: hidden, the line shown
@@ -247,7 +253,7 @@ local function enemyBar()
     expect(b.iconShown).toBe(true)
     expect(b.kickShown).toBe(true)
     local h = T.size["cast-sm"]
-    expect(b.spell:GetWidth()).toBe(300 - h - S["space-3"] * 2 - b.lockW - 70)
+    expect(b.spell:GetWidth()).toBe(300 - h - S["space-3"] * 2 - assert(b.lockW) - 70)
 end
 
 @test("your own bar: md, no arcane layer, lock or kick")
@@ -269,9 +275,9 @@ local function plateBar()
     expect(b.icon).toBeNil()
     expect(b.lineIcon ~= nil).toBe(true)
     expect(b.lock ~= nil).toBe(true)
-    expect(b.lock:GetWidth()).toBe(math.max(8, h))
+    expect(assert(b.lock):GetWidth()).toBe(math.max(8, h))
     expect(b.target ~= nil).toBe(true)
-    expect(b.target:IsShown()).toBe(false)
+    expect(assert(b.target):IsShown()).toBe(false)
     expect(b.spellYou).toBeNil()
     expect(b.targetShown).toBeNil()
     -- without its target line
@@ -296,15 +302,15 @@ local function iconAndKick()
     local b = bar("target")
     local h = T.size["cast-sm"]
     b:SetIconShown(false)
-    expect(b.icon:IsShown()).toBe(false)
-    expect(b.iconEdge:IsShown()).toBe(false)
+    expect(assert(b.icon):IsShown()).toBe(false)
+    expect(assert(b.iconEdge):IsShown()).toBe(false)
     local _, _, _, x = b.bar:GetPoint(1)
     expect(x).toBe(0)
-    expect(b.spell:GetWidth()).toBe(300 - S["space-3"] * 2 - b.lockW - 70)
+    expect(b.spell:GetWidth()).toBe(300 - S["space-3"] * 2 - assert(b.lockW) - 70)
     b:SetKickShown(false)
-    expect(b.spell:GetWidth()).toBe(300 - S["space-3"] * 2 - b.lockW - 40)
+    expect(b.spell:GetWidth()).toBe(300 - S["space-3"] * 2 - assert(b.lockW) - 40)
     b:SetIconShown(true)
-    expect(b.icon:IsShown()).toBe(true)
+    expect(assert(b.icon):IsShown()).toBe(true)
     local _, _, _, x2 = b.bar:GetPoint(1)
     expect(x2).toBe(h)
     -- a bar without an icon stays without one
@@ -320,16 +326,16 @@ local function sizes()
     expect(b:GetWidth()).toBe(250)
     b:SetBarHeight(30)
     expect(b:GetHeight()).toBe(30)
-    expect({ b.icon:GetSize() }).toEqual({ 30, 30 })
-    expect(b.kick:GetHeight()).toBe(30)
-    expect(b.spell:GetWidth()).toBe(250 - 30 - S["space-3"] * 2 - b.lockW - 70)
+    expect({ assert(b.icon):GetSize() }).toEqual({ 30, 30 })
+    expect(assert(b.kick):GetHeight()).toBe(30)
+    expect(b.spell:GetWidth()).toBe(250 - 30 - S["space-3"] * 2 - assert(b.lockW) - 70)
     local p = bar("nameplate1", { size = "plate", target = true })
     p:SetBarHeight(4)
     expect(p.bar:GetHeight()).toBe(4)
     expect(p:GetHeight()).toBe(4 + S["space-1"] + 13)
-    expect(p.lock:GetWidth()).toBe(8)
+    expect(assert(p.lock):GetWidth()).toBe(8)
     p:SetBarWidth(150)
-    expect(p.target.name:GetWidth()).toBe(150 - p.lockW - 12)
+    expect(assert(p.target).name:GetWidth()).toBe(150 - assert(p.lockW) - 12)
     local me = bar("player")
     me:SetBarHeight(20)
     expect(me:GetHeight()).toBe(20)
@@ -340,12 +346,12 @@ local function neutral()
     local b = bar("target")
     mock.stub(b, "KickReady", function(): boolean return true end)
     b:SetNeutral(true)
-    expect(b.arcane:GetAlpha()).toBe(0)
-    expect(b.lockHost:GetAlpha()).toBe(0)
-    expect(b.kick:IsShown()).toBe(false)
+    expect(assert(b.arcane):GetAlpha()).toBe(0)
+    expect(assert(b.lockHost):GetAlpha()).toBe(0)
+    expect(assert(b.kick):IsShown()).toBe(false)
     b:SetNeutral(false)
-    expect(b.arcane:GetAlpha()).toBe(1)
-    expect(b.kick:IsShown()).toBe(true)
+    expect(assert(b.arcane):GetAlpha()).toBe(1)
+    expect(assert(b.kick):IsShown()).toBe(true)
     bar("player"):SetNeutral(true)
 end
 
@@ -355,20 +361,20 @@ local function kickStates()
     local state: boolean? = true
     mock.stub(b, "KickReady", function(): boolean? return state end)
     b:UpdateKick()
-    expect(b.kick:IsShown()).toBe(true)
-    expect(tokenOf(b.kick.glyph)).toBe("arcane")
-    expect(b.kick.secs:IsShown()).toBe(false)
+    expect(assert(b.kick):IsShown()).toBe(true)
+    expect(tokenOf(assert(b.kick).glyph)).toBe("arcane")
+    expect(assert(b.kick).secs:IsShown()).toBe(false)
     state = false
     b:UpdateKick()
-    expect(tokenOf(b.kick.glyph)).toBe("ink-faint")
-    expect(b.kick.secs:IsShown()).toBe(true)
+    expect(tokenOf(assert(b.kick).glyph)).toBe("ink-faint")
+    expect(assert(b.kick).secs:IsShown()).toBe(true)
     state = nil
     b:UpdateKick()
-    expect(b.kick:IsShown()).toBe(false)
-    expect(b.kick.secs:IsShown()).toBe(false)
+    expect(assert(b.kick):IsShown()).toBe(false)
+    expect(assert(b.kick).secs:IsShown()).toBe(false)
     state = true
     b:SetKickShown(false)
-    expect(b.kick:IsShown()).toBe(false)
+    expect(assert(b.kick):IsShown()).toBe(false)
     -- no kick: nothing to draw
     bar("player"):UpdateKick()
 end
@@ -393,7 +399,7 @@ local function targetInline()
     b:UpdateTarget()
     local hex = (C_ClassColor.GetClassColor("PRIEST") :: ColorMixin):GenerateHexColor()
     expect(b.spell:GetText()).toBe(("Fireball › |c%sAnna|r"):format(hex))
-    expect(b.spellYou:GetText()).toBe("Fireball ›")
+    expect(assert(b.spellYou):GetText()).toBe("Fireball ›")
     local youAlpha = mock.stub(b.you, "SetAlphaFromBoolean")
     local lineAlpha = mock.stub(b.spell, "SetAlphaFromBoolean")
     class = nil
@@ -428,20 +434,20 @@ local function targetLine()
     local name: any = "Anna"
     mock.stub(b, "SpellTarget", function(): (any, any, any) return name, "PRIEST", false end)
     b:UpdateTarget()
-    expect(b.target:IsShown()).toBe(true)
-    expect(b.target.name:GetText()).toBe("Anna")
-    local r, g, bl = b.target.name:GetTextColor()
+    expect(assert(b.target):IsShown()).toBe(true)
+    expect(assert(b.target).name:GetText()).toBe("Anna")
+    local r, g, bl = assert(b.target).name:GetTextColor()
     local cr, cg, cb = (C_ClassColor.GetClassColor("PRIEST") :: ColorMixin):GetRGB()
     expect({ r, g, bl }).toEqual({ cr, cg, cb })
     name = nil
     b:UpdateTarget()
-    expect(b.target:IsShown()).toBe(false)
+    expect(assert(b.target):IsShown()).toBe(false)
     name = "Anna"
     b:UpdateTarget()
     b:SetTargetShown(false)
-    expect(b.target:IsShown()).toBe(false)
+    expect(assert(b.target):IsShown()).toBe(false)
     b:UpdateTarget()
-    expect(b.target:IsShown()).toBe(false)
+    expect(assert(b.target):IsShown()).toBe(false)
     -- no target line: nothing
     bar("nameplate2", { size = "plate" }):UpdateTarget()
 end
@@ -463,8 +469,8 @@ local function enemyCast()
     expect(b.neutral).toBe(false)
     -- an enemy's notInterruptible is secret: the layers' alphas set from it
     -- through SetAlphaFromBoolean are secret too (as in the game)
-    expect(b.arcane:GetAlpha()).toBeSecret()
-    expect(b.lockHost:GetAlpha()).toBeSecret()
+    expect(assert(b.arcane):GetAlpha()).toBeSecret()
+    expect(assert(b.lockHost):GetAlpha()).toBeSecret()
     mock.advanceFrames(3)
     expect(b.time.value).toBeNil()
     mock.advanceTime(2.5)
@@ -503,9 +509,9 @@ local function channelAndFriend()
     friend:castSpell(15407, { castTime = 3, channel = true })
     expect(b:IsShown()).toBe(true)
     expect(b.neutral).toBe(true)
-    expect(b.arcane:GetAlpha()).toBe(0)
+    expect(assert(b.arcane):GetAlpha()).toBe(0)
     b:SetInterruptible(true)
-    expect(b.lockHost:GetAlpha()).toBe(0)
+    expect(assert(b.lockHost):GetAlpha()).toBe(0)
 end
 
 @test("Tick: a cast that stopped without its event takes the bar down")
@@ -515,7 +521,7 @@ local function missedStop()
     b:Activate()
     w:castSpell(133, { castTime = 5 })
     b:Deactivate() -- deaf: the stop event goes unheard
-    b.duration = UnitCastingDuration("target")
+    b.duration = UnitCastingDuration("target") :: LuaDurationObject?
     b:Show()
     w:interruptCast()
     mock.advanceTime(0.5)
@@ -533,13 +539,13 @@ local function kickSeconds()
     mock.stub(b, "KickReady", function(): boolean return isReady end)
     castBar.interrupt.usedAt, castBar.interrupt.cooldown = GetTime(), 3
     w:castSpell(133, { castTime = 5 })
-    expect(b.kick.secs:IsShown()).toBe(true)
+    expect(assert(b.kick).secs:IsShown()).toBe(true)
     b:Tick()
-    expect(b.kick.secs:GetText()).toBe("3")
+    expect(assert(b.kick).secs:GetText()).toBe("3")
     mock.advanceTime(3.5)
     isReady = true
     b:Tick()
-    expect(b.kick.secs:IsShown()).toBe(false)
+    expect(assert(b.kick).secs:IsShown()).toBe(false)
 end
 
 @test("Start without a cast stops; Refresh without a unit stops")
