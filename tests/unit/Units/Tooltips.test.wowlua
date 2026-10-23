@@ -11,9 +11,37 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M from "/Units/Tooltips"
 import expectNoErrors from "../../helpers"
+import asFrame, asFontString, asStatusBar, named, part from "/UI/Reskin"
+import type Color from "/Core/Tokens"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
-local G: any = _G
+
+-- GameTooltip's text lines, by side and number.
+local function textLeft(i: number): FontString? return asFontString(named("GameTooltipTextLeft" .. i)) end
+local function textRight(i: number): FontString? return asFontString(named("GameTooltipTextRight" .. i)) end
+
+-- The game's default anchor, as an ownerless tooltip gets it.
+local function defaultAnchor()
+    local set = named("GameTooltip_SetDefaultAnchor")
+    assert(type(set) == "function")
+    ;(set :: (tooltip: GameTooltip, parent: Frame) -> ())(GameTooltip, UIParent)
+end
+
+-- The game's unit menu for yourself, opened; every open menu closed.
+local function openUnitMenu()
+    local mgr = named("UnitPopupManager")
+    local open = part(mgr, "OpenMenu")
+    assert(type(open) == "function")
+    ;(open :: (mgr: unknown, which: string, context: { unit: string }) -> ())(mgr, "SELF", { unit = "player" })
+end
+local function closeMenus()
+    local get = part(named("Menu"), "GetManager")
+    assert(type(get) == "function")
+    local manager = (get :: () -> unknown)()
+    local close = part(manager, "CloseMenus")
+    assert(type(close) == "function")
+    ;(close :: (manager: unknown) -> ())(manager)
+end
 
 -- Placeholder units (made once).
 local friend = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "MAGE", level = 42, reaction = "friendly" })
@@ -21,8 +49,8 @@ local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile",
 local trader = mock.spawnUnit({ name = "Merchant Elwin", level = 30, reaction = "neutral", distance = 10 })
 
 -- A colour as the tooltip line has it, compared with a token's.
-local function hasColor(fs: any, token: string): boolean
-    local r, g, b = fs:GetTextColor()
+local function hasColor(fs: FontString?, token: string): boolean
+    local r, g, b = assert(fs):GetTextColor()
     local tr, tg, tb = UI.RGBA(token)
     return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
 end
@@ -30,8 +58,8 @@ end
 local function lines(): string[]
     local out: string[] = {}
     for i = 1, GameTooltip:NumLines() do
-        local l = G["GameTooltipTextLeft" .. i]
-        local r = G["GameTooltipTextRight" .. i]
+        local l = textLeft(i)
+        local r = textRight(i)
         out[#out + 1] = tostring(l and l:GetText() or "") .. "|" .. tostring(r and r:IsShown() and r:GetText() or "")
     end
     return out
@@ -56,7 +84,7 @@ end
 @test("Blizzard's tooltips skinned, at SuuUI's scale")
 local function skinned()
     for _, name in ipairs({ "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1" }) do
-        expect(UI.IsTooltipSkinned(G[name])).toBe(true)
+        expect(UI.IsTooltipSkinned(assert(asFrame(named(name))))).toBe(true)
     end
     local want = SuuUI.Root:GetEffectiveScale() / UIParent:GetEffectiveScale()
     expect(GameTooltip:GetScale()).toBeCloseTo(want)
@@ -70,15 +98,15 @@ local function nameColors()
     GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
     mock.player:target(friend)
     GameTooltip:SetUnit("target")
-    expect(hasColor(G.GameTooltipTextLeft1, "class-mage")).toBe(true)
+    expect(hasColor(textLeft(1), "class-mage")).toBe(true)
     GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
     mock.player:target(wolf)
     GameTooltip:SetUnit("target")
-    expect(hasColor(G.GameTooltipTextLeft1, "reaction-hostile")).toBe(true)
+    expect(hasColor(textLeft(1), "reaction-hostile")).toBe(true)
     GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
     mock.player:target(trader)
     GameTooltip:SetUnit("target")
-    expect(hasColor(G.GameTooltipTextLeft1, "reaction-neutral")).toBe(true)
+    expect(hasColor(textLeft(1), "reaction-neutral")).toBe(true)
     -- a theme change: the open tooltip's name again
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
     M:Set("nameColors", false)
@@ -86,7 +114,7 @@ local function nameColors()
     GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
     mock.player:target(friend)
     GameTooltip:SetUnit("target")
-    expect(hasColor(G.GameTooltipTextLeft1, "class-mage")).toBe(false)
+    expect(hasColor(textLeft(1), "class-mage")).toBe(false)
 end
 
 @test("the level in its difficulty's colour, the rest of its line as the game wrote it")
@@ -94,10 +122,11 @@ local function level()
     GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
     mock.player:target(wolf)
     GameTooltip:SetUnit("target")
-    local hex = T.color[UI.LevelColor(9)].hex
+    local colors: { [string]: Color } = T.color
+    local hex = assert(colors[UI.LevelColor(9)]).hex
     local found = false
     for i = 2, GameTooltip:NumLines() do
-        local text = G["GameTooltipTextLeft" .. i]:GetText() or ""
+        local text = assert(textLeft(i)):GetText() or ""
         if text:find("|cff" .. hex .. "9|r", 1, true) then found = true end
     end
     expect(found).toBe(true)
@@ -107,7 +136,7 @@ end
 
 @test("the health bar keeps the unit fill whatever the game colours it")
 local function healthBar()
-    local bar = G.GameTooltipStatusBar
+    local bar = assert(asStatusBar(named("GameTooltipStatusBar")))
     bar:SetStatusBarColor(1, 0, 0)
     local r, g, b = bar:GetStatusBarColor()
     local fr, fg, fb = UI.RGBA("unit-fill")
@@ -152,7 +181,7 @@ local function auraPanel()
     mock.advanceFrames(1)
     GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
     GameTooltip:SetUnit("party1")
-    local p = M.auraPanel
+    local p = assert(M.auraPanel).panel
     expect(p:IsShown()).toBe(true)
     expect(M.auraFor).toBe(GameTooltip)
     GameTooltip:Hide()
@@ -176,8 +205,8 @@ local function ids()
     expect(hasLine("From|Tamsin Ashford")).toBe(true)
     -- yours
     mock.player:applyAura({ spellID = 6673, name = "Battle Shout", duration = 120, source = mock.player })
-    local a: any = C_UnitAuras.GetAuraDataBySpellName("player", "Battle Shout")
-    if a then
+    local a = C_UnitAuras.GetAuraDataBySpellName("player", "Battle Shout")
+    if a and not issecretvalue(a) then
         GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
         GameTooltip:SetUnitBuffByAuraInstanceID("player", a.auraInstanceID)
         local you = false
@@ -192,20 +221,20 @@ end
 
 @test("a tooltip without a place of its own: SuuUI's, above the bags while they're open; Blizzard's by the setting")
 local function anchor()
-    G.GameTooltip_SetDefaultAnchor(GameTooltip, UIParent)
+    defaultAnchor()
     local _, rel = GameTooltip:GetPoint(1)
-    expect(rel).toBe(M.anchorFrame)
+    expect(rel).toBe(assert(M.anchorFrame))
     local bags = CreateFrame("Frame", "SuuUIBags", UIParent)
     bags:SetSize(100, 100)
     bags:SetPoint("CENTER")
     bags:Show()
-    G.GameTooltip_SetDefaultAnchor(GameTooltip, UIParent)
+    defaultAnchor()
     local _, rel2 = GameTooltip:GetPoint(1)
     expect(rel2).toBe(bags)
     bags:Hide()
-    mock.setField(G, "SuuUIBags", nil)
+    mock.setField(_G, "SuuUIBags", nil)
     M:Set("anchor", "blizzard")
-    G.GameTooltip_SetDefaultAnchor(GameTooltip, UIParent)
+    defaultAnchor()
     local _, rel3 = GameTooltip:GetPoint(1)
     expect(rel3 ~= M.anchorFrame).toBe(true)
 end
@@ -226,25 +255,25 @@ end
 @test("the game's unit menus in SuuUI's look; off by the setting")
 local function unitMenus()
     local reskinned = 0
-    mock.stub(UI, "ReskinMenu", function(_: any) reskinned = reskinned + 1 end)
-    G.UnitPopupManager:OpenMenu("SELF", { unit = "player" })
+    mock.stub(UI, "ReskinMenu", function(_: unknown) reskinned = reskinned + 1 end)
+    openUnitMenu()
     mock.advanceFrames(2)
     local times = reskinned
     expect(times > 0).toBe(true)
-    G.Menu.GetManager():CloseMenus()
+    closeMenus()
     M:Set("unitMenus", false)
-    G.UnitPopupManager:OpenMenu("SELF", { unit = "player" })
+    openUnitMenu()
     expect(reskinned).toBe(times)
-    G.Menu.GetManager():CloseMenus()
+    closeMenus()
 end
 
 @test("the aura buttons' own tooltip styled through the engine; a refusal said")
 local function auraTooltip()
     local said: string[] = {}
-    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
-    local inbound = G.AuraContainerInbound
-    if inbound then
-        mock.stub(inbound, "SetTooltipBackdrop", function(_: any) error("not now") end)
+    mock.stub(M, "Print", function(_: unknown, text: string) said[#said + 1] = text end)
+    local inbound = named("AuraContainerInbound")
+    if type(inbound) == "table" then
+        mock.stub(inbound, "SetTooltipBackdrop", function(_: unknown) error("not now") end)
         M:StyleAuraTooltip()
         expect(said[1]:sub(1, 34)).toBe("couldn't style the aura tooltips: ")
     end

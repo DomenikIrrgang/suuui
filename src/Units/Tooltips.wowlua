@@ -22,33 +22,35 @@
 -- and timers, no names.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type Panel from "/UI/Panel"
+import type Color from "/Core/Tokens"
 import type Position from "/EditMode/EditMode"
 import isSecret from "wowlua:secret"
 import hook, hookScript from "wowlua:hooks"
 import after from "wowlua:timer"
+import type UnitAuras from "/UI/Auras"
+import type Text from "/UI/Text"
+import asFrame, asFontString, asStatusBar, part, named, openRoot from "/UI/Reskin"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
-local M = SuuUI.RegisterModule({
-    id = "tooltips",
-    name = "Tooltips",
-    description = "Blizzard's tooltips in SuuUI's look: art, type, name colours, where they open.",
-    api = "0.12",
-    reloadToToggle = true,
-    defaults = {
-        nameColors = true,
-        groupAuras = true,
-        ids = true,           -- spell IDs, and who cast a buff or debuff
-        anchor = "suuui", -- "suuui" (its own place, above the bags) or "blizzard"
-        unitMenus = true, -- the game's right-click menus on units in SuuUI's look
-        position = { point = "BOTTOMRIGHT", x = -30, y = 260 } :: Position,
-    },
-})
+local DEFAULTS = {
+    nameColors = true,
+    groupAuras = true,
+    ids = true,           -- spell IDs, and who cast a buff or debuff
+    anchor = "suuui", -- "suuui" (its own place, above the bags) or "blizzard"
+    unitMenus = true, -- the game's right-click menus on units in SuuUI's look
+    position = { point = "BOTTOMRIGHT", x = -30, y = 260 } :: Position,
+}
+
+local M: TooltipsModule
+
 
 -- (secrecy tested first: comparing a secret is an error in strict mode)
 local function plain(v: unknown): v is string | number | boolean | table return not isSecret(v) and v ~= nil end
 
-local TOOLTIPS = { "GameTooltip", "ShoppingTooltip1", "ShoppingTooltip2", "ItemRefTooltip",
+local TOOLTIPS: string[] = { "GameTooltip", "ShoppingTooltip1", "ShoppingTooltip2", "ItemRefTooltip",
                    "ItemRefShoppingTooltip1", "ItemRefShoppingTooltip2" }
 
 --------------------------------------------------------------------------------
@@ -57,27 +59,7 @@ local TOOLTIPS = { "GameTooltip", "ShoppingTooltip1", "ShoppingTooltip2", "ItemR
 
 -- Blizzard's three tooltip fonts in SuuUI's styles: the title, the lines,
 -- the small print.
-local FONTS = { GameTooltipHeaderText = "unit-name-lg", GameTooltipText = "body", GameTooltipTextSmall = "caption" }
-
-function M:ApplyFonts()
-    for object, style in pairs(FONTS) do
-        local font = _G[object]
-        local s = T.type[style]
-        if font and font.SetFont and s then font:SetFont(s.file, s.size, "") end
-    end
-end
-
--- The tooltips at SuuUI's scale (they live under UIParent; SuuUI's frames
--- under its pixel-perfect root), so type and edges match the rest.
-function M:ApplyScale()
-    local ui = UIParent:GetEffectiveScale()
-    if not ui or ui == 0 then return end
-    local scale = SuuUI.Root:GetEffectiveScale() / ui
-    for _, name in ipairs(TOOLTIPS) do
-        local tt = _G[name]
-        if tt then tt:SetScale(scale) end
-    end
-end
+local FONTS: { [string]: string } = { GameTooltipHeaderText = "unit-name-lg", GameTooltipText = "body", GameTooltipTextSmall = "caption" }
 
 --------------------------------------------------------------------------------
 -- The unit's name and the health bar
@@ -89,90 +71,6 @@ local function reactionToken(r: number): string
     return "reaction-friendly"
 end
 
-function M:ColorUnit(tooltip: any)
-    if not self:Get("nameColors") or not tooltip.GetUnit then return end
-    local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
-    if not ok or not plain(unit) or not unit then return end
-    local token
-    local isPlayer = UnitIsPlayer(unit)
-    if not plain(isPlayer) then return end
-    if isPlayer then
-        local _, class = UnitClass(unit)
-        if plain(class) and class then token = "class-" .. class:lower() end
-    else
-        local r = UnitReaction(unit, "player")
-        if plain(r) and r then token = reactionToken(r) end
-    end
-    if not (token and T.color[token]) then return end
-    local name = tooltip:GetName()
-    local line = name and _G[name .. "TextLeft1"]
-    if line then line:SetTextColor(UI.RGBA(token)) end
-end
-
--- The unit's level in its difficulty's colour on the "Level 34 …" line
--- (asked 2026-10-18), the rest of the line as it is.
-function M:ColorLevel(tooltip: any)
-    if not tooltip.GetUnit then return end
-    local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
-    if not ok or not plain(unit) or not unit then return end
-    local level = UnitLevel(unit)
-    if not plain(level) then return end
-    local hex = T.color[UI.LevelColor(level)].hex
-    local word = LEVEL or "Level"
-    local name = tooltip:GetName()
-    for i = 2, math.min(5, tooltip:NumLines() or 0) do
-        local line = name and _G[name .. "TextLeft" .. i]
-        local text = line and line:GetText()
-        if plain(text) and text then
-            local before, num, rest = text:match("^(.-" .. word .. " )(%S+)(.*)$")
-            if num and not num:find("|c", 1, true) then
-                line:SetText(before .. "|cff" .. hex .. num .. "|r" .. rest)
-                return
-            end
-        end
-    end
-end
-
-function M:SkinStatusBar()
-    local bar = _G.GameTooltipStatusBar
-    if not bar or self.barSkinned then return end
-    self.barSkinned = true
-    bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-    bar:SetHeight(4)
-    local track = bar:CreateTexture(nil, "BACKGROUND")
-    UI.PaintFill(track, "surface-sunk")
-    track:SetAllPoints()
-    bar:SetStatusBarColor(UI.RGBA("unit-fill"))
-    -- the game colours the bar on every show: it goes back to the unit fill,
-    -- read each time (a theme may have changed it)
-    local setting = false
-    hook(bar, "SetStatusBarColor", function(b: any)
-        if setting then return end
-        setting = true
-        b:SetStatusBarColor(UI.RGBA("unit-fill"))
-        setting = false
-    end)
-end
-
--- A theme change: the fonts, the bar's fill, the aura tooltips' backdrop
--- (set in the engine) and the aura panel's caption line.
-function M:ApplyTheme()
-    self:ApplyFonts()
-    local bar = _G.GameTooltipStatusBar
-    if bar and self.barSkinned then bar:SetStatusBarColor(UI.RGBA("unit-fill")) end
-    -- a unit's tooltip open now: its name in the new colour (the rest of
-    -- its lines are the game's, set again on the next show)
-    if GameTooltip:IsShown() then pcall(self.ColorUnit, self, GameTooltip) end
-    self:StyleAuraTooltip()
-    if self.auraPanel then
-        -- (anchored to by the game's aura container: sized out of combat)
-        self:RunOutOfCombat("auraPanel", function()
-            local size, gap = UI.Size("icon-md"), T.space["space-2"]
-            self.auraPanel:SetHeight(3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"])
-        end)
-    end
-end
-
 --------------------------------------------------------------------------------
 -- A group member's auras
 --------------------------------------------------------------------------------
@@ -180,13 +78,34 @@ end
 local MAX_LINES = 12
 local PER_ROW = 8
 
-local function groupUnit(unit: any): boolean
-    if type(unit) ~= "string" then return false end
+local function groupUnit(unit: string): boolean
     if unit:match("^party%d") or unit:match("^raid%d") then return true end
     return unit == "player" and IsInGroup()
 end
 
-local function timeLeft(a: any): string
+-- The unit a tooltip shows, when it's one addon code can read.
+local function unitOf(tooltip: GameTooltip): string?
+    local ok: boolean, _: unknown, unit: unknown = pcall(tooltip.GetUnit, tooltip)
+    if ok and plain(unit) and type(unit) == "string" then return unit end
+    return nil
+end
+
+-- An aura as the game gives it (read with care: any part may be secret).
+local function auraAt(unit: string, index: unknown, filter: unknown): AuraData?
+    local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, index :: number, filter :: string)
+    if not ok or issecretvalue(a) then return nil end
+    return a
+end
+
+-- One of the game's tooltip hooks (TooltipDataProcessor, declared as a plain
+-- table): fn after the game filled a tooltip of `kind`.
+type PostCall = (tooltip: GameTooltip, data: unknown) -> ()
+local function postCall(kind: unknown, fn: PostCall)
+    local add = part(TooltipDataProcessor, "AddTooltipPostCall")
+    if type(add) == "function" then (add :: (kind: unknown, fn: PostCall) -> ())(kind, fn) end
+end
+
+local function timeLeft(a: AuraData): string
     local d, x = a.duration, a.expirationTime
     if not (plain(d) and plain(x)) or not d or d <= 0 or not x then return "" end
     local left = x - GetTime()
@@ -196,229 +115,21 @@ local function timeLeft(a: any): string
     return ("%dh"):format(left / 3600)
 end
 
--- Out of combat: the auras as lines (debuffs first, in ember), at most 12.
-function M:AddAuraLines(tooltip: any, unit: string)
-    local list = {}
-    for _, filter in ipairs({ "HARMFUL", "HELPFUL" }) do
-        for i = 1, 40 do
-            -- (the aura is read as before: typed any, its fields guarded one by one)
-            local ok: boolean, a: any = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
-            if not ok or not a then break end
-            if plain(a.name) and a.name then list[#list + 1] = { a = a, harmful = filter == "HARMFUL" } end
-        end
-    end
-    if #list == 0 then return end
-    local ink, ember, muted = T.color["ink"], T.color["ember-text"], T.color["ink-muted"]
-    tooltip:AddLine(" ")
-    for i = 1, math.min(#list, MAX_LINES) do
-        local a, harmful = list[i].a, list[i].harmful
-        local icon = plain(a.icon) and a.icon and ("|T" .. a.icon .. ":0:0:0:0:64:64:5:59:5:59|t ") or ""
-        -- yours: you (or your pet) cast it (isFromPlayerOrPlayerPet is true for
-        -- every aura on you, found in game)
-        local src = a.sourceUnit
-        local mine = not harmful and plain(src) and src ~= nil and (UnitIsUnit(src, "player") or UnitIsUnit(src, "pet"))
-        local c = harmful and ember or ink
-        local name = a.name .. (mine and (" |cff" .. muted.hex .. "(yours)|r") or "")
-        local count = plain(a.applications) and a.applications and a.applications > 1 and (" ×" .. a.applications) or ""
-        tooltip:AddDoubleLine(icon .. name .. count, timeLeft(a), c[1], c[2], c[3], muted[1], muted[2], muted[3])
-    end
-    if #list > MAX_LINES then
-        tooltip:AddLine(("+%d more"):format(#list - MAX_LINES), muted[1], muted[2], muted[3])
-    end
-    tooltip:Show()
-end
-
--- In combat: the game's aura container in a small panel under the tooltip.
-function M:AuraPanel()
-    if self.auraPanel then return self.auraPanel end
-    local size = UI.Size("icon-md")
-    local gap = T.space["space-2"]
-    local w = PER_ROW * size + (PER_ROW - 1) * gap
-    local p = UI.Panel(SuuUI.Root, { ornament = true, width = w + T.space["space-4"] * 2,
-        height = 3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"] })
-    p:SetFrameStrata("TOOLTIP")
-    p:Hide()
-    p.caption = UI.Text(p, "caption", "ink-muted")
-    p.caption:SetPoint("TOPLEFT", T.space["space-4"], -T.space["space-4"])
-    p.caption:SetValue("Auras")
-    p.holder = CreateFrame("Frame", nil, p)
-    p.holder:SetPoint("TOPLEFT", p.caption, "BOTTOMLEFT", 0, -T.space["space-2"])
-    p.holder:SetSize(w, 3 * size + 2 * gap)
-    p.auras = UI.AuraContainer(p.holder, "none", { size = "icon-md", spacing = gap, anchor = "TOPLEFT",
-        growth = { "RIGHT", "DOWN" }, lineWidth = w,
-        groups = {
-            { key = "debuffs", filter = { "HARMFUL" }, max = PER_ROW, dispel = true },
-            { key = "buffs", filter = { "HELPFUL" }, max = PER_ROW * 2 },
-        } })
-    if p.auras then p.auras.container:SetPoint("TOPLEFT", p.holder, "TOPLEFT") end
-    self.auraPanel = p
-    return p
-end
-
-function M:ShowAuraPanel(tooltip: any, unit: string)
-    local p = self:AuraPanel()
-    if not p.auras then return end
-    p.auras:SetUnit(unit)
-    p:ClearAllPoints()
-    local bar = _G.GameTooltipStatusBar
-    local below = (bar and bar:IsShown() and bar:GetParent() == tooltip) and bar or tooltip
-    p:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -T.space["space-2"])
-    p:Show()
-    self.auraFor = tooltip
-end
-
-function M:HideAuraPanel()
-    if self.auraPanel and self.auraPanel:IsShown() then
-        self.auraPanel:Hide()
-        if self.auraPanel.auras then self.auraPanel.auras:SetUnit("none") end
-    end
-    self.auraFor = nil
-end
-
-function M:GroupAuras(tooltip: any)
-    if not self:Get("groupAuras") or tooltip ~= GameTooltip or not tooltip.GetUnit then return end
-    local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
-    if not ok or not plain(unit) or not groupUnit(unit) then return end
-    if InCombatLockdown() then
-        self:ShowAuraPanel(tooltip, unit)
-    else
-        self:AddAuraLines(tooltip, unit)
-    end
-end
-
 --------------------------------------------------------------------------------
 -- Any of Blizzard's tooltips, the first time it shows something
 --------------------------------------------------------------------------------
-
--- Tooltips SuuUI doesn't know by name (the aura buttons' own one, an
--- addon's) get the look the first time they show the game's data.
-function M:SkinAny(tooltip: any)
-    if UI.IsTooltipSkinned(tooltip) then return end
-    if tooltip.IsForbidden and tooltip:IsForbidden() then return end
-    if tooltip.GetObjectType and tooltip:GetObjectType() ~= "GameTooltip" then return end
-    local name = tooltip:GetName()
-    -- a tooltip inside another one keeps its host's look
-    if name and name:find("Embedded") then return end
-    UI.SkinTooltip(tooltip)
-    local ui = UIParent:GetEffectiveScale()
-    if ui and ui > 0 and tooltip:GetParent() == UIParent then
-        tooltip:SetScale(SuuUI.Root:GetEffectiveScale() / ui)
-    end
-end
 
 --------------------------------------------------------------------------------
 -- The aura buttons' own tooltip
 --------------------------------------------------------------------------------
 
--- The game's aura buttons (buffs, the target's, party and raid auras) show
--- a tooltip of the engine's that addon code can't touch; the engine takes a
--- style for it instead (AuraContainerInbound.SetTooltipBackdrop, its options
--- from the client's API documentation, 2026-10-13): surface-glass inside a
--- 1px gilt-line edge. Its text stays the game's (no spell ID there).
-function M:StyleAuraTooltip()
-    local inbound = _G.AuraContainerInbound
-    if not (inbound and inbound.SetTooltipBackdrop and CreateColor) then return end
-    -- one physical pixel in UIParent units
-    local h = select(2, GetPhysicalScreenSize())
-    local scale = UIParent:GetEffectiveScale()
-    local px = (h and h > 0 and scale > 0) and (768 / h / scale) or 1
-    local bg, edge = { UI.RGBA("surface-glass") }, { UI.RGBA("gilt-line") }
-    local ok, err = pcall(inbound.SetTooltipBackdrop, {
-        backdropInfo = {
-            bgFile = "Interface\\Buttons\\WHITE8X8",
-            edgeFile = "Interface\\Buttons\\WHITE8X8",
-            edgeSize = px,
-            insets = { left = px, right = px, top = px, bottom = px },
-        },
-        centerColor = CreateColor(unpack(bg)),
-        borderColor = CreateColor(unpack(edge)),
-    })
-    if not ok then self:Print("couldn't style the aura tooltips: " .. tostring(err)) end
-end
-
 --------------------------------------------------------------------------------
 -- Spell IDs, and who cast an aura
 --------------------------------------------------------------------------------
 
-function M:AddSpellID(tooltip: any, data: any)
-    if not self:Get("ids") then return end
-    local id = data and data.id
-    if not plain(id) or type(id) ~= "number" then return end
-    local m = T.color["ink-faint"]
-    tooltip:AddDoubleLine("Spell ID", tostring(id), m[1], m[2], m[3], m[1], m[2], m[3])
-    tooltip:Show()
-end
-
--- After SetUnitAura & co: "From" and the caster in their class colour.
-function M:AddSource(tooltip: any, unit: any, auraInstanceID: number?, index: any, filter: any)
-    if not self:Get("ids") then return end
-    if not plain(unit) or not unit then return end
-    local ok: boolean, a: any
-    if auraInstanceID then
-        ok, a = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, auraInstanceID)
-    else
-        ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, index, filter)
-    end
-    if not ok or not a then return end
-    local src = a.sourceUnit
-    if not plain(src) or not src then return end
-    local name = UnitName(src)
-    if not plain(name) or not name then return end
-    local color = T.color["ink"]
-    if UI.Flag(UnitIsPlayer(src)) then
-        local _, class = UnitClass(src)
-        if plain(class) and class and T.color["class-" .. class:lower()] then color = T.color["class-" .. class:lower()] end
-    end
-    if UI.Flag(UnitIsUnit(src, "player")) then name = name .. " (you)" end
-    local m = T.color["ink-faint"]
-    tooltip:AddDoubleLine("From", name, m[1], m[2], m[3], color[1], color[2], color[3])
-    tooltip:Show()
-end
-
--- On each tooltip itself: the setters are Blizzard's Lua, copied onto every
--- tooltip by its template's mixin (GameTooltipDataMixin), so its metatable
--- never sees them (hooked there, the caster line never came).
-function M:HookAuraSources()
-    for _, name in ipairs(TOOLTIPS) do
-        local tt = _G[name]
-        if tt then self:HookAuraSourcesOn(tt) end
-    end
-end
-
-function M:HookAuraSourcesOn(api: any)
-    local function hookSetter(method: string, byID: boolean, defaultFilter: string?)
-        if type(api[method]) ~= "function" then return end
-        hook(api, method, function(tooltip: any, unit: any, a2: any, a3: any)
-            if not self:IsEnabled() or (tooltip.IsForbidden and tooltip:IsForbidden()) then return end
-            if byID then
-                self:Guard(self.AddSource)(self, tooltip, unit, a2)
-            else
-                self:Guard(self.AddSource)(self, tooltip, unit, nil, a2, a3 or defaultFilter)
-            end
-        end)
-    end
-    hookSetter("SetUnitAura", false, "HELPFUL")
-    hookSetter("SetUnitBuff", false, "HELPFUL")
-    hookSetter("SetUnitDebuff", false, "HARMFUL")
-    hookSetter("SetUnitBuffByAuraInstanceID", true)
-    hookSetter("SetUnitDebuffByAuraInstanceID", true)
-    hookSetter("SetUnitAuraByAuraInstanceID", true)
-end
-
 --------------------------------------------------------------------------------
 -- Where a tooltip without an owner of its own opens
 --------------------------------------------------------------------------------
-
-function M:Anchor(tooltip: any)
-    if self:Get("anchor") ~= "suuui" or tooltip ~= GameTooltip then return end
-    tooltip:ClearAllPoints()
-    local bags = _G.SuuUIBags
-    if bags and bags:IsVisible() then
-        tooltip:SetPoint("BOTTOMRIGHT", bags, "TOPRIGHT", 0, T.space["space-4"])
-    else
-        tooltip:SetPoint("BOTTOMRIGHT", self.anchorFrame, "BOTTOMRIGHT")
-    end
-end
 
 --------------------------------------------------------------------------------
 -- Settings
@@ -447,77 +158,430 @@ local SECTION = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
--- The game's unit menus (UnitPopupManager:OpenMenu, every "MENU_UNIT_…"
--- menu: you, your target, party, raid, players in the world) in SuuUI's
--- look: hooked after the game opened one, so its choices stay the game's.
--- Its submenus follow (UI.ReskinMenu restyles the menus a restyled one opens).
-function M:HookUnitMenus()
-    local mgr = _G.UnitPopupManager
-    if self.unitMenusHooked or not (mgr and mgr.OpenMenu) then return end
-    self.unitMenusHooked = true
-    hook(mgr, "OpenMenu", function()
-        if not (self:IsEnabled() and self:Get("unitMenus")) then return end
-        local manager = Menu and Menu.GetManager and Menu.GetManager()
-        local menu = manager and manager.GetOpenMenu and manager:GetOpenMenu()
-        if not menu then return end
-        UI.ReskinMenu(menu)
-        -- its rows may come a frame later
-        after(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
-    end)
-end
+-- In combat a group member's auras: the game's container in a small panel.
+type AuraPanel = { panel: Panel, caption: Text, holder: Frame, auras: UnitAuras? }
 
-function M:OnEnable()
-    for _, name in ipairs(TOOLTIPS) do
-        if _G[name] then UI.SkinTooltip(_G[name]) end
+class TooltipsModule extends Module<typeof(DEFAULTS)>
+    anchorFrame: Frame? = nil
+    -- the tooltip the aura panel hangs under
+    auraFor: GameTooltip? = nil
+    auraPanel: AuraPanel? = nil
+    barSkinned: boolean? = nil
+    hooked: boolean? = nil
+    unitMenusHooked: boolean? = nil
+
+    constructor()
+        super({
+            id = "tooltips",
+            name = "Tooltips",
+            description = "Blizzard's tooltips in SuuUI's look: art, type, name colours, where they open.",
+            api = "0.12",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
     end
-    self:HookUnitMenus()
-    self:OnGameEvent("ADDON_LOADED", function() self:HookUnitMenus() end)
-    self:ApplyFonts()
-    self:ApplyScale()
-    self:SkinStatusBar()
-    if not self.anchorFrame then
-        -- the place edit mode moves (tooltips open from its bottom right)
-        self.anchorFrame = CreateFrame("Frame", "SuuUITooltipAnchor", SuuUI.Root)
-        self.anchorFrame:SetSize(220, 90)
+
+    function ApplyFonts()
+        for object, style in pairs(FONTS) do
+            local font = named(object)
+            local setFont = part(font, "SetFont")
+            local types: { [string]: { file: string, size: number } } = T.type
+            local s = types[style]
+            if type(setFont) == "function" and s then pcall(setFont, font, s.file, s.size, "") end
+        end
     end
-    self:RegisterMover(self.anchorFrame, { key = "position", label = "Tooltips" })
-    self:RegisterSettings(SECTION)
-    if not self.hooked then
-        self.hooked = true
-        if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType then
-            TooltipDataProcessor.AddTooltipPostCall(TooltipDataProcessor.AllTypes or "ALL", function(tooltip)
-                if self:IsEnabled() then pcall(self.SkinAny, self, tooltip) end
+
+    -- The tooltips at SuuUI's scale (they live under UIParent; SuuUI's frames
+    -- under its pixel-perfect root), so type and edges match the rest.
+    function ApplyScale()
+        local ui = UIParent:GetEffectiveScale()
+        if not ui or ui == 0 then return end
+        local scale = SuuUI.Root:GetEffectiveScale() / ui
+        for _, name in ipairs(TOOLTIPS) do
+            local tt = asFrame(named(name))
+            if tt then tt:SetScale(scale) end
+        end
+    end
+
+    function ColorUnit(tooltip: GameTooltip)
+        if not self:Get("nameColors") then return end
+        local unit = unitOf(tooltip)
+        if not unit then return end
+        local token: string? = nil
+        local isPlayer = UnitIsPlayer(unit)
+        if not plain(isPlayer) then return end
+        if isPlayer then
+            local _, class = UnitClass(unit)
+            if plain(class) and class then token = "class-" .. class:lower() end
+        else
+            local r = UnitReaction(unit, "player")
+            if plain(r) and r then token = reactionToken(r) end
+        end
+        local colors: { [string]: unknown } = T.color
+        if not (token and colors[token]) then return end
+        local name = tooltip:GetName()
+        local line = name and asFontString(named(name .. "TextLeft1")) or nil
+        if line then line:SetTextColor(UI.RGBA(token)) end
+    end
+
+    -- The unit's level in its difficulty's colour on the "Level 34 …" line
+    -- (asked 2026-10-18), the rest of the line as it is.
+    function ColorLevel(tooltip: GameTooltip)
+        local unit = unitOf(tooltip)
+        if not unit then return end
+        local level = UnitLevel(unit)
+        if not plain(level) then return end
+        local colors: { [string]: Color } = T.color
+        local hex = assert(colors[UI.LevelColor(level)]).hex
+        local word = LEVEL or "Level"
+        local name = tooltip:GetName()
+        for i = 2, math.min(5, tooltip:NumLines() or 0) do
+            local line = name and asFontString(named(name .. "TextLeft" .. i)) or nil
+            local text = line and line:GetText()
+            if line and plain(text) and text then
+                local before, num, rest = text:match("^(.-" .. word .. " )(%S+)(.*)$")
+                if num and not num:find("|c", 1, true) then
+                    line:SetText(assert(before) .. "|cff" .. hex .. num .. "|r" .. assert(rest))
+                    return
+                end
+            end
+        end
+    end
+
+    function SkinStatusBar()
+        local bar = asStatusBar(named("GameTooltipStatusBar"))
+        if not bar or self.barSkinned then return end
+        self.barSkinned = true
+        bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        bar:SetHeight(4)
+        local track = bar:CreateTexture(nil, "BACKGROUND")
+        UI.PaintFill(track, "surface-sunk")
+        track:SetAllPoints()
+        bar:SetStatusBarColor(UI.RGBA("unit-fill"))
+        -- the game colours the bar on every show: it goes back to the unit fill,
+        -- read each time (a theme may have changed it)
+        local setting = false
+        hook(bar, "SetStatusBarColor", function(b: StatusBar)
+            if setting then return end
+            setting = true
+            b:SetStatusBarColor(UI.RGBA("unit-fill"))
+            setting = false
+        end)
+    end
+
+    -- A theme change: the fonts, the bar's fill, the aura tooltips' backdrop
+    -- (set in the engine) and the aura panel's caption line.
+    function ApplyTheme()
+        self:ApplyFonts()
+        local bar = asStatusBar(named("GameTooltipStatusBar"))
+        if bar and self.barSkinned then bar:SetStatusBarColor(UI.RGBA("unit-fill")) end
+        -- a unit's tooltip open now: its name in the new colour (the rest of
+        -- its lines are the game's, set again on the next show)
+        if GameTooltip:IsShown() then pcall(self.ColorUnit, self, GameTooltip) end
+        self:StyleAuraTooltip()
+        local aura = self.auraPanel
+        if aura then
+            -- (anchored to by the game's aura container: sized out of combat)
+            self:RunOutOfCombat("auraPanel", function()
+                local size, gap = UI.Size("icon-md"), T.space["space-2"]
+                aura.panel:SetHeight(3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"])
             end)
-            for _, kind in ipairs({ Enum.TooltipDataType.Spell, Enum.TooltipDataType.UnitAura }) do
-                if kind then
-                    TooltipDataProcessor.AddTooltipPostCall(kind, function(tooltip, data)
+        end
+    end
+
+    -- Out of combat: the auras as lines (debuffs first, in ember), at most 12.
+    function AddAuraLines(tooltip: GameTooltip, unit: string)
+        local list: { a: AuraData, harmful: boolean }[] = {}
+        for _, filter in ipairs({ "HARMFUL", "HELPFUL" }) do
+            for i = 1, 40 do
+                local a = auraAt(unit, i, filter)
+                if not a then break end
+                if plain(a.name) and a.name then list[#list + 1] = { a = a, harmful = filter == "HARMFUL" } end
+            end
+        end
+        if #list == 0 then return end
+        local ink, ember, muted = T.color["ink"], T.color["ember-text"], T.color["ink-muted"]
+        tooltip:AddLine(" ")
+        for i = 1, math.min(#list, MAX_LINES) do
+            local a, harmful = list[i].a, list[i].harmful
+            local icon = plain(a.icon) and a.icon and ("|T" .. a.icon .. ":0:0:0:0:64:64:5:59:5:59|t ") or ""
+            -- yours: you (or your pet) cast it (isFromPlayerOrPlayerPet is true for
+            -- every aura on you, found in game)
+            local src = a.sourceUnit
+            local mine = not harmful and plain(src) and src ~= nil and (UI.Flag(UnitIsUnit(src, "player")) or UI.Flag(UnitIsUnit(src, "pet")))
+            local c = harmful and ember or ink
+            local name = a.name .. (mine and (" |cff" .. muted.hex .. "(yours)|r") or "")
+            local count = plain(a.applications) and a.applications and a.applications > 1 and (" ×" .. a.applications) or ""
+            tooltip:AddDoubleLine(icon .. name .. count, timeLeft(a), c[1], c[2], c[3], muted[1], muted[2], muted[3])
+        end
+        if #list > MAX_LINES then
+            tooltip:AddLine(("+%d more"):format(#list - MAX_LINES), muted[1], muted[2], muted[3])
+        end
+        tooltip:Show()
+    end
+
+    -- In combat: the game's aura container in a small panel under the tooltip.
+    function AuraPanel(): AuraPanel
+        local made = self.auraPanel
+        if made then return made end
+        local size = UI.Size("icon-md")
+        local gap = T.space["space-2"]
+        local w = PER_ROW * size + (PER_ROW - 1) * gap
+        local p = UI.Panel(SuuUI.Root, { ornament = true, width = w + T.space["space-4"] * 2,
+            height = 3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"] })
+        p:SetFrameStrata("TOOLTIP")
+        p:Hide()
+        local caption = UI.Text(p, "caption", "ink-muted")
+        caption:SetPoint("TOPLEFT", T.space["space-4"], -T.space["space-4"])
+        caption:SetValue("Auras")
+        local holder = CreateFrame("Frame", nil, p)
+        holder:SetPoint("TOPLEFT", caption, "BOTTOMLEFT", 0, -T.space["space-2"])
+        holder:SetSize(w, 3 * size + 2 * gap)
+        local auras = UI.AuraContainer(holder, "none", { size = "icon-md", spacing = gap, anchor = "TOPLEFT",
+            growth = { "RIGHT", "DOWN" }, lineWidth = w,
+            groups = {
+                { key = "debuffs", filter = { "HARMFUL" }, max = PER_ROW, dispel = true },
+                { key = "buffs", filter = { "HELPFUL" }, max = PER_ROW * 2 },
+            } })
+        if auras then auras.container:SetPoint("TOPLEFT", holder, "TOPLEFT") end
+        local panel: AuraPanel = { panel = p, caption = caption, holder = holder, auras = auras }
+        self.auraPanel = panel
+        return panel
+    end
+
+    function ShowAuraPanel(tooltip: GameTooltip, unit: string)
+        local aura = self:AuraPanel()
+        local p, auras = aura.panel, aura.auras
+        if not auras then return end
+        auras:SetUnit(unit)
+        p:ClearAllPoints()
+        local bar = asStatusBar(named("GameTooltipStatusBar"))
+        local below: Region = (bar and bar:IsShown() and bar:GetParent() == tooltip) and bar or tooltip
+        p:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -T.space["space-2"])
+        p:Show()
+        self.auraFor = tooltip
+    end
+
+    function HideAuraPanel()
+        local aura = self.auraPanel
+        if aura and aura.panel:IsShown() then
+            aura.panel:Hide()
+            local auras = aura.auras
+            if auras then auras:SetUnit("none") end
+        end
+        self.auraFor = nil
+    end
+
+    function GroupAuras(tooltip: GameTooltip)
+        if not self:Get("groupAuras") or tooltip ~= GameTooltip then return end
+        local unit = unitOf(tooltip)
+        if not unit or not groupUnit(unit) then return end
+        if InCombatLockdown() then
+            self:ShowAuraPanel(tooltip, unit)
+        else
+            self:AddAuraLines(tooltip, unit)
+        end
+    end
+
+    -- Tooltips SuuUI doesn't know by name (the aura buttons' own one, an
+    -- addon's) get the look the first time they show the game's data.
+    function SkinAny(given: unknown)
+        local tooltip = asFrame(given)
+        if not tooltip or UI.IsTooltipSkinned(tooltip) then return end
+        if tooltip:IsForbidden() then return end
+        if tooltip:GetObjectType() ~= "GameTooltip" then return end
+        local name = tooltip:GetName()
+        -- a tooltip inside another one keeps its host's look
+        if name and name:find("Embedded") then return end
+        UI.SkinTooltip(tooltip)
+        local ui = UIParent:GetEffectiveScale()
+        if ui and ui > 0 and tooltip:GetParent() == UIParent then
+            tooltip:SetScale(SuuUI.Root:GetEffectiveScale() / ui)
+        end
+    end
+
+    -- The game's aura buttons (buffs, the target's, party and raid auras) show
+    -- a tooltip of the engine's that addon code can't touch; the engine takes a
+    -- style for it instead (AuraContainerInbound.SetTooltipBackdrop, its options
+    -- from the client's API documentation, 2026-10-13): surface-glass inside a
+    -- 1px gilt-line edge. Its text stays the game's (no spell ID there).
+    function StyleAuraTooltip()
+        local inbound = named("AuraContainerInbound")
+        local setBackdrop = part(inbound, "SetTooltipBackdrop")
+        if not (type(setBackdrop) == "function" and CreateColor) then return end
+        -- one physical pixel in UIParent units
+        local _, h = GetPhysicalScreenSize()
+        local scale = UIParent:GetEffectiveScale()
+        local px = (h and h > 0 and scale > 0) and (768 / h / scale) or 1
+        local bg, edge = { UI.RGBA("surface-glass") }, { UI.RGBA("gilt-line") }
+        local ok: boolean, err: unknown = pcall(setBackdrop :: (style: unknown) -> (), {
+            backdropInfo = {
+                bgFile = "Interface\\Buttons\\WHITE8X8",
+                edgeFile = "Interface\\Buttons\\WHITE8X8",
+                edgeSize = px,
+                insets = { left = px, right = px, top = px, bottom = px },
+            },
+            centerColor = CreateColor(unpack(bg)),
+            borderColor = CreateColor(unpack(edge)),
+        })
+        if not ok then self:Print("couldn't style the aura tooltips: " .. tostring(err)) end
+    end
+
+    function AddSpellID(tooltip: GameTooltip, data: unknown)
+        if not self:Get("ids") then return end
+        local id = part(data, "id")
+        if not plain(id) or type(id) ~= "number" then return end
+        local m = T.color["ink-faint"]
+        tooltip:AddDoubleLine("Spell ID", tostring(id), m[1], m[2], m[3], m[1], m[2], m[3])
+        tooltip:Show()
+    end
+
+    -- After SetUnitAura & co: "From" and the caster in their class colour.
+    function AddSource(tooltip: GameTooltip, unit: unknown, auraInstanceID: unknown, index: unknown, filter: unknown)
+        if not self:Get("ids") then return end
+        if not plain(unit) or type(unit) ~= "string" then return end
+        local a: AuraData? = nil
+        if plain(auraInstanceID) and type(auraInstanceID) == "number" then
+            local ok, read = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, auraInstanceID)
+            if ok and not issecretvalue(read) then a = read end
+        else
+            a = auraAt(unit, index, filter)
+        end
+        if not a then return end
+        local src = a.sourceUnit
+        if not plain(src) or not src then return end
+        local readName = UnitName(src)
+        if not plain(readName) or not readName then return end
+        local name: string = readName
+        local colors: { [string]: Color } = T.color
+        local color = assert(colors["ink"])
+        if UI.Flag(UnitIsPlayer(src)) then
+            local _, class = UnitClass(src)
+            local own = plain(class) and class and colors["class-" .. class:lower()]
+            if own then color = own end
+        end
+        if UI.Flag(UnitIsUnit(src, "player")) then name = name .. " (you)" end
+        local m = T.color["ink-faint"]
+        tooltip:AddDoubleLine("From", name, m[1], m[2], m[3], color[1], color[2], color[3])
+        tooltip:Show()
+    end
+
+    -- On each tooltip itself: the setters are Blizzard's Lua, copied onto every
+    -- tooltip by its template's mixin (GameTooltipDataMixin), so its metatable
+    -- never sees them (hooked there, the caster line never came).
+    function HookAuraSources()
+        for _, name in ipairs(TOOLTIPS) do
+            local tt = asFrame(named(name))
+            if tt then self:HookAuraSourcesOn(tt) end
+        end
+    end
+
+    function HookAuraSourcesOn(api: Frame)
+        local function hookSetter(method: string, byID: boolean, defaultFilter: string?)
+            if type(part(api, method)) ~= "function" then return end
+            hook(api, method, function(tooltip: GameTooltip, unit: unknown, a2: unknown, a3: unknown)
+                if not self:IsEnabled() or tooltip:IsForbidden() then return end
+                if byID then
+                    self:Guard(self.AddSource)(self, tooltip, unit, a2)
+                else
+                    self:Guard(self.AddSource)(self, tooltip, unit, nil, a2, a3 or defaultFilter)
+                end
+            end)
+        end
+        hookSetter("SetUnitAura", false, "HELPFUL")
+        hookSetter("SetUnitBuff", false, "HELPFUL")
+        hookSetter("SetUnitDebuff", false, "HARMFUL")
+        hookSetter("SetUnitBuffByAuraInstanceID", true)
+        hookSetter("SetUnitDebuffByAuraInstanceID", true)
+        hookSetter("SetUnitAuraByAuraInstanceID", true)
+    end
+
+    function Anchor(tooltip: GameTooltip)
+        local anchor = self.anchorFrame
+        if self:Get("anchor") ~= "suuui" or tooltip ~= GameTooltip or not anchor then return end
+        tooltip:ClearAllPoints()
+        local bags = asFrame(named("SuuUIBags"))
+        if bags and bags:IsVisible() then
+            tooltip:SetPoint("BOTTOMRIGHT", bags, "TOPRIGHT", 0, T.space["space-4"])
+        else
+            tooltip:SetPoint("BOTTOMRIGHT", anchor, "BOTTOMRIGHT")
+        end
+    end
+
+    -- The game's unit menus (UnitPopupManager:OpenMenu, every "MENU_UNIT_…"
+    -- menu: you, your target, party, raid, players in the world) in SuuUI's
+    -- look: hooked after the game opened one, so its choices stay the game's.
+    -- Its submenus follow (UI.ReskinMenu restyles the menus a restyled one opens).
+    function HookUnitMenus()
+        local mgr = named("UnitPopupManager")
+        if self.unitMenusHooked or not part(mgr, "OpenMenu") then return end
+        self.unitMenusHooked = true
+        hook(mgr, "OpenMenu", function()
+            if not (self:IsEnabled() and self:Get("unitMenus")) then return end
+            local menu = openRoot()
+            if not menu then return end
+            UI.ReskinMenu(menu)
+            -- its rows may come a frame later
+            after(0, function() if menu:IsShown() then UI.ReskinMenu(menu) end end)
+        end)
+    end
+
+    override function OnEnable()
+        for _, name in ipairs(TOOLTIPS) do
+            local tt = asFrame(named(name))
+            if tt then UI.SkinTooltip(tt) end
+        end
+        self:HookUnitMenus()
+        self:OnGameEvent("ADDON_LOADED", function() self:HookUnitMenus() end)
+        self:ApplyFonts()
+        self:ApplyScale()
+        self:SkinStatusBar()
+        local anchor = self.anchorFrame
+        if not anchor then
+            -- the place edit mode moves (tooltips open from its bottom right)
+            anchor = CreateFrame("Frame", "SuuUITooltipAnchor", SuuUI.Root)
+            anchor:SetSize(220, 90)
+            self.anchorFrame = anchor
+        end
+        self:RegisterMover(anchor, { key = "position", label = "Tooltips" })
+        self:RegisterSettings(SECTION)
+        if not self.hooked then
+            self.hooked = true
+            if part(TooltipDataProcessor, "AddTooltipPostCall") and Enum.TooltipDataType then
+                postCall(part(TooltipDataProcessor, "AllTypes") or "ALL", function(tooltip: GameTooltip, _: unknown)
+                    if self:IsEnabled() then pcall(self.SkinAny, self, tooltip) end
+                end)
+                for _, kind in ipairs({ Enum.TooltipDataType.Spell, Enum.TooltipDataType.UnitAura }) do
+                    postCall(kind, function(tooltip: GameTooltip, data: unknown)
                         if self:IsEnabled() then self:Guard(self.AddSpellID)(self, tooltip, data) end
                     end)
                 end
+                self:HookAuraSources()
+                postCall(Enum.TooltipDataType.Unit, function(tooltip: GameTooltip, _: unknown)
+                    if not self:IsEnabled() then return end
+                    pcall(self.ColorUnit, self, tooltip)
+                    pcall(self.ColorLevel, self, tooltip)
+                    self:Guard(self.GroupAuras)(self, tooltip)
+                end)
             end
-            self:HookAuraSources()
-            TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
-                if not self:IsEnabled() then return end
-                pcall(self.ColorUnit, self, tooltip)
-                pcall(self.ColorLevel, self, tooltip)
-                self:Guard(self.GroupAuras)(self, tooltip)
-            end)
+            hookScript(GameTooltip, "OnHide", function() self:HideAuraPanel() end)
+            -- another unit (or no unit) on the same tooltip: the panel goes
+            hookScript(GameTooltip, "OnTooltipCleared", function() self:HideAuraPanel() end)
+            if type(GameTooltip_SetDefaultAnchor) == "function" then
+                hook("GameTooltip_SetDefaultAnchor", function(tooltip: GameTooltip)
+                    if self:IsEnabled() then self:Anchor(tooltip) end
+                end)
+            end
         end
-        hookScript(GameTooltip, "OnHide", function() self:HideAuraPanel() end)
-        -- another unit (or no unit) on the same tooltip: the panel goes
-        hookScript(GameTooltip, "OnTooltipCleared", function() self:HideAuraPanel() end)
-        if type(GameTooltip_SetDefaultAnchor) == "function" then
-            hook("GameTooltip_SetDefaultAnchor", function(tooltip: any)
-                if self:IsEnabled() then self:Anchor(tooltip) end
-            end)
+        self:StyleAuraTooltip()
+        -- the aura panel's container made out of combat, ready for a fight
+        if not InCombatLockdown() then self:AuraPanel() end
+        for _, e in ipairs({ "UI_SCALE_CHANGED", "DISPLAY_SIZE_CHANGED" }) do
+            self:OnGameEvent(e, function() after(0, function() self:ApplyScale(); self:StyleAuraTooltip() end) end)
         end
+        self:On("SUUUI_ROOT_SCALED", function() self:ApplyScale() end)
+        self:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end)
     end
-    self:StyleAuraTooltip()
-    -- the aura panel's container made out of combat, ready for a fight
-    if not InCombatLockdown() then self:AuraPanel() end
-    for _, e in ipairs({ "UI_SCALE_CHANGED", "DISPLAY_SIZE_CHANGED" }) do
-        self:OnGameEvent(e, function() after(0, function() self:ApplyScale(); self:StyleAuraTooltip() end) end)
-    end
-    self:On("SUUUI_ROOT_SCALED", function() self:ApplyScale() end)
-    self:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end)
 end
+
+M = SuuUI.AddModule(TooltipsModule.new())
