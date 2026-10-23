@@ -40,36 +40,33 @@
 -- commands; others show their aliases only.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type Text from "/UI/Text"
+import type Border from "/UI/Draw"
+import type KeyChip, ScrollArea from "/UI/Panel"
 import hookScript from "wowlua:hooks"
 -- the matching (what's typed against the catalog) in a module of its own
 import * as match from "./ChatCommands/Match"
 import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
+local try, tryMethod = errors.try, errors.tryMethod
+local asString, asNumber, flag, field = secret.asString, secret.asNumber, secret.flag, tbl.field
 
-local M = SuuUI.RegisterModule({
-    id = "chatcommands",
-    name = "Command palette",
-    description = "Typing a / in chat lists the commands that fit, by category, with what they do; Tab puts one in.",
-    api = "0.17",
-    defaults = {
-        suggest = true, -- the palette at all
-        args = true,    -- names, channels and topics after a command
-        emotes = true,  -- emotes among the commands
-        tab = true,     -- Tab and a click put the marked row in (Up and Down mark)
-    },
-})
+local DEFAULTS = {
+    suggest = true, -- the palette at all
+    args = true,    -- names, channels and topics after a command
+    emotes = true,  -- emotes among the commands
+    tab = true,     -- Tab and a click put the marked row in (Up and Down mark)
+}
 
--- what secret.readable() lets through: a value that's there and not a secret
-type Readable = string | number | boolean | table | (...any) -> ...any
-local function call(fn: any, ...: any): ...any
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
-    if ok then return a, b, c, d, e, f, g, h, i, j, k end
-end
-type Color = number[] & { hex: string }
-local colors: { [string]: any } = T.color
+local M: ChatCommandsModule
+
+local colors: { [string]: unknown } = T.color
 local tint = match.tint
 
 -- A command in the catalog.
@@ -82,8 +79,8 @@ type Row = { value: string, color?: string, diamond?: boolean, note?: string, ri
 type Group = { title: string, rows: Row[] }
 type SubCommand = match.SubCommand
 type Query = match.Query
--- A row in the drawn list, in order (Up and Down step through them).
-type Entry = { put: string, frame: any, y: number, h: number }
+-- What this character keeps: the category chosen.
+type PaletteChar = { category?: string }
 
 local PAD = S["space-5"]
 local ABOVE = 72 -- the palette reaches this far above the chat's box
@@ -204,18 +201,20 @@ local INFO_LIST: InfoEntry[] = {
     { "EDITMODE", "game", "The game's edit mode" },
     { "PVP", "game", "Turn PvP on or off" },
 }
-local INFO = {}
+type Info = { cat: string, desc: string, main?: string, arg?: string, usage?: string, rank: number }
+local INFO: { [string]: Info } = {}
 for i, e in ipairs(INFO_LIST) do
-    INFO[e[1]] = { cat = e[2], desc = e[3], main = e.main, arg = e.arg, usage = e.usage, rank = i }
+    INFO[assert(e[1])] = { cat = assert(e[2]), desc = assert(e[3]), main = e.main, arg = e.arg, usage = e.usage, rank = i }
 end
 
 -- A command key's aliases, lower case, each once: SLASH_<KEY>1…n.
 local function aliasesOf(key: string): string[]
     local list: string[], seen: { [string]: boolean }, i = {}, {}, 1
     while i <= 30 do
-        local s = _G["SLASH_" .. key .. i]
-        if s == nil then break end
-        if secret.readable(s) and type(s) == "string" then
+        local raw = field(_G, "SLASH_" .. key .. i)
+        if raw == nil then break end
+        local s = asString(raw)
+        if s then
             local low = s:lower()
             if low:sub(1, 1) == "/" and not seen[low] then
                 seen[low] = true
@@ -229,909 +228,317 @@ end
 
 -- Who registered a command: true for the game, else the addon's name.
 local function origin(key: string): true | string
-    if not issecurevariable then return true end
     local ok, secure, by = pcall(issecurevariable, "SLASH_" .. key .. "1")
     if not ok or secure then return true end
-    return secret.readable(by) and by or "an addon"
+    return asString(by) or "an addon"
 end
 
--- Every command: { cmd, aliases, names, desc, cat, src, key, arg, usage,
--- chatType, rank }, by category order, rank and name.
-function M:BuildCatalog()
-    local keys: { [string]: boolean } = {}
-    local function take(k: unknown) if type(k) == "string" and secret.readable(k) then keys[k] = true end end
-    if type(SlashCmdList) == "table" then
-        for k in pairs(SlashCmdList) do take(k) end
-        local mt = getmetatable(SlashCmdList)
-        if type(mt) == "table" and type(mt.__index) == "table" then
-            for k in pairs(mt.__index) do take(k) end
-        end
-    end
-    if type(hash_ChatTypeInfoList) == "table" then
-        for _, k in pairs(hash_ChatTypeInfoList) do take(k) end
-    end
-    local items: Item[], byName: { [string]: Item } = {}, {}
-    for key in pairs(keys) do
-        local names = aliasesOf(key)
-        if #names > 0 then
-            local info = INFO[key]
-            local who = origin(key)
-            -- SuuUI's own /suu: by its name (wowlua registers it under its
-            -- own key, WOWLUA_SUUUI_<n>; the secret.readable-Lua SuuUI's was SUUUI)
-            local suu = false
-            for _, n in ipairs(names) do if n == "/suu" then suu = true end end
-            local cat, src
-            if suu or who == "SuuUI" then
-                cat, src = "suuui", "SuuUI"
-            elseif who ~= true then
-                cat, src = "addon", who
-            else
-                local chatType = type(ChatTypeInfo) == "table" and ChatTypeInfo[key] ~= nil
-                cat = info and info.cat or (chatType and "chat") or "game"
-                src = LABEL[cat] or cat
-            end
-            local main = names[1]
-            if info and info.main then
-                for _, n in ipairs(names) do if n == info.main then main = n end end
-            end
-            local aliases: string[] = {}
-            for _, n in ipairs(names) do if n ~= main then aliases[#aliases + 1] = n end end
-            local item: Item = {
-                cmd = main, aliases = aliases, names = names, key = key, cat = cat, src = src,
-                desc = info and info.desc, arg = info and info.arg, usage = info and info.usage,
-                rank = info and info.rank or 500,
-                chatType = type(ChatTypeInfo) == "table" and ChatTypeInfo[key] ~= nil,
-            }
-            if suu then
-                item.desc, item.arg, item.usage, item.rank = "Open SuuUI's settings; /suu help lists the rest", "suu",
-                    "<command>", 1
-            end
-            -- a name two keys share (localized aliases) goes to the first
-            local taken = false
-            for _, n in ipairs(names) do if byName[n] then taken = true end end
-            if not taken then
-                items[#items + 1] = item
-                for _, n in ipairs(names) do byName[n] = item end
-            end
-        end
-    end
-    -- the emotes: EMOTE<n>_TOKEN with its commands EMOTE<n>_CMD<m>
-    local max = type(MAXEMOTEINDEX) == "number" and MAXEMOTEINDEX or 1000
-    for n = 1, max do
-        if _G["EMOTE" .. n .. "_TOKEN"] ~= nil then
-            local names: string[], m = {}, 1
-            while m <= 20 do
-                local s = _G["EMOTE" .. n .. "_CMD" .. m]
-                if s == nil then break end
-                if secret.readable(s) and type(s) == "string" then
-                    local low = s:lower()
-                    if low:sub(1, 1) == "/" and not byName[low] then
-                        local dup = false
-                        for _, x in ipairs(names) do if x == low then dup = true end end
-                        if not dup then names[#names + 1] = low end
-                    end
-                end
-                m = m + 1
-            end
-            if #names > 0 then
-                local aliases: string[] = {}
-                for i = 2, #names do aliases[#aliases + 1] = names[i] end
-                local item: Item = { cmd = names[1], aliases = aliases, names = names, cat = "emote", src = "Emote", rank = 1000 + n }
-                items[#items + 1] = item
-                for _, x in ipairs(names) do byName[x] = item end
-            end
-        end
-    end
-    local catOrder: { [string]: number } = {}
-    for i, c in ipairs(ALL_ORDER) do catOrder[c] = i end
-    table.sort(items, function(a: Item, b: Item): boolean
-        if a.cat ~= b.cat then return (catOrder[a.cat] or 0) < (catOrder[b.cat] or 0) end
-        if a.rank ~= b.rank then return a.rank < b.rank end
-        return a.cmd < b.cmd
-    end)
-    self.catalog, self.byName, self.builtAt = items, byName, GetTime()
+-- Whether the game has a chat type by this key.
+local function isChatType(key: string): boolean
+    return field(_G, "ChatTypeInfo", key) ~= nil
 end
 
--- The catalog, built again once a minute at most (addons add commands late).
-function M:Catalog()
-    if not self.catalog or GetTime() - (self.builtAt or 0) > 60 then self:BuildCatalog() end
-    return self.catalog
+local function classToken(file: string?): string
+    local token = file and ("class-" .. file:lower())
+    return token and colors[token] ~= nil and token or "ink"
 end
 
 --------------------------------------------------------------------------------
--- What goes after a command
+-- The panel's parts
 --------------------------------------------------------------------------------
 
-local function classToken(file: unknown): string
-    return type(file) == "string" and colors["class-" .. file:lower()] and ("class-" .. file:lower()) or "ink"
-end
-
--- Names for an argument: { { title, rows = { { value, color, note, right } } } }.
-function M:Names(kind: string, typed: string): Group[]
-    typed = typed:lower()
-    local seen: { [string]: boolean }, groups: Group[] = {}, {}
-    -- (the player's own name is never secret; a secret one is not compared)
-    local me: string? = nil
-    local mine = SuuUI.FullName("player")
-    if secret.readable(mine) then me = mine end
-    local function fits(name: unknown): name is string
-        return secret.readable(name) and type(name) == "string" and name ~= "" and name ~= me
-            and (typed == "" or name:lower():sub(1, #typed) == typed)
-    end
-    local function add(title: string, rows: Row[])
-        local out: Row[] = {}
-        for _, r in ipairs(rows) do
-            local key = r.value:lower()
-            if not seen[key] then
-                seen[key] = true
-                out[#out + 1] = r
-            end
-        end
-        if #out > 0 then groups[#groups + 1] = { title = title, rows = out } end
-    end
-    local function unitRow(unit: string, note: string?): Row?
-        local name = SuuUI.FullName(unit)
-        if not fits(name) then return nil end
-        local _, file = call(UnitClass, unit)
-        local level = call(UnitLevel, unit)
-        if not secret.readable(level) then level = nil end
-        return { value = name, color = classToken(secret.readable(file) and file), diamond = true,
-                 note = level and level > 0 and ("Level " .. level) or nil, right = note }
-    end
-    local inGroup = IsInGroup()
-    if kind == "names" and secret.flag(call(UnitIsPlayer, "target")) then
-        local together = secret.flag(call(UnitInParty, "target")) or secret.flag(call(UnitInRaid, "target"))
-        add("Target", { unitRow("target", together and "in your group" or nil) } :: Row[])
-    end
-    if (kind == "names" or kind == "group") and inGroup then
-        local rows = {}
-        local raid = IsInRaid()
-        for i = 1, raid and GetNumGroupMembers() or GetNumSubgroupMembers() do
-            local r = unitRow(raid and ("raid" .. i) or ("party" .. i))
-            if r then rows[#rows + 1] = r end
-        end
-        table.sort(rows, function(a, b) return a.value < b.value end)
-        add(raid and "Raid" or "Party", rows)
-    end
-    if (kind == "names" or kind == "guild") and IsInGuild() then
-        local rows = {}
-        for i = 1, (call(GetNumGuildMembers) or 0) do
-            local full, rank, _, _, _, _, _, _, online, _, file = call(GetGuildRosterInfo, i)
-            if secret.readable(full) and full then
-                local name = Ambiguate(full, "short")
-                if fits(name) and (online or kind == "guild") then
-                    rows[#rows + 1] = { value = name, color = classToken(secret.readable(file) and file), diamond = true,
-                                        note = secret.readable(rank) and rank or nil, online = online and true or false,
-                                        right = online and (tint("fel", "● ") .. "Online") or "Offline" }
-                end
-            end
-        end
-        table.sort(rows, function(a, b)
-            if a.online ~= b.online then return a.online end
-            return a.value < b.value
-        end)
-        add(kind == "guild" and "Guild" or "Guild · online", rows)
-    end
-    if (kind == "names" or kind == "friends") and C_FriendList then
-        local rows = {}
-        for i = 1, (call(C_FriendList.GetNumFriends) or 0) do
-            local f = call(C_FriendList.GetFriendInfoByIndex, i)
-            if type(f) == "table" and fits(f.name) and (f.connected or kind == "friends") then
-                rows[#rows + 1] = { value = f.name, color = classToken(f.className and f.className:upper()),
-                                    diamond = true, note = secret.readable(f.area) and f.area or nil,
-                                    right = f.connected and (tint("fel", "● ") .. "Online") or "Offline" }
-            end
-        end
-        add("Friends", rows)
-    end
-    if kind == "ignored" and C_FriendList then
-        local rows = {}
-        for i = 1, (call(C_FriendList.GetNumIgnores) or 0) do
-            local name = call(C_FriendList.GetIgnoreName, i)
-            if fits(name) then rows[#rows + 1] = { value = name } end
-        end
-        add("Ignored", rows)
-    end
-    return groups
-end
-
--- Channels: the ones you're in ("leave"), or the server's and yours ("join").
-function M:Channels(kind: string, typed: string): Group[]
-    typed = typed:lower()
-    local rows: Row[], seen: { [string]: boolean } = {}, {}
-    local list = { call(GetChannelList) }
-    for i = 1, #list, 3 do
-        local id, name = list[i], list[i + 1]
-        if secret.readable(name) and type(name) == "string" and not seen[name:lower()] then
-            seen[name:lower()] = true
-            if name:lower():sub(1, #typed) == typed then
-                rows[#rows + 1] = { value = name, note = secret.readable(id) and tostring(id) or nil, right = "joined" }
-            end
-        end
-    end
-    if kind == "join" then
-        local joined = rows
-        rows = {}
-        for _, name in ipairs({ call(EnumerateServerChannels) }) do
-            if secret.readable(name) and type(name) == "string" and not seen[name:lower()] and name:lower():sub(1, #typed) == typed then
-                seen[name:lower()] = true
-                rows[#rows + 1] = { value = name }
-            end
-        end
-        local groups: Group[] = {}
-        if #rows > 0 then groups[#groups + 1] = { title = "Channels", rows = rows } end
-        if #joined > 0 then groups[#groups + 1] = { title = "Joined", rows = joined } end
-        return groups
-    end
-    return #rows > 0 and { { title = "Joined", rows = rows } } or {}
-end
-
---------------------------------------------------------------------------------
--- Reading the input
---------------------------------------------------------------------------------
-
--- What the input's text asks for: { mode = "commands", typed } or
--- { mode = "args", item, prefix, typed, kind } or nil (no palette).
-function M:Parse(text: unknown): Query?
-    return match.parse(text, self:Get("args") and true or false,
-        function(): { [string]: Item } self:Catalog(); return self.byName end, SuuUI.Commands)
-end
-
---------------------------------------------------------------------------------
--- The panel
---------------------------------------------------------------------------------
-
-local function hairline(parent: Frame): any
+local function hairline(parent: Frame): Frame
     local line = UI.Hairline(parent, "gilt-faint")
     line:SetHeight(1)
     return line
 end
 
-local function chip(parent: Frame, label: string, onClick: () -> ()): any
-    local b = CreateFrame("Button", nil, parent)
-    b.bg = UI.Fill(b, "surface-raised")
-    b.bg:SetAllPoints()
-    b.edge = UI.Border(b, "gilt-line")
-    b.label = UI.Text(b, "caption", "ink-muted")
-    b.label:SetPoint("CENTER")
-    b.label:SetValue(label)
-    b:SetScript("OnClick", onClick)
-    return b
+-- A category chip.
+class Chip extends Button
+    readonly bg: Texture
+    readonly edge: Border
+    readonly label: Text
+    readonly value: string
+
+    constructor(parent: Frame, label: string, value: string, onClick: () -> ())
+        super(nil, parent)
+        self.value = value
+        self.bg = UI.Fill(self, "surface-raised")
+        self.bg:SetAllPoints()
+        self.edge = UI.Border(self, "gilt-line")
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetPoint("CENTER")
+        self.label:SetValue(label)
+        self:SetScript("OnClick", onClick)
+    end
 end
 
 -- The source badge: the word in a small box.
-local function badge(parent: Frame): any
-    local f = CreateFrame("Frame", nil, parent)
-    f:SetHeight(16)
-    UI.Fill(f, "surface-raised"):SetAllPoints()
-    UI.Border(f, "gilt-line")
-    f.text = UI.Text(f, "micro", "ink-muted")
-    f.text:SetPoint("CENTER")
-    function f:SetLabel(s: string)
+class SourceBadge extends Frame
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(16)
+        UI.Fill(self, "surface-raised"):SetAllPoints()
+        UI.Border(self, "gilt-line")
+        self.text = UI.Text(self, "micro", "ink-muted")
+        self.text:SetPoint("CENTER")
+    end
+
+    function SetLabel(s: string)
         self.text:SetValue(s)
         self:SetWidth(math.ceil(UI.MeasureText("micro", s)) + 10)
     end
-    return f
 end
 
-function M:Build()
-    local p = CreateFrame("Frame", "SuuUICommandPalette", SuuUI.Root)
-    p:SetFrameStrata("DIALOG")
-    p:EnableMouse(true)
-    p:SetScript("OnMouseUp", function() self:Refocus() end)
-    p:Hide()
-    UI.Fill(p, "surface"):SetAllPoints()
-    UI.Border(p, "gilt-line")
-    UI.Shadow(p, "shadow-panel")
-    -- the categories
-    p.chips = {}
-    for _, c in ipairs(CATEGORIES) do
-        local b = chip(p, c.label, function() self:Refocus(); self:SetCategory(c.value) end)
-        b.value = c.value
-        b:SetScript("OnEnter", function() if self:Category() ~= c.value then b.label:SetColor("ink") end end)
-        b:SetScript("OnLeave", function() if self:Category() ~= c.value then b.label:SetColor("ink-muted") end end)
-        p.chips[#p.chips + 1] = b
-    end
-    p.chipLine = hairline(p)
-    p.chipLine:SetPoint("TOPLEFT", 1, -CHIPS_H)
-    p.chipLine:SetPoint("TOPRIGHT", -1, -CHIPS_H)
-    -- the keys
-    p.foot = CreateFrame("Frame", nil, p)
-    p.foot:SetPoint("BOTTOMLEFT", 1, 1)
-    p.foot:SetPoint("BOTTOMRIGHT", -1, 1)
-    p.foot:SetHeight(FOOT_H)
-    local footLine = hairline(p.foot)
-    footLine:SetPoint("TOPLEFT")
-    footLine:SetPoint("TOPRIGHT")
-    p.foot.parts = {}
-    -- the list
-    p.scroll = UI.ScrollArea(p, S["space-2"])
-    p.scroll:SetPoint("TOPLEFT", 1, -(CHIPS_H + 1))
-    p.scroll:SetPoint("BOTTOMRIGHT", p.foot, "TOPRIGHT", -(S["space-2"] * 2 + 3), 0)
-    p.scroll:HookScript("OnSizeChanged", function(sc, w) sc.child:SetWidth(w) end)
-    p.pools = { head = {}, row = {}, name = {}, topic = {}, line = {}, usage = {} }
-    self.palette = p
-    self:Place()
-end
+-- A heading in the list, with a count at the right.
+class HeadRow extends Frame
+    readonly text: Text
+    readonly meta: Text
 
--- Over the chat's box, reaching above it; without SuuUI's chat, above the input.
-function M:Place()
-    local p = self.palette
-    if not p then return end
-    p:ClearAllPoints()
-    local box = SuuUI.GetAnchor("chat")
-    if box then
-        p:SetPoint("TOPLEFT", box, "TOPLEFT", 0, ABOVE)
-        p:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, 0)
-    elseif self.box then
-        p:SetPoint("BOTTOMLEFT", self.box, "TOPLEFT", 0, S["space-3"])
-        p:SetPoint("BOTTOMRIGHT", self.box, "TOPRIGHT", 0, S["space-3"])
-        p:SetHeight(300)
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.text = UI.Text(self, "caption", "ink-muted")
+        self.text:SetPoint("TOPLEFT", PAD, -5)
+        self.meta = UI.Text(self, "caption", "ink-faint")
+        self.meta:SetPoint("TOPRIGHT", -PAD, -5)
     end
 end
 
-function M:PlaceChips()
-    local p = self.palette
-    local x = PAD
-    for _, b in ipairs(p.chips) do
-        local shown = b.value ~= "emote" or self:Get("emotes")
-        b:SetShown(shown)
-        if shown then
-            b:SetSize(math.ceil(UI.MeasureText("caption", b.label.value)) + S["space-4"] * 2, CHIP_H)
-            b:ClearAllPoints()
-            b:SetPoint("TOPLEFT", x, -(S["space-2"] * 2))
-            x = x + b:GetWidth() + S["space-2"]
-        end
-        local on = b.value == self:Category()
-        UI.PaintFill(b.bg, on and "arcane-soft" or "surface-raised")
-        b.edge:SetColor(on and "arcane" or "gilt-line")
-        b.label:SetColor(on and "ink" or "ink-muted")
+-- A line of text in the list ("and 3 more", "No command starts with …").
+class LineRow extends Frame
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.text = UI.Text(self, "caption", "ink-faint")
+        self.text:SetPoint("LEFT", PAD, 0)
+        self.text:SetPoint("RIGHT", -PAD, 0)
+        self.text:SetJustifyH("LEFT")
     end
 end
 
--- The key hints: { { key, what } }.
-function M:SetFoot(parts: string[][])
-    local foot = self.palette.foot
-    for _, part in ipairs(foot.parts) do part.chip:Hide(); part.text:Hide() end
-    local x = PAD
-    for i, p in ipairs(parts) do
-        local part = foot.parts[i]
-        if not part then
-            part = { chip = UI.KeyChip(foot, ""), text = UI.Text(foot, "caption", "ink-muted") }
-            foot.parts[i] = part
-        end
-        part.chip:SetKey(p[1])
-        part.chip:ClearAllPoints()
-        part.chip:SetPoint("LEFT", x, 0)
-        part.chip:Show()
-        x = x + part.chip:GetWidth() + S["space-2"]
-        part.text:SetValue(p[2])
-        part.text:ClearAllPoints()
-        part.text:SetPoint("LEFT", x, 0)
-        part.text:Show()
-        x = x + part.text:GetUnboundedStringWidth() + S["space-5"]
+-- How a command is written, over what may follow it.
+class UsageRow extends Frame
+    readonly cmd: Text
+    readonly arg: Text
+    readonly desc: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.cmd = UI.Text(self, "label", "ink")
+        self.cmd:SetPoint("LEFT", PAD, 0)
+        self.arg = UI.Text(self, "caption", "ink-muted")
+        self.arg:SetPoint("LEFT", self.cmd, "RIGHT", S["space-2"], 0)
+        self.desc = UI.Text(self, "caption", "ink-muted")
+        self.desc:SetPoint("LEFT", self.arg, "RIGHT", S["space-4"], 0)
+        self.desc:SetPoint("RIGHT", -PAD, 0)
+        self.desc:SetJustifyH("LEFT")
+        local line = hairline(self)
+        line:SetPoint("BOTTOMLEFT")
+        line:SetPoint("BOTTOMRIGHT")
     end
 end
 
--- A frame from a pool (made the first time), shown, at y in the list.
-function M:Take(kind: string, y: number, h: number): any
-    local p = self.palette
-    local pool = p.pools[kind]
-    pool.used = (pool.used or 0) + 1
-    local f = pool[pool.used]
-    if not f then
-        f = self["Make" .. kind:sub(1, 1):upper() .. kind:sub(2)](self, p.scroll.child)
-        pool[pool.used] = f
-    end
-    f:ClearAllPoints()
-    f:SetPoint("TOPLEFT", 0, -y)
-    f:SetPoint("RIGHT", p.scroll.child, "RIGHT")
-    f:SetHeight(h)
-    f:Show()
-    return f
-end
+-- A row Up and Down mark and Tab or a click puts in.
+class PickRow extends Button
+    readonly hl: Texture
+    -- its place in the drawn list
+    index: number? = nil
 
-function M:MakeHead(parent: Frame): any
-    local f = CreateFrame("Frame", nil, parent)
-    f.text = UI.Text(f, "caption", "ink-muted")
-    f.text:SetPoint("TOPLEFT", PAD, -5)
-    f.meta = UI.Text(f, "caption", "ink-faint")
-    f.meta:SetPoint("TOPRIGHT", -PAD, -5)
-    return f
-end
-
-function M:MakeLine(parent: Frame): any
-    local f = CreateFrame("Frame", nil, parent)
-    f.text = UI.Text(f, "caption", "ink-faint")
-    f.text:SetPoint("LEFT", PAD, 0)
-    f.text:SetPoint("RIGHT", -PAD, 0)
-    f.text:SetJustifyH("LEFT")
-    return f
-end
-
-function M:MakeUsage(parent: Frame): any
-    local f = CreateFrame("Frame", nil, parent)
-    f.cmd = UI.Text(f, "label", "ink")
-    f.cmd:SetPoint("LEFT", PAD, 0)
-    f.arg = UI.Text(f, "caption", "ink-muted")
-    f.arg:SetPoint("LEFT", f.cmd, "RIGHT", S["space-2"], 0)
-    f.desc = UI.Text(f, "caption", "ink-muted")
-    f.desc:SetPoint("LEFT", f.arg, "RIGHT", S["space-4"], 0)
-    f.desc:SetPoint("RIGHT", -PAD, 0)
-    f.desc:SetJustifyH("LEFT")
-    local line = hairline(f)
-    line:SetPoint("BOTTOMLEFT")
-    line:SetPoint("BOTTOMRIGHT")
-    return f
-end
-
-local function rowScripts(self: any, r: any)
-    r.hl = UI.Fill(r, "arcane-soft", "BACKGROUND")
-    r.hl:SetAllPoints()
-    r.hl:Hide()
-    r:SetScript("OnEnter", function(btn)
-        if btn.index then self.mark = btn.index; self:DrawMark() end
-    end)
-    r:SetScript("OnClick", function(btn)
-        self:Refocus()
-        if btn.index then self:Put(self.flat[btn.index]) end
-    end)
-end
-
-function M:MakeRow(parent: Frame): any
-    local r = CreateFrame("Button", nil, parent)
-    rowScripts(self, r)
-    r.cmd = UI.Text(r, "label", "ink")
-    r.cmd:SetPoint("LEFT", PAD, 0)
-    r.cmd:SetWidth(CMD_W)
-    r.cmd:SetJustifyH("LEFT")
-    -- the columns follow the command: a long one pushes them along
-    r.alias = UI.Text(r, "caption", "ink-muted")
-    r.alias:SetPoint("LEFT", r.cmd, "RIGHT", S["space-4"], 0)
-    r.alias:SetWidth(ALIAS_W)
-    r.alias:SetJustifyH("LEFT")
-    r.badge = badge(r)
-    r.badge:SetPoint("RIGHT", -PAD, 0)
-    r.desc = UI.Text(r, "caption", "ink-muted")
-    r.desc:SetPoint("LEFT", r.alias, "RIGHT", S["space-4"], 0)
-    r.desc:SetPoint("RIGHT", r.badge, "LEFT", -S["space-4"], 0)
-    r.desc:SetJustifyH("LEFT")
-    return r
-end
-
-function M:MakeName(parent: Frame): any
-    local r = CreateFrame("Button", nil, parent)
-    rowScripts(self, r)
-    r.dot = UI.Diamond(r, 5, "ink")
-    r.dot:SetPoint("LEFT", PAD, 0)
-    r.name = UI.Text(r, "label", "ink")
-    r.name:SetWidth(NAME_W)
-    r.name:SetJustifyH("LEFT")
-    r.right = UI.Text(r, "caption", "ink-muted")
-    r.right:SetPoint("RIGHT", -PAD, 0)
-    r.note = UI.Text(r, "caption", "ink-muted")
-    r.note:SetPoint("LEFT", PAD + 10 + NAME_W + S["space-4"], 0)
-    r.note:SetPoint("RIGHT", r.right, "LEFT", -S["space-4"], 0)
-    r.note:SetJustifyH("LEFT")
-    return r
-end
-
-function M:MakeTopic(parent: Frame): any
-    local r = CreateFrame("Button", nil, parent)
-    rowScripts(self, r)
-    r.text = UI.Text(r, "body", "ink")
-    r.text:SetPoint("LEFT", S["space-3"], 0)
-    r.text:SetPoint("RIGHT", -S["space-3"], 0)
-    r.text:SetJustifyH("LEFT")
-    return r
-end
-
-local hit, aliasText = match.hit, match.aliasText
-
---------------------------------------------------------------------------------
--- Drawing
---------------------------------------------------------------------------------
-
-function M:Category(): string
-    return match.category(self:CharData().category, self:Get("emotes") and true or false)
-end
-
-function M:SetCategory(c: string)
-    self:CharData().category = c
-    self.mark = 1
-    self:Refresh(true)
-end
-
--- Shift-Tab: the category after (round the end).
-function M:StepCategory(step: number)
-    self:SetCategory(match.stepCategory(self:Category(), step, self:Get("emotes") and true or false))
-end
-
--- The commands that start with `typed`: by category, and in all.
-function M:Matches(typed: string): ({ [string]: Match[] }, number)
-    return match.matches(self:Catalog(), typed, self:Get("emotes") and true or false)
-end
-
--- The closest commands to a typed word nothing starts with.
-function M:Closest(typed: string): Match[]
-    return match.closest(self:Catalog(), typed, self:Get("emotes") and true or false)
-end
-
-function M:BeginDraw()
-    local p = self.palette
-    for _, pool in pairs(p.pools) do
-        for _, f in ipairs(pool) do f:Hide(); f.index = nil end
-        pool.used = 0
-    end
-    self.flat = {}
-    self.drawY = S["space-1"]
-end
-
-function M:DrawHead(text: string, meta: string?)
-    local f = self:Take("head", self.drawY, HEAD_H)
-    f.text:SetValue(text)
-    f.meta:SetValue(meta or "")
-    self.drawY = self.drawY + HEAD_H
-end
-
-function M:DrawLine(text: string, color: string?, h: number?)
-    local f = self:Take("line", self.drawY, h or MORE_H)
-    f.text:SetValue(text)
-    f.text:SetColor(color or "ink-faint")
-    self.drawY = self.drawY + (h or MORE_H)
-end
-
-function M:DrawCommand(m: { item: Shown }, typed: string, put: string?)
-    local r = self:Take("row", self.drawY, ROW_H)
-    local item = m.item
-    r.cmd:SetValue(hit(item.cmd, typed))
-    local w = math.max(CMD_W, math.ceil(UI.MeasureText("label", item.cmd)) + 2)
-    r.cmd:SetWidth(w)
-    local alias = aliasText(item, typed)
-    r.alias:SetValue(alias)
-    -- without aliases a long command takes their column, and the description
-    -- stays in line with the others while it fits
-    r.alias:SetWidth(alias == "" and math.max(1, CMD_W + ALIAS_W - w) or ALIAS_W)
-    r.desc:SetValue(item.desc or "")
-    r.badge:SetLabel(item.src)
-    self.flat[#self.flat + 1] = { put = put or item.cmd, frame = r, y = self.drawY, h = ROW_H }
-    r.index = #self.flat
-    self.drawY = self.drawY + ROW_H
-end
-
-function M:DrawCommandList(list: Match[], typed: string, most: number?)
-    for i, m in ipairs(list) do
-        if most and i > most then break end
-        self:DrawCommand(m, typed)
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.hl = UI.Fill(self, "arcane-soft", "BACKGROUND")
+        self.hl:SetAllPoints()
+        self.hl:Hide()
+        self:SetScript("OnEnter", function()
+            local i = self.index
+            if i then M.mark = i; M:DrawMark() end
+        end)
+        self:SetScript("OnClick", function()
+            M:Refocus()
+            local i = self.index
+            if i then M:Put(M.flat[i]) end
+        end)
     end
 end
 
--- "In Chat: /reply, /raid, /rw · Emotes: 7"
-local elsewhere = match.elsewhere
+-- A command: its name, aliases, what it does, where it comes from.
+class CommandRow extends PickRow
+    readonly cmd: Text
+    readonly alias: Text
+    readonly badge: SourceBadge
+    readonly desc: Text
 
-function M:DrawCommands(typed: string): string[][]
-    local cat = self:Category()
-    local byCat, total = self:Matches(typed)
-    local keys: string[][] = {}
-    if total == 0 then
-        self:DrawLine(("No %s starts with %s"):format(NOUN.all, typed), "ink", NONE_H)
-        local closest = self:Closest(typed)
-        if #closest > 0 then
-            self:DrawHead("Closest")
-            self:DrawCommandList(closest, "")
-            keys = { { "Tab", "take " .. closest[1].item.cmd }, { "Enter", "sends " .. typed .. " as typed" } }
-        end
-    elseif cat == "all" then
-        for _, c in ipairs(ALL_ORDER) do
-            local list = byCat[c]
-            if list then
-                self:DrawHead(LABEL[c])
-                self:DrawCommandList(list, typed)
-            end
-        end
-        keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Shift Tab", "category" } }
-    else
-        local list = byCat[cat]
-        if list then
-            self:DrawHead(LABEL[cat], ("%d of %d"):format(#list, total))
-            self:DrawCommandList(list, typed)
-            local more = elsewhere(byCat, cat)
-            if more ~= "" then self:DrawLine(more) end
-            keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Shift Tab", "category" } }
-        else
-            self:DrawLine(("No %s starts with %s"):format(NOUN[cat], typed), "ink", NONE_H)
-            self:DrawHead("In other categories")
-            local first
-            for _, c in ipairs(ALL_ORDER) do
-                if byCat[c] then
-                    first = first or byCat[c][1]
-                    self:DrawCommandList(byCat[c], typed, 3)
-                end
-            end
-            keys = { { "Tab", "take " .. first.item.cmd }, { "Shift Tab", "category" } }
-        end
-    end
-    if not self:Get("tab") then match.withoutTab(keys) end
-    return keys
-end
-
-function M:DrawUsage(cmd: string, arg: string?, desc: string?)
-    local f = self:Take("usage", self.drawY, USAGE_H)
-    f.cmd:SetValue(cmd)
-    f.arg:SetValue(arg or "")
-    f.desc:SetValue(desc or "")
-    self.drawY = self.drawY + USAGE_H + S["space-1"]
-end
-
-function M:DrawNames(groups: Group[], prefix: string)
-    for _, g in ipairs(groups) do
-        self:DrawHead(g.title)
-        for _, row in ipairs(g.rows) do
-            local r = self:Take("name", self.drawY, ROW_H)
-            r.dot:SetShown(row.diamond and true or false)
-            if row.diamond then UI.Paint(r.dot, row.color or "ink") end
-            r.name:ClearAllPoints()
-            r.name:SetPoint("LEFT", row.diamond and (PAD + 10) or PAD, 0)
-            r.name:SetValue(row.value)
-            r.name:SetColor(row.color or "ink")
-            r.note:SetValue(row.note or "")
-            r.right:SetValue(row.right or "")
-            self.flat[#self.flat + 1] = { put = prefix .. row.value, frame = r, y = self.drawY, h = ROW_H }
-            r.index = #self.flat
-            self.drawY = self.drawY + ROW_H
-        end
+    constructor(parent: Frame)
+        super(parent)
+        self.cmd = UI.Text(self, "label", "ink")
+        self.cmd:SetPoint("LEFT", PAD, 0)
+        self.cmd:SetWidth(CMD_W)
+        self.cmd:SetJustifyH("LEFT")
+        -- the columns follow the command: a long one pushes them along
+        self.alias = UI.Text(self, "caption", "ink-muted")
+        self.alias:SetPoint("LEFT", self.cmd, "RIGHT", S["space-4"], 0)
+        self.alias:SetWidth(ALIAS_W)
+        self.alias:SetJustifyH("LEFT")
+        self.badge = SourceBadge.new(self)
+        self.badge:SetPoint("RIGHT", -PAD, 0)
+        self.desc = UI.Text(self, "caption", "ink-muted")
+        self.desc:SetPoint("LEFT", self.alias, "RIGHT", S["space-4"], 0)
+        self.desc:SetPoint("RIGHT", self.badge, "LEFT", -S["space-4"], 0)
+        self.desc:SetJustifyH("LEFT")
     end
 end
 
-function M:DrawArgs(q: Query): string[][]
-    -- (args mode: the item and the prefix are always there)
-    local item = q.item :: Item
-    local prefix = q.prefix :: string
-    local keys: string[][] = { { "↑↓", "choose" }, { "Tab", "put in" } }
-    if q.kind == "suu" then
-        self:DrawUsage(item.cmd, "<command>", "SuuUI's commands; " .. item.cmd .. " alone opens its settings")
-        local rows: SubCommand[], all = {}, SuuUI.Commands()
-        local typed = q.typed:lower()
-        for _, c in ipairs(all) do
-            if c.name:sub(1, #typed) == typed then rows[#rows + 1] = c end
-        end
-        self:DrawHead("Commands", ("%d of %d"):format(#rows, #all))
-        for _, c in ipairs(rows) do
-            self:DrawCommand({ item = { cmd = c.name, aliases = {}, desc = c.help, src = "SuuUI" } }, typed,
-                prefix .. c.name)
-        end
-        if #rows == 0 then self:DrawLine(("No SuuUI command starts with %s"):format(q.typed), "ink", NONE_H) end
-    elseif q.kind == "words" then
-        local sub = q.sub :: SubCommand
-        local args = sub.args :: string[]
-        self:DrawUsage(item.cmd .. " " .. sub.name, "<topic>", sub.help)
-        local words: string[], typed = {}, q.typed:lower()
-        for _, w in ipairs(args) do
-            if type(w) == "string" and w:sub(1, #typed) == typed then words[#words + 1] = w end
-        end
-        self:DrawHead("Topics", ("%d of %d"):format(#words, #args))
-        local w = self.palette:GetWidth() - 2 - (S["space-2"] * 2 + 3)
-        local colW = math.floor((w - PAD * 2 - S["space-4"] * (TOPIC_COLS - 1)) / TOPIC_COLS)
-        local top = self.drawY
-        for i, word in ipairs(words) do
-            local col, line = (i - 1) % TOPIC_COLS, math.floor((i - 1) / TOPIC_COLS)
-            local y = top + line * TOPIC_H
-            local r = self:Take("topic", y, TOPIC_H)
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", PAD + col * (colW + S["space-4"]), -y)
-            r:SetSize(colW, TOPIC_H)
-            r.text:SetValue(hit(word, typed))
-            self.flat[#self.flat + 1] = { put = prefix .. word, frame = r, y = y, h = TOPIC_H }
-            r.index = #self.flat
-        end
-        self.drawY = top + math.ceil(#words / TOPIC_COLS) * TOPIC_H
-        if #words == 0 then self:DrawLine(("No topic starts with %s"):format(q.typed), "ink", NONE_H) end
-    else
-        self:DrawUsage(item.cmd, item.usage, item.desc)
-        local groups
-        if q.kind == "join" or q.kind == "leave" then groups = self:Channels(q.kind, q.typed)
-        else groups = self:Names(q.kind, q.typed) end
-        self:DrawNames(groups, prefix)
-        if #groups == 0 then
-            self:DrawLine(q.typed == "" and "No one to suggest here" or ("No one here starts with %s"):format(q.typed),
-                "ink", NONE_H)
-        end
+-- A name after a command (in its class colour), or a channel.
+class NameRow extends PickRow
+    readonly dot: Texture
+    readonly name: Text
+    readonly right: Text
+    readonly note: Text
+
+    constructor(parent: Frame)
+        super(parent)
+        self.dot = UI.Diamond(self, 5, "ink")
+        self.dot:SetPoint("LEFT", PAD, 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetWidth(NAME_W)
+        self.name:SetJustifyH("LEFT")
+        self.right = UI.Text(self, "caption", "ink-muted")
+        self.right:SetPoint("RIGHT", -PAD, 0)
+        self.note = UI.Text(self, "caption", "ink-muted")
+        self.note:SetPoint("LEFT", PAD + 10 + NAME_W + S["space-4"], 0)
+        self.note:SetPoint("RIGHT", self.right, "LEFT", -S["space-4"], 0)
+        self.note:SetJustifyH("LEFT")
     end
-    if not self:Get("tab") then keys = {} end
-    return keys
 end
 
--- The palette for the input's text (force: draw even if the text is the same).
-function M:Refresh(force: boolean?)
-    local p = self.palette
-    local box = self.box
-    local q = box and not self.quiet and self:Get("suggest") and self:Parse(self.text)
-    -- the game's own name list on this input: the palette steps aside
-    if q and AutoCompleteBox and AutoCompleteBox:IsShown() and AutoCompleteBox.parent == box then q = nil end
-    if not q then
-        if p then p:Hide() end
-        self.query = nil
-        return
+-- A topic after /suu probe (in columns).
+class TopicRow extends PickRow
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(parent)
+        self.text = UI.Text(self, "body", "ink")
+        self.text:SetPoint("LEFT", S["space-3"], 0)
+        self.text:SetPoint("RIGHT", -S["space-3"], 0)
+        self.text:SetJustifyH("LEFT")
     end
-    if not p then self:Build(); p = self.palette end
-    local key = q.mode .. "\1" .. (q.prefix or "") .. "\1" .. q.typed .. "\1" .. self:Category()
-    if not force and key == self.queryKey and p:IsShown() then return end
-    if key ~= self.queryKey then self.mark = 1 end
-    self.query, self.queryKey = q, key
-    self:Place()
-    self:PlaceChips()
-    local w = p.scroll:GetWidth()
-    if w and w > 1 then p.scroll.child:SetWidth(w) end
-    self:BeginDraw()
-    local keys
-    if q.mode == "commands" then keys = self:DrawCommands(q.typed) else keys = self:DrawArgs(q) end
-    self:SetFoot(keys)
-    p.scroll.child:SetHeight(self.drawY + S["space-2"])
-    p.scroll:SetVerticalScroll(0)
-    p:Show()
-    self:DrawMark()
 end
 
--- The marked row: its ground, and the list scrolled to keep it in view.
-function M:DrawMark()
-    local p = self.palette
-    if not (p and self.flat) then return end
-    if #self.flat == 0 then return end
-    self.mark = math.max(1, math.min(self.mark or 1, #self.flat))
-    for i, e in ipairs(self.flat) do e.frame.hl:SetShown(i == self.mark and self:Get("tab")) end
-    local e = self.flat[self.mark]
-    local top, viewH = p.scroll:GetVerticalScroll(), p.scroll:GetHeight()
-    if e.y < top then p.scroll:SetVerticalScroll(math.max(0, e.y - HEAD_H))
-    elseif e.y + e.h > top + viewH then p.scroll:SetVerticalScroll(e.y + e.h - viewH) end
+-- Frames of one kind, made the first time and used again each draw.
+class Pool<F extends Frame>
+    readonly list: F[] = {}
+    used: number = 0
+
+    constructor(private make: (parent: Frame) -> F)
+    end
+
+    -- The next one, shown at `y` in `parent`, `h` high.
+    function Take(parent: Frame, y: number, h: number): F
+        self.used = self.used + 1
+        local f = self.list[self.used]
+        if not f then
+            f = self.make(parent)
+            self.list[self.used] = f
+        end
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", 0, -y)
+        f:SetPoint("RIGHT", parent, "RIGHT")
+        f:SetHeight(h)
+        f:Show()
+        return f
+    end
+
+    function Clear()
+        for _, f in ipairs(self.list) do f:Hide() end
+        self.used = 0
+    end
 end
 
---------------------------------------------------------------------------------
--- Keys and the input
---------------------------------------------------------------------------------
+-- A key hint in the foot.
+type FootPart = { chip: KeyChip, text: Text }
 
--- Whether the palette uses Up and Down on this input now (the chat's recall
--- asks before it recalls).
-function M:TakesArrows(box: any): boolean
-    return self.palette and self.palette:IsShown() and self.box == box and self:Get("tab")
-        and self.flat and #self.flat > 0 or false
+-- The palette over the chat: the chips, the list, the keys.
+class Palette extends Frame
+    readonly chips: Chip[] = {}
+    readonly chipLine: Frame
+    readonly foot: Frame
+    readonly footParts: FootPart[] = {}
+    readonly scroll: ScrollArea
+    readonly heads: Pool<HeadRow> = Pool.new(function(p: Frame): HeadRow return HeadRow.new(p) end)
+    readonly lines: Pool<LineRow> = Pool.new(function(p: Frame): LineRow return LineRow.new(p) end)
+    readonly usages: Pool<UsageRow> = Pool.new(function(p: Frame): UsageRow return UsageRow.new(p) end)
+    readonly commands: Pool<CommandRow> = Pool.new(function(p: Frame): CommandRow return CommandRow.new(p) end)
+    readonly names: Pool<NameRow> = Pool.new(function(p: Frame): NameRow return NameRow.new(p) end)
+    readonly topics: Pool<TopicRow> = Pool.new(function(p: Frame): TopicRow return TopicRow.new(p) end)
+
+    constructor()
+        super("SuuUICommandPalette", SuuUI.Root)
+        self:SetFrameStrata("DIALOG")
+        self:EnableMouse(true)
+        self:SetScript("OnMouseUp", function() M:Refocus() end)
+        self:Hide()
+        UI.Fill(self, "surface"):SetAllPoints()
+        UI.Border(self, "gilt-line")
+        UI.Shadow(self, "shadow-panel")
+        -- the categories
+        for _, c in ipairs(CATEGORIES) do
+            local b = Chip.new(self, c.label, c.value, function() M:Refocus(); M:SetCategory(c.value) end)
+            b:SetScript("OnEnter", function() if M:Category() ~= c.value then b.label:SetColor("ink") end end)
+            b:SetScript("OnLeave", function() if M:Category() ~= c.value then b.label:SetColor("ink-muted") end end)
+            self.chips[#self.chips + 1] = b
+        end
+        self.chipLine = hairline(self)
+        self.chipLine:SetPoint("TOPLEFT", 1, -CHIPS_H)
+        self.chipLine:SetPoint("TOPRIGHT", -1, -CHIPS_H)
+        -- the keys
+        self.foot = CreateFrame("Frame", nil, self)
+        self.foot:SetPoint("BOTTOMLEFT", 1, 1)
+        self.foot:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.foot:SetHeight(FOOT_H)
+        local footLine = hairline(self.foot)
+        footLine:SetPoint("TOPLEFT")
+        footLine:SetPoint("TOPRIGHT")
+        -- the list
+        local scroll = UI.ScrollArea(self, S["space-2"])
+        scroll:SetPoint("TOPLEFT", 1, -(CHIPS_H + 1))
+        scroll:SetPoint("BOTTOMRIGHT", self.foot, "TOPRIGHT", -(S["space-2"] * 2 + 3), 0)
+        scroll:HookScript("OnSizeChanged", function(_: Frame, w: number) scroll.child:SetWidth(w) end)
+        self.scroll = scroll
+    end
+
+    -- Every pool's frames hidden, for a new draw.
+    function ClearRows()
+        self.heads:Clear()
+        self.lines:Clear()
+        self.usages:Clear()
+        local function clearPicks<R extends PickRow>(pool: Pool<R>)
+            for _, f in ipairs(pool.list) do f.index = nil end
+            pool:Clear()
+        end
+        clearPicks(self.commands)
+        clearPicks(self.names)
+        clearPicks(self.topics)
+    end
 end
 
--- The marked row into the input: only into the open input that has focus,
--- with SetText (see the header).
-function M:Put(entry: Entry?): boolean
-    local box = self.box
-    if not (entry and box and box:IsShown() and box:HasFocus()) or not self:Get("tab") then return false end
-    box:SetText(entry.put)
-    box:SetCursorPosition(#entry.put)
-    self.text = box:GetText()
-    self:Refresh()
-    return true
-end
+-- A row in the drawn list, in order (Up and Down step through them).
+type Entry = { put: string, frame: PickRow, y: number, h: number }
 
-local IGNORED_KEYS = {
+local IGNORED_KEYS: { [string]: boolean } = {
     UP = true, DOWN = true, LEFT = true, RIGHT = true, TAB = true, ESCAPE = true, ENTER = true, NUMPADENTER = true,
     HOME = true, END = true, PAGEUP = true, PAGEDOWN = true,
 }
 
-function M:HookBox(box: any)
-    self.hooked = self.hooked or {}
-    if self.hooked[box] then return end
-    self.hooked[box] = true
-    hookScript(box, "OnKeyDown", function(b: any, key: string)
-        if not self:IsEnabled() or b ~= self.box then return end
-        if IGNORED_KEYS[key] or key:find("SHIFT$") or key:find("CTRL$") or key:find("ALT$") or key:find("META$") then
-            return
-        end
-        -- typed: the palette may show again after a recalled line
-        self.quiet = false
-    end)
-    hookScript(box, "OnArrowPressed", function(b: any, key: string)
-        if not self:IsEnabled() or b ~= self.box then return end
-        if key ~= "UP" and key ~= "DOWN" then return end
-        if self:TakesArrows(b) then
-            self.mark = ((self.mark or 1) - 1 + (key == "DOWN" and 1 or -1)) % #self.flat + 1
-            self:DrawMark()
-        else
-            -- the chat's recall puts a line in: no palette for it
-            self.quiet = true
-        end
-    end)
-end
+local hit, aliasText = match.hit, match.aliasText
+-- "In Chat: /reply, /raid, /rw · Emotes: 7"
+local elsewhere = match.elsewhere
 
--- Shift-Tab changes the category: the command list shows on this input.
-function M:StepsCategory(box: any): boolean
-    return self.box == box and self.query and self.query.mode == "commands" and self.palette
-        and self.palette:IsShown() or false
-end
+local FOCUS_EVENTS = { "ChatFrame.OnEditBoxFocusGained", "ChatFrame.OnEditBoxFocusLost" }
 
--- Tab, from ChatEdit_CustomTabPressed: true when the palette took it.
-function M:OnTab(box: any): boolean
-    -- Shift-Tab: the next category instead of putting a row in
-    if IsShiftKeyDown() and self:StepsCategory(box) then
-        self:StepCategory(1)
-        return true
-    end
-    if not (self:TakesArrows(box) and self.flat[self.mark or 1]) then return false end
-    return self:Put(self.flat[self.mark or 1])
-end
-
-local tabWrapped
-local function wrapTab()
-    if tabWrapped then return end
-    tabWrapped = true
-    local original = ChatEdit_CustomTabPressed
-    -- the game calls it through securecall for addons' Tab completion; true
-    -- skips the game's own
-    ChatEdit_CustomTabPressed = function(box, ...)
-        if M:IsEnabled() then
-            local ok, took = pcall(M.OnTab, M, box)
-            if ok and took then return true end
-        end
-        if original then return original(box, ...) end
-    end
-end
-
-function M:Focus(box: any)
-    self.box = box
-    self.quiet = false
-    self.text = nil
-    self:HookBox(box)
-    -- the guild roster comes a moment after it's asked for
-    if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then call(C_GuildInfo.GuildRoster) end
-    self.driver:Show()
-end
-
--- A click on the palette took the input's focus: give it back.
-function M:Refocus()
-    local box = self.box
-    if box and box:IsShown() and not box:HasFocus() then box:SetFocus() end
-end
-
--- A click on the palette on its way: a button held on it (the press took the
--- focus), or released a moment ago (its OnClick gives the focus back). The
--- pointer merely resting there when Enter sends doesn't count.
-function M:Clicking(): boolean
-    if not (self.box and self.box:IsShown() and self.palette and self.palette:IsShown() and self.palette:IsMouseOver()) then
-        return false
-    end
-    if IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton") then
-        self.heldUntil = GetTime() + 0.2
-        return true
-    end
-    return GetTime() < (self.heldUntil or 0)
-end
-
-function M:Unfocus(box: any?)
-    if box and box ~= self.box then return end
-    if self:Clicking() then return end
-    self.box, self.text, self.query, self.queryKey = nil, nil, nil, nil
-    if self.palette then self.palette:Hide() end
-    if self.driver then self.driver:Hide() end
-end
-
--- Each frame while an input has focus: its text, compared.
-function M:Tick()
-    local box = self.box
-    if not (box and box:IsShown() and box:HasFocus()) then
-        if not self:Clicking() then self:Unfocus() end
-        return
-    end
-    local text = box:GetText()
-    if not secret.readable(text) then text = nil end
-    if text ~= self.text then
-        self.text = text
-        self:Refresh()
-    elseif self.palette and self.palette:IsShown() and AutoCompleteBox and AutoCompleteBox:IsShown()
-        and AutoCompleteBox.parent == box then
-        self:Refresh()
-    end
-end
-
---------------------------------------------------------------------------------
--- Settings and lifecycle
---------------------------------------------------------------------------------
-
-local function suggestOff() return not M:Get("suggest"), "Turn Suggest commands on first." end
+local function suggestOff(): (boolean, string) return not M:Get("suggest"), "Turn Suggest commands on first." end
 
 local SECTION = {
     id = "chatcommands", label = "Command palette", category = "World", order = 21, merge = "chat",
@@ -1148,30 +555,788 @@ local SECTION = {
     },
 }
 
-local FOCUS_EVENTS = { "ChatFrame.OnEditBoxFocusGained", "ChatFrame.OnEditBoxFocusLost" }
+class ChatCommandsModule extends Module<typeof(DEFAULTS)>
+    palette: Palette? = nil
+    -- the chat input with the focus, and its text as last read
+    box: EditBox? = nil
+    text: string? = nil
+    -- a recalled line: no palette for it until something is typed
+    quiet: boolean = false
+    query: Query? = nil
+    queryKey: string? = nil
+    -- the marked row
+    mark: number = 1
+    flat: Entry[] = {}
+    drawY: number = 0
+    catalog: Item[]? = nil
+    byName: { [string]: Item } = {}
+    builtAt: number = 0
+    readonly hooked: { [EditBox]: boolean } = tbl.weakKeys()
+    heldUntil: number = 0
+    driver: Frame? = nil
+    tabWrapped: boolean = false
 
-function M:OnEnable()
-    if not self.driver then
-        self.driver = CreateFrame("Frame")
-        self.driver:Hide()
-        self.driver:SetScript("OnUpdate", self:Guard(function() self:Tick() end))
+    constructor()
+        super({
+            id = "chatcommands",
+            name = "Command palette",
+            description = "Typing a / in chat lists the commands that fit, by category, with what they do; Tab puts one in.",
+            api = "0.17",
+            defaults = DEFAULTS,
+        })
     end
-    wrapTab()
-    if EventRegistry and EventRegistry.RegisterCallback then
-        EventRegistry:RegisterCallback(FOCUS_EVENTS[1], function(_, box) if self:IsEnabled() then self:Focus(box) end end, self)
-        EventRegistry:RegisterCallback(FOCUS_EVENTS[2], function(_, box) self:Unfocus(box) end, self)
+
+    function Char(): PaletteChar return self:CharData() :: unknown :: PaletteChar end
+    function Pal(): Palette return assert(self.palette) end
+
+    -- Every command: { cmd, aliases, names, desc, cat, src, key, arg, usage,
+    -- chatType, rank }, by category order, rank and name.
+    function BuildCatalog()
+        local keys: { [string]: boolean } = {}
+        local function take(k: unknown)
+            local key = asString(k)
+            if key then keys[key] = true end
+        end
+        local list = field(_G, "SlashCmdList")
+        if type(list) == "table" and secret.readable(list) then
+            for k in pairs(list) do take(k) end
+            for k in pairs(tbl.list(field(getmetatable(list), "__index")) :: { [unknown]: unknown }) do take(k) end
+        end
+        local hashed = field(_G, "hash_ChatTypeInfoList")
+        if type(hashed) == "table" and secret.readable(hashed) then
+            for _, k in pairs(hashed) do take(k) end
+        end
+        local items: Item[], byName: { [string]: Item } = {}, {}
+        for key in pairs(keys) do
+            local names = aliasesOf(key)
+            if #names > 0 then
+                local info = INFO[key]
+                local who = origin(key)
+                -- SuuUI's own /suu: by its name (wowlua registers it under its
+                -- own key, WOWLUA_SUUUI_<n>; the plain-Lua SuuUI's was SUUUI)
+                local suu = false
+                for _, n in ipairs(names) do if n == "/suu" then suu = true end end
+                local cat: string, src: string
+                if suu or who == "SuuUI" then
+                    cat, src = "suuui", "SuuUI"
+                elseif who ~= true then
+                    cat, src = "addon", who
+                else
+                    cat = info and info.cat or (isChatType(key) and "chat") or "game"
+                    src = LABEL[cat] or cat
+                end
+                local main = names[1]
+                local wanted = info and info.main
+                if wanted then
+                    for _, n in ipairs(names) do if n == wanted then main = n end end
+                end
+                local aliases: string[] = {}
+                for _, n in ipairs(names) do if n ~= main then aliases[#aliases + 1] = n end end
+                local item: Item = {
+                    cmd = main, aliases = aliases, names = names, key = key, cat = cat, src = src,
+                    desc = info and info.desc, arg = info and info.arg, usage = info and info.usage,
+                    rank = info and info.rank or 500,
+                    chatType = isChatType(key),
+                }
+                if suu then
+                    item.desc, item.arg, item.usage, item.rank = "Open SuuUI's settings; /suu help lists the rest", "suu",
+                        "<command>", 1
+                end
+                -- a name two keys share (localized aliases) goes to the first
+                local taken = false
+                for _, n in ipairs(names) do if byName[n] then taken = true end end
+                if not taken then
+                    items[#items + 1] = item
+                    for _, n in ipairs(names) do byName[n] = item end
+                end
+            end
+        end
+        -- the emotes: EMOTE<n>_TOKEN with its commands EMOTE<n>_CMD<m>
+        local max = asNumber(field(_G, "MAXEMOTEINDEX")) or 1000
+        for n = 1, max do
+            if field(_G, "EMOTE" .. n .. "_TOKEN") ~= nil then
+                local names: string[], m = {}, 1
+                while m <= 20 do
+                    local raw = field(_G, "EMOTE" .. n .. "_CMD" .. m)
+                    if raw == nil then break end
+                    local s = asString(raw)
+                    if s then
+                        local low = s:lower()
+                        if low:sub(1, 1) == "/" and not byName[low] then
+                            local dup = false
+                            for _, x in ipairs(names) do if x == low then dup = true end end
+                            if not dup then names[#names + 1] = low end
+                        end
+                    end
+                    m = m + 1
+                end
+                if #names > 0 then
+                    local aliases: string[] = {}
+                    for i = 2, #names do aliases[#aliases + 1] = names[i] end
+                    local item: Item = { cmd = names[1], aliases = aliases, names = names, cat = "emote", src = "Emote", rank = 1000 + n }
+                    items[#items + 1] = item
+                    for _, x in ipairs(names) do byName[x] = item end
+                end
+            end
+        end
+        local catOrder: { [string]: number } = {}
+        for i, c in ipairs(ALL_ORDER) do catOrder[c] = i end
+        table.sort(items, function(a: Item, b: Item): boolean
+            if a.cat ~= b.cat then return (catOrder[a.cat] or 0) < (catOrder[b.cat] or 0) end
+            if a.rank ~= b.rank then return a.rank < b.rank end
+            return a.cmd < b.cmd
+        end)
+        self.catalog, self.byName, self.builtAt = items, byName, GetTime()
     end
-    self:RegisterSettings(SECTION)
-    self:On("SUUUI_ANCHOR_CHANGED", function() self:Place() end)
-    self:On("SUUUI_THEME_CHANGED", function() if self.palette and self.palette:IsShown() then self:Refresh(true) end end)
-    self:WatchAll({ "suggest", "args", "emotes", "tab" }, function() self:Refresh(true) end)
-    -- addons that load later add commands
-    self:OnGameEvent("ADDON_LOADED", function() self.catalog = nil end)
+
+    -- The catalog, built again once a minute at most (addons add commands late).
+    function Catalog(): Item[]
+        local catalog = self.catalog
+        if catalog and GetTime() - self.builtAt <= 60 then return catalog end
+        self:BuildCatalog()
+        return assert(self.catalog)
+    end
+
+    --------------------------------------------------------------------------------
+    -- What goes after a command
+    --------------------------------------------------------------------------------
+
+    -- Names for an argument: { { title, rows = { { value, color, note, right } } } }.
+    function Names(kind: string, typed: string): Group[]
+        typed = typed:lower()
+        local seen: { [string]: boolean }, groups: Group[] = {}, {}
+        -- (the player's own name is never secret; a secret one is not compared)
+        local me = asString(SuuUI.FullName("player"))
+        local function fits(name: string?): boolean
+            return name ~= nil and name ~= "" and name ~= me and (typed == "" or name:lower():sub(1, #typed) == typed)
+        end
+        local function add(title: string, rows: Row[])
+            local out: Row[] = {}
+            for _, r in ipairs(rows) do
+                local key = r.value:lower()
+                if not seen[key] then
+                    seen[key] = true
+                    out[#out + 1] = r
+                end
+            end
+            if #out > 0 then groups[#groups + 1] = { title = title, rows = out } end
+        end
+        local function unitRow(unit: string, note: string?): Row?
+            local name = asString(SuuUI.FullName(unit))
+            if not name or not fits(name) then return nil end
+            local _, file = try(UnitClass, unit)
+            local level = asNumber(try(UnitLevel, unit))
+            return { value = name, color = classToken(asString(file)), diamond = true,
+                     note = level and level > 0 and ("Level " .. level) or nil, right = note }
+        end
+        local inGroup = IsInGroup()
+        if kind == "names" and flag(try(UnitIsPlayer, "target")) then
+            local together = flag(try(UnitInParty, "target")) or flag(try(UnitInRaid, "target"))
+            local row = unitRow("target", together and "in your group" or nil)
+            if row then add("Target", { row }) end
+        end
+        if (kind == "names" or kind == "group") and inGroup then
+            local rows: Row[] = {}
+            local raid = IsInRaid()
+            for i = 1, raid and GetNumGroupMembers() or GetNumSubgroupMembers() do
+                local r = unitRow(raid and ("raid" .. i) or ("party" .. i))
+                if r then rows[#rows + 1] = r end
+            end
+            table.sort(rows, function(a: Row, b: Row): boolean return a.value < b.value end)
+            add(raid and "Raid" or "Party", rows)
+        end
+        if (kind == "names" or kind == "guild") and IsInGuild() then
+            local rows: Row[] = {}
+            for i = 1, asNumber(try(GetNumGuildMembers)) or 0 do
+                local full, rank, _, _, _, _, _, _, rawOnline, _, file = try(GetGuildRosterInfo, i)
+                local whole = asString(full)
+                if whole then
+                    local name = Ambiguate(whole, "short")
+                    local online = flag(rawOnline)
+                    if fits(name) and (online or kind == "guild") then
+                        rows[#rows + 1] = { value = name, color = classToken(asString(file)), diamond = true,
+                                            note = asString(rank), online = online,
+                                            right = online and (tint("fel", "● ") .. "Online") or "Offline" }
+                    end
+                end
+            end
+            table.sort(rows, function(a: Row, b: Row): boolean
+                if a.online ~= b.online then return a.online == true end
+                return a.value < b.value
+            end)
+            add(kind == "guild" and "Guild" or "Guild · online", rows)
+        end
+        if kind == "names" or kind == "friends" then
+            local rows: Row[] = {}
+            for i = 1, asNumber(try(field(C_FriendList, "GetNumFriends"))) or 0 do
+                local f = try(field(C_FriendList, "GetFriendInfoByIndex"), i)
+                local name, connected = asString(field(f, "name")), flag(field(f, "connected"))
+                if name and fits(name) and (connected or kind == "friends") then
+                    local class = asString(field(f, "className"))
+                    rows[#rows + 1] = { value = name, color = classToken(class and class:upper()),
+                                        diamond = true, note = asString(field(f, "area")),
+                                        right = connected and (tint("fel", "● ") .. "Online") or "Offline" }
+                end
+            end
+            add("Friends", rows)
+        end
+        if kind == "ignored" then
+            local rows: Row[] = {}
+            for i = 1, asNumber(try(field(C_FriendList, "GetNumIgnores"))) or 0 do
+                local name = asString(try(field(C_FriendList, "GetIgnoreName"), i))
+                if name and fits(name) then rows[#rows + 1] = { value = name } end
+            end
+            add("Ignored", rows)
+        end
+        return groups
+    end
+
+    -- Channels: the ones you're in ("leave"), or the server's and yours ("join").
+    function Channels(kind: string, typed: string): Group[]
+        typed = typed:lower()
+        local rows: Row[], seen: { [string]: boolean } = {}, {}
+        local list = { try(GetChannelList) }
+        for i = 1, #list, 3 do
+            local id, name = list[i], asString(list[i + 1])
+            if name and not seen[name:lower()] then
+                seen[name:lower()] = true
+                if name:lower():sub(1, #typed) == typed then
+                    local num = asNumber(id)
+                    rows[#rows + 1] = { value = name, note = num and tostring(num) or nil, right = "joined" }
+                end
+            end
+        end
+        if kind == "join" then
+            local joined = rows
+            rows = {}
+            for _, raw in ipairs({ try(EnumerateServerChannels) }) do
+                local name = asString(raw)
+                if name and not seen[name:lower()] and name:lower():sub(1, #typed) == typed then
+                    seen[name:lower()] = true
+                    rows[#rows + 1] = { value = name }
+                end
+            end
+            local groups: Group[] = {}
+            if #rows > 0 then groups[#groups + 1] = { title = "Channels", rows = rows } end
+            if #joined > 0 then groups[#groups + 1] = { title = "Joined", rows = joined } end
+            return groups
+        end
+        if #rows == 0 then return {} end
+        return { { title = "Joined", rows = rows } }
+    end
+
+    --------------------------------------------------------------------------------
+    -- Reading the input
+    --------------------------------------------------------------------------------
+
+    -- What the input's text asks for: { mode = "commands", typed } or
+    -- { mode = "args", item, prefix, typed, kind } or nil (no palette).
+    function Parse(text: unknown): Query?
+        return match.parse(text, self:Get("args") == true,
+            function(): { [string]: Item } self:Catalog(); return self.byName end, SuuUI.Commands)
+    end
+
+    --------------------------------------------------------------------------------
+    -- The panel
+    --------------------------------------------------------------------------------
+
+    function Build()
+        self.palette = Palette.new()
+        self:Place()
+    end
+
+    -- Over the chat's box, reaching above it; without SuuUI's chat, above the input.
+    function Place()
+        local p = self.palette
+        if not p then return end
+        p:ClearAllPoints()
+        local box = SuuUI.GetAnchor("chat")
+        local input = self.box
+        if box then
+            p:SetPoint("TOPLEFT", box, "TOPLEFT", 0, ABOVE)
+            p:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, 0)
+        elseif input then
+            p:SetPoint("BOTTOMLEFT", input, "TOPLEFT", 0, S["space-3"])
+            p:SetPoint("BOTTOMRIGHT", input, "TOPRIGHT", 0, S["space-3"])
+            p:SetHeight(300)
+        end
+    end
+
+    function PlaceChips()
+        local x = PAD
+        for _, b in ipairs(self:Pal().chips) do
+            local shown = b.value ~= "emote" or self:Get("emotes")
+            b:SetShown(shown)
+            if shown then
+                b:SetSize(math.ceil(UI.MeasureText("caption", b.label:GetText() or "")) + S["space-4"] * 2, CHIP_H)
+                b:ClearAllPoints()
+                b:SetPoint("TOPLEFT", x, -(S["space-2"] * 2))
+                x = x + b:GetWidth() + S["space-2"]
+            end
+            local on = b.value == self:Category()
+            UI.PaintFill(b.bg, on and "arcane-soft" or "surface-raised")
+            b.edge:SetColor(on and "arcane" or "gilt-line")
+            b.label:SetColor(on and "ink" or "ink-muted")
+        end
+    end
+
+    -- The key hints: { { key, what } }.
+    function SetFoot(parts: string[][])
+        local p = self:Pal()
+        local foot = p.foot
+        for _, part in ipairs(p.footParts) do part.chip:Hide(); part.text:Hide() end
+        local x = PAD
+        for i, hint in ipairs(parts) do
+            local part = p.footParts[i]
+            if not part then
+                part = { chip = UI.KeyChip(foot, ""), text = UI.Text(foot, "caption", "ink-muted") }
+                p.footParts[i] = part
+            end
+            part.chip:SetKey(hint[1])
+            part.chip:ClearAllPoints()
+            part.chip:SetPoint("LEFT", x, 0)
+            part.chip:Show()
+            x = x + part.chip:GetWidth() + S["space-2"]
+            part.text:SetValue(hint[2])
+            part.text:ClearAllPoints()
+            part.text:SetPoint("LEFT", x, 0)
+            part.text:Show()
+            x = x + part.text:GetUnboundedStringWidth() + S["space-5"]
+        end
+    end
+
+    --------------------------------------------------------------------------------
+    -- Drawing
+    --------------------------------------------------------------------------------
+
+    function Category(): string
+        return match.category(self:Char().category, self:Get("emotes") == true)
+    end
+
+    function SetCategory(c: string)
+        self:Char().category = c
+        self.mark = 1
+        self:Refresh(true)
+    end
+
+    -- Shift-Tab: the category after (round the end).
+    function StepCategory(step: number)
+        self:SetCategory(match.stepCategory(self:Category(), step, self:Get("emotes") == true))
+    end
+
+    -- The commands that start with `typed`: by category, and in all.
+    function Matches(typed: string): ({ [string]: Match[] }, number)
+        return match.matches(self:Catalog(), typed, self:Get("emotes") == true)
+    end
+
+    -- The closest commands to a typed word nothing starts with.
+    function Closest(typed: string): Match[]
+        return match.closest(self:Catalog(), typed, self:Get("emotes") == true)
+    end
+
+    function BeginDraw()
+        self:Pal():ClearRows()
+        self.flat = {}
+        self.drawY = S["space-1"]
+    end
+
+    -- A row Up and Down reach, at the current place.
+    function Pickable(r: PickRow, put: string, y: number, h: number)
+        self.flat[#self.flat + 1] = { put = put, frame = r, y = y, h = h }
+        r.index = #self.flat
+    end
+
+    function DrawHead(text: string, meta: string?)
+        local p = self:Pal()
+        local f = p.heads:Take(p.scroll.child, self.drawY, HEAD_H)
+        f.text:SetValue(text)
+        f.meta:SetValue(meta or "")
+        self.drawY = self.drawY + HEAD_H
+    end
+
+    function DrawLine(text: string, color: string?, h: number?)
+        local p = self:Pal()
+        local f = p.lines:Take(p.scroll.child, self.drawY, h or MORE_H)
+        f.text:SetValue(text)
+        f.text:SetColor(color or "ink-faint")
+        self.drawY = self.drawY + (h or MORE_H)
+    end
+
+    function DrawCommand(item: Shown, typed: string, put: string?)
+        local p = self:Pal()
+        local r = p.commands:Take(p.scroll.child, self.drawY, ROW_H)
+        r.cmd:SetValue(hit(item.cmd, typed))
+        local w = math.max(CMD_W, math.ceil(UI.MeasureText("label", item.cmd)) + 2)
+        r.cmd:SetWidth(w)
+        local alias = aliasText(item, typed)
+        r.alias:SetValue(alias)
+        -- without aliases a long command takes their column, and the description
+        -- stays in line with the others while it fits
+        r.alias:SetWidth(alias == "" and math.max(1, CMD_W + ALIAS_W - w) or ALIAS_W)
+        r.desc:SetValue(item.desc or "")
+        r.badge:SetLabel(item.src)
+        self:Pickable(r, put or item.cmd, self.drawY, ROW_H)
+        self.drawY = self.drawY + ROW_H
+    end
+
+    function DrawCommandList(list: Match[], typed: string, most: number?)
+        for i, m in ipairs(list) do
+            if most and i > most then break end
+            self:DrawCommand(m.item, typed)
+        end
+    end
+
+    function DrawCommands(typed: string): string[][]
+        local cat = self:Category()
+        local byCat, total = self:Matches(typed)
+        local keys: string[][] = {}
+        if total == 0 then
+            self:DrawLine(("No %s starts with %s"):format(NOUN.all, typed), "ink", NONE_H)
+            local closest = self:Closest(typed)
+            if #closest > 0 then
+                self:DrawHead("Closest")
+                self:DrawCommandList(closest, "")
+                keys = { { "Tab", "take " .. closest[1].item.cmd }, { "Enter", "sends " .. typed .. " as typed" } }
+            end
+        elseif cat == "all" then
+            for _, c in ipairs(ALL_ORDER) do
+                local list = byCat[c]
+                if list then
+                    self:DrawHead(LABEL[c] or c)
+                    self:DrawCommandList(list, typed)
+                end
+            end
+            keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Shift Tab", "category" } }
+        else
+            local list = byCat[cat]
+            if list then
+                self:DrawHead(LABEL[cat] or cat, ("%d of %d"):format(#list, total))
+                self:DrawCommandList(list, typed)
+                local more = elsewhere(byCat, cat)
+                if more ~= "" then self:DrawLine(more) end
+                keys = { { "↑↓", "choose" }, { "Tab", "put in" }, { "Shift Tab", "category" } }
+            else
+                self:DrawLine(("No %s starts with %s"):format(NOUN[cat], typed), "ink", NONE_H)
+                self:DrawHead("In other categories")
+                local first: Match? = nil
+                for _, c in ipairs(ALL_ORDER) do
+                    local others = byCat[c]
+                    if others then
+                        first = first or others[1]
+                        self:DrawCommandList(others, typed, 3)
+                    end
+                end
+                keys = { { "Tab", "take " .. (first and first.item.cmd or "") }, { "Shift Tab", "category" } }
+            end
+        end
+        if not self:Get("tab") then match.withoutTab(keys) end
+        return keys
+    end
+
+    function DrawUsage(cmd: string, arg: string?, desc: string?)
+        local p = self:Pal()
+        local f = p.usages:Take(p.scroll.child, self.drawY, USAGE_H)
+        f.cmd:SetValue(cmd)
+        f.arg:SetValue(arg or "")
+        f.desc:SetValue(desc or "")
+        self.drawY = self.drawY + USAGE_H + S["space-1"]
+    end
+
+    function DrawNames(groups: Group[], prefix: string)
+        local p = self:Pal()
+        for _, g in ipairs(groups) do
+            self:DrawHead(g.title)
+            for _, row in ipairs(g.rows) do
+                local r = p.names:Take(p.scroll.child, self.drawY, ROW_H)
+                r.dot:SetShown(row.diamond == true)
+                if row.diamond then UI.Paint(r.dot, row.color or "ink") end
+                r.name:ClearAllPoints()
+                r.name:SetPoint("LEFT", row.diamond and (PAD + 10) or PAD, 0)
+                r.name:SetValue(row.value)
+                r.name:SetColor(row.color or "ink")
+                r.note:SetValue(row.note or "")
+                r.right:SetValue(row.right or "")
+                self:Pickable(r, prefix .. row.value, self.drawY, ROW_H)
+                self.drawY = self.drawY + ROW_H
+            end
+        end
+    end
+
+    function DrawArgs(q: Query): string[][]
+        -- (args mode: the item and the prefix are always there)
+        local item = assert(q.item)
+        local prefix = assert(q.prefix)
+        local p = self:Pal()
+        local keys: string[][] = { { "↑↓", "choose" }, { "Tab", "put in" } }
+        if q.kind == "suu" then
+            self:DrawUsage(item.cmd, "<command>", "SuuUI's commands; " .. item.cmd .. " alone opens its settings")
+            local rows: SubCommand[], all = {}, SuuUI.Commands()
+            local typed = q.typed:lower()
+            for _, c in ipairs(all) do
+                if c.name:sub(1, #typed) == typed then rows[#rows + 1] = c end
+            end
+            self:DrawHead("Commands", ("%d of %d"):format(#rows, #all))
+            for _, c in ipairs(rows) do
+                self:DrawCommand({ cmd = c.name, aliases = {}, desc = c.help, src = "SuuUI" }, typed, prefix .. c.name)
+            end
+            if #rows == 0 then self:DrawLine(("No SuuUI command starts with %s"):format(q.typed), "ink", NONE_H) end
+        elseif q.kind == "words" then
+            local sub = assert(q.sub)
+            local args = sub.args or {}
+            self:DrawUsage(item.cmd .. " " .. sub.name, "<topic>", sub.help)
+            local words: string[], typed = {}, q.typed:lower()
+            for _, w in ipairs(args) do
+                if w:sub(1, #typed) == typed then words[#words + 1] = w end
+            end
+            self:DrawHead("Topics", ("%d of %d"):format(#words, #args))
+            local w = p:GetWidth() - 2 - (S["space-2"] * 2 + 3)
+            local colW = math.floor((w - PAD * 2 - S["space-4"] * (TOPIC_COLS - 1)) / TOPIC_COLS)
+            local top = self.drawY
+            for i, word in ipairs(words) do
+                local col, line = (i - 1) % TOPIC_COLS, math.floor((i - 1) / TOPIC_COLS)
+                local y = top + line * TOPIC_H
+                local r = p.topics:Take(p.scroll.child, y, TOPIC_H)
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", PAD + col * (colW + S["space-4"]), -y)
+                r:SetSize(colW, TOPIC_H)
+                r.text:SetValue(hit(word, typed))
+                self:Pickable(r, prefix .. word, y, TOPIC_H)
+            end
+            self.drawY = top + math.ceil(#words / TOPIC_COLS) * TOPIC_H
+            if #words == 0 then self:DrawLine(("No topic starts with %s"):format(q.typed), "ink", NONE_H) end
+        else
+            self:DrawUsage(item.cmd, item.usage, item.desc)
+            local kind = q.kind or ""
+            local groups: Group[]
+            if kind == "join" or kind == "leave" then groups = self:Channels(kind, q.typed)
+            else groups = self:Names(kind, q.typed) end
+            self:DrawNames(groups, prefix)
+            if #groups == 0 then
+                self:DrawLine(q.typed == "" and "No one to suggest here" or ("No one here starts with %s"):format(q.typed),
+                    "ink", NONE_H)
+            end
+        end
+        if not self:Get("tab") then keys = {} end
+        return keys
+    end
+
+    -- The game's own name list on this input: the palette steps aside.
+    function GameListOn(box: EditBox): boolean
+        local list = frames.find("AutoCompleteBox")
+        return list ~= nil and list:IsShown() and field(list, "parent") == box
+    end
+
+    -- The palette for the input's text (force: draw even if the text is the same).
+    function Refresh(force: boolean?)
+        local box = self.box
+        local q = box and not self.quiet and self:Get("suggest") and self:Parse(self.text) or nil
+        if q and box and self:GameListOn(box) then q = nil end
+        if not q then
+            local open = self.palette
+            if open then open:Hide() end
+            self.query = nil
+            return
+        end
+        if not self.palette then self:Build() end
+        local p = self:Pal()
+        local key = q.mode .. "\1" .. (q.prefix or "") .. "\1" .. q.typed .. "\1" .. self:Category()
+        if not force and key == self.queryKey and p:IsShown() then return end
+        if key ~= self.queryKey then self.mark = 1 end
+        self.query, self.queryKey = q, key
+        self:Place()
+        self:PlaceChips()
+        local w = p.scroll:GetWidth()
+        if w > 1 then p.scroll.child:SetWidth(w) end
+        self:BeginDraw()
+        local keys: string[][]
+        if q.mode == "commands" then keys = self:DrawCommands(q.typed) else keys = self:DrawArgs(q) end
+        self:SetFoot(keys)
+        p.scroll.child:SetHeight(self.drawY + S["space-2"])
+        p.scroll:SetVerticalScroll(0)
+        p:Show()
+        self:DrawMark()
+    end
+
+    -- The marked row: its ground, and the list scrolled to keep it in view.
+    function DrawMark()
+        local p = self.palette
+        if not p or #self.flat == 0 then return end
+        self.mark = math.max(1, math.min(self.mark, #self.flat))
+        for i, e in ipairs(self.flat) do e.frame.hl:SetShown(i == self.mark and self:Get("tab")) end
+        local e = self.flat[self.mark]
+        local top, viewH = p.scroll:GetVerticalScroll(), p.scroll:GetHeight()
+        if e.y < top then p.scroll:SetVerticalScroll(math.max(0, e.y - HEAD_H))
+        elseif e.y + e.h > top + viewH then p.scroll:SetVerticalScroll(e.y + e.h - viewH) end
+    end
+
+    --------------------------------------------------------------------------------
+    -- Keys and the input
+    --------------------------------------------------------------------------------
+
+    -- Whether the palette uses Up and Down on this input now (the chat's recall
+    -- asks before it recalls).
+    function TakesArrows(box: EditBox): boolean
+        local p = self.palette
+        return p ~= nil and p:IsShown() and self.box == box and self:Get("tab") and #self.flat > 0
+    end
+
+    -- The marked row into the input: only into the open input that has focus,
+    -- with SetText (see the header).
+    function Put(entry: Entry?): boolean
+        local box = self.box
+        if not (entry and box and box:IsShown() and box:HasFocus()) or not self:Get("tab") then return false end
+        box:SetText(entry.put)
+        box:SetCursorPosition(#entry.put)
+        self.text = asString(box:GetText())
+        self:Refresh()
+        return true
+    end
+
+    function HookBox(box: EditBox)
+        if self.hooked[box] then return end
+        self.hooked[box] = true
+        hookScript(box, "OnKeyDown", function(b: EditBox, key: string)
+            if not self:IsEnabled() or b ~= self.box then return end
+            if IGNORED_KEYS[key] or key:find("SHIFT$") or key:find("CTRL$") or key:find("ALT$") or key:find("META$") then
+                return
+            end
+            -- typed: the palette may show again after a recalled line
+            self.quiet = false
+        end)
+        hookScript(box, "OnArrowPressed", function(b: EditBox, key: string)
+            if not self:IsEnabled() or b ~= self.box then return end
+            if key ~= "UP" and key ~= "DOWN" then return end
+            if self:TakesArrows(b) then
+                self.mark = (self.mark - 1 + (key == "DOWN" and 1 or -1)) % #self.flat + 1
+                self:DrawMark()
+            else
+                -- the chat's recall puts a line in: no palette for it
+                self.quiet = true
+            end
+        end)
+    end
+
+    -- Shift-Tab changes the category: the command list shows on this input.
+    function StepsCategory(box: EditBox): boolean
+        local q, p = self.query, self.palette
+        return self.box == box and q ~= nil and q.mode == "commands" and p ~= nil and p:IsShown()
+    end
+
+    -- Tab, from ChatEdit_CustomTabPressed: true when the palette took it.
+    function OnTab(box: EditBox): boolean
+        -- Shift-Tab: the next category instead of putting a row in
+        if IsShiftKeyDown() and self:StepsCategory(box) then
+            self:StepCategory(1)
+            return true
+        end
+        local entry = self.flat[self.mark]
+        if not (self:TakesArrows(box) and entry) then return false end
+        return self:Put(entry)
+    end
+
+    -- Tab: the game calls ChatEdit_CustomTabPressed through securecall for
+    -- addons' Tab completion; true skips the game's own.
+    function WrapTab()
+        if self.tabWrapped then return end
+        self.tabWrapped = true
+        local original = field(_G, "ChatEdit_CustomTabPressed")
+        _G.ChatEdit_CustomTabPressed = function(box: EditBox, ...: unknown): unknown
+            if self:IsEnabled() then
+                local ok, took = pcall(self.OnTab, self, box)
+                if ok and took then return true end
+            end
+            return try(original, box, ...)
+        end
+    end
+
+    function Focus(box: EditBox)
+        self.box = box
+        self.quiet = false
+        self.text = nil
+        self:HookBox(box)
+        -- the guild roster comes a moment after it's asked for
+        if IsInGuild() then try(field(C_GuildInfo, "GuildRoster")) end
+        local driver = self.driver
+        if driver then driver:Show() end
+    end
+
+    -- A click on the palette took the input's focus: give it back.
+    function Refocus()
+        local box = self.box
+        if box and box:IsShown() and not box:HasFocus() then box:SetFocus() end
+    end
+
+    -- A click on the palette on its way: a button held on it (the press took the
+    -- focus), or released a moment ago (its OnClick gives the focus back). The
+    -- pointer merely resting there when Enter sends doesn't count.
+    function Clicking(): boolean
+        local box, p = self.box, self.palette
+        if not (box and box:IsShown() and p and p:IsShown() and p:IsMouseOver()) then return false end
+        if IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton") then
+            self.heldUntil = GetTime() + 0.2
+            return true
+        end
+        return GetTime() < self.heldUntil
+    end
+
+    function Unfocus(box: EditBox?)
+        if box and box ~= self.box then return end
+        if self:Clicking() then return end
+        self.box, self.text, self.query, self.queryKey = nil, nil, nil, nil
+        local p, driver = self.palette, self.driver
+        if p then p:Hide() end
+        if driver then driver:Hide() end
+    end
+
+    -- Each frame while an input has focus: its text, compared.
+    function Tick()
+        local box = self.box
+        if not (box and box:IsShown() and box:HasFocus()) then
+            if not self:Clicking() then self:Unfocus() end
+            return
+        end
+        local text = asString(box:GetText())
+        local p = self.palette
+        if text ~= self.text then
+            self.text = text
+            self:Refresh()
+        elseif p and p:IsShown() and self:GameListOn(box) then
+            self:Refresh()
+        end
+    end
+
+    override function OnEnable()
+        if not self.driver then
+            local driver = CreateFrame("Frame")
+            driver:Hide()
+            driver:SetScript("OnUpdate", self:Guard(function() self:Tick() end))
+            self.driver = driver
+        end
+        self:WrapTab()
+        local registry = field(_G, "EventRegistry")
+        tryMethod(registry, "RegisterCallback", FOCUS_EVENTS[1], function(_: unknown, box: unknown)
+            local input = frames.asEditBox(box)
+            if self:IsEnabled() and input then self:Focus(input) end
+        end, self)
+        tryMethod(registry, "RegisterCallback", FOCUS_EVENTS[2], function(_: unknown, box: unknown)
+            self:Unfocus(frames.asEditBox(box))
+        end, self)
+        self:RegisterSettings(SECTION)
+        self:On("SUUUI_ANCHOR_CHANGED", function() self:Place() end)
+        self:On("SUUUI_THEME_CHANGED", function()
+            local p = self.palette
+            if p and p:IsShown() then self:Refresh(true) end
+        end)
+        self:WatchAll({ "suggest", "args", "emotes", "tab" }, function() self:Refresh(true) end)
+        -- addons that load later add commands
+        self:OnGameEvent("ADDON_LOADED", function() self.catalog = nil end)
+    end
+
+    override function OnDisable()
+        local registry = field(_G, "EventRegistry")
+        for _, e in ipairs(FOCUS_EVENTS) do tryMethod(registry, "UnregisterCallback", e, self) end
+        self:Unfocus()
+    end
 end
 
-function M:OnDisable()
-    if EventRegistry and EventRegistry.UnregisterCallback then
-        for _, e in ipairs(FOCUS_EVENTS) do EventRegistry:UnregisterCallback(e, self) end
-    end
-    self:Unfocus()
-end
+M = SuuUI.AddModule(ChatCommandsModule.new())

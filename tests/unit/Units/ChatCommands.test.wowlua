@@ -9,56 +9,74 @@
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import * as secret from "wowlua:secret"
 import SuuUI from "/Core/API"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as registry from "/SettingsUI/Registry"
+import internal M, Palette, Chip from "/Units/ChatCommands"
 import expectNoErrors from "../../helpers"
 import themeChanged from "../SettingsUI/UiSettingsHelpers"
 
-local P: any = assert(SuuUI.GetModule("chatcommands"))
-local G: any = _G
+local box: EditBox? = nil
 
-local box: any = nil
+local function input(): EditBox return assert(box) end
+
+-- The game's EventRegistry, told something.
+local function trigger(name: string, b: Frame)
+    errors.tryMethod(tbl.field(_G, "EventRegistry"), "TriggerEvent", name, b)
+end
 
 -- The input with the focus, as the game tells it (EventRegistry).
-local function focusBox(): any
-    local b: any = CreateFrame("EditBox", nil, UIParent)
+local function focusBox(): EditBox
+    local b = CreateFrame("EditBox", nil, UIParent)
     b:SetSize(300, 24)
     b:SetPoint("BOTTOM", 0, 40)
     b:SetAutoFocus(false)
     b:Show()
     b:SetFocus()
-    EventRegistry:TriggerEvent("ChatFrame.OnEditBoxFocusGained", b)
+    trigger("ChatFrame.OnEditBoxFocusGained", b)
     box = b
     return b
 end
 
 -- What's in the input, as typed: the palette reads it each frame.
 local function typed(text: string)
-    box:SetText(text)
-    box:SetCursorPosition(#text)
+    local b = input()
+    b:SetText(text)
+    b:SetCursorPosition(#text)
     mock.advanceFrames(1)
 end
 
-local function palette(): any return G.SuuUICommandPalette end
+-- Tab in the input, as the game asks addons (ChatEdit_CustomTabPressed).
+local function tab(): unknown
+    return (errors.try(tbl.field(_G, "ChatEdit_CustomTabPressed"), input()))
+end
+
+local function palette(): Frame? return frames.find("SuuUICommandPalette") end
+local function pal(): Palette return assert(M.palette) end
 
 -- The shown frames of a pool, in order.
-local function shown(kind: string): any[]
-    local out: any[] = {}
-    for _, f in ipairs(palette().pools[kind]) do if f:IsShown() then out[#out + 1] = f end end
+local function shown<F extends Frame>(list: F[]): F[]
+    local out: F[] = {}
+    for _, f in ipairs(list) do if f:IsShown() then out[#out + 1] = f end end
     return out
 end
 
 local function heads(): string[]
     local out: string[] = {}
-    for _, f in ipairs(shown("head")) do out[#out + 1] = f.text:GetText() end
+    for _, f in ipairs(shown(pal().heads.list)) do out[#out + 1] = f.text:GetText() or "" end
     return out
 end
 
+local function firstLine(): string return assert(shown(pal().lines.list)[1]).text:GetText() or "" end
+
 local function puts(): string[]
     local out: string[] = {}
-    for _, e in ipairs(P.flat or {}) do out[#out + 1] = e.put end
+    for _, e in ipairs(M.flat) do out[#out + 1] = e.put end
     return out
 end
 
@@ -67,15 +85,15 @@ local function has(list: string[], value: string): boolean
     return false
 end
 
-local function chip(value: string): any
-    for _, b in ipairs(palette().chips) do if b.value == value then return b end end
+local function chip(value: string): Chip
+    for _, b in ipairs(pal().chips) do if b.value == value then return b end end
     error("no chip " .. value)
 end
 
 local function footText(): string
     local out: string[] = {}
-    for _, part in ipairs(palette().foot.parts) do
-        if part.text:IsShown() then out[#out + 1] = part.text:GetText() end
+    for _, part in ipairs(pal().footParts) do
+        if part.text:IsShown() then out[#out + 1] = part.text:GetText() or "" end
     end
     return table.concat(out, " | ")
 end
@@ -87,16 +105,17 @@ end
 
 @afterEach
 local function cleanup()
-    if box then
-        box:ClearFocus()
-        EventRegistry:TriggerEvent("ChatFrame.OnEditBoxFocusLost", box)
-        box:Hide()
+    local b = box
+    if b then
+        b:ClearFocus()
+        trigger("ChatFrame.OnEditBoxFocusLost", b)
+        b:Hide()
         box = nil
     end
     mock.setModifiers({ shift = false })
-    for _, key in ipairs({ "suggest", "args", "emotes", "tab" }) do P:Reset(key) end
-    P:CharData().category = nil
-    P.heldUntil = nil
+    M:ResetAll({ "suggest", "args", "emotes", "tab" })
+    M:Char().category = nil
+    M.heldUntil = 0
     mock.advanceFrames(1)
     expectNoErrors()
 end
@@ -118,7 +137,7 @@ local function everything()
     expect(has(puts(), "/suu")).toBe(true)
     expect(footText()).toBe("choose | put in | category")
     -- the rows show their source
-    local row = shown("row")[1]
+    local row = assert(shown(pal().commands.list)[1])
     expect(row.badge.text:GetText()).toBe("Group")
 end
 
@@ -127,12 +146,12 @@ local function narrowed()
     typed("/inv")
     local list = puts()
     expect(list[1]).toBe("/inv")
-    local row = shown("row")[1]
-    expect(row.cmd:GetText():find("/inv", 1, true) ~= nil).toBe(true)
+    local row = assert(shown(pal().commands.list)[1])
+    expect((row.cmd:GetText() or ""):find("/inv", 1, true) ~= nil).toBe(true)
     typed("/countdown")
     expect(puts()[1]).toBe("/countdown")
     -- the same text again: nothing drawn again
-    P:Refresh()
+    M:Refresh()
     expect(puts()[1]).toBe("/countdown")
 end
 
@@ -142,24 +161,23 @@ local function categories()
     mock.hover(chip("chat"))
     mock.hover(nil)
     mock.click(chip("chat"))
-    expect(P:Category()).toBe("chat")
+    expect(M:Category()).toBe("chat")
     expect(heads()[1]).toBe("Chat")
-    local line = shown("line")[1]
-    expect(line.text:GetText():find("In Group:", 1, true) ~= nil).toBe(true)
+    expect(firstLine():find("In Group:", 1, true) ~= nil).toBe(true)
     mock.hover(chip("chat"))                       -- the chosen one keeps its look
     mock.hover(nil)
     mock.setModifiers({ shift = true })
-    expect(G.ChatEdit_CustomTabPressed(box)).toBe(true)
-    expect(P:Category()).toBe("group")
-    P:CharData().category = "addon"
-    G.ChatEdit_CustomTabPressed(box)
-    expect(P:Category()).toBe("all")
+    expect(tab()).toBe(true)
+    expect(M:Category()).toBe("group")
+    M:Char().category = "addon"
+    tab()
+    expect(M:Category()).toBe("all")
 end
 
 @test("nothing starts with it: the closest commands, Tab takes the first; nothing close: just the note")
 local function closest()
     typed("/invte")
-    expect(shown("line")[1].text:GetText()).toBe("No command starts with /invte")
+    expect(firstLine()).toBe("No command starts with /invte")
     expect(heads()).toEqual({ "Closest" })
     expect(puts()[1]).toBe("/inv")
     expect(footText()).toBe("take /inv | sends /invte as typed")
@@ -170,23 +188,23 @@ end
 
 @test("a category without a match: the others' first three, Tab takes the first")
 local function elsewhere()
-    P:CharData().category = "emote"
+    M:Char().category = "emote"
     typed("/invite")
-    expect(shown("line")[1].text:GetText()).toBe("No emote starts with /invite")
+    expect(firstLine()).toBe("No emote starts with /invite")
     expect(heads()).toEqual({ "In other categories" })
     expect(footText()).toBe("take /inv | category")
 end
 
 @test("emotes off: no emote chip, no emotes, the emote category shows all")
 local function noEmotes()
-    P:Set("emotes", false)
-    P:CharData().category = "emote"
+    M:Set("emotes", false)
+    M:Char().category = "emote"
     typed("/da")
     expect(chip("emote")).never.toBeShown()
-    expect(P:Category()).toBe("all")
+    expect(M:Category()).toBe("all")
     expect(has(heads(), "Emotes")).toBe(false)
-    P:StepCategory(-1)
-    expect(P:Category()).toBe("addon")
+    M:StepCategory(-1)
+    expect(M:Category()).toBe("addon")
 end
 
 --------------------------------------------------------------------------------
@@ -196,44 +214,44 @@ end
 @test("Up and Down mark a row (round the ends, scrolled into view); Tab puts it in")
 local function marking()
     typed("/")
-    expect(P:TakesArrows(box)).toBe(true)
-    local n = #P.flat
-    mock.script(box, "OnArrowPressed", "UP")
-    expect(P.mark).toBe(n)
-    mock.script(box, "OnArrowPressed", "DOWN")
-    expect(P.mark).toBe(1)
-    mock.script(box, "OnArrowPressed", "LEFT")
-    mock.script(box, "OnArrowPressed", "DOWN")
-    expect(P.flat[2].frame.hl).toBeShown()
-    local want = P.flat[2].put
-    expect(G.ChatEdit_CustomTabPressed(box)).toBe(true)
-    expect(box:GetText()).toBe(want)
+    expect(M:TakesArrows(input())).toBe(true)
+    local n = #M.flat
+    mock.script(input(), "OnArrowPressed", "UP")
+    expect(M.mark).toBe(n)
+    mock.script(input(), "OnArrowPressed", "DOWN")
+    expect(M.mark).toBe(1)
+    mock.script(input(), "OnArrowPressed", "LEFT")
+    mock.script(input(), "OnArrowPressed", "DOWN")
+    expect(assert(M.flat[2]).frame.hl).toBeShown()
+    local want = assert(M.flat[2]).put
+    expect(tab()).toBe(true)
+    expect(input():GetText()).toBe(want)
 end
 
 @test("hovering a row marks it; a click puts it in and gives the input its focus back")
 local function clicking()
     typed("/invi")
-    local rows = shown("row")
+    local rows = shown(pal().commands.list)
     mock.hover(rows[1])
-    expect(P.mark).toBe(1)
-    box:ClearFocus()
+    expect(M.mark).toBe(1)
+    input():ClearFocus()
     mock.click(rows[1])
-    expect(box:HasFocus()).toBe(true)
-    expect(box:GetText()).toBe("/inv")
+    expect(input():HasFocus()).toBe(true)
+    expect(input():GetText()).toBe("/inv")
     -- a click on the palette's ground just gives the focus back
-    box:ClearFocus()
-    mock.script(palette(), "OnMouseUp", "LeftButton")
-    expect(box:HasFocus()).toBe(true)
+    input():ClearFocus()
+    mock.script(pal(), "OnMouseUp", "LeftButton")
+    expect(input():HasFocus()).toBe(true)
 end
 
 @test("Tab off: no mark, no Tab in the keys, nothing put in; the arrows are the chat's again")
 local function tabOff()
-    P:Set("tab", false)
+    M:Set("tab", false)
     typed("/inv")
     expect(footText()).toBe("category")
-    expect(P:TakesArrows(box)).toBe(false)
-    expect(P:Put(P.flat[1])).toBe(false)
-    expect(G.ChatEdit_CustomTabPressed(box)).toBe(nil)
+    expect(M:TakesArrows(input())).toBe(false)
+    expect(M:Put(M.flat[1])).toBe(false)
+    expect(tab()).toBe(nil)
     typed("/invite ")
     expect(footText()).toBe("")
 end
@@ -241,16 +259,16 @@ end
 @test("a recalled line brings no palette until something is typed")
 local function quiet()
     typed("/")
-    P:Set("tab", false)
-    mock.script(box, "OnArrowPressed", "UP")       -- the chat's recall
-    expect(P.quiet).toBe(true)
+    M:Set("tab", false)
+    mock.script(input(), "OnArrowPressed", "UP")       -- the chat's recall
+    expect(M.quiet).toBe(true)
     typed("/inv")
     expect(palette()).never.toBeShown()
-    mock.script(box, "OnKeyDown", "LSHIFT")
-    mock.script(box, "OnKeyDown", "TAB")
-    expect(P.quiet).toBe(true)
-    mock.script(box, "OnKeyDown", "V")
-    expect(P.quiet).toBe(false)
+    mock.script(input(), "OnKeyDown", "LSHIFT")
+    mock.script(input(), "OnKeyDown", "TAB")
+    expect(M.quiet).toBe(true)
+    mock.script(input(), "OnKeyDown", "V")
+    expect(M.quiet).toBe(false)
     typed("/invi")
     expect(palette()).toBeShown()
 end
@@ -265,14 +283,13 @@ local function names()
     mock.player:target(tamsin)
     local otherplayer = mock.spawnUnit({ name = "Otherplayer", player = true, class = "WARRIOR", level = 58, reaction = "friendly" })
     C_PartyInfo.InviteUnit("Otherplayer")
-    local joining: any = otherplayer                   -- (missing from MockUnit's declaration)
-    joining:joinGroup()
+    errors.tryMethod(otherplayer, "joinGroup")         -- (missing from MockUnit's declaration)
     mock.joinGuild({ name = "Test Guild", members = {
         { name = "Ashford", class = "PRIEST", level = 60, online = true },
         { name = "Offline Member", class = "ROGUE", level = 40, online = false },
     } })
     mock.stub(C_FriendList, "GetNumFriends", function(): number return 2 end)
-    mock.stub(C_FriendList, "GetFriendInfoByIndex", function(i: number): any
+    mock.stub(C_FriendList, "GetFriendInfoByIndex", function(i: number): unknown
         if i == 1 then return { name = "Pell", connected = true, className = "Druid", area = "Elwynn" } end
         return { name = "Quill", connected = false }
     end)
@@ -283,12 +300,12 @@ local function names()
     expect(has(puts(), "/invite Ashford")).toBe(true)
     expect(has(puts(), "/invite Offline Member")).toBe(false)
     expect(has(puts(), "/invite Quill")).toBe(false)
-    local first = shown("name")[1]
+    local first = assert(shown(pal().names.list)[1])
     expect(first.note:GetText()).toBe("Level 60")
     typed("/invite Ot")
     expect(puts()).toEqual({ "/invite Otherplayer" })
     typed("/invite Zz")
-    expect(shown("line")[1].text:GetText()).toBe("No one here starts with Zz")
+    expect(firstLine()).toBe("No one here starts with Zz")
 end
 
 @test("after /gremove the whole guild; /removefriend every friend; /unignore the ignored")
@@ -304,7 +321,7 @@ local function lists()
     expect(puts()[3]).toBe("/gremove Offline Member")
     expect(has(puts(), "/gremove Offline Member")).toBe(true)
     mock.stub(C_FriendList, "GetNumFriends", function(): number return 1 end)
-    mock.stub(C_FriendList, "GetFriendInfoByIndex", function(_: number): any return { name = "Quill", connected = false } end)
+    mock.stub(C_FriendList, "GetFriendInfoByIndex", function(_: number): unknown return { name = "Quill", connected = false } end)
     typed("/removefriend ")
     expect(puts()).toEqual({ "/removefriend Quill" })
     mock.stub(C_FriendList, "GetNumIgnores", function(): number return 1 end)
@@ -313,14 +330,14 @@ local function lists()
     expect(puts()).toEqual({ "/unignore Otherplayer" })
     -- nobody to suggest
     mock.stub(C_FriendList, "GetNumIgnores", function(): number return 0 end)
-    P:Refresh(true)
-    expect(shown("line")[1].text:GetText()).toBe("No one to suggest here")
+    M:Refresh(true)
+    expect(firstLine()).toBe("No one to suggest here")
 end
 
 @test("after /join the server's channels and yours; after /leave the ones you're in")
 local function channels()
     mock.setChannels({ joined = { { name = "General" }, { name = "Trade" } } })
-    mock.stub(G, "EnumerateServerChannels", function(): ...string return "General", "LocalDefense", "WorldDefense" end)
+    mock.stub(_G, "EnumerateServerChannels", function(): ...string return "General", "LocalDefense", "WorldDefense" end)
     typed("/join ")
     expect(heads()).toEqual({ "Channels", "Joined" })
     expect(has(puts(), "/join LocalDefense")).toBe(true)
@@ -335,18 +352,21 @@ end
 local function suu()
     typed("/suu ")
     expect(heads()[1]).toBe("Commands")
-    expect(#P.flat > 3).toBe(true)
+    expect(#M.flat > 3).toBe(true)
     typed("/suu zzz")
-    expect(shown("line")[1].text:GetText()).toBe("No SuuUI command starts with zzz")
-    local withArgs: any = nil
-    for _, c in ipairs(SuuUI.Commands()) do if c.args and #c.args > 0 then withArgs = c end end
-    assert(withArgs, "no /suu command with topics")
-    typed("/suu " .. withArgs.name .. " ")
+    expect(firstLine()).toBe("No SuuUI command starts with zzz")
+    local name: string?, topic: string? = nil, nil
+    for _, c in ipairs(SuuUI.Commands()) do
+        local args = c.args
+        if args and #args > 0 then name, topic = c.name, args[1] end
+    end
+    local withArgs = assert(name, "no /suu command with topics")
+    typed("/suu " .. withArgs .. " ")
     expect(heads()[1]).toBe("Topics")
-    expect(P.flat[1].put).toBe("/suu " .. withArgs.name .. " " .. withArgs.args[1])
-    typed("/suu " .. withArgs.name .. " zzz")
-    expect(shown("line")[1].text:GetText()).toBe("No topic starts with zzz")
-    typed("/suu " .. withArgs.name .. " a b")    -- past the topic: none
+    expect(assert(M.flat[1]).put).toBe("/suu " .. withArgs .. " " .. assert(topic))
+    typed("/suu " .. withArgs .. " zzz")
+    expect(firstLine()).toBe("No topic starts with zzz")
+    typed("/suu " .. withArgs .. " a b")    -- past the topic: none
     expect(palette()).never.toBeShown()
     typed("/suu nosuchcommand x")
     expect(palette()).never.toBeShown()
@@ -358,19 +378,19 @@ local function aside()
     expect(palette()).never.toBeShown()
     typed("hello")
     expect(palette()).never.toBeShown()
-    P:Set("args", false)
+    M:Set("args", false)
     typed("/invite ")
     expect(palette()).never.toBeShown()
-    P:Set("args", true)
+    M:Set("args", true)
     typed("/invite ")
     expect(palette()).toBeShown()
-    local auto = G.AutoCompleteBox
-    auto.parent = box
+    local auto = assert(frames.find("AutoCompleteBox"))
+    mock.setField(auto, "parent", input())
     auto:Show()
     mock.advanceFrames(1)
     expect(palette()).never.toBeShown()
     auto:Hide()
-    P:Set("suggest", false)
+    M:Set("suggest", false)
     typed("/")
     expect(palette()).never.toBeShown()
 end
@@ -383,20 +403,20 @@ end
 local function focus()
     typed("/")
     -- another input's focus lost: not this one
-    EventRegistry:TriggerEvent("ChatFrame.OnEditBoxFocusLost", CreateFrame("EditBox"))
+    trigger("ChatFrame.OnEditBoxFocusLost", CreateFrame("EditBox"))
     expect(palette()).toBeShown()
     mock.fake("IsMouseButtonDown", function(_: string?): boolean return true end)
     mock.hover(palette())
-    P:Unfocus(box)
+    M:Unfocus(input())
     expect(palette()).toBeShown()
     mock.fake("IsMouseButtonDown", function(_: string?): boolean return false end)
-    expect(P:Clicking()).toBe(true)                -- released a moment ago
+    expect(M:Clicking()).toBe(true)                -- released a moment ago
     mock.advanceTime(1)
     mock.hover(nil)
-    box:ClearFocus()
+    input():ClearFocus()
     mock.advanceFrames(1)
     expect(palette()).never.toBeShown()
-    expect(P.box).toBe(nil)
+    expect(M.box).toBe(nil)
 end
 
 --------------------------------------------------------------------------------
@@ -407,34 +427,38 @@ end
 local function section()
     local s = registry.get("chatcommands") :: registry.Section
     expect(s.merge).toBe("chat")
-    local args: any = nil
-    for _, r in ipairs((s.groups or {})[1].rows) do if r.key == "args" then args = r end end
-    expect((args.disabled())).toBe(false)
-    P:Set("suggest", false)
-    expect((args.disabled())).toBe(true)
+    local disabled: unknown = nil
+    for _, g in ipairs(tbl.list(tbl.field(s, "groups"))) do
+        for _, r in ipairs(tbl.list(tbl.field(g, "rows"))) do
+            if tbl.field(r, "key") == "args" then disabled = tbl.field(r, "disabled") end
+        end
+    end
+    expect(secret.asBoolean((errors.try(disabled)))).toBe(false)
+    M:Set("suggest", false)
+    expect(secret.asBoolean((errors.try(disabled)))).toBe(true)
 end
 
 @test("over the chat's box; without SuuUI's chat above the input; a theme draws it again")
 local function place()
     typed("/")
-    local p = palette()
-    expect(select(2, p:GetPoint(1))).toBe(SuuUI.GetAnchor("chat"))
-    mock.stub(SuuUI, "GetAnchor", function(_: string): any return nil end)
+    local p = pal()
+    expect(select(2, p:GetPoint(1)) :: unknown).toBe(SuuUI.GetAnchor("chat"))
+    mock.stub(SuuUI, "GetAnchor", function(_: string): Frame? return nil end)
     events.emit("SUUUI_ANCHOR_CHANGED", "chat")
-    expect(select(2, p:GetPoint(1))).toBe(box)
+    expect(select(2, p:GetPoint(1)) :: unknown).toBe(input())
     themeChanged()
     expect(p).toBeShown()
 end
 
 @test("the catalog: built once a minute at most, again after an addon loads")
 local function catalog()
-    local first = P:Catalog()
-    expect(P:Catalog()).toBe(first)
+    local first = M:Catalog()
+    expect(M:Catalog()).toBe(first)
     mock.fireEvent("ADDON_LOADED", "Some_Addon", false)
-    expect(P.catalog).toBe(nil)
-    local second = P:Catalog()
+    expect(M.catalog).toBe(nil)
+    local second = M:Catalog()
     mock.advanceTime(61)
-    expect(P:Catalog() ~= second).toBe(true)
+    expect(M:Catalog() ~= second).toBe(true)
 end
 
 @test("turned off: the palette closes and the inputs are left alone; on again it works")
@@ -442,7 +466,7 @@ local function offOn()
     typed("/")
     settings.set("chatcommands", "enabled", false)
     expect(palette()).never.toBeShown()
-    expect(G.ChatEdit_CustomTabPressed(box)).toBe(nil)
+    expect(tab()).toBe(nil)
     settings.set("chatcommands", "enabled", true)
     focusBox()
     typed("/inv")
@@ -451,18 +475,17 @@ end
 
 @test("another addon's command: under Addons, with the addon's name")
 local function addonCommand()
-    local real = G.issecurevariable
-    mock.stub(G, "issecurevariable", function(name: string): (boolean, string?)
+    local real = issecurevariable
+    mock.stub(_G, "issecurevariable", function(name: string): (boolean, string?)
         if name == "SLASH_WLTESTCMD1" then return false, "Other Addon" end
         return real(name)
     end)
-    G.SLASH_WLTESTCMD1 = "/wltestcmd"
-    G.SlashCmdList.WLTESTCMD = function(_: string) end
-    P.catalog = nil
+    mock.setField(_G, "SLASH_WLTESTCMD1", "/wltestcmd")
+    local list = tbl.field(_G, "SlashCmdList")
+    if type(list) == "table" then mock.setField(list, "WLTESTCMD", function(_: string) end) end
+    M.catalog = nil
     typed("/wltest")
     expect(heads()).toEqual({ "Addons" })
-    expect(shown("row")[1].badge.text:GetText()).toBe("Other Addon")
-    G.SlashCmdList.WLTESTCMD = nil
-    G.SLASH_WLTESTCMD1 = nil
-    P.catalog = nil
+    expect(assert(shown(pal().commands.list)[1]).badge.text:GetText()).toBe("Other Addon")
+    M.catalog = nil
 end
