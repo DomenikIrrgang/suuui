@@ -14,30 +14,27 @@
 -- own groups into it.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type CastBar from "/UI/CastBar"
 import type Position from "/EditMode/EditMode"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "castbars",
-    name = "Cast bars",
-    description = "Your cast bar, and the casts of your target, focus and bosses with your interrupt's state.",
-    api = "0.9",
-    combatSafe = true,
-    reloadToToggle = true,
-    defaults = {
-        playerPosition = { point = "BOTTOM", x = 0, y = 292 } :: Position,
-        showPlayer = true,
-        showTarget = true,
-        showFocus = true,
-        showBoss = true,
-        showIcon = true,
-        showKick = true,
-        playerWidth = 340,
-        castTarget = true, -- "Spell › Target" on every cast bar
-    },
-})
+local DEFAULTS = {
+    playerPosition = { point = "BOTTOM", x = 0, y = 292 } :: Position,
+    showPlayer = true,
+    showTarget = true,
+    showFocus = true,
+    showBoss = true,
+    showIcon = true,
+    showKick = true,
+    playerWidth = 340,
+    castTarget = true, -- "Spell › Target" on every cast bar
+}
+
+local M: CastBarsModule
+
 
 -- The unit frames a cast bar hangs under, and the setting that turns it off.
 local ATTACH = {
@@ -47,52 +44,13 @@ local ATTACH = {
 -- Each attached bar is as wide as its unit's bar: the target's follows the
 -- unit frames' width setting, the others their size token (never a size read
 -- back from the frame).
-local function width(name: string): any
+local function width(name: string): number | string
     if name == "target" then
         local frames = SuuUI.GetModule("unitframes")
-        return frames and frames:Get("width") or "bar-lg"
+        local w = frames and frames:Setting("width")
+        return type(w) == "number" and w or "bar-lg"
     end
     return "bar-md"
-end
-
-function M:Attach(name: string, frame: any)
-    local key = ATTACH[name]
-    if not key then return end
-    local bar = self.attached[name]
-    if not frame then
-        if bar then bar:Deactivate() end
-        return
-    end
-    if not bar then
-        bar = UI.CastBar(frame, name, { size = "sm", width = width(name), name = "SuuUI" .. name .. "CastBar",
-            target = self:Get("castTarget") })
-        SuuUI.TagInstance(bar, { module = M.id, role = name:lower() })
-        self.attached[name] = bar
-    end
-    bar:SetParent(frame)
-    bar:SetBarWidth(UI.Size(width(name)))
-    bar:ClearAllPoints()
-    bar:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -S["space-1"])
-    bar:SetIconShown(self:Get("showIcon"))
-    bar:SetKickShown(self:Get("showKick"))
-    bar:SetTargetShown(self:Get("castTarget"))
-    if self:Get(key) then bar:Activate() else bar:Deactivate() end
-end
-
-function M:ApplyOptions()
-    for name in pairs(ATTACH) do self:Attach(name, SuuUI.GetAnchor(name)) end
-    self.player:SetIconShown(self:Get("showIcon"))
-    self.player:SetTargetShown(self:Get("castTarget"))
-    self.player:SetBarWidth(self:Get("playerWidth"))
-    -- Your cast bar runs unless it is turned off or hidden in edit mode.
-    if self:Get("showPlayer") and not self:Get("playerPosition").hidden then
-        -- (also when turned on mid-session: Blizzard's must not show beside it)
-        SuuUI.SuppressBlizzard("PlayerCastingBarFrame")
-        SuuUI.SuppressBlizzard("PetCastingBarFrame")
-        self.player:Activate()
-    else
-        self.player:Deactivate()
-    end
 end
 
 local SECTION = {
@@ -119,40 +77,105 @@ local SECTION = {
     },
 }
 
-function M:OnEnable()
-    if self:Get("showPlayer") then
-        SuuUI.SuppressBlizzard("PlayerCastingBarFrame")
-        SuuUI.SuppressBlizzard("PetCastingBarFrame")
-    end
-    if not self.player then
-        self.player = UI.CastBar(SuuUI.Root, "player", { size = "md", width = self:Get("playerWidth"),
-            name = "SuuUIPlayerCastBar", target = self:Get("castTarget") })
-        self.player.suuManagedShow = true -- shown only while you cast
-        SuuUI.TagInstance(self.player, { module = M.id, role = "player" })
-        self.attached = {}
-    end
-    self:RegisterMover(self.player, { key = "playerPosition", label = "Your cast bar",
-        enabled = function() return self:Get("showPlayer") end })
-    self:Watch("showPlayer", SuuUI.EditMode.Refresh)
-    self:RegisterSettings(SECTION)
-    self:ApplyOptions()
+class CastBarsModule extends Module<typeof(DEFAULTS)>
+    -- the bars under unit frames, by unit
+    attached: { [string]: CastBar } = {}
+    player: CastBar? = nil
 
-    self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame) self:Attach(name, frame) end)
-    -- the target's bar follows the target frame's width, live
-    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
-        -- (with the frame: its resize waits for the end of combat too)
-        if namespace == "unitframes" and key == "width" then
-            self:RunOutOfCombat("targetWidth", function() self:Attach("target", SuuUI.GetAnchor("target")) end)
+    constructor()
+        super({
+            id = "castbars",
+            name = "Cast bars",
+            description = "Your cast bar, and the casts of your target, focus and bosses with your interrupt's state.",
+            api = "0.9",
+            combatSafe = true,
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
+    end
+
+    function Attach(name: string, frame: Frame?)
+        local key = ATTACH[name]
+        if not key then return end
+        local bar = self.attached[name]
+        if not frame then
+            if bar then bar:Deactivate() end
+            return
         end
-    end)
-    self:WatchAll({ "showPlayer", "showTarget", "showFocus", "showBoss", "showIcon", "showKick", "castTarget",
-                           "playerWidth", "playerPosition" }, function() self:ApplyOptions() end)
-end
+        if not bar then
+            bar = UI.CastBar(frame, name, { size = "sm", width = width(name), name = "SuuUI" .. name .. "CastBar",
+                target = self:Get("castTarget") })
+            SuuUI.TagInstance(bar, { module = M.id, role = name:lower() })
+            self.attached[name] = bar
+        end
+        bar:SetParent(frame)
+        bar:SetBarWidth(UI.Size(width(name)))
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 0, -S["space-1"])
+        bar:SetIconShown(self:Get("showIcon"))
+        bar:SetKickShown(self:Get("showKick"))
+        bar:SetTargetShown(self:Get("castTarget"))
+        if self:Get(key) then bar:Activate() else bar:Deactivate() end
+    end
 
-function M:OnDisable()
-    -- Only reached when the module errors: the module toggles on reload.
-    if self.player then
-        self.player:Deactivate()
-        for _, bar in pairs(self.attached) do bar:Deactivate() end
+    function ApplyOptions()
+        for name in pairs(ATTACH) do self:Attach(name, SuuUI.GetAnchor(name)) end
+        local player = self.player
+        if not player then return end
+        player:SetIconShown(self:Get("showIcon"))
+        player:SetTargetShown(self:Get("castTarget"))
+        player:SetBarWidth(self:Get("playerWidth"))
+        -- Your cast bar runs unless it is turned off or hidden in edit mode.
+        if self:Get("showPlayer") and not self:Get("playerPosition").hidden then
+            -- (also when turned on mid-session: Blizzard's must not show beside it)
+            SuuUI.SuppressBlizzard("PlayerCastingBarFrame")
+            SuuUI.SuppressBlizzard("PetCastingBarFrame")
+            player:Activate()
+        else
+            player:Deactivate()
+        end
+    end
+
+    override function OnEnable()
+        if self:Get("showPlayer") then
+            SuuUI.SuppressBlizzard("PlayerCastingBarFrame")
+            SuuUI.SuppressBlizzard("PetCastingBarFrame")
+        end
+        local player = self.player
+        if not player then
+            player = UI.CastBar(SuuUI.Root, "player", { size = "md", width = self:Get("playerWidth"),
+                name = "SuuUIPlayerCastBar", target = self:Get("castTarget") })
+            player.suuManagedShow = true -- shown only while you cast
+            SuuUI.TagInstance(player, { module = M.id, role = "player" })
+            self.player = player
+            self.attached = {}
+        end
+        self:RegisterMover(player, { key = "playerPosition", label = "Your cast bar",
+            enabled = function() return self:Get("showPlayer") end })
+        self:Watch("showPlayer", SuuUI.EditMode.Refresh)
+        self:RegisterSettings(SECTION)
+        self:ApplyOptions()
+
+        self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame) self:Attach(name, frame) end)
+        -- the target's bar follows the target frame's width, live
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+            -- (with the frame: its resize waits for the end of combat too)
+            if namespace == "unitframes" and key == "width" then
+                self:RunOutOfCombat("targetWidth", function() self:Attach("target", SuuUI.GetAnchor("target")) end)
+            end
+        end)
+        self:WatchAll({ "showPlayer", "showTarget", "showFocus", "showBoss", "showIcon", "showKick", "castTarget",
+                               "playerWidth", "playerPosition" }, function() self:ApplyOptions() end)
+    end
+
+    override function OnDisable()
+        -- Only reached when the module errors: the module toggles on reload.
+        local player = self.player
+        if player then
+            player:Deactivate()
+            for _, bar in pairs(self.attached) do bar:Deactivate() end
+        end
     end
 end
+
+M = SuuUI.AddModule(CastBarsModule.new())
