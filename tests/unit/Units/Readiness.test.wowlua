@@ -24,7 +24,7 @@ local function inWorld(w: World)
     local members = w.members or {}
     mock.stub(game, "UnitExists", function(unit: string): boolean return unit == "player" or members[unit] ~= nil end)
     mock.stub(game, "UnitIsUnit", function(a: string, b: string): boolean return a == b end)
-    mock.stub(SuuUI, "FullName", function(unit: string?): any
+    mock.stub(SuuUI, "FullName", function(unit: string?): unknown
         if unit == nil or unit == "player" then return "Ayla Dawnfeather" end
         local m = members[unit]
         return m and m.name
@@ -37,20 +37,20 @@ local function inWorld(w: World)
 end
 
 -- Your druid's spells: which you know, and their cooldowns.
-local function knowSpells(known: { [number]: boolean }, cooldowns: { [number]: any })
-    mock.stub(game, "GetSpellInfo", function(name: string): any
+local function knowSpells(known: { [number]: boolean }, cooldowns: { [number]: unknown })
+    mock.stub(game, "GetSpellInfo", function(name: string): unknown
         local id = SPELLS[name]
         return id and { spellID = id, name = name }
     end)
     mock.stub(game, "IsPlayerSpell", function(id: number): boolean return known[id] == true end)
-    mock.stub(game, "GetSpellCooldown", function(id: number): any return cooldowns[id] end)
+    mock.stub(game, "GetSpellCooldown", function(id: number): unknown return cooldowns[id] end)
     mock.stub(game, "GetSpellName", function(id: number): string? return NAMES[id] end)
 end
 
-local sent: { [number]: any }[] = {}
+local sent: { [number]: unknown }[] = {}
 local function captureSends()
     sent = {}
-    mock.stub(game, "SendAddonMessage", function(...: any): boolean
+    mock.stub(game, "SendAddonMessage", function(...: unknown): boolean
         sent[#sent + 1] = { ... }
         return true
     end)
@@ -179,12 +179,12 @@ local function readOwnEdges()
     expect(#own).toBe(3)
     for _, c in ipairs(own) do expect(c.left).toBe(0) end
     -- a spell whose ID is secret is left out
-    mock.stub(game, "GetSpellInfo", function(name: string): any
+    mock.stub(game, "GetSpellInfo", function(name: string): unknown
         return { spellID = name == "Rebirth" and mock.secret(20484) or SPELLS[name] }
     end)
     expect(#(assert(M:ReadOwn()))).toBe(2)
     -- an unknown spell (no info)
-    mock.stub(game, "GetSpellInfo", function(): any return nil end)
+    mock.stub(game, "GetSpellInfo", function(): unknown return nil end)
     expect(#(assert(M:ReadOwn()))).toBe(0)
 end
 
@@ -216,13 +216,13 @@ local function send()
     expect(sent[1][1]).toBe("SuuUI")
     expect(sent[1][2]).toBe("RDYQ")
     expect(sent[1][3]).toBe("PARTY")
-    expect(M.lastSend.ok).toBe(true)
-    expect(M.lastSend.result).toBe("true")
-    expect(M.lastSend.text).toBe("RDYQ")
+    expect(assert(M.lastSend).ok).toBe(true)
+    expect(assert(M.lastSend).result).toBe("true")
+    expect(assert(M.lastSend).text).toBe("RDYQ")
     inWorld({ raid = true })
     M:Send(string.rep("x", 60))
     expect(sent[2][3]).toBe("RAID")
-    expect(#M.lastSend.text).toBe(40)
+    expect(#assert(M.lastSend).text).toBe(40)
     mock.player:enterCombat()
     M:Send("RDYQ")
     expect(#sent).toBe(2)
@@ -231,14 +231,14 @@ end
 @test("Send: what the game answered, an error or a secret")
 local function sendAnswers()
     inWorld({ group = true })
-    mock.stub(game, "SendAddonMessage", function(): any error("throttled") end)
+    mock.stub(game, "SendAddonMessage", function(): unknown error("throttled") end)
     M:Send("RDYQ")
-    expect(M.lastSend.ok).toBe(false)
-    expect(M.lastSend.result).toContain("throttled")
-    mock.stub(game, "SendAddonMessage", function(): any return mock.secret(0) end)
+    expect(assert(M.lastSend).ok).toBe(false)
+    expect(assert(M.lastSend).result).toContain("throttled")
+    mock.stub(game, "SendAddonMessage", function(): unknown return mock.secret(0) end)
     M:Send("RDYQ")
-    expect(M.lastSend.ok).toBe(true)
-    expect(M.lastSend.result).toBe("secret")
+    expect(assert(M.lastSend).ok).toBe(true)
+    expect(assert(M.lastSend).result).toBe("secret")
 end
 
 @test("Share: your cooldowns as one message; nothing in combat")
@@ -281,14 +281,14 @@ local function hears()
     inWorld({})
     local now = GetTime()
     M:OnMessage("SuuUI", "RDY\t20484:0,29166:60", "PARTY", "Thessaly Moonbrook-Realm")
-    local h = M.heard["Thessaly Moonbrook"]
+    local h = assert(assert(M.heard)["Thessaly Moonbrook"])
     expect(h).toBeTruthy()
     expect(h.at).toBe(now)
     expect(#h.spells).toBe(2)
     expect(h.spells[2].endsAt).toBe(now + 60)
     -- a newer share replaces it
     M:OnMessage("SuuUI", "RDY\t", "PARTY", "Thessaly Moonbrook")
-    expect(#M.heard["Thessaly Moonbrook"].spells).toBe(0)
+    expect(#assert(assert(M.heard)["Thessaly Moonbrook"]).spells).toBe(0)
 end
 
 @test("OnMessage: what isn't a share is ignored")
@@ -319,7 +319,7 @@ local function wired()
     inWorld({})
     mock.receiveAddonMessage("SuuUI", "RDY\t20484:30", "PARTY", "Brannoc")
     mock.advanceFrames(1)
-    expect(M.heard and M.heard["Brannoc"]).toBeTruthy()
+    expect(M.heard and assert(assert(M.heard)["Brannoc"])).toBeTruthy()
 end
 
 --------------------------------------------------------------------------------
@@ -340,15 +340,15 @@ local function partyRoster()
     expect(r[2].name).toBe("Brannoc Stone")
     expect(r[2].class).toBe("WARRIOR")
     expect(r[3].name).toBe("Veyra")
-    mock.stub(SuuUI, "FullName", function(unit: string?): any
+    mock.stub(SuuUI, "FullName", function(unit: string?): unknown
         if unit == "party1" then return mock.secret("Hidden") end
         if unit == "party2" then return nil end
         return "Ayla Dawnfeather"
     end)
     expect(#roster()).toBe(1)
     -- a secret class: kept, without one
-    mock.stub(SuuUI, "FullName", function(unit: string?): any return unit == "party1" and "Brannoc" or "Ayla Dawnfeather" end)
-    mock.stub(game, "UnitClass", function(unit: string): (any, any)
+    mock.stub(SuuUI, "FullName", function(unit: string?): unknown return unit == "party1" and "Brannoc" or "Ayla Dawnfeather" end)
+    mock.stub(game, "UnitClass", function(unit: string): (unknown, unknown)
         if unit == "player" then return "Druid", "DRUID" end
         return "Warrior", mock.secret("WARRIOR")
     end)
@@ -398,7 +398,7 @@ end
 -- The panel
 --------------------------------------------------------------------------------
 
-local function panelShown(): boolean return M.panel:IsShown() and true or false end
+local function panelShown(): boolean return assert(M.panel):IsShown() and true or false end
 
 @test("Update: off, always, hidden by edit mode, combat, an encounter")
 local function update()
@@ -410,8 +410,8 @@ local function update()
     M:Set("shows", "always")
     M:Update()
     expect(panelShown()).toBe(true)
-    expect(#M.panel.data).toBe(1)
-    expect(M.panel.action).never.toBeShown()
+    expect(#assert(M.panel).data).toBe(1)
+    expect(assert(M.panel).action).never.toBeShown()
     local pos = M:Get("position")
     pos.hidden = true
     M:Set("position", pos)
@@ -445,7 +445,7 @@ local function updateGroup()
     inWorld({ group = true, lead = true })
     M:Update()
     expect(panelShown()).toBe(true)
-    expect(M.panel.action).toBeShown()
+    expect(assert(M.panel).action).toBeShown()
     M:Set("shows", "instance")
     M:Update()
     expect(panelShown()).toBe(false)
@@ -536,7 +536,7 @@ local function encounterEvents()
     mock.fireEvent("ENCOUNTER_END", 1084, "Onyxia", 9, 40, 1, {})
     expect(M.encounter).toBe(nil)
     expect(panelShown()).toBe(true)
-    M.panel:Hide()
+    assert(M.panel):Hide()
     mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
     expect(panelShown()).toBe(true)
 end
@@ -571,7 +571,7 @@ local function command()
     out = mock.printed()
     expect(out[before + 3]).toContain("heard from Oren (2)")
     expect(out[before + 4]).toContain("ok, true (RDYQ)")
-    M.lastSend.ok = false
+    assert(M.lastSend).ok = false
     mock.slash("/suu ready")
     expect(mock.printed()[before + 6]).toContain("error")
 end
@@ -582,7 +582,7 @@ local function readyCheck()
     inWorld({ group = true, lead = true })
     M:Set("shows", "group")
     expect(panelShown()).toBe(true)
-    mock.click(M.panel.action)
+    mock.click(assert(M.panel).action)
     expect(s).toHaveBeenCalledTimes(1)
 end
 

@@ -8,28 +8,29 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M from "/Units/GameMenu"
+import type MenuItem from "/Units/GameMenu"
+import type ConfirmOptions, ConfirmDialog from "/UI/Panel"
+import asFrame, asButton, part from "/UI/Reskin"
 import expectNoErrors from "../../helpers"
 
-local G: any = _G
-
 local function open()
-    if not G.GameMenuFrame:IsShown() then ShowUIPanel(G.GameMenuFrame) end
+    if not GameMenuFrame:IsShown() then ShowUIPanel(GameMenuFrame) end
     mock.advanceFrames(2)
 end
 
 local function close()
-    if G.GameMenuFrame:IsShown() then HideUIPanel(G.GameMenuFrame) end
+    if GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end
     mock.advanceFrames(2)
 end
 
 -- The panel's entry by its label.
-local function item(label: string): any
+local function item(label: string): MenuItem
     for _, b in ipairs(M.items) do if b.label:GetText() == label then return b end end
     error("no entry " .. label)
 end
 
 -- The secure cover over an entry.
-local function coverOf(label: string): any
+local function coverOf(label: string): Button?
     local b = item(label)
     for i, s in ipairs(M.secureItems or {}) do
         if s == b then return M.overs and M.overs[i] end
@@ -42,7 +43,7 @@ local function cleanup()
     if InCombatLockdown() then mock.player:leaveCombat() end
     close()
     for _, name in ipairs({ "SettingsPanel", "EditModeManagerFrame", "MacroFrame", "AddonList" }) do
-        local f = G[name]
+        local f = asFrame(_G[name])
         if f and f:IsShown() then HideUIPanel(f) end
     end
     mock.advanceFrames(2)
@@ -54,16 +55,16 @@ local function escape()
     -- (Esc clears a target first, as the game does)
     mock.player:target(nil)
     -- a first login: Esc skips SuuUI's welcome first, the menu stays shut
-    local welcome: any = SuuUI.GetModule("welcome")
-    if welcome and welcome.dim and welcome.dim:IsShown() then
+    local welcomeDim = asFrame(part(SuuUI.GetModule("welcome"), "dim"))
+    if welcomeDim and welcomeDim:IsShown() then
         mock.pressKey("ESCAPE")
         mock.advanceFrames(2)
-        expect(welcome.dim:IsShown()).toBe(false)
-        expect(G.GameMenuFrame:IsShown()).toBe(false)
+        expect(welcomeDim:IsShown()).toBe(false)
+        expect(GameMenuFrame:IsShown()).toBe(false)
     end
     mock.pressKey("ESCAPE")
     mock.advanceFrames(2)
-    local g = G.GameMenuFrame
+    local g = GameMenuFrame
     expect(g:IsShown()).toBe(true)
     expect(M.dim).toBeShown()
     expect(g:GetAlpha()).toBe(0)
@@ -79,7 +80,7 @@ end
 @test("the game placing its menu again: put back out of sight")
 local function keptAway()
     open()
-    local g = G.GameMenuFrame
+    local g = GameMenuFrame
     g:ClearAllPoints()
     g:SetPoint("CENTER")
     g:SetAlpha(1)
@@ -94,9 +95,9 @@ end
 local function infoLine()
     open()
     local name, realm = UnitFullName("player")
-    expect(M.who:GetText()).toBe(tostring(name) .. " · " .. tostring(realm))
-    expect(M.perf:GetText():find(" fps · ", 1, true) ~= nil).toBe(true)
-    local drawn = mock.spy(function(_: any) end)
+    expect(assert(M.who):GetText()).toBe(tostring(name) .. " · " .. tostring(realm))
+    expect((assert(M.perf):GetText() or ""):find(" fps · ", 1, true) ~= nil).toBe(true)
+    local drawn = mock.spy(function(_: unknown) end)
     mock.stub(M, "DrawPerf", drawn)
     mock.advanceTime(1.1)
     expect(drawn).toHaveBeenCalled()
@@ -108,60 +109,60 @@ local function entries()
         open()
         item(label):Click()
         mock.advanceFrames(2)
-        expect(G.GameMenuFrame:IsShown()).toBe(false)
+        expect(GameMenuFrame:IsShown()).toBe(false)
     end
     choose("Options")
-    expect(G.SettingsPanel:IsShown()).toBe(true)
-    HideUIPanel(G.SettingsPanel)
+    expect(SettingsPanel:IsShown()).toBe(true)
+    HideUIPanel(SettingsPanel)
     choose("Edit Mode")
-    expect(G.EditModeManagerFrame:IsShown()).toBe(true)
-    HideUIPanel(G.EditModeManagerFrame)
+    expect(EditModeManagerFrame:IsShown()).toBe(true)
+    HideUIPanel(EditModeManagerFrame)
     mock.advanceFrames(2)
     -- (SuuUI's Macros module opens its own window for it)
     choose("Macros")
-    if G.MacroFrame and G.MacroFrame:IsShown() then HideUIPanel(G.MacroFrame) end
+    local macros = asFrame(_G.MacroFrame)
+    if macros and macros:IsShown() then HideUIPanel(macros) end
     -- (SuuUI's Addons module opens its own window for it)
     choose("AddOns")
-    if G.AddonList and G.AddonList:IsShown() then HideUIPanel(G.AddonList) end
+    if AddonList and AddonList:IsShown() then HideUIPanel(AddonList) end
     local settings = mock.spy(function() end)
     mock.stub(SuuUI, "OpenSettings", settings)
     choose("SuuUI settings")
     expect(settings).toHaveBeenCalled()
     local help = mock.spy(function() end)
-    mock.stub(G, "ToggleHelpFrame", help)
+    mock.stub(_G, "ToggleHelpFrame", help)
     choose("Support")
     expect(help).toHaveBeenCalled()
     -- Return to Game
     open()
-    local back: any = nil
-    for _, child in ipairs({ M.panel.body:GetChildren() }) do
-        local c: any = child
-        if c.GetText and c:GetText() == "Return to Game" then back = c end
+    local back: Button? = nil
+    for _, child in ipairs({ assert(M.panel).body:GetChildren() }) do
+        local c = asButton(child)
+        if c and c:GetText() == "Return to Game" then back = c end
     end
     if back then
         back:Click()
         mock.advanceFrames(2)
-        expect(G.GameMenuFrame:IsShown()).toBe(false)
+        expect(GameMenuFrame:IsShown()).toBe(false)
     end
 end
 
 @test("Reload UI, Log Out: secure buttons over the entries while the menu shows")
 local function secure()
     open()
-    local reload, logout = coverOf("Reload UI"), coverOf("Log Out")
-    expect(reload ~= nil).toBe(true)
+    local reload, logout = assert(coverOf("Reload UI")), assert(coverOf("Log Out"))
     expect(reload:GetAttribute("type1")).toBe("macro")
     expect(reload:GetAttribute("macrotext1")).toBe("/reload")
     expect(logout:GetAttribute("macrotext1")).toBe("/logout")
     expect(reload:IsShown()).toBe(true)
     -- the cover's hover lights the entry under it
-    reload:GetScript("OnEnter")(reload)
+    mock.script(reload, "OnEnter")
     expect(item("Reload UI").hover:IsShown()).toBe(true)
-    reload:GetScript("OnLeave")(reload)
+    mock.script(reload, "OnLeave")
     -- a click: the menu closes a frame after
-    reload:GetScript("PostClick")(reload)
+    mock.script(reload, "PostClick")
     mock.advanceFrames(2)
-    expect(G.GameMenuFrame:IsShown()).toBe(false)
+    expect(GameMenuFrame:IsShown()).toBe(false)
     expect(reload:IsShown()).toBe(false)
 end
 
@@ -175,41 +176,42 @@ local function combat()
     expect(b:GetAlpha() < 1).toBe(true)
     expect(item("Edit Mode").blocked).toBe("Not in combat")
     -- (its secure cover can't be moved in a fight: off already as it began)
-    expect(coverOf("Log Out"):IsShown()).toBe(false)
+    expect(assert(coverOf("Log Out")):IsShown()).toBe(false)
     mock.hover(b)
     mock.hover(nil)
     -- a blocked entry does nothing
     b:Click()
-    expect(G.GameMenuFrame:IsShown()).toBe(true)
+    expect(GameMenuFrame:IsShown()).toBe(true)
     mock.player:leaveCombat()
     mock.advanceFrames(2)
     expect(item("Log Out").blocked).toBeNil()
-    expect(coverOf("Log Out"):IsShown()).toBe(true)
+    expect(assert(coverOf("Log Out")):IsShown()).toBe(true)
 end
 
 @test("Exit Game asks first: SuuUI's question, its button covered by a secure /quit")
 local function exitGame()
-    local asked: any = nil
-    local dialog = CreateFrame("Frame", nil, UIParent)
-    dialog.ok = CreateFrame("Button", nil, dialog)
-    dialog.ok:SetSize(80, 24)
-    dialog.ok:SetPoint("CENTER")
-    dialog.ok:SetScript("OnEnter", function() end)
-    dialog.ok:SetScript("OnLeave", function() end)
-    mock.stub(SuuUI.UI, "Confirm", function(opts: any): any asked = opts; return dialog end)
+    local asked: ConfirmOptions? = nil
+    local real = SuuUI.UI.Confirm
+    local dialog: ConfirmDialog? = nil
+    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions): ConfirmDialog
+        asked = opts
+        local d = real(opts)
+        dialog = d
+        return d
+    end)
     open()
     item("Exit Game"):Click()
     mock.advanceFrames(2)
-    expect(asked.title).toBe("Exit the game?")
-    asked.onConfirm()
-    local over = M.quitOver
+    expect(assert(asked).title).toBe("Exit the game?")
+    assert(assert(asked).onConfirm)()
+    local over = assert(M.quitOver)
     expect(over:GetAttribute("macrotext1")).toBe("/quit")
     expect(over:IsShown()).toBe(true)
-    over:GetScript("OnEnter")(over)
-    over:GetScript("OnLeave")(over)
-    over:GetScript("PreClick")(over)
+    mock.script(over, "OnEnter")
+    mock.script(over, "OnLeave")
+    mock.script(over, "PreClick")
     -- the question gone: its cover too
-    dialog:Hide()
+    assert(dialog):Hide()
     expect(over:IsShown()).toBe(false)
     -- asked again: the same cover
     M:ConfirmQuit()
@@ -224,7 +226,7 @@ end
 
 @test("on the way out already: Log Out and Exit Game say so")
 local function onTheWayOut()
-    mock.stub(G, "StaticPopup_Visible", function(which: string): any return which == "CAMP" and G.StaticPopup1 or nil end)
+    mock.stub(_G, "StaticPopup_Visible", function(which: string): Frame? return which == "CAMP" and asFrame(_G.StaticPopup1) or nil end)
     open()
     expect(item("Log Out").blocked).toBe("Already on the way out")
     expect(item("Exit Game").blocked).toBe("Already on the way out")
@@ -233,7 +235,7 @@ end
 @test("a plugin's entries: in their group, or a group of their own before Session; built again on the next open")
 local function plugins()
     local clicked = mock.spy(function() end)
-    local plugin: any = SuuUI.GetModule("gamemenu")
+    local plugin = M
     plugin:AddGameMenuItem({ group = "Help", label = "Plugin help", glyph = "chat", onClick = clicked })
     plugin:AddGameMenuItem({ group = "Tools", label = "A tool", blocked = function(): string return "Not now" end })
     expect(M.stale).toBe(true)
@@ -245,8 +247,8 @@ local function plugins()
     expect(item("A tool").blocked).toBe("Not now")
     -- the groups in order: Session last
     local groups = M:Groups()
-    expect(groups[#groups][1]).toBe("Session")
-    expect(groups[#groups - 1][1]).toBe("Tools")
+    expect(groups[#groups].name).toBe("Session")
+    expect(groups[#groups - 1].name).toBe("Tools")
     -- in a fight: not rebuilt now
     close()
     mock.player:enterCombat()
@@ -270,8 +272,7 @@ end
 @test("stopped: the panel hidden, the game's menu left alone")
 local function disabled()
     open()
-    local m: any = M
-    m:OnDisable()
+    M:OnDisable()
     expect(M.dim).never.toBeShown()
-    M:PutAway(G.GameMenuFrame)
+    M:PutAway(GameMenuFrame)
 end

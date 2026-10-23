@@ -13,6 +13,7 @@
 
 - Plugin API 0.19: a `Select` with `multiple` reports the chosen list through `onChangeAll(values)` and keeps it in `select.values`; `onChange` and `select.value` are for one value.
 - Plugin API 0.19: an aura container's `ShowPreview(items, place)` takes the place with named fields: `{ point =, relativeTo =, relativePoint =, x =, y = }`.
+- Plugin API 0.19: `RegisterMover`'s option `managedShow = true` says your module shows and hides the frame itself; edit mode then leaves its visibility alone (as `frame.suuManagedShow = true` did, which still works).
 - Plugin API 0.19: `SuuUI.UI.UnitStandIn(person)` needs each person's `health`, and its `UnitCreatureFamily` answers `""` for no family.
 
 ### Fixed

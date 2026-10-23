@@ -9,12 +9,12 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/MicroMenu"
+import type MenuButton from "/UI/MicroMenu"
+import asFrame from "/UI/Reskin"
 import expectNoErrors from "../../helpers"
 
-local G: any = _G
-
-local function button(key: string): any
-    return M.menu.buttons[key]
+local function button(key: string): MenuButton
+    return assert(assert(M.menu).buttons[key])
 end
 
 local function keys(): string[]
@@ -33,7 +33,7 @@ local function cleanup()
     if InCombatLockdown() then mock.player:leaveCombat() end
     M:ResetAll({ "buttons", "shows", "bagCount", "seenPluginButtons" })
     for _, name in ipairs({ "CharacterFrame", "WorldMapFrame", "GameMenuFrame" }) do
-        local f = G[name]
+        local f = asFrame(_G[name])
         if f and f:IsShown() then HideUIPanel(f) end
     end
     mock.advanceFrames(2)
@@ -47,7 +47,7 @@ local function order()
     expect(list[1]).toBe("character")
     for _, k in ipairs(list) do expect(button(k)).toBeShown() end
     -- the shop isn't chosen by default
-    expect(button("shop")).toBeNil()
+    expect(assert(M.menu).buttons.shop).toBeNil()
     expect(M.blizzardHidden).toBe(true)
     -- in a row, left to right
     local _, _, _, x1 = button(list[1]):GetPoint(1)
@@ -58,15 +58,15 @@ end
 @test("Character: a secure click on Blizzard's button opens its window; the button lit while it's open")
 local function character()
     local b = button("character")
-    expect(b:GetAttribute("clickbutton")).toBe(G.CharacterMicroButton)
+    expect(b:GetAttribute("clickbutton")).toBe(CharacterMicroButton)
     mock.click(b)
     mock.advanceFrames(2)
-    expect(G.CharacterFrame:IsShown()).toBe(true)
+    expect(CharacterFrame:IsShown()).toBe(true)
     tick()
     expect(b.active).toBe(true)
-    HideUIPanel(G.CharacterFrame)
+    HideUIPanel(CharacterFrame)
     -- (Blizzard's button stays pushed a moment; the menu looks again)
-    G.CharacterMicroButton:SetButtonState("NORMAL")
+    CharacterMicroButton:SetButtonState("NORMAL")
     tick()
     expect(b.active).toBe(false)
 end
@@ -75,39 +75,39 @@ end
 local function ownButtons()
     mock.click(button("worldmap"))
     mock.advanceFrames(2)
-    expect(G.WorldMapFrame:IsShown()).toBe(true)
+    expect(WorldMapFrame:IsShown()).toBe(true)
     tick()
     expect(button("worldmap").active).toBe(true)
-    HideUIPanel(G.WorldMapFrame)
+    HideUIPanel(WorldMapFrame)
     local bags = mock.spy(function() end)
     mock.stub(SuuUI, "ToggleBags", bags)
     mock.click(button("bags"))
     expect(bags).toHaveBeenCalled()
     mock.click(button("menu"))
     mock.advanceFrames(2)
-    expect(G.GameMenuFrame:IsShown()).toBe(true)
+    expect(GameMenuFrame:IsShown()).toBe(true)
     tick()
     expect(button("menu").active).toBe(true)
-    HideUIPanel(G.GameMenuFrame)
+    HideUIPanel(GameMenuFrame)
     tick()
     expect(button("menu").active).toBe(false)
 end
 
 @test("the bags' state: SuuUI's bags, else Blizzard's combined or single bags")
 local function bagsOpen()
-    local item: any = nil
-    for _, it in ipairs(M:Items()) do if it.key == "bags" then item = it end end
+    local open: (() -> boolean)? = nil
+    for _, it in ipairs(M:Items()) do if it.key == "bags" then open = it.open end end
     local own = CreateFrame("Frame", "SuuUIBags", UIParent)
     own:Show()
-    expect(item.open()).toBe(true)
+    expect(assert(open)()).toBe(true)
     own:Hide()
-    expect(item.open()).toBe(false)
-    mock.setField(G, "SuuUIBags", nil)
-    expect(item.open()).toBe(false)
-    local single = G.ContainerFrame1
+    expect(assert(open)()).toBe(false)
+    mock.setField(_G, "SuuUIBags", nil)
+    expect(assert(open)()).toBe(false)
+    local single = asFrame(_G.ContainerFrame1)
     if single then
         single:Show()
-        expect(item.open()).toBe(true)
+        expect(assert(open)()).toBe(true)
         single:Hide()
     end
 end
@@ -126,15 +126,15 @@ local function alerts()
     M:Emit("SUUUI_SPELLS_TO_TRAIN", 0)
     expect(button("spellbook").alertText).toBeNil()
     mock.stub(C_Traits, "GetConfigIDByTreeID", function(_: number): number return 7143863 end)
-    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): any return { { quantity = 2 } } end)
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): unknown return { { quantity = 2 } } end)
     M:UpdateAlerts()
     expect(button("legacy").alertText).toBe("2 Legacy points to spend")
-    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): any return { { quantity = 1 } } end)
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): unknown return { { quantity = 1 } } end)
     M:UpdateAlerts()
     expect(button("legacy").alertText).toBe("1 Legacy point to spend")
     -- unreadable: none
-    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): any return { { quantity = mock.secret(3) } } end)
-    mock.stub(C_ClassTalents, "HasUnspentTalentPoints", function(): any return mock.secret(true) end)
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", function(_: number, _: number, _: boolean): unknown return { { quantity = mock.secret(3) } } end)
+    mock.stub(C_ClassTalents, "HasUnspentTalentPoints", function(): unknown return mock.secret(true) end)
     M:UpdateAlerts()
     expect(button("legacy").alertText).toBeNil()
     expect(button("talents").alertText).toBeNil()
@@ -156,21 +156,21 @@ end
 
 @test("the gear's wear on the Character button: the lowest piece's percent, ember once one breaks, the pieces in its tooltip")
 local function durability()
-    mock.stub(SuuUI, "Durability", function(): any
+    mock.stub(SuuUI, "Durability", function(): unknown
         return { state = "damaged", parts = { character = true }, lowest = { percent = 15 }, headline = "Badly damaged",
                  lines = { { "Legs", "15%" } } }
     end)
     M:UpdateDurability()
     local b = button("character")
     expect(b.count:GetText()).toBe("15%")
-    expect(#b.lines).toBe(2)
-    mock.stub(SuuUI, "Durability", function(): any
+    expect(#assert(b.lines)).toBe(2)
+    mock.stub(SuuUI, "Durability", function(): unknown
         return { state = "broken", parts = { character = true }, lowest = { percent = 0 }, headline = "Broken", lines = {} }
     end)
     M:Emit("SUUUI_DURABILITY_CHANGED")
     expect(b.count:GetText()).toBe("0%")
     -- fine, or the module off: nothing
-    mock.stub(SuuUI, "Durability", function(): any return nil end)
+    mock.stub(SuuUI, "Durability", function(): unknown return nil end)
     M:Emit("SUUUI_SERVICE_CHANGED", "durability")
     expect(b.badge:IsShown()).toBe(false)
     expect(b.lines).toBeNil()
@@ -194,7 +194,7 @@ end
 @test("a plugin's button: shown the first time, before the game menu; one you hid stays hidden; a built-in key ignored")
 local function plugins()
     local clicked = mock.spy(function() end)
-    local plugin: any = SuuUI.GetModule("micromenu")
+    local plugin = M
     plugin:AddMicroItem({ key = "planner", glyph = "map", label = "Planner", onClick = clicked })
     plugin:AddMicroItem({ key = "bags", glyph = "bag", label = "Other bags", onClick = function() end })
     local list = keys()
@@ -214,30 +214,30 @@ local function plugins()
     expect(has.planner2).toBe(true)
     -- in the settings' chips
     local row = SECTION.groups[1].rows[1]
-    local chips = row.build(CreateFrame("Frame", nil, UIParent), function(_: any) end)
+    local chips: unknown = row.build(CreateFrame("Frame", nil, UIParent), function(_: string[]) end)
     expect(chips ~= nil).toBe(true)
 end
 
 @test("SuuUI's own Talents and Collections windows when those modules are on")
 local function ownWindows()
-    local talents: any = SuuUI.GetModule("talents")
-    local collections: any = SuuUI.GetModule("collections")
+    local talents = SuuUI.GetModule("talents")
+    local collections = SuuUI.GetModule("collections")
     for _, it in ipairs(M:Items()) do
         if it.key == "talents" and talents and talents:Get("enabled") then
             expect(it.click).toBeNil()
             local toggled = mock.spy(function() end)
             mock.stub(SuuUI, "ToggleTalents", toggled)
-            it.onClick()
+            assert(it.onClick)()
             expect(toggled).toHaveBeenCalled()
-            expect(type(it.open())).toBe("boolean")
+            expect(type(assert(it.open)())).toBe("boolean")
         end
         if it.key == "collections" and collections and collections:Get("enabled") then
             expect(it.click).toBeNil()
             local toggled = mock.spy(function() end)
             mock.stub(SuuUI, "ToggleCollections", toggled)
-            it.onClick()
+            assert(it.onClick)()
             expect(toggled).toHaveBeenCalled()
-            local _ = it.open()
+            local _ = assert(it.open)()
         end
     end
 end
@@ -247,17 +247,16 @@ local function preview()
     local parent = CreateFrame("Frame", nil, UIParent)
     local view = M:PreviewView(parent)
     expect(view:GetParent()).toBe(parent)
-    expect(view.buttons.talents.alertText).toBe("Talent points to spend")
+    expect(assert(view.buttons.talents).alertText).toBe("Talent points to spend")
     M:Set("buttons", { "character", "menu" })
     view:Show()
-    expect(view.buttons.spellbook:IsShown()).toBe(false)
+    expect(assert(view.buttons.spellbook):IsShown()).toBe(false)
     M:Set("shows", "combat")
 end
 
 -- (last: the module off)
 @test("stopped: hidden, its anchor withdrawn")
 local function disabled()
-    local m: any = M
-    m:OnDisable()
+    M:OnDisable()
     expect(M.menu).never.toBeShown()
 end
