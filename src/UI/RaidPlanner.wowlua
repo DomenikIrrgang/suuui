@@ -42,14 +42,14 @@
 --   where: { slot = id } | { group = n } | { unplaced = true }
 
 import after from "wowlua:timer"
-import tokens as T from "/Core/Tokens"
+import tokens as T, TextStyle from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as controls from "/UI/Controls"
 import * as draw from "/UI/Draw"
 import * as uiIcon from "/UI/Icon"
 import * as inputs from "/UI/Inputs"
 import * as panel from "/UI/Panel"
-import WindowFrame from "/UI/Panel"
+import WindowFrame, Panel from "/UI/Panel"
 import * as selectModule from "/UI/Select"
 import * as uiText from "/UI/Text"
 import * as tooltip from "/UI/Tooltip"
@@ -64,7 +64,8 @@ local PAL_H = 18
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local ROLE_GLYPH: { [string]: string } = { TANK = "shield", HEALER = "plus", DAMAGER = "sword" }
 
-local function lineH(style: string): number return (T.type :: { [string]: any })[style].lineHeight end
+local styles: { [string]: TextStyle } = T.type
+local function lineH(style: string): number return assert(styles[style]).lineHeight end
 -- a slot card: the player's icon, then who and their spec on top, what the
 -- slot asks for under it
 local function cardH(): number return 3 + lineH("label") + lineH("caption") + 4 end
@@ -73,17 +74,99 @@ local function cardTextX(): number return 5 + cardIcon() + S["space-3"] end
 
 local CROP = 0.08
 local CLASS_ART = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
+-- the character creation tiles' coordinates by class (declared as a plain table)
+local CLASS_COORDS = (CLASS_ICON_TCOORDS or {}) :: { [string]: number[] }
+
+--------------------------------------------------------------------------------
+-- What the window draws (SetData) and reports (the callbacks)
+--------------------------------------------------------------------------------
+
+-- A setup's or a slot's ID (the module's: numbers, and "work").
+export type PlannerId = string | number
+-- A spec: the module's tree number (1-3), or a test's name.
+export type PlannerSpec = string | number
+-- A spec, class or role art: a texture's file or ID.
+export type PlannerArt = string | number
+
+export type PlannerStat = { n: number | string, label: string, warn?: boolean }
+export type PlannerSetup = { id: PlannerId, name?: string, meta?: string, loaded?: boolean, changed?: boolean }
+export type PaletteSpec = { spec: PlannerSpec, label: string, name?: string, role?: string, icon?: PlannerArt }
+export type PaletteClass = { class: string, name: string, specs?: PaletteSpec[] }
+-- state: "filled", "provisional", "open", "conflict" or "away"
+export type PlannerSlot = { id: PlannerId, req?: string, who?: string, class?: string, spec?: string, icon?: PlannerArt,
+                            iconClass?: string, state?: string, pinned?: boolean, player?: string, tip?: string }
+-- tone: "ok", "warn" or "open"
+export type PlannerChip = { text: string, tone?: string, tip?: string }
+export type PlannerGroup = { n: number, kind?: string, canAdd?: boolean, slots?: PlannerSlot[], chips?: PlannerChip[] }
+export type PlannerTip = { description?: string, lines?: tooltip.TooltipLine[] }
+export type PlannerListItem = { label?: string, detail?: string, n?: number | string, warn?: boolean, tip?: PlannerTip }
+export type PlannerPerson = { name?: string, class?: string, icon?: PlannerArt, known?: boolean, detail?: string }
+export type PlannerButton = { shown?: boolean, label?: string, enabled?: boolean, reason?: string }
+
+export type PlannerData = {
+    meta?: string,
+    stats?: PlannerStat[],
+    note?: string,
+    size?: number,
+    setups?: PlannerSetup[],
+    palette?: PaletteClass[],
+    groups?: PlannerGroup[],
+    raidWide?: PlannerListItem[],
+    raidWideMeta?: string,
+    raidWideEmpty?: string,
+    open?: PlannerListItem[],
+    unplaced?: PlannerPerson[],
+    unplacedMeta?: string,
+    hint?: string,
+    fill?: PlannerButton,
+    inspect?: PlannerButton,
+    arrange?: PlannerButton,
+}
+
+-- What is dragged: a spec (any of a class or a role), or a player (from a slot).
+export type DragSpec = { class?: string, spec?: PlannerSpec, role?: string }
+export type DragWhat = { spec?: DragSpec, player?: string, from?: PlannerId }
+-- Where it was dropped.
+export type DropWhere = { slot?: PlannerId, group?: number, unplaced?: boolean }
+-- The art a dragged thing shows.
+type DragArt = { icon?: PlannerArt, class?: string, known?: boolean }
+
+-- The slot editor (EditSlot): what the slot asks for, and the choices.
+export type SlotEditorDef = {
+    id: PlannerId,
+    title?: string,
+    meta?: string,
+    class?: string,
+    spec?: PlannerSpec,
+    role?: string,
+    label?: string,
+    who?: string,
+    classes?: selectModule.SelectOption<string>[],
+    specs?: inputs.SegmentedOption<PlannerSpec>[],
+    whoOptions?: selectModule.SelectOption<string>[],
+}
+-- What the slot editor changed (false: back to any).
+export type SlotChanges = { class?: string | false, spec?: PlannerSpec | false, role?: string | false, label?: string,
+                            pin?: string | false }
+
+-- The moves Arrange groups would make (ShowMoves).
+export type PlannerMove = { name?: string, class?: string, icon?: PlannerArt, known?: boolean, from?: number, to?: number }
+export type PlannerMoves = { meta?: string, moves?: PlannerMove[], note?: string }
+
+--------------------------------------------------------------------------------
+-- Art
+--------------------------------------------------------------------------------
 
 -- A player's art on a texture: their spec's icon, else their class's (the
 -- character creation tiles); none when neither is known.
-local function setArt(tex: any, icon: any, class: string?)
-    local coords = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
+local function setArt(tex: Texture, icon: PlannerArt?, class: string?)
+    local coords = class and CLASS_COORDS[class]
     if icon then
         tex:SetTexture(icon)
         tex:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
     elseif coords then
         tex:SetTexture(CLASS_ART)
-        tex:SetTexCoord(unpack(coords))
+        tex:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
     else
         tex:SetTexture(nil)
     end
@@ -92,7 +175,7 @@ end
 
 -- The same on a uiIcon.icon: faded while the spec isn't known, dimmed (`dim`)
 -- for what an open slot asks for.
-local function setPlayerIcon(f: any, icon: any, class: string?, known: any, dim: any)
+local function setPlayerIcon(f: uiIcon.Icon, icon: PlannerArt?, class: string?, known: boolean?, dim: boolean?)
     setArt(f.art, icon, class)
     f:SetState(dim and "dim" or "rest")
     f.art:SetAlpha(dim and 0.5 or ((known or icon) and 1 or 0.6))
@@ -100,33 +183,24 @@ end
 
 local function classToken(file: string?): string
     local t = file and ("class-" .. file:lower())
-    return (t and (T.color :: { [string]: any })[t]) and t or "ink"
+    local colors: { [string]: unknown } = T.color
+    if t and colors[t] ~= nil then return t end
+    return "ink"
 end
 
-local function pool(list: any[], i: number, make: () -> any): any
-    list[i] = list[i] or make()
-    list[i]:Show()
-    return list[i]
+-- The i-th of a list of reused frames (made by make() the first time), shown.
+local function pool<F extends Region>(list: F[], i: number, make: () -> F): F
+    local f = list[i]
+    if not f then
+        f = make()
+        list[i] = f
+    end
+    f:Show()
+    return f
 end
 
-local function hideFrom(list: any[], i: number)
+local function hideFrom<F extends Region>(list: F[], i: number)
     for k = i, #list do list[k]:Hide() end
-end
-
---------------------------------------------------------------------------------
--- Dragging: a card follows the cursor; the target under it lights up arcane
---------------------------------------------------------------------------------
-
--- A frame that can be dragged: what it carries comes from carry(frame).
-local function draggable(self: any, f: any, carry: any)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", function(b)
-        local what, text, token, art = carry(b)
-        if not what then return end
-        tooltip.hideTooltip()
-        self:StartDrag(what, text, token, art)
-    end)
-    f:SetScript("OnDragStop", function() self:StopDrag() end)
 end
 
 --------------------------------------------------------------------------------
@@ -134,177 +208,573 @@ end
 --------------------------------------------------------------------------------
 
 -- A small chip (the palette's specs, a group's buffs): caption text in a
--- hairline box, after a glyph or (glyph "icon") a spec's icon.
-local function chip(parent: any, glyph: string?): any
-    local b = CreateFrame("Button", nil, parent)
-    b:SetHeight(PAL_H)
-    b.bg = draw.fill(b, "surface-raised")
-    b.bg:SetAllPoints()
-    b.edge = draw.border(b, "gilt-faint")
-    if glyph then
-        b.glyph = b:CreateTexture(nil, "ARTWORK")
-        b.glyph:SetSize(10, 10)
-        b.glyph:SetPoint("LEFT", 4, 0)
-        if glyph ~= "icon" then
-            b.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
-            draw.paint(b.glyph, "ink-muted")
+-- hairline box, after a glyph or (glyph "icon") a spec's icon. What it
+-- carries when dragged: its class, spec, role and icon.
+export class PaletteChip extends Button
+    readonly bg: Texture
+    readonly edge: draw.Border
+    readonly glyph: Texture? = nil
+    readonly label: uiText.Text
+    readonly hasGlyph: boolean
+    -- what a drag carries
+    text: string = ""
+    class: string? = nil
+    spec: PlannerSpec? = nil
+    role: string? = nil
+    icon: PlannerArt? = nil
+
+    constructor(parent: Frame, glyph: string?)
+        super(nil, parent)
+        self.hasGlyph = glyph ~= nil
+        self:SetHeight(PAL_H)
+        self.bg = draw.fill(self, "surface-raised")
+        self.bg:SetAllPoints()
+        self.edge = draw.border(self, "gilt-faint")
+        if glyph then
+            local g = self:CreateTexture(nil, "ARTWORK")
+            g:SetSize(10, 10)
+            g:SetPoint("LEFT", 4, 0)
+            if glyph ~= "icon" then
+                g:SetTexture(GLYPHS .. glyph .. ".tga")
+                draw.paint(g, "ink-muted")
+            end
+            self.glyph = g
         end
+        self.label = uiText.text(self, "caption", "ink-muted")
+        self.label:SetPoint("LEFT", glyph and 17 or 4, 0)
+        self:SetScript("OnEnter", function() self.edge:SetColor("gilt"); self.label:SetColor("ink") end)
+        self:SetScript("OnLeave", function() self.edge:SetColor("gilt-faint"); self.label:SetColor("ink-muted") end)
     end
-    b.label = uiText.text(b, "caption", "ink-muted")
-    b.label:SetPoint("LEFT", glyph and 17 or 4, 0)
-    function b:SetText(text: string)
+
+    -- Its text, and a width to fit it.
+    function SetChipText(text: string)
         self.label:SetValue(text)
-        self:SetWidth(uiText.measureText("caption", text) + (glyph and 21 or 8))
+        self:SetWidth(uiText.measureText("caption", text) + (self.hasGlyph and 21 or 8))
     end
-    b:SetScript("OnEnter", function(self) self.edge:SetColor("gilt"); self.label:SetColor("ink") end)
-    b:SetScript("OnLeave", function(self) self.edge:SetColor("gilt-faint"); self.label:SetColor("ink-muted") end)
-    return b
 end
 
--- How a slot card looks in its state (and while a drag hovers it).
-local function styleCard(c: any)
-    local s = c.state or "filled"
-    local hover = c.dropHover
-    local open = s == "open" or s == "away"
-    c.fill:SetShown(hover or not open)
-    draw.paintFill(c.fill, hover and "arcane-soft" or "surface-raised")
-    c.edge:SetShown(hover or open or s == "conflict")
-    c.edge:SetColor(hover and "arcane" or "amber", (open and not hover) and 0.7 or nil)
-    c.who:SetColor(hover and "ink" or (s == "open" and "amber") or (s == "away" and "ink-muted") or classToken(c.class))
-    c.req:SetColor((s == "conflict" and not hover) and "amber" or ((open or hover) and "ink-muted") or "ink-faint")
+-- A group's buff chip.
+export class GroupChip extends Frame
+    readonly edge: draw.Border
+    readonly text: uiText.Text
+    tip: string? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(CHIP_H)
+        self.edge = draw.border(self, "gilt-faint")
+        self.text = uiText.text(self, "caption", "ink-muted")
+        self.text:SetPoint("CENTER", 0, 0)
+        self:EnableMouse(true)
+        self:SetScript("OnEnter", function()
+            local tip = self.tip
+            if tip then tooltip.showTooltip(self, { title = self.text:GetText(), description = tip }) end
+        end)
+        self:SetScript("OnLeave", function() tooltip.hideTooltip() end)
+    end
 end
 
-local function groupChip(g: any): any
-    local f = CreateFrame("Frame", nil, g)
-    f:SetHeight(CHIP_H)
-    f.edge = draw.border(f, "gilt-faint")
-    f.text = uiText.text(f, "caption", "ink-muted")
-    f.text:SetPoint("CENTER", 0, 0)
-    f:EnableMouse(true)
-    f:SetScript("OnEnter", function(self)
-        if self.tip then tooltip.showTooltip(self, { title = self.text:GetText(), description = self.tip }) end
-    end)
-    f:SetScript("OnLeave", function() tooltip.hideTooltip() end)
-    return f
+-- A setup in the left column.
+export class SetupRow extends Button
+    readonly fill: Texture
+    readonly edge: draw.Border
+    readonly name: uiText.Text
+    readonly changed: Texture
+    readonly meta: uiText.Text
+    id: PlannerId? = nil
+    loaded: boolean? = nil
+
+    constructor(planner: RaidPlanner)
+        super(nil, planner.left)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.fill = draw.fill(self, "surface-raised")
+        self.fill:SetAllPoints()
+        self.edge = draw.border(self, "gilt-line")
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("TOPLEFT", 7, -5)
+        self.name:SetJustifyH("LEFT")
+        self.changed = draw.diamond(self, 5, "ink")
+        self.changed:SetPoint("LEFT", self.name, "RIGHT", 6, 0)
+        self.meta = uiText.text(self, "caption", "ink-muted")
+        self.meta:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -1)
+        self.meta:SetJustifyH("LEFT")
+        self:SetScript("OnEnter", function() if not self.loaded then self.fill:Show(); self.fill:SetAlpha(0.5) end end)
+        self:SetScript("OnLeave", function() if not self.loaded then self.fill:Hide() end; self.fill:SetAlpha(1) end)
+        self:SetScript("OnClick", function(_: Button, button: string)
+            local id = self.id
+            if not id then return end
+            if button == "RightButton" then
+                local menu = planner.onSetupMenu
+                if menu then menu(id, self) end
+            else
+                local pick = planner.onSetup
+                if pick then pick(id) end
+            end
+        end)
+    end
 end
 
---------------------------------------------------------------------------------
--- The columns
---------------------------------------------------------------------------------
+-- A coverage or open-slot row in the right column.
+export class ListRow extends Frame
+    readonly rule: Texture
+    readonly mark: Texture
+    readonly label: uiText.Text
+    readonly n: uiText.Text
+    readonly detail: uiText.Text
+    tip: PlannerTip? = nil
 
-local function setupRow(self: any): any
-    local r = CreateFrame("Button", nil, self.left)
-    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    r.fill = draw.fill(r, "surface-raised")
-    r.fill:SetAllPoints()
-    r.edge = draw.border(r, "gilt-line")
-    r.name = uiText.text(r, "label", "ink")
-    r.name:SetPoint("TOPLEFT", 7, -5)
-    r.name:SetJustifyH("LEFT")
-    r.changed = draw.diamond(r, 5, "ink")
-    r.changed:SetPoint("LEFT", r.name, "RIGHT", 6, 0)
-    r.meta = uiText.text(r, "caption", "ink-muted")
-    r.meta:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
-    r.meta:SetJustifyH("LEFT")
-    r:SetScript("OnEnter", function(b) if not b.loaded then b.fill:Show(); b.fill:SetAlpha(0.5) end end)
-    r:SetScript("OnLeave", function(b) if not b.loaded then b.fill:Hide() end; b.fill:SetAlpha(1) end)
-    r:SetScript("OnClick", function(b, button)
-        if not b.id then return end
-        if button == "RightButton" then
-            if self.onSetupMenu then self.onSetupMenu(b.id, b) end
-        elseif self.onSetup then
-            self.onSetup(b.id)
-        end
-    end)
-    return r
-end
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.rule = draw.fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("TOPLEFT")
+        self.rule:SetPoint("TOPRIGHT")
+        self.mark = draw.diamond(self, 5, "ink-muted")
+        self.label = uiText.text(self, "label", "ink")
+        self.label:SetPoint("TOPLEFT", 14, -4)
+        self.label:SetJustifyH("LEFT")
+        self.mark:SetPoint("CENTER", self, "TOPLEFT", 5, -(4 + lineH("label") / 2))
+        self.n = uiText.text(self, "numeric", "ink")
+        self.n:SetPoint("TOPRIGHT", 0, -4)
+        self.detail = uiText.text(self, "caption", "ink-muted")
+        self.detail:SetPoint("TOPLEFT", self.label, "BOTTOMLEFT", 0, 0)
+        self.detail:SetJustifyH("LEFT")
+        self.detail:SetWordWrap(true)
+        self:EnableMouse(true)
+        self:SetScript("OnEnter", function()
+            local tip = self.tip
+            if tip then tooltip.showTooltip(self, { title = self.label:GetText(), description = tip.description, lines = tip.lines }) end
+        end)
+        self:SetScript("OnLeave", function() tooltip.hideTooltip() end)
+    end
 
-local function listRow(parent: any): any
-    local r = CreateFrame("Frame", nil, parent)
-    r.rule = draw.fill(r, "gilt-faint", "ARTWORK")
-    r.rule:SetHeight(1)
-    r.rule:SetPoint("TOPLEFT")
-    r.rule:SetPoint("TOPRIGHT")
-    r.mark = draw.diamond(r, 5, "ink-muted")
-    r.label = uiText.text(r, "label", "ink")
-    r.label:SetPoint("TOPLEFT", 14, -4)
-    r.label:SetJustifyH("LEFT")
-    r.mark:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
-    r.n = uiText.text(r, "numeric", "ink")
-    r.n:SetPoint("TOPRIGHT", 0, -4)
-    r.detail = uiText.text(r, "caption", "ink-muted")
-    r.detail:SetPoint("TOPLEFT", r.label, "BOTTOMLEFT", 0, 0)
-    r.detail:SetJustifyH("LEFT")
-    r.detail:SetWordWrap(true)
-    r:EnableMouse(true)
-    r:SetScript("OnEnter", function(self)
-        if self.tip then tooltip.showTooltip(self, { title = self.label:GetText(), description = self.tip.description, lines = self.tip.lines }) end
-    end)
-    r:SetScript("OnLeave", function() tooltip.hideTooltip() end)
-    return r
-end
-
--- One coverage or open-slot row; returns its height.
-local function drawListRow(r: any, item: any, first: boolean, w: number): number
-    r.rule:SetShown(not first)
-    r.mark:SetPoint("CENTER", r, "TOPLEFT", 5, -(4 + lineH("label") / 2))
-    local warn = item.warn
-    r.mark:SetSize(warn and 6 or 5, warn and 6 or 5)
-    draw.paint(r.mark, warn and "amber" or "ink-muted")
-    r.label:SetValue(item.label or "")
-    r.label:SetColor(warn and "amber" or "ink")
-    r.n:SetValue(item.n and tostring(item.n) or "")
-    r.n:SetColor(warn and "amber" or "ink")
-    local nW = item.n and (uiText.measureText("numeric", tostring(item.n)) + S["space-4"]) or 0
-    r.label:SetWidth(w - 14 - nW)
-    r.detail:SetFixedWidth(w - 14 - nW)
-    r.detail:SetValue(item.detail or "")
-    r.detail:SetShown((item.detail or "") ~= "")
-    r.tip = item.tip
-    local h = 4 + lineH("label") + ((item.detail or "") ~= "" and r.detail:GetStringHeight() or 0) + 4
-    r:SetSize(w, h)
-    return h
+    -- Draws `item` at width w (first: no rule over it); returns its height.
+    function Draw(item: PlannerListItem, first: boolean, w: number): number
+        self.rule:SetShown(not first)
+        self.mark:SetPoint("CENTER", self, "TOPLEFT", 5, -(4 + lineH("label") / 2))
+        local warn = item.warn
+        self.mark:SetSize(warn and 6 or 5, warn and 6 or 5)
+        draw.paint(self.mark, warn and "amber" or "ink-muted")
+        self.label:SetValue(item.label or "")
+        self.label:SetColor(warn and "amber" or "ink")
+        local n = item.n
+        self.n:SetValue(n and tostring(n) or "")
+        self.n:SetColor(warn and "amber" or "ink")
+        local nW = n and (uiText.measureText("numeric", tostring(n)) + S["space-4"]) or 0
+        self.label:SetWidth(w - 14 - nW)
+        self.detail:SetFixedWidth(w - 14 - nW)
+        local detail = item.detail or ""
+        self.detail:SetValue(detail)
+        self.detail:SetShown(detail ~= "")
+        self.tip = item.tip
+        local h = 4 + lineH("label") + (detail ~= "" and self.detail:GetStringHeight() or 0) + 4
+        self:SetSize(w, h)
+        return h
+    end
 end
 
 local PERSON_ICON = 16
 local PERSON_X = PERSON_ICON + S["space-3"]
 
-local function personRow(self: any): any
-    local r = CreateFrame("Button", nil, self.unplacedZone)
-    r:RegisterForClicks("RightButtonUp")
-    r.rule = draw.fill(r, "gilt-faint", "ARTWORK")
-    r.rule:SetHeight(1)
-    r.rule:SetPoint("TOPLEFT")
-    r.rule:SetPoint("TOPRIGHT")
-    r.icon = uiIcon.icon(r, PERSON_ICON)
-    r.icon:SetPoint("TOPLEFT", 0, -4)
-    r.name = uiText.text(r, "label", "ink")
-    r.name:SetPoint("TOPLEFT", PERSON_X, -4)
-    r.detail = uiText.text(r, "caption", "ink-muted")
-    r.detail:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, 0)
-    r.detail:SetJustifyH("LEFT")
-    r.detail:SetWordWrap(true)
-    r:SetScript("OnClick", function(b, button) if self.onPerson then self.onPerson(b.person, b, button) end end)
-    draggable(self, r, function(b) return { player = b.person }, b.person, classToken(b.class), { icon = b.personIcon, class = b.class, known = b.known } end)
-    return r
+-- A player without a slot (right column).
+export class PersonRow extends Button
+    readonly rule: Texture
+    readonly icon: uiIcon.Icon
+    readonly name: uiText.Text
+    readonly detail: uiText.Text
+    person: string? = nil
+    class: string? = nil
+    -- (the icon value in a field of its own: `icon` is the row's icon widget)
+    personIcon: PlannerArt? = nil
+    known: boolean? = nil
+
+    constructor(planner: RaidPlanner)
+        super(nil, planner.unplacedZone)
+        self:RegisterForClicks("RightButtonUp")
+        self.rule = draw.fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("TOPLEFT")
+        self.rule:SetPoint("TOPRIGHT")
+        self.icon = uiIcon.icon(self, PERSON_ICON)
+        self.icon:SetPoint("TOPLEFT", 0, -4)
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("TOPLEFT", PERSON_X, -4)
+        self.detail = uiText.text(self, "caption", "ink-muted")
+        self.detail:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, 0)
+        self.detail:SetJustifyH("LEFT")
+        self.detail:SetWordWrap(true)
+        self:SetScript("OnClick", function(_: Button, button: string)
+            local person, on = self.person, planner.onPerson
+            if person and on then on(person, self, button) end
+        end)
+        planner:Draggable(self, function(): (DragWhat?, string?, string?, DragArt?)
+            return { player = self.person }, self.person, classToken(self.class),
+                { icon = self.personIcon, class = self.class, known = self.known }
+        end)
+    end
 end
 
---------------------------------------------------------------------------------
--- Drawing it all
---------------------------------------------------------------------------------
+-- A slot card: who fills the slot and what it asks for; a drop target.
+export class SlotCard extends Button
+    readonly planner: RaidPlanner
+    readonly fill: Texture
+    readonly edge: draw.Border
+    readonly icon: uiIcon.Icon
+    readonly who: uiText.Text
+    readonly pin: Texture
+    readonly spec: uiText.Text
+    readonly dots: Texture[] = {}
+    readonly req: uiText.Text
+    slot: PlannerSlot? = nil
+    state: string? = nil
+    class: string? = nil
+    dropHover: boolean? = nil
+    where: DropWhere? = nil
+
+    constructor(planner: RaidPlanner, g: GroupBox)
+        super(nil, g)
+        self.planner = planner
+        self:SetHeight(cardH())
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.fill = draw.fill(self, "surface-raised")
+        self.fill:SetAllPoints()
+        self.edge = draw.border(self, "amber")
+        self.icon = uiIcon.icon(self, cardIcon())
+        self.who = uiText.text(self, "label", "ink")
+        self.who:SetPoint("TOPLEFT", cardTextX(), -3)
+        self.who:SetJustifyH("LEFT")
+        local pin = self:CreateTexture(nil, "ARTWORK")
+        pin:SetTexture(GLYPHS .. "pushpin.tga")
+        pin:SetSize(9, 9)
+        pin:SetPoint("LEFT", self.who, "RIGHT", S["space-2"], 0)
+        draw.paint(pin, "gilt-text")
+        self.pin = pin
+        self.spec = uiText.text(self, "caption", "ink-muted")
+        self.spec:SetPoint("TOPRIGHT", -6, -4)
+        -- "?": provisional until inspected, underlined in dots
+        for i = 1, 3 do
+            local d = draw.fill(self, "ink-muted", "ARTWORK")
+            d:SetSize(1, 1)
+            d:SetPoint("TOPLEFT", self.spec, "BOTTOMLEFT", (i - 1) * 2.5, 0)
+            self.dots[i] = d
+        end
+        self.req = uiText.text(self, "caption", "ink-faint")
+        self.req:SetPoint("TOPLEFT", cardTextX(), -(3 + lineH("label")))
+        self.req:SetJustifyH("LEFT")
+        self:SetScript("OnClick", function(_: Button, button: string)
+            local s, on = self.slot, planner.onSlot
+            if s and on then on(s.id, self, button) end
+        end)
+        self:SetScript("OnEnter", function()
+            if planner.dragging then return end
+            if not self.dropHover and self.state ~= "open" and self.state ~= "away" then
+                self.edge:SetShown(true)
+                self.edge:SetColor("gilt-line")
+            end
+            local s = self.slot
+            if s then tooltip.showTooltip(self, { title = s.who or s.req, subtitle = s.who and s.req or nil, description = s.tip }) end
+        end)
+        self:SetScript("OnLeave", function() self:Style(); tooltip.hideTooltip() end)
+        planner:Draggable(self, function(): (DragWhat?, string?, string?, DragArt?)
+            local s = self.slot
+            local player = s and s.player
+            if not (s and player) then return nil end
+            return { player = player, from = s.id }, player, classToken(s.class),
+                { icon = s.icon, class = s.iconClass or s.class, known = s.spec ~= "?" }
+        end)
+    end
+
+    -- How it looks in its state (and while a drag hovers it).
+    function Style()
+        local s = self.state or "filled"
+        local hover = self.dropHover == true
+        local open = s == "open" or s == "away"
+        self.fill:SetShown(hover or not open)
+        draw.paintFill(self.fill, hover and "arcane-soft" or "surface-raised")
+        self.edge:SetShown(hover or open or s == "conflict")
+        self.edge:SetColor(hover and "arcane" or "amber", (open and not hover) and 0.7 or nil)
+        self.who:SetColor(hover and "ink" or (s == "open" and "amber") or (s == "away" and "ink-muted") or classToken(self.class))
+        self.req:SetColor((s == "conflict" and not hover) and "amber" or ((open or hover) and "ink-muted") or "ink-faint")
+    end
+
+    function SetDropHover(on: boolean)
+        self.dropHover = on
+        self:Style()
+    end
+
+    -- Shows slot `s` at width w.
+    function Fill(s: PlannerSlot, w: number)
+        self.slot = s
+        self.state, self.class = s.state, s.class
+        self:SetSize(w, cardH())
+        -- the player's spec icon (their class's while it's "?"); an open or
+        -- away slot: what it asks for, dimmed, or an empty well
+        local open = s.state == "open" or s.state == "away"
+        local size = cardIcon()
+        self.icon:SetSize(size, size)
+        self.icon:ClearAllPoints()
+        self.icon:SetPoint("TOPLEFT", 5, -math.floor((cardH() - size) / 2))
+        setPlayerIcon(self.icon, s.icon, s.iconClass or s.class, s.spec ~= "?", open)
+        self.who:SetValue(s.who or "Open")
+        self.pin:SetShown(s.pinned == true)
+        local spec = s.spec or ""
+        self.spec:SetValue(spec)
+        local q = spec == "?"
+        self.spec:SetColor(q and "ink" or "ink-muted")
+        for _, d in ipairs(self.dots) do d:SetShown(q) end
+        self.req:SetValue(s.req or "")
+        -- placed from the text styles each time (a theme can change them)
+        local x = cardTextX()
+        self.who:SetPoint("TOPLEFT", x, -3)
+        self.req:SetPoint("TOPLEFT", x, -(3 + lineH("label")))
+        -- the name and what it asks for stop short of the spec and the edge
+        local specW = spec ~= "" and (uiText.measureText("caption", spec) + S["space-3"]) or 0
+        -- (as wide as the name, so the pin sits right after it)
+        local room = math.max(10, w - x - 6 - specW - (s.pinned and 13 or 0))
+        self.who:SetWidth(math.min(room, uiText.measureText("label", s.who or "Open") + 1))
+        self.req:SetWidth(w - x - 6)
+        self.dropHover = false
+        self:Style()
+    end
+end
+
+-- A group's Add slot: a click makes an open slot, a drop one that asks for it.
+export class AddSlot extends Button
+    readonly edge: draw.Border
+    readonly fill: Texture
+    readonly label: uiText.Text
+    where: DropWhere? = nil
+
+    constructor(planner: RaidPlanner, g: GroupBox)
+        super(nil, g)
+        self:SetHeight(22)
+        self.edge = draw.border(self, "gilt-faint")
+        self.fill = draw.fill(self, "arcane-soft")
+        self.fill:SetAllPoints()
+        self.fill:Hide()
+        self.label = uiText.text(self, "caption", "ink-faint")
+        self.label:SetPoint("CENTER")
+        self.label:SetValue("+ Add slot")
+        self:SetScript("OnEnter", function() if not planner.dragging then self.label:SetColor("ink-muted") end end)
+        self:SetScript("OnLeave", function() self.label:SetColor("ink-faint") end)
+        self:SetScript("OnClick", function()
+            local add = planner.onAdd
+            if add then add(g.n, self) end
+        end)
+    end
+
+    function SetDropHover(on: boolean)
+        self.fill:SetShown(on)
+        self.edge:SetColor(on and "arcane" or "gilt-faint")
+        self.label:SetColor(on and "ink" or "ink-faint")
+    end
+end
+
+-- A group of five: its head, slot cards, Add slot, its party-wide buffs.
+export class GroupBox extends Frame
+    readonly title: uiText.Text
+    readonly kind: uiText.Text
+    readonly cards: SlotCard[] = {}
+    readonly chips: GroupChip[] = {}
+    readonly add: AddSlot
+    readonly rule: Texture
+    n: number = 0
+    h: number = 0
+
+    constructor(planner: RaidPlanner)
+        super(nil, planner.mid)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        draw.border(self, "gilt-faint")
+        self.title = uiText.text(self, "header", "gilt-text")
+        self.title:SetPoint("TOPLEFT", 7, -6)
+        self.kind = uiText.text(self, "caption", "ink-muted")
+        self.kind:SetPoint("TOPRIGHT", -7, -7)
+        self.add = AddSlot.new(planner, self)
+        self.rule = draw.fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+    end
+end
+
+-- Without a slot: a drop here lets a placed player go.
+export class UnplacedZone extends Frame
+    readonly fill: Texture
+    readonly empty: uiText.Text
+    where: DropWhere? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(RIGHT_W, 24)
+        self.fill = draw.fill(self, "arcane-soft")
+        self.fill:SetAllPoints()
+        self.fill:Hide()
+        self.empty = uiText.text(self, "caption", "ink-faint")
+        self.empty:SetPoint("TOPLEFT", 0, -4)
+        self.empty:SetValue("Nobody: everyone has a slot.")
+    end
+
+    function SetDropHover(on: boolean) self.fill:SetShown(on) end
+end
+
+-- Anything a drag can be dropped on.
+type DropTarget = SlotCard | AddSlot | UnplacedZone
+
+-- A class's row in the palette: its name (any of the class) and its specs.
+export class PaletteRow extends Frame
+    readonly diamond: Texture
+    readonly name: PaletteChip
+    readonly specs: PaletteChip[] = {}
+
+    constructor(planner: RaidPlanner)
+        super(nil, planner.left)
+        self:SetSize(LEFT_W, PAL_H)
+        self.diamond = draw.diamond(self, 5, "ink")
+        self.diamond:SetPoint("LEFT", 2, 0)
+        local name = PaletteChip.new(self)
+        name.bg:Hide()
+        name.edge:SetShown(false)
+        name:SetPoint("LEFT", 8, 0)
+        name:SetScript("OnEnter", nil)
+        name:SetScript("OnLeave", nil)
+        planner:Draggable(name, function(): (DragWhat?, string?, string?, DragArt?)
+            return { spec = { class = name.class } }, name.text, classToken(name.class), { class = name.class, known = true }
+        end)
+        self.name = name
+        for k = 1, 3 do
+            -- each spec with its icon
+            local s = PaletteChip.new(self, "icon")
+            planner:Draggable(s, function(): (DragWhat?, string?, string?, DragArt?)
+                return { spec = { class = s.class, spec = s.spec, role = s.role } }, s.text, classToken(s.class),
+                    { icon = s.icon, class = s.class, known = true }
+            end)
+            self.specs[k] = s
+        end
+    end
+end
+
+-- A count in the status line.
+export class StatItem extends Frame
+    readonly n: uiText.Text
+    readonly label: uiText.Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.n = uiText.text(self, "numeric", "ink")
+        self.n:SetPoint("LEFT")
+        self.label = uiText.text(self, "caption", "ink-muted")
+        self.label:SetPoint("LEFT", self.n, "RIGHT", S["space-2"], 0)
+    end
+end
+
+-- The card that follows the cursor while dragging.
+export class DragGhost extends Frame
+    readonly icon: uiIcon.Icon
+    readonly text: uiText.Text
+
+    constructor(planner: RaidPlanner)
+        super(nil, UIParent)
+        self:SetFrameStrata("TOOLTIP")
+        self:SetHeight(22)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "arcane")
+        self.icon = uiIcon.icon(self, 16)
+        self.icon:SetPoint("LEFT", 3, 0)
+        self.text = uiText.text(self, "label", "ink")
+        self:SetScript("OnUpdate", function()
+            local scale = self:GetEffectiveScale()
+            local x, y = GetCursorPosition()
+            self:ClearAllPoints()
+            self:SetPoint("LEFT", UIParent, "BOTTOMLEFT", x / scale + 12, y / scale)
+            local over = planner:TargetUnderCursor()
+            if over ~= planner.over then
+                local was = planner.over
+                if was then was:SetDropHover(false) end
+                if over then over:SetDropHover(true) end
+                planner.over = over
+            end
+        end)
+    end
+end
 
 --------------------------------------------------------------------------------
 -- The slot editor: what a slot asks for, beside its card
 --------------------------------------------------------------------------------
 
-local ROLES: any[] = { { value = "any", label = "Any" }, { value = "TANK", label = "Tank" },
+local ROLES: inputs.SegmentedOption<string>[] = { { value = "any", label = "Any" }, { value = "TANK", label = "Tank" },
                 { value = "HEALER", label = "Healer" }, { value = "DAMAGER", label = "Damage" } }
 local EDITOR_W = 320
 
-local function field(parent: any, label: string): any
+local function field(parent: Frame, label: string): uiText.Text
     local t = uiText.text(parent, "caption", "ink-muted")
     t:SetValue(label)
     return t
+end
+
+export class SlotEditor extends Panel
+    readonly planner: RaidPlanner
+    def: SlotEditorDef? = nil
+    readonly classLabel: uiText.Text
+    readonly classSelect: selectModule.Select<string>
+    readonly specLabel: uiText.Text
+    -- one switch per class (its three specs), made when first needed
+    readonly specs: { [string]: inputs.Segmented<PlannerSpec> } = {}
+    readonly roleLabel: uiText.Text
+    readonly role: inputs.Segmented<string>
+    readonly labelLabel: uiText.Text
+    readonly labelField: inputs.TextField
+    readonly whoLabel: uiText.Text
+    readonly whoSelect: selectModule.Select<string>
+    readonly remove: controls.SuuButton
+    readonly done: controls.SuuButton
+
+    constructor(planner: RaidPlanner)
+        super(planner, { title = "Slot", closable = true, solid = true, width = EDITOR_W })
+        self.planner = planner
+        self:SetFrameLevel(planner:GetFrameLevel() + 60)
+        self:EnableMouse(true)
+        local b = self.body
+        local inner = EDITOR_W - S["space-5"] * 2
+        self.classLabel = field(b, "Class")
+        self.classSelect = selectModule.select(b, { options = {}, width = inner,
+            onChange = function(v: string) self:Send({ class = v ~= "any" and v or false }) end })
+        self.specLabel = field(b, "Spec")
+        self.roleLabel = field(b, "Role")
+        self.role = inputs.segmented(b, { options = ROLES, onChange = function(v: string) self:Send({ role = v ~= "any" and v or false }) end })
+        self.labelLabel = field(b, "Label (optional)")
+        self.labelField = inputs.textField(b, { width = inner, placeholder = "Main tank",
+            onChange = function(text: string?) self:Send({ label = strtrim(text or "") }) end })
+        self.whoLabel = field(b, "Who")
+        self.whoSelect = selectModule.select(b, { options = {}, width = inner,
+            onChange = function(v: string) self:Send({ pin = v ~= "any" and v or false }) end })
+        self.remove = controls.button(b, { text = "Remove slot", onClick = function()
+            local def = self.def
+            self:Hide()
+            local remove = planner.onSlotRemove
+            if def and remove then remove(def.id) end
+        end })
+        self.done = controls.button(b, { text = "Done", variant = "primary", onClick = function() self:Hide() end })
+        self:HookScript("OnHide", function() self.labelField.edit:ClearFocus() end)
+        self:Hide()
+    end
+
+    -- Reports a change to the slot being edited.
+    function Send(changes: SlotChanges)
+        local def, change = self.def, self.planner.onSlotChange
+        if def and change then change(def.id, changes) end
+    end
+
+    -- The spec switch for `class` (any: "any"), shown, the others hidden.
+    function SpecSwitch(class: string?, options: inputs.SegmentedOption<PlannerSpec>[]): inputs.Segmented<PlannerSpec>
+        local key = class or "any"
+        local switch = self.specs[key]
+        if not switch then
+            switch = inputs.segmented(self.body, { options = options, onChange = function(v: PlannerSpec)
+                self:Send({ spec = v ~= "any" and v or false })
+            end })
+            self.specs[key] = switch
+        end
+        for k, s in pairs(self.specs) do s:SetShown(k == key) end
+        return switch
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -313,57 +783,126 @@ end
 
 local MOVES_W = 340
 
+-- A move in the list.
+export class MoveRow extends Frame
+    readonly icon: uiIcon.Icon
+    readonly name: uiText.Text
+    readonly from: uiText.Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(20)
+        self.icon = uiIcon.icon(self, PERSON_ICON)
+        self.icon:SetPoint("LEFT", 0, 0)
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("LEFT", PERSON_X, 0)
+        self.name:SetJustifyH("LEFT")
+        self.from = uiText.text(self, "caption", "ink-muted")
+        self.from:SetPoint("RIGHT")
+    end
+end
+
+export class MovesPanel extends Panel
+    readonly rows: MoveRow[] = {}
+    readonly note: uiText.Text
+    readonly go: controls.SuuButton
+    readonly cancel: controls.SuuButton
+    onConfirm: (() -> ())? = nil
+
+    constructor(planner: RaidPlanner)
+        super(planner, { title = "Arrange groups", closable = true, solid = true, width = MOVES_W })
+        self:SetFrameLevel(planner:GetFrameLevel() + 60)
+        self:EnableMouse(true)
+        self.note = uiText.text(self.body, "caption", "ink-muted")
+        self.note:SetWordWrap(true)
+        self.note:SetJustifyH("LEFT")
+        self.go = controls.button(self.body, { text = "Move", variant = "primary", onClick = function()
+            local fn = self.onConfirm
+            self:Hide()
+            if fn then fn() end
+        end })
+        self.cancel = controls.button(self.body, { text = "Cancel", onClick = function() self:Hide() end })
+        self:Hide()
+    end
+end
+
 --------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
 
-local planners: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+local planners: { [RaidPlanner]: boolean } = setmetatable({}, { __mode = "k" })
 -- a theme's line heights: everything laid out again
 events.on("SUUUI_THEME_CHANGED", function()
     for w in pairs(planners) do if w.data and w:IsShown() then w:Draw() end end
 end, "UI.RaidPlanner")
 
+-- What carry(frame) gives a drag: what it carries, its text, colour and art.
+type Carry = () -> (DragWhat?, string?, string?, DragArt?)
+
 export class RaidPlanner extends WindowFrame
     status: Frame
-    stats: any
-    note: any
+    stats: StatItem[] = {}
+    note: uiText.Text
     left: Frame
     mid: Frame
     right: Frame
-    setupsHead: any
-    sizes: any
-    setupRows: any
-    renameField: any
-    renaming: any? = nil
+    setupsHead: panel.SectionHeader
+    sizes: inputs.Segmented<number>
+    setupRows: SetupRow[] = {}
+    renameField: inputs.TextField
+    -- the setup the rename field is for
+    renameId: PlannerId? = nil
+    renaming: PlannerId? = nil
     newRow: Button
-    tools: any
-    paletteHead: any
-    roleChips: any
-    palRows: any
-    groupFrames: any
-    raidHead: any
-    raidRows: any
-    raidEmpty: any
-    openHead: any
-    openRows: any
-    openEmpty: any
-    unplacedHead: any
-    unplacedZone: Frame
-    personRows: any
-    arrange: any
-    inspect: any
-    fill: any
-    hint: any
-    dragging: any? = nil
-    over: any? = nil
-    ghost: any? = nil
-    data: any? = nil
-    editor: any? = nil
-    movesPanel: any? = nil
+    newLabel: uiText.Text
+    tools: controls.SuuButton[] = {}
+    paletteHead: panel.SectionHeader
+    roleChips: PaletteChip[] = {}
+    palRows: PaletteRow[] = {}
+    groupFrames: GroupBox[] = {}
+    raidHead: panel.SectionHeader
+    raidRows: ListRow[] = {}
+    raidEmpty: uiText.Text
+    openHead: panel.SectionHeader
+    openRows: ListRow[] = {}
+    openEmpty: uiText.Text
+    unplacedHead: panel.SectionHeader
+    unplacedZone: UnplacedZone
+    personRows: PersonRow[] = {}
+    arrange: controls.SuuButton
+    inspect: controls.SuuButton
+    fill: controls.SuuButton
+    hint: uiText.Text
+    dragging: DragWhat? = nil
+    over: DropTarget? = nil
+    ghost: DragGhost? = nil
+    data: PlannerData? = nil
+    dirty: boolean? = nil
+    editor: SlotEditor? = nil
+    movesPanel: MovesPanel? = nil
+    -- what the module does when something is done (see the header)
+    onSize: ((size: number) -> ())? = nil
+    onSetup: ((id: PlannerId) -> ())? = nil
+    onSetupMenu: ((id: PlannerId, owner: Frame) -> ())? = nil
+    onNew: ((owner: Frame) -> ())? = nil
+    onRename: ((id: PlannerId, text: string) -> ())? = nil
+    onSave: (() -> ())? = nil
+    onSaveAsNew: (() -> ())? = nil
+    onDuplicate: (() -> ())? = nil
+    onDelete: (() -> ())? = nil
+    onSlot: ((id: PlannerId, owner: Frame, button: string) -> ())? = nil
+    onAdd: ((group: number, owner: Frame) -> ())? = nil
+    onDrop: ((what: DragWhat, where: DropWhere) -> ())? = nil
+    onPerson: ((name: string, owner: Frame, button: string) -> ())? = nil
+    onSlotChange: ((id: PlannerId, changes: SlotChanges) -> ())? = nil
+    onSlotRemove: ((id: PlannerId) -> ())? = nil
+    onInspect: (() -> ())? = nil
+    onArrange: (() -> ())? = nil
+    onFill: (() -> ())? = nil
 
-    constructor(parent: any)
+    constructor(parent: Frame)
         super(parent, { name = "SuuUIRaidPlanner", title = "Raid planner", width = WIDTH, height = HEIGHT,
-            footer = true, onClose = function(win: any) win:Hide() end })
+            footer = true, onClose = function(win: Frame) win:Hide() end })
         self:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
         local c = self.content
         local contentW = WIDTH - S["space-5"] * 2
@@ -373,7 +912,6 @@ export class RaidPlanner extends WindowFrame
         self.status = CreateFrame("Frame", nil, c)
         self.status:SetPoint("TOPLEFT")
         self.status:SetSize(contentW, 20)
-        self.stats = {}
         self.note = uiText.text(self.status, "caption", "ink-muted")
         self.note:SetPoint("RIGHT")
 
@@ -391,75 +929,74 @@ export class RaidPlanner extends WindowFrame
         -- left: setups, then the palette
         self.setupsHead = panel.sectionHeader(self.left, "Setups", "", LEFT_W)
         self.sizes = inputs.segmented(self.left, { options = { { value = 40, label = "40" }, { value = 20, label = "20" }, { value = 10, label = "10" } },
-            onChange = function(v: any) if self.onSize then self.onSize(v) end end })
-        self.setupRows = {}
+            onChange = function(v: number)
+                local size = self.onSize
+                if size then size(v) end
+            end })
         self.renameField = inputs.textField(self.left, { width = LEFT_W, onChange = function(text: string?)
-            local id = self.renameField.id
+            local id = self.renameId
             self.renaming = nil
-            if id and self.onRename then self.onRename(id, strtrim(text or "")) end
+            local rename = self.onRename
+            if id and rename then rename(id, strtrim(text or "")) end
         end })
         self.renameField.edit:HookScript("OnEditFocusLost", function()
             after(0, function() if self.renaming then self:Rename(nil) end end)
         end)
         self.renameField:Hide()
-        self.newRow = CreateFrame("Button", nil, self.left)
-        self.newRow:SetSize(LEFT_W, 24)
-        self.newRow.label = uiText.text(self.newRow, "caption", "ink-muted")
-        self.newRow.label:SetPoint("LEFT", 7, 0)
-        self.newRow.label:SetValue("+ New setup")
-        self.newRow:SetScript("OnEnter", function(b) b.label:SetColor("ink") end)
-        self.newRow:SetScript("OnLeave", function(b) b.label:SetColor("ink-muted") end)
-        self.newRow:SetScript("OnClick", function(b) if self.onNew then self.onNew(b) end end)
+        local newRow = CreateFrame("Button", nil, self.left)
+        newRow:SetSize(LEFT_W, 24)
+        local newLabel = uiText.text(newRow, "caption", "ink-muted")
+        newLabel:SetPoint("LEFT", 7, 0)
+        newLabel:SetValue("+ New setup")
+        newRow:SetScript("OnEnter", function() newLabel:SetColor("ink") end)
+        newRow:SetScript("OnLeave", function() newLabel:SetColor("ink-muted") end)
+        newRow:SetScript("OnClick", function(b: Button)
+            local new = self.onNew
+            if new then new(b) end
+        end)
+        self.newRow, self.newLabel = newRow, newLabel
         local bw = (LEFT_W - S["space-2"]) / 2
+        local function call(fn: () -> (() -> ())?): () -> ()
+            return function()
+                local f = fn()
+                if f then f() end
+            end
+        end
         self.tools = {
-            controls.button(self.left, { text = "Save", variant = "primary", width = bw, onClick = function() if self.onSave then self.onSave() end end }),
-            controls.button(self.left, { text = "Save as new", width = bw, onClick = function() if self.onSaveAsNew then self.onSaveAsNew() end end }),
-            controls.button(self.left, { text = "Duplicate", width = bw, onClick = function() if self.onDuplicate then self.onDuplicate() end end }),
-            controls.button(self.left, { text = "Delete", width = bw, onClick = function() if self.onDelete then self.onDelete() end end }),
+            controls.button(self.left, { text = "Save", variant = "primary", width = bw, onClick = call(function(): (() -> ())? return self.onSave end) }),
+            controls.button(self.left, { text = "Save as new", width = bw, onClick = call(function(): (() -> ())? return self.onSaveAsNew end) }),
+            controls.button(self.left, { text = "Duplicate", width = bw, onClick = call(function(): (() -> ())? return self.onDuplicate end) }),
+            controls.button(self.left, { text = "Delete", width = bw, onClick = call(function(): (() -> ())? return self.onDelete end) }),
         }
         self.paletteHead = panel.sectionHeader(self.left, "Slot palette", "drag onto a slot", LEFT_W)
-        self.roleChips = {}
         for _, r in ipairs({ { "TANK", "Any tank" }, { "HEALER", "Any healer" }, { "DAMAGER", "Any damage" } }) do
-            local b = chip(self.left, ROLE_GLYPH[r[1]])
-            b:SetText(r[2])
+            local b = PaletteChip.new(self.left, ROLE_GLYPH[r[1]])
+            b:SetChipText(r[2])
             b.role, b.text = r[1], r[2]
-            draggable(self, b, function(x) return { spec = { role = x.role } }, x.text, "ink" end)
+            self:Draggable(b, function(): (DragWhat?, string?, string?, DragArt?) return { spec = { role = b.role } }, b.text, "ink" end)
             self.roleChips[#self.roleChips + 1] = b
         end
-        self.palRows = {}
-
-        -- middle: the groups
-        self.groupFrames = {}
 
         -- right: raid-wide, open slots, without a slot
         self.raidHead = panel.sectionHeader(self.right, "Raid-wide", "tracked only", RIGHT_W)
-        self.raidRows = {}
         self.raidEmpty = uiText.text(self.right, "caption", "ink-faint")
         self.raidEmpty:SetWordWrap(true)
         self.raidEmpty:SetJustifyH("LEFT")
         self.raidEmpty:SetFixedWidth(RIGHT_W)
         self.openHead = panel.sectionHeader(self.right, "Open slots", "", RIGHT_W)
-        self.openRows = {}
         self.openEmpty = uiText.text(self.right, "caption", "ink-faint")
         self.openEmpty:SetValue("None: every slot is filled.")
         self.unplacedHead = panel.sectionHeader(self.right, "Without a slot", "", RIGHT_W)
-        self.unplacedZone = CreateFrame("Frame", nil, self.right)
-        self.unplacedZone:SetSize(RIGHT_W, 24)
-        self.unplacedZone.fill = draw.fill(self.unplacedZone, "arcane-soft")
-        self.unplacedZone.fill:SetAllPoints()
-        self.unplacedZone.fill:Hide()
-        self.unplacedZone.SetDropHover = function(z: any, on: boolean) z.fill:SetShown(on) end
-        self.unplacedZone.empty = uiText.text(self.unplacedZone, "caption", "ink-faint")
-        self.unplacedZone.empty:SetPoint("TOPLEFT", 0, -4)
-        self.unplacedZone.empty:SetValue("Nobody: everyone has a slot.")
-        self.personRows = {}
+        self.unplacedZone = UnplacedZone.new(self.right)
 
         -- the footer (asked for above)
         local footer = self.footer :: Frame
-        self.arrange = controls.button(footer, { text = "Arrange groups", variant = "primary", onClick = function() if self.onArrange then self.onArrange() end end })
+        self.arrange = controls.button(footer, { text = "Arrange groups", variant = "primary",
+            onClick = call(function(): (() -> ())? return self.onArrange end) })
         self.arrange:SetPoint("RIGHT", 0, 0)
-        self.inspect = controls.button(footer, { text = "Inspect", icon = "eye", onClick = function() if self.onInspect then self.onInspect() end end })
-        self.fill = controls.button(footer, { text = "Fill slots", onClick = function() if self.onFill then self.onFill() end end })
+        self.inspect = controls.button(footer, { text = "Inspect", icon = "eye",
+            onClick = call(function(): (() -> ())? return self.onInspect end) })
+        self.fill = controls.button(footer, { text = "Fill slots", onClick = call(function(): (() -> ())? return self.onFill end) })
         self.hint = uiText.text(footer, "caption", "ink-muted")
         self.hint:SetPoint("LEFT", 0, 0)
         self.hint:SetJustifyH("LEFT")
@@ -470,16 +1007,33 @@ export class RaidPlanner extends WindowFrame
         end)
         self:HookScript("OnHide", function()
             if self.dragging then self:StopDrag() end
-            if self.editor then self.editor:Hide() end
-            if self.movesPanel then self.movesPanel:Hide() end
+            local editor, moves = self.editor, self.movesPanel
+            if editor then editor:Hide() end
+            if moves then moves:Hide() end
         end)
         self:Hide()
         planners[self] = true
     end
 
+    --------------------------------------------------------------------------
+    -- Dragging: a card follows the cursor; the target under it lights up arcane
+    --------------------------------------------------------------------------
+
+    -- Makes `f` draggable: what it carries comes from carry().
+    function Draggable(f: Button, carry: Carry)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", function()
+            local what, text, token, art = carry()
+            if not what then return end
+            tooltip.hideTooltip()
+            self:StartDrag(what, text, token, art)
+        end)
+        f:SetScript("OnDragStop", function() self:StopDrag() end)
+    end
+
     -- Everything that takes a drop, shown now: slot cards, Add slot, Without a slot.
-    function Targets(): any[]
-        local out: any[] = {}
+    function Targets(): DropTarget[]
+        local out: DropTarget[] = {}
         for _, g in ipairs(self.groupFrames) do
             if g:IsShown() then
                 for _, c in ipairs(g.cards) do if c:IsShown() then out[#out + 1] = c end end
@@ -490,42 +1044,24 @@ export class RaidPlanner extends WindowFrame
         return out
     end
 
-    function TargetUnderCursor(): any
+    function TargetUnderCursor(): DropTarget?
         for _, t in ipairs(self:Targets()) do
             if t:IsMouseOver() then return t end
         end
+        return nil
     end
 
-    -- art: { icon, class, known } (a player's or a spec's), or nil.
-    function StartDrag(what: any, text: string?, token: string?, art: any)
+    -- art: a player's or a spec's, or nil.
+    function StartDrag(what: DragWhat, text: string?, token: string?, art: DragArt?)
         self.dragging = what
         local gh = self.ghost
         if not gh then
-            gh = CreateFrame("Frame", nil, UIParent) :: any
-            gh:SetFrameStrata("TOOLTIP")
-            gh:SetHeight(22)
-            draw.fill(gh, "surface-raised"):SetAllPoints()
-            draw.border(gh, "arcane")
-            gh.icon = uiIcon.icon(gh, 16)
-            gh.icon:SetPoint("LEFT", 3, 0)
-            gh.text = uiText.text(gh, "label", "ink")
-            gh:SetScript("OnUpdate", function(f)
-                local scale = f:GetEffectiveScale()
-                local x, y = GetCursorPosition()
-                f:ClearAllPoints()
-                f:SetPoint("LEFT", UIParent, "BOTTOMLEFT", x / scale + 12, y / scale)
-                local over = self:TargetUnderCursor()
-                if over ~= self.over then
-                    if self.over then self.over:SetDropHover(false) end
-                    if over then over:SetDropHover(true) end
-                    self.over = over
-                end
-            end)
+            gh = DragGhost.new(self)
             self.ghost = gh
         end
-        local hasArt = art and (art.icon or art.class) and true or false
+        local hasArt = art ~= nil and (art.icon ~= nil or art.class ~= nil)
         gh.icon:SetShown(hasArt)
-        if hasArt then setPlayerIcon(gh.icon, art.icon, art.class, art.known) end
+        if art and hasArt then setPlayerIcon(gh.icon, art.icon, art.class, art.known) end
         local x = hasArt and (3 + 16 + S["space-3"]) or S["space-4"]
         gh.text:ClearAllPoints()
         gh.text:SetPoint("LEFT", x, 0)
@@ -537,147 +1073,37 @@ export class RaidPlanner extends WindowFrame
 
     function StopDrag()
         local over = self:TargetUnderCursor()
-        if self.ghost then self.ghost:Hide() end
-        if self.over then self.over:SetDropHover(false); self.over = nil end
+        local ghost, lit = self.ghost, self.over
+        if ghost then ghost:Hide() end
+        if lit then lit:SetDropHover(false); self.over = nil end
         local what = self.dragging
         self.dragging = nil
-        if what and over and self.onDrop then self.onDrop(what, over.where) end
+        local drop, where = self.onDrop, over and over.where
+        if what and where and drop then drop(what, where) end
     end
 
-    function Card(g: any): any
-        local c = CreateFrame("Button", nil, g)
-        c:SetHeight(cardH())
-        c:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-        c.fill = draw.fill(c, "surface-raised")
-        c.fill:SetAllPoints()
-        c.edge = draw.border(c, "amber")
-        c.icon = uiIcon.icon(c, cardIcon())
-        c.who = uiText.text(c, "label", "ink")
-        c.who:SetPoint("TOPLEFT", cardTextX(), -3)
-        c.who:SetJustifyH("LEFT")
-        c.pin = c:CreateTexture(nil, "ARTWORK")
-        c.pin:SetTexture(GLYPHS .. "pushpin.tga")
-        c.pin:SetSize(9, 9)
-        c.pin:SetPoint("LEFT", c.who, "RIGHT", S["space-2"], 0)
-        draw.paint(c.pin, "gilt-text")
-        c.spec = uiText.text(c, "caption", "ink-muted")
-        c.spec:SetPoint("TOPRIGHT", -6, -4)
-        -- "?": provisional until inspected, underlined in dots
-        c.dots = {}
-        for i = 1, 3 do
-            local d = draw.fill(c, "ink-muted", "ARTWORK")
-            d:SetSize(1, 1)
-            d:SetPoint("TOPLEFT", c.spec, "BOTTOMLEFT", (i - 1) * 2.5, 0)
-            c.dots[i] = d
-        end
-        c.req = uiText.text(c, "caption", "ink-faint")
-        c.req:SetPoint("TOPLEFT", cardTextX(), -(3 + lineH("label")))
-        c.req:SetJustifyH("LEFT")
-        c.SetDropHover = function(card: any, on: boolean) card.dropHover = on; styleCard(card) end
-        c:SetScript("OnClick", function(card, button: string)
-            if card.slot and card.planner.onSlot then card.planner.onSlot(card.slot.id, card, button) end
-        end)
-        c:SetScript("OnEnter", function(card)
-            if card.planner.dragging then return end
-            if not card.dropHover and card.state ~= "open" and card.state ~= "away" then card.edge:SetShown(true); card.edge:SetColor("gilt-line") end
-            local s = card.slot
-            if s then tooltip.showTooltip(card, { title = s.who or s.req, subtitle = s.who and s.req or nil, description = s.tip }) end
-        end)
-        c:SetScript("OnLeave", function(card) styleCard(card); tooltip.hideTooltip() end)
-        draggable(self, c, function(b)
-            local s = b.slot
-            if not (s and s.player) then return end
-            return { player = s.player, from = s.id }, s.player, classToken(s.class),
-                { icon = s.icon, class = s.iconClass or s.class, known = s.spec ~= "?" }
-        end)
-        c.planner = self
-        return c
-    end
-
-    function SetCard(c: any, s: any, w: number)
-        c.slot = s
-        c.state, c.class = s.state, s.class
-        c:SetSize(w, cardH())
-        -- the player's spec icon (their class's while it's "?"); an open or
-        -- away slot: what it asks for, dimmed, or an empty well
-        local open = s.state == "open" or s.state == "away"
-        local size = cardIcon()
-        c.icon:SetSize(size, size)
-        c.icon:ClearAllPoints()
-        c.icon:SetPoint("TOPLEFT", 5, -math.floor((cardH() - size) / 2))
-        setPlayerIcon(c.icon, s.icon, s.iconClass or s.class, s.spec ~= "?", open)
-        c.who:SetValue(s.who or "Open")
-        c.pin:SetShown(s.pinned and true or false)
-        c.spec:SetValue(s.spec or "")
-        local q = s.spec == "?"
-        c.spec:SetColor(q and "ink" or "ink-muted")
-        for _, d in ipairs(c.dots) do d:SetShown(q) end
-        c.req:SetValue(s.req or "")
-        -- placed from the text styles each time (a theme can change them)
-        local x = cardTextX()
-        c.who:SetPoint("TOPLEFT", x, -3)
-        c.req:SetPoint("TOPLEFT", x, -(3 + lineH("label")))
-        -- the name and what it asks for stop short of the spec and the edge
-        local specW = (s.spec and s.spec ~= "") and (uiText.measureText("caption", s.spec) + S["space-3"]) or 0
-        -- (as wide as the name, so the pin sits right after it)
-        local room = math.max(10, w - x - 6 - specW - (s.pinned and 13 or 0))
-        c.who:SetWidth(math.min(room, uiText.measureText("label", s.who or "Open") + 1))
-        c.req:SetWidth(w - x - 6)
-        c.dropHover = false
-        styleCard(c)
-    end
-
-    -- A group of five: its head, slot cards, Add slot, its party-wide buffs.
-    function Group(): any
-        local g = CreateFrame("Frame", nil, self.mid)
-        draw.fill(g, "surface-sunk"):SetAllPoints()
-        draw.border(g, "gilt-faint")
-        g.title = uiText.text(g, "header", "gilt-text")
-        g.title:SetPoint("TOPLEFT", 7, -6)
-        g.kind = uiText.text(g, "caption", "ink-muted")
-        g.kind:SetPoint("TOPRIGHT", -7, -7)
-        g.cards, g.chips = {}, {}
-        -- Add slot: a click makes an open slot, a drop one that asks for it
-        local add = CreateFrame("Button", nil, g)
-        add:SetHeight(22)
-        add.edge = draw.border(add, "gilt-faint")
-        add.fill = draw.fill(add, "arcane-soft")
-        add.fill:SetAllPoints()
-        add.fill:Hide()
-        add.label = uiText.text(add, "caption", "ink-faint")
-        add.label:SetPoint("CENTER")
-        add.label:SetValue("+ Add slot")
-        add.SetDropHover = function(b: any, on: boolean)
-            b.fill:SetShown(on)
-            b.edge:SetColor(on and "arcane" or "gilt-faint")
-            b.label:SetColor(on and "ink" or "ink-faint")
-        end
-        add:SetScript("OnEnter", function(b) if not self.dragging then b.label:SetColor("ink-muted") end end)
-        add:SetScript("OnLeave", function(b) b.label:SetColor("ink-faint") end)
-        add:SetScript("OnClick", function(b) if self.onAdd then self.onAdd(g.n, b) end end)
-        g.add = add
-        g.rule = draw.fill(g, "gilt-faint", "ARTWORK")
-        g.rule:SetHeight(1)
-        return g
-    end
+    --------------------------------------------------------------------------
+    -- Drawing it all
+    --------------------------------------------------------------------------
 
     -- Lays one group out at width w; returns its height.
-    function DrawGroup(g: any, d: any, w: number): number
+    function DrawGroup(g: GroupBox, d: PlannerGroup, w: number): number
         g.n = d.n
         g.title:SetValue("Group " .. d.n)
         g.kind:SetValue(d.kind or "")
         local inner = w - 14
         local y = 6 + lineH("header") + 4
-        for i, s in ipairs(d.slots or {}) do
-            local c = pool(g.cards, i, function() return self:Card(g) end)
-            self:SetCard(c, s, inner)
+        local slots = d.slots or {}
+        for i, s in ipairs(slots) do
+            local c = pool(g.cards, i, function(): SlotCard return SlotCard.new(self, g) end)
+            c:Fill(s, inner)
             c.where = { slot = s.id }
             c:ClearAllPoints()
             c:SetPoint("TOPLEFT", 7, -y)
             y = y + cardH() + 3
         end
-        hideFrom(g.cards, #(d.slots or {}) + 1)
-        g.add:SetShown(d.canAdd and true or false)
+        hideFrom(g.cards, #slots + 1)
+        g.add:SetShown(d.canAdd == true)
         if d.canAdd then
             g.add.where = { group = d.n }
             g.add:SetSize(inner, 22)
@@ -696,7 +1122,7 @@ export class RaidPlanner extends WindowFrame
             y = y + 4
             local x = 0
             for i, ch in ipairs(chips) do
-                local f = pool(g.chips, i, function() return groupChip(g) end)
+                local f = pool(g.chips, i, function(): GroupChip return GroupChip.new(g) end)
                 f.text:SetValue(ch.text)
                 local cw = math.ceil(uiText.measureText("caption", ch.text)) + 10
                 if x > 0 and x + cw > inner then x = 0; y = y + CHIP_H + 3 end
@@ -715,8 +1141,7 @@ export class RaidPlanner extends WindowFrame
         return y + 7
     end
 
-    function DrawLeft(d: any): number
-        local L = self.left
+    function DrawLeft(d: PlannerData): number
         local y = 0
         local setups = d.setups or {}
         self.setupsHead:SetPoint("TOPLEFT", 0, 0)
@@ -729,17 +1154,17 @@ export class RaidPlanner extends WindowFrame
         local rowH = 5 + lineH("label") + 1 + lineH("caption") + 5
         self.renameField:Hide()
         for i, s in ipairs(setups) do
-            local r = pool(self.setupRows, i, function() return setupRow(self) end)
+            local r = pool(self.setupRows, i, function(): SetupRow return SetupRow.new(self) end)
             r.id, r.loaded = s.id, s.loaded
             r:SetSize(LEFT_W, rowH)
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", 0, -y)
-            r.fill:SetShown(s.loaded and true or false)
-            r.edge:SetShown(s.loaded and true or false)
+            r.fill:SetShown(s.loaded == true)
+            r.edge:SetShown(s.loaded == true)
             r.name:SetValue(s.name or "")
             r.name:SetWidth(math.min(LEFT_W - 28, uiText.measureText("label", s.name or "") + 1))
             r.name:Show()
-            r.changed:SetShown(s.changed and true or false)
+            r.changed:SetShown(s.changed == true)
             r.meta:SetValue(s.meta or "")
             r.meta:SetWidth(LEFT_W - 14)
             if self.renaming == s.id then
@@ -752,7 +1177,7 @@ export class RaidPlanner extends WindowFrame
                 f:ClearAllPoints()
                 f:SetPoint("TOPLEFT", r, "TOPLEFT", 0, 0)
                 f:Show()
-                f.id = s.id
+                self.renameId = s.id
                 if not f.edit:HasFocus() then
                     f:SetValue(s.name or "")
                     f.edit:SetFocus()
@@ -790,35 +1215,13 @@ export class RaidPlanner extends WindowFrame
             x = x + b:GetWidth() + S["space-2"]
         end
         y = y + PAL_H + S["space-3"]
-        for i, c in ipairs(d.palette or {}) do
-            local row = pool(self.palRows, i, function()
-                local f = CreateFrame("Frame", nil, L)
-                f:SetSize(LEFT_W, PAL_H)
-                f.diamond = draw.diamond(f, 5, "ink")
-                f.diamond:SetPoint("LEFT", 2, 0)
-                f.name = chip(f)
-                f.name.bg:Hide()
-                f.name.edge:SetShown(false)
-                f.name:SetPoint("LEFT", 8, 0)
-                f.name:SetScript("OnEnter", nil)
-                f.name:SetScript("OnLeave", nil)
-                draggable(self, f.name, function(b) return { spec = { class = b.class } }, b.text, classToken(b.class), { class = b.class, known = true } end)
-                f.specs = {}
-                for k = 1, 3 do
-                    -- each spec with its icon
-                    local s = chip(f, "icon")
-                    draggable(self, s, function(b)
-                        return { spec = { class = b.class, spec = b.spec, role = b.role } }, b.text, classToken(b.class),
-                            { icon = b.icon, class = b.class, known = true }
-                    end)
-                    f.specs[k] = s
-                end
-                return f
-            end)
+        local palette = d.palette or {}
+        for i, c in ipairs(palette) do
+            local row = pool(self.palRows, i, function(): PaletteRow return PaletteRow.new(self) end)
             row:ClearAllPoints()
             row:SetPoint("TOPLEFT", 0, -y)
             draw.paint(row.diamond, classToken(c.class))
-            row.name:SetText(c.name)
+            row.name:SetChipText(c.name)
             row.name.label:SetColor(classToken(c.class))
             row.name.class, row.name.text = c.class, "Any " .. c.name:lower()
             local sx = 62
@@ -826,8 +1229,9 @@ export class RaidPlanner extends WindowFrame
                 local sp = c.specs and c.specs[k]
                 s:SetShown(sp ~= nil)
                 if sp then
-                    s:SetText(sp.label)
-                    setArt(s.glyph, sp.icon, c.class)
+                    s:SetChipText(sp.label)
+                    local glyph = s.glyph
+                    if glyph then setArt(glyph, sp.icon, c.class) end
                     s.class, s.spec, s.role, s.icon, s.text = c.class, sp.spec, sp.role, sp.icon, c.name .. " · " .. (sp.name or sp.label)
                     s:ClearAllPoints()
                     s:SetPoint("LEFT", sx, 0)
@@ -836,11 +1240,11 @@ export class RaidPlanner extends WindowFrame
             end
             y = y + PAL_H + S["space-1"]
         end
-        hideFrom(self.palRows, #(d.palette or {}) + 1)
+        hideFrom(self.palRows, #palette + 1)
         return y
     end
 
-    function DrawGroups(d: any, w: number): number
+    function DrawGroups(d: PlannerData, w: number): number
         local groups = d.groups or {}
         local cols = 4
         local gw = math.floor((w - (cols - 1) * GROUP_GAP) / cols)
@@ -848,7 +1252,7 @@ export class RaidPlanner extends WindowFrame
         for first = 1, #groups, cols do
             local rowH = 0
             for i = first, math.min(#groups, first + cols - 1) do
-                local g = pool(self.groupFrames, i, function() return self:Group() end)
+                local g = pool(self.groupFrames, i, function(): GroupBox return GroupBox.new(self) end)
                 local h = self:DrawGroup(g, groups[i], gw)
                 g.h = h
                 rowH = math.max(rowH, h)
@@ -862,7 +1266,7 @@ export class RaidPlanner extends WindowFrame
         return y
     end
 
-    function DrawRight(d: any): number
+    function DrawRight(d: PlannerData): number
         local R = self.right
         local y = 0
         local list = d.raidWide or {}
@@ -870,10 +1274,10 @@ export class RaidPlanner extends WindowFrame
         self.raidHead:SetLabel("Raid-wide", d.raidWideMeta or "tracked only")
         y = y + lineH("header") + S["space-3"]
         for i, item in ipairs(list) do
-            local r = pool(self.raidRows, i, function() return listRow(R) end)
+            local r = pool(self.raidRows, i, function(): ListRow return ListRow.new(R) end)
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", 0, -y)
-            y = y + drawListRow(r, item, i == 1, RIGHT_W)
+            y = y + r:Draw(item, i == 1, RIGHT_W)
         end
         hideFrom(self.raidRows, #list + 1)
         self.raidEmpty:SetShown(#list == 0)
@@ -891,10 +1295,10 @@ export class RaidPlanner extends WindowFrame
         self.openHead:SetLabel("Open slots", tostring(#open))
         y = y + lineH("header") + S["space-3"]
         for i, item in ipairs(open) do
-            local r = pool(self.openRows, i, function() return listRow(R) end)
+            local r = pool(self.openRows, i, function(): ListRow return ListRow.new(R) end)
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", 0, -y)
-            y = y + drawListRow(r, { label = item.label, detail = item.detail, warn = true }, i == 1, RIGHT_W)
+            y = y + r:Draw({ label = item.label, detail = item.detail, warn = true }, i == 1, RIGHT_W)
         end
         hideFrom(self.openRows, #open + 1)
         if #open == 0 then
@@ -918,8 +1322,7 @@ export class RaidPlanner extends WindowFrame
         zone.where = { unplaced = true }
         local zy = 0
         for i, p in ipairs(people) do
-            local r = pool(self.personRows, i, function() return personRow(self) end)
-            -- (the icon value in a field of its own: `icon` is the row's icon widget)
+            local r = pool(self.personRows, i, function(): PersonRow return PersonRow.new(self) end)
             r.person, r.class, r.personIcon, r.known = p.name, p.class, p.icon, p.known
             r.rule:SetShown(i > 1)
             setPlayerIcon(r.icon, p.icon, p.class, p.known)
@@ -940,17 +1343,11 @@ export class RaidPlanner extends WindowFrame
         return y
     end
 
-    function DrawStatus(d: any)
+    function DrawStatus(d: PlannerData)
         local x = 0
-        for i, st in ipairs(d.stats or {}) do
-            local f = pool(self.stats, i, function()
-                local s = CreateFrame("Frame", nil, self.status)
-                s.n = uiText.text(s, "numeric", "ink")
-                s.n:SetPoint("LEFT")
-                s.label = uiText.text(s, "caption", "ink-muted")
-                s.label:SetPoint("LEFT", s.n, "RIGHT", S["space-2"], 0)
-                return s
-            end)
+        local stats = d.stats or {}
+        for i, st in ipairs(stats) do
+            local f = pool(self.stats, i, function(): StatItem return StatItem.new(self.status) end)
             f.n:SetValue(tostring(st.n))
             f.n:SetColor(st.warn and "amber" or "ink")
             f.label:SetValue(st.label)
@@ -960,7 +1357,7 @@ export class RaidPlanner extends WindowFrame
             f:SetPoint("LEFT", x, 0)
             x = x + w + 14
         end
-        hideFrom(self.stats, #(d.stats or {}) + 1)
+        hideFrom(self.stats, #stats + 1)
         self.note:SetValue(d.note or "")
     end
 
@@ -976,12 +1373,13 @@ export class RaidPlanner extends WindowFrame
         self.content:SetHeight(top + h + S["space-4"])
         -- the footer: the hint, then Fill, Inspect, Arrange groups
         self.hint:SetValue(d.hint or "")
-        local function button(b: any, def: any, label: string?)
-            def = def or {}
+        local function button(b: controls.SuuButton, given: PlannerButton?, label: string?)
+            local def = given or {}
             b:SetShown(def.shown ~= false)
             if label then b:SetLabel(label) end
-            b:SetEnabledState(def.enabled and true or false)
-            b.tooltip = (not def.enabled and def.reason) and { title = b.label:GetText(), description = def.reason } or nil
+            b:SetEnabledState(def.enabled == true)
+            local reason = def.reason
+            b.tooltip = (not def.enabled and reason) and { title = b.label:GetText(), description = reason } or nil
         end
         button(self.arrange, d.arrange)
         button(self.inspect, d.inspect, d.inspect and d.inspect.label)
@@ -997,75 +1395,38 @@ export class RaidPlanner extends WindowFrame
         self.hint:SetPoint("RIGHT", prev, "LEFT", -S["space-5"], 0)
     end
 
-    function SetData(d: any)
+    function SetData(d: PlannerData)
         self.data = d
         if self:IsShown() then self:Draw() else self.dirty = true end
     end
 
     -- Renaming setup `id` in its row (nil: done).
-    function Rename(id: any)
+    function Rename(id: PlannerId?)
         self.renaming = id
         self:Draw()
     end
 
-    function BuildEditor()
-        local p = panel.panel(self :: any, { title = "Slot", closable = true, solid = true, width = EDITOR_W })
-        p:SetFrameLevel(self:GetFrameLevel() + 60)
-        p:EnableMouse(true)
-        local b = p.body
-        local inner = EDITOR_W - S["space-5"] * 2
-        local function send(changes: { [string]: any }) if p.def and self.onSlotChange then self.onSlotChange(p.def.id, changes) end end
-        p.classLabel = field(b, "Class")
-        p.class = selectModule.select(b, { options = {}, width = inner, onChange = function(v: any) send({ class = v ~= "any" and v or false }) end })
-        p.specLabel = field(b, "Spec")
-        p.specs = {} -- one switch per class (its three specs), made when first needed
-        p.roleLabel = field(b, "Role")
-        p.role = inputs.segmented(b, { options = ROLES, onChange = function(v: any) send({ role = v ~= "any" and v or false }) end })
-        p.labelLabel = field(b, "Label (optional)")
-        p.label = inputs.textField(b, { width = inner, placeholder = "Main tank", onChange = function(text: string?) send({ label = strtrim(text or "") }) end })
-        p.whoLabel = field(b, "Who")
-        p.who = selectModule.select(b, { options = {}, width = inner, onChange = function(v: any) send({ pin = v ~= "any" and v or false }) end })
-        p.remove = controls.button(b, { text = "Remove slot", onClick = function()
-            local id = p.def and p.def.id
-            p:Hide()
-            if id and self.onSlotRemove then self.onSlotRemove(id) end
-        end })
-        p.done = controls.button(b, { text = "Done", variant = "primary", onClick = function() p:Hide() end })
-        p:HookScript("OnHide", function() p.label.edit:ClearFocus() end)
-        p:Hide()
-        self.editor = p
-    end
-
-    function SpecSwitch(class: string?, options: any[]): any
+    -- def: what the slot asks for and the choices; the editor sits beside `card`.
+    function EditSlot(def: SlotEditorDef, card: Frame?)
         local p = self.editor
-        local key = class or "any"
-        if not p.specs[key] then
-            p.specs[key] = inputs.segmented(p.body, { options = options, onChange = function(v: any)
-                if p.def and self.onSlotChange then self.onSlotChange(p.def.id, { spec = v ~= "any" and v or false }) end
-            end })
+        if not p then
+            p = SlotEditor.new(self)
+            self.editor = p
         end
-        for k, s in pairs(p.specs) do s:SetShown(k == key) end
-        return p.specs[key]
-    end
-
-    -- def: { id, title, meta, class, spec, role, label, who, classes, specs, whoOptions }
-    function EditSlot(def: any, card: any)
-        if not self.editor then self:BuildEditor() end
-        local p = self.editor
         p.def = def
         p:SetTitle(def.title or "Slot", def.meta or "")
         local y = 0
-        local function place(region: any, h: number, gap: number?)
+        local function place(region: Region, h: number, gap: number?)
             region:ClearAllPoints()
             region:SetPoint("TOPLEFT", 0, -y)
             y = y + h + (gap or S["space-2"])
         end
         place(p.classLabel, lineH("caption"))
-        p.class:SetOptions(def.classes or {})
-        p.class:SetValue(def.class or "any")
-        place(p.class, 30, S["space-5"])
+        p.classSelect:SetOptions(def.classes or {})
+        p.classSelect:SetValue(def.class or "any")
+        place(p.classSelect, 30, S["space-5"])
         place(p.specLabel, lineH("caption"))
-        local spec = self:SpecSwitch(def.class, def.specs or { { value = "any", label = "Any" } })
+        local spec = p:SpecSwitch(def.class, def.specs or { { value = "any", label = "Any" } })
         spec:SetValue(def.spec or "any")
         spec:SetDisabled(def.class == nil)
         place(spec, 30, S["space-5"])
@@ -1073,12 +1434,12 @@ export class RaidPlanner extends WindowFrame
         p.role:SetValue(def.role or "any")
         place(p.role, 30, S["space-5"])
         place(p.labelLabel, lineH("caption"))
-        if not p.label.edit:HasFocus() then p.label:SetValue(def.label or "") end
-        place(p.label, 30, S["space-5"])
+        if not p.labelField.edit:HasFocus() then p.labelField:SetValue(def.label or "") end
+        place(p.labelField, 30, S["space-5"])
         place(p.whoLabel, lineH("caption"))
-        p.who:SetOptions(def.whoOptions or { { value = "any", label = "Anyone who fits" } })
-        p.who:SetValue(def.who or "any")
-        place(p.who, 30, S["space-5"])
+        p.whoSelect:SetOptions(def.whoOptions or { { value = "any", label = "Anyone who fits" } })
+        p.whoSelect:SetValue(def.who or "any")
+        place(p.whoSelect, 30, S["space-5"])
         p.done:ClearAllPoints()
         p.done:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -y)
         p.remove:ClearAllPoints()
@@ -1089,8 +1450,12 @@ export class RaidPlanner extends WindowFrame
         if card then
             -- beside the card, on whichever side has room
             p:ClearAllPoints()
-            local right = card:GetRight() and self:GetRight() and (self:GetRight() - card:GetRight() > EDITOR_W + 20)
-            if right then p:SetPoint("TOPLEFT", card, "TOPRIGHT", 12, 0) else p:SetPoint("TOPRIGHT", card, "TOPLEFT", -12, 0) end
+            local cardRight, right = card:GetRight(), self:GetRight()
+            if cardRight and right and right - cardRight > EDITOR_W + 20 then
+                p:SetPoint("TOPLEFT", card, "TOPRIGHT", 12, 0)
+            else
+                p:SetPoint("TOPRIGHT", card, "TOPLEFT", -12, 0)
+            end
             p:SetClampedToScreen(true)
         elseif not p:GetPoint() then
             p:SetPoint("CENTER", self, "CENTER")
@@ -1099,39 +1464,32 @@ export class RaidPlanner extends WindowFrame
     end
 
     -- The card showing slot `id`, if it's drawn.
-    function CardFor(id: any): any
+    function CardFor(id: PlannerId): SlotCard?
         for _, g in ipairs(self.groupFrames) do
             for _, c in ipairs(g.cards) do
-                if c:IsShown() and c.slot and c.slot.id == id then return c end
+                local s = c.slot
+                if c:IsShown() and s and s.id == id then return c end
             end
         end
+        return nil
     end
 
     function CloseEditor()
-        if self.editor then self.editor:Hide() end
+        local editor = self.editor
+        if editor then editor:Hide() end
     end
 
-    function EditingSlot(): any
-        return self.editor and self.editor:IsShown() and self.editor.def and self.editor.def.id or nil
+    -- The slot being edited, if the editor is open.
+    function EditingSlot(): PlannerId?
+        local editor = self.editor
+        local def = editor and editor:IsShown() and editor.def
+        return def and def.id or nil
     end
 
-    function ShowMoves(def: any, onConfirm: (() -> ())?)
-        local p: any = self.movesPanel
+    function ShowMoves(def: PlannerMoves, onConfirm: (() -> ())?)
+        local p = self.movesPanel
         if not p then
-            p = panel.panel(self :: any, { title = "Arrange groups", closable = true, solid = true, width = MOVES_W })
-            p:SetFrameLevel(self:GetFrameLevel() + 60)
-            p:EnableMouse(true)
-            p.rows = {}
-            p.note = uiText.text(p.body, "caption", "ink-muted")
-            p.note:SetWordWrap(true)
-            p.note:SetJustifyH("LEFT")
-            p.go = controls.button(p.body, { text = "Move", variant = "primary", onClick = function()
-                local fn = p.onConfirm
-                p:Hide()
-                if fn then fn() end
-            end })
-            p.cancel = controls.button(p.body, { text = "Cancel", onClick = function() p:Hide() end })
-            p:Hide()
+            p = MovesPanel.new(self)
             self.movesPanel = p
         end
         p.onConfirm = onConfirm
@@ -1139,19 +1497,9 @@ export class RaidPlanner extends WindowFrame
         p:SetTitle("Arrange groups", def.meta or (#moves == 1 and "1 move" or (#moves .. " moves")))
         local inner = MOVES_W - S["space-5"] * 2
         local y = 0
+        local body = p.body
         for i, m in ipairs(moves) do
-            local r = pool(p.rows, i, function()
-                local f = CreateFrame("Frame", nil, p.body)
-                f:SetHeight(20)
-                f.icon = uiIcon.icon(f, PERSON_ICON)
-                f.icon:SetPoint("LEFT", 0, 0)
-                f.name = uiText.text(f, "label", "ink")
-                f.name:SetPoint("LEFT", PERSON_X, 0)
-                f.name:SetJustifyH("LEFT")
-                f.from = uiText.text(f, "caption", "ink-muted")
-                f.from:SetPoint("RIGHT")
-                return f
-            end)
+            local r = pool(p.rows, i, function(): MoveRow return MoveRow.new(body) end)
             r:SetWidth(inner)
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", 0, -y)
@@ -1182,6 +1530,6 @@ export class RaidPlanner extends WindowFrame
     end
 end
 
-export function raidPlanner(parent: any): RaidPlanner
+export function raidPlanner(parent: Frame): RaidPlanner
     return RaidPlanner.new(parent)
 end

@@ -9,18 +9,21 @@ import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
-import raidPlanner from "/UI/RaidPlanner"
+import raidPlanner, RaidPlanner, PlannerData, PlannerSlot, PlannerId, DragWhat, DropWhere, SlotChanges from "/UI/RaidPlanner"
 import * as tooltipModule from "/UI/Tooltip"
+import type SelectOption from "/UI/Select"
+import type SegmentedOption from "/UI/Inputs"
 import expectNoErrors from "../../helpers"
 import tokenOf, borderToken, alphaOf from "./WorldHelpers"
 
 local S = T.space
 
-local planner: any = nil
+local planner: RaidPlanner? = nil
 
-local function make(): any
-    planner = raidPlanner(UIParent)
-    return planner
+local function make(): RaidPlanner
+    local w = raidPlanner(UIParent)
+    planner = w
+    return w
 end
 
 @afterEach
@@ -32,15 +35,15 @@ local function cleanup()
 end
 
 local MAGE = "MAGE"
-local function slot(id: string, over: { [string]: any }?): { [string]: any }
-    local s: { [string]: any } = { id = id, req = "Any damage", who = "Tamsin", class = MAGE, spec = "Frost",
+local function slot(id: string, over: { [string]: unknown }?): PlannerSlot
+    local s: { [string]: unknown } = { id = id, req = "Any damage", who = "Tamsin", class = MAGE, spec = "Frost",
         icon = 135846, state = "filled", player = "Tamsin" }
     for k, v in pairs(over or {}) do s[k] = v end
-    return s
+    return s :: PlannerSlot
 end
 
-local function data(over: { [string]: any }?): { [string]: any }
-    local d: { [string]: any } = {
+local function data(over: { [string]: unknown }?): PlannerData
+    local d: { [string]: unknown } = {
         meta = "Molten Core · 40", size = 40, note = "Fill slots places who fits",
         stats = { { n = 38, label = "in raid" }, { n = 2, label = "open", warn = true } },
         setups = {
@@ -80,16 +83,16 @@ local function data(over: { [string]: any }?): { [string]: any }
         arrange = { enabled = true },
     }
     for k, v in pairs(over or {}) do d[k] = v end
-    return d
+    return d :: PlannerData
 end
 
-local function shown(list: any[]): any[]
-    local out: any[] = {}
+local function shown<F extends Region>(list: F[]): F[]
+    local out: F[] = {}
     for _, f in ipairs(list) do if f:IsShown() then out[#out + 1] = f end end
     return out
 end
 
-local function drawn(d: { [string]: any }?): any
+local function drawn(d: PlannerData?): RaidPlanner
     local w = make()
     w:Show()
     w:SetData(d or data())
@@ -157,8 +160,8 @@ local function setups()
     expect(mc.fill).toBeShown()
     mock.hover(nil)
     expect(mc.fill:GetAlpha()).toBe(1)
-    local picked = mock.spy(function(_id: any) end)
-    local menu = mock.spy(function(_id: any, _o: any) end)
+    local picked = mock.spy(function(_id: PlannerId) end)
+    local menu = mock.spy(function(_id: PlannerId, _o: Frame) end)
     mock.click(ony)
     mock.click(ony, "RightButton")
     w.onSetup, w.onSetupMenu = picked, menu
@@ -180,21 +183,21 @@ local function leftControls()
     for _, b in ipairs(w.tools) do mock.click(b) end
     mock.click(w.newRow)
     w.onSave, w.onSaveAsNew, w.onDuplicate, w.onDelete = note("save"), note("saveAsNew"), note("duplicate"), note("delete")
-    local newSetup = mock.spy(function(_o: any) end)
-    local size = mock.spy(function(_v: any) end)
+    local newSetup = mock.spy(function(_o: Frame) end)
+    local size = mock.spy(function(_v: number) end)
     w.onNew, w.onSize = newSetup, size
     for _, b in ipairs(w.tools) do mock.click(b) end
     expect(calls).toEqual({ "save", "saveAsNew", "duplicate", "delete" })
     mock.click(w.newRow)
     expect(newSetup).toHaveBeenCalledWith(w.newRow)
     mock.hover(w.newRow)
-    expect(tokenOf(w.newRow.label)).toBe("ink")
+    expect(tokenOf(w.newLabel)).toBe("ink")
     mock.hover(nil)
-    expect(tokenOf(w.newRow.label)).toBe("ink-muted")
-    w.sizes.onChange(20)
+    expect(tokenOf(w.newLabel)).toBe("ink-muted")
+    assert(w.sizes.onChange)(20)
     expect(size).toHaveBeenCalledWith(20)
     w.onSize = nil
-    w.sizes.onChange(10)
+    assert(w.sizes.onChange)(10)
 end
 
 @test("the palette: the roles, then each class with its specs; chips light on hover")
@@ -203,8 +206,8 @@ local function palette()
     expect(w.paletteHead.label).toHaveText("Slot palette")
     local roles = w.roleChips
     expect(roles[1].label).toHaveText("Any tank")
-    expect(roles[1].glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\shield.tga")
-    expect(roles[2].glyph:GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\plus.tga")
+    expect(assert(roles[1].glyph):GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\shield.tga")
+    expect(assert(roles[2].glyph):GetTexture()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\plus.tga")
     local row = shown(w.palRows)[1]
     expect(row.name.label).toHaveText("Mage")
     expect(tokenOf(row.name.label)).toBe("class-mage")
@@ -212,7 +215,7 @@ local function palette()
     expect(row.name.text).toBe("Any mage")
     local arcane, fire, third = row.specs[1], row.specs[2], row.specs[3]
     expect(arcane.label).toHaveText("Arc")
-    expect(arcane.glyph:GetTextureFileID()).toBe(135932)
+    expect(assert(arcane.glyph):GetTextureFileID()).toBe(135932)
     expect(arcane.text).toBe("Mage · Arc")
     expect(fire.text).toBe("Mage · Fire")
     expect(third).never.toBeShown()
@@ -248,13 +251,13 @@ local function group()
     -- the groups of a row as tall as the tallest
     expect(g1:GetHeight()).toBe(g2:GetHeight())
     -- a chip's tooltip
-    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
     mock.hover(chips[1])
     expect(show).toHaveBeenCalledWith(chips[1], { title = "Battle Shout", description = "From Brannoc" })
     mock.hover(chips[2])
     expect(show).toHaveBeenCalledTimes(1)
     -- many chips wrap onto another line
-    local many: { [string]: any }[] = {}
+    local many: { [string]: unknown }[] = {}
     for i = 1, 12 do many[i] = { text = "Buff number " .. i, tone = "ok" } end
     w:SetData(data({ groups = { { n = 1, slots = {}, chips = many } } }))
     local wrapped = shown(shown(w.groupFrames)[1].chips)
@@ -315,7 +318,7 @@ local function cardInput()
     local w = drawn()
     local g = shown(w.groupFrames)[1]
     local filled, open = g.cards[1], g.cards[3]
-    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
     mock.stub(tooltipModule, "hideTooltip", function() end)
     mock.hover(filled)
     expect(filled.edge.top).toBeShown()
@@ -325,7 +328,7 @@ local function cardInput()
     expect(filled.edge.top).never.toBeShown()
     expect(show).toHaveBeenCalledWith(open, { title = "Tank" })
     expect(borderToken(open.edge)).toBe("amber")
-    local clicked = mock.spy(function(_id: any, _o: any, _b: string) end)
+    local clicked = mock.spy(function(_id: PlannerId, _o: Frame, _b: string) end)
     mock.click(filled)
     w.onSlot = clicked
     mock.click(filled, "RightButton")
@@ -342,7 +345,7 @@ end
 local function addSlot()
     local w = drawn()
     local add = shown(w.groupFrames)[1].add
-    local added = mock.spy(function(_n: number, _o: any) end)
+    local added = mock.spy(function(_n: number, _o: Frame) end)
     mock.click(add)
     w.onAdd = added
     mock.click(add)
@@ -372,7 +375,7 @@ local function raidWide()
     expect(fr.detail).toHaveText("Nobody brings it")
     expect(fr.n).toHaveText("")
     expect(w.raidEmpty).never.toBeShown()
-    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
     mock.hover(ai)
     expect(show).toHaveBeenCalledWith(ai, { title = "Arcane Intellect", description = "From two mages" })
     mock.hover(fr)
@@ -401,7 +404,7 @@ local function rightColumn()
     expect(person.rule).never.toBeShown()
     expect(w.unplacedZone.empty).never.toBeShown()
     expect(w.unplacedZone.where).toEqual({ unplaced = true })
-    local clicked = mock.spy(function(_n: any, _o: any, _b: string) end)
+    local clicked = mock.spy(function(_n: string, _o: Frame, _b: string) end)
     mock.click(person, "RightButton")
     w.onPerson = clicked
     mock.click(person, "RightButton")
@@ -462,7 +465,7 @@ end
 @test("Rename: the field over the row, focused, the name hidden; Enter to onRename")
 local function rename()
     local w = drawn()
-    local renamed = mock.spy(function(_id: any, _t: string) end)
+    local renamed = mock.spy(function(_id: PlannerId, _t: string) end)
     w.onRename = renamed
     w:Rename("ony")
     local row = shown(w.setupRows)[2]
@@ -470,7 +473,7 @@ local function rename()
     expect(f).toBeShown()
     expect(row.name).never.toBeShown()
     expect(row.meta).toHaveText("Renaming · Enter to keep")
-    expect(f.id).toBe("ony")
+    expect(w.renameId).toBe("ony")
     expect(f.edit:HasFocus()).toBe(true)
     expect(f.edit:GetText()).toBe("Onyxia")
     -- drawn again while typing: what is typed kept
@@ -490,8 +493,8 @@ local function rename()
     w.onRename = nil
     w:Rename("mc")
     mock.pressKey("ENTER")
-    f.id = nil
-    f.onChange("x")
+    w.renameId = nil
+    assert(f.onChange)("x")
 end
 
 --------------------------------------------------------------------------------
@@ -499,7 +502,7 @@ end
 --------------------------------------------------------------------------------
 
 -- Drags `from` and drops it on `to` (nil: over nothing), the mouse over it.
-local function dragOnto(from: any, to: any?)
+local function dragOnto(from: Frame, to: Frame?)
     mock.script(from, "OnDragStart", "LeftButton")
     mock.hover(to)
     mock.advanceFrames(1)
@@ -510,13 +513,13 @@ end
 @test("a spec dragged onto a slot: the ghost with its icon and colour, the slot lit, onDrop")
 local function dragSpec()
     local w = drawn()
-    local dropped = mock.spy(function(_w: any, _t: any) end)
+    local dropped = mock.spy(function(_w: DragWhat, _t: DropWhere) end)
     w.onDrop = dropped
     local spec = shown(w.palRows)[1].specs[1]
     local target = shown(w.groupFrames)[1].cards[3]
     mock.script(spec, "OnDragStart", "LeftButton")
     expect(w.dragging).toEqual({ spec = { class = MAGE, spec = "Arcane", role = "DAMAGER" } })
-    local gh = w.ghost
+    local gh = assert(w.ghost)
     expect(gh).toBeShown()
     expect(gh.text).toHaveText("Mage · Arc")
     expect(tokenOf(gh.text)).toBe("class-mage")
@@ -549,13 +552,13 @@ end
 @test("roles, classes and players dragged; a drop on nothing, or without onDrop")
 local function dragOthers()
     local w = drawn()
-    local dropped = mock.spy(function(_w: any, _t: any) end)
+    local dropped = mock.spy(function(_w: DragWhat, _t: DropWhere) end)
     w.onDrop = dropped
     local g = shown(w.groupFrames)[1]
     -- a role onto Add slot: no icon on the ghost
     dragOnto(w.roleChips[1], g.add)
     expect(dropped).toHaveBeenCalledWith({ spec = { role = "TANK" } }, { group = 1 })
-    expect(w.ghost.icon).never.toBeShown()
+    expect(assert(w.ghost).icon).never.toBeShown()
     -- a class onto a slot
     dragOnto(shown(w.palRows)[1].name, g.cards[2])
     expect(dropped).toHaveBeenCalledWith({ spec = { class = MAGE } }, { slot = "s2" })
@@ -591,8 +594,8 @@ end
 -- The slot editor
 --------------------------------------------------------------------------------
 
-local CLASSES: { [string]: any }[] = { { value = "any", label = "Any class" }, { value = MAGE, label = "Mage" } }
-local SPECS: { [string]: any }[] = { { value = "any", label = "Any" }, { value = "Frost", label = "Frost" } }
+local CLASSES: SelectOption<string>[] = { { value = "any", label = "Any class" }, { value = MAGE, label = "Mage" } }
+local SPECS: SegmentedOption<string | number>[] = { { value = "any", label = "Any" }, { value = "Frost", label = "Frost" } }
 
 @test("EditSlot: the slot's title, its class, spec, role, label and who; beside its card")
 local function editor()
@@ -603,26 +606,26 @@ local function editor()
     w:EditSlot({ id = "s1", title = "Group 1 · Slot 1", meta = "filled", class = MAGE, spec = "Frost", role = "DAMAGER",
         label = "Sheep", who = "Tamsin", classes = CLASSES, specs = SPECS,
         whoOptions = { { value = "any", label = "Anyone who fits" }, { value = "Tamsin", label = "Tamsin" } } }, card)
-    local p = w.editor
+    local p = assert(w.editor)
     expect(p).toBeShown()
     expect(p.title).toHaveText("Group 1 · Slot 1")
     expect(p.meta).toHaveText("filled")
-    expect(p.class.value).toBe(MAGE)
-    expect(p.specs[MAGE].value).toBe("Frost")
-    expect(p.specs[MAGE].disabled).toBe(false)
+    expect(p.classSelect.value).toBe(MAGE)
+    expect(assert(p.specs[MAGE]).value).toBe("Frost")
+    expect(assert(p.specs[MAGE]).disabled).toBe(false)
     expect(p.role.value).toBe("DAMAGER")
-    expect(p.label.edit:GetText()).toBe("Sheep")
-    expect(p.who.value).toBe("Tamsin")
+    expect(p.labelField.edit:GetText()).toBe("Sheep")
+    expect(p.whoSelect.value).toBe("Tamsin")
     expect(w:EditingSlot()).toBe("s1")
     local _, rel = p:GetPoint(1)
-    expect(rel).toBe(card)
+    expect(rel).toBe(assert(card))
     -- another slot without a class: the any-spec switch, disabled; defaults
     w:EditSlot({ id = "s3" }, nil)
     expect(p.title).toHaveText("Slot")
-    expect(p.class.value).toBe("any")
-    expect(p.specs.any.disabled).toBe(true)
-    expect(p.specs[MAGE]).never.toBeShown()
-    expect(p.who.value).toBe("any")
+    expect(p.classSelect.value).toBe("any")
+    expect(assert(p.specs.any).disabled).toBe(true)
+    expect(assert(p.specs[MAGE])).never.toBeShown()
+    expect(p.whoSelect.value).toBe("any")
     expect(w:EditingSlot()).toBe("s3")
     w:CloseEditor()
     expect(w:EditingSlot()).toBeNil()
@@ -634,31 +637,31 @@ end
 @test("the editor's changes to onSlotChange: class, spec, role, label, who; Remove and Done")
 local function editorChanges()
     local w = drawn()
-    local changes = mock.spy(function(_id: any, _c: any) end)
-    local removed = mock.spy(function(_id: any) end)
+    local changes = mock.spy(function(_id: PlannerId, _c: SlotChanges) end)
+    local removed = mock.spy(function(_id: PlannerId) end)
     w:EditSlot({ id = "s1", class = MAGE, classes = CLASSES, specs = SPECS }, nil)
-    local p = w.editor
-    p.class.onChange(MAGE)
+    local p = assert(w.editor)
+    assert(p.classSelect.onChange)(MAGE)
     w.onSlotChange, w.onSlotRemove = changes, removed
-    p.class.onChange("any")
+    assert(p.classSelect.onChange)("any")
     expect(changes).toHaveBeenCalledWith("s1", { class = false })
-    p.class.onChange(MAGE)
+    assert(p.classSelect.onChange)(MAGE)
     expect(changes).toHaveBeenCalledWith("s1", { class = MAGE })
-    p.specs[MAGE].onChange("Frost")
+    assert(assert(p.specs[MAGE]).onChange)("Frost")
     expect(changes).toHaveBeenCalledWith("s1", { spec = "Frost" })
-    p.specs[MAGE].onChange("any")
+    assert(assert(p.specs[MAGE]).onChange)("any")
     expect(changes).toHaveBeenCalledWith("s1", { spec = false })
-    p.role.onChange("TANK")
+    assert(p.role.onChange)("TANK")
     expect(changes).toHaveBeenCalledWith("s1", { role = "TANK" })
-    p.role.onChange("any")
+    assert(p.role.onChange)("any")
     expect(changes).toHaveBeenCalledWith("s1", { role = false })
-    p.label.onChange("  Main tank ")
+    assert(p.labelField.onChange)("  Main tank ")
     expect(changes).toHaveBeenCalledWith("s1", { label = "Main tank" })
-    p.label.onChange(nil)
+    assert(p.labelField.onChange)("")
     expect(changes).toHaveBeenCalledWith("s1", { label = "" })
-    p.who.onChange("Tamsin")
+    assert(p.whoSelect.onChange)("Tamsin")
     expect(changes).toHaveBeenCalledWith("s1", { pin = "Tamsin" })
-    p.who.onChange("any")
+    assert(p.whoSelect.onChange)("any")
     expect(changes).toHaveBeenCalledWith("s1", { pin = false })
     mock.click(p.done)
     expect(p).never.toBeShown()
@@ -671,21 +674,21 @@ local function editorChanges()
     w:EditSlot({ id = "s1" }, nil)
     mock.click(p.remove)
     p.def = nil
-    p.role.onChange("TANK")
-    p.specs.any.onChange("x")
+    assert(p.role.onChange)("TANK")
+    assert(assert(p.specs.any).onChange)("x")
 end
 
 @test("the editor's label kept while it's being typed in")
 local function editorTyping()
     local w = drawn()
     w:EditSlot({ id = "s1", label = "Sheep" }, nil)
-    local p = w.editor
-    mock.typeText(p.label.edit, "!")
+    local p = assert(w.editor)
+    mock.typeText(p.labelField.edit, "!")
     w:EditSlot({ id = "s1", label = "Other" }, nil)
-    expect(p.label.edit:GetText()).toBe("Sheep!")
+    expect(p.labelField.edit:GetText()).toBe("Sheep!")
     -- closing it drops the focus
     p:Hide()
-    expect(p.label.edit:HasFocus()).toBe(false)
+    expect(p.labelField.edit:HasFocus()).toBe(false)
 end
 
 --------------------------------------------------------------------------------
@@ -700,7 +703,7 @@ local function moves()
         { name = "Tamsin", class = MAGE, icon = 135846, known = true, from = 3, to = 1 },
         { name = "Brannoc", class = "WARRIOR", from = 2, to = 4 },
     }, note = "Healers spread over the groups." }, confirmed)
-    local p = w.movesPanel
+    local p = assert(w.movesPanel)
     expect(p).toBeShown()
     expect(p.meta).toHaveText("2 moves")
     local rows = shown(p.rows)
