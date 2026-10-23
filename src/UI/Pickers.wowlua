@@ -20,14 +20,16 @@ import * as events from "/Core/Events"
 import root from "/Core/Root"
 import * as draw from "./Draw"
 import text, Text from "./Text"
-import panel, Panel from "./Panel"
-import showTooltip, hideTooltip from "./Tooltip"
+import Panel from "./Panel"
+import showTooltip, hideTooltip, TooltipData from "./Tooltip"
 
 local S = T.space
 
-local function setDisabled(self: any, disabled: any)
-    self.disabled = disabled and true or false
-    self:SetAlpha(self.disabled and T.opacity["opacity-disabled"] or 1)
+-- A control dimmed to opacity-disabled while disabled; says whether it is.
+local function dim(control: Region, disabled: unknown): boolean
+    local off = disabled ~= nil and disabled ~= false
+    control:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
+    return off
 end
 
 --------------------------------------------------------------------------------
@@ -41,10 +43,21 @@ local POINT_NAMES: { [string]: string } = {
 local GRID: FramePoint[][] = { { "TOPLEFT", "TOP", "TOPRIGHT" }, { "LEFT", "CENTER", "RIGHT" }, { "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT" } }
 local CELL = 20
 
-export type PickerOptions = { value?: any, onChange?: (value: any) -> () }
+export type PickerOptions = { value?: FramePoint, onChange?: (point: FramePoint) -> () }
+
+-- a point of the grid: a button with its diamond
+class AnchorCell extends Button
+    readonly dot: Texture
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.dot = draw.diamond(self, 6, "ink-muted")
+        self.dot:SetPoint("CENTER")
+    end
+end
 
 export class AnchorPicker extends Frame
-    cells: { [string]: Button }
+    cells: { [FramePoint]: AnchorCell }
     onChange: ((point: FramePoint) -> ())? = nil
     value: FramePoint = "CENTER"
     disabled: boolean? = nil
@@ -58,11 +71,9 @@ export class AnchorPicker extends Frame
         self.cells, self.onChange = {}, opts.onChange
         for row, points in ipairs(GRID) do
             for col, point in ipairs(points) do
-                local b = CreateFrame("Button", nil, self)
+                local b = AnchorCell.new(self)
                 b:SetSize(CELL, CELL)
                 b:SetPoint("TOPLEFT", 4 + (col - 1) * CELL, -4 - (row - 1) * CELL)
-                b.dot = draw.diamond(b, 6, "ink-muted")
-                b.dot:SetPoint("CENTER")
                 b:SetScript("OnClick", function()
                     if self.disabled then return end
                     self:SetValue(point)
@@ -85,7 +96,7 @@ export class AnchorPicker extends Frame
         end
     end
 
-    function SetDisabled(...: any): ...any return setDisabled(self, ...) end
+    function SetDisabled(disabled: unknown) self.disabled = dim(self, disabled) end
 end
 
 export function anchorPicker(parent: Frame, opts: PickerOptions?): AnchorPicker
@@ -107,13 +118,18 @@ local MINI = 8 -- between the small points
 export type AnchorButtonOptions = {
     value?: FramePoint,
     note?: string,
-    tooltip?: (point: FramePoint) -> { [string]: any }?,
+    tooltip?: (point: FramePoint) -> TooltipData?,
     onChange?: (point: FramePoint) -> (),
 }
 
 -- the popover: a Panel with the grid's note under it
-export interface AnchorPopover extends Panel
-    note: Text
+export class AnchorPopover extends Panel
+    readonly note: Text
+
+    constructor()
+        super(root, { solid = true, shadow = true })
+        self.note = text(self, "caption", "ink-muted")
+    end
 end
 
 local openButtons: { [AnchorButton]: boolean } = setmetatable({}, { __mode = "k" })
@@ -122,8 +138,8 @@ export class AnchorButton extends Button
     border: draw.Border
     onChange: ((point: FramePoint) -> ())? = nil
     note: string? = nil
-    tooltip: ((point: FramePoint) -> { [string]: any }?)? = nil
-    dots: { [string]: Texture }
+    tooltip: ((point: FramePoint) -> TooltipData?)? = nil
+    dots: { [FramePoint]: Texture }
     value: FramePoint = "CENTER"
     picker: AnchorPicker? = nil
     pop: AnchorPopover? = nil
@@ -170,14 +186,14 @@ export class AnchorButton extends Button
         if self:IsVisible() and self:IsMouseOver() then showTooltip(self, self:Tooltip()) end
     end
 
-    function SetDisabled(disabled: any)
-        setDisabled(self, disabled)
+    function SetDisabled(disabled: unknown)
+        self.disabled = dim(self, disabled)
         if self.disabled then self:Close() end
     end
 
-    function Tooltip(): { [string]: any }
-        local data: { [string]: any } = self.tooltip and self.tooltip(self.value) or {}
-        data.title = data.title or ("Anchor: " .. (POINT_NAMES[self.value] or self.value or ""))
+    function Tooltip(): TooltipData
+        local data: TooltipData = self.tooltip and self.tooltip(self.value) or {}
+        data.title = data.title or ("Anchor: " .. (POINT_NAMES[self.value] or self.value))
         return data
     end
 
@@ -198,7 +214,7 @@ export class AnchorButton extends Button
     function Open()
         if self.disabled then return end
         if not self.pop then
-            local pop = panel(root, { solid = true, shadow = true }) :: AnchorPopover
+            local pop = AnchorPopover.new()
             pop.body:SetScript("OnSizeChanged", nil)
             pop.body:Hide()
             pop:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -213,7 +229,6 @@ export class AnchorButton extends Button
             end })
             self.picker = picker
             picker:SetPoint("TOPLEFT", pad, -pad)
-            pop.note = text(pop, "caption", "ink-muted")
             pop.note:SetWordWrap(true)
             pop.note:SetJustifyH("LEFT")
             pop.note:SetFixedWidth(w - pad * 2)
@@ -257,11 +272,21 @@ end, "UI.AnchorButton")
 
 local SWATCH = 20
 
-export type ChipOption = { value: any, label: string }
+export type ChipOption = { value: string, label: string }
 export type SwatchRowOptions = { options: ChipOption[], value?: string, onChange?: (token: string) -> () }
 
+-- a colour of the row: its option and the ring while chosen
+class Swatch extends Button
+    readonly ring: Frame
+
+    constructor(parent: Frame, readonly option: ChipOption)
+        super(nil, parent)
+        self.ring = CreateFrame("Frame", nil, self)
+    end
+end
+
 export class SwatchRow extends Frame
-    swatches: Button[]
+    swatches: Swatch[]
     onChange: ((token: string) -> ())? = nil
     value: string? = nil
     disabled: boolean? = nil
@@ -271,15 +296,13 @@ export class SwatchRow extends Frame
         self.swatches, self.onChange = {}, opts.onChange
         local x = 0
         for _, option in ipairs(opts.options) do
-            local b = CreateFrame("Button", nil, self)
-            b.option = option
+            local b = Swatch.new(self, option)
             b:SetSize(SWATCH, SWATCH)
             b:SetPoint("LEFT", x, 0)
             local fill = draw.fill(b, option.value)
             fill:SetPoint("TOPLEFT", 3, -3)
             fill:SetPoint("BOTTOMRIGHT", -3, 3)
             draw.border(b, "gilt-hairline", { inset = 2 })
-            b.ring = CreateFrame("Frame", nil, b)
             b.ring:SetAllPoints()
             draw.border(b.ring, "arcane", { width = 2 })
             b:SetScript("OnClick", function()
@@ -301,7 +324,7 @@ export class SwatchRow extends Frame
         for _, b in ipairs(self.swatches) do b.ring:SetShown(b.option.value == token) end
     end
 
-    function SetDisabled(...: any): ...any return setDisabled(self, ...) end
+    function SetDisabled(disabled: unknown) self.disabled = dim(self, disabled) end
 end
 
 export function swatchRow(parent: Frame, opts: SwatchRowOptions): SwatchRow
@@ -312,12 +335,33 @@ end
 -- ToggleChips
 --------------------------------------------------------------------------------
 
-export type ToggleChipsOptions = { options: ChipOption[], value?: any[], onChange?: (values: any[]) -> () }
+export type ToggleChipsOptions = { options: ChipOption[], value?: string[], onChange?: (values: string[]) -> () }
+
+-- an on/off chip: its option, the fill and edge while on, its label
+class Chip extends Button
+    readonly bg: Texture
+    readonly edgeOn: Frame
+    readonly label: Text
+
+    constructor(parent: Frame, readonly option: ChipOption)
+        super(nil, parent)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.bg = draw.fill(self, "arcane-soft", "BACKGROUND", 1)
+        self.bg:SetAllPoints()
+        self.edgeOn = CreateFrame("Frame", nil, self)
+        self.edgeOn:SetAllPoints()
+        draw.border(self.edgeOn, "arcane")
+        self.label = text(self, "label", "ink-muted")
+        self.label:SetPoint("CENTER")
+        self.label:SetValue(option.label)
+    end
+end
 
 export class ToggleChips extends Frame
-    chips: Button[]
-    onChange: ((values: any[]) -> ())? = nil
-    set: { [any]: boolean }
+    chips: Chip[]
+    onChange: ((values: string[]) -> ())? = nil
+    set: { [string]: boolean }
     disabled: boolean? = nil
 
     constructor(parent: Frame, opts: ToggleChipsOptions)
@@ -325,18 +369,7 @@ export class ToggleChips extends Frame
         self.chips, self.onChange, self.set = {}, opts.onChange, {}
         local x = 0
         for _, option in ipairs(opts.options) do
-            local b = CreateFrame("Button", nil, self)
-            b.option = option
-            draw.fill(b, "surface-sunk"):SetAllPoints()
-            draw.border(b, "gilt-line")
-            b.bg = draw.fill(b, "arcane-soft", "BACKGROUND", 1)
-            b.bg:SetAllPoints()
-            b.edgeOn = CreateFrame("Frame", nil, b)
-            b.edgeOn:SetAllPoints()
-            draw.border(b.edgeOn, "arcane")
-            b.label = text(b, "label", "ink-muted")
-            b.label:SetPoint("CENTER")
-            b.label:SetValue(option.label)
+            local b = Chip.new(self, option)
             b:SetSize(math.max(40, b.label:GetUnboundedStringWidth() + S["space-5"] * 2), 26)
             b:SetPoint("LEFT", x, 0)
             b:SetScript("OnClick", function()
@@ -352,8 +385,8 @@ export class ToggleChips extends Frame
         self:SetValue(opts.value)
     end
 
-    function SetValue(values: any[]?)
-        local set: { [any]: boolean } = {}
+    function SetValue(values: string[]?)
+        local set: { [string]: boolean } = {}
         for _, v in ipairs(values or {}) do set[v] = true end
         self.set = set
         for _, b in ipairs(self.chips) do
@@ -364,15 +397,15 @@ export class ToggleChips extends Frame
         end
     end
 
-    function GetValue(): any[]
-        local out: any[] = {}
+    function GetValue(): string[]
+        local out: string[] = {}
         for _, b in ipairs(self.chips) do
             if self.set[b.option.value] then out[#out + 1] = b.option.value end
         end
         return out
     end
 
-    function SetDisabled(...: any): ...any return setDisabled(self, ...) end
+    function SetDisabled(disabled: unknown) self.disabled = dim(self, disabled) end
 end
 
 export function toggleChips(parent: Frame, opts: ToggleChipsOptions): ToggleChips

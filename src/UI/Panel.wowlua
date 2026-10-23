@@ -39,23 +39,26 @@ export function closeButton(parent: Frame, onClick: ((b: Button) -> ())?): Butto
 end
 
 -- The kbd chip: a key in micro on surface-raised, at least 20px square.
-export interface KeyChip extends Frame
+export class KeyChip extends Frame
     text: Text
-    function SetKey(k: string)
-end
 
-export function keyChip(parent: Frame, key: string?): KeyChip
-    local f: KeyChip = CreateFrame("Frame", nil, parent) :: any
-    draw.fill(f, "surface-raised"):SetAllPoints()
-    draw.border(f, "gilt-line")
-    f.text = text(f, "micro", "ink")
-    f.text:SetPoint("CENTER", 0, 0)
-    function f:SetKey(k: string)
+    constructor(parent: Frame, key: string?)
+        super(nil, parent)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.text = text(self, "micro", "ink")
+        self.text:SetPoint("CENTER", 0, 0)
+        self:SetKey(key or "")
+    end
+
+    function SetKey(k: string)
         self.text:SetValue(k)
         self:SetSize(math.max(20, self.text:GetUnboundedStringWidth() + S["space-2"] * 2), 20)
     end
-    f:SetKey(key or "")
-    return f
+end
+
+export function keyChip(parent: Frame, key: string?): KeyChip
+    return KeyChip.new(parent, key)
 end
 
 --------------------------------------------------------------------------------
@@ -317,14 +320,19 @@ end
 -- overflows.
 --------------------------------------------------------------------------------
 
-export interface ScrollArea extends ScrollFrame
-    child: Frame
+export class ScrollArea extends ScrollFrame
+    readonly child: Frame
     -- with a bar
     track?: Texture
     thumb?: Texture
     grip?: Button
     grab?: number
     dragging?: boolean
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.child = CreateFrame("Frame", nil, self)
+    end
 end
 
 local function updateBar(scroll: ScrollArea)
@@ -389,8 +397,8 @@ local function makeGrip(scroll: ScrollArea, parent: Frame): Button
 end
 
 export function scrollArea(parent: Frame, bar: number?): ScrollArea
-    local scroll: ScrollArea = CreateFrame("ScrollFrame", nil, parent) :: any
-    local child = CreateFrame("Frame", nil, scroll)
+    local scroll = ScrollArea.new(parent)
+    local child = scroll.child
     child:SetSize(1, 1)
     scroll:SetScrollChild(child)
     scroll:EnableMouseWheel(true)
@@ -398,7 +406,6 @@ export function scrollArea(parent: Frame, bar: number?): ScrollArea
         local max = math.max(0, child:GetHeight() - self:GetHeight())
         self:SetVerticalScroll(math.min(max, math.max(0, self:GetVerticalScroll() - delta * 48)))
     end)
-    scroll.child = child
     if bar then
         -- on the parent: the scroll frame clips what it holds
         local track = draw.fill(parent, "gilt-faint", "ARTWORK")
@@ -573,25 +580,26 @@ end
 -- and an optional meta caption. Give it a width.
 --------------------------------------------------------------------------------
 
-export interface SectionHeader extends Frame
+export class SectionHeader extends Frame
     label: Text
     meta: Text
     rule: Frame
-    function SetLabel(l: string?, m: string?)
-end
 
-export function sectionHeader(parent: Frame, label: string?, meta: string?, width: number?): SectionHeader
-    local f: SectionHeader = CreateFrame("Frame", nil, parent) :: any
-    f:SetSize(width or 380, T.type.header.lineHeight)
-    headers[f] = true
-    f.label = text(f, "header", "gilt-text")
-    f.label:SetShadowed(true)
-    f.label:SetPoint("LEFT")
-    f.meta = text(f, "caption", "ink-muted")
-    f.meta:SetShadowed(true)
-    f.meta:SetPoint("RIGHT")
-    f.rule = draw.hairline(f, "gilt-line", "out")
-    function f:SetLabel(l: string?, m: string?)
+    constructor(parent: Frame, label: string?, meta: string?, width: number?)
+        super(nil, parent)
+        self:SetSize(width or 380, T.type.header.lineHeight)
+        headers[self] = true
+        self.label = text(self, "header", "gilt-text")
+        self.label:SetShadowed(true)
+        self.label:SetPoint("LEFT")
+        self.meta = text(self, "caption", "ink-muted")
+        self.meta:SetShadowed(true)
+        self.meta:SetPoint("RIGHT")
+        self.rule = draw.hairline(self, "gilt-line", "out")
+        self:SetLabel(label, meta)
+    end
+
+    function SetLabel(l: string?, m: string?)
         self.label:SetValue(l or "")
         self.meta:SetValue(m or "")
         self.rule:ClearAllPoints()
@@ -602,8 +610,10 @@ export function sectionHeader(parent: Frame, label: string?, meta: string?, widt
             self.rule:SetPoint("RIGHT", self, "RIGHT")
         end
     end
-    f:SetLabel(label, meta)
-    return f
+end
+
+export function sectionHeader(parent: Frame, label: string?, meta: string?, width: number?): SectionHeader
+    return SectionHeader.new(parent, label, meta, width)
 end
 
 --------------------------------------------------------------------------------
@@ -626,9 +636,9 @@ end
 --------------------------------------------------------------------------------
 
 export type WindowTab = {
-    key: any,
+    key: string,
     label: string,
-    disabled?: boolean | (() -> any),
+    disabled?: boolean | (() -> boolean?),
     reason?: string,
 }
 
@@ -642,13 +652,13 @@ export type WindowOptions = {
     height?: number,
     footer?: boolean,
     tabs?: WindowTab[],
-    onTab?: (key: any) -> (),
+    onTab?: (key: string) -> (),
 }
 
 -- A window tab: its key and label, what it was made from, and while it is
 -- disabled a cover that takes the click and says why.
 export class TabButton extends Button
-    key: any
+    key: string
     label: Text
     def: WindowTab
     cover: Frame
@@ -694,8 +704,8 @@ export class WindowFrame extends Panel
     tabRow?: Frame
     tabButtons?: TabButton[]
     tabMarker?: TabMarker
-    tab: any = nil
-    onTab?: (key: any) -> ()
+    tab: string? = nil
+    onTab?: (key: string) -> ()
 
     constructor(parent: Frame, opts: WindowOptions)
         super(parent, {
@@ -786,7 +796,7 @@ export class WindowFrame extends Panel
         marker:SetChosen(chosen)
     end
 
-    function SetTab(key: any)
+    function SetTab(key: string)
         if not self.tabButtons then return end
         self.tab = key
         self:DrawTabs()

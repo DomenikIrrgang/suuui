@@ -11,7 +11,8 @@ import * as tooltip from "/UI/Tooltip"
 import * as draw from "/UI/Draw"
 import measureText from "/UI/Text"
 import closeButton, keyChip, panel, scrollArea, makeModal, confirm, sectionHeader, windowFrame, Panel, PanelOptions,
-    ScrollArea, WindowFrame, WindowOptions, ConfirmOptions from "/UI/Panel"
+    ScrollArea, TabButton, WindowFrame, WindowOptions, ConfirmOptions from "/UI/Panel"
+import type TabMarker from "/UI/TabMarker"
 import internal shade from "/UI/Panel"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, pointOf, themeChanged, reduceMotion from "./PrimitivesHelpers"
@@ -642,8 +643,8 @@ local function win(opts: WindowOptions): WindowFrame
     return w
 end
 
-local function tab(w: WindowFrame, i: number): any
-    return (w.tabButtons :: Button[])[i]
+local function tab(w: WindowFrame, i: number): TabButton
+    return (w.tabButtons :: TabButton[])[i]
 end
 
 @test("a window: a movable, closable panel on the high layer, its content scrolling")
@@ -719,7 +720,7 @@ local function tabs()
     expect(w.tab).toBe("back")
     expect(s).toHaveBeenCalledWith("back")
     expect(tokenOf(b.label)).toBe("gilt-text")
-    expect((w.tabMarker :: any).chosen).toBe(b)
+    expect((w.tabMarker :: TabMarker).chosen).toBe(b)
     mock.click(a)
     expect(w.tab).toBe("buy")
     expect(tokenOf(a.label)).toBe("gilt-text")
@@ -729,8 +730,8 @@ end
 @test("hover inks a tab that isn't chosen")
 local function tabHover()
     local w = win({ title = "T", width = 500, height = 300,
-        tabs = { { key = 1, label = "One" }, { key = 2, label = "Two" } } })
-    w:SetTab(1)
+        tabs = { { key = "one", label = "One" }, { key = "two", label = "Two" } } })
+    w:SetTab("one")
     mock.hover(tab(w, 2))
     expect(tokenOf(tab(w, 2).label)).toBe("ink")
     mock.hover(tab(w, 1))
@@ -744,11 +745,11 @@ end
 local function tabDisabled()
     local open = false
     local w = win({ title = "T", width = 500, height = 300, tabs = {
-        { key = 1, label = "One" },
-        { key = 2, label = "Two", disabled = true, reason = "Not yet" },
-        { key = 3, label = "Three", disabled = function(): any return not open end },
+        { key = "one", label = "One" },
+        { key = "two", label = "Two", disabled = true, reason = "Not yet" },
+        { key = "three", label = "Three", disabled = function(): boolean return not open end },
     } })
-    w:SetTab(1)
+    w:SetTab("one")
     local two, three = tab(w, 2), tab(w, 3)
     expect(tokenOf(two.label)).toBe("ink-faint")
     expect(two.label:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
@@ -759,8 +760,8 @@ local function tabDisabled()
     mock.hover(nil)
     expect(hidden).toHaveBeenCalled()
     -- chosen while disabled: not shown as chosen
-    w:SetTab(2)
-    expect((w.tabMarker :: any).chosen).toBeNil()
+    w:SetTab("two")
+    expect((w.tabMarker :: TabMarker).chosen).toBeNil()
     open = true
     w:DrawTabs()
     expect(three.cover).never.toBeShown()
@@ -770,7 +771,7 @@ end
 
 @test("a theme change lays the tabs out again")
 local function tabsTheme()
-    local w = win({ title = "T", width = 500, height = 300, tabs = { { key = 1, label = "One" } } })
+    local w = win({ title = "T", width = 500, height = 300, tabs = { { key = "one", label = "One" } } })
     T.type.header.lineHeight = HEADER_LINE + 6
     themeChanged()
     expect(y(w.tabRow)).toBe(-w:BodyTop())

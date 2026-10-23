@@ -5,7 +5,7 @@
 
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
-import stack, grid, Layout from "/UI/Layout"
+import stack, grid, placementOf, isHooked, Layout, Align, Placement from "/UI/Layout"
 import text from "/UI/Text"
 import expectNoErrors, newParent from "../../helpers"
 import pointOf from "./PrimitivesHelpers"
@@ -24,6 +24,15 @@ local function box(p: Frame, w: number, h: number): Frame
     local f = CreateFrame("Frame", nil, p)
     f:SetSize(w, h)
     return f
+end
+
+local function layoutOf(r: Region): Layout?
+    local p = placementOf(r)
+    return p and p.layout
+end
+
+local function placedAt(r: Region): Placement
+    return assert(placementOf(r))
 end
 
 -- where a child sits: its TOPLEFT offsets from the container
@@ -54,15 +63,15 @@ local function verticalStack()
     local a, b = box(c, 50, 20), box(c, 80, 30)
     expect(l:Add(a)).toBe(a)
     l:Add(b)
-    expect(a.layout).toBe(l)
+    expect(layoutOf(a)).toBe(l)
     -- nothing moves until the next frame
     expect(c:GetHeight()).toBe(1)
     mock.advanceFrames(1)
     expect(at(a)).toEqual({ 10, -10 })
     expect(at(b)).toEqual({ 10, -34 })
     expect(c).toHaveSize(100, 74)
-    expect(a.suuLayoutW).toBe(50)
-    expect(b.suuLayoutH).toBe(30)
+    expect(placedAt(a).w).toBe(50)
+    expect(placedAt(b).h).toBe(30)
 end
 
 @test("a horizontal stack places its children left to right")
@@ -101,7 +110,7 @@ end
 
 @test("cross-axis alignment: start, center, end and stretch")
 @cases({ { "start", 0 }, { "center", 15 }, { "end", 30 } })
-local function aligned(align: string, x: number)
+local function aligned(align: Align, x: number)
     local c = host()
     local l = stack(c, { align = align })
     local wide, narrow = box(c, 50, 10), box(c, 20, 10)
@@ -238,7 +247,7 @@ local function hookedOnce()
     l:Add(a)
     l:Remove(a)
     l:Add(a)
-    expect(a.suuLayoutHooked).toBe(true)
+    expect(isHooked(a)).toBe(true)
     mock.advanceFrames(1)
     expect(#l.children).toBe(1)
 end
@@ -355,12 +364,12 @@ local function removeAndClear()
     l:Add(a)
     l:Add(b)
     l:Remove(a)
-    expect(a.layout).toBeNil()
+    expect(layoutOf(a)).toBeNil()
     l:Remove(a) -- not in it: nothing
     mock.advanceFrames(1)
     expect(c:GetHeight()).toBe(20)
     l:Clear()
-    expect(b.layout).toBeNil()
+    expect(layoutOf(b)).toBeNil()
     expect(#l.children).toBe(0)
     mock.advanceFrames(1)
     expect(c:GetHeight()).toBe(0)
@@ -436,7 +445,7 @@ local function grids()
     expect(at(cells[1])).toEqual({ 1, -1 })
     expect(at(cells[3])).toEqual({ 45, -1 })
     expect(at(cells[4])).toEqual({ 1, -13 })
-    expect(cells[5].suuLayoutW).toBe(5)
+    expect(placedAt(cells[5]).w).toBe(5)
     expect(c).toHaveSize(3 * 20 + 2 * 2 + 2, 2 * 10 + 2 + 2)
 end
 
@@ -452,7 +461,7 @@ local function gridDefaults()
     mock.advanceFrames(1)
     expect(at(b)).toEqual({ 0, -32 })
     expect(c).toHaveSize(32, 64)
-    expect(a.layout).toBe(g)
+    expect(layoutOf(a)).toBe(g)
 end
 
 @test("a grid with fewer children than columns is as wide as they are; empty is 0")
@@ -468,7 +477,7 @@ local function gridNarrow()
     g:Clear()
     mock.advanceFrames(1)
     expect(c).toHaveSize(0, 0)
-    expect(a.layout).toBeNil()
+    expect(layoutOf(a)).toBeNil()
 end
 
 @test("Layout objects keep the options they were made with")

@@ -9,6 +9,7 @@ import root as suuRoot from "/Core/Root"
 import * as motion from "/Core/Motion"
 import tooltipFrame, showTooltip, hideTooltip, refreshTooltip, attachTooltip, skinTooltip, isTooltipSkinned, spellTooltip from "/UI/Tooltip"
 import internal current, spellPostCall from "/UI/Tooltip"
+import placementOf from "/UI/Layout"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, themeChanged from "./WindowsHelpers"
 
@@ -22,6 +23,12 @@ mock.module(motion, { fadeIn = function(frame: any, duration: number?)
 end })
 
 local parent: Frame? = nil
+
+-- the space a layout puts before this row
+local function gapOf(r: Region): number?
+    local p = placementOf(r)
+    return p and p.opts and p.opts.gapBefore
+end
 
 local function make()
     parent = newParent()
@@ -127,21 +134,21 @@ local function lines()
     expect(r2.left:CanWordWrap()).toBe(true)
     expect(r2.left:GetWidth()).toBe(t:GetWidth() - PAD * 2)
     -- the gaps: after the subtitle, and a line's own
-    expect(r1.layoutOpts.gapBefore).toBe(S["space-2"] + S["space-1"])
-    expect(t.rows[3].layoutOpts.gapBefore).toBe(8)
+    expect(gapOf(r1)).toBe(S["space-2"] + S["space-1"])
+    expect(gapOf(t.rows[3])).toBe(8)
     -- fewer lines: the rest hidden
     t:SetContent({ title = "T", lines = { { "One" } } })
     expect(t.rows[1]).toBeShown()
     expect(t.rows[2]).never.toBeShown()
     expect(t.rows[3]).never.toBeShown()
     -- the first line without a subtitle has no extra gap
-    expect(t.rows[1].layoutOpts.gapBefore).toBeNil()
+    expect(gapOf(t.rows[1])).toBeNil()
 end
 
 @test("a line with a missing left side is empty")
 local function emptyLeft()
     local t = make()
-    t:SetContent({ title = "T", lines = { { nil, "right" } } })
+    t:SetContent({ title = "T", lines = { { [2] = "right" } } })
     expect(t.rows[1].left:GetText()).toBe("")
     expect(t.rows[1].right).toHaveText("right")
 end
@@ -149,8 +156,8 @@ end
 @test("a theme change lays out the shown tooltips with content")
 local function theme()
     local t = make()
-    local hidden = tooltipFrame(parent)
-    local fresh = tooltipFrame(parent)
+    local hidden = tooltipFrame(assert(parent))
+    local fresh = tooltipFrame(assert(parent))
     t:SetContent({ title = "T" })
     hidden:SetContent({ title = "H" })
     hidden:Hide()

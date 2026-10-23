@@ -17,6 +17,7 @@
 --   tooltipFrame(parent) -> a standalone tooltip with :SetContent(data)
 
 import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
 import hook, hookScript from "wowlua:hooks"
 import tokens as T from "/Core/Tokens"
 import root as suuRoot from "/Core/Root"
@@ -25,27 +26,46 @@ import * as motion from "/Core/Motion"
 import * as draw from "/UI/Draw"
 import text, Text from "/UI/Text"
 import Panel from "/UI/Panel"
-import stack as layoutStack from "/UI/Layout"
+import stack as layoutStack, Stack from "/UI/Layout"
 
 local S = T.space
 
 local MAX_W = 280
 local INTENT = 0.12
 
-local function row(self: any, i: number): any
-    self.rows[i] = self.rows[i] or (function()
-        local r = CreateFrame("Frame", nil, self.stackFrame)
-        r.left = text(r, "body", "ink")
-        r.left:SetPoint("LEFT")
-        r.right = text(r, "body", "ink-muted")
-        r.right:SetPoint("RIGHT")
-        return r
-    end)()
-    return self.rows[i]
+-- A line: its left text, an optional right one, and (0.17) the space before it.
+export type TooltipLine = { [number]: string, gap?: number }
+
+-- What a tooltip shows.
+export type TooltipData = {
+    title?: string,
+    titleColor?: string,
+    subtitle?: string,
+    lines?: TooltipLine[],
+    description?: string,
+    meta?: string,
+    maxWidth?: number,
+}
+
+-- A tooltip's data, or a function of its owner that makes it.
+export type TooltipSource = TooltipData | ((owner: Region) -> TooltipData)
+
+-- A line's row: the left text and the right one.
+export class TooltipRow extends Frame
+    readonly left: Text
+    readonly right: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.left = text(self, "body", "ink")
+        self.left:SetPoint("LEFT")
+        self.right = text(self, "body", "ink-muted")
+        self.right:SetPoint("RIGHT")
+    end
 end
 
 -- a theme change: the shown ones laid out again (the text styles' sizes)
-local tips: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+local tips: { [TooltipFrame]: boolean } = setmetatable({}, { __mode = "k" })
 events.on("SUUUI_THEME_CHANGED", function()
     for t in pairs(tips) do
         if t:IsShown() and t.content then t:SetContent(t.content) end
@@ -54,15 +74,15 @@ end, "UI.TooltipFrame")
 
 export class TooltipFrame extends Panel
     stackFrame: Frame
-    stack: any
+    stack: Stack
     heading: Text
     sub: Text
     desc: Text
     status: Text
-    rows: any
-    content: any? = nil
+    rows: TooltipRow[]
+    content: TooltipData? = nil
 
-    constructor(parent: any)
+    constructor(parent: Frame)
         super(parent, { ornament = true, solid = false })
         tips[self] = true
         -- Sized by SetContent, not by the panel body.
@@ -80,7 +100,16 @@ export class TooltipFrame extends Panel
         self.rows = {}
     end
 
-    function SetContent(d: { [string]: any })
+    private function Row(i: number): TooltipRow
+        local r = self.rows[i]
+        if not r then
+            r = TooltipRow.new(self.stackFrame)
+            self.rows[i] = r
+        end
+        return r
+    end
+
+    function SetContent(d: TooltipData)
         self.content = d
         local stack = self.stack
         stack:Clear()
@@ -100,7 +129,7 @@ export class TooltipFrame extends Panel
 
         for _, r in ipairs(self.rows) do r:Hide() end
         for i, l in ipairs(d.lines or {}) do
-            local r = row(self, i)
+            local r = self:Row(i)
             r.left:SetValue(l[1] or "")
             r.right:SetValue(l[2] or "")
             local w = r.left:GetUnboundedStringWidth() + (l[2] and (S["space-5"] + r.right:GetUnboundedStringWidth()) or 0)
@@ -176,7 +205,7 @@ export class TooltipFrame extends Panel
     end
 end
 
-export function tooltipFrame(parent: any): TooltipFrame
+export function tooltipFrame(parent: Frame): TooltipFrame
     return TooltipFrame.new(parent)
 end
 
@@ -184,9 +213,9 @@ end
 -- The shared tooltip
 --------------------------------------------------------------------------------
 
-local shared: any, intent: TimerHandle?
+local shared: TooltipFrame?, intent: TimerHandle?
 -- what the shared tooltip shows now: its owner and its data
-local current: { owner?: any, data?: any } = {}
+local current: { owner?: Region, data?: TooltipSource } = {}
 
 export function hideTooltip()
     if intent then intent:Cancel() intent = nil end
@@ -194,37 +223,38 @@ export function hideTooltip()
     current.owner, current.data = nil, nil
 end
 
-export function showTooltip(owner: any, data: any)
+export function showTooltip(owner: Region, data: TooltipSource)
     hideTooltip()
     intent = after(INTENT, function()
         intent = nil
         if not owner:IsVisible() then return end
-        shared = shared or tooltipFrame(suuRoot)
-        shared:SetFrameStrata("TOOLTIP")
+        local tip = shared or tooltipFrame(suuRoot)
+        shared = tip
+        tip:SetFrameStrata("TOOLTIP")
         -- seen even while the UI is faded out (the NPC dialogue's scene)
-        shared:SetIgnoreParentAlpha(true)
-        shared:SetClampedToScreen(true)
+        tip:SetIgnoreParentAlpha(true)
+        tip:SetClampedToScreen(true)
         current.owner, current.data = owner, data
-        shared:SetContent(type(data) == "function" and data(owner) or data)
-        shared:ClearAllPoints()
-        shared:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", S["space-4"], S["space-4"])
-        shared:Show()
-        motion.fadeIn(shared, T.duration["dur-fast"])
+        if type(data) == "function" then tip:SetContent(data(owner)) else tip:SetContent(data) end
+        tip:ClearAllPoints()
+        tip:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", S["space-4"], S["space-4"])
+        tip:Show()
+        motion.fadeIn(tip, T.duration["dur-fast"])
     end)
 end
 
 -- 0.17: the shared tooltip shown for `owner` again, with its data a function
 -- asked again (a modifier key changes what it says): nothing when it shows
 -- for another frame, or not yet.
-export function refreshTooltip(owner: any)
-    local data = current.data
-    if not (shared and shared:IsShown() and current.owner == owner and type(data) == "function") then return end
-    shared:SetContent(data(owner))
+export function refreshTooltip(owner: Region)
+    local data, tip = current.data, shared
+    if not (tip and tip:IsShown() and current.owner == owner and type(data) == "function") then return end
+    tip:SetContent(data(owner))
 end
 
 -- Shows `data` (a table, or a function of the frame) while the mouse is over `frame`.
-export function attachTooltip(frame: any, data: any)
-    frame:HookScript("OnEnter", function(self: any) showTooltip(self, data) end)
+export function attachTooltip(frame: Frame, data: TooltipSource)
+    frame:HookScript("OnEnter", function(self: Frame) showTooltip(self, data) end)
     frame:HookScript("OnLeave", hideTooltip)
 end
 
@@ -240,15 +270,17 @@ end
 -- Blizzard's.
 --------------------------------------------------------------------------------
 
-type Art = { bg: Texture, border: any, ornament: any }
+type Art = { bg: Texture, border: draw.Border, ornament: Texture }
 
-local skinned: { [any]: Art } = {}
+local skinned: { [Frame]: Art } = {}
 
-local function hideBlizzardArt(tooltip: any)
-    if tooltip.NineSlice then tooltip.NineSlice:SetAlpha(0) end
+-- Blizzard's tooltip art (the NineSlice its template makes).
+local function hideBlizzardArt(tooltip: Frame)
+    local nineSlice = (tooltip :: { NineSlice?: Frame }).NineSlice
+    if nineSlice then nineSlice:SetAlpha(0) end
 end
 
-export function skinTooltip(tooltip: any): Art?
+export function skinTooltip(tooltip: Frame?): Art?
     if not tooltip or skinned[tooltip] then return nil end
     local bg = tooltip:CreateTexture(nil, "BACKGROUND", nil, -8)
     draw.paintFill(bg, "surface-glass")
@@ -264,10 +296,10 @@ export function skinTooltip(tooltip: any): Art?
     return art
 end
 
-export function isTooltipSkinned(tooltip: any): boolean return skinned[tooltip] ~= nil end
+export function isTooltipSkinned(tooltip: Frame): boolean return skinned[tooltip] ~= nil end
 
 if type(SharedTooltip_SetBackdropStyle) == "function" then
-    hook("SharedTooltip_SetBackdropStyle", function(tooltip: any)
+    hook("SharedTooltip_SetBackdropStyle", function(tooltip: Frame)
         if skinned[tooltip] then hideBlizzardArt(tooltip) end
     end)
 end
@@ -282,21 +314,22 @@ end
 -- in a post-call too, so every draw carries them (found in game: the cost
 -- showed only on the second hover).
 
-type Pending = { id: any, owner: any, lines: any[], added?: boolean }
+type Pending = { id: number, owner: Frame, lines: string[], added?: boolean }
 
 local pending: Pending? -- { id, lines }
 
-local function addExtra(tooltip: any, lines: any[])
+local function addExtra(tooltip: GameTooltip, lines: string[])
     for _, line in ipairs(lines) do tooltip:AddLine(line, 1, 1, 1, true) end
 end
 
 -- The spell post-call: the pending lines on GameTooltip when it draws that
 -- spell for that owner.
-local function spellPostCall(tooltip: any, data: any)
+-- (data: the game's tooltip data; the id is a secret in some places)
+local function spellPostCall(tooltip: GameTooltip, data: { id?: number | Secret<number> }?)
     local p = pending
     if tooltip ~= GameTooltip or not p then return end
     local id = data and data.id
-    if issecretvalue and issecretvalue(id) then return end
+    if isSecret(id) then return end
     if id == p.id and tooltip:GetOwner() == p.owner then
         addExtra(tooltip, p.lines)
         p.added = true
@@ -314,9 +347,9 @@ local function hookSpellTips()
     hookScript(GameTooltip, "OnHide", function() pending = nil end)
 end
 
-export function spellTooltip(owner: any, spellID: number, extra: any, anchor: any)
+export function spellTooltip(owner: Frame, spellID: number, extra: string | string[] | nil, anchor: TooltipAnchor?)
     hookSpellTips()
-    local lines: any[] = type(extra) == "table" and extra or (extra and { extra } or {})
+    local lines: string[] = type(extra) == "table" and extra or (extra and { extra } or {})
     -- the owner first: it hides what the tooltip showed, and its OnHide
     -- clears `pending` (found in game)
     GameTooltip:SetOwner(owner, anchor or "ANCHOR_RIGHT")
