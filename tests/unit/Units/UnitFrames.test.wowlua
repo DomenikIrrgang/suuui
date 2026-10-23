@@ -12,7 +12,10 @@ import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/UnitFrames"
 import expectNoErrors from "../../helpers"
 
-local G: any = _G
+import asFrame, named from "/UI/Reskin"
+
+-- One of the game's frames, by name.
+local function game(name: string): Frame return assert(asFrame(named(name))) end
 local T = SuuUI.Tokens
 
 local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10 })
@@ -35,26 +38,35 @@ local function cleanup()
     expectNoErrors()
 end
 
-local function rows(): { [string]: any }
-    local out: { [string]: any } = {}
-    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do out[r.key] = r end end
+-- A settings row as the tests read it.
+type Row = { key?: string, disabled?: () -> (boolean?, string?) }
+local function rows(): { [string]: Row }
+    local out: { [string]: Row } = {}
+    for _, g in ipairs(SECTION.groups) do
+        for _, r in ipairs(g.rows) do
+            local row: Row = r
+            if row.key then out[row.key] = row end
+        end
+    end
     return out
 end
+-- why a row is off
+local function disabled(r: Row?): (boolean?, string?) return assert(assert(r).disabled)() end
 
 @test("every frame drawn over Blizzard's stood-down ones and published for other modules")
 local function frames()
-    expect(G.PlayerFrame:IsShown()).toBe(false)
-    expect(G.TargetFrame:IsShown()).toBe(false)
-    expect(M.frames.player:IsShown()).toBe(true)
-    expect(SuuUI.GetAnchor("player")).toBe(M.frames.player)
-    expect(SuuUI.GetAnchor("target")).toBe(M.frames.target)
-    expect(SuuUI.GetAnchor("targettarget")).toBe(M.frames.tot)
+    expect(game("PlayerFrame"):IsShown()).toBe(false)
+    expect(game("TargetFrame"):IsShown()).toBe(false)
+    expect(assert(M.frames).player:IsShown()).toBe(true)
+    expect(SuuUI.GetAnchor("player")).toBe(assert(M.frames).player)
+    expect(SuuUI.GetAnchor("target")).toBe(assert(M.frames).target)
+    expect(SuuUI.GetAnchor("targettarget")).toBe(assert(M.frames).tot)
     expect(SuuUI.GetAnchor("boss3")).toBe(M.bosses[3])
 end
 
 @test("each frame follows its unit; off by its setting or hidden in edit mode, after a fight")
 local function follow()
-    local target = M.frames.target
+    local target = assert(M.frames).target
     expect(target:IsShown()).toBe(false)
     mock.player:target(wolf)
     mock.advanceFrames(2)
@@ -62,13 +74,13 @@ local function follow()
     -- the target's target: the wolf on you
     wolf:target(mock.player)
     mock.advanceFrames(12)
-    expect(M.frames.tot:IsShown()).toBe(true)
+    expect(assert(M.frames).tot:IsShown()).toBe(true)
     M:Set("showToT", false)
     mock.advanceFrames(2)
-    expect(M.frames.tot:IsShown()).toBe(false)
+    expect(assert(M.frames).tot:IsShown()).toBe(false)
     M:Set("showToT", true)
     mock.advanceFrames(2)
-    expect(M.frames.tot:IsShown()).toBe(true)
+    expect(assert(M.frames).tot:IsShown()).toBe(true)
     -- in a fight: after it
     mock.player:enterCombat()
     mock.advanceFrames(1)
@@ -86,15 +98,15 @@ end
 local function size()
     M:Set("width", 300)
     M:Set("height", 40)
-    expect(M.frames.player:GetWidth()).toBe(300)
-    expect(M.frames.target:GetHeight()).toBe(40)
+    expect(assert(M.frames).player:GetWidth()).toBe(300)
+    expect(assert(M.frames).target:GetHeight()).toBe(40)
     mock.player:enterCombat()
     mock.advanceFrames(1)
     M:Set("width", 260)
-    expect(M.frames.player:GetWidth()).toBe(300)
+    expect(assert(M.frames).player:GetWidth()).toBe(300)
     mock.player:leaveCombat()
     mock.advanceFrames(1)
-    expect(M.frames.player:GetWidth()).toBe(260)
+    expect(assert(M.frames).player:GetWidth()).toBe(260)
 end
 
 @test("the options live on every frame")
@@ -105,7 +117,7 @@ local function options()
     M:Set("raidMarkers", false)
     M:Set("showMeta", false)
     M:Set("eliteDragon", true)
-    local f = M.frames.target
+    local f = assert(M.frames).target
     expect(f.opts.power).toBe(false)
     expect(f.opts.healthText).toBe("both")
     expect(f.opts.nameColor).toBe("ink")
@@ -114,49 +126,49 @@ local function options()
     expect(f.opts.dragon).toBe(true)
     -- the target of target has no power line
     M:Set("showPower", true)
-    expect(M.frames.tot.opts.power).toBe(false)
-    expect(M.frames.player.opts.power).toBe(true)
+    expect(assert(M.frames).tot.opts.power).toBe(false)
+    expect(assert(M.frames).player.opts.power).toBe(true)
 end
 
 @test("out of combat at full health the frames rest dimmed (the game picks it from your secret health); hurt, in combat or hovered: full")
 local function fade()
-    local player, target = M.frames.player, M.frames.target
+    local player, target = assert(M.frames).player, assert(M.frames).target
     -- (alphas are stored at 8 bits: the resting one as a plain frame reads it back)
     local probe = CreateFrame("Frame")
     probe:SetAlpha(T.opacity["opacity-ooc"])
     local rest = mock.secret(probe:GetAlpha())
     M:UpdateFade()
-    expect(player:GetAlpha() :: any).toBe(rest)
-    expect(target:GetAlpha() :: any).toBe(rest)
+    expect(player:GetAlpha() :: unknown).toBe(rest)
+    expect(target:GetAlpha() :: unknown).toBe(rest)
     -- hurt: shown in full, at once
     mock.player:damage(50)
     mock.advanceFrames(2)
-    expect(player:GetAlpha() :: any).toBe(mock.secret(1))
+    expect(player:GetAlpha() :: unknown).toBe(mock.secret(1))
     mock.player:heal(50)
     mock.advanceFrames(2)
-    expect(player:GetAlpha() :: any).toBe(rest)
+    expect(player:GetAlpha() :: unknown).toBe(rest)
     -- hovered: full at once (a secret alpha can't be faded from; it reads
     -- back secret for good), then resting again
     mock.hover(player)
-    expect(player:GetAlpha() :: any).toBe(mock.secret(1))
+    expect(player:GetAlpha() :: unknown).toBe(mock.secret(1))
     mock.hover(nil)
-    expect(player:GetAlpha() :: any).toBe(rest)
+    expect(player:GetAlpha() :: unknown).toBe(rest)
     -- in combat: full
     mock.player:enterCombat()
     mock.advanceFrames(2)
-    expect(player:GetAlpha() :: any).toBe(mock.secret(1))
+    expect(player:GetAlpha() :: unknown).toBe(mock.secret(1))
     mock.player:leaveCombat()
     mock.advanceFrames(2)
     -- the setting off: full, faded to
     M:Set("fadeOutOfCombat", false)
     mock.advanceFrames(120)
-    expect(player:GetAlpha() :: any).toBe(mock.secret(1))
+    expect(player:GetAlpha() :: unknown).toBe(mock.secret(1))
     expectNoErrors()
 end
 
 @test("aggro on your frame in a group (not as the tank); solo none")
 local function aggro()
-    local player = M.frames.player
+    local player = assert(M.frames).player
     mock.player:target(wolf)
     wolf:setThreat(100)
     mock.advanceFrames(1)
@@ -177,7 +189,7 @@ end
 
 @test("combo points over the target: a rogue's on an enemy; the setting off")
 local function combo()
-    local c = M.combo
+    local c = assert(M.combo)
     mock.player:target(wolf)
     mock.advanceFrames(1)
     expect(c:IsShown()).toBe(false)
@@ -197,7 +209,7 @@ end
 
 @test("the rested sign while you rest and earn; full; carrying; hidden in combat and at the cap")
 local function rested()
-    local sign = M.restedSign
+    local sign = assert(M.restedSign)
     expect(sign.look).toBeNil()
     mock.player:setStats({ restedXP = 400, xpMax = 1000 })
     mock.setResting(true)
@@ -236,9 +248,9 @@ end
 @test("your frame's tooltip: the rested lines after the unit's")
 local function tooltip()
     local lines: { string } = {}
-    local tip: any = {}
-    function tip:AddLine(text: string) lines[#lines + 1] = text end
-    function tip:AddDoubleLine(a: string, b: string) lines[#lines + 1] = a .. " | " .. b end
+    local tip = GameTooltip
+    mock.stub(tip, "AddLine", function(_: unknown, text: string) lines[#lines + 1] = text end)
+    mock.stub(tip, "AddDoubleLine", function(_: unknown, a: string, b: string) lines[#lines + 1] = a .. " | " .. b end)
     mock.player:setStats({ restedXP = 400, xpMax = 1000 })
     mock.setResting(true)
     mock.advanceFrames(1)
@@ -262,14 +274,14 @@ local function tooltip()
     M:AddRestedLines(tip)
     expect(#lines).toBe(0)
     -- hovering your frame calls it
-    expect(M.frames.player.onTooltip ~= nil).toBe(true)
+    expect(assert(M.frames).player.onTooltip ~= nil).toBe(true)
 end
 
 @test("edit mode: the sign stands still where it could show")
 local function editMode()
     mock.stub(SuuUI.EditMode, "IsActive", function(): boolean return true end)
     M:Emit("SUUUI_EDITMODE_CHANGED", true)
-    expect(M.restedSign.look).toBe("rest")
+    expect(assert(M.restedSign).look).toBe("rest")
 end
 
 @test("the settings preview: your frame at its size, the sign, the reason while it wouldn't show")
@@ -297,15 +309,15 @@ end
 @test("the settings rows: combo points for rogues and druids; the rested rows wait for the sign")
 local function rowsWait()
     local r = rows()
-    local off, why = r.comboPoints.disabled()
+    local off, why = disabled(r.comboPoints)
     expect(off).toBe(true)
     expect(why).toBe("Only rogues and druids use combo points.")
     mock.setPlayer({ class = "DRUID" })
-    expect((r.comboPoints.disabled())).toBe(false)
+    expect((disabled(r.comboPoints))).toBe(false)
     mock.setPlayer({ class = "WARRIOR" })
-    expect((r.restedShow.disabled())).toBeNil()
+    expect((disabled(r.restedShow))).toBeNil()
     M:Set("restedSign", false)
-    off, why = r.restedShow.disabled()
+    off, why = disabled(r.restedShow)
     expect(why).toBe("The rested sign is off.")
     M:Set("debuffBadges", "off")
 end
@@ -313,9 +325,8 @@ end
 -- (last: the module off)
 @test("stopped: the frames gone, their anchors withdrawn")
 local function disabled()
-    local m: any = M
-    m:OnDisable()
-    expect(M.frames.player:IsShown()).toBe(false)
+    assert(M.OnDisable)(M)
+    expect(assert(M.frames).player:IsShown()).toBe(false)
     expect(SuuUI.GetAnchor("player")).toBeNil()
-    expect(M.frames.player.onTooltip).toBeNil()
+    expect(assert(M.frames).player.onTooltip).toBeNil()
 end
