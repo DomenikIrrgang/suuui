@@ -6,21 +6,28 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import * as tips from "/Units/WorldMap/Tips"
 import type Group, Item from "/Units/WorldMap/Arrange"
+import type QuestStarts from "/Data/QuestStarts"
 
 local MUTED = "|cff" .. SuuUI.Tokens.color["ink-muted"].hex
 local S = SuuUI.Tokens.space
 
-local function group(items: Item[], distinct: number?): Group
-    return { x = 0, y = 0, items = items, key = nil, fixed = nil, small = nil, distinct = distinct or #items, uids = {} }
+-- A group of made-up pins (only the fields a test needs).
+local function group(items: { [string]: unknown }[], distinct: number?): Group
+    local list: Item[] = {}
+    for i, it in ipairs(items) do
+        local one: Item = mock.partial(it)
+        list[i] = one
+    end
+    return { x = 0, y = 0, items = list, key = nil, fixed = nil, small = nil, distinct = distinct or #items, uids = {} }
 end
 
 -- The quest data's objectives and names for these tests.
 local function questData()
-    mock.stub(SuuUI, "QuestStarts", function(): any
-        return {
+    mock.stub(SuuUI, "QuestStarts", function(): QuestStarts
+        return mock.partial({
             objectives = { [1] = "Bring 8 Scorpid Worker Tails to $N.", [2] = "Find $Gyour brother:your sister; in Razor Hill." },
             quests = { [2] = { "Family Ties" } },
-        }
+        })
     end)
 end
 
@@ -41,7 +48,7 @@ end
 @test("one pin: its own card, else its name, title and kind, a quest's colour")
 local function onePin()
     local card = { title = "Its own" }
-    expect(tips.tipBase(group({ { tip = function(): any return card end } }))).toBe(card)
+    expect(tips.tipBase(group({ { tip = function(): { title: string } return card end } }))).toEqual(card)
     local tip = tips.tipBase(group({ { name = "Grosk", detail = "Food & Drink", kindName = "Repair", small = true,
         more = { { "Open all day" } } } }), "a hint")
     expect(tip.title).toBe("Grosk")
@@ -88,11 +95,11 @@ end
 
 @test("a merged pin of many: twelve lines, then how many more")
 local function many()
-    local items: Item[] = {}
+    local items: { [string]: unknown }[] = {}
     for i = 1, 15 do items[i] = { name = "Rare " .. i } end
-    local tip = tips.tipBase(group(items))
-    expect(#tip.lines).toBe(13)
-    expect(tip.lines[13]).toEqual({ "and 3 more" })
+    local lines = tips.tipBase(group(items)).lines or {}
+    expect(#lines).toBe(13)
+    expect(lines[13]).toEqual({ "and 3 more" })
 end
 
 @test("with Shift: one quest's objectives as the description, unknown ones said so")

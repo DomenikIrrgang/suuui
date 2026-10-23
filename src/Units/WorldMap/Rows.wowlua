@@ -1,0 +1,119 @@
+-- Units/WorldMap/Rows.wowlua
+-- SuuUI's generated map data, read: a quest's, an NPC's and an entrance's
+-- row and an instance's levels are compact mixed lists (their layouts in
+-- Data/QuestStarts, Data/MapPlaces and Data/InstanceLevels), read here
+-- into typed records, each row once (the rows never change).
+
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+
+local asString, asNumber = secret.asString, secret.asNumber
+
+-- A list of numbers in a row (none: nil).
+local function numbers(v: unknown): number[]?
+    if type(v) ~= "table" then return nil end
+    local out: number[] = {}
+    for i, x in ipairs(tbl.list(v)) do out[i] = asNumber(x) or 0 end
+    return out
+end
+
+-- What a quest asks: a skill line or a faction, and how much of it.
+export type Need = { id: number, value: number }
+
+local function need(v: unknown): Need?
+    if type(v) ~= "table" then return nil end
+    local list = tbl.list(v)
+    local id = asNumber(list[1])
+    if not id then return nil end
+    return { id = id, value = asNumber(list[2]) or 1 }
+end
+
+-- A quest of SuuUI.QuestStarts().quests.
+export type Quest = {
+    name?: string, minLevel?: number, level?: number, races?: number, classes?: number,
+    -- the quests before it (all of them, or one of them), those it excludes
+    preGroup?: number[], preSingle?: number[], exclusiveTo?: number[],
+    nextInChain?: number, parent?: number, breadcrumbFor?: number,
+    -- 1 repeatable, 2 needs an event
+    flags: number,
+    skill?: Need, minRep?: Need, maxRep?: Need,
+    -- the event it shows during ("darkmoonFaire", …)
+    event?: string,
+}
+
+local quests: { [unknown[]]: Quest } = tbl.weakKeys()
+
+export function quest(row: unknown[]): Quest
+    local known = quests[row]
+    if known then return known end
+    local q: Quest = {
+        name = asString(row[1]), minLevel = asNumber(row[2]), level = asNumber(row[3]),
+        races = asNumber(row[4]), classes = asNumber(row[5]),
+        preGroup = numbers(row[6]), preSingle = numbers(row[7]), exclusiveTo = numbers(row[8]),
+        nextInChain = asNumber(row[9]), flags = asNumber(row[10]) or 0, parent = asNumber(row[11]),
+        breadcrumbFor = asNumber(row[12]), skill = need(row[13]), minRep = need(row[14]), maxRep = need(row[15]),
+        event = asString(row[16]),
+    }
+    quests[row] = q
+    return q
+end
+
+-- An NPC of SuuUI.MapPlaces().npcs: its name and title, the sides it is
+-- friendly to ("A", "H", "AH"), its services ("inn,repair"), its rank
+-- ("rare", "rareElite"), levels, the event it is out for.
+export type Npc = {
+    name: string, title?: string, friendly?: string, services?: string, rank?: string,
+    minLevel?: number, maxLevel?: number, event?: string,
+}
+
+local npcs: { [unknown[]]: Npc } = tbl.weakKeys()
+
+export function npc(row: unknown[]): Npc
+    local known = npcs[row]
+    if known then return known end
+    local n: Npc = {
+        name = asString(row[1]) or "?", title = asString(row[2]), friendly = asString(row[3]),
+        services = asString(row[4]), rank = asString(row[5]), minLevel = asNumber(row[6]),
+        maxLevel = asNumber(row[7]), event = asString(row[8]),
+    }
+    npcs[row] = n
+    return n
+end
+
+-- An entrance of SuuUI.QuestStarts().entrances: its place (percent), name,
+-- kind ("dungeon", "raid", "battleground"), side ("H", "A" or any), and
+-- whether the spot is only its area's.
+export type Entrance = { x: number, y: number, name: string, kind: string, faction?: string, approx: boolean }
+
+local entrances: { [unknown[]]: Entrance } = tbl.weakKeys()
+
+export function entrance(row: unknown[]): Entrance
+    local known = entrances[row]
+    if known then return known end
+    local e: Entrance = {
+        x = asNumber(row[1]) or 0, y = asNumber(row[2]) or 0, name = asString(row[3]) or "?",
+        kind = asString(row[4]) or "dungeon", faction = asString(row[5]), approx = row[6] == true,
+    }
+    entrances[row] = e
+    return e
+end
+
+-- An instance's recommended levels (SuuUI.InstanceLevels()), and each
+-- wing's.
+export type Wing = { name: string, min: number, max: number }
+export type Levels = { min: number, max: number, wings: Wing[] }
+
+local levels: { [unknown[]]: Levels } = tbl.weakKeys()
+
+export function instanceLevels(row: unknown[]): Levels
+    local known = levels[row]
+    if known then return known end
+    local wings: Wing[] = {}
+    for i = 3, #row do
+        local w = tbl.list(row[i])
+        wings[#wings + 1] = { name = asString(w[1]) or "?", min = asNumber(w[2]) or 0, max = asNumber(w[3]) or 0 }
+    end
+    local l: Levels = { min = asNumber(row[1]) or 0, max = asNumber(row[2]) or 0, wings = wings }
+    levels[row] = l
+    return l
+end

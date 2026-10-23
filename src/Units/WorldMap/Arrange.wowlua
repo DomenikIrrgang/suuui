@@ -6,8 +6,32 @@
 -- map's frames, so it's tested on its own; Units/WorldMap draws the
 -- groups.
 
--- A pin before merging (M:Collect): x, y, key, small, pin, name, detail, …
-export type Item = { [string]: any }
+import type MapPinData from "/UI/MapPin"
+import type TooltipData from "/UI/Tooltip"
+import * as tbl from "wowlua:table"
+
+-- A line of a map pin's tooltip, and the quest (or quests) it names.
+export type TipLine = { [number]: string, gap?: number, quest?: number, quests?: number[] }
+
+-- A map pin's tooltip (Units/WorldMap/Tips): the first quest it names too.
+export type MapTip = {
+    title?: string, titleColor?: string, subtitle?: string, lines?: TipLine[], description?: string,
+    meta?: string, maxWidth?: number, titleQuest?: number,
+}
+
+-- A pin before merging (M:Collect): its place (0-1), what it merges with
+-- (`key`; none: never), whether it's small or never moves, who it is
+-- (`uid`: one NPC's spawn points count once), its look, its card (name,
+-- detail, the lines under them, a merged pin's line), and what hovering
+-- it rings: its quests, its rare, its route; a mark's id; a tooltip of its
+-- own.
+export type Item = {
+    x: number, y: number, key?: string, small?: boolean, fixed?: boolean, uid?: string,
+    pin: MapPinData, name: string, detail?: string, listDetail?: string, kindName?: string,
+    more?: TipLine[], difficulty?: string, repeatable?: boolean, rank?: number,
+    quests?: number[], rare?: number, route?: number[][], mark?: number, teaches?: string,
+    tip?: () -> TooltipData,
+}
 -- Pins merged into one, in px (merge)
 export type Group = { x: number, y: number, items: Item[], key: string?, fixed: boolean?, small: boolean?,
                distinct: number, uids: { [string]: boolean } }
@@ -23,7 +47,7 @@ export function merge(items: Item[], w: number, h: number, radius: number): Grou
     local r2 = radius * radius
     for _, it in ipairs(items) do
         local px, py = it.x * w, it.y * h
-        local into
+        local into: Group? = nil
         if it.key then
             for _, g in ipairs(groups) do
                 if g.key == it.key then
@@ -32,6 +56,7 @@ export function merge(items: Item[], w: number, h: number, radius: number): Grou
                 end
             end
         end
+        local uid = it.uid
         if into then
             local n = #into.items
             into.x = (into.x * n + px) / (n + 1)
@@ -39,11 +64,13 @@ export function merge(items: Item[], w: number, h: number, radius: number): Grou
             into.items[n + 1] = it
             into.fixed = into.fixed and it.fixed
             -- one NPC's (or quest giver's) spawn points count once
-            if not (it.uid and into.uids[it.uid]) then into.distinct = into.distinct + 1 end
-            if it.uid then into.uids[it.uid] = true end
+            if not (uid and into.uids[uid]) then into.distinct = into.distinct + 1 end
+            if uid then into.uids[uid] = true end
         else
+            local uids: { [string]: boolean } = {}
+            if uid then uids[uid] = true end
             groups[#groups + 1] = { x = px, y = py, items = { it }, key = it.key, fixed = it.fixed, small = it.small,
-                                    distinct = 1, uids = it.uid and { [it.uid] = true } or {} }
+                                    distinct = 1, uids = uids }
         end
     end
     return groups
@@ -70,8 +97,9 @@ export function mergeGroups(groups: Group[], radius: number): Group[]
                         a.y = (a.y * na + b.y * nb) / (na + nb)
                         for _, it in ipairs(b.items) do
                             a.items[#a.items + 1] = it
-                            if not (it.uid and a.uids[it.uid]) then a.distinct = a.distinct + 1 end
-                            if it.uid then a.uids[it.uid] = true end
+                            local uid = it.uid
+                            if not (uid and a.uids[uid]) then a.distinct = a.distinct + 1 end
+                            if uid then a.uids[uid] = true end
                         end
                         a.fixed = a.fixed and b.fixed
                         table.remove(groups, j)
@@ -128,10 +156,13 @@ export function arrange(list: Item[], w: number, h: number, closest: boolean): (
     local items, radius, grow = list, MERGE_RADIUS, 1
     if closest then
         -- (and a little larger: there's room)
-        items, radius, grow = {}, MERGE_RADIUS_CLOSEST, CLOSEST_GROW
+        local fixed: Item[] = {}
         for i, it in ipairs(list) do
-            items[i] = setmetatable({ fixed = true }, { __index = it })
+            local copy = tbl.shallowCopy(it)
+            copy.fixed = true
+            fixed[i] = copy
         end
+        items, radius, grow = fixed, MERGE_RADIUS_CLOSEST, CLOSEST_GROW
     end
     local groups = merge(items, w, h, radius)
     mergeGroups(groups, radius)
@@ -140,7 +171,7 @@ export function arrange(list: Item[], w: number, h: number, closest: boolean): (
     mergeGroups(groups, radius)
     spread(groups)
     -- small ones under the rest, places on top
-    table.sort(groups, function(a, b)
+    table.sort(groups, function(a: Group, b: Group): boolean
         local la = a.small and 1 or (a.fixed and 3 or 2)
         local lb = b.small and 1 or (b.fixed and 3 or 2)
         if la ~= lb then return la < lb end

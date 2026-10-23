@@ -178,7 +178,10 @@ What one module does for others goes through a **service**, named, with a table 
 | `durability` (0.17) | `Get()` | `SuuUI.Durability()` |
 | `raidplanner` (0.17) | `Toggle()`, `Show()`, `IsShown()` | the Social window's Raid › Plan |
 | `marks` (0.19) | `Marks()`, `PlaceOn(mark, mapID)`, `MapName(map)`, `PinLook(mark)`, `OpenCard(id, anchor)`, `CardMark()`, `AnchorCard(anchor)` | the world map's marks |
-| `worldmap` (0.19) | `MarksShown()` → `{ yours, shared }`, `PinForMark(id)` | the minimap's marks, the mark card |
+| `worldmap` (0.19) | `MarksShown()` → `{ yours, shared }`, `PinForMark(id)`, `Refresh()` (its pins drawn again), `OpenWith(group, item)` (the map opened with one Map filter on: `("services", "repair")`) | the minimap's marks, the mark card, the flight map, the Damaged gear note |
+| `convergences` (0.19) | `Shown()` (this character sees them: Skyborne), `OnMap(mapID)` → `{ x, y, where, tip() }` list, `PinLook()` | the world map's Skyborne pins |
+| `campfires` (0.19) | `Fires()` → `{ map, x, y }` list: the campfires this character found | the world map's campfire pins |
+| `flightmap` (0.19) | `AtMaster()`: the flight master's map is open | the world map (its own pins wait meanwhile) |
 
 `SUUUI_SERVICE_CHANGED(name)` fires when a service comes or goes.
 

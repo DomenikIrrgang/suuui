@@ -19,7 +19,7 @@
 -- reads "Shared by" until you use Skysight there yourself.
 --
 -- Only Skyborne characters see them: the world map's Skyborne filters
--- (WorldMap reads Spots, PlaceOn and Tip here), and the minimap when near.
+-- (through the convergences service), and the minimap when near.
 -- A built-in module written against the public API only.
 --
 -- A spot: { map (uiMapID), x, y (0-1), by (who found it), at (time()),
@@ -28,6 +28,8 @@
 
 import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
+import CONVERGENCES from "/Core/ServiceKeys"
+import type ConvergenceOnMap from "/Core/ServiceKeys"
 import after from "wowlua:timer"
 import type TooltipData, TooltipLine from "/UI/Tooltip"
 import type MapPinData from "/UI/MapPin"
@@ -328,6 +330,19 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
         return nil, nil
     end
 
+    -- The convergences a map shows (the world map's pins): place, where,
+    -- tooltip.
+    function OnMap(mapID: number): ConvergenceOnMap[]
+        local out: ConvergenceOnMap[] = {}
+        for _, spot in ipairs(self:Spots()) do
+            local x, y = self:PlaceOn(spot, mapID)
+            if x and y then
+                out[#out + 1] = { x = x, y = y, where = self:Where(spot), tip = function(): TooltipData return self:Tip(spot) end }
+            end
+        end
+        return out
+    end
+
     function MapName(map: number?): string?
         local info = map and C_Map.GetMapInfo(map)
         return info and info.name
@@ -552,6 +567,11 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         store()
+        self:ProvideService(CONVERGENCES, {
+            Shown = function(): boolean return self:Shown() end,
+            OnMap = function(mapID: number): ConvergenceOnMap[] return self:OnMap(mapID) end,
+            PinLook = function(): MapPinData return self:PinLook() end,
+        })
         self:RegisterSettings(SECTION)
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
         self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)

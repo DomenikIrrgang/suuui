@@ -11,13 +11,22 @@
 
 import test, expect, afterEach, beforeEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 import * as windowSkin from "/UI/WindowSkin"
 import WindowChrome from "/UI/WindowSkin"
 import SuuUI from "/Core/API"
+import type QuestStarts from "/Data/QuestStarts"
+import type MapPlaces from "/Data/MapPlaces"
 import internal M, SECTION from "/Units/WorldMap"
+import internal M as marks from "/Units/Marks"
+import internal M as conv from "/Units/Convergences"
+import internal M as campsite from "/Units/Campsite"
+import internal M as flightMap from "/Units/FlightMap"
+import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
 import expectNoErrors from "../../helpers"
 
-local G: any = _G
 local ELWYNN = 1429
 
 -- SuuUI's quest data, small: a giver with two quests (one a group's), a
@@ -28,12 +37,12 @@ local patrol = false
 -- (`crowd`: a second giver beside the first)
 local crowd = false
 local function giverRows(): number[][]
-    local rows = { { 50, 50, 101, 9001, 9005 }, { 51.5, 50, 102, 9002 }, { 80, 80, 103, 9004 } }
+    local rows: number[][] = { { 50, 50, 101, 9001, 9005 }, { 51.5, 50, 102, 9002 }, { 80, 80, 103, 9004 } }
     if patrol then rows[#rows + 1] = { 20, 80, 105, 9007 } end
     if crowd then rows[#rows + 1] = { 50.3, 50.2, 106, 9008 } end
     return rows
 end
-local function starts(): any
+local function starts(): QuestStarts
     return {
         quests = {
             [9001] = { "Wolves Across the Border", 1, 2 },
@@ -64,7 +73,7 @@ end
 -- trainer and another class's, a weapon master, an herbalist, the Horde's
 -- innkeeper, a Winter Veil vendor, a walking vendor, a banker, mailboxes,
 -- a rare elite at two spots, a walking rare, a chest.
-local function places(): any
+local function places(): MapPlaces
     return {
         npcs = {
             [201] = { "Innkeeper Farley", "Innkeeper", "A", "inn,repair" },
@@ -91,21 +100,29 @@ local function places(): any
     }
 end
 
--- Every filter on.
-local ALL = {
-    quests = { "objectives", "levels", "colours", "available", "repeatable", "items", "trivial" },
-    places = { "unexplored", "dungeons", "battlegrounds", "flight", "campfires" },
-    services = { "inn", "repair", "goods", "food", "vendor", "stable", "battlemaster", "guild", "tabard", "spirit" },
-    trading = { "auction", "mail", "bank" },
-    trainers = { "class", "professions", "weapon", "riding" },
-    rares = { "rares", "treasures" },
-    marks = { "yours", "shared" },
-}
+-- Map filters' choice: each group's values on.
+type Choice = { [string]: string[] }
 
-local function copy(t: any): any
-    if type(t) ~= "table" then return t end
-    local out = {}
-    for k, v in pairs(t) do out[k] = copy(v) end
+-- Every filter on.
+local function all(): Choice
+    return {
+        quests = { "objectives", "levels", "colours", "available", "repeatable", "items", "trivial" },
+        places = { "unexplored", "dungeons", "battlegrounds", "flight", "campfires" },
+        services = { "inn", "repair", "goods", "food", "vendor", "stable", "battlemaster", "guild", "tabard", "spirit" },
+        trading = { "auction", "mail", "bank" },
+        trainers = { "class", "professions", "weapon", "riding" },
+        rares = { "rares", "treasures" },
+        marks = { "yours", "shared" },
+    }
+end
+
+local function copy(c: Choice): Choice
+    local out: Choice = {}
+    for k, list in pairs(c) do
+        local l: string[] = {}
+        for i, v in ipairs(list) do l[i] = v end
+        out[k] = l
+    end
     return out
 end
 
@@ -121,19 +138,39 @@ end
 @afterEach
 local function cleanup()
     mock.hover(nil)
-    if G.WorldMapFrame:IsShown() then G.WorldMapFrame:Hide() end
+    if WorldMapFrame:IsShown() then WorldMapFrame:Hide() end
     M:Reset("filters")
     M:Reset("pinAlpha")
-    M:CharData().taxi = nil
+    M:Char().taxi = nil
     mock.advanceTime(7)
     expectNoErrors()
 end
 
 -- The pins a map would show, by name.
-local function collect(mapID: number?): { [string]: any }
-    local out: { [string]: any } = {}
+local function collect(mapID: number?): { [string]: Item }
+    local out: { [string]: Item } = {}
     for _, it in ipairs(M:Collect(mapID or ELWYNN)) do out[it.name] = it end
     return out
+end
+
+-- A pin's line under its card.
+local function line(it: Item?, i: number): TipLine
+    assert(it, "no pin")
+    local more = it.more
+    assert(more, "no lines")
+    local l = more[i]
+    assert(l, "no line " .. i)
+    return l
+end
+
+-- The text of a pin's line.
+local function text(it: Item?, i: number): string
+    return line(it, i)[1] or ""
+end
+
+local function pin(it: Item?): Item
+    assert(it, "no pin")
+    return it
 end
 
 --------------------------------------------------------------------------------
@@ -173,13 +210,14 @@ end
 @test("the quest options that are the game's settings: read from it, set in it")
 local function gameSettings()
     -- (from the map's own menu: the map open)
-    G.WorldMapFrame:Show()
+    WorldMapFrame:Show()
     C_CVar.SetCVar("questPOI", "1")
     C_CVar.SetCVar("showQuestLevel", "0")
     C_CVar.SetCVar("showQuestDifficultyColor", "1")
     local value = M:MenuValue()
-    expect(value.quests[1]).toBe("objectives")
-    expect(value.quests[2]).toBe("colours")
+    local quests = value.quests or {}
+    expect(quests[1]).toBe("objectives")
+    expect(quests[2]).toBe("colours")
     local v = copy(value)
     v.quests = { "levels", "available" }
     M:OnFilters(v)
@@ -197,11 +235,11 @@ end
 local function openWith()
     M:OpenWith("services", "repair")
     expect(M:Layers().services.repair).toBe(true)
-    expect(G.WorldMapFrame).toBeShown()
+    expect(WorldMapFrame).toBeShown()
     -- already on: the map only
-    G.WorldMapFrame:Hide()
+    WorldMapFrame:Hide()
     M:OpenWith("services", "repair")
-    expect(G.WorldMapFrame).toBeShown()
+    expect(WorldMapFrame).toBeShown()
 end
 
 --------------------------------------------------------------------------------
@@ -211,7 +249,7 @@ end
 @test("quests to pick up: a pin per giver, the best quest's colour, the others listed, a group's bar")
 local function questGivers()
     local pins = collect()
-    local dughan = pins["Wolves Across the Border"]
+    local dughan = pin(pins["Wolves Across the Border"])
     expect(dughan.key).toBe("available")
     expect(dughan.x).toBe(0.5)
     expect(dughan.detail).toBe("Level 2 · Marshal Dughan")
@@ -219,12 +257,12 @@ local function questGivers()
     expect(dughan.quests).toEqual({ 9001, 9005 })
     -- his walk and the other quest
     expect(dughan.route ~= nil).toBe(true)
-    expect(dughan.more[1][1]:find("Walks a route", 1, true) ~= nil).toBe(true)
-    expect(dughan.more[2].quest).toBe(9005)
+    expect(text(dughan, 1):find("Walks a route", 1, true) ~= nil).toBe(true)
+    expect(line(dughan, 2).quest).toBe(9005)
     -- (one of them a dungeon's: the bar under the pin)
     expect(dughan.pin.bar).toBe("quest-difficult")
     expect(dughan.pin.arcs).toEqual({ "quest-difficult", "quest-difficult" })
-    local farmer = pins["Boar Hides"]
+    local farmer = pin(pins["Boar Hides"])
     expect(farmer.key).toBe("repeatable")
     expect(farmer.detail).toBe("Repeatable · Level 1 · Farmer Saldean")
     expect(farmer.pin.color).toBe("mana")
@@ -235,80 +273,79 @@ end
 @test("quests from an item: where it drops, found or dropped")
 local function itemQuests()
     local list = M:Collect(ELWYNN)
-    local drops = {}
+    local drops: Item[] = {}
     for _, it in ipairs(list) do if it.key == "itemQuest" then drops[#drops + 1] = it end end
     expect(#drops).toBe(2)
-    expect(drops[1].more[1][1]).toBe("Starts from A Torn Scroll")
-    expect(drops[1].more[2][1]:find("Dropped by Kobold Worker", 1, true) ~= nil).toBe(true)
-    expect(drops[2].more[2][1]:find("Found in Old Crate", 1, true) ~= nil).toBe(true)
+    expect(text(drops[1], 1)).toBe("Starts from A Torn Scroll")
+    expect(text(drops[1], 2):find("Dropped by Kobold Worker", 1, true) ~= nil).toBe(true)
+    expect(text(drops[2], 2):find("Found in Old Crate", 1, true) ~= nil).toBe(true)
     expect(drops[1].listDetail).toBe("Level 1 · A Torn Scroll · Kobold Worker")
 end
 
 @test("entrances: yours and everyone's, the levels, an approximate door")
 local function entrances()
     local pins = collect()
-    local mines = pins["The Deadmines"]
+    local mines = pin(pins["The Deadmines"])
     expect(mines.key).toBe("entrance")
     expect(mines.fixed).toBe(true)
-    expect(mines.detail:find("^Dungeon") ~= nil).toBe(true)
+    expect((mines.detail or ""):find("^Dungeon") ~= nil).toBe(true)
     -- the Horde's: not for you
     expect(pins["Ragefire Chasm"]).toBeNil()
-    local wsg = pins["Warsong Gulch"]
+    local wsg = pin(pins["Warsong Gulch"])
     expect(wsg.key).toBe("battleground")
-    expect(wsg.more[#wsg.more][1]:find("Approximate", 1, true) ~= nil).toBe(true)
+    expect(text(wsg, #(wsg.more or {})):find("Approximate", 1, true) ~= nil).toBe(true)
 end
 
 @test("services by the filters: one pin per NPC for the first service shown; your class's trainer only")
 local function services()
     local pins = collect()
-    expect(pins["Innkeeper Farley"].kindName).toBe("Innkeeper")
+    expect(pin(pins["Innkeeper Farley"]).kindName).toBe("Innkeeper")
     expect(pins["Smith Argus"]).toBeNil()
-    expect(pins["Lyria Du Lac"].kindName).toBe("Class trainer")
-    expect(pins["Lyria Du Lac"].pin.color).toBe("class-warrior")
+    expect(pin(pins["Lyria Du Lac"]).kindName).toBe("Class trainer")
+    expect(pin(pins["Lyria Du Lac"]).pin.color).toBe("class-warrior")
     -- another class's trainer never, not even as an innkeeper
     expect(pins["Khelden Bremen"]).toBeNil()
     expect(pins["Innkeeper Grosk"]).toBeNil()
-    expect(pins["Banker Marion"].kindName).toBe("Banker")
-    expect(pins["Mailbox"].key).toBe("mail")
+    expect(pin(pins["Banker Marion"]).kindName).toBe("Banker")
+    expect(pin(pins["Mailbox"]).key).toBe("mail")
     -- the holiday's vendor only while it's on
     expect(pins["Winter Vendor"]).toBeNil()
 end
 
 @test("with every filter on: repair, the trainers, the weapon master's weapons, rares and treasures")
 local function everything()
-    M:OnFilters(copy(ALL))
+    M:OnFilters(all())
     local pins = collect()
-    expect(pins["Smith Argus"].kindName).toBe("Repair")
-    local woo = pins["Woo Ping"]
+    expect(pin(pins["Smith Argus"]).kindName).toBe("Repair")
+    local woo = pin(pins["Woo Ping"])
     expect(woo.kindName).toBe("Weapon master")
-    expect(woo.teaches:find("Two-Handed Swords", 1, true) ~= nil).toBe(true)
-    expect(woo.more[1][1]:find("^Teaches ") ~= nil).toBe(true)
-    expect(pins["Herbalist Pomeroy"].kindName).toBe("Herbalism trainer")
-    local peddler = pins["Wandering Peddler"]
-    expect(peddler.route ~= nil).toBe(true)
-    local hogger = pins["Hogger"]
+    expect((woo.teaches or ""):find("Two-Handed Swords", 1, true) ~= nil).toBe(true)
+    expect(text(woo, 1):find("^Teaches ") ~= nil).toBe(true)
+    expect(pin(pins["Herbalist Pomeroy"]).kindName).toBe("Herbalism trainer")
+    expect(pin(pins["Wandering Peddler"]).route ~= nil).toBe(true)
+    local hogger = pin(pins["Hogger"])
     expect(hogger.key).toBe("rareElite")
     expect(hogger.detail).toBe("Rare elite · level 11")
-    expect(hogger.more[1][1]:find("one of 2 spots", 1, true) ~= nil).toBe(true)
-    local fang = pins["Mother Fang"]
+    expect(text(hogger, 1):find("one of 2 spots", 1, true) ~= nil).toBe(true)
+    local fang = pin(pins["Mother Fang"])
     expect(fang.detail).toBe("Rare · level 10-12")
     expect(fang.route ~= nil).toBe(true)
-    expect(pins["Mossy Chest"].key).toBe("treasure")
+    expect(pin(pins["Mossy Chest"]).key).toBe("treasure")
 end
 
 @test("flight masters: found by this character's record, not checked on a continent before")
 local function flightMasters()
     local list = M:Collect(1415)
-    local masters = {}
-    for _, it in ipairs(list) do if it.pin and it.pin.glyph == "wing" then masters[#masters + 1] = it end end
+    local masters: Item[] = {}
+    for _, it in ipairs(list) do if it.pin.glyph == "wing" then masters[#masters + 1] = it end end
     expect(#masters > 0).toBe(true)
     expect(masters[1].detail).toBe("Flight master · not checked yet")
     -- this character's record: one found, the rest not
     local id: number = 0
-    for _, n in ipairs(C_TaxiMap.GetTaxiNodesForMap(1415) :: any[]) do
+    for _, n in ipairs(C_TaxiMap.GetTaxiNodesForMap(1415)) do
         if n.name == masters[1].name then id = n.nodeID end
     end
-    M:CharData().taxi = { known = { [id] = true }, checked = { [1415] = true } }
+    M:Char().taxi = { known = { [id] = true }, checked = { [1415] = true } }
     list = M:Collect(1415)
     local found, notFound = 0, 0
     for _, it in ipairs(list) do
@@ -321,26 +358,25 @@ end
 
 @test("campfires you found, marks, and a Skyborne's convergences")
 local function others()
-    local camp: any = SuuUI.GetModule("campsite")
-    camp:CharData().fires = { { map = ELWYNN, x = 0.3, y = 0.6, seen = 0 }, { map = 1, x = 0.1, y = 0.1, seen = 0 } }
-    local marks: any = SuuUI.GetModule("marks")
+    campsite:CharData().fires = { { map = ELWYNN, x = 0.3, y = 0.6, seen = 0 }, { map = 1, x = 0.1, y = 0.1, seen = 0 } }
     local mine = marks:Add(ELWYNN, 0.2, 0.8, { name = "Herbs" })
     local shared = marks:Add(ELWYNN, 0.25, 0.8, { name = "", from = "Brannoc" })
-    local conv: any = SuuUI.GetModule("convergences")
     mock.stub(conv, "Shown", function(): boolean return true end)
     conv:Add({ map = ELWYNN, x = 0.9, y = 0.1 })
     local pins = collect()
-    expect(pins["Campfire"].key).toBe("campfire")
-    expect(pins["Herbs"].mark).toBe(mine.id)
-    expect(pins["Mark"].more[1][1]:find("Shared by Brannoc", 1, true) ~= nil).toBe(true)
-    local c = pins["Convergence of Elements"]
+    expect(pin(pins["Campfire"]).key).toBe("campfire")
+    expect(pin(pins["Herbs"]).mark).toBe(mine.id)
+    expect(text(pins["Mark"], 1):find("Shared by Brannoc", 1, true) ~= nil).toBe(true)
+    local c = pin(pins["Convergence of Elements"])
     expect(c.key).toBe("convergence")
-    expect(type(c.tip())).toBe("table")
+    local tip = c.tip
+    assert(tip, "no tooltip")
+    expect(type(tip())).toBe("table")
     marks:Remove(mine.id)
     marks:Remove(shared.id)
-    camp:CharData().fires = nil
+    campsite:CharData().fires = nil
     local spots = conv:Spots()
-    spots[#spots] = nil
+    table.remove(spots)
 end
 
 @test("what an NPC should offer you, by the map's checks (for /suu probe givers)")
@@ -361,49 +397,65 @@ end
 --------------------------------------------------------------------------------
 
 local function openMap(mapID: number?)
-    G.WorldMapFrame:Show()
-    G.WorldMapFrame:SetMapID(mapID or ELWYNN)
+    WorldMapFrame:Show()
+    WorldMapFrame:SetMapID(mapID or ELWYNN)
     mock.advanceFrames(3)
 end
 
 -- The pin showing a pin of this name.
-local function pinOf(name: string): any
-    for _, pin in ipairs(M.pins) do
-        for _, it in ipairs(pin.group and pin.group.items or {}) do
-            if it.name == name then return pin end
+local function pinOf(name: string)
+    for _, p in ipairs(M.pins) do
+        local g = p.group
+        for _, it in ipairs(g and g.items or {}) do
+            if it.name == name then return p end
         end
     end
     return nil
 end
 
+local function shownPin(name: string)
+    local p = pinOf(name)
+    assert(p, "no pin shows " .. name)
+    return p
+end
+
+-- The pins merged into the one showing this name.
+local function groupOf(name: string): Group
+    local g = shownPin(name).group
+    assert(g, "no group")
+    return g
+end
+
 @test("the map open: pins merged where they crowd, in tiers, at the setting's opacity")
 local function drawn()
     openMap()
-    M:OnFilters(copy(ALL))
+    M:OnFilters(all())
     mock.advanceFrames(2)
     expect(#M.pins > 10).toBe(true)
-    local mail = pinOf("Mailbox")
-    expect(mail.group.distinct).toBe(2)
+    local mail = shownPin("Mailbox")
+    expect(groupOf("Mailbox").distinct).toBe(2)
     expect(mail.countTab).toBeShown()
-    local base = M.layer:GetFrameLevel()
+    local layer = M.layer
+    assert(layer, "no layer")
+    local base = layer:GetFrameLevel()
     expect(mail:GetFrameLevel()).toBe(base + 1)
-    expect(pinOf("Wolves Across the Border"):GetFrameLevel()).toBe(base + 3)
-    expect(pinOf("The Deadmines"):GetFrameLevel()).toBe(base + 5)
+    expect(shownPin("Wolves Across the Border"):GetFrameLevel()).toBe(base + 3)
+    expect(shownPin("The Deadmines"):GetFrameLevel()).toBe(base + 5)
     M:Set("pinAlpha", 50)
-    expect(pinOf("The Deadmines"):GetAlpha()).toBeCloseTo(0.5)
+    expect(shownPin("The Deadmines"):GetAlpha()).toBeCloseTo(0.5)
 end
 
 @test("a quest's pin hovered: its tooltip, every pin of its quests ringed, the rest faded, the giver's walk")
 local function hovered()
     openMap()
-    local giver = pinOf("Wolves Across the Border")
+    local giver = shownPin("Wolves Across the Border")
     mock.hover(giver)
     expect(M.hoveredPin).toBe(giver)
     expect(giver.hl).toBeShown()
-    expect(pinOf("Innkeeper Farley"):GetAlpha()).toBeCloseTo(0.3)
+    expect(shownPin("Innkeeper Farley"):GetAlpha()).toBeCloseTo(0.3)
     expect(M.routes).toBeShown()
     -- Shift: its objectives (the tooltip asked again)
-    local refreshed = mock.spy(function(_: any) end)
+    local refreshed = mock.spy(function(_: Region) end)
     mock.stub(SuuUI.UI, "RefreshTooltip", refreshed)
     mock.setModifiers({ shift = true })
     expect(refreshed).toHaveBeenCalledTimes(1)
@@ -417,9 +469,9 @@ end
 @test("a rare's pin hovered: its every spot ringed")
 local function rareHovered()
     openMap()
-    M:OnFilters(copy(ALL))
+    M:OnFilters(all())
     mock.advanceFrames(2)
-    local fang = pinOf("Mother Fang")
+    local fang = shownPin("Mother Fang")
     mock.hover(fang)
     expect(fang.hl).toBeShown()
     expect(M.routes).toBeShown()
@@ -428,18 +480,17 @@ end
 @test("a click on a merged pin zooms to it; on a mark its card; on another nothing")
 local function clicks()
     openMap()
-    local zoomed = mock.spy(function(_: any, _: number, _: number) end)
-    mock.stub(G.WorldMapFrame, "PanAndZoomTo", zoomed)
-    mock.click(pinOf("Mailbox"))
+    local zoomed = mock.spy(function(_: unknown, _: number, _: number) end)
+    mock.stub(WorldMapFrame, "PanAndZoomTo", zoomed)
+    mock.click(shownPin("Mailbox"))
     expect(zoomed).toHaveBeenCalledTimes(1)
-    mock.click(pinOf("Innkeeper Farley"))
+    mock.click(shownPin("Innkeeper Farley"))
     expect(zoomed).toHaveBeenCalledTimes(1)
-    local marks: any = SuuUI.GetModule("marks")
     local mark = marks:Add(ELWYNN, 0.9, 0.9, { name = "Ore" })
     mock.advanceFrames(2)
-    local opened = mock.spy(function(_: any, _: any, _: any) end)
+    local opened = mock.spy(function(_: unknown, _: number, _: Region?) end)
     mock.stub(marks, "OpenCard", opened)
-    mock.click(pinOf("Ore"))
+    mock.click(shownPin("Ore"))
     expect(opened).toHaveBeenCalledTimes(1)
     expect(M:PinForMark(mark.id)).toBe(pinOf("Ore"))
     marks:Remove(mark.id)
@@ -448,8 +499,7 @@ end
 @test("at the flight master the flight map's pins only: Map filters away")
 local function atFlightMaster()
     openMap()
-    local flight: any = SuuUI.GetModule("flightmap")
-    mock.stub(flight, "AtMaster", function(): boolean return true end)
+    mock.stub(flightMap, "AtMaster", function(): boolean return true end)
     M:Refresh()
     expect(M.menu).never.toBeShown()
     expect(#M.pins).toBe(0)
@@ -457,7 +507,7 @@ end
 
 @test("the flight masters this character found, noted at a flight master's map")
 local function recordTaxi()
-    mock.fake("C_TaxiMap.GetAllTaxiNodes", function(_: number?): any
+    mock.fake("C_TaxiMap.GetAllTaxiNodes", function(_: number?): unknown
         return {
             { nodeID = 2, name = "Stormwind, Elwynn", state = 0 },
             { nodeID = 4, name = "Sentinel Hill, Westfall", state = 1 },
@@ -467,37 +517,37 @@ local function recordTaxi()
     end)
     openMap()
     M:RecordTaxiNodes()
-    local taxi = M:CharData().taxi
+    local taxi = M:Char().taxi
+    assert(taxi, "nothing noted")
     expect(taxi.known).toEqual({ [2] = true, [4] = true })
     expect(next(taxi.checked) ~= nil).toBe(true)
     -- none of them: nothing noted
-    M:CharData().taxi = nil
-    mock.fake("C_TaxiMap.GetAllTaxiNodes", function(_: number?): any return {} end)
+    M:Char().taxi = nil
+    mock.fake("C_TaxiMap.GetAllTaxiNodes", function(_: number?): unknown return {} end)
     M:RecordTaxiNodes()
-    expect(M:CharData().taxi).toBeNil()
+    expect(M:Char().taxi).toBeNil()
 end
 
 @test("a quest's group tag the game tells late: the guess first, the map again when it differs")
 local function lateTag()
     patrol = true
-    local told: any = nil
-    mock.fake("C_QuestLog.GetQuestTagInfo", function(id: number): any
+    local told: unknown = nil
+    mock.fake("C_QuestLog.GetQuestTagInfo", function(id: number): unknown
         if id == 9007 then return told end
         -- (one the game knows at once: an elite quest)
         if id == 9008 then return { tagID = 1 } end
         return nil
     end)
     openMap()
-    expect(pinOf("Elite Patrol").group.items[1].pin.bar).toBe("quest-difficult")
+    expect(groupOf("Elite Patrol").items[1].pin.bar).toBe("quest-difficult")
     told = { tagID = 0 }
     mock.advanceTime(2.1)
     mock.advanceFrames(2)
-    expect(pinOf("Elite Patrol").group.items[1].pin.bar).toBeNil()
+    expect(groupOf("Elite Patrol").items[1].pin.bar).toBeNil()
     -- a quest whose tag the game knows at once: its bar at once
     crowd = true
     M:Refresh()
-    local necklace = pinOf("The Lost Necklace")
-    for _, it in ipairs(necklace.group.items) do
+    for _, it in ipairs(groupOf("The Lost Necklace").items) do
         if it.name == "The Lost Necklace" then expect(it.pin.bar).toBe("quest-difficult") end
     end
     crowd = false
@@ -515,13 +565,14 @@ local function questPins()
     mock.advanceTime(1)
     openMap(1412)
     local styled = 0
-    for pin in G.WorldMapFrame:EnumeratePinsByTemplate("QuestPinTemplate") do
-        if pin.suuQuest then styled = styled + 1 end
+    for _, p in ipairs(frames.mapPins(WorldMapFrame, "QuestPinTemplate")) do
+        if M.looks[p] then styled = styled + 1 end
     end
     expect(styled > 0).toBe(true)
     M:Set("enabled", false)
-    for pin in G.WorldMapFrame:EnumeratePinsByTemplate("QuestPinTemplate") do
-        if pin.suuQuest then expect(pin.suuQuest).never.toBeShown() end
+    for _, p in ipairs(frames.mapPins(WorldMapFrame, "QuestPinTemplate")) do
+        local look = M.looks[p]
+        if look then expect(look).never.toBeShown() end
     end
     M:Reset("enabled")
 end
@@ -541,7 +592,7 @@ end
 @test("what changes the pins: quests taken, marks, themes, the calendar")
 local function refreshes()
     openMap()
-    local refresh = mock.spy(function(_: any) end)
+    local refresh = mock.spy(function(_: unknown) end)
     mock.stub(M, "Refresh", refresh)
     mock.fireEvent("QUEST_ACCEPTED", 1)
     mock.advanceTime(0.3)
@@ -565,7 +616,6 @@ end
 
 @test("Skyborne's group in Map filters once the map shows for a Skyborne")
 local function skyborneMenu()
-    local conv: any = SuuUI.GetModule("convergences")
     mock.stub(conv, "Shown", function(): boolean return true end)
     openMap()
     expect(M.skyborneMenu).toBe(true)
@@ -585,71 +635,99 @@ end
 local function crowded()
     crowd = true
     openMap()
-    local pin = pinOf("Wolves Across the Border")
-    expect(pin.group.distinct).toBe(2)
-    expect(pin.countTab).toBeShown()
+    expect(groupOf("Wolves Across the Border").distinct).toBe(2)
+    expect(shownPin("Wolves Across the Border").countTab).toBeShown()
     crowd = false
 end
 
 -- A quest pin as the game's quest data provider makes one: its style, its
 -- quest, tracked or not, its highlight.
-local function gamePin(style: number, opts: { [string]: any }?): any
-    local o = opts or {}
-    local pin: any = CreateFrame("Button", nil, M.layer)
-    pin:SetSize(20, 20)
-    pin.questID = o.questID or 9005
-    pin.HighlightTexture = pin:CreateTexture()
-    pin.HighlightTexture:SetShown(o.lit == true)
-    pin.NormalTexture = pin:CreateTexture()
-    function pin:GetStyle(): number return style end
-    function pin:IsSelected(): boolean return o.tracked == true end
-    function pin:SetStyle(s: number) style = s end
-    return pin
+class GamePin extends Button
+    questID: number
+    readonly HighlightTexture: Texture
+    readonly NormalTexture: Texture
+    shownStyle: number
+    tracked: boolean
+
+    constructor(parent: Frame, style: number, opts: { questID?: number, lit?: boolean, tracked?: boolean }?)
+        super(nil, parent)
+        local o = opts or {}
+        self:SetSize(20, 20)
+        self.shownStyle = style
+        self.tracked = o.tracked == true
+        self.questID = o.questID or 9005
+        self.HighlightTexture = self:CreateTexture()
+        self.HighlightTexture:SetShown(o.lit == true)
+        self.NormalTexture = self:CreateTexture()
+    end
+
+    function GetStyle(): number return self.shownStyle end
+    function IsSelected(): boolean return self.tracked end
+    function SetStyle(s: number) self.shownStyle = s end
+end
+
+-- One of the game's quest pin styles.
+local function style(name: string): number
+    return secret.asNumber(tbl.field(_G, "POIButtonUtil", "Style", name)) or -1
+end
+
+local function gamePin(name: string, opts: { questID?: number, lit?: boolean, tracked?: boolean }?): GamePin
+    local layer = M.layer
+    assert(layer, "no layer")
+    return GamePin.new(layer, style(name), opts)
+end
+
+-- SuuUI's look in a game pin.
+local function lookOf(p: Frame)
+    local look = M.looks[p]
+    assert(look, "not styled")
+    return look
 end
 
 @test("the game's quest pins' looks: in progress, to turn in (a group's with its bar), a waypoint, disabled, tracked")
 local function questLooks()
     openMap()
-    local styles = POIButtonUtil.Style
-    local progress = gamePin(styles.QuestInProgress)
+    local progress = gamePin("QuestInProgress")
     M:StyleQuestPin(progress)
-    expect(progress.suuQuest).toBeShown()
+    expect(lookOf(progress)).toBeShown()
     expect(progress.NormalTexture:GetAlpha()).toBe(0)
-    expect(progress.suuQuest.glow).never.toBeShown()
-    local turnIn = gamePin(styles.QuestComplete)
+    expect(lookOf(progress).glow).never.toBeShown()
+    local turnIn = gamePin("QuestComplete")
     M:StyleQuestPin(turnIn)
-    expect(turnIn.suuQuest.glow).toBeShown()
-    local waypoint = gamePin(styles.Waypoint, { lit = true })
+    expect(lookOf(turnIn).glow).toBeShown()
+    local waypoint = gamePin("Waypoint", { lit = true })
     M:StyleQuestPin(waypoint)
-    expect(waypoint.suuQuest.pin.hl).toBeShown()
-    local tracked = gamePin(styles.QuestInProgress, { tracked = true })
+    expect(lookOf(waypoint).pin.hl).toBeShown()
+    local tracked = gamePin("QuestInProgress", { tracked = true })
     M:StyleQuestPin(tracked)
-    expect(tracked.suuQuest.glow).toBeShown()
+    expect(lookOf(tracked).glow).toBeShown()
     -- the game's own style changes: ours follows
-    tracked:SetStyle(styles.QuestDisabled)
-    expect(tracked.suuQuest).never.toBeShown()
+    tracked:SetStyle(style("QuestDisabled"))
+    expect(lookOf(tracked)).never.toBeShown()
     tracked:SetStyle(99)
-    expect(tracked.suuQuest).never.toBeShown()
+    expect(lookOf(tracked)).never.toBeShown()
     -- hovered: a tenth larger
     mock.hover(progress)
-    expect(progress.suuQuest.hovered).toBe(true)
+    expect(lookOf(progress).hovered).toBe(true)
     mock.hover(nil)
-    expect(progress.suuQuest.hovered).toBe(false)
+    expect(lookOf(progress).hovered).toBe(false)
 end
 
 @test("the cities' little houses hidden on the map")
 local function townPins()
     openMap()
-    local hidden = mock.spy(function(_: any) end)
-    local house = { poiInfo = { name = "Stormwind" }, Hide = hidden }
-    local camp = { poiInfo = { atlasName = "poi-town" }, Hide = hidden }
-    mock.stub(G.WorldMapFrame, "EnumeratePinsByTemplate", function(_: any, template: string): any
-        local list = template == "AreaPOIPinTemplate" and { house, camp } or {}
+    local house = CreateFrame("Frame", nil, UIParent)
+    local camp = CreateFrame("Frame", nil, UIParent)
+    mock.setField(house, "poiInfo", { name = "Stormwind" })
+    mock.setField(camp, "poiInfo", { atlasName = "poi-town" })
+    mock.stub(WorldMapFrame, "EnumeratePinsByTemplate", function(_: unknown, template: string): () -> Frame?
+        local list: Frame[] = template == "AreaPOIPinTemplate" and { house, camp } or {}
         local i = 0
-        return function() i = i + 1; return list[i] end
+        return function(): Frame? i = i + 1; return list[i] end
     end)
     M:HideTownPins()
-    expect(hidden).toHaveBeenCalledTimes(1)
+    expect(house:IsShown()).toBe(false)
+    expect(camp:IsShown()).toBe(true)
 end
 
 @test("Map filters over the map's top left without SuuUI's window skin")
@@ -657,9 +735,11 @@ local function filtersPlaced()
     openMap()
     mock.stub(windowSkin, "chromeOf", function(_: Frame?): WindowChrome? return nil end)
     M:PlaceFilters()
-    expect(M.menu:GetParent()).toBe(G.WorldMapFrame)
-    local _, rel = M.menu:GetPoint(1)
-    expect(rel).toBe(G.WorldMapFrame:GetCanvasContainer())
+    local menu = M.menu
+    assert(menu, "no menu")
+    expect(menu:GetParent()).toBe(WorldMapFrame)
+    local _, rel = menu:GetPoint(1)
+    expect(rel == frames.asFrame(WorldMapFrame:GetCanvasContainer())).toBe(true)
 end
 
 @test("the real data: a new Human warrior's Elwynn Forest has quests to pick up, an innkeeper, mailboxes")

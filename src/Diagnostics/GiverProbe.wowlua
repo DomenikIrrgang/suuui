@@ -9,6 +9,7 @@
 --   /suu probe givers clear  forget what was recorded
 
 import after from "wowlua:timer"
+import quest from "/Units/WorldMap/Rows"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import SuuUI from "/Core/API"
@@ -60,19 +61,21 @@ end
 
 -- the quests before one and instead of it, done or not ("97246 done")
 local function why(id: number, done: { [number]: any }): string
-    local q = SuuUI.QuestStarts().quests[id]
-    if not q then return "not in the data" end
+    local row = SuuUI.QuestStarts().quests[id]
+    if not row then return "not in the data" end
+    local q = quest(row)
     local parts = {}
     local function list(label: string, ids: number[]?)
         local items = {}
         for _, pre in ipairs(ids or {}) do items[#items + 1] = pre .. (done[pre] and " done" or " not done") end
         if #items > 0 then parts[#parts + 1] = label .. " " .. table.concat(items, ", ") end
     end
-    list("after all of", q[6])
-    list("after one of", q[7])
-    list("not with", q[8])
-    parts[#parts + 1] = ("level %s (from %s)"):format(tostring(q[3]), tostring(q[2]))
-    if q[16] then parts[#parts + 1] = "event " .. q[16] end
+    list("after all of", q.preGroup)
+    list("after one of", q.preSingle)
+    list("not with", q.exclusiveTo)
+    parts[#parts + 1] = ("level %s (from %s)"):format(tostring(q.level), tostring(q.minLevel))
+    local event = q.event
+    if event then parts[#parts + 1] = "event " .. event end
     return table.concat(parts, "; ")
 end
 
@@ -103,8 +106,9 @@ export function check(event: string)
     local myLevel = UnitLevel("player")
     local data = SuuUI.QuestStarts().quests
     for qid, title in pairs(offers) do
-        local q = data[qid]
-        if not shown[qid] and q and q[3] and secret.readable(myLevel) and q[3] >= myLevel + 5 then
+        local row = data[qid]
+        local level = row and quest(row).level
+        if not shown[qid] and level and secret.readable(myLevel) and level >= myLevel + 5 then
             red[#red + 1] = qid .. " " .. title
         elseif not shown[qid] then
             local known = false

@@ -6,6 +6,8 @@
 import test, expect from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as quests from "/Units/WorldMap/Quests"
+import quest from "/Units/WorldMap/Rows"
+import type Quest from "/Units/WorldMap/Rows"
 
 -- The quests in your log for these tests.
 local logged: { [number]: boolean } = {}
@@ -85,7 +87,7 @@ end
 @test("your profession skills by skill line")
 local function skills()
     mock.fake("GetProfessions", function(): (number?, number?) return 1, 4 end)
-    mock.fake("GetProfessionInfo", function(i: number): ...any
+    mock.fake("GetProfessionInfo", function(i: number): ...unknown
         if i == 1 then return "Cooking", 133971, 150, 300, 0, 0, 185 end
         return "Skinning", 134366, 75, 150, 0, 0, 393
     end)
@@ -94,7 +96,7 @@ end
 
 @test("your standing with a faction, read once; none you've met: 0")
 local function standing()
-    local read = mock.spy(function(id: number): any return id == 76 and { currentStanding = 3200 } or nil end)
+    local read = mock.spy(function(id: number): { currentStanding: number }? return id == 76 and { currentStanding = 3200 } or nil end)
     mock.fake("C_Reputation.GetFactionDataByID", read)
     local who = me()
     expect(quests.standing(who, 76)).toBe(3200)
@@ -106,10 +108,10 @@ end
 @test("holidays from the calendar: today's events on, the Darkmoon Faire on its site's map only")
 local function holidays()
     local now = { year = 2026, month = 10, monthDay = 21, hour = 12, minute = 0 }
-    mock.fake("C_DateAndTime.GetCurrentCalendarTime", function(): any return now end)
+    mock.fake("C_DateAndTime.GetCurrentCalendarTime", function(): unknown return now end)
     local shown = { month = 10, year = 2026 }
-    mock.fake("C_Calendar.GetMonthInfo", function(_: number): any return shown end)
-    local function day(d: number, h: number?): any return { year = 2026, month = 10, monthDay = d, hour = h or 0, minute = 0 } end
+    mock.fake("C_Calendar.GetMonthInfo", function(_: number): unknown return shown end)
+    local function day(d: number, h: number?): unknown return { year = 2026, month = 10, monthDay = d, hour = h or 0, minute = 0 } end
     local events = {
         { calendarType = "HOLIDAY", eventID = 324, startTime = day(18), endTime = day(31) },
         { calendarType = "HOLIDAY", eventID = 264, startTime = day(21, 6), endTime = day(21, 23) },
@@ -118,7 +120,7 @@ local function holidays()
         { calendarType = "PLAYER", eventID = 327, startTime = day(1), endTime = day(31) },
     }
     mock.fake("C_Calendar.GetNumDayEvents", function(_: number, _: number): number return #events end)
-    mock.fake("C_Calendar.GetDayEvent", function(_: number, _: number, i: number): any return events[i] end)
+    mock.fake("C_Calendar.GetDayEvent", function(_: number, _: number, i: number): unknown return events[i] end)
     expect(quests.readCalendar()).toBe(true)
     expect(quests.eventOn("hallowsEnd")).toBe(true)
     expect(quests.eventOn("winterVeil")).toBe(false)
@@ -135,35 +137,35 @@ end
 @test("a quest's name: the data's, the game's title, else its ID")
 local function names()
     mock.fake("C_QuestLog.GetTitleForQuestID", function(id: number): string? return id == 5 and "Lazy Peons" or "" end)
-    expect(quests.questName({ "Vile Familiars" }, 5)).toBe("Vile Familiars")
+    expect(quests.questName(quest({ "Vile Familiars" }), 5)).toBe("Vile Familiars")
     expect(quests.questName(nil, 5)).toBe("Lazy Peons")
-    expect(quests.questName({}, 6)).toBe("Quest 6")
+    expect(quests.questName(quest({}), 6)).toBe("Quest 6")
 end
 
 @test("a quest to pick up: level, repeatable, in the log, turned in, and its difficulty")
 local function basics()
     inLog(900)
     local done: { [number]: boolean } = { [800] = true }
-    expect({ quests.questState({ "A", 10, 12 }, 1, me(), done) }).toEqual({ "available", "standard", 12 })
-    expect({ quests.questState({ "A", nil, 0 }, 1, me(), done) }).toEqual({ "available", "difficult", 15 })
-    expect({ quests.questState({ "A" }, 900, me(), done) }).toEqual({})
-    expect({ quests.questState({ "A" }, 800, me(), done) }).toEqual({})
-    local daily: any[] = { "A" }
+    expect({ quests.questState(quest({ "A", 10, 12 }), 1, me(), done) }).toEqual({ "available", "standard", 12 })
+    expect({ quests.questState(quest({ "A", nil, 0 }), 1, me(), done) }).toEqual({ "available", "difficult", 15 })
+    expect({ quests.questState(quest({ "A" }), 900, me(), done) }).toEqual({})
+    expect({ quests.questState(quest({ "A" }), 800, me(), done) }).toEqual({})
+    local daily: unknown[] = { "A" }
     daily[10] = 1
-    expect({ quests.questState(daily, 800, me(), done) }).toEqual({ "repeatable", "difficult", 15 })
+    expect({ quests.questState(quest(daily), 800, me(), done) }).toEqual({ "repeatable", "difficult", 15 })
     -- above you, or far above (the data lacks its minimum)
-    expect({ quests.questState({ "A", 20 }, 1, me(), done) }).toEqual({})
-    expect({ quests.questState({ "A", nil, 21 }, 1, me(), done) }).toEqual({})
+    expect({ quests.questState(quest({ "A", 20 }), 1, me(), done) }).toEqual({})
+    expect({ quests.questState(quest({ "A", nil, 21 }), 1, me(), done) }).toEqual({})
 end
 
 @test("a quest to pick up: race and class, the quests before it and the ones it excludes")
 local function chains()
     inLog(50, 61)
     local done: { [number]: boolean } = { [10] = true, [11] = true, [20] = true }
-    local function q(i: number, v: any): any[]
-        local t: any[] = { "A" }
+    local function q(i: number, v: unknown): Quest
+        local t: unknown[] = { "A" }
         t[i] = v
-        return t
+        return quest(t)
     end
     expect({ quests.questState(q(4, 4), 1, me(), done) }).toEqual({})
     expect({ quests.questState(q(4, 2 + 4), 1, me(), done) }).never.toEqual({})
@@ -193,10 +195,10 @@ local function needs()
     local who = me()
     who.skills = { [185] = 50 }
     who.reps = { [76] = 3200 }
-    local function q(i: number, v: any): any[]
-        local t: any[] = { "A" }
+    local function q(i: number, v: unknown): Quest
+        local t: unknown[] = { "A" }
         t[i] = v
-        return t
+        return quest(t)
     end
     expect({ quests.questState(q(13, { 185, 100 }), 1, who, done) }).toEqual({})
     expect({ quests.questState(q(13, { 185, 40 }), 1, who, done) }).never.toEqual({})
@@ -213,7 +215,7 @@ end
 @test("your standing on a client without C_Reputation's faction data: the old call's bar value")
 local function oldStanding()
     mock.setField(C_Reputation, "GetFactionDataByID", nil)
-    mock.fake("GetFactionInfoByID", function(id: number): ...any
+    mock.fake("GetFactionInfoByID", function(id: number): ...unknown
         if id == 76 then return "Orgrimmar", "", 5, 3000, 9000, 4200 end
         return nil
     end)
