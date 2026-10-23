@@ -15,18 +15,15 @@
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
 import after, every from "wowlua:timer"
 
-local M = SuuUI.RegisterModule({
-    id = "campsite",
-    name = "Campfire",
-    description = "Alerts at a campfire: one is near, resting by it, Camp Benefits gained.",
-    api = "0.12",
-    combatSafe = true,
-    defaults = {
-        nearbyFor = 0, -- seconds the "Campfire nearby" alert stays; 0: until you rest or walk away
-    },
-})
+local DEFAULTS = {
+    nearbyFor = 0, -- seconds the "Campfire nearby" alert stays; 0: until you rest or walk away
+}
+
+local M: CampsiteModule
+
 
 local KEY = "suu:campfire"
 local NEARBY, WELCOMING, BENEFITS = 1283391, 1229739, 1229741
@@ -53,23 +50,16 @@ end
 -- Phases and their alerts
 --------------------------------------------------------------------------------
 
--- "nearby", "resting", "rested" or nil; false when auras can't be read.
-function M:Phase()
-    local near, welcoming, benefits = aura(NEARBY), aura(WELCOMING), aura(BENEFITS)
-    if near == false or welcoming == false or benefits == false then return false end
-    if not near and not welcoming then return nil, nil end
-    if benefits then return "rested", benefits end
-    if welcoming then return "resting", welcoming end
-    return "nearby", nil
-end
-
 -- What Camp Benefits does: its tooltip's text after the name, out of
 -- combat, as the alert's lines. The text is a heading ("Gained the following
 -- camp benefits:") and a line per benefit, "Tent: You received …" (found in
 -- game): the heading and the time left are dropped, bullets stripped, each
 -- benefit a line with its name in ink and what it does in ink-muted.
 local MAX_LINE = 110
-local function effectOf(a: any?): (string?, number?)
+-- An aura the alerts read: one of yours, or a sample's (its effect made up).
+type CampAura = { auraInstanceID?: number | Secret<number>, expirationTime?: number | Secret<number>, effect?: () -> string }
+
+local function effectOf(a: CampAura?): (string?, number?)
     if not a or issecretvalue(a.auraInstanceID) or not a.auraInstanceID then return nil end
     if not (C_TooltipInfo and C_TooltipInfo.GetUnitBuffByAuraInstanceID) then return nil end
     local ok, data = pcall(C_TooltipInfo.GetUnitBuffByAuraInstanceID, "player", a.auraInstanceID)
@@ -94,120 +84,31 @@ local function effectOf(a: any?): (string?, number?)
     return table.concat(out, "\n"), #out
 end
 
-local function restLeft(a: any?): number?
+local function restLeft(a: CampAura?): number?
     if not a then return nil end
     local x = a.expirationTime
     if not issecretvalue(x) and x and x > 0 then return x - GetTime() end
-end
-
-function M:Alert(phase: string?, a: any?)
-    if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
-    self.rested = nil
-    if self.ticker then self.ticker:Cancel(); self.ticker = nil end
-    if phase == "nearby" then
-        -- (flying over one: no fire to sit at; asked 2026-10-19)
-        if UnitOnTaxi("player") then SuuUI.HideAlert(KEY) return end
-        -- stays until you rest (or walk away), or for the setting's seconds
-        SuuUI.ShowAlert(KEY, "info", "Campfire nearby", "Sit for a minute: an hour of Camp Benefits")
-        local stay = self:Get("nearbyFor")
-        if not stay or stay <= 0 then return end
-        self.briefTimer = after(stay, function()
-            self.briefTimer = nil
-            SuuUI.HideAlert(KEY)
-        end)
-        return
-    elseif phase == "resting" then
-        local function show()
-            local left = restLeft(a)
-            SuuUI.ShowAlert(KEY, "info", "Resting by the fire", left and ("Camp Benefits in " .. clock(left)) or "Stay seated for a minute")
-        end
-        show()
-        self.ticker = every(0.5, show)
-        return
-    elseif phase == "rested" then
-        -- what you gained, with the time in the title
-        local left = restLeft(a)
-        local title = (left and left < 3500) and ("Camp Benefits · " .. clock(left) .. " left") or "Camp Benefits gained · 1h"
-        local effect, count = effectOf(a)
-        if a and a.effect then effect, count = a.effect(), 2 end
-        SuuUI.ShowAlert(KEY, "info", title, effect or "For the next hour")
-        self.rested = { title = title, a = a }
-        -- longer with more to read: 6 s and 2 more per benefit, at most 16
-        self.briefTimer = after(math.min(16, BRIEF + 2 * (count or 1)), function()
-            self.briefTimer = nil
-            SuuUI.HideAlert(KEY)
-        end)
-        return
-    else
-        SuuUI.HideAlert(KEY)
-        return
-    end
-end
-
-function M:Update()
-    local phase, a = self:Phase()
-    if phase == false then return end -- in combat: as it was
-    if phase == self.phase then return end
-    local was = self.phase
-    self.phase = phase
-    -- walking away: its alert goes
-    if not phase then
-        self:Alert(nil)
-        return
-    end
-    -- a fire you just walked up to while already rested: say how long is left
-    if was == nil and phase == "rested" then
-        self:Alert("rested", a)
-        return
-    end
-    self:Alert(phase, a)
 end
 
 --------------------------------------------------------------------------------
 -- Fires you pass, for the map
 --------------------------------------------------------------------------------
 
-function M:RememberFire()
-    -- a fire you just lit yourself goes out: not one to remember
-    if self.litAt and GetTime() - self.litAt < 10 then return end
-    local map = C_Map.GetBestMapForUnit("player")
-    if issecretvalue(map) or not map then return end
-    local pos = C_Map.GetPlayerMapPosition(map, "player")
-    if not pos then return end
-    local x, y = pos:GetXY()
-    if not (not issecretvalue(x) and not issecretvalue(y) and x and y) then return end
-    local data = self:CharData()
-    data.fires = data.fires or {}
-    for _, f in ipairs(data.fires) do
-        if f.map == map and math.abs(f.x - x) < 0.01 and math.abs(f.y - y) < 0.01 then
-            f.seen = time()
-            return
-        end
-    end
-    table.insert(data.fires, { map = map, x = x, y = y, seen = time() })
-    while #data.fires > MAX_FIRES do table.remove(data.fires, 1) end
+-- A fire you passed (saved per character; the world map shows them).
+export type Fire = { map: number, x: number, y: number, seen: number }
+
+-- The fires in a character's data (saved: made when missing).
+export function firesOf(data: { [string]: unknown }): Fire[]
+    local fires = data.fires
+    if type(fires) == "table" then return fires :: Fire[] end
+    local made: Fire[] = {}
+    data.fires = made
+    return made
 end
 
 --------------------------------------------------------------------------------
 -- Settings and a look without a fire
 --------------------------------------------------------------------------------
-
-function M:Sample(phase: string?)
-    local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600), effect = function()
-        local muted = SuuUI.Tokens.color["ink-muted"].hex
-        return "Tent: |cff" .. muted .. "(here: what it does, read from the buff itself)|r\nMana Well: |cff" .. muted
-            .. "(and each other benefit on its own line)|r"
-    end }
-    self:Alert(phase or "nearby", fake)
-    if phase ~= "rested" then
-        -- a sample doesn't stay
-        self.briefTimer = after(BRIEF, function()
-            self.briefTimer = nil
-            if self.ticker then self.ticker:Cancel(); self.ticker = nil end
-            SuuUI.HideAlert(KEY)
-        end)
-    end
-end
 
 local SECTION = {
     id = "campsite", label = "Campfire", category = "General", order = 26,
@@ -231,52 +132,185 @@ local SECTION = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
-function M:OnEnable()
-    SuuUI.AllowAlertOutOfCombat(KEY)
-    self:RegisterSettings(SECTION)
-    self:OnUnitEvent("UNIT_AURA", { "player" }, function()
-        local wasNear = self.near
-        local near = aura(NEARBY)
-        if near ~= false then
-            self.near = near and true or false
-            if self.near and not wasNear then self:RememberFire() end
+class CampsiteModule extends Module<typeof(DEFAULTS)>
+    briefTimer: TimerHandle? = nil
+    litAt: number? = nil
+    near: boolean? = nil
+    -- "nearby", "resting", "rested", or "unknown" (to be read again)
+    phase: string? = nil
+    rested: { title: string, a: CampAura? }? = nil
+    ticker: TickerHandle? = nil
+
+    constructor()
+        super({
+            id = "campsite",
+            name = "Campfire",
+            description = "Alerts at a campfire: one is near, resting by it, Camp Benefits gained.",
+            api = "0.12",
+            combatSafe = true,
+            defaults = DEFAULTS,
+        })
+    end
+
+    -- "nearby", "resting", "rested" or nil; false when auras can't be read.
+    function Phase(): (string | false | nil, AuraData?)
+        local near, welcoming, benefits = aura(NEARBY), aura(WELCOMING), aura(BENEFITS)
+        if near == false or welcoming == false or benefits == false then return false end
+        if not near and not welcoming then return nil, nil end
+        if benefits then return "rested", benefits end
+        if welcoming then return "resting", welcoming end
+        return "nearby", nil
+    end
+
+    function Alert(phase: string?, a: CampAura?)
+        if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
+        self.rested = nil
+        if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+        if phase == "nearby" then
+            -- (flying over one: no fire to sit at; asked 2026-10-19)
+            if UnitOnTaxi("player") then SuuUI.HideAlert(KEY) return end
+            -- stays until you rest (or walk away), or for the setting's seconds
+            SuuUI.ShowAlert(KEY, "info", "Campfire nearby", "Sit for a minute: an hour of Camp Benefits")
+            local stay = self:Get("nearbyFor")
+            if not stay or stay <= 0 then return end
+            self.briefTimer = after(stay, function()
+                self.briefTimer = nil
+                SuuUI.HideAlert(KEY)
+            end)
+            return
+        elseif phase == "resting" then
+            local function show()
+                local left = restLeft(a)
+                SuuUI.ShowAlert(KEY, "info", "Resting by the fire", left and ("Camp Benefits in " .. clock(left)) or "Stay seated for a minute")
+            end
+            show()
+            self.ticker = every(0.5, show)
+            return
+        elseif phase == "rested" then
+            -- what you gained, with the time in the title
+            local left = restLeft(a)
+            local title = (left and left < 3500) and ("Camp Benefits · " .. clock(left) .. " left") or "Camp Benefits gained · 1h"
+            local effect, count = effectOf(a)
+            if a and a.effect then effect, count = a.effect(), 2 end
+            SuuUI.ShowAlert(KEY, "info", title, effect or "For the next hour")
+            self.rested = { title = title, a = a }
+            -- longer with more to read: 6 s and 2 more per benefit, at most 16
+            self.briefTimer = after(math.min(16, BRIEF + 2 * (count or 1)), function()
+                self.briefTimer = nil
+                SuuUI.HideAlert(KEY)
+            end)
+            return
+        else
+            SuuUI.HideAlert(KEY)
+            return
         end
-        self:Update()
-    end)
-    self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", { "player" }, function(_, _, _, spellID)
-        if not issecretvalue(spellID) and spellID == LIGHT_FIRE then self.litAt = GetTime() end
-    end)
-    -- combat ending clears every alert: say again what still holds (after the
-    -- Alerts module has cleared)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        after(0.2, function() self.phase = "unknown"; self:Update() end)
-    end)
-    self:RegisterCommand("campsite", "The campfire alerts without a fire: /suu campsite nearby, resting or rested.", function(arg)
-        self:Sample((arg == "resting" or arg == "rested") and arg or "nearby")
-    end)
-    -- after a login or /reload by a fire: the alert for where you are, once
-    -- the game has your auras (and the Alerts module is up)
-    local function sayNow()
-        after(1, function()
-            if not self:IsEnabled() then return end
-            self.near = aura(NEARBY) and true or false
-            self.phase = "unknown"
+    end
+
+    function Update()
+        local phase, a = self:Phase()
+        if phase == false then return end -- in combat: as it was
+        if phase == self.phase then return end
+        local was = self.phase
+        self.phase = phase
+        -- walking away: its alert goes
+        if not phase then
+            self:Alert(nil)
+            return
+        end
+        -- a fire you just walked up to while already rested: say how long is left
+        if was == nil and phase == "rested" then
+            self:Alert("rested", a)
+            return
+        end
+        self:Alert(phase, a)
+    end
+
+    function RememberFire()
+        -- a fire you just lit yourself goes out: not one to remember
+        if self.litAt and GetTime() - self.litAt < 10 then return end
+        local map = C_Map.GetBestMapForUnit("player")
+        if issecretvalue(map) or not map then return end
+        local pos = C_Map.GetPlayerMapPosition(map, "player")
+        if not pos then return end
+        local x, y = pos:GetXY()
+        if not (not issecretvalue(x) and not issecretvalue(y) and x and y) then return end
+        local fires = firesOf(self:CharData())
+        for _, f in ipairs(fires) do
+            if f.map == map and math.abs(f.x - x) < 0.01 and math.abs(f.y - y) < 0.01 then
+                f.seen = time()
+                return
+            end
+        end
+        table.insert(fires, { map = map, x = x, y = y, seen = time() })
+        while #fires > MAX_FIRES do table.remove(fires, 1) end
+    end
+
+    function Sample(phase: string?)
+        local fake = { expirationTime = GetTime() + (phase == "resting" and 42 or 3600), effect = function()
+            local muted = SuuUI.Tokens.color["ink-muted"].hex
+            return "Tent: |cff" .. muted .. "(here: what it does, read from the buff itself)|r\nMana Well: |cff" .. muted
+                .. "(and each other benefit on its own line)|r"
+        end }
+        self:Alert(phase or "nearby", fake)
+        if phase ~= "rested" then
+            -- a sample doesn't stay
+            self.briefTimer = after(BRIEF, function()
+                self.briefTimer = nil
+                if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+                SuuUI.HideAlert(KEY)
+            end)
+        end
+    end
+
+    override function OnEnable()
+        SuuUI.AllowAlertOutOfCombat(KEY)
+        self:RegisterSettings(SECTION)
+        self:OnUnitEvent("UNIT_AURA", { "player" }, function()
+            local wasNear = self.near
+            local near = aura(NEARBY)
+            if near ~= false then
+                self.near = near and true or false
+                if self.near and not wasNear then self:RememberFire() end
+            end
             self:Update()
         end)
+        self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", { "player" }, function(_, _, _, spellID)
+            if not issecretvalue(spellID) and spellID == LIGHT_FIRE then self.litAt = GetTime() end
+        end)
+        -- combat ending clears every alert: say again what still holds (after the
+        -- Alerts module has cleared)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            after(0.2, function() self.phase = "unknown"; self:Update() end)
+        end)
+        self:RegisterCommand("campsite", "The campfire alerts without a fire: /suu campsite nearby, resting or rested.", function(arg)
+            self:Sample((arg == "resting" or arg == "rested") and arg or "nearby")
+        end)
+        -- after a login or /reload by a fire: the alert for where you are, once
+        -- the game has your auras (and the Alerts module is up)
+        local function sayNow()
+            after(1, function()
+                if not self:IsEnabled() then return end
+                self.near = aura(NEARBY) and true or false
+                self.phase = "unknown"
+                self:Update()
+            end)
+        end
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", sayNow)
+        sayNow()
+        -- the benefits' lines carry a colour code: shown again while up
+        self:On("SUUUI_THEME_CHANGED", function()
+            local r = self.rested
+            if not (r and self.briefTimer) or InCombatLockdown() then return end
+            local effect = r.a and r.a.effect and r.a.effect() or effectOf(r.a)
+            SuuUI.ShowAlert(KEY, "info", r.title, effect or "For the next hour")
+        end)
     end
-    self:OnGameEvent("PLAYER_ENTERING_WORLD", sayNow)
-    sayNow()
-    -- the benefits' lines carry a colour code: shown again while up
-    self:On("SUUUI_THEME_CHANGED", function()
-        local r = self.rested
-        if not (r and self.briefTimer) or InCombatLockdown() then return end
-        local effect = r.a and r.a.effect and r.a.effect() or effectOf(r.a)
-        SuuUI.ShowAlert(KEY, "info", r.title, effect or "For the next hour")
-    end)
+
+    override function OnDisable()
+        if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+        if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
+        SuuUI.HideAlert(KEY)
+    end
 end
 
-function M:OnDisable()
-    if self.ticker then self.ticker:Cancel(); self.ticker = nil end
-    if self.briefTimer then self.briefTimer:Cancel(); self.briefTimer = nil end
-    SuuUI.HideAlert(KEY)
-end
+M = SuuUI.AddModule(CampsiteModule.new())
