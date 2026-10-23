@@ -10,7 +10,9 @@
 
 import tokens as T from "./Tokens"
 import * as settings from "./Settings"
-import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import type Easings from "./Tokens"
 
 local function isReduced(): boolean
     return settings.ready() and settings.get("ui", "reducedMotion") and true or false
@@ -21,55 +23,66 @@ export function reduced(): boolean
     return isReduced()
 end
 
-local function smoothing(easing: string): string
-    return (T.easing :: { [string]: any })[easing].smoothing
+local function smoothing(easing: keyof Easings): SmoothingType
+    return T.easing[easing].smoothing :: SmoothingType
 end
 
 type Fade = { from: number, to: number, start: number, duration: number }
 
 -- Running alphaTo fades.
-local fades: { [any]: Fade } = {}
+local fades: { [Region]: Fade } = {}
 
--- One AnimationGroup per frame and preset, built on first use (kept on the
--- frame as suuMotion).
-local function group(frame: any, preset: string, build: (g: any) -> ()): any
-    frame.suuMotion = frame.suuMotion or {}
-    local g = frame.suuMotion[preset]
-    if not g then
-        g = frame:CreateAnimationGroup()
-        build(g)
-        g:SetScript("OnFinished", function() frame:SetAlpha(1) end)
-        frame.suuMotion[preset] = g
-    end
-    return g
+-- A preset's AnimationGroup on a frame, and the animations a later play
+-- adjusts (their duration).
+export type Preset = { group: AnimationGroup, alpha?: Alpha, down?: Translation }
+
+-- Each frame's presets, built on first use.
+local built: { [Region]: { [string]: Preset } } = tbl.weakKeys()
+
+-- The presets built on a frame so far (none: nil).
+export function presetsOf(frame: Region): { [string]: Preset }?
+    return built[frame]
 end
 
-export function stop(frame: any)
-    if frame.suuMotion then
-        for _, g in pairs(frame.suuMotion) do g:Stop() end
+local function preset(frame: Region, name: string, build: (g: AnimationGroup, p: Preset) -> ()): Preset
+    local mine = built[frame] or {}
+    built[frame] = mine
+    local p = mine[name]
+    if not p then
+        local g = frame:CreateAnimationGroup()
+        p = { group = g }
+        build(g, p)
+        g:SetScript("OnFinished", function() frame:SetAlpha(1) end)
+        mine[name] = p
     end
+    return p
+end
+
+export function stop(frame: Region)
+    for _, p in pairs(built[frame] or {}) do p.group:Stop() end
     fades[frame] = nil -- a running alphaTo would override the alpha set here
     frame:SetAlpha(1)
 end
 
-export function fadeIn(frame: any, duration: number?)
+export function fadeIn(frame: Region, duration: number?)
     stop(frame)
     if isReduced() then return end
-    local g = group(frame, "fadeIn", function(g: any)
+    local p = preset(frame, "fadeIn", function(g: AnimationGroup, kept: Preset)
         local a = g:CreateAnimation("Alpha")
         a:SetFromAlpha(0)
         a:SetToAlpha(1)
         a:SetSmoothing(smoothing("ease-out"))
-        g.alpha = a
+        kept.alpha = a
     end)
-    g.alpha:SetDuration(duration or T.duration["dur-base"])
-    g:Play()
+    local a = p.alpha
+    if a then a:SetDuration(duration or T.duration["dur-base"]) end
+    p.group:Play()
 end
 
-export function enter(frame: any, duration: number?)
+export function enter(frame: Region, duration: number?)
     stop(frame)
     if isReduced() then return end
-    local g = group(frame, "enter", function(g: any)
+    local p = preset(frame, "enter", function(g: AnimationGroup, kept: Preset)
         -- Jump 6px up instantly, then move back down while fading in.
         local up = g:CreateAnimation("Translation")
         up:SetOffset(0, 6)
@@ -84,12 +97,13 @@ export function enter(frame: any, duration: number?)
         a:SetToAlpha(1)
         a:SetSmoothing(smoothing("ease-out"))
         a:SetOrder(2)
-        g.down, g.alpha = down, a
+        kept.down, kept.alpha = down, a
     end)
     local d = duration or T.duration["dur-base"]
-    g.down:SetDuration(d)
-    g.alpha:SetDuration(d)
-    g:Play()
+    local down, a = p.down, p.alpha
+    if down then down:SetDuration(d) end
+    if a then a:SetDuration(d) end
+    p.group:Play()
 end
 
 -- Fades `frame` from its current alpha to `to` over `duration` (ease-out).
@@ -108,13 +122,13 @@ driver:SetScript("OnUpdate", function(self: Frame)
     if not any then self:Hide() end
 end)
 
-export function alphaTo(frame: any, to: number, duration: number?)
+export function alphaTo(frame: Region, to: number, duration: number?)
     local d = duration or T.duration["dur-slow"]
-    local from: any = frame:GetAlpha()
     -- once a frame's alpha was set from a secret (the unit frames' resting
     -- alpha), the game reads it back secret for good (found in game): no
     -- fade can start from it, so the alpha is set at once
-    if isSecret(from) or isReduced() or d <= 0 or math.abs(from - to) < 0.01 then
+    local from = secret.asNumber(frame:GetAlpha())
+    if not from or isReduced() or d <= 0 or math.abs(from - to) < 0.01 then
         fades[frame] = nil
         frame:SetAlpha(to)
         return
@@ -125,10 +139,10 @@ export function alphaTo(frame: any, to: number, duration: number?)
     driver:Show()
 end
 
-export function pop(frame: any)
+export function pop(frame: Region)
     stop(frame)
     if isReduced() then return end
-    local g = group(frame, "pop", function(g: any)
+    local p = preset(frame, "pop", function(g: AnimationGroup, _: Preset)
         local s = g:CreateAnimation("Scale")
         s:SetScaleFrom(0.86, 0.86)
         s:SetScaleTo(1, 1)
@@ -140,5 +154,5 @@ export function pop(frame: any)
         a:SetDuration(T.duration["dur-base"])
         a:SetSmoothing(smoothing("ease-out"))
     end)
-    g:Play()
+    p.group:Play()
 end

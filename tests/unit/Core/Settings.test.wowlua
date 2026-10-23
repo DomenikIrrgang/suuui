@@ -7,6 +7,7 @@
 
 import test, expect, config, afterEach, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
+import field from "wowlua:table"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as fault from "/Core/Fault"
@@ -40,6 +41,9 @@ settings.veto("zzsa", "num", function(new: any): (boolean?, string?)
 end, "Settings Test Load Veto")
 local readyHeard = 0
 events.on("SUUUI_SETTINGS_READY", function() readyHeard += 1 end, "Settings Test Ready")
+
+-- SuuUIDB as Settings keeps it.
+local function savedDB(): settings.SavedDB return DB.db :: unknown :: settings.SavedDB end
 
 @afterEach
 local function cleanup()
@@ -83,8 +87,8 @@ local function faultWith(text: string): fault.Entry?
     return nil
 end
 
-local function saved(name: string): { [string]: any }
-    return DB.db.profiles[name]
+local function saved(name: string): settings.Profile
+    return (assert(savedDB().profiles[name]))
 end
 
 --------------------------------------------------------------------------------
@@ -446,8 +450,8 @@ local function lateMigration()
     expect(heard).toHaveBeenCalledWith(4, "zzsc", "size")
     expect(heard).toHaveBeenCalledTimes(1)
     expect(saved("Other").zzsc).toBeNil()
-    expect(saved("Other").__migrated["zzsc/rename"]).toBe(true)
-    expect(saved("Empty").__migrated["zzsc/rename"]).toBe(true)
+    expect(assert(saved("Other").__migrated)["zzsc/rename"]).toBe(true)
+    expect(assert(saved("Empty").__migrated)["zzsc/rename"]).toBe(true)
     -- once per profile: a profile that has had it isn't migrated again
     saved("Other").zzsc = { width = 8 }
     profiles.use("Other")
@@ -475,7 +479,7 @@ local function migrationError()
     settings.register("zzsd", { v = 1 })
     saved("Main").zzsd = { v = 2 }
     settings.migrate("zzsd", "fails", function() error("settings-err-migration") end, "Migration Owner")
-    expect(saved("Main").__migrated["zzsd/fails"]).toBeNil()
+    expect(assert(saved("Main").__migrated)["zzsd/fails"]).toBeNil()
     expect(saved("Main").zzsd).toEqual({ v = 2 })
     expect((faultWith("settings-err-migration") :: fault.Entry).source).toBe("Migration Owner")
     -- the owner defaults to the namespace
@@ -496,7 +500,7 @@ local function lateMigrationElsewhere()
     end)
     expect(saved("Other").zzsg).toEqual({ v = 2 })
     expect(heard).never.toHaveBeenCalled()
-    expect(DB.db.profiles.Broken).toBe("x")
+    expect(field(DB.db, "profiles", "Broken")).toBe("x")
     DB.db.profiles.Broken = nil
     saved("Other").zzsg = nil
 end
@@ -585,7 +589,7 @@ local function use()
     local changed = listen("SUUUI_PROFILE_CHANGED")
     expect(profiles.use("zztarget")).toBe(true)
     expect(profiles.current()).toBe("ZzTarget")
-    expect(DB.db.chars[settings.getCharKey() :: string]).toBe("ZzTarget")
+    expect(field(DB.db, "chars", settings.getCharKey() :: string)).toBe("ZzTarget")
     expect(flag).toHaveBeenCalledWith(true, "zzsa", "flag")
     expect(num).never.toHaveBeenCalled()
     expect(saved("ZzTarget").zzsa).toEqual({ flag = true })
@@ -612,9 +616,9 @@ local function delete()
     DB.db.chars["Alt - Realm"] = "ZzGone"
     local listChanged, roleChanged = listen("SUUUI_PROFILES_CHANGED"), listen("SUUUI_ROLE_PROFILES_CHANGED")
     expect(profiles.delete("zzgone")).toBe(true)
-    expect(DB.db.profiles.ZzGone).toBeNil()
+    expect(field(DB.db, "profiles", "ZzGone")).toBeNil()
     expect(DB.db.roleProfiles).toEqual({ HEALER = "ZzKept" })
-    expect(DB.db.chars["Alt - Realm"]).toBeNil()
+    expect(field(DB.db, "chars", "Alt - Realm")).toBeNil()
     expect(listChanged).toHaveBeenCalledTimes(1)
     expect(roleChanged).toHaveBeenCalledTimes(1)
     -- no role mapped to it: no role change
@@ -687,7 +691,7 @@ local function roles()
     expect(profiles.roleProfile("TANK")).toBe("ZzTank")
     profiles.setRoleProfile("HEALER", "Missing")
     expect(profiles.roleProfile("HEALER")).toBeNil()
-    expect(DB.db.roleProfiles.HEALER).toBeNil()
+    expect(field(DB.db, "roleProfiles", "HEALER")).toBeNil()
     profiles.setRoleProfile("TANK", nil)
     expect(profiles.roleProfile("TANK")).toBeNil()
     DB.db.roleProfiles.DAMAGER = "Vanished"
@@ -703,12 +707,12 @@ local function charRoles()
     profiles.setChosenRole("TANK")
     expect(profiles.chosenRole()).toBe("TANK")
     profiles.setChosenRole("auto")
-    expect(DB.db.charRoles[key]).toBeNil()
+    expect(field(DB.db, "charRoles", key)).toBeNil()
     expect(changed).toHaveBeenCalledTimes(2)
     local lastBefore = profiles.lastRole()
     profiles.setLastRole("HEALER")
     expect(profiles.lastRole()).toBe("HEALER")
-    expect(DB.db.lastRoles[key]).toBe("HEALER")
+    expect(field(DB.db, "lastRoles", key)).toBe("HEALER")
     if lastBefore then profiles.setLastRole(lastBefore) else DB.db.lastRoles[key] = nil end
 end
 
@@ -745,7 +749,7 @@ local function import()
     expect(p.plugin).toEqual({ x = { 1 } })
     expect(p.junk).toBeNil()
     expect(p[3]).toBeNil()
-    expect(p.__migrated["zzsb/toNumber"]).toBe(true)
+    expect(assert(p.__migrated)["zzsb/toNumber"]).toBe(true)
     expect(settings.get("zzsa", "flag")).toBe(true)
     expect(profiles.import("ZzNothing", "not a table")).toBe(true)
     expect(saved("ZzNothing").zzsa).toBeNil()
@@ -777,12 +781,12 @@ local function charData()
     expect(settings.forgetCharData("zzsa", "Nobody")).toBe(false)
     expect(settings.forgetCharData("zzsa", "Odd")).toBe(false)
     expect(settings.forgetCharData("zzsa", "Alt - Realm")).toBe(true)
-    expect(DB.db.charData["Alt - Realm"]).toEqual({ other = {} })
+    expect(field(DB.db, "charData", "Alt - Realm")).toEqual({ other = {} })
     expect(settings.forgetCharData("other", "Alt - Realm")).toBe(true)
-    expect(DB.db.charData["Alt - Realm"]).toBeNil()
+    expect(field(DB.db, "charData", "Alt - Realm")).toBeNil()
     DB.db.charData.Odd = nil
     DB.db.charData.Alt2 = nil
-    DB.db.charData[key].zzsa = nil
+    rawset(assert(savedDB().charData[key]), "zzsa", nil)
 end
 
 @test("account-wide values")

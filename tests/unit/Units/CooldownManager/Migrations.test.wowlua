@@ -30,6 +30,10 @@ end
 local function storedList(v: Values, class: string, spec: string, key: string): Lists.Entry[]
     return assert(stored(v, class, spec)[key])
 end
+-- The lists from before setups, as a migration left them.
+local function listsOf(v: Values): Lists.ListSet
+    return field(v, "lists") :: unknown :: Lists.ListSet
+end
 -- A collection's entries, a shared slot's members.
 local function inside(e: Lists.Entry?): Lists.Entry[] return (assert(assert(e).entries)) end
 local function membersOf(e: Lists.Entry?): Lists.Entry[] return (assert(assert(e).members)) end
@@ -80,7 +84,7 @@ local function slotUids()
     expect(buffs[2].uid).toBe("mWARRIOR3buffs2")
     expect(buffs[3].uid).toBe("mWARRIOR3buffs3")
     expect(buffs[4].uid).toBe("keep")
-    expect(v.lists.utility[1].uid).toBe("mutility1")
+    expect(assert(listsOf(v).utility)[1].uid).toBe("mutility1")
 end
 
 @test("slot uids: nothing to give")
@@ -121,18 +125,18 @@ local function missingPerEntry()
     expect(inside(assert(l.buffs)[3])[1].missing).toBe("remind")
     expect(assert(l.debuffs)[1].missing).toBe("hide")
     expect(assert(l.procs)[1].missing).toBeNil()
-    expect(v.lists.buffs[1].missing).toBe("remind")
+    expect(assert(listsOf(v).buffs)[1].missing).toBe("remind")
 end
 
 @test("missing per entry: no old choice changes nothing")
 local function missingPerEntryNone()
     local v: Values = { setups = { WARRIOR = { ["3"] = { lists = { buffs = { { name = "A" } }, debuffs = "junk" } } } }, lists = "junk" }
     migrations.missingPerEntry(v)
-    expect(v.setups.WARRIOR["3"].lists.buffs[1].missing).toBeNil()
+    expect(storedList(v, "WARRIOR", "3", "buffs")[1].missing).toBeNil()
     -- a list that isn't a table, and a missing value that isn't a string
     local w: Values = { missingBuffs = true, missingDebuffs = "hide", lists = { buffs = { { name = "A" } }, debuffs = "junk" } }
     migrations.missingPerEntry(w)
-    expect(w.lists.buffs[1].missing).toBeNil()
+    expect(assert(listsOf(w).buffs)[1].missing).toBeNil()
     local empty: Values = { setups = "junk" }
     migrations.missingPerEntry(empty)
     expect(empty).toEqual({ setups = "junk" })
@@ -142,7 +146,7 @@ end
 -- shaman-shields-auto
 --------------------------------------------------------------------------------
 
-local function shields(icon: number?): Values
+local function shields(icon: number?): Lists.Entry
     return { group = true, name = "Shields", fixedIcon = true, icon = icon,
              members = { { name = "Lightning Shield", ids = { 324 }, icon = 324 }, { name = "Water Shield", ids = { 52127 }, icon = 52127 } } }
 end
@@ -167,9 +171,10 @@ local function shamanOtherSlots()
     local renamed = shields(52127)
     renamed.name = "Other"
     local three = shields(52127)
-    table.insert(three.members, { name = "Earth Shield", ids = { 974 } })
+    table.insert(membersOf(three), { name = "Earth Shield", ids = { 974 } })
     local swapped = shields(52127)
-    swapped.members[1], swapped.members[2] = swapped.members[2], swapped.members[1]
+    local sm = membersOf(swapped)
+    sm[1], sm[2] = sm[2], sm[1]
     local unfixed = shields(52127)
     unfixed.fixedIcon = nil
     local v: Values = { setups = { SHAMAN = { ["3"] = { lists = { buffs = { renamed, three, swapped, unfixed } } } } } }
@@ -177,7 +182,7 @@ local function shamanOtherSlots()
     expect(renamed.fixedIcon).toBe(true)
     expect(three.fixedIcon).toBe(true)
     expect(swapped.fixedIcon).toBe(true)
-    expect(unfixed.members[1].name).toBe("Lightning Shield")
+    expect(membersOf(unfixed)[1].name).toBe("Lightning Shield")
 end
 
 @test("shaman shields: no shaman setups")
@@ -189,10 +194,10 @@ local function shamanNone()
     migrations.shamanShieldsAuto(junk)
     local bad: Values = { setups = { SHAMAN = "junk" } }
     migrations.shamanShieldsAuto(bad)
-    expect(bad.setups.SHAMAN).toBe("junk")
+    expect(field(bad, "setups", "SHAMAN")).toBe("junk")
     local noBuffs: Values = { setups = { SHAMAN = { ["1"] = { lists = { buffs = "junk" } } } } }
     migrations.shamanShieldsAuto(noBuffs)
-    expect(noBuffs.setups.SHAMAN["1"].lists.buffs).toBe("junk")
+    expect(field(noBuffs, "setups", "SHAMAN", "1", "lists", "buffs")).toBe("junk")
 end
 
 --------------------------------------------------------------------------------
@@ -221,8 +226,8 @@ local function shortBuffs()
     expect(buffs[2].missing).toBe("grey")
     expect(buffs[3].missing).toBe("remind")
     expect(inside(buffs[4])[1].missing).toBe("warn")
-    expect(v.setups.PRIEST["1"].lists.buffs[1].missing).toBe("warn")
-    expect(v.setups.MAGE["1"].lists.buffs[1].missing).toBe("remind")
+    expect(storedList(v, "PRIEST", "1", "buffs")[1].missing).toBe("warn")
+    expect(storedList(v, "MAGE", "1", "buffs")[1].missing).toBe("remind")
 end
 
 @test("short buffs: no setups")
@@ -232,7 +237,7 @@ local function shortBuffsNone()
     expect(v).toEqual({})
     local w: Values = { setups = { WARRIOR = { ["3"] = { lists = { buffs = "junk" } } } } }
     migrations.shortBuffsWarn(w)
-    expect(w.setups.WARRIOR["3"].lists.buffs).toBe("junk")
+    expect(field(w, "setups", "WARRIOR", "3", "lists", "buffs")).toBe("junk")
 end
 
 --------------------------------------------------------------------------------

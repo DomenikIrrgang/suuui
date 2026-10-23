@@ -8,8 +8,6 @@ import * as motion from "/Core/Motion"
 import * as settings from "/Core/Settings"
 import newParent, expectNoErrors from "../../helpers"
 
-type Groups = { [string]: AnimationGroup }
-
 local made: Frame[] = {}
 local function frame(): Frame
     local f = newParent(50, 50)
@@ -17,21 +15,21 @@ local function frame(): Frame
     return f
 end
 
--- The groups Motion keeps on a frame (its suuMotion field), and the
--- animations it keeps on a group (alpha, down): fields Motion adds to
--- client objects, read through one untyped view each.
-local function groups(f: Frame): Groups?
-    local fields: { [string]: any } = f :: any
-    return fields.suuMotion
+-- The presets Motion built on a frame, and one of them.
+local function groups(f: Frame): { [string]: motion.Preset }? return motion.presetsOf(f) end
+local function preset(f: Frame, name: string): motion.Preset
+    return (assert(assert(groups(f), "no groups")[name], "no " .. name))
 end
+local function group(f: Frame, name: string): AnimationGroup return preset(f, name).group end
+-- The animations a preset adjusts.
 type Kept = { alpha: Alpha, down: Translation? }
 local function kept(g: AnimationGroup): Kept
-    local fields: { [string]: any } = g :: any
-    return { alpha = fields.alpha, down = fields.down }
-end
-
-local function group(f: Frame, preset: string): AnimationGroup
-    return (assert(assert(groups(f), "no groups")[preset], "no " .. preset))
+    for _, f in ipairs(made) do
+        for _, p in pairs(groups(f) or {}) do
+            if p.group == g then return { alpha = assert(p.alpha), down = p.down } end
+        end
+    end
+    error("not a preset's group")
 end
 
 @afterEach

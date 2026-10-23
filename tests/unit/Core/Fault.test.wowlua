@@ -3,6 +3,7 @@
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import field from "wowlua:table"
 import * as errors from "wowlua:errors"
 import * as fault from "/Core/Fault"
 import * as DB from "/Core/DB"
@@ -52,12 +53,12 @@ local function reports()
     expect(e.count).toBe(1)
     expect(e.time:match("^%d%d:%d%d:%d%d$") ~= nil).toBe(true)
     expect(out).toEqual({ PREFIX .. "|cffff9a80Bags hit an error and was skipped:|r fault-one  (/suu errors)" })
-    local saved: any[] = DB.db.errors
+    local saved = DB.list("errors")
     expect(#saved).toBe(1)
-    expect(saved[1].source).toBe("Bags")
-    expect(saved[1].message).toBe("fault-one")
-    expect(saved[1].stack).toBe("the stack")
-    expect(saved[1].version).toBe(version)
+    expect(field(saved[1], "source")).toBe("Bags")
+    expect(field(saved[1], "message")).toBe("fault-one")
+    expect(field(saved[1], "stack")).toBe("the stack")
+    expect(field(saved[1], "version")).toBe(version)
 end
 
 @test("report: the same error again counts, quietly; another source is another entry")
@@ -90,9 +91,9 @@ local function keepsFifty()
     expect(last().message).toBe("fault-many-1")
     expect(last().count).toBe(1)
     -- the saved log keeps the newest 30
-    local saved: any[] = DB.db.errors
+    local saved = DB.list("errors")
     expect(#saved).toBe(30)
-    expect(saved[30].message).toBe("fault-many-1")
+    expect(field(saved[30], "message")).toBe("fault-many-1")
 end
 
 --------------------------------------------------------------------------------
@@ -391,18 +392,18 @@ end
 local function blockedOther()
     mock.fireEvent("ADDON_ACTION_FORBIDDEN", "OtherAddon", "TargetUnit")
     expect(#fault.entries()).toBe(0)
-    local saved: any[] = DB.db.blocked
+    local saved = DB.list("blocked")
     expect(#saved).toBe(1)
-    expect(saved[1].event).toBe("ADDON_ACTION_FORBIDDEN")
-    expect(saved[1].addon).toBe("OtherAddon")
-    expect(saved[1].func).toBe("TargetUnit")
-    expect(saved[1].combat).toBe(false)
-    expect(type(saved[1].stack)).toBe("string")
+    expect(field(saved[1], "event")).toBe("ADDON_ACTION_FORBIDDEN")
+    expect(field(saved[1], "addon")).toBe("OtherAddon")
+    expect(field(saved[1], "func")).toBe("TargetUnit")
+    expect(field(saved[1], "combat")).toBe(false)
+    expect(type(field(saved[1], "stack"))).toBe("string")
     mock.player:enterCombat()
     for i = 1, 31 do mock.fireEvent("ADDON_ACTION_BLOCKED", "OtherAddon", "F" .. i) end
     mock.player:leaveCombat()
-    saved = DB.db.blocked
+    saved = DB.list("blocked")
     expect(#saved).toBe(30)
-    expect(saved[30].func).toBe("F31")
-    expect(saved[30].combat).toBe(true)
+    expect(field(saved[30], "func")).toBe("F31")
+    expect(field(saved[30], "combat")).toBe(true)
 end

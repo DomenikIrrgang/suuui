@@ -47,10 +47,10 @@ end
 
 local copy, equal, ownerName = tbl.copy, tbl.equal, util.ownerName
 
-export type Values = { [string]: any }
-export type Profile = { [string]: any }
-export type Watcher = (value: any, namespace: string, key: string) -> ()
-export type Veto = (new: any, old: any) -> (boolean?, string?)
+export type Values = { [string]: unknown }
+export type Profile = { [string]: Values } -- namespace -> its stored values
+export type Watcher = (value: unknown, namespace: string, key: string) -> ()
+export type Veto = (new: unknown, old: unknown) -> (boolean?, string?)
 export type Listing = { namespace: string, keys: string[] }
 export type Exported = { name: string, data: Profile }
 -- A module's migration of its stored values (`migrations()` lists them).
@@ -62,15 +62,15 @@ export type SavedDB = {
     version: number,
     profiles: { [string]: Profile },
     chars: { [string]: string },
-    charData: { [string]: { [string]: { [any]: any } } },
+    charData: { [string]: { [string]: Values } },
     roleProfiles: { [string]: string }?,
     charRoles: { [string]: string }?,
     lastRoles: { [string]: string }?,
-    account: { [string]: any }?,
-    [string]: any,
+    account: { [string]: unknown }?,
+    [string]: unknown,
 }
 
-type Hook = { fn: (...any) -> ...any, owner: unknown, dead: boolean? }
+type Hook<F> = { fn: F, owner: unknown, dead: boolean? }
 type Change = { namespace: string, key: string }
 
 -- In each profile, the migrations it has had: "namespace/id" -> true. Not a
@@ -78,7 +78,7 @@ type Change = { namespace: string, key: string }
 -- setting, and it travels with the profile's data (copies, exports).
 const MIGRATED = "__migrated"
 
-local function stored(p: Profile?, namespace: string, key: string): any
+local function stored(p: Profile?, namespace: string, key: string): unknown
     local t = p and p[namespace]
     if t then return t[key] end
     return nil
@@ -86,8 +86,8 @@ end
 
 export class SettingsStore
     private defaults: { [string]: Values } = {}  -- namespace -> { key -> default }
-    private watchers: { [string]: Hook[] } = {}  -- "namespace.key" -> { { fn, owner }, ... }
-    private vetoes: { [string]: Hook[] } = {}    -- "namespace.key" -> { { fn, owner }, ... }
+    private watchers: { [string]: Hook<Watcher>[] } = {}  -- "namespace.key" -> { { fn, owner }, ... }
+    private vetoes: { [string]: Hook<Veto>[] } = {}    -- "namespace.key" -> { { fn, owner }, ... }
     private generation: { [string]: number } = {} -- "namespace.key" -> write count
     private migrationList: Migration[] = {}      -- in the order they were registered
     -- bound when the saved data has loaded
@@ -120,7 +120,7 @@ export class SettingsStore
     end
 
     -- (errors blame the caller of the module's function: level 4)
-    private function default(namespace: string, key: string): any
+    private function default(namespace: string, key: string): unknown
         local d = self.defaults[namespace]
         if not d then error(("SuuUI Settings: unknown namespace %q"):format(tostring(namespace)), 4) end
         local v = d[key]
@@ -130,7 +130,7 @@ export class SettingsStore
 
     -- A stored value of another type than the default's (an old or
     -- hand-edited profile) is ignored, so the default applies.
-    private function valueOf(namespace: string, key: string): any
+    private function valueOf(namespace: string, key: string): unknown
         local d = self:default(namespace, key)
         local v = stored(self.profile, namespace, key)
         if v == nil or type(v) ~= type(d) then return d end
@@ -141,14 +141,14 @@ export class SettingsStore
         return self.profile ~= nil
     end
 
-    function get(namespace: string, key: string): any
+    function get(namespace: string, key: string): unknown
         return copy(self:valueOf(namespace, key))
     end
 
     -- The value itself, not a copy: to read only (a table changed in place
     -- changes the profile behind the watchers' backs). For large tables
     -- read often, where get's copy is garbage each time.
-    function peek(namespace: string, key: string): any
+    function peek(namespace: string, key: string): unknown
         return self:valueOf(namespace, key)
     end
 
@@ -175,7 +175,7 @@ export class SettingsStore
     end
 
     -- A setting's default (a copy).
-    function defaultOf(namespace: string, key: string): any
+    function defaultOf(namespace: string, key: string): unknown
         return copy(self:default(namespace, key))
     end
 
@@ -183,11 +183,12 @@ export class SettingsStore
     -- Watchers and vetoes
     ----------------------------------------------------------------------------
 
-    private function addHook(map: { [string]: Hook[] }, namespace: string, key: string, fn: (...any) -> ...any, owner: unknown)
+    private function addHook<F>(map: { [string]: Hook<F>[] }, namespace: string, key: string, fn: F, owner: unknown)
         self:default(namespace, key)
-        assert(type(fn) == "function" and owner ~= nil, "SuuUI Settings: a function and an owner are required")
+        local given: unknown = fn
+        assert(type(given) == "function" and owner ~= nil, "SuuUI Settings: a function and an owner are required")
         local id = namespace .. "." .. key
-        local hooks: Hook[] = map[id] or {}
+        local hooks: Hook<F>[] = map[id] or {}
         map[id] = hooks
         hooks[#hooks + 1] = { fn = fn, owner = owner, dead = false }
     end
@@ -237,7 +238,7 @@ export class SettingsStore
     -- Writing
     ----------------------------------------------------------------------------
 
-    private function write(namespace: string, key: string, value: any)
+    private function write(namespace: string, key: string, value: unknown)
         local p = self:current()
         if equal(value, (self.defaults[namespace] :: Values)[key]) then
             local t = p[namespace]
@@ -246,12 +247,13 @@ export class SettingsStore
                 if next(t) == nil then p[namespace] = nil end
             end
         else
-            p[namespace] = p[namespace] or {}
-            p[namespace][key] = copy(value)
+            local t = p[namespace] or {}
+            p[namespace] = t
+            t[key] = copy(value)
         end
     end
 
-    function set(namespace: string, key: string, value: any): (boolean, string?)
+    function set(namespace: string, key: string, value: unknown): (boolean, string?)
         local d = self:default(namespace, key)
         if type(value) ~= type(d) then
             error(("SuuUI Settings: %s.%s takes a %s, not a %s"):format(namespace, key, type(d), type(value)), 3)
@@ -305,9 +307,10 @@ export class SettingsStore
             if v ~= nil and type(v) == type(d) then
                 for _, h in ipairs({ unpack(hooks) }) do
                     local ok, allowed = self.reporter:call(ownerName(h.owner), h.fn, copy(v), copy(d))
-                    if ok and allowed == false then
-                        p[namespace][key] = nil
-                        if next(p[namespace]) == nil then p[namespace] = nil end
+                    local values = p[namespace]
+                    if ok and allowed == false and values then
+                        values[key] = nil
+                        if next(values) == nil then p[namespace] = nil end
                         break
                     end
                 end
@@ -329,9 +332,9 @@ export class SettingsStore
     private function runMigration(p: Profile, m: Migration)
         local tag = m.namespace .. "/" .. m.id
         local done = p[MIGRATED]
-        if type(done) == "table" and done[tag] then return end
+        if done and done[tag] then return end
         local values = p[m.namespace]
-        if type(values) == "table" then
+        if values then
             if not self.reporter:call(m.owner, m.fn, values) then return end
             -- what the migration left at its default isn't stored
             local defs = self.defaults[m.namespace] :: Values
@@ -518,7 +521,7 @@ export class SettingsStore
     -- value is the default. In the profile you use, each goes through set
     -- (vetoes, watchers); in another, it is stored for when that profile is
     -- used.
-    function setProfileValues(text: string?, entries: { [number]: any }[]): (boolean, string?)
+    function setProfileValues(text: string?, entries: unknown[][]): (boolean, string?)
         local profileName = strtrim(text or "")
         if profileName == "" then return false, "A profile needs a name." end
         local existing = self:findProfile(profileName)
@@ -531,8 +534,8 @@ export class SettingsStore
         local target = assert(self:loadedDB().profiles[profileName])
         for _, e in ipairs(entries) do
             local namespace, key, value = e[1], e[2], e[3]
-            local defs = self.defaults[namespace]
-            if defs and defs[key] ~= nil then
+            local defs = type(namespace) == "string" and self.defaults[namespace] or nil
+            if type(namespace) == "string" and type(key) == "string" and defs and defs[key] ~= nil then
                 if value == nil then value = defs[key] end
                 if target == self.profile then
                     self:set(namespace, key, copy(value))
@@ -543,8 +546,9 @@ export class SettingsStore
                         if next(t) == nil then target[namespace] = nil end
                     end
                 else
-                    target[namespace] = target[namespace] or {}
-                    target[namespace][key] = copy(value)
+                    local t = target[namespace] or {}
+                    target[namespace] = t
+                    t[key] = copy(value)
                 end
             end
         end
@@ -612,15 +616,16 @@ export class SettingsStore
     -- shape (migrations), then keeps for registered settings only values of
     -- the default's type. Namespaces SuuUI doesn't know (a plugin that isn't
     -- installed here) are kept as they are.
-    private function sanitize(data: any): Profile
+    private function sanitize(data: unknown): Profile
         local out: Profile = {}
         if type(data) ~= "table" then return out end
         for namespace, values in pairs(data) do
             if type(namespace) == "string" and type(values) == "table" then
                 for key, v in pairs(values) do
                     if type(key) == "string" then
-                        out[namespace] = out[namespace] or {}
-                        out[namespace][key] = copy(v)
+                        local t = out[namespace] or {}
+                        out[namespace] = t
+                        t[key] = copy(v)
                     end
                 end
             end
@@ -628,7 +633,7 @@ export class SettingsStore
         self:migrateAll(out)
         for namespace, values in pairs(out) do
             local defs = self.defaults[namespace]
-            if defs and type(values) == "table" then
+            if defs then
                 for key, v in pairs(values) do
                     if defs[key] ~= nil and type(v) ~= type(defs[key]) then values[key] = nil end
                 end
@@ -639,7 +644,7 @@ export class SettingsStore
     end
 
     -- A new profile from exported data; switches to it.
-    function importProfile(text: string, data: any): (boolean, string?)
+    function importProfile(text: string, data: unknown): (boolean, string?)
         local ok, err = self:createProfile(text)
         if not ok then return false, err end
         self:loadedDB().profiles[strtrim(text)] = self:sanitize(data)
@@ -652,7 +657,7 @@ export class SettingsStore
 
     -- A module's own data for this character (not a setting: kept out of
     -- profiles, exports and resets), made on first use. Saved with SuuUIDB.
-    function charData(namespace: string): { [any]: any }
+    function charData(namespace: string): Values
         local data = self:loadedDB()
         local key = self.charKey :: string
         local mine = data.charData[key]
@@ -660,16 +665,18 @@ export class SettingsStore
             mine = {}
             data.charData[key] = mine
         end
-        mine[namespace] = mine[namespace] or {}
-        return mine[namespace]
+        local values = mine[namespace] or {}
+        mine[namespace] = values
+        return values
     end
 
     -- Every character's data for a module ({ [charKey] = data }, this one's
     -- included: the same table charData gives), and this character's key.
-    function allCharData(namespace: string): { [string]: { [any]: any } }
-        local out: { [string]: { [any]: any } } = {}
+    function allCharData(namespace: string): { [string]: Values }
+        local out: { [string]: Values } = {}
         for key, data in pairs(self:loadedDB().charData) do
-            if type(data) == "table" and type(data[namespace]) == "table" then out[key] = data[namespace] end
+            local values = type(data) == "table" and data[namespace]
+            if type(values) == "table" then out[key] = values end
         end
         return out
     end
@@ -680,12 +687,12 @@ export class SettingsStore
 
     -- Account-wide values that aren't per profile (the colour vision
     -- preset): the same on every character and in every profile.
-    function account(key: string): any
+    function account(key: string): unknown
         local data = self.db
         return data and data.account and data.account[key]
     end
 
-    function setAccount(key: string, value: any)
+    function setAccount(key: string, value: unknown)
         local data = self:loadedDB()
         local values = data.account or {}
         data.account = values
@@ -711,7 +718,7 @@ export class SettingsStore
     -- The saved data is in (`saved`, filled in where it lacks a part) and
     -- `key` is this character: the profile it uses, every profile brought
     -- up to date. The migrations and vetoes registered so far run.
-    function bind(saved: { [string]: any }, key: string)
+    function bind(saved: { [string]: unknown }, key: string)
         saved.version = saved.version or 1
         saved.profiles = saved.profiles or {}
         saved.chars = saved.chars or {}
@@ -738,24 +745,50 @@ export const store = SettingsStore.new()
 
 export function register(namespace: string, defs: Values) store:register(namespace, defs) end
 export function ready(): boolean return store:ready() end
-export function get(namespace: string, key: string): any return store:get(namespace, key) end
-export function peek(namespace: string, key: string): any return store:peek(namespace, key) end
+export function get(namespace: string, key: string): unknown return store:get(namespace, key) end
+export function peek(namespace: string, key: string): unknown return store:peek(namespace, key) end
 export function isDefault(namespace: string, key: string): boolean return store:isDefault(namespace, key) end
 export function list(): Listing[] return store:list() end
 export function has(namespace: string, key: string?): boolean return store:has(namespace, key) end
-export function defaultOf(namespace: string, key: string): any return store:defaultOf(namespace, key) end
+export function defaultOf(namespace: string, key: string): unknown return store:defaultOf(namespace, key) end
 export function watch(namespace: string, key: string, fn: Watcher, owner: unknown) store:watch(namespace, key, fn, owner) end
 export function veto(namespace: string, key: string, fn: Veto, owner: unknown) store:veto(namespace, key, fn, owner) end
 export function unwatch(owner: unknown) store:unwatch(owner) end
-export function set(namespace: string, key: string, value: any): (boolean, string?) return store:set(namespace, key, value) end
+export function set(namespace: string, key: string, value: unknown): (boolean, string?) return store:set(namespace, key, value) end
 export function reset(namespace: string?, key: string?): boolean return store:reset(namespace, key) end
 export function migrate(namespace: string, id: string, fn: (values: Values) -> (), owner: unknown?) store:migrate(namespace, id, fn, owner) end
 export function migrations(): Migration[] return store:migrations() end
-export function charData(namespace: string): { [any]: any } return store:charData(namespace) end
-export function allCharData(namespace: string): { [string]: { [any]: any } } return store:allCharData(namespace) end
+export function charData(namespace: string): Values return store:charData(namespace) end
+export function allCharData(namespace: string): { [string]: Values } return store:allCharData(namespace) end
 export function getCharKey(): string? return store:getCharKey() end
-export function account(key: string): any return store:account(key) end
-export function setAccount(key: string, value: any) store:setAccount(key, value) end
+export function account(key: string): unknown return store:account(key) end
+
+-- A setting read as its default's type (the store keeps only values of
+-- that type, so these hold; a wrong namespace or key is an error).
+export function getNumber(namespace: string, key: string): number
+    local v = store:get(namespace, key)
+    if type(v) ~= "number" then error(("SuuUI Settings: %s.%s isn't a number"):format(namespace, key), 2) end
+    return v
+end
+
+export function getString(namespace: string, key: string): string
+    local v = store:get(namespace, key)
+    if type(v) ~= "string" then error(("SuuUI Settings: %s.%s isn't a string"):format(namespace, key), 2) end
+    return v
+end
+
+export function getTable(namespace: string, key: string): Values
+    local v = store:get(namespace, key)
+    if type(v) ~= "table" then error(("SuuUI Settings: %s.%s isn't a table"):format(namespace, key), 2) end
+    return v :: Values
+end
+
+-- An account-wide value that is a string, or nil.
+export function accountString(key: string): string?
+    local v = store:account(key)
+    return type(v) == "string" and v or nil
+end
+export function setAccount(key: string, value: unknown) store:setAccount(key, value) end
 export function forgetCharData(namespace: string, key: string): boolean return store:forgetCharData(namespace, key) end
 
 export const profiles = {
@@ -766,7 +799,7 @@ export const profiles = {
     create = function(text: string?, from: string?): (boolean, string?) return store:createProfile(text, from) end,
     delete = function(text: string?): (boolean, string?) return store:deleteProfile(text) end,
     copyFrom = function(text: string?): (boolean, string?) return store:copyProfile(text) end,
-    setValues = function(text: string?, entries: { [number]: any }[]): (boolean, string?) return store:setProfileValues(text, entries) end,
+    setValues = function(text: string?, entries: unknown[][]): (boolean, string?) return store:setProfileValues(text, entries) end,
     roleProfile = function(role: string): string? return store:roleProfile(role) end,
     setRoleProfile = function(role: string, profileName: string?): boolean return store:setRoleProfile(role, profileName) end,
     chosenRole = function(): string return store:chosenRole() end,
@@ -774,7 +807,7 @@ export const profiles = {
     lastRole = function(): string? return store:lastRole() end,
     setLastRole = function(role: string) store:setLastRole(role) end,
     export = function(text: string?): (Exported?, string?) return store:exportProfile(text) end,
-    import = function(text: string, data: any): (boolean, string?) return store:importProfile(text, data) end,
+    import = function(text: string, data: unknown): (boolean, string?) return store:importProfile(text, data) end,
 }
 
 -- The SavedVariables are in: the colour vision preset first, before
@@ -784,7 +817,7 @@ export const profiles = {
 @onLoad
 local function bind()
     local data = DB.db
-    vision.apply(data.account and data.account.colorVision)
+    vision.apply(secret.asString(tbl.field(data, "account", "colorVision")))
     store:bind(data, secret.known(UnitName("player"), "?") .. " - " .. GetRealmName())
 end
 
@@ -796,11 +829,11 @@ register("core", {
     debug = false, -- print SuuUI's debug lines in chat
 })
 
-export function debug(...: any)
+export function debug(...: unknown)
     if store:ready() and store:peek("core", "debug") then print("|cffa39b8b[debug]|r", ...) end
 end
 
-watch("core", "debug", function(on: any)
+watch("core", "debug", function(on: unknown)
     print(on and "Debug lines on." or "Debug lines off.")
 end, "Core")
 
@@ -808,7 +841,7 @@ end, "Core")
 -- Chat commands
 --------------------------------------------------------------------------------
 
-local function parse(text: string, like: any): (any, string?)
+local function parse(text: string, like: unknown): (unknown, string?)
     local t = type(like)
     if t == "boolean" then
         local l = text:lower()
@@ -825,7 +858,7 @@ local function parse(text: string, like: any): (any, string?)
     return nil, "this setting can only be changed in the settings window"
 end
 
-local function show(v: any): string
+local function show(v: unknown): string
     if type(v) == "table" then return "(table)" end
     return tostring(v)
 end
@@ -885,7 +918,7 @@ registerCommand("reset", "Reset a setting, a namespace, or everything: /suu rese
     print(arg .. " is back to its default.")
 end)
 
-registerCommand("profile", "Show profiles; /suu profile use|new|delete <name> (any letter case, or the start of a name)", function(arg: string)
+registerCommand("profile", "Show profiles; /suu profile use|new|delete <name> (unknown letter case, or the start of a name)", function(arg: string)
     if not store:ready() then return print("Settings haven't loaded yet.") end
     local verb, text = arg:match("^(%S+)%s+(.+)$")
     local ok: boolean? = nil
