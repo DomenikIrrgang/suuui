@@ -7,6 +7,7 @@ import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import objectiveTracker, TRACKER_HEAD_H from "/UI/ObjectiveTracker"
+import ObjectiveTracker, ObjectiveTrackerOptions, TrackerQuest, QuestRow from "/UI/ObjectiveTracker"
 import * as tooltipModule from "/UI/Tooltip"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf from "./WorldHelpers"
@@ -18,7 +19,7 @@ local function lineH(): number return T.type.caption.lineHeight end
 
 local parent: Frame? = nil
 
-local function make(opts: { [string]: any }?): any
+local function make(opts: ObjectiveTrackerOptions?): ObjectiveTracker
     parent = newParent(400, 600)
     local t = objectiveTracker(parent, opts)
     t:SetPoint("TOPLEFT")
@@ -34,17 +35,17 @@ local function cleanup()
 end
 
 -- A quest with `n` open objectives.
-local function quest(id: number, opts: { [string]: any }?): { [string]: any }
-    local q: { [string]: any } = { questID = id, title = "Quest " .. id, objectives = { { text = "Slay a wolf", progress = "0/3" } } }
-    for k, v in pairs(opts or {}) do q[k] = v end
+local function quest(id: number, change: ((q: TrackerQuest) -> ())?): TrackerQuest
+    local q: TrackerQuest = { questID = id, title = "Quest " .. id, objectives = { { text = "Slay a wolf", progress = "0/3" } } }
+    if change then change(q) end
     return q
 end
 
 -- The rows in use, in list order.
-local function rowsOf(t: any): any[]
-    local out: any[] = {}
+local function rowsOf(t: ObjectiveTracker): QuestRow[]
+    local out: QuestRow[] = {}
     for _, r in ipairs(t.rows) do if r.inUse then out[#out + 1] = r end end
-    table.sort(out, function(a: any, b: any) return a.top < b.top end)
+    table.sort(out, function(a: QuestRow, b: QuestRow) return a.top < b.top end)
     return out
 end
 
@@ -92,9 +93,9 @@ local function toggle()
     mock.click(t.toggle)
     expect(toggled).toHaveBeenCalledTimes(1)
     mock.hover(t.toggle)
-    expect(tokenOf(t.toggle.edge.top)).toBe("gilt")
+    expect(tokenOf(t.toggleEdge.top)).toBe("gilt")
     mock.hover(nil)
-    expect(tokenOf(t.toggle.edge.top)).toBe("gilt-line")
+    expect(tokenOf(t.toggleEdge.top)).toBe("gilt-line")
 end
 
 @test("the owner's own toggle: sized and drawn here, its click left to the owner")
@@ -107,7 +108,7 @@ local function ownToggle()
     local t = objectiveTracker(parent, { toggle = own })
     expect(t.toggle).toBe(own)
     expect(own:GetWidth()).toBe(HEAD_H)
-    expect((own :: any).edge ~= nil).toBe(true)
+    expect(t.toggleEdge ~= nil).toBe(true)
     t.onToggle = mock.spy()
     mock.click(own)
     expect(clicked).toHaveBeenCalledTimes(1)
@@ -169,14 +170,14 @@ end
 })
 local function difficulty(level: string, color: string?, token: string)
     local t = make()
-    t:SetQuests({ quest(1, { difficulty = level, color = color }) })
+    t:SetQuests({ quest(1, function(q: TrackerQuest) q.difficulty = level; q.color = color end) })
     expect(tokenOf(rowsOf(t)[1].title)).toBe(token)
 end
 
 @test("a done objective: a check, muted; one without a count takes the width")
 local function doneObjective()
     local t = make()
-    t:SetQuests({ quest(1, { objectives = { { text = "Find the cave", done = true }, { text = "Light the brazier" } } }) })
+    t:SetQuests({ quest(1, function(q: TrackerQuest) q.objectives = { { text = "Find the cave", done = true }, { text = "Light the brazier" } } end) })
     local r = rowsOf(t)[1]
     local done, open = r.lines[1], r.lines[2]
     expect(done.check).toBeShown()
@@ -195,7 +196,7 @@ end
 @test("a complete quest: the arcane check and Ready to turn in, or its own words")
 local function complete()
     local t = make()
-    t:SetQuests({ quest(1, { complete = true }), quest(2, { complete = true, turnIn = "Return to Tamsin" }) })
+    t:SetQuests({ quest(1, function(q: TrackerQuest) q.complete = true end), quest(2, function(q: TrackerQuest) q.complete = true; q.turnIn = "Return to Tamsin" end) })
     local a, b = rowsOf(t)[1], rowsOf(t)[2]
     expect(a.done).toBeShown()
     expect(a.done.check).toBeShown()
@@ -209,7 +210,7 @@ end
 @test("a failed quest: Failed in ember, no check")
 local function failed()
     local t = make()
-    t:SetQuests({ quest(1, { failed = true }) })
+    t:SetQuests({ quest(1, function(q: TrackerQuest) q.failed = true end) })
     local r = rowsOf(t)[1]
     expect(r.done).toBeShown()
     expect(r.done.check).never.toBeShown()
@@ -224,7 +225,7 @@ end
 @test("an entry's icon before the title and a count after it")
 local function iconAndCount()
     local t = make()
-    t:SetQuests({ quest(1, { icon = 134400, count = "×3", title = "Linen Bandage" }) })
+    t:SetQuests({ quest(1, function(q: TrackerQuest) q.icon = 134400; q.count = "×3"; q.title = "Linen Bandage" end) })
     local r = rowsOf(t)[1]
     expect(r.icon).toBeShown()
     expect(r.icon.art:GetTextureFileID()).toBe(134400)
@@ -241,7 +242,7 @@ end
 @test("the settings preview's item: a plain icon beside the title")
 local function preview()
     local t = make()
-    t:SetQuests({ quest(1, { item = { preview = true, icon = 134414 } }), quest(2, { item = { icon = 1 } }) })
+    t:SetQuests({ quest(1, function(q: TrackerQuest) q.item = { preview = true, icon = 134414 } end), quest(2, function(q: TrackerQuest) q.item = { icon = 1 } end) })
     local a, b = rowsOf(t)[1], rowsOf(t)[2]
     expect(a.preview).toBeShown()
     expect(a.preview.art:GetTextureFileID()).toBe(134414)
@@ -252,8 +253,8 @@ end
 local function zones()
     local t = make()
     t:SetQuests({
-        quest(1, { zone = "Elwynn Forest" }), quest(2, { zone = "Elwynn Forest" }),
-        quest(3, { zone = "Westfall" }),
+        quest(1, function(q: TrackerQuest) q.zone = "Elwynn Forest" end), quest(2, function(q: TrackerQuest) q.zone = "Elwynn Forest" end),
+        quest(3, function(q: TrackerQuest) q.zone = "Westfall" end),
     })
     local headings: string[] = {}
     for _, z in ipairs(t.zoneRows) do if z.inUse then headings[#headings + 1] = z.text:GetText() end end
@@ -306,7 +307,7 @@ end
 @test("hover: the entry's tooltip and onRowEnter; away hides it")
 local function hover()
     local t = make()
-    t:SetQuests({ quest(5, { tooltip = { title = "Quest 5" } }), quest(6) })
+    t:SetQuests({ quest(5, function(q: TrackerQuest) q.tooltip = { title = "Quest 5" } end), quest(6) })
     local a, b = rowsOf(t)[1], rowsOf(t)[2]
     local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
     local hide = mock.stub(tooltipModule, "hideTooltip", function() end)
@@ -329,9 +330,9 @@ end
 -- The Recipes section
 --------------------------------------------------------------------------------
 
-local function recipe(id: number, opts: { [string]: any }?): { [string]: any }
-    local r: { [string]: any } = { questID = id, title = "Recipe " .. id, objectives = { { text = "Linen Cloth", progress = "1/2" } } }
-    for k, v in pairs(opts or {}) do r[k] = v end
+local function recipe(id: number, change: ((q: TrackerQuest) -> ())?): TrackerQuest
+    local r: TrackerQuest = { questID = id, title = "Recipe " .. id, objectives = { { text = "Linen Cloth", progress = "1/2" } } }
+    if change then change(r) end
     return r
 end
 
@@ -378,9 +379,9 @@ local function recipesFolded()
     mock.click(h.toggle)
     expect(toggled).toHaveBeenCalledWith("recipes")
     mock.hover(h.toggle)
-    expect(tokenOf(h.toggle.edge.top)).toBe("gilt")
+    expect(tokenOf(h.toggleEdge.top)).toBe("gilt")
     mock.hover(nil)
-    expect(tokenOf(h.toggle.edge.top)).toBe("gilt-line")
+    expect(tokenOf(h.toggleEdge.top)).toBe("gilt-line")
     -- no recipes: no section
     t:SetRecipes(nil, false, nil)
     t:SetQuests({ quest(1) })
@@ -396,7 +397,7 @@ local function questsFolded()
     t:SetQuests({ quest(1), quest(2) })
     local rows = rowsOf(t)
     expect(#rows).toBe(1)
-    expect(rows[1].quest.recipe).toBe(true)
+    expect(assert(rows[1].quest).recipe).toBe(true)
     expect(t.sectionRows[1].top).toBe(0)
     t:SetQuestsCollapsed(false)
     expect(t.minus).toBeShown()
@@ -408,8 +409,8 @@ end
 -- Scrolling within maxHeight
 --------------------------------------------------------------------------------
 
-local function many(n: number): { [string]: any }[]
-    local list: { [string]: any }[] = {}
+local function many(n: number): TrackerQuest[]
+    local list: TrackerQuest[] = {}
     for i = 1, n do list[i] = quest(i) end
     return list
 end
@@ -423,7 +424,7 @@ local function window()
     expect(t:GetHeight()).toBe(HEAD_H + S["space-4"] + view)
     expect(t.clip:GetHeight()).toBe(view)
     expect(t.contentWidth).toBe(260 - S["space-5"] - 1)
-    expect(t.list:GetWidth()).toBe(t.contentWidth)
+    expect(t.list:GetWidth()).toBe(assert(t.contentWidth))
     expect(t.thumb).toBeShown()
     expect(t.thumb:GetHeight()).toBe(math.max(16, view * view / t.listHeight))
     -- the rows past the window hidden
@@ -464,7 +465,7 @@ local function questTop()
     local t = make({ maxHeight = 200 })
     t:SetQuests(many(10))
     expect(t:QuestTop(1)).toBe(HEAD_H + S["space-4"])
-    local second = t.tops[2]
+    local second = assert(t.tops[2])
     expect(t:QuestTop(2)).toBe(HEAD_H + S["space-4"] + second)
     expect(t:QuestTop(10)).toBeNil()
     expect(t:QuestTop(99)).toBeNil()
@@ -497,19 +498,19 @@ end
 local function frozen()
     local t = make()
     t:SetQuests({
-        quest(1, { zone = "Elwynn Forest" }),
-        quest(2, { zone = "Elwynn Forest", objectives = { { text = "a" }, { text = "b" } } }),
+        quest(1, function(q: TrackerQuest) q.zone = "Elwynn Forest" end),
+        quest(2, function(q: TrackerQuest) q.zone = "Elwynn Forest"; q.objectives = { { text = "a" }, { text = "b" } } end),
     })
-    local top1, top2, h2 = t.tops[1], t.tops[2], t.heights[2]
+    local top1, top2, h2 = assert(t.tops[1]), assert(t.tops[2]), assert(t.heights[2])
     -- quest 2 shrinks, quest 1 is gone, quest 3 and a new zone come
-    t:SetQuests({ quest(2), quest(3, { zone = "Westfall" }) }, true)
+    t:SetQuests({ quest(2), quest(3, function(q: TrackerQuest) q.zone = "Westfall" end) }, true)
     expect(t.tops[2]).toBe(top2)
     expect(t.heights[2]).toBe(h2)
     expect(t.tops[1]).toBe(top1)
     local gone = t.rows[1]
     expect(gone.inUse).toBe(false)
     expect(gone).never.toBeShown()
-    expect(t.tops[3] > top2).toBe(true)
+    expect(assert(t.tops[3]) > top2).toBe(true)
     local headings: string[] = {}
     for _, z in ipairs(t.zoneRows) do if z.inUse then headings[#headings + 1] = z.text:GetText() end end
     expect(headings).toEqual({ "Elwynn Forest", "Westfall" })

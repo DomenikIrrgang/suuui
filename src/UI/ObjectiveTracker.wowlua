@@ -47,9 +47,13 @@ import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
 import * as uiIcon from "/UI/Icon"
+import Icon from "/UI/Icon"
 import * as inputs from "/UI/Inputs"
+import Glyph from "/UI/Inputs"
 import * as uiText from "/UI/Text"
+import Text from "/UI/Text"
 import * as tooltip from "/UI/Tooltip"
+import TooltipSource from "/UI/Tooltip"
 
 local S = T.space
 
@@ -68,115 +72,214 @@ local DIFFICULTY: { [string]: string } = {
 
 export const TRACKER_HEAD_H = HEAD_H
 
--- A diamond bullet: 4px, turned 45°, 3px either side.
-local function bullet(parent: any): any
-    local d = draw.diamond(parent, 4, "ink-muted", "ARTWORK")
-    return d
+--------------------------------------------------------------------------------
+-- The data (see the header)
+--------------------------------------------------------------------------------
+
+export type TrackerObjective = { text?: string, progress?: string, done?: boolean }
+
+export type TrackerQuest = {
+    questID: number,
+    zone?: string,
+    title?: string,
+    difficulty?: string,
+    complete?: boolean,
+    failed?: boolean,
+    turnIn?: string,
+    objectives?: TrackerObjective[],
+    -- the settings preview's item: a plain icon beside the title
+    item?: { preview?: boolean, icon?: number | string },
+    -- 0.13: a token for the title, an icon before it, a count after it
+    color?: string,
+    icon?: number | string,
+    count?: string,
+    tooltip?: TooltipSource,
+    -- (a recipe of the Recipes section: set by the tracker)
+    recipe?: boolean,
+}
+
+export type ObjectiveTrackerOptions = {
+    name?: string,
+    width?: number,
+    maxHeight?: number,
+    -- the owner's own (secure) toggle button, drawn here
+    toggle?: Button,
+    title?: string,
+    meta?: string,
+}
+
+-- A line of the list: a zone's heading, a section's head, or an entry.
+type Entry = { zone?: string, id?: number, section?: string, recipe?: number }
+
+--------------------------------------------------------------------------------
+-- The rows
+--------------------------------------------------------------------------------
+
+-- An objective: a 4px diamond (or a check once done), its text, its count.
+class ObjectiveLine extends Frame
+    readonly bullet: Texture
+    readonly check: Texture
+    readonly text: Text
+    readonly count: Text
+
+    constructor(row: Frame)
+        super(nil, row)
+        self.bullet = draw.diamond(self, 4, "ink-muted", "ARTWORK")
+        self.check = inputs.check(self, 11, "ink-muted")
+        self.text = uiText.text(self, "caption", "ink")
+        self.text:SetShadowed(true)
+        self.text:SetWordWrap(true)
+        self.text:SetJustifyH("LEFT")
+        self.text:SetPoint("TOPLEFT", 10 + S["space-3"], 0)
+        self.count = uiText.text(self, "numeric", "ink")
+        self.count:SetShadowed(true)
+        self.count:SetPoint("TOPRIGHT", 0, 1)
+    end
 end
 
-local function objectiveLine(row: any): any
-    local l = CreateFrame("Frame", nil, row)
-    l.bullet = bullet(l)
-    l.check = inputs.check(l, 11, "ink-muted")
-    l.text = uiText.text(l, "caption", "ink")
-    l.text:SetShadowed(true)
-    l.text:SetWordWrap(true)
-    l.text:SetJustifyH("LEFT")
-    l.text:SetPoint("TOPLEFT", 10 + S["space-3"], 0)
-    l.count = uiText.text(l, "numeric", "ink")
-    l.count:SetShadowed(true)
-    l.count:SetPoint("TOPRIGHT", 0, 1)
-    return l
+-- "Ready to turn in" (an arcane check) or "Failed".
+class DoneLine extends Frame
+    readonly check: Texture
+    readonly text: Text
+
+    constructor(row: Frame)
+        super(nil, row)
+        self.check = inputs.check(self, 12, "arcane")
+        self.check:SetPoint("LEFT", INDENT, 0)
+        self.text = uiText.text(self, "caption", "arcane")
+        self.text:SetShadowed(true)
+        self.text:SetPoint("LEFT", self.check, "RIGHT", S["space-2"], 0)
+    end
 end
 
-local function questRow(t: any): any
-    local r = CreateFrame("Button", nil, t.list)
-    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    r.title = uiText.text(r, "label", "quest-standard")
-    r.title:SetShadowed(true)
-    r.title:SetJustifyH("LEFT")
-    -- 0.13: an entry's own icon before the title (a tracked recipe's
-    -- product) and a count after it ("×3")
-    r.icon = uiIcon.icon(r, ICON)
-    r.icon:Hide()
-    r.count = uiText.text(r, "numeric", "arcane")
-    r.count:SetShadowed(true)
-    r.count:SetPoint("TOPRIGHT", 0, 0)
-    r.lines = {}
-    r.done = CreateFrame("Frame", nil, r)
-    r.done.check = inputs.check(r.done, 12, "arcane")
-    r.done.check:SetPoint("LEFT", INDENT, 0)
-    r.done.text = uiText.text(r.done, "caption", "arcane")
-    r.done.text:SetShadowed(true)
-    r.done.text:SetPoint("LEFT", r.done.check, "RIGHT", S["space-2"], 0)
-    -- the settings preview's item: a plain icon left of the title
-    r.preview = uiIcon.icon(r, "icon-md")
-    r.preview:SetPoint("TOPRIGHT", r, "TOPLEFT", -S["space-3"], 2)
-    r.preview:Hide()
-    r:SetScript("OnEnter", function(self)
-        if self.quest and self.quest.tooltip then tooltip.showTooltip(self, self.quest.tooltip) end
-        if t.onRowEnter and self.quest then t.onRowEnter(self) end
-    end)
-    r:SetScript("OnLeave", function() tooltip.hideTooltip() end)
-    r:SetScript("OnClick", function(self, button)
-        if not self.quest then return end
-        if self.quest.recipe then
-            if t.onRecipeClick then t.onRecipeClick(self.quest.questID, button, self) end
-        elseif t.onQuestClick then
-            t.onQuestClick(self.quest.questID, button, self)
-        end
-    end)
-    return r
+-- A quest (or a recipe): its title and its objectives.
+export class QuestRow extends Button
+    readonly title: Text
+    readonly icon: Icon
+    readonly count: Text
+    readonly lines: ObjectiveLine[] = {}
+    readonly done: DoneLine
+    readonly preview: Icon
+    quest: TrackerQuest? = nil
+    -- where it sits in the list, its height, whether an entry uses it
+    top: number = 0
+    height: number = 0
+    inUse: boolean = false
+
+    constructor(t: ObjectiveTracker)
+        super(nil, t.list)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.title = uiText.text(self, "label", "quest-standard")
+        self.title:SetShadowed(true)
+        self.title:SetJustifyH("LEFT")
+        -- 0.13: an entry's own icon before the title (a tracked recipe's
+        -- product) and a count after it ("×3")
+        self.icon = uiIcon.icon(self, ICON)
+        self.icon:Hide()
+        self.count = uiText.text(self, "numeric", "arcane")
+        self.count:SetShadowed(true)
+        self.count:SetPoint("TOPRIGHT", 0, 0)
+        self.done = DoneLine.new(self)
+        -- the settings preview's item: a plain icon left of the title
+        self.preview = uiIcon.icon(self, "icon-md")
+        self.preview:SetPoint("TOPRIGHT", self, "TOPLEFT", -S["space-3"], 2)
+        self.preview:Hide()
+        self:SetScript("OnEnter", function()
+            local q = self.quest
+            local tip = q and q.tooltip
+            if tip then tooltip.showTooltip(self, tip) end
+            if t.onRowEnter and q then t.onRowEnter(self) end
+        end)
+        self:SetScript("OnLeave", function() tooltip.hideTooltip() end)
+        self:SetScript("OnClick", function(_: Button, button: string)
+            local q = self.quest
+            if not q then return end
+            if q.recipe then
+                if t.onRecipeClick then t.onRecipeClick(q.questID, button, self) end
+            elseif t.onQuestClick then
+                t.onQuestClick(q.questID, button, self)
+            end
+        end)
+    end
 end
 
 -- A zone's heading over its quests: caption in gilt-text, a gilt-line
 -- hairline fading out after it.
-local function zoneRow(t: any): any
-    local z = CreateFrame("Frame", nil, t.list)
-    z.text = uiText.text(z, "caption", "gilt-text")
-    z.text:SetShadowed(true)
-    z.text:SetPoint("LEFT")
-    z.rule = draw.hairline(z, "gilt-line", "out")
-    z.rule:SetPoint("LEFT", z.text, "RIGHT", S["space-3"], 0)
-    z.rule:SetPoint("RIGHT")
-    return z
+class ZoneRow extends Frame
+    readonly text: Text
+    readonly rule: Frame
+    top: number = 0
+    height: number = 0
+    inUse: boolean = false
+
+    constructor(t: ObjectiveTracker)
+        super(nil, t.list)
+        self.text = uiText.text(self, "caption", "gilt-text")
+        self.text:SetShadowed(true)
+        self.text:SetPoint("LEFT")
+        self.rule = draw.hairline(self, "gilt-line", "out")
+        self.rule:SetPoint("LEFT", self.text, "RIGHT", S["space-3"], 0)
+        self.rule:SetPoint("RIGHT")
+    end
+end
+
+-- The toggle's look (the toggle itself may be a secure button the owner
+-- made): its edge, gilt on hover.
+local function toggleArt(b: Button): draw.Border
+    draw.fill(b, "surface-glass", "BACKGROUND"):SetAllPoints()
+    local edge = draw.border(b, "gilt-line")
+    b:HookScript("OnEnter", function() edge:SetColor("gilt") end)
+    b:HookScript("OnLeave", function() edge:SetColor("gilt-line") end)
+    return edge
 end
 
 -- A section's head inside the list (0.13: Recipes, under the quests): like
 -- the tracker's own head, its own toggle, title, rule and meta; it scrolls
 -- with the list, so quests and recipes share the tracker's height.
-local function sectionRow(t: any): any
-    local h = CreateFrame("Frame", nil, t.list)
-    h:SetHeight(HEAD_H)
-    h.toggle = CreateFrame("Button", nil, h)
-    h.toggle:SetSize(HEAD_H, HEAD_H)
-    h.toggle:SetPoint("LEFT")
-    draw.fill(h.toggle, "surface-glass", "BACKGROUND"):SetAllPoints()
-    h.toggle.edge = draw.border(h.toggle, "gilt-line")
-    h.toggle:SetScript("OnEnter", function(self) self.edge:SetColor("gilt") end)
-    h.toggle:SetScript("OnLeave", function(self) self.edge:SetColor("gilt-line") end)
-    h.toggle:SetScript("OnClick", function() if t.onSectionToggle and h.key then t.onSectionToggle(h.key) end end)
-    h.plus = inputs.plus(h.toggle, "gilt-text")
-    h.plus:SetPoint("CENTER")
-    h.minus = inputs.minus(h.toggle, "gilt-text")
-    h.minus:SetPoint("CENTER")
-    h.label = uiText.text(h, "header", "gilt-text")
-    h.label:SetShadowed(true)
-    h.label:SetPoint("LEFT", HEAD_H + S["space-3"], 0)
-    h.meta = uiText.text(h, "caption", "ink-muted")
-    h.meta:SetShadowed(true)
-    h.meta:SetPoint("RIGHT")
-    h.rule = draw.hairline(h, "gilt-line", "out")
-    h.rule:SetPoint("LEFT", h.label, "RIGHT", S["space-3"], 0)
-    h.rule:SetPoint("RIGHT", h.meta, "LEFT", -S["space-3"], 0)
-    return h
-end
+class SectionRow extends Frame
+    readonly toggle: Button
+    readonly toggleEdge: draw.Border
+    readonly plus: Glyph
+    readonly minus: Glyph
+    readonly label: Text
+    readonly meta: Text
+    readonly rule: Frame
+    key: string? = nil
+    top: number = 0
+    height: number = 0
+    inUse: boolean = false
 
-type Entry = { zone?: string, id?: any, section?: string, recipe?: any }
+    constructor(t: ObjectiveTracker)
+        super(nil, t.list)
+        self:SetHeight(HEAD_H)
+        local toggle = CreateFrame("Button", nil, self)
+        self.toggle = toggle
+        toggle:SetSize(HEAD_H, HEAD_H)
+        toggle:SetPoint("LEFT")
+        self.toggleEdge = toggleArt(toggle)
+        toggle:SetScript("OnClick", function()
+            local key = self.key
+            if t.onSectionToggle and key then t.onSectionToggle(key) end
+        end)
+        self.plus = inputs.plus(toggle, "gilt-text")
+        self.plus:SetPoint("CENTER")
+        self.minus = inputs.minus(toggle, "gilt-text")
+        self.minus:SetPoint("CENTER")
+        self.label = uiText.text(self, "header", "gilt-text")
+        self.label:SetShadowed(true)
+        self.label:SetPoint("LEFT", HEAD_H + S["space-3"], 0)
+        self.meta = uiText.text(self, "caption", "ink-muted")
+        self.meta:SetShadowed(true)
+        self.meta:SetPoint("RIGHT")
+        self.rule = draw.hairline(self, "gilt-line", "out")
+        self.rule:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
+        self.rule:SetPoint("RIGHT", self.meta, "LEFT", -S["space-3"], 0)
+    end
+end
 
 -- The list's entries: a zone heading wherever the zone changes (quests
 -- carry `zone`; none: no headings), then its quests.
-local function entriesOf(quests: any[]): Entry[]
+local function entriesOf(quests: TrackerQuest[]): Entry[]
     local entries: Entry[], last: string? = {}, nil
     for _, q in ipairs(quests) do
         if q.zone and q.zone ~= last then
@@ -191,54 +294,61 @@ end
 -- While the quests scroll they make room for the thumb at the right edge.
 local GUTTER = S["space-5"] + 1
 
--- The toggle's look (the toggle itself may be a secure button the owner
--- made: t.toggle).
-local function toggleArt(b: any)
-    draw.fill(b, "surface-glass", "BACKGROUND"):SetAllPoints()
-    b.edge = draw.border(b, "gilt-line")
-    b:HookScript("OnEnter", function(self) self.edge:SetColor("gilt") end)
-    b:HookScript("OnLeave", function(self) self.edge:SetColor("gilt-line") end)
+-- A row in the window shown at its place, else hidden (so nothing out of
+-- sight takes a click).
+local function placeRow(r: Frame, top: number, height: number, inUse: boolean, list: Frame, scroll: number, view: number)
+    if inUse and (top + height > scroll) and (top < scroll + view) then
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", list, "TOPLEFT", 0, -(top - scroll))
+        r:Show()
+    else
+        r:Hide()
+    end
 end
 
 export class ObjectiveTracker extends Frame
-    width: any
-    maxHeight: any
-    rows: any
-    zoneRows: any
-    sectionRows: any
-    heights: any
+    width: number
+    maxHeight: number? = nil
+    rows: QuestRow[] = {}
+    zoneRows: ZoneRow[] = {}
+    sectionRows: SectionRow[] = {}
+    heights: { [number]: number } = {}
     head: Frame
-    toggle: any
-    plus: any
-    minus: any
-    label: any
-    meta: any
-    rule: any
+    toggle: Button
+    toggleEdge: draw.Border
+    plus: Glyph
+    minus: Glyph
+    label: Text
+    meta: Text
+    rule: Frame
     clip: Frame
     list: Frame
     thumb: Texture
-    scroll: number
-    recipes: any = nil
-    recipesCollapsed: any = nil
-    recipesMeta: any = nil
-    contentWidth: any = nil
-    entries: any = nil
-    tops: any = nil
-    listHeight: any = nil
-    scrollLocked: any = nil
-    collapsed: any = nil
-    questsCollapsed: any = nil
+    scroll: number = 0
+    recipes: TrackerQuest[]? = nil
+    recipesCollapsed: boolean = false
+    recipesMeta: string? = nil
+    contentWidth: number? = nil
+    entries: Entry[]? = nil
+    tops: { [number]: number } = {}
+    listHeight: number = 0
+    scrollLocked: boolean = false
+    collapsed: boolean = false
+    questsCollapsed: boolean = false
+    -- set by the owner (see the header)
+    onToggle: (() -> ())? = nil
+    onQuestClick: ((questID: number, button: string, row: QuestRow) -> ())? = nil
+    onRecipeClick: ((recipeID: number, button: string, row: QuestRow) -> ())? = nil
+    onSectionToggle: ((key: string) -> ())? = nil
+    onRowEnter: ((row: QuestRow) -> ())? = nil
+    onScroll: (() -> ())? = nil
 
-    constructor(parent: any, opts: { [string]: any }?)
-        opts = opts or {}
-        super(opts.name, parent)
-        self.width = opts.width or 260
-        self.maxHeight = opts.maxHeight
+    constructor(parent: Frame, opts: ObjectiveTrackerOptions?)
+        local o = opts or {}
+        super(o.name, parent)
+        self.width = o.width or 260
+        self.maxHeight = o.maxHeight
         self:SetSize(self.width, HEAD_H)
-        self.rows = {}
-        self.zoneRows = {}
-        self.sectionRows = {}
-        self.heights = {}
 
         self.head = CreateFrame("Frame", nil, self)
         self.head:SetPoint("TOPLEFT")
@@ -247,14 +357,14 @@ export class ObjectiveTracker extends Frame
         -- the toggle: a plain button, or the owner's (a secure one, placed by
         -- the owner over the head's left end: anchored into the tracker, which
         -- changes height in combat, it would lock the tracker's layout)
-        local toggle = opts.toggle
+        local toggle = o.toggle
         if not toggle then
             toggle = CreateFrame("Button", nil, self.head)
             toggle:SetPoint("LEFT")
             toggle:SetScript("OnClick", function() if self.onToggle then self.onToggle() end end)
         end
         toggle:SetSize(HEAD_H, HEAD_H)
-        toggleArt(toggle)
+        self.toggleEdge = toggleArt(toggle)
         self.toggle = toggle
         self.plus = inputs.plus(toggle, "gilt-text")
         self.plus:SetPoint("CENTER")
@@ -286,9 +396,8 @@ export class ObjectiveTracker extends Frame
         draw.paintFill(self.thumb, "gilt-line")
         self.thumb:SetWidth(1)
         self.thumb:Hide()
-        self.scroll = 0
-        self:SetTitle(opts.title)
-        self:SetMeta(opts.meta)
+        self:SetTitle(o.title)
+        self:SetMeta(o.meta)
         self:EnableMouseWheel(true)
         self:SetScript("OnMouseWheel", function(_: Frame, delta: number) self:ScrollBy(-delta * (titleH() + lineH() * 2)) end)
         self:SetCollapsed(false)
@@ -296,19 +405,20 @@ export class ObjectiveTracker extends Frame
     end
 
     -- One quest drawn into its row; the row's natural height.
-    function DrawQuest(r: any, q: any): number
+    function DrawQuest(r: QuestRow, q: TrackerQuest): number
         r.quest = q
         r.title:SetValue(q.title or "")
         r.title:SetColor(q.color or DIFFICULTY[q.difficulty or "standard"] or "quest-standard")
         local titleHeight, lineHeight = titleH(), lineH()
-        r.icon:SetShown(q.icon ~= nil)
-        if q.icon then
-            r.icon:SetArt(q.icon)
+        local icon = q.icon
+        r.icon:SetShown(icon ~= nil)
+        if icon then
+            r.icon:SetArt(icon)
             r.icon:SetPoint("TOPLEFT", 0, -(titleHeight - ICON) / 2)
         end
         r.count:SetValue(q.count or "")
         r.title:ClearAllPoints()
-        r.title:SetPoint("TOPLEFT", q.icon and (ICON + S["space-3"]) or 0, 0)
+        r.title:SetPoint("TOPLEFT", icon and (ICON + S["space-3"]) or 0, 0)
         if q.count and q.count ~= "" then
             r.title:SetPoint("TOPRIGHT", r.count, "TOPLEFT", -S["space-3"], 0)
         else
@@ -333,11 +443,11 @@ export class ObjectiveTracker extends Frame
         else
             r.done:Hide()
             for i, o in ipairs(q.objectives or {}) do
-                local l = r.lines[i] or objectiveLine(r)
+                local l = r.lines[i] or ObjectiveLine.new(r)
                 r.lines[i] = l
                 l.bullet:SetShown(not o.done)
                 l.bullet:SetPoint("TOPLEFT", 3, -(lineHeight - 4) / 2)
-                l.check:SetShown(o.done and true or false)
+                l.check:SetShown(o.done == true)
                 l.check:SetPoint("TOPLEFT", -1, -(lineHeight - 11) / 2)
                 l.text:SetColor(o.done and "ink-muted" or "ink")
                 l.count:SetColor(o.done and "ink-muted" or "ink")
@@ -354,45 +464,49 @@ export class ObjectiveTracker extends Frame
                 y = y + h + 1
             end
         end
-        r.preview:SetShown(q.item and q.item.preview and true or false)
-        if q.item and q.item.preview then r.preview:SetArt(q.item.icon) end
+        local item = q.item
+        local preview = item ~= nil and item.preview == true
+        r.preview:SetShown(preview)
+        if item and preview then r.preview:SetArt(item.icon) end
         return y
     end
 
     -- The recipes section (shown after the quests): t:SetRecipes(list, collapsed, meta)
-    function SetRecipes(list: any, collapsed: any, meta: string?)
+    function SetRecipes(list: TrackerQuest[]?, collapsed: unknown, meta: string?)
         self.recipes = list or {}
-        self.recipesCollapsed = collapsed and true or false
+        self.recipesCollapsed = collapsed ~= nil and collapsed ~= false
         self.recipesMeta = meta
     end
 
-    function SetQuests(quests: any, freeze: any)
-        if freeze and self.contentWidth then
+    function SetQuests(quests: TrackerQuest[]?, freeze: unknown)
+        local frozen = freeze ~= nil and freeze ~= false
+        if frozen and self.contentWidth then
             -- frozen: the width stays too
-            self:LayOut(quests, freeze)
+            self:LayOut(quests, frozen)
         else
             self.contentWidth = self.width
-            self:LayOut(quests, freeze)
-            if self.maxHeight and (self.listHeight or 0) > self:ViewHeight() then
+            self:LayOut(quests, frozen)
+            if self.maxHeight and self.listHeight > self:ViewHeight() then
                 self.contentWidth = self.width - GUTTER
-                self:LayOut(quests, freeze)
+                self:LayOut(quests, frozen)
             end
         end
-        self.list:SetWidth(self.contentWidth)
+        self.list:SetWidth(self.contentWidth or self.width)
         self:Fit()
         self:ApplyScroll()
     end
 
-    function LayOut(quests: any, freeze: any)
-        quests = quests or {}
-        local byID: { [any]: any } = {}
+    function LayOut(given: TrackerQuest[]?, freeze: boolean)
+        local quests = given or {}
+        local byID: { [number]: TrackerQuest } = {}
         for _, q in ipairs(quests) do byID[q.questID] = q end
         -- the entries: as given, or (frozen) the last ones with new quests after
         local entries: Entry[]
-        if freeze and self.entries then
+        local before = self.entries
+        if freeze and before then
             entries = {}
-            local seen: { [any]: boolean }, last: string? = {}, nil
-            for _, e in ipairs(self.entries) do
+            local seen: { [number]: boolean }, last: string? = {}, nil
+            for _, e in ipairs(before) do
                 entries[#entries + 1] = e
                 if e.id then seen[e.id] = true end
                 last = e.zone
@@ -414,11 +528,12 @@ export class ObjectiveTracker extends Frame
             if not (e.section or e.recipe) and not self.questsCollapsed then kept[#kept + 1] = e end
         end
         entries = kept
-        local byRecipe: { [any]: any } = {}
-        if self.recipes and #self.recipes > 0 then
+        local byRecipe: { [number]: TrackerQuest } = {}
+        local recipes = self.recipes
+        if recipes and #recipes > 0 then
             entries[#entries + 1] = { section = "recipes" }
             if not self.recipesCollapsed then
-                for _, rcp in ipairs(self.recipes) do
+                for _, rcp in ipairs(recipes) do
                     byRecipe[rcp.questID] = rcp
                     entries[#entries + 1] = { recipe = rcp.questID }
                 end
@@ -428,60 +543,63 @@ export class ObjectiveTracker extends Frame
         for _, r in ipairs(self.rows) do r.inUse = false end
         for _, z in ipairs(self.zoneRows) do z.inUse = false end
         for _, h in ipairs(self.sectionRows) do h.inUse = false end
-        self.tops = {}
+        local tops: { [number]: number } = {}
+        self.tops = tops
+        local width = self.contentWidth or self.width
         local y: number, prev: string? = 0, nil
         local nQuest, nZone, nSection = 0, 0, 0
         for _, e in ipairs(entries) do
-            if e.section then
+            local section, recipe, id, zone = e.section, e.recipe, e.id, e.zone
+            if section then
                 nSection = nSection + 1
-                local h = self.sectionRows[nSection] or sectionRow(self)
+                local h = self.sectionRows[nSection] or SectionRow.new(self)
                 self.sectionRows[nSection] = h
                 -- space-6 over a section after the quests
                 if prev then y = y + S["space-6"] end
-                h.key = e.section
+                h.key = section
                 h.label:SetValue("Recipes")
                 h.meta:SetValue(self.recipesMeta or "")
                 h.plus:SetShown(self.recipesCollapsed)
                 h.minus:SetShown(not self.recipesCollapsed)
-                h:SetWidth(self.contentWidth)
+                h:SetWidth(width)
                 h.top, h.height, h.inUse = y, HEAD_H, true
                 y = y + HEAD_H
                 prev = "section"
-            elseif e.recipe then
+            elseif recipe then
                 nQuest = nQuest + 1
-                local r = self.rows[nQuest] or questRow(self)
+                local r = self.rows[nQuest] or QuestRow.new(self)
                 self.rows[nQuest] = r
-                local rcp = byRecipe[e.recipe]
+                local rcp = assert(byRecipe[recipe])
                 rcp.recipe = true
                 local h = self:DrawQuest(r, rcp)
                 if prev == "quest" then y = y + S["space-4"] elseif prev == "section" then y = y + S["space-4"] end
                 r.top, r.height, r.inUse = y, h, true
-                r:SetSize(self.contentWidth, math.max(1, h))
+                r:SetSize(width, math.max(1, h))
                 y = y + h
                 prev = "quest"
-            elseif e.id then
+            elseif id then
                 nQuest = nQuest + 1
-                local r = self.rows[nQuest] or questRow(self)
+                local r = self.rows[nQuest] or QuestRow.new(self)
                 self.rows[nQuest] = r
-                local q = byID[e.id]
+                local q = byID[id]
                 local h = q and self:DrawQuest(r, q) or 0
-                if freeze then h = math.max(h, self.heights[e.id] or 0) end
+                if freeze then h = math.max(h, self.heights[id] or 0) end
                 -- space-4 between quests, space-2 under a zone's heading
                 if prev == "quest" then y = y + S["space-4"] elseif prev == "zone" then y = y + S["space-2"] end
-                self.heights[e.id] = h
-                self.tops[e.id] = y
+                self.heights[id] = h
+                tops[id] = y
                 r.top, r.height, r.inUse = y, h, q ~= nil
-                r:SetSize(self.contentWidth, math.max(1, h))
+                r:SetSize(width, math.max(1, h))
                 y = y + h
                 prev = "quest"
             else
                 nZone = nZone + 1
-                local z = self.zoneRows[nZone] or zoneRow(self)
+                local z = self.zoneRows[nZone] or ZoneRow.new(self)
                 self.zoneRows[nZone] = z
                 -- space-5 over a zone's heading after the one before
                 if prev then y = y + S["space-5"] end
-                z.text:SetValue(e.zone)
-                z:SetSize(self.contentWidth, lineH())
+                z.text:SetValue(zone or "")
+                z:SetSize(width, lineH())
                 z.top, z.height, z.inUse = y, lineH(), true
                 y = y + lineH()
                 prev = "zone"
@@ -492,19 +610,20 @@ export class ObjectiveTracker extends Frame
     end
 
     -- The quests' window: maxHeight less the head (all of them without one).
-    function ViewHeight()
-        if not self.maxHeight then return self.listHeight or 0 end
-        return math.max(lineH(), self.maxHeight - HEAD_H - S["space-4"])
+    function ViewHeight(): number
+        local max = self.maxHeight
+        if not max then return self.listHeight end
+        return math.max(lineH(), max - HEAD_H - S["space-4"])
     end
 
     function ScrollBy(px: number)
         if self.scrollLocked then return end
-        self:SetScroll((self.scroll or 0) + px)
+        self:SetScroll(self.scroll + px)
     end
 
-    function SetScroll(v: number)
-        local max = math.max(0, (self.listHeight or 0) - self:ViewHeight())
-        v = math.max(0, math.min(max, math.floor(v + 0.5)))
+    function SetScroll(given: number)
+        local max = math.max(0, self.listHeight - self:ViewHeight())
+        local v = math.max(0, math.min(max, math.floor(given + 0.5)))
         if v == self.scroll then return end
         self.scroll = v
         self:ApplyScroll()
@@ -512,32 +631,23 @@ export class ObjectiveTracker extends Frame
     end
 
     -- In combat with secure item buttons beside the titles: the list stays put.
-    function SetScrollLocked(on: any)
-        self.scrollLocked = on and true or false
+    function SetScrollLocked(on: unknown)
+        self.scrollLocked = on ~= nil and on ~= false
     end
 
     -- The rows in the window shown, the rest hidden (so nothing out of sight
     -- takes a click); the thumb at the right edge while there's more.
     function ApplyScroll()
         local view = self:ViewHeight()
-        local max = math.max(0, (self.listHeight or 0) - view)
-        self.scroll = math.max(0, math.min(max, self.scroll or 0))
+        local max = math.max(0, self.listHeight - view)
+        self.scroll = math.max(0, math.min(max, self.scroll))
         local scroll = self.scroll
-        for _, pool in ipairs({ self.rows, self.zoneRows, self.sectionRows }) do
-            for _, r in ipairs(pool) do
-                local visible = r.inUse and (r.top + r.height > scroll) and (r.top < scroll + view)
-                if visible then
-                    r:ClearAllPoints()
-                    r:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -(r.top - scroll))
-                    r:Show()
-                else
-                    r:Hide()
-                end
-            end
-        end
+        for _, r in ipairs(self.rows) do placeRow(r, r.top, r.height, r.inUse, self.list, scroll, view) end
+        for _, r in ipairs(self.zoneRows) do placeRow(r, r.top, r.height, r.inUse, self.list, scroll, view) end
+        for _, r in ipairs(self.sectionRows) do placeRow(r, r.top, r.height, r.inUse, self.list, scroll, view) end
         if max > 0 then
             local trackH = view
-            local thumbH = math.max(16, trackH * view / (self.listHeight or 1))
+            local thumbH = math.max(16, trackH * view / self.listHeight)
             self.thumb:ClearAllPoints()
             -- at the tracker's right edge, the quests GUTTER clear of it
             self.thumb:SetPoint("TOPRIGHT", self.list, "TOPLEFT", self.width, -((trackH - thumbH) * scroll / max))
@@ -549,10 +659,10 @@ export class ObjectiveTracker extends Frame
     end
 
     -- Where a quest's title starts, down from the tracker's top (nil: not shown).
-    function QuestTop(questID: any): number?
-        local top = self.tops and self.tops[questID]
-        if not top then return nil end
-        top = top - (self.scroll or 0)
+    function QuestTop(questID: number): number?
+        local at = self.tops[questID]
+        if not at then return nil end
+        local top = at - self.scroll
         -- the title scrolled out of the window (its item, 24px from 2px over the
         -- title, would hang past the window's bottom)
         if top < 0 or top - 2 + 24 > self:ViewHeight() then return nil end
@@ -574,8 +684,8 @@ export class ObjectiveTracker extends Frame
         self.label:SetValue(text or "Quests")
     end
 
-    function SetCollapsed(on: any)
-        self.collapsed = on and true or false
+    function SetCollapsed(on: unknown)
+        self.collapsed = on ~= nil and on ~= false
         self.list:SetShown(not self.collapsed)
         self:DrawToggle()
         self:Fit()
@@ -583,20 +693,20 @@ export class ObjectiveTracker extends Frame
 
     -- 0.13: only the quests folded away; the sections after them (Recipes)
     -- stay (asked for in game). Takes effect with the next SetQuests.
-    function SetQuestsCollapsed(on: any)
-        self.questsCollapsed = on and true or false
+    function SetQuestsCollapsed(on: unknown)
+        self.questsCollapsed = on ~= nil and on ~= false
         self:DrawToggle()
     end
 
     function DrawToggle()
         local folded = self.collapsed or self.questsCollapsed
-        self.plus:SetShown(folded and true or false)
+        self.plus:SetShown(folded)
         self.minus:SetShown(not folded)
     end
 
     function Fit()
         local h = HEAD_H
-        local list = math.min(self.listHeight or 0, self:ViewHeight())
+        local list = math.min(self.listHeight, self:ViewHeight())
         if not self.collapsed and list > 0 then h = h + S["space-4"] + list end
         self.clip:SetHeight(math.max(1, list))
         self:SetHeight(h)
@@ -610,6 +720,6 @@ export class ObjectiveTracker extends Frame
 end
 mixins.ObjectiveTracker = ObjectiveTracker
 
-export function objectiveTracker(parent: any, opts: { [string]: any }?): ObjectiveTracker
+export function objectiveTracker(parent: Frame, opts: ObjectiveTrackerOptions?): ObjectiveTracker
     return ObjectiveTracker.new(parent, opts)
 end
