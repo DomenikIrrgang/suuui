@@ -19,71 +19,62 @@
 -- important debuffs; buffs come through buff indicators). Out of range fades
 -- the frame.
 
+
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import UnitFrame from "/UI/UnitFrame"
+import type StandInPerson, UnitApi, UnitFrameOptions, GroupDefensives from "/UI/UnitFrame"
+import type UnitAuras, AuraGroup from "/UI/Auras"
+import type Icon from "/UI/Icon"
 import type Position from "/EditMode/EditMode"
-import type StandInPerson from "/UI/UnitFrame"
 import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 import after, every from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "raid",
-    name = "Raid frames",
-    description = "Your raid by group: health, roles, debuffs you can remove, aggro and range.",
-    api = "0.9",
-    reloadToToggle = true,
-    defaults = {
-        position = { point = "BOTTOMLEFT", x = 28, y = 300 } :: Position,
-        arrangement = "columns",   -- "columns" (side layout) or "rows" (healer layout)
-        sort = "group",            -- within each group: "group" (raid order) or "role"
-        perBand = 4,               -- columns: groups side by side before the next band
-        width = 108,
-        height = 19,
-        heightLarge = 20,          -- raids of 21-40
-        gap = 8,
-        groupGap = 4,
-        showSolo = false,          -- your own frame while not in a group (to try them)
-        power = "roles",
-        healthText = "none",
-        nameColor = "game",        -- "game" (class colour) or "ink", as on the unit frames
-        raidMarkers = true,
-        lowHealth = true,
-        incoming = true,
-        buffIcons = 1,             -- defensives (the Defensives list), inside the bar's right end
-        debuffIcons = 2,           -- debuffs at the very end, the ones you can remove first
-        debuffBadges = "all",      -- "all" debuff types, "removable" or "off"
-        rangeAlpha = 0.25,
-    },
-})
+local DEFAULTS = {
+    position = { point = "BOTTOMLEFT", x = 28, y = 300 } :: Position,
+    arrangement = "columns",   -- "columns" (side layout) or "rows" (healer layout)
+    sort = "group",            -- within each group: "group" (raid order) or "role"
+    perBand = 4,               -- columns: groups side by side before the next band
+    width = 108,
+    height = 19,
+    heightLarge = 20,          -- raids of 21-40
+    gap = 8,
+    groupGap = 4,
+    showSolo = false,          -- your own frame while not in a group (to try them)
+    power = "roles",
+    healthText = "none",
+    nameColor = "game",        -- "game" (class colour) or "ink", as on the unit frames
+    raidMarkers = true,
+    lowHealth = true,
+    incoming = true,
+    buffIcons = 1,             -- defensives (the Defensives list), inside the bar's right end
+    debuffIcons = 2,           -- debuffs at the very end, the ones you can remove first
+    debuffBadges = "all",      -- "all" debuff types, "removable" or "off"
+    rangeAlpha = 0.25,
+}
 
--- "badges" is "debuffBadges" now, as on the unit frames
--- one aura count became defensives and debuffs, each with its own; they
--- start at the new defaults
-M:Migrate("auraSplit", function(values) values.auras = nil end)
-
-M:Migrate("debuffBadges", function(values)
-    if values.badges ~= nil and values.debuffBadges == nil then values.debuffBadges = values.badges end
-    values.badges = nil
-end)
+local M: RaidFramesModule
 
 local GROUPS = 8
-local HEALER_CLASS = { PRIEST = true, DRUID = true, PALADIN = true, SHAMAN = true }
+local HEALER_CLASS: { [string]: boolean } = { PRIEST = true, DRUID = true, PALADIN = true, SHAMAN = true }
 
-local function powerFor(unit: string, A: any)
-    A = A or _G
+export function powerFor(unit: string, A: UnitApi): boolean
     local mode = M:Get("power")
     if mode == "all" then return true end
     if mode == "none" then return false end
     local role = A.UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(unit)
     if not secret.isSecret(role) and role and role ~= "NONE" then return role == "TANK" or role == "HEALER" end
     local _, class = A.UnitClass(unit)
-    return not secret.isSecret(class) and class and HEALER_CLASS[class] or false
+    return not secret.isSecret(class) and class and HEALER_CLASS[class] == true or false
 end
 
 -- The bar height for the raid's size: the shorter one from 21 players up.
-local function barHeight()
+local function barHeight(): number
     local n = GetNumGroupMembers and GetNumGroupMembers() or 0
     return (n > 20) and M:Get("heightLarge") or M:Get("height")
 end
@@ -104,9 +95,9 @@ local GAP_SETS = S["space-2"]
 -- frame keeps two groups (the engine makes ten buttons for each, whatever
 -- its count) and the second, your other debuffs, comes only on a frame
 -- that has shown you.
-type AuraGroup = { key: string, set: "buffIcons" | "debuffIcons", who?: string, filter?: string[], filters?: { me: string[], others: string[] },
-    list?: string, border?: string, drain?: string, dispel?: boolean, harmfulEdge?: boolean, gap?: number }
-local AURA_GROUPS: AuraGroup[] = {
+type RaidGroup = { key: string, set: "buffIcons" | "debuffIcons", who?: string, filter?: string[], filters?: { me: string[], others: string[] },
+    list?: keyof GroupDefensives, border?: string, drain?: string, dispel?: boolean, harmfulEdge?: boolean, gap?: number }
+local AURA_GROUPS: RaidGroup[] = {
     { key = "debuffs", set = "debuffIcons", filters = { me = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, others = { "HARMFUL" } },
       dispel = true, harmfulEdge = true },
     -- every other debuff on yours (Forbearance, Weakened Soul…); buffs come
@@ -132,128 +123,107 @@ local function auraReserve(h: number): number
     return w > 0 and (w + 2 * S["space-1"] + 1) or 0
 end
 
---------------------------------------------------------------------------------
--- A header's button, styled once when the header makes it
---------------------------------------------------------------------------------
-
--- The row: a clip as wide as the settings' icons (the engine fills its
--- groups to their counts; the clip cuts off the rest) and one engine
--- container growing left from the bar's right end.
--- A group's count on a button: its setting, on the frames it is for (you:
--- read when the unit changes; unknown counts as someone else).
-local function groupMax(f: any, g: AuraGroup): number
-    if g.who and g.who ~= (f.isMe and "me" or "others") then return 0 end
-    return M:Get(g.set)
-end
-
--- A group's filter on a button, for whoever it shows now.
-local function groupFilter(f: any, g: AuraGroup): string[]?
-    return g.filters and g.filters[f.isMe and "me" or "others"] or g.filter
-end
-
--- Which debuff groups a button uses, and their filters, for whoever it
--- shows now.
-local function applyWho(f: any)
-    if not f.auras then return end
-    for _, g in ipairs(AURA_GROUPS) do
-        if g.filters then f.auras:SetGroupFilter(g.key, groupFilter(f, g)) end
-        if g.who then f.auras:SetGroupMax(g.key, groupMax(f, g)) end
-    end
-end
-
-local function buildAuras(f: any, h: number)
-    local defensives = UI.GroupDefensives()
-    local groups = {}
-    for i, g in ipairs(AURA_GROUPS) do
-        groups[i] = { key = g.key, filter = groupFilter(f, g), max = groupMax(f, g), dispel = g.dispel, drain = g.drain, digits = false,
-            harmfulEdge = g.harmfulEdge, border = g.border, gap = g.gap, include = g.list and defensives[g.list] }
-    end
-    f.auraClip = CreateFrame("Frame", nil, f)
-    f.auraClip:SetClipsChildren(true)
-    f.auraClip:SetFrameLevel(f.over:GetFrameLevel() + 1)
-    f.auras = UI.AuraContainer(f.auraClip, "none", { size = iconSize(h), spacing = S["space-1"], anchor = "TOPRIGHT", growth = { "LEFT", "DOWN" }, groups = groups, lazy = true })
-    if f.auras then
-        f.auras.container:SetPoint("TOPRIGHT", f.auraClip, "TOPRIGHT")
-        M:ApplyAuraCount(f)
-    end
-end
-
-local function buildSelected(f: any)
+-- The selected border (your target): its own frame, so a secret "is it the
+-- target?" can set its alpha through the engine.
+local function selectedBorder(f: Frame): Frame
     local sel = CreateFrame("Frame", nil, f)
     sel:SetAllPoints()
     sel:SetFrameLevel(f:GetFrameLevel() + 10)
     UI.Border(sel, "arcane", { inset = 0 })
     sel:SetAlpha(0)
-    f.selected = sel
+    return sel
 end
 
--- Whether a button's unit is you, read when its unit changes and after a
--- fight: UnitIsUnit may be secret in combat, and a secret answer keeps the
--- last one.
-local function updateIsMe(f: any)
-    local me = f.unit and UnitIsUnit(f.unit, "player")
-    if not secret.isSecret(me) then f.isMe = me and true or false end
-end
+--------------------------------------------------------------------------------
+-- A header's button, styled once when the header makes it
+--------------------------------------------------------------------------------
 
-function M:StyleButton(button: any)
-    if button.suuStyled then return end
-    button.suuStyled = true
-    local h = barHeight()
-    local f = UI.UnitFrame(nil, nil, {
-        frame = button, size = "sm", width = self:Get("width"), height = h,
-        powerFor = powerFor, textOnSmall = true, healthText = self:Get("healthText"),
-        nameColor = self:Get("nameColor"), raidMarker = self:Get("raidMarkers"),
-        lowHealth = false, lowTint = self:Get("lowHealth"), incoming = self:Get("incoming"),
-        reserveRight = auraReserve(h),
-    })
-    SuuUI.TagInstance(f, { module = M.id, role = "raid" })
-    if not InCombatLockdown() then f:RegisterForClicks("AnyUp") end
-    buildAuras(f, h)
-    buildSelected(f)
-    f:SetDispelBadges(self:Get("debuffBadges"))
-    f:SetIndicators(UI.IndicatorsFor(UI.GroupIndicators(), UI.GroupTier()))
-    f:SetWardSpells(UI.GroupDefensives().warded)
-    self.buttons[#self.buttons + 1] = f
-    -- the header sets the unit; the frame and its auras follow
-    f:HookScript("OnAttributeChanged", function(btn, name, value)
-        if name ~= "unit" then return end
-        btn:SetUnit(value, true)
-        updateIsMe(btn)
-        applyWho(btn)
-        if btn.auras then btn.auras:SetUnit(value or "none") end
-        M:UpdateOffline()
-        if value then
-            if not btn.active then btn:Activate() end
-            btn:Refresh()
-            self:UpdateState(btn)
+-- A raid button: SuuUI's unit frame on the button the group header made, the
+-- row of auras inside its bar (a clip as wide as the settings' icons: the
+-- engine fills its groups to their counts; the clip cuts off the rest) and
+-- the selected border. Whether its unit is you is read when the unit changes
+-- and after a fight (UnitIsUnit may be secret in combat: a secret answer
+-- keeps the last one).
+export class RaidButton extends UnitFrame
+    readonly auraClip: Frame
+    readonly selected: Frame
+    auras: UnitAuras? = nil
+    isMe: boolean = false
+
+    constructor(parent: Frame?, unit: string?, opts: UnitFrameOptions)
+        super(parent, unit, opts)
+        self.auraClip = CreateFrame("Frame", nil, self)
+        self.auraClip:SetClipsChildren(true)
+        self.auraClip:SetFrameLevel(self.over:GetFrameLevel() + 1)
+        self.selected = selectedBorder(self)
+    end
+
+    -- A group's count on this button: its setting, on the frames it is for.
+    function GroupMax(g: RaidGroup): number
+        if g.who and g.who ~= (self.isMe and "me" or "others") then return 0 end
+        return M:Get(g.set)
+    end
+
+    -- A group's filter for whoever it shows now.
+    function GroupFilter(g: RaidGroup): string[]?
+        local filters = g.filters
+        return filters and (self.isMe and filters.me or filters.others) or g.filter
+    end
+
+    -- The engine's row, filled group by group.
+    function BuildAuras(h: number)
+        local defensives = UI.GroupDefensives()
+        local groups: AuraGroup[] = {}
+        for i, g in ipairs(AURA_GROUPS) do
+            local list = g.list
+            groups[i] = { key = g.key, filter = self:GroupFilter(g) or {}, max = self:GroupMax(g), dispel = g.dispel, drain = g.drain,
+                digits = false, harmfulEdge = g.harmfulEdge, border = g.border, gap = g.gap, include = list and defensives[list] }
         end
-    end)
-    local unit = f:GetAttribute("unit")
-    if unit then
-        f:SetUnit(unit, true)
-        updateIsMe(f)
-        applyWho(f)
-        if f.auras then f.auras:SetUnit(unit) end
-        f:Activate()
+        local auras = UI.AuraContainer(self.auraClip, "none", { size = iconSize(h), spacing = S["space-1"], anchor = "TOPRIGHT",
+            growth = { "LEFT", "DOWN" }, groups = groups, lazy = true })
+        self.auras = auras
+        if auras then
+            auras.container:SetPoint("TOPRIGHT", self.auraClip, "TOPRIGHT")
+            self:ApplyAuraCount()
+        end
     end
-end
 
-function M:ApplyAuraCount(f: any)
-    -- each group's count, and the clip: the row at the bar's right end,
-    -- centred on its height
-    local h = f:GetHeight()
-    local size = iconSize(h)
-    for _, g in ipairs(AURA_GROUPS) do
-        f.auras:SetGroupMax(g.key, groupMax(f, g))
-        -- the icons follow the bar's height (from 21 players too); the height
-        -- only changes out of combat, where the engine's buttons take a resize
-        if not InCombatLockdown() then f.auras:SetGroupSize(g.key, size) end
+    function UpdateIsMe()
+        local unit = self.unit
+        local me = unit and UnitIsUnit(unit, "player")
+        if not secret.isSecret(me) then self.isMe = me and true or false end
     end
-    local w = rowWidth(h)
-    f.auraClip:ClearAllPoints()
-    f.auraClip:SetPoint("RIGHT", f, "RIGHT", -S["space-1"] - 1, 0)
-    f.auraClip:SetSize(math.max(1, w), size)
-    f.auraClip:SetShown(w > 0)
+
+    -- Which debuff groups it uses, and their filters, for whoever it shows now.
+    function ApplyWho()
+        local auras = self.auras
+        if not auras then return end
+        for _, g in ipairs(AURA_GROUPS) do
+            local filter = g.filters and self:GroupFilter(g)
+            if filter then auras:SetGroupFilter(g.key, filter) end
+            if g.who then auras:SetGroupMax(g.key, self:GroupMax(g)) end
+        end
+    end
+
+    -- Each group's count, and the clip: the row at the bar's right end,
+    -- centred on its height.
+    function ApplyAuraCount()
+        local auras = self.auras
+        if not auras then return end
+        local h = self:GetHeight()
+        local size = iconSize(h)
+        for _, g in ipairs(AURA_GROUPS) do
+            auras:SetGroupMax(g.key, self:GroupMax(g))
+            -- the icons follow the bar's height (from 21 players too); the height
+            -- only changes out of combat, where the engine's buttons take a resize
+            if not InCombatLockdown() then auras:SetGroupSize(g.key, size) end
+        end
+        local w = rowWidth(h)
+        self.auraClip:ClearAllPoints()
+        self.auraClip:SetPoint("RIGHT", self, "RIGHT", -S["space-1"] - 1, 0)
+        self.auraClip:SetSize(math.max(1, w), size)
+        self.auraClip:SetShown(w > 0)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -267,19 +237,6 @@ end
 -- groupingOrder errors on its next update.
 local ROLE_ORDER = "TANK,HEALER,DAMAGER,NONE"
 
-function M:ApplySort()
-    local byRole = self:Get("sort") == "role"
-    for _, hd in ipairs(self.headers) do
-        if byRole then
-            hd:SetAttribute("groupingOrder", ROLE_ORDER)
-            hd:SetAttribute("groupBy", "ASSIGNEDROLE")
-        else
-            hd:SetAttribute("groupBy", nil)
-            hd:SetAttribute("groupingOrder", nil)
-        end
-    end
-end
-
 -- Run by each header for each button it makes (restricted code): size and
 -- click actions, then SuuUI's styling.
 local INIT = [[
@@ -291,35 +248,30 @@ local INIT = [[
     header:CallMethod("SuuStyle", self:GetName())
 ]]
 
-local function buildHeader(self: any, g: number)
-    local h = CreateFrame("Frame", "SuuUIRaidGroup" .. g, self.holder, "SecureGroupHeaderTemplate")
-    h:SetAttribute("template", "SecureUnitButtonTemplate")
-    h:SetAttribute("templateType", "Button")
-    h:SetAttribute("groupFilter", tostring(g))
-    h:SetAttribute("showRaid", true)
-    h:SetAttribute("showPlayer", true)
-    h:SetAttribute("showParty", false)
-    h:SetAttribute("sortMethod", "INDEX")
-    h:SetAttribute("unitsPerColumn", 5)
-    h:SetAttribute("maxColumns", 1)
-    h:SetAttribute("initialConfigFunction", INIT)
-    h.SuuStyle = function(_: any, name: string)
-        local button = _G[name]
-        if button then self:StyleButton(button) end
-    end
-    return h
-end
+-- A raid group's secure header: it makes its group's buttons and asks SuuUI
+-- to style each (its SuuStyle, called from the restricted code).
+class GroupHeader extends Frame
+    private readonly module: RaidFramesModule
 
--- All forty buttons now, out of combat: a header shows five slots from a
--- negative starting index, which makes its buttons; then back to normal.
-local function precreate(self: any)
-    self.holder:Show()
-    for _, h in ipairs(self.headers) do
-        h:SetAttribute("showSolo", true)
-        h:SetAttribute("startingIndex", -4)
-        h:Show()
-        h:SetAttribute("startingIndex", 1)
-        h:SetAttribute("showSolo", false)
+    constructor(m: RaidFramesModule, holder: Frame, g: number)
+        super("SuuUIRaidGroup" .. g, holder, "SecureGroupHeaderTemplate")
+        self.module = m
+        self:SetAttribute("template", "SecureUnitButtonTemplate")
+        self:SetAttribute("templateType", "Button")
+        self:SetAttribute("groupFilter", tostring(g))
+        self:SetAttribute("showRaid", true)
+        self:SetAttribute("showPlayer", true)
+        self:SetAttribute("showParty", false)
+        self:SetAttribute("sortMethod", "INDEX")
+        self:SetAttribute("unitsPerColumn", 5)
+        self:SetAttribute("maxColumns", 1)
+        self:SetAttribute("initialConfigFunction", INIT)
+    end
+
+    -- (called by INIT, from the restricted code, for each button made)
+    function SuuStyle(name: string)
+        local button = frames.asButton(tbl.field(_G, name))
+        if button then self.module:StyleButton(button) end
     end
 end
 
@@ -360,157 +312,28 @@ local function gridAt(h: number): Grid
         perBand = math.max(1, M:Get("perBand")), rows = M:Get("arrangement") == "rows" }
 end
 
-function M:Layout()
-    local w, h, gap = self:Get("width"), barHeight(), self:Get("gap")
-    local grid = gridAt(h)
-    for g, hd in ipairs(self.headers) do
-        hd:SetAttribute("unitWidth", w)
-        hd:SetAttribute("unitHeight", h)
-        hd:ClearAllPoints()
-        if grid.rows then
-            hd:SetAttribute("point", "LEFT")
-            hd:SetAttribute("xOffset", gap)
-            hd:SetAttribute("yOffset", 0)
-        else
-            hd:SetAttribute("point", "TOP")
-            hd:SetAttribute("xOffset", 0)
-            hd:SetAttribute("yOffset", -gap)
-        end
-        local x, y = groupOrigin(g, grid)
-        hd:SetPoint("TOPLEFT", self.holder, "TOPLEFT", x, -y)
-    end
-    -- rows: as tall as eight groups of a full raid (heightLarge) whatever
-    -- the raid's size: the rows hang from its top, so the top edge stays put
-    -- (the healer layout sits between the player and target frames, tops
-    -- level) and it ends above the dock's stance and pet bars (seen in
-    -- game: sized for eight rows at the 20-player height it reached them)
-    self.holder:SetSize(holderSize(grid, self:Get("heightLarge")))
-    for _, f in ipairs(self.buttons) do
-        f.opts.reserveRight = auraReserve(h)
-        f:Resize(w, h)
-        f:FitRow()
-    end
-    self.tierHeight = h
-    self:DrawPreview()
-end
-
-function M:ApplyOptions()
-    for _, f in ipairs(self.buttons) do
-        f.opts.healthText = self:Get("healthText")
-        f.opts.nameColor = self:Get("nameColor")
-        f.opts.raidMarker = self:Get("raidMarkers")
-        f.opts.lowTint = self:Get("lowHealth")
-        f.opts.incoming = self:Get("incoming")
-        f.opts.reserveRight = auraReserve(f:GetHeight())
-        if f.auras then self:ApplyAuraCount(f) end
-        if f.active then f:Refresh() end
-    end
-    self:UpdateStates()
-    self:UpdateRange()
-    self:UpdateOffline()
-end
-
--- An offline player's auras are stale: their icons go see-through.
-function M:UpdateOffline()
-    for _, f in ipairs(self.buttons or {}) do
-        local online = true
-        local unit = f.unit
-        if unit and secret.flag(UnitExists(unit)) then
-            local c = UnitIsConnected(unit)
-            if c ~= nil and not secret.isSecret(c) then online = c and true or false end
-        end
-        if f.auras then f.auras.container:SetAlpha(online and 1 or 0) end
-    end
-end
-
-function M:ApplyIndicators()
-    self.indicatorTier = UI.GroupTier()
-    local list = UI.IndicatorsFor(UI.GroupIndicators(), self.indicatorTier)
-    for _, f in ipairs(self.buttons) do f:SetIndicators(list) end
-end
-
-function M:QueueIndicators()
-    if self.indicatorTimer then self.indicatorTimer:Cancel() end
-    self.indicatorTimer = after(1, function()
-        self.indicatorTimer = nil
-        self:RunOutOfCombat("indicators", function() self:ApplyIndicators() end)
-    end)
-end
-
-function M:ApplyBadges()
-    for _, f in ipairs(self.buttons) do f:SetDispelBadges(self:Get("debuffBadges")) end
-end
-
--- The Defensives list: the inline icons' spells and Warded, out of combat.
-function M:ApplyDefensives()
-    local d = UI.GroupDefensives()
-    for _, f in ipairs(self.buttons) do
-        if f.auras then
-            for _, g in ipairs(AURA_GROUPS) do
-                if g.list then f.auras:SetGroupSpells(g.key, d[g.list]) end
-            end
-        end
-        f:SetWardSpells(d.warded)
-    end
-end
-
-function M:UpdateVisibility()
-    self:RunOutOfCombat("visibility", function()
-        RegisterStateDriver(self.holder, "visibility", "[group:raid] show; " .. (self:Get("showSolo") and "[nogroup] show; " or "") .. "hide")
-        self.headers[1]:SetAttribute("showSolo", self:Get("showSolo"))
-    end)
-end
-
---------------------------------------------------------------------------------
--- States: aggro, your target, range
---------------------------------------------------------------------------------
-
-function M:UpdateState(f: any)
-    local u = f.unit
-    if not u or not UnitExists(u) then return end
-    local threat = UnitThreatSituation(u)
-    local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(u)
-    local aggro = not secret.isSecret(threat) and threat ~= nil and threat >= 2 and not (not secret.isSecret(role) and role == "TANK")
-    f:SetState(aggro and "danger" or nil, aggro and "Aggro" or nil)
-end
-
-function M:UpdateStates()
-    for _, f in ipairs(self.buttons) do self:UpdateState(f) end
-end
-
-function M:UpdateSelected()
-    for _, f in ipairs(self.buttons) do
-        local is = f.unit and UnitExists(f.unit) and UnitIsUnit(f.unit, "target")
-        if secret.isSecret(is) then f.selected:SetAlphaFromBoolean(is, 1, 0) else f.selected:SetAlpha(is and 1 or 0) end
-    end
-end
-
-function M:UpdateRange()
-    local far = self:Get("rangeAlpha")
-    for _, f in ipairs(self.buttons) do
-        if f:IsVisible() then
-            if not f.unit or f.isMe then
-                f:SetAlpha(1)
-            else
-                local inRange, checked = UnitInRange(f.unit)
-                if secret.isSecret(inRange) then
-                    f:SetAlphaFromBoolean(inRange, 1, far)
-                elseif not secret.isSecret(checked) and checked == false then
-                    f:SetAlpha(1)
-                else
-                    f:SetAlpha(inRange and 1 or far)
-                end
-            end
-        end
-    end
-end
-
 --------------------------------------------------------------------------------
 -- The preview: a made-up raid (10, 20 or 40) in the settings window's
 -- preview column, drawn by the same unit frames from stand-in data.
 --------------------------------------------------------------------------------
 
-local ROSTER = {
+-- An aura on a made-up person: a spell texture with the edge the engine
+-- would give it (a debuff's; a defensive has none).
+type Aura = { spell: number, edge?: string }
+-- What makes the preview show every state.
+type Extras = {
+    incoming?: number, absorb?: number, marker?: number, aggro?: boolean, debuff?: string, removable?: boolean,
+    dead?: boolean, far?: boolean, selected?: boolean, power?: number, offline?: boolean, auras?: Aura[],
+}
+type Person = {
+    name: string, class: string, role: string, health: number, max: number, power: number, incoming?: number,
+    absorb?: number, marker?: number, aggro?: boolean, debuff?: string, removable?: boolean, dead?: boolean,
+    far?: boolean, selected?: boolean, offline?: boolean, auras?: Aura[],
+}
+
+type Member = { name: string, class: string, role?: string }
+local ROSTER: Member[] = {}
+for _, r in ipairs({
     { "Brannoc", "WARRIOR", "TANK" }, { "Ysolde", "PRIEST", "HEALER" }, { "Kaelith", "MAGE" }, { "Morrow", "ROGUE" }, { "Veyra", "SHAMAN", "HEALER" },
     { "Aldric", "PALADIN" }, { "Thessaly", "DRUID" }, { "Grimbolt", "WARLOCK" }, { "Sylva", "HUNTER" }, { "Oren", "PRIEST", "HEALER" },
     { "Hadrin", "WARRIOR", "TANK" }, { "Lisset", "MAGE" }, { "Corvane", "ROGUE" }, { "Tamsin", "DRUID" }, { "Eldra", "SHAMAN", "HEALER" },
@@ -519,228 +342,95 @@ local ROSTER = {
     { "Torvald", "WARRIOR" }, { "Wren", "DRUID" }, { "Cassian", "MAGE" }, { "Ysra", "WARLOCK" }, { "Bellamy", "PALADIN", "HEALER" },
     { "Garrick", "ROGUE" }, { "Odessa", "SHAMAN", "HEALER" }, { "Pell", "HUNTER" }, { "Juna", "PRIEST", "HEALER" }, { "Thorne", "WARRIOR", "TANK" },
     { "Liora", "MAGE" }, { "Brask", "WARLOCK" }, { "Sefa", "DRUID" }, { "Halden", "PALADIN" }, { "Mirelle", "PRIEST", "HEALER" },
-}
+}) do
+    ROSTER[#ROSTER + 1] = { name = r[1], class = r[2], role = r[3] }
+end
 local HEALTH = { 64, 92, 31, 83, 88, 18, 100, 0, 76, 64, 97, 100, 58, 100, 91, 100, 85, 100, 72, 100,
                  44, 100, 100, 89, 100, 100, 67, 100, 100, 93, 100, 100, 81, 100, 100, 26, 100, 100, 100, 86 }
--- what makes the preview show every state: auras are spell textures with the
--- edge the engine would give them
-local SPECIAL = {
-    Brannoc = { incoming = 0.18, absorb = 0.1, marker = 8, auras = { { 871 } } },
-    Kaelith = { aggro = true, incoming = 0.12, auras = { { 10060 } } },
-    Morrow = { debuff = "Poison", auras = { { 2818, "dispel-poison" } } },
-    Oren = { debuff = "Disease", removable = true, auras = { { 18278, "dispel-disease" } } },
+local SPECIAL: { [string]: Extras } = {
+    Brannoc = { incoming = 0.18, absorb = 0.1, marker = 8, auras = { { spell = 871 } } },
+    Kaelith = { aggro = true, incoming = 0.12, auras = { { spell = 10060 } } },
+    Morrow = { debuff = "Poison", auras = { { spell = 2818, edge = "dispel-poison" } } },
+    Oren = { debuff = "Disease", removable = true, auras = { { spell = 18278, edge = "dispel-disease" } } },
     Grimbolt = { dead = true }, Sylva = { far = true }, Aldric = { aggro = true },
-    Thessaly = { auras = { { 1022 } } }, Corvane = { incoming = 0.2 },
-    Dagny = { absorb = 0.14 }, Nimra = { debuff = "Magic", removable = true, auras = { { 122, "dispel-magic" } } },
-    Liora = { debuff = "Curse", auras = { { 980, "dispel-curse" } } },
+    Thessaly = { auras = { { spell = 1022 } } }, Corvane = { incoming = 0.2 },
+    Dagny = { absorb = 0.14 }, Nimra = { debuff = "Magic", removable = true, auras = { { spell = 122, edge = "dispel-magic" } } },
+    Liora = { debuff = "Curse", auras = { { spell = 980, edge = "dispel-curse" } } },
     Ysolde = { selected = true, power = 0.14 },
     Hadrin = { marker = 7 }, Veyra = { offline = true },
 }
 
-local ROLE_RANK = { TANK = 1, HEALER = 2, DAMAGER = 3 }
+local ROLE_RANK: { [string]: number } = { TANK = 1, HEALER = 2, DAMAGER = 3 }
 
-local people: { [number]: { [string]: any } } = {}
-local function person(unit: string)
+local people: { [number]: Person } = {}
+local function person(unit: string): Person
     local i = tonumber(unit:match("^raidpreview(%d+)$")) or 1
     local d = people[i]
     if not d then
-        local r = ROSTER[i]
-        d = { name = r[1], class = r[2], role = r[3] or "DAMAGER", health = HEALTH[i] / 100, max = 4200, power = 0.4 + (i * 13 % 60) / 100 }
-        for k, v in pairs(SPECIAL[r[1]] or {}) do d[k] = v end
-        if d.health == 0 then d.dead = true end
+        local r = assert(ROSTER[i])
+        local health = assert(HEALTH[i]) / 100
+        local x = SPECIAL[r.name] or {}
+        d = { name = r.name, class = r.class, role = r.role or "DAMAGER", health = health, max = 4200,
+              power = x.power or (0.4 + (i * 13 % 60) / 100), incoming = x.incoming, absorb = x.absorb, marker = x.marker,
+              aggro = x.aggro, debuff = x.debuff, removable = x.removable, dead = x.dead or health == 0, far = x.far,
+              selected = x.selected, offline = x.offline, auras = x.auras }
         people[i] = d
     end
     return d
 end
 
-local STAND_IN = UI.UnitStandIn(function(u: string): StandInPerson return person(u) :: StandInPerson end)
-
--- A set of 40 made-up frames on a view: the settings window's, and edit
--- mode's group preview (on the real frames' place).
-function M:BuildSet(parent: Frame)
-    local view = CreateFrame("Frame", nil, parent)
-    view:SetSize(1, 1)
-    local set = { view = view, frames = {} }
-    for i = 1, 40 do
-        local f = UI.UnitFrame(view, "raidpreview" .. i, { size = "sm", secure = false, api = STAND_IN, powerFor = powerFor, textOnSmall = true })
-        f:SetScript("OnEnter", nil)
-        f:SetScript("OnLeave", nil)
-        f:EnableMouse(false)
-        buildSelected(f)
-        f.icons = {}
-        for k = 1, 4 do
-            local icon = UI.Icon(f.over, 12)
-            icon:Hide()
-            f.icons[k] = icon
-        end
-        f.dispelDecos = {}
-        for _, kind in ipairs(UI.DEBUFF_TYPES) do
-            local deco = f:DispelDecoration(f, kind)
-            deco:Hide()
-            f.dispelDecos[kind] = deco
-        end
-        f.wardDeco = f:WardDecoration(f)
-        f.wardDeco:SetWarded(false)
-        set.frames[i] = f
-    end
-    return set
-end
-
-function M:PreviewView(parent: Frame)
-    if self.previewView then
-        self.previewView:SetParent(parent)
-        self:DrawPreview(true)
-        return self.previewView
-    end
-    self.previewSet = self:BuildSet(parent)
-    self.previewView = self.previewSet.view
-    self.previewView:HookScript("OnShow", function() self:DrawPreview() end)
-    self:DrawPreview(true)
-    return self.previewView
-end
-
--- Both previews: the settings window's (while it shows) and edit mode's.
-function M:DrawPreview(force: boolean?)
-    local set = self.previewSet
-    if set and (force or set.view:IsVisible()) then self:DrawSet(set) end
-    if self.screenSet and self.screenSet.view:IsShown() then self:DrawSet(self.screenSet) end
-end
-
+local STAND_IN = UI.UnitStandIn(function(u: string): StandInPerson return person(u) end)
 
 -- The group preview's "with buffs and debuffs": everyone carries a
 -- defensive or two from the Defensives list and a debuff of every type.
-local function fullAuras()
-    local out = {}
+local function fullAuras(): Aura[]
+    local out: Aura[] = {}
     local list = UI.GroupDefensives().all or {}
-    for i = 1, math.min(4, #list) do out[#out + 1] = { list[i] } end
-    for _, a in ipairs({ { 122, "dispel-magic" }, { 980, "dispel-curse" }, { 2818, "dispel-poison" }, { 18278, "dispel-disease" } }) do
-        out[#out + 1] = a
-    end
+    for i = 1, math.min(4, #list) do out[#out + 1] = { spell = list[i] } end
+    local debuffs: Aura[] = { { spell = 122, edge = "dispel-magic" }, { spell = 980, edge = "dispel-curse" },
+        { spell = 2818, edge = "dispel-poison" }, { spell = 18278, edge = "dispel-disease" } }
+    for _, a in ipairs(debuffs) do out[#out + 1] = a end
     return out
 end
 
--- Edit mode's group preview: a made-up raid of `count` on the real frames'
--- place, the real ones see-through meanwhile; 0 or fewer than 6 ends it.
-function M:ScreenPreview(count: any, auras: any)
-    if not self.holder then return end
-    if not count or count <= 5 then
-        if self.screenSet then self.screenSet.view:Hide() end
-        self.holder:SetAlpha(1)
-        return
+-- A preview's frame: icons drawn where the engine's would be, the debuff
+-- types' looks, Warded, the selected border.
+export class PreviewRaidFrame extends UnitFrame
+    readonly icons: Icon[] = {}
+    readonly dispelDecos: { [string]: Frame } = {}
+    readonly selected: Frame
+    indicatorVersion: string? = nil
+
+    constructor(parent: Frame, unit: string, opts: UnitFrameOptions)
+        super(parent, unit, opts)
+        self:SetScript("OnEnter", nil)
+        self:SetScript("OnLeave", nil)
+        self:EnableMouse(false)
+        self.selected = selectedBorder(self)
+        for k = 1, 4 do
+            local icon = UI.Icon(self.over, 12)
+            icon:Hide()
+            self.icons[k] = icon
+        end
+        for _, kind in ipairs(UI.DEBUFF_TYPES) do
+            local deco = self:DispelDecoration(self, kind)
+            deco:Hide()
+            self.dispelDecos[kind] = deco
+        end
+        local ward = self:WardDecoration(self)
+        ward:SetWarded(false)
+        self.wardDeco = ward
     end
-    local set = self.screenSet
-    if not set then
-        set = self:BuildSet(SuuUI.Root)
-        self.screenSet = set
-    end
-    set.count = count
-    set.allAuras = auras and fullAuras() or nil
-    set.view:SetFrameStrata(self.holder:GetFrameStrata())
-    set.view:SetFrameLevel(self.holder:GetFrameLevel() + 20)
-    set.view:ClearAllPoints()
-    set.view:SetPoint("TOPLEFT", self.holder, "TOPLEFT")
-    set.view:Show()
-    self:DrawSet(set)
-    self.holder:SetAlpha(0)
 end
 
-function M:DrawSet(set: any)
-    local count = set.count or self.previewSize or 20
-    local w = self:Get("width")
-    local h = count > 20 and self:Get("heightLarge") or self:Get("height")
-    local grid = gridAt(h)
-    local groups = math.ceil(count / 5)
-    local size, far = iconSize(h), self:Get("rangeAlpha")
-    local badges = self:Get("debuffBadges")
-    local defensives = UI.GroupDefensives()
-    local listed, warding = {}, {}
-    for _, id in ipairs(defensives.all or {}) do listed[id] = true end
-    for _, id in ipairs(defensives.warded or {}) do warding[id] = true end
-    -- each person's place in their group: raid order, or by role as the
-    -- headers sort (tanks, healers, then damage; raid order within a role)
-    local slotOf = {}
-    for g = 1, groups do
-        local members = {}
-        for i = (g - 1) * 5 + 1, math.min(g * 5, count) do members[#members + 1] = i end
-        if self:Get("sort") == "role" then
-            table.sort(members, function(a, b)
-                local ra, rb = ROLE_RANK[person("raidpreview" .. a).role] or 4, ROLE_RANK[person("raidpreview" .. b).role] or 4
-                if ra ~= rb then return ra < rb end
-                return a < b
-            end)
-        end
-        for slot, i in ipairs(members) do slotOf[i] = slot - 1 end
-    end
-    local maxX, maxY = 0, 0
-    for i, f in ipairs(set.frames) do
-        if i > count then
-            f:Hide()
-        else
-            local g, slot = math.floor((i - 1) / 5) + 1, slotOf[i]
-            local gx, gy = groupOrigin(g, grid)
-            local sx, sy = slotOffset(slot, grid)
-            local x, y = gx + sx, gy + sy
-            f:ClearAllPoints()
-            f:SetPoint("TOPLEFT", set.view, "TOPLEFT", x, -y)
-            maxX, maxY = math.max(maxX, x + w), math.max(maxY, y + h)
-            f.opts.healthText = self:Get("healthText")
-            f.opts.nameColor = self:Get("nameColor")
-            f.opts.raidMarker = self:Get("raidMarkers")
-            f.opts.lowTint = self:Get("lowHealth")
-            f.opts.lowHealth = false
-            f.opts.incoming = self:Get("incoming")
-            f.opts.reserveRight = auraReserve(h)
-            f:Resize(w, h)
-            f:Refresh()
-            local d = person("raidpreview" .. i)
-            f:SetState(d.aggro and "danger" or nil, d.aggro and "Aggro" or nil)
-            for kind, deco in pairs(f.dispelDecos) do
-                deco:SetShown(badges ~= "off" and d.debuff == kind and (d.removable or badges ~= "removable"))
-            end
-            local warded = false
-            local auras = set.allAuras or d.auras or {}
-            for _, a in ipairs(auras) do warded = warded or warding[a[1]] == true end
-            f.wardDeco:SetWarded(warded)
-            f:SetAlpha(d.far and far or 1)
-            f.selected:SetAlpha(d.selected and 1 or 0)
-            -- indicators on every third person, as if their auras were up
-            local list, version = UI.GroupIndicators()
-            local tier = UI.GroupTier(count)
-            if f.indicatorVersion ~= version .. tier then
-                f.indicatorVersion = version .. tier
-                f:SetPreviewIndicators((i % 3 == 1) and UI.IndicatorsFor(list, tier) or nil)
-            end
-            -- debuffs (a dispel edge) at the end, listed defensives before
-            -- them; other buffs don't show
-            local bySet = { debuffs = {}, buffs = {} }
-            for _, a in ipairs(auras) do
-                if a[2] then bySet.debuffs[#bySet.debuffs + 1] = a
-                elseif listed[a[1]] then bySet.buffs[#bySet.buffs + 1] = a end
-            end
-            -- the row from the right end: debuffs, then the defensives
-            local used, x = 0, S["space-1"] + 1
-            for si, key in ipairs({ "debuffs", "buffs" }) do
-                local limit = self:Get(key == "buffs" and "buffIcons" or "debuffIcons")
-                for k = 1, math.min(#bySet[key], limit) do
-                    local a = bySet[key][k]
-                    if k == 1 and si == 2 and used > 0 then x = x + GAP_SETS - S["space-1"] end
-                    used = used + 1
-                    local icon = f.icons[used]
-                    icon:SetSize(size, size)
-                    icon:SetArt(C_Spell.GetSpellTexture(a[1]))
-                    icon:SetBorder(a[2] or "ward")
-                    icon:ClearAllPoints()
-                    icon:SetPoint("RIGHT", f, "RIGHT", -x, 0)
-                    icon:Show()
-                    x = x + size + S["space-1"]
-                end
-            end
-            for k = used + 1, #f.icons do f.icons[k]:Hide() end
-            f:Show()
-        end
-    end
-    set.view:SetSize(math.max(1, maxX), math.max(1, maxY))
-    if groups == 0 then set.view:SetSize(1, 1) end
+-- 40 made-up frames on a view: the settings window's, and edit mode's group
+-- preview (on the real frames' place): how many show, everyone's auras when
+-- "with buffs and debuffs".
+type PreviewSet = { view: Frame, frames: PreviewRaidFrame[], count?: number, allAuras?: Aura[] }
+
+local function hasNoArrangement(): (boolean?, string?)
+    if M:Get("arrangement") ~= "columns" then return true, "Only for groups as columns." end
+    return nil, nil
 end
 
 --------------------------------------------------------------------------------
@@ -749,7 +439,7 @@ end
 
 local SECTION = {
     id = "raid", label = "Raid frames", category = "Frames", order = 16,
-    preview = function(parent: Frame) return M:PreviewView(parent) end,
+    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
     groups = {
         { title = "Layout", description = "One layout per profile. Healers usually want groups as rows in the middle of the screen, tanks and DPS columns above the chat: make a profile for each and let SuuUI switch them with your role (General > Profiles > By role). Move the frames in edit mode (General > Appearance > Edit layout).", rows = {
             { key = "showSolo", label = "Show when solo", control = "toggle", combat = true,
@@ -757,9 +447,9 @@ local SECTION = {
             { label = "Preview", control = "segmented",
               options = { { value = 10, label = "10" }, { value = 20, label = "20" }, { value = 40, label = "40" } },
               description = "How many made-up people the preview shows.",
-              get = function() return M.previewSize or 20 end,
+              get = function(): number return M.previewSize or 20 end,
               -- not a setting: no reset, never counts as a change
-              set = function(v: number) M.previewSize = v; M:DrawPreview(); return true end },
+              set = function(v: number): boolean M.previewSize = v; M:DrawPreview(); return true end },
             { key = "arrangement", label = "Groups", control = "segmented", combat = true,
               options = { { value = "columns", label = "Columns" }, { value = "rows", label = "Rows" } },
               description = "Columns: each group a column of five (the side layout). Rows: each group a row of five, group 1 on top (the healer layout)." },
@@ -768,7 +458,7 @@ local SECTION = {
               description = "Within each group: the raid's order, or tanks, healers, then damage. Everyone stays in their own group." },
             { key = "perBand", label = "Columns side by side", control = "stepper", min = 1, max = 8, step = 1, combat = true,
               description = "Then the next groups start a new band below. 4 keeps 40 players in two bands.",
-              disabled = function() if M:Get("arrangement") ~= "columns" then return true, "Only for groups as columns." end end },
+              disabled = hasNoArrangement },
             { key = "width", label = "Width", control = "slider", min = 60, max = 200, step = 2, unit = "px", live = false, combat = true,
               description = "Each frame's width; groups as rows are five frames wide." },
             { key = "height", label = "Height", control = "slider", min = 14, max = 40, step = 1, unit = "px", live = false, combat = true,
@@ -806,7 +496,7 @@ local SECTION = {
               description = "Magic, Curse, Poison, Disease as a badge and border, in combat too. A debuff covers Aggro." },
             -- step 0.01: the default is the design's opacity-oor (0.42)
             { key = "rangeAlpha", label = "Out of range", control = "slider", min = 0.2, max = 1, step = 0.01,
-              format = function(v: number) return ("%d%%"):format(v * 100 + 0.5) end,
+              format = function(v: number): string return ("%d%%"):format(v * 100 + 0.5) end,
               description = "How faint a raid member out of your range is." },
         } },
     },
@@ -817,102 +507,524 @@ local SECTION = {
 --------------------------------------------------------------------------------
 
 local function standDownBlizzard()
-    if _G.CompactRaidFrameContainer then SuuUI.SuppressBlizzard("CompactRaidFrameContainer") end
+    if frames.find("CompactRaidFrameContainer") then SuuUI.SuppressBlizzard("CompactRaidFrameContainer") end
 end
 
-function M:OnEnable()
-    standDownBlizzard()
-    if not self.holder then
-        self.buttons = {}
-        self.holder = CreateFrame("Frame", "SuuUIRaidFrames", SuuUI.Root, "SecureHandlerStateTemplate")
-        self.holder:SetSize(1, 1)
-        self.holder.suuManagedShow = true
-        self.headers = {}
-        for g = 1, GROUPS do self.headers[g] = buildHeader(self, g) end
+class RaidFramesModule extends Module<typeof(DEFAULTS)>
+    readonly buttons: RaidButton[] = {}
+    readonly headers: GroupHeader[] = {}
+    -- the header-made buttons styled already
+    readonly styled: { [Button]: boolean } = tbl.weakKeys()
+    holder: Frame? = nil
+    indicatorTier: string? = nil
+    indicatorTimer: TimerHandle? = nil
+    previewSet: PreviewSet? = nil
+    previewSize: number? = nil
+    previewView: Frame? = nil
+    rangeTicker: TickerHandle? = nil
+    -- edit mode's group preview
+    screenSet: PreviewSet? = nil
+    tierHeight: number? = nil
+
+    constructor()
+        super({
+            id = "raid",
+            name = "Raid frames",
+            description = "Your raid by group: health, roles, debuffs you can remove, aggro and range.",
+            api = "0.9",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
     end
-    self:RegisterMover(self.holder, { key = "position", label = "Raid frames" })
-    SuuUI.PublishAnchor("raid", self.holder)
-    self:RegisterSettings(SECTION)
-    self:RunOutOfCombat("build", function()
-        self:Layout()
-        precreate(self)
-        self:Layout()
-        self:ApplySort()
-        self:UpdateVisibility()
-        self:ApplyOptions()
-    end)
 
-    self:WatchAll({ "arrangement", "perBand", "width", "height", "heightLarge", "gap", "groupGap", "buffIcons", "debuffIcons" }, function()
-        self:DrawPreview()
-        self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
-    end)
-    self:WatchAll({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "rangeAlpha" }, function() self:ApplyOptions(); self:DrawPreview() end)
-    self:Watch("debuffBadges", function()
-        self:DrawPreview()
-        self:RunOutOfCombat("badges", function() self:ApplyBadges() end)
-    end)
-    self:Watch("showSolo", function() self:UpdateVisibility() end)
-    self:Watch("sort", function()
-        self:DrawPreview()
-        self:RunOutOfCombat("sort", function() self:ApplySort() end)
-    end)
-    self:On("SUUUI_INDICATORS_CHANGED", function() self:QueueIndicators(); self:DrawPreview() end)
-    -- edit mode's group preview: a made-up raid on the real frames' place
-    self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, size, auras) self:ScreenPreview(size, auras) end)
-    self:On("SUUUI_DEFENSIVES_CHANGED", function()
-        self:RunOutOfCombat("defensives", function() self:ApplyDefensives() end)
-        self:DrawPreview()
-    end)
+    function StyleButton(button: Button)
+        if self.styled[button] then return end
+        self.styled[button] = true
+        local h = barHeight()
+        local f = RaidButton.adopt(button, nil, nil, {
+            frame = button, size = "sm", width = self:Get("width"), height = h,
+            powerFor = powerFor, textOnSmall = true, healthText = self:Get("healthText"),
+            nameColor = self:Get("nameColor"), raidMarker = self:Get("raidMarkers"),
+            lowHealth = false, lowTint = self:Get("lowHealth"), incoming = self:Get("incoming"),
+            reserveRight = auraReserve(h),
+        })
+        SuuUI.TagInstance(f, { module = M.id, role = "raid" })
+        if not InCombatLockdown() then f:RegisterForClicks("AnyUp") end
+        f:BuildAuras(h)
+        f:SetDispelBadges(self:Get("debuffBadges"))
+        f:SetIndicators(UI.IndicatorsFor(UI.GroupIndicators(), UI.GroupTier()))
+        f:SetWardSpells(UI.GroupDefensives().warded)
+        self.buttons[#self.buttons + 1] = f
+        -- the header sets the unit; the frame and its auras follow
+        f:HookScript("OnAttributeChanged", function(btn, name, value)
+            if name ~= "unit" then return end
+            local unit = secret.asString(value)
+            btn:SetUnit(unit, true)
+            btn:UpdateIsMe()
+            btn:ApplyWho()
+            local auras = btn.auras
+            if auras then auras:SetUnit(unit or "none") end
+            self:UpdateOffline()
+            if unit then
+                if not btn.active then btn:Activate() end
+                btn:Refresh()
+                self:UpdateState(btn)
+            end
+        end)
+        local unit = secret.asString(f:GetAttribute("unit"))
+        if unit then
+            f:SetUnit(unit, true)
+            f:UpdateIsMe()
+            f:ApplyWho()
+            local auras = f.auras
+            if auras then auras:SetUnit(unit) end
+            f:Activate()
+        end
+    end
 
-    self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)
-    self:OnGameEvent("UNIT_CONNECTION", function() self:UpdateOffline() end)
-    self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
-        -- a token can now be someone else: redraw, re-scan auras (the
-        -- indicators' too)
-        for _, f in ipairs(self.buttons) do
-            if f.unit then
-                updateIsMe(f)
-                applyWho(f)
-                if f.auras then f.auras:Refresh() end
-                for _, list in pairs(f.dispelSets or {}) do for _, c in ipairs(list) do c:Refresh() end end
-                for _, c in ipairs(f.indicatorContainers or {}) do c:Refresh() end
+    function ApplySort()
+        local byRole = self:Get("sort") == "role"
+        for _, hd in ipairs(self.headers) do
+            if byRole then
+                hd:SetAttribute("groupingOrder", ROLE_ORDER)
+                hd:SetAttribute("groupBy", "ASSIGNEDROLE")
+            else
+                hd:SetAttribute("groupBy", nil)
+                hd:SetAttribute("groupingOrder", nil)
             end
         end
-        self:UpdateStates(); self:UpdateSelected(); self:UpdateRange()
-        -- someone changed raid group: "my group" missing looks follow
-        for _, f in ipairs(self.buttons) do f:UpdateIndicatorPresence() end
-        -- indicators limited to some group sizes
-        if UI.GroupTier() ~= self.indicatorTier then self:QueueIndicators() end
-        -- crossing 20 players changes the bar height (out of combat)
-        if barHeight() ~= self.tierHeight then
-            self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
+    end
+
+    function Layout()
+        local holder = assert(self.holder)
+        local w, h, gap = self:Get("width"), barHeight(), self:Get("gap")
+        local grid = gridAt(h)
+        for g, hd in ipairs(self.headers) do
+            hd:SetAttribute("unitWidth", w)
+            hd:SetAttribute("unitHeight", h)
+            hd:ClearAllPoints()
+            if grid.rows then
+                hd:SetAttribute("point", "LEFT")
+                hd:SetAttribute("xOffset", gap)
+                hd:SetAttribute("yOffset", 0)
+            else
+                hd:SetAttribute("point", "TOP")
+                hd:SetAttribute("xOffset", 0)
+                hd:SetAttribute("yOffset", -gap)
+            end
+            local x, y = groupOrigin(g, grid)
+            hd:SetPoint("TOPLEFT", holder, "TOPLEFT", x, -y)
         end
-    end)
-    self:OnGameEvent("UNIT_THREAT_SITUATION_UPDATE", function(_, unit)
-        for _, f in ipairs(self.buttons) do if f.unit == unit then self:UpdateState(f) end end
-    end)
-    -- "while missing" indicators: read out of combat, hidden in combat
-    local function presence(unit: string?)
+        -- rows: as tall as eight groups of a full raid (heightLarge) whatever
+        -- the raid's size: the rows hang from its top, so the top edge stays put
+        -- (the healer layout sits between the player and target frames, tops
+        -- level) and it ends above the dock's stance and pet bars (seen in
+        -- game: sized for eight rows at the 20-player height it reached them)
+        holder:SetSize(holderSize(grid, self:Get("heightLarge")))
         for _, f in ipairs(self.buttons) do
-            if not unit or f.unit == unit then f:UpdateIndicatorPresence() end
+            f.opts.reserveRight = auraReserve(h)
+            f:Resize(w, h)
+            f:FitRow()
+        end
+        self.tierHeight = h
+        self:DrawPreview()
+    end
+
+    function ApplyOptions()
+        for _, f in ipairs(self.buttons) do
+            f.opts.healthText = self:Get("healthText")
+            f.opts.nameColor = self:Get("nameColor")
+            f.opts.raidMarker = self:Get("raidMarkers")
+            f.opts.lowTint = self:Get("lowHealth")
+            f.opts.incoming = self:Get("incoming")
+            f.opts.reserveRight = auraReserve(f:GetHeight())
+            f:ApplyAuraCount()
+            if f.active then f:Refresh() end
+        end
+        self:UpdateStates()
+        self:UpdateRange()
+        self:UpdateOffline()
+    end
+
+    -- An offline player's auras are stale: their icons go see-through.
+    function UpdateOffline()
+        for _, f in ipairs(self.buttons) do
+            local online = true
+            local unit = f.unit
+            if unit and secret.flag(UnitExists(unit)) then
+                local c = UnitIsConnected(unit)
+                if c ~= nil and not secret.isSecret(c) then online = c and true or false end
+            end
+            local auras = f.auras
+            if auras then auras.container:SetAlpha(online and 1 or 0) end
         end
     end
-    self:OnGameEvent("UNIT_AURA", function(_, unit)
-        if not InCombatLockdown() and unit and (unit == "player" or unit:find("^party") or unit:find("^raid")) then presence(unit) end
-    end)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function() after(0, function() presence() end) end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        presence()
-        for _, f in ipairs(self.buttons) do updateIsMe(f); applyWho(f) end
-    end)
-    self.rangeTicker = every(0.3, function()
-        if self.holder:IsVisible() then self:UpdateRange() end
-    end)
+
+    function ApplyIndicators()
+        local tier = UI.GroupTier()
+        self.indicatorTier = tier
+        local list = UI.IndicatorsFor(UI.GroupIndicators(), tier)
+        for _, f in ipairs(self.buttons) do f:SetIndicators(list) end
+    end
+
+    function QueueIndicators()
+        local timer = self.indicatorTimer
+        if timer then timer:Cancel() end
+        self.indicatorTimer = after(1, function()
+            self.indicatorTimer = nil
+            self:RunOutOfCombat("indicators", function() self:ApplyIndicators() end)
+        end)
+    end
+
+    function ApplyBadges()
+        for _, f in ipairs(self.buttons) do f:SetDispelBadges(self:Get("debuffBadges")) end
+    end
+
+    -- The Defensives list: the inline icons' spells and Warded, out of combat.
+    function ApplyDefensives()
+        local d = UI.GroupDefensives()
+        for _, f in ipairs(self.buttons) do
+            local auras = f.auras
+            if auras then
+                for _, g in ipairs(AURA_GROUPS) do
+                    local list = g.list
+                    if list then auras:SetGroupSpells(g.key, d[list]) end
+                end
+            end
+            f:SetWardSpells(d.warded)
+        end
+    end
+
+    function UpdateVisibility()
+        self:RunOutOfCombat("visibility", function()
+            RegisterStateDriver(assert(self.holder), "visibility", "[group:raid] show; " .. (self:Get("showSolo") and "[nogroup] show; " or "") .. "hide")
+            assert(self.headers[1]):SetAttribute("showSolo", self:Get("showSolo"))
+        end)
+    end
+
+    function UpdateState(f: RaidButton)
+        local u = f.unit
+        if not u or not UnitExists(u) then return end
+        local threat = UnitThreatSituation(u)
+        local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(u)
+        local aggro = not secret.isSecret(threat) and threat ~= nil and threat >= 2 and not (not secret.isSecret(role) and role == "TANK")
+        f:SetState(aggro and "danger" or nil, aggro and "Aggro" or nil)
+    end
+
+    function UpdateStates()
+        for _, f in ipairs(self.buttons) do self:UpdateState(f) end
+    end
+
+    function UpdateSelected()
+        for _, f in ipairs(self.buttons) do
+            local unit = f.unit
+            local is = unit and UnitExists(unit) and UnitIsUnit(unit, "target")
+            if secret.isSecret(is) then f.selected:SetAlphaFromBoolean(is, 1, 0) else f.selected:SetAlpha(is and 1 or 0) end
+        end
+    end
+
+    function UpdateRange()
+        local far = self:Get("rangeAlpha")
+        for _, f in ipairs(self.buttons) do
+            if f:IsVisible() then
+                local unit = f.unit
+                if not unit or f.isMe then
+                    f:SetAlpha(1)
+                else
+                    local inRange, checked = UnitInRange(unit)
+                    if secret.isSecret(inRange) then
+                        f:SetAlphaFromBoolean(inRange, 1, far)
+                    elseif not secret.isSecret(checked) and checked == false then
+                        f:SetAlpha(1)
+                    else
+                        f:SetAlpha(inRange and 1 or far)
+                    end
+                end
+            end
+        end
+    end
+
+    function BuildSet(parent: Frame): PreviewSet
+        local view = CreateFrame("Frame", nil, parent)
+        view:SetSize(1, 1)
+        local set: PreviewSet = { view = view, frames = {} }
+        for i = 1, 40 do
+            set.frames[i] = PreviewRaidFrame.new(view, "raidpreview" .. i, { size = "sm", secure = false, api = STAND_IN, powerFor = powerFor, textOnSmall = true })
+        end
+        return set
+    end
+
+    function PreviewView(parent: Frame): Frame
+        local view = self.previewView
+        if view then
+            view:SetParent(parent)
+            self:DrawPreview(true)
+            return view
+        end
+        local set = self:BuildSet(parent)
+        self.previewSet = set
+        view = set.view
+        self.previewView = view
+        view:HookScript("OnShow", function() self:DrawPreview() end)
+        self:DrawPreview(true)
+        return view
+    end
+
+    -- Both previews: the settings window's (while it shows) and edit mode's.
+    function DrawPreview(force: boolean?)
+        local set = self.previewSet
+        if set and (force or set.view:IsVisible()) then self:DrawSet(set) end
+        local screen = self.screenSet
+        if screen and screen.view:IsShown() then self:DrawSet(screen) end
+    end
+
+    -- Edit mode's group preview: a made-up raid of `count` on the real frames'
+    -- place, the real ones see-through meanwhile; 0 or fewer than 6 ends it.
+    function ScreenPreview(given: unknown, auras: unknown)
+        local holder = self.holder
+        if not holder then return end
+        local count = secret.asNumber(given)
+        if not count or count <= 5 then
+            local screen = self.screenSet
+            if screen then screen.view:Hide() end
+            holder:SetAlpha(1)
+            return
+        end
+        local set = self.screenSet
+        if not set then
+            set = self:BuildSet(SuuUI.Root)
+            self.screenSet = set
+        end
+        set.count = count
+        set.allAuras = auras and fullAuras() or nil
+        set.view:SetFrameStrata(holder:GetFrameStrata())
+        set.view:SetFrameLevel(holder:GetFrameLevel() + 20)
+        set.view:ClearAllPoints()
+        set.view:SetPoint("TOPLEFT", holder, "TOPLEFT")
+        set.view:Show()
+        self:DrawSet(set)
+        holder:SetAlpha(0)
+    end
+
+    function DrawSet(set: PreviewSet)
+        local count = set.count or self.previewSize or 20
+        local w = self:Get("width")
+        local h = count > 20 and self:Get("heightLarge") or self:Get("height")
+        local grid = gridAt(h)
+        local groups = math.ceil(count / 5)
+        local size, far = iconSize(h), self:Get("rangeAlpha")
+        local badges = self:Get("debuffBadges")
+        local defensives = UI.GroupDefensives()
+        local listed: { [number]: boolean }, warding: { [number]: boolean } = {}, {}
+        for _, id in ipairs(defensives.all or {}) do listed[id] = true end
+        for _, id in ipairs(defensives.warded or {}) do warding[id] = true end
+        -- each person's place in their group: raid order, or by role as the
+        -- headers sort (tanks, healers, then damage; raid order within a role)
+        local slotOf: { [number]: number } = {}
+        for g = 1, groups do
+            local members: number[] = {}
+            for i = (g - 1) * 5 + 1, math.min(g * 5, count) do members[#members + 1] = i end
+            if self:Get("sort") == "role" then
+                table.sort(members, function(a: number, b: number): boolean
+                    local ra, rb = ROLE_RANK[person("raidpreview" .. a).role] or 4, ROLE_RANK[person("raidpreview" .. b).role] or 4
+                    if ra ~= rb then return ra < rb end
+                    return a < b
+                end)
+            end
+            for slot, i in ipairs(members) do slotOf[i] = slot - 1 end
+        end
+        local maxX, maxY = 0, 0
+        for i, f in ipairs(set.frames) do
+            if i > count then
+                f:Hide()
+            else
+                local g, slot = math.floor((i - 1) / 5) + 1, assert(slotOf[i])
+                local gx, gy = groupOrigin(g, grid)
+                local sx, sy = slotOffset(slot, grid)
+                local x, y = gx + sx, gy + sy
+                f:ClearAllPoints()
+                f:SetPoint("TOPLEFT", set.view, "TOPLEFT", x, -y)
+                maxX, maxY = math.max(maxX, x + w), math.max(maxY, y + h)
+                f.opts.healthText = self:Get("healthText")
+                f.opts.nameColor = self:Get("nameColor")
+                f.opts.raidMarker = self:Get("raidMarkers")
+                f.opts.lowTint = self:Get("lowHealth")
+                f.opts.lowHealth = false
+                f.opts.incoming = self:Get("incoming")
+                f.opts.reserveRight = auraReserve(h)
+                f:Resize(w, h)
+                f:Refresh()
+                local d = person("raidpreview" .. i)
+                f:SetState(d.aggro and "danger" or nil, d.aggro and "Aggro" or nil)
+                for kind, deco in pairs(f.dispelDecos) do
+                    deco:SetShown(badges ~= "off" and d.debuff == kind and (d.removable or badges ~= "removable"))
+                end
+                local warded = false
+                local auras = set.allAuras or d.auras or {}
+                for _, a in ipairs(auras) do warded = warded or warding[a.spell] == true end
+                local ward = f.wardDeco
+                if ward then ward:SetWarded(warded) end
+                f:SetAlpha(d.far and far or 1)
+                f.selected:SetAlpha(d.selected and 1 or 0)
+                -- indicators on every third person, as if their auras were up
+                local list, version = UI.GroupIndicators()
+                local tier = UI.GroupTier(count)
+                if f.indicatorVersion ~= version .. tier then
+                    f.indicatorVersion = version .. tier
+                    f:SetPreviewIndicators((i % 3 == 1) and UI.IndicatorsFor(list, tier) or nil)
+                end
+                -- debuffs (a dispel edge) at the end, listed defensives before
+                -- them; other buffs don't show
+                local debuffs: Aura[], buffs: Aura[] = {}, {}
+                for _, a in ipairs(auras) do
+                    if a.edge then debuffs[#debuffs + 1] = a
+                    elseif listed[a.spell] then buffs[#buffs + 1] = a end
+                end
+                -- the row from the right end: debuffs, then the defensives
+                local used, ix = 0, S["space-1"] + 1
+                local sets = { debuffs, buffs }
+                local limits = { self:Get("debuffIcons"), self:Get("buffIcons") }
+                for si, kind in ipairs(sets) do
+                    for k = 1, math.min(#kind, assert(limits[si])) do
+                        local a = kind[k]
+                        if k == 1 and si == 2 and used > 0 then ix = ix + GAP_SETS - S["space-1"] end
+                        used = used + 1
+                        local icon = f.icons[used]
+                        icon:SetSize(size, size)
+                        icon:SetArt(C_Spell.GetSpellTexture(a.spell))
+                        icon:SetBorder(a.edge or "ward")
+                        icon:ClearAllPoints()
+                        icon:SetPoint("RIGHT", f, "RIGHT", -ix, 0)
+                        icon:Show()
+                        ix = ix + size + S["space-1"]
+                    end
+                end
+                for k = used + 1, #f.icons do f.icons[k]:Hide() end
+                f:Show()
+            end
+        end
+        set.view:SetSize(math.max(1, maxX), math.max(1, maxY))
+        if groups == 0 then set.view:SetSize(1, 1) end
+    end
+
+    override function OnEnable()
+        standDownBlizzard()
+        local holder = self.holder
+        if not holder then
+            holder = CreateFrame("Frame", "SuuUIRaidFrames", SuuUI.Root, "SecureHandlerStateTemplate")
+            holder:SetSize(1, 1)
+            self.holder = holder
+            for g = 1, GROUPS do self.headers[g] = GroupHeader.new(self, holder, g) end
+        end
+        -- its state driver shows it, not edit mode
+        self:RegisterMover(holder, { key = "position", label = "Raid frames", managedShow = true })
+        SuuUI.PublishAnchor("raid", holder)
+        self:RegisterSettings(SECTION)
+        self:RunOutOfCombat("build", function()
+            self:Layout()
+            -- all forty buttons now, out of combat: a header shows five slots
+            -- from a negative starting index, which makes its buttons; then
+            -- back to normal (aura containers can't be made in combat)
+            holder:Show()
+            for _, h in ipairs(self.headers) do
+                h:SetAttribute("showSolo", true)
+                h:SetAttribute("startingIndex", -4)
+                h:Show()
+                h:SetAttribute("startingIndex", 1)
+                h:SetAttribute("showSolo", false)
+            end
+            self:Layout()
+            self:ApplySort()
+            self:UpdateVisibility()
+            self:ApplyOptions()
+        end)
+
+        self:WatchAll({ "arrangement", "perBand", "width", "height", "heightLarge", "gap", "groupGap", "buffIcons", "debuffIcons" }, function()
+            self:DrawPreview()
+            self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
+        end)
+        self:WatchAll({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "rangeAlpha" }, function() self:ApplyOptions(); self:DrawPreview() end)
+        self:Watch("debuffBadges", function()
+            self:DrawPreview()
+            self:RunOutOfCombat("badges", function() self:ApplyBadges() end)
+        end)
+        self:Watch("showSolo", function() self:UpdateVisibility() end)
+        self:Watch("sort", function()
+            self:DrawPreview()
+            self:RunOutOfCombat("sort", function() self:ApplySort() end)
+        end)
+        self:On("SUUUI_INDICATORS_CHANGED", function() self:QueueIndicators(); self:DrawPreview() end)
+        -- edit mode's group preview: a made-up raid on the real frames' place
+        self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, size, auras) self:ScreenPreview(size, auras) end)
+        self:On("SUUUI_DEFENSIVES_CHANGED", function()
+            self:RunOutOfCombat("defensives", function() self:ApplyDefensives() end)
+            self:DrawPreview()
+        end)
+
+        self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)
+        self:OnGameEvent("UNIT_CONNECTION", function() self:UpdateOffline() end)
+        self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
+            -- a token can now be someone else: redraw, re-scan auras (the
+            -- indicators' too)
+            for _, f in ipairs(self.buttons) do
+                if f.unit then
+                    f:UpdateIsMe()
+                    f:ApplyWho()
+                    local auras = f.auras
+                    if auras then auras:Refresh() end
+                    for _, list in pairs(f.dispelSets) do for _, c in ipairs(list) do c:Refresh() end end
+                    for _, c in ipairs(f.indicatorContainers) do c:Refresh() end
+                end
+            end
+            self:UpdateStates(); self:UpdateSelected(); self:UpdateRange()
+            -- someone changed raid group: "my group" missing looks follow
+            for _, f in ipairs(self.buttons) do f:UpdateIndicatorPresence() end
+            -- indicators limited to some group sizes
+            if UI.GroupTier() ~= self.indicatorTier then self:QueueIndicators() end
+            -- crossing 20 players changes the bar height (out of combat)
+            if barHeight() ~= self.tierHeight then
+                self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
+            end
+        end)
+        self:OnGameEvent("UNIT_THREAT_SITUATION_UPDATE", function(_, unit)
+            for _, f in ipairs(self.buttons) do if f.unit == unit then self:UpdateState(f) end end
+        end)
+        -- "while missing" indicators: read out of combat, hidden in combat
+        local function presence(unit: string?)
+            for _, f in ipairs(self.buttons) do
+                if not unit or f.unit == unit then f:UpdateIndicatorPresence() end
+            end
+        end
+        self:OnGameEvent("UNIT_AURA", function(_, unit)
+            if not InCombatLockdown() and unit and (unit == "player" or unit:find("^party") or unit:find("^raid")) then presence(unit) end
+        end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() after(0, function() presence() end) end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            presence()
+            for _, f in ipairs(self.buttons) do f:UpdateIsMe(); f:ApplyWho() end
+        end)
+        self.rangeTicker = every(0.3, function()
+            if holder:IsVisible() then self:UpdateRange() end
+        end)
+    end
+
+    override function OnDisable()
+        -- Only reached when the module errors: the module toggles on reload.
+        SuuUI.PublishAnchor("raid", nil)
+        local ticker = self.rangeTicker
+        if ticker then ticker:Cancel() end
+        for _, f in ipairs(self.buttons) do f:Deactivate() end
+    end
 end
 
-function M:OnDisable()
-    -- Only reached when the module errors: the module toggles on reload.
-    SuuUI.PublishAnchor("raid", nil)
-    if self.rangeTicker then self.rangeTicker:Cancel() end
-    for _, f in ipairs(self.buttons or {}) do f:Deactivate() end
-end
+M = SuuUI.AddModule(RaidFramesModule.new())
+
+-- "badges" is "debuffBadges" now, as on the unit frames
+-- one aura count became defensives and debuffs, each with its own; they
+-- start at the new defaults
+M:Migrate("auraSplit", function(values: { [string]: unknown }) values.auras = nil end)
+
+M:Migrate("debuffBadges", function(values: { [string]: unknown })
+    if values.badges ~= nil and values.debuffBadges == nil then values.debuffBadges = values.badges end
+    values.badges = nil
+end)

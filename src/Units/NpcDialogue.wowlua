@@ -24,30 +24,30 @@
 -- fight starts.
 -- A built-in module written against the public API only.
 
+
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type KeyChip, ScrollArea from "/UI/Panel"
+import type Text from "/UI/Text"
+import type ItemSlot, Money from "/UI/Inventory"
+import type Border from "/UI/Draw"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "npcdialogue",
-    name = "NPC dialogue",
-    description = "Talking to an NPC as a scene: their live portrait, what they say, your answers numbered below; quests in the same voice.",
-    api = "0.17",
-    reloadToToggle = true,
-    defaults = {
-        hideUI = true, -- the rest of the UI fades out while you talk
-    },
-})
+local DEFAULTS = {
+    hideUI = true, -- the rest of the UI fades out while you talk
+}
 
-local function call(fn: any, ...: any): ...any
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h, i = pcall(fn, ...)
-    if ok then return a, b, c, d, e, f, g, h, i end
-end
+local M: NpcDialogueModule
+
+local try, asString, asNumber = errors.try, secret.asString, secret.asNumber
 
 -- the bar (design D3): 1080 wide; padding 12, 20 at the right; the speaker's
 -- column 200 wide, 20 from the talk
@@ -66,19 +66,36 @@ local CPS = 90 -- characters a second while a line types in
 local ANIM_TALK, ANIM_IDLE = 60, 0
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local SOFT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleSoft.tga"
--- an answer pill's and a card's description (see DrawPills, DrawCards)
-export type Answer = { [string]: any }
-export type Card = { [string]: any }
-local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+
+-- A text in a colour token: an answer's quest mark ("!", "?"), its tag
+-- ("Daily").
+export type Marked = { text: string, color: string }
+-- An answer, a pill: its key ("1"; "Esc" for Goodbye), a glyph (a SuuUI
+-- glyph's name or the game's icon) or a quest mark, the text, a tag, what it
+-- does, why it is off, whether it leaves.
+export type Answer = {
+    key?: string, label?: string, glyph?: string | number, mark?: Marked, tag?: Marked,
+    act?: () -> (), off?: string, leave?: boolean,
+}
+-- A card: an item to choose, receive or hand over (the quest frame's list
+-- and index), what it shows, and for a choice whether it can be chosen.
+export type Card = {
+    kind: string, index: number, name?: string, icon?: number | string, count?: number, quality?: number, itemID?: number,
+    link?: string, upgrade?: boolean, right?: string, rightColor?: string, choosable?: boolean, on?: boolean,
+    choose?: (n: number) -> (),
+}
+-- What comes with the cards: money and experience.
+export type Gains = { money?: number, xp?: number }
 
 -- the game's gossip icons as SuuUI glyphs (the icon itself where unknown)
-local OPTION_GLYPH = {
+local OPTION_GLYPH: { [number]: string } = {
     [132050] = "bank", [132051] = "swords", [132052] = "inn", [132053] = "chat", [132055] = "scroll",
     [132056] = "tabard", [132057] = "wing", [132058] = "book", [132060] = "bag",
 }
 
 -- an item's equip slot, for "Upgrade" on a reward
-local EQUIP_SLOTS = {
+local EQUIP_SLOTS: { [string]: number[] } = {
     INVTYPE_HEAD = { 1 }, INVTYPE_NECK = { 2 }, INVTYPE_SHOULDER = { 3 }, INVTYPE_BODY = { 4 }, INVTYPE_CHEST = { 5 },
     INVTYPE_ROBE = { 5 }, INVTYPE_WAIST = { 6 }, INVTYPE_LEGS = { 7 }, INVTYPE_FEET = { 8 }, INVTYPE_WRIST = { 9 },
     INVTYPE_HAND = { 10 }, INVTYPE_FINGER = { 11, 12 }, INVTYPE_TRINKET = { 13, 14 }, INVTYPE_CLOAK = { 15 },
@@ -88,18 +105,18 @@ local EQUIP_SLOTS = {
 }
 
 local function itemLevel(link: string?): number?
-    local lvl = link and call(C_Item.GetDetailedItemLevelInfo, link)
-    return secret.readable(lvl) and lvl or nil
+    return link and asNumber(try(C_Item.GetDetailedItemLevelInfo, link)) or nil
 end
 
 -- Whether an item would raise the item level of what you wear there.
 local function upgrade(link: string?): boolean
     if not link then return false end
-    local _, _, _, _, _, _, _, _, equipLoc = C_Item.GetItemInfo(link)
-    local slots = equipLoc and EQUIP_SLOTS[equipLoc]
+    local _, _, _, _, _, _, _, _, equipLoc = try(C_Item.GetItemInfo, link)
+    local loc = asString(equipLoc)
+    local slots = loc and EQUIP_SLOTS[loc]
     local mine = itemLevel(link)
     if not (slots and mine) then return false end
-    local lowest
+    local lowest: number? = nil
     for _, s in ipairs(slots) do
         local worn = itemLevel(GetInventoryItemLink("player", s)) or 0
         lowest = lowest and math.min(lowest, worn) or worn
@@ -123,500 +140,321 @@ local function charEnds(text: string): number[]
     return ends
 end
 
---------------------------------------------------------------------------------
--- The bar
---------------------------------------------------------------------------------
-
--- One answer, a pill: its key, a glyph or a quest mark, the text, a tag.
--- Why one is off shows in its tooltip.
-function M:BuildPill(parent: any): any
-    local b = CreateFrame("Button", nil, parent)
-    b:SetHeight(PILL_H)
-    b.bg = UI.Fill(b, "surface-sunk", "BACKGROUND")
-    b.bg:SetAllPoints()
-    b.hover = b:CreateTexture(nil, "BACKGROUND", nil, 1)
-    b.hover:SetAllPoints()
-    b.hover:SetColorTexture(1, 1, 1, 1)
-    UI.PaintGradient(b.hover, "HORIZONTAL", "arcane", "arcane", 0.18, 0.06)
-    b.hover:Hide()
-    b.border = UI.Border(b, "gilt-faint")
-    b.key = UI.KeyChip(b, "1")
-    b.key:SetPoint("LEFT", S["space-2"], 0)
-    b.glyph = b:CreateTexture(nil, "ARTWORK")
-    b.glyph:SetSize(13, 13)
-    b.mark = UI.Text(b, "alert", "gilt-text")
-    b.mark:SetFont(T.type.alert.file, 16, "")
-    b.text = UI.Text(b, "body", "ink")
-    b.text:SetWordWrap(false)
-    b.tag = UI.Text(b, "micro", "gilt-text")
-    function b:Lit(on: any)
-        on = on and not self.off
-        self.hover:SetShown(on)
-        self.border:SetColor(on and "arcane" or "gilt-faint")
-        self.key.text:SetColor(on and "arcane" or "ink-muted")
-    end
-    b:SetScript("OnEnter", function(self)
-        self:Lit(true)
-        if self.off then UI.ShowTooltip(self, { title = self.label, description = self.off }) end
-    end)
-    b:SetScript("OnLeave", function(self) self:Lit(false); UI.HideTooltip() end)
-    b:SetScript("OnClick", function(self)
-        if self.off or not self.act then return end
-        PlaySound(SOUNDKIT.IG_QUEST_LIST_SELECT)
-        self.act()
-    end)
-    return b
+-- One of the game's quest buttons, clicked (Accept keeps its PvP
+-- confirmation, Complete its money one).
+local function click(name: string)
+    local b = frames.asButton(tbl.field(_G, name))
+    if b then b:Click() end
 end
 
--- One card on one line: an item to choose, receive or hand over.
-function M:BuildCard(parent: any): any
-    local c = CreateFrame("Button", nil, parent)
-    c:SetHeight(CARD_H)
-    c.bg = UI.Fill(c, "surface-sunk", "BACKGROUND")
-    c.bg:SetAllPoints()
-    c.border = UI.Border(c, "gilt-faint")
-    c.slot = UI.ItemSlot(c, 28)
-    c.slot:SetPoint("LEFT", S["space-2"] + 1, 0)
-    c.slot:EnableMouse(false)
-    c.right = UI.Text(c, "micro", "arcane")
-    c.right:SetPoint("RIGHT", -S["space-3"], 0)
-    c.name = UI.Text(c, "label", "ink")
-    c.name:SetPoint("LEFT", c.slot, "RIGHT", S["space-3"], 0)
-    c.name:SetPoint("RIGHT", c.right, "LEFT", -S["space-3"], 0)
-    c.name:SetJustifyH("LEFT")
-    c.name:SetWordWrap(false)
-    c:SetScript("OnEnter", function(self)
-        if not self.on then self.border:SetColor("gilt-line") end
-        if self.kind then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT", S["space-4"], 0)
-            GameTooltip:SetQuestItem(self.kind, self.index)
-            GameTooltip:Show()
-        end
-    end)
-    c:SetScript("OnLeave", function(self)
-        if not self.on then self.border:SetColor("gilt-faint") end
-        GameTooltip:Hide()
-    end)
-    c:SetScript("OnClick", function(self)
-        if self.kind == "choice" and self.choosable then
-            self.choose(self.index)
-        elseif self.link then
-            HandleModifiedItemClick(self.link)
-        end
-    end)
-    function c:SetOn(on: any)
-        self.on = on
-        self.border:SetColor(on and "arcane" or "gilt-faint")
-        UI.PaintFill(self.bg, on and "arcane-soft" or "surface-sunk")
-    end
-    return c
-end
+-- The game's quest and gossip frames.
+local function questFrame(): Frame? return frames.find("QuestFrame") end
+local function gossipFrame(): Frame? return frames.find("GossipFrame") end
+
+--------------------------------------------------------------------------------
+-- The bar's parts
+--------------------------------------------------------------------------------
 
 -- the key light: gilt at a tenth (kept: Bind)
-local function lightTint(t: any)
+local function lightTint(t: Texture)
     local r, g, b = UI.RGBA("gilt")
     t:SetVertexColor(r * 0.1, g * 0.1, b * 0.1)
 end
 
-function M:BuildPortrait(parent: any): any
-    local p = CreateFrame("Frame", nil, parent)
-    p:SetSize(PORT_W, PORT_H)
-    p:SetClipsChildren(true)
-    local base = p:CreateTexture(nil, "BACKGROUND", nil, -8)
-    base:SetAllPoints()
-    base:SetColorTexture(1, 1, 1, 1)
-    base:SetGradient("VERTICAL", CreateColor(0.047, 0.039, 0.031, 1), CreateColor(0.129, 0.110, 0.090, 1))
-    local light = p:CreateTexture(nil, "BACKGROUND", nil, -7)
-    light:SetTexture(SOFT)
-    light:SetBlendMode("ADD")
-    light:SetPoint("TOPLEFT", -20, PORT_H * 0.35)
-    light:SetPoint("BOTTOMRIGHT", 20, PORT_H * 0.35 - PORT_H)
-    UI.Bind(light, lightTint)
-    p.model = CreateFrame("PlayerModel", nil, p)
-    p.model:SetPoint("TOPLEFT", 1, -1)
-    p.model:SetPoint("BOTTOMRIGHT", -1, 1)
-    -- the vignette over the model: the bottom and the sides darker
-    local over = CreateFrame("Frame", nil, p)
-    over:SetAllPoints()
-    over:SetFrameLevel(p.model:GetFrameLevel() + 2)
-    local bottom = over:CreateTexture(nil, "ARTWORK")
-    bottom:SetColorTexture(1, 1, 1, 1)
-    bottom:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.7), CreateColor(0, 0, 0, 0))
-    bottom:SetPoint("BOTTOMLEFT")
-    bottom:SetPoint("BOTTOMRIGHT")
-    bottom:SetHeight(PORT_H * 0.4)
-    for _, side in ipairs({ "LEFT", "RIGHT" }) do
-        local t = over:CreateTexture(nil, "ARTWORK")
-        t:SetColorTexture(1, 1, 1, 1)
-        t:SetGradient("HORIZONTAL", CreateColor(0, 0, 0, side == "LEFT" and 0.35 or 0), CreateColor(0, 0, 0, side == "LEFT" and 0 or 0.35))
-        t:SetPoint(("TOP" .. side) :: any)
-        t:SetPoint(("BOTTOM" .. side) :: any)
-        t:SetWidth(PORT_W * 0.25)
+-- One answer, a pill: its key, a glyph or a quest mark, the text, a tag.
+-- Why one is off shows in its tooltip.
+export class AnswerPill extends Button
+    readonly bg: Texture
+    readonly hover: Texture
+    readonly border: Border
+    readonly key: KeyChip
+    readonly glyph: Texture
+    readonly mark: Text
+    readonly text: Text
+    readonly tag: Text
+    label: string? = nil
+    off: string? = nil
+    act: (() -> ())? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(PILL_H)
+        self.bg = UI.Fill(self, "surface-sunk", "BACKGROUND")
+        self.bg:SetAllPoints()
+        self.hover = self:CreateTexture(nil, "BACKGROUND", nil, 1)
+        self.hover:SetAllPoints()
+        self.hover:SetColorTexture(1, 1, 1, 1)
+        UI.PaintGradient(self.hover, "HORIZONTAL", "arcane", "arcane", 0.18, 0.06)
+        self.hover:Hide()
+        self.border = UI.Border(self, "gilt-faint")
+        self.key = UI.KeyChip(self, "1")
+        self.key:SetPoint("LEFT", S["space-2"], 0)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(13, 13)
+        self.mark = UI.Text(self, "alert", "gilt-text")
+        self.mark:SetFont(T.type.alert.file, 16, "")
+        self.text = UI.Text(self, "body", "ink")
+        self.text:SetWordWrap(false)
+        self.tag = UI.Text(self, "micro", "gilt-text")
+        self:SetScript("OnEnter", function()
+            self:Lit(true)
+            local off = self.off
+            if off then UI.ShowTooltip(self, { title = self.label, description = off }) end
+        end)
+        self:SetScript("OnLeave", function() self:Lit(false); UI.HideTooltip() end)
+        self:SetScript("OnClick", function()
+            local act = self.act
+            if self.off or not act then return end
+            PlaySound(SOUNDKIT.IG_QUEST_LIST_SELECT)
+            act()
+        end)
     end
-    UI.Border(over, "gilt-line")
-    return p
+
+    function Lit(given: unknown)
+        local on = given and not self.off and true or false
+        self.hover:SetShown(on)
+        self.border:SetColor(on and "arcane" or "gilt-faint")
+        self.key.text:SetColor(on and "arcane" or "ink-muted")
+    end
 end
 
-function M:Build()
-    -- the scene: a light vignette over the world, the bar on it
-    local root = CreateFrame("Frame", "SuuUINpcDialogue", SuuUI.Root)
-    root:SetAllPoints(UIParent)
-    root:SetFrameStrata("DIALOG")
-    -- seen while the rest of the UI is faded out
-    root:SetIgnoreParentAlpha(true)
-    root:HookScript("OnHide", function() self:HideUI(false) end)
-    root:Hide()
-    local vig = root:CreateTexture(nil, "BACKGROUND")
-    vig:SetColorTexture(1, 1, 1, 1)
-    vig:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.65), CreateColor(0, 0, 0, 0))
-    vig:SetPoint("BOTTOMLEFT")
-    vig:SetPoint("BOTTOMRIGHT")
-    vig:SetPoint("TOP", root, "CENTER", 0, -40)
-    self.root = root
+-- One card on one line: an item to choose, receive or hand over.
+export class RewardCard extends Button
+    readonly bg: Texture
+    readonly border: Border
+    readonly slot: ItemSlot
+    readonly right: Text
+    readonly name: Text
+    card: Card? = nil
+    on: boolean = false
 
-    local bar = CreateFrame("Frame", nil, root)
-    bar:SetWidth(BAR_W)
-    bar:EnableMouse(true)
-    UI.Fill(bar, "surface", "BACKGROUND"):SetAllPoints()
-    UI.Border(bar, "gilt-faint")
-    local edge = UI.Hairline(bar, "gilt", "both")
-    edge:SetPoint("TOPLEFT", 0, 0)
-    edge:SetPoint("TOPRIGHT", 0, 0)
-    self.bar = bar
-    self:PlaceBar()
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(CARD_H)
+        self.bg = UI.Fill(self, "surface-sunk", "BACKGROUND")
+        self.bg:SetAllPoints()
+        self.border = UI.Border(self, "gilt-faint")
+        self.slot = UI.ItemSlot(self, 28)
+        self.slot:SetPoint("LEFT", S["space-2"] + 1, 0)
+        self.slot:EnableMouse(false)
+        self.right = UI.Text(self, "micro", "arcane")
+        self.right:SetPoint("RIGHT", -S["space-3"], 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.slot, "RIGHT", S["space-3"], 0)
+        self.name:SetPoint("RIGHT", self.right, "LEFT", -S["space-3"], 0)
+        self.name:SetJustifyH("LEFT")
+        self.name:SetWordWrap(false)
+        self:SetScript("OnEnter", function()
+            if not self.on then self.border:SetColor("gilt-line") end
+            local c = self.card
+            if c then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT", S["space-4"], 0)
+                GameTooltip:SetQuestItem(c.kind, c.index)
+                GameTooltip:Show()
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            if not self.on then self.border:SetColor("gilt-faint") end
+            GameTooltip:Hide()
+        end)
+        self:SetScript("OnClick", function()
+            local c = self.card
+            if not c then return end
+            local choose, link = c.choose, c.link
+            if c.kind == "choice" and c.choosable and choose then
+                choose(c.index)
+            elseif link then
+                HandleModifiedItemClick(link)
+            end
+        end)
+    end
 
-    -- the speaker: the plate in the bar's bottom corner, the portrait on it;
-    -- both stay put however tall the bar grows (asked for in game)
-    local plate = CreateFrame("Frame", nil, bar)
-    plate:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", PAD, PAD)
-    plate:SetWidth(PORT_W)
-    local port = self:BuildPortrait(bar)
-    port:SetPoint("BOTTOMLEFT", plate, "TOPLEFT", 0, -1)
-    port:SetFrameLevel(bar:GetFrameLevel() + 5)
-    self.portrait = port
-    plate:SetFrameLevel(port:GetFrameLevel() + 3)
-    UI.Fill(plate, "surface", "BACKGROUND"):SetAllPoints()
-    UI.Border(plate, "gilt-line")
-    plate.edge = UI.Fill(plate, "reaction-friendly", "ARTWORK")
-    plate.edge:SetPoint("TOPLEFT")
-    plate.edge:SetPoint("BOTTOMLEFT")
-    plate.edge:SetWidth(3)
-    plate.name = UI.Text(plate, "alert", "ink")
-    plate.name:SetShadowOffset(0, -1)
-    plate.name:SetPoint("TOPLEFT", S["space-4"] + 3, -S["space-2"])
-    plate.name:SetPoint("RIGHT", -S["space-4"], 0)
-    plate.name:SetJustifyH("LEFT")
-    plate.name:SetWordWrap(false)
-    plate.role = UI.Text(plate, "caption", "gilt-text")
-    plate.role:SetPoint("TOPLEFT", plate.name, "BOTTOMLEFT", 0, -1)
-    self.plate = plate
-
-    UI.CloseButton(bar, function() self:Leave() end):SetPoint("TOPRIGHT", -S["space-4"], -S["space-4"])
-
-    -- what is said and answered
-    local talk = CreateFrame("Frame", nil, bar)
-    talk:SetPoint("TOPLEFT", PAD + PORT_W + GAP, -PAD)
-    talk:SetWidth(BAR_W - PAD - PORT_W - GAP - PAD_R)
-    self.talk = talk
-    -- a quest's head: its title and level
-    local qhead = CreateFrame("Frame", nil, talk)
-    qhead:SetHeight(18)
-    qhead.glyph = qhead:CreateTexture(nil, "ARTWORK")
-    qhead.glyph:SetSize(13, 13)
-    qhead.glyph:SetPoint("LEFT")
-    qhead.glyph:SetTexture(GLYPHS .. "questDots")
-    UI.Paint(qhead.glyph, "gilt-text")
-    qhead.title = UI.Text(qhead, "unit-name-lg", "gilt-text")
-    qhead.title:SetPoint("LEFT", qhead.glyph, "RIGHT", S["space-3"], 0)
-    qhead.level = UI.Text(qhead, "caption", "ink-muted")
-    qhead.level:SetPoint("RIGHT", -28, 0)
-    self.qhead = qhead
-    -- their line: a gilt quote mark, the text (scrolls when long)
-    local speech = CreateFrame("Button", nil, talk)
-    speech:SetScript("OnClick", function() self:RevealAll() end)
-    speech.quote = UI.Text(speech, "alert", "gilt")
-    speech.quote:SetAlpha(0.8)
-    speech.quote:SetPoint("TOPLEFT", 0, 4)
-    speech.scroll = UI.ScrollArea(speech, S["space-3"])
-    speech.scroll:SetPoint("TOPLEFT", 22, 0)
-    speech.scroll:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
-    speech.text = UI.Text(speech.scroll.child, "body", "ink")
-    speech.text:SetJustifyH("LEFT")
-    speech.text:SetWordWrap(true)
-    speech.text:SetPoint("TOPLEFT")
-    -- more below: the last line fades into the bar
-    speech.fade = speech:CreateTexture(nil, "OVERLAY")
-    speech.fade:SetColorTexture(1, 1, 1, 1)
-    UI.PaintGradient(speech.fade, "VERTICAL", "surface", "surface", 1, 0)
-    speech.fade:SetPoint("BOTTOMLEFT", speech.scroll, "BOTTOMLEFT")
-    speech.fade:SetPoint("BOTTOMRIGHT", speech.scroll, "BOTTOMRIGHT")
-    speech.fade:SetHeight(24)
-    speech.scroll:HookScript("OnVerticalScroll", function() self:DrawFade() end)
-    -- the hint, in the bar's foot at the right
-    speech.skip = UI.Text(bar, "caption", "ink-faint")
-    speech.skip:SetPoint("BOTTOMRIGHT", -PAD_R, PAD)
-    speech.skip:SetValue("Space  show it all")
-    self.speech = speech
-    -- what they ask (a quest's objectives), on one line where it fits
-    local ask = CreateFrame("Frame", nil, talk)
-    UI.Fill(ask, "surface-sunk", "BACKGROUND"):SetAllPoints()
-    local askEdge = UI.Fill(ask, "gilt-line", "ARTWORK")
-    askEdge:SetPoint("TOPLEFT")
-    askEdge:SetPoint("BOTTOMLEFT")
-    askEdge:SetWidth(2)
-    ask.head = UI.Text(ask, "header", "gilt-text")
-    ask.head:SetPoint("TOPLEFT", S["space-4"], -S["space-3"] - 1)
-    ask.head:SetValue("What they ask")
-    ask.text = UI.Text(ask, "body", "ink")
-    ask.text:SetPoint("TOPLEFT", ask.head, "TOPRIGHT", S["space-4"], 1)
-    ask.text:SetJustifyH("LEFT")
-    ask.text:SetWordWrap(true)
-    self.ask = ask
-    -- the cards and what comes with them (money, experience)
-    local cards = CreateFrame("Frame", nil, talk)
-    cards.caption = UI.Text(cards, "caption", "ink-muted")
-    cards.caption:SetPoint("TOPLEFT")
-    cards.list = {}
-    cards.money = UI.Money(cards)
-    cards.xp = UI.Text(cards, "caption", "ink-muted")
-    self.cards = cards
-    -- the answers
-    self.pills = {}
-
-    -- keys: 1-9, Space, Enter; everything else goes on to the game
-    bar:EnableKeyboard(true)
-    if not InCombatLockdown() then bar:SetPropagateKeyboardInput(true) end
-    bar:SetScript("OnKeyDown", function(f, key)
-        if InCombatLockdown() then return end
-        local handled = self:Key(key)
-        f:SetPropagateKeyboardInput(not handled)
-    end)
-    -- typing the line in
-    bar:SetScript("OnUpdate", function(_, elapsed) self:Type(elapsed) end)
-    self:SetFaces()
+    function SetOn(on: boolean)
+        self.on = on
+        self.border:SetColor(on and "arcane" or "gilt-faint")
+        UI.PaintFill(self.bg, on and "arcane-soft" or "surface-sunk")
+    end
 end
 
--- The texts set in a style's face at their own size (again after a theme
--- changed the faces), and the speech's line measured in its face.
-function M:SetFaces()
-    self.plate.name:SetFont(T.type.alert.file, 17, "")
-    self.qhead.title:SetFont(T.type["unit-name-lg"].file, 15, "")
-    self.ask.head:SetFont(T.type.header.file, 12, "")
-    for _, b in ipairs(self.pills) do b.mark:SetFont(T.type.alert.file, 16, "") end
-    local speech = self.speech
-    speech.quote:SetFont(T.type.alert.file, 32, "")
-    speech.text:SetFont(T.type.body.file, TEXT_SIZE, "")
-    speech.text:SetSpacing(TEXT_SPACING)
-    -- whole lines only: the area is a number of lines high
-    local was = speech.text:GetText()
-    speech.text:SetText("A")
-    local one = speech.text:GetStringHeight()
-    speech.text:SetText("A\nA")
-    speech.lineH, speech.maxH = one, one + (SPEECH_LINES - 1) * (speech.text:GetStringHeight() - one)
-    speech.text:SetText(was or "")
+-- The speaker's live portrait: a PlayerModel in a lit frame with a vignette.
+export class Portrait extends Frame
+    readonly model: PlayerModel
+    -- whether the model has the talk animation
+    canTalk: boolean = false
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(PORT_W, PORT_H)
+        self:SetClipsChildren(true)
+        local base = self:CreateTexture(nil, "BACKGROUND", nil, -8)
+        base:SetAllPoints()
+        base:SetColorTexture(1, 1, 1, 1)
+        base:SetGradient("VERTICAL", CreateColor(0.047, 0.039, 0.031, 1), CreateColor(0.129, 0.110, 0.090, 1))
+        local light = self:CreateTexture(nil, "BACKGROUND", nil, -7)
+        light:SetTexture(SOFT)
+        light:SetBlendMode("ADD")
+        light:SetPoint("TOPLEFT", -20, PORT_H * 0.35)
+        light:SetPoint("BOTTOMRIGHT", 20, PORT_H * 0.35 - PORT_H)
+        UI.Bind(light, lightTint)
+        self.model = CreateFrame("PlayerModel", nil, self)
+        self.model:SetPoint("TOPLEFT", 1, -1)
+        self.model:SetPoint("BOTTOMRIGHT", -1, 1)
+        -- the vignette over the model: the bottom and the sides darker
+        local over = CreateFrame("Frame", nil, self)
+        over:SetAllPoints()
+        over:SetFrameLevel(self.model:GetFrameLevel() + 2)
+        local bottom = over:CreateTexture(nil, "ARTWORK")
+        bottom:SetColorTexture(1, 1, 1, 1)
+        bottom:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.7), CreateColor(0, 0, 0, 0))
+        bottom:SetPoint("BOTTOMLEFT")
+        bottom:SetPoint("BOTTOMRIGHT")
+        bottom:SetHeight(PORT_H * 0.4)
+        for _, side in ipairs({ "LEFT", "RIGHT" }) do
+            local t = over:CreateTexture(nil, "ARTWORK")
+            t:SetColorTexture(1, 1, 1, 1)
+            t:SetGradient("HORIZONTAL", CreateColor(0, 0, 0, side == "LEFT" and 0.35 or 0), CreateColor(0, 0, 0, side == "LEFT" and 0 or 0.35))
+            t:SetPoint(("TOP" .. side) :: FramePoint)
+            t:SetPoint(("BOTTOM" .. side) :: FramePoint)
+            t:SetWidth(PORT_W * 0.25)
+        end
+        UI.Border(over, "gilt-line")
+    end
 end
+
+-- The speaker's name plate: friend or foe on its edge, the name, the role.
+class Plate extends Frame
+    readonly edge: Texture
+    readonly name: Text
+    readonly role: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.edge = UI.Fill(self, "reaction-friendly", "ARTWORK")
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.edge:SetWidth(3)
+        self.name = UI.Text(self, "alert", "ink")
+        self.name:SetShadowOffset(0, -1)
+        self.name:SetPoint("TOPLEFT", S["space-4"] + 3, -S["space-2"])
+        self.name:SetPoint("RIGHT", -S["space-4"], 0)
+        self.name:SetJustifyH("LEFT")
+        self.name:SetWordWrap(false)
+        self.role = UI.Text(self, "caption", "gilt-text")
+        self.role:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -1)
+    end
+end
+
+-- A quest's head: its title and level.
+class QuestHead extends Frame
+    readonly glyph: Texture
+    readonly title: Text
+    readonly level: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(18)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(13, 13)
+        self.glyph:SetPoint("LEFT")
+        self.glyph:SetTexture(GLYPHS .. "questDots")
+        UI.Paint(self.glyph, "gilt-text")
+        self.title = UI.Text(self, "unit-name-lg", "gilt-text")
+        self.title:SetPoint("LEFT", self.glyph, "RIGHT", S["space-3"], 0)
+        self.level = UI.Text(self, "caption", "ink-muted")
+        self.level:SetPoint("RIGHT", -28, 0)
+    end
+end
+
+-- Their line: a gilt quote mark, the text (scrolls when long; the last line
+-- fades into the bar while more is below), and the hint in the bar's foot.
+class Speech extends Button
+    readonly quote: Text
+    readonly scroll: ScrollArea
+    readonly text: Text
+    readonly fade: Texture
+    readonly skip: Text
+    -- one line's height, the most it shows
+    lineH: number = 0
+    maxH: number = 0
+
+    constructor(parent: Frame, bar: Frame)
+        super(nil, parent)
+        self.quote = UI.Text(self, "alert", "gilt")
+        self.quote:SetAlpha(0.8)
+        self.quote:SetPoint("TOPLEFT", 0, 4)
+        self.scroll = UI.ScrollArea(self, S["space-3"])
+        self.scroll:SetPoint("TOPLEFT", 22, 0)
+        self.scroll:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+        self.text = UI.Text(self.scroll.child, "body", "ink")
+        self.text:SetJustifyH("LEFT")
+        self.text:SetWordWrap(true)
+        self.text:SetPoint("TOPLEFT")
+        self.fade = self:CreateTexture(nil, "OVERLAY")
+        self.fade:SetColorTexture(1, 1, 1, 1)
+        UI.PaintGradient(self.fade, "VERTICAL", "surface", "surface", 1, 0)
+        self.fade:SetPoint("BOTTOMLEFT", self.scroll, "BOTTOMLEFT")
+        self.fade:SetPoint("BOTTOMRIGHT", self.scroll, "BOTTOMRIGHT")
+        self.fade:SetHeight(24)
+        self.skip = UI.Text(bar, "caption", "ink-faint")
+        self.skip:SetPoint("BOTTOMRIGHT", -PAD_R, PAD)
+        self.skip:SetValue("Space  show it all")
+    end
+end
+
+-- What they ask (a quest's objectives), on one line where it fits.
+class AskBox extends Frame
+    readonly head: Text
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        UI.Fill(self, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        local edge = UI.Fill(self, "gilt-line", "ARTWORK")
+        edge:SetPoint("TOPLEFT")
+        edge:SetPoint("BOTTOMLEFT")
+        edge:SetWidth(2)
+        self.head = UI.Text(self, "header", "gilt-text")
+        self.head:SetPoint("TOPLEFT", S["space-4"], -S["space-3"] - 1)
+        self.head:SetValue("What they ask")
+        self.text = UI.Text(self, "body", "ink")
+        self.text:SetPoint("TOPLEFT", self.head, "TOPRIGHT", S["space-4"], 1)
+        self.text:SetJustifyH("LEFT")
+        self.text:SetWordWrap(true)
+    end
+end
+
+-- The cards and what comes with them (money, experience).
+class CardList extends Frame
+    readonly caption: Text
+    readonly list: RewardCard[] = {}
+    readonly money: Money
+    readonly xp: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.caption = UI.Text(self, "caption", "ink-muted")
+        self.caption:SetPoint("TOPLEFT")
+        self.money = UI.Money(self)
+        self.xp = UI.Text(self, "caption", "ink-muted")
+    end
+end
+
+-- The scene: the bar and its parts (built once).
+export type Scene = {
+    root: Frame, bar: Frame, plate: Plate, portrait: Portrait, talk: Frame, qhead: QuestHead, speech: Speech,
+    ask: AskBox, cards: CardList,
+}
 
 --------------------------------------------------------------------------------
 -- What is shown
 --------------------------------------------------------------------------------
 
--- The speaker: portrait, name, role, friend or foe.
-function M:DrawSpeaker()
-    local unit = UnitExists("npc") and "npc" or nil
-    local name = unit and UnitName(unit)
-    self.plate.name:SetValue(secret.readable(name) and name or "")
-    -- the role: the tooltip's line under the name (Weapons Merchant), unless
-    -- it's the level line
-    local role
-    local info = unit and C_TooltipInfo and C_TooltipInfo.GetUnit and call(C_TooltipInfo.GetUnit, unit)
-    local line = info and info.lines and info.lines[2]
-    local text = line and line.leftText
-    if secret.readable(text) and text ~= "" and not text:find("^" .. (LEVEL or "Level")) then role = text end
-    self.plate.role:SetValue(role or "")
-    self.plate:SetHeight(S["space-2"] * 2 + 20 + (role and (T.type.caption.lineHeight + 1) or 0))
-    local hostile = unit and UnitCanAttack("player", unit)
-    UI.PaintFill(self.plate.edge, hostile and "reaction-hostile" or "reaction-friendly")
-    local m = self.portrait.model
-    -- a new speaker only: setting the unit again restarts the model
-    local guid = unit and UnitGUID(unit)
-    if unit and (not secret.readable(guid) or (guid :: any) ~= self.speakerGUID) then
-        self.speakerGUID = secret.readable(guid) and guid or nil
-        self.talking = nil
-        m:ClearModel()
-        m:SetUnit(unit)
-        m:SetPortraitZoom(ZOOM)
-    end
-    m:SetShown(unit ~= nil)
-    m.canTalk = call(m.HasAnimation, m, ANIM_TALK) ~= false
-end
-
--- The answers as pills, wrapping: { label, glyph | mark = { "!", token },
--- tag = { text, token }, act, off = why, leave, key }.
-function M:DrawPills(list: Answer[], y: number, width: number): number
-    local x, rowGap = 0, S["space-3"]
-    for i, a in ipairs(list) do
-        local b = self.pills[i] or self:BuildPill(self.talk)
-        self.pills[i] = b
-        local key = a.key or (i <= 9 and tostring(i) or "")
-        b.key:SetKey(key)
-        b.key:SetHeight(18)
-        b.key:SetShown(key ~= "")
-        local left = S["space-2"] + (key ~= "" and (b.key:GetWidth() + S["space-3"]) or 0)
-        b.glyph:ClearAllPoints()
-        b.mark:ClearAllPoints()
-        if a.mark then
-            b.glyph:Hide()
-            b.mark:Show()
-            b.mark:SetPoint("CENTER", b, "LEFT", left + 8, 0)
-            b.mark:SetValue(a.mark[1])
-            b.mark:SetColor(a.mark[2])
-        else
-            b.mark:Hide()
-            b.glyph:Show()
-            b.glyph:SetPoint("CENTER", b, "LEFT", left + 8, 0)
-            if type(a.glyph) == "number" then
-                b.glyph:SetTexture(a.glyph)
-                b.glyph:SetVertexColor(1, 1, 1)
-            else
-                b.glyph:SetTexture(GLYPHS .. (a.glyph or "chat"))
-                UI.Paint(b.glyph, (a.leave or a.off) and "ink-muted" or "gilt-text")
-            end
-        end
-        left = left + 16 + S["space-3"]
-        b.text:ClearAllPoints()
-        b.text:SetPoint("LEFT", left, 0)
-        b.text:SetValue(a.label or "")
-        b.text:SetColor((a.off and "ink-faint") or (a.leave and "ink-muted") or "ink")
-        local tw = math.min(UI.MeasureText("body", a.label or ""), width - left - S["space-5"] - 80)
-        b.text:SetWidth(tw)
-        local w = left + tw
-        b.tag:ClearAllPoints()
-        if a.tag then
-            b.tag:SetPoint("LEFT", b.text, "RIGHT", S["space-3"], 0)
-            b.tag:SetValue(a.tag[1])
-            b.tag:SetColor(a.tag[2])
-            b.tag:Show()
-            w = w + S["space-3"] + UI.MeasureText("micro", a.tag[1])
-        else
-            b.tag:Hide()
-        end
-        w = math.ceil(w + S["space-5"])
-        if x > 0 and x + w > width then
-            x, y = 0, y + PILL_H + rowGap
-        end
-        b:ClearAllPoints()
-        b:SetPoint("TOPLEFT", x, -y)
-        b:SetWidth(w)
-        b.label, b.off, b.act = a.label, a.off, a.act
-        b:SetAlpha(a.off and 0.7 or 1)
-        b:Lit(b:IsMouseOver())
-        b:Show()
-        x = x + w + rowGap
-    end
-    for i = #list + 1, #self.pills do self.pills[i]:Hide() end
-    self.answerList = list
-    return #list > 0 and (y + PILL_H) or y
-end
-
--- The cards, a line each: items to choose or receive, or to hand over;
--- money and experience in the same row after them.
-function M:DrawCards(y: number, width: number, items: Card[], caption: string?, gains: { [string]: any }?, need: boolean?): number
-    local cards = self.cards
-    cards:ClearAllPoints()
-    cards:SetPoint("TOPLEFT", 0, -y)
-    cards:SetWidth(width)
-    cards.caption:SetValue(caption or "")
-    local top = (caption and caption ~= "") and (T.type.caption.lineHeight + S["space-2"]) or 0
-    local cw = need and NEED_W or CARD_W
-    local x, row = 0, 0
-    for i, it in ipairs(items) do
-        local c = cards.list[i] or self:BuildCard(cards)
-        cards.list[i] = c
-        if x > 0 and x + cw > width then x, row = 0, row + 1 end
-        c:ClearAllPoints()
-        c:SetPoint("TOPLEFT", x, -(top + row * (CARD_H + S["space-3"])))
-        c:SetWidth(cw)
-        c.slot.skin:SetItem({ icon = it.icon, count = it.count, quality = QUALITY[it.quality] })
-        c.name:SetValue(it.name or "…")
-        local q = QUALITY[it.quality]
-        c.name:SetColor(q and ("quality-" .. q) or "ink")
-        c.right:SetValue(it.right or (it.upgrade and "▲ Upgrade") or "")
-        c.right:SetColor(it.rightColor or "arcane")
-        c.kind, c.index, c.link = it.kind, it.index, it.link
-        c.choosable, c.choose = it.choosable, it.choose
-        c:SetOn(it.on)
-        c:Show()
-        x = x + cw + S["space-3"]
-    end
-    for i = #items + 1, #cards.list do cards.list[i]:Hide() end
-    -- money and experience: after the cards on their row, or alone
-    local gx = #items > 0 and (x + S["space-3"]) or 0
-    if #items > 0 and gx + 160 > width then gx, row = 0, row + 1 end
-    local gyMid = top + row * (CARD_H + S["space-3"]) + (#items > 0 and CARD_H / 2 or 9)
-    cards.money:ClearAllPoints()
-    cards.xp:ClearAllPoints()
-    local any = false
-    if gains and gains.money and gains.money > 0 then
-        cards.money:SetPoint("LEFT", cards, "TOPLEFT", gx, -gyMid)
-        cards.money:SetCopper(gains.money)
-        cards.money:Show()
-        gx = gx + 90
-        any = true
-    else
-        cards.money:Hide()
-    end
-    if gains and gains.xp and gains.xp > 0 then
-        cards.xp:SetPoint("LEFT", cards, "TOPLEFT", gx, -gyMid)
-        cards.xp:SetValue(BreakUpLargeNumbers(gains.xp) .. " XP")
-        cards.xp:Show()
-        any = true
-    else
-        cards.xp:Hide()
-    end
-    local h
-    if #items > 0 then h = top + (row + 1) * CARD_H + row * S["space-3"]
-    elseif any then h = top + 18
-    else h = 0 end
-    cards:SetHeight(math.max(1, h))
-    cards:SetShown(h > 0)
-    return h
-end
-
 -- A reward or required item from the quest frame's lists.
 local function questItem(kind: string, i: number): Card
-    local name, icon, count, quality, _, itemID = GetQuestItemInfo(kind, i)
-    local link = GetQuestItemLink(kind, i)
-    return { kind = kind, index = i, name = secret.readable(name) and name or nil, icon = icon, count = (count or 0) > 1 and count or nil,
-        quality = quality, itemID = itemID, link = secret.readable(link) and link or nil }
-end
-
--- The rewards: what to choose from, what comes anyway, money and experience.
-function M:Rewards(choosing: boolean): (Card[], string?, { [string]: any })
-    local items: Card[] = {}
-    local choices = GetNumQuestChoices() or 0
-    for i = 1, choices do
-        local it = questItem("choice", i)
-        it.upgrade = upgrade(it.link)
-        if choosing and choices > 1 then
-            it.choosable = true
-            it.on = self.chosen == i
-            it.choose = function(n: number) self.chosen = n; self:Draw() end
-        end
-        items[#items + 1] = it
-    end
-    for i = 1, GetNumQuestRewards() or 0 do
-        items[#items + 1] = questItem("reward", i)
-    end
-    local caption
-    if choices > 1 then caption = choosing and "Choose your reward" or "You may choose one" end
-    return items, caption, { money = GetRewardMoney and GetRewardMoney() or 0, xp = GetRewardXP and GetRewardXP() or 0 }
-end
-
--- What the conversation is now: gossip, greeting, detail, progress or reward.
-function M:View()
-    if self.questView and QuestFrame and QuestFrame:IsShown() then return self.questView end
-    if GossipFrame and GossipFrame:IsShown() then return "gossip" end
-    return nil
+    local name, icon, count, quality, _, itemID = try(GetQuestItemInfo, kind, i)
+    local n = asNumber(count) or 0
+    return { kind = kind, index = i, name = asString(name), icon = asNumber(icon) or asString(icon), count = n > 1 and n or nil,
+        quality = asNumber(quality), itemID = asNumber(itemID), link = asString(try(GetQuestItemLink, kind, i)) }
 end
 
 -- What a view says: their line, your answers, a quest's head, what they
@@ -627,324 +465,11 @@ export type Content = {
     ask?: string,
     items?: Card[],
     caption?: string,
-    gains?: { [string]: any },
+    gains?: Gains,
     need?: boolean,      -- the cards are items to hand over
     title?: string,      -- a quest's title
-    level?: any,         -- and its level
+    level?: number,      -- and its level
 }
-
-function M:Content(view: string): Content
-    local text, answers: Answer[], ask: string? = "", {}, nil
-    local items, caption, gains, need
-    local qtitle, qlevel
-    if view == "gossip" then
-        text = call(C_GossipInfo.GetText) or ""
-        local options = call(C_GossipInfo.GetOptions) or {}
-        if GossipOptionSort then table.sort(options, GossipOptionSort) end
-        for _, o in ipairs(options) do
-            local icon = o.overrideIconID or o.icon
-            answers[#answers + 1] = { label = o.name, glyph = OPTION_GLYPH[icon] or icon or "chat",
-                act = function() C_GossipInfo.SelectOptionByIndex(o.orderIndex) end }
-        end
-        for _, q in ipairs(call(C_GossipInfo.GetActiveQuests) or {}) do
-            answers[#answers + 1] = { label = q.title, mark = { "?", q.isComplete and "gilt-text" or "ink-faint" },
-                tag = q.isComplete and { "Ready", "gilt-text" } or nil,
-                act = function() C_GossipInfo.SelectActiveQuest(q.questID) end }
-        end
-        for _, q in ipairs(call(C_GossipInfo.GetAvailableQuests) or {}) do
-            local daily = q.frequency and q.frequency > 0
-            answers[#answers + 1] = { label = q.title, mark = { "!", (daily or q.repeatable) and "arcane" or (q.isTrivial and "ink-faint") or "gilt-text" },
-                tag = daily and { "Daily", "arcane" } or q.repeatable and { "Repeatable", "arcane" } or nil,
-                act = function() C_GossipInfo.SelectAvailableQuest(q.questID) end }
-        end
-        answers[#answers + 1] = { key = "Esc", label = "Goodbye", glyph = "door", leave = true, act = function() self:Leave() end }
-    elseif view == "greeting" then
-        text = GetGreetingText() or ""
-        for i = 1, GetNumActiveQuests() or 0 do
-            local title, done = GetActiveTitle(i)
-            answers[#answers + 1] = { label = title, mark = { "?", done and "gilt-text" or "ink-faint" },
-                tag = done and { "Ready", "gilt-text" } or nil, act = function() (SelectActiveQuest :: any)(i) end }
-        end
-        for i = 1, GetNumAvailableQuests() or 0 do
-            local trivial, frequency, repeatable = GetAvailableQuestInfo(i)
-            local daily = frequency and frequency > 0
-            answers[#answers + 1] = { label = GetAvailableTitle(i), mark = { "!", (daily or repeatable) and "arcane" or (trivial and "ink-faint") or "gilt-text" },
-                tag = daily and { "Daily", "arcane" } or repeatable and { "Repeatable", "arcane" } or nil,
-                act = function() (SelectAvailableQuest :: any)(i) end }
-        end
-        answers[#answers + 1] = { key = "Esc", label = "Goodbye", glyph = "door", leave = true, act = function() self:Leave() end }
-    elseif view == "detail" then
-        qtitle = GetTitleText()
-        local id = GetQuestID and GetQuestID()
-        qlevel = id and C_QuestLog and C_QuestLog.GetQuestDifficultyLevel and call(C_QuestLog.GetQuestDifficultyLevel, id)
-        text = GetQuestText() or ""
-        ask = GetObjectiveText()
-        items, caption, gains = self:Rewards(false)
-        answers = {
-            { label = "Accept", glyph = "check", act = function() QuestFrameAcceptButton:Click() end },
-            { label = "Decline", glyph = "close", leave = true, act = function() QuestFrameDeclineButton:Click() end },
-        }
-    elseif view == "progress" then
-        qtitle = GetTitleText()
-        text = GetProgressText() or ""
-        items, need = {}, true
-        local short
-        for i = 1, GetNumQuestItems() or 0 do
-            local it = questItem("required", i)
-            local want = select(3, GetQuestItemInfo("required", i)) or 0
-            local have = it.itemID and C_Item.GetItemCount(it.itemID) or 0
-            it.count = nil
-            it.right = have .. " / " .. want
-            it.rightColor = have < want and "ember-text" or "gilt-text"
-            if have < want and not short then short = ("You need %d more %s"):format(want - have, it.name or "") end
-            items[#items + 1] = it
-        end
-        local money = GetQuestMoneyToGet and GetQuestMoneyToGet() or 0
-        if money > 0 and GetMoney() < money and not short then short = "You don't have enough money" end
-        local why = not IsQuestCompletable() and (short or "Not done yet") or nil
-        answers = {
-            { label = #items > 0 and "Hand them over" or "Continue", glyph = "check", off = why, act = function() QuestFrameCompleteButton:Click() end },
-            { label = "I'll be back", glyph = "chat", leave = true, act = function() QuestFrameGoodbyeButton:Click() end },
-        }
-        gains = { money = money }
-    elseif view == "reward" then
-        qtitle = GetTitleText()
-        text = GetRewardText() or ""
-        if (GetNumQuestChoices() or 0) == 1 then self.chosen = 1 end
-        items, caption, gains = self:Rewards(true)
-        local choose = (GetNumQuestChoices() or 0) > 1 and not self.chosen
-        answers = {
-            { label = "Complete quest", glyph = "check", off = choose and "Choose a reward first" or nil, act = function()
-                if QuestInfoFrame then QuestInfoFrame.itemChoice = self.chosen or 0 end
-                QuestFrameCompleteQuestButton:Click()
-            end },
-        }
-    end
-
-    return { text = text, answers = answers, ask = ask, items = items, caption = caption, gains = gains, need = need,
-             title = qtitle, level = qlevel }
-end
-
-function M:Draw()
-    local view = self:View()
-    if not view then self.root:Hide() return end
-    if not self.root:IsShown() then self:PlaceBar() end
-    self.root:Show()
-    self:HideUI(true)
-    self:DrawSpeaker()
-    local width = self.talk:GetWidth()
-    local c = self:Content(view)
-    local text, answers, ask = c.text, c.answers, c.ask
-    local items, caption, gains, need = c.items, c.caption, c.gains, c.need
-    local qtitle, qlevel = c.title, c.level
-
-    -- lay it out, top to bottom
-    local y = 0
-    local gap = S["space-4"]
-    local qhead = self.qhead
-    qhead:SetShown(qtitle ~= nil)
-    if qtitle then
-        qhead:ClearAllPoints()
-        qhead:SetPoint("TOPLEFT", 0, 0)
-        qhead:SetWidth(width)
-        qhead.title:SetValue(qtitle)
-        qhead.level:SetValue((secret.readable(qlevel) and qlevel > 0) and ("Level " .. qlevel) or "")
-        y = y + qhead:GetHeight() + gap
-    end
-    -- the line
-    local sp = self.speech
-    sp:ClearAllPoints()
-    sp:SetPoint("TOPLEFT", 0, -y)
-    sp:SetWidth(width)
-    sp.text:SetWidth(width - 22 - S["space-3"] - 3)
-    sp.quote:SetValue("“")
-    if text ~= self.fullText then
-        self.fullText = text
-        self.ends = charEnds(text)
-        self.shown = (SuuUI.Motion.Reduced() or text == "") and #self.ends or 0
-        self.typed = 0
-        sp.scroll:SetVerticalScroll(0)
-    end
-    sp.text:SetValue(text)
-    local th = sp.text:GetStringHeight()
-    sp.scroll.child:SetHeight(th)
-    local sh = math.max(sp.lineH, math.min(th, sp.maxH))
-    sp:SetHeight(sh)
-    self:ShowTyped()
-    self:DrawFade()
-    y = y + sh + gap
-    -- what they ask
-    local a = self.ask
-    a:SetShown(ask ~= nil and ask ~= "")
-    if a:IsShown() then
-        a:ClearAllPoints()
-        a:SetPoint("TOPLEFT", 0, -y)
-        a:SetWidth(width)
-        local textW = width - S["space-4"] * 2 - UI.MeasureText("header", "What they ask") - S["space-4"]
-        a.text:SetWidth(textW)
-        a.text:SetValue(ask)
-        local h = S["space-3"] * 2 + math.max(T.type.body.lineHeight, a.text:GetStringHeight())
-        a:SetHeight(h)
-        y = y + h + gap
-    end
-    -- the cards
-    local ch = self:DrawCards(y, width, items or {}, caption, gains, need)
-    if ch > 0 then y = y + ch + gap end
-    -- the answers
-    y = self:DrawPills(answers, y, width)
-    self.talk:SetHeight(math.max(1, y))
-
-    -- the bar: as tall as what is said, or the plate
-    self.bar:SetHeight(math.max(self.plate:GetHeight(), y) + 2 * PAD)
-end
-
---------------------------------------------------------------------------------
--- The line, typing in
---------------------------------------------------------------------------------
-
--- The fade at the line's foot while more of it is below.
-function M:DrawFade()
-    local sp = self.speech
-    local more = sp.scroll.child:GetHeight() - sp:GetHeight() - sp.scroll:GetVerticalScroll()
-    sp.fade:SetShown(more > 2)
-end
-
-function M:ShowTyped()
-    local ends, n = self.ends or {}, self.shown or 0
-    local sp = self.speech
-    local full = n >= #ends
-    if full then
-        sp.text:SetText(self.fullText or "")
-    else
-        sp.text:SetText((self.fullText or ""):sub(1, ends[n] or 0))
-    end
-    sp.skip:SetShown(not full)
-    local m = self.portrait.model
-    local talking = not full
-    if m.canTalk and talking ~= self.talking then
-        self.talking = talking
-        m:SetAnimation(talking and ANIM_TALK or ANIM_IDLE)
-    end
-end
-
-function M:Type(elapsed: number)
-    local ends = self.ends
-    if not ends or (self.shown or 0) >= #ends then return end
-    self.typed = (self.typed or 0) + elapsed * CPS
-    local n = math.min(#ends, math.floor(self.typed))
-    if n ~= self.shown then
-        self.shown = n
-        self:ShowTyped()
-    end
-end
-
-function M:RevealAll()
-    if not self.ends then return false end
-    if (self.shown or 0) >= #self.ends then return false end
-    self.shown = #self.ends
-    self:ShowTyped()
-    return true
-end
-
---------------------------------------------------------------------------------
--- Keys and leaving
---------------------------------------------------------------------------------
-
-function M:Key(key: string): boolean
-    -- with a modifier held a key is the game's (shift-1, a screenshot's
-    -- Cmd+Shift arrive as the bare key)
-    if IsModifierKeyDown() then return false end
-    local list = self.answerList or {}
-    if key == "SPACE" then return self:RevealAll() end
-    local n = tonumber(key)
-    if n and n >= 1 and n <= 9 then
-        local a = list[n]
-        if a and a.key ~= "Esc" then
-            if not a.off and a.act then PlaySound(SOUNDKIT.IG_QUEST_LIST_SELECT); a.act() end
-            return true
-        end
-        return false
-    end
-    if key == "ENTER" then
-        local view = self:View()
-        if view == "detail" or view == "progress" or view == "reward" then
-            local a = list[1]
-            if a and not a.off and a.act then a.act() end
-            return true
-        end
-    end
-    return false
-end
-
--- Goodbye: the game's frames close, and the conversation with them.
-function M:Leave()
-    if QuestFrame and QuestFrame:IsShown() then HideUIPanel(QuestFrame) end
-    if GossipFrame and GossipFrame:IsShown() then HideUIPanel(GossipFrame) end
-    self.root:Hide()
-end
-
---------------------------------------------------------------------------------
--- With the game's frames
---------------------------------------------------------------------------------
-
-function M:PutAway(frame: any)
-    if not self:IsEnabled() then return end
-    self.placing = true
-    frame:SetAlpha(0)
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-    self.placing = false
-end
-
--- A game frame out of sight whenever it shows or is placed.
-function M:Away(frame: any)
-    hook(frame, "SetPoint", function() if not self.placing then after(0, function() self:PutAway(frame) end) end end)
-    hook(frame, "SetAlpha", function(_, a: number) if not self.placing and a ~= 0 then after(0, function() self:PutAway(frame) end) end end)
-    hookScript(frame, "OnShow", function()
-        if not self:IsEnabled() then return end
-        self:PutAway(frame)
-        after(0, function() self:PutAway(frame) end)
-    end)
-    hookScript(frame, "OnHide", function()
-        -- the conversation over: the next one starts fresh
-        if not ((GossipFrame and GossipFrame:IsShown()) or (QuestFrame and QuestFrame:IsShown())) then
-            self.speakerGUID, self.questView = nil, nil
-        end
-        self:QueueDraw()
-    end)
-end
-
-function M:QueueDraw()
-    if self.queued then return end
-    self.queued = true
-    after(0, function()
-        self.queued = nil
-        if self:IsEnabled() then self:Draw() end
-    end)
-end
-
-function M:Hook()
-    if self.hooked then return end
-    self.hooked = true
-    local g, q = _G.GossipFrame, _G.QuestFrame
-    if g then
-        self:Away(g)
-        if g.Update then hook(g, "Update", function() self:QueueDraw() end) end
-        hookScript(g, "OnShow", function() self:QueueDraw() end)
-    end
-    if q then
-        self:Away(q)
-        local panels = { greeting = _G.QuestFrameGreetingPanel, detail = _G.QuestFrameDetailPanel,
-                         progress = _G.QuestFrameProgressPanel, reward = _G.QuestFrameRewardPanel }
-        for view, panel in pairs(panels) do
-            if panel then hookScript(panel, "OnShow", function()
-                self.questView = view
-                if view == "reward" then self.chosen = nil end
-                self:QueueDraw()
-            end) end
-        end
-    end
-end
 
 local SECTION = {
     id = "npcdialogue", label = "NPC dialogue", category = "General", order = 23,
@@ -956,41 +481,6 @@ local SECTION = {
     },
 }
 
-function M:OnEnable()
-    if not self.root then self:Build() end
-    self:Hook()
-    self:RegisterSettings(SECTION)
-    self:Watch("hideUI", function(on)
-        self:PlaceBar()
-        self:HideUI(on and self.root:IsShown())
-    end)
-    -- a theme change: the faces, and an open conversation drawn again (line heights)
-    self:On("SUUUI_THEME_CHANGED", function()
-        self:SetFaces()
-        if self.root:IsShown() then self:QueueDraw() end
-    end)
-    for _, e in ipairs({ "QUEST_ITEM_UPDATE", "QUEST_LOG_UPDATE", "GET_ITEM_INFO_RECEIVED", "BAG_UPDATE_DELAYED" }) do
-        self:OnGameEvent(e, function() if self.root:IsShown() then self:QueueDraw() end end)
-    end
-    -- in combat the keys stay the game's (a frame's key handling can't change then)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-        if self.bar then self.bar:EnableKeyboard(false) end
-        -- a fight: the UI back at once
-        self:HideUI(false)
-    end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        if self.bar then
-            self.bar:EnableKeyboard(true)
-            self.bar:SetPropagateKeyboardInput(true)
-        end
-    end)
-end
-
-function M:OnDisable()
-    if self.root then self.root:Hide() end
-    self:HideUI(false)
-end
-
 --------------------------------------------------------------------------------
 -- The rest of the UI, faded out while you talk
 --------------------------------------------------------------------------------
@@ -1000,25 +490,683 @@ end
 local KEEP = { "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1", "ShoppingTooltip2",
                "StaticPopup1", "StaticPopup2", "StaticPopup3", "StaticPopup4" }
 
--- Where the bar sits: a fifth up the screen while the rest of the UI is
--- faded out (closer to the NPC: asked for in game), else over the action bars.
-function M:PlaceBar()
-    local bar = self.bar
-    if not bar then return end
-    local high = self:Get("hideUI")
-    bar:ClearAllPoints()
-    bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, high and math.floor(UIParent:GetHeight() * HIGH_SHARE) or LOW_Y)
-end
+class NpcDialogueModule extends Module<typeof(DEFAULTS)>
+    answerList: Answer[] = {}
+    chosen: number? = nil
+    ends: number[]? = nil
+    fullText: string? = nil
+    hooked: boolean? = nil
+    readonly pills: AnswerPill[] = {}
+    questView: string? = nil
+    queued: boolean? = nil
+    scene: Scene? = nil
+    shown: number = 0
+    speakerGUID: string? = nil
+    talking: boolean? = nil
+    typed: number = 0
+    uiAlpha: number? = nil
+    uiHidden: boolean = false
 
-function M:HideUI(on: any)
-    on = on and self:IsEnabled() and self:Get("hideUI") and not InCombatLockdown() or false
-    if on == (self.uiHidden or false) then return end
-    self.uiHidden = on
-    for _, name in ipairs(KEEP) do
-        local f = _G[name]
-        if f and f.SetIgnoreParentAlpha then f:SetIgnoreParentAlpha(on) end
+    constructor()
+        super({
+            id = "npcdialogue",
+            name = "NPC dialogue",
+            description = "Talking to an NPC as a scene: their live portrait, what they say, your answers numbered below; quests in the same voice.",
+            api = "0.17",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
     end
-    if on then self.uiAlpha = UIParent:GetAlpha() end
-    SuuUI.Motion.AlphaTo(UIParent, on and 0 or (self.uiAlpha or 1), T.duration["dur-base"] or 0.2)
+
+    -- The scene (built on enable).
+    function Scene(): Scene
+        return assert(self.scene)
+    end
+
+    function Build()
+        -- the scene: a light vignette over the world, the bar on it
+        local root = CreateFrame("Frame", "SuuUINpcDialogue", SuuUI.Root)
+        root:SetAllPoints(UIParent)
+        root:SetFrameStrata("DIALOG")
+        -- seen while the rest of the UI is faded out
+        root:SetIgnoreParentAlpha(true)
+        root:HookScript("OnHide", function() self:HideUI(false) end)
+        root:Hide()
+        local vig = root:CreateTexture(nil, "BACKGROUND")
+        vig:SetColorTexture(1, 1, 1, 1)
+        vig:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.65), CreateColor(0, 0, 0, 0))
+        vig:SetPoint("BOTTOMLEFT")
+        vig:SetPoint("BOTTOMRIGHT")
+        vig:SetPoint("TOP", root, "CENTER", 0, -40)
+
+        local bar = CreateFrame("Frame", nil, root)
+        bar:SetWidth(BAR_W)
+        bar:EnableMouse(true)
+        UI.Fill(bar, "surface", "BACKGROUND"):SetAllPoints()
+        UI.Border(bar, "gilt-faint")
+        local edge = UI.Hairline(bar, "gilt", "both")
+        edge:SetPoint("TOPLEFT", 0, 0)
+        edge:SetPoint("TOPRIGHT", 0, 0)
+
+        -- the speaker: the plate in the bar's bottom corner, the portrait on it;
+        -- both stay put however tall the bar grows (asked for in game)
+        local plate = Plate.new(bar)
+        plate:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", PAD, PAD)
+        plate:SetWidth(PORT_W)
+        local port = Portrait.new(bar)
+        port:SetPoint("BOTTOMLEFT", plate, "TOPLEFT", 0, -1)
+        port:SetFrameLevel(bar:GetFrameLevel() + 5)
+        plate:SetFrameLevel(port:GetFrameLevel() + 3)
+        UI.Fill(plate, "surface", "BACKGROUND"):SetAllPoints()
+        UI.Border(plate, "gilt-line")
+
+        UI.CloseButton(bar, function() self:Leave() end):SetPoint("TOPRIGHT", -S["space-4"], -S["space-4"])
+
+        -- what is said and answered
+        local talk = CreateFrame("Frame", nil, bar)
+        talk:SetPoint("TOPLEFT", PAD + PORT_W + GAP, -PAD)
+        talk:SetWidth(BAR_W - PAD - PORT_W - GAP - PAD_R)
+        local speech = Speech.new(talk, bar)
+        speech:SetScript("OnClick", function() self:RevealAll() end)
+        speech.scroll:HookScript("OnVerticalScroll", function() self:DrawFade() end)
+        self.scene = { root = root, bar = bar, plate = plate, portrait = port, talk = talk, qhead = QuestHead.new(talk),
+                       speech = speech, ask = AskBox.new(talk), cards = CardList.new(talk) }
+        self:PlaceBar()
+
+        -- keys: 1-9, Space, Enter; everything else goes on to the game
+        bar:EnableKeyboard(true)
+        if not InCombatLockdown() then bar:SetPropagateKeyboardInput(true) end
+        bar:SetScript("OnKeyDown", function(f, key)
+            if InCombatLockdown() then return end
+            local handled = self:Key(key)
+            f:SetPropagateKeyboardInput(not handled)
+        end)
+        -- typing the line in
+        bar:SetScript("OnUpdate", function(_, elapsed) self:Type(elapsed) end)
+        self:SetFaces()
+    end
+
+    -- The texts set in a style's face at their own size (again after a theme
+    -- changed the faces), and the speech's line measured in its face.
+    function SetFaces()
+        local scene = self:Scene()
+        scene.plate.name:SetFont(T.type.alert.file, 17, "")
+        scene.qhead.title:SetFont(T.type["unit-name-lg"].file, 15, "")
+        scene.ask.head:SetFont(T.type.header.file, 12, "")
+        for _, b in ipairs(self.pills) do b.mark:SetFont(T.type.alert.file, 16, "") end
+        local speech = scene.speech
+        speech.quote:SetFont(T.type.alert.file, 32, "")
+        speech.text:SetFont(T.type.body.file, TEXT_SIZE, "")
+        speech.text:SetSpacing(TEXT_SPACING)
+        -- whole lines only: the area is a number of lines high
+        local was = speech.text:GetText()
+        speech.text:SetText("A")
+        local one = speech.text:GetStringHeight()
+        speech.text:SetText("A\nA")
+        speech.lineH, speech.maxH = one, one + (SPEECH_LINES - 1) * (speech.text:GetStringHeight() - one)
+        speech.text:SetText(was or "")
+    end
+
+    -- The speaker: portrait, name, role, friend or foe.
+    function DrawSpeaker()
+        local scene = self:Scene()
+        local plate = scene.plate
+        local unit = UnitExists("npc") and "npc" or nil
+        plate.name:SetValue(unit and asString(UnitName(unit)) or "")
+        -- the role: the tooltip's line under the name (Weapons Merchant), unless
+        -- it's the level line
+        local role: string? = nil
+        local info = unit and C_TooltipInfo and C_TooltipInfo.GetUnit and try(C_TooltipInfo.GetUnit, unit)
+        local lines = tbl.field(info, "lines")
+        local line = type(lines) == "table" and (lines :: unknown[])[2]
+        local text = asString(tbl.field(line, "leftText"))
+        if text and text ~= "" and not text:find("^" .. (LEVEL or "Level")) then role = text end
+        plate.role:SetValue(role or "")
+        plate:SetHeight(S["space-2"] * 2 + 20 + (role and (T.type.caption.lineHeight + 1) or 0))
+        local hostile = unit and UnitCanAttack("player", unit)
+        UI.PaintFill(plate.edge, hostile and "reaction-hostile" or "reaction-friendly")
+        local portrait = scene.portrait
+        local m = portrait.model
+        -- a new speaker only: setting the unit again restarts the model
+        local guid = unit and asString(UnitGUID(unit))
+        if unit and (not guid or guid ~= self.speakerGUID) then
+            self.speakerGUID = guid
+            self.talking = nil
+            m:ClearModel()
+            m:SetUnit(unit)
+            m:SetPortraitZoom(ZOOM)
+        end
+        m:SetShown(unit ~= nil)
+        portrait.canTalk = errors.tryMethod(m, "HasAnimation", ANIM_TALK) ~= false
+    end
+
+    -- The answers as pills, wrapping.
+    function DrawPills(list: Answer[], y: number, width: number): number
+        local talk = self:Scene().talk
+        local x, rowGap = 0, S["space-3"]
+        for i, a in ipairs(list) do
+            local b = self.pills[i] or AnswerPill.new(talk)
+            self.pills[i] = b
+            local key = a.key or (i <= 9 and tostring(i) or "")
+            b.key:SetKey(key)
+            b.key:SetHeight(18)
+            b.key:SetShown(key ~= "")
+            local left = S["space-2"] + (key ~= "" and (b.key:GetWidth() + S["space-3"]) or 0)
+            b.glyph:ClearAllPoints()
+            b.mark:ClearAllPoints()
+            local mark = a.mark
+            if mark then
+                b.glyph:Hide()
+                b.mark:Show()
+                b.mark:SetPoint("CENTER", b, "LEFT", left + 8, 0)
+                b.mark:SetValue(mark.text)
+                b.mark:SetColor(mark.color)
+            else
+                b.mark:Hide()
+                b.glyph:Show()
+                b.glyph:SetPoint("CENTER", b, "LEFT", left + 8, 0)
+                local glyph = a.glyph
+                if type(glyph) == "number" then
+                    b.glyph:SetTexture(glyph)
+                    b.glyph:SetVertexColor(1, 1, 1)
+                else
+                    b.glyph:SetTexture(GLYPHS .. (glyph or "chat"))
+                    UI.Paint(b.glyph, (a.leave or a.off) and "ink-muted" or "gilt-text")
+                end
+            end
+            left = left + 16 + S["space-3"]
+            b.text:ClearAllPoints()
+            b.text:SetPoint("LEFT", left, 0)
+            b.text:SetValue(a.label or "")
+            b.text:SetColor((a.off and "ink-faint") or (a.leave and "ink-muted") or "ink")
+            local tw = math.min(UI.MeasureText("body", a.label or ""), width - left - S["space-5"] - 80)
+            b.text:SetWidth(tw)
+            local w = left + tw
+            b.tag:ClearAllPoints()
+            local tag = a.tag
+            if tag then
+                b.tag:SetPoint("LEFT", b.text, "RIGHT", S["space-3"], 0)
+                b.tag:SetValue(tag.text)
+                b.tag:SetColor(tag.color)
+                b.tag:Show()
+                w = w + S["space-3"] + UI.MeasureText("micro", tag.text)
+            else
+                b.tag:Hide()
+            end
+            w = math.ceil(w + S["space-5"])
+            if x > 0 and x + w > width then
+                x, y = 0, y + PILL_H + rowGap
+            end
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", x, -y)
+            b:SetWidth(w)
+            b.label, b.off, b.act = a.label, a.off, a.act
+            b:SetAlpha(a.off and 0.7 or 1)
+            b:Lit(b:IsMouseOver())
+            b:Show()
+            x = x + w + rowGap
+        end
+        for i = #list + 1, #self.pills do self.pills[i]:Hide() end
+        self.answerList = list
+        return #list > 0 and (y + PILL_H) or y
+    end
+
+    -- The cards, a line each: items to choose or receive, or to hand over;
+    -- money and experience in the same row after them.
+    function DrawCards(y: number, width: number, items: Card[], caption: string?, gains: Gains?, need: boolean?): number
+        local cards = self:Scene().cards
+        cards:ClearAllPoints()
+        cards:SetPoint("TOPLEFT", 0, -y)
+        cards:SetWidth(width)
+        cards.caption:SetValue(caption or "")
+        local top = (caption and caption ~= "") and (T.type.caption.lineHeight + S["space-2"]) or 0
+        local cw = need and NEED_W or CARD_W
+        local x, row = 0, 0
+        for i, it in ipairs(items) do
+            local c = cards.list[i] or RewardCard.new(cards)
+            cards.list[i] = c
+            if x > 0 and x + cw > width then x, row = 0, row + 1 end
+            c:ClearAllPoints()
+            c:SetPoint("TOPLEFT", x, -(top + row * (CARD_H + S["space-3"])))
+            c:SetWidth(cw)
+            local q = it.quality and QUALITY[it.quality]
+            c.slot.skin:SetItem({ icon = it.icon, count = it.count, quality = q })
+            c.name:SetValue(it.name or "…")
+            c.name:SetColor(q and ("quality-" .. q) or "ink")
+            c.right:SetValue(it.right or (it.upgrade and "▲ Upgrade") or "")
+            c.right:SetColor(it.rightColor or "arcane")
+            c.card = it
+            c:SetOn(it.on == true)
+            c:Show()
+            x = x + cw + S["space-3"]
+        end
+        for i = #items + 1, #cards.list do cards.list[i]:Hide() end
+        -- money and experience: after the cards on their row, or alone
+        local gx = #items > 0 and (x + S["space-3"]) or 0
+        if #items > 0 and gx + 160 > width then gx, row = 0, row + 1 end
+        local gyMid = top + row * (CARD_H + S["space-3"]) + (#items > 0 and CARD_H / 2 or 9)
+        cards.money:ClearAllPoints()
+        cards.xp:ClearAllPoints()
+        local some = false
+        local money, xp = gains and gains.money, gains and gains.xp
+        if money and money > 0 then
+            cards.money:SetPoint("LEFT", cards, "TOPLEFT", gx, -gyMid)
+            cards.money:SetCopper(money)
+            cards.money:Show()
+            gx = gx + 90
+            some = true
+        else
+            cards.money:Hide()
+        end
+        if xp and xp > 0 then
+            cards.xp:SetPoint("LEFT", cards, "TOPLEFT", gx, -gyMid)
+            cards.xp:SetValue(BreakUpLargeNumbers(xp) .. " XP")
+            cards.xp:Show()
+            some = true
+        else
+            cards.xp:Hide()
+        end
+        local h
+        if #items > 0 then h = top + (row + 1) * CARD_H + row * S["space-3"]
+        elseif some then h = top + 18
+        else h = 0 end
+        cards:SetHeight(math.max(1, h))
+        cards:SetShown(h > 0)
+        return h
+    end
+
+    -- The rewards: what to choose from, what comes anyway, money and experience.
+    function Rewards(choosing: boolean): (Card[], string?, Gains)
+        local items: Card[] = {}
+        local choices = GetNumQuestChoices() or 0
+        for i = 1, choices do
+            local it = questItem("choice", i)
+            it.upgrade = upgrade(it.link)
+            if choosing and choices > 1 then
+                it.choosable = true
+                it.on = self.chosen == i
+                it.choose = function(n: number) self.chosen = n; self:Draw() end
+            end
+            items[#items + 1] = it
+        end
+        for i = 1, GetNumQuestRewards() or 0 do
+            items[#items + 1] = questItem("reward", i)
+        end
+        local caption: string? = nil
+        if choices > 1 then caption = choosing and "Choose your reward" or "You may choose one" end
+        return items, caption, { money = GetRewardMoney and GetRewardMoney() or 0, xp = GetRewardXP and GetRewardXP() or 0 }
+    end
+
+    -- What the conversation is now: gossip, greeting, detail, progress or reward.
+    function View(): string?
+        local quest, gossip = questFrame(), gossipFrame()
+        if self.questView and quest and quest:IsShown() then return self.questView end
+        if gossip and gossip:IsShown() then return "gossip" end
+        return nil
+    end
+
+    function Content(view: string): Content
+        local text, answers: Answer[], ask: string? = "", {}, nil
+        local items: Card[]?, caption: string?, gains: Gains?, need: boolean? = nil, nil, nil, nil
+        local qtitle: string?, qlevel: number? = nil, nil
+        local goodbye: Answer = { key = "Esc", label = "Goodbye", glyph = "door", leave = true, act = function() self:Leave() end }
+        if view == "gossip" then
+            text = asString(try(C_GossipInfo.GetText)) or ""
+            local ok, got = pcall(C_GossipInfo.GetOptions)
+            local options: GossipOptionUIInfo[] = ok and type(got) == "table" and got or {}
+            if GossipOptionSort then table.sort(options, GossipOptionSort) end
+            for _, o in ipairs(options) do
+                local icon = o.overrideIconID or o.icon
+                answers[#answers + 1] = { label = o.name, glyph = OPTION_GLYPH[icon] or icon or "chat",
+                    act = function() C_GossipInfo.SelectOptionByIndex(o.orderIndex) end }
+            end
+            local okA, active = pcall(C_GossipInfo.GetActiveQuests)
+            for _, q in ipairs(okA and type(active) == "table" and active or {}) do
+                answers[#answers + 1] = { label = q.title, mark = { text = "?", color = q.isComplete and "gilt-text" or "ink-faint" },
+                    tag = q.isComplete and { text = "Ready", color = "gilt-text" } or nil,
+                    act = function() C_GossipInfo.SelectActiveQuest(q.questID) end }
+            end
+            local okV, available = pcall(C_GossipInfo.GetAvailableQuests)
+            for _, q in ipairs(okV and type(available) == "table" and available or {}) do
+                local daily = q.frequency and q.frequency > 0
+                answers[#answers + 1] = { label = q.title, mark = { text = "!", color = (daily or q.repeatable) and "arcane" or (q.isTrivial and "ink-faint") or "gilt-text" },
+                    tag = daily and { text = "Daily", color = "arcane" } or q.repeatable and { text = "Repeatable", color = "arcane" } or nil,
+                    act = function() C_GossipInfo.SelectAvailableQuest(q.questID) end }
+            end
+            answers[#answers + 1] = goodbye
+        elseif view == "greeting" then
+            text = GetGreetingText() or ""
+            for i = 1, GetNumActiveQuests() or 0 do
+                local title, done = GetActiveTitle(i)
+                answers[#answers + 1] = { label = title, mark = { text = "?", color = done and "gilt-text" or "ink-faint" },
+                    tag = done and { text = "Ready", color = "gilt-text" } or nil, act = function() try(SelectActiveQuest, i) end }
+            end
+            for i = 1, GetNumAvailableQuests() or 0 do
+                local trivial, frequency, repeatable = GetAvailableQuestInfo(i)
+                local daily = frequency and frequency > 0
+                answers[#answers + 1] = { label = GetAvailableTitle(i), mark = { text = "!", color = (daily or repeatable) and "arcane" or (trivial and "ink-faint") or "gilt-text" },
+                    tag = daily and { text = "Daily", color = "arcane" } or repeatable and { text = "Repeatable", color = "arcane" } or nil,
+                    act = function() try(SelectAvailableQuest, i) end }
+            end
+            answers[#answers + 1] = goodbye
+        elseif view == "detail" then
+            qtitle = GetTitleText()
+            local id = GetQuestID and GetQuestID()
+            qlevel = id and C_QuestLog and C_QuestLog.GetQuestDifficultyLevel and asNumber(try(C_QuestLog.GetQuestDifficultyLevel, id)) or nil
+            text = GetQuestText() or ""
+            ask = GetObjectiveText()
+            items, caption, gains = self:Rewards(false)
+            answers = {
+                { label = "Accept", glyph = "check", act = function() click("QuestFrameAcceptButton") end },
+                { label = "Decline", glyph = "close", leave = true, act = function() click("QuestFrameDeclineButton") end },
+            }
+        elseif view == "progress" then
+            qtitle = GetTitleText()
+            text = GetProgressText() or ""
+            local needed: Card[] = {}
+            need = true
+            local short: string? = nil
+            for i = 1, GetNumQuestItems() or 0 do
+                local it = questItem("required", i)
+                local _, _, wantR = try(GetQuestItemInfo, "required", i)
+                local want = asNumber(wantR) or 0
+                local itemID = it.itemID
+                local have = itemID and C_Item.GetItemCount(itemID) or 0
+                it.count = nil
+                it.right = have .. " / " .. want
+                it.rightColor = have < want and "ember-text" or "gilt-text"
+                if have < want and not short then short = ("You need %d more %s"):format(want - have, it.name or "") end
+                needed[#needed + 1] = it
+            end
+            items = needed
+            local money = GetQuestMoneyToGet and GetQuestMoneyToGet() or 0
+            if money > 0 and GetMoney() < money and not short then short = "You don't have enough money" end
+            local why = not IsQuestCompletable() and (short or "Not done yet") or nil
+            answers = {
+                { label = #needed > 0 and "Hand them over" or "Continue", glyph = "check", off = why, act = function() click("QuestFrameCompleteButton") end },
+                { label = "I'll be back", glyph = "chat", leave = true, act = function() click("QuestFrameGoodbyeButton") end },
+            }
+            gains = { money = money }
+        elseif view == "reward" then
+            qtitle = GetTitleText()
+            text = GetRewardText() or ""
+            if (GetNumQuestChoices() or 0) == 1 then self.chosen = 1 end
+            items, caption, gains = self:Rewards(true)
+            local choose = (GetNumQuestChoices() or 0) > 1 and not self.chosen
+            answers = {
+                { label = "Complete quest", glyph = "check", off = choose and "Choose a reward first" or nil, act = function()
+                    local info = frames.find("QuestInfoFrame")
+                    if info then
+                        local fields = info :: { [string]: unknown }
+                        fields.itemChoice = self.chosen or 0
+                    end
+                    click("QuestFrameCompleteQuestButton")
+                end },
+            }
+        end
+
+        return { text = text, answers = answers, ask = ask, items = items, caption = caption, gains = gains, need = need,
+                 title = qtitle, level = qlevel }
+    end
+
+    function Draw()
+        local scene = self:Scene()
+        local view = self:View()
+        if not view then scene.root:Hide() return end
+        if not scene.root:IsShown() then self:PlaceBar() end
+        scene.root:Show()
+        self:HideUI(true)
+        self:DrawSpeaker()
+        local width = scene.talk:GetWidth()
+        local c = self:Content(view)
+        local text, answers, ask = c.text, c.answers, c.ask
+        local qtitle, qlevel = c.title, c.level
+
+        -- lay it out, top to bottom
+        local y = 0
+        local gap = S["space-4"]
+        local qhead = scene.qhead
+        qhead:SetShown(qtitle ~= nil)
+        if qtitle then
+            qhead:ClearAllPoints()
+            qhead:SetPoint("TOPLEFT", 0, 0)
+            qhead:SetWidth(width)
+            qhead.title:SetValue(qtitle)
+            qhead.level:SetValue((qlevel and qlevel > 0) and ("Level " .. qlevel) or "")
+            y = y + qhead:GetHeight() + gap
+        end
+        -- the line
+        local sp = scene.speech
+        sp:ClearAllPoints()
+        sp:SetPoint("TOPLEFT", 0, -y)
+        sp:SetWidth(width)
+        sp.text:SetWidth(width - 22 - S["space-3"] - 3)
+        sp.quote:SetValue("“")
+        if text ~= self.fullText then
+            self.fullText = text
+            local ends = charEnds(text)
+            self.ends = ends
+            self.shown = (SuuUI.Motion.Reduced() or text == "") and #ends or 0
+            self.typed = 0
+            sp.scroll:SetVerticalScroll(0)
+        end
+        sp.text:SetValue(text)
+        local th = sp.text:GetStringHeight()
+        sp.scroll.child:SetHeight(th)
+        local sh = math.max(sp.lineH, math.min(th, sp.maxH))
+        sp:SetHeight(sh)
+        self:ShowTyped()
+        self:DrawFade()
+        y = y + sh + gap
+        -- what they ask
+        local a = scene.ask
+        a:SetShown(ask ~= nil and ask ~= "")
+        if ask and a:IsShown() then
+            a:ClearAllPoints()
+            a:SetPoint("TOPLEFT", 0, -y)
+            a:SetWidth(width)
+            local textW = width - S["space-4"] * 2 - UI.MeasureText("header", "What they ask") - S["space-4"]
+            a.text:SetWidth(textW)
+            a.text:SetValue(ask)
+            local h = S["space-3"] * 2 + math.max(T.type.body.lineHeight, a.text:GetStringHeight())
+            a:SetHeight(h)
+            y = y + h + gap
+        end
+        -- the cards
+        local ch = self:DrawCards(y, width, c.items or {}, c.caption, c.gains, c.need)
+        if ch > 0 then y = y + ch + gap end
+        -- the answers
+        y = self:DrawPills(answers, y, width)
+        scene.talk:SetHeight(math.max(1, y))
+
+        -- the bar: as tall as what is said, or the plate
+        scene.bar:SetHeight(math.max(scene.plate:GetHeight(), y) + 2 * PAD)
+    end
+
+    -- The fade at the line's foot while more of it is below.
+    function DrawFade()
+        local sp = self:Scene().speech
+        local more = sp.scroll.child:GetHeight() - sp:GetHeight() - sp.scroll:GetVerticalScroll()
+        sp.fade:SetShown(more > 2)
+    end
+
+    function ShowTyped()
+        local scene = self:Scene()
+        local ends, n = self.ends or {}, self.shown
+        local sp = scene.speech
+        local full = n >= #ends
+        if full then
+            sp.text:SetText(self.fullText or "")
+        else
+            sp.text:SetText((self.fullText or ""):sub(1, ends[n] or 0))
+        end
+        sp.skip:SetShown(not full)
+        local portrait = scene.portrait
+        local talking = not full
+        if portrait.canTalk and talking ~= self.talking then
+            self.talking = talking
+            portrait.model:SetAnimation(talking and ANIM_TALK or ANIM_IDLE)
+        end
+    end
+
+    function Type(elapsed: number)
+        local ends = self.ends
+        if not ends or self.shown >= #ends then return end
+        self.typed = self.typed + elapsed * CPS
+        local n = math.min(#ends, math.floor(self.typed))
+        if n ~= self.shown then
+            self.shown = n
+            self:ShowTyped()
+        end
+    end
+
+    function RevealAll(): boolean
+        local ends = self.ends
+        if not ends then return false end
+        if self.shown >= #ends then return false end
+        self.shown = #ends
+        self:ShowTyped()
+        return true
+    end
+
+    function Key(key: string): boolean
+        -- with a modifier held a key is the game's (shift-1, a screenshot's
+        -- Cmd+Shift arrive as the bare key)
+        if IsModifierKeyDown() then return false end
+        local list = self.answerList
+        if key == "SPACE" then return self:RevealAll() end
+        local n = tonumber(key)
+        if n and n >= 1 and n <= 9 then
+            local a = list[n]
+            if a and a.key ~= "Esc" then
+                local act = a.act
+                if not a.off and act then PlaySound(SOUNDKIT.IG_QUEST_LIST_SELECT); act() end
+                return true
+            end
+            return false
+        end
+        if key == "ENTER" then
+            local view = self:View()
+            if view == "detail" or view == "progress" or view == "reward" then
+                local a = list[1]
+                local act = a and a.act
+                if a and not a.off and act then act() end
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Goodbye: the game's frames close, and the conversation with them.
+    function Leave()
+        local quest, gossip = questFrame(), gossipFrame()
+        if quest and quest:IsShown() then HideUIPanel(quest) end
+        if gossip and gossip:IsShown() then HideUIPanel(gossip) end
+        self:Scene().root:Hide()
+    end
+
+    -- A game frame out of sight while the module is on (see-through and off
+    -- screen, still shown: closing it ends the interaction); the conversation
+    -- over when it hides.
+    function Away(frame: Frame)
+        frames.keepAway(frame, { fade = true, when = function(): boolean return self:IsEnabled() end })
+        hookScript(frame, "OnHide", function()
+            -- the conversation over: the next one starts fresh
+            local quest, gossip = questFrame(), gossipFrame()
+            if not ((gossip and gossip:IsShown()) or (quest and quest:IsShown())) then
+                self.speakerGUID, self.questView = nil, nil
+            end
+            self:QueueDraw()
+        end)
+    end
+
+    function QueueDraw()
+        if self.queued then return end
+        self.queued = true
+        after(0, function()
+            self.queued = nil
+            if self:IsEnabled() then self:Draw() end
+        end)
+    end
+
+    function HookGame()
+        if self.hooked then return end
+        self.hooked = true
+        local g, q = gossipFrame(), questFrame()
+        if g then
+            self:Away(g)
+            if tbl.field(g, "Update") then hook(g :: { [string]: unknown }, "Update", function() self:QueueDraw() end) end
+            hookScript(g, "OnShow", function() self:QueueDraw() end)
+        end
+        if q then
+            self:Away(q)
+            for _, view in ipairs({ "greeting", "detail", "progress", "reward" }) do
+                local panel = frames.find("QuestFrame" .. view:sub(1, 1):upper() .. view:sub(2) .. "Panel")
+                if panel then hookScript(panel, "OnShow", function()
+                    self.questView = view
+                    if view == "reward" then self.chosen = nil end
+                    self:QueueDraw()
+                end) end
+            end
+        end
+    end
+
+    override function OnEnable()
+        if not self.scene then self:Build() end
+        self:HookGame()
+        self:RegisterSettings(SECTION)
+        self:Watch("hideUI", function(on)
+            self:PlaceBar()
+            self:HideUI(on and self:Scene().root:IsShown())
+        end)
+        -- a theme change: the faces, and an open conversation drawn again (line heights)
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:SetFaces()
+            if self:Scene().root:IsShown() then self:QueueDraw() end
+        end)
+        for _, e in ipairs({ "QUEST_ITEM_UPDATE", "QUEST_LOG_UPDATE", "GET_ITEM_INFO_RECEIVED", "BAG_UPDATE_DELAYED" }) do
+            self:OnGameEvent(e, function() if self:Scene().root:IsShown() then self:QueueDraw() end end)
+        end
+        -- in combat the keys stay the game's (a frame's key handling can't change then)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self:Scene().bar:EnableKeyboard(false)
+            -- a fight: the UI back at once
+            self:HideUI(false)
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            local bar = self:Scene().bar
+            bar:EnableKeyboard(true)
+            bar:SetPropagateKeyboardInput(true)
+        end)
+    end
+
+    override function OnDisable()
+        local scene = self.scene
+        if scene then scene.root:Hide() end
+        self:HideUI(false)
+    end
+
+    -- Where the bar sits: a fifth up the screen while the rest of the UI is
+    -- faded out (closer to the NPC: asked for in game), else over the action bars.
+    function PlaceBar()
+        local scene = self.scene
+        if not scene then return end
+        local high = self:Get("hideUI")
+        scene.bar:ClearAllPoints()
+        scene.bar:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, high and math.floor(UIParent:GetHeight() * HIGH_SHARE) or LOW_Y)
+    end
+
+    function HideUI(given: unknown)
+        local on = given and self:IsEnabled() and self:Get("hideUI") and not InCombatLockdown() and true or false
+        if on == self.uiHidden then return end
+        self.uiHidden = on
+        for _, name in ipairs(KEEP) do
+            local f = frames.find(name)
+            if f then f:SetIgnoreParentAlpha(on) end
+        end
+        if on then self.uiAlpha = UIParent:GetAlpha() end
+        SuuUI.Motion.AlphaTo(UIParent, on and 0 or (self.uiAlpha or 1), T.duration["dur-base"] or 0.2)
+    end
 end
 
+M = SuuUI.AddModule(NpcDialogueModule.new())

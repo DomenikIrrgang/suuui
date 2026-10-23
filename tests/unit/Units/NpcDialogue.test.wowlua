@@ -9,8 +9,11 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M from "/Units/NpcDialogue"
 import expectNoErrors from "../../helpers"
+import type AnswerPill, Scene from "/Units/NpcDialogue"
+import * as frames from "wowlua:frames"
 
-local G: any = _G
+local function scene(): Scene return M:Scene() end
+local function gossipFrame(): Frame return (assert(frames.find("GossipFrame"))) end
 
 -- Placeholder NPCs and quests (made once: the engine keeps them).
 local SWORD, SHIELD, CAP, PELT = 990201, 990202, 990203, 990204
@@ -45,21 +48,21 @@ local function talkTo(npc: mock.MockUnit)
 end
 
 -- The answer pills shown, by label.
-local function pill(label: string): any
+local function pill(label: string): AnswerPill
     for _, b in ipairs(M.pills) do if b:IsShown() and b.label == label then return b end end
-    return nil
+    error("no pill " .. label)
 end
 
 local function labels(): string[]
     local out: string[] = {}
-    for _, a in ipairs(M.answerList or {}) do out[#out + 1] = a.label end
+    for _, a in ipairs(M.answerList) do out[#out + 1] = a.label or "" end
     return out
 end
 
 @afterEach
 local function cleanup()
     if InCombatLockdown() then mock.player:leaveCombat() end
-    if M.root:IsShown() then M:Leave() end
+    if scene().root:IsShown() then M:Leave() end
     mock.setModifiers({})
     M:Reset("hideUI")
     mock.advanceTime(1)
@@ -78,28 +81,28 @@ end
 local function offered()
     talkTo(offer)
     expect(M:View()).toBe("detail")
-    expect(M.root).toBeShown()
-    expect(M.qhead.title:GetText()).toBe("Wolves Across the Border")
-    expect(M.plate.name:GetText()).toBe("Quartermaster Hale")
+    expect(scene().root).toBeShown()
+    expect(scene().qhead.title:GetText()).toBe("Wolves Across the Border")
+    expect(scene().plate.name:GetText()).toBe("Quartermaster Hale")
     -- the line types in; Space shows it all
-    expect(M.fullText:find("Kill wolves", 1, true)).toBe(1)
+    expect(assert(M.fullText):find("Kill wolves", 1, true)).toBe(1)
     M.shown = 0
     M.typed = 0
     M:ShowTyped()
-    expect(M.speech.skip).toBeShown()
+    expect(scene().speech.skip).toBeShown()
     mock.advanceFrames(5)
     expect(M.shown > 0).toBe(true)
     expect(M:Key("SPACE")).toBe(true)
-    expect(M.speech.text:GetText()).toBe(M.fullText)
-    expect(M.speech.skip).never.toBeShown()
+    expect(scene().speech.text:GetText() :: unknown).toBe(M.fullText)
+    expect(scene().speech.skip).never.toBeShown()
     expect(M:Key("SPACE")).toBe(false)
-    expect(M.ask.text:GetText()).toBe("Kill 5 wolves.")
+    expect(scene().ask.text:GetText()).toBe("Kill 5 wolves.")
     -- the rewards: two to choose from (one may be chosen), one anyway, money and experience
-    expect(M.cards.caption:GetText()).toBe("You may choose one")
-    expect(M.cards.list[1].name:GetText()).toBe("Militia Shortsword")
-    expect(M.cards.list[3].name:GetText()).toBe("Worn Cap")
-    expect(M.cards.money).toBeShown()
-    expect(M.cards.xp:GetText()).toBe("450 XP")
+    expect(scene().cards.caption:GetText()).toBe("You may choose one")
+    expect(scene().cards.list[1].name:GetText()).toBe("Militia Shortsword")
+    expect(scene().cards.list[3].name:GetText()).toBe("Worn Cap")
+    expect(scene().cards.money).toBeShown()
+    expect(scene().cards.xp:GetText()).toBe("450 XP")
     expect(labels()).toEqual({ "Accept", "Decline" })
     -- a reward better than what you wear (a level 1 character has no weapon worn): an upgrade
     local cards = M:Rewards(false)
@@ -107,14 +110,14 @@ local function offered()
     expect(cards[3].upgrade).toBeNil()
     -- a card clicked: its link to the chat, the game's way
     local handled = mock.spy(function(_: string) end)
-    mock.stub(G, "HandleModifiedItemClick", handled)
-    M.cards.list[3]:Click()
+    mock.stub(_G, "HandleModifiedItemClick", handled)
+    scene().cards.list[3]:Click()
     expect(handled).toHaveBeenCalled()
     -- Enter accepts
     expect(M:Key("ENTER")).toBe(true)
     settle()
     expect(C_QuestLog.GetLogIndexForQuestID(OFFERED) ~= nil).toBe(true)
-    expect(M.root).never.toBeShown()
+    expect(scene().root).never.toBeShown()
 end
 
 @test("a quest declined: the scene ends")
@@ -122,7 +125,7 @@ local function declined()
     talkTo(offer)
     pill("Decline"):Click()
     settle()
-    expect(M.root).never.toBeShown()
+    expect(scene().root).never.toBeShown()
     expect(C_QuestLog.GetLogIndexForQuestID(OFFERED)).toBeNil()
 end
 
@@ -144,18 +147,18 @@ local function gossip()
     talkTo(talker)
     pill("Goodbye"):Click()
     settle()
-    expect(M.root).never.toBeShown()
-    expect(G.GossipFrame:IsShown()).toBe(false)
+    expect(scene().root).never.toBeShown()
+    expect(gossipFrame():IsShown()).toBe(false)
 end
 
 @test("gossip's quests: one to take, one to hand in (ready), daily and repeatable tagged")
 local function gossipQuests()
     talkTo(talker)
-    mock.stub(C_GossipInfo, "GetAvailableQuests", function(): any
+    mock.stub(C_GossipInfo, "GetAvailableQuests", function(): unknown
         return { { questID = 1, title = "A Daily Errand", frequency = 1 }, { questID = 2, title = "Again and Again", repeatable = true },
                  { questID = 3, title = "Easy Work", isTrivial = true } }
     end)
-    mock.stub(C_GossipInfo, "GetActiveQuests", function(): any
+    mock.stub(C_GossipInfo, "GetActiveQuests", function(): unknown
         return { { questID = 4, title = "Bring the Pelts", isComplete = true }, { questID = 5, title = "Still Hunting" } }
     end)
     local selected = mock.spy(function(_: number) end)
@@ -165,12 +168,12 @@ local function gossipQuests()
     M:Draw()
     expect(labels()).toEqual({ "Make this inn your home.", "What can I buy here?", "Tell me a story.", "Bring the Pelts",
         "Still Hunting", "A Daily Errand", "Again and Again", "Easy Work", "Goodbye" })
-    expect(M.answerList[4].tag[1]).toBe("Ready")
-    expect(M.answerList[6].tag[1]).toBe("Daily")
-    expect(M.answerList[7].tag[1]).toBe("Repeatable")
-    M.answerList[4].act()
+    expect(assert(M.answerList[4].tag).text).toBe("Ready")
+    expect(assert(M.answerList[6].tag).text).toBe("Daily")
+    expect(assert(M.answerList[7].tag).text).toBe("Repeatable")
+    assert(M.answerList[4].act)()
     expect(active).toHaveBeenCalledWith(4)
-    M.answerList[6].act()
+    assert(M.answerList[6].act)()
     expect(selected).toHaveBeenCalledWith(1)
 end
 
@@ -183,15 +186,15 @@ local function handIn()
     talkTo(offer)
     expect(M:View()).toBe("progress")
     expect(M.fullText).toBe("Are the wolves gone?")
-    expect(M.cards.list[1].right:GetText()).toBe("0 / 2")
+    expect(scene().cards.list[1].right:GetText()).toBe("0 / 2")
     local a = M.answerList[1]
     expect(a.label).toBe("Hand them over")
-    expect(a.off:find("You need 2 more", 1, true)).toBe(1)
+    expect(assert(a.off):find("You need 2 more", 1, true)).toBe(1)
     -- a pill that's off: its reason as the tooltip, nothing on a click
     local b = pill("Hand them over")
-    b:GetScript("OnEnter")(b)
+    mock.script(b, "OnEnter")
     b:Click()
-    b:GetScript("OnLeave")(b)
+    mock.script(b, "OnLeave")
     expect(M:View()).toBe("progress")
     pill("I'll be back"):Click()
     settle()
@@ -203,26 +206,26 @@ local function handIn()
     mock.advanceTime(2)
     mock.advanceFrames(3)
     talkTo(offer)
-    expect(M.cards.list[1].right:GetText()).toBe("2 / 2")
+    expect(scene().cards.list[1].right:GetText()).toBe("2 / 2")
     expect(M.answerList[1].off).toBeNil()
     M:Key("ENTER")
     settle()
     expect(M:View()).toBe("reward")
-    expect(M.cards.caption:GetText()).toBe("Choose your reward")
+    expect(scene().cards.caption:GetText()).toBe("Choose your reward")
     expect(M.answerList[1].off).toBe("Choose a reward first")
     -- a choice: lit, the button free
-    M.cards.list[2]:Click()
+    scene().cards.list[2]:Click()
     expect(M.chosen).toBe(2)
-    expect(M.cards.list[2].on).toBe(true)
+    expect(scene().cards.list[2].on).toBe(true)
     expect(M.answerList[1].off).toBeNil()
     -- a card's tooltip: the quest item's
-    local card = M.cards.list[1]
-    card:GetScript("OnEnter")(card)
-    card:GetScript("OnLeave")(card)
+    local card = scene().cards.list[1]
+    mock.script(card, "OnEnter")
+    mock.script(card, "OnLeave")
     pill("Complete quest"):Click()
     mock.advanceTime(3)
     mock.advanceFrames(3)
-    expect(M.root).never.toBeShown()
+    expect(scene().root).never.toBeShown()
     expect(C_QuestLog.GetLogIndexForQuestID(OFFERED)).toBeNil()
 end
 
@@ -235,10 +238,10 @@ local function keys()
     expect(M:Key("Q")).toBe(false)
     expect(M:Key("ENTER")).toBe(false)
     -- the bar's own key handler: the game gets what isn't handled
-    M.bar:GetScript("OnKeyDown")(M.bar, "Q")
+    mock.script(scene().bar, "OnKeyDown", "Q")
     -- in combat the keys are the game's
     mock.player:enterCombat()
-    M.bar:GetScript("OnKeyDown")(M.bar, "1")
+    mock.script(scene().bar, "OnKeyDown", "1")
     expect(M:View()).toBe("gossip")
     mock.player:leaveCombat()
 end
@@ -246,20 +249,20 @@ end
 @test("the speaker: their name and role, friend or foe; the portrait kept for the same speaker")
 local function speaker()
     talkTo(talker)
-    expect(M.plate.name:GetText()).toBe("Innkeeper Morwen")
+    expect(scene().plate.name:GetText()).toBe("Innkeeper Morwen")
     local guid = M.speakerGUID
     M:DrawSpeaker()
     expect(M.speakerGUID).toBe(guid)
-    mock.stub(C_TooltipInfo, "GetUnit", function(_: string): any
+    mock.stub(C_TooltipInfo, "GetUnit", function(_: string): unknown
         return { lines = { { leftText = "Innkeeper Morwen" }, { leftText = "Innkeeper" } } }
     end)
     M:DrawSpeaker()
-    expect(M.plate.role:GetText()).toBe("Innkeeper")
-    mock.stub(C_TooltipInfo, "GetUnit", function(_: string): any
+    expect(scene().plate.role:GetText()).toBe("Innkeeper")
+    mock.stub(C_TooltipInfo, "GetUnit", function(_: string): unknown
         return { lines = { { leftText = "Innkeeper Morwen" }, { leftText = "Level 30" } } }
     end)
     M:DrawSpeaker()
-    expect(M.plate.role:GetText()).toBe("")
+    expect(scene().plate.role:GetText()).toBe("")
 end
 
 @test("the rest of the UI fades out while you talk, and back after; at once in a fight; off by the setting")
@@ -267,7 +270,7 @@ local function hideUI()
     talkTo(talker)
     mock.advanceFrames(40)
     expect(UIParent:GetAlpha()).toBe(0)
-    expect(M.root:GetEffectiveAlpha()).toBe(1)
+    expect(scene().root:GetEffectiveAlpha()).toBe(1)
     mock.player:enterCombat()
     mock.advanceFrames(40)
     expect(UIParent:GetAlpha()).toBe(1)
@@ -280,7 +283,7 @@ local function hideUI()
     talkTo(talker)
     mock.advanceFrames(40)
     expect(UIParent:GetAlpha()).toBe(1)
-    local _, _, _, _, y = M.bar:GetPoint(1)
+    local _, _, _, _, y = scene().bar:GetPoint(1)
     expect(y).toBe(28)
     M:Set("hideUI", true)
 end
@@ -288,7 +291,7 @@ end
 @test("the game's frames out of sight however they're placed")
 local function away()
     talkTo(talker)
-    local g = G.GossipFrame
+    local g = gossipFrame()
     g:ClearAllPoints()
     g:SetPoint("CENTER")
     g:SetAlpha(1)
@@ -300,26 +303,26 @@ end
 
 @test("a greeting: their quests to hand in and to take, Goodbye")
 local function greeting()
-    mock.stub(G, "GetGreetingText", function(): string return "Greetings, $N." end)
-    mock.stub(G, "GetNumActiveQuests", function(): number return 1 end)
-    mock.stub(G, "GetActiveTitle", function(_: number): (string, boolean) return "Bring the Pelts", true end)
-    mock.stub(G, "GetNumAvailableQuests", function(): number return 2 end)
-    mock.stub(G, "GetAvailableQuestInfo", function(i: number): (boolean, number, boolean)
+    mock.stub(_G, "GetGreetingText", function(): string return "Greetings, $N." end)
+    mock.stub(_G, "GetNumActiveQuests", function(): number return 1 end)
+    mock.stub(_G, "GetActiveTitle", function(_: number): (string, boolean) return "Bring the Pelts", true end)
+    mock.stub(_G, "GetNumAvailableQuests", function(): number return 2 end)
+    mock.stub(_G, "GetAvailableQuestInfo", function(i: number): (boolean, number, boolean)
         return i == 2, i == 1 and 1 or 0, false
     end)
-    mock.stub(G, "GetAvailableTitle", function(i: number): string return i == 1 and "A Daily Errand" or "Easy Work" end)
+    mock.stub(_G, "GetAvailableTitle", function(i: number): string return i == 1 and "A Daily Errand" or "Easy Work" end)
     local active = mock.spy(function(_: number) end)
-    mock.stub(G, "SelectActiveQuest", active)
+    mock.stub(_G, "SelectActiveQuest", active)
     local available = mock.spy(function(_: number) end)
-    mock.stub(G, "SelectAvailableQuest", available)
+    mock.stub(_G, "SelectAvailableQuest", available)
     local c = M:Content("greeting")
     expect(c.text).toBe("Greetings, $N.")
     expect(#c.answers).toBe(4)
-    expect(c.answers[1].tag[1]).toBe("Ready")
-    expect(c.answers[2].tag[1]).toBe("Daily")
-    c.answers[1].act()
+    expect(assert(c.answers[1].tag).text).toBe("Ready")
+    expect(assert(c.answers[2].tag).text).toBe("Daily")
+    assert(c.answers[1].act)()
     expect(active).toHaveBeenCalledWith(1)
-    c.answers[3].act()
+    assert(c.answers[3].act)()
     expect(available).toHaveBeenCalledWith(2)
 end
 
@@ -330,8 +333,8 @@ local function longLine()
     mock.stub(C_GossipInfo, "GetText", function(): string return string.rep("A long story about the old days. ", 60) end)
     M:Draw()
     M:RevealAll()
-    expect(M.speech.fade).toBeShown()
-    M.speech.scroll:SetVerticalScroll(10000)
+    expect(scene().speech.fade).toBeShown()
+    scene().speech.scroll:SetVerticalScroll(10000)
     M:DrawFade()
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
     mock.advanceFrames(2)
@@ -347,20 +350,18 @@ local function typedWhole()
     M:Draw()
     M.shown, M.typed = 0, 0
     M:Type(0.02)
-    expect(M.speech.text:GetText()).toBe("Ä")
+    expect(scene().speech.text:GetText()).toBe("Ä")
     M:Type(0.02)
     M:Type(0.02)
-    expect(M.speech.text:GetText():find("|cffff0000", 1, true) ~= nil).toBe(true)
+    expect(scene().speech.text:GetText():find("|cffff0000", 1, true) ~= nil).toBe(true)
 end
 
 -- (last: the module off)
 @test("stopped: the scene hidden, the UI back")
 local function disabled()
     talkTo(talker)
-    local m: any = M
-    m:OnDisable()
-    expect(M.root).never.toBeShown()
+    M:OnDisable()
+    expect(scene().root).never.toBeShown()
     mock.advanceFrames(40)
     expect(UIParent:GetAlpha()).toBe(1)
-    M:PutAway(G.GossipFrame)
 end

@@ -10,22 +10,25 @@
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
-import SuuUI from "/Core/API"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, captureConfirm from "../../helpers"
+import type Confirms from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged, tokenOf from "../SettingsUI/UiSettingsHelpers"
-
-local M: any = assert(SuuUI.GetModule("mail"))
-local UI: any = SuuUI.UI
-local G: any = _G
+import internal M from "/Units/Mail"
+import type MailRow, OpenMail, SendForm, Inbox, Sent, SuggestList from "/Units/Mail"
+import type WindowFrame from "/UI/Panel"
+import type ConfirmOptions from "/UI/Panel"
+import type TooltipData from "/UI/Tooltip"
+import * as frames from "wowlua:frames"
 
 local WATER, TOME = 990011, 990012
 mock.defineItem(WATER, { name = "Test Water", quality = 1, stackCount = 20, icon = 134400 }, { cached = true })
 mock.defineItem(TOME, { name = "Test Tome", quality = 3, stackCount = 1, icon = 133744 }, { cached = true })
 
-local confirmed: any = nil
-local box: any = nil
+local confirms: Confirms? = nil
+local box: mock.MockUnit? = nil
 
-local function letters(): any[]
+type Letter = { [string]: unknown }
+local function letters(): Letter[]
     return {
         { sender = "Tamsin", subject = "Hello", money = 5000, daysLeft = 2.5, wasRead = false, text = "Hi there", canReply = true },
         { sender = "Ashford", subject = "Supplies", items = { { id = WATER, count = 5 } }, daysLeft = 20, wasRead = true, canReply = true },
@@ -36,48 +39,54 @@ local function letters(): any[]
     }
 end
 
-local function openMailbox(list: any[]?)
-    box = box or mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
-    mock.defineMailbox(box, { letters = list or letters() })
-    mock.player:interact(box)
+local function openMailbox(list: Letter[]?)
+    local mailbox = box or mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    box = mailbox
+    mock.defineMailbox(mailbox, { letters = list or letters() })
+    mock.player:interact(mailbox)
     mock.advanceTime(0.5)
 end
 
 @beforeEach
 local function start()
-    confirmed = nil
-    mock.stub(UI, "Confirm", function(opts: any) confirmed = opts end)
+    confirms = captureConfirm()
     mock.player:setMoney(1000000)
 end
 
 @afterEach
 local function cleanup()
     if M.open then CloseMail() end
-    if M.send then
-        M.send.to:SetValue("")
-        M.send.subject:SetValue("")
-        M.send.body.edit:SetText("")
-        M.send.money:Clear()
-        M.send.mode:SetValue("send")
+    local s = M.send
+    if s then
+        s.to:SetValue("")
+        s.subject:SetValue("")
+        s.body:SetText("")
+        s.money:Clear()
+        s.mode:SetValue("send")
     end
     M.sending, M.pending = false, nil
     local focus = GetCurrentKeyBoardFocus()
     if focus then focus:ClearFocus() end
     mock.advanceTime(1)
-    M:CharData().sent = nil
+    M:MailData().sent = nil
     expectNoErrors()
 end
 
-local function win(): any return G.SuuUIMailWindow end
+local function win(): WindowFrame return (assert(M.window)) end
+local function inbox(): Inbox return (assert(M.inbox)) end
+local function send(): SendForm return (assert(M.send)) end
+local function sent(): Sent return (assert(M.sent)) end
+local function confirmed(): ConfirmOptions return assert(confirms).last() end
+local function mailFrame(): Frame return (assert(frames.find("MailFrame"))) end
 
-local function row(sender: string): any
-    for _, r in ipairs(M.inbox.rows) do
+local function row(sender: string): MailRow
+    for _, r in ipairs(inbox().rows) do
         if r:IsShown() and r.sender:GetText() == sender then return r end
     end
     error("no mail from " .. sender)
 end
 
-local function pane(): any return M.inbox.open end
+local function pane(): OpenMail return inbox().open end
 
 --------------------------------------------------------------------------------
 -- The inbox
@@ -87,27 +96,27 @@ local function pane(): any return M.inbox.open end
 local function opening()
     openMailbox()
     expect(win()).toBeShown()
-    expect(G.MailFrame:GetAlpha()).toBe(0)
-    G.MailFrame:SetPoint("CENTER")
+    expect(mailFrame():GetAlpha()).toBe(0)
+    mailFrame():SetPoint("CENTER")
     mock.advanceTime(0.01)
-    expect(G.MailFrame:GetLeft() > UIParent:GetRight()).toBe(true)
-    local close = mock.stub(G, "CloseMail", function() end)
+    expect(assert(mailFrame():GetLeft()) > assert(UIParent:GetRight())).toBe(true)
+    local close = mock.stub(_G, "CloseMail", function() end)
     win():Hide()
     expect(close).toHaveBeenCalledTimes(1)
 end
 
 @test("each mail: who from (unread in gilt), the subject, the days left (amber under 3), what it carries")
-local function inbox()
+local function inboxRows()
     openMailbox()
-    expect(M.inbox.count:GetText()).toBe("5 mails")
+    expect(inbox().count:GetText()).toBe("5 mails")
     local hello = row("Tamsin")
     expect(tokenOf(hello.sender)).toBe("gilt-text")
-    expect(hello.right:GetText():find("2 d", 1, true) ~= nil).toBe(true)
-    expect(hello.right2:GetText():find("50", 1, true) ~= nil).toBe(true)
+    expect((hello.right:GetText() or ""):find("2 d", 1, true) ~= nil).toBe(true)
+    expect((hello.right2:GetText() or ""):find("50", 1, true) ~= nil).toBe(true)
     expect(row("Ashford").right2:GetText()).toBe("1 item")
-    expect(row("Tester").right2:GetText():find("COD", 1, true) ~= nil).toBe(true)
-    expect(row("Tester").right:GetText():find("12 h", 1, true) ~= nil).toBe(true)
-    expect(M.inbox.none).toBeShown()
+    expect((row("Tester").right2:GetText() or ""):find("COD", 1, true) ~= nil).toBe(true)
+    expect((row("Tester").right:GetText() or ""):find("12 h", 1, true) ~= nil).toBe(true)
+    expect(inbox().none).toBeShown()
     mock.hover(hello)
     expect(hello.hl).toBeShown()
     mock.hover(nil)
@@ -117,11 +126,11 @@ end
 @test("an empty mailbox says so; more mail than the inbox holds says how many wait")
 local function empty()
     openMailbox({})
-    expect(M.inbox.empty).toBeShown()
-    expect(M.inbox.count:GetText()).toBe("0 mails")
-    mock.stub(G, "GetInboxNumItems", function(): (number, number) return 0, 3 end)
+    expect(inbox().empty).toBeShown()
+    expect(inbox().count:GetText()).toBe("0 mails")
+    mock.stub(_G, "GetInboxNumItems", function(): (number, number) return 0, 3 end)
     M:Refresh()
-    expect(M.inbox.count:GetText()).toBe("0 mails, 3 more once these are gone")
+    expect(inbox().count:GetText()).toBe("0 mails, 3 more once these are gone")
 end
 
 --------------------------------------------------------------------------------
@@ -139,26 +148,28 @@ local function opened()
     expect(p.body:GetText()).toBe("Hi there")
     expect(p.moneyRow).toBeShown()
     expect(p.delete:IsEnabled()).toBe(false)
-    expect(p.delete.tooltip.description).toBe("Take what's attached first.")
-    local take = mock.stub(G, "TakeInboxMoney", function(_: number) end)
+    expect((p.delete.tooltip :: TooltipData).description).toBe("Take what's attached first.")
+    local take = mock.stub(_G, "TakeInboxMoney", function(_: number) end)
     mock.click(p.takeMoney)
     expect(take).toHaveBeenCalledWith(1)
     mock.click(p.reply)
-    expect(M.send.to:GetValue()).toBe("Tamsin")
-    expect(M.send.subject:GetValue()).toBe("RE: Hello")
+    expect(send().to:GetValue()).toBe("Tamsin")
+    expect(send().subject:GetValue()).toBe("RE: Hello")
 end
 
 @test("an invoice: what sold, to whom, for how much, the deposit, the cut and what you got")
 local function invoice()
     openMailbox()
     mock.click(row("Auction House"))
-    local text = pane().body:GetText()
+    local text = pane().body:GetText() or ""
     expect(text:find("Item sold: Test Tome", 1, true) ~= nil).toBe(true)
     expect(text:find("Buyer: Ashford", 1, true) ~= nil).toBe(true)
     expect(text:find("Amount received: ", 1, true) ~= nil).toBe(true)
-    mock.stub(G, "GetInboxInvoiceInfo", function(_: number): ...any return "buyer", "Test Water", "Tamsin", 300, nil end)
+    mock.stub(_G, "GetInboxInvoiceInfo", function(_: number): (string?, string?, string?, number, number, number, number, number, number, number, number, boolean)
+        return "buyer", "Test Water", "Tamsin", 300, 0, 0, 0, 0, 0, 0, 0, false
+    end)
     M:Refresh()
-    expect(pane().body:GetText():find("Item bought: Test Water", 1, true) ~= nil).toBe(true)
+    expect((pane().body:GetText() or ""):find("Item bought: Test Water", 1, true) ~= nil).toBe(true)
 end
 
 @test("attachments: shown, their tooltip, a click takes one, a modified click links it")
@@ -167,15 +178,15 @@ local function attachments()
     mock.click(row("Ashford"))
     local slot = pane().slots[1]
     expect(slot).toBeShown()
-    local tip = mock.stub(GameTooltip, "SetInboxItem", function(_: any, _: number, _: number) end)
+    local tip = mock.stub(GameTooltip, "SetInboxItem", function(_: unknown, _: number, _: number) end)
     mock.hover(slot)
     expect(tip).toHaveBeenCalledWith(GameTooltip, 2, 1)
     mock.hover(nil)
-    local took = mock.stub(G, "TakeInboxItem", function(_: number, _: number) end)
+    local took = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
     mock.click(slot)
     expect(took).toHaveBeenCalledWith(2, 1)
-    mock.stub(G, "IsModifiedClick", function(_: string?): boolean return true end)
-    local link = mock.stub(G, "HandleModifiedItemClick", function(_: string): boolean return true end)
+    mock.stub(_G, "IsModifiedClick", function(_: string?): boolean return true end)
+    local link = mock.stub(_G, "HandleModifiedItemClick", function(_: string): boolean return true end)
     mock.click(slot)
     expect(link).toHaveBeenCalledTimes(1)
     expect(took).toHaveBeenCalledTimes(1)
@@ -186,31 +197,31 @@ local function cod()
     openMailbox()
     mock.click(row("Tester"))
     expect(pane().codRow).toBeShown()
-    local took = mock.stub(G, "TakeInboxItem", function(_: number, _: number) end)
+    local took = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
     mock.click(pane().slots[1])
-    expect(confirmed.title).toBe("Pay cash on delivery?")
-    confirmed.onConfirm()
+    expect(confirmed().title).toBe("Pay cash on delivery?")
+    assert(confirmed().onConfirm)(nil)
     expect(took).toHaveBeenCalledWith(3, 1)
     mock.player:setMoney(100)
     mock.click(pane().slots[1])
-    expect(confirmed.title).toBe("Not enough money")
+    expect(confirmed().title).toBe("Not enough money")
 end
 
 @test("Delete for an empty mail, Return for a player's; the open mail goes")
 local function deleteReturn()
     openMailbox({ { sender = "Tamsin", subject = "Just words", text = "x", daysLeft = 5, wasRead = true, canReply = true } })
     mock.click(row("Tamsin"))
-    local del = mock.stub(G, "DeleteInboxItem", function(_: number) end)
-    mock.stub(G, "InboxItemCanDelete", function(_: number): boolean return true end)
+    local del = mock.stub(_G, "DeleteInboxItem", function(_: number) end)
+    mock.stub(_G, "InboxItemCanDelete", function(_: number): boolean return true end)
     M:Refresh()
     expect(pane().delete:IsEnabled()).toBe(true)
     mock.click(pane().delete)
     expect(del).toHaveBeenCalledWith(1)
     expect(M.openIndex).toBe(nil)
-    mock.stub(G, "InboxItemCanDelete", function(_: number): boolean return false end)
+    mock.stub(_G, "InboxItemCanDelete", function(_: number): boolean return false end)
     mock.click(row("Tamsin"))
     expect(pane().ret).toBeShown()
-    local ret = mock.stub(G, "ReturnInboxItem", function(_: number) end)
+    local ret = mock.stub(_G, "ReturnInboxItem", function(_: number) end)
     mock.click(pane().ret)
     expect(ret).toHaveBeenCalledWith(1)
 end
@@ -218,8 +229,8 @@ end
 @test("a modified click on a mail loots it whole, unless it's COD")
 local function autoLoot()
     openMailbox()
-    mock.stub(G, "IsModifiedClick", function(_: string?): boolean return true end)
-    local loot = mock.stub(G, "AutoLootMailItem", function(_: number) end)
+    mock.stub(_G, "IsModifiedClick", function(_: string?): boolean return true end)
+    local loot = mock.stub(_G, "AutoLootMailItem", function(_: number) end)
     mock.click(row("Ashford"))
     mock.click(row("Tester"))
     expect(loot).toHaveBeenCalledTimes(1)
@@ -233,10 +244,10 @@ end
 local function collectAll()
     openMailbox()
     local took: string[] = {}
-    mock.stub(G, "TakeInboxMoney", function(i: number) took[#took + 1] = "money " .. i end)
-    mock.stub(G, "TakeInboxItem", function(i: number, a: number) took[#took + 1] = "item " .. i .. "." .. a end)
-    mock.click(M.inbox.collect)
-    expect(M.inbox.collect.label:GetText()).toBe("Collecting…")
+    mock.stub(_G, "TakeInboxMoney", function(i: number) took[#took + 1] = "money " .. i end)
+    mock.stub(_G, "TakeInboxItem", function(i: number, a: number) took[#took + 1] = "item " .. i .. "." .. a end)
+    mock.click(inbox().collect)
+    expect(inbox().collect.label:GetText()).toBe("Collecting…")
     M:CollectAll(false)                            -- collecting already: once
     mock.advanceTime(0.26)
     expect(took).toEqual({ "money 1" })
@@ -245,21 +256,21 @@ local function collectAll()
     CloseMail()
     openMailbox({ { sender = "Ashford", subject = "Supplies", items = { { id = WATER, count = 5 } }, daysLeft = 20, wasRead = true } })
     mock.stub(C_Container, "CalculateTotalNumberOfFreeBagSlots", function(): number return 0 end)
-    mock.click(M.inbox.collect)
+    mock.click(inbox().collect)
     mock.advanceTime(0.26)
     expect(M.collecting).toBe(nil)
-    expect(M.inbox.collect.label:GetText()).toBe("Collect all")
+    expect(inbox().collect.label:GetText()).toBe("Collect all")
 end
 
 @test("Collect money takes only the money; a command waiting at the server waits")
 local function collectMoney()
     openMailbox({ { sender = "Ashford", subject = "Supplies", items = { { id = WATER, count = 5 } }, daysLeft = 20, wasRead = true } })
-    expect(M.inbox.money:IsEnabled()).toBe(false)  -- no money
+    expect(inbox().money:IsEnabled()).toBe(false)  -- no money
     openMailbox()
     local pending = true
     mock.stub(C_Mail, "IsCommandPending", function(): boolean return pending end)
-    local took = mock.stub(G, "TakeInboxMoney", function(_: number) end)
-    mock.click(M.inbox.money)
+    local took = mock.stub(_G, "TakeInboxMoney", function(_: number) end)
+    mock.click(inbox().money)
     mock.advanceTime(0.26)
     expect(took).toHaveBeenCalledTimes(0)
     pending = false
@@ -278,12 +289,15 @@ local function sendTab()
     win():SetTab("send")
 end
 
-local function reason(): string? return M.send.go.tooltip and M.send.go.tooltip.description end
+local function reason(): string?
+    local tip = send().go.tooltip
+    return tip and (tip :: TooltipData).description
+end
 
 @test("Send needs someone, a subject, an attachment for COD, and the money")
 local function sendNeeds()
     sendTab()
-    local s = M.send
+    local s = send()
     expect(reason()).toBe("Who is it for?")
     s.to:SetValue("Tamsin")
     M:DrawSendState()
@@ -305,41 +319,41 @@ end
 @test("Send: money or COD set, the mail sent; on success it's in Sent and the form clears")
 local function sending()
     sendTab()
-    local s = M.send
+    local s = send()
     s.to:SetValue("Tamsin")
     s.subject:SetValue("Gold")
-    s.body.edit:SetText("for you")
+    s.body:SetText("for you")
     s.money:SetCopper(100)
     M:DrawSendState()                              -- (Send checks again as you type)
-    local sent: any = nil
-    mock.stub(G, "SendMail", function(to: string, subject: string, body: string) sent = { to, subject, body } end)
-    local money = mock.stub(G, "SetSendMailMoney", function(_: number) end)
+    local out: string[]? = nil
+    mock.stub(_G, "SendMail", function(to: string, subject: string, body: string?) out = { to, subject, body or "" } end)
+    local money = mock.stub(_G, "SetSendMailMoney", function(_: number) end)
     mock.click(s.go)
-    expect(sent).toEqual({ "Tamsin", "Gold", "for you" })
+    expect(out).toEqual({ "Tamsin", "Gold", "for you" })
     expect(money).toHaveBeenCalledWith(100)
     expect(s.go.label:GetText()).toBe("Sending…")
     mock.fireEvent("MAIL_SEND_SUCCESS")
-    expect(M:CharData().sent[1].to).toBe("Tamsin")
+    expect(assert(M:MailData().sent)[1].to).toBe("Tamsin")
     expect(s.subject:GetValue()).toBe("")
     -- COD
     s.subject:SetValue("Pay me")
     s.money:SetCopper(100)
     s.mode:SetValue("cod")
-    local cod = mock.stub(G, "SetSendMailCOD", function(_: number) end)
+    local cod = mock.stub(_G, "SetSendMailCOD", function(_: number) end)
     M:Send()
     expect(cod).toHaveBeenCalledWith(100)
     mock.fireEvent("MAIL_FAILED")
     expect(M.sending).toBe(false)
-    expect(#M:CharData().sent).toBe(1)
+    expect(#assert(M:MailData().sent)).toBe(1)
 end
 
 @test("a cancelled confirmation, or nothing back for 30 s, gives Send back")
 local function neverStuck()
     sendTab()
-    local s = M.send
+    local s = send()
     s.to:SetValue("Tamsin")
     s.subject:SetValue("x")
-    mock.stub(G, "SendMail", function(_: string, _: string, _: string) end)
+    mock.stub(_G, "SendMail", function(_: string, _: string, _: string?) end)
     M:Send()
     mock.fireEvent("SECURE_TRANSFER_CANCEL")
     expect(M.sending).toBe(false)
@@ -352,17 +366,17 @@ end
 @test("attachments: a click or a drop puts the cursor's item in; the first names an empty subject")
 local function sendAttach()
     sendTab()
-    local s = M.send
-    local clicked = mock.stub(G, "ClickSendMailItemButton", function(_: number, _: boolean?) end)
+    local s = send()
+    local clicked = mock.stub(_G, "ClickSendMailItemButton", function(_: number, _: boolean?) end)
     mock.click(s.slots[1])
     mock.click(s.slots[1], "RightButton")
     mock.script(s.slots[2], "OnReceiveDrag")
     expect(clicked).toHaveBeenCalledTimes(3)
-    mock.stub(G, "HasSendMailItem", function(a: number): boolean return a == 1 end)
-    mock.stub(G, "GetSendMailItem", function(_: number): ...any return "Test Water", nil, 134400, 5, 1 end)
+    mock.stub(_G, "HasSendMailItem", function(a: unknown): boolean return a == 1 end)
+    mock.stub(_G, "GetSendMailItem", function(_: number): (string, number, number, number, number) return "Test Water", 0, 134400, 5, 1 end)
     M:DrawSendState()
     expect(s.subject:GetValue()).toBe("Test Water")
-    local tip = mock.stub(GameTooltip, "SetSendMailItem", function(_: any, _: number) end)
+    local tip = mock.stub(GameTooltip, "SetSendMailItem", function(_: unknown, _: number) end)
     mock.hover(nil)                                -- (the click left the pointer on it)
     mock.hover(s.slots[1])
     expect(tip).toHaveBeenCalledWith(GameTooltip, 1)
@@ -371,21 +385,21 @@ local function sendAttach()
     mock.hover(nil)
     -- what goes out is kept for Sent
     s.to:SetValue("Tamsin")
-    mock.stub(G, "SendMail", function(_: string, _: string, _: string) end)
+    mock.stub(_G, "SendMail", function(_: string, _: string, _: string?) end)
     M:Send()
     mock.fireEvent("MAIL_SEND_SUCCESS")
     win():SetTab("sent")
-    expect(M.sent.rows[1].sender:GetText()).toBe("To Tamsin")
+    expect(sent().rows[1].sender:GetText()).toBe("To Tamsin")
 end
 
 @test("the message counts its characters; a click in its well focuses it")
 local function message()
     sendTab()
-    local e = M.send.body.edit
+    local e = send().body
     mock.typeText(e, "hello")
-    expect(M.send.counter:GetText():find("5 / ", 1, true) ~= nil).toBe(true)
+    expect((send().counter:GetText() or ""):find("5 / ", 1, true) ~= nil).toBe(true)
     e:ClearFocus()
-    mock.script(M.send.body.well, "OnMouseDown", "LeftButton")
+    mock.script(send().well, "OnMouseDown", "LeftButton")
     expect(e:HasFocus()).toBe(true)
     mock.pressKey("ESCAPE")
     expect(e:HasFocus()).toBe(false)
@@ -397,9 +411,10 @@ end
 
 @test("To suggests your characters on this realm and side, those you sent to, and the guild")
 local function suggestions()
-    local me = M:CharData()
-    me.sent = { { to = "Tamsin", at = time() - 7200 }, { to = "tamsin", at = time() } }
-    mock.stub(M, "AllCharData", function(_: any): any
+    local me = M:MailData()
+    me.sent = { { to = "Tamsin", subject = "", items = {}, money = 0, cod = 0, at = time() - 7200 },
+                { to = "tamsin", subject = "", items = {}, money = 0, cod = 0, at = time() } }
+    mock.stub(M, "AllCharData", function(_: unknown): { [string]: { [string]: unknown } }
         return {
             mine = { name = "Ashford", realm = me.realm, faction = me.faction, class = "MAGE", level = 60 },
             far = { name = "Otherplayer", realm = "Elsewhere", faction = me.faction },
@@ -411,13 +426,13 @@ local function suggestions()
         { name = "Tester", class = "MAGE", level = 40, online = false },
         { name = "Otherplayer", class = "MAGE", level = 40, online = false },
     } })
-    local roster = G.GetGuildRosterInfo
-    mock.stub(G, "GetGuildRosterLastOnline", function(i: number): ...any
+    local roster = GetGuildRosterInfo
+    mock.stub(_G, "GetGuildRosterLastOnline", function(i: number): (number, number, number, number)
         local who = tostring((roster(i)))
         if who:find("Partytwo", 1, true) then return 0, 0, 3, 0 end
         if who:find("Tester", 1, true) then return 0, 0, 0, 5 end
         if who:find("Otherplayer", 1, true) then return 0, 0, 0, 0 end
-        return nil
+        return nil :: unknown :: number, 0, 0, 0
     end)
     local groups = M:Suggestions("")
     local titles: string[] = {}
@@ -440,11 +455,12 @@ end
 
 @test("the list under To: arrows pick, Enter or Tab or a click puts the name in")
 local function suggestList()
-    M:CharData().sent = { { to = "Tamsin", at = time() }, { to = "Ashford", at = time() } }
+    M:MailData().sent = { { to = "Tamsin", subject = "", items = {}, money = 0, cod = 0, at = time() },
+                          { to = "Ashford", subject = "", items = {}, money = 0, cod = 0, at = time() } }
     sendTab()
-    local edit = M.send.to.edit
+    local edit = send().to.edit
     edit:SetFocus()
-    local d = M.suggest
+    local d: SuggestList = assert(M.suggest)
     expect(d).toBeShown()
     mock.script(edit, "OnArrowPressed", "DOWN")
     expect(d.pick).toBe(2)
@@ -454,19 +470,19 @@ local function suggestList()
     mock.script(edit, "OnArrowPressed", "DOWN")
     mock.script(edit, "OnArrowPressed", "DOWN")
     mock.script(edit, "OnEnterPressed")
-    expect(M.send.to:GetValue()).toBe("Ashford")
+    expect(send().to:GetValue()).toBe("Ashford")
     expect(d).never.toBeShown()
     edit:SetText("tam")
     mock.typeText(edit, "s")
     expect(d).toBeShown()
     mock.script(edit, "OnTabPressed")
-    expect(M.send.to:GetValue()).toBe("Tamsin")
-    expect(M.send.subject.edit:HasFocus()).toBe(true)
+    expect(send().to:GetValue()).toBe("Tamsin")
+    expect(send().subject.edit:HasFocus()).toBe(true)
     edit:SetFocus()
     mock.hover(d.rows[2])
     expect(d.pick).toBe(2)
     mock.click(d.rows[1])
-    expect(M.send.to:GetValue()).toBe("Tamsin")
+    expect(send().to:GetValue()).toBe("Tamsin")
     -- leaving the field closes it
     edit:SetFocus()
     mock.hover(nil)
@@ -485,13 +501,13 @@ end
 local function sentList()
     openMailbox()
     win():SetTab("sent")
-    expect(M.sent.empty).toBeShown()
-    M:CharData().sent = { { to = "Tamsin", subject = "Old", at = time() - 3 * 86400, money = 0, cod = 0, items = {} },
+    expect(sent().empty).toBeShown()
+    M:MailData().sent = { { to = "Tamsin", subject = "Old", at = time() - 3 * 86400, money = 0, cod = 0, items = {} },
                           { to = "Tamsin", subject = "Bits", at = time() - 120, money = 500, cod = 0,
                             items = { { name = "Test Water", icon = 134400, count = 5 }, { name = "x", icon = 1, count = 1 } } },
                           { to = "Ashford", subject = "COD", at = time(), money = 0, cod = 900, items = {} } }
     M:Refresh()
-    local r = M.sent.rows
+    local r = sent().rows
     expect(r[1].right:GetText()).toBe("3 d ago")
     expect(r[2].right:GetText()).toBe("2 min ago")
     expect(r[2].right2:GetText():find("2 items", 1, true) ~= nil).toBe(true)
@@ -509,7 +525,7 @@ local function command()
     expect(hasLine(lines, "Guild: Partyone")).toBe(true)
     mock.slash("/suu mailsuggest zzz")
     expect(hasLine(printedSince(n), "no suggestions")).toBe(true)
-    mock.stub(M, "Suggestions", function(_: any, _: string?): any error("broken") end)
+    mock.stub(M, "Suggestions", function(_: unknown, _: string?): { title: string, rows: {} }[] error("broken") end)
     mock.slash("/suu mailsuggest x")
     expect(hasLine(printedSince(n), "suggestions failed")).toBe(true)
 end
@@ -518,7 +534,7 @@ end
 local function rest()
     mock.fireEvent("PLAYER_LEVEL_UP", 61, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     mock.advanceTime(1.1)
-    expect(M:CharData().level).toBe(UnitLevel("player"))
+    expect(M:MailData().level).toBe(UnitLevel("player"))
     openMailbox()
     themeChanged()
     mock.fireEvent("MAIL_INBOX_UPDATE")

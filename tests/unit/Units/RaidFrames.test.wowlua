@@ -9,8 +9,12 @@ import * as mock from "wowlua:mock"
 import internal M, powerFor from "/Units/RaidFrames"
 import migrations as settingMigrations from "/Core/Settings"
 import expectNoErrors from "../../helpers"
+import type RaidButton from "/Units/RaidFrames"
+import * as frames from "wowlua:frames"
 
-local G: any = _G
+-- The raid frames' holder, a group's header (by their global names).
+local function holder(): Frame return (assert(frames.find("SuuUIRaidFrames"))) end
+local function header(g: number): Frame return (assert(frames.find("SuuUIRaidGroup" .. g))) end
 
 local CLASSES = { "WARRIOR", "PRIEST", "MAGE", "ROGUE", "SHAMAN" }
 local ROLES: { [string]: ("TANK" | "HEALER" | "DAMAGER")? } = { WARRIOR = "TANK", PRIEST = "HEALER", SHAMAN = "HEALER", MAGE = "DAMAGER", ROGUE = "DAMAGER" }
@@ -33,14 +37,14 @@ local function raid(n: number)
     mock.advanceTime(0.4)
 end
 
-local function buttonOf(unit: string): any
+local function buttonOf(unit: string): RaidButton?
     for _, f in ipairs(M.buttons) do if f.unit == unit and f:IsShown() then return f end end
     return nil
 end
 
-local function myButton(): any
+local function myButton(): RaidButton
     for _, f in ipairs(M.buttons) do if f.isMe and f:IsShown() then return f end end
-    return nil
+    error("no button of yours")
 end
 
 @afterEach
@@ -58,26 +62,26 @@ end
 @test("solo and in a party: no raid frames; solo by the setting, your own")
 local function notInRaid()
     mock.advanceFrames(2)
-    expect(G.SuuUIRaidFrames).never.toBeShown()
+    expect(holder()).never.toBeShown()
     mock.group:add(raiders[1])
     mock.advanceFrames(2)
-    expect(G.SuuUIRaidFrames).never.toBeShown()
+    expect(holder()).never.toBeShown()
     mock.group:leave()
     M:Set("showSolo", true)
     mock.advanceFrames(2)
-    expect(G.SuuUIRaidFrames).toBeShown()
+    expect(holder()).toBeShown()
 end
 
 @test("in a raid: a header per group, its buttons SuuUI's frames with their units, you among them")
 local function inRaid()
     raid(6)
-    expect(G.SuuUIRaidFrames).toBeShown()
-    expect(myButton() ~= nil).toBe(true)
+    expect(holder()).toBeShown()
+    myButton()
     local shown = 0
     for _, f in ipairs(M.buttons) do if f:IsShown() and f.unit then shown = shown + 1 end end
     expect(shown).toBe(7)
-    expect(G.SuuUIRaidGroup1).toBeShown()
-    expect(G.SuuUIRaidGroup2).toBeShown()
+    expect(header(1)).toBeShown()
+    expect(header(2)).toBeShown()
     -- (every button made before the first fight: forty)
     expect(#M.buttons >= 40).toBe(true)
 end
@@ -86,19 +90,19 @@ end
 local function layout()
     raid(6)
     local w, h, gap, gg = M:Get("width"), M:Get("height"), M:Get("gap"), M:Get("groupGap")
-    local holder = G.SuuUIRaidFrames
+    local box = holder()
     local per = M:Get("perBand")
-    expect(holder:GetWidth()).toBe(per * w + (per - 1) * gg)
-    local _, _, _, x2 = G.SuuUIRaidGroup2:GetPoint(1)
+    expect(box:GetWidth()).toBe(per * w + (per - 1) * gg)
+    local _, _, _, x2 = header(2):GetPoint(1)
     expect(x2).toBe(w + gg)
-    local _, _, _, x5, y5 = G.SuuUIRaidGroup5:GetPoint(1)
+    local _, _, _, x5, y5 = header(5):GetPoint(1)
     expect(x5).toBe(0)
     expect(y5).toBe(-(5 * h + 4 * gap + gg * 2))
     M:Set("arrangement", "rows")
-    expect(G.SuuUIRaidGroup1:GetAttribute("point")).toBe("LEFT")
-    local _, _, _, _, y2 = G.SuuUIRaidGroup2:GetPoint(1)
+    expect(header(1):GetAttribute("point")).toBe("LEFT")
+    local _, _, _, _, y2 = header(2):GetPoint(1)
     expect(y2).toBe(-(h + gg))
-    expect(holder:GetWidth()).toBe(5 * w + 4 * gap)
+    expect(box:GetWidth()).toBe(5 * w + 4 * gap)
     M:Set("width", 90)
     expect(myButton():GetWidth()).toBe(90)
 end
@@ -107,10 +111,10 @@ end
 local function sortByRole()
     raid(6)
     M:Set("sort", "role")
-    expect(G.SuuUIRaidGroup1:GetAttribute("groupBy")).toBe("ASSIGNEDROLE")
-    expect(G.SuuUIRaidGroup1:GetAttribute("groupingOrder")).toBe("TANK,HEALER,DAMAGER,NONE")
+    expect(header(1):GetAttribute("groupBy")).toBe("ASSIGNEDROLE")
+    expect(header(1):GetAttribute("groupingOrder")).toBe("TANK,HEALER,DAMAGER,NONE")
     M:Set("sort", "group")
-    expect(G.SuuUIRaidGroup1:GetAttribute("groupBy")).toBeNil()
+    expect(header(1):GetAttribute("groupBy")).toBeNil()
 end
 
 @test("from 21 players the shorter bar")
@@ -125,9 +129,9 @@ local function power()
     local priest = buttonOf("raid2") or buttonOf("raid3")
     expect(priest ~= nil).toBe(true)
     M:Set("power", "all")
-    expect(powerFor("raid1", nil)).toBe(true)
+    expect(powerFor("raid1", myButton().api)).toBe(true)
     M:Set("power", "none")
-    expect(powerFor("raid1", nil)).toBe(false)
+    expect(powerFor("raid1", myButton().api)).toBe(false)
 end
 
 @test("aggro on your frame from an enemy's threat; your target ringed")
@@ -155,21 +159,23 @@ local function rangeAndOffline()
     local half = probe:GetAlpha()
     raiders[1]:setDistance(80)
     mock.advanceTime(0.4)
-    local f: any = nil
+    local f: RaidButton? = nil
     for _, b in ipairs(M.buttons) do
-        if b:IsShown() and b.unit and not b.isMe and UnitIsUnit(b.unit, "raid1") then f = b end
+        local unit = b.unit
+        if b:IsShown() and unit and not b.isMe and UnitIsUnit(unit, "raid1") then f = b end
     end
     if not f then
         for _, b in ipairs(M.buttons) do if b:IsShown() and b.unit and not b.isMe then f = b end end
     end
     expect(f ~= nil).toBe(true)
     -- (set from the range answer, a secret: it reads back secret for good)
-    expect(myButton():GetAlpha() :: any).toBe(mock.secret(1))
+    expect(myButton():GetAlpha() :: unknown).toBe(mock.secret(1))
     raiders[1]:setOnline(false)
     raiders[2]:setOnline(false)
     local off = 0
     for _, b in ipairs(M.buttons) do
-        if b:IsShown() and b.unit and not b.isMe and b.auras.container:GetAlpha() == 0 then off = off + 1 end
+        local auras = b.auras
+        if b:IsShown() and b.unit and not b.isMe and auras and auras.container:GetAlpha() == 0 then off = off + 1 end
     end
     expect(off).toBe(2)
     raiders[1]:setOnline(true)
@@ -193,25 +199,24 @@ local function previews()
     local parent = CreateFrame("Frame", nil, UIParent)
     local view = M:PreviewView(parent)
     expect(view:GetWidth() > 1).toBe(true)
-    local row = nil
-    for _, r in ipairs((M :: any).sectionRows or {}) do row = r end
-    local _ = row
     M.previewSize = 40
     M:DrawPreview(true)
-    expect(M.previewSet.frames[40]).toBeShown()
+    local set = assert(M.previewSet)
+    expect(set.frames[40]).toBeShown()
     M.previewSize = 10
     M:DrawPreview(true)
-    expect(M.previewSet.frames[11]).never.toBeShown()
+    expect(set.frames[11]).never.toBeShown()
     M:Set("sort", "role")
     M:Set("debuffBadges", "removable")
     M:Set("arrangement", "rows")
     M:DrawPreview(true)
     M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 25, true)
-    expect(M.screenSet.view).toBeShown()
-    expect(G.SuuUIRaidFrames:GetAlpha()).toBe(0)
+    local screen = assert(M.screenSet)
+    expect(screen.view).toBeShown()
+    expect(holder():GetAlpha()).toBe(0)
     M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 5, false)
-    expect(M.screenSet.view).never.toBeShown()
-    expect(G.SuuUIRaidFrames:GetAlpha()).toBe(1)
+    expect(screen.view).never.toBeShown()
+    expect(holder():GetAlpha()).toBe(1)
     M:Emit("SUUUI_EDITMODE_GROUP_PREVIEW", 0, false)
     M:PreviewView(UIParent)
     M.previewSize = nil
@@ -219,13 +224,13 @@ end
 
 @test("indicators and defensives changed: applied out of combat, a burst once")
 local function indicators()
-    local applied = mock.spy(function(_: any) end)
+    local applied = mock.spy(function(_: unknown) end)
     mock.stub(M, "ApplyIndicators", applied)
     M:Emit("SUUUI_INDICATORS_CHANGED")
     M:Emit("SUUUI_INDICATORS_CHANGED")
     mock.advanceTime(1.1)
     expect(applied).toHaveBeenCalledTimes(1)
-    local defensives = mock.spy(function(_: any) end)
+    local defensives = mock.spy(function(_: unknown) end)
     mock.stub(M, "ApplyDefensives", defensives)
     M:Emit("SUUUI_DEFENSIVES_CHANGED")
     expect(defensives).toHaveBeenCalledTimes(1)
@@ -242,11 +247,11 @@ end
 @test("auras change: the missing-buff indicators read again, after combat too")
 local function presence()
     raid(2)
-    local read = mock.spy(function(_: any) end)
+    local read = mock.spy(function(_: unknown) end)
     local me = myButton()
     mock.stub(me, "UpdateIndicatorPresence", read)
     -- (your button's unit is your raid token)
-    mock.fireUnitEvent("UNIT_AURA", me.unit, { isFullUpdate = true })
+    mock.fireUnitEvent("UNIT_AURA", assert(me.unit), { isFullUpdate = true })
     expect(read).toHaveBeenCalledTimes(1)
     mock.player:enterCombat()
     mock.advanceFrames(1)
@@ -258,7 +263,7 @@ end
 local function migrations()
     for _, m in ipairs(settingMigrations()) do
         if m.namespace == "raid" then
-            local v: { [string]: any } = { auras = 2, badges = "off" }
+            local v: { [string]: unknown } = { auras = 2, badges = "off" }
             m.fn(v)
             if m.id == "auraSplit" then expect(v.auras).toBeNil() end
             if m.id == "debuffBadges" then expect(v.debuffBadges).toBe("off") end
@@ -272,7 +277,7 @@ local function styledLate()
     b:SetSize(100, 20)
     b:SetAttribute("unit", "player")
     M:StyleButton(b)
-    local f = M.buttons[#M.buttons]
+    local f = assert(M.buttons[#M.buttons])
     expect(f.unit).toBe("player")
     expect(f.isMe).toBe(true)
     expect(f.active).toBe(true)
@@ -285,7 +290,6 @@ end
 @test("the module stopped by an error: its buttons off")
 local function disabled()
     raid(2)
-    local m: any = M
-    m:OnDisable()
+    M:OnDisable()
     expect(myButton().active).toBeFalsy()
 end
