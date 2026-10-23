@@ -10,10 +10,12 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, sortQuests from "/Units/ObjectiveTracker"
+import type QuestPlace from "/Units/ObjectiveTracker"
+import type QuestRow, TrackerQuest from "/UI/ObjectiveTracker"
+import type MenuDescription from "/UI/ContextMenu"
 import expectNoErrors from "../../helpers"
 
 local UI = SuuUI.UI
-local G: any = _G
 
 -- Placeholder quests, each from its own giver (made once: the engine keeps them).
 local WOLVES, LETTERS, CATTAILS = 9001, 9002, 9003
@@ -46,9 +48,14 @@ local function settle()
     mock.advanceFrames(2)
 end
 
+-- The placed frame, its secure parts and the tracker.
+local function parts()
+    return M:Parts()
+end
+
 -- The tracker's rows in use, by title.
-local function row(title: string): any
-    for _, r in ipairs(M.tracker.rows) do
+local function row(title: string): QuestRow?
+    for _, r in ipairs(parts().tracker.rows) do
         if r.inUse and r.quest and r.quest.title == title then return r end
     end
     return nil
@@ -57,12 +64,13 @@ end
 -- What a context menu offered: its buttons by label.
 local menu: { [string]: () -> () } = {}
 local function captureMenus()
-    mock.stub(UI, "ContextMenuFrom", function(owner: any, describe: (owner: any, root: any) -> ())
+    mock.stub(UI, "ContextMenuFrom", function<O>(owner: O, describe: (owner: O, root: MenuDescription) -> ())
         for k in pairs(menu) do menu[k] = nil end
-        local root: any = {}
-        function root:CreateTitle(_: string) end
-        function root:CreateButton(label: string, fn: () -> ()) menu[label] = fn end
-        describe(owner, root)
+        local root = {
+            CreateTitle = function(_: unknown, _: string) end,
+            CreateButton = function(_: unknown, label: string, fn: () -> ()) menu[label] = fn end,
+        }
+        describe(owner, root :: unknown :: MenuDescription)
     end)
 end
 
@@ -110,14 +118,15 @@ local function accepted()
     expect(q.zone).toBe("Elwynn Forest")
     -- (level 5 for a level 1 character)
     expect(q.difficulty).toBe("very-difficult")
-    expect(q.objectives[1].text).toBe("Prowler slain")
-    expect(q.objectives[1].progress).toBe("0/5")
-    expect(q.objectives[1].done).toBe(false)
+    local o = assert(q.objectives)[1]
+    expect(o.text).toBe("Prowler slain")
+    expect(o.progress).toBe("0/5")
+    expect(o.done).toBe(false)
     expect(row("Wolves Across the Border") ~= nil).toBe(true)
-    expect(M.tracker:GetAlpha()).toBe(1)
+    expect(parts().tracker:GetAlpha()).toBe(1)
     -- the heading found by walking up the log; a colour the tracker doesn't know: standard
-    mock.stub(C_QuestLog, "GetHeaderIndexForQuest", function(_: number): any return nil end)
-    mock.stub(G, "GetQuestDifficultyColor", function(_: number): any return { font = "GameFontNormal" } end)
+    mock.stub(C_QuestLog, "GetHeaderIndexForQuest", function(_: number): number? return nil end)
+    mock.stub(_G, "GetQuestDifficultyColor", function(_: number): { font: string } return { font = "GameFontNormal" } end)
     q = M:TrackedQuests()[1]
     expect(q.zone).toBe("Elwynn Forest")
     expect(q.difficulty).toBe("standard")
@@ -139,13 +148,13 @@ end
 local function empty()
     settle()
     M:Refresh()
-    expect(M.tracker:GetAlpha()).toBe(0)
-    expect(M.toggle:GetAlpha()).toBe(0)
+    expect(parts().tracker:GetAlpha()).toBe(0)
+    expect(parts().toggle:GetAlpha()).toBe(0)
 end
 
 @test("by zone: the zone you're in first, then the nearest, the rest in log order; the nearest first within one")
 local function sorting()
-    local list: { [string]: any }[] = {
+    local list: (QuestPlace & { questID: number })[] = {
         { questID = 1, zone = "Durotar", logIndex = 5, distance = 100 },
         { questID = 2, zone = "Elwynn Forest", logIndex = 3, distance = 900 },
         { questID = 3, zone = "Elwynn Forest", logIndex = 2, distance = 400 },
@@ -164,11 +173,11 @@ end
 local function objectiveTexts()
     take(WOLVES)
     local real = C_QuestLog.GetQuestObjectives
-    mock.stub(C_QuestLog, "GetQuestObjectives", function(_: number): any
+    mock.stub(C_QuestLog, "GetQuestObjectives", function(_: number): unknown
         return { { text = "0/2 Handful of Cattails", finished = false }, { text = "Cattails: 1/4", finished = false },
                  { text = "Find the cave", finished = true } }
     end)
-    local o = M:TrackedQuests()[1].objectives
+    local o = assert(M:TrackedQuests()[1].objectives)
     expect(o[1].text).toBe("Handful of Cattails")
     expect(o[1].progress).toBe("0/2")
     expect(o[2].text).toBe("Cattails")
@@ -177,8 +186,8 @@ local function objectiveTexts()
     expect(o[3].progress).toBeNil()
     expect(o[3].done).toBe(true)
     -- unreadable: none
-    mock.stub(C_QuestLog, "GetQuestObjectives", function(_: number): any return "nothing" end)
-    expect(#M:TrackedQuests()[1].objectives).toBe(0)
+    mock.stub(C_QuestLog, "GetQuestObjectives", function(_: number): unknown return "nothing" end)
+    expect(#assert(M:TrackedQuests()[1].objectives)).toBe(0)
     -- (Blizzard's own code reads it too: the real one back at once)
     mock.stub(C_QuestLog, "GetQuestObjectives", real)
 end
@@ -187,27 +196,27 @@ end
 local function complete()
     take(LETTERS)
     mock.stub(C_QuestLog, "IsComplete", function(id: number): boolean return id == LETTERS end)
-    mock.stub(G, "GetQuestLogCompletionText", function(_: number): string return "Return to the Courier." end)
+    mock.stub(_G, "GetQuestLogCompletionText", function(_: number): string return "Return to the Courier." end)
     local q = M:TrackedQuests()[1]
     expect(q.complete).toBe(true)
     expect(q.objectives).toBeNil()
-    expect(q.tooltip.description).toBe("Return to the Courier.")
+    expect((q.tooltip :: { description: string }).description).toBe("Return to the Courier.")
 end
 
 @test("a quest's item: a secure button beside its title, its cooldown, in range; kept in place in combat")
 local function items()
     take(WOLVES)
     local link = "|cffffffff|Hitem:6145::::::::1:::::::::|h[Clarice's Pendant]|h|r"
-    mock.stub(G, "GetQuestLogSpecialItemInfo", function(_: number): (string, number, number, boolean)
+    mock.stub(_G, "GetQuestLogSpecialItemInfo", function(_: number): (string, number, number, boolean)
         return link, 133282, 3, false
     end)
-    mock.stub(G, "GetQuestLogSpecialItemCooldown", function(_: number): (number, number, number)
+    mock.stub(_G, "GetQuestLogSpecialItemCooldown", function(_: number): (number, number, number)
         return GetTime(), 30, 1
     end)
     local inRange = 1
-    mock.stub(G, "IsQuestLogSpecialItemInRange", function(_: number): number return inRange end)
+    mock.stub(_G, "IsQuestLogSpecialItemInRange", function(_: number): number return inRange end)
     M:Refresh()
-    local b = M.itemButtons[1]
+    local b = assert(M.itemButtons[1])
     expect(b).toBeShown()
     expect(b:GetAttribute("type")).toBe("item")
     expect(b:GetAttribute("item")).toBe(link)
@@ -226,15 +235,15 @@ local function items()
     b:ShowTooltip()
     GameTooltip:Hide()
     -- no cooldown
-    mock.stub(G, "GetQuestLogSpecialItemCooldown", function(_: number): any return nil end)
+    mock.stub(_G, "GetQuestLogSpecialItemCooldown", function(_: number): (number?, number?, number?) return nil, nil, nil end)
     mock.fireEvent("BAG_UPDATE_COOLDOWN")
     -- in combat the list holds still; laid out again after
     mock.player:enterCombat()
-    expect(M.tracker.scrollLocked).toBe(true)
+    expect(parts().tracker.scrollLocked).toBe(true)
     take(CATTAILS)
     M:Refresh()
     expect(M.pendingItems).toBe(true)
-    M:LayoutItems(M.quests)
+    M:LayoutItems(assert(M.quests))
     mock.player:leaveCombat()
     expect(M.pendingItems).toBeNil()
     -- Quest items off: none
@@ -247,19 +256,19 @@ end
 local function collapsing()
     take(WOLVES)
     settle()
-    mock.click(M.toggle)
+    mock.click(parts().toggle)
     expect(M:Get("collapsed")).toBe(true)
-    expect(M.holder).never.toBeShown()
-    mock.click(M.toggle)
+    expect(parts().holder).never.toBeShown()
+    mock.click(parts().toggle)
     expect(M:Get("collapsed")).toBe(false)
-    expect(M.holder).toBeShown()
+    expect(parts().holder).toBeShown()
     -- a boss up: only the head
     local boss = mock.spawnUnit({ name = "Hogger", level = 11, reaction = "hostile", classification = "elite" })
     mock.startEncounter({ id = 1, name = "Hogger", bosses = { boss } })
     mock.advanceFrames(20)
     mock.advanceFrames(2)
     expect(M:InBossFight()).toBeTruthy()
-    expect(M.holder).never.toBeShown()
+    expect(parts().holder).never.toBeShown()
     mock.endEncounter(true)
     mock.advanceFrames(20)
     mock.advanceFrames(2)
@@ -283,8 +292,8 @@ local function questClicks()
     take(WOLVES)
     settle()
     local opened = mock.spy(function(_: number) end)
-    mock.stub(G, "QuestMapFrame_OpenToQuestDetails", opened)
-    local r = row("Wolves Across the Border")
+    mock.stub(_G, "QuestMapFrame_OpenToQuestDetails", opened)
+    local r = assert(row("Wolves Across the Border"))
     M:QuestClick(WOLVES, "LeftButton", r)
     expect(opened).toHaveBeenCalledWith(WOLVES)
     M:QuestClick(WOLVES, "RightButton", r)
@@ -303,7 +312,7 @@ local function questClicks()
     mock.group:add(friend)
     mock.stub(C_QuestLog, "IsPushableQuest", function(_: number): boolean return true end)
     local pushed = mock.spy(function() end)
-    mock.stub(G, "QuestLogPushQuest", pushed)
+    mock.stub(_G, "QuestLogPushQuest", pushed)
     M:QuestClick(WOLVES, "RightButton", r)
     choose("Share")
     expect(pushed).toHaveBeenCalled()
@@ -321,7 +330,7 @@ mock.defineItem(STONE, { name = "Coarse Stone", quality = 1, icon = 135233 })
 local RECIPE = 2660
 
 local function trackRecipe(have: { [number]: number })
-    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): any
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
         return { outputItemID = PRODUCT, name = "Rough Sharpening Stone",
                  reagentSlotSchematics = { { reagents = { { itemID = ORE } }, quantityRequired = 2 },
                                            { reagents = { { itemID = STONE } }, quantityRequired = 1 },
@@ -337,28 +346,30 @@ local function recipes()
     trackRecipe({ [ORE] = 1 })
     local list = M:TrackedRecipes()
     expect(#list).toBe(1)
-    local r = list[1]
+    local r: TrackerQuest = list[1]
+    local objectives = assert(r.objectives)
     expect(r.title).toBe("Rough Sharpening Stone")
-    expect(r.objectives[1].text).toBe("Rough Stone")
-    expect(r.objectives[1].progress).toBe("1/2")
-    expect(r.objectives[1].done).toBe(false)
-    expect(r.objectives[2].progress).toBe("0/1")
+    expect(objectives[1].text).toBe("Rough Stone")
+    expect(objectives[1].progress).toBe("1/2")
+    expect(objectives[1].done).toBe(false)
+    expect(objectives[2].progress).toBe("0/1")
     expect(r.complete).toBe(false)
-    expect(M.tracker:GetAlpha()).toBe(1)
+    expect(parts().tracker:GetAlpha()).toBe(1)
     trackRecipe({ [ORE] = 5, [STONE] = 3 })
     r = M:TrackedRecipes()[1]
     expect(r.complete).toBe(true)
     expect(r.count).toBe("×2")
     -- the section's own toggle
-    M.tracker.onSectionToggle("recipes")
+    local sectionToggle = assert(parts().tracker.onSectionToggle)
+    sectionToggle("recipes")
     expect(M:Get("recipesCollapsed")).toBe(true)
-    M.tracker.onSectionToggle("recipes")
+    sectionToggle("recipes")
     -- off: none
     M:Set("recipes", false)
     expect(#M:TrackedRecipes()).toBe(0)
     M:Set("recipes", true)
     -- a product not loaded yet: asked for, drawn again once it comes
-    mock.stub(C_Item, "GetItemInfo", function(_: number): any return nil end)
+    mock.stub(C_Item, "GetItemInfo", function(_: number): nil return nil end)
     M:TrackedRecipes()
     expect(M.waitingItems).toBe(true)
     mock.fireEvent("GET_ITEM_INFO_RECEIVED", PRODUCT, true)
@@ -370,15 +381,14 @@ end
 local function recipeClicks()
     captureMenus()
     trackRecipe({ [ORE] = 2, [STONE] = 1 })
-    local r = row("Rough Sharpening Stone")
-    expect(r ~= nil).toBe(true)
+    local r = assert(row("Rough Sharpening Stone"))
     -- no profession to open it: nothing
     mock.stub(SuuUI, "ProfessionOpener", function(_: number): number? return nil end)
     M:RowEnter(r)
     expect(M.opener).toBeNil()
     mock.stub(SuuUI, "ProfessionOpener", function(_: number): number? return 2018 end)
     M:RowEnter(r)
-    local b = M.opener
+    local b = assert(M.opener)
     expect(b).toBeShown()
     expect(b:GetAttribute("type1")).toBe("spell")
     expect(b:GetAttribute("spell1")).toBe(2018)
@@ -394,12 +404,12 @@ local function recipeClicks()
     b:Click("RightButton")
     expect(menu["Stop tracking"] ~= nil).toBe(true)
     -- the mouse away: the opener goes
-    b:GetScript("OnEnter")(b)
-    b:GetScript("OnLeave")(b)
+    mock.script(b, "OnEnter")
+    mock.script(b, "OnLeave")
     expect(b).never.toBeShown()
     -- the row's own clicks: the menu; the profession open already: chosen
     M:RecipeClick(RECIPE, "RightButton", r)
-    mock.stub(C_TradeSkillUI, "GetBaseProfessionInfo", function(): any return { professionID = 0 } end)
+    mock.stub(C_TradeSkillUI, "GetBaseProfessionInfo", function(): unknown return { professionID = 0 } end)
     mock.stub(C_TradeSkillUI, "GetTradeSkillLineForRecipe", function(_: number): (number, string, number) return 0, "", 0 end)
     mock.stub(C_TradeSkillUI, "IsTradeSkillReady", function(): boolean return true end)
     M:RecipeClick(RECIPE, "LeftButton", r)
@@ -407,7 +417,7 @@ local function recipeClicks()
     mock.stub(C_TradeSkillUI, "IsTradeSkillReady", function(): boolean return false end)
     mock.player:enterCombat()
     local said: string[] = {}
-    mock.stub(M, "Print", function(_: any, text: string) said[#said + 1] = text end)
+    mock.stub(M, "Print", function(_: unknown, text: string) said[#said + 1] = text end)
     M:RecipeClick(RECIPE, "LeftButton", r)
     expect(said[1]).toBe("Professions open out of combat.")
     M:RowEnter(r)
@@ -421,12 +431,12 @@ end
 local function settings()
     take(WOLVES)
     M:Set("maxHeight", 200)
-    expect(M.frame:GetHeight()).toBe(200)
+    expect(parts():GetHeight()).toBe(200)
     mock.player:enterCombat()
     M:Set("maxHeight", 300)
     expect(M.pendingSize).toBe(true)
     mock.player:leaveCombat()
-    expect(M.frame:GetHeight()).toBe(300)
+    expect(parts():GetHeight()).toBe(300)
     M:Set("shows", "combat")
     local parent = CreateFrame("Frame", nil, UIParent)
     local view = M:PreviewView(parent)
@@ -440,7 +450,7 @@ end
 local function resort()
     take(WOLVES)
     settle()
-    local refresh = mock.spy(function(_: any) end)
+    local refresh = mock.spy(function(_: unknown) end)
     mock.stub(M, "QueueRefresh", refresh)
     mock.advanceFrames(11, 1000)
     expect(refresh).toHaveBeenCalled()
@@ -450,16 +460,15 @@ end
 local function scrolled()
     take(WOLVES)
     settle()
-    local laid = mock.spy(function(_: any, _: any) end)
+    local laid = mock.spy(function(_: unknown, _: unknown) end)
     mock.stub(M, "LayoutItems", laid)
-    M.tracker.onScroll()
+    assert(parts().tracker.onScroll)()
     expect(laid).toHaveBeenCalled()
 end
 
 -- (last: the tracker off)
 @test("stopped: hidden")
 local function disabled()
-    local m: any = M
-    m:OnDisable()
-    expect(M.frame).never.toBeShown()
+    M:OnDisable()
+    expect(parts()).never.toBeShown()
 end
