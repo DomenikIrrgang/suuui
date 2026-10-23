@@ -8,7 +8,7 @@ import tokens as T from "/Core/Tokens"
 import * as roles from "/Core/Roles"
 import * as events from "/Core/Events"
 import cooldownTracker, cooldownConditionMet, CooldownTracker, trackerSound, trackerSoundFiles,
-    trackerAuraSounds from "/UI/CooldownTracker"
+    trackerAuraSounds, TrackerEnchant, TrackerEntry, TrackerCondition, TrackerWhen, TrackerLists, TrackerOptions from "/UI/CooldownTracker"
 import internal knownRank, knowsEntry, cooldownMember, iconFor, currentStance, targetKind, instanceKind,
     rosterClasses, hasRank, readTalents, lookUp, listHas, counts, conditionMet, staticState, chain, stateOf,
     allMet, withMetMembers, auraSize, auraLook, slotArt, sourceFilter, auraParts, containerKey, cooldownFlags,
@@ -40,19 +40,19 @@ end
 -- The trackers a test made, and the cooldown world it fakes.
 local trackers: CooldownTracker[] = {}
 local parent: Frame? = nil
-local cooldowns: { [number]: { active: any, gcd?: any } } = {}
-local usable: { [number]: { any } } = {}
+local cooldowns: { [number]: { active: unknown, gcd?: unknown } } = {}
+local usable: { [number]: { unknown } } = {}
 
 local function fakeSpells()
-    mock.fake("C_Spell.GetSpellCooldown", function(id: number): any
+    mock.fake("C_Spell.GetSpellCooldown", function(id: number): unknown
         local c = cooldowns[id]
         return { startTime = 0, duration = 0, isEnabled = true, modRate = 1,
                  isActive = c and c.active or false, isOnGCD = c and c.gcd or false }
     end)
-    mock.fake("C_Spell.GetSpellCooldownDuration", function(id: number): any
+    mock.fake("C_Spell.GetSpellCooldownDuration", function(id: number): unknown
         return cooldowns[id] and { duration = true } or nil
     end)
-    mock.fake("C_Spell.IsSpellUsable", function(id: number): (any, any)
+    mock.fake("C_Spell.IsSpellUsable", function(id: number): (unknown, unknown)
         local u = usable[id]
         if u then return u[1], u[2] end
         return true, false
@@ -60,7 +60,7 @@ local function fakeSpells()
 end
 
 -- A running tracker with these lists and options, built (the driver's frame).
-local function tracker(lists: any, opts: any?): CooldownTracker
+local function tracker(lists: TrackerLists, opts: TrackerOptions?): CooldownTracker
     fakeSpells()
     local p = parent or newParent(600, 400)
     parent = p
@@ -72,13 +72,14 @@ local function tracker(lists: any, opts: any?): CooldownTracker
     return t
 end
 
-local function strike(extra: { [string]: any }?): { [string]: any }
-    local e: { [string]: any } = { name = "Test Strike", ids = { KNOWN_LOW, KNOWN_HIGH } }
-    for k, v in pairs(extra or {}) do e[k] = v end
-    return e
+local function strike(extra: TrackerEntry?): TrackerEntry
+    local e: { [string]: unknown } = { name = "Test Strike", ids = { KNOWN_LOW, KNOWN_HIGH } }
+    local more: { [string]: unknown } = extra or {}
+    for k, v in pairs(more) do e[k] = v end
+    return e :: TrackerEntry
 end
 
-local function cond(c: { [string]: any }, match: string?): any
+local function cond(c: TrackerCondition, match: string?): TrackerWhen
     return { match = match, conditions = { c } }
 end
 
@@ -120,15 +121,15 @@ end
 
 @test("cooldownMember: the last member you know, with the group's behaviour")
 local function member()
-    local g = { group = true, name = "G", icon = 5, show = "ready", effect = "you",
+    local g: TrackerEntry = { group = true, name = "G", icon = 5, show = "ready", effect = "you",
                 members = { { name = "A", ids = { KNOWN_LOW } }, { name = "B", ids = { UNKNOWN } },
                             { name = "C", ids = {} }, { name = "D", ids = { OTHER }, when = cond({ type = "combat" }) } } }
-    local e = cooldownMember(g)
+    local e = assert(cooldownMember(g))
     expect(e.name).toBe("D")
     expect(e.show).toBe("ready")
     expect(e.group).toBeNil()
     expect(e.icon).toBeNil()
-    expect(e.memberWhen).toBe(g.members[4].when)
+    expect(e.memberWhen).toBe(assert(g.members)[4].when)
     expect(cooldownMember({ group = true, members = { { name = "B", ids = { UNKNOWN } } } })).toBeNil()
     expect(cooldownMember({ group = true })).toBeNil()
 end
@@ -142,12 +143,16 @@ end
 
 @test("cooldownFlags: unknown reads as not active")
 local function flags()
-    local info: any = { isActive = true, isOnGCD = mock.secret(true) }
+    -- (a secret isOnGCD, which the declarations don't allow for)
+    local onGCD: unknown = mock.secret(true)
+    local info: SpellCooldownInfoSecret = { startTime = 0, duration = 0, isEnabled = true, isActive = true, modRate = 1,
+                                            isOnGCD = onGCD :: boolean }
     local a, g = cooldownFlags(info)
     expect(a).toBe(true); expect(g).toBe(false)
     a, g = cooldownFlags(nil)
     expect(a).toBe(false); expect(g).toBe(false)
-    a, g = cooldownFlags(mock.secret(info))
+    local plain: SpellCooldownInfo = { startTime = 0, duration = 0, isEnabled = true, isActive = true, modRate = 1 }
+    a, g = cooldownFlags(mock.secret(plain))
     expect(a).toBe(false); expect(g).toBe(false)
 end
 
@@ -174,8 +179,8 @@ local function groupCond()
     local inGroup, inRaid = false, false
     mock.fake("IsInGroup", function(): boolean return inGroup end)
     mock.fake("IsInRaid", function(): boolean return inRaid end)
-    mock.fake("UnitIsUnit", function(a: string, b: string): any return a == "party2" and b == "player" end)
-    mock.fake("UnitClass", function(unit: string): (any, any)
+    mock.fake("UnitIsUnit", function(a: string, b: string): unknown return a == "party2" and b == "player" end)
+    mock.fake("UnitClass", function(unit: string): (unknown, unknown)
         if unit == "player" then return "Mage", "MAGE" end
         if unit == "party1" or unit == "raid3" then return "Druid", "DRUID" end
         if unit == "party3" then return "x", mock.secret("PRIEST") end
@@ -249,9 +254,9 @@ local function targetCond()
     mock.fake("UnitLevel", function(_: string): number return -1 end)
     expect(targetKind()).toBe("boss")
     mock.fake("UnitLevel", function(_: string): number return 10 end)
-    mock.fake("UnitIsBossMob", function(_: string): any return true end)
+    mock.fake("UnitIsBossMob", function(_: string): unknown return true end)
     expect(targetKind()).toBe("boss")
-    mock.fake("UnitIsPlayer", function(_: string): any return true end)
+    mock.fake("UnitIsPlayer", function(_: string): unknown return true end)
     expect(targetKind()).toBe("player")
     mock.player:target(nil)
     mob:despawn()
@@ -260,9 +265,9 @@ end
 @test("stance: caster, forms by spell, by name, a rogue's stealth")
 local function stanceCond()
     local index = 0
-    local spell: any = 768
-    mock.fake("GetShapeshiftForm", function(): any return index end)
-    mock.fake("GetShapeshiftFormInfo", function(_: number): (any, any, any, any) return 1, true, true, spell end)
+    local spell: unknown = 768
+    mock.fake("GetShapeshiftForm", function(): unknown return index end)
+    mock.fake("GetShapeshiftFormInfo", function(_: number): (unknown, unknown, unknown, unknown) return 1, true, true, spell end)
     expect(currentStance()).toBe("caster")
     index = 1
     expect(currentStance()).toBe("cat")
@@ -299,20 +304,20 @@ end
 
 @test("readTalents: ranked nodes' chosen entry, else every entry")
 local function talents()
-    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return 7 end)
-    mock.fake("C_Traits.GetConfigInfo", function(_: number): any return { treeIDs = { 1 } } end)
-    mock.fake("C_Traits.GetTreeNodes", function(_: number): any return { 10, 11, 12, 13 } end)
-    mock.fake("C_Traits.GetNodeInfo", function(_: number, node: number): any
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown return 7 end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number): unknown return { treeIDs = { 1 } } end)
+    mock.fake("C_Traits.GetTreeNodes", function(_: number): unknown return { 10, 11, 12, 13 } end)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, node: number): unknown
         if node == 10 then return { ranksPurchased = 1, activeEntry = { entryID = 100 }, entryIDs = { 100 } } end
         if node == 11 then return { activeRank = 2, entryIDs = { 110, 111, mock.secret(1) } } end
         if node == 12 then return { currentRank = 0, entryIDs = { 120 } } end
         return { ranksPurchased = mock.secret(1), entryIDs = { 130 } }
     end)
-    mock.fake("C_Traits.GetEntryInfo", function(_: number, entry: number): any
+    mock.fake("C_Traits.GetEntryInfo", function(_: number, entry: number): unknown
         if entry == 111 then return { definitionID = mock.secret(5) } end
         return { definitionID = entry * 10 }
     end)
-    mock.fake("C_Traits.GetDefinitionInfo", function(def: number): any
+    mock.fake("C_Traits.GetDefinitionInfo", function(def: number): unknown
         if def == 1000 then return { spellID = 5000, overriddenSpellID = 5001 } end
         if def == 1100 then return { spellID = mock.secret(1) } end
         return nil
@@ -324,20 +329,20 @@ local function talents()
     expect(hasRank({ ranksPurchased = 0, activeRank = 0 })).toBe(false)
     expect(hasRank({ currentRank = 3 })).toBe(true)
     -- no config, a secret one, no tree list
-    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return nil end)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown return nil end)
     expect(readTalents()).toBeNil()
-    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return mock.secret(7) end)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown return mock.secret(7) end)
     expect(readTalents()).toBeNil()
-    mock.fake("C_ClassTalents.GetActiveConfigID", function(): any return 7 end)
-    mock.fake("C_Traits.GetConfigInfo", function(_: number): any return {} end)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown return 7 end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number): unknown return {} end)
     expect(readTalents()).toBeNil()
 end
 
 @test("lookUp keeps what it read, false for nothing")
 local function lookups()
-    local ctx: { [string]: any } = {}
+    local ctx: { [string]: unknown } = {}
     local n = 0
-    local function read(): any n = n + 1; return nil end
+    local function read(): unknown n = n + 1; return nil end
     expect(lookUp(ctx, "k", read)).toBe(false)
     expect(lookUp(ctx, "k", read)).toBe(false)
     expect(n).toBe(1)
@@ -387,11 +392,11 @@ end
 
 @test("withMetMembers: a group without the members that can't show")
 local function metMembers()
-    local single = { ids = { 1 } }
+    local single: TrackerEntry = { ids = { 1 } }
     expect(withMetMembers(single, {})).toBe(single)
-    local plain = { group = true, members = { { ids = { 1 } } } }
+    local plain: TrackerEntry = { group = true, members = { { ids = { 1 } } } }
     expect(withMetMembers(plain, {})).toBe(plain)
-    local g = { group = true, name = "G", members = {
+    local g: TrackerEntry = { group = true, name = "G", members = {
         { ids = { 3, 1 } },
         { ids = { 2 }, when = cond({ type = "group", value = "raid" }) },
         { ids = { 1, 4 }, when = cond({ type = "combat" }) },
@@ -399,7 +404,7 @@ local function metMembers()
     } }
     local e = withMetMembers(g, {})
     expect(e).never.toBe(g)
-    expect(#e.members).toBe(3)
+    expect(#assert(e.members)).toBe(3)
     expect(e.ids).toEqual({ 1, 3, 4 })
     expect(e.name).toBe("G")
 end
@@ -414,10 +419,10 @@ local function looks()
     expect(auraSize({ size = "small" })).toBe(T.size["icon-md"])
     expect(auraSize({ size = "large" })).toBe(T.size["cdm-essential"])
     expect(auraSize({ size = "huge" })).toBe(T.size["icon-lg"])
-    local look = auraLook({ border = "gilt", glow = true, digits = false, stacks = true, expiring = 5 }, { border = "arcane", drain = true })
+    local look = auraLook({ border = "gilt", glow = true, digits = false, stacks = true, expiring = 5 }, { border = "arcane", drain = "drain-arcane" })
     expect(look.border).toBe("gilt")
     expect(look.glow).toBe("glow-arcane")
-    expect(look.drain).toBe(true)
+    expect(look.drain).toBe("drain-arcane")
     expect(look.digits).toBe(false)
     expect(look.expiring).toBe(5)
     expect(auraLook({ border = "nope" }, nil).border).toBeNil()
@@ -427,13 +432,13 @@ end
 local function art()
     expect(slotArt({ ids = { KNOWN_LOW } }, {})).toBe(1001)
     expect(slotArt({ group = true, fixedIcon = true, icon = OTHER, ids = { KNOWN_LOW } }, {})).toBe(1004)
-    local g = { group = true, icon = OTHER, ids = { UNKNOWN }, members = {
+    local g: TrackerEntry = { group = true, icon = OTHER, ids = { UNKNOWN }, members = {
         { ids = { UNKNOWN }, icon = KNOWN_HIGH, when = cond({ type = "combat" }) },
         { ids = { UNKNOWN } },
         { ids = { KNOWN_LOW } },
     } }
     expect(slotArt(g, {})).toBe(1001) -- the member you know
-    table.remove(g.members, 3)
+    table.remove(assert(g.members), 3)
     expect(slotArt(g, { combat = true })).toBe(1002) -- the first met: its own icon
     expect(slotArt(g, { combat = false })).toBe(1003) -- the second: its first ID
     expect(slotArt({ group = true, icon = OTHER, ids = { UNKNOWN }, members = { { ids = {} } } }, {})).toBe(1004)
@@ -446,7 +451,7 @@ end
     { "nil", "mine", "any", "HELPFUL|PLAYER" }, { "nil", "nil", "others", "HELPFUL|!PLAYER" },
 })
 local function filters(source: string, flag: string, default: string, out: string)
-    local e: { [string]: any } = {}
+    local e: TrackerEntry = {}
     if source ~= "nil" then e.source = source end
     if flag == "group" then e.group = true elseif flag == "mine" then e.mine = true end
     expect(table.concat(sourceFilter("HELPFUL", e, default), "|")).toBe(out)
@@ -493,12 +498,12 @@ end
 
 @test("trackerSound: the file, else the sound kit; unknown plays nothing")
 local function sounds()
-    local played: { any } = {}
-    mock.fake("PlaySoundFile", function(file: any, _: string): any played[#played + 1] = file; return true end)
-    mock.fake("PlaySound", function(kit: any, _: string): any played[#played + 1] = "kit" .. kit; return true end)
+    local played: { unknown } = {}
+    mock.fake("PlaySoundFile", function(file: unknown, _: string): unknown played[#played + 1] = file; return true end)
+    mock.fake("PlaySound", function(kit: unknown, _: string): unknown played[#played + 1] = "kit" .. kit; return true end)
     trackerSound("chime")
     expect(played).toEqual({ 567409 })
-    mock.fake("PlaySoundFile", function(_: any, _: string): any return false end)
+    mock.fake("PlaySoundFile", function(_: unknown, _: string): unknown return false end)
     trackerSound("ping")
     expect(played[2]).toBe("kit" .. SOUNDKIT.MAP_PING)
     trackerSound("nope")
@@ -560,8 +565,8 @@ end
 
 @test("cell states: cooldown dims, GCD keeps it ready, coming ready pops and plays")
 local function cellStates()
-    local played: { any } = {}
-    mock.fake("PlaySoundFile", function(file: any, _: string): any played[#played + 1] = file; return true end)
+    local played: { unknown } = {}
+    mock.fake("PlaySoundFile", function(file: unknown, _: string): unknown played[#played + 1] = file; return true end)
     local t = tracker({ essential = { strike({ sound = "chime" }) } })
     local c = t.built.essential[1]
     expect(c.icon.state).toBe("rest")
@@ -656,7 +661,7 @@ local function driver()
     local t = tracker({ essential = { strike() } })
     local c = t.built.essential[1]
     local reads = 0 -- (the Cooldown Manager's own tracker reads its spells too)
-    mock.fake("C_Spell.GetSpellCooldown", function(id: number): any
+    mock.fake("C_Spell.GetSpellCooldown", function(id: number): unknown
         if id == KNOWN_HIGH then reads = reads + 1 end
         return nil
     end)
@@ -765,8 +770,8 @@ end
 @test("live conditions: a cell shows only in its stance, in place")
 local function liveCell()
     local index = 0
-    mock.fake("GetShapeshiftForm", function(): any return index end)
-    mock.fake("GetShapeshiftFormInfo", function(_: number): (any, any, any, any) return 1, true, true, 768 end)
+    mock.fake("GetShapeshiftForm", function(): unknown return index end)
+    mock.fake("GetShapeshiftFormInfo", function(_: number): (unknown, unknown, unknown, unknown) return 1, true, true, 768 end)
     local t = tracker({ essential = { strike({ when = cond({ type = "stance", stances = { "cat" } }) }),
                                       { name = "Overpower", ids = { OTHER } } } })
     local c = t.built.essential[1]
@@ -846,8 +851,8 @@ local function auraRows()
     -- debuff slots wait for a hostile target (as an alpha from the boolean:
     -- the VM stores SetAlphaFromBoolean's arguments without applying them)
     local slot = t.built.debuffs[1]
-    local shown: any = nil
-    mock.stub(slot, "SetAlphaFromBoolean", function(_: any, on: any, _: number, _: number) shown = on end)
+    local shown: unknown = nil
+    mock.stub(slot, "SetAlphaFromBoolean", function(_: unknown, on: unknown, _: number, _: number) shown = on end)
     t:UpdateMissing()
     expect(shown).toBe(false)
     local mob = mock.spawnUnit({ name = "Mob", reaction = "hostile" })
@@ -856,7 +861,7 @@ local function auraRows()
     -- a frame without it: a plain alpha
     local plain = t.built.debuffs[2]
     plain.withTarget = true
-    plain.SetAlphaFromBoolean = false -- (shadows the widget method)
+    rawset(plain, "SetAlphaFromBoolean", false) -- (shadows the widget method)
     t:UpdateMissing()
     expect(plain:GetAlpha()).toBe(1)
     mock.player:target(nil)
@@ -928,7 +933,7 @@ end
 local function enchants()
     local t = tracker({ buffs = { { enchant = "main", name = "MH" }, { enchant = "off", missing = "hide" },
                                   { enchant = "ranged", missing = "grey" } } })
-    local main, off, ranged = t.built.buffs[1], t.built.buffs[2], t.built.buffs[3]
+    local main, off, ranged = t.built.buffs[1] :: TrackerEnchant, t.built.buffs[2] :: TrackerEnchant, t.built.buffs[3] :: TrackerEnchant
     expect(main.enchant).toBe(true)
     expect(main.missing).toBe("warn")
     expect(main).toBeShown()
@@ -946,20 +951,20 @@ local function enchants()
     expect(main).never.toBeShown()
     local w = tracker({ buffs = { { enchant = "main", warnCombat = true } } })
     mock.player:enterCombat()
-    expect(w.built.buffs[1].missing).toBe("warn")
+    expect((w.built.buffs[1] :: TrackerEnchant).missing).toBe("warn")
     mock.player:leaveCombat()
 end
 
 @test("aura sounds: registered per spell and unit, taken back on Stop")
 local function auraSounds()
     local nextID = 0
-    local removed: { any } = {}
-    mock.fake("C_UnitAuras.AddAuraSound", function(_: any, data: any): any
+    local removed: { unknown } = {}
+    mock.fake("C_UnitAuras.AddAuraSound", function(_: unknown, data: unknown): unknown
         if data.spellID == UNKNOWN then error("refused") end
         nextID = nextID + 1
         return nextID
     end)
-    mock.fake("C_UnitAuras.RemoveAuraSound", function(id: any) removed[#removed + 1] = id end)
+    mock.fake("C_UnitAuras.RemoveAuraSound", function(id: unknown) removed[#removed + 1] = id end)
     local t = tracker({ buffs = { strike({ soundAppear = "chime", soundDrop = "nope" }) },
                         procs = { { name = "P", ids = { OTHER }, soundStack = "proc" } },
                         debuffs = { { name = "D", ids = { UNKNOWN }, soundAppear = "warning" } } })
@@ -1021,7 +1026,7 @@ end
 
 @test("a rebuild takes back the slots, cells and containers it made")
 local function reuse()
-    local lists = { essential = { strike() }, buffs = { strike() }, procs = { { name = "P", ids = { OTHER } } },
+    local lists: TrackerLists = { essential = { strike() }, buffs = { strike() }, procs = { { name = "P", ids = { OTHER } } },
                     debuffs = { strike({ missing = "remind" }) } }
     local t = tracker(lists)
     local cell, slot, reminder, flow = t.built.essential[1], t.built.buffs[1], t.built.remindDebuffs[1], t.leftFlow
