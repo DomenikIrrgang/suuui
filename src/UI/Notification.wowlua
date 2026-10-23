@@ -59,10 +59,10 @@ import * as events from "/Core/Events"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
 import text, Text from "/UI/Text"
-import button from "/UI/Controls"
-import icon as iconFrame from "/UI/Icon"
+import SuuButton from "/UI/Controls"
+import icon as iconFrame, Icon from "/UI/Icon"
 import closeButton from "/UI/Panel"
-import showTooltip, hideTooltip from "/UI/Tooltip"
+import showTooltip, hideTooltip, TooltipSource from "/UI/Tooltip"
 
 local S = T.space
 
@@ -83,47 +83,145 @@ local function clock(seconds: number): string
     return tostring(s)
 end
 
--- A quiet, primary or danger button of the card's own (a SuuUI note); one
--- pool per look (a button's variant is set when it's made).
-local function noteButton(n: any, i: number, variant: string): any
+-- The card's icon: a glyph (in a colour) or a texture (its coordinates),
+-- and what hovering it shows.
+export type NotificationIcon = {
+    glyph?: string,
+    color?: string,
+    texture?: string | number,
+    coords?: number[],
+    tooltip?: (owner: Frame) -> (),
+}
+-- A button of the card: its label, look, what a click does; how many chose
+-- it, whether it is pressed or off, its tooltip and glyph.
+export type NotificationAction = {
+    label?: string,
+    variant?: string,
+    onClick?: (card: Notification) -> (),
+    count?: number,
+    pressed?: boolean,
+    disabled?: boolean,
+    tooltip?: TooltipSource,
+    icon?: string,
+}
+-- Someone on a presence card.
+export type NotificationPerson = {
+    name: string,
+    color?: string,
+    tag?: string,
+    detail?: string,
+    whisper?: () -> (),
+    icon?: NotificationIcon,
+}
+export type NotificationPresence = {
+    online?: boolean,
+    source?: string,
+    plural?: string,
+    glyph?: string,
+    people?: NotificationPerson[],
+    invite?: () -> (),
+}
+-- What a card shows (see the top).
+export type NotificationData = {
+    id?: string | number,
+    kind?: string,
+    tone?: string,
+    category?: string,
+    title?: string,
+    body?: string,
+    icon?: NotificationIcon,
+    bodyTooltip?: TooltipSource,
+    duration?: number,
+    remaining?: number,
+    soonAt?: number,
+    ["until"]?: string,
+    item?: { icon?: string | number, label?: string, quality?: string },
+    confirmText?: string,
+    actions?: NotificationAction[],
+    host?: { buttons?: number, confirm?: boolean, roles?: number, width?: number },
+    warning?: string,
+    closable?: boolean,
+    onClose?: (card: Notification) -> (),
+    source?: { tool?: boolean, channel?: string, text?: string },
+    presence?: NotificationPresence,
+}
+
+-- A quiet, primary or danger button of the card's own (a SuuUI note); a
+-- choice made stays pressed in arcane (a loot roll's).
+class NoteButton extends SuuButton
+    readonly pressedBg: Texture
+    pressed: boolean = false
+
+    constructor(parent: Frame, variant: string)
+        super(parent, { text = "", variant = variant == "primary" and "primary" or "quiet" })
+        self:SetHeight(ACTION_H)
+        if variant == "danger" then
+            self.border:SetColor("ember")
+            self.label:SetColor("ember-text")
+            self:HookScript("OnLeave", function() self.border:SetColor("ember") end)
+        end
+        self.pressedBg = draw.fill(self, "arcane-soft", "BACKGROUND", 1)
+        self.pressedBg:SetAllPoints()
+        self.pressedBg:Hide()
+        self:HookScript("OnLeave", function() if self.pressed then self.border:SetColor("arcane") end end)
+    end
+end
+
+-- one pool per look (a button's variant is set when it's made)
+local function noteButton(n: Notification, i: number, variant: string): NoteButton
     local pool = n.buttons[variant]
     if not pool then pool = {}; n.buttons[variant] = pool end
     local b = pool[i]
     if b then return b end
-    b = button(n.actionsRow, { text = "", variant = variant == "primary" and "primary" or "quiet" })
-    b:SetHeight(ACTION_H)
-    if variant == "danger" then
-        b.border:SetColor("ember")
-        b.label:SetColor("ember-text")
-        b:HookScript("OnLeave", function(self) self.border:SetColor("ember") end)
-    end
-    -- a choice made stays pressed in arcane (a loot roll's)
-    b.pressedBg = draw.fill(b, "arcane-soft", "BACKGROUND", 1)
-    b.pressedBg:SetAllPoints()
-    b.pressedBg:Hide()
-    b:HookScript("OnLeave", function(self) if self.pressed then self.border:SetColor("arcane") end end)
+    b = NoteButton.new(n.actionsRow, variant)
     pool[i] = b
     return b
 end
 
 -- A name on a group presence card: whispers them.
-local function nameButton(n: any, i: number): any
+class NameButton extends Button
+    readonly text: Text
+    person?: NotificationPerson
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.text = text(self, "label", "ink")
+        self.text:SetPoint("LEFT")
+        self:SetScript("OnEnter", function() self.text:SetAlpha(0.75) end)
+        self:SetScript("OnLeave", function() self.text:SetAlpha(1) end)
+        self:SetScript("OnClick", function()
+            local person = self.person
+            if person and person.whisper then person.whisper() end
+        end)
+    end
+end
+
+local function nameButton(n: Notification, i: number): NameButton
     local b = n.names[i]
     if b then return b end
-    b = CreateFrame("Button", nil, n.namesRow)
-    b.text = text(b, "label", "ink")
-    b.text:SetPoint("LEFT")
-    b:SetScript("OnEnter", function(self) self.text:SetAlpha(0.75) end)
-    b:SetScript("OnLeave", function(self) self.text:SetAlpha(1) end)
-    b:SetScript("OnClick", function(self) if self.person and self.person.whisper then self.person.whisper() end end)
+    b = NameButton.new(n.namesRow)
     n.names[i] = b
     return b
 end
 
-local notes: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+-- A source badge ("Tool", the channel).
+class SourceBadge extends Frame
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(16)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.text = text(self, "micro", "ink-muted")
+        self.text:SetPoint("CENTER")
+    end
+end
+
+local notes: { [Notification]: boolean } = setmetatable({}, { __mode = "k" })
 
 export class Notification extends Frame
-    buttons: any
+    buttons: { [string]: NoteButton[] }
     border: draw.Border
     head: Frame
     icon: Frame
@@ -131,21 +229,24 @@ export class Notification extends Frame
     category: Text
     title: Text
     time: Text
-    close: any
+    close: Button
     bodyRow: Frame
     body: Text
     itemRow: Frame
-    item: any
+    item: Icon
     itemLabel: Text
     confirmRow: Frame
     confirmLabel: Text
     confirmBox: Frame
+    confirmEdge: draw.Border
     untilRow: Frame
     untilGlyph: Texture
     untilText: Text
     sourceRow: Frame
-    badges: any
+    badges: SourceBadge[]
     quote: Text
+    -- the source's post, whole (the quote may be cut short)
+    post: string? = nil
     rolesRow: Frame
     warningRow: Frame
     warningText: Text
@@ -153,13 +254,15 @@ export class Notification extends Frame
     status: Texture
     source: Text
     namesRow: Frame
-    names: any
+    names: NameButton[]
     drain: Texture
-    iconTip: any = nil
-    onCardClick: any = nil
-    data: any = nil
+    iconTip: ((owner: Frame) -> ())? = nil
+    onCardClick: (() -> ())? = nil
+    data: NotificationData? = nil
+    -- in a stack: a request (above open windows)
+    request: boolean? = nil
 
-    constructor(parent: any)
+    constructor(parent: Frame)
         super(nil, parent)
         notes[self] = true
         self:SetSize(WIDTH, 80)
@@ -201,7 +304,10 @@ export class Notification extends Frame
         self.body:SetWordWrap(true)
         self.body:SetPoint("TOPLEFT")
         -- bodyTooltip: what hovering the body shows (everyone still choosing)
-        self.bodyRow:SetScript("OnEnter", function(row: Frame) if self.data and self.data.bodyTooltip then showTooltip(row, self.data.bodyTooltip) end end)
+        self.bodyRow:SetScript("OnEnter", function(row: Frame)
+            local tip = self.data and self.data.bodyTooltip
+            if tip then showTooltip(row, tip) end
+        end)
         self.bodyRow:SetScript("OnLeave", function() hideTooltip() end)
 
         self.itemRow = CreateFrame("Frame", nil, self)
@@ -219,7 +325,7 @@ export class Notification extends Frame
         self.confirmBox:SetPoint("BOTTOMRIGHT")
         self.confirmBox:SetHeight(FIELD_H)
         draw.fill(self.confirmBox, "surface-sunk", "BACKGROUND"):SetAllPoints()
-        self.confirmBox.edge = draw.border(self.confirmBox, "gilt-line")
+        self.confirmEdge = draw.border(self.confirmBox, "gilt-line")
 
         self.untilRow = CreateFrame("Frame", nil, self)
         self.untilGlyph = self.untilRow:CreateTexture(nil, "ARTWORK")
@@ -238,8 +344,8 @@ export class Notification extends Frame
         self.quote:SetJustifyH("LEFT")
         self.quote:SetWordWrap(true)
         self.quote:SetMaxLines(2)
-        self.sourceRow:SetScript("OnEnter", function(row)
-            if row.post and self.quote:IsTruncated() then showTooltip(row, { description = row.post }) end
+        self.sourceRow:SetScript("OnEnter", function(row: Frame)
+            if self.post and self.quote:IsTruncated() then showTooltip(row, { description = self.post }) end
         end)
         self.sourceRow:SetScript("OnLeave", function() hideTooltip() end)
 
@@ -273,7 +379,7 @@ export class Notification extends Frame
         extend.add(extend.Kind.Notification, self, {})
     end
 
-    function SetIcon(def: { [string]: any }?)
+    function SetIcon(def: NotificationIcon?)
         local icon = def or {}
         self.iconTip = icon.tooltip
         local art = self.iconArt
@@ -300,8 +406,8 @@ export class Notification extends Frame
     end
 
     -- The presence layout (see SetData's presence).
-    function SetPresence(d: { [string]: any }): number
-        local p = d.presence
+    function SetPresence(d: NotificationData): number
+        local p = d.presence :: NotificationPresence
         local people = p.people or {}
         local single = #people == 1
         for _, f in ipairs({ self.bodyRow, self.itemRow, self.confirmRow, self.untilRow }) do f:Hide() end
@@ -466,7 +572,7 @@ export class Notification extends Frame
         return y
     end
 
-    function SetData(d: { [string]: any }): number
+    function SetData(d: NotificationData): number
         self.data = d
         self.status:Hide()
         self.source:Hide()
@@ -511,7 +617,7 @@ export class Notification extends Frame
         if closable then self.time:SetPoint("RIGHT", self.close, "LEFT", -S["space-3"], 0)
         else self.time:SetPoint("TOPRIGHT", 0, -(headH - T.type.numeric.lineHeight) / 2) end
         local y = PAD + headH
-        local function place(f: any, h: number)
+        local function place(f: Region, h: number)
             y = y + S["space-3"]
             f:ClearAllPoints()
             f:SetPoint("TOPLEFT", PAD, -y)
@@ -537,12 +643,7 @@ export class Notification extends Frame
             local function badge(i: number, word: string)
                 local b = self.badges[i]
                 if not b then
-                    b = CreateFrame("Frame", nil, self.sourceRow) :: any
-                    b:SetHeight(16)
-                    draw.fill(b, "surface-raised"):SetAllPoints()
-                    draw.border(b, "gilt-line")
-                    b.text = text(b, "micro", "ink-muted")
-                    b.text:SetPoint("CENTER")
+                    b = SourceBadge.new(self.sourceRow)
                     self.badges[i] = b
                 end
                 b.text:SetValue(word)
@@ -552,12 +653,13 @@ export class Notification extends Frame
                 b:Show()
                 bx = bx + b:GetWidth() + S["space-2"]
             end
+            local source = d.source
             local n = 0
-            if d.source.tool then n = n + 1; badge(n, "Tool") end
-            if d.source.channel then n = n + 1; badge(n, d.source.channel) end
+            if source.tool then n = n + 1; badge(n, "Tool") end
+            if source.channel then n = n + 1; badge(n, source.channel) end
             for i = n + 1, #self.badges do self.badges[i]:Hide() end
             local h = n > 0 and 16 or 0
-            local post = d.source.text
+            local post = source.text
             if post and post ~= "" then
                 self.quote:SetWidth(WIDTH - PAD * 2)
                 self.quote:SetValue("“" .. post .. "”")
@@ -567,26 +669,28 @@ export class Notification extends Frame
                 self.quote:SetPoint("TOPLEFT", self.sourceRow, "TOPLEFT", 0, -(h + gap))
                 self.quote:Show()
                 h = h + gap + math.ceil(self.quote:GetStringHeight())
-                self.sourceRow.post = post
+                self.post = post
             else
                 self.quote:Hide()
-                self.sourceRow.post = nil
+                self.post = nil
             end
-            self.sourceRow:EnableMouse(self.sourceRow.post ~= nil)
+            self.sourceRow:EnableMouse(self.post ~= nil)
             if h > 0 then place(self.sourceRow, h) end
         end
         -- the item
-        if d.item then
-            self.item:SetArt(d.item.icon)
-            self.item:SetBorder(d.item.quality and ("quality-" .. d.item.quality) or "gilt-hairline")
-            self.itemLabel:SetValue(d.item.label or "")
-            self.itemLabel:SetColor(d.item.quality and ("quality-" .. d.item.quality) or "ink")
+        local item = d.item
+        if item then
+            self.item:SetArt(item.icon)
+            self.item:SetBorder(item.quality and ("quality-" .. item.quality) or "gilt-hairline")
+            self.itemLabel:SetValue(item.label or "")
+            self.itemLabel:SetColor(item.quality and ("quality-" .. item.quality) or "ink")
             place(self.itemRow, 28)
         else
             self.itemRow:Hide()
         end
         -- the role choices (hosted), and a warning under them
-        if d.host and d.host.roles and d.host.roles > 0 then
+        local host = d.host
+        if host and host.roles and host.roles > 0 then
             place(self.rolesRow, rolesH())
         end
         if d.warning and d.warning ~= "" then
@@ -602,8 +706,9 @@ export class Notification extends Frame
             self.confirmRow:Hide()
         end
         -- what makes it go
-        if d["until"] then
-            self.untilText:SetValue(d["until"])
+        local untilText = d["until"]
+        if untilText then
+            self.untilText:SetValue(untilText)
             place(self.untilRow, T.type.caption.lineHeight)
         else
             self.untilRow:Hide()
@@ -613,7 +718,7 @@ export class Notification extends Frame
             for _, b in ipairs(pool) do b:Hide() end
         end
         local actions = d.actions or {}
-        if d.host and d.host.buttons and d.host.buttons > 0 then
+        if host and host.buttons and host.buttons > 0 then
             place(self.actionsRow, ACTION_H)
         elseif #actions > 0 then
             place(self.actionsRow, ACTION_H)
@@ -623,12 +728,13 @@ export class Notification extends Frame
                 local b = noteButton(self, i, a.variant or "quiet")
                 -- a count after the label: how many chose it (a loot roll's votes)
                 local label = a.label or ""
-                if a.count then
-                    label = label .. "  |cff" .. T.color[a.count > 0 and "ink-muted" or "ink-faint"].hex .. a.count .. "|r"
+                local count = a.count
+                if count then
+                    label = label .. "  |cff" .. T.color[count > 0 and "ink-muted" or "ink-faint"].hex .. count .. "|r"
                 end
                 b:SetLabel(label)
                 b:SetIcon(a.icon)
-                b.pressed = a.pressed and true or false
+                b.pressed = a.pressed == true
                 b.pressedBg:SetShown(b.pressed)
                 if b.variant ~= "primary" then b.border:SetColor(b.pressed and "arcane" or (a.variant == "danger" and "ember" or "gilt-line")) end
                 b.label:SetColor(b.pressed and "arcane" or (b.variant == "primary" and "on-signal" or (a.variant == "danger" and "ember-text" or "ink")))
@@ -648,7 +754,7 @@ export class Notification extends Frame
         -- the drain
         self.drain:SetShown(hasTime and true or false)
         draw.paintFill(self.drain, kind == "timed" and "gilt-line" or "ink-muted")
-        if hasTime then self:SetRemaining(d.remaining) end
+        if hasTime then self:SetRemaining(d.remaining :: number) end
         return y
     end
 
@@ -666,7 +772,7 @@ export class Notification extends Frame
 end
 mixins.Notification = Notification
 
-export function notification(parent: any): Notification
+export function notification(parent: Frame): Notification
     return Notification.new(parent)
 end
 
@@ -676,58 +782,74 @@ end
 
 local ORDER: { [string]: number } = { action = 0, roll = 0, ["until"] = 1, sticky = 2, timed = 3 }
 
-type Entry = { d: { [string]: any }, i: number }
+type Entry = { d: NotificationData, i: number }
 
-local function link(parent: any, label: string, onClick: () -> ()): any
-    local b = CreateFrame("Button", nil, parent) :: any
-    b.label = text(b, "caption", "gilt-text")
-    b.label:SetPoint("LEFT")
-    b.label:SetValue(label)
-    b:SetSize(80, T.type.caption.lineHeight)
-    b:SetScript("OnClick", onClick)
-    b:SetScript("OnEnter", function(self: any) self.label:SetColor("ink") end)
-    b:SetScript("OnLeave", function(self: any) self.label:SetColor("gilt-text") end)
-    -- as wide as its words (the first text too: it was 80 wide, its words at
-    -- the left, so a right-aligned link stood in from the edge)
-    local function fit() b:SetWidth(math.ceil(b.label:GetUnboundedStringWidth())) end
-    hook(b.label, "SetValue", fit)
-    b:HookScript("OnShow", fit) -- the font may not measure before it's shown
-    fit()
-    return b
+-- A link in the stack's foot: gilt words, ink on hover.
+class StackLink extends Button
+    readonly label: Text
+
+    constructor(parent: Frame, label: string, onClick: () -> ())
+        super(nil, parent)
+        self.label = text(self, "caption", "gilt-text")
+        self.label:SetPoint("LEFT")
+        self.label:SetValue(label)
+        self:SetSize(80, T.type.caption.lineHeight)
+        self:SetScript("OnClick", onClick)
+        self:SetScript("OnEnter", function() self.label:SetColor("ink") end)
+        self:SetScript("OnLeave", function() self.label:SetColor("gilt-text") end)
+        -- as wide as its words (the first text too: it was 80 wide, its words at
+        -- the left, so a right-aligned link stood in from the edge)
+        local function fit() self:SetWidth(math.ceil(self.label:GetUnboundedStringWidth())) end
+        hook(self.label, "SetValue", fit)
+        self:HookScript("OnShow", fit) -- the font may not measure before it's shown
+        fit()
+    end
 end
 
-local stacks: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+local function link(parent: Frame, label: string, onClick: () -> ()): StackLink
+    return StackLink.new(parent, label, onClick)
+end
+
+local stacks: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- A theme change: the cards laid out again (colour codes in the titles and
 -- counts, the text styles' line heights), a stack's with its items.
 events.on("SUUUI_THEME_CHANGED", function()
-    for s in pairs(stacks) do
+    for f in pairs(stacks) do
+        local s = f :: NotificationStack
         s.foot:SetHeight(T.type.caption.lineHeight)
         s.moreLink:SetHeight(T.type.caption.lineHeight)
         s.clearLink:SetHeight(T.type.caption.lineHeight)
         if s.items then s:SetItems(s.items, s.inCombat) end
     end
     for n in pairs(notes) do
-        if n.data and not stacks[n:GetParent()] then n:SetData(n.data) end
+        local data, parent = n.data, n:GetParent()
+        if data and not (parent and stacks[parent]) then n:SetData(data) end
     end
 end, "UI.Notification")
 
 export class NotificationStack extends Frame
-    max: any
+    max: number
     foot: Frame
-    moreLink: any
+    moreLink: StackLink
     expanded: boolean = false
     heldText: Text
-    clearLink: any
-    notesHidden: any = nil
+    clearLink: StackLink
+    notesHidden: boolean? = nil
+    -- the cards by their item's id, and the cards put by
+    cards: { [string | number]: Notification } = {}
+    spare: Notification[] = {}
+    items: NotificationData[]? = nil
+    inCombat: boolean? = nil
+    onExpand: (() -> ())? = nil
+    onClearAll: (() -> ())? = nil
 
-    constructor(parent: any, opts: { name?: string, max?: number }?)
-        opts = opts or {}
+    constructor(parent: Frame, options: { name?: string, max?: number }?)
+        local opts = options or {}
         super(opts.name, parent)
         stacks[self] = true
         self:SetSize(WIDTH, 1)
         self.max = opts.max or 5
-        self.cards, self.spare = {}, {}
         self.foot = CreateFrame("Frame", nil, self)
         self.foot:SetHeight(T.type.caption.lineHeight)
         self.moreLink = link(self.foot, "+1 more", function()
@@ -741,8 +863,8 @@ export class NotificationStack extends Frame
     end
 
     -- Notes out of sight (a window covers them), requests kept.
-    function SetNotesHidden(hidden: any)
-        local on = hidden and true or false
+    function SetNotesHidden(hidden: unknown)
+        local on = hidden ~= nil and hidden ~= false
         if self.notesHidden == on then return end
         self.notesHidden = on
         for _, card in pairs(self.cards) do
@@ -751,11 +873,11 @@ export class NotificationStack extends Frame
         self.foot:SetAlpha(on and 0 or 1)
     end
 
-    function CardFor(id: any): any
+    function CardFor(id: string | number): Notification?
         return self.cards[id]
     end
 
-    function SetItems(items: { [string]: any }[]?, inCombat: boolean?)
+    function SetItems(items: NotificationData[]?, inCombat: boolean?)
         self.items, self.inCombat = items, inCombat
         local list: Entry[], held = {}, 0
         for i, d in ipairs(items or {}) do
@@ -772,16 +894,17 @@ export class NotificationStack extends Frame
             return a.i < b.i
         end)
         local max = self.expanded and #list or math.min(#list, self.max)
-        local used: { [any]: boolean } = {}
+        local used: { [string | number]: boolean } = {}
         local y = 0
         for k = 1, max do
             local d = list[k].d
-            local card = self.cards[d.id]
+            local id = d.id or k
+            local card = self.cards[id]
             if not card then
                 card = table.remove(self.spare) or notification(self)
-                self.cards[d.id] = card
+                self.cards[id] = card
             end
-            used[d.id] = true
+            used[id] = true
             -- requests (popups to answer, loot rolls) above open windows; notes
             -- at the stack's own layer, under them (asked for in game)
             local request = d.kind == "action" or d.kind == "roll"
@@ -818,12 +941,15 @@ export class NotificationStack extends Frame
             self.foot:SetPoint("TOPLEFT", 0, -y)
             self.foot:SetPoint("TOPRIGHT", 0, -y)
             local x = 0
-            for _, f in ipairs({ self.moreLink, self.heldText }) do
-                if f:IsShown() then
-                    f:ClearAllPoints()
-                    f:SetPoint("LEFT", x, 0)
-                    x = x + (f.GetUnboundedStringWidth and f:GetUnboundedStringWidth() or f:GetWidth()) + S["space-4"]
-                end
+            if self.moreLink:IsShown() then
+                self.moreLink:ClearAllPoints()
+                self.moreLink:SetPoint("LEFT", x, 0)
+                x = x + self.moreLink:GetWidth() + S["space-4"]
+            end
+            if self.heldText:IsShown() then
+                self.heldText:ClearAllPoints()
+                self.heldText:SetPoint("LEFT", x, 0)
+                x = x + self.heldText:GetUnboundedStringWidth() + S["space-4"]
             end
             y = y + T.type.caption.lineHeight
         end
@@ -831,6 +957,6 @@ export class NotificationStack extends Frame
     end
 end
 
-export function notificationStack(parent: any, opts: { name?: string, max?: number }?): NotificationStack
+export function notificationStack(parent: Frame, opts: { name?: string, max?: number }?): NotificationStack
     return NotificationStack.new(parent, opts)
 end

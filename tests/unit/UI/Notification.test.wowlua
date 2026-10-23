@@ -7,7 +7,7 @@ import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import * as extend from "/Core/Extend"
 import * as tooltip from "/UI/Tooltip"
-import notification, notificationStack from "/UI/Notification"
+import notification, notificationStack, NotificationData, NotificationPerson from "/UI/Notification"
 import internal clock from "/UI/Notification"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, themeChanged from "./WindowsHelpers"
@@ -28,12 +28,12 @@ local parent: Frame? = nil
 
 local function make()
     parent = parent or newParent()
-    return notification(parent)
+    return notification(assert(parent))
 end
 
 local function stack(max: number?)
     parent = parent or newParent()
-    return notificationStack(parent, max and { max = max } or nil)
+    return notificationStack(assert(parent), max and { max = max } or nil)
 end
 
 @afterEach
@@ -140,7 +140,7 @@ local function requestTime()
     expect(n.time).toHaveText("8")
     expect(tokenOf(n.time)).toBe("amber")
     expect(tokenOf(n.drain)).toBe("amber")
-    expect(n.data.remaining).toBe(8)
+    expect((n.data :: NotificationData).remaining).toBe(8)
     -- soonAt moves the line; the time placed left of a close button
     n:SetData({ kind = "action", title = "T", duration = 120, remaining = 90, soonAt = 100, closable = true })
     expect(n.time).toHaveText("1:30")
@@ -154,7 +154,7 @@ local function remaining()
     n:SetRemaining(5)
     n:SetData({ title = "T" })
     n:SetRemaining(5)
-    expect(n.data.remaining).toBeNil()
+    expect((n.data :: NotificationData).remaining).toBeNil()
     n:SetData({ title = "T", duration = 10, remaining = 10 })
     n:SetRemaining(20)
     expect(n.drain:GetWidth()).toBeCloseTo(WIDTH - 2)
@@ -241,7 +241,7 @@ local function source()
     expect(n.badges[1].text).toHaveText("Tool")
     expect(n.badges[2].text).toHaveText("LookingForGroup")
     expect(n.quote).toHaveText("“LF tank for the Den”")
-    expect(n.sourceRow.post).toBe("LF tank for the Den")
+    expect(n.post).toBe("LF tank for the Den")
     expect(n.sourceRow:IsMouseEnabled()).toBe(true)
     local _, _, _, _, y = n.quote:GetPoint(1)
     expect(y).toBe(-(16 + S["space-3"]))
@@ -265,7 +265,7 @@ local function sourceParts()
     expect(n.badges[1].text).toHaveText("General")
     expect(n.badges[2]).never.toBeShown()
     expect(n.quote).never.toBeShown()
-    expect(n.sourceRow.post).toBeNil()
+    expect(n.post).toBeNil()
     expect(n.sourceRow:IsMouseEnabled()).toBe(false)
     n:SetData({ title = "T", source = { text = "Just a post" } })
     expect(n.badges[1]).never.toBeShown()
@@ -335,8 +335,8 @@ local function actions()
         { label = "Accept", variant = "primary", onClick = accept, icon = "check" },
     } })
     expect(n.actionsRow).toBeShown()
-    local primary = n.buttons.primary[2]
-    local quiet = n.buttons.quiet[1]
+    local primary = assert(n.buttons.primary)[2]
+    local quiet = assert(n.buttons.quiet)[1]
     expect(primary.label).toHaveText("Accept")
     expect(tokenOf(primary.label)).toBe("on-signal")
     expect(primary.icon).toBeShown()
@@ -358,7 +358,7 @@ end
 local function dangerAction()
     local n = make()
     n:SetData({ title = "T", actions = { { label = "Delete", variant = "danger" } } })
-    local b = n.buttons.danger[1]
+    local b = assert(n.buttons.danger)[1]
     expect(tokenOf(b.border.top)).toBe("ember")
     expect(tokenOf(b.label)).toBe("ember-text")
     mock.hover(b)
@@ -376,7 +376,7 @@ local function pressedCounts()
         { label = "Need", count = 2, pressed = true, disabled = true },
         { label = "Greed", count = 0, disabled = true, onClick = onClick, tooltip = { title = "Can't" } },
     } })
-    local need, greed = n.buttons.quiet[1], n.buttons.quiet[2]
+    local need, greed = assert(n.buttons.quiet)[1], assert(n.buttons.quiet)[2]
     expect(need.label:GetText()).toBe("Need  |cff" .. T.color["ink-muted"].hex .. "2|r")
     expect(greed.label:GetText()).toBe("Greed  |cff" .. T.color["ink-faint"].hex .. "0|r")
     expect(need.pressed).toBe(true)
@@ -422,7 +422,7 @@ local function onlineOne()
     expect(n.source).never.toBeShown()
     expect(n.close).toBeShown()
     expect(n.time).never.toBeShown()
-    local q = n.buttons.quiet
+    local q = assert(n.buttons.quiet)
     expect(q[1].label).toHaveText("Whisper")
     expect(q[2].label).toHaveText("Invite")
     mock.click(q[1])
@@ -454,7 +454,7 @@ end
 @test("several online: a count, each name whispering them, wrapping")
 local function onlineMany()
     local n = make()
-    local people: { [string]: any }[] = {}
+    local people: NotificationPerson[] = {}
     local whispers: any[] = {}
     for i = 1, 8 do
         whispers[i] = mock.spy()
@@ -494,7 +494,7 @@ end
 local function offline(count: number, want: string)
     local n = make()
     local names = { "Tamsin", "Brannoc", "Edda", "Orrin" }
-    local people: { [string]: any }[] = {}
+    local people: NotificationPerson[] = {}
     for i = 1, count do people[i] = { name = names[i] } end
     n:SetData({ presence = { online = false, source = "Friend", people = people } })
     expect(n.title).toHaveText(want)
@@ -529,7 +529,7 @@ local function themeLone()
     local n = make()
     local data = { title = "T" }
     n:SetData(data)
-    local blank = notification(parent)
+    local blank = notification(assert(parent))
     local set, setBlank = mock.spy(), mock.spy()
     mock.stub(n, "SetData", set)
     mock.stub(blank, "SetData", setBlank)
@@ -563,7 +563,7 @@ local function freshStack()
     expect(s:GetWidth()).toBe(WIDTH)
     expect(s.max).toBe(5)
     expect(s.foot).never.toBeShown()
-    local named = notificationStack(parent, { name = "SuuUITestStack" })
+    local named = notificationStack(assert(parent), { name = "SuuUITestStack" })
     expect(_G["SuuUITestStack"]).toBe(named)
 end
 
@@ -579,16 +579,16 @@ local function order()
         { id = "x1", kind = "odd", title = "unknown kind" },
     })
     expect(ids(s)).toEqual({ "a1", "r1", "u1", "s1", "t1", "x1" })
-    expect(s:CardFor("a1"):GetFrameStrata()).toBe("DIALOG")
-    expect(s:CardFor("a1").request).toBe(true)
-    expect(s:CardFor("t1"):GetFrameStrata()).toBe(s:GetFrameStrata())
+    expect(assert(s:CardFor("a1")):GetFrameStrata()).toBe("DIALOG")
+    expect(assert(s:CardFor("a1")).request).toBe(true)
+    expect(assert(s:CardFor("t1")):GetFrameStrata()).toBe(s:GetFrameStrata())
     expect(s:CardFor("nope")).toBeNil()
 end
 
 @test("at most max cards; +N more expands them")
 local function more()
     local s = stack(2)
-    local items: { [string]: any }[] = {}
+    local items: NotificationData[] = {}
     for i = 1, 4 do items[i] = { id = "n" .. i, title = "Note " .. i } end
     local onExpand = mock.spy()
     s.onExpand = onExpand
@@ -647,7 +647,7 @@ end
 local function spares()
     local s = stack()
     s:SetItems({ { id = "a" }, { id = "b" } })
-    local a = s:CardFor("a")
+    local a = assert(s:CardFor("a"))
     s:SetItems({ { id = "b" } })
     expect(a).never.toBeShown()
     expect(a.data).toBeNil()
@@ -681,11 +681,11 @@ end
 @test("a theme change lays a stack out again with its items")
 local function themeStack()
     local s = stack()
-    local items: { [string]: any }[] = { { id = "a" } }
+    local items: NotificationData[] = { { id = "a" } }
     s:SetItems(items, false)
     local set = mock.spy()
     mock.stub(s, "SetItems", set)
-    local empty = notificationStack(parent)
+    local empty = notificationStack(assert(parent))
     local setEmpty = mock.spy()
     mock.stub(empty, "SetItems", setEmpty)
     local cardSet = mock.spy()
