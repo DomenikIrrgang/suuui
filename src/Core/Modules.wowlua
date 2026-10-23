@@ -35,7 +35,7 @@
 -- functions are its methods.
 
 import onLogin from "wowlua:lifecycle"
-import print, name as ADDON, registerCommand, unregisterCommands from "./Init"
+import print, name as ADDON, registerCommand, unregisterCommands, CommandArgs from "./Init"
 import * as events from "./Events"
 import * as settings from "./Settings"
 import * as fault from "./Fault"
@@ -73,12 +73,311 @@ end
 local RESERVED: { [string]: boolean } = { core = true, ui = true, layout = true }
 
 -- A module's settings: their defaults' names and types (`defaults` given to
--- RegisterModule), so `M:Get(key)` reads the default's type.
+-- the module), so `M:Get(key)` reads the default's type.
 export type Settings = { [string]: unknown }
 
---- A SuuUI module as plugins see it: SuuUI's own fields (read only), the
---- methods below, and whatever the module keeps on itself. `D` is its
---- settings' type (its defaults').
+-- A module's settings with SuuUI's own: whether it is on.
+export type WithEnabled<D> = D & { enabled: boolean }
+
+-- What a module is made from (see the top of this file).
+export type ModuleDef<D> = {
+    id: string,
+    name?: string,
+    description?: string,
+    api?: string,
+    defaults?: D,
+    enabledByDefault?: boolean,
+    reloadToToggle?: boolean,
+    combatSafe?: boolean,
+    replaces?: string,
+    -- the addon it comes from (found from the call stack when not given)
+    addon?: string,
+}
+
+--------------------------------------------------------------------------------
+-- API versions
+--------------------------------------------------------------------------------
+
+local function parseVersion(v: unknown): (number?, number, number)
+    local major, minor, patch = tostring(v):match("^(%d+)%.?(%d*)%.?(%d*)$")
+    if not major then return nil, 0, 0 end
+    return tonumber(major), tonumber(minor) or 0, tonumber(patch) or 0
+end
+
+-- True when this SuuUI's API can serve a module written for `wanted`: the
+-- same major version, and at least that minor and patch.
+export function apiAtLeast(wanted: unknown): boolean
+    local a, b, c = parseVersion(API_VERSION)
+    local x, y, z = parseVersion(wanted)
+    if not x then return false end
+    if a ~= x then return false end
+    if b ~= y then return b > y end
+    return c >= z
+end
+
+--------------------------------------------------------------------------------
+-- The module object
+--------------------------------------------------------------------------------
+
+-- The addon whose file made the module, from the call stack: the first
+-- frame of another addon, else SuuUI itself. SuuUI's own frames are skipped
+-- by addon, not by file, so this also holds when wowlua bundles SuuUI into
+-- one file.
+local function sourceAddon(): string
+    local stack = debugstack(1, 12, 0) or ""
+    local mine = false
+    for addon in stack:gmatch("AddOns[/\\]([^/\\]+)[/\\]") do
+        if addon ~= ADDON then return addon end
+        mine = true
+    end
+    return mine and ADDON or "?"
+end
+
+-- SuuUI's own fields of a module: read through the module's properties,
+-- set here only (Inspect once set self.id to a frame, and the settings
+-- search broke far away, 2026-10-17).
+type Own = {
+    id: string, name: string, description?: string, api?: string, source: string, builtIn: boolean,
+    state: ModuleState, error?: string, pendingReload?: boolean, enabledAtLoad?: boolean, initialized?: boolean,
+    reloadToToggle: boolean, combatSafe: boolean, replaces?: string, replacedBy?: string,
+    -- its settings' defaults, SuuUI's "enabled" included
+    defaults: Settings,
+}
+local owns: { [table]: Own } = setmetatable({}, { __mode = "k" })
+
+-- A module's own fields (a module keeps any name of its own on itself, so
+-- the class takes none for this).
+local function ownOf(m: table): Own return assert(owns[m]) end
+
+-- A module whatever its settings: what the registry, the settings window
+-- and plugins handle.
+export interface AnyModule
+    readonly id: string
+    readonly name: string
+    readonly description: string?
+    readonly api: string?
+    readonly source: string
+    readonly builtIn: boolean
+    readonly state: ModuleState
+    readonly error: string?
+    readonly pendingReload: boolean?
+    readonly enabledAtLoad: boolean?
+    readonly initialized: boolean?
+    readonly reloadToToggle: boolean
+    readonly combatSafe: boolean
+    readonly replaces: string?
+    readonly replacedBy: string?
+    function OnInitialize()
+    function OnEnable()
+    function OnDisable()
+    function IsEnabled(): boolean
+end
+
+-- What a module may add to a role's preset, and a notification kind.
+export type NotificationKind = { [string]: unknown }
+
+--- A SuuUI module: SuuUI's own fields (read only), its settings typed by
+--- its defaults (`D`), and what it registers, which goes when it turns off.
+--- Built-in modules extend it; a plugin's is a PluginModule.
+export class Module<D extends Settings> implements AnyModule
+    constructor(def: ModuleDef<D>)
+        assert(type(def) == "table", "SuuUI.RegisterModule takes a table")
+        local id = def.id
+        assert(type(id) == "string" and id:find("^%l[%l%d_]*$"),
+            "SuuUI.RegisterModule: id must be lower case letters, digits and _, starting with a letter")
+        local given: Settings = def.defaults or {}
+        local defaults: Settings = util.copy(given)
+        assert(defaults.enabled == nil, "SuuUI.RegisterModule: \"enabled\" is SuuUI's own setting; use enabledByDefault")
+        assert(def.replaces == nil or (type(def.replaces) == "string" and def.replaces ~= id),
+            "SuuUI.RegisterModule: replaces names another module's id")
+        defaults.enabled = def.enabledByDefault ~= false
+        local source = def.addon or sourceAddon()
+        owns[self] = {
+            id = id,
+            name = def.name or id,
+            description = def.description,
+            api = def.api,
+            reloadToToggle = def.reloadToToggle and true or false,
+            combatSafe = def.combatSafe and true or false,
+            source = source,
+            builtIn = source == ADDON,
+            state = ModuleState.Registered,
+            replaces = def.replaces,
+            defaults = defaults,
+        }
+    end
+
+    get id(): string return ownOf(self).id end
+    get name(): string return ownOf(self).name end
+    get description(): string? return ownOf(self).description end
+    get api(): string? return ownOf(self).api end
+    get source(): string return ownOf(self).source end
+    get builtIn(): boolean return ownOf(self).builtIn end
+    get state(): ModuleState return ownOf(self).state end
+    get error(): string? return ownOf(self).error end
+    get pendingReload(): boolean? return ownOf(self).pendingReload end
+    get enabledAtLoad(): boolean? return ownOf(self).enabledAtLoad end
+    get initialized(): boolean? return ownOf(self).initialized end
+    get reloadToToggle(): boolean return ownOf(self).reloadToToggle end
+    get combatSafe(): boolean return ownOf(self).combatSafe end
+    get replaces(): string? return ownOf(self).replaces end
+    get replacedBy(): string? return ownOf(self).replacedBy end
+
+    -- Its life: once before the first enable, then each time it turns on or
+    -- off (a module overrides what it needs).
+    function OnInitialize() end
+    function OnEnable() end
+    function OnDisable() end
+
+    -- Its settings (the defaults' keys and types, and "enabled").
+    function Get<K extends keyof WithEnabled<D>>(key: K): WithEnabled<D>[K]
+        return settings.get(self.id, key) :: WithEnabled<D>[K]
+    end
+    -- 0.17: the value itself, not a copy, to read only (large tables read often)
+    function Peek<K extends keyof WithEnabled<D>>(key: K): WithEnabled<D>[K]
+        return settings.peek(self.id, key) :: WithEnabled<D>[K]
+    end
+    function Set<K extends keyof WithEnabled<D>>(key: K, value: WithEnabled<D>[K]): (boolean, string?)
+        return settings.set(self.id, key, value)
+    end
+    -- one key, or the whole namespace
+    function Reset<K extends keyof WithEnabled<D>>(key: K?): boolean return settings.reset(self.id, key) end
+    function Watch<K extends keyof WithEnabled<D>>(key: K, fn: (value: WithEnabled<D>[K], namespace: string, key: string) -> ())
+        settings.watch(self.id, key, fn :: settings.Watcher, self)
+    end
+    function Veto<K extends keyof WithEnabled<D>>(key: K, fn: (new: WithEnabled<D>[K], old: WithEnabled<D>[K]) -> (boolean?, string?))
+        settings.veto(self.id, key, fn :: settings.Veto, self)
+    end
+    -- 0.19: fn(key) whenever one of `keys` changes; each of `keys` reset
+    function WatchAll<K extends keyof WithEnabled<D>>(keys: K[], fn: (key: K) -> ())
+        for _, key in ipairs(keys) do settings.watch(self.id, key, function() fn(key) end, self) end
+    end
+    function ResetAll<K extends keyof WithEnabled<D>>(keys: K[])
+        for _, key in ipairs(keys) do settings.reset(self.id, key) end
+    end
+    -- fn(values) reshapes one profile's stored values of this module (a
+    -- renamed key, a changed type), once per profile. Call it right after
+    -- the module is made, at file load, so it runs before the old values
+    -- are judged by type.
+    function Migrate(id: string, fn: (values: settings.Values) -> ()) settings.migrate(self.id, id, fn, self) end
+
+    -- 0.11: the module's own data for this character (a table it fills;
+    -- saved, never part of a profile)
+    function CharData(): { [string]: unknown } return settings.charData(self.id) end
+    function AllCharData(): { [string]: { [string]: unknown } } return settings.allCharData(self.id) end
+    function CharKey(): string? return settings.getCharKey() end
+    function ForgetCharData(key: string): boolean return settings.forgetCharData(self.id, key) end
+
+    -- fn wrapped so an error in it is reported (SuuUIDB.errors, /suu errors)
+    -- under the module's name, as errors in its events are: for UI callbacks.
+    function Guard<A..., R...>(fn: (A...) -> R...): (A...) -> (boolean, R...)
+        return function(...: A...): (boolean, R...) return fault.call(self.name, fn, ...) end
+    end
+
+    -- A message: SuuUI's (Core/Messages.d.wowlua: the listener's arguments
+    -- are checked) or a plugin's own (any name; its values unchecked).
+    function On<M extends string>(message: M, fn: (name: M, EventArgs<M>...) -> ())
+        events.bus:listen(message, fn :: events.Listener, self)
+    end
+    function Off(message: string) events.off(message, self) end
+    function Emit<M extends string>(message: M, ...: EventArgs<M>...) events.bus:send(message, ...) end
+    function OnGameEvent<E extends EventName>(event: E, fn: (name: E, EventArgs<E>...) -> ())
+        events.onGame(event, fn, self)
+    end
+    function OnUnitEvent<E extends EventName>(event: E, units: UnitToken | UnitToken[], fn: (name: E, EventArgs<E>...) -> ())
+        events.onUnit(event, units, fn, self)
+    end
+
+    -- Keys get an "m:" prefix so a module's never collide with the core's own.
+    function RunOutOfCombat(key: string | number, fn: () -> ())
+        combat.run("m:" .. self.id .. ":" .. tostring(key), fn, self.name)
+    end
+
+    function RegisterCommand(cmd: string, help: string, fn: (rest: string) -> (), args: CommandArgs?)
+        registerCommand(cmd, help, fn, self, args)
+    end
+
+    -- A settings section for this module: its rows read and write the
+    -- module's own namespace, and the section goes away when the module
+    -- turns off.
+    function RegisterSettings(def: { [string]: any }): settingsRegistry.Section
+        def.namespace = def.namespace or self.id
+        return settingsRegistry.register(def, self)
+    end
+
+    -- An edit-mode handle for one of the module's frames. opts.key names a
+    -- position setting in the module's defaults (default "position").
+    function RegisterMover(frame: Region, opts: { [string]: any }?): editMode.Mover
+        local o: { [string]: any } = opts or {}
+        o.namespace = self.id
+        o.label = o.label or self.name
+        return editMode.register(frame, o, self)
+    end
+
+    -- 0.17: SuuUI's own UI (Core/Extend.wowlua). fn(object, info) for every
+    -- instance of a kind, now and later (undo(object, info) for each when
+    -- the module turns off); fn(object, ...) after a method; fn(object,
+    -- original, ...) instead of one. All removed when the module turns off.
+    function Each(kind: string, fn: extend.Extender, undo: extend.Extender?) extend.each(kind, fn, undo, self) end
+    function Hook(kind: string, method: string, fn: extend.Hook) extend.hook(kind, method, fn, self) end
+    function Override(kind: string, method: string, fn: extend.Override) extend.override(kind, method, fn, self) end
+
+    -- 0.17: a service other modules reach by name (Core/Services.wowlua);
+    -- gone when the module turns off.
+    function Provide(serviceName: string, impl: { [string]: any }) services.provide(serviceName, impl, self) end
+
+    -- 0.17: entries in SuuUI's own menus and lists (Core/Extend.wowlua):
+    -- before one of SuuUI's right-click menus opens, fn(menu, context); a
+    -- micro menu button; a game menu entry; a game popup shown as a
+    -- notification card; this module's own settings in a role's preset.
+    -- Gone when it turns off. (The micro menu and the game menu check the
+    -- items they get.)
+    function ExtendMenu(id: string, fn: extend.MenuExtension) extend.extendMenu(id, fn, self) end
+    function AddMicroItem(item: unknown) extend.addTo(extend.List.MicroMenu, item, self) end
+    function AddGameMenuItem(item: unknown) extend.addTo(extend.List.GameMenu, item, self) end
+    function AddNotificationKind(which: string, def: NotificationKind?)
+        local d: NotificationKind = def or {}
+        d.which = which
+        extend.addTo(extend.List.NotificationKinds, d, self)
+    end
+    function AddToRolePreset(role: string, values: { [string]: unknown })
+        local preset: extend.RolePreset = { role = role, namespace = self.id, values = values }
+        extend.addTo(extend.List.RolePresets, preset, self)
+    end
+
+    function Print(...: unknown)
+        print("|cffa39b8b" .. self.name .. ":|r", ...)
+    end
+
+    function IsEnabled(): boolean
+        return self.state == ModuleState.Enabled
+    end
+end
+
+-- What a plugin's module is made from: a module's definition and its
+-- callbacks (see the top of this file).
+export type PluginDef = ModuleDef<Settings> & {
+    OnInitialize?: (self: PluginModule) -> (),
+    OnEnable?: (self: PluginModule) -> (),
+    OnDisable?: (self: PluginModule) -> (),
+}
+
+-- A plugin's module (SuuUI.RegisterModule): its callbacks come with its
+-- definition, and it keeps what it likes on itself.
+export class PluginModule extends Module<Settings>
+    constructor(def: PluginDef)
+        super(def)
+        -- the instance's own, in front of the class's empty ones
+        if def.OnInitialize then rawset(self, "OnInitialize", def.OnInitialize) end
+        if def.OnEnable then rawset(self, "OnEnable", def.OnEnable) end
+        if def.OnDisable then rawset(self, "OnDisable", def.OnDisable) end
+    end
+end
+
+-- A module not converted to a class yet (TRANSITION: built-in modules move
+-- to classes extending Module one by one; this goes when the last one has):
+-- a PluginModule seen with its settings typed and whatever it keeps on
+-- itself loose.
 export type ModuleOf<D> = {
     id: string,
     name: string,
@@ -95,18 +394,12 @@ export type ModuleOf<D> = {
     combatSafe: boolean,
     replaces: string?,
     replacedBy: string?,
-    OnInitialize: ((self: ModuleOf<D>) -> ())?,
-    OnEnable: ((self: ModuleOf<D>) -> ())?,
-    OnDisable: ((self: ModuleOf<D>) -> ())?,
-    -- its settings (Settings: `nil` for a key without a default)
     Get: <K extends keyof D>(self: ModuleOf<D>, key: K) -> D[K],
-    -- 0.17: the value itself, not a copy, to read only (large tables read often)
     Peek: <K extends keyof D>(self: ModuleOf<D>, key: K) -> D[K],
     Set: <K extends keyof D>(self: ModuleOf<D>, key: K, value: D[K]) -> (boolean, string?),
     Reset: <K extends keyof D>(self: ModuleOf<D>, key: K?) -> boolean,
     Watch: <K extends keyof D>(self: ModuleOf<D>, key: K, fn: (value: D[K], namespace: string, key: string) -> ()) -> (),
     Veto: <K extends keyof D>(self: ModuleOf<D>, key: K, fn: (new: D[K], old: D[K]) -> (boolean?, string?)) -> (),
-    -- 0.19: fn(key) whenever one of `keys` changes; each of `keys` reset
     WatchAll: <K extends keyof D>(self: ModuleOf<D>, keys: K[], fn: (key: K) -> ()) -> (),
     ResetAll: <K extends keyof D>(self: ModuleOf<D>, keys: K[]) -> (),
     IsEnabled: (self: ModuleOf<D>) -> boolean,
@@ -118,203 +411,22 @@ export type ModuleOf<D> = {
                                        fn: (name: E, EventArgs<E>...) -> ()) -> (),
     [string]: any,
 }
-
--- A module's settings with SuuUI's own: whether it is on.
-export type WithEnabled<D> = D & { enabled: boolean }
-
--- A module whatever its settings (the registry's view).
-export type Module = ModuleOf<WithEnabled<Settings>>
-
--- What RegisterModule takes (see the top of this file).
-export type ModuleDef<D> = {
-    id: string,
-    name?: string,
-    description?: string,
-    api?: string,
-    defaults?: D,
-    enabledByDefault?: boolean,
-    reloadToToggle?: boolean,
-    combatSafe?: boolean,
-    replaces?: string,
-    -- the addon it comes from (found from the call stack when not given)
-    addon?: string,
+-- (TRANSITION) what such a module is made from: its callbacks see it so.
+export type LooseDef<D> = {
+    id: string, name?: string, description?: string, api?: string, defaults?: D, enabledByDefault?: boolean,
+    reloadToToggle?: boolean, combatSafe?: boolean, replaces?: string, addon?: string,
     OnInitialize?: (self: ModuleOf<WithEnabled<D>>) -> (),
     OnEnable?: (self: ModuleOf<WithEnabled<D>>) -> (),
     OnDisable?: (self: ModuleOf<WithEnabled<D>>) -> (),
 }
 
---------------------------------------------------------------------------------
--- API versions
---------------------------------------------------------------------------------
-
-local function parseVersion(v: any): (number?, number, number)
-    local major, minor, patch = tostring(v):match("^(%d+)%.?(%d*)%.?(%d*)$")
-    if not major then return nil, 0, 0 end
-    return tonumber(major), tonumber(minor) or 0, tonumber(patch) or 0
-end
-
--- True when this SuuUI's API can serve a module written for `wanted`: the
--- same major version, and at least that minor and patch.
-export function apiAtLeast(wanted: any): boolean
-    local a, b, c = parseVersion(API_VERSION)
-    local x, y, z = parseVersion(wanted)
-    if not x then return false end
-    if a ~= x then return false end
-    if b ~= y then return b > y end
-    return c >= z
-end
-
---------------------------------------------------------------------------------
--- The module object
---------------------------------------------------------------------------------
-
-local Module: { [string]: any } = {}
-
--- SuuUI's own fields on a module: read like any field, but set only here.
--- A module (or anyone) writing one gets an error naming it (Inspect once set
--- self.id to a frame, and the settings search broke far away, 2026-10-17).
--- They live in a table of their own, so a write always reaches __newindex.
-local OWN: { [string]: boolean } = { id = true, name = true, description = true, api = true, source = true, builtIn = true,
-              state = true, error = true, pendingReload = true, enabledAtLoad = true, initialized = true,
-              reloadToToggle = true, combatSafe = true, replaces = true, replacedBy = true }
-local fields: { [any]: { [string]: any } } = setmetatable({}, { __mode = "k" })
-
-local ModuleMeta = {
-    __index = function(m: any, key: string): any
-        local mine = fields[m]
-        local v = mine and mine[key]
-        if v ~= nil then return v end
-        return Module[key]
-    end,
-    __newindex = function(m: any, key: string, value: any)
-        if OWN[key] then
-            local mine = fields[m]
-            error(("SuuUI: %q is the module's own field and can't be set (module %s); keep your value under another name")
-                :format(tostring(key), tostring(mine and mine.id)), 2)
-        end
-        rawset(m, key, value)
-    end,
-}
-
--- Sets one of SuuUI's own fields (this file only).
-local function own(m: Module, key: string, value: any)
-    (fields[m] :: { [string]: any })[key] = value
-end
-
-function Module.Get(self: Module, key: string): any return settings.get(self.id, key) end
--- 0.17: the value itself, not a copy, to read only (large tables read often)
-function Module.Peek(self: Module, key: string): any return settings.peek(self.id, key) end
-function Module.Set(self: Module, key: string, value: any): (boolean, string?) return settings.set(self.id, key, value) end
-function Module.Reset(self: Module, key: string?): boolean return settings.reset(self.id, key) end
--- 0.11: the module's own data for this character (a table it fills;
--- saved, never part of a profile)
-function Module.CharData(self: Module): { [any]: any } return settings.charData(self.id) end
-function Module.AllCharData(self: Module): { [string]: { [any]: any } } return settings.allCharData(self.id) end
-function Module.CharKey(self: Module): string? return settings.getCharKey() end
-function Module.ForgetCharData(self: Module, key: string): boolean return settings.forgetCharData(self.id, key) end
--- fn wrapped so an error in it is reported (SuuUIDB.errors, /suu errors)
--- under the module's name, as errors in its events are: for UI callbacks.
-function Module.Guard(self: Module, fn: (...any) -> ...any): (...any) -> ...any
-    return function(...: any): ...any return fault.call(self.name, fn, ...) end
-end
-function Module.Watch(self: Module, key: string, fn: settings.Watcher) settings.watch(self.id, key, fn, self) end
-function Module.Veto(self: Module, key: string, fn: settings.Veto) settings.veto(self.id, key, fn, self) end
-function Module.WatchAll(self: Module, keys: string[], fn: (key: string) -> ())
-    for _, key in ipairs(keys) do settings.watch(self.id, key, function() fn(key) end, self) end
-end
-function Module.ResetAll(self: Module, keys: string[])
-    for _, key in ipairs(keys) do settings.reset(self.id, key) end
-end
-
--- fn(values) reshapes one profile's stored values of this module (a renamed
--- key, a changed type), once per profile. Call it right after RegisterModule,
--- at file load, so it runs before the old values are judged by type.
-function Module.Migrate(self: Module, id: string, fn: (values: settings.Values) -> ()) settings.migrate(self.id, id, fn, self) end
-
--- A message: SuuUI's (Core/Messages.d.wowlua: the listener's arguments are
--- checked) or a plugin's own (any name; its values unchecked).
-function Module.On<M extends string>(self: Module, message: M, fn: (name: M, EventArgs<M>...) -> ())
-    events.bus:listen(message, fn :: events.Listener, self)
-end
-function Module.Off(self: Module, message: string) events.off(message, self) end
-function Module.Emit<M extends string>(self: Module, message: M, ...: EventArgs<M>...) events.bus:send(message, ...) end
-function Module.OnGameEvent<E extends EventName>(self: Module, event: E, fn: (name: E, EventArgs<E>...) -> ())
-    events.onGame(event, fn, self)
-end
-function Module.OnUnitEvent<E extends EventName>(self: Module, event: E, units: UnitToken | UnitToken[],
-                                                 fn: (name: E, EventArgs<E>...) -> ())
-    events.onUnit(event, units, fn, self)
-end
-
--- Keys get an "m:" prefix so a module's never collide with the core's own.
-function Module.RunOutOfCombat(self: Module, key: any, fn: () -> ())
-    combat.run("m:" .. self.id .. ":" .. tostring(key), fn, self.name)
-end
-
-function Module.RegisterCommand(self: Module, cmd: string, help: string, fn: (rest: string) -> (), args: any)
-    registerCommand(cmd, help, fn, self, args)
-end
-
--- A settings section for this module: its rows read and write the module's
--- own namespace, and the section goes away when the module turns off.
-function Module.RegisterSettings(self: Module, def: { [string]: any }): any
-    def.namespace = def.namespace or self.id
-    return settingsRegistry.register(def, self)
-end
-
--- An edit-mode handle for one of the module's frames. opts.key names a
--- position setting in the module's defaults (default "position").
-function Module.RegisterMover(self: Module, frame: any, opts: { [string]: any }?): any
-    local o: { [string]: any } = opts or {}
-    o.namespace = self.id
-    o.label = o.label or self.name
-    return editMode.register(frame, o, self)
-end
-
--- 0.17: SuuUI's own UI (Core/Extend.wowlua). fn(object, info) for every
--- instance of a kind, now and later (undo(object, info) for each when the
--- module turns off); fn(object, ...) after a method; fn(object, original,
--- ...) instead of one. All removed when the module turns off.
-function Module.Each(self: Module, kind: string, fn: extend.Extender, undo: extend.Extender?) extend.each(kind, fn, undo, self) end
-function Module.Hook(self: Module, kind: string, method: string, fn: extend.Hook) extend.hook(kind, method, fn, self) end
-function Module.Override(self: Module, kind: string, method: string, fn: extend.Override) extend.override(kind, method, fn, self) end
-
--- 0.17: a service other modules reach by name (Core/Services.wowlua); gone
--- when the module turns off.
-function Module.Provide(self: Module, serviceName: string, impl: { [string]: any }) services.provide(serviceName, impl, self) end
-
--- 0.17: entries in SuuUI's own menus and lists (Core/Extend.wowlua): before one
--- of SuuUI's right-click menus opens, fn(menu, context); a micro menu
--- button; a game menu entry; a game popup shown as a notification card;
--- this module's own settings in a role's preset. Gone when it turns off.
-function Module.ExtendMenu(self: Module, id: string, fn: extend.MenuExtension) extend.extendMenu(id, fn, self) end
--- (what the micro menu and the game menu take: they check the item)
-function Module.AddMicroItem(self: Module, item: unknown) extend.addTo(extend.List.MicroMenu, item, self) end
-function Module.AddGameMenuItem(self: Module, item: unknown) extend.addTo(extend.List.GameMenu, item, self) end
-function Module.AddNotificationKind(self: Module, which: string, def: { [string]: unknown }?)
-    local d: { [string]: unknown } = def or {}
-    d.which = which
-    extend.addTo(extend.List.NotificationKinds, d, self)
-end
-function Module.AddToRolePreset(self: Module, role: string, values: { [string]: unknown })
-    local preset: extend.RolePreset = { role = role, namespace = self.id, values = values }
-    extend.addTo(extend.List.RolePresets, preset, self)
-end
-
-function Module.Print(self: Module, ...: any)
-    print("|cffa39b8b" .. self.name .. ":|r", ...)
-end
-
-function Module.IsEnabled(self: Module): boolean
-    return self.state == "enabled"
-end
 
 --------------------------------------------------------------------------------
 -- Lifecycle
 --------------------------------------------------------------------------------
 
 -- Everything a module registered through its own methods, taken away.
-local function releaseAll(m: any)
+local function releaseAll(m: unknown)
     events.offAll(m)
     settings.unwatch(m)
     unregisterCommands(m)
@@ -324,23 +436,9 @@ local function releaseAll(m: any)
     services.unregister(m)
 end
 
--- The addon whose file called RegisterModule, from the call stack: the first
--- frame of another addon, else SuuUI itself. SuuUI's own frames are skipped
--- by addon, not by file, so this also holds when wowlua bundles SuuUI into
--- one file.
-local function sourceAddon(): string
-    local stack = debugstack(1, 8, 0) or ""
-    local mine = false
-    for addon in stack:gmatch("AddOns[/\\]([^/\\]+)[/\\]") do
-        if addon ~= ADDON then return addon end
-        mine = true
-    end
-    return mine and ADDON or "?"
-end
-
 export class ModuleRegistry
-    private modules: Module[] = {}
-    private byId: { [string]: Module } = {}
+    private modules: AnyModule[] = {}
+    private byId: { [string]: AnyModule } = {}
     private started: boolean = false
 
     constructor(
@@ -353,51 +451,47 @@ export class ModuleRegistry
     )
     end
 
-    private function fail(m: Module, phase: string)
-        own(m, "state", ModuleState.Errored)
-        own(m, "error", phase .. " failed")
+    private function fail(m: AnyModule, phase: string)
+        ownOf(m :: table).state = ModuleState.Errored
+        ownOf(m :: table).error = phase .. " failed"
         -- Undo what a failed OnEnable got as far as building (frames shown,
         -- anchors published). The reporter reports an error here and
         -- carries on.
-        local onDisable = m.OnDisable
-        if phase == "OnEnable" and onDisable then self.reporter:call(m.name, onDisable, m) end
+        if phase == "OnEnable" then self.reporter:call(m.name, function() m:OnDisable() end) end
         self.release(m)
         self.notifier:emit("SUUUI_MODULE_ERRORED", m.id)
     end
 
-    private function enable(m: Module)
+    private function enable(m: AnyModule)
         if m.state == ModuleState.Enabled or m.state == ModuleState.Incompatible then return end
         if not m.initialized then
-            local onInit = m.OnInitialize
-            if onInit and not self.reporter:call(m.name, onInit, m) then return self:fail(m, "OnInitialize") end
-            own(m, "initialized", true)
+            if not self.reporter:call(m.name, function() m:OnInitialize() end) then return self:fail(m, "OnInitialize") end
+            ownOf(m :: table).initialized = true
         end
-        local onEnable = m.OnEnable
-        if onEnable and not self.reporter:call(m.name, onEnable, m) then return self:fail(m, "OnEnable") end
-        own(m, "state", ModuleState.Enabled)
-        own(m, "error", nil)
+        if not self.reporter:call(m.name, function() m:OnEnable() end) then return self:fail(m, "OnEnable") end
+        ownOf(m :: table).state = ModuleState.Enabled
+        ownOf(m :: table).error = nil
         self.notifier:emit("SUUUI_MODULE_ENABLED", m.id)
     end
 
-    private function disable(m: Module)
+    private function disable(m: AnyModule)
         if m.state ~= ModuleState.Enabled then
-            if m.state ~= ModuleState.Incompatible then own(m, "state", ModuleState.Disabled) end
+            if m.state ~= ModuleState.Incompatible then ownOf(m :: table).state = ModuleState.Disabled end
             return
         end
-        local onDisable = m.OnDisable
-        if onDisable then self.reporter:call(m.name, onDisable, m) end
+        self.reporter:call(m.name, function() m:OnDisable() end)
         self.release(m)
-        own(m, "state", ModuleState.Disabled)
+        ownOf(m :: table).state = ModuleState.Disabled
         self.notifier:emit("SUUUI_MODULE_DISABLED", m.id)
     end
 
     -- Brings the module in line with its "enabled" setting.
-    function sync(m: Module)
+    function sync(m: AnyModule)
         if m.state == ModuleState.Incompatible or m.replacedBy then return end
         local want = self.store:get(m.id, "enabled")
         if m.reloadToToggle then
             -- an errored module that is still on retries at the next load
-            own(m, "pendingReload", (want ~= m.enabledAtLoad or (want and m.state == ModuleState.Errored)) or nil)
+            ownOf(m :: table).pendingReload = (want ~= m.enabledAtLoad or (want and m.state == ModuleState.Errored)) or nil
             return
         end
         self.runner:run("module:" .. m.id, function()
@@ -407,23 +501,23 @@ export class ModuleRegistry
 
     -- The module standing in for `m` this session (0.17: `replaces`): one
     -- that is on and can load. Decided at login, so a change takes a reload.
-    private function replacer(m: Module): Module?
+    private function replacer(m: AnyModule): AnyModule?
         for _, o in ipairs(self.modules) do
             if o.replaces == m.id and o ~= m and o.state ~= ModuleState.Incompatible and self.store:get(o.id, "enabled") then return o end
         end
         return nil
     end
 
-    private function start(m: Module)
+    private function start(m: AnyModule)
         local by = self:replacer(m)
         if by then
-            own(m, "replacedBy", by.name)
-            own(m, "enabledAtLoad", false)
-            own(m, "state", ModuleState.Disabled)
+            ownOf(m :: table).replacedBy = by.name
+            ownOf(m :: table).enabledAtLoad = false
+            ownOf(m :: table).state = ModuleState.Disabled
             self.store:watch(m.id, "enabled", function() end, "Modules")
             return
         end
-        own(m, "enabledAtLoad", self.store:get(m.id, "enabled"))
+        ownOf(m :: table).enabledAtLoad = self.store:get(m.id, "enabled")
         self.store:watch(m.id, "enabled", function() self:sync(m) end, "Modules")
         if m.state == ModuleState.Incompatible then return end
         if m.enabledAtLoad then
@@ -436,7 +530,7 @@ export class ModuleRegistry
                 self.runner:run("module:" .. m.id, function() self:enable(m) end, m.name)
             end
         else
-            own(m, "state", ModuleState.Disabled)
+            ownOf(m :: table).state = ModuleState.Disabled
         end
     end
 
@@ -451,65 +545,42 @@ export class ModuleRegistry
     -- Registration
     ----------------------------------------------------------------------------
 
-    function register<D extends Settings>(def: ModuleDef<D>): ModuleOf<WithEnabled<D>>
-        assert(type(def) == "table", "SuuUI.RegisterModule takes a table")
-        local id = def.id
-        assert(type(id) == "string" and id:find("^%l[%l%d_]*$"),
-            "SuuUI.RegisterModule: id must be lower case letters, digits and _, starting with a letter")
+    -- A module made (a built-in one's class, or a plugin's PluginModule):
+    -- its settings registered, started at once after login.
+    function add<M extends AnyModule>(m: M): M
+        local id = m.id
         assert(not self.byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
-        local given: Settings = def.defaults or {}
-        local defaults: Settings = util.copy(given)
-        assert(defaults.enabled == nil, "SuuUI.RegisterModule: \"enabled\" is SuuUI's own setting; use enabledByDefault")
-        assert(def.replaces == nil or (type(def.replaces) == "string" and def.replaces ~= id),
-            "SuuUI.RegisterModule: replaces names another module's id")
-        defaults.enabled = def.enabledByDefault ~= false
-
-        -- the module, as the registry handles every one (its settings' type
-        -- is the caller's: ModuleOf<D>)
-        local made = setmetatable({
-            OnInitialize = def.OnInitialize,
-            OnEnable = def.OnEnable,
-            OnDisable = def.OnDisable,
-        }, ModuleMeta)
-        local m = (made :: unknown) :: Module
-        local source = def.addon or sourceAddon()
-        fields[m] = {
-            id = id,
-            name = def.name or id,
-            description = def.description,
-            api = def.api,
-            reloadToToggle = def.reloadToToggle and true or false,
-            combatSafe = def.combatSafe and true or false,
-            source = source,
-            builtIn = source == ADDON,
-            state = ModuleState.Registered,
-            replaces = def.replaces,
-        }
-
-        self.store:register(id, defaults)
-        if def.api and not apiAtLeast(def.api) then
-            own(m, "state", ModuleState.Incompatible)
-            own(m, "error", ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(def.api), API_VERSION))
+        self.store:register(id, ownOf(m :: table).defaults)
+        local api = m.api
+        if api and not apiAtLeast(api) then
+            ownOf(m :: table).state = ModuleState.Incompatible
+            ownOf(m :: table).error = ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(api), API_VERSION)
             print(("%s (%s) can't load: it %s."):format(m.name, m.source, tostring(m.error)))
         end
-
         self.modules[#self.modules + 1] = m
         self.byId[id] = m
         self.notifier:emit("SUUUI_MODULE_REGISTERED", id)
         if self.started then self:start(m) end
+        return m
+    end
+
+    -- A plugin's module (SuuUI.RegisterModule), and (TRANSITION) a
+    -- built-in one not converted to a class yet.
+    function register<D extends Settings>(def: LooseDef<D>): ModuleOf<WithEnabled<D>>
+        local m = self:add(PluginModule.new((def :: unknown) :: PluginDef))
         return (m :: unknown) :: ModuleOf<WithEnabled<D>>
     end
 
-    function get(id: string): Module?
+    function get(id: string): AnyModule?
         return self.byId[id]
     end
 
-    function all(): Module[]
+    function all(): AnyModule[]
         return self.modules
     end
 
     -- The module `text` names: its id or name, in any letter case.
-    function find(text: string?): Module?
+    function find(text: string?): AnyModule?
         local wanted = strtrim(text or ""):lower()
         for _, m in ipairs(self.modules) do
             if m.id == wanted or m.name:lower() == wanted then return m end
@@ -521,10 +592,11 @@ end
 -- SuuUI's registry, and its methods as the module's functions.
 export const registry = ModuleRegistry.new()
 
-export function register<D extends Settings>(def: ModuleDef<D>): ModuleOf<WithEnabled<D>> return registry:register(def) end
-export function get(id: string): Module? return registry:get(id) end
-export function all(): Module[] return registry:all() end
-export function find(text: string?): Module? return registry:find(text) end
+export function add<M extends AnyModule>(m: M): M return registry:add(m) end
+export function register<D extends Settings>(def: LooseDef<D>): ModuleOf<WithEnabled<D>> return registry:register(def) end
+export function get(id: string): AnyModule? return registry:get(id) end
+export function all(): AnyModule[] return registry:all() end
+export function find(text: string?): AnyModule? return registry:find(text) end
 
 @onLogin
 local function startAll()
@@ -546,7 +618,7 @@ local STATE_TEXT: { [ModuleState]: string } = {
     [ModuleState.Registered] = "|cffa39b8bwaiting for login|r",
 }
 
-local function describe(m: Module): string
+local function describe(m: AnyModule): string
     local state = STATE_TEXT[m.state] or m.state
     if m.replacedBy then state = "|cffa39b8breplaced by " .. m.replacedBy .. "|r" end
     if m.pendingReload then
@@ -574,11 +646,11 @@ local function toggle(arg: string, on: boolean)
         -- protected frames can only retry from a fresh load.
         if m.reloadToToggle then
             settings.set(m.id, "enabled", true)
-            own(m, "pendingReload", true)
+            ownOf(m :: table).pendingReload = true
             print(("%s tries again after a /reload."):format(m.name))
             return _G.print(describe(m))
         end
-        own(m, "state", ModuleState.Disabled)
+        ownOf(m :: table).state = ModuleState.Disabled
         if settings.get(m.id, "enabled") then registry:sync(m) end
     end
     settings.set(m.id, "enabled", on)

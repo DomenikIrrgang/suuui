@@ -27,9 +27,10 @@ config({ lifecycle = "manual" })
 const P = "|cff9fd3c7SuuUI|r "
 const LISTENER = { name = "Modules Test Listener" }
 
-type Module = modules.Module
+-- (the loose view of a module made from a definition)
+type Module = modules.ModuleOf<modules.WithEnabled<modules.Settings>>
 type Calls = { init: number, enable: number, disable: number }
-type Def = modules.ModuleDef<modules.Settings>
+type Def = modules.LooseDef<modules.Settings>
 -- a table the test hands over as it is
 type Opts = { [string]: unknown }
 -- messages a module of this file sends (as a plugin's own would be)
@@ -249,7 +250,7 @@ local function ownFields()
     local m = modules.register({ id = nextId() })
     for _, key in ipairs({ "id", "name", "state", "error", "replacedBy", "builtIn" }) do
         expect(function() (m :: Opts)[key] = "x" end)
-            .toThrow(("%q is the module's own field and can't be set (module %s)"):format(key, m.id))
+            .toThrow(("property '%s' of PluginModule is read-only"):format(key))
     end
     m.counter = 5
     expect(rawget(m, "counter")).toBe(5)
@@ -737,7 +738,7 @@ local function own(): Own
 end
 
 -- A module whose callbacks say what ran, in `ran`.
-local function recording(o: Own, def: Def, ran: string[]): modules.Module
+local function recording(o: Own, def: Def, ran: string[]): Module
     def.OnInitialize = def.OnInitialize or function() ran[#ran + 1] = "init" end
     def.OnEnable = def.OnEnable or function() ran[#ran + 1] = "enable" end
     def.OnDisable = def.OnDisable or function() ran[#ran + 1] = "disable" end
