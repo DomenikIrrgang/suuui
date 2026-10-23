@@ -48,15 +48,24 @@
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as controls from "/UI/Controls"
+import SuuButton from "/UI/Controls"
 import * as draw from "/UI/Draw"
 import * as filterMenu from "/UI/FilterMenu"
+import FilterMenu, FilterGroup, FilterValues from "/UI/FilterMenu"
 import * as uiIcon from "/UI/Icon"
+import Icon from "/UI/Icon"
 import * as inputs from "/UI/Inputs"
+import TextField, Stepper, Checkbox from "/UI/Inputs"
 import * as inventory from "/UI/Inventory"
+import ItemSlot from "/UI/Inventory"
 import * as panel from "/UI/Panel"
+import ScrollArea from "/UI/Panel"
 import * as selectModule from "/UI/Select"
+import Select, SelectOption from "/UI/Select"
 import * as tabMarker from "/UI/TabMarker"
+import TabMarker from "/UI/TabMarker"
 import * as uiText from "/UI/Text"
+import Text from "/UI/Text"
 
 local S = T.space
 
@@ -71,281 +80,591 @@ local DIFFICULTY: { [number]: string } = { [0] = "quest-very-difficult", "quest-
 export const PROFESSIONS_W = 720
 export const PROFESSIONS_H = 600
 
+--------------------------------------------------------------------------------
+-- The data (see the header); the caller's own fields ride along on cards,
+-- recipes and the crafting page (handed back in the callbacks)
+--------------------------------------------------------------------------------
+
+export type ProfessionTab = { key: string | number, label?: string, icon?: number | string, glyph?: string }
+
+export type ProfessionSpell = { name?: string, icon?: number | string, active?: boolean, onClick?: () -> (),
+    onEnter?: (owner: Frame) -> (), onLeave?: () -> (), onDrag?: () -> () }
+
+export type ProfessionCard = {
+    [string]: unknown,
+    name?: string,
+    rank?: string,
+    icon?: number | string,
+    skill?: number,
+    max?: number,
+    crafting?: boolean,
+    recipes?: { learned?: number, total?: number },
+    spells?: ProfessionSpell[],
+    untrained?: boolean,
+    hint?: string,
+    onDrag?: () -> (),
+    onUnlearn?: () -> (),
+}
+
+export type ProfessionOverview = { primary?: ProfessionCard[], secondary?: ProfessionCard[] }
+
+export type RecipeEntry = { [string]: unknown, id: number, name?: string, difficulty?: number, canMake?: number,
+    tracked?: boolean, learned?: boolean }
+
+export type RecipeCategory = { name?: string, recipes?: RecipeEntry[], flat?: boolean }
+
+export type CraftingData = {
+    [string]: unknown,
+    name?: string,
+    rank?: string,
+    skill?: number,
+    max?: number,
+    recipes?: { learned?: number, total?: number },
+    categories?: RecipeCategory[],
+    selected?: number,
+}
+
+export type RecipeReagent = { name?: string, icon?: number | string, quality?: number, qualityName?: string,
+    have?: number, need?: number }
+
+export type RecipeSourceItem = { icon?: number | string, name?: string, quality?: number, qualityName?: string,
+    note?: string, onEnter?: (owner: Frame) -> () }
+
+export type RecipeDetail = {
+    name?: string,
+    quality?: number,
+    qualityName?: string,
+    icon?: number | string,
+    makes?: number,
+    desc?: string,
+    tools?: { name?: string, met?: boolean }[],
+    reagents?: RecipeReagent[],
+    cooldown?: string,
+    source?: { item?: RecipeSourceItem, lines?: string[] },
+    tracked?: boolean,
+    canMake?: number,
+    ready?: boolean,
+    why?: string,
+    onProduct?: (owner: Frame) -> (),
+    onReagent?: (i: number, owner: Frame) -> (),
+}
+
+export type ProfessionsOptions = { edgeInset?: number }
+
+--------------------------------------------------------------------------------
+-- Pieces
+--------------------------------------------------------------------------------
+
 -- a thin bar with its numbers ("83 / 150"), a caption before it ("Skill")
 local BAR_LABEL_W = 50
-local function skillBar(parent: any, label: string?): any
-    local f = CreateFrame("Frame", nil, parent)
-    f:SetHeight(T.type.numeric.lineHeight)
-    f.num = uiText.text(f, "numeric", "ink")
-    f.num:SetPoint("RIGHT")
-    f.track = draw.fill(f, "track", "ARTWORK")
-    f.track:SetHeight(6)
-    if label then
-        f.label = uiText.text(f, "caption", "ink-muted")
-        f.label:SetPoint("LEFT")
-        f.label:SetValue(label)
-        f.track:SetPoint("LEFT", f, "LEFT", BAR_LABEL_W, 0)
-    else
-        f.track:SetPoint("LEFT") -- wowlua: coverage ignore (every bar has its caption)
+class SkillBar extends Frame
+    readonly num: Text
+    readonly track: Texture
+    readonly fill: Texture
+    readonly label: Text? = nil
+    skill: number = 0
+    max: number? = nil
+
+    constructor(parent: Frame, label: string?)
+        super(nil, parent)
+        self:SetHeight(T.type.numeric.lineHeight)
+        self.num = uiText.text(self, "numeric", "ink")
+        self.num:SetPoint("RIGHT")
+        self.track = draw.fill(self, "track", "ARTWORK")
+        self.track:SetHeight(6)
+        if label then
+            local l = uiText.text(self, "caption", "ink-muted")
+            l:SetPoint("LEFT")
+            l:SetValue(label)
+            self.label = l
+            self.track:SetPoint("LEFT", self, "LEFT", BAR_LABEL_W, 0)
+        else
+            self.track:SetPoint("LEFT") -- wowlua: coverage ignore (every bar has its caption)
+        end
+        self.track:SetPoint("RIGHT", self.num, "LEFT", -S["space-4"], 0)
+        self.fill = draw.fill(self, "progress-fill", "ARTWORK", 1)
+        self.fill:SetHeight(6)
+        self.fill:SetPoint("LEFT", self.track, "LEFT")
+        self:SetScript("OnSizeChanged", function() if self.max then self:Draw() end end)
     end
-    f.track:SetPoint("RIGHT", f.num, "LEFT", -S["space-4"], 0)
-    f.fill = draw.fill(f, "progress-fill", "ARTWORK", 1)
-    f.fill:SetHeight(6)
-    f.fill:SetPoint("LEFT", f.track, "LEFT")
-    function f:SetSkill(skill: number?, max: number?)
+
+    function SetSkill(skill: number?, max: number?)
         self.skill, self.max = skill or 0, max or 0
-        self.num:SetValue(self.skill .. " / " .. self.max)
+        self.num:SetValue(self.skill .. " / " .. (self.max or 0))
         self:Draw()
     end
+
     -- the fill from the numbers kept (the width settles after the first
     -- layout: drawn again then, the numbers untouched)
-    function f:Draw()
-        local frac = (self.max or 0) > 0 and math.min(1, (self.skill or 0) / self.max) or 0
+    function Draw()
+        local max = self.max or 0
+        local frac = max > 0 and math.min(1, self.skill / max) or 0
         local w = self.track:GetWidth()
         self.fill:SetShown(frac > 0 and w > 0)
         if w > 0 then self.fill:SetWidth(math.max(0.01, w * frac)) end
     end
-    f:SetScript("OnSizeChanged", function(self) if self.max then self:Draw() end end)
-    return f
 end
-
---------------------------------------------------------------------------------
--- The rail
---------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
 -- Overview
 --------------------------------------------------------------------------------
 
-local function makeSpell(parent: any): any
-    local s = CreateFrame("Button", nil, parent)
-    s:SetSize(120, 22)
-    s.icon = uiIcon.icon(s, 20)
-    s.icon:SetPoint("LEFT")
-    s.label = uiText.text(s, "caption", "ink-muted")
-    s.label:SetPoint("LEFT", s.icon, "RIGHT", S["space-3"], 0)
-    s:SetScript("OnClick", function(self) if self.spell and self.spell.onClick then self.spell.onClick() end end)
-    -- a gilt edge under the mouse: it does something (asked for in game)
-    s:SetScript("OnEnter", function(self)
-        self.icon:SetBorder("gilt")
-        if self.spell and self.spell.onEnter then self.spell.onEnter(self) end
-    end)
-    s:SetScript("OnLeave", function(self)
-        self.icon:SetBorder(self.spell and self.spell.active and "arcane" or nil)
-        if self.spell and self.spell.onLeave then self.spell.onLeave() end
-    end)
-    -- onto an action bar (Disenchant: asked for in game)
-    s:RegisterForDrag("LeftButton")
-    s:SetScript("OnDragStart", function(self) if self.spell and self.spell.onDrag then self.spell.onDrag() end end)
-    return s
+class SpellButton extends Button
+    readonly icon: Icon
+    readonly label: Text
+    spell: ProfessionSpell? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(120, 22)
+        self.icon = uiIcon.icon(self, 20)
+        self.icon:SetPoint("LEFT")
+        self.label = uiText.text(self, "caption", "ink-muted")
+        self.label:SetPoint("LEFT", self.icon, "RIGHT", S["space-3"], 0)
+        self:SetScript("OnClick", function()
+            local click = self.spell and self.spell.onClick
+            if click then click() end
+        end)
+        -- a gilt edge under the mouse: it does something (asked for in game)
+        self:SetScript("OnEnter", function()
+            self.icon:SetBorder("gilt")
+            local enter = self.spell and self.spell.onEnter
+            if enter then enter(self) end
+        end)
+        self:SetScript("OnLeave", function()
+            local spell = self.spell
+            self.icon:SetBorder(spell and spell.active and "arcane" or nil)
+            local leave = spell and spell.onLeave
+            if leave then leave() end
+        end)
+        -- onto an action bar (Disenchant: asked for in game)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", function()
+            local drag = self.spell and self.spell.onDrag
+            if drag then drag() end
+        end)
+    end
 end
 
-local function makeCard(view: any): any
-    local c = CreateFrame("Button", nil, view.overview)
-    draw.fill(c, "surface-sunk"):SetAllPoints()
-    c.border = draw.border(c, "gilt-faint")
-    c.icon = uiIcon.icon(c, "icon-lg")
-    c.icon:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
-    c.name = uiText.text(c, "header", "gilt-text")
-    c.name:SetPoint("TOPLEFT", c.icon, "TOPRIGHT", S["space-4"], -1)
-    c.rank = uiText.text(c, "caption", "ink-muted")
-    c.rank:SetPoint("TOPLEFT", c.name, "BOTTOMLEFT", 0, -1)
-    c.open = uiText.text(c, "caption", "gilt-text")
-    c.open:SetPoint("TOPRIGHT", -S["space-5"], -S["space-5"] - 2)
-    c.skill = skillBar(c, "Skill")
-    c.skill:SetPoint("TOPLEFT", c.icon, "BOTTOMLEFT", 0, -S["space-4"])
-    c.skill:SetPoint("RIGHT", c, "RIGHT", -S["space-5"], 0)
-    -- a crafting profession's recipes: learned of all (counted when it was
-    -- last open)
-    c.recipes = skillBar(c, "Recipes")
-    c.recipes:SetPoint("TOPLEFT", c.skill, "BOTTOMLEFT", 0, -S["space-3"])
-    c.recipes:SetPoint("RIGHT", c, "RIGHT", -S["space-5"], 0)
-    c.recipesHint = uiText.text(c, "caption", "ink-faint")
-    c.recipesHint:SetPoint("LEFT", c.recipes, "LEFT", 0, 0)
-    c.spells = {}
-    c.empty = uiText.text(c, "caption", "ink-muted")
-    c.empty:SetPoint("CENTER")
-    c.hint = uiText.text(c, "caption", "ink-faint")
-    c.hint:SetPoint("LEFT", c.skill, "LEFT", 0, 0)
-    -- Unlearn: a quiet trash glyph in the bottom right corner of a learned
-    -- one (always there: shown only on hover, it never showed in game);
-    -- the game's own confirmation
-    c.unlearn = CreateFrame("Button", nil, c)
-    c.unlearn:SetSize(22, 22)
-    c.unlearn:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-4"])
-    c.unlearn.edge = draw.border(c.unlearn, "gilt-line")
-    c.unlearn.edge:SetShown(false)
-    c.unlearn.glyph = c.unlearn:CreateTexture(nil, "ARTWORK")
-    c.unlearn.glyph:SetTexture(GLYPHS .. "trash.tga")
-    c.unlearn.glyph:SetSize(14, 14) -- even, like the button: whole pixels each side
-    c.unlearn.glyph:SetPoint("CENTER")
-    draw.paint(c.unlearn.glyph, "ink-faint")
-    c.unlearn:SetFrameLevel(c:GetFrameLevel() + 5)
-    c.unlearn:Hide()
-    c.unlearn:SetScript("OnEnter", function(self)
-        self.edge:SetShown(true)
-        draw.paint(self.glyph, "ember-text")
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip_SetTitle(GameTooltip, "Unlearn " .. (c.card and c.card.name or ""))
-        GameTooltip_AddNormalLine(GameTooltip, "You lose your skill and the recipes you know.")
-        GameTooltip:Show()
-    end)
-    c.unlearn:SetScript("OnLeave", function(self)
+-- A small square button with a glyph: an edge under the mouse.
+class GlyphButton extends Button
+    readonly edge: draw.Border
+    readonly glyph: Texture
+
+    constructor(parent: Frame, glyph: string)
+        super(nil, parent)
+        self:SetSize(22, 22)
+        self.edge = draw.border(self, "gilt-line")
         self.edge:SetShown(false)
-        draw.paint(self.glyph, "ink-faint")
-        GameTooltip:Hide()
-    end)
-    c.unlearn:SetScript("OnClick", function() if c.card and c.card.onUnlearn then c.card.onUnlearn() end end)
-    c:SetScript("OnEnter", function(self)
-        if self.card and self.card.crafting then self.border:SetColor("gilt-line") end
-        if self.card and self.card.onDrag then self.icon:SetBorder("gilt") end
-    end)
-    c:SetScript("OnLeave", function(self)
-        self.border:SetColor("gilt-faint")
-        self.icon:SetBorder(nil)
-    end)
-    c:SetScript("OnClick", function(self) if self.card and self.card.crafting and view.onOpen then view.onOpen(self.card) end end)
-    -- the card dragged: the profession's own spell (Enchanting) onto a bar
-    c:RegisterForDrag("LeftButton")
-    c:SetScript("OnDragStart", function(self) if self.card and self.card.onDrag then self.card.onDrag() end end)
-    return c
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
+        self.glyph:SetSize(14, 14) -- even, like the button: whole pixels each side
+        self.glyph:SetPoint("CENTER")
+    end
+end
+
+-- a spell's row on a card
+local SPELL_H = 22
+
+class CardFrame extends Button
+    readonly border: draw.Border
+    readonly icon: Icon
+    readonly name: Text
+    readonly rank: Text
+    readonly open: Text
+    readonly skill: SkillBar
+    readonly recipes: SkillBar
+    readonly recipesHint: Text
+    readonly spells: SpellButton[] = {}
+    readonly empty: Text
+    readonly hint: Text
+    readonly unlearn: GlyphButton
+    card: ProfessionCard? = nil
+
+    constructor(view: Professions)
+        super(nil, view.overview)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        self.border = draw.border(self, "gilt-faint")
+        self.icon = uiIcon.icon(self, "icon-lg")
+        self.icon:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+        self.name = uiText.text(self, "header", "gilt-text")
+        self.name:SetPoint("TOPLEFT", self.icon, "TOPRIGHT", S["space-4"], -1)
+        self.rank = uiText.text(self, "caption", "ink-muted")
+        self.rank:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -1)
+        self.open = uiText.text(self, "caption", "gilt-text")
+        self.open:SetPoint("TOPRIGHT", -S["space-5"], -S["space-5"] - 2)
+        self.skill = SkillBar.new(self, "Skill")
+        self.skill:SetPoint("TOPLEFT", self.icon, "BOTTOMLEFT", 0, -S["space-4"])
+        self.skill:SetPoint("RIGHT", self, "RIGHT", -S["space-5"], 0)
+        -- a crafting profession's recipes: learned of all (counted when it was
+        -- last open)
+        self.recipes = SkillBar.new(self, "Recipes")
+        self.recipes:SetPoint("TOPLEFT", self.skill, "BOTTOMLEFT", 0, -S["space-3"])
+        self.recipes:SetPoint("RIGHT", self, "RIGHT", -S["space-5"], 0)
+        self.recipesHint = uiText.text(self, "caption", "ink-faint")
+        self.recipesHint:SetPoint("LEFT", self.recipes, "LEFT", 0, 0)
+        self.empty = uiText.text(self, "caption", "ink-muted")
+        self.empty:SetPoint("CENTER")
+        self.hint = uiText.text(self, "caption", "ink-faint")
+        self.hint:SetPoint("LEFT", self.skill, "LEFT", 0, 0)
+        -- Unlearn: a quiet trash glyph in the bottom right corner of a learned
+        -- one (always there: shown only on hover, it never showed in game);
+        -- the game's own confirmation
+        local unlearn = GlyphButton.new(self, "trash")
+        self.unlearn = unlearn
+        unlearn:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-4"])
+        draw.paint(unlearn.glyph, "ink-faint")
+        unlearn:SetFrameLevel(self:GetFrameLevel() + 5)
+        unlearn:Hide()
+        unlearn:SetScript("OnEnter", function()
+            unlearn.edge:SetShown(true)
+            draw.paint(unlearn.glyph, "ember-text")
+            GameTooltip:SetOwner(unlearn, "ANCHOR_RIGHT")
+            local card = self.card
+            GameTooltip_SetTitle(GameTooltip, "Unlearn " .. (card and card.name or ""))
+            GameTooltip_AddNormalLine(GameTooltip, "You lose your skill and the recipes you know.")
+            GameTooltip:Show()
+        end)
+        unlearn:SetScript("OnLeave", function()
+            unlearn.edge:SetShown(false)
+            draw.paint(unlearn.glyph, "ink-faint")
+            GameTooltip:Hide()
+        end)
+        unlearn:SetScript("OnClick", function()
+            local forget = self.card and self.card.onUnlearn
+            if forget then forget() end
+        end)
+        self:SetScript("OnEnter", function()
+            local card = self.card
+            if card and card.crafting then self.border:SetColor("gilt-line") end
+            if card and card.onDrag then self.icon:SetBorder("gilt") end
+        end)
+        self:SetScript("OnLeave", function()
+            self.border:SetColor("gilt-faint")
+            self.icon:SetBorder(nil)
+        end)
+        self:SetScript("OnClick", function()
+            local card = self.card
+            if card and card.crafting and view.onOpen then view.onOpen(card) end
+        end)
+        -- the card dragged: the profession's own spell (Enchanting) onto a bar
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", function()
+            local drag = self.card and self.card.onDrag
+            if drag then drag() end
+        end)
+    end
+
+    function Fill(card: ProfessionCard?, empty: string?)
+        self.card = card
+        local has = card ~= nil
+        self.icon:SetShown(has); self.name:SetShown(has); self.rank:SetShown(has); self.skill:SetShown(has)
+        self.open:SetShown(card ~= nil and card.crafting == true)
+        self.empty:SetShown(not has)
+        if not card then
+            self.empty:SetValue(empty or "Learn a profession from a trainer")
+            self.hint:Hide()
+            self.unlearn:Hide()
+            self.recipes:Hide(); self.recipesHint:Hide()
+            for _, s in ipairs(self.spells) do s:Hide() end
+            return
+        end
+        self.icon:SetArt(card.icon)
+        self.name:SetValue(card.name or "")
+        self.rank:SetValue(card.rank or "")
+        self.open:SetValue("Recipes")
+        -- not learned: dimmed, how to learn it where the skill bar goes
+        local off = card.untrained == true
+        self.icon:SetState(off and "dim" or "rest")
+        self.name:SetColor(off and "ink-muted" or "gilt-text")
+        self.skill:SetShown(not off)
+        self.hint:SetShown(off)
+        self.hint:SetValue(card.hint or "")
+        self.skill:SetSkill(card.skill, card.max)
+        local counted = card.crafting and not off and card.recipes or nil
+        self.recipes:SetShown(counted ~= nil)
+        if counted then self.recipes:SetSkill(counted.learned, counted.total) end
+        self.recipesHint:SetShown(card.crafting == true and not off and not counted)
+        self.recipesHint:SetValue("Recipes: open it once to count them")
+        self.unlearn:SetShown(card.onUnlearn ~= nil)
+        local below: Frame = (card.crafting and not off) and self.recipes or self.skill
+        local y = S["space-4"]
+        local spells = card.spells or {}
+        for i, sp in ipairs(spells) do
+            local s = self.spells[i] or SpellButton.new(self)
+            self.spells[i] = s
+            s.spell = sp
+            s.icon:SetArt(sp.icon)
+            s.icon:SetBorder(sp.active and "arcane" or nil)
+            s.icon:SetGlow(sp.active and "glow-arcane" or nil)
+            s.label:SetValue(sp.name or "")
+            s.label:SetColor(sp.active and "arcane" or (sp.onClick and "ink" or "ink-muted"))
+            local w = 20 + S["space-3"] + math.ceil(s.label:GetUnboundedStringWidth()) + 2
+            s:SetWidth(w)
+            s:ClearAllPoints()
+            s:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -y)
+            s:Show()
+            y = y + SPELL_H + S["space-2"]
+        end
+        for i = #spells + 1, #self.spells do self.spells[i]:Hide() end
+    end
 end
 
 -- a card's height: its head and bars, then its spells one under another
 -- (side by side they ran into the Unlearn glyph: found in game), as many
 -- rows as the profession with the most has
-local SPELL_H = 22
-local function cardHeight(rows: number?): number
-    rows = math.max(1, rows or 1)
+local function cardHeight(given: number?): number
+    local rows = math.max(1, given or 1)
     return S["space-5"] * 2 + 30 + S["space-4"] + T.type.numeric.lineHeight * 2 + S["space-3"] + S["space-4"]
         + rows * SPELL_H + (rows - 1) * S["space-2"]
-end
-
-local function fillCard(c: any, card: any, empty: string?)
-    c.card = card
-    local has = card ~= nil
-    c.icon:SetShown(has); c.name:SetShown(has); c.rank:SetShown(has); c.skill:SetShown(has); c.open:SetShown(has and card.crafting)
-    c.empty:SetShown(not has)
-    if not has then
-        c.empty:SetValue(empty or "Learn a profession from a trainer")
-        c.hint:Hide()
-        c.unlearn:Hide()
-        c.recipes:Hide(); c.recipesHint:Hide()
-        for _, s in ipairs(c.spells) do s:Hide() end
-        return
-    end
-    c.icon:SetArt(card.icon)
-    c.name:SetValue(card.name or "")
-    c.rank:SetValue(card.rank or "")
-    c.open:SetValue("Recipes")
-    -- not learned: dimmed, how to learn it where the skill bar goes
-    local off = card.untrained and true or false
-    c.icon:SetState(off and "dim" or "rest")
-    c.name:SetColor(off and "ink-muted" or "gilt-text")
-    c.skill:SetShown(not off)
-    c.hint:SetShown(off)
-    c.hint:SetValue(card.hint or "")
-    c.skill:SetSkill(card.skill, card.max)
-    local counted = card.crafting and not off and card.recipes
-    c.recipes:SetShown(counted and true or false)
-    if counted then c.recipes:SetSkill(card.recipes.learned, card.recipes.total) end
-    c.recipesHint:SetShown(card.crafting and not off and not counted or false)
-    c.recipesHint:SetValue("Recipes: open it once to count them")
-    c.unlearn:SetShown(card.onUnlearn ~= nil)
-    local below = (card.crafting and not off) and c.recipes or c.skill
-    local y = S["space-4"]
-    for i, sp in ipairs(card.spells or {}) do
-        local s = c.spells[i] or makeSpell(c)
-        c.spells[i] = s
-        s.spell = sp
-        s.icon:SetArt(sp.icon)
-        s.icon:SetBorder(sp.active and "arcane" or nil)
-        s.icon:SetGlow(sp.active and "glow-arcane" or nil)
-        s.label:SetValue(sp.name or "")
-        s.label:SetColor(sp.active and "arcane" or (sp.onClick and "ink" or "ink-muted"))
-        local w = 20 + S["space-3"] + math.ceil(s.label:GetUnboundedStringWidth()) + 2
-        s:SetWidth(w)
-        s:ClearAllPoints()
-        s:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -y)
-        s:Show()
-        y = y + SPELL_H + S["space-2"]
-    end
-    for i = #(card.spells or {}) + 1, #c.spells do c.spells[i]:Hide() end
 end
 
 --------------------------------------------------------------------------------
 -- Crafting: the recipe list
 --------------------------------------------------------------------------------
 
-local function makeListRow(view: any): any
-    local r = CreateFrame("Button", nil, view.list.child)
-    r:SetHeight(ROW_H)
-    r.sel = draw.fill(r, "arcane-soft", "BACKGROUND")
-    r.sel:SetAllPoints()
-    r.selEdge = draw.fill(r, "arcane", "ARTWORK")
-    r.selEdge:SetWidth(2)
-    r.selEdge:SetPoint("TOPLEFT")
-    r.selEdge:SetPoint("BOTTOMLEFT")
-    r.hover = draw.fill(r, "gilt-faint", "BACKGROUND", 1)
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.chevron = r:CreateTexture(nil, "ARTWORK")
-    r.chevron:SetSize(10, 10)
-    r.chevron:SetPoint("LEFT", 2, 0)
-    draw.paint(r.chevron, "gilt-text")
-    r.eye = r:CreateTexture(nil, "ARTWORK")
-    r.eye:SetTexture(GLYPHS .. "eye.tga")
-    r.eye:SetSize(12, 12)
-    r.eye:SetPoint("RIGHT", -S["space-3"], 0)
-    draw.paint(r.eye, "gilt-text")
-    r.count = uiText.text(r, "caption", "ink-muted")
-    r.count:SetPoint("RIGHT", r.eye, "LEFT", -S["space-3"], 0)
-    r.label = uiText.text(r, "label", "ink")
-    r.label:SetPoint("LEFT", r, "LEFT", S["space-5"], 0)
-    r.label:SetPoint("RIGHT", r.count, "LEFT", -S["space-3"], 0)
-    r.label:SetJustifyH("LEFT")
-    r:SetScript("OnEnter", function(self)
-        self.hover:Show()
-        if self.recipe and view.onRecipeEnter then view.onRecipeEnter(self.recipe, self) end
-    end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide(); GameTooltip:Hide() end)
-    r:SetScript("OnClick", function(self)
-        if self.category then
-            view.folded[self.category] = not view.folded[self.category]
-            view:DrawList()
-        elseif self.recipe and IsModifiedClick("CHATLINK") and view.onLinkRecipe then
-            -- Shift-click: the recipe's link in chat
-            view.onLinkRecipe(self.recipe.id)
-        elseif self.recipe and view.onSelect then
-            view.onSelect(self.recipe.id)
-        end
-    end)
-    return r
+class RecipeRow extends Button
+    readonly sel: Texture
+    readonly selEdge: Texture
+    readonly hover: Texture
+    readonly chevron: Texture
+    readonly eye: Texture
+    readonly count: Text
+    readonly label: Text
+    -- a category's head, or a recipe
+    category: string? = nil
+    recipe: RecipeEntry? = nil
+
+    constructor(view: Professions)
+        super(nil, view.list.child)
+        self:SetHeight(ROW_H)
+        self.sel = draw.fill(self, "arcane-soft", "BACKGROUND")
+        self.sel:SetAllPoints()
+        self.selEdge = draw.fill(self, "arcane", "ARTWORK")
+        self.selEdge:SetWidth(2)
+        self.selEdge:SetPoint("TOPLEFT")
+        self.selEdge:SetPoint("BOTTOMLEFT")
+        self.hover = draw.fill(self, "gilt-faint", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.chevron = self:CreateTexture(nil, "ARTWORK")
+        self.chevron:SetSize(10, 10)
+        self.chevron:SetPoint("LEFT", 2, 0)
+        draw.paint(self.chevron, "gilt-text")
+        self.eye = self:CreateTexture(nil, "ARTWORK")
+        self.eye:SetTexture(GLYPHS .. "eye.tga")
+        self.eye:SetSize(12, 12)
+        self.eye:SetPoint("RIGHT", -S["space-3"], 0)
+        draw.paint(self.eye, "gilt-text")
+        self.count = uiText.text(self, "caption", "ink-muted")
+        self.count:SetPoint("RIGHT", self.eye, "LEFT", -S["space-3"], 0)
+        self.label = uiText.text(self, "label", "ink")
+        self.label:SetPoint("LEFT", self, "LEFT", S["space-5"], 0)
+        self.label:SetPoint("RIGHT", self.count, "LEFT", -S["space-3"], 0)
+        self.label:SetJustifyH("LEFT")
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            local recipe = self.recipe
+            if recipe and view.onRecipeEnter then view.onRecipeEnter(recipe, self) end
+        end)
+        self:SetScript("OnLeave", function() self.hover:Hide(); GameTooltip:Hide() end)
+        self:SetScript("OnClick", function()
+            local category, recipe = self.category, self.recipe
+            if category then
+                view.folded[category] = not view.folded[category]
+                view:DrawList()
+            elseif recipe and IsModifiedClick("CHATLINK") and view.onLinkRecipe then
+                -- Shift-click: the recipe's link in chat
+                view.onLinkRecipe(recipe.id)
+            elseif recipe and view.onSelect then
+                view.onSelect(recipe.id)
+            end
+        end)
+    end
 end
 
 --------------------------------------------------------------------------------
 -- Crafting: the chosen recipe
 --------------------------------------------------------------------------------
 
-local function makeReagent(view: any): any
-    local r = CreateFrame("Frame", nil, view.recipe.body)
-    r:SetHeight(32)
-    r.slot = inventory.itemSlot(r, 30)
-    r.slot:SetPoint("LEFT")
-    r.slot:SetScript("OnEnter", function(self) if view.recipeData and view.recipeData.onReagent then view.recipeData.onReagent(self.index, self) end end)
-    r.slot:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    r.count = uiText.text(r, "numeric", "ink")
-    r.count:SetPoint("RIGHT")
-    r.name = uiText.text(r, "label", "ink")
-    r.name:SetPoint("LEFT", r.slot, "RIGHT", S["space-4"], 0)
-    r.name:SetPoint("RIGHT", r.count, "LEFT", -S["space-4"], 0)
-    r.name:SetJustifyH("LEFT")
-    return r
+-- A reagent's slot: which reagent it shows.
+class ReagentSlot extends ItemSlot
+    index: number = 0
+end
+
+class ReagentRow extends Frame
+    readonly slot: ReagentSlot
+    readonly count: Text
+    readonly name: Text
+
+    constructor(view: Professions, parent: Frame)
+        super(nil, parent)
+        self:SetHeight(32)
+        local slot = ReagentSlot.new(self, 30)
+        self.slot = slot
+        slot:SetPoint("LEFT")
+        slot:SetScript("OnEnter", function()
+            local reagent = view.recipeData and view.recipeData.onReagent
+            if reagent then reagent(slot.index, slot) end
+        end)
+        slot:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self.count = uiText.text(self, "numeric", "ink")
+        self.count:SetPoint("RIGHT")
+        self.name = uiText.text(self, "label", "ink")
+        self.name:SetPoint("LEFT", slot, "RIGHT", S["space-4"], 0)
+        self.name:SetPoint("RIGHT", self.count, "LEFT", -S["space-4"], 0)
+        self.name:SetJustifyH("LEFT")
+    end
+end
+
+-- A tool the recipe needs: a check or a cross, "Requires …".
+class ToolLine extends Frame
+    readonly glyph: Texture
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(T.type.caption.lineHeight + 2)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(11, 11)
+        self.glyph:SetPoint("LEFT")
+        self.text = uiText.text(self, "caption", "ink-muted")
+        self.text:SetPoint("LEFT", self.glyph, "RIGHT", S["space-3"], 0)
+    end
+end
+
+-- The chosen recipe's pane: everything above the foot scrolls.
+class RecipePane extends Frame
+    readonly none: Text
+    readonly foot: Frame
+    readonly why: Text
+    readonly scroll: ScrollArea
+    readonly body: Frame
+    readonly product: ItemSlot
+    readonly title: Text
+    readonly makes: Text
+    readonly desc: Text
+    readonly tools: ToolLine[] = {}
+    readonly reagents: ReagentRow[] = {}
+    readonly reagentHead: Text
+    readonly cooldown: Text
+    readonly source: Text
+    readonly sourceHead: Text
+    readonly sourceItem: ReagentRow
+    readonly create: SuuButton
+    readonly createAll: SuuButton
+    readonly qty: Stepper
+    readonly track: Checkbox
+
+    constructor(view: Professions)
+        super(nil, view.crafting)
+        self:SetPoint("TOPLEFT", view.listBox, "TOPRIGHT", S["space-6"], 0)
+        self:SetPoint("BOTTOMRIGHT", view.crafting, "BOTTOMRIGHT", 0, 0)
+        self.none = uiText.text(self, "caption", "ink-muted")
+        self.none:SetPoint("CENTER")
+        self.none:SetValue("Choose a recipe")
+        -- the foot: Track, quantity, Create all, Create
+        self.foot = CreateFrame("Frame", nil, self)
+        self.foot:SetPoint("BOTTOMLEFT")
+        self.foot:SetPoint("BOTTOMRIGHT")
+        self.foot:SetHeight(30)
+        self.why = uiText.text(self, "caption", "ember-text")
+        self.why:SetPoint("BOTTOMRIGHT", self.foot, "TOPRIGHT", 0, S["space-3"])
+        -- everything above it scrolls when it's taller than the pane
+        local scroll = panel.scrollArea(self, S["space-3"])
+        self.scroll = scroll
+        scroll:SetPoint("TOPLEFT")
+        local c = scroll.child
+        self.body = c
+        scroll:HookScript("OnSizeChanged", function() c:SetWidth(math.max(1, scroll:GetWidth())) end)
+        local product = inventory.itemSlot(c, 36)
+        self.product = product
+        product:SetPoint("TOPLEFT")
+        product:SetScript("OnEnter", function()
+            local show = view.recipeData and view.recipeData.onProduct
+            if show then show(product) end
+        end)
+        product:SetScript("OnClick", function()
+            local selected = view.craftData and view.craftData.selected
+            if IsModifiedClick("CHATLINK") and view.onLinkRecipe and selected then
+                view.onLinkRecipe(selected)
+            end
+        end)
+        product:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self.title = uiText.text(c, "unit-name-lg", "ink")
+        self.title:SetPoint("TOPLEFT", product, "TOPRIGHT", S["space-5"], 0)
+        self.title:SetPoint("RIGHT", c, "RIGHT")
+        self.title:SetJustifyH("LEFT")
+        self.makes = uiText.text(c, "caption", "ink-muted")
+        self.makes:SetPoint("TOPLEFT", self.title, "BOTTOMLEFT", 0, -1)
+        self.desc = uiText.text(c, "caption", "ink-muted")
+        self.desc:SetPoint("TOPLEFT", self.makes, "BOTTOMLEFT", 0, -1)
+        self.desc:SetPoint("RIGHT", c, "RIGHT")
+        self.desc:SetJustifyH("LEFT")
+        self.desc:SetWordWrap(true)
+        self.reagentHead = uiText.text(c, "header", "gilt-text")
+        self.reagentHead:SetValue("Reagents")
+        self.cooldown = uiText.text(c, "caption", "amber")
+        self.source = uiText.text(c, "caption", "ink-muted")
+        self.source:SetJustifyH("LEFT")
+        self.source:SetWordWrap(true)
+        self.source:SetSpacing(2)
+        self.sourceHead = uiText.text(c, "header", "gilt-text")
+        self.sourceHead:SetValue("Source")
+        local sourceItem = ReagentRow.new(view, c)
+        self.sourceItem = sourceItem
+        sourceItem.slot:SetScript("OnEnter", function()
+            local src = view.recipeData and view.recipeData.source
+            local item = src and src.item
+            local enter = item and item.onEnter
+            if enter then enter(sourceItem.slot) end
+        end)
+        sourceItem:Hide()
+        local qty = inputs.stepper(self.foot, { min = 1, max = 1, value = 1 })
+        self.qty = qty
+        self.create = controls.button(self.foot, { text = "Create", variant = "primary",
+            onClick = function() if view.onCreate then view.onCreate(qty.value or 1) end end })
+        self.create:SetPoint("BOTTOMRIGHT")
+        self.createAll = controls.button(self.foot, { text = "Create all", variant = "quiet",
+            onClick = function() if view.onCreateAll then view.onCreateAll() end end })
+        self.createAll:SetPoint("RIGHT", self.create, "LEFT", -S["space-3"], 0)
+        qty:SetPoint("RIGHT", self.createAll, "LEFT", -S["space-3"], 0)
+        self.track = inputs.checkbox(self.foot, { label = "Track", onChange = function(on: boolean) if view.onTrack then view.onTrack(on) end end })
+        self.track:SetPoint("LEFT", self.foot, "LEFT", 0, 0)
+    end
+end
+
+-- A tab of the rail: the overview, or a crafting profession.
+class RailTab extends Button
+    readonly icon: Icon
+    readonly glyph: Texture
+    key: string | number | nil = nil
+    label: string? = nil
+
+    constructor(view: Professions)
+        super(nil, view.rail)
+        self:SetSize(32, 32)
+        self.icon = uiIcon.icon(self, 28)
+        self.icon:SetPoint("CENTER")
+        self.glyph = self:CreateTexture(nil, "OVERLAY")
+        self.glyph:SetSize(16, 16)
+        self.glyph:SetPoint("CENTER")
+        self:SetScript("OnClick", function()
+            local key = self.key
+            if key and view.onTab then view.onTab(key) end
+        end)
+        self:SetScript("OnEnter", function()
+            GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+            GameTooltip_SetTitle(GameTooltip, self.label or "")
+            GameTooltip:Show()
+        end)
+        self:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
 end
 
 -- The recipe list's filters (design board "Professions · Filters"):
 -- what the module reads, by group key.
-local FILTER_GROUPS: any[] = {
+local FILTER_GROUPS: FilterGroup[] = {
     { key = "show", label = "Show", kind = "one", options = {
         { value = "all", label = "All" }, { value = "learned", label = "Learned" },
         { value = "unlearned", label = "Unlearned" } } },
@@ -361,9 +680,9 @@ local FILTER_GROUPS: any[] = {
     { key = "other", label = "Other", kind = "toggles", options = {
         { value = "materials", label = "Have materials" }, { value = "skillup", label = "Skill up" } } },
 }
-export const PROFESSION_FILTER_DEFAULTS = { show = "learned", difficulty = {}, quality = {}, other = {} } :: { [string]: any }
+export const PROFESSION_FILTER_DEFAULTS: FilterValues = { show = "learned", difficulty = {}, quality = {}, other = {} }
 
-local SORTS: any[] = {
+local SORTS: SelectOption<string>[] = {
     { value = "category", label = "Category", summary = "Sort: Category" },
     { value = "difficulty", label = "Difficulty", summary = "Sort: Difficulty" },
     { value = "skill", label = "Skill required", summary = "Sort: Skill" },
@@ -371,7 +690,7 @@ local SORTS: any[] = {
     { value = "name", label = "Name", summary = "Sort: Name" },
 }
 
-local views: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+local views: { [Professions]: boolean } = setmetatable({}, { __mode = "k" })
 events.on("SUUUI_THEME_CHANGED", function()
     for f in pairs(views) do f:PlaceForType() end
 end, "UI.Professions")
@@ -381,42 +700,54 @@ end, "UI.Professions")
 --------------------------------------------------------------------------------
 
 export class Professions extends Frame
-    edgeInset: any
-    tabs: any
-    cards: any
-    listRows: any
-    folded: any
+    edgeInset: number
+    tabs: RailTab[] = {}
+    cards: CardFrame[] = {}
+    listRows: RecipeRow[] = {}
+    folded: { [string]: boolean } = {}
     rail: Frame
     main: Frame
     overview: Frame
-    primaryHead: any
-    primaryCount: any
-    secondaryHead: any
+    primaryHead: Text
+    primaryCount: Text
+    secondaryHead: Text
     crafting: Frame
-    craftRank: any
-    craftName: any
-    craftSkill: any
-    craftRecipes: any
-    link: Button
-    search: any
-    filterMenu: any
-    sort: any
+    craftRank: Text
+    craftName: Text
+    craftSkill: SkillBar
+    craftRecipes: SkillBar
+    link: GlyphButton
+    search: TextField
+    filterMenu: FilterMenu
+    sort: Select<string>
     listBox: Frame
-    list: any
-    listEmpty: any
-    recipe: any
-    tabList: any? = nil
-    tabMarker: any? = nil
+    list: ScrollArea
+    listEmpty: Text
+    recipe: RecipePane
+    tabList: ProfessionTab[] = {}
+    tabMarker: TabMarker? = nil
     mode: string? = nil
-    overviewData: any? = nil
-    recipeData: any? = nil
-    recipeShown: any? = nil
-    craftData: any? = nil
+    overviewData: ProfessionOverview? = nil
+    recipeData: RecipeDetail? = nil
+    recipeShown: string? = nil
+    craftData: CraftingData? = nil
+    -- what the page asks of its owner (see the header)
+    onTab: ((key: string | number) -> ())? = nil
+    onOpen: ((card: ProfessionCard) -> ())? = nil
+    onSelect: ((id: number) -> ())? = nil
+    onRecipeEnter: ((recipe: RecipeEntry, owner: Frame) -> ())? = nil
+    onSearch: ((text: string) -> ())? = nil
+    onFilters: ((value: FilterValues) -> ())? = nil
+    onSort: ((key: string) -> ())? = nil
+    onTrack: ((on: boolean) -> ())? = nil
+    onCreate: ((count: number) -> ())? = nil
+    onCreateAll: (() -> ())? = nil
+    onLink: (() -> ())? = nil
+    onLinkRecipe: ((id: number) -> ())? = nil
 
-    constructor(parent: any, opts: { [string]: any }?)
+    constructor(parent: Frame, opts: ProfessionsOptions?)
         super(nil, parent)
         self.edgeInset = opts and opts.edgeInset or 20
-        self.tabs, self.cards, self.listRows, self.folded = {}, {}, {}, {}
         -- the rail
         self.rail = CreateFrame("Frame", nil, self)
         self.rail:SetPoint("TOPRIGHT")
@@ -444,48 +775,42 @@ export class Professions extends Frame
         self.craftRank:SetPoint("TOPRIGHT", 0, 0)
         self.craftName = uiText.text(self.crafting, "header", "gilt-text")
         self.craftName:SetPoint("TOPLEFT", 0, 0)
-        self.craftSkill = skillBar(self.crafting, "Skill")
+        self.craftSkill = SkillBar.new(self.crafting, "Skill")
         self.craftSkill:SetPoint("LEFT", self.craftName, "RIGHT", S["space-5"], 0)
-        self.craftRecipes = skillBar(self.crafting, "Recipes")
+        self.craftRecipes = SkillBar.new(self.crafting, "Recipes")
         self.craftRecipes:SetPoint("LEFT", self.craftSkill, "RIGHT", S["space-5"] * 2, 0)
         -- Link: the profession in chat, at the end of the head row (design
         -- board "Professions · Link")
-        self.link = CreateFrame("Button", nil, self.crafting)
-        self.link:SetSize(22, 22)
-        self.link.edge = draw.border(self.link, "gilt-line")
-        self.link.edge:SetShown(false)
-        self.link.glyph = self.link:CreateTexture(nil, "ARTWORK")
-        self.link.glyph:SetTexture(GLYPHS .. "chain.tga")
-        self.link.glyph:SetSize(14, 14)
-        self.link.glyph:SetPoint("CENTER")
-        draw.paint(self.link.glyph, "ink-muted")
-        self.link:SetScript("OnEnter", function(obj)
-            obj.edge:SetShown(true)
-            draw.paint(obj.glyph, "ink")
+        local link = GlyphButton.new(self.crafting, "chain")
+        self.link = link
+        draw.paint(link.glyph, "ink-muted")
+        link:SetScript("OnEnter", function()
+            link.edge:SetShown(true)
+            draw.paint(link.glyph, "ink")
             local name = self.craftData and self.craftData.name or "this profession"
-            GameTooltip:SetOwner(obj, "ANCHOR_BOTTOMLEFT")
+            GameTooltip:SetOwner(link, "ANCHOR_BOTTOMLEFT")
             GameTooltip_SetTitle(GameTooltip, "Link " .. name .. " in chat")
             GameTooltip_AddNormalLine(GameTooltip, "Whoever clicks it sees your recipes.")
             GameTooltip_AddBlankLineToTooltip(GameTooltip)
             GameTooltip_AddNormalLine(GameTooltip, "Shift-click a recipe, in the list or its product, to link that recipe.")
             GameTooltip:Show()
         end)
-        self.link:SetScript("OnLeave", function(obj)
-            obj.edge:SetShown(false)
-            draw.paint(obj.glyph, "ink-muted")
+        link:SetScript("OnLeave", function()
+            link.edge:SetShown(false)
+            draw.paint(link.glyph, "ink-muted")
             GameTooltip:Hide()
         end)
-        self.link:SetScript("OnClick", function() if self.onLink then self.onLink() end end)
+        link:SetScript("OnClick", function() if self.onLink then self.onLink() end end)
         -- the list: search on its own row, the filters and the sort under it
         -- (one row of the three didn't fit the 250 px column), then the recipes
         self.search = inputs.textField(self.crafting, { width = LIST_W, placeholder = "Search recipes",
             onTextChanged = function(text: string) if self.onSearch then self.onSearch(text) end end })
         local half = math.floor((LIST_W - S["space-3"]) / 2)
         self.filterMenu = filterMenu.filterMenu(self.crafting, { groups = FILTER_GROUPS, defaults = PROFESSION_FILTER_DEFAULTS,
-            width = half, onChange = function(v) if self.onFilters then self.onFilters(v) end end })
+            width = half, onChange = function(v: FilterValues) if self.onFilters then self.onFilters(v) end end })
         self.filterMenu:SetPoint("TOPLEFT", self.search, "BOTTOMLEFT", 0, -S["space-3"])
         self.sort = selectModule.select(self.crafting, { width = LIST_W - half - S["space-3"], options = SORTS, value = "category",
-            onChange = function(v) if self.onSort then self.onSort(v) end end })
+            onChange = function(v: string) if self.onSort then self.onSort(v) end end })
         self.sort:SetPoint("LEFT", self.filterMenu, "RIGHT", S["space-3"], 0)
         self.listBox = CreateFrame("Frame", nil, self.crafting)
         self.listBox:SetPoint("TOPLEFT", self.filterMenu, "BOTTOMLEFT", 0, -S["space-4"])
@@ -501,103 +826,27 @@ export class Professions extends Frame
         self.listEmpty:SetValue("No recipes match")
         self.listEmpty:Hide()
         -- the recipe
-        local v = CreateFrame("Frame", nil, self.crafting)
-        self.recipe = v
-        v:SetPoint("TOPLEFT", self.listBox, "TOPRIGHT", S["space-6"], 0)
-        v:SetPoint("BOTTOMRIGHT", self.crafting, "BOTTOMRIGHT", 0, 0)
-        v.none = uiText.text(v, "caption", "ink-muted")
-        v.none:SetPoint("CENTER")
-        v.none:SetValue("Choose a recipe")
-        -- the foot: Track, quantity, Create all, Create
-        v.foot = CreateFrame("Frame", nil, v)
-        v.foot:SetPoint("BOTTOMLEFT")
-        v.foot:SetPoint("BOTTOMRIGHT")
-        v.foot:SetHeight(30)
-        v.why = uiText.text(v, "caption", "ember-text")
-        v.why:SetPoint("BOTTOMRIGHT", v.foot, "TOPRIGHT", 0, S["space-3"])
-        -- everything above it scrolls when it's taller than the pane
-        v.scroll = panel.scrollArea(v, S["space-3"])
-        v.scroll:SetPoint("TOPLEFT")
-        v.body = v.scroll.child
-        v.scroll:HookScript("OnSizeChanged", function(obj) v.body:SetWidth(math.max(1, obj:GetWidth())) end)
-        local c = v.body
-        v.product = inventory.itemSlot(c, 36)
-        v.product:SetPoint("TOPLEFT")
-        v.product:SetScript("OnEnter", function(obj) if self.recipeData and self.recipeData.onProduct then self.recipeData.onProduct(obj) end end)
-        v.product:SetScript("OnClick", function()
-            if IsModifiedClick("CHATLINK") and self.onLinkRecipe and self.craftData and self.craftData.selected then
-                self.onLinkRecipe(self.craftData.selected)
-            end
-        end)
-        v.product:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        v.title = uiText.text(c, "unit-name-lg", "ink")
-        v.title:SetPoint("TOPLEFT", v.product, "TOPRIGHT", S["space-5"], 0)
-        v.title:SetPoint("RIGHT", c, "RIGHT")
-        v.title:SetJustifyH("LEFT")
-        v.makes = uiText.text(c, "caption", "ink-muted")
-        v.makes:SetPoint("TOPLEFT", v.title, "BOTTOMLEFT", 0, -1)
-        v.desc = uiText.text(c, "caption", "ink-muted")
-        v.desc:SetPoint("TOPLEFT", v.makes, "BOTTOMLEFT", 0, -1)
-        v.desc:SetPoint("RIGHT", c, "RIGHT")
-        v.desc:SetJustifyH("LEFT")
-        v.desc:SetWordWrap(true)
-        v.tools, v.reagents = {}, {}
-        v.reagentHead = uiText.text(c, "header", "gilt-text")
-        v.reagentHead:SetValue("Reagents")
-        v.cooldown = uiText.text(c, "caption", "amber")
-        v.source = uiText.text(c, "caption", "ink-muted")
-        v.source:SetJustifyH("LEFT")
-        v.source:SetWordWrap(true)
-        v.source:SetSpacing(2)
-        v.sourceHead = uiText.text(c, "header", "gilt-text")
-        v.sourceHead:SetValue("Source")
-        v.sourceItem = makeReagent(self)
-        v.sourceItem.slot:SetScript("OnEnter", function(obj)
-            local src = self.recipeData and self.recipeData.source
-            if src and src.item and src.item.onEnter then src.item.onEnter(obj) end
-        end)
-        v.sourceItem:Hide()
-        v.create = controls.button(v.foot, { text = "Create", variant = "primary",
-            onClick = function() if self.onCreate then self.onCreate(v.qty.value or 1) end end })
-        v.create:SetPoint("BOTTOMRIGHT")
-        v.createAll = controls.button(v.foot, { text = "Create all", variant = "quiet",
-            onClick = function() if self.onCreateAll then self.onCreateAll() end end })
-        v.createAll:SetPoint("RIGHT", v.create, "LEFT", -S["space-3"], 0)
-        v.qty = inputs.stepper(v.foot, { min = 1, max = 1, value = 1 })
-        v.qty:SetPoint("RIGHT", v.createAll, "LEFT", -S["space-3"], 0)
-        v.track = inputs.checkbox(v.foot, { label = "Track", onChange = function(on: boolean) if self.onTrack then self.onTrack(on) end end })
-        v.track:SetPoint("LEFT", v.foot, "LEFT", 0, 0)
+        self.recipe = RecipePane.new(self)
         self:PlaceForType()
         self:SetRecipe(nil)
         views[self] = true
     end
 
-    function SetTabs(list: any[]?, selected: any)
-        self.tabList = list or {}
+    function SetTabs(list: ProfessionTab[]?, selected: string | number | nil)
+        local tabs = list or {}
+        self.tabList = tabs
         -- the chosen one's jewel, gliding along the rail (tabMarker)
-        self.tabMarker = self.tabMarker or tabMarker.tabMarker(self.rail, { vertical = true, side = "LEFT", x = -6, jewel = 7 })
-        local chosen: any
-        for i, t in ipairs(self.tabList) do
+        local marker = self.tabMarker or tabMarker.tabMarker(self.rail, { vertical = true, side = "LEFT", x = -6, jewel = 7 })
+        self.tabMarker = marker
+        local chosen: RailTab? = nil
+        for i, t in ipairs(tabs) do
             local b = self.tabs[i]
             if not b then
-                b = CreateFrame("Button", nil, self.rail) :: any
-                b:SetSize(32, 32)
-                b.icon = uiIcon.icon(b, 28)
-                b.icon:SetPoint("CENTER")
-                b.glyph = b:CreateTexture(nil, "OVERLAY")
-                b.glyph:SetSize(16, 16)
-                b.glyph:SetPoint("CENTER")
-                b:SetScript("OnClick", function(tab) if tab.key and tab.owner.onTab then tab.owner.onTab(tab.key) end end)
-                b:SetScript("OnEnter", function(tab)
-                    GameTooltip:SetOwner(tab, "ANCHOR_LEFT")
-                    GameTooltip_SetTitle(GameTooltip, tab.label or "")
-                    GameTooltip:Show()
-                end)
-                b:SetScript("OnLeave", function() GameTooltip:Hide() end)
-                self.tabMarker:Track(b)
+                b = RailTab.new(self)
+                marker:Track(b)
                 self.tabs[i] = b
             end
-            b.owner, b.key, b.label = self, t.key, t.label
+            b.key, b.label = t.key, t.label
             b:ClearAllPoints()
             -- centred between the divider and the window's edge (edgeInset past
             -- the page), as the Spellbook's schools are
@@ -618,38 +867,38 @@ export class Professions extends Frame
             if on then chosen = b end
             b:Show()
         end
-        for i = #self.tabList + 1, #self.tabs do self.tabs[i]:Hide() end
-        self.tabMarker:SetChosen(chosen)
+        for i = #tabs + 1, #self.tabs do self.tabs[i]:Hide() end
+        marker:SetChosen(chosen)
     end
 
-    function SetOverview(d: any)
-        d = d or {}
+    function SetOverview(data: ProfessionOverview?)
+        local d = data or {}
         self.mode = "overview"
         self.overviewData = d
         self.overview:Show()
         self.crafting:Hide()
         local w = self.overview:GetWidth()
         if not w or w <= 0 then w = PROFESSIONS_W - 40 - RAIL_W - S["space-5"] end
+        local primary, secondary = d.primary or {}, d.secondary or {}
         local rows = 1
-        for _, list in ipairs({ d.primary or {}, d.secondary or {} }) do
-            for _, card in pairs(list) do rows = math.max(rows, #(card.spells or {})) end
-        end
+        for _, card in ipairs(primary) do rows = math.max(rows, #(card.spells or {})) end
+        for _, card in ipairs(secondary) do rows = math.max(rows, #(card.spells or {})) end
         local cardH = cardHeight(rows)
         local gap = S["space-5"]
         local y = 0
         self.primaryHead:ClearAllPoints()
         self.primaryHead:SetPoint("TOPLEFT", self.overview, "TOPLEFT", 0, -y)
         self.primaryHead:SetValue("Primary professions")
-        self.primaryCount:SetValue(#(d.primary or {}) .. " of 2")
+        self.primaryCount:SetValue(#primary .. " of 2")
         y = y + T.type.header.lineHeight + S["space-4"]
         local half = math.floor((w - gap) / 2)
         for i = 1, 2 do
-            local c = self.cards[i] or makeCard(self)
+            local c = self.cards[i] or CardFrame.new(self)
             self.cards[i] = c
             c:ClearAllPoints()
             c:SetPoint("TOPLEFT", self.overview, "TOPLEFT", (i - 1) * (half + gap), -y)
             c:SetSize(half, cardH)
-            fillCard(c, d.primary and d.primary[i])
+            c:Fill(primary[i])
             c:Show()
         end
         y = y + cardH + S["space-6"]
@@ -657,18 +906,18 @@ export class Professions extends Frame
         self.secondaryHead:SetPoint("TOPLEFT", self.overview, "TOPLEFT", 0, -y)
         self.secondaryHead:SetValue("Secondary professions")
         y = y + T.type.header.lineHeight + S["space-4"]
-        local sec = d.secondary or {}
-        local n = math.max(1, #sec)
+        local n = math.max(1, #secondary)
         local third = math.floor((w - gap * 2) / 3)
         for i = 1, math.max(n, 3) do
-            local c = self.cards[2 + i] or makeCard(self)
+            local c = self.cards[2 + i] or CardFrame.new(self)
             self.cards[2 + i] = c
             local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
             c:ClearAllPoints()
             c:SetPoint("TOPLEFT", self.overview, "TOPLEFT", col * (third + gap), -(y + row * (cardH + gap)))
             c:SetSize(third, cardH)
-            if sec[i] then
-                fillCard(c, sec[i])
+            local card = secondary[i]
+            if card then
+                c:Fill(card)
                 c:Show()
             else
                 c:Hide()
@@ -683,9 +932,9 @@ export class Professions extends Frame
         local child = self.list.child
         child:SetWidth(math.max(1, self.list:GetWidth()))
         local y, n = 0, 0
-        local function row()
+        local function row(): RecipeRow
             n = n + 1
-            local r = self.listRows[n] or makeListRow(self)
+            local r = self.listRows[n] or RecipeRow.new(self)
             self.listRows[n] = r
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
@@ -696,17 +945,18 @@ export class Professions extends Frame
         end
         for _, cat in ipairs(d.categories or {}) do
             -- a flat list (sorted across categories): no header, never folded
-            local folded = not cat.flat and self.folded[cat.name]
+            local name = cat.name
+            local folded = not cat.flat and name ~= nil and self.folded[name] == true
             if not cat.flat then
                 local r = row()
-                r.category, r.recipe = cat.name, nil
+                r.category, r.recipe = name, nil
                 r.chevron:SetTexture(GLYPHS .. (folded and "chevronRight" or "chevronDown") .. ".tga")
                 r.chevron:Show()
                 r.eye:Hide()
                 r.sel:Hide(); r.selEdge:Hide()
                 r.label:SetStyle("header")
                 r.label:SetColor("gilt-text")
-                r.label:SetValue(cat.name or "")
+                r.label:SetValue(name or "")
                 r.count:SetValue(tostring(#(cat.recipes or {})))
             end
             if not folded then
@@ -717,8 +967,9 @@ export class Professions extends Frame
                     rr.label:SetStyle("label")
                     rr.label:SetColor(rec.learned == false and "ink-faint" or (DIFFICULTY[rec.difficulty or 3] or "quest-trivial"))
                     rr.label:SetValue(rec.name or "")
-                    rr.count:SetValue((rec.canMake or 0) > 0 and ("[" .. rec.canMake .. "]") or "")
-                    rr.eye:SetShown(rec.tracked and true or false)
+                    local canMake = rec.canMake or 0
+                    rr.count:SetValue(canMake > 0 and ("[" .. canMake .. "]") or "")
+                    rr.eye:SetShown(rec.tracked == true)
                     local on = rec.id == d.selected
                     rr.sel:SetShown(on); rr.selEdge:SetShown(on)
                 end
@@ -730,14 +981,16 @@ export class Professions extends Frame
         child:SetHeight(math.max(1, y))
     end
 
-    function SetRecipe(r: any)
+    function SetRecipe(r: RecipeDetail?)
         self.recipeData = r
         local v = self.recipe
         local c = v.body
         local w = v.scroll:GetWidth()
         if w and w > 0 then c:SetWidth(w) end
         v.none:SetShown(r == nil)
-        for _, part in ipairs({ v.product, v.title, v.makes, v.desc, v.reagentHead, v.foot }) do part:SetShown(r ~= nil) end
+        local shown = r ~= nil
+        v.product:SetShown(shown); v.title:SetShown(shown); v.makes:SetShown(shown); v.desc:SetShown(shown)
+        v.reagentHead:SetShown(shown); v.foot:SetShown(shown)
         if not r then
             for _, x in ipairs(v.tools) do x:Hide() end
             for _, x in ipairs(v.reagents) do x:Hide() end
@@ -751,22 +1004,18 @@ export class Professions extends Frame
         v.product.skin:SetItem({ icon = r.icon, quality = r.qualityName })
         v.title:SetValue(r.name or "")
         v.title:SetColor(QUALITY[r.quality or 1] or "ink")
-        v.makes:SetValue((r.makes and r.makes > 1) and ("Makes " .. r.makes) or "")
+        local makes = r.makes
+        v.makes:SetValue((makes and makes > 1) and ("Makes " .. makes) or "")
         v.desc:SetValue(r.desc or "")
         local y = 36 + S["space-4"]
         local dh = (r.desc and r.desc ~= "") and v.desc:GetStringHeight() or 0
         y = math.max(y, T.type["unit-name-lg"].lineHeight + T.type.caption.lineHeight + dh + S["space-4"])
         -- what it needs
-        for i, t in ipairs(r.tools or {}) do
+        local tools = r.tools or {}
+        for i, t in ipairs(tools) do
             local line = v.tools[i]
             if not line then
-                line = CreateFrame("Frame", nil, c) :: any
-                line:SetHeight(T.type.caption.lineHeight + 2)
-                line.glyph = line:CreateTexture(nil, "ARTWORK")
-                line.glyph:SetSize(11, 11)
-                line.glyph:SetPoint("LEFT")
-                line.text = uiText.text(line, "caption", "ink-muted")
-                line.text:SetPoint("LEFT", line.glyph, "RIGHT", S["space-3"], 0)
+                line = ToolLine.new(c)
                 v.tools[i] = line
             end
             line:ClearAllPoints()
@@ -779,13 +1028,14 @@ export class Professions extends Frame
             line:Show()
             y = y + T.type.caption.lineHeight + 2
         end
-        for i = #(r.tools or {}) + 1, #v.tools do v.tools[i]:Hide() end
+        for i = #tools + 1, #v.tools do v.tools[i]:Hide() end
         -- where a recipe not learned yet is learned: its recipe item (hover
         -- for its tooltip) and where that is, or a trainer
         local src = r.source
+        local lines = src and src.lines
         v.sourceHead:SetShown(src ~= nil)
         v.sourceItem:SetShown(src ~= nil and src.item ~= nil)
-        v.source:SetShown(src ~= nil and src.lines ~= nil and #src.lines > 0)
+        v.source:SetShown(lines ~= nil and #lines > 0)
         if src then
             y = y + S["space-5"]
             v.sourceHead:ClearAllPoints()
@@ -804,11 +1054,11 @@ export class Professions extends Frame
                 row.count:SetColor("fel")
                 y = y + 32 + S["space-2"]
             end
-            if src.lines and #src.lines > 0 then
+            if lines and #lines > 0 then
                 v.source:ClearAllPoints()
                 v.source:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
                 v.source:SetWidth(math.max(100, c:GetWidth()))
-                v.source:SetValue(table.concat(src.lines, "\n"))
+                v.source:SetValue(table.concat(lines, "\n"))
                 y = y + v.source:GetStringHeight()
             end
         end
@@ -816,8 +1066,9 @@ export class Professions extends Frame
         v.reagentHead:ClearAllPoints()
         v.reagentHead:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
         y = y + T.type.header.lineHeight + S["space-4"]
-        for i, g in ipairs(r.reagents or {}) do
-            local row = v.reagents[i] or makeReagent(self)
+        local reagents = r.reagents or {}
+        for i, g in ipairs(reagents) do
+            local row = v.reagents[i] or ReagentRow.new(self, c)
             v.reagents[i] = row
             row.slot.index = i
             row:ClearAllPoints()
@@ -832,12 +1083,13 @@ export class Professions extends Frame
             row:Show()
             y = y + 32 + S["space-2"]
         end
-        for i = #(r.reagents or {}) + 1, #v.reagents do v.reagents[i]:Hide() end
-        v.cooldown:SetShown(r.cooldown ~= nil)
-        if r.cooldown then
+        for i = #reagents + 1, #v.reagents do v.reagents[i]:Hide() end
+        local cooldown = r.cooldown
+        v.cooldown:SetShown(cooldown ~= nil)
+        if cooldown then
             v.cooldown:ClearAllPoints()
             v.cooldown:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -(y + S["space-3"]))
-            v.cooldown:SetValue("Cooldown " .. r.cooldown)
+            v.cooldown:SetValue("Cooldown " .. cooldown)
             y = y + S["space-3"] + T.type.caption.lineHeight
         end
         -- taller than the pane: it scrolls (a long Source pushed the reagents
@@ -847,25 +1099,27 @@ export class Professions extends Frame
             self.recipeShown = r.name
             v.scroll:SetVerticalScroll(0)
         end
-        v.track:SetValue(r.tracked and true or false)
-        local ready = r.ready and true or false
+        v.track:SetValue(r.tracked == true)
+        local ready = r.ready == true
+        local canMake = r.canMake or 0
         v.create:SetEnabledState(ready)
-        v.createAll:SetEnabledState(ready and (r.canMake or 0) > 1)
-        v.createAll:SetLabel("Create all" .. ((r.canMake or 0) > 1 and (" (" .. r.canMake .. ")") or ""))
-        v.qty.max = math.max(1, r.canMake or 1)
-        if (v.qty.value or 1) > v.qty.max then v.qty:SetValue(v.qty.max) end
+        v.createAll:SetEnabledState(ready and canMake > 1)
+        v.createAll:SetLabel("Create all" .. (canMake > 1 and (" (" .. canMake .. ")") or ""))
+        local max = math.max(1, r.canMake or 1)
+        v.qty.max = max
+        if (v.qty.value or 1) > max then v.qty:SetValue(max) end
         v.qty:SetDisabled(not ready)
         v.why:SetShown(not ready and r.why ~= nil)
         v.why:SetValue(r.why or "")
     end
 
     -- The saved choices back in the controls.
-    function SetFilters(value: any) self.filterMenu:SetValue(value) end
+    function SetFilters(value: FilterValues?) self.filterMenu:SetValue(value) end
 
     function SetSort(key: string?) self.sort:SetValue(key or "category") end
 
-    function SetCrafting(d: any)
-        d = d or {}
+    function SetCrafting(data: CraftingData?)
+        local d = data or {}
         self.mode = "crafting"
         self.craftData = d
         self.overview:Hide()
@@ -873,14 +1127,15 @@ export class Professions extends Frame
         self.craftName:SetValue(d.name or "")
         self.craftRank:SetValue(d.rank or "")
         self.craftSkill:SetSkill(d.skill, d.max)
-        self.craftRecipes:SetShown(d.recipes ~= nil)
-        if d.recipes then self.craftRecipes:SetSkill(d.recipes.learned, d.recipes.total) end
+        local recipes = d.recipes
+        self.craftRecipes:SetShown(recipes ~= nil)
+        if recipes then self.craftRecipes:SetSkill(recipes.learned, recipes.total) end
         -- the two bars share what the name and rank leave
         local gap = S["space-5"]
         local rankW = (d.rank and d.rank ~= "") and (self.craftRank:GetUnboundedStringWidth() + gap) or 0
         rankW = rankW + self.link:GetWidth() + gap
         local room = (self.crafting:GetWidth() or 0) - self.craftName:GetUnboundedStringWidth() - rankW - gap * 2
-        local bar = d.recipes and math.floor((room - gap * 2) / 2) or room
+        local bar = recipes and math.floor((room - gap * 2) / 2) or room
         self.craftSkill:SetWidth(math.max(80, bar))
         self.craftRecipes:SetWidth(math.max(80, bar))
         self:DrawList()
@@ -911,6 +1166,6 @@ export class Professions extends Frame
     end
 end
 
-export function professions(parent: any, opts: { [string]: any }?): Professions
+export function professions(parent: Frame, opts: ProfessionsOptions?): Professions
     return Professions.new(parent, opts)
 end
