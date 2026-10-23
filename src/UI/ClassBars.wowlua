@@ -25,8 +25,10 @@ import mixins from "/Core/Init"
 import * as draw from "/UI/Draw"
 import * as uiText from "/UI/Text"
 import * as actionButton from "/UI/ActionButton"
+import ActionButton from "/UI/ActionButton"
 import * as keybindMode from "/UI/KeybindMode"
-import durationTextBinding from "/UI/Auras"
+import durationTextBinding, DurationText from "/UI/Auras"
+import Text from "/UI/Text"
 
 const S = T.space
 
@@ -39,33 +41,73 @@ const known = secret.known
 
 -- Where the game's form, pet, totem, spell and cursor functions are read
 -- from: the game's (a table, so tests can stand in for one).
-local G: { [string]: any } = setmetatable({}, { __index = function(_: any, k: string): any return _G[k] end })
+type Game = {
+    GetShapeshiftFormInfo: typeof(GetShapeshiftFormInfo),
+    GetNumShapeshiftForms?: typeof(GetNumShapeshiftForms),
+    GetBindingKey: typeof(GetBindingKey),
+    GetPetActionInfo: typeof(GetPetActionInfo),
+    GetPetActionCooldown: typeof(GetPetActionCooldown),
+    GetPetActionSlotUsable?: typeof(GetPetActionSlotUsable),
+    GetCVarBool: typeof(GetCVarBool),
+    GetCursorInfo: typeof(GetCursorInfo),
+    IsPlayerSpell?: typeof(IsPlayerSpell),
+    GetMultiCastTotemSpells: typeof(GetMultiCastTotemSpells),
+    GetActionInfo: typeof(GetActionInfo),
+    GetTotemInfo: typeof(GetTotemInfo),
+    GetTotemDuration: typeof(GetTotemDuration),
+    C_Spell: {
+        GetSpellName: typeof(C_Spell.GetSpellName),
+        GetSpellTexture: typeof(C_Spell.GetSpellTexture),
+        IsSpellUsable: typeof(C_Spell.IsSpellUsable),
+    },
+    C_SpellBook?: { IsSpellInSpellBook?: typeof(C_SpellBook.IsSpellInSpellBook) },
+    C_DurationUtil: { CreateDuration: typeof(C_DurationUtil.CreateDuration) },
+}
+local G = setmetatable({}, { __index = function(_: unknown, k: string): unknown return _G[k] end }) :: Game
 
--- A class bar: a row of action buttons on a secure header (the stance,
--- pet and totem bars). Raw.Mixins.ClassBar is the class.
-export abstract class ClassBar
+-- A class bar's options: the header's name, the binding list's label, and
+-- what a layout or (totems) a set change calls.
+export type ClassBarOptions = {
+    name: string,
+    label?: string,
+    onLayout?: (bar: ClassBarBase) -> (),
+    page?: number,
+    onPage?: (page: number) -> (),
+}
+
+-- What every class bar has, whatever its buttons: what a layout's callback
+-- gets.
+export abstract class ClassBarBase
     name: string
     binding: string
     enabled: boolean = true
-    onLayout: ((bar: ClassBar) -> ())? = nil
+    onLayout: ((bar: ClassBarBase) -> ())? = nil
     header: Frame
-    buttons: any[] = {}
     hotkeysShown: boolean = false
     size: number? = nil
     count: number? = nil
 
-    constructor(parent: Frame, opts: { [string]: any }, binding: string)
+    constructor(parent: Frame, opts: ClassBarOptions, binding: string)
         self.name, self.binding = opts.name, binding
         self.onLayout = opts.onLayout
         self.header = CreateFrame("Frame", opts.name, parent, "SecureHandlerStateTemplate")
         self.header:SetSize(1, 1)
     end
+end
 
-    -- The SLOTS buttons of a stance or pet bar.
-    protected function addSlots(opts: { [string]: any }, binding: string)
+-- A class bar: a row of action buttons on a secure header (the stance,
+-- pet and totem bars). Raw.Mixins.ClassBar is the class.
+export abstract class ClassBar<B extends ActionButton> extends ClassBarBase
+    buttons: B[] = {}
+
+    constructor(parent: Frame, opts: ClassBarOptions, binding: string)
+        super(parent, opts, binding)
+    end
+
+    -- The SLOTS buttons of a stance or pet bar, each made by `make`.
+    protected function addSlots(opts: ClassBarOptions, binding: string, make: (name: string, i: number) -> B)
         for i = 1, SLOTS do
-            local b = actionButton.actionButton(self.header, opts.name .. "Button" .. i, "action-sm")
-            b.index = i
+            local b = make(opts.name .. "Button" .. i, i)
             b.bindCommand = binding .. i
             b.bindLabel = (opts.label or opts.name) .. " button " .. i
             b:SetID(0)
@@ -74,8 +116,8 @@ export abstract class ClassBar
         end
     end
 
-    function SetHotkeysShown(shown: any)
-        self.hotkeysShown = shown and true or false
+    function SetHotkeysShown(shown: unknown)
+        self.hotkeysShown = shown ~= nil and shown ~= false
         for _, b in ipairs(self.buttons) do b:SetHotkeyShown(self.hotkeysShown) end
     end
 
@@ -101,18 +143,19 @@ export abstract class ClassBar
     end
 
     -- One row, buttons space-1 apart; `count` of them shown.
-    function Layout(count: number)
+    function Layout(count: number?)
         combat.run("classbar:layout:" .. self.name, function()
+            local n = count or SLOTS
             local px, gap = self.size or self.buttons[1]:GetWidth(), S["space-1"]
             for i, b in ipairs(self.buttons) do
                 b:Resize(px)
                 b:ClearAllPoints()
                 b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), 0)
-                b:SetShown(i <= count)
+                b:SetShown(i <= n)
             end
-            local n = math.max(count, 1)
-            self.header:SetSize(n * px + (n - 1) * gap, px)
-            self.count = count
+            local shown = math.max(n, 1)
+            self.header:SetSize(shown * px + (shown - 1) * gap, px)
+            self.count = n
             if self.onLayout then self.onLayout(self) end
         end, "Action bars")
     end
@@ -122,14 +165,14 @@ export abstract class ClassBar
     end
 
     -- Empty slots: with the setting, or while you drag something that fits.
-    function SetShowEmpty(shown: any)
+    function SetShowEmpty(shown: unknown)
         for _, b in ipairs(self.buttons) do
-            b.showEmpty = shown and true or false
+            b.showEmpty = shown ~= nil and shown ~= false
             b:UpdateEmpty()
         end
     end
 
-    abstract function SetEnabled(on: any)
+    abstract function SetEnabled(on: unknown)
 end
 mixins.ClassBar = ClassBar
 
@@ -137,40 +180,47 @@ mixins.ClassBar = ClassBar
 -- Stance / form bar
 --------------------------------------------------------------------------------
 
-local function stanceUpdate(b: any)
-    local icon, active, castable, spellID = G.GetShapeshiftFormInfo(b.index)
-    b.hasAction = icon ~= nil
-    b.spellID = spellID
-    if b.hasAction then
-        b.art:SetTexture(icon)
-        b.art:Show()
-        b:ShowSpellCooldown(spellID)
-        b:ShowUsable(not known(castable, true))
-        b:ShowActive(uiText.flag(active))
-    else
-        b.art:Hide()
-        b.cooldown:Clear()
-        b:ShowActive(false)
-        b:ShowUsable(false)
-    end
-    b.count:SetText("")
-    b:UpdateHotkey()
-    b:UpdateEmpty()
-end
+-- A form's button: drawn from the shapeshift API.
+class StanceButton extends ActionButton
+    index: number = 0
+    spellID: number? = nil
 
-local function stanceTooltip(b: any)
-    GameTooltip:SetShapeshift(b.index)
+    constructor(parent: Frame, name: string, i: number)
+        super(parent, name, "action-sm")
+        self.index = i
+    end
+
+    override function Update()
+        local icon, active, castable, spellID = G.GetShapeshiftFormInfo(self.index)
+        self.hasAction = icon ~= nil
+        self.spellID = spellID
+        if self.hasAction then
+            self.art:SetTexture(icon)
+            self.art:Show()
+            self:ShowSpellCooldown(spellID)
+            self:ShowUsable(not known(castable, true))
+            self:ShowActive(uiText.flag(active))
+        else
+            self.art:Hide()
+            self.cooldown:Clear()
+            self:ShowActive(false)
+            self:ShowUsable(false)
+        end
+        self.count:SetText("")
+        self:UpdateHotkey()
+        self:UpdateEmpty()
+    end
+
+    override function ShowTooltip()
+        GameTooltip:SetShapeshift(self.index)
+    end
 end
 
 -- The stance / form bar.
-export class StanceBar extends ClassBar
-    constructor(parent: Frame, opts: { [string]: any })
+export class StanceBar extends ClassBar<StanceButton>
+    constructor(parent: Frame, opts: ClassBarOptions)
         super(parent, opts, "SHAPESHIFTBUTTON")
-        self:addSlots(opts, "SHAPESHIFTBUTTON")
-        for _, b in ipairs(self.buttons) do
-            b.Update = stanceUpdate
-            b.ShowTooltip = stanceTooltip
-        end
+        self:addSlots(opts, "SHAPESHIFTBUTTON", function(name: string, i: number) return StanceButton.new(self.header, name, i) end)
         local function forms() self:UpdateForms() end
         local function all() self:UpdateAll() end
         events.onGame("UPDATE_SHAPESHIFT_FORMS", forms, self)
@@ -188,10 +238,11 @@ export class StanceBar extends ClassBar
 
     -- Which spell each button casts, and how many buttons: out of combat.
     function UpdateForms()
-        local n = G.GetNumShapeshiftForms and G.GetNumShapeshiftForms() or 0
+        local count = G.GetNumShapeshiftForms
+        local n = count and count() or 0
         combat.run("classbar:forms:" .. self.name, function()
             for i, b in ipairs(self.buttons) do
-                local spellID = i <= n and select(4, G.GetShapeshiftFormInfo(i))
+                local spellID = i <= n and select(4, G.GetShapeshiftFormInfo(i)) or nil
                 local name = spellID and G.C_Spell.GetSpellName(spellID)
                 b:SetAttribute("type", name and "spell" or nil)
                 b:SetAttribute("spell", name)
@@ -202,15 +253,15 @@ export class StanceBar extends ClassBar
         self:UpdateAll()
     end
 
-    override function SetEnabled(on: any)
-        self.enabled = on and true or false
+    override function SetEnabled(on: unknown)
+        self.enabled = on ~= nil and on ~= false
         self:UpdateForms()
         self:UpdateBindings()
     end
 
 end
 
-export function stanceBar(parent: Frame, opts: { [string]: any }): StanceBar
+export function stanceBar(parent: Frame, opts: ClassBarOptions): StanceBar
     return StanceBar.new(parent, opts)
 end
 
@@ -218,43 +269,62 @@ end
 -- Pet bar
 --------------------------------------------------------------------------------
 
-local function petUpdate(b: any)
-    local name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID, checksRange, inRange = G.GetPetActionInfo(b.index)
-    b.hasAction = name ~= nil
-    b.petName, b.autoCastAllowed = name, autoCastAllowed
-    if b.hasAction then
-        b.art:SetTexture(isToken and _G[texture] or texture)
-        b.art:Show()
-        if spellID then
-            b:ShowSpellCooldown(spellID)
-        else
-            local start, duration = G.GetPetActionCooldown(b.index)
-            local live = not isSecret(duration) and not isSecret(start) and duration and duration > 0
-            if live then
-                b.petDuration = b.petDuration or G.C_DurationUtil.CreateDuration()
-                b.petDuration:SetTimeFromStart(start, duration)
-            end
-            b:ShowCooldown(live and true or false, false, live and b.petDuration or nil)
-        end
-        b:ShowUsable(G.GetPetActionSlotUsable and not known(G.GetPetActionSlotUsable(b.index), true) or false)
-        b:ShowActive(uiText.flag(isActive))
-        b:ShowAutocast(uiText.flag(autoCastEnabled))
-        b:SetOutOfRange(uiText.flag(checksRange) and not known(inRange, true))
-    else
-        b.art:Hide()
-        b.cooldown:Clear()
-        b:ShowActive(false)
-        b:ShowAutocast(false)
-        b:ShowUsable(false)
-        b:SetOutOfRange(false)
-    end
-    b.count:SetText("")
-    b:UpdateHotkey()
-    b:UpdateEmpty()
-end
+-- A pet action's button: drawn from the pet action API.
+class PetButton extends ActionButton
+    index: number = 0
+    petName: string? = nil
+    autoCastAllowed: boolean? = nil
+    petDuration: LuaDurationObject? = nil
 
-local function petTooltip(b: any)
-    GameTooltip:SetPetAction(b.index)
+    constructor(parent: Frame, name: string, i: number)
+        super(parent, name, "action-sm")
+        self.index = i
+    end
+
+    override function Update()
+        local name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID, checksRange, inRange = G.GetPetActionInfo(self.index)
+        self.hasAction = name ~= nil
+        self.petName, self.autoCastAllowed = name, autoCastAllowed
+        if self.hasAction then
+            -- (a token names a global holding the texture's path)
+            local art: unknown = texture
+            if isToken then art = _G[texture] end
+            self.art:SetTexture(type(art) == "string" and art or texture)
+            self.art:Show()
+            if spellID then
+                self:ShowSpellCooldown(spellID)
+            else
+                local start, duration = G.GetPetActionCooldown(self.index)
+                local live = not isSecret(duration) and not isSecret(start) and duration and duration > 0
+                local d = self.petDuration
+                if live then
+                    d = d or G.C_DurationUtil.CreateDuration()
+                    self.petDuration = d
+                    d:SetTimeFromStart(start, duration)
+                end
+                self:ShowCooldown(live and true or false, false, live and d or nil)
+            end
+            local usable = G.GetPetActionSlotUsable
+            self:ShowUsable(usable and not known(usable(self.index), true) or false)
+            self:ShowActive(uiText.flag(isActive))
+            self:ShowAutocast(uiText.flag(autoCastEnabled))
+            self:SetOutOfRange(uiText.flag(checksRange) and not known(inRange, true))
+        else
+            self.art:Hide()
+            self.cooldown:Clear()
+            self:ShowActive(false)
+            self:ShowAutocast(false)
+            self:ShowUsable(false)
+            self:SetOutOfRange(false)
+        end
+        self.count:SetText("")
+        self:UpdateHotkey()
+        self:UpdateEmpty()
+    end
+
+    override function ShowTooltip()
+        GameTooltip:SetPetAction(self.index)
+    end
 end
 
 local PET_VISIBILITY = "[@pet,exists,nopossessbar,novehicleui] show; hide"
@@ -266,13 +336,11 @@ local PET_DRAG = [[
 local PET_RECEIVE = [[ return "petaction", self:GetAttribute("action") ]]
 
 -- The pet bar.
-export class PetBar extends ClassBar
-    constructor(parent: Frame, opts: { [string]: any })
+export class PetBar extends ClassBar<PetButton>
+    constructor(parent: Frame, opts: ClassBarOptions)
         super(parent, opts, "BONUSACTIONBUTTON")
-        self:addSlots(opts, "BONUSACTIONBUTTON")
+        self:addSlots(opts, "BONUSACTIONBUTTON", function(name: string, i: number) return PetButton.new(self.header, name, i) end)
         for i, b in ipairs(self.buttons) do
-            b.Update = petUpdate
-            b.ShowTooltip = petTooltip
             b:SetAttribute("type", "pet")
             b:SetAttribute("action", i)
             b:RegisterForDrag("LeftButton")
@@ -317,9 +385,10 @@ export class PetBar extends ClassBar
     function UpdateAutocastClicks()
         combat.run("classbar:autocast:" .. self.name, function()
             for _, b in ipairs(self.buttons) do
-                local allowed = b.petName and uiText.flag(b.autoCastAllowed)
+                local name = b.petName
+                local allowed = name ~= nil and uiText.flag(b.autoCastAllowed)
                 b:SetAttribute("type2", allowed and "macro" or "pet")
-                b:SetAttribute("macrotext2", allowed and ("/petautocasttoggle " .. b.petName) or nil)
+                b:SetAttribute("macrotext2", allowed and ("/petautocasttoggle " .. (name or "")) or nil)
             end
         end, "Action bars")
     end
@@ -341,15 +410,15 @@ export class PetBar extends ClassBar
         end, "Action bars")
     end
 
-    override function SetEnabled(on: any)
-        self.enabled = on and true or false
+    override function SetEnabled(on: unknown)
+        self.enabled = on ~= nil and on ~= false
         self:UpdateShown()
         self:UpdateBindings()
     end
 
 end
 
-export function petBar(parent: Frame, opts: { [string]: any }): PetBar
+export function petBar(parent: Frame, opts: ClassBarOptions): PetBar
     return PetBar.new(parent, opts)
 end
 
@@ -396,23 +465,26 @@ local ELEMENTS: Element[] = {
 }
 local RECALL = (TOTEM_MULTI_CAST_RECALL_SPELLS and TOTEM_MULTI_CAST_RECALL_SPELLS[1]) or 36936
 -- the summon spells, one per set: Call of the Elements, Ancestors, Spirits
-local SUMMONS: number[] = (TOTEM_MULTI_CAST_SUMMON_SPELLS :: any) or { 66842, 66843, 66844 }
+local SUMMONS: number[] = TOTEM_MULTI_CAST_SUMMON_SPELLS :: number[] or { 66842, 66843, 66844 }
 
 local DIR = Enum.StatusBarTimerDirection or {}
 local IMMEDIATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate
 
 local function knows(spellID: number?): boolean
     if not spellID then return false end
-    if G.C_SpellBook and G.C_SpellBook.IsSpellInSpellBook then
-        local ok, yes = pcall(G.C_SpellBook.IsSpellInSpellBook, spellID, Enum.SpellBookSpellBank.Player, false)
+    local book = G.C_SpellBook
+    local inBook = book and book.IsSpellInSpellBook
+    if inBook then
+        local ok, yes = pcall(inBook, spellID, Enum.SpellBookSpellBank.Player, false)
         if ok then return yes and true or false end
     end
-    return G.IsPlayerSpell and G.IsPlayerSpell(spellID) or false
+    local isPlayerSpell = G.IsPlayerSpell
+    return isPlayerSpell and isPlayerSpell(spellID) or false
 end
 
 -- The totems you know for an element (the game's list for its slot).
 local function elementSpells(slot: number): number[]
-    local ok, list = pcall(function() return { G.GetMultiCastTotemSpells(slot) } end)
+    local ok, list = pcall(function(): number[] return { G.GetMultiCastTotemSpells(slot) } end)
     return ok and list or {}
 end
 
@@ -425,90 +497,253 @@ end
 local function slotSpell(slot: number, page: number?): number?
     local kind, id = G.GetActionInfo(slotAction(slot, page))
     if kind == "spell" and id and not isSecret(id) then return id :: number end
-end
-
--- The empty look (dashes, the faint glyph) while the slot holds nothing; by
--- alpha, so it changes in combat too.
-local function showEmpty(b: any)
-    local on = not b.hasAction
-    b.empty:SetAlpha(on and 1 or 0)
-    for _, t in ipairs(b.dashes or {}) do
-        draw.paintFill(t, "gilt-faint")
-        t:SetAlpha(on and 1 or 0)
-    end
-end
-
-local function totemUpdate(b: any)
-    local spellID = slotSpell(b.element.slot, b.bar.page)
-    b.spellID = spellID
-    b.hasAction = spellID ~= nil
-    b.known = #elementSpells(b.element.slot) > 0
-    if spellID then
-        b.art:SetTexture(G.C_Spell.GetSpellTexture(spellID))
-        b.art:Show()
-        b:ShowSpellCooldown(spellID)
-        local usable, noMana = G.C_Spell.IsSpellUsable(spellID)
-        b:ShowUsable(not (known(usable, true) and not known(noMana, false)))
-    else
-        b.art:Hide()
-        b.cooldown:Clear()
-        b:ShowUsable(false)
-    end
-    showEmpty(b)
-    b:ShowActive(b.picking and true or false)
-    b.count:SetText("")
-    b:UpdateHotkey()
-    b:UpdateEmpty()
-end
-
-local function totemTooltip(b: any)
-    if b.spellID then GameTooltip:SetSpellByID(b.spellID) end
-    if b.known then
-        local cr, cg, cb = draw.rgba("ink-muted")
-        GameTooltip:AddLine("Right click: dismiss it. The arrow: choose another.", cr, cg, cb, true)
-    end
+    return nil
 end
 
 -- An element's empty look: dashed, its glyph faint (the design's).
-local function emptyLook(b: any, element: Element)
-    local e = CreateFrame("Frame", nil, b.face)
-    e:SetAllPoints()
-    draw.fill(e, "surface-sunk", "BACKGROUND", 1):SetAllPoints()
-    e.glyph = e:CreateTexture(nil, "ARTWORK")
-    e.glyph:SetTexture(GLYPH .. element.glyph .. ".tga")
-    draw.paint(e.glyph, "ink-faint")
-    e.glyph:SetPoint("CENTER")
-    b.empty = e
-    -- the dashes: the pet bar's autocast ring, in gilt-faint (showEmpty)
-    b:ShowAutocast(true)
+class EmptyLook extends Frame
+    readonly glyph: Texture
+
+    constructor(parent: Frame, element: Element)
+        super(nil, parent)
+        self:SetAllPoints()
+        draw.fill(self, "surface-sunk", "BACKGROUND", 1):SetAllPoints()
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPH .. element.glyph .. ".tga")
+        draw.paint(self.glyph, "ink-faint")
+        self.glyph:SetPoint("CENTER")
+    end
 end
 
 -- The strip over an element: its time and drain while its totem is down.
-local function stripSegment(bar: any, b: any): any
-    local s = CreateFrame("Frame", nil, bar.header)
-    s:SetHeight(STRIP_H)
-    s.track = s:CreateTexture(nil, "BACKGROUND")
-    s.track:SetPoint("BOTTOMLEFT")
-    s.track:SetPoint("BOTTOMRIGHT")
-    s.track:SetHeight(2)
-    draw.paintFill(s.track, "track")
-    s.drain = CreateFrame("StatusBar", nil, s)
-    s.drain:SetPoint("BOTTOMLEFT")
-    s.drain:SetPoint("BOTTOMRIGHT")
-    s.drain:SetHeight(2)
-    s.drain:SetStatusBarTexture(WHITE)
-    draw.paint(s.drain, "ink")
-    s.drain:SetMinMaxValues(0, 1)
-    s.drain:Hide()
-    s.text = s:CreateFontString(nil, "OVERLAY")
-    fonts.apply(s.text, "micro")
-    s.text:SetShadowColor(0, 0, 0, 1)
-    s.text:SetShadowOffset(0, -1)
-    s.text:SetPoint("TOP", 0, 0)
-    s.text:SetJustifyH("CENTER")
-    s.binding = durationTextBinding(s.text, EXPIRE)
-    b.segment = s
-    return s
+class StripSegment extends Frame
+    readonly track: Texture
+    readonly drain: StatusBar
+    readonly text: FontString
+    readonly binding: DurationText?
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(STRIP_H)
+        self.track = self:CreateTexture(nil, "BACKGROUND")
+        self.track:SetPoint("BOTTOMLEFT")
+        self.track:SetPoint("BOTTOMRIGHT")
+        self.track:SetHeight(2)
+        draw.paintFill(self.track, "track")
+        self.drain = CreateFrame("StatusBar", nil, self)
+        self.drain:SetPoint("BOTTOMLEFT")
+        self.drain:SetPoint("BOTTOMRIGHT")
+        self.drain:SetHeight(2)
+        self.drain:SetStatusBarTexture(WHITE)
+        draw.paint(self.drain, "ink")
+        self.drain:SetMinMaxValues(0, 1)
+        self.drain:Hide()
+        self.text = self:CreateFontString(nil, "OVERLAY")
+        fonts.apply(self.text, "micro")
+        self.text:SetShadowColor(0, 0, 0, 1)
+        self.text:SetShadowOffset(0, -1)
+        self.text:SetPoint("TOP", 0, 0)
+        self.text:SetJustifyH("CENTER")
+        self.binding = durationTextBinding(self.text, EXPIRE)
+    end
+end
+
+-- The arrow on a hovered button, under its bottom edge: opens its list
+-- (an element's totems while it has more than one; the Call button's sets
+-- while you know more than one). Out of combat.
+class PickArrow extends Button
+    readonly bg: Texture
+    readonly icon: Texture
+    over: boolean = false
+
+    constructor(b: Button, open: () -> (), wanted: () -> boolean)
+        -- under the button: above it the strip shows the time (asked in game:
+        -- the timer covered the arrow while a totem was down)
+        super(nil, b)
+        self:SetSize(14, 8)
+        self:SetPoint("TOP", b, "BOTTOM", 0, 3)
+        self:SetFrameStrata("HIGH")
+        self.bg = draw.fill(self, "surface-glass", "BACKGROUND")
+        self.bg:SetAllPoints()
+        self.icon = self:CreateTexture(nil, "ARTWORK")
+        self.icon:SetTexture(GLYPH .. "chevronUp.tga")
+        draw.paint(self.icon, "gilt-text")
+        self.icon:SetSize(10, 10)
+        self.icon:SetPoint("CENTER")
+        self:SetScript("OnClick", open)
+        self:SetScript("OnEnter", function() self.over = true end)
+        self:SetScript("OnLeave", function()
+            self.over = false
+            after(0.3, function() if not (self.over or b:IsMouseOver()) then self:Hide() end end)
+        end)
+        self:Hide()
+        b:HookScript("OnEnter", function()
+            if not InCombatLockdown() and wanted() then self:Show() end
+        end)
+        b:HookScript("OnLeave", function()
+            after(0.3, function() if not (self.over or b:IsMouseOver()) then self:Hide() end end)
+        end)
+    end
+end
+
+-- An element's button: casts the totem its slot holds in the bar's set.
+class TotemButton extends ActionButton
+    readonly element: Element
+    readonly bar: TotemBar
+    empty: EmptyLook
+    segment: StripSegment
+    arrow?: PickArrow
+    spellID: number? = nil
+    known: boolean = false
+    picking: boolean = false
+    castAt: number? = nil
+    -- whether the totem down is the one it casts (kept while combat hides it)
+    chosen: boolean? = nil
+
+    constructor(bar: TotemBar, name: string, element: Element)
+        super(bar.header, name, "action-sm")
+        self.element, self.bar = element, bar
+        self.empty = EmptyLook.new(self.face, element)
+        self.segment = StripSegment.new(bar.header)
+        -- the dashes: the pet bar's autocast ring, in gilt-faint (showEmpty)
+        self:ShowAutocast(true)
+    end
+
+    -- The empty look (dashes, the faint glyph) while the slot holds nothing; by
+    -- alpha, so it changes in combat too.
+    function ShowEmptyLook()
+        local on = not self.hasAction
+        self.empty:SetAlpha(on and 1 or 0)
+        for _, t in ipairs(self.dashes or {}) do
+            draw.paintFill(t, "gilt-faint")
+            t:SetAlpha(on and 1 or 0)
+        end
+    end
+
+    override function Update()
+        local spellID = slotSpell(self.element.slot, self.bar.page)
+        self.spellID = spellID
+        self.hasAction = spellID ~= nil
+        self.known = #elementSpells(self.element.slot) > 0
+        if spellID then
+            self.art:SetTexture((G.C_Spell.GetSpellTexture(spellID)))
+            self.art:Show()
+            self:ShowSpellCooldown(spellID)
+            local usable, noMana = G.C_Spell.IsSpellUsable(spellID)
+            self:ShowUsable(not (known(usable, true) and not known(noMana, false)))
+        else
+            self.art:Hide()
+            self.cooldown:Clear()
+            self:ShowUsable(false)
+        end
+        self:ShowEmptyLook()
+        self:ShowActive(self.picking)
+        self.count:SetText("")
+        self:UpdateHotkey()
+        self:UpdateEmpty()
+    end
+
+    override function ShowTooltip()
+        if self.spellID then GameTooltip:SetSpellByID(self.spellID) end
+        if self.known then
+            local cr, cg, cb = draw.rgba("ink-muted")
+            GameTooltip:AddLine("Right click: dismiss it. The arrow: choose another.", cr, cg, cb, true)
+        end
+    end
+end
+
+-- Call of the Elements: casts the set's summon spell; its arrow, the sets.
+class CallButton extends ActionButton
+    readonly bar: TotemBar
+    spellID: number? = nil
+    arrow?: PickArrow
+
+    constructor(bar: TotemBar, name: string)
+        super(bar.header, name, "action-sm")
+        self.bar = bar
+        self.showEmpty = false
+    end
+
+    override function Update() end
+
+    override function ShowTooltip()
+        if self.spellID then GameTooltip:SetSpellByID(self.spellID) end
+        if self.bar.knownSets > 1 then
+            local cr, cg, cb = draw.rgba("ink-muted")
+            GameTooltip:AddLine("The arrow: another set of totems.", cr, cg, cb, true)
+        end
+    end
+end
+
+-- Totemic Recall.
+class RecallButton extends ActionButton
+    constructor(bar: TotemBar, name: string)
+        super(bar.header, name, "action-sm")
+        self.showEmpty = false
+    end
+
+    override function Update() end
+
+    override function ShowTooltip() GameTooltip:SetSpellByID(RECALL) end
+end
+
+-- A row of a list over the bar: its hover, icon, label and tick.
+class PickRow extends Button
+    readonly hover: Texture
+    readonly icon: Texture
+    readonly label: Text
+    readonly check: Texture
+    -- (the sets' list) the set and its four totems
+    page: number = 1
+    totems: Texture[] = {}
+
+    constructor(parent: Frame, template: string?, height: number, iconSize: number)
+        super(nil, parent, template)
+        self:SetHeight(height)
+        self.hover = draw.fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.icon = self:CreateTexture(nil, "ARTWORK")
+        self.icon:SetSize(iconSize, iconSize)
+        self.icon:SetPoint("LEFT", 4, 0)
+        self.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        self.label = uiText.text(self, "caption", "ink")
+        self.label:SetPoint("LEFT", self.icon, "RIGHT", 6, 0)
+        self.check = self:CreateTexture(nil, "ARTWORK")
+        self.check:SetTexture(GLYPH .. "check.tga")
+        draw.paint(self.check, "gilt-text")
+        self.check:SetSize(10, 10)
+        self.check:SetPoint("RIGHT", -6, 0)
+        self:SetScript("OnEnter", function() self.hover:Show() end)
+        self:SetScript("OnLeave", function() self.hover:Hide() end)
+    end
+end
+
+-- A list over the bar (an element's totems, the sets): a glass panel with a
+-- title, its rows, and a catcher that closes it on a click elsewhere.
+class PickList extends Frame
+    readonly title: Text
+    readonly rows: PickRow[] = {}
+    readonly catcher: Button
+
+    constructor(onOutside: () -> ())
+        super(nil, UIParent)
+        self:SetFrameStrata("DIALOG")
+        draw.fill(self, "surface-glass", "BACKGROUND"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.title = uiText.text(self, "micro", "gilt-text")
+        self.title:SetPoint("TOPLEFT", 8, -6)
+        -- a click anywhere else closes it
+        local catcher = CreateFrame("Button", nil, UIParent)
+        self.catcher = catcher
+        catcher:SetFrameStrata("DIALOG")
+        catcher:SetAllPoints(UIParent)
+        catcher:RegisterForClicks("AnyUp")
+        catcher:SetScript("OnClick", onOutside)
+        catcher:Hide()
+        self:SetFrameLevel(catcher:GetFrameLevel() + 5)
+        self:Hide()
+    end
 end
 
 -- Whether the totem down in a slot is the one its button casts (asked
@@ -516,7 +751,7 @@ end
 -- combat the slot's spell answers (GetTotemInfo, by ID or by name: a rank
 -- may differ); in combat it is secret, so the answer is kept, and a totem
 -- that goes down just after its button or Call was clicked is the chosen one.
-local function totemIsChosen(b: any): boolean
+local function totemIsChosen(b: TotemButton): boolean
     local slot = b.element.slot
     local ok, have, _, _, _, _, _, spellID = pcall(G.GetTotemInfo, slot)
     if not ok or isSecret(have) or isSecret(spellID) then
@@ -529,110 +764,54 @@ local function totemIsChosen(b: any): boolean
         return true
     end
     local chosen = slotSpell(slot, b.bar.page)
-    b.chosen = not chosen or spellID == chosen
+    local same = not chosen or spellID == chosen
         or (G.C_Spell.GetSpellName(spellID :: number) or 1) == (G.C_Spell.GetSpellName(chosen) or 2)
-    return b.chosen
-end
-
--- The arrow on a hovered button, under its bottom edge: opens its list
--- (an element's totems while it has more than one; the Call button's sets
--- while you know more than one). Out of combat.
-local function pickArrow(b: any, open: () -> (), wanted: () -> boolean)
-    -- under the button: above it the strip shows the time (asked in game:
-    -- the timer covered the arrow while a totem was down)
-    local a = CreateFrame("Button", nil, b)
-    a:SetSize(14, 8)
-    a:SetPoint("TOP", b, "BOTTOM", 0, 3)
-    a:SetFrameStrata("HIGH")
-    a.bg = draw.fill(a, "surface-glass", "BACKGROUND")
-    a.bg:SetAllPoints()
-    a.icon = a:CreateTexture(nil, "ARTWORK")
-    a.icon:SetTexture(GLYPH .. "chevronUp.tga")
-    draw.paint(a.icon, "gilt-text")
-    a.icon:SetSize(10, 10)
-    a.icon:SetPoint("CENTER")
-    a:SetScript("OnClick", open)
-    a:SetScript("OnEnter", function() a.over = true end)
-    a:SetScript("OnLeave", function()
-        a.over = false
-        after(0.3, function() if not (a.over or b:IsMouseOver()) then a:Hide() end end)
-    end)
-    a:Hide()
-    b:HookScript("OnEnter", function()
-        if not InCombatLockdown() and wanted() then a:Show() end
-    end)
-    b:HookScript("OnLeave", function()
-        after(0.3, function() if not (a.over or b:IsMouseOver()) then a:Hide() end end)
-    end)
-    b.arrow = a
+    b.chosen = same and true or false
+    return b.chosen == true
 end
 
 -- The totem bar (Forever): a button per element, Call and Recall.
-export class TotemBar extends ClassBar
-    page: any = nil
-    onPage: any = nil
-    rule: any = nil
-    call: any = nil
-    recall: any = nil
-    hasCall: any = nil
-    knownSets: any = nil
-    hasRecall: any = nil
-    anyKnown: any = nil
-    picker: any = nil
-    sets: any = nil
+export class TotemBar extends ClassBar<TotemButton>
+    page: number = 1
+    onPage: ((page: number) -> ())? = nil
+    rule: Texture
+    call: CallButton
+    recall: RecallButton
+    hasCall: boolean = false
+    knownSets: number = 0
+    hasRecall: boolean = false
+    anyKnown: boolean = false
+    picker: PickList? = nil
+    sets: PickList? = nil
 
-    constructor(parent: Frame, opts: { [string]: any })
+    constructor(parent: Frame, opts: ClassBarOptions)
         super(parent, opts, "MULTICASTACTIONBUTTON")
-        self.name, self.enabled = opts.name, true
         self.page, self.onPage = opts.page or 1, opts.onPage
-        self.binding = "MULTICASTACTIONBUTTON"
-        self.onLayout = opts.onLayout
-        self.header = CreateFrame("Frame", opts.name, parent, "SecureHandlerStateTemplate")
-        self.header:SetSize(1, 1)
-        self.buttons = {}
         for i, element in ipairs(ELEMENTS) do
-            local b = actionButton.actionButton(self.header, opts.name .. "Button" .. i, "action-sm")
+            local b = TotemButton.new(self, opts.name .. "Button" .. i, element)
             b:SetID(0)
             b:RegisterForClicks("AnyUp", "AnyDown")
-            b.element = element
             b.showEmpty = true
             b.bindLabel = (opts.label or opts.name) .. ": " .. element.word
-            emptyLook(b, element)
-            b.Update = totemUpdate
-            b.ShowTooltip = totemTooltip
-            stripSegment(self, b)
-            b.bar = self
-            pickArrow(b, function() self:OpenPicker(b) end, function() return #elementSpells(element.slot) > 1 end)
-            b:HookScript("OnClick", function(_, button) if button == "LeftButton" then b.castAt = GetTime() end end)
+            b.arrow = PickArrow.new(b, function() self:OpenPicker(b) end, function() return #elementSpells(element.slot) > 1 end)
+            b:HookScript("OnClick", function(_: Button, button: string) if button == "LeftButton" then b.castAt = GetTime() end end)
             self.buttons[i] = b
         end
         -- Call of the Elements, after a hairline
         self.rule = self.header:CreateTexture(nil, "ARTWORK")
         self.rule:SetSize(1, 12)
         draw.paintFill(self.rule, "gilt-hairline")
-        self.call = actionButton.actionButton(self.header, opts.name .. "Call", "action-sm")
+        self.call = CallButton.new(self, opts.name .. "Call")
         self.call:SetID(0)
         self.call:RegisterForClicks("AnyUp", "AnyDown")
-        self.call.showEmpty = false
-        self.call.Update = function() end
-        self.call.ShowTooltip = function(c: any)
-            if c.spellID then GameTooltip:SetSpellByID(c.spellID) end
-            if (self.knownSets or 0) > 1 then
-                local cr, cg, cb = draw.rgba("ink-muted")
-                GameTooltip:AddLine("The arrow: another set of totems.", cr, cg, cb, true)
-            end
-        end
-        pickArrow(self.call, function() self:OpenSets() end, function() return (self.knownSets or 0) > 1 end)
+        self.call.arrow = PickArrow.new(self.call, function() self:OpenSets() end, function() return self.knownSets > 1 end)
         self.call:HookScript("OnClick", function()
             for _, b in ipairs(self.buttons) do b.castAt = GetTime() end
         end)
         -- Totemic Recall: the last button, on the right of Call
-        self.recall = actionButton.actionButton(self.header, opts.name .. "Recall", "action-sm")
+        self.recall = RecallButton.new(self, opts.name .. "Recall")
         self.recall:SetID(0)
         self.recall:RegisterForClicks("AnyUp", "AnyDown")
-        self.recall.showEmpty = false
-        self.recall.Update = function() end
-        self.recall.ShowTooltip = function() GameTooltip:SetSpellByID(RECALL) end
 
         local function refresh() self:Refresh() end
         local function all() self:UpdateAll() end
@@ -640,8 +819,8 @@ export class TotemBar extends ClassBar
         for _, e in ipairs(gameEvents) do
             pcall(events.onGame, e, refresh, self)
         end
-        local gameEvents: EventName[] = { "ACTIONBAR_SLOT_CHANGED", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_COOLDOWN" }
-        for _, e in ipairs(gameEvents) do
+        local updates: EventName[] = { "ACTIONBAR_SLOT_CHANGED", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_COOLDOWN" }
+        for _, e in ipairs(updates) do
             events.onGame(e, all, self)
         end
         events.onGame("PLAYER_TOTEM_UPDATE", function() self:UpdateTimers() end, self)
@@ -651,7 +830,8 @@ export class TotemBar extends ClassBar
         -- allows it)
         events.onGame("PLAYER_REGEN_DISABLED", function()
             self:ClosePicker()
-            if self.sets and self.sets:IsShown() then self.sets:Hide(); self.sets.catcher:Hide() end
+            local sets = self.sets
+            if sets and sets:IsShown() then sets:Hide(); sets.catcher:Hide() end
         end, self)
         self:Refresh()
         extend.add(extend.Kind.ActionBar, self, { name = opts.name, totems = true })
@@ -661,28 +841,30 @@ export class TotemBar extends ClassBar
     -- Recall faint while nothing is down. The duration object comes in combat
     -- too (its values secret); none: empty.
     function UpdateTimers()
-        local any = false
+        local anyDown = false
         for _, b in ipairs(self.buttons) do
             local s = b.segment
             local ok, d = pcall(G.GetTotemDuration, b.element.slot)
-            if ok and d then any = true end
+            if ok and d then anyDown = true end
             if ok and d and totemIsChosen(b) then
                 pcall(s.drain.SetTimerDuration, s.drain, d, IMMEDIATE, DIR.RemainingTime)
                 s.drain:Show()
-                if s.binding then
-                    pcall(s.binding.SetDuration, s.binding, d)
-                    pcall(s.binding.SetEnabled, s.binding, true)
+                local binding = s.binding
+                if binding then
+                    pcall(binding.SetDuration, binding, d)
+                    pcall(binding.SetEnabled, binding, true)
                 end
                 s.text:Show()
             else
                 s.drain:Hide()
-                if s.binding then pcall(s.binding.SetEnabled, s.binding, false) end
+                local binding = s.binding
+                if binding then pcall(binding.SetEnabled, binding, false) end
                 s.text:SetText("")
                 s.text:Hide()
             end
         end
         -- Recall: faint while no totem is down (an alpha: in combat too)
-        if self.recall then self.recall:ShowUsable(not any) end
+        self.recall:ShowUsable(not anyDown)
     end
 
     -- Which totem each button casts and what the bar holds: out of combat.
@@ -719,19 +901,20 @@ export class TotemBar extends ClassBar
     override function UpdateAll()
         for _, b in ipairs(self.buttons) do b:Update() end
         local c = self.call
-        if c.spellID then
+        local spellID = c.spellID
+        if spellID then
             c.hasAction = true
-            c.art:SetTexture(G.C_Spell.GetSpellTexture(c.spellID))
+            c.art:SetTexture((G.C_Spell.GetSpellTexture(spellID)))
             c.art:Show()
-            c:ShowSpellCooldown(c.spellID)
+            c:ShowSpellCooldown(spellID)
         else
             c.hasAction = false
         end
         c:UpdateEmpty()
         local r = self.recall
-        r.hasAction = self.hasRecall and true or false
+        r.hasAction = self.hasRecall
         if r.hasAction then
-            r.art:SetTexture(G.C_Spell.GetSpellTexture(RECALL))
+            r.art:SetTexture((G.C_Spell.GetSpellTexture(RECALL)))
             r.art:Show()
             r:ShowSpellCooldown(RECALL)
         end
@@ -741,7 +924,7 @@ export class TotemBar extends ClassBar
 
     -- The row and the strip over it (Call of the Elements after a hairline),
     -- Call and Recall after a hairline.
-    override function Layout()
+    override function Layout(_count: number?)
         combat.run("classbar:totemlayout:" .. self.name, function()
             local px, gap = self.size or 18, S["space-2"]
             local rowY = 0
@@ -752,7 +935,7 @@ export class TotemBar extends ClassBar
                 b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), rowY)
                 b.empty.glyph:SetSize(math.floor(px * 0.55), math.floor(px * 0.55))
                 -- Resize draws the dashes again at a new size (in ink): gilt-faint
-                showEmpty(b)
+                b:ShowEmptyLook()
                 local s = b.segment
                 s:ClearAllPoints()
                 s:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), stripY)
@@ -764,8 +947,11 @@ export class TotemBar extends ClassBar
             self.rule:SetShown(self.hasCall or self.hasRecall)
             -- after the hairline: Call, then Recall, each only once learned
             local x = rowEnd + 5
-            for _, extra in ipairs({ { self.call, self.hasCall }, { self.recall, self.hasRecall } }) do
-                local b, shown = extra[1], extra[2] and true or false
+            local extras: { button: ActionButton, shown: boolean }[] = {
+                { button = self.call, shown = self.hasCall }, { button = self.recall, shown = self.hasRecall },
+            }
+            for _, extra in ipairs(extras) do
+                local b, shown = extra.button, extra.shown
                 b:Resize(px)
                 b:ClearAllPoints()
                 b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", x, rowY)
@@ -783,35 +969,20 @@ export class TotemBar extends ClassBar
         self:Layout()
     end
 
-    override function SetEnabled(on: any)
-        self.enabled = on and true or false
+    override function SetEnabled(on: unknown)
+        self.enabled = on ~= nil and on ~= false
         self:Refresh()
     end
 
     -- The list of an element's totems, over its slot: one secure "multispell"
     -- row each (the game's own way of choosing), the chosen one ticked. Out of
     -- combat only: it closes when a fight starts.
-    function OpenPicker(b: any)
+    function OpenPicker(b: TotemButton)
         if InCombatLockdown() then return end
         local p = self.picker
         if not p then
-            p = CreateFrame("Frame", nil, UIParent)
-            p:SetFrameStrata("DIALOG")
+            p = PickList.new(function() self:ClosePicker() end)
             p:SetSize(136, 40)
-            draw.fill(p, "surface-glass", "BACKGROUND"):SetAllPoints()
-            draw.border(p, "gilt-line")
-            p.title = uiText.text(p, "micro", "gilt-text")
-            p.title:SetPoint("TOPLEFT", 8, -6)
-            p.rows = {}
-            -- a click anywhere else closes it
-            p.catcher = CreateFrame("Button", nil, UIParent)
-            p.catcher:SetFrameStrata("DIALOG")
-            p.catcher:SetAllPoints(UIParent)
-            p.catcher:RegisterForClicks("AnyUp")
-            p.catcher:SetScript("OnClick", function() self:ClosePicker() end)
-            p.catcher:Hide()
-            p:SetFrameLevel(p.catcher:GetFrameLevel() + 5)
-            p:Hide()
             self.picker = p
         end
         local slot = b.element.slot
@@ -822,25 +993,8 @@ export class TotemBar extends ClassBar
         for i, id in ipairs(spells) do
             local r = p.rows[i]
             if not r then
-                r = CreateFrame("Button", nil, p, "SecureActionButtonTemplate")
+                r = PickRow.new(p, "SecureActionButtonTemplate", 20, 14)
                 r:RegisterForClicks("AnyUp", "AnyDown")
-                r:SetHeight(20)
-                r.hover = draw.fill(r, "surface-raised", "BACKGROUND")
-                r.hover:SetAllPoints()
-                r.hover:Hide()
-                r.icon = r:CreateTexture(nil, "ARTWORK")
-                r.icon:SetSize(14, 14)
-                r.icon:SetPoint("LEFT", 4, 0)
-                r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-                r.label = uiText.text(r, "caption", "ink")
-                r.label:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
-                r.check = r:CreateTexture(nil, "ARTWORK")
-                r.check:SetTexture(GLYPH .. "check.tga")
-                draw.paint(r.check, "gilt-text")
-                r.check:SetSize(10, 10)
-                r.check:SetPoint("RIGHT", -6, 0)
-                r:SetScript("OnEnter", function(row) row.hover:Show() end)
-                r:SetScript("OnLeave", function(row) row.hover:Hide() end)
                 r:HookScript("PostClick", function()
                     after(0, function() self:ClosePicker(); self:UpdateAll() end)
                 end)
@@ -849,7 +1003,7 @@ export class TotemBar extends ClassBar
             r:SetAttribute("type", "multispell")
             r:SetAttribute("action", slotAction(slot, self.page))
             r:SetAttribute("spell", id)
-            r.icon:SetTexture(G.C_Spell.GetSpellTexture(id))
+            r.icon:SetTexture((G.C_Spell.GetSpellTexture(id)))
             r.label:SetValue(G.C_Spell.GetSpellName(id) or "")
             r.check:SetShown(id == chosen)
             r:ClearAllPoints()
@@ -892,23 +1046,11 @@ export class TotemBar extends ClassBar
         if InCombatLockdown() then return end
         local p = self.sets
         if not p then
-            p = CreateFrame("Frame", nil, UIParent)
-            p:SetFrameStrata("DIALOG")
-            draw.fill(p, "surface-glass", "BACKGROUND"):SetAllPoints()
-            draw.border(p, "gilt-line")
-            p.title = uiText.text(p, "micro", "gilt-text")
-            p.title:SetPoint("TOPLEFT", 8, -6)
-            p.title:SetValue("TOTEM SETS")
-            p.rows = {}
-            p.catcher = CreateFrame("Button", nil, UIParent)
-            p.catcher:SetFrameStrata("DIALOG")
-            p.catcher:SetAllPoints(UIParent)
-            p.catcher:RegisterForClicks("AnyUp")
-            p.catcher:SetScript("OnClick", function() p:Hide(); p.catcher:Hide() end)
-            p.catcher:Hide()
-            p:SetFrameLevel(p.catcher:GetFrameLevel() + 5)
-            p:Hide()
-            self.sets = p
+            local list: PickList
+            list = PickList.new(function() list:Hide(); list.catcher:Hide() end)
+            list.title:SetValue("TOTEM SETS")
+            self.sets = list
+            p = list
         end
         local y, n = -6 - 12 - 4, 0
         for page, id in ipairs(SUMMONS) do
@@ -916,40 +1058,24 @@ export class TotemBar extends ClassBar
                 n = n + 1
                 local r = p.rows[n]
                 if not r then
-                    r = CreateFrame("Button", nil, p)
-                    r:SetHeight(22)
-                    r.hover = draw.fill(r, "surface-raised", "BACKGROUND")
-                    r.hover:SetAllPoints()
-                    r.hover:Hide()
-                    r.icon = r:CreateTexture(nil, "ARTWORK")
-                    r.icon:SetSize(16, 16)
-                    r.icon:SetPoint("LEFT", 4, 0)
-                    r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-                    r.label = uiText.text(r, "caption", "ink")
-                    r.label:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
-                    r.totems = {}
+                    local row = PickRow.new(p, nil, 22, 16)
+                    r = row
                     for k = 1, 4 do
-                        local t = r:CreateTexture(nil, "ARTWORK")
+                        local t = row:CreateTexture(nil, "ARTWORK")
                         t:SetSize(12, 12)
                         t:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-                        r.totems[k] = t
+                        row.totems[k] = t
                     end
-                    r.check = r:CreateTexture(nil, "ARTWORK")
-                    r.check:SetTexture(GLYPH .. "check.tga")
-                    draw.paint(r.check, "gilt-text")
-                    r.check:SetSize(10, 10)
-                    r.check:SetPoint("RIGHT", -6, 0)
-                    r:SetScript("OnEnter", function(row) row.hover:Show() end)
-                    r:SetScript("OnLeave", function(row) row.hover:Hide() end)
-                    r:SetScript("OnClick", function(row)
-                        p:Hide()
-                        p.catcher:Hide()
+                    local list = p
+                    row:SetScript("OnClick", function()
+                        list:Hide()
+                        list.catcher:Hide()
                         self:SetPage(row.page)
                     end)
-                    p.rows[n] = r
+                    p.rows[n] = row
                 end
                 r.page = page
-                r.icon:SetTexture(G.C_Spell.GetSpellTexture(id))
+                r.icon:SetTexture((G.C_Spell.GetSpellTexture(id)))
                 r.label:SetValue(G.C_Spell.GetSpellName(id) or "")
                 -- its four totems, earth to air, before the tick
                 local x = -22
@@ -980,6 +1106,6 @@ export class TotemBar extends ClassBar
 
 end
 
-export function totemBar(parent: Frame, opts: { [string]: any }): TotemBar
+export function totemBar(parent: Frame, opts: ClassBarOptions): TotemBar
     return TotemBar.new(parent, opts)
 end

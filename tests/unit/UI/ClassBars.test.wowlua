@@ -6,28 +6,29 @@
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as classBars from "/UI/ClassBars"
+import TotemBar, ClassBarBase from "/UI/ClassBars"
 import * as keybindMode from "/UI/KeybindMode"
 import * as events from "/Core/Events"
 import internal G, knows, elementSpells, slotAction, slotSpell, totemIsChosen from "/UI/ClassBars"
 import expectNoErrors, newParent from "../../helpers"
 
-type Form = { icon: number?, active: any, castable: any, spellID: number }
-type PetAction = { name: string, texture: string, isToken: boolean, isActive: any, autoCastAllowed: any,
-    autoCastEnabled: any, spellID: number?, checksRange: any, inRange: any }
+type Form = { icon: number?, active: unknown, castable: unknown, spellID: number }
+type PetAction = { name: string, texture: string, isToken: boolean, isActive: unknown, autoCastAllowed: unknown,
+    autoCastEnabled: unknown, spellID: number?, checksRange: unknown, inRange: unknown }
 
 -- What the stand-in answers.
 type Fake = {
     forms: Form[],
     pet: { [number]: PetAction },
-    petCooldown: { [number]: any[] },
-    petUsable: { [number]: any },
+    petCooldown: { [number]: unknown[] },
+    petUsable: { [number]: unknown },
     totemSpells: { [number]: number[] },
-    actions: { [number]: any },
-    totems: { [number]: any[] },
-    durations: { [number]: any },
+    actions: { [number]: unknown },
+    totems: { [number]: unknown[] },
+    durations: { [number]: LuaDurationObject },
     known: { [number]: boolean },
     names: { [number]: string },
-    usable: { [number]: any[] },
+    usable: { [number]: unknown[] },
     keys: { [string]: string },
     cursor: string?,
     locked: boolean,
@@ -35,59 +36,70 @@ type Fake = {
 
 local parent: Frame
 local fake: Fake
-local made: any[] = {}
+local made: ClassBarBase[] = {}
+local madeTotems: TotemBar[] = {}
 local GLOBALS: string[] = { "GetShapeshiftFormInfo", "GetNumShapeshiftForms", "GetPetActionInfo", "GetPetActionCooldown",
     "GetPetActionSlotUsable", "GetMultiCastTotemSpells", "GetActionInfo", "GetTotemInfo", "GetTotemDuration", "C_SpellBook",
     "IsPlayerSpell", "C_Spell", "GetBindingKey", "GetCursorInfo", "GetCVarBool" }
 
 local function stand(f: Fake)
     rawset(G, "GetNumShapeshiftForms", function(): number return #f.forms end)
-    rawset(G, "GetShapeshiftFormInfo", function(i: number): (number?, any, any, number?)
+    rawset(G, "GetShapeshiftFormInfo", function(i: number): (number?, unknown, unknown, number?)
         local x = f.forms[i]
         if not x then return nil, false, false, nil end
         return x.icon, x.active, x.castable, x.spellID
     end)
-    rawset(G, "GetPetActionInfo", function(i: number): ...any
+    rawset(G, "GetPetActionInfo", function(i: number): ...unknown
         local a = f.pet[i]
         if not a then return nil end
         return a.name, a.texture, a.isToken, a.isActive, a.autoCastAllowed, a.autoCastEnabled, a.spellID, a.checksRange, a.inRange
     end)
-    rawset(G, "GetPetActionCooldown", function(i: number): ...any return unpack(f.petCooldown[i] or { 0, 0 }) end)
-    rawset(G, "GetPetActionSlotUsable", function(i: number): any
+    rawset(G, "GetPetActionCooldown", function(i: number): ...unknown return unpack(f.petCooldown[i] or { 0, 0 }) end)
+    rawset(G, "GetPetActionSlotUsable", function(i: number): unknown
         local u = f.petUsable[i]
         if u == nil then return true end
         return u
     end)
     rawset(G, "GetMultiCastTotemSpells", function(slot: number): ...number return unpack(f.totemSpells[slot] or {}) end)
-    rawset(G, "GetActionInfo", function(action: number): ...any
+    rawset(G, "GetActionInfo", function(action: number): ...unknown
         local id = f.actions[action]
         if id == nil then return nil end
         return "spell", id
     end)
-    rawset(G, "GetTotemInfo", function(slot: number): ...any return unpack(f.totems[slot] or { false }) end)
-    rawset(G, "GetTotemDuration", function(slot: number): any return f.durations[slot] end)
-    rawset(G, "C_SpellBook", { IsSpellInSpellBook = function(id: number, _: any, _: any): boolean return f.known[id] == true end })
+    rawset(G, "GetTotemInfo", function(slot: number): ...unknown return unpack(f.totems[slot] or { false }) end)
+    rawset(G, "GetTotemDuration", function(slot: number): LuaDurationObject? return f.durations[slot] end)
+    rawset(G, "C_SpellBook", { IsSpellInSpellBook = function(id: number, _: unknown, _: unknown): boolean return f.known[id] == true end })
     rawset(G, "IsPlayerSpell", function(id: number): boolean return f.known[id] == true end)
     rawset(G, "C_Spell", {
         GetSpellName = function(id: number): string? return f.names[id] end,
         GetSpellTexture = function(id: number): number return 130000 + id % 1000 end,
-        IsSpellUsable = function(id: number): (any, any) return unpack(f.usable[id] or { true, false }) end,
+        IsSpellUsable = function(id: number): ...unknown return unpack(f.usable[id] or { true, false }) end,
     })
     rawset(G, "GetBindingKey", function(cmd: string): string? return f.keys[cmd] end)
     rawset(G, "GetCursorInfo", function(): string? return f.cursor end)
     rawset(G, "GetCVarBool", function(_: string): boolean return f.locked end)
 end
 
-local function track(bar: any): any
+local function track<T extends ClassBarBase>(bar: T): T
     made[#made + 1] = bar
     bar.header:SetPoint("CENTER")
     return bar
 end
 
-local function duration(seconds: number): any
+local function duration(seconds: number): LuaDurationObject
     local d = C_DurationUtil.CreateDuration()
     d:SetTimeFromStart(GetTime(), seconds)
     return d
+end
+
+type TotemOptions = { page?: number, onPage?: (page: number) -> (), onLayout?: (bar: ClassBarBase) -> () }
+
+local function totems(opts: TotemOptions?): TotemBar
+    local o = opts or {}
+    local bar = classBars.totemBar(parent, { name = "SuuUITestTotems" .. (#made + 1), page = o.page, onPage = o.onPage,
+        onLayout = o.onLayout })
+    madeTotems[#madeTotems + 1] = bar
+    return track(bar)
 end
 
 @beforeEach
@@ -103,10 +115,14 @@ end
 @afterEach
 local function tearDown()
     if InCombatLockdown() then mock.player:leaveCombat() end
+    for _, b in ipairs(madeTotems) do
+        b:ClosePicker()
+        local sets = b.sets
+        if sets then sets:Hide() sets.catcher:Hide() end
+    end
+    madeTotems = {}
     for _, b in ipairs(made) do
         events.offAll(b)
-        if b.ClosePicker then b:ClosePicker() end
-        if b.sets then b.sets:Hide() b.sets.catcher:Hide() end
         UnregisterStateDriver(b.header, "visibility")
         ClearOverrideBindings(b.header)
         b.header:Hide()
@@ -125,7 +141,7 @@ local function stances()
     fake.forms = { { icon = 132349, active = true, castable = true, spellID = 2457 },
                    { icon = 132341, active = false, castable = false, spellID = 71 } }
     local laid = mock.spy()
-    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance", onLayout = function(b: any) laid(b) end }))
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance", onLayout = function(b: ClassBarBase) laid(b) end }))
     expect(bar.header:GetName()).toBe("SuuUITestStance")
     expect(#bar.buttons).toBe(10)
     expect(bar.header:IsShown()).toBe(true)
@@ -232,20 +248,24 @@ end
 -- Pet bar
 --------------------------------------------------------------------------------
 
-local function petAction(extra: { [string]: any }?): PetAction
-    local a: { [string]: any } = { name = "Bite", texture = "Interface\\Icons\\Ability_Racial_Cannibalize", isToken = false,
+local function petAction(change: ((a: PetAction) -> ())?): PetAction
+    local a: PetAction = { name = "Bite", texture = "Interface\\Icons\\Ability_Racial_Cannibalize", isToken = false,
         isActive = false, autoCastAllowed = false, autoCastEnabled = false, spellID = 17253, checksRange = false, inRange = true }
-    for k, v in pairs(extra or {}) do a[k] = v end
-    return a :: any
+    if change then change(a) end
+    return a
 end
 
 @test("the pet bar: ten pet actions, each drawn from the game's")
 local function pets()
     fake.pet = {
-        [1] = petAction({ name = "PET_ACTION_ATTACK", texture = "PET_ATTACK_TEXTURE", isToken = true, spellID = false :: any, isActive = true }),
-        [2] = petAction({ autoCastAllowed = true, autoCastEnabled = true, checksRange = true, inRange = false }),
-        [3] = petAction({ spellID = false :: any }),
-        [4] = petAction({ spellID = false :: any }),
+        [1] = petAction(function(a: PetAction)
+            a.name, a.texture, a.isToken, a.spellID, a.isActive = "PET_ACTION_ATTACK", "PET_ATTACK_TEXTURE", true, nil, true
+        end),
+        [2] = petAction(function(a: PetAction)
+            a.autoCastAllowed, a.autoCastEnabled, a.checksRange, a.inRange = true, true, true, false
+        end),
+        [3] = petAction(function(a: PetAction) a.spellID = nil end),
+        [4] = petAction(function(a: PetAction) a.spellID = nil end),
     }
     fake.petCooldown = { [3] = { GetTime(), 10 }, [4] = { mock.secret(GetTime()), 10 } }
     fake.petUsable = { [2] = false }
@@ -385,7 +405,7 @@ end
 
 @test("totemIsChosen: the totem down is the button's, by ID or name; in combat the kept answer")
 local function chosen()
-    local b: any = { element = { slot = 2 }, bar = { page = 1 } }
+    local b = totems().buttons[1] -- earth: slot 2, page 1
     fake.actions = { [134] = 8075 }
     expect(totemIsChosen(b)).toBe(true) -- nothing down
     expect(b.chosen).toBeNil()
@@ -408,7 +428,7 @@ local function chosen()
     b.castAt = nil
     expect(totemIsChosen(b)).toBe(true)
     -- no spell in the slot: any totem is fine
-    rawset(G, "GetTotemInfo", function(_: number): ...any return true, "x", 0, 1, 1, 1, 8071 end)
+    rawset(G, "GetTotemInfo", function(_: number): ...unknown return true, "x", 0, 1, 1, 1, 8071 end)
     fake.actions = {}
     expect(totemIsChosen(b)).toBe(true)
 end
@@ -421,12 +441,6 @@ local function shaman()
     fake.totemSpells = { [1] = { 3599 }, [2] = { 8075, 8071 }, [3] = {}, [4] = {} }
     fake.actions = { [133] = 3599, [134] = 8075, [137] = 3599 }
     fake.known = { [66842] = true, [66843] = true, [36936] = true }
-end
-
-local function totems(opts: { [string]: any }?): any
-    local o: { [string]: any } = { name = "SuuUITestTotems" .. (#made + 1) }
-    for k, v in pairs(opts or {}) do o[k] = v end
-    return track(classBars.totemBar(parent, o))
 end
 
 @test("the totem bar: hidden until a totem is known")
@@ -443,7 +457,7 @@ end
 local function totemBar()
     shaman()
     local laid = mock.spy()
-    local bar = totems({ onLayout = function(b: any) laid(b) end })
+    local bar = totems({ onLayout = function(b: ClassBarBase) laid(b) end })
     expect(bar.header:IsShown()).toBe(true)
     local earth = bar.buttons[1] -- earth first
     expect(earth.element.word).toBe("Earth")
@@ -519,7 +533,7 @@ local function picker()
     local bar = totems()
     local earth = bar.buttons[1]
     bar:OpenPicker(earth)
-    local p = bar.picker
+    local p = assert(bar.picker)
     expect(p:IsShown()).toBe(true)
     expect(p.title:GetText()).toBe("EARTH TOTEMS")
     expect(#p.rows).toBe(2)
@@ -559,7 +573,7 @@ local function sets()
     shaman()
     local bar = totems()
     bar:OpenSets()
-    local p = bar.sets
+    local p = assert(bar.sets)
     expect(p:IsShown()).toBe(true)
     expect(#p.rows).toBe(2)
     expect(p.rows[1].label:GetText()).toBe("Call of the Elements")
@@ -593,30 +607,30 @@ local function arrows()
     local bar = totems()
     local earth, fire = bar.buttons[1], bar.buttons[2]
     mock.hover(fire) -- one totem: no choice
-    expect(fire.arrow:IsShown()).toBe(false)
+    expect(assert(fire.arrow):IsShown()).toBe(false)
     mock.hover(earth)
-    expect(earth.arrow:IsShown()).toBe(true)
-    mock.hover(earth.arrow)
+    expect(assert(earth.arrow):IsShown()).toBe(true)
+    mock.hover(assert(earth.arrow))
     mock.advanceTime(0.4)
-    expect(earth.arrow:IsShown()).toBe(true) -- on the arrow
-    mock.click(earth.arrow)
-    expect(bar.picker:IsShown()).toBe(true)
+    expect(assert(earth.arrow):IsShown()).toBe(true) -- on the arrow
+    mock.click(assert(earth.arrow))
+    expect(assert(bar.picker):IsShown()).toBe(true)
     bar:ClosePicker()
     mock.hover(nil)
     mock.advanceTime(0.4)
-    expect(earth.arrow:IsShown()).toBe(false)
+    expect(assert(earth.arrow):IsShown()).toBe(false)
     -- the Call button's: with more than one set
     mock.hover(bar.call)
-    expect(bar.call.arrow:IsShown()).toBe(true)
-    mock.click(bar.call.arrow)
-    expect(bar.sets:IsShown()).toBe(true)
+    expect(assert(bar.call.arrow):IsShown()).toBe(true)
+    mock.click(assert(bar.call.arrow))
+    expect(assert(bar.sets):IsShown()).toBe(true)
     mock.hover(nil)
     mock.advanceTime(0.4)
-    expect(bar.call.arrow:IsShown()).toBe(false)
+    expect(assert(bar.call.arrow):IsShown()).toBe(false)
     -- in a fight: none
     mock.player:enterCombat()
     mock.hover(earth)
-    expect(earth.arrow:IsShown()).toBe(false)
+    expect(assert(earth.arrow):IsShown()).toBe(false)
     mock.hover(nil)
 end
 
@@ -650,8 +664,8 @@ local function totemTips()
     expect(line).toHaveBeenCalledTimes(2)
     bar.recall:ShowTooltip()
     expect(byId).toHaveBeenCalledWith(GameTooltip, 36936)
-    bar.call.Update()
-    bar.recall.Update()
+    bar.call:Update()
+    bar.recall:Update()
     -- no Call known, one set at most: no lines
     fake.known = {}
     bar:Refresh()
