@@ -304,6 +304,8 @@ Drawing helpers: `Fill(parent, color, layer)`, `Border(frame, color, { width, in
 
 A section is plain data. `module:RegisterSettings(section)` ties it to the module (namespace = the module's id); `SuuUI.RegisterSettings(section)` registers one that is always there.
 
+In wowlua the section's type is `SettingsSection` (`import type SettingsSection from "/Core/Modules"`; its groups and rows are `GroupDef` and `RowDef` in SettingsUI/Registry, 0.19). Write it on the section (`local SECTION: SettingsSection = { … }`) so its rows are checked where you write them. A row's `get` gives and its `set(value)` takes the value as `unknown`; a custom row's `build(parent, onChange, def)` returns the control's frame, and `SetValue(value)` on that frame, when it has one, shows the setting.
+
 ```lua
 M:RegisterSettings({
     id = "hello", label = "Hello",

@@ -14,7 +14,9 @@ import * as modules from "/Core/Modules"
 import * as serialize from "/Core/Serialize"
 import * as registry from "/SettingsUI/Registry"
 import * as settingsWindow from "/SettingsUI/Window"
-import internal pages from "/SettingsUI/Window"
+import internal pages, SettingsWindow, ProfileDialog, BoundRow, BoundGroup, NavButton, SettingsPage from "/SettingsUI/Window"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 import expectNoErrors from "../../helpers"
 import printedSince, printedCount, hasLine from "./UiSettingsHelpers"
 
@@ -28,19 +30,20 @@ settings.register("wtest2", { extra = false })
 settings.register("wtmod", { enabled = true })
 
 -- Custom controls: what each was built with, and what each was shown.
-local changers: { [string]: (v: any) -> () } = {}
-local shownValue: { [string]: any } = {}
+local changers: { [string]: (v: unknown) -> () } = {}
+local shownValue: { [string]: unknown } = {}
 
-local function custom(parent: any, onChange: (v: any) -> (), def: { [string]: any }): any
-    local c: any = CreateFrame("Frame", nil, parent)
+local function custom(parent: Frame, onChange: (v: unknown) -> (), def: registry.RowDef): Frame
+    local c = CreateFrame("Frame", nil, parent)
     c:SetSize(60, 20)
-    changers[def.label] = onChange
-    c.SetValue = function(_: any, v: any) shownValue[def.label] = v end
+    local label = def.label or ""
+    changers[label] = onChange
+    rawset(c, "SetValue", function(_: unknown, v: unknown) shownValue[label] = v end)
     return c
 end
 
 -- The player changes custom control `label` to `v`.
-local function change(label: string, v: any)
+local function change(label: string, v: unknown)
     local fn = changers[label]
     assert(fn, "no custom control " .. label)
     fn(v)
@@ -52,13 +55,13 @@ local noteText = "First note."
 
 -- The preview: a view of the size the test asks for.
 local viewW, viewH = 100, 100
-local function preview(parent: any): any
+local function preview(parent: Frame): Frame
     local v = CreateFrame("Frame", nil, parent)
     v:SetSize(viewW, viewH)
     return v
 end
 
-local builtPage: any = nil
+local builtPage: registry.Page? = nil
 
 registry.register({
     id = "wt-alpha", label = "Alpha Test", category = "World", order = 1, namespace = "wtest",
@@ -68,8 +71,8 @@ registry.register({
             { key = "flag", label = "Flag", description = "Turns the flag on.", control = "toggle", combat = true },
             { key = "flag", label = "Flag box", control = "checkbox", checkLabel = "On", combat = true },
             { key = "mode", label = "Mode", control = "segmented", options = modeOptions },
-            { key = "mode", label = "Mode list", control = "select", options = function(): any return modeOptions end,
-              description = function(): string return "Mode is " .. settings.get("wtest", "mode") end },
+            { key = "mode", label = "Mode list", control = "select", options = function(): SelectOption<string>[] return modeOptions end,
+              description = function(): string return "Mode is " .. settings.getString("wtest", "mode") end },
             { key = "enabled", namespace = "wtmod", label = "Module on", control = "toggle" },
         } },
         { title = "Numbers", rows = {
@@ -82,9 +85,9 @@ registry.register({
             { label = "Just text", description = "No control here." },
             { label = "Odd", control = "weird" },
             { label = "Refuses", control = "custom", build = custom,
-              get = function(): number return 1 end, set = function(_: any): (boolean, string?) return false, "too high" end },
+              get = function(): number return 1 end, set = function(_: unknown): (boolean, string?) return false, "too high" end },
             { label = "Refuses quietly", control = "custom", build = custom,
-              get = function(): number return 1 end, set = function(_: any): (boolean, string?) return false end },
+              get = function(): number return 1 end, set = function(_: unknown): (boolean, string?) return false end },
             { key = "word", label = "Locked word", control = "text",
               disabled = function(): (boolean, string?) return true, "Locked for now." end },
         } },
@@ -93,7 +96,7 @@ registry.register({
 
 registry.register({
     id = "wt-beta", label = "Beta Test", category = "Plugins", order = 1, namespace = "wtest",
-    build = function(page: any)
+    build = function(page: registry.Page)
         builtPage = page
         page:AddGroup({ title = "Built", rows = { { key = "flag", label = "Built flag", control = "toggle" } } })
     end,
@@ -106,8 +109,10 @@ registry.register({
 
 local startProfile: string? = nil
 
-local function win(): any return (_G :: any).SuuUISettings end
-local function dialog(): any return (_G :: any).SuuUIProfileDialog end
+local function win(): SettingsWindow return frames.find("SuuUISettings") :: unknown :: SettingsWindow end
+local function dialog(): ProfileDialog? return frames.find("SuuUIProfileDialog") :: unknown :: ProfileDialog? end
+-- A section's page, built.
+local function page(id: string): SettingsPage return (assert(pages[id], "no page " .. id)) end
 
 @beforeEach
 local function remember()
@@ -133,28 +138,33 @@ local function cleanup()
 end
 
 -- A page's bound row, by its label.
-local function row(id: string, label: string): any
-    local page = pages[id]
-    assert(page, "no page " .. id)
-    for _, r in ipairs(page.rows) do
+local function row(id: string, label: string): BoundRow
+    for _, r in ipairs(page(id).rows) do
         if r.def.label == label then return r end
     end
     error("no row " .. label .. " on " .. id)
 end
 
-local function group(id: string, title: string): any
-    for _, g in ipairs(pages[id].groups) do
+local function group(id: string, title: string): BoundGroup
+    for _, g in ipairs(page(id).groups) do
         if g.def.title == title then return g end
     end
     error("no group " .. title .. " on " .. id)
 end
 
-local function navFor(id: string): any
+-- A row's control's shown value and choices.
+local function valueOf(r: BoundRow): unknown return tbl.field(r.control, "value") end
+local function choicesOf(r: BoundRow): unknown[] return tbl.list(tbl.field(r.control, "options")) end
+
+local function navFor(id: string): NavButton?
     for _, b in ipairs(win().navButtons) do
-        if b.section and b.section.id == id and b:IsShown() then return b end
+        local section = b.section
+        if section and section.id == id and b:IsShown() then return b end
     end
     return nil
 end
+
+local function navOf(id: string): NavButton return (assert(navFor(id), "no nav " .. id)) end
 
 local function headings(): string[]
     local out: string[] = {}
@@ -165,20 +175,20 @@ local function headings(): string[]
 end
 
 -- A button under `f` (any depth) by its label.
-local function buttonLabelled(f: any, label: string): any
-    for _, c in ipairs({ f:GetChildren() }) do
-        local b: any = c
-        local l = b.label
-        if type(l) == "table" and l.GetText and l:GetText() == label then return b end
-        local found = buttonLabelled(b, label)
+local function buttonLabelled(f: Frame, label: string): Button?
+    for _, c in ipairs(frames.children(f)) do
+        local l = frames.asFontString(tbl.field(c, "label"))
+        local b = frames.asButton(c)
+        if b and l and l:GetText() == label then return b end
+        local found = buttonLabelled(c, label)
         if found then return found end
     end
     return nil
 end
 
 -- A footer button by its label.
-local function footButton(label: string): any
-    return buttonLabelled(win().resetSection:GetParent(), label)
+local function footButton(label: string): Button
+    return (assert(buttonLabelled(assert(frames.asFrame(win().resetSection:GetParent())), label)))
 end
 
 -- Lets the window's next-frame refresh run.
@@ -196,10 +206,10 @@ local function opens()
     local f = win()
     expect(f).toBeShown()
     local first = registry.list()[1]
-    expect(pages[first.id].frame).toBeShown()
+    expect(page(first.id).frame).toBeShown()
     expect(f.profile.value).toBe(profiles.current())
     expect(#f.profile.options).toBe(#profiles.list())
-    local b = navFor(first.id)
+    local b = navOf(first.id)
     expect(b.bg).toBeShown()
     expect(b.label:GetText()).toBe(first.label)
 end
@@ -211,16 +221,16 @@ local function nav()
     expect(hasLine(h, "World")).toBe(true)
     expect(hasLine(h, "Plugins")).toBe(true)
     expect(navFor("wt-merged")).toBe(nil)      -- merged: on Beta's page
-    local beta = navFor("wt-beta")
+    local beta = navOf("wt-beta")
     expect(beta.bg).never.toBeShown()
     mock.hover(beta)
     expect(beta.bg).toBeShown()
-    mock.hover(navFor("wt-alpha"))             -- the open one: no hover look
+    mock.hover(navOf("wt-alpha"))             -- the open one: no hover look
     expect(beta.bg).never.toBeShown()
     mock.hover(nil)
     mock.click(beta)
-    expect(pages["wt-beta"].frame).toBeShown()
-    expect(pages["wt-alpha"].frame).never.toBeShown()
+    expect(page("wt-beta").frame).toBeShown()
+    expect(page("wt-alpha").frame).never.toBeShown()
     expect(beta.bg).toBeShown()
     expect(win().navMarker ~= nil).toBe(true)
 end
@@ -228,23 +238,23 @@ end
 @test("a merged section opens the page it shows on; a built section's groups, then the merged ones")
 local function merged()
     settingsWindow.open("wt-merged")
-    expect(pages["wt-beta"].frame).toBeShown()
+    expect(page("wt-beta").frame).toBeShown()
     expect(pages["wt-merged"]).toBe(nil)
     local titles: string[] = {}
-    for _, g in ipairs(pages["wt-beta"].groups) do titles[#titles + 1] = g.def.title end
+    for _, g in ipairs(page("wt-beta").groups) do titles[#titles + 1] = g.def.title or "" end
     expect(titles).toEqual({ "Built", "Extra" })
-    expect(pages["wt-beta"].merged).toBe("wt-merged")
+    expect(page("wt-beta").merged).toBe("wt-merged")
     -- the merged row writes its own namespace
     local extra = row("wt-beta", "Extra flag")
     expect(extra.namespace).toBe("wtest2")
-    mock.click(extra.control)
+    mock.click(assert(extra.control))
     expect(settings.get("wtest2", "extra")).toBe(true)
 end
 
 @test("an unknown id opens the first section")
 local function unknownId()
     settingsWindow.open("no-such-section")
-    expect(pages[registry.list()[1].id].frame).toBeShown()
+    expect(page(registry.list()[1].id).frame).toBeShown()
 end
 
 --------------------------------------------------------------------------------
@@ -254,10 +264,10 @@ end
 @test("every control shows its setting; a change writes it and the rows follow")
 local function controls()
     settingsWindow.open("wt-alpha")
-    expect(row("wt-alpha", "Flag").control.value).toBe(false)
-    expect(row("wt-alpha", "Mode").control.value).toBe("a")
-    expect(row("wt-alpha", "Level").control.value).toBe(1)
-    expect(row("wt-alpha", "Level steps").control.value).toBe(1)
+    expect(valueOf(row("wt-alpha", "Flag"))).toBe(false)
+    expect(valueOf(row("wt-alpha", "Mode"))).toBe("a")
+    expect(valueOf(row("wt-alpha", "Level"))).toBe(1)
+    expect(valueOf(row("wt-alpha", "Level steps"))).toBe(1)
     expect(shownValue["Custom level"]).toBe(1)
     expect(shownValue["Custom plain"]).toBe(nil)   -- no key, no get: not bound
     expect(row("wt-alpha", "Just text").control).toBe(nil)
@@ -266,10 +276,10 @@ local function controls()
     expect(settings.get("wtest", "level")).toBe(4)
     expect(shownValue["Custom level"]).toBe(4)
     nextFrame()
-    expect(row("wt-alpha", "Level").control.value).toBe(4)
-    expect(row("wt-alpha", "Level steps").control.value).toBe(4)
+    expect(valueOf(row("wt-alpha", "Level"))).toBe(4)
+    expect(valueOf(row("wt-alpha", "Level steps"))).toBe(4)
     change("Custom plain", "x")                 -- no set: nothing
-    mock.click(row("wt-alpha", "Press").control)
+    mock.click(assert(row("wt-alpha", "Press").control))
     expect(pressed).toBe(1)
 end
 
@@ -295,8 +305,8 @@ local function descriptions()
     settings.set("wtest", "mode", "b")
     nextFrame()
     expect(list.desc:GetText()).toBe("Mode is b")
-    expect(list.control.value).toBe("b")
-    expect(#list.control.options).toBe(2)
+    expect(valueOf(list)).toBe("b")
+    expect(#choicesOf(list)).toBe(2)
 end
 
 @test("a disabled row says why")
@@ -320,7 +330,7 @@ local function modified()
     expect(r.modified).toBe(true)
     -- every Numbers row on level: slider, stepper, custom
     expect(group("wt-alpha", "Numbers").meta:GetText()).toBe("3 changed")
-    expect(navFor("wt-alpha").dot).toBeShown()
+    expect(navOf("wt-alpha").dot).toBeShown()
     settings.set("wtest", "word", "hi")
     nextFrame()
     expect(group("wt-alpha", "Numbers").meta:GetText()).toBe("5 changed")
@@ -343,7 +353,7 @@ local function modified()
     expect(settings.get("wtest", "level")).toBe(1)
     expect(stepper.modified).toBe(false)
     nextFrame()
-    expect(navFor("wt-alpha").dot).never.toBeShown()
+    expect(navOf("wt-alpha").dot).never.toBeShown()
 end
 
 --------------------------------------------------------------------------------
@@ -353,8 +363,8 @@ end
 -- The labels of the shown rows on a page.
 local function shownRows(id: string): string[]
     local out: string[] = {}
-    for _, r in ipairs(pages[id].rows) do
-        if r:IsShown() then out[#out + 1] = r.def.label end
+    for _, r in ipairs(page(id).rows) do
+        if r:IsShown() then out[#out + 1] = r.def.label or "" end
     end
     return out
 end
@@ -366,17 +376,17 @@ local function typing()
     mock.typeText(f.search.edit, "Flag")
     expect(shownRows("wt-alpha")).toEqual({ "Flag", "Flag box" })
     expect(shownRows("wt-beta")).toEqual({ "Built flag", "Extra flag" })
-    expect(pages["wt-alpha"].title).toBeShown()
-    expect(pages["wt-beta"].frame).toBeShown()
+    expect(page("wt-alpha").title).toBeShown()
+    expect(page("wt-beta").frame).toBeShown()
     expect(group("wt-alpha", "Numbers")).never.toBeShown()
     -- searching: no preview, no Reset section, no section chosen
     expect(f.preview).never.toBeShown()
     expect(f.resetSection:IsEnabled()).toBe(false)
-    expect(navFor("wt-alpha").bg).never.toBeShown()
+    expect(navOf("wt-alpha").bg).never.toBeShown()
     mock.advanceFrames(1)
     -- results in the nav's order: Alpha's page before Beta's
-    local _, alphaTop = pages["wt-alpha"].frame:GetCenter()
-    local _, betaTop = pages["wt-beta"].frame:GetCenter()
+    local _, alphaTop = page("wt-alpha").frame:GetCenter()
+    local _, betaTop = page("wt-beta").frame:GetCenter()
     expect(alphaTop > betaTop).toBe(true)
 end
 
@@ -393,7 +403,7 @@ local function matches()
     expect(#shownRows("wt-alpha")).toBe(11)
     settingsWindow.search("  BETA test ")             -- the section's label, trimmed, any case
     expect(shownRows("wt-beta")).toEqual({ "Built flag", "Extra flag" })
-    expect(pages["wt-alpha"].frame).never.toBeShown()
+    expect(page("wt-alpha").frame).never.toBeShown()
     settingsWindow.search("merged test")              -- the merged section's own label
     expect(shownRows("wt-beta")).toEqual({ "Extra flag" })
 end
@@ -404,17 +414,17 @@ local function noMatch()
     local f = win()
     settingsWindow.search("zzz nothing")
     expect(f.empty).toBeShown()
-    expect(pages["wt-alpha"].frame).never.toBeShown()
+    expect(page("wt-alpha").frame).never.toBeShown()
     settingsWindow.search("")
     expect(f.empty).never.toBeShown()
-    expect(pages["wt-alpha"].frame).toBeShown()
-    expect(pages["wt-beta"].frame).never.toBeShown()
+    expect(page("wt-alpha").frame).toBeShown()
+    expect(page("wt-beta").frame).never.toBeShown()
     expect(f.preview).toBeShown()
     settingsWindow.search("flag")
     settingsWindow.show("wt-beta")
     expect(f.search:GetValue()).toBe("")
-    expect(pages["wt-beta"].frame).toBeShown()
-    expect(pages["wt-alpha"].frame).never.toBeShown()
+    expect(page("wt-beta").frame).toBeShown()
+    expect(page("wt-alpha").frame).never.toBeShown()
     expect(#shownRows("wt-beta")).toBe(2)
 end
 
@@ -422,7 +432,7 @@ end
 local function brokenPage()
     settingsWindow.open("wt-alpha")
     registry.register({ id = "wt-broken", label = "Broken Test", category = "Plugins", order = 9,
-        build = function(_: any) error("wt-broken failed") end }, OTHER)
+        build = function(_: registry.Page) error("wt-broken failed") end }, OTHER)
     settingsWindow.search("flag")
     expect(pages["wt-broken"]).toBe(nil)
     expect(#shownRows("wt-beta")).toBe(2)
@@ -447,7 +457,7 @@ local function previewShown()
     expect(p).toBeShown()
     expect(p.title:GetText()).toBe("Alpha preview")
     expect(p.note:GetText()).toBe("First note.")
-    expect((p.view:GetPoint(1))).toBe("CENTER")
+    expect((assert(p.view):GetPoint(1))).toBe("CENTER")
     settingsWindow.show("wt-beta")
     expect(p).never.toBeShown()
     expect(p.view).toBe(nil)
@@ -459,30 +469,30 @@ local function previewBig()
     viewW, viewH = 2000, 2000
     settingsWindow.open("wt-alpha")
     local p = win().preview
-    expect((p.view:GetPoint(1))).toBe("TOPLEFT")
+    expect((assert(p.view):GetPoint(1))).toBe("TOPLEFT")
     noteText = "Second note."
-    p.view:SetSize(10, 10)
+    assert(p.view):SetSize(10, 10)
     mock.advanceFrames(1)
-    expect((p.view:GetPoint(1))).toBe("CENTER")
+    expect((assert(p.view):GetPoint(1))).toBe("CENTER")
     expect(p.note:GetText()).toBe("Second note.")
     viewW, viewH = 2000, 10
     settingsWindow.show("wt-beta")
     settingsWindow.show("wt-alpha")
-    expect((p.view:GetPoint(1))).toBe("LEFT")
+    expect((assert(p.view):GetPoint(1))).toBe("LEFT")
     viewW, viewH = 10, 2000
     settingsWindow.show("wt-beta")
     settingsWindow.show("wt-alpha")
-    expect((p.view:GetPoint(1))).toBe("TOP")
+    expect((assert(p.view):GetPoint(1))).toBe("TOP")
 end
 
 @test("a replaced view's size change leaves the preview alone")
 local function previewOld()
     settingsWindow.open("wt-alpha")
     local p = win().preview
-    local old = p.view
+    local old = assert(p.view)
     settingsWindow.show("wt-beta")
     settingsWindow.show("wt-alpha")
-    local now = p.view
+    local now = assert(p.view)
     expect(now ~= old).toBe(true)
     local point = now:GetPoint(1)
     old:SetSize(3000, 3000)
@@ -496,7 +506,7 @@ end
 
 @test("Reset section: the first click arms it, the second resets the page's changed rows, not a module's switch")
 local function resetSection()
-    mock.stub(modules, "get", function(id: string): any return id == "wtmod" and {} or nil end)
+    mock.stub(modules, "get", function(id: string): unknown return id == "wtmod" and {} or nil end)
     settingsWindow.open("wt-alpha")
     settings.set("wtest", "level", 5)
     settings.set("wtest", "mode", "b")
@@ -540,12 +550,12 @@ local function hiddenRefresh()
     settingsWindow.close()
     settings.set("wtest", "level", 7)
     nextFrame()
-    expect(row("wt-alpha", "Level").control.value).toBe(1)
+    expect(valueOf(row("wt-alpha", "Level"))).toBe(1)
     settingsWindow.open()
-    expect(row("wt-alpha", "Level").control.value).toBe(7)
+    expect(valueOf(row("wt-alpha", "Level"))).toBe(7)
     -- a burst: one refresh on the next frame
     local refresh = mock.spy(row("wt-alpha", "Level").refresh)
-    row("wt-alpha", "Level").refresh = refresh
+    row("wt-alpha", "Level").Refresh = refresh
     settings.set("wtest", "level", 2)
     settings.set("wtest", "level", 3)
     expect(refresh).never.toHaveBeenCalled()
@@ -557,8 +567,8 @@ end
 local function moduleEvents()
     settingsWindow.open("wt-alpha")
     local r = row("wt-alpha", "Level")
-    local refresh = mock.spy(r.refresh)
-    r.refresh = refresh
+    local refresh = mock.spy(r.Refresh)
+    r.Refresh = refresh
     events.emit("SUUUI_MODULE_ENABLED", "x")
     events.emit("SUUUI_MODULE_DISABLED", "x")
     nextFrame()
@@ -579,11 +589,11 @@ local function picker()
     expect(profiles.create("Picker Test")).toBe(true)
     nextFrame()
     expect(#f.profile.options).toBe(#profiles.list())
-    f.profile.onChange("Picker Test")
+    assert(f.profile.onChange)("Picker Test")
     expect(profiles.current()).toBe("Picker Test")
     expect(f.profile.value).toBe("Picker Test")
     local n = printedCount()
-    f.profile.onChange("No Such Test Profile")
+    assert(f.profile.onChange)("No Such Test Profile")
     expect(#printedSince(n)).toBe(1)
     expect(f.profile.value).toBe("Picker Test")
 end
@@ -592,10 +602,10 @@ end
 local function exporting()
     settingsWindow.open("wt-alpha")
     mock.click(footButton("Export"))
-    local d = dialog()
+    local d = assert(dialog())
     expect(d).toBeShown()
-    expect(d.title:GetText()).toBe("Export profile")
-    expect(d.meta:GetText()).toBe(profiles.current())
+    expect(assert(d.title):GetText()).toBe("Export profile")
+    expect(assert(d.meta):GetText()).toBe(profiles.current() or "")
     expect(d.name).never.toBeShown()
     expect(d.action).never.toBeShown()
     local value = serialize.decode(d.edit:GetText())
@@ -614,8 +624,8 @@ local function importing()
     settings.reset("wtest", "word")
     settingsWindow.open("wt-alpha")
     mock.click(footButton("Import"))
-    local d = dialog()
-    expect(d.title:GetText()).toBe("Import profile")
+    local d = assert(dialog())
+    expect(assert(d.title):GetText()).toBe("Import profile")
     expect(d.name).toBeShown()
     d.edit:SetText(text)
     local n = printedCount()
@@ -634,7 +644,7 @@ end
 @test("Import: a string that isn't a profile, or a name that's taken, says so and stays open")
 local function importRefused()
     settingsWindow.import()
-    local d = dialog()
+    local d = assert(dialog())
     d.edit:SetText("hello")
     mock.click(d.action)
     expect(d).toBeShown()
@@ -665,7 +675,7 @@ local function sectionAdded()
     registry.register({ id = "wt-late", label = "Late Test", category = "Plugins", order = 5,
         groups = { { title = "Late", rows = { { label = "Late flag" } } } } }, OTHER)
     expect(navFor("wt-late") ~= nil).toBe(true)
-    expect(pages["wt-alpha"].frame).toBeShown()
+    expect(page("wt-alpha").frame).toBeShown()
     settingsWindow.search("flag")
     registry.register({ id = "wt-later", label = "Later Test", category = "Plugins", order = 6,
         groups = { { title = "Later", rows = { { label = "Later flag" } } } } }, OTHER)
@@ -677,34 +687,34 @@ local function sectionRemoved()
     registry.register({ id = "wt-gone", label = "Gone Test", category = "Plugins", order = 7,
         groups = { { title = "Gone", rows = { { label = "Gone row" } } } } }, OTHER)
     settingsWindow.open("wt-gone")
-    local old = pages["wt-gone"]
+    local old = page("wt-gone")
     registry.unregister(OTHER)
     expect(pages["wt-gone"]).toBe(nil)
     expect(old.frame).never.toBeShown()
-    expect(pages[registry.list()[1].id].frame).toBeShown()
+    expect(page(registry.list()[1].id).frame).toBeShown()
     -- merged into Beta now: Beta's page is built again, with it
     settingsWindow.show("wt-beta")
     local before = pages["wt-beta"]
     registry.register({ id = "wt-joins", label = "Joins Test", category = "Plugins", merge = "wt-beta",
         groups = { { title = "Joined", rows = { { label = "Joined row" } } } } }, OTHER)
     expect(pages["wt-beta"] ~= before).toBe(true)
-    expect(pages["wt-beta"].merged).toBe("wt-merged,wt-joins")
-    expect(pages["wt-beta"].frame).toBeShown()
+    expect(page("wt-beta").merged).toBe("wt-merged,wt-joins")
+    expect(page("wt-beta").frame).toBeShown()
 end
 
 @test("a page can drop its groups (sections that rebuild themselves)")
 local function cleared()
     settingsWindow.open("wt-beta")
-    local page = builtPage
-    expect(page).toBe(pages["wt-beta"])
-    local g = page.groups[1]
-    page:Clear()
-    expect(#page.groups).toBe(0)
-    expect(#page.rows).toBe(0)
+    local built = page("wt-beta")
+    expect(builtPage).toBe(built)
+    local g = built.groups[1]
+    built:Clear()
+    expect(#built.groups).toBe(0)
+    expect(#built.rows).toBe(0)
     expect(g).never.toBeShown()
     -- (built again for the tests after this one)
-    win().pagesStack:Remove(page.frame)
-    page.frame:Hide()
+    win().pagesStack:Remove(built.frame)
+    built.frame:Hide()
     pages["wt-beta"] = nil
 end
 

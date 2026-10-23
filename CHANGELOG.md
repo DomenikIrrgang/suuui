@@ -20,6 +20,7 @@
 - Plugin API 0.19: three more services, `convergences`, `campfires` and `flightmap`, and the `worldmap` service's `Refresh()` and `OpenWith(group, item)`: the world map, the flight map, the Convergences, the campsite and the notifications now talk only through them.
 - Plugin API 0.19: `SuuUI.RecipeSources(recipeID)` is typed: a `RecipeSource[]?` (its layout in Data/RecipeSources), where it was untyped.
 - Plugin API 0.19: `SuuUI.RaidCatalog()` names its providers' fields: `by = { { class = "DRUID", tree = 2, talent = true } }`, where they were a list (`{ "DRUID", 2, talent = true }`).
+- Plugin API 0.19: a settings section is typed (`SettingsSection` from `/Core/Modules`, its groups and rows in SettingsUI/Registry): a wowlua plugin's section is checked as you write it. A row's `set` takes the value as `unknown` (check it before you use it), a custom control's `build(parent, onChange, def)` returns its frame, and `disabled` may return nothing.
 - Plugin API 0.19: `chrome:SetTabs` takes any frame as a tab's `button` (the Character window's mode tabs are frames on some clients); the Social pages' `onMenu` and `onMember` get the frame clicked as a `Frame`, and their rows may carry the owner's own fields (`bnetID`, `gameAccountID`, `inviteName`, `guid`, `unit`, …).
 
 ### Fixed
