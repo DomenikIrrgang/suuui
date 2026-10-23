@@ -20,8 +20,34 @@ import internal M, SECTION from "/Units/Timeline"
 import migrations as settingMigrations from "/Core/Settings"
 import expectNoErrors from "../../helpers"
 
-local G: any = _G
-local ET: any = C_EncounterTimeline
+import type EncounterTimeline from "/UI/Timeline"
+import part from "/UI/Reskin"
+
+local ET = C_EncounterTimeline
+
+-- The timeline (made when the module came on).
+local function tl(): EncounterTimeline return assert(M.timeline) end
+-- its first and second events' badge
+local function badgeText(i: number): string? return assert(assert(tl().events)[i].badge).text end
+
+-- A boss mod's callback; a DBM bar; a LibCandyBar bar (its data on it).
+type Callback = (...unknown) -> ()
+type Bar = { frame: Frame }
+type CandyBar = Frame & { data: { [string]: unknown } }
+
+-- A settings row as the tests read it.
+type Row = { key?: string, text?: string, onClick?: () -> (), disabled?: () -> (boolean?, string?), description?: unknown }
+local function rowsBy(field: string): { [string]: Row }
+    local out: { [string]: Row } = {}
+    for _, g in ipairs(SECTION.groups) do
+        for _, r in ipairs(g.rows) do
+            local row: Row = r
+            local name = field == "key" and row.key or (row.text or row.key)
+            if name then out[name] = row end
+        end
+    end
+    return out
+end
 local friend = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
 
 -- The alerts raised: their title by key.
@@ -40,8 +66,8 @@ local function addonMessage(prefix: string, text: string, sender: string)
 end
 
 local function labels(sorted: boolean?): string
-    local out = {}
-    for _, e in ipairs(M.timeline.events or {}) do out[#out + 1] = e.label end
+    local out: string[] = {}
+    for _, e in ipairs(tl().events or {}) do out[#out + 1] = e.label or "" end
     if sorted then table.sort(out) end
     return table.concat(out, ", ")
 end
@@ -52,7 +78,7 @@ local function cleanup()
     M:CancelPull(true)
     mock.group:leave()
     M:ResetAll({ "variant", "position", "pullSeconds", "pullAlert", "pullVoice", "source", "hideTheirs" })
-    M.labels, M.badges, M.addonTimers = nil, nil, nil
+    M.labels, M.badges, M.addonTimers = {}, {}, {}
     ET.CancelAllScriptEvents()
     mock.advanceTime(2)
     expectNoErrors()
@@ -61,16 +87,16 @@ end
 @test("hidden while nothing is on it; the test's five abilities, the timeline or the list; off; one leaving as it runs out")
 local function timeline()
     M:Refresh()
-    expect(M.timeline:IsShown()).toBe(false)
+    expect(tl():IsShown()).toBe(false)
     M:Test()
-    expect(M.timeline:IsShown()).toBe(true)
+    expect(tl():IsShown()).toBe(true)
     expect(labels()).toBe("Shield Wall, Frost Nova, Rain of Fire, Death Coil, Whirlwind")
-    expect(M.timeline.events[1].badge.text).toBe("Tank")
-    expect(M.timeline.variant).toBe("track")
+    expect(badgeText(1)).toBe("Tank")
+    expect(tl().variant).toBe("track")
     M:Set("variant", "list")
-    expect(M.timeline.variant).toBe("list")
+    expect(tl().variant).toBe("list")
     M:Set("variant", "off")
-    expect(M.timeline:IsShown()).toBe(false)
+    expect(tl():IsShown()).toBe(false)
     expect(SuuUI.GetAnchor("encounterTimeline")).toBeNil()
     M:Set("variant", "track")
     expect(SuuUI.GetAnchor("encounterTimeline")).toBe(M.timeline)
@@ -78,7 +104,7 @@ local function timeline()
     mock.advanceTime(4.2)
     expect(labels()).toBe("Frost Nova, Rain of Fire, Death Coil, Whirlwind")
     M:Set("position", { point = "TOP", x = 0, y = -28, hidden = true })
-    expect(M.timeline:IsShown()).toBe(false)
+    expect(tl():IsShown()).toBe(false)
 end
 
 @test("an ability's danger badge from its icons; a secret name or time left out; a paused one")
@@ -87,17 +113,17 @@ local function badges()
     ET.AddScriptEvent({ spellID = 122, iconFileID = 1, duration = 8, overrideName = "Nova", icons = bit.lshift(1, set.Deadly) })
     ET.AddScriptEvent({ spellID = 123, iconFileID = 1, duration = 9, overrideName = "Hold", paused = true })
     M:Refresh()
-    expect(M.timeline.events[1].badge.text).toBe("Lethal")
-    expect(M.timeline.events[2].paused).toBe(9)
+    expect(badgeText(1)).toBe("Lethal")
+    expect(assert(tl().events)[2].paused).toBe(9)
     -- (a name the game keeps secret)
     local info = ET.GetEventInfo
-    mock.stub(ET, "GetEventInfo", function(id: number): any
+    mock.stub(ET, "GetEventInfo", function(id: number): unknown
         local e = info(id)
-        e.spellName = mock.secret(e.spellName)
+        e.spellName = mock.secret(e.spellName :: string)
         return e
     end)
     M:Refresh()
-    expect(M.timeline.events[1].label).toBe("")
+    expect(assert(tl().events)[1].label).toBe("")
 end
 
 @test("/suu pull: the game's countdown, its alert to Pull!, the voice for the last ten seconds")
@@ -217,88 +243,95 @@ local function voice()
     M:Speak(11, "Heart")
     expect(#played).toBe(1)
     M:Set("pullVoice", "Michael")
-    local rows: { [string]: any } = {}
-    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do rows[r.text or r.key] = r end end
-    rows["Hear the voice"].onClick()
+    local rows = rowsBy("text")
+    assert(assert(rows["Hear the voice"]).onClick)()
     mock.advanceTime(4)
     expect(#played).toBe(5)
     M:Set("pullVoice", "off")
-    expect((rows["Hear the voice"].disabled())).toBe(true)
-    rows["Start a pull countdown"].onClick()
-    rows["Show a test timeline"].onClick()
+    expect((assert(assert(rows["Hear the voice"]).disabled)())).toBe(true)
+    assert(assert(rows["Start a pull countdown"]).onClick)()
+    assert(assert(rows["Show a test timeline"]).onClick)()
 end
 
 @test("DBM as the source: its timers on the timeline (paused, updated, stopped), its bars and warnings hidden and given back")
 local function dbm()
-    local callbacks: { [string]: any } = {}
-    local dbmBars: any[] = {}
-    mock.setField(G, "DBM", {
-        Options = { HideDBMWarnings = false },
-        RegisterCallback = function(_: any, event: string, fn: any) callbacks[event] = fn end,
-    })
-    mock.setField(G, "DBT", { CreateBar = function(_: any)
+    local callbacks: { [string]: Callback } = {}
+    local function fire(event: string, ...: unknown) assert(callbacks[event])(...) end
+    local dbmBars: Bar[] = {}
+    local options = { HideDBMWarnings = false }
+    local bars = { CreateBar = function(_: unknown): Bar
         local bar = { frame = CreateFrame("Frame") }
         dbmBars[#dbmBars + 1] = bar
         return bar
-    end })
-    M.hooked, M.hookedParts = nil, nil
+    end }
+    mock.setField(_G, "DBM", {
+        Options = options,
+        RegisterCallback = function(_: unknown, event: string, fn: Callback) callbacks[event] = fn end,
+    })
+    mock.setField(_G, "DBT", bars)
+    M.hooked, M.hookedParts = nil, {}
     M:HookSources()
     M:HookDisplays()
     expect(#M:SourceOptions()).toBe(2)
     M:Set("source", "dbm")
-    expect(G.DBM.Options.HideDBMWarnings).toBe(true)
-    callbacks.DBM_TimerBegin(nil, "t1", "Lava Burst", 12, 135813, nil, nil, 4)
-    callbacks.DBM_TimerBegin(nil, "t2", "Pull in", 10, nil)
+    expect(options.HideDBMWarnings).toBe(true)
+    fire("DBM_TimerBegin", nil, "t1", "Lava Burst", 12, 135813, nil, nil, 4)
+    fire("DBM_TimerBegin", nil, "t2", "Pull in", 10, nil)
     expect(labels()).toBe("Lava Burst")
-    expect(M.timeline.events[1].badge.text).toBe("Kick")
-    callbacks.DBM_TimerPause(nil, "t1")
-    expect(M.timeline.events[1].paused ~= nil).toBe(true)
-    callbacks.DBM_TimerResume(nil, "t1")
-    callbacks.DBM_TimerUpdate(nil, "t1", 2, 12)
-    expect(M.timeline.events[1].endsAt ~= nil).toBe(true)
-    callbacks.DBM_TimerStop(nil, "t1")
+    expect(badgeText(1)).toBe("Kick")
+    fire("DBM_TimerPause", nil, "t1")
+    expect(assert(tl().events)[1].paused ~= nil).toBe(true)
+    fire("DBM_TimerResume", nil, "t1")
+    fire("DBM_TimerUpdate", nil, "t1", 2, 12)
+    expect(assert(tl().events)[1].endsAt ~= nil).toBe(true)
+    fire("DBM_TimerStop", nil, "t1")
     expect(labels()).toBe("")
     -- its bars kept see-through
-    local bar = G.DBT:CreateBar()
+    local bar = (bars.CreateBar :: (self: unknown) -> Bar)(bars)
     expect(bar.frame:GetAlpha()).toBe(0)
     bar.frame:SetAlpha(1)
     expect(bar.frame:GetAlpha()).toBe(0)
     -- its own warnings back
     M:Set("hideTheirs", false)
-    expect(G.DBM.Options.HideDBMWarnings).toBe(false)
+    expect(options.HideDBMWarnings).toBe(false)
     M:Set("source", "suui")
     M.hooked = nil
 end
 
 @test("BigWigs as the source: its bars' timers, stop all; its own bars hidden, another addon's not")
 local function bigwigs()
-    local messages: { [string]: any } = {}
-    mock.setField(G, "BigWigsLoader", { RegisterMessage = function(_: any, msg: string, fn: any) messages[msg] = fn end })
-    local proto: any = {}
-    function proto:Start() end
-    function proto:Get(key: string): any return self.data[key] end
+    local messages: { [string]: Callback } = {}
+    local function send(msg: string, ...: unknown) assert(messages[msg])(...) end
+    mock.setField(_G, "BigWigsLoader", { RegisterMessage = function(_: unknown, msg: string, fn: Callback) messages[msg] = fn end })
+    local proto = {
+        Start = function(_: unknown) end,
+        Get = function(bar: CandyBar, key: string): unknown return bar.data[key] end,
+    }
     mock.provideLibrary("LibCandyBar-3.0", { barPrototype = proto })
-    M.hooked, M.hookedParts = nil, nil
+    M.hooked, M.hookedParts = nil, {}
     M:HookSources()
     M:HookDisplays()
     M:Set("source", "bigwigs")
     local mod = {}
-    messages.BigWigs_StartBar(nil, mod, nil, "Magma Blast", 15, 135820)
-    messages.BigWigs_StartBar(nil, mod, nil, "Breath", 20, nil)
+    send("BigWigs_StartBar", nil, mod, nil, "Magma Blast", 15, 135820)
+    send("BigWigs_StartBar", nil, mod, nil, "Breath", 20, nil)
     expect(labels(true)).toBe("Breath, Magma Blast")
-    messages.BigWigs_PauseBar(nil, mod, "Breath")
-    messages.BigWigs_ResumeBar(nil, mod, "Breath")
-    messages.BigWigs_StopBar(nil, mod, "Magma Blast")
+    send("BigWigs_PauseBar", nil, mod, "Breath")
+    send("BigWigs_ResumeBar", nil, mod, "Breath")
+    send("BigWigs_StopBar", nil, mod, "Magma Blast")
     expect(labels()).toBe("Breath")
-    messages.BigWigs_StopBars(nil)
+    send("BigWigs_StopBars", nil)
     expect(labels()).toBe("")
     -- (LibCandyBar's bars: frames with its prototype's methods)
-    local ours: any = CreateFrame("Frame")
-    ours.Get, ours.data = proto.Get, { ["bigwigs:module"] = mod }
-    local theirs: any = CreateFrame("Frame")
-    theirs.Get, theirs.data = proto.Get, {}
-    proto.Start(ours)
-    proto.Start(theirs)
+    local ours, theirs = CreateFrame("Frame"), CreateFrame("Frame")
+    mock.setField(ours, "Get", proto.Get)
+    mock.setField(ours, "data", { ["bigwigs:module"] = mod })
+    mock.setField(theirs, "Get", proto.Get)
+    mock.setField(theirs, "data", {})
+    local start = part(proto, "Start")
+    assert(type(start) == "function")
+    ;(start :: (bar: Frame) -> ())(ours)
+    ;(start :: (bar: Frame) -> ())(theirs)
     expect(ours:GetAlpha()).toBe(0)
     expect(theirs:GetAlpha()).toBe(1)
     M:Set("source", "suui")
@@ -310,17 +343,18 @@ local function preview()
     local parent = CreateFrame("Frame", nil, UIParent)
     local p = M:PreviewView(parent)
     expect(p:GetParent()).toBe(parent)
-    expect(#p.events).toBe(5)
+    expect(#assert(p.events)).toBe(5)
     M:Set("variant", "list")
     expect(p.variant).toBe("list")
 end
 
 @test("the settings rows: the boss mods not installed named; Hide their bars waits for one")
 local function rowsWait()
-    local rows: { [string]: any } = {}
-    for _, g in ipairs(SECTION.groups) do for _, r in ipairs(g.rows) do if r.key then rows[r.key] = r end end end
-    expect(rows.source.description():find("Install DBM or BigWigs", 1, true) ~= nil).toBe(true)
-    local off, why = rows.hideTheirs.disabled()
+    local rows = rowsBy("key")
+    local describe = assert(rows.source).description
+    assert(type(describe) == "function")
+    expect(((describe :: () -> string)()):find("Install DBM or BigWigs", 1, true) ~= nil).toBe(true)
+    local off, why = assert(assert(rows.hideTheirs).disabled)()
     expect(off).toBe(true)
     expect(why).toBe("Choose DBM or BigWigs first.")
 end
@@ -332,13 +366,13 @@ local function migrations()
         if m.namespace == "timeline" and m.id == "pullVoice-kokoro-3" then
             found = found + 1
             for old, new in pairs({ David = "Michael", Jim = "Bella", Heart = "Heart" }) do
-                local v: { [string]: any } = { pullVoice = old }
+                local v: { [string]: unknown } = { pullVoice = old }
                 m.fn(v)
                 expect(v.pullVoice).toBe(new)
             end
         elseif m.namespace == "timeline" and m.id == "pullAlert-last10" then
             found = found + 1
-            local v: { [string]: any } = { pullAlert = "last5" }
+            local v: { [string]: unknown } = { pullAlert = "last5" }
             m.fn(v)
             expect(v.pullAlert).toBe("last10")
         end
@@ -350,9 +384,8 @@ end
 @test("stopped: the timeline gone, the countdown cancelled, Blizzard's numbers back")
 local function disabled()
     M:StartPull(10)
-    local m: any = M
-    m:OnDisable()
+    assert(M.OnDisable)(M)
     expect(M.pullEnds).toBeNil()
-    expect(M.timeline:IsShown()).toBe(false)
+    expect(tl():IsShown()).toBe(false)
     expect(M.trackerOff).toBeNil()
 end
