@@ -12,59 +12,52 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
-import * as registry from "/SettingsUI/Registry"
 import expectNoErrors, newParent from "../../helpers"
 
-local M: any = assert(SuuUI.GetModule("indicators"))
-local UI: any = SuuUI.UI
+import internal M, buildEditor from "/Units/BuffIndicators"
+import type IndicatorEditor, IndicatorRow, IndicatorEditPanel from "/Units/BuffIndicators"
+import type Indicator from "/UI/UnitFrame"
+import type Segmented from "/UI/Inputs"
+
+local UI = SuuUI.UI
 
 @afterEach
 local function cleanup()
     M.editSpec = nil
     M:Reset("lists")
-    for _, c in ipairs({ SuuUI.Root:GetChildren() }) do
-        local x: any = c
-        if x.previews and x.kind and x.sizes then x:Hide() end
-    end
+    local panel = M.editPanel
+    if panel then panel:Hide() end
     expectNoErrors()
 end
 
-local function section(): registry.Section
-    return registry.get("indicators") :: registry.Section
-end
-
-local function editor(): any
+local function editor(): IndicatorEditor
     local host = newParent(600, 600)
-    local f = ((section().groups or {})[1]).rows[1].build(host)
+    local f = buildEditor(host)
     f:SetPoint("TOPLEFT", host, "TOPLEFT")
     return f
 end
 
-local function shownRows(f: any): any[]
-    local out: any[] = {}
+local function shownRows(f: IndicatorEditor): IndicatorRow[]
+    local out: IndicatorRow[] = {}
     for _, r in ipairs(f.rows) do if r:IsShown() then out[#out + 1] = r end end
     return out
 end
 
-local function names(list: any[]): string[]
+local function names(list: Indicator[]): string[]
     local out: string[] = {}
-    for _, e in ipairs(list) do out[#out + 1] = e.name end
+    for _, e in ipairs(list) do out[#out + 1] = e.name or "" end
     return out
 end
 
 -- The Edit indicator modal, open (it's made the first time).
-local function editPanel(f: any, index: number): any
+local function editPanel(f: IndicatorEditor, index: number): IndicatorEditPanel
     mock.click(shownRows(f)[index].edit)
-    local p: any = nil
-    for _, c in ipairs({ SuuUI.Root:GetChildren() }) do
-        local x: any = c
-        if x:IsShown() and x.previews and x.kind and x.sizes then p = x end
-    end
-    assert(p, "no Edit indicator modal")
+    local p = assert(M.editPanel, "no Edit indicator modal")
+    assert(p:IsShown(), "no Edit indicator modal")
     return p
 end
 
-local function click(seg: any, value: any)
+local function click(seg: Segmented<string>, value: string)
     for _, b in ipairs(seg.buttons) do
         if b.option.value == value then mock.click(b) return end
     end
@@ -82,7 +75,7 @@ local function defaults()
     expect(names(prot)).toEqual({ "Battle Shout" })
     expect(prot[1].source).toBe("any")
     expect(prot[1].show).toBe("missing")
-    expect(#prot[1].ids > 5).toBe(true)
+    expect(#assert(prot[1].ids) > 5).toBe(true)
 end
 
 @test("lists are kept per class and spec; one saved before specs serves every spec")
@@ -93,7 +86,7 @@ local function perSpec()
     M:SetList({ { name = "Active", ids = { 6673 } } })     -- the active spec's
     expect(names(M:List())).toEqual({ "Active" })
     -- the older shape: one list for the class
-    M:Set("lists", { WARRIOR = { { name = "Old", ids = { 6673 } } } })
+    settings.set("indicators", "lists", { WARRIOR = { { name = "Old", ids = { 6673 } } } })
     expect(names(M:List(1))).toEqual({ "Old" })
     expect(names(M:List(3))).toEqual({ "Old" })
     M:SetList({}, 1)
@@ -103,7 +96,7 @@ end
 
 @test("the group frames get the active spec's list; turned off, none")
 local function published()
-    mock.stub(M, "ActiveSpec", function(_: any): number return 3 end)
+    mock.stub(M, "ActiveSpec", function(_: unknown): number return 3 end)
     M:Publish()
     expect(names((UI.GroupIndicators()))).toEqual({ "Battle Shout" })
     settings.set("indicators", "enabled", false)
@@ -116,7 +109,7 @@ end
 local function specChanged()
     local f = editor()
     M.editSpec = 2
-    mock.stub(M, "ActiveSpec", function(_: any): number return 3 end)
+    mock.stub(M, "ActiveSpec", function(_: unknown): number return 3 end)
     events.emit("SUUUI_SPEC_CHANGED", 3)
     expect(M.editSpec).toBe(nil)
     expect(names((UI.GroupIndicators()))).toEqual({ "Battle Shout" })
@@ -134,7 +127,7 @@ local function rows()
     expect(f.spec.options[4].label).toBe("Protection")
     expect(f.empty).toBeShown()
     expect(f.specNote:GetText()).toBe("Shown on your frames now.")
-    f.spec.onChange(3)
+    assert(f.spec.onChange)(3)
     expect(f.specNote:GetText()).toBe("Shown when you switch to this spec.")
     local r = shownRows(f)[1]
     expect(r.name:GetText()).toBe("Battle Shout")
@@ -143,7 +136,7 @@ local function rows()
     f:Hide()
     f:Show()
     -- a tree no preset names
-    mock.stub(SuuUI, "CooldownPresets", function(): any[] return {} end)
+    mock.stub(SuuUI, "CooldownPresets", function(): unknown[] return {} end)
     f:Refresh()
     expect(f.spec.options[2].label).toBe("Tree 1")
 end
@@ -168,16 +161,16 @@ end
 @test("+ Add: a buff the presets know, by name, or any spell by its ID; × removes one")
 local function adding()
     local f = editor()
-    f.add.onChange("Battle Shout")
+    assert(f.add.onChange)("Battle Shout")
     expect(names(M:List(0))).toEqual({ "Battle Shout" })
     expect(M:List(0)[1].kind).toBe("icon")
-    expect(f.add.lookup("6673")[1].value).toBe("id:6673")
-    expect(f.add.lookup("words")).toBe(nil)
-    expect(f.add.lookup("999999999")).toBe(nil)
-    f.add.onChange("id:6673")
+    expect(assert(assert(assert(f.add.lookup)("6673"))[1]).value).toBe("id:6673")
+    expect(assert(f.add.lookup)("words")).toBe(nil)
+    expect(assert(f.add.lookup)("999999999")).toBe(nil)
+    assert(f.add.onChange)("id:6673")
     expect(#M:List(0)).toBe(2)
-    f.add.onChange(nil)
-    f.add.onChange("Not a buff")
+    ;(assert(f.add.onChange) :: (v: string?) -> ())(nil)
+    assert(f.add.onChange)("Not a buff")
     expect(#M:List(0)).toBe(2)
     mock.click(shownRows(f)[1].remove)
     expect(#M:List(0)).toBe(1)
@@ -189,7 +182,7 @@ local function reorder()
     local f = editor()
     local r = shownRows(f)
     local s = f:GetEffectiveScale()
-    local function cursorAt(row: any, dy: number)
+    local function cursorAt(row: IndicatorRow, dy: number)
         local x, y = row:GetCenter()
         mock.setCursorPosition(x * s, (y + dy) * s)
     end
@@ -228,51 +221,51 @@ local function editing()
     M:SetList({ { name = "Renewal", ids = { 139 }, kind = "icon", point = "TOPRIGHT", size = 12, color = "fel", source = "mine" } }, 0)
     local f = editor()
     local p = editPanel(f, 1)
-    expect(p.title:GetText():find("Renewal", 1, true) ~= nil).toBe(true)
-    expect(p.previews[1]).toBeShown()               -- up only
-    expect(p.previews[2]).never.toBeShown()
+    expect(assert(assert(p.title):GetText()):find("Renewal", 1, true) ~= nil).toBe(true)
+    expect(p.previews[1].holder).toBeShown()               -- up only
+    expect(p.previews[2].holder).never.toBeShown()
     expect(p.color.reason:GetText()).toBe("An icon shows the spell's own art.")
     expect(p.point.reason:GetText()).toBe("Its time shows from 16px.")
     -- a square: the colour applies
-    click(p.kind, "square")
+    click(p.kind.control, "square")
     expect(M:List(0)[1].kind).toBe("square")
     expect(p.color.reason:GetText()).toBe("")
-    p.color.onChange("ward")
+    assert(p.color.control.onChange)("ward")
     expect(M:List(0)[1].color).toBe("ward")
-    p.point.onChange("BOTTOM")
-    p.size.onChange(9)
+    assert(p.point.control.onChange)("BOTTOM")
+    assert(p.size.onChange)(9)
     expect(M:List(0)[1].point).toBe("BOTTOM")
     expect(M:List(0)[1].size).toBe(9)
     -- a border: no position
-    click(p.kind, "border")
+    click(p.kind.control, "border")
     expect(p.point.reason:GetText()).toBe("A border goes around the whole frame.")
     -- while missing: both previews' places, the missing colour
-    click(p.show, "both")
-    expect(p.previews[2]).toBeShown()
-    p.missingColor.onChange("amber")
+    click(p.show.control, "both")
+    expect(p.previews[2].holder).toBeShown()
+    assert(p.missingColor.control.onChange)("amber")
     expect(M:List(0)[1].missingColor).toBe("amber")
-    p.missingColor.onChange("ember")
+    assert(p.missingColor.control.onChange)("ember")
     expect(M:List(0)[1].missingColor).toBe(nil)
-    click(p.show, "missing")
-    expect(p.previews[1]).never.toBeShown()
-    click(p.show, "up")
+    click(p.show.control, "missing")
+    expect(p.previews[1].holder).never.toBeShown()
+    click(p.show.control, "up")
     expect(p.missingColor.reason:GetText()).toBe("Only for While missing and Up or missing.")
     -- a bar colour: no position, no "both"
-    click(p.kind, "fill")
+    click(p.kind.control, "fill")
     expect(p.point.reason:GetText()).toBe("A bar colour tints the whole health fill.")
     -- an icon while missing: grey
-    click(p.kind, "icon")
-    click(p.show, "missing")
+    click(p.kind.control, "icon")
+    click(p.show.control, "missing")
     expect(p.missingColor.reason:GetText()).toBe("An icon shows grey while it's missing.")
     -- where
-    click(p.source, "any")
-    click(p.on, "group")
+    click(p.source.control, "any")
+    click(p.on.control, "group")
     expect(M:List(0)[1].on).toBe("group")
-    click(p.on, "all")
+    click(p.on.control, "all")
     expect(M:List(0)[1].on).toBe(nil)
-    p.sizes.onChange({ "5", "10" })
+    assert(p.sizes.control.onChange)({ "5", "10" })
     expect(M:List(0)[1].sizes).toEqual({ ["5"] = true, ["10"] = true })
-    p.sizes.onChange({ "5", "10", "20", "40" })
+    assert(p.sizes.control.onChange)({ "5", "10", "20", "40" })
     expect(M:List(0)[1].sizes).toBe(nil)
     mock.click(p.reset)
     local e = M:List(0)[1]
@@ -285,12 +278,12 @@ end
 
 @test("while Edit is open the live frames wait; they get the changes when it closes")
 local function waiting()
-    mock.stub(M, "ActiveSpec", function(_: any): number return 0 end)
+    mock.stub(M, "ActiveSpec", function(_: unknown): number return 0 end)
     M:SetList({ { name = "Renewal", ids = { 139 }, kind = "icon" } }, 0)
     local f = editor()
     local p = editPanel(f, 1)
     local before = select(2, UI.GroupIndicators())
-    click(p.kind, "square")
+    click(p.kind.control, "square")
     expect(select(2, UI.GroupIndicators())).toBe(before)
     expect(M.publishPending).toBe(true)
     mock.click(p.done)
@@ -306,9 +299,9 @@ local function editCloses()
     mock.click(shownRows(f)[2].remove)
     expect(p).never.toBeShown()
     p = editPanel(f, 1)
-    f.spec.onChange(1)
+    assert(f.spec.onChange)(1)
     expect(p).never.toBeShown()
-    f.spec.onChange(0)
+    assert(f.spec.onChange)(0)
     p = editPanel(f, 1)
     f:Hide()
     expect(p).never.toBeShown()
@@ -322,11 +315,11 @@ end
 @test("the preview: three made-up players at the healer size, with the list being edited")
 local function preview()
     M:SetList({ { name = "Renewal", ids = { 139 }, kind = "square", color = "fel" } }, 0)
-    local view = (section().preview :: (parent: any) -> any)(newParent(300, 200))
+    local view = M:PreviewView(newParent(300, 200))
     expect(#M.previewFrames).toBe(3)
     expect(view:GetHeight() > 70).toBe(true)
-    local draw = mock.spy(M.previewFrames[1].SetPreviewIndicators)
-    M.previewFrames[1].SetPreviewIndicators = draw
+    local first = assert(M.previewFrames[1])
+    local draw = mock.stub(first, "SetPreviewIndicators", first.SetPreviewIndicators)
     M:SetList({}, 0)
     expect(draw).toHaveBeenCalledTimes(1)
     M:PreviewView(newParent(300, 200))
