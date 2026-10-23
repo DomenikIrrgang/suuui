@@ -8,6 +8,8 @@
 -- them.
 
 import SuuUI from "/Core/API"
+import type ColorToken from "/Core/Tokens"
+import * as secret from "wowlua:secret"
 
 local T = SuuUI.Tokens
 
@@ -17,6 +19,9 @@ export type TaxiNode = { slot: number, id: number, name: string, kind: string, c
 export type Routes = { [number]: { [number]: number } }
 -- One dash of a dashed line: x1, y1, x2, y2
 export type Segment = { number }
+-- A route's measured time: t (s), how many flights it's the mean of (n),
+-- the flyer's speed (v).
+export type RouteRecord = { t?: number, n?: number, v?: number }
 
 -- "4:12"
 export function clock(s: number): string
@@ -29,7 +34,7 @@ export function coins(copper: number?): string
     copper = math.max(0, math.floor(copper or 0))
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local parts: string[] = {}
-    local function part(v: number, unit: string, token: string) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
+    local function part(v: number, unit: string, token: ColorToken) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
     if g > 0 then part(g, "g", "coin-gold") end
     if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
     if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
@@ -37,15 +42,17 @@ export function coins(copper: number?): string
 end
 
 -- "Crossroads, The Barrens" → "Crossroads"
-export function short(name: any): string
-    return name and name:match("^([^,]+)") or name or "?"
+export function short(name: unknown): string
+    local s = secret.asString(name)
+    if not s then return "?" end
+    return s:match("^([^,]+)") or s
 end
 
 -- Taxi nodes the client still lists that no one flies to (an old copy of
 -- Powderfuse Port, transports, quest flights)
-export function junk(name: any): boolean
-    return type(name) ~= "string" or issecretvalue(name) or name:find("^zzOLD") ~= nil or name:find("^Transport,") ~= nil
-        or name:find("^Quest Path") ~= nil
+export function junk(name: unknown): boolean
+    local s = secret.asString(name)
+    return not s or s:find("^zzOLD") ~= nil or s:find("^Transport,") ~= nil or s:find("^Quest Path") ~= nil
 end
 
 -- One hop's length in yards, either way round; nil when not known.
@@ -184,10 +191,10 @@ end
 -- none) and its length: the time flown, scaled to `speed` when the
 -- flyer's differed by more than `boost`, and true; else the length at
 -- `speed`, and false; nil when neither is known.
-export function flightTime(record: { [string]: any }?, yards: number?, speed: number, boost: number): (number?, boolean?)
-    if record and record.t then
-        local t = record.t
-        if record.v and math.abs(record.v / speed - 1) > boost then t = t * record.v / speed end
+export function flightTime(record: RouteRecord?, yards: number?, speed: number, boost: number): (number?, boolean?)
+    local t, v = record and record.t, record and record.v
+    if t then
+        if v and math.abs(v / speed - 1) > boost then t = t * v / speed end
         return t, true
     end
     if yards then return yards / speed, false end

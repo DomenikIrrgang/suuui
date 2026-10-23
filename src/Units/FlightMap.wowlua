@@ -36,32 +36,48 @@
 -- carries the speed of whoever flew it and is scaled to yours when the two
 -- differ by more than 3%.
 -- A built-in module written against the public API only.
+-- (The game's map canvas and taxi functions declare their results `any`:
+-- each is read through wowlua:secret and wowlua:frames where it's used.)
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
 import WORLD_MAP, FLIGHT_MAP from "/Core/ServiceKeys"
 import chromeOf from "/UI/WindowSkin"
+import Panel from "/UI/Panel"
+import type ScrollArea, SectionHeader from "/UI/Panel"
+import MapPin from "/UI/MapPin"
+import type Border from "/UI/Draw"
+import type Text from "/UI/Text"
+import type SuuButton from "/UI/Controls"
+import type Money from "/UI/Inventory"
+import type Bar from "/UI/Bar"
+import type TooltipData, TooltipLine from "/UI/Tooltip"
 import type Position from "/EditMode/EditMode"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
+import * as events from "wowlua:events"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 import clock, coins, short, junk, fitWay, span, dashes, nearest, alongByShare, shares, hopShares, flightTime, timeText,
     viaText, stopsText, stepsText, nearestMaster from "/Units/FlightMap/Route"
-import type TaxiNode from "/Units/FlightMap/Route"
+import type TaxiNode, RouteRecord from "/Units/FlightMap/Route"
 import * as maths from "/Units/FlightMap/Route"
-import * as secret from "wowlua:secret"
-
-local M = SuuUI.RegisterModule({
-    id = "flightmap",
-    name = "Flight map",
-    description = "The world map as the flight master's map: routes, costs and flight times, and your flight on the map while you fly.",
-    api = "0.17",
-    combatSafe = true,
-    defaults = { atMaster = true, inFlight = true, confirm = false, timer = true,
-                 -- the flight bar: top centre, at the screen-edge inset
-                 timerPosition = { point = "TOP", x = 0, y = -28 } :: Position },
-})
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
+
+local try, field = errors.try, tbl.field
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+local DEFAULTS = {
+    atMaster = true, inFlight = true, confirm = false, timer = true,
+    -- the flight bar: top centre, at the screen-edge inset
+    timerPosition = { point = "TOP", x = 0, y = -28 } :: Position,
+}
+
+local M: FlightMapModule
 
 -- A flight master on the flight master's map (M:ReadSession).
 type Session = { nodes: TaxiNode[], byID: { [number]: TaxiNode }, current?: TaxiNode }
@@ -71,6 +87,22 @@ type View = { map: number, pos: { [number]: number[] }, w: number, h: number }
 -- (placed on the continent's map; else only each master's share, at)
 type Route = { at: { [number]: number }, map?: number, w?: number, h?: number, points?: number[][], run?: number[], total?: number }
 type PlacedRoute = { at: { [number]: number }, map: number, w: number, h: number, points: number[][], run: number[], total: number }
+-- A flight in the air: its route (nodeIDs), when it started, its expected
+-- time and whether that was measured, its stops' names, the stop Land at
+-- set it down at, whether it began before a reload; worked out on the way:
+-- its route for the bar, the next stop ahead.
+type Flight = {
+    path: number[], started: number, expected?: number, measured?: boolean, names: { [number]: string },
+    early?: number, reloaded?: boolean, route?: Route | false, namesRead?: boolean, ahead?: number,
+}
+-- A flight taken and not yet in the air (TakeTaxiNode ran).
+type Pending = { path: number[], at: number, names: { [number]: string } }
+-- What a character keeps: its speed, how many flights taught it, its flight
+-- over a reload.
+type Kept = { path: number[], wall?: number, names?: { [number]: string }, early?: number }
+type FlightChar = { speed?: number, flights?: number, flight?: Kept }
+-- What the account keeps: the routes timed.
+type FlightAccount = { routes?: { [string]: RouteRecord } }
 
 local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = TEXTURES .. "Glyphs\\"
@@ -93,24 +125,37 @@ local MAX_DASHES = 120 -- on one dashed line
 --------------------------------------------------------------------------------
 
 local function continentOf(mapID: number?): number?
-    local info = mapID and C_Map.GetMapInfo(mapID)
+    local info = mapID and errors.tryValue(C_Map.GetMapInfo, mapID) or nil
+    local continent = asNumber(field(Enum, "UIMapType", "Continent")) or 2
     local guard = 0
     while info and guard < 8 do
-        if info.mapType == (Enum.UIMapType and Enum.UIMapType.Continent or 2) then return info.mapID end
-        info = info.parentMapID and info.parentMapID > 0 and C_Map.GetMapInfo(info.parentMapID)
+        if info.mapType == continent then return info.mapID end
+        local parent = info.parentMapID
+        info = parent and parent > 0 and errors.tryValue(C_Map.GetMapInfo, parent) or nil
         guard = guard + 1
     end
+    return nil
+end
+
+local function bestMap(): number?
+    return errors.tryValue(C_Map.GetBestMapForUnit, "player")
+end
+
+-- A position's x, y as the game gives it (a Vector2D), read.
+local function xyOf(pos: unknown): (number?, number?)
+    local x, y = errors.tryMethod(pos, "GetXY")
+    return asNumber(x), asNumber(y)
 end
 
 -- Every flight master's place on a map, by nodeID (anywhere, a flight
 -- master or not; a zone's map gives its continent's too, outside 0-1).
 local function positions(mapID: number?): { [number]: number[] }
     local out: { [number]: number[] } = {}
-    local ok, list = pcall(C_TaxiMap.GetTaxiNodesForMap, mapID :: any)
-    for _, n in ipairs(ok and type(list) == "table" and list or {}) do
-        local x, y
-        if n.position and n.position.GetXY then x, y = n.position:GetXY() end
-        if secret.readable(n.nodeID) and secret.readable(x) and secret.readable(y) then out[n.nodeID] = { x, y } end
+    if not mapID then return out end
+    for _, n in ipairs(errors.tryValue(C_TaxiMap.GetTaxiNodesForMap, mapID) or {}) do
+        local x, y = xyOf(n.position)
+        local id = asNumber(n.nodeID)
+        if id and x and y then out[id] = { x, y } end
     end
     return out
 end
@@ -143,83 +188,39 @@ local function hopWay(mapID: number, a: number, b: number, pa: number[], pb: num
     if not data then data, back = fromB and fromB[a], true end
     if data and C_Map.GetMapPosFromWorldPos and CreateVector2D then
         local points: number[][] = {}
-        local way: number[][]? = points
+        local whole = true
         for i = 2, #data - 1, 2 do
             -- (the world's x, y as the client tables give them: x north, y west)
-            local ok, onMap, pos = pcall(C_Map.GetMapPosFromWorldPos, data[1], CreateVector2D(data[i], data[i + 1]), mapID)
-            local x, y
-            if ok and onMap == mapID and pos and pos.GetXY then x, y = pos:GetXY() end
-            if issecretvalue(x) or issecretvalue(y) or x == nil or y == nil then way = nil break end
+            local onMap, pos = try(C_Map.GetMapPosFromWorldPos, data[1], CreateVector2D(data[i], data[i + 1]), mapID)
+            local x, y = nil, nil
+            if asNumber(onMap) == mapID then x, y = xyOf(pos) end
+            if x == nil or y == nil then whole = false break end
             points[#points + 1] = { x, y }
         end
         -- each end near its master: within a quarter of the hop
-        if way then got = fitWay(way, back, pa, pb) end
+        if whole then got = fitWay(points, back, pa, pb) end
     end
     mine[key] = got
     return got
 end
 
-local function call(fn: any, ...: any): (any, any)
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b = pcall(fn, ...)
-    if ok then return a, b end
+-- The world's yards at a map's place, nil when the game doesn't say.
+local function worldXY(mapID: number, x: number, y: number): (number?, number?)
+    local _, pos = try(C_Map.GetWorldPosFromMapPos, mapID, CreateVector2D(x, y))
+    return xyOf(pos)
 end
 
--- The flight master's map as the game gives it: { nodes (by slot), byID,
--- current } with each node { slot, id, name, kind ("CURRENT", "REACHABLE",
--- "DISTANT"), cost, path (the nodeIDs a flight there passes, from here) };
--- nil while there's none.
-function M:ReadSession()
-    local n = call(NumTaxiNodes)
-    if not (secret.readable(n) and n and n > 0) then return nil end
-    -- nodeIDs by slot (C_TaxiMap's nodes carry both), by name to be sure
-    local ids: { [number]: number }, byName: { [string]: number } = {}, {}
-    local zone = C_Map.GetBestMapForUnit("player")
-    for _, m in ipairs({ zone, continentOf(zone), call(_G.GetTaxiMapID) }) do
-        local list = call(C_TaxiMap.GetAllTaxiNodes, m)
-        for _, node in ipairs(type(list) == "table" and (list :: any[]) or {}) do
-            if secret.readable(node.nodeID) and secret.readable(node.slotIndex) and node.slotIndex then ids[node.slotIndex] = ids[node.slotIndex] or node.nodeID end
-            if secret.readable(node.nodeID) and secret.readable(node.name) and node.name then byName[node.name] = byName[node.name] or node.nodeID end
-        end
-        if next(ids) then break end
-    end
-    local s: Session = { nodes = {}, byID = {} }
-    for slot = 1, n do
-        local name, kind = call(TaxiNodeName, slot), call(TaxiNodeGetType, slot)
-        local id = ids[slot]
-        if not id and secret.readable(name) then id = byName[name] end
-        if secret.readable(kind) and kind ~= "NONE" and not junk(name) and id then
-            local cost = call(TaxiNodeCost, slot)
-            local node: TaxiNode = { slot = slot, id = id, name = name, kind = kind, cost = secret.readable(cost) and cost or 0 }
-            s.nodes[#s.nodes + 1] = node
-            s.byID[id] = node
-            if kind == "CURRENT" then s.current = node end
-        end
-    end
-    -- each destination's hops, slot to slot, as nodeIDs
-    local slotID: { [number]: number } = {}
-    for _, node in ipairs(s.nodes) do slotID[node.slot] = node.id end
-    for _, node in ipairs(s.nodes) do
-        if node.kind == "REACHABLE" then
-            local hops = call(GetNumRoutes, node.slot)
-            if secret.readable(hops) and hops and hops > 0 then
-                local first = slotID[call(TaxiGetNodeSlot, node.slot, 1, true)]
-                local path: number[] = {}
-                if first then path[1] = first end
-                local whole = first ~= nil
-                for r = 1, hops do
-                    local id = slotID[call(TaxiGetNodeSlot, node.slot, r, false)]
-                    if not id then whole = false break end
-                    path[r + 1] = id
-                end
-                if whole then node.path = path end
-            end
-            -- (a route the game can't trace: straight there)
-            if not node.path and s.current then node.path = { s.current.id, node.id } end
-        end
-    end
-    if not s.current then return nil end
-    return s
+-- Your place on a map (0-1), nil while the game doesn't give it.
+local function myPlace(mapID: number?): (number?, number?)
+    if not mapID then return nil, nil end
+    local x, y = xyOf((try(C_Map.GetPlayerMapPosition, mapID, "player")))
+    if x and y and (x > 0 or y > 0) then return x, y end
+    return nil, nil
+end
+
+-- One of the game's taxi functions by name, called quietly; its first value.
+local function taxi(name: string, ...: unknown): unknown
+    return (try(field(_G, name), ...))
 end
 
 --------------------------------------------------------------------------------
@@ -228,283 +229,29 @@ end
 
 -- the routes timed, for the account: [nodeID>nodeID>…] = { t (s), n, v (the
 -- flyer's speed) }
-local function timed(): { [string]: any }
-    local data = SuuUI.AccountData("flightmap")
-    data.routes = data.routes or {}
-    return data.routes
-end
-
-function M:Speed()
-    return self:CharData().speed or SPEED
-end
-
--- A flight's time in seconds and whether it was measured: one flown on
--- this route before (scaled to your speed when its flyer's differed by
--- more than BOOST), else its length at your speed; nil when neither is
--- known.
-function M:FlightTime(path: number[]?): (number?, boolean?)
-    if not path then return nil end
-    local r = timed()[table.concat(path, ">")]
-    return flightTime(r, not (r and r.t) and pathYards(path) or nil, self:Speed(), BOOST)
-end
-
--- A flight landed after `seconds`: its route's time, and the character's
--- speed a step toward what it flew.
-function M:Learn(flight: { path: number[], expected: number?, reloaded: boolean? }, seconds: number)
-    local expected = flight.expected
-    if flight.reloaded or seconds < 5 then return end
-    if expected and math.abs(seconds / expected - 1) > TRUST then return end
-    local data = self:CharData()
-    local yards = pathYards(flight.path)
-    if yards then
-        local speed = self:Speed()
-        data.speed = speed + LEARN * (yards / seconds - speed)
-        data.flights = (data.flights or 0) + 1
-    end
-    local key = table.concat(flight.path, ">")
-    local r = timed()[key] or {}
-    r.n = math.min((r.n or 0) + 1, KEEP)
-    r.t = r.t and (r.t + (seconds - r.t) / r.n) or seconds
-    r.v = self:Speed()
-    timed()[key] = r
+local function timed(): { [string]: RouteRecord }
+    local data = SuuUI.AccountData("flightmap") :: unknown :: FlightAccount
+    local routes = data.routes or {}
+    data.routes = routes
+    return routes
 end
 
 --------------------------------------------------------------------------------
--- A flight: taken, in the air, landed
---------------------------------------------------------------------------------
-
--- TakeTaxiNode ran (SuuUI's Fly or the game's own map): the route it asked for.
-function M:Taking(slot: number)
-    local s = self.last or self:ReadSession()
-    local node
-    for _, n in ipairs(s and s.nodes or {}) do if n.slot == slot then node = n end end
-    if not (node and node.path) then return end
-    -- (the stops' names for the flight bar: in the air there's no session)
-    local names: { [number]: string } = {}
-    for _, id in ipairs(node.path) do
-        local n = s.byID[id]
-        if n then names[id] = short(n.name) end
-    end
-    self.pending = { path = node.path, at = GetTime(), names = names }
-end
-
-function M:FlightStarted(at: number)
-    local p = self.pending
-    if not (p and GetTime() - p.at < 15 and UnitOnTaxi("player")) then return end
-    self.pending = nil
-    local expected, measured = self:FlightTime(p.path)
-    self.flight = { path = p.path, started = at, expected = expected, measured = measured, names = p.names }
-    -- kept over a reload, to show (not to time: the start isn't exact then)
-    self:CharData().flight = { path = p.path, wall = time() - (GetTime() - at), names = p.names }
-    self:QueueLayout()
-    self:UpdateTimer()
-end
-
--- Landed: at the destination, its time is learned; set down by Land at at
--- the stop it asked for, the time of the route that far (the game flies it
--- as that route: probed 2026-10-19, Ratchet to Crossroads of a longer
--- flight landed in the hop's time); landed early elsewhere, nothing.
-function M:FlightEnded(at: number)
-    local f = self.flight
-    if not f then return end
-    self.flight = nil
-    self:CharData().flight = nil
-    local seconds = at - f.started
-    local continent = continentOf(C_Map.GetBestMapForUnit("player"))
-    local spots = continent and positions(continent)
-    local me = continent and call(C_Map.GetPlayerMapPosition, continent, "player")
-    local x, y
-    if me and me.GetXY then x, y = me:GetXY() end
-    -- (where the game doesn't say, taken as there)
-    local function landedAt(id: number): boolean
-        local p = spots and spots[id]
-        if not (p and secret.readable(x) and secret.readable(y)) then return true end
-        return math.sqrt((p[1] - x) ^ 2 + (p[2] - y) ^ 2) < 0.03
-    end
-    if f.early and landedAt(f.path[f.early]) then
-        local path: number[] = {}
-        for i = 1, f.early do path[i] = f.path[i] end
-        self:Learn({ path = path, expected = self:FlightTime(path), reloaded = f.reloaded }, seconds)
-    elseif landedAt(f.path[#f.path]) then
-        self:Learn(f, seconds)
-    end
-    self:QueueLayout()
-    self:UpdateTimer()
-end
-
--- After a reload in the air: the flight kept, shown but not timed.
-function M:ResumeFlight()
-    local data = self:CharData()
-    local kept = data.flight
-    if not (kept and kept.path and kept.wall) then return end
-    local ago = time() - kept.wall
-    if not UnitOnTaxi("player") or ago > MAX_FLIGHT or ago < 0 then data.flight = nil return end
-    local expected, measured = self:FlightTime(kept.path)
-    self.flight = { path = kept.path, started = GetTime() - ago, expected = expected, measured = measured,
-                    names = kept.names, early = kept.early, reloaded = true }
-end
-
---------------------------------------------------------------------------------
--- The game's flight map, kept open underneath
---------------------------------------------------------------------------------
-
--- Unseen, and neither it nor anything on it takes the mouse (an unseen
--- node button would still fly where it was clicked). Only alpha and the
--- mouse: hidden, it closes the flight master.
-function M:HideGameMap()
-    local tf = _G.TaxiFrame
-    if not tf then return false end
-    self.gameQuiet = self.gameQuiet or {}
-    tf:SetAlpha(0)
-    local function quiet(f: any, depth: number)
-        if f:IsMouseEnabled() then
-            f:EnableMouse(false)
-            self.gameQuiet[#self.gameQuiet + 1] = f
-        end
-        if depth < 3 then for _, c in ipairs({ f:GetChildren() }) do quiet(c, depth + 1) end end
-    end
-    quiet(tf, 0)
-    return true
-end
-
-function M:ShowGameMap()
-    local tf = _G.TaxiFrame
-    if not (tf and self.gameQuiet) then return end
-    tf:SetAlpha(1)
-    for _, f in ipairs(self.gameQuiet) do f:EnableMouse(true) end
-    self.gameQuiet = nil
-end
-
---------------------------------------------------------------------------------
--- At the flight master: the world map as the flight map
---------------------------------------------------------------------------------
-
-function M:AtMaster()
-    return self.session ~= nil
-end
-
--- The world map module's pins away while the flight map shows, back after.
-local function refreshPins()
-    local wm = SuuUI.UseService(WORLD_MAP)
-    local refresh = wm and wm.Refresh
-    if refresh then refresh() end
-end
-
-function M:OnTaxiOpened()
-    self.last = self:ReadSession()
-    if self.session then self:LeaveMaster(false) end
-    if not (self:Get("atMaster") and self.map) or InCombatLockdown() then return end
-    -- unseen at once (no flicker); the world map a frame later, once the
-    -- game has put its own map up (it would close the world map if that
-    -- showed first)
-    if not self:HideGameMap() then return end
-    after(0, function() self:EnterMaster(true) end)
-end
-
-function M:EnterMaster(retry: boolean)
-    if not self.gameQuiet then return end
-    local s = self:ReadSession()
-    if not s then
-        -- (the nodes a moment later; else the game's own map after all)
-        if retry then after(0.2, function() self:EnterMaster(false) end) else self:ShowGameMap() end
-        return
-    end
-    self.last = s
-    -- its new buttons, made as it showed, without the mouse too
-    self:HideGameMap()
-    self.session, self.selected, self.hovered = s, nil, nil
-    local f = self.map
-    if not f:IsShown() then f:Show() end
-    local continent = continentOf(C_Map.GetBestMapForUnit("player"))
-    if continent and f:GetMapID() ~= continent then f:SetMapID(continent) end
-    self:FillSide()
-    self:PlaceSide()
-    self.side:Show()
-    self:UpdateBar()
-    self:SetTitle(true)
-    self:QuietHeader(true)
-    refreshPins()
-    self:QueueLayout()
-end
-
--- The flight master closed (walked away, flown, or the map closed):
--- the game's map back as it was; the world map closed with it.
-function M:LeaveMaster(closeMap: boolean)
-    local was = self.session ~= nil
-    self.session, self.selected, self.hovered = nil, nil, nil
-    self:ShowGameMap()
-    if self.side then self.side:Hide() end
-    if self.bar then self.bar:Hide() end
-    if not was then return end
-    self:SetTitle(false)
-    self:QuietHeader(false)
-    local f = self.map
-    if closeMap and f and f:IsShown() then
-        self.closing = true
-        f:Hide()
-        self.closing = false
-    end
-    refreshPins()
-    self:QueueLayout()
-end
-
--- the map's header: "Flight master · Thunder Bluff" while it's the flight
--- map, its usual "Kalimdor › Mulgore" after
-function M:SetTitle(master: boolean)
-    local chrome = self.map and chromeOf(self.map)
-    if not chrome then return end
-    if master and self.session then
-        chrome:SetTitle("Flight master · " .. short(self.session.current.name))
-        return
-    end
-    local mapID = self.map:GetMapID()
-    local info = mapID and C_Map.GetMapInfo(mapID)
-    if not info then return end
-    local continent = continentOf(mapID)
-    local c
-    if continent and continent ~= mapID then c = C_Map.GetMapInfo(continent) end
-    chrome:SetTitle(c and (c.name .. " › " .. info.name) or info.name)
-end
-
 -- The header row's quest log controls (its search, count and settings) and
 -- the waypoint pin: nothing to do at a flight master (asked 2026-10-19);
 -- unseen and out of the mouse's way, back after. (The world map module
 -- puts its own Map filters away.)
-local function headerControls()
-    local list = _G.QuestScrollFrame
-    local f = _G.WorldMapFrame
-    return { list and list.SearchBox, _G.QuestLogCount, list and list.SettingsDropdown, f and f.WorldMapTrackingPinButton }
-end
+--------------------------------------------------------------------------------
 
-function M:QuietHeader(on: boolean)
-    for _, c in pairs(headerControls()) do
-        if c then
-            c:SetAlpha(on and 0 or 1)
-            if c.EnableMouse then c:EnableMouse(not on) end
-        end
+local function headerControls(): Region[]
+    local out: Region[] = {}
+    local found = { field(_G, "QuestScrollFrame", "SearchBox"), field(_G, "QuestLogCount"),
+                    field(_G, "QuestScrollFrame", "SettingsDropdown"), field(_G, "WorldMapFrame", "WorldMapTrackingPinButton") }
+    for i = 1, 4 do
+        local r = frames.asRegion(found[i])
+        if r then out[#out + 1] = r end
     end
-end
-
-function M:Select(node: TaxiNode?)
-    if not (self.session and node and node.kind == "REACHABLE") then return end
-    self.selected = node
-    self:UpdateBar()
-    self:UpdateRows()
-    self:QueueInk()
-end
-
-function M:Fly(node: TaxiNode?)
-    node = node or self.selected
-    if not (self.session and node) then return end
-    TakeTaxiNode(node.slot)
-end
-
--- A destination clicked (its pin or its row): flown to at once; with
--- Confirm before flying, chosen for the bar's Fly.
-function M:Choose(node: TaxiNode?)
-    if not (self.session and node and node.kind == "REACHABLE") then return end
-    if self:Get("confirm") then self:Select(node) return end
-    self:Fly(node)
+    return out
 end
 
 -- Your quests' next steps (asked 2026-10-19): where the game's quest pins
@@ -513,621 +260,161 @@ end
 -- NEAR yards. { [nodeID] = { questID, ... } } for the session's masters.
 local NEAR = 800
 
-local function worldXY(mapID: number, x: number, y: number): (number?, number?)
-    local ok, _, pos = pcall(C_Map.GetWorldPosFromMapPos, mapID, CreateVector2D(x, y))
-    if ok and pos then return pos:GetXY() end
-end
-
-function M:QuestSteps(s: Session?): { [number]: number[] }
-    local out: { [number]: number[] } = {}
-    local continent = continentOf(C_Map.GetBestMapForUnit("player"))
-    if not (s and continent and C_Map.GetWorldPosFromMapPos and CreateVector2D) then return out end
-    -- the masters you can fly to, and the one you're at, in yards
-    local at = positions(continent)
-    local masters: { node: TaxiNode, x: number, y: number }[] = {}
-    for _, n in ipairs(s.nodes) do
-        local p = at[n.id]
-        local x, y
-        if p then x, y = worldXY(continent, p[1], p[2]) end
-        if x and y and n.kind ~= "DISTANT" then masters[#masters + 1] = { node = n, x = x, y = y } end
-    end
-    -- each quest once: on its zone's map, else the continent's
-    local maps = { continent }
-    local children = call(C_Map.GetMapChildrenInfo, continent, nil, true)
-    for _, c in ipairs(type(children) == "table" and (children :: any[]) or {}) do
-        if c.mapType == Enum.UIMapType.Zone then table.insert(maps, 1, c.mapID) end
-    end
-    local seen: { [number]: boolean } = {}
-    for _, map in ipairs(maps) do
-        local quests = call(C_QuestLog.GetQuestsOnMap, map)
-        for _, q in ipairs(type(quests) == "table" and (quests :: any[]) or {}) do
-            local id = q.questID
-            if secret.readable(id) and secret.readable(q.x) and secret.readable(q.y) and not seen[id] then
-                seen[id] = true
-                local x, y = worldXY(map, q.x, q.y)
-                local best: TaxiNode? = nil
-                if x and y then best = nearestMaster(masters, x, y, NEAR) end
-                -- (nearest the master you're at: not a reason to fly)
-                if best and best.kind == "REACHABLE" then
-                    local steps = out[best.id] or {}
-                    out[best.id] = steps
-                    table.insert(steps, id)
-                end
-            end
-        end
-    end
-    return out
-end
-
--- A flight master's tooltip on the flight map.
-function M:Tip(node: TaxiNode): { [string]: any }
-    local s = self.session
-    if not s then return {} end
-    if node.kind == "CURRENT" then
-        return { title = node.name, subtitle = "Flight master · you are here" }
-    end
-    if node.kind ~= "REACHABLE" then
-        return { title = node.name, subtitle = "Flight master · not found yet",
-                 description = "Talk to its flight master once to fly there." }
-    end
-    local t, measured = self:FlightTime(node.path)
-    local lines = { { "Cost", coins(node.cost) }, { "Time", timeText(t, measured, true) } }
-    -- the quests with a step near it
-    for _, id in ipairs(self.steps and self.steps[node.id] or {}) do
-        local title = call(C_QuestLog.GetTitleForQuestID, id)
-        if secret.readable(title) and title then
-            lines[#lines + 1] = { title, call(C_QuestLog.IsComplete, id) and "turn in" or "objective" }
-        end
-    end
-    return {
-        title = node.name, subtitle = viaText(node.path, s.byID),
-        lines = lines,
-        meta = not self:Get("confirm") and "Click to fly"
-            or (self.selected == node and "Fly in the bar below" or "Click to choose"),
-    }
-end
+local function inside(p: number[]): boolean return p[1] >= -0.01 and p[1] <= 1.01 and p[2] >= -0.01 and p[2] <= 1.01 end
 
 --------------------------------------------------------------------------------
--- The side panel: the destinations
+-- The parts
 --------------------------------------------------------------------------------
 
-function M:BuildSide()
-    if self.side then return end
-    local f = self.map
-    local side = CreateFrame("Frame", nil, f)
-    side:EnableMouse(true)
-    side:Hide()
-    UI.Fill(side, "surface", "BACKGROUND"):SetAllPoints()
-    side.edge = UI.Border(side, "gilt-line")
-    side.head = UI.SectionHeader(side, "Destinations", "")
-    side.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
-    side.head:SetPoint("TOPRIGHT", -S["space-5"], -S["space-5"])
-    side.scroll = UI.ScrollArea(side, 2)
-    side.scroll:SetPoint("TOPLEFT", side.head, "BOTTOMLEFT", 0, -S["space-4"])
-    side.scroll:SetPoint("BOTTOMRIGHT", -S["space-5"] - S["space-3"], S["space-5"])
-    side.rows = {}
-    self.side = side
-end
+-- A tag beside a pin or a destination: its text on glass.
+class Tag extends Frame
+    readonly text: Text
 
-function M:Row(i: number): any
-    local side = self.side
-    local row = side.rows[i]
-    if row then return row end
-    row = CreateFrame("Button", nil, side.scroll.child)
-    row:SetHeight(ROW_H)
-    row.fill = UI.Fill(row, "surface-raised", "BACKGROUND")
-    row.fill:SetAllPoints()
-    row.fill:Hide()
-    row.edge = UI.Border(row, "gilt-line")
-    row.edge:SetShown(false)
-    row.glyph = row:CreateTexture(nil, "ARTWORK")
-    row.glyph:SetTexture(GLYPHS .. "wing.tga")
-    row.glyph:SetSize(14, 14)
-    row.glyph:SetPoint("LEFT", S["space-4"], 0)
-    UI.Paint(row.glyph, "gilt-text")
-    row.time = UI.Text(row, "numeric", "ink")
-    row.time:SetPoint("RIGHT", -S["space-4"], 0)
-    -- the name over the row's middle, its stops under it; the time's
-    -- room kept on the right
-    local x = S["space-4"] + 14 + S["space-4"]
-    row.name = UI.Text(row, "label", "ink")
-    row.name:SetPoint("BOTTOMLEFT", row, "LEFT", x, 0)
-    row.name:SetPoint("BOTTOMRIGHT", row, "RIGHT", -64, 0)
-    row.name:SetJustifyH("LEFT")
-    row.stops = UI.Text(row, "caption", "ink-muted")
-    row.stops:SetPoint("TOPLEFT", row, "LEFT", x, 0)
-    row:SetScript("OnEnter", function(r)
-        r.hover = true
-        self:PaintRow(r)
-        if r.node then
-            self.hovered = r.node
-            self:QueueInk()
-            UI.ShowTooltip(r, function() return r.node and self:Tip(r.node) or {} end)
-        end
-    end)
-    row:SetScript("OnLeave", function(r)
-        r.hover = false
-        self:PaintRow(r)
-        self.hovered = nil
-        self:QueueInk()
-        UI.HideTooltip()
-    end)
-    row:SetScript("OnClick", function(r) self:Choose(r.node) end)
-    side.rows[i] = row
-    return row
-end
-
-function M:PaintRow(row: any)
-    local chosen = row.node and row.node == self.selected
-    row.fill:SetShown(row.hover or chosen)
-    row.edge:SetShown(chosen)
-end
-
--- The destinations, by name.
-function M:FillSide()
-    self:BuildSide()
-    local s = self.session
-    local list: TaxiNode[] = {}
-    for _, n in ipairs(s and s.nodes or {}) do
-        if n.kind == "REACHABLE" then list[#list + 1] = n end
-    end
-    table.sort(list, function(a, b) return a.name < b.name end)
-    -- (the list shows whatever the quests say)
-    local ok, steps = pcall(self.QuestSteps, self, s)
-    self.steps = ok and steps or {}
-    local side = self.side
-    side.head:SetLabel("Destinations", tostring(#list))
-    local width = math.max(1, side.scroll:GetWidth())
-    for i, node in ipairs(list) do
-        local row = self:Row(i)
-        row.node = node
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", side.scroll.child, "TOPLEFT", 0, -(i - 1) * ROW_H)
-        row:SetWidth(width)
-        row.name:SetValue(short(node.name))
-        local stepText = stepsText(self.steps[node.id])
-        row.stops:SetValue(stopsText(node.path) .. (stepText and (" · " .. stepText) or ""))
-        row:Show()
-    end
-    for i = #list + 1, #side.rows do side.rows[i]:Hide(); side.rows[i].node = nil end
-    side.scroll.child:SetSize(width, math.max(1, #list * ROW_H))
-    self:UpdateRows()
-end
-
--- the rows' times and which one is chosen
-function M:UpdateRows()
-    if not self.side then return end
-    for _, row in ipairs(self.side.rows) do
-        if row.node then
-            local t, measured = self:FlightTime(row.node.path)
-            row.time:SetValue(timeText(t, measured))
-            row.time:SetColor(measured and "ink" or "ink-muted")
-            self:PaintRow(row)
-        end
+    constructor(parent: Frame)
+        super(nil, parent)
+        UI.Fill(self, "surface-glass"):SetAllPoints()
+        UI.Border(self, "gilt-hairline")
+        self.text = UI.Text(self, "micro", "ink")
+        self.text:SetPoint("CENTER", 0, 0)
     end
 end
 
--- Over the quest log while it's open (it's the map's side panel); beside
--- the window, as wide, while it's closed.
-function M:PlaceSide()
-    local f, side = self.map, self.side
-    if not side then return end
-    local log = f.QuestLog or _G.QuestMapFrame
-    side:ClearAllPoints()
-    if log and log:IsShown() then
-        side:SetPoint("TOPLEFT", log, "TOPLEFT", 0, 0)
-        side:SetPoint("BOTTOMRIGHT", log, "BOTTOMRIGHT", 0, 0)
-        side:SetFrameStrata(log:GetFrameStrata())
-        side:SetFrameLevel(log:GetFrameLevel() + 100)
-        side.edge:SetShown(false)
-    else
-        side:SetPoint("TOPLEFT", f, "TOPRIGHT", S["space-3"], 0)
-        side:SetPoint("BOTTOMLEFT", f, "BOTTOMRIGHT", S["space-3"], 0)
-        side:SetWidth(f.questLogWidth or 333)
-        side:SetFrameLevel(f:GetFrameLevel() + 100)
-        side.edge:SetShown(true)
-    end
-    -- the rows as wide as the list, laid out again
-    after(0, function() if self.session and self.side:IsShown() then self:FillSide() end end)
-end
-
---------------------------------------------------------------------------------
--- The bar at the map's bottom: the chosen destination and Fly
---------------------------------------------------------------------------------
-
-function M:BuildBar()
-    if self.bar then return end
-    local f = self.map
-    local bar = UI.Panel(f, { ornament = true })
-    -- (over the map's pins, the game's and SuuUI's, as the status line)
-    bar:SetFrameLevel(4000)
-    bar.body:SetFrameLevel(4001)
-    bar:EnableMouse(true)
-    bar:Hide()
-    local body = bar.body
-    bar.glyph = body:CreateTexture(nil, "ARTWORK")
-    bar.glyph:SetTexture(GLYPHS .. "wing.tga")
-    bar.glyph:SetSize(15, 15)
-    UI.Paint(bar.glyph, "gilt-text")
-    bar.name = UI.Text(body, "unit-name", "ink")
-    bar.via = UI.Text(body, "caption", "ink-muted")
-    bar.rule = UI.Fill(body, "gilt-faint", "ARTWORK")
-    bar.rule:SetWidth(1)
-    bar.money = UI.Money(body)
-    bar.clock = body:CreateTexture(nil, "ARTWORK")
-    bar.clock:SetTexture(GLYPHS .. "hourglass.tga")
-    bar.clock:SetSize(11, 11)
-    UI.Paint(bar.clock, "ink-faint")
-    bar.time = UI.Text(body, "numeric", "ink-muted")
-    bar.fly = UI.Button(body, { text = "Fly", variant = "primary", icon = "wing", onClick = function() self:Fly() end,
-                                tooltip = { title = "Fly", description = "Take this flight (the cost is paid at once)." } })
-    self.bar = bar
-end
-
--- The bar for the chosen destination, sized to what it says.
-function M:UpdateBar()
-    local s, node = self.session, self.selected
-    if not (s and node) then
-        if self.bar then self.bar:Hide() end
-        return
-    end
-    self:BuildBar()
-    local bar = self.bar
-    local t, measured = self:FlightTime(node.path)
-    bar.name:SetValue(short(node.name))
-    bar.via:SetValue(viaText(node.path, s.byID))
-    bar.money:SetCopper(node.cost)
-    bar.time:SetValue(timeText(t, measured, true))
-    bar.fly:Remeasure()
-    local gap = S["space-5"]
-    local h = math.max(T.type["unit-name"].lineHeight + T.type.caption.lineHeight, 30)
-    local x = 0
-    bar.glyph:ClearAllPoints()
-    bar.glyph:SetPoint("LEFT", bar.body, "LEFT", x, 0)
-    x = x + 15 + S["space-4"]
-    local textW = math.ceil(math.max(bar.name:GetUnboundedStringWidth(), bar.via:GetUnboundedStringWidth()))
-    bar.name:ClearAllPoints()
-    bar.name:SetPoint("BOTTOMLEFT", bar.body, "LEFT", x, 0)
-    bar.via:ClearAllPoints()
-    bar.via:SetPoint("TOPLEFT", bar.body, "LEFT", x, 0)
-    x = x + textW + gap
-    bar.rule:ClearAllPoints()
-    bar.rule:SetPoint("TOPLEFT", bar.body, "TOPLEFT", x, 0)
-    bar.rule:SetPoint("BOTTOMLEFT", bar.body, "BOTTOMLEFT", x, 0)
-    x = x + 1 + gap
-    bar.money:ClearAllPoints()
-    bar.money:SetPoint("LEFT", bar.body, "LEFT", x, 0)
-    x = x + bar.money:GetWidth() + gap
-    bar.clock:ClearAllPoints()
-    bar.clock:SetPoint("LEFT", bar.body, "LEFT", x, 0)
-    x = x + 11 + S["space-2"]
-    bar.time:ClearAllPoints()
-    bar.time:SetPoint("LEFT", bar.body, "LEFT", x, 0)
-    x = x + math.ceil(bar.time:GetUnboundedStringWidth()) + gap
-    bar.fly:ClearAllPoints()
-    bar.fly:SetPoint("LEFT", bar.body, "LEFT", x, 0)
-    x = x + bar.fly:GetWidth()
-    bar.body:SetSize(x, h)
-    bar:ClearAllPoints()
-    bar:SetPoint("BOTTOM", self.map.ScrollContainer or self.map, "BOTTOM", 0, S["space-5"])
-    bar:Show()
-end
-
---------------------------------------------------------------------------------
--- On the map's canvas: pins, routes, times
---------------------------------------------------------------------------------
-
-function M:Pin()
-    self.free = self.free or {}
-    local pin = table.remove(self.free)
-    if not pin then
-        pin = UI.MapPin(self.layer)
-        pin:RegisterForClicks("LeftButtonUp")
-        -- the time (or "You are here") right of it, on glass
-        local tag = CreateFrame("Frame", nil, pin)
-        tag:SetPoint("LEFT", pin, "RIGHT", 3, 0)
-        UI.Fill(tag, "surface-glass"):SetAllPoints()
-        UI.Border(tag, "gilt-hairline")
-        tag.text = UI.Text(tag, "micro", "ink")
-        tag.text:SetPoint("CENTER", 0, 0)
-        pin.tag = tag
-        pin:SetScript("OnEnter", function(p)
-            if not p.node then return end
-            if p.node.kind == "REACHABLE" then self.hovered = p.node; self:QueueInk() end
-            UI.ShowTooltip(p, function() return p.node and self:Tip(p.node) or {} end)
-        end)
-        pin:SetScript("OnLeave", function()
-            self.hovered = nil
-            self:QueueInk()
-            UI.HideTooltip()
-        end)
-        pin:SetScript("OnClick", function(p) self:Choose(p.node) end)
-        -- a right-click goes through to the map (it zooms out)
-        if pin.SetPassThroughButtons then pcall(pin.SetPassThroughButtons, pin, "RightButton") end
-    end
-    pin:Show()
-    self.pins[#self.pins + 1] = pin
-    return pin
-end
-
-local function setTag(tag: any, text: string, color: string)
+local function setTag(tag: Tag, text: string, color: string)
     tag.text:SetValue(text)
     tag.text:SetColor(color)
     tag:SetSize(math.ceil(tag.text:GetUnboundedStringWidth()) + 10, T.type.micro.lineHeight + 2)
     tag:Show()
 end
 
--- one line of the drawing (pooled per layer: the dark underlay under the gilt)
-function M:Line(layer: string, x1: number, y1: number, x2: number, y2: number, thickness: number, token: string, alpha: number?)
-    local pool = self.ink.pools[layer]
-    pool.n = pool.n + 1
-    local line = pool[pool.n]
-    if not line then
-        line = self.ink:CreateLine(nil, layer)
-        pool[pool.n] = line
-    end
-    line:SetThickness(thickness)
-    UI.PaintFill(line, token, alpha)
-    line:SetStartPoint("TOPLEFT", self.ink, x1, -y1)
-    line:SetEndPoint("TOPLEFT", self.ink, x2, -y2)
-    line:Show()
-end
+-- A flight master's pin: the time (or "You are here") right of it.
+class FlightPin extends MapPin
+    readonly tag: Tag
+    node: TaxiNode? = nil
 
--- dashes along a route's points: dash px drawn, gap px left out, the
--- pattern carried on round its bends
-function M:Dashes(layer: string, points: number[][], dash: number, gap: number, thickness: number, token: string, alpha: number?)
-    -- (zoomed far in, longer dashes: no more than MAX_DASHES on a line)
-    for _, d in ipairs(dashes(points, dash, gap, MAX_DASHES)) do
-        self:Line(layer, d[1], d[2], d[3], d[4], thickness, token, alpha)
+    constructor(parent: Frame)
+        super(parent)
+        self.tag = Tag.new(self)
+        self.tag:SetPoint("LEFT", self, "RIGHT", 3, 0)
     end
 end
 
--- A route on the shown map (or `view`: { map, pos, w, h }), in px: its hops
--- the way they fly (or straight) one after another, and where each master
--- on it falls among the points; nil when one isn't on this map.
-function M:Way(path: number[], view: View?): (number[][]?, number[]?)
-    local v: View = view or self.view
-    local points: number[][], stops: number[] = {}, {}
-    for i, id in ipairs(path) do
-        local p = v.pos[id]
-        if not p then return nil end
-        if i > 1 then
-            -- (the hop's own ends left out: it runs from pin to pin)
-            local way = hopWay(v.map, path[i - 1], id, v.pos[path[i - 1]] :: number[], p)
-            if way then
-                for k = 2, #way - 1 do points[#points + 1] = { way[k][1] * v.w, way[k][2] * v.h } end
-            end
-        end
-        points[#points + 1] = { p[1] * v.w, p[2] * v.h }
-        stops[#stops + 1] = #points
-    end
-    return points, stops
-end
+-- The lines of one draw layer, pooled (n in use).
+type LinePool = { n: number, [number]: Line }
+-- A stop on a route in flight: a small gilt disc on a surface rim.
+type Dot = { rim: Texture, fill: Texture }
 
--- A route solid: the gilt line on a dark underlay, so it reads on any art.
-function M:Solid(points: number[][], width: number, token: string)
-    for i = 1, #points - 1 do
-        local a, b = points[i], points[i + 1]
-        self:Line("BORDER", a[1], a[2], b[1], b[2], width + 3, "surface", 0.65)
-        self:Line("ARTWORK", a[1], a[2], b[1], b[2], width, token)
+-- The drawing on the map's canvas: lines (the dark underlay under the
+-- gilt), stops' dots, the time left in flight by the destination.
+class Ink extends Frame
+    readonly pools: { BORDER: LinePool, ARTWORK: LinePool } = { BORDER = { n = 0 }, ARTWORK = { n = 0 } }
+    readonly dots: Dot[] = {}
+    dotN: number = 0
+    readonly left: Tag
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.left = Tag.new(self)
+        self.left:SetFrameLevel(self:GetFrameLevel() + 8)
+        self.left:Hide()
     end
 end
 
--- a stop on a route in flight: a small gilt disc on a surface rim
-function M:Dot(x: number, y: number)
-    local n = self.ink.dotN + 1
-    self.ink.dotN = n
-    local d = self.ink.dots[n]
-    if not d then
-        d = { rim = self.ink:CreateTexture(nil, "OVERLAY", nil, 1), fill = self.ink:CreateTexture(nil, "OVERLAY", nil, 2) }
-        d.rim:SetTexture(DISC)
-        d.rim:SetSize(9, 9)
-        UI.Paint(d.rim, "surface")
-        d.fill:SetTexture(DISC)
-        d.fill:SetSize(6, 6)
-        UI.Paint(d.fill, "gilt-text")
-        self.ink.dots[n] = d
-    end
-    for _, t in ipairs({ d.rim, d.fill }) do
-        t:ClearAllPoints()
-        t:SetPoint("CENTER", self.ink, "TOPLEFT", x, -y)
-        t:Show()
-    end
-end
+-- A destination's row in the side panel.
+class DestRow extends Button
+    readonly fill: Texture
+    readonly edge: Border
+    readonly glyph: Texture
+    readonly time: Text
+    readonly name: Text
+    readonly stops: Text
+    hover: boolean = false
+    node: TaxiNode? = nil
 
-function M:ClearDrawing()
-    for _, pin in ipairs(self.pins or {}) do
-        pin:Hide()
-        pin:ClearAllPoints()
-        pin:SetHighlight(nil)
-        pin.tag:Hide()
-        pin.node = nil
-        table.insert(self.free, pin)
-    end
-    self.pins = {}
-    self.view = nil
-    self:ClearInk()
-end
-
-function M:ClearInk()
-    local ink = self.ink
-    if not ink then return end
-    for _, pool in pairs(ink.pools) do
-        for i = 1, #pool do pool[i]:Hide() end
-        pool.n = 0
-    end
-    for _, d in ipairs(ink.dots) do d.rim:Hide(); d.fill:Hide() end
-    ink.dotN = 0
-    ink.left:Hide()
-end
-
-local function inside(p: number[]): boolean return p[1] >= -0.01 and p[1] <= 1.01 and p[2] >= -0.01 and p[2] <= 1.01 end
-
--- The flight master's map: a pin for every node of yours on this map,
--- the time beside each destination.
-function M:DrawMaster(pos: { [number]: number[] }, w: number, h: number, cs: number)
-    local s: Session = self.session
-    local base = self.layer:GetFrameLevel()
-    for _, n in ipairs(s.nodes) do
-        local p = pos[n.id]
-        if p and inside(p) then
-            local pin = self:Pin()
-            pin.node = n
-            if n.kind == "DISTANT" then
-                pin:SetData({ glyph = "wing", color = "ink-faint", edge = "ink-faint" })
-                pin.edge:SetTexture(DASHED)
-                pin:SetBaseAlpha(0.8)
-                pin.tag:Hide()
-            else
-                local here = n.kind == "CURRENT"
-                pin:SetData({ glyph = "wing", color = "gilt-text", edge = here and "arcane" or "gilt-line", ring = here and "arcane" or nil })
-                pin.edge:SetTexture(DISC)
-                pin:SetBaseAlpha(1)
-                if here then
-                    setTag(pin.tag, "You are here", "arcane")
-                else
-                    local t, measured = self:FlightTime(n.path)
-                    setTag(pin.tag, timeText(t, measured), measured and "ink" or "ink-muted")
-                end
-            end
-            pin:SetScale(1 / cs)
-            pin:SetFrameLevel(base + (n.kind == "DISTANT" and 2 or 5))
-            pin.tag:SetFrameLevel(base + 7)
-            pin:SetPoint("CENTER", self.layer, "TOPLEFT", p[1] * w, -p[2] * h)
-        end
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self.fill = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.fill:SetAllPoints()
+        self.fill:Hide()
+        self.edge = UI.Border(self, "gilt-line")
+        self.edge:SetShown(false)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "wing.tga")
+        self.glyph:SetSize(14, 14)
+        self.glyph:SetPoint("LEFT", S["space-4"], 0)
+        UI.Paint(self.glyph, "gilt-text")
+        self.time = UI.Text(self, "numeric", "ink")
+        self.time:SetPoint("RIGHT", -S["space-4"], 0)
+        -- the name over the row's middle, its stops under it; the time's
+        -- room kept on the right
+        local x = S["space-4"] + 14 + S["space-4"]
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("BOTTOMLEFT", self, "LEFT", x, 0)
+        self.name:SetPoint("BOTTOMRIGHT", self, "RIGHT", -64, 0)
+        self.name:SetJustifyH("LEFT")
+        self.stops = UI.Text(self, "caption", "ink-muted")
+        self.stops:SetPoint("TOPLEFT", self, "LEFT", x, 0)
     end
 end
 
--- Its lines: the routes between the ones you know faint, the hovered (else
--- the chosen) destination's route solid; that one's pin ringed.
-function M:InkMaster(pos: { [number]: number[] }, _w: number?, _h: number?)
-    local s: Session = self.session
-    local known: TaxiNode[] = {}
-    for _, n in ipairs(s.nodes) do
-        if n.kind ~= "DISTANT" and pos[n.id] then known[#known + 1] = n end
-    end
-    -- the network: each hop between two you know, once
-    for i = 1, #known do
-        for j = i + 1, #known do
-            local a, b = known[i], known[j]
-            if hopYards(a.id, b.id) then
-                local points = self:Way({ a.id, b.id })
-                if points then self:Dashes("ARTWORK", points, 4, 4, 1.5, "gilt-line") end
-            end
-        end
-    end
-    -- the route of the one hovered, else the one chosen
-    local shown = self.hovered or self.selected
-    if shown and shown.path then
-        local points = self:Way(shown.path)
-        if points then self:Solid(points, 2.5, "gilt-text") end
-    end
-    for _, pin in ipairs(self.pins) do
-        local n = pin.node
-        pin:SetHighlight(n and (n == self.selected or n == self.hovered) and true or nil)
+-- The side panel: the destinations.
+class Side extends Frame
+    readonly edge: Border
+    readonly head: SectionHeader
+    readonly scroll: ScrollArea
+    readonly rows: DestRow[] = {}
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:EnableMouse(true)
+        self:Hide()
+        UI.Fill(self, "surface", "BACKGROUND"):SetAllPoints()
+        self.edge = UI.Border(self, "gilt-line")
+        self.head = UI.SectionHeader(self, "Destinations", "")
+        self.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+        self.head:SetPoint("TOPRIGHT", -S["space-5"], -S["space-5"])
+        self.scroll = UI.ScrollArea(self, 2)
+        self.scroll:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT", 0, -S["space-4"])
+        self.scroll:SetPoint("BOTTOMRIGHT", -S["space-5"] - S["space-3"], S["space-5"])
     end
 end
 
--- Your place on a map (0-1), nil while the game doesn't give it.
-local function myPlace(mapID: number?): (number?, number?)
-    local me = call(C_Map.GetPlayerMapPosition, mapID, "player")
-    local x, y
-    if me and me.GetXY then x, y = me:GetXY() end
-    if secret.readable(x) and secret.readable(y) and (x > 0 or y > 0) then return x, y end
-end
+-- The bar at the map's bottom: the chosen destination and Fly.
+class FlyBar extends Panel
+    readonly glyph: Texture
+    readonly name: Text
+    readonly via: Text
+    readonly rule: Texture
+    readonly money: Money
+    readonly clock: Texture
+    readonly time: Text
+    readonly fly: SuuButton
 
--- How far along the flight you are: the point on the route nearest you
--- (the game gives your place in flight), else by the time flown along the
--- route's length. -> the segment it's on, and the point.
-function M:Along(points: number[][], w: number, h: number): (number, number, number)
-    local x, y = myPlace(self.map:GetMapID())
-    if x and y then
-        local bk, bx, by = nearest(points, x * w, y * h)
-        if bk then return bk, bx :: number, by :: number end
+    constructor(parent: Frame, onFly: () -> ())
+        super(parent, { ornament = true })
+        -- (over the map's pins, the game's and SuuUI's, as the status line)
+        self:SetFrameLevel(4000)
+        self.body:SetFrameLevel(4001)
+        self:EnableMouse(true)
+        self:Hide()
+        local body = self.body
+        self.glyph = body:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "wing.tga")
+        self.glyph:SetSize(15, 15)
+        UI.Paint(self.glyph, "gilt-text")
+        self.name = UI.Text(body, "unit-name", "ink")
+        self.via = UI.Text(body, "caption", "ink-muted")
+        self.rule = UI.Fill(body, "gilt-faint", "ARTWORK")
+        self.rule:SetWidth(1)
+        self.money = UI.Money(body)
+        self.clock = body:CreateTexture(nil, "ARTWORK")
+        self.clock:SetTexture(GLYPHS .. "hourglass.tga")
+        self.clock:SetSize(11, 11)
+        UI.Paint(self.clock, "ink-faint")
+        self.time = UI.Text(body, "numeric", "ink-muted")
+        self.fly = UI.Button(body, { text = "Fly", variant = "primary", icon = "wing", onClick = onFly,
+                                     tooltip = { title = "Fly", description = "Take this flight (the cost is paid at once)." } })
     end
-    local fl = self.flight
-    local total = fl.expected
-    if not total then return 1, points[1][1], points[1][2] end
-    return alongByShare(points, math.min(1, (GetTime() - fl.started) / total))
-end
-
--- In the air: the route flown solid, the rest dashed, a dot at each stop,
--- the time left at the destination (landing early: up to that stop).
-function M:DrawFlight(w: number, h: number)
-    local fl = self.flight
-    local points, stops = self:Way(fl.path)
-    if not points then return end
-    local last, share = #points, 1
-    local route = fl.early and self:FlightRoute(fl)
-    if route and stops[fl.early] and route.at[fl.early] then last, share = stops[fl.early], route.at[fl.early] end
-    local k, qx, qy = self:Along(points, w, h)
-    local flown: number[][] = {}
-    for i = 1, k do flown[i] = points[i] end
-    flown[#flown + 1] = { qx, qy }
-    self:Solid(flown, 3, "gilt")
-    local rest: number[][] = { { qx, qy } }
-    for i = k + 1, last do rest[#rest + 1] = points[i] end
-    self:Dashes("BORDER", rest, 5, 5, 5, "surface", 0.65)
-    self:Dashes("ARTWORK", rest, 5, 5, 2, "gilt-text")
-    for _, i in ipairs(stops) do if i <= last then self:Dot(points[i][1], points[i][2]) end end
-    local dest = points[last]
-    if fl.expected then
-        local left = fl.expected * share - (GetTime() - fl.started)
-        local tag = self.ink.left
-        setTag(tag, (fl.measured and "" or "~") .. clock(math.max(0, left)) .. " left", "ink")
-        tag:ClearAllPoints()
-        tag:SetPoint("LEFT", self.ink, "TOPLEFT", dest[1] + 10, -dest[2] + PIN / 2)
-    end
-end
-
--- Everything again (the map, its zoom, the flight master): the pins, then
--- the lines.
-function M:Layout()
-    self.layoutQueued = false
-    self:ClearDrawing()
-    local f = self.map
-    if not (f and f:IsShown() and self:IsEnabled()) then return end
-    local flying = not self.session and self.flight and self:Get("inFlight")
-    if not (self.session or flying) then return end
-    local canvas = f:GetCanvas()
-    local cs = f:GetCanvasScale()
-    if not (cs and cs > 0) then return end
-    local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
-    if w <= 0 or h <= 0 then return end
-    local ink = self.ink
-    ink:SetScale(1 / cs)
-    ink:ClearAllPoints()
-    ink:SetPoint("TOPLEFT", self.layer, "TOPLEFT")
-    ink:SetSize(w, h)
-    self.view = { map = f:GetMapID(), pos = positions(f:GetMapID()), w = w, h = h }
-    if self.session then self:DrawMaster(self.view.pos, w, h, cs) end
-    self:DrawInk()
-end
-
--- The lines alone (a hover, a choice, the clock in flight): the pins under
--- the mouse stay (made again, they'd lose and regain it, over and over).
-function M:DrawInk()
-    self.inkQueued = false
-    self:ClearInk()
-    local v = self.view
-    if not v then return end
-    if self.session then
-        self:InkMaster(v.pos, v.w, v.h)
-    elseif self.flight and self:Get("inFlight") then
-        self:DrawFlight(v.w, v.h)
-    end
-end
-
-function M:QueueLayout()
-    if self.layoutQueued then return end
-    self.layoutQueued = true
-    after(0, function() self:Layout() end)
-end
-
-function M:QueueInk()
-    if self.inkQueued or self.layoutQueued then return end
-    self.inkQueued = true
-    after(0, function() if self.inkQueued then self:DrawInk() end end)
 end
 
 --------------------------------------------------------------------------------
@@ -1158,414 +445,99 @@ local SWEEP_T = 1.8  -- s for the sweep to cross
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local HATCH = TEXTURES .. "Hatch.tga"
 
+-- A stop's diamond on the bar: its rim, and its middle (gilt once passed).
+type StopMark = { rim: Texture, dot: Texture }
+-- The fill between ticks: from `base` at `at`, `rate` of the bar a second.
+type Drive = { flight?: Flight, base: number, rate: number, at: number, shown: number }
+-- What the bar shows (M:TimerView): the destination, the time and its
+-- colour, the lines under the bar, the fill ("solid", "hatch" or none: the
+-- sweep), how far and how fast, the stops, the stop Land at names.
+type TimerView = {
+    flight?: Flight, name: string, time: string, timeColor: string, fill?: string, frac?: number, rate?: number,
+    left: string, right: string, stops: { at: number, passed: boolean }[], land?: string,
+}
+
+class FlightTimer extends Panel
+    readonly glyph: Texture
+    readonly name: Text
+    readonly time: Text
+    readonly track: Bar
+    readonly hatch: Texture
+    readonly clip: Frame
+    readonly sweep: Frame
+    readonly marks: Frame
+    readonly stops: StopMark[] = {}
+    readonly next: Text
+    readonly lands: Text
+    readonly land: SuuButton
+    landAt: string? = nil
+    fillToken: string? = nil
+    drive: Drive? = nil
+    still: boolean = false
+
+    constructor(parent: Frame, onLand: () -> ())
+        super(parent, { name = "SuuUIFlightTimer", width = TIMER_W, ornament = true })
+        self:SetFrameStrata("LOW")
+        self:Hide()
+        local body = self.body
+        self.glyph = body:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "wing.tga")
+        self.glyph:SetSize(GLYPH, GLYPH)
+        UI.Paint(self.glyph, "gilt-text")
+        self.name = UI.Text(body, "unit-name-sm", "ink")
+        self.name:SetJustifyH("LEFT")
+        self.time = UI.Text(body, "numeric", "ink")
+        -- the bar: the fill (hatched while estimated), the sweep while there's
+        -- no telling, the stops over both
+        self.track = UI.StatusBar(body, { width = TIMER_W, height = TRACK_H, track = "track", fill = "gilt", border = false })
+        local fill = self.track.bar:GetStatusBarTexture()
+        self.hatch = self.track.bar:CreateTexture(nil, "OVERLAY")
+        self.hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
+        self.hatch:SetHorizTile(true)
+        self.hatch:SetVertTile(true)
+        self.hatch:SetPoint("TOPLEFT", fill, "TOPLEFT")
+        self.hatch:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+        UI.Paint(self.hatch, "gilt")
+        self.clip = CreateFrame("Frame", nil, self.track)
+        self.clip:SetAllPoints()
+        self.clip:SetClipsChildren(true)
+        self.clip:SetFrameLevel(self.track.bar:GetFrameLevel() + 1)
+        self.sweep = CreateFrame("Frame", nil, self.clip)
+        for i, from in ipairs({ 0, 1 }) do
+            local t = self.sweep:CreateTexture(nil, "ARTWORK")
+            t:SetTexture(WHITE)
+            t:SetPoint("TOPLEFT", self.sweep, i == 1 and "TOPLEFT" or "TOP")
+            t:SetPoint("BOTTOMRIGHT", self.sweep, i == 1 and "BOTTOM" or "BOTTOMRIGHT")
+            UI.PaintGradient(t, "HORIZONTAL", "gilt", "gilt", from, 1 - from)
+        end
+        self.marks = CreateFrame("Frame", nil, self.track)
+        self.marks:SetAllPoints()
+        self.marks:SetFrameLevel(self.track.bar:GetFrameLevel() + 2)
+        self.next = UI.Text(body, "caption", "ink-muted")
+        self.next:SetJustifyH("LEFT")
+        self.lands = UI.Text(body, "caption", "ink-faint")
+        self.land = UI.Button(body, { variant = "quiet", onClick = onLand })
+        self.land:Hide()
+    end
+
+    -- a stop's diamond: gilt-text rim, gilt once passed, surface ahead
+    function Stop(i: number): StopMark
+        local d = self.stops[i]
+        if not d then
+            d = { rim = UI.Diamond(self.marks, STOP, "gilt-text", "OVERLAY", 6), dot = UI.Diamond(self.marks, STOP - 2, "surface", "OVERLAY", 7) }
+            self.stops[i] = d
+        end
+        return d
+    end
+end
+
 -- "18:42" (or "6:42 PM", as the game's clock is set): the local time
 -- `seconds` from now
 local function clockAt(seconds: number): string
-    local t = date("*t", time() + math.floor(math.max(0, seconds) + 0.5))
-    if C_CVar.GetCVarBool("timeMgrUseMilitaryTime") then return ("%02d:%02d"):format(t.hour, t.min) end
-    return ("%d:%02d %s"):format((t.hour - 1) % 12 + 1, t.min, t.hour >= 12 and "PM" or "AM")
-end
-
--- A stop's name: kept from the flight master's map as the flight was taken,
--- else (a reload from before they were kept) from the continent's masters.
-function M:StopName(fl: any, id: number): string
-    fl.names = fl.names or {}
-    if not fl.names[id] and not fl.namesRead then
-        fl.namesRead = true
-        local continent = continentOf(C_Map.GetBestMapForUnit("player"))
-        local ok, list = pcall(C_TaxiMap.GetTaxiNodesForMap, continent :: any)
-        for _, n in ipairs(ok and type(list) == "table" and list or {}) do
-            if secret.readable(n.nodeID) and secret.readable(n.name) and n.name and not fl.names[n.nodeID] then fl.names[n.nodeID] = short(n.name) end
-        end
-    end
-    return fl.names[id] or "?"
-end
-
--- The flight's route for the bar, worked out once a flight: its points on
--- the continent's map in yards across and down (so a stop's place is its
--- distance along the way it's flown), the length run to each point, and
--- each master's share of the whole (at[i] for path[i]). When the map can't
--- place it, the shares by the hops' lengths alone (the progress then by
--- the time flown); false when those aren't known either.
-function M:FlightRoute(fl: any): Route | false
-    if fl.route ~= nil then return fl.route end
-    local route: Route | false = false
-    local continent = continentOf(C_Map.GetBestMapForUnit("player"))
-    local x0, y0, x1, y1, x2, y2
-    if continent and C_Map.GetWorldPosFromMapPos and CreateVector2D then
-        x0, y0 = worldXY(continent, 0, 0)
-        x1, y1 = worldXY(continent, 1, 0)
-        x2, y2 = worldXY(continent, 0, 1)
-    end
-    if x0 and y0 and x1 and y1 and x2 and y2 then
-        local view: View = { map = continent :: number, pos = positions(continent),
-                       w = span({ x0, y0 }, { x1, y1 }), h = span({ x0, y0 }, { x2, y2 }) }
-        local points, stops
-        if view.w > 0 and view.h > 0 then points, stops = self:Way(fl.path, view) end
-        if points and stops and #points >= 2 then
-            local run, total, at = shares(points, stops)
-            if run and total and at then
-                route = { map = continent, w = view.w, h = view.h, points = points, run = run, total = total, at = at }
-            end
-        end
-    end
-    if not route then
-        local at = hopShares(SuuUI.FlightRoutes(), fl.path)
-        if at then route = { at = at } end
-    end
-    fl.route = route
-    return route
-end
-
--- How far along the flight you are (0-1): your place projected onto the
--- route, else the time flown of the time expected; nil with neither.
-function M:Flown(fl: any, route: Route | false): number?
-    if route and route.points then
-        local placed = route :: PlacedRoute
-        local x, y = myPlace(placed.map)
-        if x and y then
-            local k, px, py = nearest(placed.points, x * placed.w, y * placed.h)
-            if k then return (placed.run[k] + span(placed.points[k], { px :: number, py :: number })) / placed.total end
-        end
-    end
-    if fl.expected and fl.expected > 0 then return math.min(1, (GetTime() - fl.started) / fl.expected) end
-end
-
-function M:BuildTimer()
-    if self.timer then return end
-    local f = UI.Panel(SuuUI.Root, { name = "SuuUIFlightTimer", width = TIMER_W, ornament = true })
-    f:SetFrameStrata("LOW")
-    f.suuManagedShow = true -- shown only in the air (and in edit mode)
-    f:Hide()
-    local body = f.body
-    f.glyph = body:CreateTexture(nil, "ARTWORK")
-    f.glyph:SetTexture(GLYPHS .. "wing.tga")
-    f.glyph:SetSize(GLYPH, GLYPH)
-    UI.Paint(f.glyph, "gilt-text")
-    f.name = UI.Text(body, "unit-name-sm", "ink")
-    f.name:SetJustifyH("LEFT")
-    f.time = UI.Text(body, "numeric", "ink")
-    -- the bar: the fill (hatched while estimated), the sweep while there's
-    -- no telling, the stops over both
-    f.track = UI.StatusBar(body, { width = TIMER_W, height = TRACK_H, track = "track", fill = "gilt", border = false })
-    local fill = f.track.bar:GetStatusBarTexture()
-    f.hatch = f.track.bar:CreateTexture(nil, "OVERLAY")
-    f.hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
-    f.hatch:SetHorizTile(true)
-    f.hatch:SetVertTile(true)
-    f.hatch:SetPoint("TOPLEFT", fill, "TOPLEFT")
-    f.hatch:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
-    UI.Paint(f.hatch, "gilt")
-    f.clip = CreateFrame("Frame", nil, f.track)
-    f.clip:SetAllPoints()
-    f.clip:SetClipsChildren(true)
-    f.clip:SetFrameLevel(f.track.bar:GetFrameLevel() + 1)
-    f.sweep = CreateFrame("Frame", nil, f.clip)
-    for i, from in ipairs({ 0, 1 }) do
-        local t = f.sweep:CreateTexture(nil, "ARTWORK")
-        t:SetTexture(WHITE)
-        t:SetPoint("TOPLEFT", f.sweep, i == 1 and "TOPLEFT" or "TOP")
-        t:SetPoint("BOTTOMRIGHT", f.sweep, i == 1 and "BOTTOM" or "BOTTOMRIGHT")
-        UI.PaintGradient(t, "HORIZONTAL", "gilt", "gilt", from, 1 - from)
-    end
-    f.marks = CreateFrame("Frame", nil, f.track)
-    f.marks:SetAllPoints()
-    f.marks:SetFrameLevel(f.track.bar:GetFrameLevel() + 2)
-    f.stops = {}
-    f.next = UI.Text(body, "caption", "ink-muted")
-    f.next:SetJustifyH("LEFT")
-    f.lands = UI.Text(body, "caption", "ink-faint")
-    f.land = UI.Button(body, { variant = "quiet", onClick = function() self:LandEarly() end })
-    f.land:Hide()
-    local wait = 0
-    f:SetScript("OnUpdate", function(_, elapsed)
-        wait = wait - elapsed
-        if wait <= 0 then
-            wait = 1
-            self:TickTimer()
-        end
-        self:MoveTimer()
-    end)
-    self.timer = f
-    self:LayoutTimer()
-    self:SampleTimer()
-end
-
--- The lines from the text styles' line heights (a theme can change them):
--- the name and time, the bar, the next stop and landing, Land at while it
--- shows; the panel fits.
-function M:LayoutTimer()
-    local f = self.timer
-    if not f then return end
-    local body, gap = f.body, S["space-3"]
-    local head = math.max(T.type["unit-name-sm"].lineHeight, T.type.numeric.lineHeight, GLYPH)
-    local foot = T.type.caption.lineHeight
-    for _, r in ipairs({ f.glyph, f.name, f.time, f.track, f.next, f.lands, f.land }) do r:ClearAllPoints() end
-    f.glyph:SetPoint("LEFT", body, "TOPLEFT", 0, -head / 2)
-    f.time:SetPoint("RIGHT", body, "TOPRIGHT", 0, -head / 2)
-    f.name:SetPoint("LEFT", body, "TOPLEFT", GLYPH + S["space-3"], -head / 2)
-    f.name:SetPoint("RIGHT", f.time, "LEFT", -S["space-4"], 0)
-    f.track:SetPoint("TOPLEFT", body, "TOPLEFT", 0, -(head + gap))
-    f.track:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, -(head + gap))
-    local y = -(head + gap + TRACK_H + gap)
-    f.lands:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
-    f.next:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
-    f.next:SetPoint("TOPRIGHT", f.lands, "TOPLEFT", -S["space-4"], 0)
-    f.land:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y - foot - S["space-4"])
-    f.sweep:SetSize(math.max(1, (TIMER_W - S["space-5"] * 2) * SWEEP), TRACK_H)
-    local height = head + gap + TRACK_H + gap + foot
-    if f.landAt then height = height + S["space-4"] + f.land:GetHeight() end
-    body:SetHeight(height)
-end
-
--- a stop's diamond: gilt-text rim, gilt once passed, surface ahead
-function M:Stop(i: number): any
-    local f = self.timer
-    local d = f.stops[i]
-    if not d then
-        d = { rim = UI.Diamond(f.marks, STOP, "gilt-text", "OVERLAY", 6), dot = UI.Diamond(f.marks, STOP - 2, "surface", "OVERLAY", 7) }
-        f.stops[i] = d
-    end
-    return d
-end
-
--- What the bar shows: { name, time, timeColor, left, right, fill ("solid",
--- "hatch" or nil: the sweep), frac, rate (of the bar a second, for the
--- fill between ticks), stops = { { at, passed } }, land (the stop Land at
--- names; nil: no button) }.
-function M:PaintTimer(v: { [string]: any })
-    local f = self.timer
-    if f.landAt ~= v.land then
-        f.landAt = v.land
-        if v.land then f.land:SetLabel("Land at " .. v.land) end
-        f.land:SetShown(v.land ~= nil)
-        self:LayoutTimer()
-    end
-    f.name:SetValue(v.name)
-    f.time:SetValue(v.time)
-    f.time:SetColor(v.timeColor)
-    f.next:SetValue(v.left)
-    f.lands:SetValue(v.right)
-    local token = v.fill == "hatch" and "progress-fill" or "gilt"
-    if f.fillToken ~= token then
-        f.fillToken = token
-        f.track:SetFill(token)
-    end
-    f.hatch:SetShown(v.fill == "hatch")
-    f.track.bar:SetShown(v.fill ~= nil)
-    f.sweep:SetShown(v.fill == nil)
-    f.still = SuuUI.Motion.Reduced()
-    -- the fill on from here at the flight's pace until the next tick: never
-    -- more than a second ahead, never back
-    local shown = f.drive and f.drive.flight == v.flight and f.drive.shown or 0
-    local frac = math.max(0, math.min(1, v.frac or 0))
-    if frac >= shown then
-        f.drive = { flight = v.flight, base = frac, rate = v.rate or 0, at = GetTime(), shown = frac }
-    else
-        f.drive = { flight = v.flight, base = shown, rate = 0, at = GetTime(), shown = shown }
-    end
-    local width = f.track:GetWidth()
-    if not (width and width > 0) then width = TIMER_W - S["space-5"] * 2 end
-    for i, s in ipairs(v.stops or {}) do
-        local d = self:Stop(i)
-        local x = s.at * width
-        for _, t in ipairs({ d.rim, d.dot }) do
-            t:ClearAllPoints()
-            t:SetPoint("CENTER", f.marks, "LEFT", x, 0)
-            t:Show()
-        end
-        UI.Paint(d.dot, s.passed and "gilt" or "surface")
-    end
-    for i = #(v.stops or {}) + 1, #f.stops do f.stops[i].rim:Hide(); f.stops[i].dot:Hide() end
-    self:MoveTimer()
-end
-
--- Every frame: the fill, and the sweep across (still with Reduce motion).
-function M:MoveTimer()
-    local f = self.timer
-    local d = f and f.drive
-    if not d then return end
-    local now = GetTime()
-    if not f.still then
-        d.shown = math.min(1, d.base + math.min(now - d.at, 1) * d.rate)
-    end
-    f.track:SetValueNow(d.shown)
-    if f.sweep:IsShown() then
-        local width = f.track:GetWidth() or 0
-        local sw = f.sweep:GetWidth()
-        local x = f.still and width * 0.3 or ((now % SWEEP_T) / SWEEP_T) * (width + sw) - sw
-        f.sweep:ClearAllPoints()
-        f.sweep:SetPoint("LEFT", f.clip, "LEFT", x, 0)
-    end
-end
-
--- Once a second in the air: the flight as it stands. Landing early, it ends
--- at that stop: the bar is the route up to it (its share, at, of the whole).
-function M:TickTimer()
-    if not (self.timer and self.flight) then return end
-    self:PaintTimer(self:TimerView(self.flight))
-end
-
--- What the flight bar shows for a flight now (PaintTimer's v); notes the
--- next stop ahead on the flight (fl.ahead, for Land at).
-function M:TimerView(fl: any): { [string]: any }
-    local route = self:FlightRoute(fl)
-    local frac = self:Flown(fl, route)
-    local flown = GetTime() - fl.started
-    local to, share = #fl.path, 1
-    if fl.early and route and (route.at[fl.early] or 0) > 0 then to, share = fl.early, route.at[fl.early] end
-    local expected = fl.expected and fl.expected * share
-    local left = expected and math.max(0, expected - flown)
-    local v = { flight = fl, name = self:StopName(fl, fl.path[to]), frac = frac and frac / share,
-                rate = expected and expected > 0 and 1 / expected or 0, stops = {} }
-    -- the stops between, by their place along the route (where you are
-    -- tells the next one even untimed; the diamonds show with a time)
-    local ahead
-    if route and frac then
-        for i = 2, to - 1 do
-            local at = route.at[i]
-            local passed = frac >= at
-            if expected then v.stops[#v.stops + 1] = { at = at / share, passed = passed } end
-            if not passed and not ahead then ahead = i end
-        end
-    end
-    fl.ahead = ahead
-    if fl.measured then
-        v.time, v.timeColor, v.fill = clock(left), "ink", "solid"
-        if ahead then
-            v.left = ("Next stop %s · %s"):format(self:StopName(fl, fl.path[ahead]), clock(math.max(0, route.at[ahead] * fl.expected - flown)))
-        elseif to < #fl.path then
-            v.left = "Landing early"
-        else
-            -- (stops it can't place: how many)
-            v.left = route and (#fl.path > 2 and "No more stops" or "Direct") or stopsText(fl.path)
-        end
-        v.right = "lands " .. clockAt(left)
-    elseif expected then
-        v.time, v.timeColor, v.fill = "~" .. clock(left), "ink-muted", "hatch"
-        v.left = (to < #fl.path and "Landing early" or "Not timed yet") .. " · estimated · " .. clock(flown) .. " so far"
-        v.right = "about " .. clockAt(left)
-    else
-        v.time, v.timeColor, v.fill, v.frac, v.rate = clock(flown), "ink-muted", nil, 0, 0
-        -- (a flight resumed after a reload isn't timed: its start isn't exact)
-        v.left = to < #fl.path and "Landing early" or fl.reloaded and "Not timed yet" or "Not timed yet · timing this flight"
-        v.right = "so far"
-    end
-    -- Land at: the next stop, while the game still flies you on past it
-    if ahead and not fl.early and TaxiRequestEarlyLanding and UnitOnTaxi("player") then
-        v.land = self:StopName(fl, fl.path[ahead])
-    end
-    return v
-end
-
--- Land at (the flight bar): the game asked to set you down at the next
--- stop; the flight now ends there, kept over a reload as well.
-function M:LandEarly()
-    local fl = self.flight
-    -- (the next stop as it stands now: the tick may be a second old)
-    if fl then self:TickTimer() end
-    if not (fl and fl.ahead and not fl.early and UnitOnTaxi("player")) then return end
-    if not pcall(TaxiRequestEarlyLanding) then return end
-    fl.early = fl.ahead
-    local kept = self:CharData().flight
-    if kept then kept.early = fl.early end
-    self:TickTimer()
-    self:QueueInk()
-end
-
--- In edit mode on the ground: the board's timed flight, to place it by.
-function M:SampleTimer()
-    self:PaintTimer({ name = "Crossroads", time = clock(95), timeColor = "ink", fill = "solid", frac = 0.4,
-                      left = "Next stop Camp Taurajo · " .. clock(18), right = "lands " .. clockAt(95),
-                      stops = { { at = 0.51, passed = false } }, land = "Camp Taurajo" })
-end
-
--- Shown in the air while the world map is closed (and the setting is on);
--- in edit mode to be moved, a sample on the ground.
-function M:UpdateTimer()
-    local f = self.timer
-    if not f then return end
-    local editing = SuuUI.EditMode.IsActive()
-    local flying = self.flight ~= nil and not (self.map and self.map:IsShown())
-    local shown = self:IsEnabled() and self:Get("timer") and not self:Get("timerPosition").hidden
-        and (flying or editing) or false
-    f:SetShown(shown)
-    if not shown then return end
-    if self.flight then self:TickTimer() else self:SampleTimer() end
-end
-
---------------------------------------------------------------------------------
--- The map
---------------------------------------------------------------------------------
-
-function M:Attach()
-    local f = _G.WorldMapFrame
-    if not f or self.map then return end
-    self.map = f
-    -- over the map's art, under the game's own pins (as the world map
-    -- module's pins)
-    self.layer = CreateFrame("Frame", nil, f:GetCanvas())
-    self.layer:SetAllPoints(f:GetCanvas())
-    local levels = f.GetPinFrameLevelsManager and f:GetPinFrameLevelsManager()
-    local above = levels and levels.GetFrameLevelStart and levels:GetFrameLevelStart("PIN_FRAME_LEVEL_MAP_HIGHLIGHT")
-    self.layer:SetFrameLevel(above and (above + 1) or (f:GetCanvas():GetFrameLevel() + 2))
-    self.pins, self.free = {}, {}
-    local ink = CreateFrame("Frame", nil, self.layer)
-    ink:SetFrameLevel(self.layer:GetFrameLevel())
-    ink.pools = { BORDER = { n = 0 }, ARTWORK = { n = 0 } }
-    ink.dots, ink.dotN = {}, 0
-    -- the time left in flight, by the destination
-    ink.left = CreateFrame("Frame", nil, ink)
-    ink.left:SetFrameLevel(ink:GetFrameLevel() + 8)
-    UI.Fill(ink.left, "surface-glass"):SetAllPoints()
-    UI.Border(ink.left, "gilt-hairline")
-    ink.left.text = UI.Text(ink.left, "micro", "ink")
-    ink.left.text:SetPoint("CENTER", 0, 0)
-    ink.left:Hide()
-    self.ink = ink
-    -- the clock in flight: the time left and where you are, every second
-    local wait = 0
-    ink:SetScript("OnUpdate", function(_, elapsed)
-        wait = wait - elapsed
-        if wait > 0 then return end
-        wait = 1
-        if self.flight and not self.session and self:Get("inFlight") then self:DrawInk() end
-    end)
-    local provider = CreateFromMixins(MapCanvasDataProviderMixin)
-    provider.RefreshAllData = function() self:QueueLayout() end
-    provider.RemoveAllData = function() self:ClearDrawing() end
-    provider.OnCanvasScaleChanged = function() self:QueueLayout() end
-    provider.OnCanvasSizeChanged = function() self:QueueLayout() end
-    self.provider = provider
-    -- the map closed at the flight master: the flight master too; in the
-    -- air the flight bar comes back
-    hookScript(f, "OnHide", function()
-        if self.session and not self.closing then
-            self:LeaveMaster(false)
-            if CloseTaxiMap then CloseTaxiMap() end
-        end
-        self:UpdateTimer()
-    end)
-    -- opened in the air: the continent, where the route shows (the flight
-    -- bar away meanwhile)
-    hookScript(f, "OnShow", function()
-        if self:IsEnabled() and self.flight and not self.session and self:Get("inFlight") then
-            after(0, function()
-                local continent = continentOf(C_Map.GetBestMapForUnit("player"))
-                if continent and f:IsShown() and f:GetMapID() ~= continent then f:SetMapID(continent) end
-            end)
-        end
-        self:UpdateTimer()
-    end)
-    -- the quest log opened or closed: the destinations go with it
-    if f.SetQuestLogPanelShown then
-        hook(f, "SetQuestLogPanelShown", function() if self.session then self:PlaceSide() end end)
-    end
-    -- the header keeps "Flight master" over map changes (the window skin
-    -- names the map on each)
-    EventRegistry:RegisterCallback("MapCanvas.MapSet", function()
-        if self.session then after(0, function() self:SetTitle(true) end) end
-    end, self)
+    local stamp = time() + math.floor(math.max(0, seconds) + 0.5)
+    local hour, min = tonumber(date("%H", stamp)) or 0, tonumber(date("%M", stamp)) or 0
+    if C_CVar.GetCVarBool("timeMgrUseMilitaryTime") then return ("%02d:%02d"):format(hour, min) end
+    return ("%d:%02d %s"):format((hour - 1) % 12 + 1, min, hour >= 12 and "PM" or "AM")
 end
 
 -- Settings › Flight map
@@ -1575,7 +547,8 @@ local SECTION = {
         { title = "At a flight master", rows = {
             { key = "atMaster", label = "The world map as the flight map", control = "toggle",
               description = "At a flight master SuuUI's world map shows where you can fly: every flight master, the routes between the ones you've found, and each flight's time and cost. Click a destination to fly there. Off: the game's own flight map." },
-            { key = "confirm", label = "Confirm before flying", control = "toggle", disabled = function() return not M:Get("atMaster"), "The world map as the flight map is off." end,
+            { key = "confirm", label = "Confirm before flying", control = "toggle",
+              disabled = function(): (boolean, string) return not M:Get("atMaster"), "The world map as the flight map is off." end,
               description = "A click on a destination chooses it, and Fly in the bar at the map's bottom takes the flight. Off: the click flies there at once (hovering still shows the route, the cost and the time)." },
         } },
         { title = "While flying", rows = {
@@ -1586,7 +559,7 @@ local SECTION = {
         } },
         { title = "Flight times", rows = {
             { label = "Timed flights", control = "button", text = "Forget",
-              description = function() return M:TimesSummary() end,
+              description = function(): string return M:TimesSummary() end,
               onClick = function()
                   UI.Confirm({ title = "Forget flight times?",
                       text = "Every route's measured time, for all your characters, and this character's flight speed. Times are estimated from the routes' lengths again until you fly them.",
@@ -1596,97 +569,1409 @@ local SECTION = {
     },
 }
 
-function M:TimesSummary()
-    local n = 0
-    for _ in pairs(timed()) do n = n + 1 end
-    local flights = self:CharData().flights or 0
-    local speed = ("%.1f yards a second"):format(self:Speed())
-    local learned = flights > 0 and (" (from " .. flights .. (flights == 1 and " flight)" or " flights)")) or " (not flown yet)"
-    return ("Each flight is timed; a route you've flown shows its time, others an estimate from their length at this character's speed: %s%s. Routes timed for the account: %d."):format(speed, learned, n)
-end
+class FlightMapModule extends Module<typeof(DEFAULTS)>
+    map: typeof(WorldMapFrame)? = nil
+    layer: Frame? = nil
+    ink: Ink? = nil
+    provider: { [string]: unknown }? = nil
+    pins: FlightPin[] = {}
+    free: FlightPin[] = {}
+    -- the map drawn on at the last layout
+    view: View? = nil
+    -- at a flight master: the session, the last one read, the destination
+    -- chosen and hovered, the quests' steps by master
+    session: Session? = nil
+    last: Session? = nil
+    selected: TaxiNode? = nil
+    hovered: TaxiNode? = nil
+    steps: { [number]: number[] } = {}
+    side: Side? = nil
+    bar: FlyBar? = nil
+    timer: FlightTimer? = nil
+    -- in the air, and a flight taken
+    flight: Flight? = nil
+    pending: Pending? = nil
+    -- the game's flight map's frames that took the mouse
+    gameQuiet: Frame[]? = nil
+    closing: boolean = false
+    layoutQueued: boolean = false
+    inkQueued: boolean = false
+    takeHooked: boolean = false
 
-function M:ForgetTimes()
-    SuuUI.AccountData("flightmap").routes = {}
-    local data = self:CharData()
-    data.speed, data.flights = nil, nil
-    if self.session then self:UpdateRows(); self:UpdateBar() end
-    self:QueueLayout()
-end
+    constructor()
+        super({
+            id = "flightmap",
+            name = "Flight map",
+            description = "The world map as the flight master's map: routes, costs and flight times, and your flight on the map while you fly.",
+            api = "0.17",
+            combatSafe = true,
+            defaults = DEFAULTS,
+        })
+    end
 
-function M:OnEnable()
-    -- whether it's open at a flight master, for the world map
-    self:ProvideService(FLIGHT_MAP, { AtMaster = function(): boolean return self:AtMaster() end })
-    self:Attach()
-    if not self.map then
-        self:OnGameEvent("ADDON_LOADED", function()
-            if not self.map and _G.WorldMapFrame then self:Attach(); if self.OnEnable then self:OnEnable() end end
-        end)
-        return
-    end
-    self:RegisterSettings(SECTION)
-    self:BuildTimer()
-    self:RegisterMover(self.timer, { key = "timerPosition", label = "Flight timer",
-        enabled = function() return self:Get("timer") end })
-    self.map:AddDataProvider(self.provider)
-    self.layer:Show()
-    -- every flight's route, whichever map took it (the hook stays; it
-    -- does nothing while the module is off)
-    if not self.takeHooked and TakeTaxiNode then
-        self.takeHooked = true
-        hook("TakeTaxiNode", function(slot) if self:IsEnabled() then self:Taking(slot) end end)
-    end
-    self:OnGameEvent("TAXIMAP_OPENED", function() self:OnTaxiOpened() end)
-    self:OnGameEvent("TAXIMAP_CLOSED", function() self:LeaveMaster(true) end)
-    -- on a taxi a moment after control goes; landed when it comes back
-    self:OnGameEvent("PLAYER_CONTROL_LOST", function()
-        local at = GetTime()
-        after(0.5, function() self:FlightStarted(at) end)
-    end)
-    self:OnGameEvent("PLAYER_CONTROL_GAINED", function()
-        local at = GetTime()
-        after(0.3, function() if not UnitOnTaxi("player") then self:FlightEnded(at) end end)
-    end)
-    self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
-        if not self.flight then self:ResumeFlight() end
-        self:QueueLayout()
-        self:UpdateTimer()
-    end)
-    self:Watch("atMaster", function() if not self:Get("atMaster") and self.session then self:LeaveMaster(false) end end)
-    self:Watch("inFlight", function() self:QueueLayout() end)
-    self:Watch("timer", function()
-        SuuUI.EditMode.Refresh()
-        self:UpdateTimer()
-    end)
-    self:Watch("timerPosition", function() self:UpdateTimer() end)
-    self:On("SUUUI_EDITMODE_CHANGED", function() self:UpdateTimer() end)
-    -- (a destination chosen to confirm: let go when clicks fly at once)
-    self:Watch("confirm", function()
-        if self.session and not self:Get("confirm") and self.selected then
-            self.selected = nil
-            self:UpdateBar()
-            self:UpdateRows()
-            self:QueueInk()
+    -- What this character keeps (its data, typed).
+    function Char(): FlightChar return self:CharData() :: unknown :: FlightChar end
+
+    -- The flight master's map as the game gives it: { nodes (by slot), byID,
+    -- current } with each node { slot, id, name, kind ("CURRENT", "REACHABLE",
+    -- "DISTANT"), cost, path (the nodeIDs a flight there passes, from here) };
+    -- nil while there's none.
+    function ReadSession(): Session?
+        local n = asNumber(taxi("NumTaxiNodes"))
+        if not (n and n > 0) then return nil end
+        -- nodeIDs by slot (C_TaxiMap's nodes carry both), by name to be sure
+        local ids: { [number]: number }, byName: { [string]: number } = {}, {}
+        local function read(m: number): boolean
+            for _, node in ipairs(errors.tryValue(C_TaxiMap.GetAllTaxiNodes, m) or {}) do
+                local id, slot, name = asNumber(node.nodeID), asNumber(node.slotIndex), asString(node.name)
+                if id and slot then ids[slot] = ids[slot] or id end
+                if id and name then byName[name] = byName[name] or id end
+            end
+            return next(ids) ~= nil
         end
-    end)
-    -- a theme: the tags, the bar and the flight bar measured again
-    self:On("SUUUI_THEME_CHANGED", function()
-        if self.session then self:UpdateBar() end
-        self:LayoutTimer()
-        self:UpdateTimer()
+        -- where you are, its continent, the flight map's (each while the one before is known)
+        local zone = bestMap()
+        local continent = continentOf(zone)
+        local taxiMap = asNumber(taxi("GetTaxiMapID"))
+        local found = zone ~= nil and read(zone)
+        if not found and zone and continent then found = read(continent) end
+        if not found and zone and continent and taxiMap then read(taxiMap) end
+        local s: Session = { nodes = {}, byID = {} }
+        for slot = 1, n do
+            local name, kind = asString(taxi("TaxiNodeName", slot)), asString(taxi("TaxiNodeGetType", slot))
+            local id = ids[slot] or (name and byName[name])
+            if name and kind and kind ~= "NONE" and not junk(name) and id then
+                local node: TaxiNode = { slot = slot, id = id, name = name, kind = kind, cost = asNumber(taxi("TaxiNodeCost", slot)) or 0 }
+                s.nodes[#s.nodes + 1] = node
+                s.byID[id] = node
+                if kind == "CURRENT" then s.current = node end
+            end
+        end
+        -- each destination's hops, slot to slot, as nodeIDs
+        local slotID: { [number]: number } = {}
+        for _, node in ipairs(s.nodes) do slotID[node.slot] = node.id end
+        local current = s.current
+        for _, node in ipairs(s.nodes) do
+            if node.kind == "REACHABLE" then
+                local hops = asNumber(taxi("GetNumRoutes", node.slot))
+                if hops and hops > 0 then
+                    local firstSlot = asNumber(taxi("TaxiGetNodeSlot", node.slot, 1, true))
+                    local first = firstSlot and slotID[firstSlot]
+                    local path: number[] = {}
+                    if first then path[1] = first end
+                    local whole = first ~= nil
+                    for r = 1, hops do
+                        local hopSlot = asNumber(taxi("TaxiGetNodeSlot", node.slot, r, false))
+                        local id = hopSlot and slotID[hopSlot]
+                        if not id then whole = false break end
+                        path[r + 1] = id
+                    end
+                    if whole then node.path = path end
+                end
+                -- (a route the game can't trace: straight there)
+                if not node.path and current then node.path = { current.id, node.id } end
+            end
+        end
+        if not current then return nil end
+        return s
+    end
+
+    --------------------------------------------------------------------------------
+    -- Flight times
+    --------------------------------------------------------------------------------
+
+    function Speed(): number
+        return self:Char().speed or SPEED
+    end
+
+    -- A flight's time in seconds and whether it was measured: one flown on
+    -- this route before (scaled to your speed when its flyer's differed by
+    -- more than BOOST), else its length at your speed; nil when neither is
+    -- known.
+    function FlightTime(path: number[]?): (number?, boolean?)
+        if not path then return nil, nil end
+        local r = timed()[table.concat(path, ">")]
+        return flightTime(r, not (r and r.t) and pathYards(path) or nil, self:Speed(), BOOST)
+    end
+
+    -- A flight landed after `seconds`: its route's time, and the character's
+    -- speed a step toward what it flew.
+    function Learn(flight: { path: number[], expected?: number, reloaded?: boolean }, seconds: number)
+        local expected = flight.expected
+        if flight.reloaded or seconds < 5 then return end
+        if expected and math.abs(seconds / expected - 1) > TRUST then return end
+        local data = self:Char()
+        local yards = pathYards(flight.path)
+        if yards then
+            local speed = self:Speed()
+            data.speed = speed + LEARN * (yards / seconds - speed)
+            data.flights = (data.flights or 0) + 1
+        end
+        local key = table.concat(flight.path, ">")
+        local r = timed()[key] or {}
+        local n = math.min((r.n or 0) + 1, KEEP)
+        local t = r.t
+        r.n = n
+        r.t = t and (t + (seconds - t) / n) or seconds
+        r.v = self:Speed()
+        timed()[key] = r
+    end
+
+    --------------------------------------------------------------------------------
+    -- A flight: taken, in the air, landed
+    --------------------------------------------------------------------------------
+
+    -- TakeTaxiNode ran (SuuUI's Fly or the game's own map): the route it asked for.
+    function Taking(slot: number)
+        local s = self.last or self:ReadSession()
+        if not s then return end
+        local node: TaxiNode? = nil
+        for _, n in ipairs(s.nodes) do if n.slot == slot then node = n end end
+        local path = node and node.path
+        if not path then return end
+        -- (the stops' names for the flight bar: in the air there's no session)
+        local names: { [number]: string } = {}
+        for _, id in ipairs(path) do
+            local n = s.byID[id]
+            if n then names[id] = short(n.name) end
+        end
+        self.pending = { path = path, at = GetTime(), names = names }
+    end
+
+    function FlightStarted(at: number)
+        local p = self.pending
+        if not (p and GetTime() - p.at < 15 and UnitOnTaxi("player")) then return end
+        self.pending = nil
+        local expected, measured = self:FlightTime(p.path)
+        self.flight = { path = p.path, started = at, expected = expected, measured = measured, names = p.names }
+        -- kept over a reload, to show (not to time: the start isn't exact then)
+        self:Char().flight = { path = p.path, wall = time() - (GetTime() - at), names = p.names }
         self:QueueLayout()
-    end)
-    -- (once the module counts as on)
-    after(0, function() self:UpdateTimer() end)
+        self:UpdateTimer()
+    end
+
+    -- Landed: at the destination, its time is learned; set down by Land at at
+    -- the stop it asked for, the time of the route that far (the game flies it
+    -- as that route: probed 2026-10-19, Ratchet to Crossroads of a longer
+    -- flight landed in the hop's time); landed early elsewhere, nothing.
+    function FlightEnded(at: number)
+        local f = self.flight
+        if not f then return end
+        self.flight = nil
+        self:Char().flight = nil
+        local seconds = at - f.started
+        local continent = continentOf(bestMap())
+        local spots = continent and positions(continent)
+        local x, y = myPlace(continent)
+        -- (where the game doesn't say, taken as there)
+        local function landedAt(id: number): boolean
+            local p = spots and spots[id]
+            if not (p and x and y) then return true end
+            return math.sqrt((p[1] - x) ^ 2 + (p[2] - y) ^ 2) < 0.03
+        end
+        local early = f.early
+        if early and landedAt(f.path[early]) then
+            local path: number[] = {}
+            for i = 1, early do path[i] = f.path[i] end
+            self:Learn({ path = path, expected = self:FlightTime(path), reloaded = f.reloaded }, seconds)
+        elseif landedAt(f.path[#f.path]) then
+            self:Learn(f, seconds)
+        end
+        self:QueueLayout()
+        self:UpdateTimer()
+    end
+
+    -- After a reload in the air: the flight kept, shown but not timed.
+    function ResumeFlight()
+        local data = self:Char()
+        local kept = data.flight
+        local wall = kept and kept.wall
+        if not (kept and wall) then return end
+        local ago = time() - wall
+        if not UnitOnTaxi("player") or ago > MAX_FLIGHT or ago < 0 then data.flight = nil return end
+        local expected, measured = self:FlightTime(kept.path)
+        self.flight = { path = kept.path, started = GetTime() - ago, expected = expected, measured = measured,
+                        names = kept.names or {}, early = kept.early, reloaded = true }
+    end
+
+    --------------------------------------------------------------------------------
+    -- The game's flight map, kept open underneath
+    --------------------------------------------------------------------------------
+
+    -- Unseen, and neither it nor anything on it takes the mouse (an unseen
+    -- node button would still fly where it was clicked). Only alpha and the
+    -- mouse: hidden, it closes the flight master.
+    function HideGameMap(): boolean
+        local tf = frames.find("TaxiFrame")
+        if not tf then return false end
+        local quiet = self.gameQuiet or {}
+        self.gameQuiet = quiet
+        tf:SetAlpha(0)
+        local function mute(f: Frame, depth: number)
+            if f:IsMouseEnabled() then
+                f:EnableMouse(false)
+                quiet[#quiet + 1] = f
+            end
+            if depth < 3 then for _, c in ipairs(frames.children(f)) do mute(c, depth + 1) end end
+        end
+        mute(tf, 0)
+        return true
+    end
+
+    function ShowGameMap()
+        local tf, quiet = frames.find("TaxiFrame"), self.gameQuiet
+        if not (tf and quiet) then return end
+        tf:SetAlpha(1)
+        for _, f in ipairs(quiet) do f:EnableMouse(true) end
+        self.gameQuiet = nil
+    end
+
+    --------------------------------------------------------------------------------
+    -- At the flight master: the world map as the flight map
+    --------------------------------------------------------------------------------
+
+    function AtMaster(): boolean
+        return self.session ~= nil
+    end
+
+    -- The world map module's pins away while the flight map shows, back after.
+    function RefreshPins()
+        local wm = SuuUI.UseService(WORLD_MAP)
+        local refresh = wm and wm.Refresh
+        if refresh then refresh() end
+    end
+
+    function OnTaxiOpened()
+        self.last = self:ReadSession()
+        if self.session then self:LeaveMaster(false) end
+        if not (self:Get("atMaster") and self.map) or InCombatLockdown() then return end
+        -- unseen at once (no flicker); the world map a frame later, once the
+        -- game has put its own map up (it would close the world map if that
+        -- showed first)
+        if not self:HideGameMap() then return end
+        after(0, function() self:EnterMaster(true) end)
+    end
+
+    function EnterMaster(retry: boolean)
+        local f = self.map
+        if not (self.gameQuiet and f) then return end
+        local s = self:ReadSession()
+        if not s then
+            -- (the nodes a moment later; else the game's own map after all)
+            if retry then after(0.2, function() self:EnterMaster(false) end) else self:ShowGameMap() end
+            return
+        end
+        self.last = s
+        -- its new buttons, made as it showed, without the mouse too
+        self:HideGameMap()
+        self.session, self.selected, self.hovered = s, nil, nil
+        if not f:IsShown() then f:Show() end
+        local continent = continentOf(bestMap())
+        if continent and asNumber(f:GetMapID()) ~= continent then f:SetMapID(continent) end
+        local side = self:FillSide()
+        self:PlaceSide()
+        side:Show()
+        self:UpdateBar()
+        self:SetTitle(true)
+        self:QuietHeader(true)
+        self:RefreshPins()
+        self:QueueLayout()
+    end
+
+    -- The flight master closed (walked away, flown, or the map closed):
+    -- the game's map back as it was; the world map closed with it.
+    function LeaveMaster(closeMap: boolean)
+        local was = self.session ~= nil
+        self.session, self.selected, self.hovered = nil, nil, nil
+        self:ShowGameMap()
+        local side, bar = self.side, self.bar
+        if side then side:Hide() end
+        if bar then bar:Hide() end
+        if not was then return end
+        self:SetTitle(false)
+        self:QuietHeader(false)
+        local f = self.map
+        if closeMap and f and f:IsShown() then
+            self.closing = true
+            f:Hide()
+            self.closing = false
+        end
+        self:RefreshPins()
+        self:QueueLayout()
+    end
+
+    -- the map's header: "Flight master · Thunder Bluff" while it's the flight
+    -- map, its usual "Kalimdor › Mulgore" after
+    function SetTitle(master: boolean)
+        local f = self.map
+        local chrome = f and chromeOf(f)
+        if not (f and chrome) then return end
+        local current = self.session and self.session.current
+        if master and current then
+            chrome:SetTitle("Flight master · " .. short(current.name))
+            return
+        end
+        local mapID = asNumber(f:GetMapID())
+        local info = mapID and errors.tryValue(C_Map.GetMapInfo, mapID)
+        if not (mapID and info) then return end
+        local continent = continentOf(mapID)
+        local c = continent and continent ~= mapID and errors.tryValue(C_Map.GetMapInfo, continent) or nil
+        chrome:SetTitle(c and (c.name .. " › " .. info.name) or info.name)
+    end
+
+    function QuietHeader(on: boolean)
+        for _, c in ipairs(headerControls()) do
+            c:SetAlpha(on and 0 or 1)
+            errors.tryMethod(c, "EnableMouse", not on)
+        end
+    end
+
+    function Select(node: TaxiNode?)
+        if not (self.session and node and node.kind == "REACHABLE") then return end
+        self.selected = node
+        self:UpdateBar()
+        self:UpdateRows()
+        self:QueueInk()
+    end
+
+    function Fly(node: TaxiNode?)
+        local to = node or self.selected
+        if not (self.session and to) then return end
+        TakeTaxiNode(to.slot)
+    end
+
+    -- A destination clicked (its pin or its row): flown to at once; with
+    -- Confirm before flying, chosen for the bar's Fly.
+    function Choose(node: TaxiNode?)
+        if not (self.session and node and node.kind == "REACHABLE") then return end
+        if self:Get("confirm") then self:Select(node) return end
+        self:Fly(node)
+    end
+
+    function QuestSteps(s: Session?): { [number]: number[] }
+        local out: { [number]: number[] } = {}
+        local continent = continentOf(bestMap())
+        if not (s and continent and C_Map.GetWorldPosFromMapPos and CreateVector2D) then return out end
+        -- the masters you can fly to, and the one you're at, in yards
+        local at = positions(continent)
+        local masters: { node: TaxiNode, x: number, y: number }[] = {}
+        for _, n in ipairs(s.nodes) do
+            local p = at[n.id]
+            local x, y = nil, nil
+            if p then x, y = worldXY(continent, p[1], p[2]) end
+            if x and y and n.kind ~= "DISTANT" then masters[#masters + 1] = { node = n, x = x, y = y } end
+        end
+        -- each quest once: on its zone's map, else the continent's
+        local maps: number[] = { continent }
+        local zone = asNumber(field(Enum, "UIMapType", "Zone"))
+        for _, c in ipairs(errors.tryValue(C_Map.GetMapChildrenInfo, continent, nil, true) or {}) do
+            if c.mapType == zone then table.insert(maps, 1, c.mapID) end
+        end
+        local seen: { [number]: boolean } = {}
+        for _, map in ipairs(maps) do
+            for _, q in ipairs(errors.tryValue(C_QuestLog.GetQuestsOnMap, map) or {}) do
+                local id, qx, qy = asNumber(q.questID), asNumber(q.x), asNumber(q.y)
+                if id and qx and qy and not seen[id] then
+                    seen[id] = true
+                    local x, y = worldXY(map, qx, qy)
+                    local best: TaxiNode? = nil
+                    if x and y then best = nearestMaster(masters, x, y, NEAR) end
+                    -- (nearest the master you're at: not a reason to fly)
+                    if best and best.kind == "REACHABLE" then
+                        local steps = out[best.id] or {}
+                        out[best.id] = steps
+                        table.insert(steps, id)
+                    end
+                end
+            end
+        end
+        return out
+    end
+
+    -- A flight master's tooltip on the flight map.
+    function Tip(node: TaxiNode): TooltipData
+        local s = self.session
+        if not s then return {} end
+        if node.kind == "CURRENT" then
+            return { title = node.name, subtitle = "Flight master · you are here" }
+        end
+        if node.kind ~= "REACHABLE" then
+            return { title = node.name, subtitle = "Flight master · not found yet",
+                     description = "Talk to its flight master once to fly there." }
+        end
+        local t, measured = self:FlightTime(node.path)
+        local lines: TooltipLine[] = { { "Cost", coins(node.cost) }, { "Time", timeText(t, measured, true) } }
+        -- the quests with a step near it
+        for _, id in ipairs(self.steps[node.id] or {}) do
+            local title = asString(errors.tryValue(C_QuestLog.GetTitleForQuestID, id))
+            if title then
+                lines[#lines + 1] = { title, flag(try(field(C_QuestLog, "IsComplete"), id)) and "turn in" or "objective" }
+            end
+        end
+        return {
+            title = node.name, subtitle = viaText(node.path, s.byID),
+            lines = lines,
+            meta = not self:Get("confirm") and "Click to fly"
+                or (self.selected == node and "Fly in the bar below" or "Click to choose"),
+        }
+    end
+
+    --------------------------------------------------------------------------------
+    -- The side panel: the destinations
+    --------------------------------------------------------------------------------
+
+    function BuildSide(): Side
+        local side = self.side
+        if side then return side end
+        local made = Side.new(self.map or UIParent)
+        self.side = made
+        return made
+    end
+
+    function Row(i: number): DestRow
+        local side = self:BuildSide()
+        local known = side.rows[i]
+        if known then return known end
+        local row = DestRow.new(side.scroll.child)
+        row:SetScript("OnEnter", function(r)
+            r.hover = true
+            self:PaintRow(r)
+            local node = r.node
+            if node then
+                self.hovered = node
+                self:QueueInk()
+                UI.ShowTooltip(r, function(): TooltipData
+                    local now = r.node
+                    return now and self:Tip(now) or {}
+                end)
+            end
+        end)
+        row:SetScript("OnLeave", function(r)
+            r.hover = false
+            self:PaintRow(r)
+            self.hovered = nil
+            self:QueueInk()
+            UI.HideTooltip()
+        end)
+        row:SetScript("OnClick", function(r) self:Choose(r.node) end)
+        side.rows[i] = row
+        return row
+    end
+
+    function PaintRow(row: DestRow)
+        local chosen = row.node ~= nil and row.node == self.selected
+        row.fill:SetShown(row.hover or chosen)
+        row.edge:SetShown(chosen)
+    end
+
+    -- The destinations, by name.
+    function FillSide(): Side
+        local side = self:BuildSide()
+        local s = self.session
+        local list: TaxiNode[] = {}
+        for _, n in ipairs(s and s.nodes or {}) do
+            if n.kind == "REACHABLE" then list[#list + 1] = n end
+        end
+        table.sort(list, function(a: TaxiNode, b: TaxiNode): boolean return a.name < b.name end)
+        -- (the list shows whatever the quests say)
+        local ok, steps = pcall(self.QuestSteps, self, s)
+        self.steps = ok and steps or {}
+        side.head:SetLabel("Destinations", tostring(#list))
+        local width = math.max(1, side.scroll:GetWidth())
+        for i, node in ipairs(list) do
+            local row = self:Row(i)
+            row.node = node
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", side.scroll.child, "TOPLEFT", 0, -(i - 1) * ROW_H)
+            row:SetWidth(width)
+            row.name:SetValue(short(node.name))
+            local stepText = stepsText(self.steps[node.id])
+            row.stops:SetValue(stopsText(node.path) .. (stepText and (" · " .. stepText) or ""))
+            row:Show()
+        end
+        for i = #list + 1, #side.rows do side.rows[i]:Hide(); side.rows[i].node = nil end
+        side.scroll.child:SetSize(width, math.max(1, #list * ROW_H))
+        self:UpdateRows()
+        return side
+    end
+
+    -- the rows' times and which one is chosen
+    function UpdateRows()
+        local side = self.side
+        if not side then return end
+        for _, row in ipairs(side.rows) do
+            local node = row.node
+            if node then
+                local t, measured = self:FlightTime(node.path)
+                row.time:SetValue(timeText(t, measured))
+                row.time:SetColor(measured and "ink" or "ink-muted")
+                self:PaintRow(row)
+            end
+        end
+    end
+
+    -- Over the quest log while it's open (it's the map's side panel); beside
+    -- the window, as wide, while it's closed.
+    function PlaceSide()
+        local f, side = self.map, self.side
+        if not (f and side) then return end
+        local log = frames.asFrame(field(f, "QuestLog")) or frames.find("QuestMapFrame")
+        side:ClearAllPoints()
+        if log and log:IsShown() then
+            side:SetPoint("TOPLEFT", log, "TOPLEFT", 0, 0)
+            side:SetPoint("BOTTOMRIGHT", log, "BOTTOMRIGHT", 0, 0)
+            side:SetFrameStrata(log:GetFrameStrata())
+            side:SetFrameLevel(log:GetFrameLevel() + 100)
+            side.edge:SetShown(false)
+        else
+            side:SetPoint("TOPLEFT", f, "TOPRIGHT", S["space-3"], 0)
+            side:SetPoint("BOTTOMLEFT", f, "BOTTOMRIGHT", S["space-3"], 0)
+            side:SetWidth(asNumber(field(f, "questLogWidth")) or 333)
+            side:SetFrameLevel(f:GetFrameLevel() + 100)
+            side.edge:SetShown(true)
+        end
+        -- the rows as wide as the list, laid out again
+        after(0, function() if self.session and side:IsShown() then self:FillSide() end end)
+    end
+
+    --------------------------------------------------------------------------------
+    -- The bar at the map's bottom: the chosen destination and Fly
+    --------------------------------------------------------------------------------
+
+    -- The bar for the chosen destination, sized to what it says.
+    function UpdateBar()
+        local s, node, f = self.session, self.selected, self.map
+        if not (s and node and f) then
+            local bar = self.bar
+            if bar then bar:Hide() end
+            return
+        end
+        local bar = self.bar
+        if not bar then
+            bar = FlyBar.new(f, function() self:Fly(nil) end)
+            self.bar = bar
+        end
+        local t, measured = self:FlightTime(node.path)
+        bar.name:SetValue(short(node.name))
+        bar.via:SetValue(viaText(node.path, s.byID))
+        bar.money:SetCopper(node.cost)
+        bar.time:SetValue(timeText(t, measured, true))
+        bar.fly:Remeasure()
+        local gap = S["space-5"]
+        local h = math.max(T.type["unit-name"].lineHeight + T.type.caption.lineHeight, 30)
+        local x = 0
+        bar.glyph:ClearAllPoints()
+        bar.glyph:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+        x = x + 15 + S["space-4"]
+        local textW = math.ceil(math.max(bar.name:GetUnboundedStringWidth(), bar.via:GetUnboundedStringWidth()))
+        bar.name:ClearAllPoints()
+        bar.name:SetPoint("BOTTOMLEFT", bar.body, "LEFT", x, 0)
+        bar.via:ClearAllPoints()
+        bar.via:SetPoint("TOPLEFT", bar.body, "LEFT", x, 0)
+        x = x + textW + gap
+        bar.rule:ClearAllPoints()
+        bar.rule:SetPoint("TOPLEFT", bar.body, "TOPLEFT", x, 0)
+        bar.rule:SetPoint("BOTTOMLEFT", bar.body, "BOTTOMLEFT", x, 0)
+        x = x + 1 + gap
+        bar.money:ClearAllPoints()
+        bar.money:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+        x = x + bar.money:GetWidth() + gap
+        bar.clock:ClearAllPoints()
+        bar.clock:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+        x = x + 11 + S["space-2"]
+        bar.time:ClearAllPoints()
+        bar.time:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+        x = x + math.ceil(bar.time:GetUnboundedStringWidth()) + gap
+        bar.fly:ClearAllPoints()
+        bar.fly:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+        x = x + bar.fly:GetWidth()
+        bar.body:SetSize(x, h)
+        bar:ClearAllPoints()
+        bar:SetPoint("BOTTOM", frames.asFrame(field(f, "ScrollContainer")) or f, "BOTTOM", 0, S["space-5"])
+        bar:Show()
+    end
+
+    --------------------------------------------------------------------------------
+    -- On the map's canvas: pins, routes, times
+    --------------------------------------------------------------------------------
+
+    function Pin(layer: Frame): FlightPin
+        local pin = table.remove(self.free)
+        if not pin then
+            local made = FlightPin.new(layer)
+            made:RegisterForClicks("LeftButtonUp")
+            made:SetScript("OnEnter", function(p)
+                local node = p.node
+                if not node then return end
+                if node.kind == "REACHABLE" then self.hovered = node; self:QueueInk() end
+                UI.ShowTooltip(p, function(): TooltipData
+                    local now = p.node
+                    return now and self:Tip(now) or {}
+                end)
+            end)
+            made:SetScript("OnLeave", function()
+                self.hovered = nil
+                self:QueueInk()
+                UI.HideTooltip()
+            end)
+            made:SetScript("OnClick", function(p) self:Choose(p.node) end)
+            -- a right-click goes through to the map (it zooms out)
+            errors.tryMethod(made, "SetPassThroughButtons", "RightButton")
+            pin = made
+        end
+        pin:Show()
+        self.pins[#self.pins + 1] = pin
+        return pin
+    end
+
+    -- one line of the drawing (pooled per layer: the dark underlay under the gilt)
+    function Line(layer: "BORDER" | "ARTWORK", x1: number, y1: number, x2: number, y2: number, thickness: number, token: string, alpha: number?)
+        local ink = self.ink
+        if not ink then return end
+        local pool = layer == "BORDER" and ink.pools.BORDER or ink.pools.ARTWORK
+        pool.n = pool.n + 1
+        local line = pool[pool.n]
+        if not line then
+            line = ink:CreateLine(nil, layer)
+            pool[pool.n] = line
+        end
+        line:SetThickness(thickness)
+        UI.PaintFill(line, token, alpha)
+        line:SetStartPoint("TOPLEFT", ink, x1, -y1)
+        line:SetEndPoint("TOPLEFT", ink, x2, -y2)
+        line:Show()
+    end
+
+    -- dashes along a route's points: dash px drawn, gap px left out, the
+    -- pattern carried on round its bends
+    function Dashes(layer: "BORDER" | "ARTWORK", points: number[][], dash: number, gap: number, thickness: number, token: string, alpha: number?)
+        -- (zoomed far in, longer dashes: no more than MAX_DASHES on a line)
+        for _, d in ipairs(dashes(points, dash, gap, MAX_DASHES)) do
+            self:Line(layer, d[1], d[2], d[3], d[4], thickness, token, alpha)
+        end
+    end
+
+    -- A route on the shown map (or `view`: { map, pos, w, h }), in px: its hops
+    -- the way they fly (or straight) one after another, and where each master
+    -- on it falls among the points; nil when one isn't on this map.
+    function Way(path: number[], view: View?): (number[][]?, number[]?)
+        local v = view or self.view
+        if not v then return nil, nil end
+        local points: number[][], stops: number[] = {}, {}
+        for i, id in ipairs(path) do
+            local p = v.pos[id]
+            if not p then return nil, nil end
+            local before = i > 1 and v.pos[path[i - 1]] or nil
+            if before then
+                -- (the hop's own ends left out: it runs from pin to pin)
+                local way = hopWay(v.map, path[i - 1], id, before, p)
+                if way then
+                    for k = 2, #way - 1 do points[#points + 1] = { way[k][1] * v.w, way[k][2] * v.h } end
+                end
+            end
+            points[#points + 1] = { p[1] * v.w, p[2] * v.h }
+            stops[#stops + 1] = #points
+        end
+        return points, stops
+    end
+
+    -- A route solid: the gilt line on a dark underlay, so it reads on any art.
+    function Solid(points: number[][], width: number, token: string)
+        for i = 1, #points - 1 do
+            local a, b = points[i], points[i + 1]
+            self:Line("BORDER", a[1], a[2], b[1], b[2], width + 3, "surface", 0.65)
+            self:Line("ARTWORK", a[1], a[2], b[1], b[2], width, token)
+        end
+    end
+
+    -- a stop on a route in flight: a small gilt disc on a surface rim
+    function Dot(x: number, y: number)
+        local ink = self.ink
+        if not ink then return end
+        local n = ink.dotN + 1
+        ink.dotN = n
+        local d = ink.dots[n]
+        if not d then
+            local made: Dot = { rim = ink:CreateTexture(nil, "OVERLAY", nil, 1), fill = ink:CreateTexture(nil, "OVERLAY", nil, 2) }
+            made.rim:SetTexture(DISC)
+            made.rim:SetSize(9, 9)
+            UI.Paint(made.rim, "surface")
+            made.fill:SetTexture(DISC)
+            made.fill:SetSize(6, 6)
+            UI.Paint(made.fill, "gilt-text")
+            ink.dots[n] = made
+            d = made
+        end
+        for _, t in ipairs({ d.rim, d.fill }) do
+            t:ClearAllPoints()
+            t:SetPoint("CENTER", ink, "TOPLEFT", x, -y)
+            t:Show()
+        end
+    end
+
+    function ClearDrawing()
+        for _, pin in ipairs(self.pins) do
+            pin:Hide()
+            pin:ClearAllPoints()
+            pin:SetHighlight(nil)
+            pin.tag:Hide()
+            pin.node = nil
+            table.insert(self.free, pin)
+        end
+        self.pins = {}
+        self.view = nil
+        self:ClearInk()
+    end
+
+    function ClearInk()
+        local ink = self.ink
+        if not ink then return end
+        for _, pool in ipairs({ ink.pools.BORDER, ink.pools.ARTWORK }) do
+            for i = 1, pool.n do
+                local line = pool[i]
+                if line then line:Hide() end
+            end
+            pool.n = 0
+        end
+        for _, d in ipairs(ink.dots) do d.rim:Hide(); d.fill:Hide() end
+        ink.dotN = 0
+        ink.left:Hide()
+    end
+
+    -- The flight master's map: a pin for every node of yours on this map,
+    -- the time beside each destination.
+    function DrawMaster(pos: { [number]: number[] }, w: number, h: number, cs: number)
+        local s, layer = self.session, self.layer
+        if not (s and layer) then return end
+        local base = layer:GetFrameLevel()
+        for _, n in ipairs(s.nodes) do
+            local p = pos[n.id]
+            if p and inside(p) then
+                local pin = self:Pin(layer)
+                pin.node = n
+                if n.kind == "DISTANT" then
+                    pin:SetData({ glyph = "wing", color = "ink-faint", edge = "ink-faint" })
+                    pin.edge:SetTexture(DASHED)
+                    pin:SetBaseAlpha(0.8)
+                    pin.tag:Hide()
+                else
+                    local here = n.kind == "CURRENT"
+                    pin:SetData({ glyph = "wing", color = "gilt-text", edge = here and "arcane" or "gilt-line", ring = here and "arcane" or nil })
+                    pin.edge:SetTexture(DISC)
+                    pin:SetBaseAlpha(1)
+                    if here then
+                        setTag(pin.tag, "You are here", "arcane")
+                    else
+                        local t, measured = self:FlightTime(n.path)
+                        setTag(pin.tag, timeText(t, measured), measured and "ink" or "ink-muted")
+                    end
+                end
+                pin:SetScale(1 / cs)
+                pin:SetFrameLevel(base + (n.kind == "DISTANT" and 2 or 5))
+                pin.tag:SetFrameLevel(base + 7)
+                pin:SetPoint("CENTER", layer, "TOPLEFT", p[1] * w, -p[2] * h)
+            end
+        end
+    end
+
+    -- Its lines: the routes between the ones you know faint, the hovered (else
+    -- the chosen) destination's route solid; that one's pin ringed.
+    function InkMaster(pos: { [number]: number[] })
+        local s = self.session
+        if not s then return end
+        local known: TaxiNode[] = {}
+        for _, n in ipairs(s.nodes) do
+            if n.kind ~= "DISTANT" and pos[n.id] then known[#known + 1] = n end
+        end
+        -- the network: each hop between two you know, once
+        for i = 1, #known do
+            for j = i + 1, #known do
+                local a, b = known[i], known[j]
+                if hopYards(a.id, b.id) then
+                    local points = self:Way({ a.id, b.id })
+                    if points then self:Dashes("ARTWORK", points, 4, 4, 1.5, "gilt-line") end
+                end
+            end
+        end
+        -- the route of the one hovered, else the one chosen
+        local shown = self.hovered or self.selected
+        local path = shown and shown.path
+        if path then
+            local points = self:Way(path)
+            if points then self:Solid(points, 2.5, "gilt-text") end
+        end
+        for _, pin in ipairs(self.pins) do
+            local n = pin.node
+            pin:SetHighlight(n ~= nil and (n == self.selected or n == self.hovered) and true or nil)
+        end
+    end
+
+    -- How far along the flight you are: the point on the route nearest you
+    -- (the game gives your place in flight), else by the time flown along the
+    -- route's length. -> the segment it's on, and the point.
+    function Along(points: number[][], w: number, h: number): (number, number, number)
+        local f = self.map
+        local x, y = myPlace(f and asNumber(f:GetMapID()) or nil)
+        if x and y then
+            local bk, bx, by = nearest(points, x * w, y * h)
+            if bk and bx and by then return bk, bx, by end
+        end
+        local fl = self.flight
+        local total = fl and fl.expected
+        if not (fl and total) then return 1, points[1][1], points[1][2] end
+        return alongByShare(points, math.min(1, (GetTime() - fl.started) / total))
+    end
+
+    -- In the air: the route flown solid, the rest dashed, a dot at each stop,
+    -- the time left at the destination (landing early: up to that stop).
+    function DrawFlight(w: number, h: number)
+        local fl, ink = self.flight, self.ink
+        if not (fl and ink) then return end
+        local points, stops = self:Way(fl.path)
+        if not (points and stops) then return end
+        local last, share = #points, 1
+        local early = fl.early
+        local route = early and self:FlightRoute(fl)
+        local stopAt, shareAt = early and stops[early], early and route and route.at[early]
+        if stopAt and shareAt then last, share = stopAt, shareAt end
+        local k, qx, qy = self:Along(points, w, h)
+        local flown: number[][] = {}
+        for i = 1, k do flown[i] = points[i] end
+        flown[#flown + 1] = { qx, qy }
+        self:Solid(flown, 3, "gilt")
+        local rest: number[][] = { { qx, qy } }
+        for i = k + 1, last do rest[#rest + 1] = points[i] end
+        self:Dashes("BORDER", rest, 5, 5, 5, "surface", 0.65)
+        self:Dashes("ARTWORK", rest, 5, 5, 2, "gilt-text")
+        for _, i in ipairs(stops) do if i <= last then self:Dot(points[i][1], points[i][2]) end end
+        local dest = points[last]
+        local expected = fl.expected
+        if expected then
+            local left = expected * share - (GetTime() - fl.started)
+            local tag = ink.left
+            setTag(tag, (fl.measured and "" or "~") .. clock(math.max(0, left)) .. " left", "ink")
+            tag:ClearAllPoints()
+            tag:SetPoint("LEFT", ink, "TOPLEFT", dest[1] + 10, -dest[2] + PIN / 2)
+        end
+    end
+
+    -- Everything again (the map, its zoom, the flight master): the pins, then
+    -- the lines.
+    function Layout()
+        self.layoutQueued = false
+        self:ClearDrawing()
+        local f, layer, ink = self.map, self.layer, self.ink
+        if not (f and layer and ink and f:IsShown() and self:IsEnabled()) then return end
+        local flying = not self.session and self.flight ~= nil and self:Get("inFlight")
+        if not (self.session or flying) then return end
+        local canvas = frames.asFrame(f:GetCanvas())
+        local cs = asNumber(f:GetCanvasScale())
+        local mapID = asNumber(f:GetMapID())
+        if not (canvas and cs and cs > 0 and mapID) then return end
+        local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
+        if w <= 0 or h <= 0 then return end
+        ink:SetScale(1 / cs)
+        ink:ClearAllPoints()
+        ink:SetPoint("TOPLEFT", layer, "TOPLEFT")
+        ink:SetSize(w, h)
+        local view: View = { map = mapID, pos = positions(mapID), w = w, h = h }
+        self.view = view
+        if self.session then self:DrawMaster(view.pos, w, h, cs) end
+        self:DrawInk()
+    end
+
+    -- The lines alone (a hover, a choice, the clock in flight): the pins under
+    -- the mouse stay (made again, they'd lose and regain it, over and over).
+    function DrawInk()
+        self.inkQueued = false
+        self:ClearInk()
+        local v = self.view
+        if not v then return end
+        if self.session then
+            self:InkMaster(v.pos)
+        elseif self.flight and self:Get("inFlight") then
+            self:DrawFlight(v.w, v.h)
+        end
+    end
+
+    function QueueLayout()
+        if self.layoutQueued then return end
+        self.layoutQueued = true
+        after(0, function() self:Layout() end)
+    end
+
+    function QueueInk()
+        if self.inkQueued or self.layoutQueued then return end
+        self.inkQueued = true
+        after(0, function() if self.inkQueued then self:DrawInk() end end)
+    end
+
+    --------------------------------------------------------------------------------
+    -- In the air with the map closed: the flight bar
+    --------------------------------------------------------------------------------
+
+    -- A stop's name: kept from the flight master's map as the flight was taken,
+    -- else (a reload from before they were kept) from the continent's masters.
+    function StopName(fl: Flight, id: number): string
+        local names = fl.names
+        if not names[id] and not fl.namesRead then
+            fl.namesRead = true
+            local continent = continentOf(bestMap())
+            for _, n in ipairs(continent and errors.tryValue(C_TaxiMap.GetTaxiNodesForMap, continent) or {}) do
+                local nodeID, name = asNumber(n.nodeID), asString(n.name)
+                if nodeID and name and not names[nodeID] then names[nodeID] = short(name) end
+            end
+        end
+        return names[id] or "?"
+    end
+
+    -- The flight's route for the bar, worked out once a flight: its points on
+    -- the continent's map in yards across and down (so a stop's place is its
+    -- distance along the way it's flown), the length run to each point, and
+    -- each master's share of the whole (at[i] for path[i]). When the map can't
+    -- place it, the shares by the hops' lengths alone (the progress then by
+    -- the time flown); false when those aren't known either.
+    function FlightRoute(fl: Flight): Route | false
+        local known = fl.route
+        if known ~= nil then return known end
+        local route: Route | false = false
+        local continent = continentOf(bestMap())
+        if continent and C_Map.GetWorldPosFromMapPos and CreateVector2D then
+            local x0, y0 = worldXY(continent, 0, 0)
+            local x1, y1 = worldXY(continent, 1, 0)
+            local x2, y2 = worldXY(continent, 0, 1)
+            if x0 and y0 and x1 and y1 and x2 and y2 then
+                local view: View = { map = continent, pos = positions(continent),
+                               w = span({ x0, y0 }, { x1, y1 }), h = span({ x0, y0 }, { x2, y2 }) }
+                local points: number[][]?, stops: number[]? = nil, nil
+                if view.w > 0 and view.h > 0 then points, stops = self:Way(fl.path, view) end
+                if points and stops and #points >= 2 then
+                    local run, total, at = shares(points, stops)
+                    if run and total and at then
+                        route = { map = continent, w = view.w, h = view.h, points = points, run = run, total = total, at = at }
+                    end
+                end
+            end
+        end
+        if not route then
+            local at = hopShares(SuuUI.FlightRoutes(), fl.path)
+            if at then route = { at = at } end
+        end
+        fl.route = route
+        return route
+    end
+
+    -- How far along the flight you are (0-1): your place projected onto the
+    -- route, else the time flown of the time expected; nil with neither.
+    function Flown(fl: Flight, route: Route | false): number?
+        if route and route.points then
+            local placed = route :: PlacedRoute
+            local x, y = myPlace(placed.map)
+            if x and y then
+                local k, px, py = nearest(placed.points, x * placed.w, y * placed.h)
+                if k and px and py then return (placed.run[k] + span(placed.points[k], { px, py })) / placed.total end
+            end
+        end
+        local expected = fl.expected
+        if expected and expected > 0 then return math.min(1, (GetTime() - fl.started) / expected) end
+        return nil
+    end
+
+    function BuildTimer(): FlightTimer
+        local known = self.timer
+        if known then return known end
+        local f = FlightTimer.new(SuuUI.Root, function() self:LandEarly() end)
+        local wait = 0
+        f:SetScript("OnUpdate", function(_, elapsed)
+            wait = wait - elapsed
+            if wait <= 0 then
+                wait = 1
+                self:TickTimer()
+            end
+            self:MoveTimer()
+        end)
+        self.timer = f
+        self:LayoutTimer()
+        self:SampleTimer()
+        return f
+    end
+
+    -- The lines from the text styles' line heights (a theme can change them):
+    -- the name and time, the bar, the next stop and landing, Land at while it
+    -- shows; the panel fits.
+    function LayoutTimer()
+        local f = self.timer
+        if not f then return end
+        local body, gap = f.body, S["space-3"]
+        local head = math.max(T.type["unit-name-sm"].lineHeight, T.type.numeric.lineHeight, GLYPH)
+        local foot = T.type.caption.lineHeight
+        for _, r in ipairs({ f.glyph, f.name, f.time, f.track, f.next, f.lands, f.land } :: Region[]) do r:ClearAllPoints() end
+        f.glyph:SetPoint("LEFT", body, "TOPLEFT", 0, -head / 2)
+        f.time:SetPoint("RIGHT", body, "TOPRIGHT", 0, -head / 2)
+        f.name:SetPoint("LEFT", body, "TOPLEFT", GLYPH + S["space-3"], -head / 2)
+        f.name:SetPoint("RIGHT", f.time, "LEFT", -S["space-4"], 0)
+        f.track:SetPoint("TOPLEFT", body, "TOPLEFT", 0, -(head + gap))
+        f.track:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, -(head + gap))
+        local y = -(head + gap + TRACK_H + gap)
+        f.lands:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
+        f.next:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
+        f.next:SetPoint("TOPRIGHT", f.lands, "TOPLEFT", -S["space-4"], 0)
+        f.land:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y - foot - S["space-4"])
+        f.sweep:SetSize(math.max(1, (TIMER_W - S["space-5"] * 2) * SWEEP), TRACK_H)
+        local height = head + gap + TRACK_H + gap + foot
+        if f.landAt then height = height + S["space-4"] + f.land:GetHeight() end
+        body:SetHeight(height)
+    end
+
+    -- What the bar shows (TimerView).
+    function PaintTimer(v: TimerView)
+        local f = self.timer
+        if not f then return end
+        if f.landAt ~= v.land then
+            f.landAt = v.land
+            local land = v.land
+            if land then f.land:SetLabel("Land at " .. land) end
+            f.land:SetShown(land ~= nil)
+            self:LayoutTimer()
+        end
+        f.name:SetValue(v.name)
+        f.time:SetValue(v.time)
+        f.time:SetColor(v.timeColor)
+        f.next:SetValue(v.left)
+        f.lands:SetValue(v.right)
+        local token = v.fill == "hatch" and "progress-fill" or "gilt"
+        if f.fillToken ~= token then
+            f.fillToken = token
+            f.track:SetFill(token)
+        end
+        f.hatch:SetShown(v.fill == "hatch")
+        f.track.bar:SetShown(v.fill ~= nil)
+        f.sweep:SetShown(v.fill == nil)
+        f.still = SuuUI.Motion.Reduced()
+        -- the fill on from here at the flight's pace until the next tick: never
+        -- more than a second ahead, never back
+        local drive = f.drive
+        local shown = drive and drive.flight == v.flight and drive.shown or 0
+        local frac = math.max(0, math.min(1, v.frac or 0))
+        if frac >= shown then
+            f.drive = { flight = v.flight, base = frac, rate = v.rate or 0, at = GetTime(), shown = frac }
+        else
+            f.drive = { flight = v.flight, base = shown, rate = 0, at = GetTime(), shown = shown }
+        end
+        local width = f.track:GetWidth()
+        if not (width > 0) then width = TIMER_W - S["space-5"] * 2 end
+        for i, s in ipairs(v.stops) do
+            local d = f:Stop(i)
+            local x = s.at * width
+            for _, t in ipairs({ d.rim, d.dot }) do
+                t:ClearAllPoints()
+                t:SetPoint("CENTER", f.marks, "LEFT", x, 0)
+                t:Show()
+            end
+            UI.Paint(d.dot, s.passed and "gilt" or "surface")
+        end
+        for i = #v.stops + 1, #f.stops do f.stops[i].rim:Hide(); f.stops[i].dot:Hide() end
+        self:MoveTimer()
+    end
+
+    -- Every frame: the fill, and the sweep across (still with Reduce motion).
+    function MoveTimer()
+        local f = self.timer
+        local d = f and f.drive
+        if not (f and d) then return end
+        local now = GetTime()
+        if not f.still then
+            d.shown = math.min(1, d.base + math.min(now - d.at, 1) * d.rate)
+        end
+        f.track:SetValueNow(d.shown)
+        if f.sweep:IsShown() then
+            local width = f.track:GetWidth()
+            local sw = f.sweep:GetWidth()
+            local x = f.still and width * 0.3 or ((now % SWEEP_T) / SWEEP_T) * (width + sw) - sw
+            f.sweep:ClearAllPoints()
+            f.sweep:SetPoint("LEFT", f.clip, "LEFT", x, 0)
+        end
+    end
+
+    -- Once a second in the air: the flight as it stands. Landing early, it ends
+    -- at that stop: the bar is the route up to it (its share, at, of the whole).
+    function TickTimer()
+        local fl = self.flight
+        if not (self.timer and fl) then return end
+        self:PaintTimer(self:TimerView(fl))
+    end
+
+    -- What the flight bar shows for a flight now (PaintTimer's v); notes the
+    -- next stop ahead on the flight (fl.ahead, for Land at).
+    function TimerView(fl: Flight): TimerView
+        local route = self:FlightRoute(fl)
+        local frac = self:Flown(fl, route)
+        local flown = GetTime() - fl.started
+        local to, share = #fl.path, 1
+        local early = fl.early
+        local shareAt = early and route and route.at[early] or 0
+        if early and shareAt > 0 then to, share = early, shareAt end
+        local expected = fl.expected and fl.expected * share
+        local left = expected and math.max(0, expected - flown) or 0
+        local v: TimerView = { flight = fl, name = self:StopName(fl, fl.path[to]), frac = frac and frac / share,
+                               rate = expected and expected > 0 and 1 / expected or 0, stops = {},
+                               time = "", timeColor = "ink", left = "", right = "" }
+        -- the stops between, by their place along the route (where you are
+        -- tells the next one even untimed; the diamonds show with a time)
+        local ahead: number? = nil
+        if route and frac then
+            for i = 2, to - 1 do
+                local at = route.at[i] or 0
+                local passed = frac >= at
+                if expected then v.stops[#v.stops + 1] = { at = at / share, passed = passed } end
+                if not passed and not ahead then ahead = i end
+            end
+        end
+        fl.ahead = ahead
+        local whole = fl.expected
+        if fl.measured and whole then
+            v.time, v.timeColor, v.fill = clock(left), "ink", "solid"
+            if ahead and route then
+                v.left = ("Next stop %s · %s"):format(self:StopName(fl, fl.path[ahead]), clock(math.max(0, (route.at[ahead] or 0) * whole - flown)))
+            elseif to < #fl.path then
+                v.left = "Landing early"
+            else
+                -- (stops it can't place: how many)
+                v.left = route and (#fl.path > 2 and "No more stops" or "Direct") or stopsText(fl.path)
+            end
+            v.right = "lands " .. clockAt(left)
+        elseif expected then
+            v.time, v.timeColor, v.fill = "~" .. clock(left), "ink-muted", "hatch"
+            v.left = (to < #fl.path and "Landing early" or "Not timed yet") .. " · estimated · " .. clock(flown) .. " so far"
+            v.right = "about " .. clockAt(left)
+        else
+            v.time, v.timeColor, v.fill, v.frac, v.rate = clock(flown), "ink-muted", nil, 0, 0
+            -- (a flight resumed after a reload isn't timed: its start isn't exact)
+            v.left = to < #fl.path and "Landing early" or fl.reloaded and "Not timed yet" or "Not timed yet · timing this flight"
+            v.right = "so far"
+        end
+        -- Land at: the next stop, while the game still flies you on past it
+        if ahead and not early and type(field(_G, "TaxiRequestEarlyLanding")) == "function" and UnitOnTaxi("player") then
+            v.land = self:StopName(fl, fl.path[ahead])
+        end
+        return v
+    end
+
+    -- Land at (the flight bar): the game asked to set you down at the next
+    -- stop; the flight now ends there, kept over a reload as well.
+    function LandEarly()
+        local fl = self.flight
+        -- (the next stop as it stands now: the tick may be a second old)
+        if fl then self:TickTimer() end
+        local ahead = fl and fl.ahead
+        if not (fl and ahead and not fl.early and UnitOnTaxi("player")) then return end
+        if not pcall(TaxiRequestEarlyLanding) then return end
+        fl.early = ahead
+        local kept = self:Char().flight
+        if kept then kept.early = ahead end
+        self:TickTimer()
+        self:QueueInk()
+    end
+
+    -- In edit mode on the ground: the board's timed flight, to place it by.
+    function SampleTimer()
+        self:PaintTimer({ name = "Crossroads", time = clock(95), timeColor = "ink", fill = "solid", frac = 0.4,
+                          left = "Next stop Camp Taurajo · " .. clock(18), right = "lands " .. clockAt(95),
+                          stops = { { at = 0.51, passed = false } }, land = "Camp Taurajo" })
+    end
+
+    -- Shown in the air while the world map is closed (and the setting is on);
+    -- in edit mode to be moved, a sample on the ground.
+    function UpdateTimer()
+        local f = self.timer
+        if not f then return end
+        local editing = SuuUI.EditMode.IsActive()
+        local map = self.map
+        local flying = self.flight ~= nil and not (map and map:IsShown())
+        local shown = self:IsEnabled() and self:Get("timer") and not self:Get("timerPosition").hidden
+            and (flying or editing) or false
+        f:SetShown(shown)
+        if not shown then return end
+        if self.flight then self:TickTimer() else self:SampleTimer() end
+    end
+
+    --------------------------------------------------------------------------------
+    -- The map
+    --------------------------------------------------------------------------------
+
+    function Attach()
+        if self.map or not frames.find("WorldMapFrame") then return end
+        local f = WorldMapFrame
+        local canvas = frames.asFrame(f:GetCanvas())
+        if not canvas then return end
+        self.map = f
+        -- over the map's art, under the game's own pins (as the world map
+        -- module's pins)
+        local layer = CreateFrame("Frame", nil, canvas)
+        layer:SetAllPoints(canvas)
+        local levels = errors.tryMethod(f, "GetPinFrameLevelsManager")
+        local above = asNumber(errors.tryMethod(levels, "GetFrameLevelStart", "PIN_FRAME_LEVEL_MAP_HIGHLIGHT"))
+        layer:SetFrameLevel(above and (above + 1) or (canvas:GetFrameLevel() + 2))
+        self.layer = layer
+        self.pins, self.free = {}, {}
+        local ink = Ink.new(layer)
+        ink:SetFrameLevel(layer:GetFrameLevel())
+        self.ink = ink
+        -- the clock in flight: the time left and where you are, every second
+        local wait = 0
+        ink:SetScript("OnUpdate", function(_, elapsed)
+            wait = wait - elapsed
+            if wait > 0 then return end
+            wait = 1
+            if self.flight and not self.session and self:Get("inFlight") then self:DrawInk() end
+        end)
+        -- the drawing's data provider: Blizzard's base, and ours on it
+        local provider: { [string]: unknown } = {}
+        local base = field(_G, "MapCanvasDataProviderMixin")
+        if type(base) == "table" then
+            for k, v in pairs(base :: { [string]: unknown }) do provider[k] = v end
+        end
+        provider.RefreshAllData = function() self:QueueLayout() end
+        provider.RemoveAllData = function() self:ClearDrawing() end
+        provider.OnCanvasScaleChanged = function() self:QueueLayout() end
+        provider.OnCanvasSizeChanged = function() self:QueueLayout() end
+        self.provider = provider
+        -- the map closed at the flight master: the flight master too; in the
+        -- air the flight bar comes back
+        hookScript(f, "OnHide", function()
+            if self.session and not self.closing then
+                self:LeaveMaster(false)
+                try(field(_G, "CloseTaxiMap"))
+            end
+            self:UpdateTimer()
+        end)
+        -- opened in the air: the continent, where the route shows (the flight
+        -- bar away meanwhile)
+        hookScript(f, "OnShow", function()
+            if self:IsEnabled() and self.flight and not self.session and self:Get("inFlight") then
+                after(0, function()
+                    local continent = continentOf(bestMap())
+                    if continent and f:IsShown() and asNumber(f:GetMapID()) ~= continent then f:SetMapID(continent) end
+                end)
+            end
+            self:UpdateTimer()
+        end)
+        -- the quest log opened or closed: the destinations go with it
+        if type(field(f, "SetQuestLogPanelShown")) == "function" then
+            hook(f, "SetQuestLogPanelShown", function() if self.session then self:PlaceSide() end end)
+        end
+        -- the header keeps "Flight master" over map changes (the window skin
+        -- names the map on each)
+        events.onRegistry("MapCanvas.MapSet", function()
+            if self.session then after(0, function() self:SetTitle(true) end) end
+        end, self)
+    end
+
+    function TimesSummary(): string
+        local n = 0
+        for _ in pairs(timed()) do n = n + 1 end
+        local flights = self:Char().flights or 0
+        local speed = ("%.1f yards a second"):format(self:Speed())
+        local learned = flights > 0 and (" (from " .. flights .. (flights == 1 and " flight)" or " flights)")) or " (not flown yet)"
+        return ("Each flight is timed; a route you've flown shows its time, others an estimate from their length at this character's speed: %s%s. Routes timed for the account: %d."):format(speed, learned, n)
+    end
+
+    function ForgetTimes()
+        local account = SuuUI.AccountData("flightmap") :: unknown :: FlightAccount
+        account.routes = {}
+        local data = self:Char()
+        data.speed, data.flights = nil, nil
+        if self.session then self:UpdateRows(); self:UpdateBar() end
+        self:QueueLayout()
+    end
+
+    override function OnEnable()
+        -- whether it's open at a flight master, for the world map
+        self:ProvideService(FLIGHT_MAP, { AtMaster = function(): boolean return self:AtMaster() end })
+        self:Attach()
+        local f, layer, provider = self.map, self.layer, self.provider
+        if not (f and layer and provider) then
+            self:OnGameEvent("ADDON_LOADED", function()
+                if not self.map and frames.find("WorldMapFrame") then
+                    self:Attach()
+                    if self.map then self:OnEnable() end
+                end
+            end)
+            return
+        end
+        self:RegisterSettings(SECTION)
+        local timer = self:BuildTimer()
+        -- (shown only in the air, and in edit mode)
+        self:RegisterMover(timer, { key = "timerPosition", label = "Flight timer", managedShow = true,
+            enabled = function(): boolean return self:Get("timer") end })
+        f:AddDataProvider(provider)
+        layer:Show()
+        -- every flight's route, whichever map took it (the hook stays; it
+        -- does nothing while the module is off)
+        if not self.takeHooked and type(field(_G, "TakeTaxiNode")) == "function" then
+            self.takeHooked = true
+            hook("TakeTaxiNode", function(slot: unknown)
+                local s = asNumber(slot)
+                if s and self:IsEnabled() then self:Taking(s) end
+            end)
+        end
+        self:OnGameEvent("TAXIMAP_OPENED", function() self:OnTaxiOpened() end)
+        self:OnGameEvent("TAXIMAP_CLOSED", function() self:LeaveMaster(true) end)
+        -- on a taxi a moment after control goes; landed when it comes back
+        self:OnGameEvent("PLAYER_CONTROL_LOST", function()
+            local at = GetTime()
+            after(0.5, function() self:FlightStarted(at) end)
+        end)
+        self:OnGameEvent("PLAYER_CONTROL_GAINED", function()
+            local at = GetTime()
+            after(0.3, function() if not UnitOnTaxi("player") then self:FlightEnded(at) end end)
+        end)
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
+            if not self.flight then self:ResumeFlight() end
+            self:QueueLayout()
+            self:UpdateTimer()
+        end)
+        self:Watch("atMaster", function() if not self:Get("atMaster") and self.session then self:LeaveMaster(false) end end)
+        self:Watch("inFlight", function() self:QueueLayout() end)
+        self:Watch("timer", function()
+            SuuUI.EditMode.Refresh()
+            self:UpdateTimer()
+        end)
+        self:Watch("timerPosition", function() self:UpdateTimer() end)
+        self:On("SUUUI_EDITMODE_CHANGED", function() self:UpdateTimer() end)
+        -- (a destination chosen to confirm: let go when clicks fly at once)
+        self:Watch("confirm", function()
+            if self.session and not self:Get("confirm") and self.selected then
+                self.selected = nil
+                self:UpdateBar()
+                self:UpdateRows()
+                self:QueueInk()
+            end
+        end)
+        -- a theme: the tags, the bar and the flight bar measured again
+        self:On("SUUUI_THEME_CHANGED", function()
+            if self.session then self:UpdateBar() end
+            self:LayoutTimer()
+            self:UpdateTimer()
+            self:QueueLayout()
+        end)
+        -- (once the module counts as on)
+        after(0, function() self:UpdateTimer() end)
+    end
+
+    override function OnDisable()
+        -- (at a flight master: the game's own map back, the session open)
+        self:LeaveMaster(false)
+        self.flight, self.pending = nil, nil
+        local timer = self.timer
+        if timer then timer:Hide() end
+        local f, provider, layer = self.map, self.provider, self.layer
+        if not f then return end
+        if provider then f:RemoveDataProvider(provider) end
+        self:ClearDrawing()
+        if layer then layer:Hide() end
+        self:RefreshPins()
+    end
 end
 
-function M:OnDisable()
-    -- (at a flight master: the game's own map back, the session open)
-    self:LeaveMaster(false)
-    self.flight, self.pending = nil, nil
-    if self.timer then self.timer:Hide() end
-    if not self.map then return end
-    self.map:RemoveDataProvider(self.provider)
-    self:ClearDrawing()
-    self.layer:Hide()
-    refreshPins()
-end
+M = SuuUI.AddModule(FlightMapModule.new())
