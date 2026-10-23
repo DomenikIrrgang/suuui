@@ -11,12 +11,21 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION, KEYBINDS from "/Units/ActionBars"
-import type Watched, CountKey, SizeKey, GapKey, VisKey, AttachKey, OffKey, ShowKey, ColsKey, PosKey from "/Units/ActionBars"
+import type Attachable, Watched, CountKey, SizeKey, GapKey, VisKey, AttachKey, OffKey, ShowKey, ColsKey, PosKey from "/Units/ActionBars"
 import migrations as settingMigrations from "/Core/Settings"
 import internal moverList from "/EditMode/EditMode"
+import type Mover from "/EditMode/EditMode"
 import expectNoErrors from "../../helpers"
 
-local G: any = _G
+import asFrame, asFontString, named from "/UI/Reskin"
+
+-- One of the game's frames, by name; a line of GameTooltip.
+local function game(name: string): Frame return assert(asFrame(named(name))) end
+local function tipLine(i: number): string? return assert(asFontString(named("GameTooltipTextLeft" .. i))):GetText() end
+
+-- A settings row as the tests read it.
+type Row = { key?: string, text?: string, label?: string, disabled?: () -> (boolean?, string?), format?: (v: number) -> string,
+             build?: (parent: Frame, onChange: (values: string[]) -> ()) -> Frame, onClick?: () -> () }
 
 local KEYS: Watched[] = { "position", "showKeys", "keyBars", "showEmpty", "showXP", "showStance", "showPet", "dockSize",
     "dockVisibility", "textSize", "showTotem", "stancePosition", "petPosition", "attachStance", "attachPet", "offStance", "offPet" }
@@ -41,39 +50,44 @@ local function cleanup()
     expectNoErrors()
 end
 
-local function attachable(key: string): any
+local function attachable(key: string): Attachable
     for _, a in ipairs(M.attachable) do if a.key == key then return a end end
-    return nil
+    error("nothing attaches as " .. key)
 end
 
-local function rows(section: any): { [string]: any }
-    local out: { [string]: any } = {}
-    for _, g in ipairs(section.groups) do
-        for _, r in ipairs(g.rows) do out[r.key or r.text or r.label] = r end
+local function rows(groups: unknown): { [string]: Row }
+    local out: { [string]: Row } = {}
+    for _, g in ipairs(groups :: { rows: unknown[] }[]) do
+        for _, r in ipairs(g.rows) do
+            local row = r :: Row
+            out[row.key or row.text or row.label or ""] = row
+        end
     end
     return out
 end
+-- why a row is off
+local function disabled(r: Row?): (boolean?, string?) return assert(assert(r).disabled)() end
 
 @test("Blizzard's bars stood down: the main bar invisible and deaf, again when the game shows it")
 local function blizzard()
-    local main = G.MainActionBar
+    local main = game("MainActionBar")
     expect(main:GetAlpha()).toBe(0)
     expect(main:IsMouseEnabled()).toBe(false)
     main:SetAlpha(1)
     main:Show()
     expect(main:GetAlpha()).toBe(0)
-    expect(G.ActionButton1:IsMouseEnabled()).toBe(false)
-    expect(G.MultiBarBottomLeft:GetAlpha() == 0 or not G.MultiBarBottomLeft:IsVisible()).toBe(true)
+    expect(game("ActionButton1"):IsMouseEnabled()).toBe(false)
+    expect(game("MultiBarBottomLeft"):GetAlpha() == 0 or not game("MultiBarBottomLeft"):IsVisible()).toBe(true)
 end
 
 @test("the dock: bars 1-4 at its button size; stance and pet at 9/10; out of combat")
 local function dock()
-    local d = M.dock
+    local d = assert(M.dock)
     local w = d:GetWidth()
     M:Set("dockSize", 30)
     expect(d:GetWidth() > w).toBe(true)
     expect(M.bars[1].buttons[1]:GetWidth()).toBe(30)
-    expect(M.stance.size).toBe(27)
+    expect(assert(M.stance).size).toBe(27)
     mock.player:enterCombat()
     mock.advanceFrames(1)
     local now = d:GetWidth()
@@ -88,19 +102,19 @@ end
 local function xp()
     mock.player:setStats({ xp = 300, xpMax = 1000, restedXP = 200 })
     mock.advanceFrames(1)
-    expect(M.xp:IsShown()).toBe(true)
-    expect(M.xp.ghost:GetValue()).toBe(500)
-    local h = M.dock:GetHeight()
+    expect(assert(M.xp):IsShown()).toBe(true)
+    expect(assert(assert(M.xp).ghost):GetValue()).toBe(500)
+    local h = assert(M.dock):GetHeight()
     M:Set("showXP", false)
-    expect(M.xp:IsShown()).toBe(false)
-    expect(M.dock:GetHeight() < h).toBe(true)
+    expect(assert(M.xp):IsShown()).toBe(false)
+    expect(assert(M.dock):GetHeight() < h).toBe(true)
     M:Set("showXP", true)
     mock.hover(M.xp)
-    local tip = G.GameTooltip
+    local tip = GameTooltip
     expect(tip:IsShown()).toBe(true)
-    expect(G.GameTooltipTextLeft1:GetText()).toBe("Level " .. UnitLevel("player"))
-    expect(G.GameTooltipTextLeft2:GetText()).toBe("300 / 1,000 XP (30%)")
-    expect(G.GameTooltipTextLeft3:GetText()).toBe("Rested 200")
+    expect(tipLine(1)).toBe("Level " .. UnitLevel("player"))
+    expect(tipLine(2)).toBe("300 / 1,000 XP (30%)")
+    expect(tipLine(3)).toBe("Rested 200")
     mock.hover(nil)
     expect(tip:IsShown()).toBe(false)
 end
@@ -108,17 +122,17 @@ end
 @test("at the level cap: the watched reputation instead; none watched: no bar")
 local function reputation()
     mock.setPlayer({ level = 60 })
-    local watched: any = nil
-    mock.stub(C_Reputation, "GetWatchedFactionData", function(): any return watched end)
+    local watched: unknown = nil
+    mock.stub(C_Reputation, "GetWatchedFactionData", function(): unknown return watched end)
     M:UpdateXP()
     expect(M.xpShown).toBe(false)
     watched = { name = "Stormwind", currentStanding = 4500, currentReactionThreshold = 3000, nextReactionThreshold = 9000 }
     M:UpdateXP()
     expect(M.xpShown).toBe(true)
-    expect(M.xp.ghost:GetValue()).toBe(1500)
+    expect(assert(assert(M.xp).ghost):GetValue()).toBe(1500)
     mock.hover(M.xp)
-    expect(G.GameTooltipTextLeft1:GetText()).toBe("Stormwind")
-    expect(G.GameTooltipTextLeft2:GetText()).toBe("1,500 / 6,000")
+    expect(tipLine(1)).toBe("Stormwind")
+    expect(tipLine(2)).toBe("1,500 / 6,000")
     mock.hover(nil)
     mock.setPlayer({ level = 1 })
     M:UpdateXP()
@@ -127,12 +141,12 @@ end
 @test("bar 1's page in its buttons' tooltips")
 local function page()
     local bar = M.bars[1]
-    bar.onPage(bar, 2)
+    assert(bar.onPage)(bar, 2)
     expect(bar.buttons[1].tooltipNote).toBe("Bar 1: Page 2")
-    bar.onPage(bar, 1)
+    assert(bar.onPage)(bar, 1)
     -- page 1: the stance it belongs to
     expect(bar.buttons[1].tooltipNote).toBe("Bar 1: Battle Stance")
-    bar.onPage(bar, 12)
+    assert(bar.onPage)(bar, 12)
     expect(bar.buttons[1].tooltipNote).toBeNil()
 end
 
@@ -199,33 +213,33 @@ end
 
 @test("edit mode's movers: dragging an attached bar drags the dock; Reset puts the dock back, or a free bar to its default; the toolbar's Attach/Detach")
 local function movers()
-    local function mover(frame: any): any
+    local function mover(frame: Frame): Mover
         for _, m in ipairs(moverList) do if m.frame == frame then return m end end
-        return nil
+        error("no mover")
     end
     M:Set("show6", true)
     local a = attachable("6")
     local m = mover(a.header)
-    expect(m.dragFrame()).toBe(a.header)
-    expect(m.action.label()).toBe("Attach to dock")
-    m.action.onClick()
+    expect(assert(m.dragFrame)()).toBe(a.header)
+    expect(assert(m.action).label()).toBe("Attach to dock")
+    assert(m.action).onClick()
     expect(M:Get("attach6")).toBe(true)
-    expect(m.action.label()).toBe("Detach")
-    expect(m.dragFrame()).toBe(M.dock)
+    expect(assert(m.action).label()).toBe("Detach")
+    expect(assert(m.dragFrame)()).toBe(M.dock)
     -- attached: Reset puts the dock back
     M:Set("position", { point = "BOTTOM", x = 40, y = 28 })
-    m.onReset()
+    assert(m.onReset)()
     expect(M:Get("position").x).toBe(0)
     -- free: the bar back to its default place (and stance attached again)
-    m.action.onClick()
+    assert(m.action).onClick()
     M:Set("pos6", { point = "RIGHT", x = -200, y = 0 })
-    m.onReset()
+    assert(m.onReset)()
     expect(M:Get("pos6").x).toBe(-52)
     local stance = mover(attachable("Stance").header)
     M:Set("attachStance", false)
-    stance.onReset()
+    assert(stance.onReset)()
     expect(M:Get("attachStance")).toBe(true)
-    m.customPlace()
+    assert(m.customPlace)()
 end
 
 @test("stance and pet start attached above the dock's outer edges; the pet bar while you have a pet")
@@ -243,24 +257,24 @@ end
 
 @test("the settings rows: bars 5-8's wait for the bar; Keybinds' list waits for the switch, its chips, Keybind mode")
 local function settingRows()
-    local r = rows(SECTION)
-    local off, why = r.vis5.disabled()
+    local r = rows(SECTION.groups)
+    local off, why = disabled(r.vis5)
     expect(off).toBe(true)
     expect(why).toBe("Turn the bar on first.")
     M:Set("show5", true)
-    expect((r.vis5.disabled())).toBe(false)
-    expect(r.textSize.format(12.5)).toBe("12.5px")
-    local k = rows(KEYBINDS)
-    expect((k.keyBars.disabled())).toBe(false)
+    expect((disabled(r.vis5))).toBe(false)
+    expect(assert(assert(r.textSize).format)(12.5)).toBe("12.5px")
+    local k = rows(KEYBINDS.groups)
+    expect((disabled(k.keyBars))).toBe(false)
     M:Set("showKeys", false)
-    off, why = k.keyBars.disabled()
+    off, why = disabled(k.keyBars)
     expect(why).toBe("Turn Show key bindings on first.")
-    local changed: any
-    local chips = k.keyBars.build(UIParent, function(v: any) changed = v end)
+    local changed: unknown = nil
+    local chips = assert(assert(k.keyBars).build)(UIParent, function(v: string[]) changed = v end)
     expect(chips ~= nil).toBe(true)
     local entered = mock.spy(function() end)
     mock.stub(SuuUI.KeybindMode, "Enter", entered)
-    k["Keybind mode"].onClick()
+    assert(assert(k["Keybind mode"]).onClick)()
     expect(entered).toHaveBeenCalled()
     expect(changed).toBeNil()
 end
@@ -271,14 +285,14 @@ local function migrations()
     for _, m in ipairs(settingMigrations()) do
         if m.namespace == "actionbars" and m.id == "dropSeeded" then
             found = found + 1
-            local v: { [string]: any } = { seeded = true }
+            local v: { [string]: unknown } = { seeded = true }
             m.fn(v)
             expect(v.seeded).toBeNil()
         elseif m.namespace == "actionbars" and m.id == "keyBars" then
             found = found + 1
-            local v: { [string]: any } = { keys2 = false, keysPet = false }
+            local v: { [string]: unknown } = { keys2 = false, keysPet = false }
             m.fn(v)
-            expect(table.concat(v.keyBars, ",")).toBe("1,3,4,5,6,7,8,stance")
+            expect(table.concat(v.keyBars :: string[], ",")).toBe("1,3,4,5,6,7,8,stance")
             expect(v.keys2).toBeNil()
         end
     end
