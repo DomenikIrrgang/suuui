@@ -15,6 +15,7 @@
 -- this module runs, so the two never show together.
 
 import SuuUI from "/Core/API"
+import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
 import after from "wowlua:timer"
 import * as Lists from "./CooldownManager/Lists"
@@ -30,12 +31,12 @@ local M = SuuUI.RegisterModule({
     api = "0.8",
     combatSafe = true,
     defaults = {
-        position = { point = "BOTTOM", x = 0, y = 322 },
+        position = { point = "BOTTOM", x = 0, y = 322 } :: Position,
         -- setups[CLASS][spec] = { preset, lists }: spec is the talent tree
         -- with the most points ("1"-"3"), "0" with none (Unspecced). One
         -- profile can hold every class and spec.
-        setups = {},
-        preset = "", lists = {}, -- before setups (migrated once)
+        setups = {} :: { [string]: { [string]: Lists.Setup } },
+        preset = "", lists = {} :: Lists.ListSet, -- before setups (migrated once)
         shows = "always",
         essentialSize = 40,
         utilityInline = false,
@@ -129,8 +130,8 @@ end
 -- The saved one itself, to read only (a copy of every class's setups was
 -- 414 KB of garbage a call): changes go through SetLists on a copy.
 function M:Setup(spec: number?)
-    local all = self:Peek("setups")
-    local s = all[CLASS] and all[CLASS][setupKey(spec)]
+    local mine = self:Peek("setups")[CLASS]
+    local s = mine and mine[setupKey(spec)]
     if s then return s end
     local p = specPreset(spec) or presets()[1]
     s = { preset = p and p.id or "", lists = p and copyLists(p) or {} }
@@ -159,9 +160,9 @@ end
 function M:MigrateLists()
     local old, oldPreset = self:Get("lists"), self:Get("preset")
     if next(old) ~= nil then
-        local all = self:Peek("setups")
+        local mine = self:Peek("setups")[CLASS]
         local key = setupKey(self.spec)
-        if findPreset(oldPreset) and not (all[CLASS] and all[CLASS][key]) then
+        if findPreset(oldPreset) and not (mine and mine[key]) then
             self:SaveSetup(self.spec, { preset = oldPreset, lists = copy(old) })
         end
         self:Set("lists", {})
@@ -2126,21 +2127,15 @@ function M:OnEnable()
     self:RegisterSettings(SECTION)
     self:Apply()
     self:ApplyResource()
-    for _, key in ipairs({ "resource", "resourceWidth", "resourceOwnWidth", "resourcePoints", "resourceHeight",
-                           "resourceNumber", "resourceLow", "resourceDruidMana", "resourceOoc" }) do
-        self:Watch(key, function() self:ApplyResource() end)
-    end
+    self:WatchAll({ "resource", "resourceWidth", "resourceOwnWidth", "resourcePoints", "resourceHeight",
+                           "resourceNumber", "resourceLow", "resourceDruidMana", "resourceOoc" }, function() self:ApplyResource() end)
     -- as wide as your cast bar, live
     self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
         if namespace == "castbars" and key == "playerWidth" then self:ApplyResource() end
     end)
-    for _, key in ipairs({ "setups", "essentialSize", "utilityInline", "readyPop", "procHighlight" }) do
-        self:Watch(key, function() self:Apply() end)
-    end
+    self:WatchAll({ "setups", "essentialSize", "utilityInline", "readyPop", "procHighlight" }, function() self:Apply() end)
     -- moving it or when it shows doesn't rebuild it
-    for _, key in ipairs({ "shows", "position" }) do
-        self:Watch(key, function() self:ApplyVisibility() end)
-    end
+    self:WatchAll({ "shows", "position" }, function() self:ApplyVisibility() end)
     -- "Seen recently" for "+ Add" (aura changes settle first)
     local pending = false
     self:OnUnitEvent("UNIT_AURA", { "player", "target" }, function()

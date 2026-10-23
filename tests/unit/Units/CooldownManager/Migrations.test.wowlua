@@ -5,10 +5,19 @@
 -- fixed Shields icon, a warrior's Battle Shout reminder).
 
 import test, expect, config from "wowlua:test"
-import SuuUI from "/Core/API"
 import * as DB from "/Core/DB"
 import * as migrations from "/Units/CooldownManager/Migrations"
+import * as Lists from "/Units/CooldownManager/Lists"
+import internal M from "/Units/CooldownManager"
 import expectNoErrors from "../../../helpers"
+
+-- A class's spec's setup as saved, and the entries of one of its lists.
+local function setup(class: string, spec: string): Lists.Setup
+    return assert(assert(M:Peek("setups")[class])[spec])
+end
+local function list(class: string, spec: string, key: string): Lists.Entry[]
+    return assert(setup(class, spec).lists[key])
+end
 
 config({ profile = "cooldowns-migrations" })
 
@@ -228,33 +237,32 @@ local function oldProfile()
     local stored = p.cooldowns
     expect(stored.missingBuffs).toBeNil()
     expect(stored.missingDebuffs).toBeNil()
-    local M = assert(SuuUI.GetModule("cooldowns"))
     expect(M:Get("essentialSize")).toBe(52)
     -- the shaman's Shields: automatic, Water Shield first (its art was fixed)
-    local sh = M:Peek("setups").SHAMAN.r.lists.buffs[1]
+    local sh = assert(list("SHAMAN", "r", "buffs")[1])
     expect(sh.fixedIcon).toBeNil()
-    expect(sh.members[1].name).toBe("Water Shield")
+    expect(assert(assert(sh.members)[1]).name).toBe("Water Shield")
     -- the warrior's: Battle Shout warns (it had its own reminder), the
     -- collection got a uid, its entry the old list-wide reminder
-    local wa = M:Peek("setups").WARRIOR.a.lists.buffs
-    expect(wa[1].missing).toBe("warn")
-    expect(wa[2].uid).toBe("mWARRIORabuffs2")
-    expect(wa[2].entries[1].missing).toBe("remind")
+    local wa = list("WARRIOR", "a", "buffs")
+    expect(assert(wa[1]).missing).toBe("warn")
+    expect(assert(wa[2]).uid).toBe("mWARRIORabuffs2")
+    expect(assert(assert(assert(wa[2]).entries)[1]).missing).toBe("remind")
     expectNoErrors()
 end
 
 @test("the lists from before setups became the active spec's setup")
 local function oldLists()
-    local M = assert(SuuUI.GetModule("cooldowns"))
     expect(M.spec).toBe(3)
     expect(M:Get("lists")).toEqual({})
     expect(M:Get("preset")).toBe("")
-    local s = M:Peek("setups").WARRIOR["3"]
+    local s = setup("WARRIOR", "3")
     expect(s.preset).toBe("arms")
-    expect(s.lists.buffs[1].uid).toBe("mbuffs1")
-    expect(s.lists.buffs[1].missing).toBe("remind")
-    expect(s.lists.buffs[2].missing).toBe("remind")
-    expect(s.lists.debuffs[1].missing).toBe("target")
-    expect(s.lists.debuffs[2].missing).toBe("hide")
+    local buffs, debuffs = list("WARRIOR", "3", "buffs"), list("WARRIOR", "3", "debuffs")
+    expect(assert(buffs[1]).uid).toBe("mbuffs1")
+    expect(assert(buffs[1]).missing).toBe("remind")
+    expect(assert(buffs[2]).missing).toBe("remind")
+    expect(assert(debuffs[1]).missing).toBe("target")
+    expect(assert(debuffs[2]).missing).toBe("hide")
     expect(M:PresetId(3)).toBe("arms")
 end

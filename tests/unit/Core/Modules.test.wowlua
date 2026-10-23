@@ -29,7 +29,9 @@ const LISTENER = { name = "Modules Test Listener" }
 
 type Module = modules.Module
 type Calls = { init: number, enable: number, disable: number }
-type Def = { [string]: any }
+type Def = modules.ModuleDef<modules.Settings>
+-- a table the test hands over as it is
+type Opts = { [string]: unknown }
 -- messages a module of this file sends (as a plugin's own would be)
 declare message SUUUI_ZZM_LIFE()
 declare message SUUUI_ZZM_HALF()
@@ -199,14 +201,15 @@ local function registerChecks()
     for _, bad in ipairs({ "Bad", "1a", "a-b", "" }) do
         expect(function() modules.register({ id = bad }) end).toThrow("id must be lower case letters")
     end
-    expect(function() modules.register({}) end).toThrow("id must be lower case letters")
+    -- (a def of the wrong shape: the dev build's argument check says so first)
+    expect(function() modules.register(({} :: unknown) :: Def) end).toThrow("bad argument #1 'def' to 'register'")
     expect(function() modules.register({ id = "zzmnormal" }) end).toThrow("the id zzmnormal is taken")
     expect(function() modules.register({ id = "core" }) end).toThrow("the id core is taken")
     expect(function() modules.register({ id = "layout" }) end).toThrow("the id layout is taken")
     expect(function() modules.register({ id = "zzmbad1", defaults = { enabled = true } }) end)
         .toThrow("\"enabled\" is SuuUI's own setting")
     expect(function() modules.register({ id = "zzmbad2", replaces = "zzmbad2" }) end).toThrow("replaces names another module's id")
-    expect(function() modules.register({ id = "zzmbad3", replaces = 5 }) end).toThrow("replaces names another module's id")
+    expect(function() modules.register(({ id = "zzmbad3", replaces = 5 } :: unknown) :: Def) end).toThrow("replaces names another module's id")
     expect(modules.get("zzmbad1")).toBeNil()
 end
 
@@ -245,7 +248,7 @@ end
 local function ownFields()
     local m = modules.register({ id = nextId() })
     for _, key in ipairs({ "id", "name", "state", "error", "replacedBy", "builtIn" }) do
-        expect(function() (m :: Def)[key] = "x" end)
+        expect(function() (m :: Opts)[key] = "x" end)
             .toThrow(("%q is the module's own field and can't be set (module %s)"):format(key, m.id))
     end
     m.counter = 5
@@ -407,8 +410,8 @@ end
 local function registerMover()
     local m = modules.register({ id = nextId(), name = "ZZ Mover" })
     local original = editMode.register
-    local defs: Def[] = {}
-    mock.module(editMode, { register = function(frame: any, opts: Def, owner: any): any
+    local defs: Opts[] = {}
+    mock.module(editMode, { register = function(frame: any, opts: Opts, owner: any): any
         defs[#defs + 1] = { frame = frame, opts = opts, owner = owner }
         return "mover"
     end })
@@ -454,7 +457,7 @@ end
 local function additions()
     local m = modules.register({ id = nextId() })
     local original = extend.addTo
-    local added: Def[] = {}
+    local added: Opts[] = {}
     mock.module(extend, { addTo = function(listName: string, item: any, owner: any)
         added[#added + 1] = { list = listName, item = item, owner = owner }
     end })
@@ -734,7 +737,7 @@ local function own(): Own
 end
 
 -- A module whose callbacks say what ran, in `ran`.
-local function recording(o: Own, def: { [string]: any }, ran: string[]): modules.Module
+local function recording(o: Own, def: Def, ran: string[]): modules.Module
     def.OnInitialize = def.OnInitialize or function() ran[#ran + 1] = "init" end
     def.OnEnable = def.OnEnable or function() ran[#ran + 1] = "enable" end
     def.OnDisable = def.OnDisable or function() ran[#ran + 1] = "disable" end

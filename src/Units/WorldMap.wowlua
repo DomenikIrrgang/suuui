@@ -40,7 +40,13 @@ import type Item, Group from "/Units/WorldMap/Arrange"
 import tipFor from "/Units/WorldMap/Tips"
 import unexploredTiles from "/Units/WorldMap/Overlays"
 
-local DEFAULT_FILTERS = {
+-- What Map filters chose: each group's values on.
+type FilterChoice = { [string]: string[] }
+-- The saved filters: each group's values (an earlier layout's groups too)
+-- and the layout's version.
+type SavedFilters = { v?: number, [string]: string[] | number | nil }
+
+local DEFAULT_FILTERS: SavedFilters = {
     -- (objectives, levels and colours: the game's own settings)
     quests = { "objectives", "colours", "available", "repeatable", "items" },
     places = { "unexplored", "dungeons", "battlegrounds", "flight", "campfires" },
@@ -154,8 +160,9 @@ function M:Saved()
     for _, g in ipairs(GROUPS) do for _, o in ipairs(g.options) do owner[o.value] = g.key end end
     local out = {}
     for _, g in ipairs(GROUPS) do out[g.key] = {} end
-    for key, list in pairs(saved) do
-        for _, v in ipairs(type(list) == "table" and (list :: any[]) or {}) do
+    for key, entry in pairs(saved) do
+        local list: string[] = type(entry) == "table" and entry or {}
+        for _, v in ipairs(list) do
             local legacy = key == "services" and LEGACY[v]
             local group, value = legacy and legacy[1] or owner[v], legacy and legacy[2] or v
             if group then
@@ -165,12 +172,18 @@ function M:Saved()
             end
         end
     end
-    for _, new in ipairs({ { 2, "quests", "items" }, { 3, "places", "unexplored" }, { 4, "marks", "yours" }, { 4, "marks", "shared" },
-                           { 5, "skyborne", "convergences" } }) do
-        if (saved.v or 1) < new[1] then
+    -- options each layout version added, on for everyone once
+    local added: { since: number, group: string, value: string }[] = {
+        { since = 2, group = "quests", value = "items" }, { since = 3, group = "places", value = "unexplored" },
+        { since = 4, group = "marks", value = "yours" }, { since = 4, group = "marks", value = "shared" },
+        { since = 5, group = "skyborne", value = "convergences" },
+    }
+    local version = saved.v
+    for _, new in ipairs(added) do
+        if (type(version) == "number" and version or 1) < new.since then
             local has = false
-            for _, v in ipairs(out[new[2]]) do if v == new[3] then has = true end end
-            if not has then table.insert(out[new[2]], new[3]) end
+            for _, v in ipairs(out[new.group]) do if v == new.value then has = true end end
+            if not has then table.insert(out[new.group], new.value) end
         end
     end
     return out
@@ -228,7 +241,7 @@ function M:MenuValue()
     return value
 end
 
-function M:OnFilters(value: { [string]: any })
+function M:OnFilters(value: FilterChoice)
     -- (a character without the Skyborne group keeps its saved choice)
     if value.skyborne == nil then value.skyborne = self:Saved().skyborne end
     local want = {}
@@ -248,8 +261,9 @@ function M:OnFilters(value: { [string]: any })
         if _G.QuestMapFrame_UpdateAll then pcall(QuestMapFrame_UpdateAll) end
         if self.map and self.map.RefreshAllDataProviders then self.map:RefreshAllDataProviders() end
     end
-    value.v = FILTERS_VERSION
-    self:Set("filters", value)
+    local saved: SavedFilters = { v = FILTERS_VERSION }
+    for group, list in pairs(value) do saved[group] = list end
+    self:Set("filters", saved)
     self:Refresh()
 end
 
@@ -1329,7 +1343,7 @@ function M:Attach()
     self.menu = UI.FilterMenu(f, {
         groups = menuGroups(), defaults = DEFAULT_FILTERS, value = self:MenuValue(),
         placeholder = "Map filters", style = "button", height = 22, done = true,
-        onChange = function(value: { [string]: any }) self:OnFilters(value) end,
+        onChange = function(value: FilterChoice) self:OnFilters(value) end,
     })
     -- every time the map opens: the game's place for its filter comes back
     self.skyborneMenu = convergences() ~= nil

@@ -40,6 +40,7 @@
 -- reload, so this module turns off or on with a reload.
 
 import SuuUI from "/Core/API"
+import type Position from "/EditMode/EditMode"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 
@@ -55,7 +56,7 @@ local M = SuuUI.RegisterModule({
     api = "0.8",
     reloadToToggle = true,
     defaults = {
-        position = { point = "BOTTOM", x = 0, y = 28 },
+        position = { point = "BOTTOM", x = 0, y = 28 } :: Position,
         -- Key bindings on the buttons: one switch, and the bars it covers
         -- ("1" to "8", "stance", "pet"), in KEY_BARS order.
         showKeys = true,
@@ -74,24 +75,40 @@ local M = SuuUI.RegisterModule({
         -- nearest edge. Stance and pet start attached above its outer edges.
         attach5 = false, attach6 = false, attach7 = false, attach8 = false,
         attachStance = true, attachPet = true,
-        off5 = { point = "CENTER", rel = "CENTER", x = 26, y = 146 },
-        off6 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
-        off7 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
-        off8 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
-        offStance = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 },
-        offPet = { point = "BOTTOMRIGHT", rel = "TOPRIGHT", x = 0, y = 4 },
+        off5 = { point = "CENTER", rel = "CENTER", x = 26, y = 146 } :: Position,
+        off6 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 } :: Position,
+        off7 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 } :: Position,
+        off8 = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 } :: Position,
+        offStance = { point = "BOTTOMLEFT", rel = "TOPLEFT", x = 0, y = 4 } :: Position,
+        offPet = { point = "BOTTOMRIGHT", rel = "TOPRIGHT", x = 0, y = 4 } :: Position,
         -- a shaman's totem bar in the stance bar's place (1.6d)
         showTotem = true,
-        stancePosition = { point = "BOTTOM", x = -220, y = 120 },
-        petPosition = { point = "BOTTOM", x = 220, y = 120 },
+        stancePosition = { point = "BOTTOM", x = -220, y = 120 } :: Position,
+        petPosition = { point = "BOTTOM", x = 220, y = 120 } :: Position,
         show5 = false, show6 = false, show7 = false, show8 = false,
         cols5 = 1, cols6 = 1, cols7 = 1, cols8 = 1,
-        pos5 = { point = "TOPLEFT", x = 624, y = -208 },
-        pos6 = { point = "RIGHT", x = -52, y = 0 },
-        pos7 = { point = "RIGHT", x = -76, y = 0 },
-        pos8 = { point = "RIGHT", x = -100, y = 0 },
+        pos5 = { point = "TOPLEFT", x = 624, y = -208 } :: Position,
+        pos6 = { point = "RIGHT", x = -52, y = 0 } :: Position,
+        pos7 = { point = "RIGHT", x = -76, y = 0 } :: Position,
+        pos8 = { point = "RIGHT", x = -100, y = 0 } :: Position,
     },
 })
+
+-- One setting per bar in the defaults (bars 5-8, and the stance and pet bars
+-- for attaching): the key made from a bar's id.
+export type ColsKey = "cols5" | "cols6" | "cols7" | "cols8"
+export type GapKey = "gap5" | "gap6" | "gap7" | "gap8"
+export type CountKey = "count5" | "count6" | "count7" | "count8"
+export type SizeKey = "size5" | "size6" | "size7" | "size8"
+export type ShowKey = "show5" | "show6" | "show7" | "show8"
+export type PosKey = "pos5" | "pos6" | "pos7" | "pos8"
+export type VisKey = "vis5" | "vis6" | "vis7" | "vis8"
+export type AttachKey = "attach5" | "attach6" | "attach7" | "attach8" | "attachStance" | "attachPet"
+export type OffKey = "off5" | "off6" | "off7" | "off8" | "offStance" | "offPet"
+-- the settings the options redraw for
+export type Watched = "textSize" | "showEmpty" | "showXP" | "showStance" | "showTotem" | "showPet" | "showKeys" | "keyBars"
+    | "dockSize" | "dockVisibility" | "position" | "stancePosition" | "petPosition"
+    | ShowKey | ColsKey | PosKey | CountKey | SizeKey | GapKey | VisKey | AttachKey | OffKey
 
 -- Blizzard's numbering: bar, first action slot, binding command, its frame.
 local BARS = {
@@ -292,7 +309,7 @@ function M:ApplyOptions()
     -- reveals a mouseover dock too
     local attached = {}
     for _, a in ipairs(self.attachable) do
-        if self:Get("attach" .. a.key) then attached[#attached + 1] = a.header end
+        if self:Get(("attach" .. a.key) :: AttachKey) then attached[#attached + 1] = a.header end
     end
     UI.SetVisibility(self.dock, self:Get("position").hidden and "hidden" or self:Get("dockVisibility"), attached)
     local keysOn = {}
@@ -307,9 +324,9 @@ function M:ApplyOptions()
         if def.free then
             local id = def.id
             local bar = self.bars[id]
-            bar:Layout(self:Get("cols" .. id), self:Get("gap" .. id), self:Get("count" .. id), self:Get("size" .. id))
-            local shown = self:Get("show" .. id) and not self:Get("pos" .. id).hidden
-            bar:SetVisibility(shown and self:Get("vis" .. id) or "hidden")
+            bar:Layout(self:Get(("cols" .. id) :: ColsKey), self:Get(("gap" .. id) :: GapKey), self:Get(("count" .. id) :: CountKey), self:Get(("size" .. id) :: SizeKey))
+            local shown = self:Get(("show" .. id) :: ShowKey) and not self:Get(("pos" .. id) :: PosKey).hidden
+            bar:SetVisibility(shown and self:Get(("vis" .. id) :: VisKey) or "hidden")
         end
     end
     self.stance:SetEnabled(self:Get("showStance") and not self:Get("stancePosition").hidden)
@@ -339,7 +356,7 @@ function M:Build()
             label = "Bar " .. def.id,
             slot = def.slot,
             binding = def.binding,
-            columns = def.free and self:Get("cols" .. def.id) or (def.id == 3 or def.id == 4) and 6 or 12,
+            columns = def.free and self:Get(("cols" .. def.id) :: ColsKey) or (def.id == 3 or def.id == 4) and 6 or 12,
             paging = def.id == 1 and UI.ActionBarPaging() or nil,
             onPage = def.id == 1 and function(bar: any, page: number)
                 local note = pageName(page)
@@ -380,8 +397,8 @@ function M:Build()
         if def.free then
             local id = def.id
             self.attachable[#self.attachable + 1] = { key = tostring(id), header = self.bars[id].header,
-                pos = "pos" .. id, label = "Action bar " .. id,
-                enabled = function() return self:Get("show" .. id) end }
+                pos = ("pos" .. id) :: PosKey, label = "Action bar " .. id,
+                enabled = function() return self:Get(("show" .. id) :: ShowKey) end }
         end
     end
     if self.totem then
@@ -401,22 +418,22 @@ function M:Build()
         self:RegisterMover(a.header, {
             key = a.pos, label = a.label, enabled = a.enabled,
             place = function() self:Place(a) end,
-            dragFrame = function() return self:Get("attach" .. a.key) and self.dock or a.header end,
+            dragFrame = function() return self:Get(("attach" .. a.key) :: AttachKey) and self.dock or a.header end,
             onDrop = function(l: number, b: number, w: number, h: number): boolean return self:Dropped(a, l, b, w, h) end,
             -- Reset: attached, it is part of the dock, so the dock goes back
             -- to its place; free, the bar goes back to its default (attached
             -- again for stance and pet).
             reset = function()
-                if self:Get("attach" .. a.key) then
+                if self:Get(("attach" .. a.key) :: AttachKey) then
                     self:Reset("position")
                 else
                     self:Reset(a.pos)
-                    self:Reset("attach" .. a.key)
-                    self:Reset("off" .. a.key)
+                    self:Reset(("attach" .. a.key) :: AttachKey)
+                    self:Reset(("off" .. a.key) :: OffKey)
                 end
             end,
             action = {
-                label = function() return self:Get("attach" .. a.key) and "Detach" or "Attach to dock" end,
+                label = function() return self:Get(("attach" .. a.key) :: AttachKey) and "Detach" or "Attach to dock" end,
                 onClick = function() self:ToggleAttach(a) end,
             },
         })
@@ -428,7 +445,10 @@ end
 --------------------------------------------------------------------------------
 
 -- A bar that can attach to the dock (bars 5-8, stance, pet).
-type Attachable = { key: string, header: any, pos: string, label: string, enabled: () -> any }
+-- A bar that can be attached to the dock: its key in the attach and off
+-- settings, its header, its position setting.
+type Attachable = { key: string, header: Frame, pos: PosKey | "stancePosition" | "petPosition", label: string,
+                    enabled: () -> boolean }
 
 -- Where (x, y) a point of a rectangle is.
 local function pointAt(point: string, l: number, b: number, w: number, h: number): (number, number)
@@ -478,9 +498,9 @@ end
 function M:Place(a: Attachable)
     local f = a.header
     f:ClearAllPoints()
-    if self:Get("attach" .. a.key) then
+    if self:Get(("attach" .. a.key) :: AttachKey) then
         f:SetParent(self.dock)
-        local o = self:Get("off" .. a.key)
+        local o = self:Get(("off" .. a.key) :: OffKey)
         f:SetPoint(o.point, self.dock, o.rel, o.x, o.y)
     else
         f:SetParent(SuuUI.Root)
@@ -494,13 +514,13 @@ end
 -- the whole dock moves by as much, with everything attached to it. A free
 -- bar dropped onto the dock (or within 12px of it) attaches there.
 function M:Dropped(a: Attachable, l: number, b: number, w: number, h: number): boolean
-    if self:Get("attach" .. a.key) then
+    if self:Get(("attach" .. a.key) :: AttachKey) then
         local cl, cb = SuuUI.EditMode.Rect(a.header)
         local dl, db, dw, dh = SuuUI.EditMode.Rect(self.dock)
         if not (cl and dl) then return true end
         -- (an anchor picked by hand stays)
         local pos = self:Get("position")
-        local point, x, y = SuuUI.EditMode.AnchorFor(dl + (l - cl), db + (b - cb), dw, dh, pos.pinned and pos.point)
+        local point, x, y = SuuUI.EditMode.AnchorFor(dl + (l - cl), db + (b - cb), dw, dh, pos.pinned and pos.point or nil)
         pos.point, pos.x, pos.y = point, math.floor(x + 0.5), math.floor(y + 0.5)
         self:Set("position", pos)
         return true
@@ -510,23 +530,23 @@ function M:Dropped(a: Attachable, l: number, b: number, w: number, h: number): b
     local m = 12
     local touches = l < dl + dw + m and l + w > dl - m and b < db + dh + m and b + h > db - m
     if not touches then return false end
-    self:Set("off" .. a.key, self:DockOffset(l, b, w, h))
-    self:Set("attach" .. a.key, true)
+    self:Set(("off" .. a.key) :: OffKey, self:DockOffset(l, b, w, h))
+    self:Set(("attach" .. a.key) :: AttachKey, true)
     return true
 end
 
 function M:ToggleAttach(a: Attachable)
     local l, b, w, h = SuuUI.EditMode.Rect(a.header)
     if not l then return end
-    if self:Get("attach" .. a.key) then
+    if self:Get(("attach" .. a.key) :: AttachKey) then
         local pos = self:Get(a.pos)
-        local point, x, y = SuuUI.EditMode.AnchorFor(l, b, w, h, pos.pinned and pos.point)
+        local point, x, y = SuuUI.EditMode.AnchorFor(l, b, w, h, pos.pinned and pos.point or nil)
         pos.point, pos.x, pos.y = point, math.floor(x + 0.5), math.floor(y + 0.5)
         self:Set(a.pos, pos)
-        self:Set("attach" .. a.key, false)
+        self:Set(("attach" .. a.key) :: AttachKey, false)
     else
-        self:Set("off" .. a.key, self:DockOffset(l, b, w, h))
-        self:Set("attach" .. a.key, true)
+        self:Set(("off" .. a.key) :: OffKey, self:DockOffset(l, b, w, h))
+        self:Set(("attach" .. a.key) :: AttachKey, true)
     end
 end
 
@@ -616,22 +636,22 @@ for id = 5, 8 do
     local options = {}
     for _, n in ipairs(COLUMNS) do options[#options + 1] = { value = n, label = tostring(n) } end
     SECTION.groups[#SECTION.groups + 1] = { title = "Bar " .. id, rows = {
-        { key = "show" .. id, label = "Show", control = "toggle", combat = true,
+        { key = ("show" .. id) :: ShowKey, label = "Show", control = "toggle", combat = true,
           description = id == 5 and "Near the top left by default; move it in edit mode." or "Next to the bar before it by default; move it in edit mode." },
-        { key = "vis" .. id, label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
+        { key = ("vis" .. id) :: VisKey, label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
           description = "Always, only in combat, or when the mouse is over it (or you drag a spell)." },
-        { key = "count" .. id, label = "Buttons", control = "stepper", min = 1, max = 12, step = 1, combat = true,
+        { key = ("count" .. id) :: CountKey, label = "Buttons", control = "stepper", min = 1, max = 12, step = 1, combat = true,
           description = "How many of its 12 buttons show." },
-        { key = "cols" .. id, label = "Columns", control = "segmented", options = options, combat = true,
+        { key = ("cols" .. id) :: ColsKey, label = "Columns", control = "segmented", options = options, combat = true,
           description = "1 stands it upright, 12 lays it flat." },
-        { key = "size" .. id, label = "Button size", control = "slider", min = 16, max = 32, step = 1, unit = "px", live = false, combat = true,
+        { key = ("size" .. id) :: SizeKey, label = "Button size", control = "slider", min = 16, max = 32, step = 1, unit = "px", live = false, combat = true,
           description = "Each of its buttons, edge to edge." },
-        { key = "gap" .. id, label = "Gap", control = "slider", min = 0, max = 12, step = 1, unit = "px", live = false, combat = true,
+        { key = ("gap" .. id) :: GapKey, label = "Gap", control = "slider", min = 0, max = 12, step = 1, unit = "px", live = false, combat = true,
           description = "Between its buttons." },
     } }
     -- its other rows wait for the bar to be on
     local function barOff()
-        if not M:Get("show" .. id) then return true, "Turn the bar on first." end
+        if not M:Get(("show" .. id) :: ShowKey) then return true, "Turn the bar on first." end
         return false
     end
     for i, row in ipairs(SECTION.groups[#SECTION.groups].rows) do
@@ -675,19 +695,21 @@ function M:OnEnable()
     if InCombatLockdown() then self:RunOutOfCombat("build", start) else start() end
     self:RegisterSettings(SECTION)
     self:RegisterSettings(KEYBINDS)
-    local keys = { "textSize", "showEmpty", "showXP", "showStance", "showTotem", "showPet", "showKeys", "keyBars", "dockSize", "dockVisibility", "position" }
+    local keys: Watched[] = { "textSize", "showEmpty", "showXP", "showStance", "showTotem", "showPet", "showKeys", "keyBars",
+                              "dockSize", "dockVisibility", "position", "stancePosition", "petPosition" }
     for id = 5, 8 do
-        keys[#keys + 1] = "show" .. id
-        keys[#keys + 1] = "cols" .. id
-        keys[#keys + 1] = "pos" .. id
-        for _, k in ipairs({ "count", "size", "gap", "vis" }) do keys[#keys + 1] = k .. id end
+        keys[#keys + 1] = ("show" .. id) :: ShowKey
+        keys[#keys + 1] = ("cols" .. id) :: ColsKey
+        keys[#keys + 1] = ("pos" .. id) :: PosKey
+        keys[#keys + 1] = ("count" .. id) :: CountKey
+        keys[#keys + 1] = ("size" .. id) :: SizeKey
+        keys[#keys + 1] = ("gap" .. id) :: GapKey
+        keys[#keys + 1] = ("vis" .. id) :: VisKey
     end
     for _, k in ipairs({ "5", "6", "7", "8", "Stance", "Pet" }) do
-        keys[#keys + 1] = "attach" .. k
-        keys[#keys + 1] = "off" .. k
+        keys[#keys + 1] = ("attach" .. k) :: AttachKey
+        keys[#keys + 1] = ("off" .. k) :: OffKey
     end
-    keys[#keys + 1] = "stancePosition"
-    keys[#keys + 1] = "petPosition"
     for _, key in ipairs(keys) do
         self:Watch(key, function() if self.dock then self:ApplyOptions() end end)
     end

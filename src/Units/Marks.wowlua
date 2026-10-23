@@ -23,6 +23,7 @@ local M = SuuUI.RegisterModule({
     name = "Map marks",
     description = "Your own marks on the world map and minimap: Ctrl+click the map to make one, name it, follow it, post it to your group.",
     api = "0.15",
+    defaults = {},
 })
 
 local UI = SuuUI.UI
@@ -58,7 +59,7 @@ function M:Marks(): Mark[]
     return store(self).marks
 end
 
-function M:Get(id: any): Mark?
+function M:Mark(id: any): Mark?
     for _, m in ipairs(self:Marks()) do if m.id == id then return m end end
 end
 
@@ -88,7 +89,7 @@ function M:Add(map: number, x: number, y: number, fields: { [string]: any }?): M
 end
 
 function M:Update(id: any, fields: { [string]: any }): Mark?
-    local mark = self:Get(id)
+    local mark = self:Mark(id)
     if not mark then return end
     for k, v in pairs(fields) do mark[k] = v end
     if not SYMBOL[mark.symbol] then mark.symbol = "star" end
@@ -142,7 +143,7 @@ local function navigation(self: any, on: boolean)
 end
 
 function M:Follow(id: any)
-    local mark = id and self:Get(id)
+    local mark = id and self:Mark(id)
     if mark and UiMapPoint and C_Map.CanSetUserWaypointOnMap and C_Map.CanSetUserWaypointOnMap(mark.map) then
         C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(mark.map, mark.x, mark.y))
         if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then C_SuperTrack.SetSuperTrackedUserWaypoint(true) end
@@ -221,7 +222,7 @@ end
 
 -- From a click only: the game sends chat from a click.
 function M:Post(id: any): boolean
-    local mark = self:Get(id)
+    local mark = self:Mark(id)
     local channel = self:GroupChannel()
     if not (mark and channel) or InCombatLockdown() then return false end
     local link = linkFor(mark)
@@ -657,7 +658,7 @@ local function layout(card: any, shared: boolean): number
 end
 
 function M:OpenCard(id: any, anchor: Region?)
-    local mark = self:Get(id)
+    local mark = self:Mark(id)
     local map = _G.WorldMapFrame
     if not (mark and map) then return end
     local card = self:Card()
@@ -787,7 +788,7 @@ function M:OnEnable()
     -- after a /reload: still following while the game kept its waypoint and
     -- the mark is there; else the setting back as it was
     local data = store(self)
-    local kept = data.following and self:Get(data.following) and C_Map.HasUserWaypoint and C_Map.HasUserWaypoint()
+    local kept = data.following and self:Mark(data.following) and C_Map.HasUserWaypoint and C_Map.HasUserWaypoint()
         and C_SuperTrack and C_SuperTrack.IsSuperTrackingUserWaypoint and C_SuperTrack.IsSuperTrackingUserWaypoint()
     if kept then
         self.following = data.following
@@ -805,7 +806,7 @@ function M:OnEnable()
     -- the game's waypoint cleared or replaced: you're no longer following
     self:OnGameEvent("USER_WAYPOINT_UPDATED", function()
         -- (still on the followed mark? a waypoint of your own in its place ends it)
-        local mark = self.following and self:Get(self.following)
+        local mark = self.following and self:Mark(self.following)
         local wp = C_Map.GetUserWaypoint and C_Map.GetUserWaypoint()
         local onMark = mark and wp and wp.uiMapID == mark.map and wp.position
             and math.abs(wp.position.x - mark.x) < 0.001 and math.abs(wp.position.y - mark.y) < 0.001

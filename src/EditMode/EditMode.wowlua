@@ -40,6 +40,11 @@ import * as settingsWindow from "/SettingsUI/Window"
 
 local S = T.space
 
+-- A frame's place as edit mode saves it: a point of SuuUI's root and an
+-- offset from it (`rel`: the frame's own point when it differs), `hidden`
+-- hides the frame, `pinned` keeps the point when the frame is dragged.
+export type Position = { point: FramePoint, x: number, y: number, rel?: FramePoint, hidden?: boolean, pinned?: boolean }
+
 --- A registered mover (what register returns).
 export type Mover = {
     frame: any,
@@ -120,15 +125,18 @@ end
 -- The anchor for a rectangle: `point` when given (one picked by hand), else
 -- the screen third its centre falls in; and the offset of the rectangle's
 -- same point from the screen's.
-export function anchorFor(l: number, b: number, w: number, h: number, point: string?): (string, number, number)
+export function anchorFor(l: number, b: number, w: number, h: number, point: FramePoint?): (FramePoint, number, number)
     local W, H = root:GetWidth(), root:GetHeight()
-    local at = point
-    if not at then
+    local at: FramePoint
+    if point then
+        at = point
+    else
         local cx, cy = l + w / 2, b + h / 2
         local horiz = (cx < W / 3 and "LEFT") or (cx > W * 2 / 3 and "RIGHT") or ""
         local vert = (cy < H / 3 and "BOTTOM") or (cy > H * 2 / 3 and "TOP") or ""
-        at = vert .. horiz
-        if at == "" then at = "CENTER" end
+        -- a side, a corner, or the centre: each one of the frame's points
+        local name = vert .. horiz
+        at = (name == "" and "CENTER" or name) :: FramePoint
     end
     local fx, fy = fractions(at)
     return at, l + w * fx - W * fx, b + h * fy - H * fy
@@ -596,7 +604,7 @@ local function buildToolbar(): any
             end
             return { description = "The screen point X and Y measure from, the screen third the frame is in. Click to pick one that stays." }
         end,
-        onChange = function(point: string)
+        onChange = function(point: FramePoint)
             local m = selected
             if not m then return end
             local l, b, w, h = rect(m.frame)

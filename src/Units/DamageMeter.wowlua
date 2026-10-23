@@ -12,6 +12,7 @@
 -- after combat ends).
 
 import SuuUI from "/Core/API"
+import type Position from "/EditMode/EditMode"
 import after from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -24,7 +25,7 @@ local M = SuuUI.RegisterModule({
     api = "0.10",
     combatSafe = true,
     defaults = {
-        position = { point = "BOTTOMRIGHT", x = -28, y = 28 },
+        position = { point = "BOTTOMRIGHT", x = -28, y = 28 } :: Position,
         shows = "always",      -- "always" | "group" | "combat" | "hidden"
         numbers = "compact",   -- "minimal" | "compact" | "complete"
         rows = 9,
@@ -359,20 +360,16 @@ function M:OnEnable()
     self:RegisterSettings(SECTION)
     self:Watch("shows", function() SuuUI.EditMode.Refresh(); self:UpdateVisibility() end)
     self:Watch("position", function() self:UpdateVisibility() end)
-    for _, key in ipairs({ "numbers", "barColor", "marker", "nameColor", "pinYou" }) do
-        self:Watch(key, function()
-            local o = self:MeterOptions()
-            for _, w in ipairs(self.windows or {}) do w:SetOptions(o) end
-            if self.previewMeter then self.previewMeter:SetOptions(o) end
-        end)
-    end
-    for _, key in ipairs({ "rows", "windowCount" }) do
-        self:Watch(key, function()
-            self:Layout()
-            if self.previewMeter then self.previewMeter:SetMaxRows(self:Get("rows")) end
-            SuuUI.EditMode.Refresh()
-        end)
-    end
+    self:WatchAll({ "numbers", "barColor", "marker", "nameColor", "pinYou" }, function()
+        local o = self:MeterOptions()
+        for _, w in ipairs(self.windows or {}) do w:SetOptions(o) end
+        if self.previewMeter then self.previewMeter:SetOptions(o) end
+    end)
+    self:WatchAll({ "rows", "windowCount" }, function()
+        self:Layout()
+        if self.previewMeter then self.previewMeter:SetMaxRows(self:Get("rows")) end
+        SuuUI.EditMode.Refresh()
+    end)
     for _, e in ipairs({ "DAMAGE_METER_COMBAT_SESSION_UPDATED", "DAMAGE_METER_CURRENT_SESSION_UPDATED", "DAMAGE_METER_RESET" }) do
         self:OnGameEvent(e, function()
             if not inCombat() then self:Soon(0.2) end

@@ -17,6 +17,7 @@
 -- module turns off or on after a reload.
 
 import SuuUI from "/Core/API"
+import type Position from "/EditMode/EditMode"
 import isSecret as isSecretValue from "wowlua:secret"
 
 local UI, Motion, T = SuuUI.UI, SuuUI.Motion, SuuUI.Tokens
@@ -41,14 +42,14 @@ local M = SuuUI.RegisterModule({
     api = "0.5",
     reloadToToggle = true,
     defaults = {
-        playerPosition = { point = "BOTTOM", x = -350, y = 308 },
-        targetPosition = { point = "BOTTOM", x = 350, y = 308 },
-        totPosition = { point = "BOTTOM", x = 582, y = 312 },
+        playerPosition = { point = "BOTTOM", x = -350, y = 308 } :: Position,
+        targetPosition = { point = "BOTTOM", x = 350, y = 308 } :: Position,
+        totPosition = { point = "BOTTOM", x = 582, y = 312 } :: Position,
         -- under the boss frames, their right edges in line (asked for in
         -- game: from the bottom centre it ran under the tracker at 1920 wide)
-        focusPosition = { point = "TOPRIGHT", x = -300, y = -560 },
-        petPosition = { point = "BOTTOM", x = -300, y = 268 },
-        bossPosition = { point = "TOPRIGHT", x = -300, y = -260 },
+        focusPosition = { point = "TOPRIGHT", x = -300, y = -560 } :: Position,
+        petPosition = { point = "BOTTOM", x = -300, y = 268 } :: Position,
+        bossPosition = { point = "TOPRIGHT", x = -300, y = -260 } :: Position,
         showToT = true,
         showFocus = true,
         showPet = true,
@@ -76,7 +77,11 @@ local M = SuuUI.RegisterModule({
 })
 
 -- Every frame this module draws. `show` names the setting that turns it off.
-local FRAMES = {
+-- the single frames: their position setting and the setting that shows them
+type FrameDef = { key: string, unit: UnitToken, label: string, position: "playerPosition" | "targetPosition" | "totPosition"
+                  | "focusPosition" | "petPosition", watch?: boolean, show?: "showToT" | "showFocus" | "showPet",
+                  opts: { [string]: unknown } }
+local FRAMES: FrameDef[] = {
     { key = "player", unit = "player", label = "Player", position = "playerPosition",
       -- No "you" badge here (the design has one): the player frame is always you.
       -- Target of target keeps it, where it tells you a mob is on you.
@@ -584,8 +589,9 @@ function M:OnEnable()
     for _, f in pairs(self.allFrames) do f:Activate() end
     -- A frame turned off in the settings gets no mover in edit mode.
     for _, d in ipairs(FRAMES) do
+        local show = d.show
         self:RegisterMover(self.frames[d.key], { key = d.position, label = d.label,
-            enabled = d.show and function() return self:Get(d.show) end or nil })
+            enabled = show and function() return self:Get(show) end or nil })
         if d.show then self:Watch(d.show, SuuUI.EditMode.Refresh) end
     end
     self:RegisterMover(self.bossHolder, { key = "bossPosition", label = "Boss frames",
@@ -617,14 +623,10 @@ function M:OnEnable()
     self:OnUnitEvent("UNIT_DISPLAYPOWER", "player", function() self.combo:Update() end)
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self.combo:Update() end)
 
-    for _, key in ipairs({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "eliteDragon", "raidMarkers", "comboPoints" }) do
-        self:Watch(key, function() self:ApplyOptions() end)
-    end
-    for _, key in ipairs({ "showToT", "showFocus", "showPet", "showBoss", "targetPosition", "totPosition",
-                           "focusPosition", "petPosition", "bossPosition" }) do
-        self:Watch(key, function() self:UpdateVisibility() end)
-    end
-    for _, key in ipairs({ "width", "height" }) do self:Watch(key, function() self:ApplySize() end) end
+    self:WatchAll({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "eliteDragon", "raidMarkers", "comboPoints" }, function() self:ApplyOptions() end)
+    self:WatchAll({ "showToT", "showFocus", "showPet", "showBoss", "targetPosition", "totPosition",
+                           "focusPosition", "petPosition", "bossPosition" }, function() self:UpdateVisibility() end)
+    self:WatchAll({ "width", "height" }, function() self:ApplySize() end)
     self:UpdateThreat()
     self:RunOutOfCombat("debuffBadges", function() self.frames.player:SetDispelBadges(self:Get("debuffBadges")) end)
     self:Watch("debuffBadges", function()
@@ -645,9 +647,7 @@ function M:OnEnable()
     self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
         if namespace == "ui" and key == "reducedMotion" then self:UpdateRested(); self:DrawPreview() end
     end)
-    for _, key in ipairs({ "restedSign", "restedShow", "restedAnimation", "restedHideCombat", "restedHideMax" }) do
-        self:Watch(key, function() self:UpdateRested(base); self:DrawPreview() end)
-    end
+    self:WatchAll({ "restedSign", "restedShow", "restedAnimation", "restedHideCombat", "restedHideMax" }, function() self:UpdateRested(base); self:DrawPreview() end)
     self:UpdateRested()
 end
 

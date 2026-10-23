@@ -23,6 +23,7 @@
 -- state, which stays readable.
 
 import SuuUI from "/Core/API"
+import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
 import after, every from "wowlua:timer"
 
@@ -36,7 +37,7 @@ local M = SuuUI.RegisterModule({
     api = "0.17",
     reloadToToggle = true,
     defaults = {
-        position = { point = "BOTTOMLEFT", x = 28, y = 300 },
+        position = { point = "BOTTOMLEFT", x = 28, y = 300 } :: Position,
         showSelf = true,
         showSolo = false,       -- your own frame while not in a group
         direction = "up",       -- "up", "down", "right"
@@ -106,7 +107,7 @@ end
 -- of debuffs: on the left side the debuffs come first from the bar. No
 -- other buffs: those come through buff indicators.
 local GAP_SETS = S["space-4"]
-type AuraGroup = { key: string, set: string, who?: string, filter: string[], list?: string, border?: string, glow?: string,
+type AuraGroup = { key: string, set: "buffIcons" | "debuffIcons", who?: string, filter: string[], list?: string, border?: string, glow?: string,
     drain?: string, dispel?: boolean, harmfulEdge?: boolean }
 local AURA_GROUPS: AuraGroup[] = {
     { key = "defensives", set = "buffIcons", filter = { "HELPFUL" }, list = "all", border = "ward", glow = "glow-ward", drain = "ward" },
@@ -720,23 +721,17 @@ function M:OnEnable()
     self:ApplyOptions()
     self:UpdateSelected()
 
-    for _, key in ipairs({ "width", "height", "gap", "direction", "showSelf", "buffIcons", "debuffIcons", "auraSide" }) do
-        self:Watch(key, function()
-            self:RunOutOfCombat("layout", function() self:Layout() end)
-            if key == "showSelf" then self:UpdateVisibility() end
-        end)
-    end
+    self:WatchAll({ "width", "height", "gap", "direction", "showSelf", "buffIcons", "debuffIcons", "auraSide" }, function(key)
+        self:RunOutOfCombat("layout", function() self:Layout() end)
+        if key == "showSelf" then self:UpdateVisibility() end
+    end)
     self:Watch("showSolo", function() self:UpdateVisibility() end)
     self:OnGameEvent("UNIT_CONNECTION", function() self:UpdateOffline() end)
-    for _, key in ipairs({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "debuffBadges", "rangeAlpha" }) do
-        self:Watch(key, function() self:ApplyOptions(); self:DrawPreview() end)
-    end
+    self:WatchAll({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "debuffBadges", "rangeAlpha" }, function() self:ApplyOptions(); self:DrawPreview() end)
     self:Watch("debuffBadges", function() self:RunOutOfCombat("badges", function() self:ApplyBadges() end) end)
     -- the preview follows layout changes at once (the real frames wait for
     -- the end of combat)
-    for _, key in ipairs({ "width", "height", "gap", "direction", "showSelf", "buffIcons", "debuffIcons", "auraSide" }) do
-        self:Watch(key, function() self:DrawPreview() end)
-    end
+    self:WatchAll({ "width", "height", "gap", "direction", "showSelf", "buffIcons", "debuffIcons", "auraSide" }, function() self:DrawPreview() end)
 
     self:OnGameEvent("PLAYER_TARGET_CHANGED", function() self:UpdateSelected() end)
     self:OnGameEvent("GROUP_ROSTER_UPDATE", function()

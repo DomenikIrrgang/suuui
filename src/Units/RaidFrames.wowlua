@@ -20,6 +20,7 @@
 -- the frame.
 
 import SuuUI from "/Core/API"
+import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
 import after, every from "wowlua:timer"
 
@@ -33,7 +34,7 @@ local M = SuuUI.RegisterModule({
     api = "0.9",
     reloadToToggle = true,
     defaults = {
-        position = { point = "BOTTOMLEFT", x = 28, y = 300 },
+        position = { point = "BOTTOMLEFT", x = 28, y = 300 } :: Position,
         arrangement = "columns",   -- "columns" (side layout) or "rows" (healer layout)
         sort = "group",            -- within each group: "group" (raid order) or "role"
         perBand = 4,               -- columns: groups side by side before the next band
@@ -106,7 +107,7 @@ local GAP_SETS = S["space-2"]
 -- frame keeps two groups (the engine makes ten buttons for each, whatever
 -- its count) and the second, your other debuffs, comes only on a frame
 -- that has shown you.
-type AuraGroup = { key: string, set: string, who?: string, filter?: string[], filters?: { me: string[], others: string[] },
+type AuraGroup = { key: string, set: "buffIcons" | "debuffIcons", who?: string, filter?: string[], filters?: { me: string[], others: string[] },
     list?: string, border?: string, drain?: string, dispel?: boolean, harmfulEdge?: boolean, gap?: number }
 local AURA_GROUPS: AuraGroup[] = {
     { key = "debuffs", set = "debuffIcons", filters = { me = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, others = { "HARMFUL" } },
@@ -844,15 +845,11 @@ function M:OnEnable()
         self:ApplyOptions()
     end)
 
-    for _, key in ipairs({ "arrangement", "perBand", "width", "height", "heightLarge", "gap", "groupGap", "buffIcons", "debuffIcons" }) do
-        self:Watch(key, function()
-            self:DrawPreview()
-            self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
-        end)
-    end
-    for _, key in ipairs({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "rangeAlpha" }) do
-        self:Watch(key, function() self:ApplyOptions(); self:DrawPreview() end)
-    end
+    self:WatchAll({ "arrangement", "perBand", "width", "height", "heightLarge", "gap", "groupGap", "buffIcons", "debuffIcons" }, function()
+        self:DrawPreview()
+        self:RunOutOfCombat("layout", function() self:Layout(); self:ApplyOptions() end)
+    end)
+    self:WatchAll({ "power", "healthText", "nameColor", "raidMarkers", "lowHealth", "incoming", "rangeAlpha" }, function() self:ApplyOptions(); self:DrawPreview() end)
     self:Watch("debuffBadges", function()
         self:DrawPreview()
         self:RunOutOfCombat("badges", function() self:ApplyBadges() end)

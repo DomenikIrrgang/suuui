@@ -72,9 +72,14 @@ end
 
 local RESERVED: { [string]: boolean } = { core = true, ui = true, layout = true }
 
+-- A module's settings: their defaults' names and types (`defaults` given to
+-- RegisterModule), so `M:Get(key)` reads the default's type.
+export type Settings = { [string]: unknown }
+
 --- A SuuUI module as plugins see it: SuuUI's own fields (read only), the
---- methods below, and whatever the module keeps on itself.
-export type Module = {
+--- methods below, and whatever the module keeps on itself. `D` is its
+--- settings' type (its defaults').
+export type ModuleOf<D> = {
     id: string,
     name: string,
     description: string?,
@@ -90,16 +95,52 @@ export type Module = {
     combatSafe: boolean,
     replaces: string?,
     replacedBy: string?,
-    OnInitialize: ((self: Module) -> ())?,
-    OnEnable: ((self: Module) -> ())?,
-    OnDisable: ((self: Module) -> ())?,
-    On: <M extends string>(self: Module, message: M, fn: (name: M, EventArgs<M>...) -> ()) -> (),
-    Off: (self: Module, message: string) -> (),
-    Emit: <M extends string>(self: Module, message: M, ...: EventArgs<M>...) -> (),
-    OnGameEvent: <E extends EventName>(self: Module, event: E, fn: (name: E, EventArgs<E>...) -> ()) -> (),
-    OnUnitEvent: <E extends EventName>(self: Module, event: E, units: UnitToken | UnitToken[],
+    OnInitialize: ((self: ModuleOf<D>) -> ())?,
+    OnEnable: ((self: ModuleOf<D>) -> ())?,
+    OnDisable: ((self: ModuleOf<D>) -> ())?,
+    -- its settings (Settings: `nil` for a key without a default)
+    Get: <K extends keyof D>(self: ModuleOf<D>, key: K) -> D[K],
+    -- 0.17: the value itself, not a copy, to read only (large tables read often)
+    Peek: <K extends keyof D>(self: ModuleOf<D>, key: K) -> D[K],
+    Set: <K extends keyof D>(self: ModuleOf<D>, key: K, value: D[K]) -> (boolean, string?),
+    Reset: <K extends keyof D>(self: ModuleOf<D>, key: K?) -> boolean,
+    Watch: <K extends keyof D>(self: ModuleOf<D>, key: K, fn: (value: D[K], namespace: string, key: string) -> ()) -> (),
+    Veto: <K extends keyof D>(self: ModuleOf<D>, key: K, fn: (new: D[K], old: D[K]) -> (boolean?, string?)) -> (),
+    -- 0.19: fn(key) whenever one of `keys` changes; each of `keys` reset
+    WatchAll: <K extends keyof D>(self: ModuleOf<D>, keys: K[], fn: (key: K) -> ()) -> (),
+    ResetAll: <K extends keyof D>(self: ModuleOf<D>, keys: K[]) -> (),
+    IsEnabled: (self: ModuleOf<D>) -> boolean,
+    On: <M extends string>(self: ModuleOf<D>, message: M, fn: (name: M, EventArgs<M>...) -> ()) -> (),
+    Off: (self: ModuleOf<D>, message: string) -> (),
+    Emit: <M extends string>(self: ModuleOf<D>, message: M, ...: EventArgs<M>...) -> (),
+    OnGameEvent: <E extends EventName>(self: ModuleOf<D>, event: E, fn: (name: E, EventArgs<E>...) -> ()) -> (),
+    OnUnitEvent: <E extends EventName>(self: ModuleOf<D>, event: E, units: UnitToken | UnitToken[],
                                        fn: (name: E, EventArgs<E>...) -> ()) -> (),
     [string]: any,
+}
+
+-- A module's settings with SuuUI's own: whether it is on.
+export type WithEnabled<D> = D & { enabled: boolean }
+
+-- A module whatever its settings (the registry's view).
+export type Module = ModuleOf<WithEnabled<Settings>>
+
+-- What RegisterModule takes (see the top of this file).
+export type ModuleDef<D> = {
+    id: string,
+    name?: string,
+    description?: string,
+    api?: string,
+    defaults?: D,
+    enabledByDefault?: boolean,
+    reloadToToggle?: boolean,
+    combatSafe?: boolean,
+    replaces?: string,
+    -- the addon it comes from (found from the call stack when not given)
+    addon?: string,
+    OnInitialize?: (self: ModuleOf<WithEnabled<D>>) -> (),
+    OnEnable?: (self: ModuleOf<WithEnabled<D>>) -> (),
+    OnDisable?: (self: ModuleOf<WithEnabled<D>>) -> (),
 }
 
 --------------------------------------------------------------------------------
@@ -178,6 +219,12 @@ function Module.Guard(self: Module, fn: (...any) -> ...any): (...any) -> ...any
 end
 function Module.Watch(self: Module, key: string, fn: settings.Watcher) settings.watch(self.id, key, fn, self) end
 function Module.Veto(self: Module, key: string, fn: settings.Veto) settings.veto(self.id, key, fn, self) end
+function Module.WatchAll(self: Module, keys: string[], fn: (key: string) -> ())
+    for _, key in ipairs(keys) do settings.watch(self.id, key, function() fn(key) end, self) end
+end
+function Module.ResetAll(self: Module, keys: string[])
+    for _, key in ipairs(keys) do settings.reset(self.id, key) end
+end
 
 -- fn(values) reshapes one profile's stored values of this module (a renamed
 -- key, a changed type), once per profile. Call it right after RegisterModule,
@@ -404,23 +451,27 @@ export class ModuleRegistry
     -- Registration
     ----------------------------------------------------------------------------
 
-    function register(def: { [string]: any }): Module
+    function register<D extends Settings>(def: ModuleDef<D>): ModuleOf<WithEnabled<D>>
         assert(type(def) == "table", "SuuUI.RegisterModule takes a table")
         local id = def.id
         assert(type(id) == "string" and id:find("^%l[%l%d_]*$"),
             "SuuUI.RegisterModule: id must be lower case letters, digits and _, starting with a letter")
         assert(not self.byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
-        local defaults: { [string]: any } = util.copy(def.defaults or {})
+        local given: Settings = def.defaults or {}
+        local defaults: Settings = util.copy(given)
         assert(defaults.enabled == nil, "SuuUI.RegisterModule: \"enabled\" is SuuUI's own setting; use enabledByDefault")
         assert(def.replaces == nil or (type(def.replaces) == "string" and def.replaces ~= id),
             "SuuUI.RegisterModule: replaces names another module's id")
         defaults.enabled = def.enabledByDefault ~= false
 
-        local m: Module = setmetatable({
+        -- the module, as the registry handles every one (its settings' type
+        -- is the caller's: ModuleOf<D>)
+        local made = setmetatable({
             OnInitialize = def.OnInitialize,
             OnEnable = def.OnEnable,
             OnDisable = def.OnDisable,
-        }, ModuleMeta) :: any
+        }, ModuleMeta)
+        local m = (made :: unknown) :: Module
         local source = def.addon or sourceAddon()
         fields[m] = {
             id = id,
@@ -446,7 +497,7 @@ export class ModuleRegistry
         self.byId[id] = m
         self.notifier:emit("SUUUI_MODULE_REGISTERED", id)
         if self.started then self:start(m) end
-        return m
+        return (m :: unknown) :: ModuleOf<WithEnabled<D>>
     end
 
     function get(id: string): Module?
@@ -470,7 +521,7 @@ end
 -- SuuUI's registry, and its methods as the module's functions.
 export const registry = ModuleRegistry.new()
 
-export function register(def: { [string]: any }): Module return registry:register(def) end
+export function register<D extends Settings>(def: ModuleDef<D>): ModuleOf<WithEnabled<D>> return registry:register(def) end
 export function get(id: string): Module? return registry:get(id) end
 export function all(): Module[] return registry:all() end
 export function find(text: string?): Module? return registry:find(text) end
