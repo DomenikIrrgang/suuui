@@ -15,6 +15,7 @@ import root from "/Core/Root"
 import * as registry from "/SettingsUI/Registry"
 import * as settingsWindow from "/SettingsUI/Window"
 import * as editMode from "/EditMode/EditMode"
+import internal theLayer, EditLayer, MoverOverlay, Toolbar from "/EditMode/EditMode"
 import expectNoErrors from "../../helpers"
 import pointOf, printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
 
@@ -33,7 +34,7 @@ settings.register("emtest", {
 
 registry.register({ id = "em-sec", label = "Edit Mode Test", namespace = "emtest", groups = {} }, OWNER)
 
-local function frameOf(w: number, h: number, name: string?): any
+local function frameOf(w: number, h: number, name: string?): Frame
     local f = CreateFrame("Frame", name, root)
     f:SetSize(w, h)
     return f
@@ -60,7 +61,7 @@ local mC = editMode.register(fc, { namespace = "emtest", key = "c", label = "Cha
         fc:ClearAllPoints()
         fc:SetPoint("CENTER", root, "CENTER", pos.x, pos.y)
     end,
-    onDrop = function(l: number, b: number, w: number, h: number): any
+    onDrop = function(l: number, b: number, w: number, h: number): boolean
         dropped = { l, b, w, h }
         return dropTakes
     end,
@@ -69,48 +70,27 @@ local mC = editMode.register(fc, { namespace = "emtest", key = "c", label = "Cha
     reset = function() resets = resets + 1 end,
 }, OWNER)
 
-local function layer(): any return (_G :: any).SuuUIEditMode end
-local function overlayOf(m: editMode.Mover): any return m.overlay end
-
--- The toolbar: the layer's child with the anchor and the keys.
-local function bar(): any
-    for _, c in ipairs({ layer():GetChildren() }) do
-        local f: any = c
-        if f.anchor and f.keys then return f end
-    end
-    error("no toolbar")
-end
-
-local function descendants(f: any, out: any[]?): any[]
-    local list = out or {}
-    for _, c in ipairs({ f:GetChildren() }) do
-        list[#list + 1] = c
-        descendants(c, list)
-    end
-    return list
-end
-
-local function labelled(f: any, label: string): any
-    for _, c in ipairs(descendants(f)) do
-        local b: any = c
-        local l = b.label
-        if type(l) == "table" and l.GetText and l:GetText() == label then return b end
-    end
-    error("nothing labelled " .. label)
+local function layer(): EditLayer return theLayer() end
+local function overlayOf(m: editMode.Mover): MoverOverlay return assert(m.overlay) end
+-- The toolbar over the selected frame.
+local function bar(): Toolbar return theLayer().toolbar end
+-- What the toolbar's anchor says about it.
+local function anchorTip(tb: Toolbar): string?
+    local data = assert(tb.anchor.tooltip)(tb.anchor.value)
+    return data and data.description
 end
 
 local function nextFrame() mock.advanceTime(0.01) end
 
-local seen: any[] = {}         -- SUUUI_EDITMODE_CHANGED's values
-local previews: any[] = {}     -- SUUUI_EDITMODE_GROUP_PREVIEW's
+local seen: boolean[] = {}                 -- SUUUI_EDITMODE_CHANGED's values
+local previews: (number | boolean)[][] = {} -- SUUUI_EDITMODE_GROUP_PREVIEW's
 
 @beforeEach
 local function listen()
     seen, previews = {}, {}
-    events.on("SUUUI_EDITMODE_CHANGED", function(...: any) seen[#seen + 1] = select(select("#", ...), ...) end, TEMP)
-    events.on("SUUUI_EDITMODE_GROUP_PREVIEW", function(...: any)
-        local n = select("#", ...)
-        previews[#previews + 1] = { (select(n - 1, ...)), (select(n, ...)) }
+    events.on("SUUUI_EDITMODE_CHANGED", function(_, active: boolean) seen[#seen + 1] = active end, TEMP)
+    events.on("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, size: number, auras: boolean)
+        previews[#previews + 1] = { size, auras }
     end, TEMP)
 end
 
@@ -490,16 +470,16 @@ local function placedByAnother()
     local f = frameOf(20, 20)
     f:SetPoint("LEFT", fa, "RIGHT")
     local m = editMode.register(f, { namespace = "emtest", key = "d", place = function() end,
-        dragFrame = function(): any return fa end }, TEMP)
+        dragFrame = function(): Frame return fa end }, TEMP)
     editMode.enter()
     local o = overlayOf(m)
     mock.click(o)
     local tb = bar()
     expect(tb.anchor.disabled).toBe(true)
     expect(tb.x.disabled).toBe(true)
-    expect(tb.anchor.tooltip().description).toBe("It moves with the frame it's attached to. Detach it to place it by number.")
-    tb.anchor.onChange("TOPLEFT")
-    tb.x.onChange(5)
+    expect(anchorTip(tb)).toBe("It moves with the frame it's attached to. Detach it to place it by number.")
+    assert(tb.anchor.onChange)("TOPLEFT")
+    assert(tb.x.onChange)(5)
     expect(settings.get("emtest", "d")).toEqual({ point = "CENTER", x = 0, y = 0 })
     local before = fa:GetLeft()
     o:GetScript("OnDragStart")(o, "LeftButton")
@@ -510,7 +490,7 @@ local function placedByAnother()
     expect(fa:GetLeft()).toBeCloseTo(before + 12)
     o:SetScript("OnUpdate", nil)
     o:StopMovingOrSizing()
-    layer():GetScript("OnKeyDown")(layer(), "ENTER")   -- not typed: Enter passes
+    assert(layer():GetScript("OnKeyDown"))(layer(), "ENTER")   -- not typed: Enter passes
     nextFrame()
     expect(tb.x:HasFocus()).toBe(false)
 end
@@ -522,7 +502,7 @@ end
 @test("the arrows nudge the selected frame 1 px, Shift 10; a mover's own drop takes them")
 local function nudging()
     editMode.enter()
-    layer():GetScript("OnKeyDown")(layer(), "UP")      -- nothing selected: passes
+    assert(layer():GetScript("OnKeyDown"))(layer(), "UP")      -- nothing selected: passes
     mock.click(overlayOf(mA))
     mock.pressKey("UP")
     mock.setModifiers({ shift = true })
@@ -540,7 +520,7 @@ local function nudging()
     dropTakes = false
     mock.pressKey("LEFT")
     expect(settings.get("emtest", "c").x).toBe(-1)
-    layer():GetScript("OnKeyDown")(layer(), "F11")     -- not edit mode's: passes
+    assert(layer():GetScript("OnKeyDown"))(layer(), "F11")     -- not edit mode's: passes
     expect(editMode.isActive()).toBe(true)
 end
 
@@ -553,7 +533,7 @@ local function enterEscape()
     nextFrame()
     expect(tb.x:HasFocus()).toBe(true)
     -- the field has the keys
-    layer():GetScript("OnKeyDown")(layer(), "UP")
+    assert(layer():GetScript("OnKeyDown"))(layer(), "UP")
     expect(settings.get("emtest", "a").y).toBe(0)
     mock.pressKey("ESCAPE")                        -- the field's: cancels
     expect(tb.x:HasFocus()).toBe(false)
@@ -601,15 +581,15 @@ local function anchoring()
     editMode.enter()
     mock.click(overlayOf(mA))
     local tb = bar()
-    expect(tb.anchor.tooltip().description).toBe("The screen point X and Y measure from, the screen third the frame is in. Click to pick one that stays.")
+    expect(anchorTip(tb)).toBe("The screen point X and Y measure from, the screen third the frame is in. Click to pick one that stays.")
     local left = fa:GetLeft()
-    tb.anchor.onChange("TOPLEFT")
+    assert(tb.anchor.onChange)("TOPLEFT")
     local pos = settings.get("emtest", "a")
     expect(pos.point).toBe("TOPLEFT")
     expect(pos.pinned).toBe(true)
     expect(pos.x).toBe(math.floor(W() / 2 - 50 + 0.5))
     expect(fa:GetLeft()).toBeCloseTo(left)
-    expect(tb.anchor.tooltip().description).toBe("The screen point X and Y measure from, picked by you: it stays when you drag the frame. Reset brings the automatic one back.")
+    expect(anchorTip(tb)).toBe("The screen point X and Y measure from, picked by you: it stays when you drag the frame. Reset brings the automatic one back.")
 end
 
 @test("Hide and Show; Reset, the mover's own or the setting's default")
@@ -654,8 +634,8 @@ local function nothingSelected()
     mock.click(overlayOf(mA))
     local tb = bar()
     editMode.exit()
-    tb.anchor.onChange("TOP")
-    tb.x.onChange(4)
+    assert(tb.anchor.onChange)("TOP")
+    assert(tb.x.onChange)(4)
     for _, b in ipairs({ tb.hide, tb.reset, tb.action }) do b:GetScript("OnClick")(b, "LeftButton") end
     expect(settings.get("emtest", "a")).toEqual({ point = "CENTER", x = 0, y = 0 })
     expect(resets).toBe(0)
@@ -671,20 +651,13 @@ local function panelGrid()
     local p = layer().panel
     local function lines(): number
         local n = 0
-        for _, r in ipairs({ layer():GetRegions() }) do if (r :: any):IsShown() then n = n + 1 end end
+        for _, r in ipairs({ layer():GetRegions() }) do if r:IsShown() then n = n + 1 end end
         return n
     end
     local fine = lines()
-    local slider: any = nil
-    local snapToggle: any = nil
-    for _, c in ipairs(descendants(p)) do
-        local f: any = c
-        if f.slider then slider = f end
-        if f.onChange and type(f.value) == "boolean" and f ~= p.previewAuras then snapToggle = f end
-    end
-    mock.click(snapToggle)
+    mock.click(p.snap)
     expect(settings.get("layout", "snap")).toBe(false)
-    mock.slide(slider.slider, 32)
+    mock.slide(p.gridSize.slider, 32)
     expect(settings.get("layout", "gridSize")).toBe(32)
     expect(lines() < fine).toBe(true)
     local ok, why = settings.set("layout", "gridSize", 2)
@@ -719,11 +692,11 @@ local function resetAll()
     settings.set("emtest", "b", { point = "TOPLEFT", x = 4, y = -4 })
     editMode.enter()
     local p = layer().panel
-    mock.click(labelled(p, "Reset all"))
+    mock.click(p.resetAll)
     expect(settings.get("emtest", "a").x).toBe(0)
     expect(settings.get("emtest", "b").x).toBe(40)
     expect(resets).toBe(1)
-    mock.click(labelled(p, "Done"))
+    mock.click(p.done)
     expect(editMode.isActive()).toBe(false)
 end
 

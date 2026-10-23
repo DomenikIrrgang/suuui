@@ -17,12 +17,13 @@
 -- SUUUI_THEME_CHANGED tells the rest (colour codes in text, colours worked
 -- out from a token, sizes from a text style's line height).
 
-import tokens as T, TextStyle from "./Tokens"
+import tokens as T, TextStyle, Color from "./Tokens"
 import * as settings from "./Settings"
 import * as events from "./Events"
 import * as vision from "./Vision"
 import * as fonts from "./Fonts"
 import * as draw from "/UI/Draw"
+import * as secret from "wowlua:secret"
 
 export type ThemeColors = { [string]: number[] }
 export type ThemeFonts = { [string]: { file?: string, size?: number, lineHeight?: number } }
@@ -33,13 +34,21 @@ export type Theme = {
     colors: ThemeColors | ((class: string?) -> ThemeColors),
     fonts: ThemeFonts,
 }
+--- What a plugin passes SuuUI.RegisterTheme.
+export type ThemeDef = {
+    id: string,
+    name?: string,
+    description?: string,
+    colors?: ThemeColors | ((class: string?) -> ThemeColors),
+    fonts?: ThemeFonts,
+}
 
-local colors: { [string]: any } = T.color
+local colors: { [string]: Color } = T.color
 local styles: { [string]: TextStyle } = T.type
 
 -- the design's own colours and text styles, before any theme or colour
 -- vision (this file loads before the saved settings apply either)
-local design: { color: { [string]: any }, type: { [string]: { file: string, size: number, lineHeight: number } } } = { color = {}, type = {} }
+local design: { color: { [string]: Color }, type: { [string]: { file: string, size: number, lineHeight: number } } } = { color = {}, type = {} }
 for tokenName, c in pairs(colors) do design.color[tokenName] = { c[1], c[2], c[3], c[4], hex = c.hex } end
 for styleName, s in pairs(styles) do design.type[styleName] = { file = s.file, size = s.size, lineHeight = s.lineHeight } end
 
@@ -59,8 +68,10 @@ local list: Theme[] = { { id = DEFAULT, name = "SuuUI", description = "SuuUI's o
 local byId: { [string]: Theme } = { [DEFAULT] = list[1] }
 local applied: string = DEFAULT
 
-export function register(def: any): Theme
-    assert(type(def) == "table" and type(def.id) == "string" and def.id ~= "", "SuuUI.RegisterTheme: a theme needs an id")
+-- (a plugin's Lua passes anything: checked here)
+export function register(value: unknown): Theme
+    local def = type(value) == "table" and value :: ThemeDef or nil
+    assert(def and type(def.id) == "string" and def.id ~= "", "SuuUI.RegisterTheme: a theme needs an id")
     assert(not byId[def.id], "SuuUI.RegisterTheme: the theme " .. def.id .. " is taken")
     if type(def.colors) == "table" then
         for token in pairs(def.colors) do
@@ -101,13 +112,16 @@ export function apply()
     local id = settings.account("theme") or DEFAULT
     local theme = byId[id] or byId[DEFAULT] :: Theme
     applied = theme.id
-    local worked: any = theme.colors
-    if type(worked) == "function" then
+    local source = theme.colors
+    local worked: ThemeColors = {}
+    if type(source) == "function" then
         local _, class = UnitClass("player")
-        local ok, t = pcall(worked, class)
-        worked = ok and type(t) == "table" and t or {}
+        local ok, t = pcall(source, secret.asString(class))
+        if ok and type(t) == "table" then worked = t end
+    else
+        worked = source
     end
-    for tokenName, c in pairs(worked :: ThemeColors) do
+    for tokenName, c in pairs(worked) do
         local token = colors[tokenName]
         -- (a worked-out table may name a token that isn't one: skipped)
         if token then

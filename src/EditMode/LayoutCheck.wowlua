@@ -14,14 +14,20 @@ import print, registerCommand from "/Core/Init"
 import * as settings from "/Core/Settings"
 import root from "/Core/Root"
 import * as DB from "/Core/DB"
+import * as secret from "wowlua:secret"
 import * as editMode from "./EditMode"
 
-type Screen = { [number]: any }
+type Screen = { name: string, w: number, h: number }
+
+--- What a run saves to SuuUIProbe.layoutCheck: per screen, the root's size
+--- and what is wrong on it.
+export type Report = { at: string, screens: { [string]: { root: string, issues: string[] } } }
 type Placed = { id: string, label: string, pos: settings.Values, w: number, h: number }
 type Rect = { f: Placed, l: number, b: number, w: number, h: number }
 
 local SCREENS: Screen[] = {
-    { "1080p", 1920, 1080 }, { "1440p", 2560, 1440 }, { "4K", 3840, 2160 }, { "3440 × 1440", 3440, 1440 },
+    { name = "1080p", w = 1920, h = 1080 }, { name = "1440p", w = 2560, h = 1440 },
+    { name = "4K", w = 3840, h = 2160 }, { name = "3440 × 1440", w = 3440, h = 1440 },
 }
 -- pairs that never show at once, and places that are only anchors
 local APART: { [string]: string } = { ["party.position"] = "raid.position", ["raid.position"] = "party.position",
@@ -41,13 +47,13 @@ end
 
 -- A frame's rectangle on a W × H root from its anchor (the frame's point at
 -- the screen's same point, offset by x, y).
-local function place(pos: { [string]: any }, w: number, h: number, W: number, H: number): (number, number, number, number)
-    local point: string = pos.point or "CENTER"
+local function place(pos: settings.Values, w: number, h: number, W: number, H: number): (number, number, number, number)
+    local point = secret.asString(pos.point) or "CENTER"
     local horiz = point:find("LEFT") and "LEFT" or point:find("RIGHT") and "RIGHT" or ""
     local vert = point:find("BOTTOM") and "BOTTOM" or point:find("TOP") and "TOP" or ""
     local rx = (horiz == "LEFT" and 0) or (horiz == "RIGHT" and W) or W / 2
     local ry = (vert == "BOTTOM" and 0) or (vert == "TOP" and H) or H / 2
-    local fx, fy = rx + (pos.x or 0), ry + (pos.y or 0)
+    local fx, fy = rx + (secret.asNumber(pos.x) or 0), ry + (secret.asNumber(pos.y) or 0)
     local l = (horiz == "LEFT" and fx) or (horiz == "RIGHT" and fx - w) or fx - w / 2
     local b = (vert == "BOTTOM" and fy) or (vert == "TOP" and fy - h) or fy - h / 2
     return l, b, w, h
@@ -108,15 +114,15 @@ end
 
 export function run()
     local frames = framesOf(editMode.movers())
-    local report = { at = date("%Y-%m-%d %H:%M:%S"), screens = {} :: { [string]: any } }
+    local report: Report = { at = date("%Y-%m-%d %H:%M:%S"), screens = {} }
     DB.probe.layoutCheck = report
     local total = 0
     for _, sc in ipairs(SCREENS) do
-        local W, H = rootSize(sc[2], sc[3])
+        local W, H = rootSize(sc.w, sc.h)
         local issues = issuesOn(frames, W, H)
-        report.screens[sc[1] :: string] = { root = ("%d × %d"):format(W + 0.5, H + 0.5), issues = issues }
+        report.screens[sc.name] = { root = ("%d × %d"):format(W + 0.5, H + 0.5), issues = issues }
         total = total + #issues
-        print(("%s (%d × %d): %s"):format(sc[1], W + 0.5, H + 0.5, #issues == 0 and "fits" or (#issues .. (#issues == 1 and " issue" or " issues"))))
+        print(("%s (%d × %d): %s"):format(sc.name, W + 0.5, H + 0.5, #issues == 0 and "fits" or (#issues .. (#issues == 1 and " issue" or " issues"))))
         for _, text in ipairs(issues) do print("  " .. text) end
     end
     if total == 0 then print("Your layout fits every screen size, nothing overlapping.") end

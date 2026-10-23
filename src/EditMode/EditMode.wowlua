@@ -21,6 +21,8 @@
 -- SUUUI_EDITMODE_GROUP_PREVIEW(size) tells the group frames when it changes.
 
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 import print, registerCommand from "/Core/Init"
 import tokens as T from "/Core/Tokens"
 import * as settings from "/Core/Settings"
@@ -30,11 +32,18 @@ import * as pixel from "/Core/Pixel"
 import root from "/Core/Root"
 import * as draw from "/UI/Draw"
 import text from "/UI/Text"
+import type Text from "/UI/Text"
 import * as panel from "/UI/Panel"
+import Panel from "/UI/Panel"
+import type KeyChip from "/UI/Panel"
 import * as inputs from "/UI/Inputs"
+import type Segmented, Toggle, NumberField, SliderInput from "/UI/Inputs"
 import * as controls from "/UI/Controls"
+import type SuuButton from "/UI/Controls"
 import * as pickers from "/UI/Pickers"
+import type AnchorButton from "/UI/Pickers"
 import * as layout from "/UI/Layout"
+import type Stack from "/UI/Layout"
 import * as settingsRegistry from "/SettingsUI/Registry"
 import * as settingsWindow from "/SettingsUI/Window"
 
@@ -45,26 +54,46 @@ local S = T.space
 -- hides the frame, `pinned` keeps the point when the frame is dragged.
 export type Position = { point: FramePoint, x: number, y: number, rel?: FramePoint, hidden?: boolean, pinned?: boolean }
 
+--- What a module passes RegisterMover: the setting (`key`, in `namespace`),
+--- the frame's name in edit mode, whether it's on, and how it places itself.
+export type MoverOptions = {
+    key?: string,
+    label?: string,
+    namespace?: string,
+    -- it shows in edit mode while this is truthy
+    enabled?: () -> unknown,
+    -- the frame places itself (a bar attached to the dock)
+    place?: () -> (),
+    -- a drop it takes over (truthy: it did)
+    onDrop?: (l: number, b: number, w: number, h: number) -> unknown,
+    -- a button of its own in the toolbar ("Attach to dock")
+    action?: { label: () -> string, onClick: () -> () },
+    reset?: () -> (),
+    -- the frame a drag moves, when another places it
+    dragFrame?: () -> Region,
+    -- its module shows and hides the frame (it reads position.hidden itself)
+    managedShow?: boolean,
+}
+
 --- A registered mover (what register returns).
 export type Mover = {
-    frame: any,
+    frame: Region,
     namespace: string,
     key: string,
     label: string,
     owner: unknown,
-    enabled: (() -> any)?,
-    customPlace: (() -> ())?,
-    onDrop: ((l: number, b: number, w: number, h: number) -> any)?,
-    action: { label: () -> string, onClick: () -> () }?,
-    onReset: (() -> ())?,
-    dragFrame: (() -> any)?,
-    overlay: any,
-    -- its module shows and hides the frame (it reads position.hidden itself)
-    managedShow: boolean?,
+    enabled?: () -> unknown,
+    customPlace?: () -> (),
+    onDrop?: (l: number, b: number, w: number, h: number) -> unknown,
+    action?: { label: () -> string, onClick: () -> () },
+    onReset?: () -> (),
+    dragFrame?: () -> Region,
+    overlay?: MoverOverlay,
+    managedShow: boolean,
 }
 
 --- What movers() lists for the layout check.
-export type MoverInfo = { frame: any, namespace: string, key: string, label: string, enabled: boolean, custom: boolean }
+export type MoverInfo = { frame: Region, namespace: string, key: string, label: string, enabled: boolean, custom: boolean }
 
 settings.register("layout", {
     snap = true,
@@ -75,15 +104,17 @@ settings.register("layout", {
 })
 
 -- The grid divides by its size: 0 or less would put frames nowhere.
-settings.veto("layout", "gridSize", function(v): (boolean?, string?)
-    if v < 4 or v > 32 then return false, "the grid size is between 4 and 32 px" end
+settings.veto("layout", "gridSize", function(v: unknown): (boolean?, string?)
+    local n = secret.asNumber(v)
+    if not n or n < 4 or n > 32 then return false, "the grid size is between 4 and 32 px" end
     return nil, nil
 end, "EditMode")
 
 local moverList: Mover[] = {}   -- list of mover records
 local active = false
 local selected: Mover? = nil
-local overlay = nil       -- the full-screen edit layer: grid, movers, panel
+local layer: EditLayer? = nil   -- the full-screen edit layer: grid, movers, panel
+local toolbar: Toolbar? = nil
 local previewSize = 0 -- the group preview chosen this session (0: off)
 local previewAuras = false -- every made-up player with buffs and debuffs
 
@@ -91,29 +122,41 @@ local previewAuras = false -- every made-up player with buffs and debuffs
 -- Positions
 --------------------------------------------------------------------------------
 
+-- A mover's saved position.
+local function positionOf(m: Mover): Position
+    local t = settings.getTable(m.namespace, m.key)
+    local rel = secret.asString(t.rel)
+    return {
+        point = (secret.asString(t.point) or "CENTER") :: FramePoint,
+        x = secret.asNumber(t.x) or 0, y = secret.asNumber(t.y) or 0,
+        rel = rel and rel :: FramePoint or nil,
+        hidden = t.hidden == true or nil, pinned = t.pinned == true or nil,
+    }
+end
+
 -- Places `frame` at `pos` (after combat if it is protected). A mover with
 -- opts.place positions its frame itself (a bar attached to the dock).
 local function place(m: Mover)
-    local pos = settings.get(m.namespace, m.key)
+    local pos = positionOf(m)
     combat.run("mover:" .. m.namespace .. "." .. m.key, function()
         local customPlace = m.customPlace
         if customPlace then
             customPlace()
         else
             m.frame:ClearAllPoints()
-            m.frame:SetPoint(pos.point or "CENTER", root, pos.point or "CENTER", pos.x or 0, pos.y or 0)
+            m.frame:SetPoint(pos.point, root, pos.point, pos.x, pos.y)
         end
         -- A frame whose visibility its module manages (a unit frame that shows
         -- only while its unit exists) reads position.hidden itself.
-        if not (m.managedShow or m.frame.suuManagedShow) then m.frame:SetShown(not pos.hidden) end
+        if not (m.managedShow or tbl.field(m.frame, "suuManagedShow")) then m.frame:SetShown(not pos.hidden) end
     end, m.label)
 end
 
 -- The frame's rectangle in root units (nil: it has none yet).
-export function rect(frame: any): (number?, number, number, number)
+export function rect(frame: Region): (number?, number, number, number)
     local s = frame:GetEffectiveScale() / root:GetEffectiveScale()
     local l, b, w, h = frame:GetRect()
-    if not l then return nil, nil :: any, nil :: any, nil :: any end
+    if not (l and b and w and h) then return nil, 0, 0, 0 end
     return l * s, b * s, w * s, h * s
 end
 
@@ -166,7 +209,7 @@ end
 
 -- `pinned`: the anchor was picked by hand, so drags keep it.
 local function save(m: Mover, point: string, x: number, y: number, pinned: boolean?)
-    local pos = settings.get(m.namespace, m.key)
+    local pos = tbl.copy(settings.getTable(m.namespace, m.key))
     pos.point, pos.x, pos.y = point, x, y
     if pinned then pos.pinned = true end
     settings.set(m.namespace, m.key, pos)
@@ -196,35 +239,33 @@ local function placedByAnother(m: Mover): boolean
     return dragFrame ~= nil and dragFrame() ~= m.frame
 end
 
-local toolbar = nil
 local KEYS_H = 26
 
 -- Over the frame, or under it when there is no room above (a frame at the
 -- screen's top edge); the line of keys on the side away from the frame.
-local function placeToolbar(m: Mover, top: number)
+local function placeToolbar(bar: Toolbar, o: MoverOverlay, top: number)
     local gap = S["space-5"] + 6
-    local below = root:GetHeight() - top < gap + toolbar:GetHeight() + S["space-2"] + KEYS_H
-    local keys = toolbar.keys
-    toolbar:ClearAllPoints()
+    local below = root:GetHeight() - top < gap + bar:GetHeight() + S["space-2"] + KEYS_H
+    local keys = bar.keys
+    bar:ClearAllPoints()
     keys:ClearAllPoints()
     if below then
-        toolbar:SetPoint("TOPRIGHT", m.overlay, "BOTTOMRIGHT", 0, -gap)
-        keys:SetPoint("TOPRIGHT", toolbar, "BOTTOMRIGHT", 0, -S["space-2"])
+        bar:SetPoint("TOPRIGHT", o, "BOTTOMRIGHT", 0, -gap)
+        keys:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", 0, -S["space-2"])
     else
-        toolbar:SetPoint("BOTTOMRIGHT", m.overlay, "TOPRIGHT", 0, gap)
-        keys:SetPoint("BOTTOMRIGHT", toolbar, "TOPRIGHT", 0, S["space-2"])
+        bar:SetPoint("BOTTOMRIGHT", o, "TOPRIGHT", 0, gap)
+        keys:SetPoint("BOTTOMRIGHT", bar, "TOPRIGHT", 0, S["space-2"])
     end
 end
 
 -- The toolbar's anchor, X and Y: the saved position, or where a frame
 -- placed by another is (greyed). A field being typed in keeps its text.
-local function showPosition(m: Mover)
+local function showPosition(bar: Toolbar, m: Mover)
     local locked = placedByAnother(m)
-    local pos = settings.get(m.namespace, m.key)
-    local point: string, x: number, y: number = pos.point or "CENTER", pos.x or 0, pos.y or 0
+    local pos = positionOf(m)
+    local point: FramePoint, x: number, y: number = pos.point, pos.x, pos.y
     local l, b, w, h = rect(m.frame)
     if locked and l then point, x, y = anchorFor(l, b, w, h) end
-    local bar = toolbar
     bar.anchor:SetValue(point)
     bar.anchor:SetDisabled(locked)
     for _, f in ipairs({ bar.x, bar.y }) do f:SetDisabled(locked) end
@@ -251,7 +292,7 @@ local function sync(m: Mover)
     o:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", l, b)
     o:SetSize(w, h)
     o.size:SetValue(("%d × %d"):format(w + 0.5, h + 0.5))
-    local hidden = settings.get(m.namespace, m.key).hidden
+    local hidden = positionOf(m).hidden
     o:SetAlpha(hidden and T.opacity["opacity-disabled"] or 1)
     draw.paintFill(o.tagBg, hidden and "ink-faint" or "arcane")
     o.tag:SetValue(m.label .. (hidden and " (hidden)" or ""))
@@ -262,120 +303,131 @@ local function sync(m: Mover)
         + (o.tagHint:IsShown() and o.tagHint:GetUnboundedStringWidth() or 0))
     o.edge:SetColor("arcane", (on or o:IsMouseOver()) and 1 or 0.6)
     o.glow:SetShown(on)
-    if on and toolbar then
-        showPosition(m)
-        placeToolbar(m, b + h)
+    local bar = toolbar
+    if on and bar then
+        showPosition(bar, m)
+        placeToolbar(bar, o, b + h)
     end
 end
 
 local function select(m: Mover?)
     local was = selected
+    local bar = toolbar
     -- what's typed for another frame (or as edit mode closes) is dropped
-    if toolbar and was ~= m then
-        toolbar.x:Cancel()
-        toolbar.y:Cancel()
-        toolbar.anchor:Close()
+    if bar and was ~= m then
+        bar.x:Cancel()
+        bar.y:Cancel()
+        bar.anchor:Close()
     end
     selected = m
     if was then sync(was) end
-    if not m then
-        if toolbar then toolbar:Hide() end
+    if not m or not bar then
+        if bar then bar:Hide() end
         return
     end
-    local hidden = settings.get(m.namespace, m.key).hidden
-    toolbar.hide:SetLabel(hidden and "Show" or "Hide")
+    bar.hide:SetLabel(positionOf(m).hidden and "Show" or "Hide")
     local action = m.action
     if action then
-        toolbar.action:SetLabel(action.label())
-        toolbar.action:Show()
-        toolbar:SetWidth(toolbar.baseWidth + S["space-2"] + 120)
+        bar.action:SetLabel(action.label())
+        bar.action:Show()
+        bar:SetWidth(bar.baseWidth + S["space-2"] + 120)
     else
-        toolbar.action:Hide()
-        toolbar:SetWidth(toolbar.baseWidth)
+        bar.action:Hide()
+        bar:SetWidth(bar.baseWidth)
     end
     sync(m)
-    toolbar:Show()
+    bar:Show()
 end
 
--- Overlays are kept per frame, so a module turned off and on again gets its
--- old overlay back instead of a new one. o.mover is the frame's current mover.
-local overlays: { [any]: any } = {}
+-- A frame's outline in edit mode: dragged, clicked, right-clicked.
+class MoverOverlay extends Button
+    readonly wash: Texture
+    readonly edge: draw.Border
+    readonly glow: draw.SoftEdge
+    readonly tagFrame: Frame
+    readonly tagBg: Texture
+    readonly tag: Text
+    readonly tagHint: Text
+    readonly size: Text
+    mover: Mover
 
-local function buildOverlay(m: Mover)
-    local o = overlays[m.frame]
-    if o then
-        o.mover, m.overlay = m, o
-        return
+    constructor(parent: Frame, m: Mover)
+        super(nil, parent)
+        self.mover = m
+        self:SetFrameLevel(parent:GetFrameLevel() + 10)
+        self:SetMovable(true)
+        self:SetClampedToScreen(true)
+        self:RegisterForDrag("LeftButton")
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.wash = self:CreateTexture(nil, "BACKGROUND")
+        self.wash:SetAllPoints()
+        draw.paintFill(self.wash, "arcane", 0.06)
+        self.edge = draw.border(self, "arcane")
+        self.glow = draw.shadow(self, "glow-arcane")
+        self.glow:SetShown(false)
+
+        self.tagFrame = CreateFrame("Frame", nil, self)
+        self.tagFrame:SetHeight(T.type.caption.lineHeight + 2)
+        self.tagFrame:SetPoint("TOPLEFT", 6, 9)
+        self.tagBg = draw.fill(self.tagFrame, "arcane")
+        self.tagBg:SetAllPoints()
+        self.tag = text(self.tagFrame, "caption", "on-signal")
+        self.tag:SetPoint("LEFT", 5, 0)
+        self.tagHint = text(self.tagFrame, "caption", "on-signal")
+        self.tagHint:SetAlpha(0.72)
+        self.tagHint:SetPoint("LEFT", self.tag, "RIGHT")
+        self.tagHint:SetValue(" · right-click: settings")
+        self.size = text(self, "micro", "ink-muted")
+        self.size:SetShadowed(true)
+        self.size:SetPoint("TOPRIGHT", self, "BOTTOMRIGHT", 0, -3)
+
+        self:SetScript("OnEnter", function() sync(self.mover) end)
+        self:SetScript("OnLeave", function() sync(self.mover) end)
+        self:SetScript("OnClick", function(_, button: string)
+            if button == "RightButton" then return openSettings(self.mover) end
+            select(self.mover)
+        end)
+        self:SetScript("OnDragStart", function() self:StartDrag() end)
+        self:SetScript("OnDragStop", function() self:StopDrag() end)
     end
-    o = CreateFrame("Button", nil, overlay)
-    o:SetFrameLevel(overlay:GetFrameLevel() + 10)
-    o:SetMovable(true)
-    o:SetClampedToScreen(true)
-    o:RegisterForDrag("LeftButton")
-    o:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    o.wash = o:CreateTexture(nil, "BACKGROUND")
-    o.wash:SetAllPoints()
-    draw.paintFill(o.wash, "arcane", 0.06)
-    o.edge = draw.border(o, "arcane")
-    o.glow = draw.shadow(o, "glow-arcane")
-    o.glow:SetShown(false)
 
-    o.tagFrame = CreateFrame("Frame", nil, o)
-    o.tagFrame:SetHeight(T.type.caption.lineHeight + 2)
-    o.tagFrame:SetPoint("TOPLEFT", 6, 9)
-    o.tagBg = draw.fill(o.tagFrame, "arcane")
-    o.tagBg:SetAllPoints()
-    o.tag = text(o.tagFrame, "caption", "on-signal")
-    o.tag:SetPoint("LEFT", 5, 0)
-    o.tagHint = text(o.tagFrame, "caption", "on-signal")
-    o.tagHint:SetAlpha(0.72)
-    o.tagHint:SetPoint("LEFT", o.tag, "RIGHT")
-    o.tagHint:SetValue(" · right-click: settings")
-    o.size = text(o, "micro", "ink-muted")
-    o.size:SetShadowed(true)
-    o.size:SetPoint("TOPRIGHT", o, "BOTTOMRIGHT", 0, -3)
-
-    o:SetScript("OnEnter", function(self) sync(self.mover) end)
-    o:SetScript("OnLeave", function(self) sync(self.mover) end)
-    o:SetScript("OnClick", function(self, button: string)
-        if button == "RightButton" then return openSettings(self.mover) end
-        select(self.mover)
-    end)
-    o:SetScript("OnDragStart", function(self)
-        local mv: Mover = self.mover
+    function StartDrag()
+        local mv = self.mover
         select(mv)
         -- The frame a drag moves: the mover's own, or the one it is part of
         -- (opts.dragFrame: a bar attached to the dock moves the dock).
         local dragFrame = mv.dragFrame
         local lead = dragFrame and dragFrame() or mv.frame
         local sl, sb = rect(lead)
-        local ol, ob = self:GetLeft(), self:GetBottom()
+        local ol, ob = self:GetLeft() or 0, self:GetBottom() or 0
         self:StartMoving()
         -- The real frames follow while dragging (edit mode is never open in
         -- combat, so protected frames may move too), and every other mover's
         -- outline keeps up with them.
         self:SetScript("OnUpdate", function()
             if InCombatLockdown() or not sl then return end
-            local dx, dy = self:GetLeft() - ol, self:GetBottom() - ob
+            local dx, dy = (self:GetLeft() or 0) - ol, (self:GetBottom() or 0) - ob
             lead:ClearAllPoints()
             lead:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", sl + dx, sb + dy)
             for _, other in ipairs(moverList) do
-                if other ~= mv and other.overlay and other.overlay:IsShown() then sync(other) end
+                local o = other.overlay
+                if other ~= mv and o and o:IsShown() then sync(other) end
             end
         end)
-    end)
-    o:SetScript("OnDragStop", function(self)
-        local mv: Mover = self.mover
+    end
+
+    function StopDrag()
+        local mv = self.mover
         self:SetScript("OnUpdate", nil)
         self:StopMovingOrSizing()
-        local l, b, w, h = self:GetLeft(), self:GetBottom(), self:GetWidth(), self:GetHeight()
+        local l, b, w, h = self:GetLeft() or 0, self:GetBottom() or 0, self:GetWidth(), self:GetHeight()
         -- opts.onDrop can take the drop over (and returns true when it did).
         local onDrop = mv.onDrop
         if onDrop and onDrop(snap(l), snap(b), w, h) then
             after(0, function() if active then sync(mv) end end)
             return
         end
-        local pos = settings.get(mv.namespace, mv.key)
+        local pos = positionOf(mv)
         local point, x, y = anchorFor(l, b, w, h, pos.pinned and pos.point or nil)
         save(mv, point, snap(x), snap(y))
         -- A drop that snaps back to the saved position changes no setting, so
@@ -384,40 +436,55 @@ local function buildOverlay(m: Mover)
         after(0, function()
             if not active then return end
             for _, other in ipairs(moverList) do
-                if other.overlay and other.overlay:IsShown() then sync(other) end
+                local o = other.overlay
+                if o and o:IsShown() then sync(other) end
             end
         end)
-    end)
+    end
+
+    function Stop()
+        self:SetScript("OnUpdate", nil)
+        self:StopMovingOrSizing()
+    end
+end
+
+-- Overlays are kept per frame, so a module turned off and on again gets its
+-- old overlay back instead of a new one. o.mover is the frame's current mover.
+local overlays: { [Region]: MoverOverlay } = {}
+
+local function buildOverlay(l: EditLayer, m: Mover): MoverOverlay
+    local o = overlays[m.frame] or MoverOverlay.new(l, m)
     o.mover = m
     overlays[m.frame] = o
     m.overlay = o
+    return o
 end
 
 --------------------------------------------------------------------------------
 -- The grid and the panel
 --------------------------------------------------------------------------------
 
-local gridLines: any[] = {}
+local gridLines: Texture[] = {}
 
-local function drawGrid()
+local function drawGrid(l: EditLayer)
     local g = settings.getNumber("layout", "gridSize")
     local W, H = root:GetWidth(), root:GetHeight()
     for _, t in ipairs(gridLines) do t:Hide() end
     local i = 0
     local function line(vertical: boolean, pos: number, alpha: number)
         i = i + 1
-        local t = gridLines[i] or overlay:CreateTexture(nil, "BACKGROUND", nil, 1)
+        local t = gridLines[i] or l:CreateTexture(nil, "BACKGROUND", nil, 1)
         gridLines[i] = t
         draw.paintFill(t, "arcane", alpha)
         t:ClearAllPoints()
-        local px = pixel.size(overlay)
+        local px = pixel.size(l)
         if vertical then
-            t:SetPoint("TOPLEFT", overlay, "TOPLEFT", pos, 0)
-            t:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", pos, 0)
+            t:SetPoint("TOPLEFT", l, "TOPLEFT", pos, 0)
+            t:SetPoint("BOTTOMLEFT", l, "BOTTOMLEFT", pos, 0)
             t:SetWidth(px)
         else
-            t:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", 0, pos)
-            t:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", 0, pos)
+            t:SetPoint("BOTTOMLEFT", l, "BOTTOMLEFT", 0, pos)
+            t:SetPoint("BOTTOMRIGHT", l, "BOTTOMRIGHT", 0, pos)
             t:SetHeight(px)
         end
         t:Show()
@@ -433,127 +500,151 @@ end
 -- frame", with air at the edge
 local PANEL_BODY = 266
 
-local function buildPanel(): any
-    local p = panel.panel(overlay, { title = "Edit mode", width = PANEL_BODY + S["space-5"] * 2 })
-    p:SetFrameStrata("FULLSCREEN_DIALOG")
-    p:EnableMouse(true)
-    -- dragged out of the way of a frame under it (asked 2026-10-19), by
-    -- anything on it that isn't a control; kept for next time, and back at
-    -- the left on a double-click
-    local function placePanel()
-        local at = settings.get("layout", "panel")
-        p:ClearAllPoints()
-        if type(at) == "table" and at.x and at.y then
-            p:SetPoint("CENTER", root, "CENTER", at.x, at.y)
+-- A switch with its label, in a row of the panel.
+local function switchRow(parent: Frame, label: string, value: boolean, onChange: (v: boolean) -> ()): (Frame, Toggle)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetSize(PANEL_BODY, 20)
+    local t = inputs.toggle(row, { value = value, onChange = onChange })
+    t:SetPoint("LEFT")
+    local l = text(row, "label", "ink")
+    l:SetValue(label)
+    l:SetPoint("LEFT", t, "RIGHT", S["space-4"], 0)
+    return row, t
+end
+
+class EditPanel extends Panel
+    readonly stack: Stack
+    readonly previewRow: Frame
+    readonly previewPick: Segmented<number>
+    readonly previewAuras: Toggle
+    readonly snap: Toggle
+    readonly gridSize: SliderInput
+    readonly resetAll: SuuButton
+    readonly done: SuuButton
+
+    constructor(parent: Frame)
+        super(parent, { title = "Edit mode", width = PANEL_BODY + S["space-5"] * 2 })
+        self:SetFrameStrata("FULLSCREEN_DIALOG")
+        self:EnableMouse(true)
+        -- dragged out of the way of a frame under it (asked 2026-10-19), by
+        -- anything on it that isn't a control; kept for next time, and back at
+        -- the left on a double-click
+        self:SetMovable(true)
+        self:SetClampedToScreen(true)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", function() self:StartMoving() end)
+        self:SetScript("OnDragStop", function()
+            self:StopMovingOrSizing()
+            local x, y = self:GetCenter()
+            local rx, ry = root:GetCenter()
+            local k = self:GetEffectiveScale() / root:GetEffectiveScale()
+            settings.set("layout", "panel", { x = math.floor((x or 0) * k - (rx or 0) + 0.5),
+                                              y = math.floor((y or 0) * k - (ry or 0) + 0.5) })
+            self:Place()
+        end)
+        -- (a frame has no OnDoubleClick: two clicks within 0.35 s)
+        local last = 0
+        self:SetScript("OnMouseUp", function(_, button: string)
+            if button ~= "LeftButton" then return end
+            local now = GetTime()
+            if now - last < 0.35 then
+                last = 0
+                settings.set("layout", "panel", {})
+                self:Place()
+            else
+                last = now
+            end
+        end)
+        local stack = layout.stack(self.body, { gap = S["space-4"], autoSize = "height" })
+        self.stack = stack
+
+        local snapRow, snapToggle = switchRow(self.body, "Snap to grid", settings.get("layout", "snap") == true,
+            function(v: boolean) settings.set("layout", "snap", v) end)
+        self.snap = snapToggle
+        stack:Add(snapRow)
+
+        local size = inputs.slider(self.body, { label = "Grid size", min = 4, max = 32, step = 4, unit = "px", width = PANEL_BODY,
+            value = settings.getNumber("layout", "gridSize"),
+            onChange = function(v: number) settings.set("layout", "gridSize", v) end })
+        self.gridSize = size
+        stack:Add(size)
+
+        -- made-up players in the group frames, at their real place and size
+        local previewRow = CreateFrame("Frame", nil, self.body)
+        previewRow:SetSize(PANEL_BODY, T.type.label.lineHeight + S["space-2"] + 28)
+        self.previewRow = previewRow
+        local previewLabel = text(previewRow, "label", "ink")
+        previewLabel:SetValue("Group preview (players)")
+        previewLabel:SetPoint("TOPLEFT")
+        self.previewPick = inputs.segmented(previewRow, {
+            -- players in the group: 5 the party, more the raid (fits the body)
+            options = { { value = 0, label = "Off" }, { value = 5, label = "5" }, { value = 10, label = "10" },
+                        { value = 20, label = "20" }, { value = 40, label = "40" } },
+            value = previewSize,
+            onChange = function(v: number) setGroupPreview(v) end })
+        self.previewPick:SetPoint("TOPLEFT", previewLabel, "BOTTOMLEFT", 0, -S["space-2"])
+        stack:Add(previewRow)
+        -- everyone with defensives and every dispel type, to see the icons fit
+        local aurasRow, aurasToggle = switchRow(self.body, "Buffs and debuffs on every frame", previewAuras,
+            function(v: boolean) setGroupPreview(previewSize, v) end)
+        self.previewAuras = aurasToggle
+        stack:Add(aurasRow)
+
+        local buttons = CreateFrame("Frame", nil, self.body)
+        local bs = layout.stack(buttons, { direction = "horizontal", gap = S["space-4"] })
+        self.resetAll = controls.button(buttons, { text = "Reset all", onClick = function()
+            -- each mover's own reset (opts.reset), as the toolbar's Reset does
+            for _, m in ipairs(moverList) do
+                local onReset = m.onReset
+                if onReset then onReset() else settings.reset(m.namespace, m.key) end
+            end
+        end })
+        bs:Add(self.resetAll)
+        self.done = controls.button(buttons, { text = "Done", variant = "primary", onClick = function() exit() end })
+        bs:Add(self.done)
+        stack:Add(buttons)
+        self:Place()
+    end
+
+    function Place()
+        local at = settings.getTable("layout", "panel")
+        local x, y = secret.asNumber(at.x), secret.asNumber(at.y)
+        self:ClearAllPoints()
+        if x and y then
+            self:SetPoint("CENTER", root, "CENTER", x, y)
         else
-            p:SetPoint("LEFT", root, "LEFT", S["space-7"], 0)
+            self:SetPoint("LEFT", root, "LEFT", S["space-7"], 0)
         end
     end
-    placePanel()
-    p:SetMovable(true)
-    p:SetClampedToScreen(true)
-    p:RegisterForDrag("LeftButton")
-    p:SetScript("OnDragStart", p.StartMoving)
-    p:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        local x, y = self:GetCenter()
-        local rx, ry = root:GetCenter()
-        local k = self:GetEffectiveScale() / root:GetEffectiveScale()
-        settings.set("layout", "panel", { x = math.floor(x * k - rx + 0.5), y = math.floor(y * k - ry + 0.5) })
-        placePanel()
-    end)
-    -- (a frame has no OnDoubleClick: two clicks within 0.35 s)
-    local last = 0
-    p:SetScript("OnMouseUp", function(_, button: string)
-        if button ~= "LeftButton" then return end
-        local now = GetTime()
-        if now - last < 0.35 then
-            last = 0
-            settings.set("layout", "panel", {})
-            placePanel()
-        else
-            last = now
-        end
-    end)
-    local stack = layout.stack(p.body, { gap = S["space-4"], autoSize = "height" })
-
-    local snapRow = CreateFrame("Frame", nil, p.body)
-    snapRow:SetSize(PANEL_BODY, 20)
-    local snapToggle = inputs.toggle(snapRow, { value = settings.get("layout", "snap"),
-        onChange = function(v) settings.set("layout", "snap", v) end })
-    snapToggle:SetPoint("LEFT")
-    local snapLabel = text(snapRow, "label", "ink")
-    snapLabel:SetValue("Snap to grid")
-    snapLabel:SetPoint("LEFT", snapToggle, "RIGHT", S["space-4"], 0)
-    stack:Add(snapRow)
-
-    local size = inputs.slider(p.body, { label = "Grid size", min = 4, max = 32, step = 4, unit = "px", width = PANEL_BODY,
-        value = settings.getNumber("layout", "gridSize"),
-        onChange = function(v) settings.set("layout", "gridSize", v) end })
-    stack:Add(size)
-
-    -- made-up players in the group frames, at their real place and size
-    local previewRow = CreateFrame("Frame", nil, p.body)
-    previewRow:SetSize(PANEL_BODY, T.type.label.lineHeight + S["space-2"] + 28)
-    p.previewRow, p.stack = previewRow, stack
-    local previewLabel = text(previewRow, "label", "ink")
-    previewLabel:SetValue("Group preview (players)")
-    previewLabel:SetPoint("TOPLEFT")
-    local previewPick = inputs.segmented(previewRow, {
-        -- players in the group: 5 the party, more the raid (fits the body)
-        options = { { value = 0, label = "Off" }, { value = 5, label = "5" }, { value = 10, label = "10" },
-                    { value = 20, label = "20" }, { value = 40, label = "40" } },
-        value = previewSize,
-        onChange = function(v) setGroupPreview(v) end })
-    previewPick:SetPoint("TOPLEFT", previewLabel, "BOTTOMLEFT", 0, -S["space-2"])
-    p.previewPick = previewPick
-    stack:Add(previewRow)
-    -- everyone with defensives and every dispel type, to see the icons fit
-    local aurasRow = CreateFrame("Frame", nil, p.body)
-    aurasRow:SetSize(PANEL_BODY, 20)
-    local aurasToggle = inputs.toggle(aurasRow, { value = previewAuras,
-        onChange = function(v) setGroupPreview(previewSize, v) end })
-    aurasToggle:SetPoint("LEFT")
-    local aurasLabel = text(aurasRow, "label", "ink")
-    aurasLabel:SetValue("Buffs and debuffs on every frame")
-    aurasLabel:SetPoint("LEFT", aurasToggle, "RIGHT", S["space-4"], 0)
-    p.previewAuras = aurasToggle
-    stack:Add(aurasRow)
-
-    local buttons = CreateFrame("Frame", nil, p.body)
-    local bs = layout.stack(buttons, { direction = "horizontal", gap = S["space-4"] })
-    bs:Add(controls.button(buttons, { text = "Reset all", onClick = function()
-        -- each mover's own reset (opts.reset), as the toolbar's Reset does
-        for _, m in ipairs(moverList) do
-            local onReset = m.onReset
-            if onReset then onReset() else settings.reset(m.namespace, m.key) end
-        end
-    end }))
-    bs:Add(controls.button(buttons, { text = "Done", variant = "primary", onClick = function() exit() end }))
-    stack:Add(buttons)
-    return p
 end
+
+-- A key and what it does, in the line of keys.
+type KeyPart = { key: string, chip: KeyChip, text: Text }
 
 -- The line of keys beside the toolbar while X or Y has focus, or what Enter
 -- does with a value past the screen's edge.
-local function buildKeys(bar: any): any
-    local keys = CreateFrame("Frame", nil, bar)
-    keys:SetHeight(KEYS_H)
-    keys:SetClampedToScreen(true)
-    keys:Hide()
-    draw.fill(keys, "surface"):SetAllPoints()
-    draw.border(keys, "gilt-line")
-    keys.parts = {}
-    for _, p in ipairs({ { "Enter", "applies" }, { "Tab", "Y" }, { "Esc", "cancels" }, { "↑ ↓", "1 px, Shift 10" } }) do
-        local label = text(keys, "micro", "ink-muted")
-        label:SetValue(p[2])
-        keys.parts[#keys.parts + 1] = { key = p[1], chip = panel.keyChip(keys, p[1]), text = label }
-    end
-    keys.warning = text(keys, "micro", "amber")
-    keys.warning:SetPoint("LEFT", S["space-3"], 0)
-    keys.warning:Hide()
+class KeysLine extends Frame
+    readonly parts: KeyPart[] = {}
+    readonly warning: Text
 
-    function keys.Layout(self: any)
+    constructor(bar: Frame)
+        super(nil, bar)
+        self:SetHeight(KEYS_H)
+        self:SetClampedToScreen(true)
+        self:Hide()
+        draw.fill(self, "surface"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        for _, p in ipairs({ { "Enter", "applies" }, { "Tab", "Y" }, { "Esc", "cancels" }, { "↑ ↓", "1 px, Shift 10" } }) do
+            local label = text(self, "micro", "ink-muted")
+            label:SetValue(p[2])
+            self.parts[#self.parts + 1] = { key = p[1], chip = panel.keyChip(self, p[1]), text = label }
+        end
+        self.warning = text(self, "micro", "amber")
+        self.warning:SetPoint("LEFT", S["space-3"], 0)
+        self.warning:Hide()
+    end
+
+    function Layout()
         local x = S["space-3"]
         for i, p in ipairs(self.parts) do
             p.chip:SetKey(p.key) -- measured again (a theme changes the text size)
@@ -565,8 +656,9 @@ local function buildKeys(bar: any): any
         if self.warning:IsShown() then x = S["space-3"] + self.warning:GetUnboundedStringWidth() end
         self:SetWidth(x + S["space-3"])
     end
+
     -- nil: the keys; text: the warning instead
-    function keys.Warn(self: any, warning: string?)
+    function Warn(warning: string?)
         self.warning:SetValue(warning or "")
         self.warning:SetShown(warning ~= nil)
         for _, p in ipairs(self.parts) do
@@ -575,134 +667,167 @@ local function buildKeys(bar: any): any
         end
         self:Layout()
     end
+
     -- shown for a field: Tab goes to `nextLetter`
-    function keys.For(self: any, nextLetter: string)
+    function For(nextLetter: string)
         self.parts[2].text:SetValue(nextLetter)
         self:Warn(nil)
         self:Show()
     end
-    return keys
 end
 
-local function buildToolbar(): any
-    local bar = panel.panel(overlay, { solid = true, shadow = true })
-    bar.body:SetScript("OnSizeChanged", nil)
-    bar.body:Hide()
-    bar:SetFrameStrata("FULLSCREEN_DIALOG")
-    bar:SetClampedToScreen(true) -- a frame at the screen's left or right edge
-    bar.keys = buildKeys(bar)
+class Toolbar extends Panel
+    readonly keys: KeysLine
+    readonly anchor: AnchorButton
+    readonly x: NumberField
+    readonly y: NumberField
+    readonly rule: Texture
+    readonly hide: SuuButton
+    readonly reset: SuuButton
+    readonly action: SuuButton
+    readonly baseWidth: number
 
-    -- The anchor: a new one leaves the frame where it is (X and Y converted)
-    -- and stays when the frame is dragged.
-    bar.anchor = pickers.anchorButton(bar, {
-        note = "The frame stays where it is; X and Y now measure from this point.",
-        tooltip = function(): { description: string }
-            local m = selected
-            if m and placedByAnother(m) then
-                return { description = "It moves with the frame it's attached to. Detach it to place it by number." }
-            end
-            if m and settings.get(m.namespace, m.key).pinned then
-                return { description = "The screen point X and Y measure from, picked by you: it stays when you drag the frame. Reset brings the automatic one back." }
-            end
-            return { description = "The screen point X and Y measure from, the screen third the frame is in. Click to pick one that stays." }
-        end,
-        onChange = function(point: FramePoint)
+    constructor(parent: Frame)
+        super(parent, { solid = true, shadow = true })
+        self.body:SetScript("OnSizeChanged", nil)
+        self.body:Hide()
+        self:SetFrameStrata("FULLSCREEN_DIALOG")
+        self:SetClampedToScreen(true) -- a frame at the screen's left or right edge
+        self.keys = KeysLine.new(self)
+
+        -- The anchor: a new one leaves the frame where it is (X and Y converted)
+        -- and stays when the frame is dragged.
+        self.anchor = pickers.anchorButton(self, {
+            note = "The frame stays where it is; X and Y now measure from this point.",
+            tooltip = function(): { description: string }
+                local m = selected
+                if m and placedByAnother(m) then
+                    return { description = "It moves with the frame it's attached to. Detach it to place it by number." }
+                end
+                if m and positionOf(m).pinned then
+                    return { description = "The screen point X and Y measure from, picked by you: it stays when you drag the frame. Reset brings the automatic one back." }
+                end
+                return { description = "The screen point X and Y measure from, the screen third the frame is in. Click to pick one that stays." }
+            end,
+            onChange = function(point: FramePoint)
+                local m = selected
+                if not m then return end
+                local l, b, w, h = rect(m.frame)
+                if not l or placedByAnother(m) then return end
+                local _, x, y = anchorFor(l, b, w, h, point)
+                save(m, point, math.floor(x + 0.5), math.floor(y + 0.5), true)
+            end })
+        self.anchor:SetPoint("LEFT", 3, 0)
+
+        -- X and Y: typed values skip the snap grid and keep the frame on screen.
+        local fields: { [string]: NumberField } = {}
+        local function field(letter: string, other: string): NumberField
+            local f = inputs.numberField(self, { letter = letter,
+                onChange = function(v: number)
+                    local m = selected
+                    if not m or placedByAnother(m) then return end
+                    local pos = positionOf(m)
+                    local x, y = pos.x, pos.y
+                    if letter == "X" then x = v else y = v end
+                    save(m, pos.point, x, y)
+                end,
+                onFocus = function(on: boolean)
+                    if on then
+                        self.anchor:Close()
+                        self.keys:For(other)
+                    else
+                        self.keys:Hide()
+                    end
+                end,
+                onTab = function()
+                    local next = fields[other]
+                    if next then next:Focus() end
+                end,
+                onTyping = function(n: number?)
+                    local f = fields[letter]
+                    local kept = n and f and f:Clamp(n)
+                    self.keys:Warn(kept and kept ~= n and ("Off screen past %d: Enter keeps it at %d."):format(kept, kept) or nil)
+                end })
+            fields[letter] = f
+            return f
+        end
+        self.x = field("X", "Y")
+        self.x:SetPoint("LEFT", self.anchor, "RIGHT", S["space-2"], 0)
+        self.y = field("Y", "X")
+        self.y:SetPoint("LEFT", self.x, "RIGHT", S["space-2"], 0)
+        self.rule = draw.fill(self, "gilt-line", "ARTWORK")
+        self.rule:SetSize(pixel.size(self), 20)
+        self.rule:SetPoint("LEFT", self.y, "RIGHT", S["space-3"], 0)
+
+        self.hide = controls.button(self, { text = "Hide", width = 60, onClick = function()
             local m = selected
             if not m then return end
-            local l, b, w, h = rect(m.frame)
-            if not l or placedByAnother(m) then return end
-            local _, x, y = anchorFor(l, b, w, h, point)
-            save(m, point, math.floor(x + 0.5), math.floor(y + 0.5), true)
+            local pos = tbl.copy(settings.getTable(m.namespace, m.key))
+            pos.hidden = not pos.hidden or nil
+            settings.set(m.namespace, m.key, pos)
+            select(m)
         end })
-    bar.anchor:SetPoint("LEFT", 3, 0)
-
-    -- X and Y: typed values skip the snap grid and keep the frame on screen.
-    local function field(letter: string, other: string): any
-        local f = nil
-        f = inputs.numberField(bar, { letter = letter,
-            onChange = function(v: number)
-                local m = selected
-                if not m or placedByAnother(m) then return end
-                local pos = settings.get(m.namespace, m.key)
-                local x, y = pos.x or 0, pos.y or 0
-                if letter == "X" then x = v else y = v end
-                save(m, pos.point or "CENTER", x, y)
-            end,
-            onFocus = function(on: boolean)
-                if on then
-                    bar.anchor:Close()
-                    bar.keys:For(other)
-                else
-                    bar.keys:Hide()
-                end
-            end,
-            onTab = function() bar[other:lower()]:Focus() end,
-            onTyping = function(n: number?)
-                local kept = n and f:Clamp(n)
-                bar.keys:Warn(kept and kept ~= n and ("Off screen past %d: Enter keeps it at %d."):format(kept, kept) or nil)
-            end })
-        return f
+        self.hide:SetPoint("LEFT", self.y, "RIGHT", S["space-3"] * 2 + 1, 0)
+        self.reset = controls.button(self, { text = "Reset", width = 60, onClick = function()
+            local m = selected
+            if not m then return end
+            local onReset = m.onReset
+            if onReset then onReset() else settings.reset(m.namespace, m.key) end
+        end })
+        self.reset:SetPoint("LEFT", self.hide, "RIGHT", S["space-2"], 0)
+        -- A mover's own action (opts.action), e.g. "Attach to dock".
+        self.action = controls.button(self, { text = "", width = 120, onClick = function()
+            local m = selected
+            local action = m and m.action
+            if m and action then
+                action.onClick()
+                after(0, function() if active and selected == m then select(m) end end)
+            end
+        end })
+        self.action:SetPoint("LEFT", self.reset, "RIGHT", S["space-2"], 0)
+        self.baseWidth = 3 + 30 + S["space-2"] + self.x:GetWidth() + S["space-2"] + self.y:GetWidth()
+            + S["space-3"] * 2 + 1 + 60 + S["space-2"] + 60 + 3
+        self:SetSize(self.baseWidth, 36)
     end
-    bar.x = field("X", "Y")
-    bar.x:SetPoint("LEFT", bar.anchor, "RIGHT", S["space-2"], 0)
-    bar.y = field("Y", "X")
-    bar.y:SetPoint("LEFT", bar.x, "RIGHT", S["space-2"], 0)
-    bar.rule = draw.fill(bar, "gilt-line", "ARTWORK")
-    bar.rule:SetSize(pixel.size(bar), 20)
-    bar.rule:SetPoint("LEFT", bar.y, "RIGHT", S["space-3"], 0)
-
-    bar.hide = controls.button(bar, { text = "Hide", width = 60, onClick = function()
-        local m = selected
-        if not m then return end
-        local pos = settings.get(m.namespace, m.key)
-        pos.hidden = not pos.hidden or nil
-        settings.set(m.namespace, m.key, pos)
-        select(m)
-    end })
-    bar.hide:SetPoint("LEFT", bar.y, "RIGHT", S["space-3"] * 2 + 1, 0)
-    bar.reset = controls.button(bar, { text = "Reset", width = 60, onClick = function()
-        local m = selected
-        if not m then return end
-        local onReset = m.onReset
-        if onReset then onReset() else settings.reset(m.namespace, m.key) end
-    end })
-    bar.reset:SetPoint("LEFT", bar.hide, "RIGHT", S["space-2"], 0)
-    -- A mover's own action (opts.action), e.g. "Attach to dock".
-    bar.action = controls.button(bar, { text = "", width = 120, onClick = function()
-        local m = selected
-        local action = m and m.action
-        if m and action then
-            action.onClick()
-            after(0, function() if active and selected == m then select(m) end end)
-        end
-    end })
-    bar.action:SetPoint("LEFT", bar.reset, "RIGHT", S["space-2"], 0)
-    bar.baseWidth = 3 + 30 + S["space-2"] + bar.x:GetWidth() + S["space-2"] + bar.y:GetWidth()
-        + S["space-3"] * 2 + 1 + 60 + S["space-2"] + 60 + 3
-    bar:SetSize(bar.baseWidth, 36)
-    return bar
 end
 
-local function buildLayer()
-    overlay = CreateFrame("Frame", "SuuUIEditMode", root)
-    overlay:SetAllPoints(root)
-    overlay:SetFrameStrata("FULLSCREEN")
-    -- The layer itself never takes the mouse, so the camera and the world
-    -- stay usable; only the movers, the toolbar and the panel do.
-    overlay:EnableMouse(false)
-    overlay:EnableKeyboard(true)
-    overlay:Hide()
-    overlay.wash = overlay:CreateTexture(nil, "BACKGROUND")
-    overlay.wash:SetAllPoints()
-    overlay.wash:SetColorTexture(0, 0, 0, 0.25)
-    overlay:SetScript("OnKeyDown", function(self, key: string)
-        local nudge = ({ UP = { 0, 1 }, DOWN = { 0, -1 }, LEFT = { -1, 0 }, RIGHT = { 1, 0 } } :: { [string]: number[] })[key]
+-- The arrow keys' nudges.
+local NUDGE: { [string]: number[] } = { UP = { 0, 1 }, DOWN = { 0, -1 }, LEFT = { -1, 0 }, RIGHT = { 1, 0 } }
+
+-- The full-screen edit layer: a wash, the grid, the movers, the panel.
+class EditLayer extends Frame
+    readonly wash: Texture
+    readonly panel: EditPanel
+    readonly toolbar: Toolbar
+
+    constructor()
+        super("SuuUIEditMode", root)
+        self:SetAllPoints(root)
+        self:SetFrameStrata("FULLSCREEN")
+        -- The layer itself never takes the mouse, so the camera and the world
+        -- stay usable; only the movers, the toolbar and the panel do.
+        self:EnableMouse(false)
+        self:EnableKeyboard(true)
+        self:Hide()
+        self.wash = self:CreateTexture(nil, "BACKGROUND")
+        self.wash:SetAllPoints()
+        self.wash:SetColorTexture(0, 0, 0, 0.25)
+        self:SetScript("OnKeyDown", function(_, key: string) self:Key(key) end)
+        self.panel = EditPanel.new(self)
+        self.toolbar = Toolbar.new(self)
+        self.toolbar:Hide()
+    end
+
+    function Key(key: string)
+        local bar = toolbar
+        local nudge = NUDGE[key]
         local m = selected
-        if toolbar.x:HasFocus() or toolbar.y:HasFocus() then
+        if not bar then return end
+        if bar.x:HasFocus() or bar.y:HasFocus() then
             self:SetPropagateKeyboardInput(true) -- the field's own keys
-        elseif key == "ESCAPE" and toolbar.anchor:IsOpen() then
+        elseif key == "ESCAPE" and bar.anchor:IsOpen() then
             self:SetPropagateKeyboardInput(false)
-            toolbar.anchor:Close()
+            bar.anchor:Close()
         elseif key == "ESCAPE" then
             self:SetPropagateKeyboardInput(false)
             exit()
@@ -710,7 +835,7 @@ local function buildLayer()
             -- Enter starts typing the selected frame's X (once this key is
             -- done, so the field doesn't take it as its own Enter)
             self:SetPropagateKeyboardInput(false)
-            after(0, function() if active and selected then toolbar.x:Focus() end end)
+            after(0, function() if active and selected then bar.x:Focus() end end)
         elseif nudge and m then
             self:SetPropagateKeyboardInput(false)
             local step = IsShiftKeyDown() and 10 or 1
@@ -719,16 +844,22 @@ local function buildLayer()
             if onDrop and l and onDrop(l + nudge[1] * step, b + nudge[2] * step, w, h) then
                 after(0, function() if active then sync(m) end end)
             else
-                local pos = settings.get(m.namespace, m.key)
-                save(m, pos.point or "CENTER", (pos.x or 0) + nudge[1] * step, (pos.y or 0) + nudge[2] * step)
+                local pos = positionOf(m)
+                save(m, pos.point, pos.x + nudge[1] * step, pos.y + nudge[2] * step)
             end
         else
             self:SetPropagateKeyboardInput(true)
         end
-    end)
-    overlay.panel = buildPanel()
-    toolbar = buildToolbar()
-    toolbar:Hide()
+    end
+end
+
+local function theLayer(): EditLayer
+    local l = layer
+    if l then return l end
+    l = EditLayer.new()
+    layer = l
+    toolbar = l.toolbar
+    return l
 end
 
 --------------------------------------------------------------------------------
@@ -745,13 +876,13 @@ export function enter(): boolean
         print("Edit mode opens out of combat.")
         return false
     end
-    if not overlay then buildLayer() end
+    local l = theLayer()
     active = true
-    overlay:Show()
-    drawGrid()
+    l:Show()
+    drawGrid(l)
     for _, m in ipairs(moverList) do
-        if not m.overlay then buildOverlay(m) end
-        m.overlay:SetShown(enabled(m))
+        local o = m.overlay or buildOverlay(l, m)
+        o:SetShown(enabled(m))
         sync(m)
     end
     select(nil)
@@ -769,9 +900,11 @@ end
 export function setGroupPreview(size: number?, auras: boolean?)
     previewSize = size or 0
     if auras ~= nil then previewAuras = auras and true or false end
-    local p = overlay and overlay.panel
-    if p and p.previewPick then p.previewPick:SetValue(previewSize) end
-    if p and p.previewAuras then p.previewAuras:SetValue(previewAuras) end
+    local p = layer and layer.panel
+    if p then
+        p.previewPick:SetValue(previewSize)
+        p.previewAuras:SetValue(previewAuras)
+    end
     if active then events.emit("SUUUI_EDITMODE_GROUP_PREVIEW", previewSize, previewAuras) end
 end
 
@@ -779,12 +912,11 @@ export function exit()
     if not active then return end
     active = false
     select(nil)
-    overlay:Hide()
+    local l = layer
+    if l then l:Hide() end
     for _, m in ipairs(moverList) do
-        if m.overlay then
-            m.overlay:SetScript("OnUpdate", nil)
-            m.overlay:StopMovingOrSizing()
-        end
+        local o = m.overlay
+        if o then o:Stop() end
         place(m)
     end
     events.emit("SUUUI_EDITMODE_CHANGED", false)
@@ -811,9 +943,10 @@ end
 export function refresh()
     if not active then return end
     for _, m in ipairs(moverList) do
-        if m.overlay then
+        local o = m.overlay
+        if o then
             local on = enabled(m)
-            m.overlay:SetShown(on)
+            o:SetShown(on)
             if not on and selected == m then select(nil) end
             if on then after(0, function() if active then sync(m) end end) end
         end
@@ -823,13 +956,15 @@ end
 -- A click anywhere but on a mover, the toolbar or the panel deselects. A
 -- click away from a field being typed in applies it first.
 events.onGame("GLOBAL_MOUSE_DOWN", function()
-    if not (active and selected) then return end
-    for _, f in ipairs({ toolbar.x, toolbar.y }) do
+    local bar, l = toolbar, layer
+    if not (active and selected and bar and l) then return end
+    for _, f in ipairs({ bar.x, bar.y }) do
         if f:HasFocus() and not f:IsMouseOver() then f.edit:ClearFocus() end
     end
-    if toolbar:IsMouseOver() or toolbar.anchor:PopoverHasMouse() or overlay.panel:IsMouseOver() then return end
+    if bar:IsMouseOver() or bar.anchor:PopoverHasMouse() or l.panel:IsMouseOver() then return end
     for _, m in ipairs(moverList) do
-        if m.overlay and m.overlay:IsShown() and m.overlay:IsMouseOver() then return end
+        local o = m.overlay
+        if o and o:IsShown() and o:IsMouseOver() then return end
     end
     select(nil)
 end, "EditMode")
@@ -841,23 +976,31 @@ events.onGame("PLAYER_REGEN_DISABLED", function()
     end
 end, "EditMode")
 
-settings.watch("layout", "gridSize", function() if active then drawGrid() end end, "EditMode")
+settings.watch("layout", "gridSize", function()
+    local l = layer
+    if active and l then drawGrid(l) end
+end, "EditMode")
 events.on("SUUUI_ROOT_SCALED", function()
-    if toolbar then toolbar.rule:SetWidth(pixel.size(toolbar)) end
-    if active then drawGrid() end
+    local bar, l = toolbar, layer
+    if bar then bar.rule:SetWidth(pixel.size(bar)) end
+    if active and l then drawGrid(l) end
 end, "EditMode")
 -- a theme change: what is sized by a text style's line height (colours
 -- follow by themselves)
 events.on("SUUUI_THEME_CHANGED", function()
     for _, o in pairs(overlays) do o.tagFrame:SetHeight(T.type.caption.lineHeight + 2) end
-    if toolbar then toolbar.keys:Layout() end
-    local p = overlay and overlay.panel
+    local bar = toolbar
+    if bar then bar.keys:Layout() end
+    local p = layer and layer.panel
     if p then
         p.previewRow:SetHeight(T.type.label.lineHeight + S["space-2"] + 28)
         p.stack:Invalidate()
     end
     if active then
-        for _, m in ipairs(moverList) do if m.overlay and m.overlay:IsShown() then sync(m) end end
+        for _, m in ipairs(moverList) do
+            local o = m.overlay
+            if o and o:IsShown() then sync(m) end
+        end
     end
 end, "EditMode")
 
@@ -866,14 +1009,13 @@ end, "EditMode")
 --------------------------------------------------------------------------------
 
 -- `namespace.key` must be a registered setting holding a position table.
-export function register(frame: any, opts: { [string]: any }, owner: unknown?): Mover
+export function register(frame: Region, opts: MoverOptions, owner: unknown?): Mover
     local m: Mover = {
-        frame = frame, namespace = opts.namespace, key = opts.key or "position",
+        frame = frame, namespace = opts.namespace or "", key = opts.key or "position",
         label = opts.label or frame:GetName() or "Frame", owner = owner,
         enabled = opts.enabled,
         customPlace = opts.place, onDrop = opts.onDrop, action = opts.action, onReset = opts.reset,
         dragFrame = opts.dragFrame,
-        overlay = nil,
         managedShow = opts.managedShow == true,
     }
     assert(type(settings.get(m.namespace, m.key)) == "table",
@@ -887,9 +1029,10 @@ export function register(frame: any, opts: { [string]: any }, owner: unknown?): 
         end
     end, m)
     place(m)
-    if active then
-        buildOverlay(m)
-        m.overlay:SetShown(enabled(m))
+    local l = layer
+    if active and l then
+        local o = buildOverlay(l, m)
+        o:SetShown(enabled(m))
         after(0, function() sync(m) end)
     end
     return m
@@ -915,10 +1058,10 @@ export function unregister(owner: unknown)
         local m = moverList[i]
         if m.owner == owner then
             settings.unwatch(m)
-            if m.overlay then
-                m.overlay:SetScript("OnUpdate", nil)
-                m.overlay:StopMovingOrSizing()
-                m.overlay:Hide()
+            local o = m.overlay
+            if o then
+                o:Stop()
+                o:Hide()
             end
             if selected == m then select(nil) end
             table.remove(moverList, i)

@@ -52,7 +52,18 @@ end
 
 type Row = { source: string, ms: number, calls: number, peak: number, kb: number }
 
-export function report(): { [string]: any }
+-- A dev build's busiest: names and how much each did.
+type Busy = { name: string, n: number, line: string }
+
+--- What /suu perf reports, also saved to SuuUIProbe.perf.
+export type Report = {
+    at: string, seconds: number, total: number, modules: string[],
+    allocated?: string[], allocatedKB?: number, allocatedAll?: string,
+    memory?: string, memoryAtStart?: string, share?: string,
+    dev?: { byCalls: string[], bySelf: string[], scripts?: string[], timers?: string[], events?: string[] },
+}
+
+export function report(): Report
     local _, spent = fault.timingState()
     local seconds = startedAt and math.max(1, GetTime() - startedAt) or 1
     local rows: Row[] = {}
@@ -62,7 +73,7 @@ export function report(): { [string]: any }
         total = total + r.ms
     end
     table.sort(rows, function(a: Row, b: Row): boolean return a.ms > b.ms end)
-    local out: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S"), seconds = math.floor(seconds), total = total, modules = {} }
+    local out: Report = { at = date("%Y-%m-%d %H:%M:%S"), seconds = math.floor(seconds), total = total, modules = {} }
     print(("Perf over %d s: %.1f ms in all (%.2f ms a second)."):format(seconds, total, total / seconds))
     for i, r in ipairs(rows) do
         local line = ("%s: %.1f ms (%.3f ms/s), %d calls, slowest %.2f ms, %s allocated"):format(r.source, r.ms, r.ms / seconds,
@@ -86,46 +97,60 @@ export function report(): { [string]: any }
     print(("Allocated: %.1f MB (%.1f KB a second); most: %s"):format(allocKB / 1024, allocKB / seconds,
         table.concat(alloc, ", ", 1, math.min(5, #alloc))))
     if risenKB then
-        out.allocatedAll = ("%.1f MB (%.1f KB a second), %d collections"):format(risenKB / 1024, risenKB / seconds, collections)
-        print("Allocated by all of SuuUI (frame scripts too): " .. out.allocatedAll)
+        local all = ("%.1f MB (%.1f KB a second), %d collections"):format(risenKB / 1024, risenKB / seconds, collections)
+        out.allocatedAll = all
+        print("Allocated by all of SuuUI (frame scripts too): " .. all)
     end
     local kb = memory()
     if kb then
-        out.memory = ("%.1f MB"):format(kb / 1024)
-        out.memoryAtStart = startKB and ("%.1f MB"):format(startKB / 1024)
-        print("Memory (all of SuuUI): " .. out.memory .. (startKB and (" (" .. out.memoryAtStart .. " at the start)") or ""))
+        local now = ("%.1f MB"):format(kb / 1024)
+        local atStart = startKB and ("%.1f MB"):format(startKB / 1024) or nil
+        out.memory, out.memoryAtStart = now, atStart
+        print("Memory (all of SuuUI): " .. now .. (atStart and (" (" .. atStart .. " at the start)") or ""))
     end
     local ms, pct = share()
     if ms then
-        out.share = ("%.2f ms a frame, %.1f%% of the frame"):format(ms, pct)
-        print("The game's profiler: " .. out.share)
+        local frameShare = ("%.2f ms a frame, %.1f%% of the frame"):format(ms, pct)
+        out.share = frameShare
+        print("The game's profiler: " .. frameShare)
     end
     -- a dev build (wowlua dev): its profiler's busiest functions and its
     -- monitor's scripts and timers, where the frequent work (and so the
     -- garbage) is
     local wl = ns.__wowlua
     if wl and wl.prof and wl.prof.stats then
-        local function top(stats: { [string]: any }, by: string, n: number, fmt: (name: string, st: any) -> string): string[]
-            local list: { name: string, s: any }[] = {}
-            for name, st in pairs(stats) do list[#list + 1] = { name = name, s = st } end
-            table.sort(list, function(a: { name: string, s: any }, b: { name: string, s: any }): boolean return (a.s[by] or 0) > (b.s[by] or 0) end)
+        -- the n busiest of a list, by the number each has
+        local function top(list: Busy[], n: number): string[]
+            table.sort(list, function(a: Busy, b: Busy): boolean return a.n > b.n end)
             local lines: string[] = {}
-            for i = 1, math.min(n, #list) do lines[i] = fmt(list[i].name, list[i].s) end
+            for i = 1, math.min(n, #list) do lines[i] = list[i].line end
             return lines
         end
-        local function fn(name: string, st: any): string
-            return ("%s: %d calls, self %.1f ms, total %.1f ms%s"):format(name, st.calls or 0, st.self or 0, st.total or 0,
-                st.location and (" (" .. st.location .. ")") or "")
+        local stats = wl.prof.stats
+        local function functions(by: "calls" | "self", n: number): string[]
+            local list: Busy[] = {}
+            for name, st in pairs(stats) do
+                list[#list + 1] = { name = name, n = st[by] or 0,
+                    line = ("%s: %d calls, self %.1f ms, total %.1f ms%s"):format(name, st.calls or 0, st.self or 0, st.total or 0,
+                        st.location and (" (" .. st.location .. ")") or "") }
+            end
+            return top(list, n)
         end
-        local function hit(name: string, st: any): string
-            return ("%s: %d, %.1f ms%s"):format(name, st.count or 0, st.total or 0, st.detail and (" (" .. tostring(st.detail) .. ")") or "")
+        local function hits(entries: { [string]: { count: number, total: number, max: number, detail: string } }?, n: number): string[]
+            local list: Busy[] = {}
+            for name, st in pairs(entries or {}) do
+                list[#list + 1] = { name = name, n = st.count or 0,
+                    line = ("%s: %d, %.1f ms%s"):format(name, st.count or 0, st.total or 0, st.detail and (" (" .. tostring(st.detail) .. ")") or "") }
+            end
+            return top(list, n)
         end
+        local mon = wl.mon
         out.dev = {
-            byCalls = top(wl.prof.stats, "calls", 40, fn),
-            bySelf = top(wl.prof.stats, "self", 25, fn),
-            scripts = wl.mon and top(wl.mon.scripts or {}, "count", 25, hit),
-            timers = wl.mon and top(wl.mon.timers or {}, "count", 15, hit),
-            events = wl.mon and top(wl.mon.events or {}, "count", 25, hit),
+            byCalls = functions("calls", 40),
+            bySelf = functions("self", 25),
+            scripts = mon and hits(mon.scripts, 25) or nil,
+            timers = mon and hits(mon.timers, 15) or nil,
+            events = mon and hits(mon.events, 25) or nil,
         }
         print("Dev build: the profiler's and monitor's busiest are in SuuUIProbe.perf.dev.")
     end
