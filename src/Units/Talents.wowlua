@@ -656,7 +656,7 @@ function M:Draft()
         if tree then
             local ok, at, why = UI.TalentOrderCheck(self.draft.steps, tree)
             if not ok then
-                for i = #self.draft.steps, at, -1 do table.remove(self.draft.steps, i) end
+                for i = #self.draft.steps, assert(at), -1 do table.remove(self.draft.steps, i) end
                 self.draft.dirty, self.draft.problem = true, why
             end
         end
@@ -858,7 +858,8 @@ function M:HeadButtons(b: any, planning: boolean)
         end }
         out[#out + 1] = { label = "Rename", onClick = function()
             UI.Confirm({ title = "Rename build", confirm = "Rename", input = { label = "Name", value = b.name },
-                onConfirm = function(name: string)
+                onConfirm = function(name: string?)
+                    if not name then return end
                     local saved = store().builds[b.id]
                     if saved then saved.name = name end
                     if self.draft and self.draft.id == b.id then self.draft.name = name end
@@ -1315,9 +1316,9 @@ function M:GameString(b: any)
     local tree = self:BuildTree(b.class)
     if not tree then return nil end
     local version = call(C_Traits.GetLoadoutSerializationVersion)
-    local hash = call(C_Traits.GetTreeHash, tree.treeID)
+    local hash: number[]? = call(C_Traits.GetTreeHash, tree.treeID)
     if not (plain(version) and version and type(hash) == "table") then return nil end
-    local ranks, entries = {}, {}
+    local ranks: { [number]: number }, entries: { [number]: number } = {}, {}
     for _, s in ipairs(b.steps) do
         ranks[s.node] = (ranks[s.node] or 0) + 1
         local n = tree.byID[s.node]
@@ -1359,7 +1360,7 @@ function M:ReadPasted(text: string?)
         end
         local ok, _, problem = UI.TalentOrderCheck(steps, tree)
         return { name = b.name ~= "" and b.name or "Shared build", class = class.file, steps = steps,
-            note = (not ok) and ("Needs a look: " .. problem) or (b.treeID ~= tree.treeID and "Made for another version of the talents.") or nil }
+            note = (not ok) and ("Needs a look: " .. (problem or "")) or (b.treeID ~= tree.treeID and "Made for another version of the talents.") or nil }
     end
     local version, specID = UI.ReadGameTalentHeader(text)
     if not version then return nil, "This isn't SuuUI's text or the game's talent string." end

@@ -9,58 +9,33 @@
 -- merge into the "Cast & swing bars" section.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
 import type Position from "/EditMode/EditMode"
+import type SwingTimer from "/UI/SwingTimer"
+
+-- what Show offers
+type Shows = "off" | "combat" | "always"
 
 local UI = SuuUI.UI
 
-local M = SuuUI.RegisterModule({
-    id = "swingtimer",
-    name = "Swing timer",
-    description = "When your next swing or shot lands, from the game's own swing timer.",
-    api = "0.9",
-    combatSafe = true,
-    defaults = {
-        position = { point = "BOTTOM", x = 0, y = 271 } :: Position,
-        shows = "combat", -- "off", "combat" or "always"
-        hideForHealers = true,
-        autoShotWindow = true,
-        autoShotNoCast = false, -- learned: this client's Auto Shot fires while moving
-    },
-})
+const DEFAULTS = {
+    position = { point = "BOTTOM", x = 0, y = 271 } :: Position,
+    shows = "combat" :: Shows,
+    hideForHealers = true,
+    autoShotWindow = true,
+    autoShotNoCast = false, -- learned: this client's Auto Shot fires while moving
+}
 
--- The toggle "In combat only" became the choice Show: Off / In combat / Always.
-M:Migrate("shows", function(values)
-    if type(values.inCombatOnly) == "boolean" then
-        values.shows = values.inCombatOnly and "combat" or "always"
-    end
-    values.inCombatOnly = nil
-end)
+local M: SwingTimerModule
 
 -- Your cast bar's width (the cast bars module's setting), or the design's.
-local function castWidth()
+local function castWidth(): number
     local cast = SuuUI.GetModule("castbars")
-    return cast and cast:Get("playerWidth") or 340
+    local width = cast and cast:Setting("playerWidth")
+    return type(width) == "number" and width or 340
 end
 
-function M:ApplyAutoShot()
-    self.timer:SetAutoShotWindow(self:Get("autoShotWindow") and not self:Get("autoShotNoCast"))
-end
-
-function M:UpdateVisibility()
-    local f = self.timer
-    local pos = self:Get("position")
-    local shows = self:Get("shows")
-    -- Off: no events either
-    if shows == "off" then f:Deactivate() else f:Activate() end
-    -- SuuUI's role (chosen, assigned or from talents), in a group only
-    local healer = IsInGroup() and SuuUI.Role() == "HEALER"
-    local shown = shows ~= "off" and not pos.hidden
-        and not (self:Get("hideForHealers") and healer)
-        and not (shows == "combat" and not UI.Flag(UnitAffectingCombat("player")))
-    f:SetShown(shown and true or false)
-end
-
-local function isOff()
+local function isOff(): (boolean, string)
     return M:Get("shows") == "off", "Turn the swing timer on first."
 end
 
@@ -77,7 +52,7 @@ local SECTION = {
               description = "With the healer role in a group, there is no swing timer." },
             { key = "autoShotWindow", label = "Auto Shot window", control = "toggle",
               description = "The last half second of a shot, when you must stand still, hatched at the end of the ranged bar; it turns amber while you move. It switches itself off if this client's Auto Shot fires while moving.",
-              disabled = function()
+              disabled = function(): (boolean, string?)
                   if M:Get("autoShotNoCast") then return true, "This client's Auto Shot fires while you move, so there is no window." end
                   return isOff()
               end },
@@ -85,35 +60,83 @@ local SECTION = {
     },
 }
 
-function M:OnEnable()
-    self.timer = self.timer or UI.SwingTimer(SuuUI.Root, { width = castWidth(), name = "SuuUISwingTimer",
-        onNoAutoShotCast = function()
-            self:Set("autoShotNoCast", true)
-            self:Print("Auto Shot fired on time while you ran, so this client has no stand-still cast: the Auto Shot window is off.")
-        end })
-    self:ApplyAutoShot()
-    self.timer.suuManagedShow = true
-    self.timer:SetBarWidth(castWidth())
-    self:RegisterMover(self.timer, { key = "position", label = "Swing timer",
-        enabled = function() return self:Get("shows") ~= "off" end })
-    self:Watch("shows", SuuUI.EditMode.Refresh)
-    self:RegisterSettings(SECTION)
-    -- as wide as your cast bar, live
-    self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
-        if namespace == "castbars" and key == "playerWidth" then self.timer:SetBarWidth(castWidth()) end
-    end)
-    for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "GROUP_ROSTER_UPDATE" }) do
-        self:OnGameEvent(e, function() self:UpdateVisibility() end)
+class SwingTimerModule extends Module<typeof(DEFAULTS)>
+    timer: SwingTimer? = nil
+
+    constructor()
+        super({
+            id = "swingtimer",
+            name = "Swing timer",
+            description = "When your next swing or shot lands, from the game's own swing timer.",
+            api = "0.9",
+            combatSafe = true,
+            defaults = DEFAULTS,
+        })
     end
-    self:On("SUUUI_ROLE_CHANGED", function() self:UpdateVisibility() end)
-    self:WatchAll({ "shows", "hideForHealers", "position" }, function() self:UpdateVisibility() end)
-    self:Watch("autoShotWindow", function() self:ApplyAutoShot() end)
-    self:UpdateVisibility()
+
+    function ApplyAutoShot()
+        local timer = self.timer
+        if timer then timer:SetAutoShotWindow(self:Get("autoShotWindow") and not self:Get("autoShotNoCast")) end
+    end
+
+    function UpdateVisibility()
+        local f = self.timer
+        if not f then return end
+        local pos = self:Get("position")
+        local shows = self:Get("shows")
+        -- Off: no events either
+        if shows == "off" then f:Deactivate() else f:Activate() end
+        -- SuuUI's role (chosen, assigned or from talents), in a group only
+        local healer = IsInGroup() and SuuUI.Role() == "HEALER"
+        local shown = shows ~= "off" and not pos.hidden
+            and not (self:Get("hideForHealers") and healer)
+            and not (shows == "combat" and not UI.Flag(UnitAffectingCombat("player")))
+        f:SetShown(shown and true or false)
+    end
+
+    override function OnEnable()
+        local timer = self.timer or UI.SwingTimer(SuuUI.Root, { width = castWidth(), name = "SuuUISwingTimer",
+            onNoAutoShotCast = function()
+                self:Set("autoShotNoCast", true)
+                self:Print("Auto Shot fired on time while you ran, so this client has no stand-still cast: the Auto Shot window is off.")
+            end })
+        self.timer = timer
+        self:ApplyAutoShot()
+        timer.suuManagedShow = true
+        timer:SetBarWidth(castWidth())
+        self:RegisterMover(timer, { key = "position", label = "Swing timer",
+            enabled = function() return self:Get("shows") ~= "off" end })
+        self:Watch("shows", SuuUI.EditMode.Refresh)
+        self:RegisterSettings(SECTION)
+        -- as wide as your cast bar, live
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+            if namespace == "castbars" and key == "playerWidth" then timer:SetBarWidth(castWidth()) end
+        end)
+        local gameEvents: EventName[] = { "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "GROUP_ROSTER_UPDATE" }
+        for _, e in ipairs(gameEvents) do
+            self:OnGameEvent(e, function() self:UpdateVisibility() end)
+        end
+        self:On("SUUUI_ROLE_CHANGED", function() self:UpdateVisibility() end)
+        self:WatchAll({ "shows", "hideForHealers", "position" }, function() self:UpdateVisibility() end)
+        self:Watch("autoShotWindow", function() self:ApplyAutoShot() end)
+        self:UpdateVisibility()
+    end
+
+    override function OnDisable()
+        local timer = self.timer
+        if timer then
+            timer:Deactivate()
+            timer:Hide()
+        end
+    end
 end
 
-function M:OnDisable()
-    if self.timer then
-        self.timer:Deactivate()
-        self.timer:Hide()
+M = SuuUI.AddModule(SwingTimerModule.new())
+
+-- The toggle "In combat only" became the choice Show: Off / In combat / Always.
+M:Migrate("shows", function(values)
+    if type(values.inCombatOnly) == "boolean" then
+        values.shows = values.inCombatOnly and "combat" or "always"
     end
-end
+    values.inCombatOnly = nil
+end)
