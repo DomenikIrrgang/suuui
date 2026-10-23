@@ -16,6 +16,7 @@
 - Plugin API 0.19: `RegisterMover`'s option `managedShow = true` says your module shows and hides the frame itself; edit mode then leaves its visibility alone (as `frame.suuManagedShow = true` did, which still works).
 - Plugin API 0.19: `SuuUI.UI.UnitStandIn(person)` needs each person's `health`, and its `UnitCreatureFamily` answers `""` for no family.
 - Plugin API 0.19: two new services, `marks` (your map marks, for the world map) and `worldmap` (its Marks filters and the pin showing a mark); the world map and the marks module now talk only through them.
+- Plugin API 0.19: `SuuUI.RecipeSources(recipeID)` is typed: a `RecipeSource[]?` (its layout in Data/RecipeSources), where it was untyped.
 - Plugin API 0.19: `chrome:SetTabs` takes any frame as a tab's `button` (the Character window's mode tabs are frames on some clients); the Social pages' `onMenu` and `onMember` get the frame clicked as a `Frame`, and their rows may carry the owner's own fields (`bnetID`, `gameAccountID`, `inviteName`, `guid`, `unit`, …).
 
 ### Fixed
