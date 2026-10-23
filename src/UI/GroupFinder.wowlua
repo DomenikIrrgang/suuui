@@ -162,7 +162,7 @@ local S = T.space
 
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = TEX .. "Glyphs\\"
-local ROLE_TEX = { tank = TEX .. "RoleTank.tga", healer = TEX .. "RoleHealer.tga", damage = TEX .. "RoleDamage.tga" }
+local ROLE_TEX: { [string]: string } = { tank = TEX .. "RoleTank.tga", healer = TEX .. "RoleHealer.tga", damage = TEX .. "RoleDamage.tga" }
 
 local BAR_H = 30
 local HEAD_H = 26
@@ -380,7 +380,7 @@ local function drawRow(b: GroupFinderBrowse, r: BrowseRowFrame, d: BrowseRow, y:
     r.edge:SetShown(d.match and true or false)
     -- the leading icon: a group's crown, or the player's class (people
     -- when it isn't known)
-    local atlas = d.class and GetClassAtlas and GetClassAtlas(d.class)
+    local atlas: string? = d.class and GetClassAtlas and GetClassAtlas(d.class)
     r.lead:ClearAllPoints()
     if d.isPlayer and atlas then
         r.lead:SetAtlas(atlas)
@@ -413,7 +413,7 @@ local function drawRow(b: GroupFinderBrowse, r: BrowseRowFrame, d: BrowseRow, y:
     r.reason:SetValue(d.reason or "")
     r.reason:ClearAllPoints()
     r.reason:SetPoint("LEFT", last, "RIGHT", S["space-4"], 0)
-    local color = d.class and T.color["class-" .. d.class:lower()] and ("class-" .. d.class:lower()) or "ink"
+    local color = draw.classColor(d.class, "ink")
     r.leader:SetValue(d.leader or "")
     r.leader:SetColor(color)
     r.who:SetValue(d.who or "")
@@ -579,6 +579,8 @@ local BAR_BASIS = { category = 150, activity = 190, search = 170, show = 120 }
 local BAR_MIN = { category = 80, activity = 90, search = 56, show = 80 }
 
 export type BarWidths = { category: number, activity: number, search: number, show: number }
+-- the selects that give way, by their widths
+local SHRINK: ("category" | "activity" | "show")[] = { "category", "activity", "show" }
 
 -- The bar's widths in `width`: `fixed` for what never shrinks (Refresh, the
 -- checkbox, the gaps), `fresh` for the tool's age (hourglass, gap, text).
@@ -593,9 +595,9 @@ local function barWidths(width: number, fixed: number, fresh: number): (BarWidth
     end
     if over > 0 then
         local room = 0
-        for _, k in ipairs({ "category", "activity", "show" }) do room = room + (w[k] - BAR_MIN[k]) end
+        for _, k in ipairs(SHRINK) do room = room + (w[k] - BAR_MIN[k]) end
         local share = math.min(1, over / math.max(1, room))
-        for _, k in ipairs({ "category", "activity", "show" }) do
+        for _, k in ipairs(SHRINK) do
             local cut = math.floor((w[k] - BAR_MIN[k]) * share + 0.5)
             w[k], over = w[k] - cut, over - cut
         end
@@ -746,7 +748,8 @@ export class GroupFinderBrowse extends Frame
         local none = #(d.groups or {}) + #(d.players or {}) == 0 and not loading
         local y = 0
         local used, skels = 0, 0
-        for _, key in ipairs({ "groups", "players" }) do
+        local sections: ("groups" | "players")[] = { "groups", "players" }
+        for _, key in ipairs(sections) do
             local rows = d[key] or {}
             local h = self.heads[key] :: SectionHead
             h:SetShown(not none)

@@ -119,7 +119,8 @@ end
 
 
 -- the columns: their share of the width after the fixed ones
-local COLUMNS = {
+type ColumnDef = { key: string, label: string, width?: number, fixed?: number, align?: "LEFT" | "RIGHT" | "CENTER" }
+local COLUMNS: ColumnDef[] = {
     { key = "name", label = "Name", width = 0.30 },
     { key = "level", label = "Level", fixed = 44, align = "RIGHT" },
     { key = "class", label = "Class", fixed = 104 },
@@ -136,7 +137,7 @@ local function columnsFor(w: number): RosterColumn[]
     local room = math.max(0, w - fixed - gaps - S["space-5"] * 2)
     local out: RosterColumn[], x = {}, S["space-5"]
     for i, c in ipairs(COLUMNS) do
-        local cw = c.fixed or math.floor(room * c.width)
+        local cw = c.fixed or math.floor(room * (c.width or 0))
         out[i] = { x = x, w = cw }
         x = x + cw + S["space-4"]
     end
@@ -326,13 +327,13 @@ export class GuildRoster extends Frame
             r:SetPoint("RIGHT", child, "RIGHT")
             -- the name in its class colour, online or not (asked for in game);
             -- an offline member's other columns stay ink-faint
-            local color = m.class and T.color["class-" .. m.class:lower()] and ("class-" .. m.class:lower()) or (m.online and "ink" or "ink-faint")
+            local color = draw.classColor(m.class, m.online and "ink" or "ink-faint")
             -- offline: still the class colour, greyed out like the rest of the row
             local fade = m.online and 1 or T.opacity["opacity-disabled"]
             draw.paint(r.diamond, color, fade)
             r.diamond:ClearAllPoints()
             r.diamond:SetPoint("CENTER", r, "LEFT", cols[1].x - 8, 0)
-            local values = { name = m.name, level = m.level and tostring(m.level) or "", class = m.className or "",
+            local values: { [string]: string? } = { name = m.name, level = m.level and tostring(m.level) or "", class = m.className or "",
                              zone = m.online and (m.zone or "") or (m.lastOnline or "Offline"), rank = m.rank or "", note = m.note or "" }
             for i, t in ipairs(r.cells) do
                 local key = COLUMNS[i].key
@@ -345,8 +346,8 @@ export class GuildRoster extends Frame
                 if i == 1 then t:SetColor(color, fade)
                 else t:SetColor(m.online and (key == "note" and "ink-muted" or "ink") or "ink-faint") end
                 if key == "class" then
-                    local atlas = m.class and GetClassAtlas and GetClassAtlas(m.class)
-                    local coords = m.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[m.class]
+                    local atlas: string? = m.class and GetClassAtlas and GetClassAtlas(m.class)
+                    local coords: number[]? = m.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[m.class]
                     if atlas then
                         r.classIcon:SetAtlas(atlas)
                         r.classIcon:SetTexCoord(0, 1, 0, 1)

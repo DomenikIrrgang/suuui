@@ -13,8 +13,8 @@ import mixins from "/Core/Init"
 import root from "/Core/Root"
 import * as draw from "./Draw"
 import text, measureText, Text from "./Text"
-import button from "./Controls"
-import textField from "./Inputs"
+import button, SuuButton from "./Controls"
+import textField, TextField from "./Inputs"
 import tabMarker, TabMarker from "./TabMarker"
 import showTooltip, hideTooltip from "./Tooltip"
 
@@ -493,61 +493,86 @@ export type ConfirmOptions = {
     enterConfirms?: boolean,
 }
 
-local confirmPanel = nil
+-- The confirm dialog: a Panel with the question, a field (a word to type,
+-- or something to enter), OK and Cancel.
+export class ConfirmDialog extends Panel
+    readonly text: Text
+    readonly ok: SuuButton
+    readonly slot: Frame
+    readonly group: Frame
+    readonly prompt: Text
+    readonly field: TextField
+    readonly cancel: SuuButton
+    -- the question asked now
+    word: string? = nil
+    input: { label?: string, placeholder?: string, value?: string }? = nil
+    onConfirm: ((text: string?) -> ())? = nil
+    onCancel: (() -> ())? = nil
+    enterConfirms: boolean? = nil
 
--- The confirm dialog: a Panel with its own fields (text, ok, cancel, field, …).
-export function confirm(opts: ConfirmOptions): Panel
-    if not confirmPanel then
-        local p = panel(root, { title = " ", width = 400, height = 170, solid = true })
-        p.text = text(p.body, "body", "ink")
-        p.text:SetWordWrap(true)
-        p.text:SetJustifyH("LEFT")
-        p.text:SetFixedWidth(360)
-        p.text:SetPoint("TOPLEFT")
-        local function confirmIt()
-            local value: string = p.field:GetValue() or ""
-            if p.word and value:upper() ~= p.word then return end
-            if p.input and strtrim(value) == "" then return end
-            local fn = p.onConfirm
-            p.onCancel = nil
-            p:Hide()
-            if fn then fn(p.input and strtrim(value) or nil) end
-        end
-        p.ok = button(p, { text = "OK", variant = "primary", width = 110, onClick = confirmIt })
-        p.ok:SetPoint("BOTTOMRIGHT", -20, 18)
+    constructor()
+        super(root, { title = " ", width = 400, height = 170, solid = true })
+        self.text = text(self.body, "body", "ink")
+        self.text:SetWordWrap(true)
+        self.text:SetJustifyH("LEFT")
+        self.text:SetFixedWidth(360)
+        self.text:SetPoint("TOPLEFT")
+        self.ok = button(self, { text = "OK", variant = "primary", width = 110, onClick = function() self:Confirm() end })
+        self.ok:SetPoint("BOTTOMRIGHT", -20, 18)
         -- the word to type: its line and field as one group, centred across
         -- the panel and between the text and the buttons (asked for in game)
-        p.slot = CreateFrame("Frame", nil, p)
-        p.slot:SetPoint("TOP", p.text, "BOTTOM")
-        p.slot:SetPoint("BOTTOM", p.ok, "TOP")
-        p.slot:SetPoint("LEFT", p, "LEFT")
-        p.slot:SetPoint("RIGHT", p, "RIGHT")
-        p.group = CreateFrame("Frame", nil, p.slot)
-        p.group:SetWidth(200)
-        p.group:SetPoint("CENTER")
-        p.prompt = text(p.group, "caption", "ink-muted")
-        p.prompt:SetPoint("TOP")
-        p.field = textField(p.group, { width = 200, onTextChanged = function(value: string?)
-            if p.word then p.ok:SetEnabledState((value or ""):upper() == p.word) end
-            if p.input then p.ok:SetEnabledState(strtrim(value or "") ~= "") end
+        self.slot = CreateFrame("Frame", nil, self)
+        self.slot:SetPoint("TOP", self.text, "BOTTOM")
+        self.slot:SetPoint("BOTTOM", self.ok, "TOP")
+        self.slot:SetPoint("LEFT", self, "LEFT")
+        self.slot:SetPoint("RIGHT", self, "RIGHT")
+        self.group = CreateFrame("Frame", nil, self.slot)
+        self.group:SetWidth(200)
+        self.group:SetPoint("CENTER")
+        self.prompt = text(self.group, "caption", "ink-muted")
+        self.prompt:SetPoint("TOP")
+        self.field = textField(self.group, { width = 200, onTextChanged = function(value: string?)
+            local word = self.word
+            if word then self.ok:SetEnabledState((value or ""):upper() == word) end
+            if self.input then self.ok:SetEnabledState(strtrim(value or "") ~= "") end
         end })
-        p.field:SetPoint("BOTTOM")
-        p.field.edit:HookScript("OnEnterPressed", function(box)
-            if p.enterConfirms == false then box:SetFocus() return end
-            confirmIt()
+        self.field:SetPoint("BOTTOM")
+        self.field.edit:HookScript("OnEnterPressed", function()
+            if self.enterConfirms == false then self.field.edit:SetFocus() return end
+            self:Confirm()
         end)
-        p.cancel = button(p, { text = "Cancel", width = 100, onClick = function() p:Hide() end })
-        p.cancel:SetPoint("RIGHT", p.ok, "LEFT", -8, 0)
-        p:HookScript("OnHide", function(self)
+        self.cancel = button(self, { text = "Cancel", width = 100, onClick = function() self:Hide() end })
+        self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -8, 0)
+        self:HookScript("OnHide", function()
             self.field.edit:ClearFocus() -- never keep the keyboard once gone
             local fn = self.onCancel
             self.onCancel, self.onConfirm = nil, nil
             if fn then fn() end
         end)
-        makeModal(p)
+        makeModal(self)
+    end
+
+    -- OK: once the word is typed or something entered.
+    function Confirm()
+        local value: string = self.field:GetValue() or ""
+        local word = self.word
+        if word and value:upper() ~= word then return end
+        if self.input and strtrim(value) == "" then return end
+        local fn = self.onConfirm
+        self.onCancel = nil
+        self:Hide()
+        if fn then fn(self.input and strtrim(value) or nil) end
+    end
+end
+
+local confirmPanel: ConfirmDialog? = nil
+
+export function confirm(opts: ConfirmOptions): ConfirmDialog
+    local p = confirmPanel
+    if not p then
+        p = ConfirmDialog.new()
         confirmPanel = p
     end
-    local p = confirmPanel
     p:SetTitle(opts.title or "Are you sure?")
     p.text:SetValue(opts.text or "")
     p.ok:SetLabel(opts.confirm or "OK")
@@ -559,16 +584,17 @@ export function confirm(opts: ConfirmOptions): Panel
     p.enterConfirms = opts.enterConfirms
     -- a word to type first, or something to enter (0.13: input = { label,
     -- placeholder }: onConfirm gets the text; OK once there is some)
-    p.word = opts.typeToConfirm and opts.typeToConfirm:upper() or nil
-    p.input = opts.input
-    local field = p.word or p.input
-    p.group:SetShown(field and true or false)
+    local word = opts.typeToConfirm and opts.typeToConfirm:upper() or nil
+    local input = opts.input
+    p.word, p.input = word, input
+    local field = word ~= nil or input ~= nil
+    p.group:SetShown(field)
     p.group:SetHeight(T.type.caption.lineHeight + 6 + 30)
-    p.field:SetValue(p.input and p.input.value or "")
-    p.ok:SetEnabledState(not field or (p.input and (p.input.value or "") ~= "") or false)
-    if p.word then p.prompt:SetValue(("Type %q to confirm."):format(p.word))
-    elseif p.input then p.prompt:SetValue(p.input.label or "") end
-    if p.field.placeholder then p.field.placeholder:SetValue(p.input and p.input.placeholder or "") end
+    p.field:SetValue(input and input.value or "")
+    p.ok:SetEnabledState(not field or (input ~= nil and (input.value or "") ~= ""))
+    if word then p.prompt:SetValue(("Type %q to confirm."):format(word))
+    elseif input then p.prompt:SetValue(input.label or "") end
+    p.field.placeholder:SetValue(input and input.placeholder or "")
     p:SetHeight(170 + (field and (p.group:GetHeight() + 12) or 0))
     p:Show()
     if field then p.field.edit:SetFocus() end
