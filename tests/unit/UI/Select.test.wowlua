@@ -11,7 +11,7 @@ import tokens as T from "/Core/Tokens"
 import * as fonts from "/Core/Fonts"
 import * as tooltip from "/UI/Tooltip"
 import measureText from "/UI/Text"
-import select, Select, SelectOption, SelectOptions, SelectList from "/UI/Select"
+import select, Select, SelectOption, SelectOptions, SelectList, SelectValue from "/UI/Select"
 import internal catcher from "/UI/Select"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, pointOf from "./PrimitivesHelpers"
@@ -40,24 +40,24 @@ local function cleanup()
     expectNoErrors()
 end
 
-local OPTIONS: SelectOption[] = {
+local OPTIONS: SelectOption<SelectValue>[] = {
     { value = "a", label = "Alpha" },
     { value = "b", label = "Beta", note = "second" },
     { value = "c", label = "Gamma", disabled = true, reason = "Not yet" },
 }
 
-local function make(opts: SelectOptions): Select
+local function make(opts: SelectOptions<SelectValue>): Select<SelectValue>
     local s = select(parent :: Frame, opts)
     s:SetPoint("TOPLEFT")
     return s
 end
 
-local function list(s: Select): SelectList
-    return s.list :: SelectList
+local function list(s: Select<SelectValue>): SelectList<SelectValue>
+    return s.list :: SelectList<SelectValue>
 end
 
 -- the open list's visible rows, as their labels' texts
-local function rowTexts(s: Select): string[]
+local function rowTexts(s: Select<SelectValue>): string[]
     local out: string[] = {}
     for _, r in ipairs(list(s).rows) do
         if r:IsShown() then out[#out + 1] = r.label:GetText() end
@@ -65,12 +65,12 @@ local function rowTexts(s: Select): string[]
     return out
 end
 
-local function row(s: Select, i: number): any
+local function row(s: Select<SelectValue>, i: number): any
     return list(s).rows[i]
 end
 
-local function many(n: number): SelectOption[]
-    local out: SelectOption[] = {}
+local function many(n: number): SelectOption<SelectValue>[]
+    local out: SelectOption<SelectValue>[] = {}
     for i = 1, n do out[i] = { value = i, label = "Option " .. i } end
     return out
 end
@@ -132,7 +132,7 @@ local function counted()
     local wide = make({ options = opts, multiple = true, maxShown = 3, value = { 1, 2, 3 } })
     expect(wide:Summary()).toBe("Option 1, Option 2, Option 3")
     -- headings don't count
-    local h: SelectOption[] = { { heading = "Group" }, { value = 1, label = "One" }, { value = 2, label = "Two" } }
+    local h: SelectOption<SelectValue>[] = { { heading = "Group" }, { value = 1, label = "One" }, { value = 2, label = "Two" } }
     expect(make({ options = h, multiple = true, value = { 1, 2 } }):Summary()).toBe("All")
     -- an empty multiple field is in ink-muted with a placeholder
     local e = make({ options = opts, multiple = true, placeholder = "Any" })
@@ -142,12 +142,12 @@ end
 @test("SetValue of a multiple field copies the list")
 local function multipleCopy()
     local s = make({ options = OPTIONS, multiple = true })
-    local v = { "a" }
+    local v: SelectValue[] = { "a" }
     s:SetValue(v)
     v[2] = "b"
-    expect(s.value).toEqual({ "a" })
+    expect(s.values).toEqual({ "a" })
     s:SetValue(nil)
-    expect(s.value).toEqual({})
+    expect(s.values).toEqual({})
 end
 
 @test("SetOptions shows the value against the new options")
@@ -249,7 +249,7 @@ end
 
 @test("headings: the header face in gilt, a rule above all but the first")
 local function headings()
-    local opts: SelectOption[] = {
+    local opts: SelectOption<SelectValue>[] = {
         { heading = "Tanks" }, { value = 1, label = "Warrior" },
         { heading = "Healers" }, { value = 2, label = "Priest" },
     }
@@ -275,7 +275,7 @@ end
 
 @test("icons, diamonds and fonts beside an option's label")
 local function decorations()
-    local opts: SelectOption[] = {
+    local opts: SelectOption<SelectValue>[] = {
         { value = 1, label = "Fireball", icon = 135812 },
         { value = 2, label = "Off", icon = 135813, disabled = true },
         { value = 3, label = "Shaman", diamond = "class-shaman" },
@@ -317,7 +317,7 @@ end
 @test("several: each click turns one on or off, the list stays open")
 local function multiple()
     local s = mock.spy(function(_v: any) end)
-    local f = make({ options = OPTIONS, multiple = true, value = { "a" }, onChange = s })
+    local f = make({ options = OPTIONS, multiple = true, value = { "a" }, onChangeAll = s })
     mock.click(f)
     expect(list(f).bulk).toBeShown()
     expect(row(f, 1).box).toBeShown()
@@ -333,31 +333,31 @@ local function multiple()
     local quiet = make({ options = OPTIONS, multiple = true })
     mock.click(quiet)
     mock.click(row(quiet, 1))
-    expect(quiet.value).toEqual({ "a" })
+    expect(quiet.values).toEqual({ "a" })
 end
 
 @test("Select all picks every option you could; Clear none")
 local function bulk()
     local s = mock.spy(function(_v: any) end)
-    local f = make({ options = { { heading = "H" }, OPTIONS[1], OPTIONS[2], OPTIONS[3] }, multiple = true, onChange = s })
+    local f = make({ options = { { heading = "H" }, OPTIONS[1], OPTIONS[2], OPTIONS[3] }, multiple = true, onChangeAll = s })
     mock.click(f)
-    local links = (list(f).bulk :: any).links
+    local links = list(f).bulkLinks
     expect(links[1]:GetWidth()).toBeCloseTo(links[1].text:GetUnboundedStringWidth(), 3)
     mock.click(links[1])
-    expect(f.value).toEqual({ "a", "b" })
+    expect(f.values).toEqual({ "a", "b" })
     expect(s).toHaveBeenCalledWith({ "a", "b" })
     mock.click(links[2])
-    expect(f.value).toEqual({})
+    expect(f.values).toEqual({})
     expect(s).toHaveBeenCalledWith({})
     mock.hover(links[1])
     expect(tokenOf(links[1].text)).toBe("ink")
     mock.hover(nil)
     expect(tokenOf(links[1].text)).toBe("ink-muted")
-    -- without onChange
-    f.onChange = nil
+    -- without onChangeAll
+    f.onChangeAll = nil
     mock.click(links[1])
     mock.click(links[2])
-    expect(f.value).toEqual({})
+    expect(f.values).toEqual({})
 end
 
 --------------------------------------------------------------------------------
@@ -401,7 +401,7 @@ end
 
 @test("search matches an option's search text; headings come with their matches")
 local function searchText()
-    local opts: SelectOption[] = {
+    local opts: SelectOption<SelectValue>[] = {
         { heading = "Shaman" }, { value = 1, label = "Elemental", search = "shaman caster" },
         { heading = "Mage" }, { value = 2, label = "Fire" }, { value = 3, label = "Frost", disabled = true },
     }
@@ -431,9 +431,9 @@ end
 
 @test("lookup adds options for what's typed, first; a looked-up pick is summarised")
 local function lookup()
-    local found: SelectOption = { value = 133, label = "Fireball (133)" }
+    local found: SelectOption<SelectValue> = { value = 133, label = "Fireball (133)" }
     local s = mock.spy(function(_v: any) end)
-    local f = make({ options = OPTIONS, onChange = s, lookup = function(q: string): SelectOption[]?
+    local f = make({ options = OPTIONS, onChange = s, lookup = function(q: string): SelectOption<SelectValue>[]?
         if q == "133" then return { found } end
         return nil
     end })
@@ -600,9 +600,9 @@ end
 
 @test("a looked-up option no longer chosen isn't the summary; a disabled option without a reason has no tooltip")
 local function moreEdges()
-    local found: SelectOption = { value = 7, label = "Seven" }
+    local found: SelectOption<SelectValue> = { value = 7, label = "Seven" }
     local f = make({ options = { { value = 1, label = "One" }, { value = 2, label = "Two", disabled = true } },
-        placeholder = "Pick", lookup = function(_q: string): SelectOption[]? return { found } end })
+        placeholder = "Pick", lookup = function(_q: string): SelectOption<SelectValue>[]? return { found } end })
     mock.click(f)
     mock.typeText(list(f).search.edit, "7")
     mock.click(row(f, 1))

@@ -31,16 +31,50 @@ export type SettingRowOptions = {
     label?: string,
     description?: string,
     -- any control: a frame, with SetDisabled(disabled) when it has one
-    control?: any,
+    control?: Frame,
     stacked?: boolean,
     onReset?: () -> (),
     width?: number,
 }
 
+-- A control that can be turned off.
+export interface Disableable
+    function SetDisabled(disabled: unknown)
+end
+
+-- Whether the control has SetDisabled.
+local function disableable(control: Frame): control is Frame & Disableable
+    return type((control :: { [string]: unknown }).SetDisabled) == "function"
+end
+
 -- the reset arrow
-export interface ResetButton extends Button
-    edge: draw.Border
-    icon: Texture
+export class ResetButton extends Button
+    readonly edge: draw.Border
+    readonly icon: Texture
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(22, 22)
+        self:SetPoint("RIGHT", -1, 0)
+        self.edge = draw.border(self, "gilt-line")
+        self.edge:SetShown(false)
+        self.icon = self:CreateTexture(nil, "ARTWORK")
+        self.icon:SetTexture(RESET_ICON)
+        self.icon:SetDesaturated(true)
+        draw.paint(self.icon, "ink-muted")
+        self.icon:SetSize(14, 14)
+        self.icon:SetPoint("CENTER")
+        self:SetScript("OnEnter", function()
+            self.edge:SetShown(true)
+            draw.paint(self.icon, "ink")
+            showTooltip(self, { title = "Reset to default" })
+        end)
+        self:SetScript("OnLeave", function()
+            self.edge:SetShown(false)
+            draw.paint(self.icon, "ink-muted")
+            hideTooltip()
+        end)
+    end
 end
 
 export class SettingRow extends Frame
@@ -52,7 +86,7 @@ export class SettingRow extends Frame
     why: Frame
     whyText: Text
     reset: ResetButton
-    control: any? = nil
+    control: Frame? = nil
     lastWidth: number? = nil
     relayoutQueued: boolean? = nil
     descValue: string? = nil
@@ -91,34 +125,15 @@ export class SettingRow extends Frame
         self.whyText:SetPoint("TOPLEFT", lock, "TOPRIGHT", S["space-2"], 1)
         self.why:Hide()
 
-        local reset: ResetButton = CreateFrame("Button", nil, self) :: any
-        reset:SetSize(22, 22)
-        reset:SetPoint("RIGHT", -1, 0)
-        reset.edge = draw.border(reset, "gilt-line")
-        reset.edge:SetShown(false)
-        reset.icon = reset:CreateTexture(nil, "ARTWORK")
-        reset.icon:SetTexture(RESET_ICON)
-        reset.icon:SetDesaturated(true)
-        draw.paint(reset.icon, "ink-muted")
-        reset.icon:SetSize(14, 14)
-        reset.icon:SetPoint("CENTER")
-        reset:SetScript("OnEnter", function(b: ResetButton)
-            b.edge:SetShown(true)
-            draw.paint(b.icon, "ink")
-            showTooltip(b, { title = "Reset to default" })
-        end)
-        reset:SetScript("OnLeave", function(b: ResetButton)
-            b.edge:SetShown(false)
-            draw.paint(b.icon, "ink-muted")
-            hideTooltip()
-        end)
+        local reset = ResetButton.new(self)
         reset:SetScript("OnClick", function() if opts.onReset then opts.onReset() end end)
         self.reset = reset
 
-        if opts.control then
-            self.control = opts.control
-            self.control:SetParent(self)
-            self.control:HookScript("OnSizeChanged", function() self:Relayout() end)
+        local control = opts.control
+        if control then
+            self.control = control
+            control:SetParent(self)
+            control:HookScript("OnSizeChanged", function() self:Relayout() end)
         end
         self:SetScript("OnSizeChanged", function(_, w: number)
             if w ~= self.lastWidth then
@@ -198,18 +213,19 @@ export class SettingRow extends Frame
         self:Relayout()
     end
 
-    function SetModified(modified: any)
-        self.modified = modified and true or false
+    function SetModified(modified: unknown)
+        self.modified = modified ~= nil and modified ~= false
         local canReset = self.modified and not self.disabled
         self.reset:SetAlpha(canReset and 1 or 0)
         self.reset:EnableMouse(canReset)
         self:Relayout()
     end
 
-    function SetDisabled(disabled: any, reason: string?)
-        self.disabled = disabled and true or false
+    function SetDisabled(disabled: unknown, reason: string?)
+        self.disabled = disabled ~= nil and disabled ~= false
         self.label:SetColor(self.disabled and "ink-muted" or "ink")
-        if self.control and self.control.SetDisabled then self.control:SetDisabled(self.disabled) end
+        local control = self.control
+        if control and disableable(control) then control:SetDisabled(self.disabled) end
         self.why:SetShown(self.disabled and reason ~= nil)
         self.whyText:SetValue(reason or "")
         self:SetModified(self.modified)

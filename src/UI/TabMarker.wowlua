@@ -51,31 +51,6 @@ export type TabMarkerOptions = {
 type Spot = { p?: number, s?: number }
 type Mark = { at: Spot, from: Spot, to: Spot, placed?: boolean, start?: number }
 
-export interface TabMarker
-    row: Frame
-    y: number
-    vertical?: boolean
-    side: string
-    x: number
-    base: number
-    jewelX: number
-    boxH?: number
-    ruleMark: Mark
-    jewelMark: Mark
-    holder: Frame
-    box?: Frame
-    rule?: Frame
-    jewel: Texture
-    chosen?: Region
-    hovered?: Region
-    waiting?: boolean
-    function Place(b: any): (number?, any, any, any)
-    function Draw(): boolean
-    function Aim()
-    function SetChosen(button: Region?)
-    function Track(button: Frame)
-end
-
 local GLIDE = T.duration["dur-base"]
 local EASE = T.easing["ease-in-out"].bezier :: number[]
 
@@ -121,139 +96,164 @@ local function step(mark: Mark): boolean
     return true
 end
 
-local Marker: TabMarker = {} :: any
-(Marker :: any).__index = Marker
+-- What a button may say of the part of it the mark spans (Panel's tabs).
+type MarkSpan = { markLeft?: number, markWidth?: number }
 
--- A button's left, bottom, width and height from the row's bottom left, in
--- the row's units (nil while it isn't laid out).
-function Marker:Place(b: any): (number?, any, any, any)
-    local row = self.row
-    local l, bt, rl, rb = b:GetLeft(), b:GetBottom(), row:GetLeft(), row:GetBottom()
-    if not (l and bt and rl and rb) then return nil end
-    local k = b:GetEffectiveScale() / row:GetEffectiveScale()
-    local left, width = l * k - rl, b:GetWidth() * k
-    if b.markLeft then left, width = b.markLeft, b.markWidth or width end
-    return left, bt * k - rb, width, b:GetHeight() * k
-end
+-- the marker following each button's hover (one per button)
+local tracked: { [Frame]: TabMarker } = setmetatable({}, { __mode = "k" })
 
-function Marker:Draw()
-    local row = self.row
-    local moving = step(self.ruleMark)
-    moving = step(self.jewelMark) or moving
-    local box = self.box
-    if box then
-        local r = self.ruleMark.at
-        box:ClearAllPoints()
-        box:SetPoint("BOTTOMLEFT", self.row, "BOTTOMLEFT", r.p :: number, self.base)
-        box:SetSize(math.max(1, r.s :: number), self.boxH :: number)
+export class TabMarker
+    readonly row: Frame
+    readonly y: number
+    readonly vertical?: boolean
+    readonly side: string
+    readonly x: number
+    base: number = 0
+    jewelX: number = 0
+    boxH?: number
+    readonly ruleMark: Mark = newMark()
+    readonly jewelMark: Mark = newMark()
+    readonly holder: Frame
+    box?: Frame
+    rule?: Frame
+    jewel?: Texture
+    chosen?: Region
+    hovered?: Region
+    waiting?: boolean
+
+    constructor(row: Frame, opts: TabMarkerOptions)
+        self.row, self.y, self.vertical, self.side, self.x = row, opts.y or 0, opts.vertical, opts.side or "LEFT", opts.x or 0
+        -- one holder above the row's buttons: the line, then the jewel over it
+        local holder = CreateFrame("Frame", nil, row)
+        self.holder = holder
+        holder:SetAllPoints()
+        holder:SetFrameLevel(row:GetFrameLevel() + (opts.level or 2))
+        -- shown again after a change while hidden: placed at once
+        row:HookScript("OnShow", function() self:Aim() end)
+        local boxOpts = opts.box
+        if boxOpts then
+            local box = CreateFrame("Frame", nil, holder)
+            self.box = box
+            draw.fill(box, boxOpts.fill):SetAllPoints()
+            draw.border(box, boxOpts.border)
+            box:Hide()
+            return
+        end
+        if opts.rule ~= false and not opts.vertical then
+            local rule = draw.hairline(holder, opts.rule or "gilt-line", "both")
+            self.rule = rule
+            rule:Hide()
+        end
+        local top = CreateFrame("Frame", nil, holder)
+        top:SetAllPoints()
+        top:SetFrameLevel(holder:GetFrameLevel() + 2)
+        local jewel = draw.diamond(top, opts.jewel or 5, "gilt")
+        jewel:Hide()
+        self.jewel = jewel
+    end
+
+    -- A button's left, bottom, width and height from the row's bottom left, in
+    -- the row's units (nil while it isn't laid out).
+    function Place(b: Region): (number?, number, number, number)
+        local row = self.row
+        local l, bt, rl, rb = b:GetLeft(), b:GetBottom(), row:GetLeft(), row:GetBottom()
+        if not (l and bt and rl and rb) then return nil, 0, 0, 0 end
+        local k = b:GetEffectiveScale() / row:GetEffectiveScale()
+        local left, width = l * k - rl, b:GetWidth() * k
+        local span = b :: MarkSpan
+        if span.markLeft then left, width = span.markLeft, span.markWidth or width end
+        return left, bt * k - rb, width, b:GetHeight() * k
+    end
+
+    function Draw()
+        local row = self.row
+        local moving = step(self.ruleMark)
+        moving = step(self.jewelMark) or moving
+        local box = self.box
+        if box then
+            local r = self.ruleMark.at
+            box:ClearAllPoints()
+            box:SetPoint("BOTTOMLEFT", self.row, "BOTTOMLEFT", r.p :: number, self.base)
+            box:SetSize(math.max(1, r.s :: number), self.boxH :: number)
+            return moving
+        end
+        local j, jewel = self.jewelMark.at, self.jewel
+        if not jewel then return moving end
+        jewel:ClearAllPoints()
+        if self.vertical then
+            jewel:SetPoint("CENTER", row, "BOTTOMLEFT", self.jewelX, j.p :: number)
+        else
+            local y = self.base + self.y
+            local rule = self.rule
+            if rule then
+                local r = self.ruleMark.at
+                rule:ClearAllPoints()
+                rule:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", r.p :: number, y)
+                rule:SetWidth(math.max(1, r.s :: number))
+            end
+            jewel:SetPoint("CENTER", row, "BOTTOMLEFT", j.p :: number, y)
+        end
         return moving
     end
-    local j = self.jewelMark.at
-    self.jewel:ClearAllPoints()
-    if self.vertical then
-        self.jewel:SetPoint("CENTER", row, "BOTTOMLEFT", self.jewelX, j.p :: number)
-    else
-        local y = self.base + self.y
-        local rule = self.rule
-        if rule then
-            local r = self.ruleMark.at
-            rule:ClearAllPoints()
-            rule:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", r.p :: number, y)
-            rule:SetWidth(math.max(1, r.s :: number))
-        end
-        self.jewel:SetPoint("CENTER", row, "BOTTOMLEFT", j.p :: number, y)
-    end
-    return moving
-end
 
-function Marker:Aim()
-    local chosen = self.chosen
-    local shown = chosen ~= nil and chosen:IsShown()
-    local rule, box = self.rule, self.box
-    if rule then rule:SetShown(shown) end
-    if box then box:SetShown(shown) else self.jewel:SetShown(shown) end
-    if not shown or not chosen then return end
-    local left, bottom, width, height = self:Place(chosen)
-    if not left then
-        -- not laid out yet: next frame
-        if not self.waiting then
-            self.waiting = true
-            after(0, function() self.waiting = false; self:Aim() end)
+    function Aim()
+        local chosen = self.chosen
+        local shown = chosen ~= nil and chosen:IsShown()
+        local rule, box = self.rule, self.box
+        if rule then rule:SetShown(shown) end
+        local jewel = self.jewel
+        if box then box:SetShown(shown) elseif jewel then jewel:SetShown(shown) end
+        if not shown or not chosen then return end
+        local left, bottom, width, height = self:Place(chosen)
+        if not left then
+            -- not laid out yet: next frame
+            if not self.waiting then
+                self.waiting = true
+                after(0, function() self.waiting = false; self:Aim() end)
+            end
+            return
         end
-        return
+        local now = motion.reduced() or not self.row:IsVisible()
+        local over = self.hovered
+        local ol, ob, ow, oh = left, bottom, width, height
+        if over and over ~= chosen and over:IsShown() then
+            local pl, pb, pw, ph = self:Place(over)
+            if pl then ol, ob, ow, oh = pl, pb, pw, ph end
+        end
+        if self.box then
+            self.base, self.boxH = bottom, height
+            aim(self.ruleMark, left, width, now)
+        elseif self.vertical then
+            self.jewelX = left + (self.side == "RIGHT" and width or 0) + self.x
+            aim(self.jewelMark, ob + oh / 2, nil, now)
+        else
+            self.base = bottom
+            aim(self.ruleMark, left, width, now)
+            aim(self.jewelMark, ol + ow / 2, nil, now)
+        end
+        if self:Draw() then
+            self.holder:SetScript("OnUpdate", function()
+                if not self:Draw() then self.holder:SetScript("OnUpdate", nil) end
+            end)
+        end
     end
-    local now = motion.reduced() or not self.row:IsVisible()
-    local over = self.hovered
-    local ol, ob, ow, oh = left, bottom, width, height
-    if over and over ~= chosen and over:IsShown() then
-        local pl, pb, pw, ph = self:Place(over)
-        if pl then ol, ob, ow, oh = pl, pb, pw, ph end
+
+    function SetChosen(button: Region?)
+        self.chosen = button
+        self:Aim()
     end
-    if self.box then
-        self.base, self.boxH = bottom, height
-        aim(self.ruleMark, left, width, now)
-    elseif self.vertical then
-        self.jewelX = left + (self.side == "RIGHT" and width or 0) + self.x
-        aim(self.jewelMark, ob + oh / 2, nil, now)
-    else
-        self.base = bottom
-        aim(self.ruleMark, left, width, now)
-        aim(self.jewelMark, ol + ow / 2, nil, now)
-    end
-    if self:Draw() then
-        self.holder:SetScript("OnUpdate", function()
-            if not self:Draw() then self.holder:SetScript("OnUpdate", nil) end
+
+    function Track(button: Frame)
+        if tracked[button] == self then return end
+        tracked[button] = self
+        button:HookScript("OnEnter", function(b) self.hovered = b; self:Aim() end)
+        button:HookScript("OnLeave", function(b)
+            if self.hovered == b then self.hovered = nil end
+            self:Aim()
         end)
     end
 end
 
-function Marker:SetChosen(button: Region?)
-    self.chosen = button
-    self:Aim()
-end
-
-function Marker:Track(button: Frame)
-    if button.suuMarkTracked == self then return end
-    button.suuMarkTracked = self
-    button:HookScript("OnEnter", function(b) self.hovered = b; self:Aim() end)
-    button:HookScript("OnLeave", function(b)
-        if self.hovered == b then self.hovered = nil end
-        self:Aim()
-    end)
-end
-
 export function tabMarker(row: Frame, opts: TabMarkerOptions?): TabMarker
-    opts = opts or {}
-    local m = setmetatable({
-        row = row, y = opts.y or 0, vertical = opts.vertical, side = opts.side or "LEFT", x = opts.x or 0,
-        base = 0, jewelX = 0, ruleMark = newMark(), jewelMark = newMark(),
-    }, Marker :: any) :: TabMarker
-    -- one holder above the row's buttons: the line, then the jewel over it
-    local holder = CreateFrame("Frame", nil, row)
-    m.holder = holder
-    holder:SetAllPoints()
-    holder:SetFrameLevel(row:GetFrameLevel() + (opts.level or 2))
-    local boxOpts = opts.box
-    if boxOpts then
-        local box = CreateFrame("Frame", nil, holder)
-        m.box = box
-        draw.fill(box, boxOpts.fill):SetAllPoints()
-        draw.border(box, boxOpts.border)
-        box:Hide()
-        row:HookScript("OnShow", function() m:Aim() end)
-        return m
-    end
-    if opts.rule ~= false and not opts.vertical then
-        local rule = draw.hairline(holder, opts.rule or "gilt-line", "both")
-        m.rule = rule
-        rule:Hide()
-    end
-    local top = CreateFrame("Frame", nil, holder)
-    top:SetAllPoints()
-    top:SetFrameLevel(holder:GetFrameLevel() + 2)
-    m.jewel = draw.diamond(top, opts.jewel or 5, "gilt")
-    m.jewel:Hide()
-    -- shown again after a change while hidden: placed at once
-    row:HookScript("OnShow", function() m:Aim() end)
-    return m
+    return TabMarker.new(row, opts or {})
 end

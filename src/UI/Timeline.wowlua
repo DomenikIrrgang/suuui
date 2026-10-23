@@ -25,38 +25,11 @@ import * as controls from "/UI/Controls"
 local S = T.space
 
 --- One ability on the timeline.
-export type TimelineEvent = { id: any, label?: string, endsAt?: number, paused?: number, icon?: any, badge?: { tone: string, text: string } }
+export type TimelineEvent = { id: number | string, label?: string, endsAt?: number, paused?: number, icon?: number | string, badge?: { tone: string, text: string } }
 type Event = TimelineEvent
 -- an event and the seconds left until it
 type Timed = { e: Event, r: number }
 
---- One ability on the track: its icon, time, name and badge.
-export interface TrackEvent extends Frame
-    icon: Icon
-    ring: draw.Border
-    time: Text
-    name: Text
-    badge: controls.StateBadge
-    align: string?
-    id: any
-end
-
---- One row of the list.
-export interface ListRow extends Frame
-    icon: Icon
-    name: Text
-    time: Text
-    badge: controls.StateBadge
-    track: Texture
-    drain: Texture
-end
-
---- The list's glass panel.
-export interface TimelineList extends Frame
-    title: Text
-    meta: Text
-    rule: Texture
-end
 
 --- What encounterTimeline makes.
 
@@ -80,19 +53,33 @@ end
 -- Track
 --------------------------------------------------------------------------------
 
+--- One ability on the track: its icon, time, name and badge.
+export class TrackEvent extends Frame
+    icon: Icon
+    ring: draw.Border
+    time: Text
+    name: Text
+    badge: controls.StateBadge
+    align: string?
+    id: (number | string)? = nil
+
+    constructor(t: EncounterTimeline)
+        super(nil, t.track)
+        self:SetSize(EV_W, TRACK_H)
+        self.icon = icon(self, "icon-md")
+        self.ring = draw.border(self.icon, { 0, 0, 0, 0.7 }, { width = 2, inset = -2 })
+        self.time = text(self, "numeric", "ink")
+        self.time:SetShadowed(true)
+        self.name = text(self, "caption", "ink-muted")
+        self.name:SetShadowed(true)
+        self.name:SetWordWrap(false)
+        self.name:SetWidth(EV_W)
+        self.badge = controls.stateBadge(self, "warning", "Tank")
+    end
+end
+
 local function trackEvent(t: EncounterTimeline): TrackEvent
-    local f: TrackEvent = CreateFrame("Frame", nil, t.track) :: any
-    f:SetSize(EV_W, TRACK_H)
-    f.icon = icon(f, "icon-md")
-    f.ring = draw.border(f.icon, { 0, 0, 0, 0.7 }, { width = 2, inset = -2 })
-    f.time = text(f, "numeric", "ink")
-    f.time:SetShadowed(true)
-    f.name = text(f, "caption", "ink-muted")
-    f.name:SetShadowed(true)
-    f.name:SetWordWrap(false)
-    f.name:SetWidth(EV_W)
-    f.badge = controls.stateBadge(f, "warning", "Tank")
-    return f
+    return TrackEvent.new(t)
 end
 
 -- start / mid / end: centred under its icon, or held inside the line's ends
@@ -204,28 +191,41 @@ end
 
 local LIST_W, ROW_H = 280, 30
 
+--- One row of the list.
+export class ListRow extends Frame
+    icon: Icon
+    name: Text
+    time: Text
+    badge: controls.StateBadge
+    track: Texture
+    drain: Texture
+
+    constructor(t: EncounterTimeline, i: number)
+        super(nil, t.list)
+        self:SetSize(LIST_W - S["space-5"] * 2, ROW_H)
+        self.icon = icon(self, "icon-md")
+        self.icon:SetPoint("LEFT", 0, 2)
+        self.name = text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.icon, "RIGHT", S["space-4"], 0)
+        self.name:SetWordWrap(false)
+        self.time = text(self, "numeric", "ink")
+        self.time:SetPoint("RIGHT", 0, 2)
+        self.badge = controls.stateBadge(self, "warning", "Tank")
+        self.badge:SetPoint("RIGHT", self.time, "LEFT", -S["space-4"], 0)
+        self.track = self:CreateTexture(nil, "BACKGROUND")
+        draw.paintFill(self.track, "track")
+        self.track:SetPoint("BOTTOMLEFT")
+        self.track:SetPoint("BOTTOMRIGHT")
+        self.track:SetHeight(2)
+        self.drain = self:CreateTexture(nil, "ARTWORK")
+        self.drain:SetPoint("BOTTOMLEFT")
+        self.drain:SetHeight(2)
+        t.rows[i] = self
+    end
+end
+
 local function listRow(t: EncounterTimeline, i: number): ListRow
-    local r: ListRow = CreateFrame("Frame", nil, t.list) :: any
-    r:SetSize(LIST_W - S["space-5"] * 2, ROW_H)
-    r.icon = icon(r, "icon-md")
-    r.icon:SetPoint("LEFT", 0, 2)
-    r.name = text(r, "label", "ink")
-    r.name:SetPoint("LEFT", r.icon, "RIGHT", S["space-4"], 0)
-    r.name:SetWordWrap(false)
-    r.time = text(r, "numeric", "ink")
-    r.time:SetPoint("RIGHT", 0, 2)
-    r.badge = controls.stateBadge(r, "warning", "Tank")
-    r.badge:SetPoint("RIGHT", r.time, "LEFT", -S["space-4"], 0)
-    r.track = r:CreateTexture(nil, "BACKGROUND")
-    draw.paintFill(r.track, "track")
-    r.track:SetPoint("BOTTOMLEFT")
-    r.track:SetPoint("BOTTOMRIGHT")
-    r.track:SetHeight(2)
-    r.drain = r:CreateTexture(nil, "ARTWORK")
-    r.drain:SetPoint("BOTTOMLEFT")
-    r.drain:SetHeight(2)
-    t.rows[i] = r
-    return r
+    return ListRow.new(t, i)
 end
 
 local function layoutList(t: EncounterTimeline, now: number)
@@ -276,24 +276,34 @@ events.on("SUUUI_THEME_CHANGED", function()
     end
 end, "Timeline")
 
+--- The list's glass panel.
+export class TimelineList extends Frame
+    readonly title: Text
+    readonly meta: Text
+    readonly rule: Texture
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetPoint("TOPLEFT")
+        self:SetWidth(LIST_W)
+        draw.fill(self, "surface-glass", "BACKGROUND"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        draw.shadow(self, "shadow-panel")
+        self.title = text(self, "header", "gilt-text")
+        self.title:SetPoint("TOPLEFT", S["space-5"], -S["space-4"])
+        self.title:SetValue("Timeline")
+        self.meta = text(self, "caption", "ink-muted")
+        self.meta:SetPoint("LEFT", self.title, "RIGHT", S["space-3"], 0)
+        self.meta:SetPoint("RIGHT", -S["space-5"], 0)
+        self.meta:SetWordWrap(false)
+        self.rule = self:CreateTexture(nil, "BORDER")
+        draw.paintFill(self.rule, "gilt-faint")
+        self.rule:SetHeight(1)
+    end
+end
+
 local function buildList(t: EncounterTimeline)
-    local p: TimelineList = CreateFrame("Frame", nil, t) :: any
-    p:SetPoint("TOPLEFT")
-    p:SetWidth(LIST_W)
-    draw.fill(p, "surface-glass", "BACKGROUND"):SetAllPoints()
-    draw.border(p, "gilt-line")
-    draw.shadow(p, "shadow-panel")
-    p.title = text(p, "header", "gilt-text")
-    p.title:SetPoint("TOPLEFT", S["space-5"], -S["space-4"])
-    p.title:SetValue("Timeline")
-    p.meta = text(p, "caption", "ink-muted")
-    p.meta:SetPoint("LEFT", p.title, "RIGHT", S["space-3"], 0)
-    p.meta:SetPoint("RIGHT", -S["space-5"], 0)
-    p.meta:SetWordWrap(false)
-    p.rule = p:CreateTexture(nil, "BORDER")
-    draw.paintFill(p.rule, "gilt-faint")
-    p.rule:SetHeight(1)
-    t.list = p
+    t.list = TimelineList.new(t)
     t.rows = {}
     placeRule(t)
     lists[t] = true

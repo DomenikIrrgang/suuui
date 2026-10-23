@@ -47,30 +47,9 @@ export type WhoData = {
     results?: WhoResult[],
 }
 
-export interface WhoRow extends Button
-    index: number
-    data?: WhoResult
-    selected: Texture
-    edge: Texture
-    hover: Texture
-    dia: Texture
-    name: Text
-    level: Text
-    race: Text
-    class: Text
-    guild: Text
-    zone: Text
-end
-
 -- Filter: a quiet button with a chevron after its word.
 export interface WhoFilterButton extends SuuButton
     chev: Glyph
-end
-
-export interface WhoEmpty extends Frame
-    glyph: Texture
-    title: Text
-    text: Text
 end
 
 local S = T.space
@@ -116,40 +95,81 @@ local function cell(parent: Frame, style: string, color: string): Text
     return fs
 end
 
+-- what the list shows with no one in it: a glyph, a title and a line
+export class WhoEmpty extends Frame
+    readonly glyph: Texture
+    readonly title: Text
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(380, 100)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "search.tga")
+        self.glyph:SetSize(24, 24)
+        draw.paint(self.glyph, "ink-faint")
+        self.glyph:SetPoint("TOP")
+        self.title = uiText.text(self, "label", "ink")
+        self.title:SetPoint("TOP", self.glyph, "BOTTOM", 0, -S["space-3"])
+        self.text = uiText.text(self, "caption", "ink-muted")
+        self.text:SetWidth(380)
+        self.text:SetJustifyH("CENTER")
+        self.text:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-3"])
+    end
+end
+
+export class WhoRow extends Button
+    index: number = 0
+    data?: WhoResult
+    selected: Texture
+    edge: Texture
+    hover: Texture
+    dia: Texture
+    name: Text
+    level: Text
+    race: Text
+    class: Text
+    guild: Text
+    zone: Text
+
+    constructor(w: GroupFinderWho)
+        super(nil, w.list.child)
+        self:SetHeight(ROW_H)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.selected = draw.fill(self, "arcane-soft", "BACKGROUND")
+        self.selected:SetAllPoints()
+        self.edge = draw.fill(self, "arcane", "ARTWORK")
+        self.edge:SetWidth(2)
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.hover = draw.fill(self, "gilt-faint", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.dia = draw.diamond(self, 6, "ink")
+        self.name = cell(self, "label", "ink")
+        self.level = cell(self, "caption", "ink")
+        self.level:SetJustifyH("RIGHT")
+        self.race = cell(self, "caption", "ink")
+        self.class = cell(self, "caption", "ink")
+        self.guild = cell(self, "caption", "ink")
+        self.zone = cell(self, "caption", "ink")
+        self:SetScript("OnEnter", function() self.hover:Show() end)
+        self:SetScript("OnLeave", function() self.hover:Hide() end)
+        self:SetScript("OnClick", function(_: WhoRow, button: string)
+            local data = self.data
+            if not data then return end
+            if button == "RightButton" then
+                if w.onMenu then w.onMenu(data) end
+            else
+                w.selected = self.index
+                w:Draw()
+            end
+        end)
+    end
+end
+
 local function makeRow(w: GroupFinderWho): WhoRow
-    local r: WhoRow = CreateFrame("Button", nil, w.list.child) :: any
-    r:SetHeight(ROW_H)
-    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    r.selected = draw.fill(r, "arcane-soft", "BACKGROUND")
-    r.selected:SetAllPoints()
-    r.edge = draw.fill(r, "arcane", "ARTWORK")
-    r.edge:SetWidth(2)
-    r.edge:SetPoint("TOPLEFT")
-    r.edge:SetPoint("BOTTOMLEFT")
-    r.hover = draw.fill(r, "gilt-faint", "BACKGROUND", 1)
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.dia = draw.diamond(r, 6, "ink")
-    r.name = cell(r, "label", "ink")
-    r.level = cell(r, "caption", "ink")
-    r.level:SetJustifyH("RIGHT")
-    r.race = cell(r, "caption", "ink")
-    r.class = cell(r, "caption", "ink")
-    r.guild = cell(r, "caption", "ink")
-    r.zone = cell(r, "caption", "ink")
-    r:SetScript("OnEnter", function(self: WhoRow) self.hover:Show() end)
-    r:SetScript("OnLeave", function(self: WhoRow) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self: WhoRow, button: string)
-        local data = self.data
-        if not data then return end
-        if button == "RightButton" then
-            if w.onMenu then w.onMenu(data) end
-        else
-            w.selected = self.index
-            w:Draw()
-        end
-    end)
-    return r
+    return WhoRow.new(w)
 end
 
 -- What the bar says at the right: "24 players found" ("· showing the first
@@ -244,20 +264,8 @@ export class GroupFinderWho extends Frame
         self.list:SetPoint("BOTTOMRIGHT", -S["space-2"], S["space-2"])
         self.list:HookScript("OnSizeChanged", function() self:Draw() end)
         -- empty
-        local e: WhoEmpty = CreateFrame("Frame", nil, self.box) :: any
-        e:SetSize(380, 100)
+        local e = WhoEmpty.new(self.box)
         e:SetPoint("CENTER", 0, -HEAD_H / 2)
-        e.glyph = e:CreateTexture(nil, "ARTWORK")
-        e.glyph:SetTexture(GLYPHS .. "search.tga")
-        e.glyph:SetSize(24, 24)
-        draw.paint(e.glyph, "ink-faint")
-        e.glyph:SetPoint("TOP")
-        e.title = uiText.text(e, "label", "ink")
-        e.title:SetPoint("TOP", e.glyph, "BOTTOM", 0, -S["space-3"])
-        e.text = uiText.text(e, "caption", "ink-muted")
-        e.text:SetWidth(380)
-        e.text:SetJustifyH("CENTER")
-        e.text:SetPoint("TOP", e.title, "BOTTOM", 0, -S["space-3"])
         self.empty = e
         -- the foot
         local function act(get: () -> ((row: WhoResult) -> ())?): () -> ()

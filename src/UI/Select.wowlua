@@ -40,19 +40,22 @@ import root from "/Core/Root"
 import * as draw from "./Draw"
 import text, measureText, Text from "./Text"
 import panel, Panel from "./Panel"
-import checkbox, check, chevron, textField, Glyph, TextField from "./Inputs"
+import checkbox, check, chevron, textField, Checkbox, Glyph, TextField from "./Inputs"
 import showTooltip, hideTooltip from "./Tooltip"
 
 local S = T.space
 local colors = T.color :: { [string]: Color }
 
-export type SelectOption = {
-    value?: any,
+-- what a select chooses between
+export type SelectValue = string | number | boolean
+
+export type SelectOption<V extends SelectValue> = {
+    value?: V,
     label?: string,
     note?: string,
     disabled?: boolean,
     reason?: string,
-    icon?: any,
+    icon?: string | number,
     summary?: string,
     heading?: string,
     search?: string,
@@ -62,10 +65,13 @@ export type SelectOption = {
 
 export type SelectFootLink = { label: string, onClick?: () -> () }
 
-export type SelectOptions = {
-    options?: SelectOption[],
-    value?: any,
-    onChange?: (value: any) -> (),
+export type SelectOptions<V extends SelectValue> = {
+    options?: SelectOption<V>[],
+    -- one value, or with `multiple` the values chosen
+    value?: V | V[],
+    onChange?: (value: V) -> (),
+    -- a multiple select's: what is chosen, after each change
+    onChangeAll?: (values: V[]) -> (),
     width?: number,
     placeholder?: string,
     multiple?: boolean,
@@ -73,33 +79,125 @@ export type SelectOptions = {
     maxRows?: number,
     minListWidth?: number,
     search?: boolean | string,
-    lookup?: (query: string) -> SelectOption[]?,
+    lookup?: (query: string) -> SelectOption<V>[]?,
     bare?: boolean,
     textStyle?: string,
     textColor?: string,
 }
 
+local ROW_H = 28
+local MAX_ROWS = 10
+local SEARCH_H = 30
+
+-- An option's row: its hover, the box (multiple) or check, its icon or
+-- diamond, label and note; a heading's rule.
+export class SelectRow<V extends SelectValue> extends Button
+    readonly hover: Texture
+    readonly box: Checkbox
+    readonly label: Text
+    readonly icon: Texture
+    readonly diamond: Texture
+    readonly note: Text
+    readonly check: Texture
+    readonly rule: Texture
+    option: SelectOption<V> = {}
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self.hover = draw.fill(self, "surface-raised")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.box = checkbox(self, { size = 14 })
+        self.box:SetPoint("LEFT", S["space-4"], 0)
+        self.box:EnableMouse(false)
+        self.label = text(self, "body", "ink")
+        -- an option's icon (spells, talents) left of its label
+        self.icon = self:CreateTexture(nil, "ARTWORK")
+        self.icon:SetSize(18, 18)
+        self.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        self.icon:Hide()
+        self.diamond = draw.diamond(self, 7, "ink", "OVERLAY")
+        self.diamond:Hide()
+        self.note = text(self, "caption", "ink-muted")
+        self.note:SetPoint("RIGHT", -S["space-4"], 0)
+        self.check = check(self, 14, "arcane")
+        self.check:SetPoint("RIGHT", -S["space-4"], 0)
+        -- a heading's rule (above every heading but the first)
+        self.rule = self:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(self.rule, "gilt-faint")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("TOPLEFT", S["space-2"], -S["space-1"])
+        self.rule:SetPoint("TOPRIGHT", -S["space-2"], -S["space-1"])
+        self.rule:Hide()
+        self:SetScript("OnEnter", function()
+            local o = self.option
+            if not (o.heading or o.disabled) then self.hover:Show() end
+            if o.disabled and o.reason then
+                showTooltip(self, { title = o.label, description = o.reason })
+            end
+        end)
+        self:SetScript("OnLeave", function() self.hover:Hide(); hideTooltip() end)
+    end
+end
+
+-- A link under the list (`select.foot`).
+class FootLink extends Button
+    readonly hover: Texture
+    readonly label: Text
+    def: SelectFootLink? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self.hover = draw.fill(self, "surface-raised")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.label = text(self, "body", "ink-muted")
+        self.label:SetPoint("LEFT", S["space-4"], 0)
+        self:SetScript("OnEnter", function() self.hover:Show(); self.label:SetColor("ink") end)
+        self:SetScript("OnLeave", function() self.hover:Hide(); self.label:SetColor("ink-muted") end)
+    end
+end
+
+-- Select all and Clear, over a multiple select's list.
+class BulkLink extends Button
+    readonly text: Text
+
+    constructor(parent: Frame, label: string)
+        super(nil, parent)
+        self.text = text(self, "caption", "ink-muted")
+        self.text:SetValue(label)
+        self.text:SetPoint("LEFT")
+        self:SetHeight(18)
+        self:SetScript("OnEnter", function() self.text:SetColor("ink") end)
+        self:SetScript("OnLeave", function() self.text:SetColor("ink-muted") end)
+    end
+end
+
 -- The open list: a Panel with its rows, the bulk links, the search field,
 -- the scrollbar and the foot's links.
-export interface SelectList extends Panel
-    rows: any[]
+export interface SelectList<V extends SelectValue> extends Panel
+    rows: SelectRow<V>[]
     bulk: Frame
+    bulkLinks: BulkLink[]
     search: TextField
     footRule: Texture
-    footLinks: any[]
+    footLinks: FootLink[]
     track: Texture
     thumb: Texture
 end
 
-local ROW_H = 28
-local MAX_ROWS = 10
-local SEARCH_H = 30
 
 --------------------------------------------------------------------------------
 -- One list at a time, plus a screen-wide catcher that closes it.
 --------------------------------------------------------------------------------
 
-local openList: Select? = nil
+-- the open one (a select of any values): closed when another opens
+interface Closable
+    function Close()
+end
+local openList: Closable? = nil
 local catcher = CreateFrame("Button", nil, UIParent)
 catcher:SetAllPoints(UIParent)
 catcher:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -107,78 +205,14 @@ catcher:Hide()
 catcher:RegisterForClicks("AnyDown")
 catcher:SetScript("OnClick", function() if openList then openList:Close() end end)
 
-local function contains(list: any[]?, v: any): boolean
-    for _, x in ipairs(list or {}) do
+local function contains<V extends SelectValue>(list: V[], v: V?): boolean
+    for _, x in ipairs(list) do
         if x == v then return true end
     end
     return false
 end
 
-local function choose(self: Select, o: SelectOption)
-    if o.heading or o.disabled then return end
-    if self.multiple then
-        local v: any[] = { unpack(self.value or {}) }
-        if contains(v, o.value) then
-            for i = #v, 1, -1 do if v[i] == o.value then table.remove(v, i) end end
-        else
-            v[#v + 1] = o.value
-        end
-        self:SetValue(v)
-        if self.onChange then self.onChange({ unpack(self.value) }) end
-    else
-        self:Close()
-        self.lookedUp = o
-        if o.value ~= self.value then
-            self:SetValue(o.value)
-            if self.onChange then self.onChange(o.value) end
-        end
-    end
-end
-
-local function row(self: Select, i: number): any
-    local list = self.list :: SelectList
-    list.rows[i] = list.rows[i] or (function(): Button
-        local r = CreateFrame("Button", nil, list)
-        r:SetHeight(ROW_H)
-        r.hover = draw.fill(r, "surface-raised")
-        r.hover:SetAllPoints()
-        r.hover:Hide()
-        r.box = checkbox(r, { size = 14 })
-        r.box:SetPoint("LEFT", S["space-4"], 0)
-        r.box:EnableMouse(false)
-        r.label = text(r, "body", "ink")
-        -- an option's icon (spells, talents) left of its label
-        r.icon = r:CreateTexture(nil, "ARTWORK")
-        r.icon:SetSize(18, 18)
-        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        r.icon:Hide()
-        r.diamond = draw.diamond(r, 7, "ink", "OVERLAY")
-        r.diamond:Hide()
-        r.note = text(r, "caption", "ink-muted")
-        r.note:SetPoint("RIGHT", -S["space-4"], 0)
-        r.check = check(r, 14, "arcane")
-        r.check:SetPoint("RIGHT", -S["space-4"], 0)
-        -- a heading's rule (above every heading but the first)
-        r.rule = r:CreateTexture(nil, "ARTWORK")
-        draw.paintFill(r.rule, "gilt-faint")
-        r.rule:SetHeight(1)
-        r.rule:SetPoint("TOPLEFT", S["space-2"], -S["space-1"])
-        r.rule:SetPoint("TOPRIGHT", -S["space-2"], -S["space-1"])
-        r.rule:Hide()
-        r:SetScript("OnEnter", function(b)
-            if not (b.option.heading or b.option.disabled) then b.hover:Show() end
-            if b.option.disabled and b.option.reason then
-                showTooltip(b, { title = b.option.label, description = b.option.reason })
-            end
-        end)
-        r:SetScript("OnLeave", function(b) b.hover:Hide(); hideTooltip() end)
-        r:SetScript("OnClick", function(b) choose(self, b.option) end)
-        return r
-    end)()
-    return list.rows[i]
-end
-
-export class Select extends Button
+export class Select<V extends SelectValue> extends Button
     bg: Texture
     border: draw.Border
     chevron: Glyph
@@ -189,23 +223,26 @@ export class Select extends Button
     minListWidth: number? = nil
     maxRows: number? = nil
     search: boolean | string? = nil
-    lookup: ((query: string) -> SelectOption[]?)? = nil
-    onChange: ((value: any) -> ())? = nil
-    options: SelectOption[]
+    lookup: ((query: string) -> SelectOption<V>[]?)? = nil
+    onChange: ((value: V) -> ())? = nil
+    onChangeAll: ((values: V[]) -> ())? = nil
+    options: SelectOption<V>[]
     bare: boolean? = nil
     -- a bare select's (opts.bare)
     maxWidth: number = 190
     textStyle: string = "body"
-    value: any = nil
+    -- the value chosen; a multiple select's, in `values`
+    value: V? = nil
+    values: V[] = {}
     disabled: boolean? = nil
-    view: SelectOption[]? = nil
+    view: SelectOption<V>[]? = nil
     offset: number? = nil
     query: string? = nil
-    list: SelectList? = nil
-    lookedUp: SelectOption? = nil
+    list: SelectList<V>? = nil
+    lookedUp: SelectOption<V>? = nil
     foot: SelectFootLink[]? = nil
 
-    constructor(parent: Frame, opts: SelectOptions)
+    constructor(parent: Frame, opts: SelectOptions<V>)
         super(nil, parent)
         self:SetSize(opts.width or 190, 30)
         self.bg = draw.fill(self, "surface-sunk")
@@ -220,7 +257,7 @@ export class Select extends Button
         self.multiple, self.maxShown, self.placeholder = opts.multiple, opts.maxShown, opts.placeholder
         self.minListWidth = opts.minListWidth
         self.maxRows, self.search, self.lookup = opts.maxRows, opts.search, opts.lookup
-        self.onChange = opts.onChange
+        self.onChange, self.onChangeAll = opts.onChange, opts.onChangeAll
         self.options = opts.options or {}
         self:SetScript("OnClick", function()
             local list = self.list
@@ -255,6 +292,40 @@ export class Select extends Button
         self:SetValue(opts.value)
     end
 
+    -- An option chosen: one more of a multiple select's, or its value.
+    function Choose(o: SelectOption<V>)
+        if o.heading or o.disabled then return end
+        local value = o.value
+        if self.multiple then
+            local v: V[] = { unpack(self.values) }
+            if contains(v, value) then
+                for i = #v, 1, -1 do if v[i] == value then table.remove(v, i) end end
+            elseif value ~= nil then
+                v[#v + 1] = value
+            end
+            self:SetValue(v)
+            if self.onChangeAll then self.onChangeAll({ unpack(self.values) }) end
+        else
+            self:Close()
+            self.lookedUp = o
+            if value ~= self.value then
+                self:SetValue(value)
+                if self.onChange and value ~= nil then self.onChange(value) end
+            end
+        end
+    end
+
+    private function Row(i: number): SelectRow<V>
+        local list = self.list :: SelectList<V>
+        local r = list.rows[i]
+        if not r then
+            r = SelectRow.new(list)
+            r:SetScript("OnClick", function() self:Choose(r.option) end)
+            list.rows[i] = r
+        end
+        return r
+    end
+
     function Summary(): string?
         if not self.multiple then
             for _, o in ipairs(self.options) do
@@ -268,7 +339,7 @@ export class Select extends Button
         for _, o in ipairs(self.options) do
             if not o.heading then
                 total = total + 1
-                if contains(self.value, o.value) then chosen[#chosen + 1] = o.label :: string end
+                if contains(self.values, o.value) then chosen[#chosen + 1] = o.label :: string end
             end
         end
         if #chosen == 0 then return self.placeholder or "None" end
@@ -277,12 +348,17 @@ export class Select extends Button
         return table.concat(chosen, ", ")
     end
 
-    function SetValue(v: any)
-        self.value = self.multiple and { unpack(v or {}) } or v
+    -- One value, or a multiple select's list.
+    function SetValue(v: V | V[] | nil)
+        if self.multiple then
+            self.values = type(v) == "table" and { unpack(v :: V[]) } or {}
+        else
+            self.value = type(v) ~= "table" and (v :: V?) or nil
+        end
         local summary = self:Summary()
         self.text:SetValue(summary)
         -- the placeholder in ink-muted (nothing chosen)
-        local empty = self.multiple and #self.value == 0 or (not self.multiple and self.value == nil)
+        local empty = self.multiple and #self.values == 0 or (not self.multiple and self.value == nil)
         if not self.bare then self.text:SetColor(empty and self.placeholder and "ink-muted" or "ink") end
         -- bare: as wide as its label, chevron included
         if self.bare then
@@ -293,13 +369,13 @@ export class Select extends Button
         if list and list:IsShown() then self:Refresh() end
     end
 
-    function SetOptions(options: SelectOption[]?)
+    function SetOptions(options: SelectOption<V>[]?)
         self.options = options or {}
-        self:SetValue(self.value)
+        if self.multiple then self:SetValue(self.values) else self:SetValue(self.value) end
     end
 
-    function SetDisabled(disabled: any)
-        self.disabled = disabled and true or false
+    function SetDisabled(disabled: unknown)
+        self.disabled = disabled ~= nil and disabled ~= false
         self:SetAlpha(self.disabled and T.opacity["opacity-disabled"] or 1)
         self.border:SetColor((not self.disabled and self:IsMouseOver()) and "gilt" or "gilt-line")
         if self.disabled then self:Close() end
@@ -319,10 +395,10 @@ export class Select extends Button
 
     -- The options the search leaves (headings only when something under them
     -- matches).
-    function View(): SelectOption[]
+    function View(): SelectOption<V>[]
         local q = (self.query or ""):lower()
         if q == "" then return self.options end
-        local out: SelectOption[], heading: SelectOption? = {}, nil
+        local out: SelectOption<V>[], heading: SelectOption<V>? = {}, nil
         if self.lookup then
             for _, o in ipairs(self.lookup(self.query :: string) or {}) do out[#out + 1] = o end
         end
@@ -338,7 +414,7 @@ export class Select extends Button
     end
 
     function Refresh()
-        local list = self.list :: SelectList
+        local list = self.list :: SelectList<V>
         for _, r in ipairs(list.rows) do r:Hide() end
         local y = S["space-2"]
         -- as wide as the longest entry needs (a narrow field can open a wide list)
@@ -378,7 +454,7 @@ export class Select extends Button
         local rowsTop = y
         for i = 1, math.min(maxRows, #view) do
             local o = view[offset + i]
-            local r = row(self, i)
+            local r = self:Row(i)
             r.option = o
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", S["space-2"], -y)
@@ -403,20 +479,20 @@ export class Select extends Button
                 y = y + hh
             else
                 r.rule:Hide()
-                local on = self.multiple and contains(self.value, o.value) or (not self.multiple and o.value == self.value)
+                local on = self.multiple and contains(self.values, o.value) or (not self.multiple and o.value == self.value)
                 r:SetHeight(ROW_H)
                 r.label:SetStyle("body")
                 -- every option in ink (the design's); the check marks the chosen one
                 r.label:SetColor(o.disabled and "ink-faint" or "ink")
                 r.label:SetValue(o.label)
                 r.icon:ClearAllPoints()
-                local lead: any[]? = nil
+                local lead: Region? = nil
                 if self.multiple then
                     r.box:Show()
                     r.box:SetValue(on)
                     r.check:Hide()
                     r.icon:SetPoint("LEFT", r.box, "RIGHT", S["space-3"], 0)
-                    lead = { r.box, S["space-3"] }
+                    lead = r.box
                 else
                     r.box:Hide()
                     r.check:SetShown(on)
@@ -436,7 +512,7 @@ export class Select extends Button
                     r.label:SetPoint("LEFT", r.icon, "RIGHT", S["space-2"], 0)
                 else
                     r.icon:Hide()
-                    if lead then r.label:SetPoint("LEFT", lead[1], "RIGHT", lead[2], 0)
+                    if lead then r.label:SetPoint("LEFT", lead, "RIGHT", S["space-3"], 0)
                     else r.label:SetPoint("LEFT", S["space-4"], 0) end
                 end
                 if o.font then r.label:SetFontObject(fonts.get(o.font)) end
@@ -466,7 +542,7 @@ export class Select extends Button
             list.thumb:SetSize(3, thumbH)
         end
         if #view == 0 then
-            local r = row(self, 1)
+            local r = self:Row(1)
             r.option = { heading = "No match" }
             r:ClearAllPoints()
             r:SetPoint("TOPLEFT", S["space-2"], -y)
@@ -494,20 +570,14 @@ export class Select extends Button
             for i, def in ipairs(foot) do
                 local b = list.footLinks[i]
                 if not b then
-                    b = CreateFrame("Button", nil, list)
-                    b:SetHeight(ROW_H)
-                    b.hover = draw.fill(b, "surface-raised")
-                    b.hover:SetAllPoints()
-                    b.hover:Hide()
-                    b.label = text(b, "body", "ink-muted")
-                    b.label:SetPoint("LEFT", S["space-4"], 0)
-                    b:SetScript("OnEnter", function(x) x.hover:Show(); x.label:SetColor("ink") end)
-                    b:SetScript("OnLeave", function(x) x.hover:Hide(); x.label:SetColor("ink-muted") end)
-                    b:SetScript("OnClick", function(x)
+                    local link = FootLink.new(list)
+                    link:SetScript("OnClick", function()
                         self:Close()
-                        if x.def and x.def.onClick then x.def.onClick() end
+                        local d = link.def
+                        if d and d.onClick then d.onClick() end
                     end)
-                    list.footLinks[i] = b
+                    list.footLinks[i] = link
+                    b = link
                 end
                 b.def = def
                 b.label:SetValue(def.label)
@@ -525,7 +595,7 @@ export class Select extends Button
         if self.disabled then return end
         if openList and openList ~= self then openList:Close() end
         if not self.list then
-            local list = panel(root, { solid = true }) :: SelectList
+            local list = panel(root, { solid = true }) :: SelectList<V>
             list.body:SetScript("OnSizeChanged", nil)
             list.body:Hide()
             list:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -534,34 +604,23 @@ export class Select extends Button
             list.rows = {}
             local bulk = CreateFrame("Frame", nil, list)
             bulk:SetSize(200, 18)
-            local all = CreateFrame("Button", nil, bulk)
-            all.text = text(all, "caption", "ink-muted")
-            all.text:SetValue("Select all")
-            all.text:SetPoint("LEFT")
-            all:SetHeight(18)
+            local all = BulkLink.new(bulk, "Select all")
             all:SetPoint("LEFT")
-            local none = CreateFrame("Button", nil, bulk)
-            none.text = text(none, "caption", "ink-muted")
-            none.text:SetValue("Clear")
-            none.text:SetPoint("LEFT")
-            none:SetHeight(18)
+            local none = BulkLink.new(bulk, "Clear")
             none:SetPoint("LEFT", all, "RIGHT", S["space-5"], 0)
-            bulk.links = { all, none }
-            for _, b in ipairs({ all, none }) do
-                b:SetScript("OnEnter", function(x) x.text:SetColor("ink") end)
-                b:SetScript("OnLeave", function(x) x.text:SetColor("ink-muted") end)
-            end
+            list.bulkLinks = { all, none }
             all:SetScript("OnClick", function()
-                local v: any[] = {}
+                local v: V[] = {}
                 for _, o in ipairs(self.options) do
-                    if not (o.heading or o.disabled) then v[#v + 1] = o.value end
+                    local value = o.value
+                    if not (o.heading or o.disabled) and value ~= nil then v[#v + 1] = value end
                 end
                 self:SetValue(v)
-                if self.onChange then self.onChange({ unpack(v) }) end
+                if self.onChangeAll then self.onChangeAll({ unpack(v) }) end
             end)
             none:SetScript("OnClick", function()
                 self:SetValue({})
-                if self.onChange then self.onChange({}) end
+                if self.onChangeAll then self.onChangeAll({}) end
             end)
             list.bulk = bulk
 
@@ -572,7 +631,7 @@ export class Select extends Button
             end })
             list.search.edit:SetScript("OnEnterPressed", function(e)
                 for _, o in ipairs(self.view or {}) do
-                    if not (o.heading or o.disabled) then choose(self, o); break end
+                    if not (o.heading or o.disabled) then self:Choose(o); break end
                 end
                 e:ClearFocus()
             end)
@@ -593,8 +652,8 @@ export class Select extends Button
             self.list = list
         end
         -- the links' widths on each open (a theme may have changed the caption size)
-        local list = self.list :: SelectList
-        for _, b in ipairs(list.bulk.links) do b:SetWidth(b.text:GetUnboundedStringWidth()) end
+        local list = self.list :: SelectList<V>
+        for _, b in ipairs(list.bulkLinks) do b:SetWidth(b.text:GetUnboundedStringWidth()) end
         list:ClearAllPoints()
         list:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
         self.query, self.offset = "", 0
@@ -609,6 +668,6 @@ export class Select extends Button
     end
 end
 
-export function select(parent: Frame, opts: SelectOptions): Select
+export function select<V extends SelectValue>(parent: Frame, opts: SelectOptions<V>): Select<V>
     return Select.new(parent, opts)
 end
