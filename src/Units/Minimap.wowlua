@@ -19,7 +19,7 @@
 import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
 import type Position from "/EditMode/EditMode"
-import isSecret from "wowlua:secret"
+import isSecret, isNumber from "wowlua:secret"
 import hook from "wowlua:hooks"
 import after, every from "wowlua:timer"
 import defer from "wowlua:combat"
@@ -46,7 +46,6 @@ local M: MinimapModule
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = TEX .. "Glyphs\\"
 local ROUND_MASK = 186178
-local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 -- the zone lines (zone, subzone, the instance line) end this far above the
 -- disc: the north marker's 8px over the ring, plus space-3
 local ZONE_GAP = 8 + S["space-3"]
@@ -438,7 +437,7 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         local _, kind, _, _, maxPlayers = GetInstanceInfo()
         local inside = not isSecret(kind) and (kind == "party" or kind == "raid")
         if inside then
-            local size = readable(maxPlayers) and maxPlayers > 0 and tostring(maxPlayers) or "?"
+            local size = isNumber(maxPlayers) and maxPlayers > 0 and tostring(maxPlayers) or "?"
             f.instance:SetValue(instanceLine(kind == "raid" and "Raid" or "Dungeon", size))
         else
             f.instance:SetValue("")
@@ -595,9 +594,8 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
             if self.pendingPlace then self:PlaceMinimap() end
         end)
         self:On("SUUUI_THEME_CHANGED", function() self:ApplyTheme() end)
-        local valid = C_EventUtils and C_EventUtils.IsEventValid
         for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_DIFFICULTY_CHANGED", "GROUP_ROSTER_UPDATE" }) do
-            if not valid or valid(e) then self:OnGameEvent(e, function() self:UpdateDifficulty() end) end
+            self:OnGameEvent(e, function() self:UpdateDifficulty() end)
         end
         self:UpdateDifficulty()
         self:OnGameEvent("CVAR_UPDATE", function() self:UpdateClock() end)

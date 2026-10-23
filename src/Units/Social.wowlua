@@ -27,6 +27,9 @@ import hookScript from "wowlua:hooks"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
+import * as format from "wowlua:format"
+import * as chat from "wowlua:chat"
+import invite as groupInvite from "wowlua:unit"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -64,13 +67,7 @@ local GAMES: { [string]: string } = { App = "the Battle.net app", BSAp = "Battle
 local function ago(stamp: unknown, now: number?): string?
     local at = secret.asNumber(stamp)
     if not at or at == 0 then return nil end
-    local s = math.max(0, (now or time()) - at)
-    if s < 3600 then return "less than an hour ago" end
-    if s < 86400 then local h = math.floor(s / 3600); return h .. (h == 1 and " hour ago" or " hours ago") end
-    local d = math.floor(s / 86400)
-    if d < 30 then return d .. (d == 1 and " day ago" or " days ago") end
-    local m = math.floor(d / 30)
-    return m .. (m == 1 and " month ago" or " months ago")
+    return format.ago((now or time()) - at, { long = true, from = "hour" })
 end
 
 --------------------------------------------------------------------------------
@@ -156,8 +153,7 @@ end
 -- A whisper to a character (the chat's own, ChatFrameUtil on newer clients).
 local function tellTo(name: string?)
     if not name then return end
-    local util = global("ChatFrameUtil")
-    errors.try(tbl.field(util, "SendTell") or global("ChatFrame_SendTell"), name)
+    chat.whisper(name)
 end
 
 local function whisper(row: Friend)
@@ -171,7 +167,7 @@ end
 -- A party invite by name (C_PartyInfo's on newer clients).
 local function inviteName(name: string?)
     if not name then return end
-    errors.try((C_PartyInfo and C_PartyInfo.InviteUnit) or global("InviteUnit"), name)
+    groupInvite(name)
 end
 
 local function invite(row: Friend)
@@ -902,36 +898,29 @@ class SocialModule extends Module<typeof(DEFAULTS)>
         self:Build()
         -- the window may load on demand
         self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
-        local valid = C_EventUtils and C_EventUtils.IsEventValid
         for _, e in ipairs({ "FRIENDLIST_UPDATE", "BN_FRIEND_INFO_CHANGED", "BN_FRIEND_ACCOUNT_ONLINE",
                              "BN_FRIEND_ACCOUNT_OFFLINE", "BN_FRIEND_LIST_SIZE_CHANGED", "IGNORELIST_UPDATE",
                              "BN_INFO_CHANGED", "PLAYER_FLAGS_CHANGED", "BN_CONNECTED", "BN_DISCONNECTED" }) do
-            if not valid or valid(e) then
-                self:OnGameEvent(e, function()
-                    local view = self.view
-                    if view and view:IsVisible() then self:QueueRender() end
-                end)
-            end
+            self:OnGameEvent(e, function()
+                local view = self.view
+                if view and view:IsVisible() then self:QueueRender() end
+            end)
         end
         -- requests and allies
         for _, e in ipairs({ "BN_FRIEND_INVITE_ADDED", "BN_FRIEND_INVITE_REMOVED", "BN_FRIEND_INVITE_LIST_INITIALIZED",
                              "FRIENDLIST_UPDATE" }) do
-            if not valid or valid(e) then self:OnGameEvent(e, function() self:RenderLists() end) end
+            self:OnGameEvent(e, function() self:RenderLists() end)
         end
         -- the raid's changes
         for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "UNIT_CONNECTION",
                              "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
-            if not valid or valid(e) then
-                self:OnGameEvent(e, function()
-                    local page = self.raidPage
-                    if page and page:IsVisible() then after(0.1, function() self:RenderRaid() end) end
-                end)
-            end
+            self:OnGameEvent(e, function()
+                local page = self.raidPage
+                if page and page:IsVisible() then after(0.1, function() self:RenderRaid() end) end
+            end)
         end
         -- the lockouts as they come in
-        if not valid or valid("UPDATE_INSTANCE_INFO") then
-            self:OnGameEvent("UPDATE_INSTANCE_INFO", function() self:DrawLockouts() end)
-        end
+        self:OnGameEvent("UPDATE_INSTANCE_INFO", function() self:DrawLockouts() end)
         -- their rows' heights come from the text styles
         self:On("SUUUI_THEME_CHANGED", function() self:DrawLockouts() end)
         -- Plan follows the raid planner turned on or off

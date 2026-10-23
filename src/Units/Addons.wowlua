@@ -27,6 +27,8 @@ import every from "wowlua:timer"
 import * as errors from "wowlua:errors"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
+import * as secure from "wowlua:secure"
+import type Overlay from "wowlua:secure"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -237,7 +239,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
     outdated: Toggle? = nil
     perChar: boolean? = nil
     perf: Frame? = nil
-    reloadOver: Button? = nil
+    reloadOver: Overlay? = nil
     rows: AddonRow[] = {}
     saving: boolean? = nil
     search: TextField? = nil
@@ -488,29 +490,17 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         local on = assert(self.window):IsShown() and apply:IsShown()
         if not over then
             if not on then return end
-            over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-            over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-            over:SetAttribute("type1", "macro")
-            over:SetAttribute("macrotext1", "/reload")
-            -- (the button's own hover: its tooltip, why it's off)
-            over:SetScript("OnEnter", function() assert(apply:GetScript("OnEnter"))(apply) end)
-            over:SetScript("OnLeave", function() assert(apply:GetScript("OnLeave"))(apply) end)
-            over:SetScript("PreClick", function()
+            -- (hovering it is hovering the button: its tooltip, why it's off)
+            over = secure.overlay(apply)
+            over.set("type1", "macro")
+            over.set("macrotext1", "/reload")
+            over.button:SetScript("PreClick", function()
                 self.saving = true
                 errors.try(A.SaveAddOns)
             end)
             self.reloadOver = over
         end
-        over:ClearAllPoints()
-        if on then
-            -- a layer above the window: a click raises the window (it's
-            -- toplevel) over anything at its own layer
-            over:SetFrameStrata("DIALOG")
-            over:SetAllPoints(apply)
-            over:Show()
-        else
-            over:Hide()
-        end
+        if on then over.show() else over.hide() end
     end
 
     function SetEnabled(e: Addon?, on: boolean)
@@ -591,7 +581,7 @@ class AddonsModule extends Module<typeof(DEFAULTS)>
         self:PlaceReload()
         -- no secure button on it (it showed in combat): wait for the fight's end
         local over = self.reloadOver
-        local ready = over and over:IsShown()
+        local ready = over and over.button:IsShown()
         apply:SetEnabledState(ready and true or false)
         apply.tooltip = not ready and { title = "Reload to apply", description = "After the fight." } or nil
     end

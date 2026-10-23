@@ -32,6 +32,8 @@ import * as chatLines from "./Chat/Lines"
 import * as chatSearch from "./Chat/Search"
 import * as chatInput from "./Chat/Input"
 import * as chatTabs from "./Chat/Tabs"
+import * as chat from "wowlua:chat"
+import invite as groupInvite from "wowlua:unit"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -383,15 +385,13 @@ local function playerMenu(owner: any, name: string): boolean
     UI.ContextMenuFrom(owner, function(_, root)
         root:CreateTitle(name)
         root:CreateButton("Whisper", function()
-            local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
-            if tell then tell(name, ChatFrame1) end
+            chat.whisper(name, ChatFrame1)
         end)
         if FCF_OpenTemporaryWindow then
             root:CreateButton("Whisper window", function() M:OpenWhisperWindow(name) end)
         end
         root:CreateButton("Invite", function()
-            local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or _G.InviteUnit
-            if invite then pcall(invite, name) end
+            groupInvite(name)
         end)
         root:CreateButton("Copy name", function() copyName(name) end)
         root:CreateButton("Add friend", function()
@@ -600,18 +600,15 @@ end
 -- Names' classes from the chat events (a line whose sender the client
 -- can't tell from its line id).
 function M:WatchClasses()
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_EMOTE", "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER",
                          "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_RAID_WARNING", "CHAT_MSG_INSTANCE_CHAT",
                          "CHAT_MSG_INSTANCE_CHAT_LEADER", "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER", "CHAT_MSG_WHISPER",
                          "CHAT_MSG_WHISPER_INFORM", "CHAT_MSG_CHANNEL" }) do
-        if not valid or valid(e) then
-            self:OnGameEvent(e, function(_, _, sender, _, _, _, _, _, _, _, _, _, guid)
-                if not (plain(sender) and plain(guid) and type(sender) == "string" and guid) then return end
-                local ok, _, class = pcall(GetPlayerInfoByGUID, guid)
-                if ok and plain(class) and class then classByName[sender:lower()] = class end
-            end)
-        end
+        self:OnGameEvent(e, function(_, _, sender, _, _, _, _, _, _, _, _, _, guid)
+            if not (plain(sender) and plain(guid) and type(sender) == "string" and guid) then return end
+            local ok, _, class = pcall(GetPlayerInfoByGUID, guid)
+            if ok and plain(class) and class then classByName[sender:lower()] = class end
+        end)
     end
 end
 
@@ -777,15 +774,12 @@ function M:HistoryFor(eb: any)
 end
 
 function M:WatchSent()
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     for event in pairs(chatInput.SENT) do
-        if not valid or valid(event) then
-            self:OnGameEvent(event, function(_, text, sender, _, _, _, _, _, channelNumber, _, _, _, guid)
-                if self.keyCapture then return end
-                local line = chatInput.sentLine(event, text, sender, channelNumber, guid)
-                if line then self:AddHistory(line) end
-            end)
-        end
+        self:OnGameEvent(event, function(_, text, sender, _, _, _, _, _, channelNumber, _, _, _, guid)
+            if self.keyCapture then return end
+            local line = chatInput.sentLine(event, text, sender, channelNumber, guid)
+            if line then self:AddHistory(line) end
+        end)
     end
 end
 
@@ -2363,28 +2357,23 @@ function M:OnEnable()
         end)
     end
     -- new windows (whispers, a new tab): skinned a frame later
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "UPDATE_CHAT_WINDOWS", "UPDATE_FLOATING_CHAT_WINDOWS", "PLAYER_ENTERING_WORLD", "UI_SCALE_CHANGED" }) do
-        if not valid or valid(e) then
-            self:OnGameEvent(e, function()
-                after(0, function()
-                    if not self:IsEnabled() then return end
-                    self:SkinAll()
-                    self:PlaceChat()
-                end)
+        self:OnGameEvent(e, function()
+            after(0, function()
+                if not self:IsEnabled() then return end
+                self:SkinAll()
+                self:PlaceChat()
             end)
-        end
+        end)
     end
     for _, e in ipairs(WAKE) do
-        if not valid or valid(e) then self:OnGameEvent(e, function() self:Wake() end) end
+        self:OnGameEvent(e, function() self:Wake() end)
     end
     -- a whisper opens a temporary window: skinned a frame later
     for _, e in ipairs({ "CHAT_MSG_WHISPER", "CHAT_MSG_WHISPER_INFORM", "CHAT_MSG_BN_WHISPER", "CHAT_MSG_BN_WHISPER_INFORM" }) do
-        if not valid or valid(e) then
-            self:OnGameEvent(e, function()
-                after(0, function() if self:IsEnabled() then self:SkinAll() end end)
-            end)
-        end
+        self:OnGameEvent(e, function()
+            after(0, function() if self:IsEnabled() then self:SkinAll() end end)
+        end)
     end
     self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
         if self.pendingPlace then self:PlaceChat() end
@@ -2394,11 +2383,9 @@ function M:OnEnable()
     -- the channels settle a moment after login; joins and leaves later
     after(3, function() if self:IsEnabled() then self:ApplyGlobalTab() end end)
     for _, e in ipairs({ "CHANNEL_UI_UPDATE", "CHAT_MSG_CHANNEL_NOTICE" }) do
-        if not valid or valid(e) then
-            self:OnGameEvent(e, function()
-                after(0.5, function() if self:IsEnabled() then self:ApplyGlobalTab() end end)
-            end)
-        end
+        self:OnGameEvent(e, function()
+            after(0.5, function() if self:IsEnabled() then self:ApplyGlobalTab() end end)
+        end)
     end
     self:WatchSent()
     self:WatchClasses()

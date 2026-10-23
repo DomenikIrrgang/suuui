@@ -24,6 +24,8 @@ import SuuUI from "/Core/API"
 import type Position from "/EditMode/EditMode"
 import * as timer from "wowlua:timer"
 import * as secret from "wowlua:secret"
+import * as chat from "wowlua:chat"
+import invite as groupInvite from "wowlua:unit"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -412,15 +414,7 @@ local function classColor(file: any): string?
     return file and T.color["class-" .. file:lower()] and ("class-" .. file:lower()) or nil
 end
 
-local function whisper(name: string)
-    local tell = (ChatFrameUtil and ChatFrameUtil.SendTell) or ChatFrame_SendTell
-    if tell then tell(name) end
-end
-
-local function invite(name: string)
-    local fn = (C_PartyInfo and C_PartyInfo.InviteUnit) or _G.InviteUnit
-    if fn then pcall(fn, name) end
-end
+local whisper, invite = chat.whisper, groupInvite
 
 -- A character friend or guild member by name: kind and the card's person.
 function M:WhoIs(name: string): (string?, Person?)
@@ -1437,12 +1431,11 @@ function M:OnEnable()
     -- request windows whose addon loads later
     self:OnGameEvent("ADDON_LOADED", function() self:HookWindows() end)
     -- notes about the game
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs({ "UPDATE_INVENTORY_DURABILITY", "PLAYER_ENTERING_WORLD" }) do
-        if not valid or valid(e) then self:OnGameEvent(e, function() self:CheckDurability() end) end
+        self:OnGameEvent(e, function() self:CheckDurability() end)
     end
     for _, e in ipairs({ "BAG_UPDATE_DELAYED", "PLAYER_ENTERING_WORLD" }) do
-        if not valid or valid(e) then self:OnGameEvent(e, function() self:CheckBags() end) end
+        self:OnGameEvent(e, function() self:CheckBags() end)
     end
     self:Watch("durability", function() self:CheckDurability() end)
     -- the Durability module's reading (its line, the pieces' names)
@@ -1451,14 +1444,10 @@ function M:OnEnable()
     self:Watch("bagsFull", function() self:CheckBags() end)
     for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED", "PLAYER_TALENT_UPDATE",
                          "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do
-        if not valid or valid(e) then
-            -- a moment later: the points read right only after the change has landed
-            self:OnGameEvent(e, function() timer.after(0.2, function() if self:IsEnabled() then self:CheckTalents(); self:CheckLegacy() end end) end)
-        end
+        -- a moment later: the points read right only after the change has landed
+        self:OnGameEvent(e, function() timer.after(0.2, function() if self:IsEnabled() then self:CheckTalents(); self:CheckLegacy() end end) end)
     end
-    if not valid or valid("MAJOR_FACTION_RENOWN_LEVEL_CHANGED") then
-        self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function() timer.after(0.2, function() if self:IsEnabled() then self:CheckLegacy() end end) end)
-    end
+    self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function() timer.after(0.2, function() if self:IsEnabled() then self:CheckLegacy() end end) end)
     self:Watch("talentPoints", function() self:CheckTalents() end)
     -- a talent build followed, changed or learned along
     self:On("SUUUI_TALENT_BUILD_CHANGED", function()
@@ -1495,15 +1484,13 @@ function M:OnEnable()
     -- social)
     self:HookPresence()
     self:OnGameEvent("CHAT_MSG_SYSTEM", function(_, msg) self:SystemLine(msg) end)
-    if not valid or valid("BN_FRIEND_ACCOUNT_ONLINE") then
-        self:OnGameEvent("BN_FRIEND_ACCOUNT_ONLINE", function(_, id)
-            if secret.readable(id) and id then self:Presence("bnet", true, self:BnetPerson(id)) end
-        end)
-        self:OnGameEvent("BN_FRIEND_INFO_CHANGED", function() self:BnetInfoChanged() end)
-        self:OnGameEvent("BN_FRIEND_ACCOUNT_OFFLINE", function(_, id)
-            if secret.readable(id) and id then self:Presence("bnet", false, self:BnetPerson(id)) end
-        end)
-    end
+    self:OnGameEvent("BN_FRIEND_ACCOUNT_ONLINE", function(_, id)
+        if secret.readable(id) and id then self:Presence("bnet", true, self:BnetPerson(id)) end
+    end)
+    self:OnGameEvent("BN_FRIEND_INFO_CHANGED", function() self:BnetInfoChanged() end)
+    self:OnGameEvent("BN_FRIEND_ACCOUNT_OFFLINE", function(_, id)
+        if secret.readable(id) and id then self:Presence("bnet", false, self:BnetPerson(id)) end
+    end)
     -- the roster asked for now and then, so a guild member's line finds them
     if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) end
     self:RegisterCommand("presence", "test: shows a card for each kind of friend coming online and going offline", function()

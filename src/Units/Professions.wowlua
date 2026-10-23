@@ -27,6 +27,9 @@ import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
+import * as items from "wowlua:item"
+import * as spells from "wowlua:spell"
+import * as chat from "wowlua:chat"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -64,21 +67,11 @@ end
 -- The numbers of a list the game gives (GetAllRecipeIDs).
 local function numbers(list: unknown): number[]
     local out: number[] = {}
-    if type(list) == "table" and secret.readable(list) then
-        for _, v in ipairs(list :: unknown[]) do
-            local n = asNumber(v)
-            if n then out[#out + 1] = n end
-        end
+    for _, v in ipairs(tbl.list(list)) do
+        local n = asNumber(v)
+        if n then out[#out + 1] = n end
     end
     return out
-end
-
--- An item as far as the game has it loaded: name, quality, icon and the
--- level it asks for.
-type ItemBrief = { name?: string, quality?: number, icon?: number, minLevel?: number }
-local function itemInfo(itemID: number): ItemBrief
-    local name, _, quality, _, minLevel, _, _, _, _, icon = try(C_Item.GetItemInfo, itemID)
-    return { name = asString(name), quality = asNumber(quality), icon = asNumber(icon), minLevel = asNumber(minLevel) }
 end
 
 -- A category of recipes (GetCategoryInfo).
@@ -252,9 +245,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local name = asString(rawName)
         if not name then return nil end
         local icon, max, skillLine = iconOf(rawIcon), asNumber(rawMax), asNumber(rawLine)
-        local spells: ProfessionSpell[] = {}
+        local spellList: ProfessionSpell[] = {}
         local card: ProfessionCard = { name = name, icon = icon, skill = asNumber(rawSkill), max = max,
-                                       skillLine = skillLine, spells = spells }
+                                       skillLine = skillLine, spells = spellList }
         local own: SpellBookItemInfo? = nil
         local ownCrafts = false
         local craftSpell: SpellBookItemInfo? = nil
@@ -289,7 +282,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                 spell.onEnter = function(owner: Frame) UI.SpellTooltip(owner, spellID) end
                 spell.onLeave = function() GameTooltip:Hide() end
                 spell.onDrag = function() self:Pickup(spellID) end
-                spells[#spells + 1] = spell
+                spellList[#spellList + 1] = spell
             end
         end
         if own and own.subName ~= "" then card.rank = own.subName end
@@ -357,7 +350,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     -- that does, under the profession's name and icon; one already made (same
     -- text) is used again.
     function PickupOpener(name: string, icon: number | string | nil, spellID: number)
-        local spell = tryValue(C_Spell.GetSpellName, spellID)
+        local spell = spells.name(spellID)
         if not spell then return end
         local body = "/cast " .. spell
         local first = (MAX_ACCOUNT_MACROS or 120) + 1
@@ -477,18 +470,16 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local sch = tryValue(C_TradeSkillUI.GetRecipeSchematic, id, false)
         local out = sch and sch.outputItemID
         if not out then return nil end
-        local item = itemInfo(out)
-        if not item.name then
-            self:LoadItem(out)
-            return nil
-        end
-        return item.minLevel or 0
+        local data = self:Item(out)
+        return data and (data.minLevel or 0)
     end
 
-    -- An item the game hasn't loaded yet: asked for, drawn again when it's there.
-    function LoadItem(itemID: number)
-        self.waitingItems = true
-        try(C_Item.RequestLoadItemDataByID, itemID)
+    -- An item's data; one the game hasn't loaded yet is asked for (nil now,
+    -- the page drawn again once it's there).
+    function Item(itemID: number): items.ItemData?
+        local data = items.get(itemID)
+        if not data then self.waitingItems = true end
+        return data
     end
 
     function Recipes(): Crafting
@@ -711,11 +702,11 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             elseif s.t == "a" then
                 lines[#lines + 1] = "Learned automatically with the profession"
             elseif s.t == "i" and itemID then
-                local item = itemInfo(itemID)
-                if not item.name then self:LoadItem(itemID) end
+                local data = self:Item(itemID)
+                local quality = data and data.quality
                 local have = tryValue(C_Item.GetItemCount, itemID, true) or 0
-                out.item = { icon = item.icon or tryValue(C_Item.GetItemIconByID, itemID), name = item.name, quality = item.quality,
-                             qualityName = item.quality and QUALITY_NAME[item.quality], note = have > 0 and "In your bags" or nil,
+                out.item = { icon = data and data.icon or tryValue(C_Item.GetItemIconByID, itemID), name = data and data.name,
+                             quality = quality, qualityName = quality and QUALITY_NAME[quality], note = have > 0 and "In your bags" or nil,
                              onEnter = function(owner: Frame) itemTip(owner, itemID) end }
                 local known = false
                 -- vendors: yours, else say the other faction's sell it
@@ -758,8 +749,8 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                     known = true
                 end
                 for _, c in ipairs(s.c or {}) do
-                    local cName = tryValue(C_Item.GetItemNameByID, c)
-                    if not cName then self:LoadItem(c) end
+                    local container = self:Item(c)
+                    local cName = container and container.name
                     lines[#lines + 1] = "Inside " .. inkText(cName or "a container")
                     known = true
                 end
@@ -779,12 +770,12 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local r: RecipeDetail = { name = info.name, icon = info.icon, canMake = can, reagents = parts, tools = tools }
         local out = sch and sch.outputItemID
         if out then
-            local item = itemInfo(out)
-            r.name = item.name or info.name
-            r.quality = item.quality
-            r.qualityName = item.quality and QUALITY_NAME[item.quality]
-            r.icon = item.icon or info.icon
-            if not item.name then self:LoadItem(out) end
+            local product = self:Item(out)
+            local quality = product and product.quality
+            r.name = product and product.name or info.name
+            r.quality = quality
+            r.qualityName = quality and QUALITY_NAME[quality]
+            r.icon = product and product.icon or info.icon
             r.onProduct = function(owner: Frame) itemTip(owner, out) end
         else
             r.desc = tryValue(C_TradeSkillUI.GetRecipeDescription, id, {})
@@ -792,10 +783,10 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local lo, hi = sch and sch.quantityMin, sch and sch.quantityMax
         if lo and hi and hi > 1 then r.makes = hi end
         for i, g in ipairs(reagents) do
-            local item = itemInfo(g.itemID)
-            if not item.name then self:LoadItem(g.itemID) end
-            parts[i] = { name = item.name, icon = item.icon or tryValue(C_Item.GetItemIconByID, g.itemID), quality = item.quality,
-                         qualityName = item.quality and QUALITY_NAME[item.quality], have = g.have, need = g.need }
+            local data = self:Item(g.itemID)
+            local quality = data and data.quality
+            parts[i] = { name = data and data.name, icon = data and data.icon or tryValue(C_Item.GetItemIconByID, g.itemID),
+                         quality = quality, qualityName = quality and QUALITY_NAME[quality], have = g.have, need = g.need }
         end
         r.onReagent = function(i: number, owner: Frame)
             local g = reagents[i]
@@ -886,13 +877,6 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         if not ok then self:Print("That profession couldn't be opened here: " .. tostring(err)) end
     end
 
-    -- A link into the chat line being typed, or a new one opened with it.
-    function ToChat(link: string)
-        local insert = field(_G, "ChatFrameUtil", "InsertLink") or field(_G, "ChatEdit_InsertLink")
-        if flag(try(insert, link)) then return end
-        try(field(_G, "ChatFrameUtil", "OpenChat") or field(_G, "ChatFrame_OpenChat"), link)
-    end
-
     -- A recipe opened (the tracker's click): its profession's window, and the
     -- recipe chosen once its list is there.
     -- Not C_TradeSkillUI.OpenRecipe: it's protected (an addon's call is
@@ -966,11 +950,11 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         view.onCreate = function(count: number) self:Craft(count) end
         view.onLink = function()
             local link = asString(try(C_TradeSkillUI.GetTradeSkillListLink))
-            if link then self:ToChat(link) else self:Print("This profession can't be linked here.") end
+            if link then chat.insertLink(link) else self:Print("This profession can't be linked here.") end
         end
         view.onLinkRecipe = function(id: number)
             local link = asString(try(C_TradeSkillUI.GetRecipeLink, id))
-            if link then self:ToChat(link) end
+            if link then chat.insertLink(link) end
         end
         view.onCreateAll = function()
             local r = view.recipeData
@@ -1019,10 +1003,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         self:Away(book)
         self:Away(crafting)
         self:Away(frames.asFrame(field(f, "ProfessionsOverviewTab")))
-        local tabs = field(f, "rightProfessionTabs")
-        if type(tabs) == "table" and secret.readable(tabs) then
-            for _, tab in ipairs(tabs :: unknown[]) do self:Away(frames.asFrame(tab)) end
-        end
+        for _, tab in ipairs(tbl.list(field(f, "rightProfessionTabs"))) do self:Away(frames.asFrame(tab)) end
         self:Away(frames.asFrame(field(f, "TabSystem")))
         -- the page follows Blizzard's: its book is the overview, its crafting
         -- page the open trade skill
@@ -1131,7 +1112,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         for _, e in ipairs({ "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED", "TRADE_SKILL_SHOW",
                              "TRADE_SKILL_CLOSE", "SKILL_LINES_CHANGED", "BAG_UPDATE_DELAYED", "TRACKED_RECIPE_UPDATE",
                              "MINIMAP_UPDATE_TRACKING", "NEW_RECIPE_LEARNED", "QUEST_DATA_LOAD_RESULT" }) do
-            if tryValue(C_EventUtils.IsEventValid, e) ~= false then self:OnGameEvent(e, redraw) end
+            self:OnGameEvent(e, redraw)
         end
         -- profession trainers: what they teach, recorded once they've listed it
         self:OnGameEvent("TRAINER_SHOW", function() after(0.3, function() self:RecordTrainer() end) end)

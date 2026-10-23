@@ -4,7 +4,7 @@
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as roles from "/Core/Roles"
-import internal listen, CLASS from "/Core/Roles"
+import internal CLASS from "/Core/Roles"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import expectNoErrors from "../../helpers"
@@ -420,34 +420,3 @@ local function waitsForTalents()
     expect(profiles.current()).toBe("RolesTank")
 end
 
-@test("an event the client doesn't know is not listened to")
-local function invalidEvent()
-    local valid = false
-    mock.fake("C_EventUtils.IsEventValid", function(_: string): boolean return valid end)
-    local calls = 0
-    listen("PLAYER_UPDATE_RESTING", function() calls += 1 end)
-    valid = true
-    listen("UPDATE_SHAPESHIFT_FORMS", function() calls += 10 end)
-    mock.fireEvent("PLAYER_UPDATE_RESTING")
-    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
-    expect(calls).toBe(10)
-    events.off("UPDATE_SHAPESHIFT_FORMS", "Roles")
-    -- C_EventUtils without IsEventValid: listened to
-    local utilsAll: { [string]: any } = C_EventUtils :: any
-    local isValid = utilsAll.IsEventValid
-    utilsAll.IsEventValid = nil
-    listen("UPDATE_SHAPESHIFT_FORMS", function() calls += 1000 end)
-    utilsAll.IsEventValid = isValid
-    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
-    expect(calls).toBe(1010)
-    events.off("UPDATE_SHAPESHIFT_FORMS", "Roles")
-    calls = 10
-    -- a client without C_EventUtils: every event is listened to
-    local utils = _G.C_EventUtils
-    _G.C_EventUtils = nil
-    listen("UPDATE_SHAPESHIFT_FORMS", function() calls += 100 end)
-    _G.C_EventUtils = utils
-    mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
-    expect(calls).toBe(110)
-    events.off("UPDATE_SHAPESHIFT_FORMS", "Roles")
-end

@@ -17,6 +17,7 @@ import type WindowFrame from "/UI/Panel"
 import type Icon from "/UI/Icon"
 import type Text from "/UI/Text"
 import hook from "wowlua:hooks"
+import isSecret, isNumber from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -26,8 +27,6 @@ local DEFAULTS = {}
 local M: DeathRecapModule
 
 
-local isSecret: (v: unknown) -> boolean = issecretvalue or function(_: unknown): boolean return false end
-local function readable(v: unknown): v is number return type(v) == "number" and not isSecret(v) end
 local function text(v: unknown): v is string return type(v) == "string" and not isSecret(v) and v ~= "" end
 
 -- One of the game's recap events (C_DeathRecap.GetRecapEvents, newest
@@ -77,7 +76,7 @@ local function spellOf(e: DeathEvent): (string, Art?)
         return name, "Interface\\Icons\\" .. (ENVIRONMENT[env] or "ability_creature_cursed_05")
     end
     local id = e.spellId
-    local icon = readable(id) and (C_Spell.GetSpellTexture(id)) or nil
+    local icon = isNumber(id) and (C_Spell.GetSpellTexture(id)) or nil
     local spell = e.spellName
     return text(spell) and spell or "Unknown", icon
 end
@@ -86,7 +85,7 @@ end
 local function extras(e: DeathEvent): string[]
     local out: string[] = {}
     local function add(v: unknown, word: string)
-        if readable(v) and v > 0 then out[#out + 1] = group3(v) .. " " .. word end
+        if isNumber(v) and v > 0 then out[#out + 1] = group3(v) .. " " .. word end
     end
     add(e.absorbed, "absorbed")
     add(e.resisted, "resisted")
@@ -266,11 +265,11 @@ export function recapOf(events: DeathEvent[], maxHP: number?): Recap
     for i = #events, 1, -1 do list[#list + 1] = events[i] end
     for _, e in ipairs(list) do
         local at = e.timestamp
-        if readable(at) and (not deathAt or at > deathAt) then deathAt = at end
+        if isNumber(at) and (not deathAt or at > deathAt) then deathAt = at end
     end
     local function before(e: DeathEvent): number?
         local at = e.timestamp
-        return deathAt and readable(at) and (deathAt - at) or nil
+        return deathAt and isNumber(at) and (deathAt - at) or nil
     end
     local first, last = list[1], list[#list]
 
@@ -282,24 +281,24 @@ export function recapOf(events: DeathEvent[], maxHP: number?): Recap
         local prev = list[i - 1]
         local hp, amount = e.currentHP, e.amount
         local prevHP = prev and prev.currentHP
-        if readable(hp) and not (readable(prevHP) and prevHP == hp and running) then
+        if isNumber(hp) and not (isNumber(prevHP) and prevHP == hp and running) then
             running = hp
         end
-        if running and readable(amount) then running = math.max(0, running - amount) end
+        if running and isNumber(amount) then running = math.max(0, running - amount) end
         after[i] = running
     end
     local firstHP = first.currentHP
-    local startHP = readable(firstHP) and firstHP or maxHP
+    local startHP = isNumber(firstHP) and firstHP or maxHP
 
     -- the head: the killing blow, its school, critical, overkill
     local bits: string[] = {}
     local lastAmount, lastSchool, lastOverkill, lastSource = last.amount, last.school, last.overkill, last.sourceName
-    if readable(lastAmount) then
-        local school = readable(lastSchool) and SCHOOL[lastSchool] or nil
+    if isNumber(lastAmount) then
+        local school = isNumber(lastSchool) and SCHOOL[lastSchool] or nil
         bits[#bits + 1] = group3(lastAmount) .. (school and (" " .. school) or "")
     end
     if last.critical == true then bits[#bits + 1] = "critical" end
-    if readable(lastOverkill) and lastOverkill > 0 then bits[#bits + 1] = group3(lastOverkill) .. " overkill" end
+    if isNumber(lastOverkill) and lastOverkill > 0 then bits[#bits + 1] = group3(lastOverkill) .. " overkill" end
     local span = before(first)
     local r: Recap = {
         count = #list,
@@ -346,14 +345,14 @@ export function recapOf(events: DeathEvent[], maxHP: number?): Recap
         for _, x in ipairs(extras(e)) do by[#by + 1] = x end
         local flag: string[] = {}
         if e.critical == true then flag[#flag + 1] = "critical" end
-        if readable(overkill) and overkill > 0 then flag[#flag + 1] = group3(overkill) .. " overkill" end
+        if isNumber(overkill) and overkill > 0 then flag[#flag + 1] = group3(overkill) .. " overkill" end
         r.rows[i] = {
             time = t and (t < 0.05 and "0 s" or ("−%.1f s"):format(t)) or "",
             spell = spell,
             icon = icon,
-            spellID = readable(id) and id > 0 and e.event ~= "SWING_DAMAGE" and id or nil,
+            spellID = isNumber(id) and id > 0 and e.event ~= "SWING_DAMAGE" and id or nil,
             by = table.concat(by, " · "),
-            amount = readable(amount) and ("−" .. group3(amount)) or "",
+            amount = isNumber(amount) and ("−" .. group3(amount)) or "",
             flag = table.concat(flag, " · "),
             hp = after[i],
             killing = i == #list,
@@ -420,7 +419,7 @@ class DeathRecapModule extends Module<typeof(DEFAULTS)>
         head:Show()
         line:Show()
         local okMax, readMax = pcall(api.GetRecapMaxHealth, id)
-        local maxHP = okMax and readable(readMax) and readMax > 0 and readMax or nil
+        local maxHP = okMax and isNumber(readMax) and readMax > 0 and readMax or nil
         local recap = recapOf(events :: DeathEvent[], maxHP)
 
         head.spell:SetValue(recap.head.spell)

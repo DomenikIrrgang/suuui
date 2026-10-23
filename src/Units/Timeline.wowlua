@@ -27,6 +27,8 @@ import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 
+local isNumber = secret.isNumber
+
 local UI = SuuUI.UI
 
 local DEFAULTS = {
@@ -42,7 +44,6 @@ local DEFAULTS = {
 
 local M: TimelineModule
 
-local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 
 local PREFIX = "SuuUI"
 local PULL_SPELL, PULL_ICON = 100, 132337 -- Charge's spell and art
@@ -61,10 +62,10 @@ local BADGES: IconBadge[] = {
 }
 local function badgeOf(mask: unknown): Badge?
     local set = tbl.field(Enum, "EncounterTimelineIconSet")
-    if not readable(mask) or mask == 0 or not set then return nil end
+    if not isNumber(mask) or mask == 0 or not set then return nil end
     for _, b in ipairs(BADGES) do
         local v = tbl.field(set, b.icon)
-        if readable(v) and bit.band(mask, bit.lshift(1, v)) ~= 0 then return { tone = b.tone, text = b.text } end
+        if isNumber(v) and bit.band(mask, bit.lshift(1, v)) ~= 0 then return { tone = b.tone, text = b.text } end
     end
     return nil
 end
@@ -264,7 +265,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
 
     -- The boss mod's timers, by its own id: { label, icon, badge, endsAt or paused }
     function AddonTimer(source: string, id: unknown, text: unknown, seconds: unknown, icon: unknown, badge: Badge?)
-        if self:Get("source") ~= source or not readable(seconds) or seconds <= 0 or isPull(text) then return end
+        if self:Get("source") ~= source or not isNumber(seconds) or seconds <= 0 or isPull(text) then return end
         local key = tostring(id)
         self.addonTimers[key] = { id = "addon:" .. key, label = plain(text) and text or "", icon = iconOf(icon),
                                   badge = badge, endsAt = GetTime() + seconds }
@@ -366,14 +367,14 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             local dbm = tbl.field(_G, "DBM")
             local function on(event: string, fn: (...unknown) -> ()) pcall(register, dbm, event, fn) end
             on("DBM_TimerBegin", function(_: unknown, id: unknown, msg: unknown, timer: unknown, icon: unknown, _: unknown, _: unknown, colorId: unknown)
-                self:AddonTimer("dbm", id, msg, timer, icon, readable(colorId) and DBM_BADGE[colorId] or nil)
+                self:AddonTimer("dbm", id, msg, timer, icon, isNumber(colorId) and DBM_BADGE[colorId] or nil)
             end)
             on("DBM_TimerStop", function(_: unknown, id: unknown) self:AddonTimerStop("dbm", id) end)
             on("DBM_TimerPause", function(_: unknown, id: unknown) self:AddonTimerPause("dbm", id, true) end)
             on("DBM_TimerResume", function(_: unknown, id: unknown) self:AddonTimerPause("dbm", id, false) end)
             on("DBM_TimerUpdate", function(_: unknown, id: unknown, elapsed: unknown, total: unknown)
                 local t = self:Get("source") == "dbm" and self.addonTimers[tostring(id)] or nil
-                if t and readable(elapsed) and readable(total) then
+                if t and isNumber(elapsed) and isNumber(total) then
                     t.endsAt, t.paused = GetTime() + math.max(0, total - elapsed), nil
                     self:Refresh()
                 end
@@ -413,18 +414,18 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         local ok, ids = pcall(ET.GetEventList)
         if not ok or type(ids) ~= "table" then return list end
         local script = tbl.field(tbl.field(Enum, "EncounterTimelineEventSource"), "Script")
-        local SCRIPT: number? = readable(script) and script or nil
+        local SCRIPT: number? = isNumber(script) and script or nil
         for _, id in ipairs(ids) do
             local okS: boolean, state: unknown = pcall(ET.GetEventState, id)
             local okR: boolean, left: unknown = pcall(ET.GetEventTimeRemaining, id)
             local okI, info = pcall(ET.GetEventInfo, id)
-            if okS and okR and okI and readable(state) and (state == ACTIVE or state == PAUSED) and readable(left)
+            if okS and okR and okI and isNumber(state) and (state == ACTIVE or state == PAUSED) and isNumber(left)
                and (left > 0 or state == PAUSED) and type(info) == "table"
-               and (source == "suui" or not readable(info.source) or info.source == SCRIPT) then
+               and (source == "suui" or not isNumber(info.source) or info.source == SCRIPT) then
                 local label: string? = nil
                 if not isSecret(info.spellName) and type(info.spellName) == "string" then label = info.spellName end
                 local icon = info.iconFileID
-                local e: TimelineEvent = { id = id, label = self.labels[id] or label or "", icon = readable(icon) and icon or nil,
+                local e: TimelineEvent = { id = id, label = self.labels[id] or label or "", icon = isNumber(icon) and icon or nil,
                             badge = self.badges[id] or badgeOf(info.icons) }
                 if state == PAUSED then e.paused = left else e.endsAt = now + left end
                 list[#list + 1] = e
@@ -506,7 +507,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         seconds = math.min(seconds, 60)
         if ET and ET.AddScriptEvent then
             local ok, id = pcall(ET.AddScriptEvent, { spellID = PULL_SPELL, iconFileID = PULL_ICON, duration = seconds, overrideName = "Pull" })
-            if ok and readable(id) then
+            if ok and isNumber(id) then
                 self.pullID = id
                 self.labels[id] = "Pull"
             end
@@ -594,7 +595,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         while #kept > 12 do table.remove(kept, 1) end
         -- ours arrived (or anyone's): no fallback start
         self.awaiting = nil
-        if isSecret(guid) or isSecret(seconds) or not readable(seconds) then return end
+        if isSecret(guid) or isSecret(seconds) or not isNumber(seconds) then return end
         if InCombatLockdown() then return end
         -- the same countdown again (the event can come more than once): keep it
         local ends = self.pullEnds
@@ -642,7 +643,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         end
         for _, t in ipairs(TEST) do
             local ok, id = pcall(ET.AddScriptEvent, { spellID = t.spell, iconFileID = t.icon, duration = t.seconds, overrideName = t.name })
-            if ok and readable(id) then
+            if ok and isNumber(id) then
                 self.labels[id] = t.name
                 self.badges[id] = t.badge
             end
@@ -699,16 +700,13 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         SuuUI.AllowAlertOutOfCombat("pull")
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
         self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
-        local valid = C_EventUtils and C_EventUtils.IsEventValid
         for _, e in ipairs({ "ENCOUNTER_TIMELINE_EVENT_ADDED", "ENCOUNTER_TIMELINE_EVENT_REMOVED", "ENCOUNTER_TIMELINE_EVENT_STATE_CHANGED",
                              "ENCOUNTER_TIMELINE_EVENT_TRACK_CHANGED", "ENCOUNTER_TIMELINE_STATE_UPDATED" }) do
-            if not valid or valid(e) then self:OnGameEvent(e, function() self:Refresh() end) end
+            self:OnGameEvent(e, function() self:Refresh() end)
         end
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.pullTicker then self:CancelPull() end end)
-        if not valid or valid("START_PLAYER_COUNTDOWN") then
-            self:OnGameEvent("START_PLAYER_COUNTDOWN", function(_, ...) self:OnCountdown(...) end)
-            self:OnGameEvent("CANCEL_PLAYER_COUNTDOWN", function() self:CancelPull() end)
-        end
+        self:OnGameEvent("START_PLAYER_COUNTDOWN", function(_, ...) self:OnCountdown(...) end)
+        self:OnGameEvent("CANCEL_PLAYER_COUNTDOWN", function() self:CancelPull() end)
         self:BlizzardNumbers(self:Get("pullAlert") == "off")
         self:Watch("pullAlert", function() self:BlizzardNumbers(self:Get("pullAlert") == "off") end)
         self:Watch("source", function() self.addonTimers = {}; self:ApplySuppression(); self:Refresh() end)

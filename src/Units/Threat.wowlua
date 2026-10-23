@@ -25,6 +25,8 @@ import type AlertTone, FormatArg from "/UI/Alert"
 import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
 
+local isNumber = secret.isNumber
+
 local UI = SuuUI.UI
 
 local DEFAULTS = {
@@ -41,7 +43,6 @@ local DEFAULTS = {
 local M: ThreatModule
 
 
-local function readable(v: unknown): v is number return not secret.isSecret(v) and type(v) == "number" end
 local TICK = 0.2
 
 -- What saves you from a mob you pulled, by class (the first one ready shows).
@@ -72,7 +73,7 @@ local function running(id: number): boolean?
     if not cd then return nil end
     local active = cd.isActive
     if not secret.isSecret(active) and active ~= nil then return active and true or false end
-    if readable(cd.duration) then return cd.duration > 0 end
+    if isNumber(cd.duration) then return cd.duration > 0 end
     return nil
 end
 
@@ -111,7 +112,7 @@ type Row = { name?: string | Secret<string>, class?: string, role?: string, stat
 local function sample(unit: string, pet: boolean?): Row?
     if not UnitExists(unit) then return nil end
     local given = UnitThreatSituation(unit, "target")
-    local status = readable(given) and given or nil
+    local status = isNumber(given) and given or nil
     local ok, _, _, scaled, _, value = pcall(UnitDetailedThreatSituation, unit, "target")
     if not ok then return nil end
     -- off the table: no status and no % (a secret % may still be someone's)
@@ -304,7 +305,7 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
         for _, r in ipairs(rows) do if r.you then me = r end end
         local status = me and me.status
         local tank = me and me.role == "TANK"
-        if not readable(status) or tank then
+        if not isNumber(status) or tank then
             unalert("threat-pull")
             unalert("threat-aggro")
             return
@@ -316,7 +317,7 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
             -- whoever holds the mob: the first other row at 2-3
             local holder: Row? = nil
             for _, r in ipairs(rows) do
-                if not r.you and readable(r.status) and r.status >= 2 then holder = r break end
+                if not r.you and isNumber(r.status) and r.status >= 2 then holder = r break end
             end
             if holder then
                 alert("threat-pull", "warning", "You're about to pull", "%s · over %s's threat%s",

@@ -22,7 +22,7 @@
 -- GUID. Shares need a division, so they arrive when combat ends. Deaths open
 -- their recap (C_DeathRecap).
 
-import isSecret from "wowlua:secret"
+import isSecret, isNumber from "wowlua:secret"
 import tokens as T from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
@@ -34,7 +34,6 @@ import showTooltip, hideTooltip from "/UI/Tooltip"
 const S = T.space
 
 const WHITE = "Interface\\Buttons\\WHITE8X8"
-local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 local function plainString(v: unknown): v is string return not isSecret(v) and type(v) == "string" and v ~= "" end
 
 -- One option of the type select: a heading, or a type (its value, label and
@@ -185,13 +184,13 @@ local function count(v: number | string | Secret<number> | nil): string
 end
 
 local function clock(given: unknown): string
-    if not readable(given) then return "" end
+    if not isNumber(given) then return "" end
     local s = math.max(0, math.floor(given + 0.5))
     return ("%d:%02d"):format(math.floor(s / 60), s % 60)
 end
 
 local function since(given: unknown): string
-    if not readable(given) then return "" end
+    if not isNumber(given) then return "" end
     local s = math.max(0, math.floor(given + 0.5))
     local m = math.floor(s / 60)
     return m > 0 and ("%dm %ds"):format(m, s % 60) or ("%ds"):format(s)
@@ -831,7 +830,7 @@ export class DamageMeter extends Frame
         if deaths then
             d.main = since(src.deathTimeSeconds)
             local recap = src.deathRecapID
-            if readable(recap) and recap > 0 and self.recapApi then
+            if isNumber(recap) and recap > 0 and self.recapApi then
                 d.open = function() self.drill = { kind = "recap", src = src, row = d }; self:Refresh() end
             end
             return d
@@ -847,13 +846,13 @@ export class DamageMeter extends Frame
             if v.numbers ~= "minimal" then d.paren = abbr(ps and src.totalAmount or src.amountPerSecond) end
         end
         local amount = src.totalAmount
-        if v.numbers == "complete" and not fight and readable(amount) and readable(total) and total > 0 then
+        if v.numbers == "complete" and not fight and isNumber(amount) and isNumber(total) and total > 0 then
             d.share = ("%d%%"):format(math.floor(amount / total * 100 + 0.5))
         end
         -- its breakdown: yours always, others' while their GUID is readable
         local guid = you and UnitGUID("player") or src.sourceGUID
         local creature = src.sourceCreatureID
-        local openable = (you or plainString(guid)) and (enemies and readable(creature) or not enemies)
+        local openable = (you or plainString(guid)) and (enemies and isNumber(creature) or not enemies)
         if openable then
             d.open = function()
                 self.drill = { kind = "spells", guid = guid, creature = (not isSecret(creature)) and creature or nil, row = d }
@@ -901,7 +900,7 @@ export class DamageMeter extends Frame
         end
         local ps = PER_SECOND[typeValue]
         local top: number | Secret<number> = deaths and 1 or (ps and list[1].amountPerSecond or list[1].totalAmount)
-        if readable(top) and top <= 0 then top = 1 end
+        if isNumber(top) and top <= 0 then top = 1 end
         local fight = inCombat()
         local max = self.maxRows
         local youAt: number? = nil
@@ -946,7 +945,7 @@ export class DamageMeter extends Frame
         self.empty:SetVisible(false)
         local ps = PER_SECOND[typeValue]
         local top: number | Secret<number> = ps and spells[1].amountPerSecond or spells[1].totalAmount
-        if readable(top) and top <= 0 then top = 1 end
+        if isNumber(top) and top <= 0 then top = 1 end
         local total = data.totalAmount
         local fight = inCombat()
         local h, gap = draw.size("meter-row"), S["space-1"]
@@ -967,7 +966,7 @@ export class DamageMeter extends Frame
                     if self.view.numbers ~= "minimal" then d.paren = abbr(ps and sp.totalAmount or sp.amountPerSecond) end
                 end
                 local amount = sp.totalAmount
-                if self.view.numbers == "complete" and not fight and readable(amount) and readable(total) and total > 0 then
+                if self.view.numbers == "complete" and not fight and isNumber(amount) and isNumber(total) and total > 0 then
                     d.share = ("%d%%"):format(math.floor(amount / total * 100 + 0.5))
                 end
                 r:ClearAllPoints()
@@ -1020,7 +1019,7 @@ export class DamageMeter extends Frame
             local d: MeterRowData = { rankWide = true, mark = "spell", spellID = ev.spellId, textName = true, heal = heal,
                         nameColor = heal and "fel" or nil }
             local at = ev.timestamp
-            if readable(deathAt) and readable(at) then
+            if isNumber(deathAt) and isNumber(at) then
                 local ago = deathAt - at
                 d.rank = ago < 0.05 and "0s" or ("-%.1fs"):format(ago)
             end
@@ -1033,7 +1032,7 @@ export class DamageMeter extends Frame
                 d.name = "Unknown"
             end
             local amount = ev.amount
-            if readable(amount) then
+            if isNumber(amount) then
                 d.main = (heal and "+" or "-") .. group3(math.floor(amount + 0.5))
             elseif isSecret(amount) then
                 d.main = AbbreviateNumbers(amount)
@@ -1041,7 +1040,7 @@ export class DamageMeter extends Frame
             local hp = ev.currentHP
             if maxHP and (issecretvalue(hp) or hp ~= nil) then
                 d.fill, d.fillMax = hp, maxHP
-                if readable(hp) and readable(maxHP) and maxHP > 0 then d.fillLow = hp / maxHP < 0.35 end
+                if isNumber(hp) and isNumber(maxHP) and maxHP > 0 then d.fillLow = hp / maxHP < 0.35 end
             end
             d.danger = i == #list
             r:ClearAllPoints()
@@ -1052,7 +1051,7 @@ export class DamageMeter extends Frame
         -- the note in the last slot: the killing blow and when
         local noteText = "Bars show health after each hit."
         local overkill = last and last.overkill
-        if last and readable(overkill) and overkill > 0 then
+        if last and isNumber(overkill) and overkill > 0 then
             local lastName = last.spellName
             local by = (plainString(last.event) and last.event == "SWING_DAMAGE") and "Melee"
                 or (plainString(lastName) and lastName) or "?"

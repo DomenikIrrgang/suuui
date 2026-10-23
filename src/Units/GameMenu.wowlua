@@ -19,6 +19,10 @@ import Module from "/Core/Modules"
 import type Panel from "/UI/Panel"
 import type Text from "/UI/Text"
 import * as secret from "wowlua:secret"
+import * as secure from "wowlua:secure"
+import * as frames from "wowlua:frames"
+import type AwayHandle from "wowlua:frames"
+import type Overlay from "wowlua:secure"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -169,17 +173,17 @@ end
 --------------------------------------------------------------------------------
 
 class GameMenuModule extends Module<typeof(DEFAULTS)>
-    awayHooked: true? = nil
+    -- the game's menu kept away
+    away: AwayHandle? = nil
     builtLine: number? = nil
     dim: Frame? = nil
     fighting: boolean? = nil
     items: MenuItem[] = {}
     -- the secure covers over the secure entries, by their place in secureItems
-    overs: { [number]: Button }? = nil
+    overs: { [number]: Overlay }? = nil
     panel: Panel? = nil
     perf: Text? = nil
-    placing: boolean? = nil
-    quitOver: Button? = nil
+    quitOver: Overlay? = nil
     secureItems: MenuItem[]? = nil
     stale: true? = nil
     ticker: TickerHandle? = nil
@@ -199,9 +203,9 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
     function BuildItem(parent: Frame, def: Entry): MenuItem
         local b = MenuItem.new(parent, def)
         if def.slash then
-            local secure = self.secureItems or {}
-            self.secureItems = secure
-            secure[#secure + 1] = b
+            local items = self.secureItems or {}
+            self.secureItems = items
+            items[#items + 1] = b
         end
         return b
     end
@@ -236,7 +240,7 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
     function Rebuild()
         if InCombatLockdown() then return end
         self.stale = nil
-        for _, over in pairs(self.overs or {}) do over:Hide() end
+        for _, over in pairs(self.overs or {}) do over.hide() end
         self.overs, self.secureItems = nil, nil
         local dim = self.dim
         if dim then dim:Hide(); dim:SetScript("OnUpdate", nil) end
@@ -317,22 +321,15 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
             confirm = "Exit Game", onConfirm = function() end })
         local over = self.quitOver
         if not over then
-            over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-            over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-            over:SetAttribute("type1", "macro")
-            over:SetAttribute("macrotext1", "/quit")
-            over:SetScript("OnEnter", function() d.ok:GetScript("OnEnter")(d.ok) end)
-            over:SetScript("OnLeave", function() d.ok:GetScript("OnLeave")(d.ok) end)
-            over:SetScript("PreClick", function() PlaySound(SOUNDKIT.IG_MAINMENU_QUIT) end)
-            d:HookScript("OnHide", function()
-                if not InCombatLockdown() then over:ClearAllPoints(); over:Hide() end
-            end)
-            self.quitOver = over
+            local made = secure.overlay(d.ok, { strata = "FULLSCREEN_DIALOG" })
+            made.set("type1", "macro")
+            made.set("macrotext1", "/quit")
+            made.button:SetScript("PreClick", function() PlaySound(SOUNDKIT.IG_MAINMENU_QUIT) end)
+            d:HookScript("OnHide", function() made.hide() end)
+            self.quitOver = made
+            over = made
         end
-        over:SetFrameStrata("FULLSCREEN_DIALOG")
-        over:ClearAllPoints()
-        over:SetAllPoints(d.ok)
-        over:Show()
+        over.show()
     end
 
     -- The secure buttons over Reload UI, Log Out and Exit Game: there while the
@@ -346,28 +343,22 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
             local over = overs[i]
             if not over and on then
                 local def = item.def
-                over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
-                over:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-                over:SetAttribute("type1", "macro")
-                over:SetAttribute("macrotext1", def.slash)
-                over:SetScript("OnEnter", function() item:GetScript("OnEnter")(item) end)
-                over:SetScript("OnLeave", function() item:GetScript("OnLeave")(item) end)
-                over:SetScript("PreClick", function() PlaySound(def.sound or SOUNDKIT.IG_MAINMENU_OPTION) end)
+                over = secure.overlay(item)
+                over.set("type1", "macro")
+                over.set("macrotext1", def.slash)
+                over.button:SetScript("PreClick", function() PlaySound(def.sound or SOUNDKIT.IG_MAINMENU_OPTION) end)
                 -- the menu closes after (closing it first would hide this button mid-click)
-                over:SetScript("PostClick", function()
+                over.button:SetScript("PostClick", function()
                     C_Timer.After(0, function() if GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end end)
                 end)
                 overs[i] = over
             end
             if over then
-                over:ClearAllPoints()
                 if on and not item.blocked then
-                    over:SetFrameStrata("DIALOG")
-                    if panel then over:SetFrameLevel(panel:GetFrameLevel() + 20) end
-                    over:SetAllPoints(item)
-                    over:Show()
+                    over.show()
+                    if panel then over.button:SetFrameLevel(panel:GetFrameLevel() + 20) end
                 else
-                    over:Hide()
+                    over.hide()
                 end
             end
         end
@@ -380,24 +371,17 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
         if perf then perf:SetValue(("%d fps · %d ms"):format(fps, world or home or 0)) end
     end
 
-    -- The game's menu out of sight: see-through and off screen, still shown.
-    -- Again on every show and whenever the game places it (it sets both itself
-    -- when it opens).
-    function PutAway(frame: Frame)
-        if not self:IsEnabled() then return end
-        self.placing = true
-        frame:SetAlpha(0)
-        frame:ClearAllPoints()
-        frame:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
-        self.placing = false
+    -- The game's menu out of sight: see-through and off screen, still shown
+    -- (it isn't protected: it moves in a fight too). Again on every show and
+    -- whenever the game places it (it sets both itself when it opens).
+    function Away(frame: Frame)
+        if self.away then return end
+        self.away = frames.keepAway(frame, { fade = true, when = function(): boolean return self:IsEnabled() end })
     end
 
-    function Away(frame: Frame)
-        self:PutAway(frame)
-        if self.awayHooked then return end
-        self.awayHooked = true
-        hooksecurefunc(frame, "SetPoint", function() if not self.placing then C_Timer.After(0, function() self:PutAway(frame) end) end end)
-        hooksecurefunc(frame, "SetAlpha", function(_: Frame, a: number) if not self.placing and a ~= 0 then C_Timer.After(0, function() self:PutAway(frame) end) end end)
+    function PutAway()
+        local away = self.away
+        if away then away.apply() end
     end
 
     -- The dimmed screen under the panel (Build makes it, Rebuild again).
@@ -420,14 +404,14 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
             if not self:IsEnabled() then return end
             if self.stale then self:Rebuild() end
             self:Away(g)
-            C_Timer.After(0, function() self:PutAway(g) end)
+            C_Timer.After(0, function() self:PutAway() end)
             self:Draw()
             self:Dim():Show()
             self:PlaceSecure(true)
             -- while it shows: keep it away, whatever the game does to it
             self:Dim():SetScript("OnUpdate", function()
                 local _, rel = g:GetPoint(1)
-                if g:GetAlpha() > 0 or rel ~= UIParent or g:GetNumPoints() ~= 1 then self:PutAway(g) end
+                if g:GetAlpha() > 0 or rel ~= UIParent or g:GetNumPoints() ~= 1 then self:PutAway() end
             end)
             if not self.ticker then
                 self.ticker = C_Timer.NewTicker(1, function() if self:Dim():IsShown() then self:DrawPerf() end end)
