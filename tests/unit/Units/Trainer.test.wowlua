@@ -5,18 +5,34 @@ import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import expectNoErrors from "../../helpers"
+import type ConfirmOptions from "/UI/Panel"
+import type SuuButton from "/UI/Controls"
+import asFrame, named from "/UI/Reskin"
 import internal M, Service, service, learnable, coins, pickAffordable, arrange, trainAllText, yourProfessions,
     npcTitle, isPetTrainer, canCategorize from "/Units/Trainer"
 
 const T = SuuUI.Tokens
 const PET = Enum.TrainerType.Pet
 
-local function coin(token: string, text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
+local function coin(token: keyof typeof(T.color), text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
+
+-- the game's trainer frame
+local function game(): Frame return assert(asFrame(named("ClassTrainerFrame"))) end
+
+-- what a button's tooltip says
+local function tipOf(b: SuuButton): string?
+    local tip = b.tooltip
+    if type(tip) == "table" then return tip.description end
+    return nil
+end
 
 -- A class trainer with `services` (the engine's), opened through its gossip.
 -- Each call teaches new spell IDs: a spell learned in one test stays known.
 local nextSpell = 90000
-local function openTrainer(services: { [string]: any }[]?): mock.MockUnit
+-- A service as the engine's trainer has it.
+type TrainerService = { spell: number, name: string, icon: number, level: number, rank: string, cost: number }
+
+local function openTrainer(services: TrainerService[]?): mock.MockUnit
     local npc = mock.spawnUnit({ name = "Bob", level = 30, reaction = "friendly" })
     nextSpell = nextSpell + 10
     mock.defineTrainer(npc, { greeting = "hi", services = services or {
@@ -34,14 +50,18 @@ local function openTrainer(services: { [string]: any }[]?): mock.MockUnit
 end
 
 -- A service as the window keeps it.
-local function svc(index: number, cost: number, opts: { [string]: any }?): Service
-    local o = opts or {}
+type ServiceOptions = { name?: string, kind?: string, texture?: number, sub?: string, category?: string, profession?: boolean }
+local function svc(index: number, cost: number, opts: ServiceOptions?): Service
+    local o: ServiceOptions = opts or {}
     return { index = index, name = o.name or ("S" .. index), kind = o.kind or "available", texture = o.texture, sub = o.sub or "",
-             category = o.category, cost = cost, profession = o.profession }
+             category = o.category, cost = cost, profession = o.profession == true }
 end
 
 -- The game's service list, faked: each { name, kind, texture, level, rank, category, cost, profession, skill, line }.
-local function fakeServices(list: { [string]: any }[])
+-- (an ability it needs: its name, whether you have it)
+type FakeService = { name: string, kind?: string, texture?: number, level?: number, rank?: string, category?: string, cost?: number,
+                     profession?: boolean, skill?: string, skillRank?: number, abilities?: { [number]: string | boolean }[], line?: string }
+local function fakeServices(list: FakeService[])
     mock.fake("GetNumTrainerServices", function() return #list end)
     mock.fake("GetTrainerServiceInfo", function(i: number)
         local s = list[i]
@@ -50,8 +70,14 @@ local function fakeServices(list: { [string]: any }[])
     end)
     mock.fake("GetTrainerServiceCost", function(i: number) return list[i].cost, list[i].profession end)
     mock.fake("GetTrainerServiceSkillReq", function(i: number) return list[i].skill, list[i].skillRank end)
-    mock.fake("GetTrainerServiceNumAbilityReq", function(i: number) return list[i].abilities and #list[i].abilities or 0 end)
-    mock.fake("GetTrainerServiceAbilityReq", function(i: number, k: number) return list[i].abilities[k][1], list[i].abilities[k][2] end)
+    mock.fake("GetTrainerServiceNumAbilityReq", function(i: number): number
+        local abilities = list[i].abilities
+        return abilities and #abilities or 0
+    end)
+    mock.fake("GetTrainerServiceAbilityReq", function(i: number, k: number): (unknown, unknown)
+        local need = assert(list[i].abilities)[k]
+        return need[1], need[2]
+    end)
     mock.fake("GetTrainerServiceSkillLine", function(i: number) return list[i] and list[i].line end)
 end
 
@@ -61,13 +87,13 @@ local function petTrainer(total: number, used: number)
 end
 
 -- UI.Confirm's options, not shown.
-local confirmed: { [string]: any }?
+local confirmed: ConfirmOptions?
 local function stubConfirm()
     confirmed = nil
-    mock.stub(SuuUI.UI, "Confirm", function(opts: { [string]: any }) confirmed = opts end)
+    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions) confirmed = opts end)
 end
 
-local function confirmOpts(): { [string]: any }
+local function confirmOpts(): ConfirmOptions
     return (assert(confirmed, "UI.Confirm wasn't called"))
 end
 
@@ -82,7 +108,7 @@ end
 local function close()
     if M.open then CloseTrainer() end
     M.open = false
-    M.window:Hide()
+    assert(M.window):Hide()
     mock.advanceTime(1)
 end
 
@@ -206,12 +232,12 @@ local function professionsYouHave()
     mock.fake("GetProfessions", function() return 3, nil, 7 end)
     mock.fake("GetProfessionInfo", function(i: number) return i == 3 and "Mining" or nil end)
     local mine = yourProfessions()
-    expect(mine :: any).toEqual({ Mining = true })
+    expect(mine).toEqual({ Mining = true })
 end
 
 @test("npcTitle: the tooltip's second line, not a level line nor a secret")
 local function title()
-    local line2: any = "Warrior Trainer"
+    local line2: unknown = "Warrior Trainer"
     mock.fake("C_TooltipInfo.GetUnit", function() return { lines = { { leftText = "Bob" }, { leftText = line2 } } } end)
     expect(npcTitle()).toBe("Warrior Trainer")
     line2 = "Level 30"
@@ -252,7 +278,7 @@ local function trainProfession()
     local opts = confirmOpts()
     expect(opts.title).toBe("Learn Mining?")
     expect(opts.text).toBe("You'll have Mining as a profession.")
-    opts.onConfirm()
+    assert(opts.onConfirm)()
     expect(buy).toHaveBeenCalledWith(1)
     -- no skill line: the service's name
     M.selected = 2
@@ -308,7 +334,7 @@ local function trainAll()
     mock.advanceTime(1)
     expect(buy).toHaveBeenCalledTimes(2)
     -- the window shut: nothing
-    M.window:Hide()
+    assert(M.window):Hide()
     bought = 0
     M:TrainAll()
     expect(buy).toHaveBeenCalledTimes(2)
@@ -346,14 +372,14 @@ local function opens()
     openTrainer()
     expect(M.open).toBe(true)
     expect(M.window).toBeShown()
-    expect(M.window.title).toHaveText("Bob")
+    expect(assert(M.window).title).toHaveText("Bob")
     expect(M.rows[1]).toBeShown()
     expect(M.rows[1].name).toHaveText("Charge")
     expect(M.rows[3].name).toHaveText("Rend")
     expect(M.rows[3].sub).toHaveText("(Rank 1) · Requires level 4")
     expect(M.empty).never.toBeShown()
     -- the game's frame out of sight
-    local f: any = _G.ClassTrainerFrame
+    local f = game()
     expect(f:GetAlpha()).toBe(0)
     CloseTrainer()
     mock.advanceTime(0.5)
@@ -366,7 +392,7 @@ end
 local function closeAsks()
     openTrainer()
     local close = mock.fake("CloseTrainer", function() end)
-    M.window:Hide()
+    assert(M.window):Hide()
     expect(close).toHaveBeenCalled()
 end
 
@@ -385,8 +411,8 @@ local function rows()
     mock.click(row)
     expect(M.selected).toBe(1)
     expect(row.sel).toBeShown()
-    expect(M.train:IsEnabled()).toBe(true)
-    expect(M.train.tooltip).toBeNil()
+    expect(assert(M.train):IsEnabled()).toBe(true)
+    expect(assert(M.train).tooltip).toBeNil()
     mock.hover(row)
     expect(row.hover).toBeShown()
     expect(GameTooltip:IsShown()).toBe(true)
@@ -401,16 +427,16 @@ end
 @test("Train's state: nothing chosen, can't afford")
 local function trainState()
     openTrainer()
-    expect(M.train:IsEnabled()).toBe(false)
-    expect(M.train.tooltip.description).toBe("Choose what to learn.")
+    expect(assert(M.train):IsEnabled()).toBe(false)
+    expect(tipOf(assert(M.train))).toBe("Choose what to learn.")
     mock.player:setMoney(50)
     M.selected = 1
     M:Refresh()
-    expect(M.train.tooltip.description).toBe("You can't afford it.")
+    expect(tipOf(assert(M.train))).toBe("You can't afford it.")
     -- the price in ember when short
     expect(M.rows[1].money).toBeShown()
-    expect(M.trainAll:IsEnabled()).toBe(false)
-    expect(M.trainAll.tooltip.description).toBe("Nothing you can learn and afford right now.")
+    expect(assert(M.trainAll):IsEnabled()).toBe(false)
+    expect(tipOf(assert(M.trainAll))).toBe("Nothing you can learn and afford right now.")
 end
 
 @test("Train all button: asks with the count and the cost, then trains")
@@ -421,7 +447,7 @@ local function trainAllButton()
     local opts = confirmOpts()
     expect(opts.text).toBe("Learn 2 skills for " .. coins(400) .. ".")
     local trainAllSpy = mock.stub(M, "TrainAll", function() end)
-    opts.onConfirm()
+    assert(opts.onConfirm)()
     expect(trainAllSpy).toHaveBeenCalled()
     -- one skill, a pet's points
     confirmed = nil
@@ -459,7 +485,7 @@ local function categories()
     expect(h1.count).toHaveText("1")
     expect(h2.name).toHaveText("Fury")
     expect(M.categorize).toBeShown()
-    expect(M.categorize.value).toBe(true)
+    expect(assert(M.categorize).value).toBe(true)
     mock.click(h1)
     expect(M.collapsed.Arms).toBe(true)
     expect(M.heads[2].name).toHaveText("Fury")
@@ -480,7 +506,7 @@ end
 local function categorizeToggle()
     openTrainer()
     local set = mock.fake("C_Trainer.SetCategorizeTrainerUI", function() end)
-    M.categorize:SetValue(false)
+    assert(M.categorize):SetValue(false)
     mock.click(M.categorize)
     expect(set).toHaveBeenCalledWith(true)
     mock.click(M.categorize)
@@ -490,16 +516,16 @@ end
 @test("Filters: shown from the game's, and set back to it")
 local function filters()
     openTrainer()
-    expect(M.filters:GetValue().show).toEqual({ "available", "unavailable", "used" })
+    expect(assert(M.filters):GetValue().show).toEqual({ "available", "unavailable", "used" })
     local set = mock.fake("SetTrainerServiceTypeFilter", function() end)
-    M.filters:SetValue({ show = { "available" } })
-    M.filters:Changed()
+    assert(M.filters):SetValue({ show = { "available" } })
+    assert(M.filters):Changed()
     expect(set).toHaveBeenCalledWith("available", true)
     expect(set).toHaveBeenCalledWith("unavailable", false)
     expect(set).toHaveBeenCalledWith("used", false)
     mock.fake("GetTrainerServiceTypeFilter", function(kind: string) return kind == "used" end)
     M:Refresh()
-    expect(M.filters:GetValue().show).toEqual({ "used" })
+    expect(assert(M.filters):GetValue().show).toEqual({ "used" })
 end
 
 @test("nothing to show: the empty line")
@@ -521,13 +547,13 @@ local function professionRank()
     mock.fake("IsTradeskillTrainer", function() return true end)
     M:Refresh()
     expect(M.rank).toBeShown()
-    expect(M.rank.label).toHaveText("Mining")
-    expect(M.rank.n).toHaveText("60 / 150")
+    expect(assert(M.rank).label).toHaveText("Mining")
+    expect(assert(M.rank).n).toHaveText("60 / 150")
     expect(M.rows[1].name).toHaveText("Thunder Clap")
     -- no step: the first service's line, else "Rank"
     mock.fake("GetTrainerServiceStepIndex", function() return nil end)
     M:Refresh()
-    expect(M.rank.label).toHaveText("Rank")
+    expect(assert(M.rank).label).toHaveText("Rank")
     mock.fake("GetTrainerTradeskillRankValues", function() return 0, 0 end)
     M:Refresh()
     expect(M.rank).never.toBeShown()
@@ -559,7 +585,7 @@ local function secretName()
     mock.fake("UnitName", function() return secret and mock.secret("Bob") or "Bob" end)
     M:Refresh()
     secret = false
-    expect(M.window.title).toHaveText("Trainer")
+    expect(assert(M.window).title).toHaveText("Trainer")
 end
 
 @test("QueueRefresh: once per moment")
@@ -578,7 +604,7 @@ end
 @test("Away: the game's frame stays out of sight when placed again; once only")
 local function away()
     openTrainer()
-    local f: any = _G.ClassTrainerFrame
+    local f = game()
     f:SetAlpha(1)
     f:SetPoint("CENTER")
     mock.advanceTime(0.1)
@@ -600,7 +626,7 @@ end
 @test("Away: nothing while the module is off")
 local function awayOff()
     openTrainer()
-    local f: any = _G.ClassTrainerFrame
+    local f = game()
     mock.stub(M, "IsEnabled", function() return false end)
     f:SetAlpha(1)
     f:SetPoint("CENTER")
