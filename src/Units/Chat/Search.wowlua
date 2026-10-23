@@ -5,13 +5,15 @@
 -- lines' font come in as arguments.
 
 import * as lines from "./Lines"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
 
 -- A line as shown in a mirror (Units/Chat's Line; the fields the search
 -- reads).
-export type ShownLine = { text?: any, at: number, plainText?: string, [string]: any }
+export type ShownLine = { text: string | Secret<string>, at: number, plainText?: string }
 -- A kept line for the search: Blizzard's text, the line as shown, where from.
 export type KeptEntry = {
-    src: string, line: ShownLine, r: any, g: any, b: any, where: string, whisper?: boolean, n: number, kind?: string,
+    src: string, line: ShownLine, r: unknown, g: unknown, b: unknown, where: string, whisper?: boolean, n: number, kind?: string,
 }
 export type Found = { key: string, who?: string, lines: KeptEntry[] }
 
@@ -28,10 +30,10 @@ end
 
 -- Whisper, party, guild or trade (Blizzard colours each chat type its own
 -- way; `types`: its ChatTypeInfo, the live one by default).
-export function lineKind(src: string, r: any, g: any, b: any, types: any = ChatTypeInfo): string?
+export function lineKind(src: string, r: unknown, g: unknown, b: unknown, types: unknown = ChatTypeInfo): string?
     for kind, list in pairs(KIND_TYPES) do
         for _, t in ipairs(list) do
-            if lines.sameColor(types and types[t], r, g, b) then return kind end
+            if lines.sameColor(tbl.field(types, t), r, g, b) then return kind end
         end
     end
     local channel = channelOf(src)
@@ -42,12 +44,16 @@ end
 -- The lines with `q` (lower case) in them, in `scope` ("all" or a kind),
 -- by player: { key, who, lines }, the newest player first (`entries` come
 -- newest first); and how many lines.
-export function findLines(entries: KeptEntry[], q: string, scope: string, types: any = ChatTypeInfo): (Found[], number)
+export function findLines(entries: KeptEntry[], q: string, scope: string, types: unknown = ChatTypeInfo): (Found[], number)
     local groups: Found[], byKey: { [string]: Found }, total = {}, {}, 0
     for _, e in ipairs(entries) do
         local line = e.line
-        line.plainText = line.plainText or lines.plainLine(line.text):lower()
-        if (line.plainText :: string):find(q, 1, true) then
+        local text = line.plainText
+        if not text then
+            text = lines.plainLine(secret.asString(line.text) or ""):lower()
+            line.plainText = text
+        end
+        if text:find(q, 1, true) then
             e.kind = e.whisper and "whisper" or lineKind(e.src, e.r, e.g, e.b, types)
             if scope == "all" or scope == e.kind then
                 local who = e.src:match("|Hplayer:([^:|]+)")

@@ -6,6 +6,7 @@
 -- comes in as arguments.
 
 import * as lines from "./Lines"
+import * as errors from "wowlua:errors"
 
 local plain = lines.plain
 
@@ -17,7 +18,7 @@ export const TYPE_CMD: { [string]: string } = {
     INSTANCE_CHAT = "/i", GUILD = "/g", OFFICER = "/o",
 }
 -- your own line's chat event → the command that sends there
-export const SENT: { [string]: string } = {
+export const SENT: { [EventName]: string } = {
     CHAT_MSG_SAY = "/s", CHAT_MSG_YELL = "/y", CHAT_MSG_EMOTE = "/e",
     CHAT_MSG_PARTY = "/p", CHAT_MSG_PARTY_LEADER = "/p",
     CHAT_MSG_RAID = "/raid", CHAT_MSG_RAID_LEADER = "/raid", CHAT_MSG_RAID_WARNING = "/rw",
@@ -52,7 +53,7 @@ end
 
 -- Your own line from a chat event, as the command that sends it again
 -- (`me`: your GUID).
-export function sentLine(event: string, text: unknown, sender: unknown, channelNumber: unknown, guid: unknown,
+export function sentLine(event: EventName, text: unknown, sender: unknown, channelNumber: unknown, guid: unknown,
                          me: unknown = UnitGUID("player")): string?
     local cmd = SENT[event]
     if not cmd or not plain(text) or type(text) ~= "string" or text == "" then return nil end
@@ -91,13 +92,13 @@ end
 
 -- `isSecure`: the client's IsSecureCmd (the live one by default; false:
 -- none, SuuUI's own list decides).
-export function isProtectedLine(line: string, isSecure: any = IsSecureCmd): boolean
+export function isProtectedLine(line: string, isSecure: unknown = IsSecureCmd): boolean
     local cmd = line:match("^(/%S+)")
     if not cmd then return false end
     cmd = cmd:lower()
     if isSecure then
-        local ok, secure = pcall(isSecure, cmd)
-        if ok and plain(secure) then return secure and true or false end
+        local secure = errors.try(isSecure, cmd)
+        if plain(secure) then return secure and true or false end
     end
     return PROTECTED[cmd] or false
 end
@@ -105,7 +106,7 @@ end
 -- Where Up (-1) or Down (1) goes from `index` in the history (#list + 1:
 -- the empty input past the newest); in combat it passes over protected
 -- commands. nil: nowhere further.
-export function recallIndex(list: string[], index: number, step: number, inCombat: boolean, isSecure: any = IsSecureCmd)
+export function recallIndex(list: string[], index: number, step: number, inCombat: boolean, isSecure: unknown = IsSecureCmd)
     : number?
     local to = index + step
     if inCombat then

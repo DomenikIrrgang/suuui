@@ -11,76 +11,71 @@
 
 import test, expect, beforeEach, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as secret from "wowlua:secret"
+import * as chat from "wowlua:chat"
 import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
 import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
-import expectNoErrors, newParent from "../../helpers"
+import internal M, TabButton, SearchPage, SearchHeader, SearchChip, WindowsEditor, WindowRow, Mirror, Line, Kept from "/Units/Chat"
+import expectNoErrors, newParent, captureMenus, choose, captureConfirm from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
 
-local M: any = assert(SuuUI.GetModule("chat"))
-local UI: any = SuuUI.UI
+local UI = SuuUI.UI
 local T = SuuUI.Tokens
-local G: any = _G
-local CF1: any = G.ChatFrame1
-local CF2: any = G.ChatFrame2
+local CF1, CF2 = ChatFrame1, ChatFrame2
 
 local LINE = "|Hplayer:Tamsin:12|h[Tamsin]|h says: hello there"
 
 -- The module's windows ready (their mirrors are made a frame after login).
 local function ready()
-    if not (M.mirrors and M.mirrors[CF1]) then mock.advanceFrames(2) end
+    if not M.mirrors[CF1] then mock.advanceFrames(2) end
 end
 
-local function mirror(cf: any): any
+local function mirror(cf: chat.Window): Mirror
     ready()
-    return M.mirrors[cf]
+    return (assert(M.mirrors[cf], "no mirror"))
 end
 
-local function lastLine(cf: any): any
+-- A window's message frame in SuuUI's panel.
+local function frameOf(cf: chat.Window): ScrollingMessageFrameMixin & Frame
+    return mirror(cf).frame
+end
+
+local function lastLine(cf: chat.Window): Line
     local m = mirror(cf)
     return m.lines[#m.lines]
 end
 
--- The window named `name` (Blizzard's settings for it).
-local function window(name: string): any
+-- A line's text, readable.
+local function textOf(line: Line): string return secret.asString(line.text) or "" end
+local function rendered(line: Line, withTime: boolean?): string return secret.asString(M:Render(line, withTime)) or "" end
+
+-- The window named `name` (Blizzard's settings for it, or a whisper's player).
+local function window(name: string): chat.Window?
     for _, cf in ipairs(M:Windows()) do
-        if GetChatWindowInfo(cf:GetID()) == name or cf.chatTarget == name then return cf end
+        local _, target = chat.conversation(cf)
+        if GetChatWindowInfo(cf:GetID()) == name or target == name then return cf end
     end
     return nil
 end
 
+local function windowOf(name: string): chat.Window return (assert(window(name), "no window " .. name)) end
+
 -- The shown tab button with this name.
-local function tab(name: string): any
-    for _, b in ipairs(M.panel.tabButtons) do
+local function findTab(name: string): TabButton?
+    for _, b in ipairs(M:Panel().tabButtons) do
         if b:IsShown() and b.label:GetText() == name then return b end
     end
     return nil
 end
 
+local function tab(name: string): TabButton return (assert(findTab(name), "no tab " .. name)) end
+
 -- A frame's left edge in UIParent units.
-local function leftOf(f: any): number
-    return f:GetLeft() * f:GetEffectiveScale() / UIParent:GetEffectiveScale()
-end
-
--- What a context menu offered: its buttons by label (run with menu[label]()).
-local function captureMenus(): { [string]: () -> () }
-    local menu: { [string]: () -> () } = {}
-    mock.stub(UI, "ContextMenuFrom", function(owner: any, describe: (owner: any, root: any) -> ())
-        for k in pairs(menu) do menu[k] = nil end
-        local root: any = {}
-        function root:CreateTitle(_: string) end
-        function root:CreateButton(label: string, fn: () -> ()) menu[label] = fn end
-        describe(owner, root)
-    end)
-    return menu
-end
-
--- Runs the menu button with this label (it must be there).
-local function choose(menu: { [string]: () -> () }, label: string)
-    local fn = menu[label]
-    assert(fn, "no menu button " .. label)
-    fn()
+local function leftOf(f: Region): number
+    return assert(f:GetLeft()) * f:GetEffectiveScale() / UIParent:GetEffectiveScale()
 end
 
 -- A message that isn't from Discord.
@@ -93,11 +88,21 @@ local function chatEvent(event: string, text: string, sender: string, guid: stri
     mock.fireEvent(event, text, sender, "", "", "", "", 0, 0, "", 0, lineID, guid, 0, false, false, false, false, NO_DISCORD)
 end
 
+-- A row of the chat's settings: what the tests use of it.
+type SettingRow = {
+    build: (parent: Frame) -> Frame, onClick: () -> (), disabled: () -> (boolean, string?), description: () -> string,
+}
+local function rowOf(label: string): SettingRow
+    local s = registry.get("chat") :: registry.Section
+    for _, g in ipairs(s.groups or {}) do
+        for _, r in ipairs(g.rows) do if r.label == label then return r end end
+    end
+    error("no row " .. label)
+end
+
 -- The edit box with the keyboard focus, which must be there.
-local function focused(): any
-    local f = GetCurrentKeyBoardFocus()
-    assert(f, "nothing has the keyboard focus")
-    return f
+local function focused(): EditBox
+    return (assert(frames.asEditBox(GetCurrentKeyBoardFocus()), "nothing has the keyboard focus"))
 end
 
 @beforeEach
@@ -132,12 +137,12 @@ end
 local function panel()
     local w, h = M:PanelSize()
     expect(w).toBe(UI.Size("chat-w"))
-    expect(M.panel:GetHeight()).toBeCloseTo(h)
+    expect(M:Panel():GetHeight()).toBeCloseTo(h)
     local left, bottom = M:LogRect()
-    expect(leftOf(CF1)).toBeCloseTo(left)
-    expect(CF1:GetBottom() * CF1:GetEffectiveScale() / UIParent:GetEffectiveScale()).toBeCloseTo(bottom)
+    expect(leftOf(CF1)).toBeCloseTo(assert(left))
+    expect(assert(CF1:GetBottom()) * CF1:GetEffectiveScale() / UIParent:GetEffectiveScale()).toBeCloseTo(bottom)
     M:Set("logHeight", M:Get("logHeight") + 40)
-    expect(M.panel:GetHeight()).toBeCloseTo(h + 40)
+    expect(M:Panel():GetHeight()).toBeCloseTo(h + 40)
 end
 
 @test("a protected ChatFrame1 in combat is placed after it; Blizzard, edit mode or a new scale place it again")
@@ -153,18 +158,18 @@ local function placing()
         pcall(CF1.ApplySystemAnchor, CF1)
         mock.advanceTime(0.01)
     end
-    expect(leftOf(CF1)).toBeCloseTo((M:LogRect()))
+    expect(leftOf(CF1)).toBeCloseTo(assert((M:LogRect())))
     M:Set("position", { point = "BOTTOMLEFT", x = 60, y = 28 })
     mock.advanceTime(0.01)
-    expect(leftOf(CF1)).toBeCloseTo((M:LogRect()))
+    expect(leftOf(CF1)).toBeCloseTo(assert((M:LogRect())))
     events.emit("SUUUI_ROOT_SCALED", UIParent:GetEffectiveScale())
     mock.advanceTime(0.01)
-    expect(leftOf(CF1)).toBeCloseTo((M:LogRect()))
+    expect(leftOf(CF1)).toBeCloseTo(assert((M:LogRect())))
     -- the game's own window events: skinned and placed a frame later
     mock.fireEvent("UPDATE_CHAT_WINDOWS")
     chatEvent("CHAT_MSG_WHISPER_INFORM", "x", "Tamsin", "", 1)
     mock.advanceTime(0.01)
-    expect(leftOf(CF1)).toBeCloseTo((M:LogRect()))
+    expect(leftOf(CF1)).toBeCloseTo(assert((M:LogRect())))
 end
 
 --------------------------------------------------------------------------------
@@ -176,10 +181,10 @@ local function copied()
     CF1:AddMessage(LINE, 1, 1, 1)
     local line = lastLine(CF1)
     expect(line.src).toBe(LINE)
-    expect(line.text:find("[Tamsin]", 1, true)).toBe(nil)
-    expect(line.text:find("|h: hello there", 1, true) ~= nil).toBe(true)
+    expect(textOf(line):find("[Tamsin]", 1, true)).toBe(nil)
+    expect(textOf(line):find("|h: hello there", 1, true) ~= nil).toBe(true)
     M.awake = true
-    expect(M:Render(line, M:ShowTimes()):find(date("%H:%M", line.at), 1, true) ~= nil).toBe(true)
+    expect(rendered(line, M:ShowTimes()):find(date("%H:%M", line.at), 1, true) ~= nil).toBe(true)
     M:Set("timestamps", false)
     expect(M:Render(line, M:ShowTimes())).toBe(line.text)
 end
@@ -190,11 +195,12 @@ local function raw()
     expect(log.raw).toBe(true)
     CF2:AddMessage("|Hplayer:Tamsin|h[Tamsin]|h hits", 1, 1, 1)
     expect(log.lines[#log.lines].text).toBe("|Hplayer:Tamsin|h[Tamsin]|h hits")
-    local secret = mock.secret("hidden words")
-    CF1:AddMessage(secret, 1, 1, 1)
+    local hidden = mock.secret("hidden words")
+    CF1:AddMessage(hidden, 1, 1, 1)
     expect(lastLine(CF1).raw).toBe(true)
-    expect(M:FormatLine(secret)).toBe(secret)
-    CF1:AddMessage(nil)                            -- nothing to copy
+    -- nothing to copy
+    local add = CF1.AddMessage :: unknown :: (self: Frame, text: unknown) -> ()
+    add(CF1, nil)
 end
 
 @test("a mirror keeps 500 lines")
@@ -212,7 +218,7 @@ local function redraw()
     M.awake = true
     m.drawnWithTime = nil
     M:Redraw(m)
-    m:ScrollUp()
+    m.frame:ScrollUp()
     M:Set("timestamps", false)
     expect(m.drawnWithTime).toBe(false)
     M:Redraw(m)                                    -- the same: nothing
@@ -222,7 +228,7 @@ end
 
 @test("the mouse wheel scrolls; with Shift to the top and the bottom")
 local function wheel()
-    local m = mirror(CF1)
+    local m = frameOf(CF1)
     for i = 1, 60 do CF1:AddMessage("wheel " .. i) end
     mock.wheel(m, 1)
     expect(m:GetScrollOffset() > 0).toBe(true)
@@ -239,15 +245,15 @@ local function classes()
     mock.spawnUnit({ name = "Otherplayer", class = "WARRIOR", player = true, guid = "Player-0000-00000000" })
     mock.stub(C_ChatInfo, "GetChatLineSenderGUID", function(_: number): string return "Player-0000-00000000" end)
     CF1:AddMessage("|Hplayer:Otherplayer:7|h[Otherplayer]|h says: hi")
-    expect(lastLine(CF1).text:find(T.color["class-warrior"].hex, 1, true) ~= nil).toBe(true)
-    expect(lastLine(CF1).classes[1]).toBe("WARRIOR")
+    expect(textOf(lastLine(CF1)):find(T.color["class-warrior"].hex, 1, true) ~= nil).toBe(true)
+    expect(assert(lastLine(CF1).classes)[1]).toBe("WARRIOR")
     mock.stub(C_ChatInfo, "GetChatLineSenderGUID", function(_: number): string return "" end)
     -- a chat event tells the sender's class, kept by name
     chatEvent("CHAT_MSG_SAY", "hey", "Otherplayer-Ashford", "Player-0000-00000000", 9)
     CF1:AddMessage("|Hplayer:Otherplayer-Ashford|h[Otherplayer-Ashford]|h says: again")
-    expect(lastLine(CF1).classes[1]).toBe("WARRIOR")
+    expect(assert(lastLine(CF1).classes)[1]).toBe("WARRIOR")
     CF1:AddMessage("|Hplayer:Tester|h[Tester]|h says: who")
-    expect(lastLine(CF1).classes[1]).toBe(false)
+    expect(assert(lastLine(CF1).classes)[1]).toBe(false)
 end
 
 --------------------------------------------------------------------------------
@@ -259,8 +265,7 @@ local function copyLine()
     mock.spawnUnit({ name = "Otherplayer", class = "WARRIOR", player = true })
     CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: copy me")
     local line = lastLine(CF1)
-    local m = mirror(CF1)
-    m:GetScript("OnHyperlinkClick")(m, "addon:suuui:copy:" .. line.id, "", "LeftButton")
+    mock.script(frameOf(CF1), "OnHyperlinkClick", "addon:suuui:copy:" .. tostring(line.id), "", "LeftButton")
     expect(focused():GetText()).toBe(date("%H:%M", line.at) .. "  Otherplayer: copy me")
     mock.advanceTime(0.01)
     local box = focused()
@@ -277,13 +282,13 @@ end
 @test("a right-click on a name: SuuUI's menu (whisper, window, invite, copy, friend, ignore)")
 local function playerMenu()
     local menu = captureMenus()
-    local m = mirror(CF1)
-    local click = m:GetScript("OnHyperlinkClick")
-    click(m, "player:Tamsin:5", "[Tamsin]", "RightButton")
+    local m = frameOf(CF1)
+    local function click(link: unknown, text: string, button: string) mock.script(m, "OnHyperlinkClick", link, text, button) end
+    click("player:Tamsin:5", "[Tamsin]", "RightButton")
     for _, label in ipairs({ "Whisper", "Whisper window", "Invite", "Copy name", "Add friend", "Ignore" }) do
         expect(menu[label] ~= nil).toBe(true)
     end
-    local tell = mock.stub(ChatFrameUtil, "SendTell", function(_: string, _: any) end)
+    local tell = mock.stub(ChatFrameUtil, "SendTell", function(_: string, _: unknown) end)
     choose(menu, "Whisper")
     expect(tell).toHaveBeenCalledTimes(1)
     local invite = mock.stub(C_PartyInfo, "InviteUnit", function(_: string) end)
@@ -300,32 +305,33 @@ local function playerMenu()
     local ignore = mock.stub(C_FriendList, "AddIgnore", function(_: string) end)
     choose(menu, "Ignore")
     expect(ignore).toHaveBeenCalledWith("Tamsin")
-    local open = mock.stub(M, "OpenWhisperWindow", function(_: any, _: string) end)
+    local open = mock.stub(M, "OpenWhisperWindow", function(_: unknown, _: string) end)
     choose(menu, "Whisper window")
     expect(open).toHaveBeenCalledTimes(1)
     -- other links open as the game's do; a secret one does nothing
-    local ref = mock.stub(G, "SetItemRef", function(...: any) end)
-    click(m, "item:6948", "[Hearthstone]", "LeftButton")
-    click(m, "player:Tamsin", "[Tamsin]", "LeftButton")
+    local ref = mock.fake("SetItemRef", function(...: unknown) end)
+    click("item:6948", "[Hearthstone]", "LeftButton")
+    click("player:Tamsin", "[Tamsin]", "LeftButton")
     expect(ref).toHaveBeenCalledTimes(2)
-    click(m, mock.secret("item:1"), "", "LeftButton")
+    click(mock.secret("item:1"), "", "LeftButton")
     expect(ref).toHaveBeenCalledTimes(2)
 end
 
 @test("hovering a link: the copy hint, an item's tooltip, nothing for others")
 local function linkTips()
-    local m = mirror(CF1)
-    local enter, leave = m:GetScript("OnHyperlinkEnter"), m:GetScript("OnHyperlinkLeave")
-    enter(m, "addon:suuui:copy:1")
+    local m = frameOf(CF1)
+    local function enter(link: unknown) mock.script(m, "OnHyperlinkEnter", link, "") end
+    local function leave() mock.script(m, "OnHyperlinkLeave", "", "") end
+    enter("addon:suuui:copy:1")
     expect(GameTooltip).toBeShown()
-    leave(m)
+    leave()
     expect(GameTooltip).never.toBeShown()
-    local set = mock.stub(GameTooltip, "SetHyperlink", function(...: any) end)
-    enter(m, "item:6948")
+    local set = mock.stub(GameTooltip, "SetHyperlink", function(...: unknown) end)
+    enter("item:6948")
     expect(set).toHaveBeenCalledTimes(1)
-    leave(m)
-    enter(m, "player:Tamsin")
-    enter(m, mock.secret("item:1"))
+    leave()
+    enter("player:Tamsin")
+    enter(mock.secret("item:1"))
     expect(set).toHaveBeenCalledTimes(1)
 end
 
@@ -358,8 +364,7 @@ local function whisperWindow()
     whisper("|Hplayer:Tamsin|h[Tamsin]|h whispers: before the window")
     M:OpenWhisperWindow("Tamsin")
     mock.advanceTime(0.01)
-    local cf = window("Tamsin")
-    assert(cf, "no whisper window")
+    local cf = windowOf("Tamsin")
     expect(M.selected).toBe(cf)
     local m = mirror(cf)
     expect(m.lines[1].src).toBe("|Hplayer:Tamsin|h[Tamsin]|h whispers: before the window")
@@ -378,7 +383,7 @@ end
 -- The input's history
 --------------------------------------------------------------------------------
 
-local function input(): any
+local function input(): EditBox
     local box = CreateFrame("EditBox", nil, UIParent)
     box:SetSize(200, 20)
     box:SetPoint("CENTER")
@@ -442,11 +447,11 @@ local function recall()
     mock.script(box, "OnArrowPressed", "UP")
     expect(box:GetText()).toBe("x")
     mock.stub(C_ChatInfo, "InChatMessagingLockdown", function(): boolean return false end)
-    local palette: any = SuuUI.GetModule("chatcommands")
-    mock.stub(palette, "TakesArrows", function(_: any, _: any): boolean return true end)
+    local palette = assert(SuuUI.GetModule("chatcommands"))
+    mock.stub(palette, "TakesArrows", function(_: unknown, _: unknown): boolean return true end)
     mock.script(box, "OnArrowPressed", "UP")
     expect(box:GetText()).toBe("x")
-    mock.stub(palette, "TakesArrows", function(_: any, _: any): boolean return false end)
+    mock.stub(palette, "TakesArrows", function(_: unknown, _: unknown): boolean return false end)
     M:Set("recall", false)
     mock.script(box, "OnArrowPressed", "UP")
     expect(box:GetText()).toBe("x")
@@ -467,16 +472,16 @@ local function tabs()
     for _, cf in ipairs(M:OrderedWindows()) do names[#names + 1] = GetChatWindowInfo(cf:GetID()) end
     expect(names[1]).toBe("General")
     expect(names[2]).toBe("Global")
-    expect(tab("Search") ~= nil).toBe(true)
+    expect(findTab("Search") ~= nil).toBe(true)
     expect(tab("General").active).toBe(true)
     mock.click(tab("Log"))
     expect(M.selected).toBe(CF2)
-    expect(mirror(CF2)).toBeShown()
-    expect(mirror(CF1)).never.toBeShown()
-    local bar = G.CombatLogQuickButtonFrame_Custom
+    expect(frameOf(CF2)).toBeShown()
+    expect(frameOf(CF1)).never.toBeShown()
+    local bar = frames.find("CombatLogQuickButtonFrame_Custom")
     if bar then
         expect(bar).toBeShown()
-        expect(bar:GetParent()).toBe(M.panel.log)
+        expect(bar:GetParent()).toBe(M:Panel().log)
     end
     mock.click(tab("General"))
     if bar then expect(bar).never.toBeShown() end
@@ -492,7 +497,7 @@ end
 
 @test("a line in another tab marks it unread until it's chosen")
 local function unread()
-    local global = window("Global")
+    local global = windowOf("Global")
     global:AddMessage("news")
     M:UpdateTabs()
     expect(tab("Global").unread).toBeShown()
@@ -503,21 +508,21 @@ end
 @test("a right-click on a window's tab opens Blizzard's chat settings for it; Search has none")
 local function tabSettings()
     mock.click(tab("Global"), "RightButton")
-    expect(G.CURRENT_CHAT_FRAME_ID).toBe(window("Global"):GetID())
-    expect(G.ChatConfigFrame).toBeShown()
+    expect(CURRENT_CHAT_FRAME_ID).toBe(windowOf("Global"):GetID())
+    expect(ChatConfigFrame).toBeShown()
     M:OpenChatSettings(CF1)                        -- open already: again for this one
-    expect(G.CURRENT_CHAT_FRAME_ID).toBe(1)
-    HideUIPanel(G.ChatConfigFrame)
+    expect(CURRENT_CHAT_FRAME_ID).toBe(1)
+    HideUIPanel(ChatConfigFrame)
     mock.click(tab("Search"), "RightButton")
 end
 
 @test("a window's font size, its name, a new window and closing one")
 local function windows()
     M:SetFontSize(CF1, 16)
-    expect(select(2, mirror(CF1):GetFont())).toBeCloseTo(16)
-    local global = window("Global")
+    expect(select(2, frameOf(CF1):GetFont())).toBeCloseTo(16)
+    local global = windowOf("Global")
     M:RenameWindow(global, "Worldwide")
-    expect(tab("Worldwide") ~= nil).toBe(true)
+    expect(findTab("Worldwide") ~= nil).toBe(true)
     M:RenameWindow(global, "")                     -- no name: kept
     M:RenameWindow(global, "Global")
     M:SetFontSize(CF1, 14)
@@ -538,17 +543,16 @@ end
 local function tempFont()
     M:OpenWhisperWindow("Otherplayer")
     mock.advanceTime(0.01)
-    local cf = window("Otherplayer")
-    assert(cf, "no whisper window")
+    local cf = windowOf("Otherplayer")
     M:SetFontSize(cf, 18)
-    expect(select(2, mirror(cf):GetFont())).toBeCloseTo(18)
+    expect(select(2, frameOf(cf):GetFont())).toBeCloseTo(18)
     M:RenameWindow(cf, "Never")                    -- a whisper window keeps its player
     M:CloseWindow(cf)
 end
 
 @test("the tabs' order is kept per character; Reset brings the starting order back")
 local function order()
-    local global = window("Global")
+    local global = windowOf("Global")
     M:SaveTabOrder({ CF2, global, CF1 })
     expect(M:HasTabOrder()).toBe(true)
     expect(M:OrderedWindows()[1]).toBe(CF2)
@@ -563,7 +567,7 @@ end
 -- A press on a tab and the pointer moved `dx` along the row, the left
 -- button held (the engine holds none: faked).
 local held = { left = false, right = false }
-local function press(b: any, dx: number)
+local function press(b: TabButton, dx: number)
     mock.fake("IsMouseButtonDown", function(button: string?): boolean
         if button == "RightButton" then return held.right end
         return held.left
@@ -571,6 +575,7 @@ local function press(b: any, dx: number)
     held.left, held.right = true, false
     local s = b:GetEffectiveScale()
     local x, y = b:GetCenter()
+    x, y = assert(x), assert(y)
     mock.setCursorPosition(x * s, y * s)
     mock.script(b, "OnMouseDown", "LeftButton")
     mock.advanceFrames(1)
@@ -603,8 +608,9 @@ local function dragCancel()
     M:UpdateTabs()
     local general = tab("General")
     press(general, 120)
-    mock.script(M.panel.dragger, "OnKeyDown", "A")
-    mock.script(M.panel.dragger, "OnKeyDown", "ESCAPE")
+    local dragger = assert(M:Panel().dragger)
+    mock.script(dragger, "OnKeyDown", "A")
+    mock.script(dragger, "OnKeyDown", "ESCAPE")
     expect(M.drag).toBe(nil)
     press(general, 120)
     held.right = true
@@ -613,7 +619,7 @@ local function dragCancel()
     press(general, 120)
     local s = general:GetEffectiveScale()
     local x, y = general:GetCenter()
-    mock.setCursorPosition(x * s, (y + 300) * s)
+    mock.setCursorPosition(assert(x) * s, (assert(y) + 300) * s)
     mock.hover(nil)                                -- away from the row
     held.left = false
     mock.advanceFrames(1)
@@ -640,13 +646,13 @@ local function editTabs()
     expect(M.press).toBe(nil)
     editMode.enter()
     expect(M:CanDrag()).toBe(true)
-    expect(M.panel.editHint).toBeShown()
+    expect(M:Panel().editHint).toBeShown()
     expect(tab("General").grip).toBeShown()
     expect(tab("Search").grip).toBe(nil)
     mock.click(tab("Log"))                         -- arranging: no switch
     expect(M.selected).toBe(CF1)
     editMode.exit()
-    expect(M.panel.editHint).never.toBeShown()
+    expect(M:Panel().editHint).never.toBeShown()
     expect(tab("General").grip).never.toBeShown()
     -- the setting changed mid-drag ends it
     M:Set("tabReorder", "drag")
@@ -666,8 +672,8 @@ local function saving()
     whisper("|Hplayer:Otherplayer|h[Otherplayer]|h whispers: and me")
     CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: keep me", 1, 1, 0)
     mock.fireEvent("PLAYER_LOGOUT")
-    local kept = M:CharData().kept
-    local general = kept.windows[1]
+    local kept = M:CharData().kept :: unknown :: Kept
+    local general = assert(kept.windows[1])
     expect(general.name).toBe("General")
     expect(general.lines[#general.lines].text).toBe("|Hplayer:Otherplayer|h[Otherplayer]|h says: keep me")
     expect(general.lines[#general.lines].rgb).toBe("ffff00")
@@ -697,30 +703,29 @@ local function restoring()
     M:LoadHistory()                                -- once
     expect(#M.whispers).toBe(1)
     expect(M.whispers[1].old).toBe(true)
-    local m = M:MirrorFrame(CF1)
-    m.lines = {}
+    local m: Mirror = { frame = M:MirrorFrame(), lines = {}, raw = false }
     M:RestoreKept(CF1, m)
     expect(#m.lines).toBe(2)
     expect(m.lines[1].old).toBe(true)
-    expect(m.lines[1].classes[1]).toBe("MAGE")
+    expect(assert(m.lines[1].classes)[1]).toBe("MAGE")
     expect(m.lines[2].divider).toBe(true)
     expect(M:DividerText(m, m.lines[2].at):find("Earlier · logged out 2 h ago", 1, true) ~= nil).toBe(true)
     -- with room, the gilt rules either side
-    m:ClearAllPoints()
-    m:SetSize(3000, 100)
+    m.frame:ClearAllPoints()
+    m.frame:SetSize(3000, 100)
     expect(M:DividerText(m, m.lines[2].at):find("WHITE8X8", 1, true) ~= nil).toBe(true)
     M:RestoreKept(CF1, m)                          -- used up
     expect(#m.lines).toBe(2)
-    M:RestoreKept(G.ChatFrame7, m)                 -- another name now
+    M:RestoreKept(assert(chat.window("ChatFrame7")), m)                 -- another name now
     expect(#m.lines).toBe(2)
     -- a whisper window with them: the earlier whispers, then the divider
     whisper("|Hplayer:Tamsin|h[Tamsin]|h whispers: now")
     M:OpenWhisperWindow("Tamsin")
     mock.advanceTime(0.01)
-    local w = mirror(window("Tamsin"))
+    local w = mirror(windowOf("Tamsin"))
     expect(w.lines[1].old).toBe(true)
     expect(w.lines[2].divider).toBe(true)
-    M:CloseWindow(window("Tamsin"))
+    M:CloseWindow(windowOf("Tamsin"))
     -- keeping off: nothing loaded
     M:Set("keepHistory", false)
     M.historyLoaded = nil
@@ -729,17 +734,11 @@ end
 
 @test("Clear kept chat forgets the kept lines and whispers and empties the tabs (not the combat log)")
 local function clearing()
-    local confirm: any = nil
-    mock.stub(UI, "Confirm", function(opts: any) confirm = opts end)
+    local asked = captureConfirm().last
     CF1:AddMessage("to forget")
     CF2:AddMessage("combat stays")
-    local s = registry.get("chat") :: registry.Section
-    local button: any = nil
-    for _, g in ipairs(s.groups or {}) do
-        for _, r in ipairs(g.rows) do if r.text == "Clear kept chat" then button = r end end
-    end
-    button.onClick()
-    confirm.onConfirm()
+    rowOf("Kept chat").onClick()
+    assert(asked().onConfirm)()
     expect(#mirror(CF1).lines).toBe(0)
     expect(#mirror(CF2).lines > 0).toBe(true)
     expect(M.whispers).toEqual({})
@@ -749,9 +748,9 @@ end
 -- Search
 --------------------------------------------------------------------------------
 
-local function openSearch(): any
+local function openSearch(): SearchPage
     mock.click(tab("Search"))
-    local s = M.search
+    local s = assert(M.search)
     for _, b in ipairs(s.chips) do if b.value == "all" then mock.click(b) end end
     return s
 end
@@ -764,14 +763,15 @@ local function searching()
     CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: dragonflies", 1, 1, 1)
     CF1:AddMessage("a dragon with no one", 1, 1, 1)
     local s = openSearch()
-    expect(s.page).toBeShown()
+    expect(s).toBeShown()
     expect(s.note:GetText()).toBe("A player's name or a word: every tab and whisper kept.")
     mock.typeText(s.field.edit, "dragon")
     expect(s.count:GetText()).toBe("5 lines")
     expect(s.headers[1].name:GetText()).toBe("Other lines")
     expect(s.rows[1].ground).toBeShown()           -- the match marked
-    local tamsin: any = nil
-    for _, h in ipairs(s.headers) do if h:IsShown() and h.name:GetText() == "Tamsin" then tamsin = h end end
+    local found: SearchHeader? = nil
+    for _, h in ipairs(s.headers) do if h:IsShown() and h.name:GetText() == "Tamsin" then found = h end end
+    local tamsin = assert(found)
     expect(tamsin.count:GetText():find("3 lines · last", 1, true) ~= nil).toBe(true)
     -- two lines a player, then "1 more"
     local more = s.mores[1]
@@ -782,7 +782,7 @@ local function searching()
     mock.click(more)
     expect(more).never.toBeShown()
     -- the whisper button opens their window
-    local open = mock.stub(M, "OpenWhisperWindow", function(_: any, _: string) end)
+    local open = mock.stub(M, "OpenWhisperWindow", function(_: unknown, _: string) end)
     mock.click(tamsin.whisper)
     expect(open).toHaveBeenCalledTimes(1)
     s.field.edit:SetText("zzz")
@@ -799,8 +799,9 @@ local function chips()
     s.field.edit:SetText("plan")
     M:RunSearch()
     expect(s.count:GetText()).toBe("2 lines")
-    local whispersChip: any = nil
-    for _, b in ipairs(s.chips) do if b.value == "whisper" then whispersChip = b end end
+    local chip: SearchChip? = nil
+    for _, b in ipairs(s.chips) do if b.value == "whisper" then chip = b end end
+    local whispersChip = assert(chip)
     mock.hover(whispersChip)
     mock.hover(nil)
     mock.click(whispersChip)
@@ -822,12 +823,12 @@ local function longLines()
     expect(row.text:GetText():find("… ", 1, true) ~= nil).toBe(true)
     expect(s.headers[1].whisper).never.toBeShown()
     -- links work in the rows; leaving the tab drops the field's focus
-    row:GetScript("OnHyperlinkLeave")(row)
+    mock.script(row, "OnHyperlinkLeave", "", "")
     s.field.edit:SetFocus()
     M:Select(CF1)
     expect(s.field.edit:HasFocus()).toBe(false)
     mock.click(tab("General"))
-    expect(s.page).never.toBeShown()
+    expect(s).never.toBeShown()
 end
 
 --------------------------------------------------------------------------------
@@ -843,8 +844,8 @@ local function idle()
     M:Tick()
     expect(M.awake).toBe(false)
     mock.advanceFrames(40, 50)
-    expect(M.panel.tabs:GetAlpha()).toBeCloseTo(0)
-    mock.hover(M.panel)
+    expect(M:Panel().tabs:GetAlpha()).toBeCloseTo(0)
+    mock.hover(M:Panel())
     M:Tick()
     expect(M.awake).toBe(true)
     mock.hover(nil)
@@ -870,11 +871,11 @@ end
 @test("the Global tab gets every channel General had; General keeps the rest")
 local function globalTab()
     mock.setChannels({ joined = { { name = "General" }, { name = "Trade" }, { name = "LookingForGroup" } } })
-    mock.stub(G, "GetChatWindowChannels", function(_: number): ...any return "General", 1, "Custom", 5 end)
-    local global = window("Global")
+    mock.fake("GetChatWindowChannels", function(_: number): ...unknown return "General", 1, "Custom", 5 end)
+    local global = windowOf("Global")
     local added: string[], removed: string[] = {}, {}
-    mock.stub(global, "AddChannel", function(_: any, name: string) added[#added + 1] = name end)
-    mock.stub(global, "RemoveChannel", function(_: any, name: string) removed[#removed + 1] = name end)
+    mock.stub(global, "AddChannel", function(_: unknown, name: string) added[#added + 1] = name end)
+    mock.stub(global, "RemoveChannel", function(_: unknown, name: string) removed[#removed + 1] = name end)
     mock.stub(SuuUI.LFG, "IsHiddenChannel", function(name: string): boolean return name == "LookingForGroup" end)
     M:ApplyGlobalTab()
     expect(hasLine(added, "Trade")).toBe(true)
@@ -892,17 +893,19 @@ end
 
 @test("no Global window: a Guild tab becomes it, else a new one")
 local function globalMade()
-    local global = window("Global")
+    local global = windowOf("Global")
     local id = global:GetID()
     SetChatWindowName(id, "Guild")
-    local renamed = mock.stub(G, "FCF_SetWindowName", function(f: any, name: string) SetChatWindowName(f:GetID(), name) end)
+    local renamed = mock.fake("FCF_SetWindowName", function(f: Frame, name: string) SetChatWindowName(f:GetID(), name) end)
     M:ApplyGlobalTab()
     expect(renamed).toHaveBeenCalledTimes(1)
     expect(GetChatWindowInfo(id)).toBe("Global")
     SetChatWindowName(id, "Elsewhere")
-    local made = { RemoveAllMessageGroups = function(_: any) end, AddChannel = function(...: any) end,
-                   RemoveChannel = function(...: any) end, GetID = function(_: any): number return 9 end }
-    local opened = mock.stub(G, "FCF_OpenNewWindow", function(_: string): any return made end)
+    -- a new window, as the game makes one
+    local made = CreateFrame("ScrollingMessageFrame")
+    made:SetID(9)
+    for _, name in ipairs({ "RemoveAllMessageGroups", "AddChannel", "RemoveChannel" }) do rawset(made, name, function() end) end
+    local opened = mock.fake("FCF_OpenNewWindow", function(_: string): Frame return made end)
     M:ApplyGlobalTab()
     expect(opened).toHaveBeenCalledWith("Global")
     SetChatWindowName(id, "Global")
@@ -912,32 +915,27 @@ end
 -- Settings
 --------------------------------------------------------------------------------
 
-local function rowOf(label: string): any
-    local s = registry.get("chat") :: registry.Section
-    for _, g in ipairs(s.groups or {}) do
-        for _, r in ipairs(g.rows) do if r.label == label then return r end end
-    end
-    error("no row " .. label)
-end
 
 @test("Settings › Windows: each window's name, size, chat settings and close; New window asks for a name")
 local function windowsEditor()
-    local f = rowOf("Windows").build(newParent(600, 400))
+    local built: Frame = rowOf("Windows").build(newParent(600, 400))
+    local f = built :: unknown :: WindowsEditor
     expect(f.rows[1].name:GetValue()).toBe("General")
     expect(f.rows[1].close).never.toBeShown()
-    f.rows[1].size.onChange(15)
-    expect(select(2, mirror(CF1):GetFont())).toBeCloseTo(15)
-    f.rows[1].size.onChange(14)
-    local global: any = nil
-    for _, r in ipairs(f.rows) do if r.cf == window("Global") then global = r end end
-    global.name.onChange("Global")
-    local open = mock.stub(M, "OpenChatSettings", function(_: any, _: any) end)
+    assert(f.rows[1].size.onChange)(15)
+    expect(select(2, frameOf(CF1):GetFont())).toBeCloseTo(15)
+    assert(f.rows[1].size.onChange)(14)
+    local found: WindowRow? = nil
+    for _, r in ipairs(f.rows) do if r.cf == window("Global") then found = r end end
+    local global = assert(found)
+    assert(global.name.onChange)("Global")
+    local open = mock.stub(M, "OpenChatSettings", function(_: unknown, _: unknown) end)
     mock.click(global.config)
     expect(open).toHaveBeenCalledTimes(1)
-    local close = mock.stub(M, "CloseWindow", function(_: any, _: any) end)
+    local close = mock.stub(M, "CloseWindow", function(_: unknown, _: unknown) end)
     mock.click(global.close)
     expect(close).toHaveBeenCalledTimes(1)
-    local new = mock.stub(M, "NewWindow", function(_: any, _: string) end)
+    local new = mock.stub(M, "NewWindow", function(_: unknown, _: string) end)
     mock.click(f.add)
     focused():SetText("Raid talk")
     mock.pressKey("ENTER")
@@ -977,21 +975,21 @@ local function theme()
     M:KeptLines()
     line.text = "stale"
     themeChanged()
-    expect(line.text ~= "stale").toBe(true)
-    expect(line.classes[1]).toBe("WARRIOR")
+    expect(textOf(line) ~= "stale").toBe(true)
+    expect(assert(line.classes)[1]).toBe("WARRIOR")
     openSearch()
     themeChanged()
 end
 
 @test("a client without AddChannel on its chat windows: said once, the tabs left alone")
 local function noChannels()
-    local add = CF1.AddChannel
-    CF1.AddChannel = nil
+    local add = rawget(CF1, "AddChannel")
+    rawset(CF1, "AddChannel", nil)
     local n = printedCount()
     M.warnedGlobal = nil
     M:ApplyGlobalTab()
     M:ApplyGlobalTab()
-    CF1.AddChannel = add
+    rawset(CF1, "AddChannel", add)
     local said = 0
     for _, l in ipairs(printedSince(n)) do
         if l:find("the Global tab can't be set up", 1, true) then said = said + 1 end
@@ -1005,8 +1003,7 @@ local function closedMidDrag(_: string, reduced: boolean)
     mock.stub(SuuUI.Motion, "Reduced", function(): boolean return reduced end)
     M:OpenWhisperWindow("Otherplayer")
     mock.advanceTime(0.01)
-    local cf = window("Otherplayer")
-    assert(cf, "no whisper window")
+    local cf = windowOf("Otherplayer")
     M:UpdateTabs()
     local b = tab("Otherplayer")
     press(b, -60)

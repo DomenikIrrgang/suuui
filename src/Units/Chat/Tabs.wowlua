@@ -3,12 +3,10 @@
 -- in the saved order, the windows in a character's order, where a dragged
 -- tab drops, the glide's easing and edit mode's dashed outline.
 
-import * as lines from "./Lines"
+import * as chat from "wowlua:chat"
 
-local plain = lines.plain
-
--- What a window offers for its key (a chat frame).
-export type Window = { isTemporary?: any, chatTarget?: any, GetID: (self: any) -> number, [string]: any }
+-- One of Blizzard's chat windows.
+export type Window = chat.Window
 -- A dash of the outline: its top left corner inside the frame, its size.
 export type Dash = { x: number, y: number, w: number, h: number }
 
@@ -17,9 +15,9 @@ export const GAP_DASH = 2
 
 -- A window's key in the saved order: its window ID, or a whisper's player.
 export function tabKey(cf: Window): string?
-    if cf.isTemporary then
-        local t = cf.chatTarget
-        if plain(t) and type(t) == "string" and t ~= "" then return "w:" .. t end
+    if chat.isTemporary(cf) then
+        local _, t = chat.conversation(cf)
+        if t and t ~= "" then return "w:" .. t end
         return nil
     end
     return "id:" .. cf:GetID()
@@ -28,8 +26,8 @@ end
 -- The windows in a kept order: the kept ones first as kept, then the rest
 -- in the starting order (a new whisper tab at the end). `order` loses what
 -- it can't keep: a whisper keeps its place only while its tab is open.
-export function ordered<W>(windows: W[], order: any[], keyOf: (w: W) -> string?): W[]
-    local byKey: { [string]: W }, out: W[], used: { [any]: boolean } = {}, {}, {}
+export function ordered<W>(windows: W[], order: unknown[], keyOf: (w: W) -> string?): W[]
+    local byKey: { [string]: W }, out: W[], used: { [W]: boolean } = {}, {}, {}
     for _, cf in ipairs(windows) do
         local k = keyOf(cf)
         if k then byKey[k] = cf end
@@ -38,8 +36,8 @@ export function ordered<W>(windows: W[], order: any[], keyOf: (w: W) -> string?)
         local k = order[i]
         if type(k) ~= "string" or (k:sub(1, 2) == "w:" and not byKey[k]) then table.remove(order, i) end
     end
-    for _, k in ipairs(order) do
-        local cf = byKey[k]
+    for _, key in ipairs(order) do
+        local cf = type(key) == "string" and byKey[key] or nil
         if cf and not used[cf] then used[cf] = true; out[#out + 1] = cf end
     end
     for _, cf in ipairs(windows) do
