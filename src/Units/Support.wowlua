@@ -12,25 +12,29 @@
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SuuButton from "/UI/Controls"
+import type LoadingMark from "/UI/LoadingMark"
+import type WindowFrame from "/UI/Panel"
+import type Text from "/UI/Text"
 import after from "wowlua:timer"
 import hookScript from "wowlua:hooks"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "support",
-    name = "Support",
-    description = "SuuUI's Support window: the game's support pages in SuuUI's window, with a toolbar and a clear state when they don't load.",
-    api = "0.17",
-    reloadToToggle = true,
-    defaults = {},
-})
+local DEFAULTS = {}
 
-local function call(fn: any, ...: any): any
+local M: SupportModule
+
+-- Calls a method of the game's browser, which may be missing on a client:
+-- its first result, or nil (an error is none of ours: the page just
+-- doesn't move).
+local function call(fn: unknown, ...: unknown): unknown
     if type(fn) ~= "function" then return nil end
     local ok, a = pcall(fn, ...)
     if ok then return a end
+    return nil
 end
 
 local WIDTH, HEIGHT = 989, 660
@@ -42,162 +46,216 @@ local LOAD_LIMIT = 12 -- seconds before the mark gives way to whatever shows
 -- The window
 --------------------------------------------------------------------------------
 
-function M:Build()
-    local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUISupportWindow", title = "Support", width = WIDTH, height = HEIGHT,
-        onClose = function(win) win:Hide() end })
-    w:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
-    w:Hide()
-    w.scroll:Hide()
-    w:HookScript("OnHide", function()
-        if self.browser then call(self.browser.ClearFocus, self.browser) end
-    end)
-    self.window = w
-    local body = w.body
+-- Over the page: loading, or unavailable.
+class PageCover extends Frame
+    readonly mark: LoadingMark
+    readonly note: Text
+    readonly title: Text
+    readonly text: Text
+    readonly retry: SuuButton
 
-    -- the toolbar
-    local bar = CreateFrame("Frame", nil, body)
-    bar:SetPoint("TOPLEFT")
-    bar:SetPoint("TOPRIGHT")
-    bar:SetHeight(BAR_H)
-    local function tool(glyph: string, tip: string, fn: () -> (), text: string?): any
-        local b = UI.Button(bar, { text = text, icon = glyph, onClick = fn, width = not text and (BAR_H + 6) or nil })
-        b:SetHeight(BAR_H)
-        b.tooltip = { title = tip }
-        return b
+    constructor(area: Frame, onRetry: () -> ())
+        super(nil, area)
+        self:SetAllPoints()
+        self:SetFrameLevel(area:GetFrameLevel() + 20)
+        UI.Fill(self, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        self:EnableMouse(true)
+        self.mark = UI.LoadingMark(self, { size = 60 })
+        self.mark:SetPoint("CENTER", 0, 20)
+        self.note = UI.Text(self, "caption", "ink-muted")
+        self.note:SetPoint("TOP", self.mark, "BOTTOM", 0, -S["space-5"])
+        self.title = UI.Text(self, "alert", "ink")
+        self.title:SetPoint("CENTER", 0, 30)
+        self.text = UI.Text(self, "body", "ink-muted")
+        self.text:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-4"])
+        self.text:SetWidth(420)
+        self.text:SetJustifyH("CENTER")
+        self.text:SetWordWrap(true)
+        self.retry = UI.Button(self, { text = "Retry", icon = "reset", variant = "primary", onClick = onRetry })
+        self.retry:SetPoint("TOP", self.text, "BOTTOM", 0, -S["space-5"])
+        self:Hide()
     end
-    self.back = tool("chevronLeft", "Back", function() self:Call("NavigateBack") end)
-    self.back:SetPoint("LEFT")
-    self.forward = tool("chevronRight", "Forward", function() self:Call("NavigateForward") end)
-    self.forward:SetPoint("LEFT", self.back, "RIGHT", S["space-3"], 0)
-    self.reload = tool("reset", "Reload", function() self:Load("NavigateReload") end)
-    self.reload:SetPoint("LEFT", self.forward, "RIGHT", S["space-3"], 0)
-    self.home = tool("book", "The knowledge base", function() self:Load("NavigateHome", HOME) end, "Knowledge base")
-    self.home:SetPoint("LEFT", self.reload, "RIGHT", S["space-4"], 0)
-    self.where = UI.Text(bar, "caption", "ink-muted")
-    self.where:SetPoint("RIGHT")
-
-    -- the page: a sunk, framed area with the browser in it
-    local area = CreateFrame("Frame", nil, body)
-    area:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -S["space-4"])
-    area:SetPoint("BOTTOMRIGHT")
-    UI.Fill(area, "surface-sunk", "BACKGROUND"):SetAllPoints()
-    UI.Border(area, "gilt-faint")
-    self.area = area
-    local ok, browser = pcall(CreateFrame, "Browser", nil, area)
-    if ok and browser then
-        browser:SetPoint("TOPLEFT", 1, -1)
-        browser:SetPoint("BOTTOMRIGHT", -1, 1)
-        browser:SetScript("OnEscapePressed", function(b) b:ClearFocus() end)
-        -- a link out of the game: the game's own question first
-        browser:SetScript("OnExternalLink", function(b, url)
-            local base = strsplit("?", url, 2)
-            StaticPopup_Show("EXTERNAL_LINK", base, nil, { url = url, browser = b })
-        end)
-        browser:SetScript("OnButtonUpdate", function(_, action)
-            if action == "doneloading" then self:Loaded() end
-        end)
-        browser:SetScript("OnError", function() self:Unavailable() end)
-        self.browser = browser
-    end
-
-    -- over the page: loading, or unavailable
-    local over = CreateFrame("Frame", nil, area)
-    over:SetAllPoints()
-    over:SetFrameLevel(area:GetFrameLevel() + 20)
-    UI.Fill(over, "surface-sunk", "BACKGROUND"):SetAllPoints()
-    over:EnableMouse(true)
-    over.mark = UI.LoadingMark(over, { size = 60 })
-    over.mark:SetPoint("CENTER", 0, 20)
-    over.note = UI.Text(over, "caption", "ink-muted")
-    over.note:SetPoint("TOP", over.mark, "BOTTOM", 0, -S["space-5"])
-    over.title = UI.Text(over, "alert", "ink")
-    over.title:SetPoint("CENTER", 0, 30)
-    over.text = UI.Text(over, "body", "ink-muted")
-    over.text:SetPoint("TOP", over.title, "BOTTOM", 0, -S["space-4"])
-    over.text:SetWidth(420)
-    over.text:SetJustifyH("CENTER")
-    over.text:SetWordWrap(true)
-    over.retry = UI.Button(over, { text = "Retry", icon = "reset", variant = "primary", onClick = function()
-        self:Load("NavigateHome", HOME)
-    end })
-    over.retry:SetPoint("TOP", over.text, "BOTTOM", 0, -S["space-5"])
-    over:Hide()
-    self.over = over
 end
 
-function M:Call(method: string, ...: any)
-    local b = self.browser
-    if b and b[method] then call(b[method], b, ...) end
-end
-
--- A page asked for: the loading mark until it's done (or a while has passed).
-function M:Load(method: string, ...: any)
-    local o = self.over
-    if not self.browser then return self:Unavailable() end
-    self.loadingSince = GetTime()
-    o:Show()
-    o.title:Hide(); o.text:Hide(); o.retry:Hide()
-    o.mark:Show(); o.note:Show()
-    o.note:SetValue("Loading support…")
-    o.mark:Start()
-    self.where:SetValue("Loading…")
-    self:Call(method, ...)
-    local since = self.loadingSince
-    after(LOAD_LIMIT, function()
-        if self.loadingSince == since then self:Loaded() end
-    end)
-end
-
-function M:Loaded()
-    self.loadingSince = nil
-    local o = self.over
-    o.mark:Stop()
-    o:Hide()
-    self.where:SetValue("Blizzard support")
-end
-
-function M:Unavailable()
-    self.loadingSince = nil
-    local o = self.over
-    o.mark:Stop()
-    o.mark:Hide(); o.note:Hide()
-    o.title:Show(); o.text:Show(); o.retry:Show()
-    o.title:SetValue("Support is unavailable right now")
-    o.text:SetValue("The support page didn't load. Check your connection and try again in a moment.")
-    o:Show()
-    self.where:SetValue("")
-end
-
-function M:Open()
-    self.window:Show()
-    self:Load("NavigateHome", HOME)
-end
-
-function M:Toggle()
-    if self.window:IsShown() then self.window:Hide() else self:Open() end
-end
+-- What Build makes: the window, its toolbar, the page and what covers it.
+export type SupportWindow = {
+    window: WindowFrame,
+    back: SuuButton, forward: SuuButton, reload: SuuButton, home: SuuButton,
+    where: Text,
+    area: Frame,
+    browser: Browser?,
+    over: PageCover,
+}
 
 --------------------------------------------------------------------------------
 -- Instead of the game's window
 --------------------------------------------------------------------------------
 
-function M:OnEnable()
-    if not self.window then self:Build() end
-    local help = _G.HelpFrame
-    if help and not self.hooked then
-        self.hooked = true
-        hookScript(help, "OnShow", function()
-            if not self:IsEnabled() then return end
-            HideUIPanel(help)
-            self:Open()
+class SupportModule extends Module<typeof(DEFAULTS)>
+    ui: SupportWindow? = nil
+    hooked: boolean? = nil
+    loadingSince: number? = nil
+
+    constructor()
+        super({
+            id = "support",
+            name = "Support",
+            description = "SuuUI's Support window: the game's support pages in SuuUI's window, with a toolbar and a clear state when they don't load.",
+            api = "0.17",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
+    end
+
+    function Build(): SupportWindow
+        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUISupportWindow", title = "Support", width = WIDTH, height = HEIGHT,
+            onClose = function(win) win:Hide() end })
+        w:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
+        w:Hide()
+        w.scroll:Hide()
+        local body = w.body
+
+        -- the toolbar
+        local bar = CreateFrame("Frame", nil, body)
+        bar:SetPoint("TOPLEFT")
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(BAR_H)
+        local function tool(glyph: string, tip: string, fn: () -> (), text: string?): SuuButton
+            local b = UI.Button(bar, { text = text, icon = glyph, onClick = fn, width = not text and (BAR_H + 6) or nil })
+            b:SetHeight(BAR_H)
+            b.tooltip = { title = tip }
+            return b
+        end
+        local back = tool("chevronLeft", "Back", function() self:Call("NavigateBack") end)
+        back:SetPoint("LEFT")
+        local forward = tool("chevronRight", "Forward", function() self:Call("NavigateForward") end)
+        forward:SetPoint("LEFT", back, "RIGHT", S["space-3"], 0)
+        local reload = tool("reset", "Reload", function() self:Load("NavigateReload") end)
+        reload:SetPoint("LEFT", forward, "RIGHT", S["space-3"], 0)
+        local home = tool("book", "The knowledge base", function() self:Load("NavigateHome", HOME) end, "Knowledge base")
+        home:SetPoint("LEFT", reload, "RIGHT", S["space-4"], 0)
+        local where = UI.Text(bar, "caption", "ink-muted")
+        where:SetPoint("RIGHT")
+
+        -- the page: a sunk, framed area with the browser in it
+        local area = CreateFrame("Frame", nil, body)
+        area:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -S["space-4"])
+        area:SetPoint("BOTTOMRIGHT")
+        UI.Fill(area, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        UI.Border(area, "gilt-faint")
+        local made, browser = pcall(CreateFrame, "Browser", nil, area)
+        local page: Browser? = nil
+        if made and browser then
+            browser:SetPoint("TOPLEFT", 1, -1)
+            browser:SetPoint("BOTTOMRIGHT", -1, 1)
+            browser:SetScript("OnEscapePressed", function(b) b:ClearFocus() end)
+            -- a link out of the game: the game's own question first
+            browser:SetScript("OnExternalLink", function(b, url: string)
+                local base = strsplit("?", url, 2)
+                StaticPopup_Show("EXTERNAL_LINK", base, nil, { url = url, browser = b })
+            end)
+            browser:SetScript("OnButtonUpdate", function(_, action: string)
+                if action == "doneloading" then self:Loaded() end
+            end)
+            browser:SetScript("OnError", function() self:Unavailable() end)
+            page = browser
+        end
+        w:HookScript("OnHide", function()
+            if page then call(page.ClearFocus, page) end
+        end)
+        local over = PageCover.new(area, function() self:Load("NavigateHome", HOME) end)
+        local ui: SupportWindow = { window = w, back = back, forward = forward, reload = reload, home = home, where = where,
+                                    area = area, browser = page, over = over }
+        self.ui = ui
+        return ui
+    end
+
+    -- A method of the game's browser, by name (it may be missing).
+    function Call(method: string, ...: unknown)
+        local ui = self.ui
+        local b = ui and ui.browser
+        if b then call((b :: { [string]: unknown })[method], b, ...) end
+    end
+
+    -- A page asked for: the loading mark until it's done (or a while has passed).
+    function Load(method: string, ...: unknown)
+        local ui = self.ui
+        if not ui then return end
+        if not ui.browser then return self:Unavailable() end
+        local o = ui.over
+        self.loadingSince = GetTime()
+        o:Show()
+        o.title:Hide(); o.text:Hide(); o.retry:Hide()
+        o.mark:Show(); o.note:Show()
+        o.note:SetValue("Loading support…")
+        o.mark:Start()
+        ui.where:SetValue("Loading…")
+        self:Call(method, ...)
+        local since = self.loadingSince
+        after(LOAD_LIMIT, function()
+            if self.loadingSince == since then self:Loaded() end
         end)
     end
-    -- the browser's own failures
-    for _, e in ipairs({ "SIMPLE_BROWSER_WEB_PROXY_FAILED", "SIMPLE_BROWSER_WEB_ERROR" }) do
-        self:OnGameEvent(e, function() if self.window:IsShown() then self:Unavailable() end end)
+
+    function Loaded()
+        self.loadingSince = nil
+        local ui = self.ui
+        if not ui then return end
+        ui.over.mark:Stop()
+        ui.over:Hide()
+        ui.where:SetValue("Blizzard support")
+    end
+
+    function Unavailable()
+        self.loadingSince = nil
+        local ui = self.ui
+        if not ui then return end
+        local o = ui.over
+        o.mark:Stop()
+        o.mark:Hide(); o.note:Hide()
+        o.title:Show(); o.text:Show(); o.retry:Show()
+        o.title:SetValue("Support is unavailable right now")
+        o.text:SetValue("The support page didn't load. Check your connection and try again in a moment.")
+        o:Show()
+        ui.where:SetValue("")
+    end
+
+    function Open()
+        local ui = self.ui or self:Build()
+        ui.window:Show()
+        self:Load("NavigateHome", HOME)
+    end
+
+    function Toggle()
+        local ui = self.ui
+        if ui and ui.window:IsShown() then ui.window:Hide() else self:Open() end
+    end
+
+    override function OnEnable()
+        if not self.ui then self:Build() end
+        local help = SuuUI.BlizzardFrame("HelpFrame")
+        if help and not self.hooked then
+            self.hooked = true
+            hookScript(help, "OnShow", function()
+                if not self:IsEnabled() then return end
+                HideUIPanel(help)
+                self:Open()
+            end)
+        end
+        -- the browser's own failures
+        local failures: EventName[] = { "SIMPLE_BROWSER_WEB_PROXY_FAILED", "SIMPLE_BROWSER_WEB_ERROR" }
+        for _, e in ipairs(failures) do
+            self:OnGameEvent(e, function()
+                local ui = self.ui
+                if ui and ui.window:IsShown() then self:Unavailable() end
+            end)
+        end
+    end
+
+    override function OnDisable()
+        local ui = self.ui
+        if ui then ui.window:Hide() end
     end
 end
 
-function M:OnDisable()
-    if self.window then self.window:Hide() end
-end
+M = SuuUI.AddModule(SupportModule.new())
