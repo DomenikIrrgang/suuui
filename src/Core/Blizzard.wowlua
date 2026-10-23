@@ -26,52 +26,72 @@ export type SuppressOptions = { children?: string[], keepParent?: boolean, noHid
 local hiddenParent = CreateFrame("Frame", "SuuUIHiddenParent", UIParent)
 hiddenParent:Hide()
 
-local suppressed: { [any]: boolean } = {}
-local hooked: { [any]: boolean } = {}
-local pending: { [any]: boolean } = {}
+local suppressed: { [Frame]: boolean } = {}
+local hooked: { [Frame]: boolean } = {}
+local pending: { [Frame]: boolean } = {}
 
-local function resolve(frame: any, path: string): any
-    local v = frame
+-- A frame of the game's (a widget: it has GetObjectType).
+export function isFrame(v: unknown): v is Frame
+    return type(v) == "table" and type((v :: { GetObjectType: unknown }).GetObjectType) == "function"
+end
+
+-- The game's frame of that global name, or nil (a name read at run time
+-- can't be typed before: this checks it is a frame).
+export function frame(name: string): Frame?
+    local v: unknown = _G[name]
+    return isFrame(v) and v or nil
+end
+
+-- What a dotted path of keys from `from` leads to ("HealthBarsContainer.healthBar").
+local function resolve(from: Frame, path: string): unknown
+    local v: unknown = from
     for part in path:gmatch("[^%.]+") do
         if type(v) ~= "table" then return nil end
-        v = v[part]
+        v = (v :: { [string]: unknown })[part]
     end
     return v
 end
 
-local function reparent(frame: any)
-    pending[frame] = nil
-    if frame:GetParent() == hiddenParent then return end
+local function reparent(f: Frame)
+    pending[f] = nil
+    if f:GetParent() == hiddenParent then return end
     if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
-        pending[frame] = true
-        after(0.25, function() reparent(frame) end)
-    elseif InCombatLockdown() and frame:IsProtected() then
-        pending[frame] = true
-        combat.run("blizzard:" .. (frame:GetName() or tostring(frame)), function() reparent(frame) end, "Hide Blizzard frame")
+        pending[f] = true
+        after(0.25, function() reparent(f) end)
+    elseif InCombatLockdown() and f:IsProtected() then
+        pending[f] = true
+        combat.run("blizzard:" .. (f:GetName() or tostring(f)), function() reparent(f) end, "Hide Blizzard frame")
     else
-        frame:SetParent(hiddenParent)
+        f:SetParent(hiddenParent)
     end
 end
 
-export function suppress(target: any, opts: SuppressOptions?)
-    local frame = target
-    if type(frame) == "string" then frame = _G[frame] end
-    if not frame or suppressed[frame] then return end
-    suppressed[frame] = true
+-- A frame, or its global name.
+export type Target = Frame | string
+
+local function frameOf(target: Target?): Frame?
+    if type(target) == "string" then return frame(target) end
+    return target
+end
+
+export function suppress(target: Target?, opts: SuppressOptions?)
+    local f = frameOf(target)
+    if not f or suppressed[f] then return end
+    suppressed[f] = true
     local o: SuppressOptions = opts or {}
 
-    frame:UnregisterAllEvents()
+    f:UnregisterAllEvents()
     for _, path in ipairs(o.children or {}) do
-        local child = resolve(frame, path)
-        if type(child) == "table" and child.UnregisterAllEvents then child:UnregisterAllEvents() end
+        local child = resolve(f, path)
+        if isFrame(child) then child:UnregisterAllEvents() end
     end
-    if not o.noHide and not (InCombatLockdown() and frame:IsProtected()) then frame:Hide() end
+    if not o.noHide and not (InCombatLockdown() and f:IsProtected()) then f:Hide() end
     if o.keepParent then return end
 
-    reparent(frame)
-    if not hooked[frame] then
-        hooked[frame] = true
-        hook(frame, "SetParent", function(self: any, parent: any)
+    reparent(f)
+    if not hooked[f] then
+        hooked[f] = true
+        hook(f, "SetParent", function(self: Frame, parent: Region?)
             if parent ~= hiddenParent and not pending[self] then
                 pending[self] = true
                 after(0, function() reparent(self) end)
@@ -81,13 +101,12 @@ export function suppress(target: any, opts: SuppressOptions?)
 end
 
 -- Suppressed frames come back only with a reload; this says whether one is.
-export function isSuppressed(target: any): boolean
-    local frame = target
-    if type(frame) == "string" then frame = _G[frame] end
-    return frame ~= nil and suppressed[frame] == true
+export function isSuppressed(target: Target?): boolean
+    local f = frameOf(target)
+    return f ~= nil and suppressed[f] == true
 end
 
 -- Kept for the public API: always false for a suppressed frame (reload to restore).
-export function restore(target: any): boolean
+export function restore(target: Target?): boolean
     return not isSuppressed(target)
 end
