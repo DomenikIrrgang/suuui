@@ -15,17 +15,27 @@ import * as fonts from "/Core/Fonts"
 import * as events from "/Core/Events"
 import paint from "./Draw"
 
+-- What a text shows: readable text or a number, or a secret text (it
+-- goes to the engine untouched).
+export type TextValue = string | number | Secret<string>
+
+-- What holds a text and lays it out again when it changes (UI/Layout).
+export interface Relayout
+    function Invalidate()
+end
+
 -- The texts made (weak), for a theme change.
-local texts: { [any]: boolean } = setmetatable({}, { __mode = "k" })
+local texts: { [Text]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- A SuuUI text: a FontString class, built on the font string its frame
 -- makes (`text()` below).
 export class Text extends FontString
     style: string? = nil
-    value: any = nil
+    -- the readable value shown (nil: a secret one, or none yet)
+    value: (string | number)? = nil
     fixedWidth: number? = nil
     -- the layout it sits in (UI/Layout.wowlua), set by the layout
-    layout: any = nil
+    layout: Relayout? = nil
 
     constructor(style: string?, color: string?)
         super()
@@ -47,7 +57,7 @@ export class Text extends FontString
         self:SetTextColor(r, g :: number, b :: number, a)
     end
 
-    function SetValue(v: any)
+    function SetValue(v: TextValue?)
         if isSecret(v) then
             self.value = nil
             self:SetText(v)
@@ -56,7 +66,7 @@ export class Text extends FontString
         end
         if v == self.value then return end
         self.value = v
-        self:SetText(v)
+        if type(v) == "number" then self:SetText(tostring(v)) else self:SetText(v) end
         self:Changed()
     end
 
@@ -76,15 +86,17 @@ export class Text extends FontString
         self:Changed()
     end
 
-    function SetVisible(shown: any)
-        shown = shown and true or false
+    -- (anything: shown when it is true-ish)
+    function SetVisible(given: unknown)
+        local shown = given ~= nil and given ~= false
         if shown == self:IsShown() then return end
         self:SetShown(shown)
         self:Changed()
     end
 
     function Changed()
-        if self.layout then self.layout:Invalidate() end
+        local layout = self.layout
+        if layout then layout:Invalidate() end
     end
 end
 
@@ -92,9 +104,9 @@ end
 -- return a secret boolean, and testing one (if, and, or, not) errors; a
 -- secret answer counts as unknown and reads as false. To show something from
 -- a secret boolean, use region:SetAlphaFromBoolean instead.
-export function flag(v: any): boolean
+export function flag(v: unknown): boolean
     if isSecret(v) then return false end
-    return v and true or false
+    return v ~= nil and v ~= false
 end
 
 -- The width of `value` in a text style, measured on a hidden FontString that
@@ -119,7 +131,5 @@ end
 -- A theme can change a text style's size (the Font object follows by
 -- itself): the layouts holding SuuUI texts measure them again.
 events.on("SUUUI_THEME_CHANGED", function()
-    for fs in pairs(texts) do
-        if fs.layout then fs.layout:Invalidate() end
-    end
+    for fs in pairs(texts) do fs:Changed() end
 end, "Text")
