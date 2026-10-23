@@ -28,7 +28,7 @@
 
 import colorize from "wowlua:color"
 import hook from "wowlua:hooks"
-import tokens as T from "/Core/Tokens"
+import tokens as T, Color from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
 import * as events from "/Core/Events"
@@ -51,35 +51,15 @@ local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local SLOT = T.size["slot"]
 local GAP = S["space-2"]
 local CROP = 0.08
-local live: { [any]: string } = setmetatable({}, { __mode = "k" }) -- money and inventory panels, for a theme change
+local COLORS = T.color :: { [string]: Color }
+local live: { [Frame]: string } = setmetatable({}, { __mode = "k" }) -- money and inventory panels, for a theme change
 
 --------------------------------------------------------------------------------
 -- The item slot
 --------------------------------------------------------------------------------
 
 -- What a slot shows: quality "poor" … "legendary" ("common": no edge).
-export type SlotItem = { icon?: any, count?: number, quality?: string, dim?: boolean, locked?: boolean }
-
--- SuuUI's look on a slot button (its state kept here, nothing on the button).
-export interface ItemSlotSkin
-    button: Button
-    well: Texture
-    icon: Texture
-    border: draw.Border
-    count: FontString
-    hover?: boolean
-    item?: SlotItem
-    function SetItem(item: SlotItem?): Button
-    function Draw()
-end
-
--- A plain slot (itemSlot).
-export interface ItemSlot extends Button
-    skin: ItemSlotSkin
-end
-
-local Skin: ItemSlotSkin = {} :: any
-(Skin :: any).__index = Skin
+export type SlotItem = { icon?: string | number, count?: number, quality?: string, dim?: boolean, locked?: boolean }
 
 -- The template's own art, out of sight (alpha, so its code showing a part
 -- again shows nothing).
@@ -88,90 +68,131 @@ local TEMPLATE_PARTS: string[] = { "IconBorder", "IconOverlay", "IconOverlay2", 
                          "UpgradeIcon", "ExtendedSlot", "ExtendedOverlay", "ExtendedOverlay2", "IconQuestTexture",
                          "ProfessionQualityOverlay", "LevelLinkLockTexture", "BagIndicator" }
 
-local function hideTemplateArt(b: any) -- (any button: Blizzard's templates' parts by name)
+-- A region of the game's, if `v` is one (a template's part, read by name).
+local function region(v: unknown): Region?
+    if type(v) ~= "table" or type((v :: { [string]: unknown }).SetAlpha) ~= "function" then return nil end
+    return v :: Region
+end
+
+-- A template's part of the button by its key (`b.IconBorder`).
+local function templatePart(b: Frame, key: string): Region?
+    return region((b :: { [string]: unknown })[key])
+end
+
+local function hideTemplateArt(b: Frame) -- (Blizzard's templates' parts by name)
     for _, key in ipairs(TEMPLATE_PARTS) do
-        local r = b[key]
-        if type(r) == "table" and r.SetAlpha then r:SetAlpha(0) end
+        local r = templatePart(b, key)
+        if r then r:SetAlpha(0) end
     end
     local name = b:GetName()
     if name then
         for _, suffix in ipairs({ "Count", "Stock", "IconQuestTexture", "NormalTexture" }) do
-            local r = _G[name .. suffix]
-            if r and r.SetAlpha then r:SetAlpha(0) end
+            local r = region(_G[name .. suffix])
+            if r then r:SetAlpha(0) end
         end
     end
-    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture" }) do
-        local t = b[get] and b[get](b)
-        if t then t:SetAlpha(0) end
+    if b:IsObjectType("Button") then
+        local btn = b :: Button
+        -- (each may be missing)
+        local normal, pushed, highlight = btn:GetNormalTexture(), btn:GetPushedTexture(), btn:GetHighlightTexture()
+        if normal then normal:SetAlpha(0) end
+        if pushed then pushed:SetAlpha(0) end
+        if highlight then highlight:SetAlpha(0) end
     end
 end
 
-export function skinItemSlot(b: any): ItemSlotSkin
-    local s: ItemSlotSkin = setmetatable({ button = b }, Skin :: any) :: any
-    hideTemplateArt(b)
-    s.well = b:CreateTexture(nil, "BACKGROUND", nil, -7)
-    s.well:SetAllPoints()
-    s.icon = b.icon or b.Icon
-    if not s.icon then
-        s.icon = b:CreateTexture(nil, "ARTWORK")
-    end
-    s.icon:ClearAllPoints()
-    s.icon:SetPoint("TOPLEFT", 1, -1)
-    s.icon:SetPoint("BOTTOMRIGHT", -1, 1)
-    s.icon:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
-    s.border = draw.border(b, "gilt-hairline", { layer = "OVERLAY" })
-    s.count = b:CreateFontString(nil, "OVERLAY")
-    fonts.apply(s.count, "micro")
-    s.count:SetShadowColor(0, 0, 0, 1)
-    s.count:SetShadowOffset(0, -1)
-    s.count:SetPoint("BOTTOMRIGHT", -2, 1)
-    s.count:SetJustifyH("RIGHT")
-    b:HookScript("OnEnter", function() s.hover = true; s:Draw() end)
-    b:HookScript("OnLeave", function() s.hover = false; s:Draw() end)
-    s:SetItem(nil)
-    return s
+-- The template's icon texture (`icon` or `Icon`), if it has one.
+local function templateIcon(b: Frame): Texture?
+    local r = templatePart(b, "icon") or templatePart(b, "Icon")
+    if r and r:IsObjectType("Texture") then return r :: Texture end
+    return nil
 end
 
--- item: { icon, count, quality ("poor" … "legendary"), dim, locked } or nil.
-function Skin:SetItem(item: SlotItem?): Button
-    self.item = item
-    local b = self.button
-    if item then
-        self.icon:SetTexture(item.icon)
-        self.icon:Show()
-        self.count:SetText((item.count and item.count > 1) and tostring(item.count) or "")
-    else
-        self.icon:SetTexture(nil)
-        self.count:SetText("")
+-- SuuUI's look on a slot button (its state kept here, nothing on the button).
+export class ItemSlotSkin
+    readonly well: Texture
+    readonly icon: Texture
+    readonly border: draw.Border
+    readonly count: FontString
+    hover?: boolean
+    item?: SlotItem
+
+    constructor(readonly button: Frame)
+        local b = button
+        hideTemplateArt(b)
+        self.well = b:CreateTexture(nil, "BACKGROUND", nil, -7)
+        self.well:SetAllPoints()
+        local icon = templateIcon(b) or b:CreateTexture(nil, "ARTWORK")
+        self.icon = icon
+        icon:ClearAllPoints()
+        icon:SetPoint("TOPLEFT", 1, -1)
+        icon:SetPoint("BOTTOMRIGHT", -1, 1)
+        icon:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
+        self.border = draw.border(b, "gilt-hairline", { layer = "OVERLAY" })
+        self.count = b:CreateFontString(nil, "OVERLAY")
+        fonts.apply(self.count, "micro")
+        self.count:SetShadowColor(0, 0, 0, 1)
+        self.count:SetShadowOffset(0, -1)
+        self.count:SetPoint("BOTTOMRIGHT", -2, 1)
+        self.count:SetJustifyH("RIGHT")
+        b:HookScript("OnEnter", function() self.hover = true; self:Draw() end)
+        b:HookScript("OnLeave", function() self.hover = false; self:Draw() end)
+        self:SetItem(nil)
     end
-    self:Draw()
-    return b
+
+    -- item: { icon, count, quality ("poor" … "legendary"), dim, locked } or nil.
+    function SetItem(item: SlotItem?): Frame
+        self.item = item
+        local b = self.button
+        if item then
+            self.icon:SetTexture(item.icon)
+            self.icon:Show()
+            self.count:SetText((item.count and item.count > 1) and tostring(item.count) or "")
+        else
+            self.icon:SetTexture(nil)
+            self.count:SetText("")
+        end
+        self:Draw()
+        return b
+    end
+
+    function Draw()
+        local item = self.item
+        if not item then
+            draw.paintFill(self.well, "surface-sunk")
+            self.border:SetColor(self.hover and "gilt" or "gilt-faint")
+            self.button:SetAlpha(1)
+            return
+        end
+        draw.paintFill(self.well, "surface-raised")
+        local q = item.quality
+        local edge = (q and q ~= "common" and ("quality-" .. q)) or "gilt-hairline"
+        self.border:SetColor(self.hover and "gilt" or edge)
+        local grey = item.dim or item.locked
+        self.icon:SetDesaturated(grey and true or false)
+        self.icon:SetVertexColor(grey and 0.55 or 1, grey and 0.55 or 1, grey and 0.55 or 1)
+        self.button:SetAlpha(item.dim and T.opacity["opacity-disabled"] or 1)
+    end
 end
 
-function Skin:Draw()
-    local item = self.item
-    if not item then
-        draw.paintFill(self.well, "surface-sunk")
-        self.border:SetColor(self.hover and "gilt" or "gilt-faint")
-        self.button:SetAlpha(1)
-        return
+export function skinItemSlot(b: Frame): ItemSlotSkin
+    return ItemSlotSkin.new(b)
+end
+
+-- A plain slot (itemSlot).
+export class ItemSlot extends Button
+    skin: ItemSlotSkin
+
+    constructor(parent: Frame, size: number?)
+        super(nil, parent)
+        self:SetSize(size or SLOT, size or SLOT)
+        self.skin = skinItemSlot(self)
     end
-    draw.paintFill(self.well, "surface-raised")
-    local q = item.quality
-    local edge = (q and q ~= "common" and ("quality-" .. q)) or "gilt-hairline"
-    self.border:SetColor(self.hover and "gilt" or edge)
-    local grey = item.dim or item.locked
-    self.icon:SetDesaturated(grey and true or false)
-    self.icon:SetVertexColor(grey and 0.55 or 1, grey and 0.55 or 1, grey and 0.55 or 1)
-    self.button:SetAlpha(item.dim and T.opacity["opacity-disabled"] or 1)
 end
 
 -- A plain slot: for previews and for bags SuuUI only remembers.
 export function itemSlot(parent: Frame, size: number?): ItemSlot
-    local b: ItemSlot = CreateFrame("Button", nil, parent) :: any
-    b:SetSize(size or SLOT, size or SLOT)
-    b.skin = skinItemSlot(b)
-    return b
+    return ItemSlot.new(parent, size)
 end
 
 --------------------------------------------------------------------------------
@@ -191,12 +212,13 @@ end
 
 -- The text for an amount (anything not a number: 0; below 0: 0; fractions
 -- dropped), the units in the coin colours: "1,204g 37s 9c".
-export function moneyText(total: any): string
-    total = math.max(0, math.floor(tonumber(total) or 0))
+export function moneyText(given: unknown): string
+    local total = math.max(0, math.floor(tonumber(given) or 0))
     local g, s, c = math.floor(total / 10000), math.floor(total / 100) % 100, total % 100
     local parts: string[] = {}
     local function part(v: number | string, unit: string, token: string)
-        parts[#parts + 1] = v .. colorize((T.color :: { [string]: any })[token].hex, unit)
+        local color = COLORS[token]
+        parts[#parts + 1] = v .. colorize(color and color.hex or "ffffff", unit)
     end
     if g > 0 then part(thousands(g), "g", "coin-gold") end
     if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
@@ -216,8 +238,8 @@ export class Money extends Frame
         live[self] = "money"
     end
 
-    function SetCopper(total: any)
-        total = math.max(0, math.floor(tonumber(total) or 0))
+    function SetCopper(given: unknown)
+        local total = math.max(0, math.floor(tonumber(given) or 0))
         self.copper = total
         self.text:SetText(moneyText(total))
         self:SetSize(math.max(1, self.text:GetUnboundedStringWidth()), T.type.numeric.lineHeight)
@@ -235,35 +257,107 @@ end
 -- A section in the grid (LayoutSlots): its head before the button at `at`.
 export type SlotSection = { at: number, label?: string, meta?: string, note?: string }
 -- A found item (SetResults).
-export type FoundItem = { icon?: any, quality?: string, label?: string, count?: number, places?: string }
+export type FoundItem = { icon?: string | number, quality?: string, label?: string, count?: number, places?: string }
 -- The foot's button (SetAction).
-export type InventoryAction = { text: string, onClick?: () -> (), tooltip?: any }
+export type InventoryAction = { text: string, onClick?: () -> (), tooltip?: tooltip.TooltipSource }
 
-export interface SectionHead extends Frame
-    rule: Texture
-    label: Text
-    meta: Text
+export class SectionHead extends Frame
+    readonly rule: Texture
+    readonly label: Text
+    readonly meta: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.rule = self:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(self.rule, "gilt-faint")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("TOPLEFT", 0, -S["space-4"])
+        self.rule:SetPoint("TOPRIGHT", 0, -S["space-4"])
+        self.label = uiText.text(self, "caption", "gilt-text")
+        self.label:SetPoint("TOPLEFT", self.rule, "BOTTOMLEFT", 0, -S["space-3"])
+        self.meta = uiText.text(self, "caption", "ink-muted")
+        self.meta:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
+    end
 end
 
-export interface ResultRow extends Frame
-    slot: ItemSlot
-    total: Text
-    label: Text
-    places: Text
-    item: FoundItem
+-- A found item's row: its slot, the count, the label and where it is.
+export class ResultRow extends Frame
+    readonly slot: ItemSlot
+    readonly total: Text
+    readonly label: Text
+    readonly places: Text
+    item: FoundItem = {}
     onEnter?: (row: ResultRow) -> ()
     onLeave?: (row: ResultRow) -> ()
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(SLOT)
+        self.slot = itemSlot(self)
+        self.slot:SetPoint("LEFT")
+        self.slot:EnableMouse(false)
+        self.total = uiText.text(self, "numeric", "ink")
+        self.total:SetPoint("RIGHT")
+        self.total:SetJustifyH("RIGHT")
+        self.label = uiText.text(self, "label", "ink")
+        self.label:SetPoint("TOPLEFT", self.slot, "TOPRIGHT", S["space-4"], -1)
+        self.label:SetPoint("RIGHT", self.total, "LEFT", -S["space-4"], 0)
+        self.label:SetJustifyH("LEFT")
+        self.label:SetWordWrap(false)
+        self.places = uiText.text(self, "caption", "ink-muted")
+        self.places:SetPoint("BOTTOMLEFT", self.slot, "BOTTOMRIGHT", S["space-4"], 1)
+        self.places:SetPoint("RIGHT", self.total, "LEFT", -S["space-4"], 0)
+        self.places:SetJustifyH("LEFT")
+        self.places:SetWordWrap(false)
+        self:SetScript("OnEnter", function() if self.onEnter then self.onEnter(self) end end)
+        self:SetScript("OnLeave", function() if self.onLeave then self.onLeave(self) end end)
+    end
 end
 
-export interface GlyphButton extends Button
-    edge: draw.Border
-    glyph: Texture
-    tip: any
+-- A small square button with a glyph (sort).
+export class GlyphButton extends Button
+    readonly edge: draw.Border
+    readonly glyph: Texture
+    tip: tooltip.TooltipSource? = nil
+
+    constructor(parent: Frame, glyph: string, tip: tooltip.TooltipSource?)
+        super(nil, parent)
+        self:SetSize(30, 30)
+        draw.fill(self, "surface-raised", "BACKGROUND"):SetAllPoints()
+        self.edge = draw.border(self, "gilt-line")
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
+        self.glyph:SetSize(16, 16)
+        self.glyph:SetPoint("CENTER")
+        draw.paint(self.glyph, "ink")
+        self.tip = tip
+        self:SetScript("OnEnter", function()
+            if self:IsEnabled() then self.edge:SetColor("gilt") end
+            local t = self.tip
+            if t then tooltip.showTooltip(self, t) end
+        end)
+        self:SetScript("OnLeave", function() self.edge:SetColor("gilt-line"); tooltip.hideTooltip() end)
+        hook(self, "SetEnabled", function(b: Button, on: unknown)
+            b:SetAlpha((on ~= nil and on ~= false) and 1 or T.opacity["opacity-disabled"])
+        end)
+    end
 end
 
-export interface Banner extends Frame
-    eye: Texture
-    text: Text
+-- The line over the grid: an eye and a caption.
+export class Banner extends Frame
+    readonly eye: Texture
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.eye = self:CreateTexture(nil, "ARTWORK")
+        self.eye:SetTexture(GLYPHS .. "eye.tga")
+        self.eye:SetSize(12, 12)
+        self.eye:SetPoint("LEFT")
+        draw.paint(self.eye, "ink-muted")
+        self.text = uiText.text(self, "caption", "ink-muted")
+        self.text:SetPoint("LEFT", self.eye, "RIGHT", S["space-3"], 0)
+    end
 end
 
 local ROW = 30 -- the tool rows: search and sort; Bags/Bank and All characters
@@ -278,39 +372,13 @@ local function sectionHead(inv: Inventory, i: number): SectionHead
     inv.heads = heads
     local old = heads[i]
     if old then return old end
-    local h: SectionHead = CreateFrame("Frame", nil, inv.grid) :: any
-    h.rule = h:CreateTexture(nil, "ARTWORK")
-    draw.paintFill(h.rule, "gilt-faint")
-    h.rule:SetHeight(1)
-    h.rule:SetPoint("TOPLEFT", 0, -S["space-4"])
-    h.rule:SetPoint("TOPRIGHT", 0, -S["space-4"])
-    h.label = uiText.text(h, "caption", "gilt-text")
-    h.label:SetPoint("TOPLEFT", h.rule, "BOTTOMLEFT", 0, -S["space-3"])
-    h.meta = uiText.text(h, "caption", "ink-muted")
-    h.meta:SetPoint("LEFT", h.label, "RIGHT", S["space-3"], 0)
+    local h = SectionHead.new(inv.grid)
     heads[i] = h
     return h
 end
 
--- A small square button with a glyph (sort).
-local function glyphButton(parent: Frame, glyph: string, tip: any): GlyphButton
-    local b: GlyphButton = CreateFrame("Button", nil, parent) :: any
-    b:SetSize(30, 30)
-    draw.fill(b, "surface-raised", "BACKGROUND"):SetAllPoints()
-    b.edge = draw.border(b, "gilt-line")
-    b.glyph = b:CreateTexture(nil, "ARTWORK")
-    b.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
-    b.glyph:SetSize(16, 16)
-    b.glyph:SetPoint("CENTER")
-    draw.paint(b.glyph, "ink")
-    b.tip = tip
-    b:SetScript("OnEnter", function(self: GlyphButton)
-        if self:IsEnabled() then self.edge:SetColor("gilt") end
-        if self.tip then tooltip.showTooltip(self, self.tip) end
-    end)
-    b:SetScript("OnLeave", function(self: GlyphButton) self.edge:SetColor("gilt-line"); tooltip.hideTooltip() end)
-    hook(b, "SetEnabled", function(self: any, on: any) self:SetAlpha(on and 1 or T.opacity["opacity-disabled"]) end)
-    return b
+local function glyphButton(parent: Frame, glyph: string, tip: tooltip.TooltipSource?): GlyphButton
+    return GlyphButton.new(parent, glyph, tip)
 end
 
 -- The header's character picker, the Bags/Bank and All characters row, the
@@ -334,16 +402,9 @@ local function buildCharacters(inv: Inventory, body: Frame)
     inv.all = all
     all:SetPoint("RIGHT", pickRow, "LEFT", inv:GridWidth(), 0)
     allLabel:SetPoint("RIGHT", all, "LEFT", -S["space-4"], 0)
-    local banner: Banner = CreateFrame("Frame", nil, body) :: any
+    local banner = Banner.new(body)
     inv.banner = banner
     banner:SetSize(inv:GridWidth(), T.type.caption.lineHeight)
-    banner.eye = banner:CreateTexture(nil, "ARTWORK")
-    banner.eye:SetTexture(GLYPHS .. "eye.tga")
-    banner.eye:SetSize(12, 12)
-    banner.eye:SetPoint("LEFT")
-    draw.paint(banner.eye, "ink-muted")
-    banner.text = uiText.text(banner, "caption", "ink-muted")
-    banner.text:SetPoint("LEFT", banner.eye, "RIGHT", S["space-3"], 0)
     banner:Hide()
     local results = CreateFrame("Frame", nil, body)
     inv.results = results
@@ -377,17 +438,22 @@ export class Inventory extends Panel
     results: Frame? = nil
     resultRows: ResultRow[]? = nil
     resultsMin: number? = nil
-    sortCover: any? = nil
-    slotsToggle: any? = nil
-    slotsLabel: any? = nil
-    previewSlots: any? = nil
+    -- the bags module's: its sort cover, the bag slots switch, the preview
+    sortCover: Frame? = nil
+    slotsToggle: Toggle? = nil
+    slotsLabel: Text? = nil
+    previewSlots: ItemSlot[]? = nil
     suuManagedShow: boolean? = nil
 
     constructor(parent: Frame, opts: InventoryOptions?)
         local o: InventoryOptions = opts or {}
         local columns = o.columns or 10
         super(parent, { name = o.name, title = o.title or "Bags", meta = "", closable = true,
-            onClose = function(p: any) if p.onClose then p.onClose() else p:Hide() end end })
+            -- (made before `super`: the panel it gets is this inventory)
+            onClose = function(p: Panel)
+                local inv = p :: Inventory
+                if inv.onClose then inv.onClose() else inv:Hide() end
+            end })
         self.columns = columns
         local body = self.body
         -- search and sort
@@ -420,7 +486,7 @@ export class Inventory extends Panel
     -- meta, note } }, each starting a new row under its head before the button
     -- at `at` (#buttons + 1: after them all); `note` alone is a quiet line (an
     -- empty section).
-    function LayoutSlots(buttons: any[], sections: SlotSection[]?)
+    function LayoutSlots<B extends Region>(buttons: B[], sections: SlotSection[]?)
         local cols = self.columns
         local starts: { [number]: SlotSection[] } = {}
         for _, sct in ipairs(sections or {}) do
@@ -525,26 +591,7 @@ export class Inventory extends Panel
         for i = 1, n do
             local r = rows[i]
             if not r then
-                r = CreateFrame("Frame", nil, results) :: any
-                r:SetHeight(SLOT)
-                r.slot = itemSlot(r)
-                r.slot:SetPoint("LEFT")
-                r.slot:EnableMouse(false)
-                r.total = uiText.text(r, "numeric", "ink")
-                r.total:SetPoint("RIGHT")
-                r.total:SetJustifyH("RIGHT")
-                r.label = uiText.text(r, "label", "ink")
-                r.label:SetPoint("TOPLEFT", r.slot, "TOPRIGHT", S["space-4"], -1)
-                r.label:SetPoint("RIGHT", r.total, "LEFT", -S["space-4"], 0)
-                r.label:SetJustifyH("LEFT")
-                r.label:SetWordWrap(false)
-                r.places = uiText.text(r, "caption", "ink-muted")
-                r.places:SetPoint("BOTTOMLEFT", r.slot, "BOTTOMRIGHT", S["space-4"], 1)
-                r.places:SetPoint("RIGHT", r.total, "LEFT", -S["space-4"], 0)
-                r.places:SetJustifyH("LEFT")
-                r.places:SetWordWrap(false)
-                r:SetScript("OnEnter", function(row: ResultRow) if row.onEnter then row.onEnter(row) end end)
-                r:SetScript("OnLeave", function(row: ResultRow) if row.onLeave then row.onLeave(row) end end)
+                r = ResultRow.new(results)
                 rows[i] = r
             end
             local item = (list :: FoundItem[])[i]

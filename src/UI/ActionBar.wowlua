@@ -130,6 +130,22 @@ const CLICK_PRE = [[
     if down and IsModifiedClick("PICKUPACTION") and self:IsUnderMouse() then return false end
 ]]
 
+export type ActionBarOptions = {
+    name: string,
+    -- the first action slot, the binding prefix (`SUUUIBAR1BUTTON`), the
+    -- paging conditions and what a page change calls
+    slot?: number,
+    binding?: string,
+    paging?: string,
+    onPage?: (bar: ActionBar, page: number) -> (),
+    columns?: number,
+    gap?: number,
+    count?: number,
+    size?: number | string,
+    -- what the binding list calls it ("Action bar 2")
+    label?: string,
+}
+
 export class ActionBar
     name: string
     slot: number
@@ -146,7 +162,7 @@ export class ActionBar
     count: number? = nil
     size: number? = nil
 
-    constructor(parent: Frame, opts: { [string]: any })
+    constructor(parent: Frame, opts: ActionBarOptions)
         -- (a plain object)
         self.name = opts.name
         self.slot = opts.slot or 1
@@ -219,14 +235,14 @@ export class ActionBar
         if self.onPage then self.onPage(self, page) end
     end
 
-    function SetHotkeysShown(shown: any)
-        self.hotkeysShown = shown and true or false
+    function SetHotkeysShown(shown: unknown)
+        self.hotkeysShown = shown ~= nil and shown ~= false
         for _, b in ipairs(self.buttons) do b:SetHotkeyShown(self.hotkeysShown) end
     end
 
-    function SetShowEmpty(shown: any)
+    function SetShowEmpty(shown: unknown)
         for _, b in ipairs(self.buttons) do
-            b.showEmpty = shown and true or false
+            b.showEmpty = shown ~= nil and shown ~= false
             b:UpdateEmpty()
         end
     end
@@ -257,8 +273,8 @@ export class ActionBar
         self:UpdateBindings()
     end
 
-    function SetShown(shown: any)
-        self:SetVisibility(shown and "always" or "hidden")
+    function SetShown(shown: unknown)
+        self:SetVisibility((shown ~= nil and shown ~= false) and "always" or "hidden")
     end
 
     -- Drag lock follows the game's "Lock Action Bars" (Shift drags anyway).
@@ -298,7 +314,7 @@ export class ActionBar
 end
 mixins.ActionBar = ActionBar
 
-export function actionBar(parent: Frame, opts: { [string]: any }): ActionBar
+export function actionBar(parent: Frame, opts: ActionBarOptions): ActionBar
     return ActionBar.new(parent, opts)
 end
 
@@ -351,7 +367,7 @@ end
 -- A spell the game put on a bar by itself (one you just learned): the
 -- game's fly-in aims at its own bars, which SuuUI stood down, so the button
 -- that holds it pops and flashes instead (asked 2026-10-18).
-local function pushed(_: any, slot: any)
+local function pushed(_: number, slot: number)
     if type(slot) ~= "number" then return end
     eachInSlot(slot, function(b)
         b:Update()
@@ -361,59 +377,59 @@ local function pushed(_: any, slot: any)
     end)
 end
 
-local HANDLERS: { [EventName]: (...any) -> () } = {
-    SPELL_PUSHED_TO_ACTIONBAR = pushed,
-    ACTIONBAR_SLOT_CHANGED = function(slot)
-        if not slot or slot == 0 then eachButton(function(b) b:Update(); rangeNow(b) end)
-        else eachInSlot(slot, function(b) b:Update(); rangeNow(b) end) end
-    end,
-    ACTIONBAR_UPDATE_COOLDOWN = later("cooldown"),
-    SPELL_UPDATE_COOLDOWN = later("cooldown"),
-    SPELL_UPDATE_CHARGES = function() eachButton(function(b) b:UpdateCount() end) end,
-    BAG_UPDATE_DELAYED = function() eachButton(function(b) b:UpdateCount() end) end,
-    ACTIONBAR_UPDATE_USABLE = later("usable"),
-    SPELL_UPDATE_USABLE = later("usable"),
-    ACTION_USABLE_CHANGED = later("usable"),
-    ACTIONBAR_UPDATE_STATE = later("active"),
-    PLAYER_ENTER_COMBAT = function() eachButton(function(b) b:UpdateActive() end) end,
-    PLAYER_LEAVE_COMBAT = function() eachButton(function(b) b:UpdateActive() end) end,
-    START_AUTOREPEAT_SPELL = function() eachButton(function(b) b:UpdateActive() end) end,
-    STOP_AUTOREPEAT_SPELL = function() eachButton(function(b) b:UpdateActive() end) end,
-    ACTION_RANGE_CHECK_UPDATE = function(slot, inRange, checksRange)
-        local out = not isSecret(checksRange) and not isSecret(inRange) and checksRange and not inRange
-        eachInSlot(slot, function(b) b:SetOutOfRange(out) end)
-    end,
-    PLAYER_TARGET_CHANGED = function() eachButton(rangeNow) end,
-    UPDATE_BINDINGS = function() for _, bar in ipairs(bars) do bar:UpdateBindings() end end,
-    CVAR_UPDATE = function(name)
-        if name == "lockActionBars" or name == "LOCK_ACTIONBAR" then
-            for _, bar in ipairs(bars) do bar:UpdateLock() end
-        end
-    end,
-    CURSOR_CHANGED = updateGrid,
-    ACTIONBAR_SHOWGRID = updateGrid,
-    ACTIONBAR_HIDEGRID = updateGrid,
-    UPDATE_MACROS = function() eachButton(function(b) b:Update() end) end,
-    SPELL_UPDATE_ICON = function() eachButton(function(b) b:Update() end) end,
-    PLAYER_ENTERING_WORLD = function() updatePages(); eachButton(function(b) b:Update(); rangeNow(b) end) end,
-    -- Paging: the Lua side follows the same conditions as the secure driver.
-    ACTIONBAR_PAGE_CHANGED = updatePages,
-    UPDATE_BONUS_ACTIONBAR = updatePages,
-    UPDATE_SHAPESHIFT_FORM = function() updatePages(); eachButton(function(b) b:UpdateUsable(); b:UpdateActive() end) end,
-    UPDATE_SHAPESHIFT_FORMS = updatePages,
-    UPDATE_OVERRIDE_ACTIONBAR = updatePages,
-    UPDATE_VEHICLE_ACTIONBAR = updatePages,
-    UPDATE_POSSESS_BAR = updatePages,
-}
-
 -- Through Core/Events: an event this client doesn't have never fires (it was
 -- a RegisterEvent in pcall), and an error is reported as "Action bars".
-for event, handler in pairs(HANDLERS) do
+-- Each runs only while there are bars.
+local function on<E extends EventName>(event: E, fn: (EventArgs<E>...) -> ())
     events.onGame(event, function(_, ...)
         if #bars == 0 then return end
-        handler(...)
+        fn(...)
     end, "Action bars")
 end
+
+on("SPELL_PUSHED_TO_ACTIONBAR", pushed)
+on("ACTIONBAR_SLOT_CHANGED", function(slot)
+    if not slot or slot == 0 then eachButton(function(b) b:Update(); rangeNow(b) end)
+    else eachInSlot(slot, function(b) b:Update(); rangeNow(b) end) end
+end)
+on("ACTIONBAR_UPDATE_COOLDOWN", later("cooldown"))
+on("SPELL_UPDATE_COOLDOWN", later("cooldown"))
+on("SPELL_UPDATE_CHARGES", function() eachButton(function(b) b:UpdateCount() end) end)
+on("BAG_UPDATE_DELAYED", function() eachButton(function(b) b:UpdateCount() end) end)
+on("ACTIONBAR_UPDATE_USABLE", later("usable"))
+on("SPELL_UPDATE_USABLE", later("usable"))
+on("ACTION_USABLE_CHANGED", later("usable"))
+on("ACTIONBAR_UPDATE_STATE", later("active"))
+on("PLAYER_ENTER_COMBAT", function() eachButton(function(b) b:UpdateActive() end) end)
+on("PLAYER_LEAVE_COMBAT", function() eachButton(function(b) b:UpdateActive() end) end)
+on("START_AUTOREPEAT_SPELL", function() eachButton(function(b) b:UpdateActive() end) end)
+on("STOP_AUTOREPEAT_SPELL", function() eachButton(function(b) b:UpdateActive() end) end)
+on("ACTION_RANGE_CHECK_UPDATE", function(slot, inRange, checksRange)
+    local out = not isSecret(checksRange) and not isSecret(inRange) and checksRange and not inRange
+    eachInSlot(slot, function(b) b:SetOutOfRange(out) end)
+end)
+on("PLAYER_TARGET_CHANGED", function() eachButton(rangeNow) end)
+on("UPDATE_BINDINGS", function() for _, bar in ipairs(bars) do bar:UpdateBindings() end end)
+on("CVAR_UPDATE", function(name)
+    if name == "lockActionBars" or name == "LOCK_ACTIONBAR" then
+        for _, bar in ipairs(bars) do bar:UpdateLock() end
+    end
+end)
+on("CURSOR_CHANGED", updateGrid)
+on("ACTIONBAR_SHOWGRID", updateGrid)
+on("ACTIONBAR_HIDEGRID", updateGrid)
+on("UPDATE_MACROS", function() eachButton(function(b) b:Update() end) end)
+on("SPELL_UPDATE_ICON", function() eachButton(function(b) b:Update() end) end)
+on("PLAYER_ENTERING_WORLD", function() updatePages(); eachButton(function(b) b:Update(); rangeNow(b) end) end)
+-- Paging: the Lua side follows the same conditions as the secure driver.
+on("ACTIONBAR_PAGE_CHANGED", updatePages)
+on("UPDATE_BONUS_ACTIONBAR", updatePages)
+on("UPDATE_SHAPESHIFT_FORM", function() updatePages(); eachButton(function(b) b:UpdateUsable(); b:UpdateActive() end) end)
+on("UPDATE_SHAPESHIFT_FORMS", updatePages)
+on("UPDATE_OVERRIDE_ACTIONBAR", updatePages)
+on("UPDATE_VEHICLE_ACTIONBAR", updatePages)
+on("UPDATE_POSSESS_BAR", updatePages)
+
 
 -- Without range events (older clients), poll the target's range.
 local pollElapsed = 0

@@ -16,8 +16,8 @@
 
 import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
-import itemSlot, money from "/UI/Inventory"
+import text, Text from "/UI/Text"
+import itemSlot, money, ItemSlot, Money from "/UI/Inventory"
 import Panel from "/UI/Panel"
 
 local S = T.space
@@ -27,54 +27,87 @@ local GAP = S["space-2"]
 local WIDTH = 260
 local BODY_W = WIDTH - S["space-5"] * 2
 
-local function row(lw: any, i: number): any
-    local r = lw.rows[i]
-    if r then return r end
-    r = CreateFrame("Button", nil, lw.body)
-    r:SetSize(BODY_W, SLOT)
-    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    r.hover = draw.fill(r, "surface-raised", "BACKGROUND")
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.slot = itemSlot(r)
-    r.slot:SetPoint("LEFT")
-    r.slot:EnableMouse(false)
-    r.label = text(r, "label", "ink")
-    r.label:SetPoint("LEFT", r.slot, "RIGHT", S["space-4"], 0)
-    r.label:SetPoint("RIGHT", -S["space-3"], 0)
-    r.label:SetJustifyH("LEFT")
-    r.money = money(r)
-    r.money:SetPoint("LEFT", r.slot, "RIGHT", S["space-4"], 0)
-    r.money.text:ClearAllPoints()
-    r.money.text:SetPoint("LEFT")
-    r:SetScript("OnClick", function(self, button) if lw.onClick then lw.onClick(self.index, button) end end)
-    r:SetScript("OnEnter", function(self)
-        self.hover:Show()
-        lw.skins[self].hover = true
-        lw.skins[self]:Draw()
-        if lw.onEnter then lw.onEnter(self.index, self) end
-    end)
-    r:SetScript("OnLeave", function(self)
+-- An item the window lists: its slot (what onClick gets, default the
+-- position), icon, count, quality, label or money, and whether it's locked.
+export type LootItem = {
+    index?: number,
+    icon?: string | number,
+    count?: number,
+    quality?: string,
+    label?: string,
+    copper?: number,
+    locked?: boolean,
+}
+
+-- A row: the slot, the label or the money, and the loot slot it shows.
+export class LootRow extends Button
+    readonly hover: Texture
+    readonly slot: ItemSlot
+    readonly label: Text
+    readonly money: Money
+    index: number = 0
+
+    constructor(lw: LootWindow)
+        super(nil, lw.body)
+        self:SetSize(BODY_W, SLOT)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.hover = draw.fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
         self.hover:Hide()
-        lw.skins[self].hover = false
-        lw.skins[self]:Draw()
-        if lw.onLeave then lw.onLeave(self.index, self) end
-    end)
-    lw.skins[r] = r.slot.skin
-    lw.rows[i] = r
-    return r
+        self.slot = itemSlot(self)
+        self.slot:SetPoint("LEFT")
+        self.slot:EnableMouse(false)
+        self.label = text(self, "label", "ink")
+        self.label:SetPoint("LEFT", self.slot, "RIGHT", S["space-4"], 0)
+        self.label:SetPoint("RIGHT", -S["space-3"], 0)
+        self.label:SetJustifyH("LEFT")
+        self.money = money(self)
+        self.money:SetPoint("LEFT", self.slot, "RIGHT", S["space-4"], 0)
+        self.money.text:ClearAllPoints()
+        self.money.text:SetPoint("LEFT")
+        local skin = self.slot.skin
+        self:SetScript("OnClick", function(_, button: string) if lw.onClick then lw.onClick(self.index, button) end end)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            skin.hover = true
+            skin:Draw()
+            if lw.onEnter then lw.onEnter(self.index, self) end
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            skin.hover = false
+            skin:Draw()
+            if lw.onLeave then lw.onLeave(self.index, self) end
+        end)
+    end
 end
 
 export class LootWindow extends Panel
-    rows: any
-    skins: any
+    rows: LootRow[] = {}
+    onClose: (() -> ())? = nil
+    -- a row clicked, entered or left: its loot slot (and the button)
+    onClick: ((slot: number, button: string) -> ())? = nil
+    onEnter: ((slot: number, row: LootRow) -> ())? = nil
+    onLeave: ((slot: number, row: LootRow) -> ())? = nil
 
-    constructor(parent: any, opts: { name?: string }?)
-        opts = opts or {}
-        super(parent, { name = opts.name, title = "Loot", meta = "", closable = true,
-            onClose = function(p: any) if p.onClose then p.onClose() else p:Hide() end end })
-        self.rows, self.skins = {}, {}
+    constructor(parent: Frame, opts: { name?: string }?)
+        local o = opts or {}
+        super(parent, { name = o.name, title = "Loot", meta = "", closable = true,
+            -- (made before `super`: the panel it gets is this window)
+            onClose = function(p: Panel)
+                local lw = p :: LootWindow
+                if lw.onClose then lw.onClose() else lw:Hide() end
+            end })
         self:SetItems({})
+    end
+
+    private function Row(i: number): LootRow
+        local r = self.rows[i]
+        if not r then
+            r = LootRow.new(self)
+            self.rows[i] = r
+        end
+        return r
     end
 
     function SetSource(source: string?)
@@ -83,9 +116,9 @@ export class LootWindow extends Panel
 
     -- items: { { index, icon, count, quality, label, copper, locked } … } in
     -- order; `index` is what onClick gets (the loot slot), default the position.
-    function SetItems(items: { [string]: any }[])
+    function SetItems(items: LootItem[])
         for i, item in ipairs(items) do
-            local r = row(self, i)
+            local r = self:Row(i)
             r.index = item.index or i
             r.slot.skin:SetItem({ icon = item.icon, count = item.count, quality = item.quality or "common", locked = item.locked })
             if item.copper then
@@ -113,6 +146,6 @@ export class LootWindow extends Panel
     end
 end
 
-export function lootWindow(parent: any, opts: { name?: string }?): LootWindow
+export function lootWindow(parent: Frame, opts: { name?: string }?): LootWindow
     return LootWindow.new(parent, opts)
 end

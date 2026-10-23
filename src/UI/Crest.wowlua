@@ -97,8 +97,8 @@ export class Crest extends Frame
     end
 
     -- The unit's classification (a secret one: hidden, like the meta words).
-    function SetClassification(c: any)
-        if isSecret(c) then c = nil end
+    function SetClassification(given: string | Secret<string> | nil)
+        local c = not isSecret(given) and given or nil
         local kind: string? = c ~= nil and KINDS[c] and c or nil
         if kind == self.kind then return end
         local was = self.kind
@@ -129,22 +129,20 @@ end
 --   placeDragon(texture, art, bar, bar:GetHeight())   -- nil art: hidden
 --------------------------------------------------------------------------------
 
--- atlas, width, height, x, y (and the breast jewel)
-export type DragonArt = { [number]: any, jewel?: boolean }
+-- the atlas, its size and offset (and the breast jewel)
+export type DragonArt = { atlas: string, width: number, height: number, x: number, y: number, jewel?: boolean }
 
--- (`:: any`: an array literal is not taken as a DragonArt, see the port notes)
+local RARE = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged"
 local DRAGON: { [string]: DragonArt } = {
-    elite = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", 100, 100, 0, 1 } :: any,
-    boss = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", 110, 90, 11, -4 } :: any,
-    rare = { "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", 110, 89, 8, -7 } :: any,
+    elite = { atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", width = 100, height = 100, x = 0, y = 1 },
+    boss = { atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", width = 110, height = 90, x = 11, y = -4 },
+    rare = { atlas = RARE, width = 110, height = 89, x = 8, y = -7 },
+    rareelite = { atlas = RARE, width = 110, height = 89, x = 8, y = -7, jewel = true },
 }
-local rare = DRAGON.rare :: DragonArt
-DRAGON.rareelite = { rare[1], rare[2], rare[3], rare[4], rare[5], jewel = true }
 
-export function dragonArt(classification: any, isBoss: any): DragonArt?
-    local secret = isSecret
-    if classification == nil or secret(classification) then return nil end
-    if (not secret(isBoss) and isBoss) or classification == "worldboss" then return DRAGON.boss end
+export function dragonArt(classification: string | Secret<string> | nil, isBoss: boolean | Secret<boolean> | nil): DragonArt?
+    if isSecret(classification) or classification == nil then return nil end
+    if (not isSecret(isBoss) and isBoss) or classification == "worldboss" then return DRAGON.boss end
     if classification == "rare" then return DRAGON.rare end
     if classification == "rareelite" then return DRAGON.rareelite end
     if classification == "elite" then return DRAGON.elite end
@@ -152,26 +150,29 @@ end
 
 -- The breast jewel: on the texture's parent, over it; 7 px at a 32 px
 -- height, its centre 31 x 50 of the art's px in from its top right.
+local jewels: { [Texture]: Frame } = setmetatable({}, { __mode = "k" })
 local function breastJewel(t: Texture): Frame
-    if t.suuJewel then return t.suuJewel end
+    local made = jewels[t]
+    if made then return made end
     local host = t:GetParent()
     local j = CreateFrame("Frame", nil, host)
     j:SetSize(1, 1)
     j:SetFrameLevel(host:GetFrameLevel() + 1)
     jewel(j, "both", 7, 0, 0)
-    t.suuJewel = j
+    jewels[t] = j
     return j
 end
 
 -- TOPRIGHT at ((x + 26) s, (y + 19) s) of `anchor`, s = height / 58
 export function placeDragon(t: Texture, art: DragonArt | false | nil, anchor: Region, height: number)
-    if t.suuJewel then t.suuJewel:Hide() end
+    local made = jewels[t]
+    if made then made:Hide() end
     if not art then return t:Hide() end
     local s = height / 58
-    t:SetAtlas(art[1])
-    t:SetSize(art[2] * s, art[3] * s)
+    t:SetAtlas(art.atlas)
+    t:SetSize(art.width * s, art.height * s)
     t:ClearAllPoints()
-    t:SetPoint("TOPRIGHT", anchor, "TOPRIGHT", (art[4] + 26) * s, (art[5] + 19) * s)
+    t:SetPoint("TOPRIGHT", anchor, "TOPRIGHT", (art.x + 26) * s, (art.y + 19) * s)
     t:Show()
     if art.jewel then
         local j, k = breastJewel(t), height / 32

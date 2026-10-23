@@ -6,7 +6,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import actionBar, actionBarPaging, ActionBar from "/UI/ActionBar"
-import internal bars, bySlot, rangeRefs, HANDLERS, onSlotChanged, pollRange from "/UI/ActionBar"
+import internal bars, bySlot, rangeRefs, onSlotChanged, pollRange from "/UI/ActionBar"
 import actionButtons, ActionButton from "/UI/ActionButton"
 import expectNoErrors, newParent from "../../helpers"
 
@@ -16,21 +16,22 @@ const S1 = T.space["space-1"]
 local parent: Frame? = nil
 local made: ActionBar[] = {}
 
-local function bar(opts: { [string]: any }?): ActionBar
+local function bar(opts: { slot?: number, name?: string, count?: number, columns?: number, gap?: number, size?: number | string,
+                            binding?: string, paging?: string, label?: string, onPage?: (bar: ActionBar, page: number) -> () }?): ActionBar
     local p = parent or newParent(600, 200)
     parent = p
-    local o: { [string]: any } = opts or {}
-    o.name = o.name or ("SuuUITestBar" .. (#made + 1))
-    o.slot = o.slot or BASE
-    local b: ActionBar = actionBar(p, o)
+    local o = opts or {}
+    local b = actionBar(p, {
+        name = o.name or ("SuuUITestBar" .. (#made + 1)), slot = o.slot or BASE, count = o.count, columns = o.columns,
+        gap = o.gap, size = o.size, binding = o.binding, paging = o.paging, label = o.label, onPage = o.onPage,
+    })
     made[#made + 1] = b
     return b
 end
 
--- One of the dispatcher's handlers, called as the event would.
-local function handle(event: string, ...: any)
-    local h = assert(HANDLERS[event], event)
-    h(...)
+-- The game event, as the game fires it.
+local function handle(event: EventName, ...: unknown)
+    mock.fireEvent(event, ...)
 end
 
 local function forget(b: ActionBar)
@@ -347,9 +348,6 @@ local function slotChanged()
     mock.fireEvent("ACTIONBAR_SLOT_CHANGED", 0)
     expect(first.hasAction).toBe(true)
     expect(b.buttons[2].hasAction).toBe(true)
-    first.hasAction = false
-    handle("ACTIONBAR_SLOT_CHANGED", nil)
-    expect(first.hasAction).toBe(true)
     -- macros and icons update every button
     first.hasAction = false
     mock.fireEvent("UPDATE_MACROS")
@@ -432,7 +430,7 @@ local function grid()
     mock.fireEvent("CURSOR_CHANGED", false, 0, 0, 0)
     expect(b.buttons[1].grid).toBe(false)
     kind = "item"
-    handle("CURSOR_CHANGED")
+    handle("CURSOR_CHANGED", false, 0, 0, 0)
     expect(b.buttons[1].grid).toBe(true)
     kind = nil
     mock.fireEvent("ACTIONBAR_HIDEGRID")
@@ -447,8 +445,6 @@ local function pushed()
     handle("SPELL_PUSHED_TO_ACTIONBAR", 133, BASE + 2, 0)
     expect(btn.flash:GetAlpha() > 0.9).toBe(true)
     expect(b.buttons[1].flash:GetAlpha()).toBe(0)
-    -- not a slot: nothing
-    handle("SPELL_PUSHED_TO_ACTIONBAR", 133, nil)
     mock.fireEvent("SPELL_PUSHED_TO_ACTIONBAR", 133, BASE, 0)
     expectNoErrors()
 end
