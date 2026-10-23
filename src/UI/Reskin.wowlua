@@ -82,10 +82,30 @@ export function isArt(t: unknown): boolean
     return type(t) == "table" and ownArt[t :: Region] == true
 end
 
--- A flag a plugin (or a module) set on one of the game's frames: suuOwn,
--- suuNoCheck, suuNoButton, suuSkip.
-local function flagged(f: unknown, key: string): boolean
-    return tbl.field(f, key) == true
+-- What a module has the passes leave alone on one of the game's parts:
+-- "button" (no button look), "check" (no check box look), "text" (its font
+-- and colour). Kept here, never on the game's frames; a plugin's flags on
+-- the frame (suuNoButton, suuNoCheck, suuSkip) count too.
+export type Leave = "button" | "check" | "text"
+local leftButtons: { [Region]: true } = tbl.weakKeys()
+local leftChecks: { [Region]: true } = tbl.weakKeys()
+local leftTexts: { [Region]: true } = tbl.weakKeys()
+
+-- What's left alone, and the plugins' flag for it.
+local function leftOf(what: Leave): ({ [Region]: true }, string)
+    if what == "button" then return leftButtons, "suuNoButton" end
+    if what == "check" then return leftChecks, "suuNoCheck" end
+    return leftTexts, "suuSkip"
+end
+
+export function leave(f: Region, what: Leave)
+    local set = leftOf(what)
+    set[f] = true
+end
+
+local function flagged(f: unknown, what: Leave): boolean
+    local set, key = leftOf(what)
+    return (type(f) == "table" and set[f :: Region] == true) or tbl.field(f, key) == true
 end
 
 -- A part of `f` that can be faded (anything with SetAlpha).
@@ -100,21 +120,8 @@ local function matchesAny(s: string, list: string[]): boolean
 end
 
 -- The textures and font strings among a frame's regions.
-local function textures(f: Frame): Texture[]
-    local out: Texture[] = {}
-    for _, r in ipairs({ f:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then out[#out + 1] = r :: Texture end
-    end
-    return out
-end
+local textures, fontStrings = frames.textures, frames.fontStrings
 
-local function fontStrings(f: Frame): FontString[]
-    local out: FontString[] = {}
-    for _, r in ipairs({ f:GetRegions() }) do
-        if r:GetObjectType() == "FontString" then out[#out + 1] = r :: FontString end
-    end
-    return out
-end
 
 --------------------------------------------------------------------------------
 -- What a pass did to each of the game's parts (kept off the game's frames)
@@ -174,7 +181,7 @@ end
 -- Whether a text is left as it is: marked by a pass, or by a module (suuSkip).
 local function skipped(fs: FontString): boolean
     local s = skins[fs]
-    return (s ~= nil and s.skip == true) or flagged(fs, "suuSkip")
+    return (s ~= nil and s.skip == true) or flagged(fs, "text")
 end
 
 --------------------------------------------------------------------------------
@@ -552,7 +559,7 @@ local function hasText(row: Frame): boolean
         return false
     end
     if any(row) then return true end
-    for _, c in ipairs({ row:GetChildren() }) do
+    for _, c in ipairs(frames.children(row)) do
         if any(c) then return true end
     end
     return false
@@ -594,14 +601,14 @@ export function reskinMenu(given: unknown)
     st.panel:Show()
     for _, t in ipairs(textures(menu)) do hideRegion(st, t) end
     local rows: Frame[] = {}
-    for _, c in ipairs({ menu:GetChildren() }) do
+    for _, c in ipairs(frames.children(menu)) do
         if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
     end
     local scrollBox = frames.asFrame(tbl.field(menu, "ScrollBox"))
     local target = frames.asFrame(tbl.field(scrollBox, "ScrollTarget"))
     local scrolling = scrollBox ~= nil and target ~= nil and scrollBox:IsShown()
     if target and scrolling then
-        for _, c in ipairs({ target:GetChildren() }) do
+        for _, c in ipairs(frames.children(target)) do
             if c:GetObjectType() == "Button" then rows[#rows + 1] = c end
         end
     end
@@ -616,11 +623,11 @@ export function reskinMenu(given: unknown)
     -- and headings, which aren't buttons (a unit menu's name on top: the
     -- panel's padding came out 28 instead of 8, found with /suu probe unitmenu)
     local lines: Frame[] = {}
-    for _, c in ipairs({ menu:GetChildren() }) do
+    for _, c in ipairs(frames.children(menu)) do
         if c ~= st.panel then lines[#lines + 1] = c end
     end
     if target and scrolling then
-        for _, c in ipairs({ target:GetChildren() }) do lines[#lines + 1] = c end
+        for _, c in ipairs(frames.children(target)) do lines[#lines + 1] = c end
     end
     for _, row in ipairs(lines) do
         local t, b = row:GetTop(), row:GetBottom()
@@ -855,7 +862,7 @@ export function reskinEditBox(given: unknown)
     end
     -- whatever else Blizzard drew it with (its own art, a backdrop frame)
     for _, t in ipairs(textures(e)) do t:SetAlpha(0) end
-    for _, c in ipairs({ e:GetChildren() }) do
+    for _, c in ipairs(frames.children(e)) do
         fade(tbl.field(c, "NineSlice"))
         for _, t in ipairs(textures(c)) do t:SetAlpha(0) end
     end
@@ -1065,7 +1072,7 @@ local function pass(f: Frame, depth: number, ctx: Ctx)
     local fill = tbl.field(f, "Fill")
     if fill and tbl.field(f, "FillArea") and tbl.field(f, "SetFillPercent") then reskinFillBar(f); return end
     if kind == "StatusBar" then reskinStatusBar(f); return end
-    if kind == "CheckButton" and not flagged(f, "suuNoCheck") then reskinCheckButton(f) end
+    if kind == "CheckButton" and not flagged(f, "check") then reskinCheckButton(f) end
     if kind == "EditBox" then reskinEditBox(f) end
     local s = skinOf(f)
     if kind == "DropdownButton" or (tbl.field(f, "Arrow") and tbl.field(f, "Text") and kind == "Button" and not s.button) then
@@ -1079,7 +1086,7 @@ local function pass(f: Frame, depth: number, ctx: Ctx)
     if b then
         local key = askString(b, "GetParentKey") or ""
         if key:find("Collapse") or key:find("Expand") then reskinCollapseButton(b)
-        elseif not flagged(b, "suuNoButton") and isPanelButton(b) then reskinButton(b) end
+        elseif not flagged(b, "button") and isPanelButton(b) then reskinButton(b) end
         local collapse, button = s.collapse, s.button
         if collapse then collapse.draw() end
         if button then button.draw() end
@@ -1108,7 +1115,7 @@ local function pass(f: Frame, depth: number, ctx: Ctx)
     else
         for _, fs in ipairs(texts) do reskinText(fs, false) end
     end
-    for _, c in ipairs({ f:GetChildren() }) do pass(c, depth + 1, ctx) end
+    for _, c in ipairs(frames.children(f)) do pass(c, depth + 1, ctx) end
 end
 
 export function reskin(given: unknown)
@@ -1143,7 +1150,7 @@ export function reskinScrollBox(given: unknown)
         else
             local target = frames.asFrame(tbl.field(box, "ScrollTarget"))
             if target then
-                for _, row in ipairs({ target:GetChildren() }) do reskinRow(row) end
+                for _, row in ipairs(frames.children(target)) do reskinRow(row) end
             end
         end
     end
@@ -1178,7 +1185,7 @@ local function dialogBox(c: Frame)
     -- the text inside: the box is its field already (no second edge)
     local function walk(fr: Frame, depth: number)
         if depth > 4 then return end
-        for _, k in ipairs({ fr:GetChildren() }) do
+        for _, k in ipairs(frames.children(fr)) do
             local e = k:GetObjectType() == "EditBox" and frames.asEditBox(k) or nil
             if e then
                 skinOf(e).edit = true
@@ -1220,7 +1227,7 @@ export function reskinDialog(given: unknown)
         draw.shadow(panel, "shadow-panel")
         draw.diamond(panel, 7, "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
         local closeButton = tbl.field(f, "CloseButton")
-        for _, c in ipairs({ f:GetChildren() }) do
+        for _, c in ipairs(frames.children(f)) do
             local kind = c:GetObjectType()
             local name = c:GetName() or ""
             local text = errors.tryMethod(c, "GetText")

@@ -10,11 +10,15 @@
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
 import SuuUI from "/Core/API"
-import internal M, trackEyes from "/Units/Windows"
+import internal M, WindowsModule, trackEyes, paneTabs, trainerRows from "/Units/Windows"
+import type WindowChrome, SkinTab from "/UI/WindowSkin"
 import expectNoErrors from "../../helpers"
 
-local G: any = _G
+local field = tbl.field
 
 -- (the spells window's tabs from level 10)
 mock.setPlayer({ level = 20 })
@@ -42,32 +46,41 @@ local function takeQuest()
     mock.advanceFrames(3)
 end
 
+-- One of the game's windows, loaded above.
+local function win(name: string): Frame return assert(frames.find(name)) end
+local function part(f: unknown, ...: string): Frame return assert(frames.asFrame(field(f, ...))) end
+
 -- A chrome's tab defs by label, and the lit one's label.
-local function tabs(chrome: any): { [string]: any }
-    local out: { [string]: any } = {}
+local function tabs(chrome: WindowChrome): { [string]: SkinTab }
+    local out: { [string]: SkinTab } = {}
     for _, def in ipairs(chrome.tabs or {}) do out[def.label] = def end
     return out
 end
 
-local function lit(chrome: any): string?
+local function tab(chrome: WindowChrome, label: string): SkinTab return assert(tabs(chrome)[label]) end
+
+local function lit(chrome: WindowChrome): string?
+    local marker = chrome.tabMarker
     for _, def in ipairs(chrome.tabs or {}) do
-        if chrome.tabMarker and chrome.tabMarker.chosen == def.button then return def.label end
+        if marker and marker.chosen == def.button then return def.label end
     end
     return nil
 end
 
-local function labels(chrome: any): string
-    local out = {}
+local function labels(chrome: WindowChrome): string
+    local out: string[] = {}
     for _, def in ipairs(chrome.tabs or {}) do out[#out + 1] = def.label end
     return table.concat(out, ", ")
 end
+
+local function title(chrome: WindowChrome?): unknown return assert(chrome).title.value end
 
 @afterEach
 local function cleanup()
     if InCombatLockdown() then mock.player:leaveCombat() end
     for _, n in ipairs({ "PlayerSpellsFrame", "LegacySystemFrame", "ProfessionsFrame", "FriendsFrame", "SocialUIFrame",
                          "CommunitiesFrame", "LFGParentFrame", "WorldMapFrame", "ClassTrainerFrame", "CollectionsJournal" }) do
-        local f = G[n]
+        local f = frames.find(n)
         if f and f:IsShown() then HideUIPanel(f) end
     end
     M:Reset("mapEnlarged")
@@ -77,12 +90,13 @@ end
 
 @test("each window in SuuUI's look as its addon loads: SuuUI's header, Blizzard's frame art away")
 local function skinned()
-    for _, k in ipairs({ "spells", "legacy", "professions", "friends", "social", "communities", "groupFinder", "worldMap", "collections" }) do
-        expect((M :: any)[k] ~= nil).toBe(true)
+    for _, chrome in ipairs({ M.spells, M.legacy, M.professions, M.friends, M.social, M.communities, M.groupFinder, M.worldMap,
+                              M.collections }) do
+        expect(chrome ~= nil).toBe(true)
     end
-    expect(G.PlayerSpellsFrame.NineSlice:GetAlpha()).toBe(0)
-    expect(M.professions.title.value).toBe("Professions")
-    expect(M.friends.title.value).toBe("Social")
+    expect(part(win("PlayerSpellsFrame"), "NineSlice"):GetAlpha()).toBe(0)
+    expect(title(M.professions)).toBe("Professions")
+    expect(title(M.friends)).toBe("Social")
     -- a second load: not skinned twice
     local spells = M.spells
     M:SkinAll()
@@ -91,77 +105,82 @@ end
 
 @test("the spells window: the title and key following the open page (Forever has no tab row)")
 local function spells()
-    local f = G.PlayerSpellsFrame
-    expect(labels(M.spells)).toBe("Specialization, Talents, Spellbook")
-    PlayerSpellsUtil.OpenToSpellBookTab()
+    local f = win("PlayerSpellsFrame")
+    expect(labels(assert(M.spells))).toBe("Specialization, Talents, Spellbook")
+    errors.try(field(_G, "PlayerSpellsUtil", "OpenToSpellBookTab"))
     mock.advanceFrames(2)
-    expect(f.TabSystem:IsShown()).toBe(false)
-    expect(M.spells.title.value).toBe("Spellbook")
+    expect(part(f, "TabSystem"):IsShown()).toBe(false)
+    expect(title(M.spells)).toBe("Spellbook")
     HideUIPanel(f)
-    PlayerSpellsUtil.OpenToClassTalentsTab()
+    errors.try(field(_G, "PlayerSpellsUtil", "OpenToClassTalentsTab"))
     mock.advanceFrames(2)
-    expect(M.spells.title.value).toBe("Talents")
+    expect(title(M.spells)).toBe("Talents")
 end
 
 @test("the Legacy window: Tree and Challenges; the reward track's tab away while SuuUI's pages have it")
 local function legacy()
-    expect(labels(M.legacy)).toBe("Tree, Challenges")
-    ShowUIPanel(G.LegacySystemFrame)
+    local chrome = assert(M.legacy)
+    expect(labels(chrome)).toBe("Tree, Challenges")
+    ShowUIPanel(win("LegacySystemFrame"))
     mock.advanceFrames(2)
-    expect(lit(M.legacy) ~= nil).toBe(true)
+    expect(lit(chrome) ~= nil).toBe(true)
 end
 
 @test("the social windows: Contacts and Raid; Forever's own with its four side buttons as tabs")
 local function social()
-    expect(labels(M.friends)).toBe("Contacts, Raid")
-    ShowUIPanel(G.FriendsFrame)
+    local friends, own = assert(M.friends), assert(M.social)
+    expect(labels(friends)).toBe("Contacts, Raid")
+    ShowUIPanel(win("FriendsFrame"))
     mock.advanceFrames(2)
-    expect(lit(M.friends)).toBe("Contacts")
-    expect(G.FriendsFrameTab4:GetAlpha()).toBe(0)
-    HideUIPanel(G.FriendsFrame)
-    ShowUIPanel(G.SocialUIFrame)
+    expect(lit(friends)).toBe("Contacts")
+    expect(win("FriendsFrameTab4"):GetAlpha()).toBe(0)
+    HideUIPanel(win("FriendsFrame"))
+    ShowUIPanel(win("SocialUIFrame"))
     mock.advanceFrames(2)
-    expect(labels(M.social)).toBe("Friends, Recent allies, Requests, Raid")
-    expect(lit(M.social)).toBe("Friends")
-    mock.click(tabs(M.social)["Raid"].button)
+    expect(labels(own)).toBe("Friends, Recent allies, Requests, Raid")
+    expect(lit(own)).toBe("Friends")
+    mock.click(tab(own, "Raid").button)
     mock.advanceFrames(2)
-    expect(lit(M.social)).toBe("Raid")
+    expect(lit(own)).toBe("Raid")
 end
 
 @test("the guild window: Chat, Roster, Info and the Guild module's Log; Blizzard's tab not lit over SuuUI's page")
 local function guild()
-    local ch = M.communities
+    local ch = assert(M.communities)
     -- (the Guild Master's Settings too)
     expect(labels(ch)).toBe("Chat, Roster, Info, Log, Settings")
-    local g: any = SuuUI.GetModule("guild")
-    ShowUIPanel(G.CommunitiesFrame)
+    local g = assert(SuuUI.GetModule("guild"))
+    ShowUIPanel(win("CommunitiesFrame"))
     mock.advanceFrames(2)
-    local shown: { any } = {}
-    mock.stub(g, "ShowOwn", function(_: any, key: string?) g.ownPage = key; shown[#shown + 1] = key or "none" end)
-    mock.click(ch.logTab)
+    local shown: string[] = {}
+    mock.stub(g, "ShowOwn", function(_: unknown, key: string?)
+        mock.setField(g, "ownPage", key)
+        shown[#shown + 1] = key or "none"
+    end)
+    mock.click(assert(M.logTab))
     expect(shown[1]).toBe("log")
     expect(lit(ch)).toBe("Log")
-    mock.click(tabs(ch)["Roster"].button)
+    mock.click(tab(ch, "Roster").button)
     mock.advanceFrames(1)
     expect(shown[2]).toBe("none")
 end
 
 @test("the group finder: wider; Browse, List yourself (My listing while listed), Who; its gear opens the settings")
 local function groupFinder()
-    local f = G.LFGParentFrame
-    expect(f:GetWidth()).toBe(M.GROUP_FINDER_SIZE[1])
-    expect(labels(M.groupFinder)).toBe("Browse, List yourself, Who")
+    local f = win("LFGParentFrame")
+    local chrome = assert(M.groupFinder)
+    expect(f:GetWidth()).toBe(WindowsModule.GROUP_FINDER_SIZE[1])
+    expect(labels(chrome)).toBe("Browse, List yourself, Who")
     mock.postLFGListing({ activityIDs = { 799 } })
     mock.advanceTime(2)
-    expect(labels(M.groupFinder)).toBe("Browse, My listing, Who")
+    expect(labels(chrome)).toBe("Browse, My listing, Who")
     mock.delistLFG()
     mock.advanceTime(2)
-    expect(labels(M.groupFinder)).toBe("Browse, List yourself, Who")
-    local opened = mock.spy(function(_: string) end)
-    mock.stub(SuuUI, "OpenSettings", opened)
+    expect(labels(chrome)).toBe("Browse, List yourself, Who")
+    local opened = mock.stub(SuuUI, "OpenSettings", function(_: string) end)
     ShowUIPanel(f)
     mock.advanceFrames(2)
-    local gear = M.groupFinder.gear
+    local gear = assert(M.gear)
     mock.hover(gear)
     mock.hover(nil)
     mock.click(gear)
@@ -170,14 +189,15 @@ end
 
 @test("the collections: five text tabs; one the game hides, or with nothing in it, greyed")
 local function collections()
-    local f = G.CollectionsJournal
+    local f = win("CollectionsJournal")
     ShowUIPanel(f)
     mock.advanceFrames(3)
-    local ch = M.collections
+    local ch = assert(M.collections)
     expect(labels(ch)).toBe("Mounts, Pets, Toys, Heirlooms, Appearances")
-    expect(tabs(ch)["Heirlooms"].disabled()).toBe(true)
-    for _, def in ipairs(ch.tabs) do
-        if not def.disabled() and def.button:IsVisible() then
+    expect(assert(tab(ch, "Heirlooms").disabled)()).toBe(true)
+    for _, def in ipairs(ch.tabs or {}) do
+        local off = def.disabled
+        if not (off and off()) and def.button:IsVisible() then
             mock.click(def.button)
             mock.advanceFrames(3)
             expect(lit(ch)).toBe(def.label)
@@ -189,51 +209,51 @@ local function collections()
     M:SetCollectionTabs()
     mock.player:leaveCombat()
     -- the appearances: Items and Sets as text tabs
-    local w = G.WardrobeCollectionFrame
-    if w and w.ItemsTab then
-        expect(w.ItemsTab.suuLabel ~= nil).toBe(true)
-        mock.hover(w.ItemsTab)
+    local items = frames.asFrame(field(_G, "WardrobeCollectionFrame", "ItemsTab"))
+    if items then
+        expect(paneTabs[items] ~= nil).toBe(true)
+        mock.hover(items)
         mock.hover(nil)
     end
 end
 
 @test("the world map: Continent › Zone in the header; a click on it goes up a level")
 local function worldMap()
-    local f = G.WorldMapFrame
+    local f = WorldMapFrame
     mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
     ShowUIPanel(f)
     mock.advanceFrames(3)
     f:SetMapID(1429)
     mock.advanceFrames(1)
-    local ch = M.worldMap
+    local ch = assert(M.worldMap)
     expect(ch.title.value).toBe("Eastern Kingdoms › Elwynn Forest")
-    local up: any
-    for _, c in ipairs({ ch.head:GetChildren() }) do
+    local up: Frame? = nil
+    for _, c in ipairs(frames.children(ch.head)) do
         local _, rel = c:GetPoint(1)
         if rel == ch.title then up = c end
     end
-    mock.hover(up)
+    local button = assert(up)
+    mock.hover(button)
     mock.hover(nil)
-    mock.click(up)
+    mock.click(button)
     expect(f:GetMapID()).toBe(1415)
     -- the coordinates: yours off the map
     mock.advanceTime(0.1)
-    expect(ch.status:GetAlpha()).toBe(1)
+    expect(assert(M.status):GetAlpha()).toBe(1)
 end
 
 @test("the world map enlarged, small, in a fight a theme change waits")
 local function mapSize()
-    local f = G.WorldMapFrame
+    local f = WorldMapFrame
     ShowUIPanel(f)
     mock.advanceFrames(3)
     local big = f:GetWidth()
-    local b = f.BorderFrame
-    local mm = b and b.MaximizeMinimizeFrame
+    local mm = frames.asFrame(field(f, "BorderFrame", "MaximizeMinimizeFrame"))
     if mm then
-        mock.click(mm.MinimizeButton)
+        mock.click(part(mm, "MinimizeButton"))
         expect(M:Get("mapEnlarged")).toBe(false)
         expect(f:GetWidth() < big).toBe(true)
-        mock.click(mm.MaximizeButton)
+        mock.click(part(mm, "MaximizeButton"))
         expect(M:Get("mapEnlarged")).toBe(true)
     end
     M:Emit("SUUUI_SETTING_CHANGED", "worldmap", "enlargedSize")
@@ -243,59 +263,57 @@ end
 @test("the quest log beside the map: rows measured for SuuUI's fonts, headers in label ink, a tracked quest's eye, the details' buttons centred")
 local function questLog()
     takeQuest()
-    local f = G.WorldMapFrame
+    local f = WorldMapFrame
     mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
     ShowUIPanel(f)
     mock.advanceFrames(3)
     -- (the log lists the quests of the map shown)
     f:SetMapID(1429)
-    if f.SetQuestLogPanelShown then f:SetQuestLogPanelShown(true) end
-    QuestLogQuests_Update()
+    errors.tryMethod(f, "SetQuestLogPanelShown", true)
+    errors.try(field(_G, "QuestLogQuests_Update"))
     mock.advanceFrames(2)
-    local list = G.QuestScrollFrame
+    local list = win("QuestScrollFrame")
     -- its zone header opened, as you'd click it
-    for header in list.headerFramePool:EnumerateActive() do mock.click(header) end
+    for _, header in ipairs(frames.rows(field(list, "headerFramePool"))) do mock.click(header) end
     mock.advanceFrames(2)
     -- each quest's track box: the eye, shown while it's tracked
     local rows = 0
-    for row in list.titleFramePool:EnumerateActive() do
+    for _, row in ipairs(frames.rows(field(list, "titleFramePool"))) do
         rows = rows + 1
-        local cb = row.Checkbox
-        local eye = trackEyes[cb]
-        expect(eye ~= nil).toBe(true)
-        expect(eye:IsShown()).toBe(cb.CheckMark:IsShown())
+        local cb = part(row, "Checkbox")
+        local eye = assert(trackEyes[cb])
+        expect(eye:IsShown()).toBe(assert(frames.asTexture(field(cb, "CheckMark"))):IsShown())
     end
     expect(rows).toBe(1)
-    for row in list.headerFramePool:EnumerateActive() do
-        expect(row:GetNormalFontObject()).toBe(G.SuuUIQuestHeaderFont)
+    for _, row in ipairs(frames.rows(field(list, "headerFramePool"))) do
+        expect(assert(frames.asButton(row)):GetNormalFontObject()).toBe(assert(M.questFont))
     end
     -- the details: Abandon, Share and Track in one row of equal widths
-    QuestMapFrame_ShowQuestDetails(WOLVES)
+    errors.try(field(_G, "QuestMapFrame_ShowQuestDetails"), WOLVES)
     mock.advanceFrames(3)
-    local d = G.QuestMapFrame.DetailsFrame
+    local d = part(win("QuestMapFrame"), "DetailsFrame")
     if d:IsVisible() then
-        expect(d.AbandonButton:GetWidth()).toBe(d.TrackButton:GetWidth())
+        expect(part(d, "AbandonButton"):GetWidth()).toBe(part(d, "TrackButton"):GetWidth())
     end
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
 end
 
 @test("the map's status line: the cursor's spot over the map, yours off it")
 local function status()
-    local f = G.WorldMapFrame
+    local f = WorldMapFrame
     mock.hover(nil) -- (the mouse away from the map)
     mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
     ShowUIPanel(f)
     mock.advanceFrames(3)
     f:SetMapID(1429)
-    local st = M.worldMap.status
+    local st = assert(M.status)
     mock.advanceTime(0.1)
     mock.advanceFrames(6) -- (it reads the map every 0.05 s)
     expect(st:GetAlpha()).toBe(1)
-    local text: any
-    for _, r in ipairs({ st:GetRegions() }) do if r:GetObjectType() == "FontString" then text = r end end
-    expect(text:GetText():find("you", 1, true) ~= nil).toBe(true)
+    local text = assert(frames.fontStrings(st)[1])
+    expect((text:GetText() or ""):find("you", 1, true) ~= nil).toBe(true)
     -- the cursor over the map: its spot
-    local sc = f.ScrollContainer
+    local sc = part(f, "ScrollContainer")
     local scale = sc:GetEffectiveScale()
     mock.setCursorPosition((sc:GetLeft() + sc:GetWidth() / 2) * scale, (sc:GetBottom() + sc:GetHeight() / 2) * scale)
     mock.hover(sc)
@@ -314,7 +332,7 @@ end
 
 @test("the trainer window restyled while SuuUI's own trainer is off: its rows, headings, price and money")
 local function trainer()
-    local own: any = SuuUI.GetModule("trainer")
+    local own = assert(SuuUI.GetModule("trainer"))
     mock.stub(own, "IsEnabled", function(): boolean return false end)
     M:SkinTrainer()
     expect(M.trainer ~= nil).toBe(true)
@@ -331,17 +349,24 @@ local function trainer()
     C_GossipInfo.SelectOption(7)
     mock.advanceTime(1)
     mock.advanceFrames(3)
-    local f = G.ClassTrainerFrame
+    local f = win("ClassTrainerFrame")
     expect(f:IsShown()).toBe(true)
-    expect(M.trainer.title.value).toBe("Brannoc Ironhand")
+    expect(title(M.trainer)).toBe("Brannoc Ironhand")
     -- each row: SuuUI's money, ember while you can't afford it, none when free
-    local prices: { [string]: any } = {}
-    for _, b in ipairs({ f.ScrollBox.ScrollTarget:GetChildren() }) do
-        if b.suuMoney and b.name then prices[b.name:GetText()] = b.suuMoney end
+    local prices: { [string]: Frame } = {}
+    local moneyText: { [string]: FontString } = {}
+    for _, b in ipairs(frames.children(part(f, "ScrollBox", "ScrollTarget"))) do
+        local row = trainerRows[b]
+        local name = frames.asFontString(field(b, "name"))
+        local label = name and name:GetText()
+        if row and label then
+            prices[label] = row.money
+            moneyText[label] = row.money.text
+        end
     end
-    expect(prices["Charge"]:IsShown()).toBe(true)
-    expect(prices["Battle Shout"]:IsShown()).toBe(false)
-    local r, g, bl = prices["Thunder Clap"].text:GetTextColor()
+    expect(assert(prices["Charge"]):IsShown()).toBe(true)
+    expect(assert(prices["Battle Shout"]):IsShown()).toBe(false)
+    local r, g, bl = assert(moneyText["Thunder Clap"]):GetTextColor()
     local er, eg, eb = SuuUI.UI.RGBA("ember-text")
     expect(math.abs(r - er) + math.abs(g - eg) + math.abs(bl - eb) < 0.03).toBe(true)
     CloseTrainer()
