@@ -22,8 +22,8 @@ import * as extend from "/Core/Extend"
 export class FakeReporter implements fault.Reporter
     errors: string[] = {}
 
-    function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
-        local function keep(ok: boolean, ...: any): (boolean, ...any)
+    function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
+        local function keep(ok: boolean, ...: R...): (boolean, R...)
             if not ok then
                 self:report(source, (...))
                 return false
@@ -33,7 +33,7 @@ export class FakeReporter implements fault.Reporter
         return keep(pcall(fn, ...))
     end
 
-    function report(source: any, message: any, stack: string?)
+    function report(source: unknown, message: unknown, stack: string?)
         local text = (tostring(message):match("^[^\n]*")) or ""
         -- (the error's position taken off: `file:line: text`)
         text = text:gsub("^[^:]+:%d+: ", "")
@@ -50,32 +50,32 @@ export class FakeSubscription implements wl.Subscription
 end
 
 -- One registration: its name, units (unit events), handler and owner.
-export type Registration = { name: string, units: string[]?, fn: (...any) -> (), owner: any, sub: FakeSubscription }
+export type Registration = { name: string, units: UnitToken[]?, fn: events.Handler, owner: unknown, sub: FakeSubscription }
 
 export class FakeDispatcher implements events.Dispatcher
     registrations: Registration[] = {}
     sent: string[] = {}
 
-    function on(name: string, fn: (...any) -> (), owner: any): wl.Subscription
+    function on(name: string, fn: events.Handler, owner: unknown): wl.Subscription
         local sub = FakeSubscription.new()
         self.registrations[#self.registrations + 1] = { name = name, units = nil, fn = fn, owner = owner, sub = sub }
         return sub
     end
 
-    function onUnit(event: string, units: string[], fn: (...any) -> (), owner: any): wl.Subscription
+    function onUnit(event: string, units: UnitToken[], fn: events.Handler, owner: unknown): wl.Subscription
         local sub = FakeSubscription.new()
         self.registrations[#self.registrations + 1] = { name = event, units = units, fn = fn, owner = owner, sub = sub }
         return sub
     end
 
-    function send(name: string, ...: any)
+    function send(name: string, ...: unknown)
         self.sent[#self.sent + 1] = name
         self:deliver(name, ...)
     end
 
     -- Runs every active handler of `name` (a game event the test fires),
     -- from a snapshot, as wowlua:events does.
-    function deliver(name: string, ...: any)
+    function deliver(name: string, ...: unknown)
         local snapshot: Registration[] = {}
         for _, r in ipairs(self.registrations) do
             if r.name == name then snapshot[#snapshot + 1] = r end
@@ -119,7 +119,7 @@ end
 export class FakeNotifier implements events.Notifier
     told: string[] = {}
 
-    function emit(name: string, ...: any)
+    function emit<M extends MessageName>(name: M, ...: EventArgs<M>...)
         self.told[#self.told + 1] = `{name} {tostring((...))}`
     end
 end

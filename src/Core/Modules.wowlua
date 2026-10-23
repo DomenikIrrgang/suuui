@@ -62,7 +62,7 @@ export enum ModuleState {
 export interface ModuleSettings
     function register(namespace: string, defs: { [string]: any })
     function get(namespace: string, key: string): any
-    function watch(namespace: string, key: string, @deferred fn: (value: any, namespace: string, key: string) -> (), owner: any)
+    function watch(namespace: string, key: string, @deferred fn: (value: any, namespace: string, key: string) -> (), owner: unknown)
 end
 
 -- What runs work now or after combat, keyed (SuuUI's CombatQueue).
@@ -93,6 +93,12 @@ export type Module = {
     OnInitialize: ((self: Module) -> ())?,
     OnEnable: ((self: Module) -> ())?,
     OnDisable: ((self: Module) -> ())?,
+    On: <M extends string>(self: Module, message: M, fn: (name: M, EventArgs<M>...) -> ()) -> (),
+    Off: (self: Module, message: string) -> (),
+    Emit: <M extends string>(self: Module, message: M, ...: EventArgs<M>...) -> (),
+    OnGameEvent: <E extends EventName>(self: Module, event: E, fn: (name: E, EventArgs<E>...) -> ()) -> (),
+    OnUnitEvent: <E extends EventName>(self: Module, event: E, units: UnitToken | UnitToken[],
+                                       fn: (name: E, EventArgs<E>...) -> ()) -> (),
     [string]: any,
 }
 
@@ -178,11 +184,20 @@ function Module.Veto(self: Module, key: string, fn: settings.Veto) settings.veto
 -- at file load, so it runs before the old values are judged by type.
 function Module.Migrate(self: Module, id: string, fn: (values: settings.Values) -> ()) settings.migrate(self.id, id, fn, self) end
 
-function Module.On(self: Module, message: string, fn: events.Listener) events.on(message, fn, self) end
+-- A message: SuuUI's (Core/Messages.d.wowlua: the listener's arguments are
+-- checked) or a plugin's own (any name; its values unchecked).
+function Module.On<M extends string>(self: Module, message: M, fn: (name: M, EventArgs<M>...) -> ())
+    events.bus:listen(message, fn :: events.Listener, self)
+end
 function Module.Off(self: Module, message: string) events.off(message, self) end
-function Module.Emit(self: Module, message: string, ...: any) events.emit(message, ...) end
-function Module.OnGameEvent(self: Module, event: string, fn: events.Listener) events.onGame(event, fn, self) end
-function Module.OnUnitEvent(self: Module, event: string, units: string | string[], fn: events.Listener) events.onUnit(event, units, fn, self) end
+function Module.Emit<M extends string>(self: Module, message: M, ...: EventArgs<M>...) events.bus:send(message, ...) end
+function Module.OnGameEvent<E extends EventName>(self: Module, event: E, fn: (name: E, EventArgs<E>...) -> ())
+    events.onGame(event, fn, self)
+end
+function Module.OnUnitEvent<E extends EventName>(self: Module, event: E, units: UnitToken | UnitToken[],
+                                                 fn: (name: E, EventArgs<E>...) -> ())
+    events.onUnit(event, units, fn, self)
+end
 
 -- Keys get an "m:" prefix so a module's never collide with the core's own.
 function Module.RunOutOfCombat(self: Module, key: any, fn: () -> ())
@@ -213,9 +228,9 @@ end
 -- instance of a kind, now and later (undo(object, info) for each when the
 -- module turns off); fn(object, ...) after a method; fn(object, original,
 -- ...) instead of one. All removed when the module turns off.
-function Module.Each(self: Module, kind: string, fn: (obj: any, info: extend.Info) -> (), undo: ((obj: any, info: extend.Info) -> ())?) extend.each(kind, fn, undo, self) end
-function Module.Hook(self: Module, kind: string, method: string, fn: (...any) -> ...any) extend.hook(kind, method, fn, self) end
-function Module.Override(self: Module, kind: string, method: string, fn: (...any) -> ...any) extend.override(kind, method, fn, self) end
+function Module.Each(self: Module, kind: string, fn: extend.Extender, undo: extend.Extender?) extend.each(kind, fn, undo, self) end
+function Module.Hook(self: Module, kind: string, method: string, fn: extend.Hook) extend.hook(kind, method, fn, self) end
+function Module.Override(self: Module, kind: string, method: string, fn: extend.Override) extend.override(kind, method, fn, self) end
 
 -- 0.17: a service other modules reach by name (Core/Services.wowlua); gone
 -- when the module turns off.
@@ -225,16 +240,18 @@ function Module.Provide(self: Module, serviceName: string, impl: { [string]: any
 -- of SuuUI's right-click menus opens, fn(menu, context); a micro menu
 -- button; a game menu entry; a game popup shown as a notification card;
 -- this module's own settings in a role's preset. Gone when it turns off.
-function Module.ExtendMenu(self: Module, id: string, fn: (menu: any, context: any) -> ()) extend.extendMenu(id, fn, self) end
-function Module.AddMicroItem(self: Module, item: any) extend.addTo(extend.List.MicroMenu, item, self) end
-function Module.AddGameMenuItem(self: Module, item: any) extend.addTo(extend.List.GameMenu, item, self) end
-function Module.AddNotificationKind(self: Module, which: string, def: { [string]: any }?)
-    local d: { [string]: any } = def or {}
+function Module.ExtendMenu(self: Module, id: string, fn: extend.MenuExtension) extend.extendMenu(id, fn, self) end
+-- (what the micro menu and the game menu take: they check the item)
+function Module.AddMicroItem(self: Module, item: unknown) extend.addTo(extend.List.MicroMenu, item, self) end
+function Module.AddGameMenuItem(self: Module, item: unknown) extend.addTo(extend.List.GameMenu, item, self) end
+function Module.AddNotificationKind(self: Module, which: string, def: { [string]: unknown }?)
+    local d: { [string]: unknown } = def or {}
     d.which = which
     extend.addTo(extend.List.NotificationKinds, d, self)
 end
-function Module.AddToRolePreset(self: Module, role: string, values: { [string]: any })
-    extend.addTo(extend.List.RolePresets, { role = role, namespace = self.id, values = values }, self)
+function Module.AddToRolePreset(self: Module, role: string, values: { [string]: unknown })
+    local preset: extend.RolePreset = { role = role, namespace = self.id, values = values }
+    extend.addTo(extend.List.RolePresets, preset, self)
 end
 
 function Module.Print(self: Module, ...: any)
@@ -285,7 +302,7 @@ export class ModuleRegistry
         private lockdown: combat.CombatState = combat.GameCombat.new(),
         private reporter: fault.Reporter = fault.log,
         private notifier: events.Notifier = events.bus,
-        private release: (owner: any) -> () = releaseAll
+        private release: (owner: unknown) -> () = releaseAll
     )
     end
 

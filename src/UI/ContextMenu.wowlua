@@ -17,8 +17,8 @@ import tokens as T from "/Core/Tokens"
 import root as suuRoot from "/Core/Root"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
-import text from "/UI/Text"
-import panel from "/UI/Panel"
+import text, Text from "/UI/Text"
+import Panel from "/UI/Panel"
 import hideTooltip from "/UI/Tooltip"
 
 local S = T.space
@@ -26,7 +26,17 @@ local S = T.space
 local ROW_H = 24
 local MIN_W = 160
 
-local menu: any, catcher: any
+-- What a menu shows: its title and items; `id` names it for plugins'
+-- entries (M:ExtendMenu) and `context` says what it's about.
+export type MenuOptions = {
+    title?: string,
+    items?: extend.MenuItem[],
+    id?: string,
+    context?: extend.MenuContext,
+}
+
+local menu: MenuFrame? = nil
+local catcher: Button? = nil
 
 local function close()
     if menu then menu:Hide() end
@@ -34,25 +44,56 @@ local function close()
 end
 export const closeContextMenu = close
 
-local function build()
-    catcher = CreateFrame("Button", nil, UIParent)
-    catcher:SetAllPoints(UIParent)
-    catcher:SetFrameStrata("FULLSCREEN_DIALOG")
-    catcher:RegisterForClicks("AnyDown")
-    catcher:SetScript("OnClick", close)
-    catcher:Hide()
-    menu = panel(suuRoot, { ornament = true, solid = false })
-    menu.body:Hide()
-    menu:SetFrameStrata("FULLSCREEN_DIALOG")
-    menu:SetFrameLevel(catcher:GetFrameLevel() + 10)
-    menu:SetClampedToScreen(true)
-    menu:EnableMouse(true)
-    menu.title = text(menu, "unit-name-lg", "ink")
-    menu.title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
-    menu.rows, menu.rules = {}, {}
-    -- Esc closes it (out of combat: the key can't be held back in one)
-    menu:EnableKeyboard(true)
-    menu:SetScript("OnKeyDown", function(self: any, key: string)
+-- An action's row: its label, its hover band, the item it picks.
+class MenuRow extends Button
+    readonly hover: Texture
+    readonly label: Text
+    item: extend.MenuItem = {}
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self.hover = draw.fill(self, "arcane-soft", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.label = text(self, "body", "ink")
+        self.label:SetPoint("LEFT", S["space-4"], 0)
+    end
+
+    @script("OnEnter")
+    function entered() if not self.item.disabled then self.hover:Show() end end
+
+    @script("OnLeave")
+    function left() self.hover:Hide() end
+
+    @script("OnClick")
+    function clicked()
+        if self.item.disabled then return end
+        close()
+        local onClick = self.item.onClick
+        if onClick then onClick() end
+    end
+end
+
+-- The menu: a glass panel with a title, its rows and the rules between
+-- groups (both kept for the next opening).
+export class MenuFrame extends Panel
+    readonly heading: Text
+    readonly rows: MenuRow[] = {}
+    readonly rules: Texture[] = {}
+
+    constructor(parent: Frame)
+        super(parent, { ornament = true, solid = false })
+        self.body:Hide()
+        self.heading = text(self, "unit-name-lg", "ink")
+        self.heading:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+        self.title = self.heading
+        -- Esc closes it (out of combat: the key can't be held back in one)
+        self:EnableKeyboard(true)
+    end
+
+    @script("OnKeyDown")
+    function keyDown(key: string)
         if InCombatLockdown() then return end
         if key == "ESCAPE" then
             self:SetPropagateKeyboardInput(false)
@@ -60,71 +101,81 @@ local function build()
         else
             self:SetPropagateKeyboardInput(true)
         end
-    end)
-    menu:Hide()
+    end
+
+    function row(i: number): MenuRow
+        local r = self.rows[i]
+        if r then return r end
+        r = MenuRow.new(self)
+        self.rows[i] = r
+        return r
+    end
+
+    function rule(i: number): Texture
+        local l = self.rules[i]
+        if l then return l end
+        l = draw.fill(self, "gilt-faint", "ARTWORK")
+        l:SetHeight(1)
+        self.rules[i] = l
+        return l
+    end
 end
 
-local function row(i: number): any
-    local r = menu.rows[i]
-    if r then return r end
-    r = CreateFrame("Button", nil, menu)
-    r:SetHeight(ROW_H)
-    r.hover = draw.fill(r, "arcane-soft", "BACKGROUND", 1)
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.label = text(r, "body", "ink")
-    r.label:SetPoint("LEFT", S["space-4"], 0)
-    r:SetScript("OnEnter", function(self) if not self.item.disabled then self.hover:Show() end end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self)
-        if self.item.disabled then return end
-        close()
-        if self.item.onClick then self.item.onClick() end
-    end)
-    menu.rows[i] = r
-    return r
+local function build(): MenuFrame
+    local c = CreateFrame("Button", nil, UIParent)
+    c:SetAllPoints(UIParent)
+    c:SetFrameStrata("FULLSCREEN_DIALOG")
+    c:RegisterForClicks("AnyDown")
+    c:SetScript("OnClick", close)
+    c:Hide()
+    catcher = c
+    local m = MenuFrame.new(suuRoot)
+    m:SetFrameStrata("FULLSCREEN_DIALOG")
+    m:SetFrameLevel(c:GetFrameLevel() + 10)
+    m:SetClampedToScreen(true)
+    m:EnableMouse(true)
+    m:Hide()
+    menu = m
+    return m
 end
 
-local function rule(i: number): any
-    local l = menu.rules[i]
-    if l then return l end
-    l = draw.fill(menu, "gilt-faint", "ARTWORK")
-    l:SetHeight(1)
-    menu.rules[i] = l
-    return l
-end
+type Placed = { region: MenuRow | Texture, y: number, row?: MenuRow }
 
-export function contextMenu(owner: any, opts: { [string]: any }?): any
-    if not menu then build() end
-    opts = opts or {}
-    opts.items = opts.items or {}
-    if opts.id then extend.applyMenu(opts.id, opts, opts.context) end
+export function contextMenu(owner: Region?, given: MenuOptions?): MenuFrame
+    local m = menu or build()
+    local opts = given or {}
+    local items: extend.MenuItem[] = opts.items or {}
+    opts.items = items
+    -- what plugins' entries see and change before it opens
+    local shown: extend.Menu = { title = opts.title, items = items, id = opts.id, context = opts.context }
+    if opts.id then extend.applyMenu(opts.id, shown, opts.context) end
     local pad = S["space-5"]
     local y = pad
-    menu.title:SetShown(opts.title ~= nil)
+    local title = shown.title
+    m.heading:SetShown(title ~= nil)
     local width = MIN_W
-    if opts.title then
-        menu.title:SetValue(opts.title)
-        width = math.max(width, math.ceil(menu.title:GetUnboundedStringWidth()) + pad * 2)
+    if title then
+        m.heading:SetValue(title)
+        width = math.max(width, math.ceil(m.heading:GetUnboundedStringWidth()) + pad * 2)
         y = y + T.type["unit-name-lg"].lineHeight + S["space-3"]
     end
     local nRow, nRule = 0, 0
-    local placed: { region: any, y: number, rule?: boolean }[] = {}
-    for _, item in ipairs(opts.items or {}) do
+    local placed: Placed[] = {}
+    for _, item in ipairs(shown.items) do
         if item.separator then
             nRule = nRule + 1
-            local l = rule(nRule)
+            local l = m:rule(nRule)
             y = y + S["space-2"]
-            placed[#placed + 1] = { region = l, y = y, rule = true }
+            placed[#placed + 1] = { region = l, y = y }
             y = y + 1 + S["space-2"]
         else
             nRow = nRow + 1
-            local r = row(nRow)
+            local r = m:row(nRow)
             r.item = item
             r.label:SetValue(item.label or "")
             r.label:SetColor(item.disabled and "ink-faint" or "ink")
             width = math.max(width, math.ceil(r.label:GetUnboundedStringWidth()) + S["space-4"] * 2 + pad * 2 - S["space-3"] * 2)
-            placed[#placed + 1] = { region = r, y = y }
+            placed[#placed + 1] = { region = r, y = y, row = r }
             y = y + ROW_H
         end
     end
@@ -136,38 +187,55 @@ export function contextMenu(owner: any, opts: { [string]: any }?): any
         p.region:SetPoint("TOPLEFT", inset, -p.y)
         p.region:SetPoint("TOPRIGHT", -inset, -p.y)
         p.region:Show()
-        if not p.rule then p.region.hover:Hide() end
+        if p.row then p.row.hover:Hide() end
     end
-    for i = nRow + 1, #menu.rows do menu.rows[i]:Hide() end
-    for i = nRule + 1, #menu.rules do menu.rules[i]:Hide() end
-    menu:SetSize(width, y + pad - S["space-2"])
+    for i = nRow + 1, #m.rows do m.rows[i]:Hide() end
+    for i = nRule + 1, #m.rules do m.rules[i]:Hide() end
+    m:SetSize(width, y + pad - S["space-2"])
     -- at the cursor
-    local scale = menu:GetEffectiveScale()
+    local scale = m:GetEffectiveScale()
     local x, cy = GetCursorPosition()
-    menu:ClearAllPoints()
-    menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / scale + 2, cy / scale - 2)
+    m:ClearAllPoints()
+    m:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / scale + 2, cy / scale - 2)
     GameTooltip:Hide()
     hideTooltip()
-    catcher:Show()
-    menu:Show()
-    return menu
+    if catcher then catcher:Show() end
+    m:Show()
+    return m
+end
+
+-- What contextMenuFrom's describe gets: the game's MenuUtil generator's
+-- calls, and what CreateButton gives.
+export class MenuButtonDescription
+    constructor(private item: extend.MenuItem)
+    end
+
+    function SetEnabled(on: boolean) self.item.disabled = not on end
+end
+
+export class MenuDescription
+    constructor(private opts: MenuOptions, private items: extend.MenuItem[])
+    end
+
+    function CreateTitle(title: string) self.opts.title = self.opts.title or title end
+
+    function CreateButton(label: string, onClick: (() -> ())?): MenuButtonDescription
+        local item: extend.MenuItem = { label = label, onClick = onClick }
+        self.items[#self.items + 1] = item
+        return MenuButtonDescription.new(item)
+    end
+
+    function CreateDivider() self.items[#self.items + 1] = { separator = true } end
 end
 
 -- The same menu described the way the game's are (MenuUtil's generator:
 -- root:CreateTitle(text), root:CreateButton(label, fn), root:CreateDivider()),
 -- so a menu moves over by its first line.
 --   contextMenuFrom(owner, function(owner, root) ... end[, id, context])
-export function contextMenuFrom(owner: any, describe: (owner: any, root: any) -> (), id: string?, context: any?): any
-    local items: { [string]: any }[] = {}
-    local opts: { [string]: any } = { items = items, id = id, context = context }
-    local root: { [string]: any } = {}
-    function root:CreateTitle(title: string) opts.title = opts.title or title end
-    function root:CreateButton(label: string, onClick: (() -> ())?)
-        local item: { [string]: any } = { label = label, onClick = onClick }
-        items[#items + 1] = item
-        return { SetEnabled = function(_: any, on: boolean) item.disabled = not on end }
-    end
-    function root:CreateDivider() items[#items + 1] = { separator = true } end
-    describe(owner, root)
-    return contextMenu(owner, opts)
+export function contextMenuFrom<O>(owner: O, describe: (owner: O, root: MenuDescription) -> (), id: string?,
+                                   context: extend.MenuContext?): MenuFrame
+    local items: extend.MenuItem[] = {}
+    local opts: MenuOptions = { items = items, id = id, context = context }
+    describe(owner, MenuDescription.new(opts, items))
+    return contextMenu(nil, opts)
 end

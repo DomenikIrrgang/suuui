@@ -37,8 +37,8 @@ export type Spent = { ms: number, calls: number, peak: number, kb: number }
 export interface Reporter
     -- fn(...) guarded: true and its results, or false (the error reported
     -- under `source`)
-    function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
-    function report(source: any, message: any, stack: string?)
+    function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
+    function report(source: unknown, message: unknown, stack: string?)
 end
 
 -- Where a new error goes: the player's chat line, the saved record.
@@ -99,7 +99,7 @@ export class FaultLog implements Reporter
     -- the stack of the error the handler last saw (xpcall's handler runs
     -- before the stack unwinds)
     private lastStack: string? = nil
-    private handler: (err: any) -> any
+    private handler: (err: unknown) -> unknown
     -- timing: while on, each call's own time and the memory it allocated
     -- (its nested calls' taken out) are added to its source. Allocation is
     -- Lua's memory count before and after: a garbage collection step inside
@@ -115,7 +115,7 @@ export class FaultLog implements Reporter
 
     constructor(private output: FaultOutput = ChatOutput.new(), private meter: Meter = GameMeter.new(),
                 private maxKept: number = MAX_KEPT)
-        self.handler = function(err: any): any
+        self.handler = function(err: unknown): unknown
             self.lastStack = debugstack(2)
             return err
         end
@@ -123,7 +123,7 @@ export class FaultLog implements Reporter
 
     -- Records an error from `source` (a module or owner name). `stack` is
     -- optional. The same error again only counts.
-    function report(source: any, message: any, stack: string?)
+    function report(source: unknown, message: unknown, stack: string?)
         local from = tostring(source or "SuuUI")
         local text = firstLine(message)
         local key = from .. "\0" .. text
@@ -143,7 +143,8 @@ export class FaultLog implements Reporter
         self.output:keep(from, text, stack)
     end
 
-    private function finish(source: string, ok: boolean, ...: any): (boolean, ...any)
+    -- `...`: the results, or the error (not ok)
+    private function finish<R...>(source: string, ok: boolean, ...: R...): (boolean, R...)
         if not ok then
             self:report(source, (...), self.lastStack)
             return false
@@ -151,7 +152,7 @@ export class FaultLog implements Reporter
         return true, ...
     end
 
-    private function finishTimed(source: string, ok: boolean, ...: any): (boolean, ...any)
+    private function finishTimed<R...>(source: string, ok: boolean, ...: R...): (boolean, R...)
         local depth = self.depth
         -- timing was turned off (or on again) inside this call: nothing to add
         if depth == 0 or not self.starts[depth] then return self:finish(source, ok, ...) end
@@ -178,7 +179,7 @@ export class FaultLog implements Reporter
     -- Calls fn(...) under xpcall; an error is reported against `source`.
     -- Returns true plus fn's results on success, false on error. Allocates
     -- nothing on success, so every event callback can go through it.
-    function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
+    function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
         if not self.timing then return self:finish(source, xpcall(fn, self.handler, ...)) end
         self.depth += 1
         local depth = self.depth
@@ -213,11 +214,11 @@ end
 -- SuuUI's log, and its methods as the module's functions.
 export const log = FaultLog.new()
 
-export function report(source: any, message: any, stack: string?)
+export function report(source: unknown, message: unknown, stack: string?)
     log:report(source, message, stack)
 end
 
-export function call(source: string, fn: (...any) -> ...any, ...: any): (boolean, ...any)
+export function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
     return log:call(source, fn, ...)
 end
 

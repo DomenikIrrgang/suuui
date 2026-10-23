@@ -71,7 +71,7 @@ end
 @test("add: info with kind and order; once per object; unknown kinds refused")
 local function add()
     local a, b = track(newThing()), track(newThing())
-    local given: extend.Info = { role = "player" }
+    local given: extend.Tags = { role = "player" }
     local ia = extend.add("meter", a, given) :: extend.Info
     expect(ia == given).toBe(true)
     expect(ia.kind).toBe("meter")
@@ -230,9 +230,9 @@ local function override()
     local t = track(newThing())
     extend.add("auracontainer", t)
     local order: string[] = {}
-    extend.override("auracontainer", "CoreATestPaint", function(self: Thing, original: any, x: number): string
+    extend.override("auracontainer", "CoreATestPaint", function(self: extend.Instance, original: extend.Method, x: unknown): string
         order[#order + 1] = "override"
-        original(self, x * 10)
+        original(self, (x :: number) * 10)
         return "mine"
     end, OWNER)
     extend.hook("auracontainer", "CoreATestPaint", function() order[#order + 1] = "hook" end, OWNER)
@@ -245,11 +245,11 @@ end
 local function stacked()
     local t = track(newThing())
     extend.add("unitframe", t)
-    extend.override("unitframe", "CoreATestPaint", function(self: Thing, original: any, x: number): any
-        return original(self, x + 1)
+    extend.override("unitframe", "CoreATestPaint", function(self: extend.Instance, original: extend.Method, x: unknown): ...unknown
+        return original(self, (x :: number) + 1)
     end, OWNER)
-    extend.override("unitframe", "CoreATestPaint", function(self: Thing, original: any, x: number): any
-        return original(self, x * 2)
+    extend.override("unitframe", "CoreATestPaint", function(self: extend.Instance, original: extend.Method, x: unknown): ...unknown
+        return original(self, (x :: number) * 2)
     end, OTHER)
     t:CoreATestPaint(5)
     -- the last added runs first: (5 * 2) + 1
@@ -327,14 +327,15 @@ end
 @test("menus: each extender gets the menu and the context, in order; errors isolated")
 local function menus()
     local seen: string[] = {}
-    extend.extendMenu("coreatest.menu", function(menu: any, context: any)
-        seen[#seen + 1] = menu.title .. ":" .. tostring(context.unit)
+    extend.extendMenu("coreatest.menu", function(menu: extend.Menu, context: unknown)
+        local about = context :: { unit?: string }
+        seen[#seen + 1] = tostring(menu.title) .. ":" .. tostring(about.unit)
     end, OWNER)
     extend.extendMenu("coreatest.menu", function() error("extend-err-menu") end, OTHER)
-    extend.extendMenu("coreatest.menu", function(menu: any)
+    extend.extendMenu("coreatest.menu", function(menu: extend.Menu)
         menu.items[#menu.items + 1] = { label = "Added" }
     end, OTHER)
-    local menu = { title = "T", items = {} :: any[] }
+    local menu: extend.Menu = { title = "T", items = {} }
     extend.applyMenu("coreatest.menu", menu, { unit = "target" })
     expect(seen).toEqual({ "T:target" })
     expect(menu.items).toEqual({ { label = "Added" } })
