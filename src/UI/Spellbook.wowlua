@@ -41,10 +41,12 @@
 import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
 import text, measureText, Text from "/UI/Text"
-import icon from "/UI/Icon"
+import icon, Icon from "/UI/Icon"
 import * as inputs from "/UI/Inputs"
+import type Toggle from "/UI/Inputs"
 import * as controls from "/UI/Controls"
-import tabMarker from "/UI/TabMarker"
+import type SuuButton from "/UI/Controls"
+import tabMarker, TabMarker from "/UI/TabMarker"
 import showTooltip, hideTooltip from "/UI/Tooltip"
 
 local S = T.space
@@ -53,56 +55,80 @@ local ICON = 36
 local TAB = 32
 local COLUMNS = 2
 
-local function cell(book: any, i: number): any
+-- A spell on the page: its label, the line under it, its icon (rank),
+-- and what it is to you.
+export type BookSpell = { label?: string, rank?: number | string, sub?: string, icon?: string | number, status?: string }
+-- A school's tab.
+export type BookSchool = { label?: string, icon?: string | number, trainable?: number, active?: boolean }
+-- Every school's spells to train and what they cost; short: you can't afford it all.
+export type BookAll = { count?: number, cost?: number, short?: boolean }
+
+-- A cell of the page: the secure button with its icon, the label, the line
+-- under it, the cooldown.
+export class SpellCell extends Frame
+    readonly button: Button
+    readonly icon: Icon
+    readonly label: Text
+    readonly sub: Text
+    readonly cooldown: Cooldown
+    spell: BookSpell? = nil
+
+    constructor(book: Spellbook, i: number)
+        super(nil, book.grid)
+        self:SetHeight(ICON)
+        -- (the secure drag template: a drag picks the spell up through the
+        -- game's own code; an addon's pickup is blocked in combat, found in game)
+        local b = CreateFrame("Button", nil, self, "SecureActionButtonTemplate,SecureHandlerDragTemplate")
+        b:SetSize(ICON, ICON)
+        b:SetPoint("LEFT")
+        -- down and up registered (up alone never cast, found in game), acting
+        -- on the release whatever the game's "cast on key down" option says
+        -- (useOnKeyDown off): pressing to drag a spell to a bar cast it (found
+        -- in game); the press starts the drag, a release on the icon casts
+        b:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+        b:SetAttribute("useOnKeyDown", false)
+        b:RegisterForDrag("LeftButton")
+        self.button = b
+        self.icon = icon(b, ICON)
+        self.icon:SetAllPoints()
+        self.icon:EnableMouse(false)
+        self.label = text(self, "label", "ink")
+        self.label:SetPoint("TOPLEFT", b, "TOPRIGHT", S["space-4"], -2)
+        self.label:SetPoint("RIGHT")
+        self.label:SetJustifyH("LEFT")
+        self.label:SetWordWrap(false)
+        self.sub = text(self, "caption", "ink-muted")
+        self.sub:SetPoint("BOTTOMLEFT", b, "BOTTOMRIGHT", S["space-4"], 2)
+        self.sub:SetPoint("RIGHT")
+        self.sub:SetJustifyH("LEFT")
+        self.sub:SetWordWrap(false)
+        b:SetScript("OnEnter", function()
+            self.icon:SetBorder("gilt")
+            if book.onEnter then book.onEnter(i, self) end
+        end)
+        b:SetScript("OnLeave", function()
+            book:DrawCell(self)
+            if book.onLeave then book.onLeave(i, self) end
+        end)
+        b:SetAttribute("_ondragstart", [=[
+            local id = self:GetAttribute("spell")
+            if id then return "spell", id end
+        ]=])
+        local cd = CreateFrame("Cooldown", nil, self.icon, "CooldownFrameTemplate")
+        self.cooldown = cd
+        cd:SetAllPoints(self.icon.art)
+        cd:SetDrawEdge(false)
+        cd:SetDrawBling(false)
+        cd:SetSwipeColor(0, 0, 0, 0.7)
+        pcall(cd.SetCountdownFont, cd, "SuuUIFont_micro")
+        cd:HookScript("OnCooldownDone", function() if book.onCooldownDone then book.onCooldownDone() end end)
+    end
+end
+
+local function cell(book: Spellbook, i: number): SpellCell
     local c = book.cells[i]
     if c then return c end
-    c = CreateFrame("Frame", nil, book.grid)
-    c:SetHeight(ICON)
-    -- (the secure drag template: a drag picks the spell up through the
-    -- game's own code; an addon's pickup is blocked in combat, found in game)
-    local b = CreateFrame("Button", nil, c, "SecureActionButtonTemplate,SecureHandlerDragTemplate")
-    b:SetSize(ICON, ICON)
-    b:SetPoint("LEFT")
-    -- down and up registered (up alone never cast, found in game), acting
-    -- on the release whatever the game's "cast on key down" option says
-    -- (useOnKeyDown off): pressing to drag a spell to a bar cast it (found
-    -- in game); the press starts the drag, a release on the icon casts
-    b:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
-    b:SetAttribute("useOnKeyDown", false)
-    b:RegisterForDrag("LeftButton")
-    c.button = b
-    c.icon = icon(b, ICON)
-    c.icon:SetAllPoints()
-    c.icon:EnableMouse(false)
-    c.label = text(c, "label", "ink")
-    c.label:SetPoint("TOPLEFT", b, "TOPRIGHT", S["space-4"], -2)
-    c.label:SetPoint("RIGHT")
-    c.label:SetJustifyH("LEFT")
-    c.label:SetWordWrap(false)
-    c.sub = text(c, "caption", "ink-muted")
-    c.sub:SetPoint("BOTTOMLEFT", b, "BOTTOMRIGHT", S["space-4"], 2)
-    c.sub:SetPoint("RIGHT")
-    c.sub:SetJustifyH("LEFT")
-    c.sub:SetWordWrap(false)
-    b:SetScript("OnEnter", function()
-        c.icon:SetBorder("gilt")
-        if book.onEnter then book.onEnter(i, c) end
-    end)
-    b:SetScript("OnLeave", function()
-        book:DrawCell(c)
-        if book.onLeave then book.onLeave(i, c) end
-    end)
-    b:SetAttribute("_ondragstart", [=[
-        local id = self:GetAttribute("spell")
-        if id then return "spell", id end
-    ]=])
-    c.cooldown = CreateFrame("Cooldown", nil, c.icon, "CooldownFrameTemplate")
-    c.cooldown:SetAllPoints(c.icon.art)
-    c.cooldown:SetDrawEdge(false)
-    c.cooldown:SetDrawBling(false)
-    c.cooldown:SetSwipeColor(0, 0, 0, 0.7)
-    if c.cooldown.SetCountdownFont then pcall(c.cooldown.SetCountdownFont, c.cooldown, "SuuUIFont_micro") end
-    c.cooldown:HookScript("OnCooldownDone", function() if book.onCooldownDone then book.onCooldownDone() end end)
+    c = SpellCell.new(book, i)
     book.cells[i] = c
     return c
 end
@@ -133,16 +159,17 @@ local ROUTE = [=[
 -- is (by the caller), never its child nor anchored to it: a frame that
 -- holds or anchors a secure one is restricted in combat too, and the
 -- control's look changes in combat (an arrow's enabled state).
-local function secureOver(book: any, control: any, snippet: string, onClick: () -> ()): any
-    local o = CreateFrame("Button", nil, control:GetParent(), "SecureHandlerClickTemplate")
+local function secureOver(book: Spellbook, control: Region, snippet: string, onClick: () -> (),
+                          onEnter: () -> (), onLeave: () -> ()): Button
+    local o = CreateFrame("Button", nil, control:GetParent() :: Frame, "SecureHandlerClickTemplate")
     o:SetSize(control:GetWidth(), control:GetHeight())
     o:SetFrameLevel(control:GetFrameLevel() + 5)
     o:RegisterForClicks("LeftButtonUp")
     o:SetFrameRef("router", book.router)
     o:SetAttribute("_onclick", snippet)
     o:HookScript("OnClick", onClick)
-    o:SetScript("OnEnter", function() if control.suuEnter then control.suuEnter(control) end end)
-    o:SetScript("OnLeave", function() if control.suuLeave then control.suuLeave(control) end end)
+    o:SetScript("OnEnter", onEnter)
+    o:SetScript("OnLeave", onLeave)
     return o
 end
 
@@ -150,7 +177,7 @@ local function hex(token: string): string return T.color[token].hex end
 
 -- 3g 20s: the digits in ink and the units in coin colours, or all of it in
 -- ember-text when you can't afford it.
-local function coinText(amount: any, short: any): (string, string)
+local function coinText(amount: number?, short: boolean?): (string, string)
     local copper = math.max(0, math.floor(tonumber(amount) or 0))
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local plain: string[], parts: string[] = {}, {}
@@ -168,41 +195,96 @@ end
 
 local function spells(n: number): string return n .. (n == 1 and " spell" or " spells") end
 
-local function switch(book: any, parent: any, label: string, key: string): any
-    local f = CreateFrame("Frame", nil, parent)
-    f.toggle = inputs.toggle(f, { onChange = function(on) if book.onSwitch then book.onSwitch(key, on) end end })
-    f.toggle:SetPoint("RIGHT")
-    f.text = text(f, "label", "ink-muted")
-    f.text:SetPoint("RIGHT", f.toggle, "LEFT", -S["space-3"], 0)
-    f.text:SetValue(label)
-    f:SetSize(f.text:GetUnboundedStringWidth() + S["space-3"] + 34, 18)
-    return f
+-- A switch in the head: its label and toggle.
+class BookSwitch extends Frame
+    readonly toggle: Toggle
+    readonly text: Text
+
+    constructor(book: Spellbook, parent: Frame, label: string, key: string)
+        super(nil, parent)
+        self.toggle = inputs.toggle(self, { onChange = function(on: boolean) if book.onSwitch then book.onSwitch(key, on) end end })
+        self.toggle:SetPoint("RIGHT")
+        self.text = text(self, "label", "ink-muted")
+        self.text:SetPoint("RIGHT", self.toggle, "LEFT", -S["space-3"], 0)
+        self.text:SetValue(label)
+        self:SetSize(self.text:GetUnboundedStringWidth() + S["space-3"] + 34, 18)
+    end
 end
 
+local function switch(book: Spellbook, parent: Frame, label: string, key: string): BookSwitch
+    return BookSwitch.new(book, parent, label, key)
+end
+
+-- A school's tab: its icon and "to train" mark; hover and click come from
+-- the secure button over it.
+class SchoolTab extends Button
+    readonly icon: Icon
+    readonly ring: Texture
+    readonly dot: Texture
+    secure?: Button
+    index: number = 0
+    label?: string
+    trainable?: number
+    active?: boolean
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(TAB, TAB)
+        self.icon = icon(self, TAB)
+        self.icon:SetAllPoints()
+        self.icon:EnableMouse(false)
+        -- the "spells to train" mark, above the icon (the icon is a frame
+        -- of its own: drawn on the tab, the mark sat under it)
+        local over = CreateFrame("Frame", nil, self)
+        over:SetAllPoints()
+        over:SetFrameLevel(self.icon:GetFrameLevel() + 3)
+        over:EnableMouse(false)
+        self.ring = draw.diamond(over, 9, "surface", "OVERLAY", 6)
+        self.ring:SetPoint("CENTER", self, "TOPRIGHT", -2, -2)
+        self.dot = draw.diamond(over, 7, "arcane", "OVERLAY", 7)
+        self.dot:SetPoint("CENTER", self, "TOPRIGHT", -2, -2)
+        self:EnableMouse(false)
+    end
+end
+
+-- The rows a page holds, and the page's distance from the window's edge.
+export type SpellbookOptions = { rows?: number, edgeInset?: number }
+
 export class Spellbook extends Frame
-    rows: any
-    edgeInset: any
-    cells: any
-    tabs: any
+    rows: number
+    edgeInset: number
+    cells: SpellCell[]
+    tabs: SchoolTab[]
     tabColumn: Frame
-    main: any
+    main: Frame
     title: Text
     toTrain: Text
-    allRanks: any
-    unlearned: any
+    allRanks: Toggle
+    unlearned: Toggle
+    unlearnedSwitch: BookSwitch
+    -- the pager's arrows' secure buttons
+    prevSecure?: Button
+    nextSecure?: Button
     grid: Frame
     pager: Frame
     pageText: Text
-    prev: any
-    next: any
-    foot: any
+    prev: SuuButton
+    next: SuuButton
+    foot: Frame
     router: Frame
-    castKeys: any? = nil
-    widest: any? = nil
-    schoolMarker: any? = nil
+    castKeys: string[]? = nil
+    widest: number? = nil
+    schoolMarker: TabMarker? = nil
+    -- what the owner hears: a cell entered or left, a school, a switch, a page
+    onEnter: ((i: number, cell: SpellCell) -> ())? = nil
+    onLeave: ((i: number, cell: SpellCell) -> ())? = nil
+    onSchool: ((i: number) -> ())? = nil
+    onSwitch: ((key: string, on: boolean) -> ())? = nil
+    onPage: ((delta: number) -> ())? = nil
+    onCooldownDone: (() -> ())? = nil
 
-    constructor(parent: any, options: { [string]: any }?)
-        local opts: { [string]: any } = options or {}
+    constructor(parent: Frame, options: SpellbookOptions?)
+        local opts = options or {}
         super(nil, parent)
         self.rows = opts.rows or 6
         self.edgeInset = opts.edgeInset or 0 -- from the window's edge to the page
@@ -226,10 +308,13 @@ export class Spellbook extends Frame
         self.title:SetPoint("TOPLEFT", 0, -6)
         self.toTrain = text(main, "caption", "arcane")
         self.toTrain:SetPoint("LEFT", self.title, "RIGHT", S["space-5"], 0)
-        self.allRanks = switch(self, main, "All ranks", "allRanks").toggle
-        self.allRanks:GetParent():SetPoint("TOPRIGHT", 0, -6)
-        self.unlearned = switch(self, main, "Unlearned spells", "unlearned").toggle
-        self.unlearned:GetParent():SetPoint("RIGHT", self.allRanks:GetParent(), "LEFT", -S["space-5"], 0)
+        local ranks = switch(self, main, "All ranks", "allRanks")
+        self.allRanks = ranks.toggle
+        ranks:SetPoint("TOPRIGHT", 0, -6)
+        local unlearned = switch(self, main, "Unlearned spells", "unlearned")
+        self.unlearned = unlearned.toggle
+        self.unlearnedSwitch = unlearned
+        unlearned:SetPoint("RIGHT", ranks, "LEFT", -S["space-5"], 0)
         -- the grid
         self.grid = CreateFrame("Frame", nil, main)
         self.grid:SetPoint("TOPLEFT", 0, -(30 + S["space-4"]))
@@ -257,9 +342,12 @@ export class Spellbook extends Frame
         self.prev:SetPoint("RIGHT", self.pager, "LEFT", -S["space-5"], 0)
         self.next = controls.button(foot, { text = "", width = 30, onClick = function() if self.onPage then self.onPage(1) end end })
         self.next:SetPoint("LEFT", self.pager, "RIGHT", S["space-5"], 0)
-        for _, pair in ipairs({ { self.prev, "chevronLeft" }, { self.next, "chevronRight" } }) do
-            local g = pair[1]:CreateTexture(nil, "OVERLAY")
-            g:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. pair[2] .. ".tga")
+        local arrows: { button: SuuButton, glyph: string, delta: number }[] = {
+            { button = self.prev, glyph = "chevronLeft", delta = -1 }, { button = self.next, glyph = "chevronRight", delta = 1 },
+        }
+        for _, pair in ipairs(arrows) do
+            local g = pair.button:CreateTexture(nil, "OVERLAY")
+            g:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. pair.glyph .. ".tga")
             g:SetSize(14, 14)
             g:SetPoint("CENTER")
             draw.paint(g, "ink")
@@ -268,10 +356,10 @@ export class Spellbook extends Frame
         -- the secure side: the router, and the pager's arrows' secure buttons
         self.router = CreateFrame("Frame", nil, self, "SecureHandlerAttributeTemplate")
         self.router:SetAttribute("_onattributechanged", ROUTE)
-        for _, pair in ipairs({ { self.prev, -1 }, { self.next, 1 } }) do
-            local arrow, delta = pair[1], pair[2]
-            arrow.suuEnter = arrow:GetScript("OnEnter")
-            arrow.suuLeave = arrow:GetScript("OnLeave")
+        for _, pair in ipairs(arrows) do
+            local arrow, delta = pair.button, pair.delta
+            -- the arrow's own hover look, from the button over it
+            local enter, leave = arrow:GetScript("OnEnter"), arrow:GetScript("OnLeave")
             local o = secureOver(self, arrow, [=[
                 local r = self:GetFrameRef("router")
                 local s = r:GetAttribute("school")
@@ -280,30 +368,31 @@ export class Spellbook extends Frame
                 local n = r:GetAttribute("pages" .. s) or 1
                 if p < 1 then p = 1 elseif p > n then p = n end
                 r:SetAttribute("page", p)
-            ]=], function() if self.onPage and arrow:IsEnabled() then self.onPage(delta) end end)
+            ]=], function() if self.onPage and arrow:IsEnabled() then self.onPage(delta) end end,
+                function() if enter then enter(arrow, true) end end, function() if leave then leave(arrow, true) end end)
             o:SetAttribute("delta", delta)
+            if delta < 0 then self.prevSecure = o else self.nextSecure = o end
             -- (where the arrow is: beside the page text's frame)
             if delta < 0 then
                 o:SetPoint("RIGHT", self.pager, "LEFT", -S["space-5"], 0)
             else
                 o:SetPoint("LEFT", self.pager, "RIGHT", S["space-5"], 0)
             end
-            arrow.secure = o
         end
     end
 
-    function SetCooldown(i: number, active: any, gcd: any, duration: any)
+    function SetCooldown(i: number, active: unknown, gcd: unknown, duration: LuaDurationObject?)
         local c = self.cells[i]
         if not c then return end
         if active and duration then
             c.cooldown:SetCooldownFromDurationObject(duration)
-            c.cooldown:SetHideCountdownNumbers(gcd and true or false)
+            c.cooldown:SetHideCountdownNumbers(gcd ~= nil and gcd ~= false)
         else
             c.cooldown:Clear()
         end
     end
 
-    function DrawCell(c: any)
+    function DrawCell(c: SpellCell)
         local s = c.spell
         if not s then return end
         local st = s.status or "learned"
@@ -325,7 +414,7 @@ export class Spellbook extends Frame
         end
     end
 
-    function SetSpells(list: any[])
+    function SetSpells(list: BookSpell[])
         local width = self.main:GetWidth()
         -- the columns as wide as the longest name or line on the page, the pair
         -- centred; the rows centred between the head and the pager (found in
@@ -387,7 +476,8 @@ export class Spellbook extends Frame
         end
     end
 
-    function SetCasts(schools: any[], perPage: number)
+    -- schools[s][i]: the spell a school's i-th cell casts, or false.
+    function SetCasts(schools: (number | false)[][], perPage: number)
         if InCombatLockdown() then return end
         local r = self.router
         for _, key in ipairs(self.castKeys or {}) do r:SetAttribute(key, nil) end
@@ -440,50 +530,36 @@ export class Spellbook extends Frame
         self.widest = px
     end
 
-    function SetSchools(list: any[])
+    function SetSchools(list: BookSchool[])
         -- the chosen school's jewel, gliding down the column (tabMarker)
-        self.schoolMarker = self.schoolMarker or tabMarker(self.tabColumn, { vertical = true, side = "RIGHT", x = S["space-4"] + 2 })
-        local chosen
+        local marker = self.schoolMarker or tabMarker(self.tabColumn, { vertical = true, side = "RIGHT", x = S["space-4"] + 2 })
+        self.schoolMarker = marker
+        local chosen: SchoolTab? = nil
         for i, s in ipairs(list) do
             local t = self.tabs[i]
             if not t then
-                t = CreateFrame("Button", nil, self.tabColumn)
-                t:SetSize(TAB, TAB)
-                t.icon = icon(t, TAB)
-                t.icon:SetAllPoints()
-                t.icon:EnableMouse(false)
-                -- the "spells to train" mark, above the icon (the icon is a frame
-                -- of its own: drawn on the tab, the mark sat under it)
-                local over = CreateFrame("Frame", nil, t)
-                over:SetAllPoints()
-                over:SetFrameLevel(t.icon:GetFrameLevel() + 3)
-                over:EnableMouse(false)
-                t.ring = draw.diamond(over, 9, "surface", "OVERLAY", 6)
-                t.ring:SetPoint("CENTER", t, "TOPRIGHT", -2, -2)
-                t.dot = draw.diamond(over, 7, "arcane", "OVERLAY", 7)
-                t.dot:SetPoint("CENTER", t, "TOPRIGHT", -2, -2)
-                -- (hover and click come from the secure button over it)
-                t:EnableMouse(false)
-                local marker = self.schoolMarker
-                t.suuEnter = function(btn: any)
-                    btn:SetAlpha(1)
-                    marker.hovered = btn
+                local tab = SchoolTab.new(self.tabColumn)
+                t = tab
+                local function entered()
+                    tab:SetAlpha(1)
+                    marker.hovered = tab
                     marker:Aim()
-                    showTooltip(btn, { title = btn.label, description = btn.trainable and btn.trainable > 0
-                        and (btn.trainable .. (btn.trainable == 1 and " spell" or " spells") .. " to train") or nil })
+                    local n = tab.trainable
+                    showTooltip(tab, { title = tab.label, description = n and n > 0
+                        and (n .. (n == 1 and " spell" or " spells") .. " to train") or nil })
                 end
-                t.suuLeave = function(btn: any)
-                    btn:SetAlpha(btn.active and 1 or 0.6)
-                    if marker.hovered == btn then marker.hovered = nil end
+                local function left()
+                    tab:SetAlpha(tab.active and 1 or 0.6)
+                    if marker.hovered == tab then marker.hovered = nil end
                     marker:Aim()
                     hideTooltip()
                 end
-                t.secure = secureOver(self, t, [=[
+                tab.secure = secureOver(self, tab, [=[
                     local r = self:GetFrameRef("router")
                     r:SetAttribute("page", 1)
                     r:SetAttribute("school", self:GetAttribute("school"))
-                ]=], function() if self.onSchool then self.onSchool(t.index) end end)
-                self.tabs[i] = t
+                ]=], function() if self.onSchool then self.onSchool(tab.index) end end, entered, left)
+                self.tabs[i] = tab
             end
             t.index, t.label, t.trainable, t.active = i, s.label, s.trainable, s.active
             t.icon:SetArt(s.icon)
@@ -492,28 +568,30 @@ export class Spellbook extends Frame
             if s.active then chosen = t end
             t:SetAlpha(s.active and 1 or 0.6)
             -- (in combat the tabs stay where they are: their secure buttons with them)
+            local secure = t.secure :: Button
             if not InCombatLockdown() then
-                t.secure:SetAttribute("school", i)
+                secure:SetAttribute("school", i)
                 -- centred between the window's edge (edgeInset to the left) and the divider
                 local x, y = (40 - self.edgeInset) / 2, -(i - 1) * (TAB + S["space-3"])
                 t:ClearAllPoints()
                 t:SetPoint("TOP", self.tabColumn, "TOPLEFT", x, y)
                 t:Show()
-                t.secure:ClearAllPoints()
-                t.secure:SetPoint("TOP", self.tabColumn, "TOPLEFT", x, y)
-                t.secure:Show()
+                secure:ClearAllPoints()
+                secure:SetPoint("TOP", self.tabColumn, "TOPLEFT", x, y)
+                secure:Show()
             end
         end
         if not InCombatLockdown() then
             for i = #list + 1, #self.tabs do
                 self.tabs[i]:Hide()
-                self.tabs[i].secure:Hide()
+                local secure = self.tabs[i].secure
+                if secure then secure:Hide() end
             end
         end
-        self.schoolMarker:SetChosen(chosen)
+        marker:SetChosen(chosen)
     end
 
-    function SetHead(title: string?, trainable: number?, all: any)
+    function SetHead(title: string?, trainable: number?, all: BookAll?)
         self.title:SetValue(title or "")
         local toTrain = trainable or 0
         local count = all and all.count or 0
@@ -521,7 +599,7 @@ export class Spellbook extends Frame
             self.toTrain:SetValue(toTrain > 0 and (spells(toTrain) .. " to train") or "")
             return
         end
-        local cost, costPlain = coinText(all.cost, all.short)
+        local cost, costPlain = coinText((all :: BookAll).cost, (all :: BookAll).short)
         local muted = "|cff" .. hex("ink-muted")
         -- the longest form that fits before the switches
         local forms: string[][]
@@ -533,8 +611,8 @@ export class Spellbook extends Frame
         else
             forms = { { "", spells(count) .. " to train in other schools · " }, { "", count .. " to train elsewhere · " } }
         end
-        local room = self.unlearned:GetParent():GetLeft() and self.toTrain:GetLeft()
-            and (self.unlearned:GetParent():GetLeft() - self.toTrain:GetLeft() - S["space-5"]) or math.huge
+        local switchLeft, textLeft = self.unlearnedSwitch:GetLeft(), self.toTrain:GetLeft()
+        local room = (switchLeft and textLeft) and (switchLeft - textLeft - S["space-5"]) or math.huge
         local pick = forms[#forms]
         for _, f in ipairs(forms) do
             if measureText("caption", f[1] .. f[2] .. costPlain) <= room then pick = f break end
@@ -555,6 +633,6 @@ export class Spellbook extends Frame
     end
 end
 
-export function spellbook(parent: any, options: { [string]: any }?): Spellbook
+export function spellbook(parent: Frame, options: SpellbookOptions?): Spellbook
     return Spellbook.new(parent, options)
 end

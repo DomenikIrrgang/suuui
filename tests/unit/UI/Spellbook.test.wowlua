@@ -6,7 +6,7 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
-import spellbook from "/UI/Spellbook"
+import spellbook, Spellbook, SpellbookOptions, BookSpell from "/UI/Spellbook"
 import measureText from "/UI/Text"
 import * as tooltipModule from "/UI/Tooltip"
 import expectNoErrors, newParent from "../../helpers"
@@ -16,9 +16,10 @@ local S = T.space
 
 local parent: Frame? = nil
 
-local function make(opts: { [string]: any }?, w: number?, h: number?): any
-    parent = newParent(w or 720, h or 520)
-    local b = spellbook(parent, opts)
+local function make(opts: SpellbookOptions?, w: number?, h: number?): Spellbook
+    local host = newParent(w or 720, h or 520)
+    parent = host
+    local b = spellbook(host, opts)
     b:SetAllPoints()
     return b
 end
@@ -35,8 +36,8 @@ local function plain(s: string?): string
     return ((s or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
 end
 
-local function spells(n: number): { [string]: any }[]
-    local list: { [string]: any }[] = {}
+local function spells(n: number): BookSpell[]
+    local list: BookSpell[] = {}
     for i = 1, n do list[i] = { label = "Spell " .. i, sub = "Rank " .. i, icon = 1000 + i, status = "learned" } end
     return list
 end
@@ -59,7 +60,7 @@ local function schools()
     expect(fire.dot).toBeShown()
     expect(fire.ring).toBeShown()
     expect(frost.dot).never.toBeShown()
-    expect(b.schoolMarker.chosen).toBe(g)
+    expect(assert(b.schoolMarker).chosen).toBe(g)
     expect(fire.icon.art:GetTextureFileID()).toBe(2)
     local _, _, _, x, y = frost:GetPoint(1)
     expect(x).toBe((40 - 20) / 2)
@@ -68,17 +69,17 @@ local function schools()
     local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
     mock.stub(tooltipModule, "hideTooltip", function() end)
     -- (the tab's secure button takes the mouse)
-    mock.hover(fire.secure)
+    mock.hover(assert(fire.secure))
     expect(fire:GetAlpha()).toBe(1)
-    expect(b.schoolMarker.hovered).toBe(fire)
+    expect(assert(b.schoolMarker).hovered).toBe(fire)
     expect(show).toHaveBeenCalledWith(fire, { title = "Fire", description = "2 spells to train" })
-    mock.hover(frost.secure)
+    mock.hover(assert(frost.secure))
     expect(fire:GetAlpha()).toBeCloseTo(0.6, 2)
     expect(show).toHaveBeenCalledWith(frost, { title = "Frost" })
     mock.hover(nil)
     -- one to train
     b:SetSchools({ { label = "General", icon = 1, active = true }, { label = "Fire", icon = 2, trainable = 1 } })
-    mock.hover(fire.secure)
+    mock.hover(assert(fire.secure))
     expect(show).toHaveBeenCalledWith(fire, { title = "Fire", description = "1 spell to train" })
     mock.hover(g)
     expect(g:GetAlpha()).toBe(1)
@@ -87,11 +88,11 @@ local function schools()
     expect(frost).never.toBeShown()
     -- a click (on the tab's secure button) to onSchool with its index
     local picked = mock.spy(function(_i: number) end)
-    mock.click(fire.secure)
+    mock.click(assert(fire.secure))
     b.onSchool = picked
-    mock.click(fire.secure)
+    mock.click(assert(fire.secure))
     expect(picked).toHaveBeenCalledWith(2)
-    expect(fire.secure:GetAttribute("school")).toBe(2)
+    expect(assert(fire.secure):GetAttribute("school")).toBe(2)
 end
 
 --------------------------------------------------------------------------------
@@ -164,10 +165,10 @@ local function switches()
     expect(b.unlearned.value).toBe(true)
     expect(b.allRanks.value).toBe(false)
     local switched = mock.spy(function(_k: string, _on: any) end)
-    b.unlearned.onChange(false)
+    assert(b.unlearned.onChange)(false)
     b.onSwitch = switched
-    b.unlearned.onChange(false)
-    b.allRanks.onChange(true)
+    assert(b.unlearned.onChange)(false)
+    assert(b.allRanks.onChange)(true)
     expect(switched).toHaveBeenCalledWith("unlearned", false)
     expect(switched).toHaveBeenCalledWith("allRanks", true)
 end
@@ -186,16 +187,16 @@ local function pager()
     expect(b.pageText).toHaveText("Page 1 of 1")
     local paged = mock.spy(function(_d: number) end)
     b:SetPage(2, 3)
-    mock.click(b.next.secure)
+    mock.click(assert(b.nextSecure))
     b.onPage = paged
     -- (the arrows' secure buttons take the clicks)
-    mock.click(b.next.secure)
-    mock.click(b.prev.secure)
+    mock.click(assert(b.nextSecure))
+    mock.click(assert(b.prevSecure))
     expect(paged).toHaveBeenCalledWith(1)
     expect(paged).toHaveBeenCalledWith(-1)
     -- a disabled arrow: nothing
     b:SetPage(1, 3)
-    mock.click(b.prev.secure)
+    mock.click(assert(b.prevSecure))
     expect(paged).toHaveBeenCalledTimes(2)
 end
 
@@ -321,7 +322,7 @@ local function cooldown()
     local set = mock.stub(cd, "SetCooldownFromDurationObject", function(_s: any, _d: any) end)
     local digits = mock.stub(cd, "SetHideCountdownNumbers", function(_s: any, _h: boolean) end)
     local clear = mock.stub(cd, "Clear", function(_s: any) end)
-    local duration = { duration = true }
+    local duration = C_DurationUtil.CreateDuration()
     b:SetCooldown(1, true, true, duration)
     expect(set).toHaveBeenCalledWith(cd, duration)
     expect(digits).toHaveBeenCalledWith(cd, true)
