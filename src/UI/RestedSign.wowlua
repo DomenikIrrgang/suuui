@@ -19,10 +19,11 @@
 --            Reduce motion always does
 --     fade: in over that long (ease-out), or out (ease-in); nil: at once
 
-import tokens as T from "/Core/Tokens"
+import tokens as T, Easings from "/Core/Tokens"
 import * as motion from "/Core/Motion"
 import * as draw from "/UI/Draw"
 import * as uiText from "/UI/Text"
+import type Text from "/UI/Text"
 
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
@@ -41,13 +42,13 @@ local DRIFT_X, DRIFT_Y = 3, 8
 local FADE_IN, HOLD, FADE_OUT = 0.6, 1.0, 1.2
 local MOON = 7
 
-local function smoothing(easing: string): string return (T.easing :: { [string]: any })[easing].smoothing end
+local function smoothing(easing: keyof Easings): SmoothingType return T.easing[easing].smoothing :: SmoothingType end
 
 -- A letter's loop: the holder drifts and fades in, its glyph fades out (an
 -- alpha animation of its own on another region, so neither waits on the
 -- other's end state). The holder rests at alpha 0 while it loops, so the
 -- start delay and the end delay show nothing.
-local function buildLoop(holder: Frame, glyph: any, d: Letter): AnimationGroup
+local function buildLoop(holder: Frame, glyph: Region, d: Letter): AnimationGroup
     local g = holder:CreateAnimationGroup()
     g:SetLooping("REPEAT")
     local move = g:CreateAnimation("Translation")
@@ -72,15 +73,39 @@ local function buildLoop(holder: Frame, glyph: any, d: Letter): AnimationGroup
     return g
 end
 
+-- One letter: its glyph drifting in its own frame, the loop, its alpha when
+-- still; the first one's full moon (and its shadow) too.
+class LetterFrame extends Frame
+    readonly glyph: Text
+    readonly loop: AnimationGroup
+    readonly still: number
+    shade?: Texture
+    moon?: Texture
+
+    constructor(parent: Frame, anchor: Frame, d: Letter)
+        super(nil, parent)
+        self:SetSize(1, 1)
+        self:SetPoint("CENTER", anchor, "TOPRIGHT", d.x, d.y)
+        self.glyph = uiText.text(self, d.style, "progress-fill")
+        self.glyph:SetShadowed(true)
+        self.glyph:SetPoint("CENTER", self, "CENTER", 0, 0)
+        self.glyph:SetValue(d.text)
+        self.loop = buildLoop(self, self.glyph, d)
+        self.still = d.still
+    end
+end
+
 export class RestedSign extends Frame
     body: Frame
-    letters: any
-    out: any
+    letters: LetterFrame[]
+    out: AnimationGroup
+    outAlpha: Alpha
     animating: boolean? = nil
-    look: any? = nil
+    look: string? = nil
 
-    constructor(frame: any)
-        super(nil, frame.markerLayer or frame)
+    -- (over a unit frame's marker layer, when it has one)
+    constructor(frame: Frame)
+        super(nil, (frame :: { markerLayer?: Frame }).markerLayer or frame)
         self:SetSize(1, 1)
         self:SetPoint("CENTER", frame, "TOPRIGHT", 0, 0)
         self:EnableMouse(false)
@@ -90,35 +115,28 @@ export class RestedSign extends Frame
         self.body:SetAllPoints()
         self.letters = {}
         for i, d in ipairs(LETTERS) do
-            local l = CreateFrame("Frame", nil, self.body)
-            l:SetSize(1, 1)
-            l:SetPoint("CENTER", frame, "TOPRIGHT", d.x, d.y)
-            l.glyph = uiText.text(l, d.style, "progress-fill")
-            l.glyph:SetShadowed(true)
-            l.glyph:SetPoint("CENTER", l, "CENTER", 0, 0)
-            l.glyph:SetValue(d.text)
-            l.loop = buildLoop(l, l.glyph, d)
-            l.still = d.still
-            self.letters[i] = l
+            self.letters[i] = LetterFrame.new(self.body, frame, d)
         end
         -- the full moon in the first letter's place, with the same shadow (0 1px, black 90%)
         local first = self.letters[1]
-        first.shade = first:CreateTexture(nil, "ARTWORK")
-        first.shade:SetTexture(DISC)
-        first.shade:SetSize(MOON, MOON)
-        first.shade:SetPoint("CENTER", first, "CENTER", 0, -1)
-        first.shade:SetVertexColor(0, 0, 0, 0.9)
-        first.moon = first:CreateTexture(nil, "OVERLAY")
-        first.moon:SetTexture(DISC)
-        first.moon:SetSize(MOON, MOON)
-        first.moon:SetPoint("CENTER", first, "CENTER", 0, 0)
-        draw.paint(first.moon, "progress-fill")
+        local shade = first:CreateTexture(nil, "ARTWORK")
+        first.shade = shade
+        shade:SetTexture(DISC)
+        shade:SetSize(MOON, MOON)
+        shade:SetPoint("CENTER", first, "CENTER", 0, -1)
+        shade:SetVertexColor(0, 0, 0, 0.9)
+        local moon = first:CreateTexture(nil, "OVERLAY")
+        first.moon = moon
+        moon:SetTexture(DISC)
+        moon:SetSize(MOON, MOON)
+        moon:SetPoint("CENTER", first, "CENTER", 0, 0)
+        draw.paint(moon, "progress-fill")
 
         -- leaving: from where it is to 0, ease-in, then hidden
         self.out = self:CreateAnimationGroup()
-        self.out.alpha = self.out:CreateAnimation("Alpha")
-        self.out.alpha:SetToAlpha(0)
-        self.out.alpha:SetSmoothing(smoothing("ease-in"))
+        self.outAlpha = self.out:CreateAnimation("Alpha")
+        self.outAlpha:SetToAlpha(0)
+        self.outAlpha:SetSmoothing(smoothing("ease-in"))
         self.out:SetScript("OnFinished", function() self:Gone() end)
         -- a loop doesn't run while hidden: shown again, the three start together
         self:SetScript("OnShow", function() if self.animating then self:Restart() end end)
@@ -128,8 +146,8 @@ export class RestedSign extends Frame
     function SetMoon(on: boolean)
         local first = self.letters[1]
         first.glyph:SetShown(not on)
-        first.moon:SetShown(on)
-        first.shade:SetShown(on)
+        if first.moon then first.moon:SetShown(on) end
+        if first.shade then first.shade:SetShown(on) end
     end
 
     function Restart()
@@ -168,8 +186,8 @@ export class RestedSign extends Frame
             local from = self:GetAlpha()
             motion.stop(self)
             if opts.fade and opts.fade > 0 and self:IsVisible() and not motion.reduced() then
-                self.out.alpha:SetFromAlpha(from)
-                self.out.alpha:SetDuration(opts.fade)
+                self.outAlpha:SetFromAlpha(from)
+                self.outAlpha:SetDuration(opts.fade)
                 self:SetAlpha(0) -- what's left when the fade ends
                 self.out:Play()
             else
@@ -191,7 +209,7 @@ export class RestedSign extends Frame
     end
 end
 
-export function restedSign(frame: any): RestedSign
+export function restedSign(frame: Frame): RestedSign
     return RestedSign.new(frame)
 end
 

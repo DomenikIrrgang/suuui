@@ -51,32 +51,20 @@ const HATCH = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Hatch.tga"
 const CAST = 0.5   -- Auto Shot's stand-still cast, seconds
 const GRACE = 0.35 -- a shot this late still counts as on time
 
--- The ranged row's stand-still window.
-export interface SwingWindow extends Frame
-    hatch: Texture
-    edge: Texture
-end
-
--- One row: a weapon's swing.
-export interface SwingRow extends Frame
-    bar: StatusBar
-    spark: Texture
-    border: draw.Border
-    flash: Texture
-    digits: Text
-    duration: any -- the engine's duration object
-    window?: SwingWindow
-    canSwing?: boolean
-    live?: boolean
-    endsAt?: number
-    length?: number
-    flashAt?: number
-    delayed?: boolean
-end
-
 -- The queued on-next-swing attack's icon.
-export interface SwingQueued extends Frame
-    art: Texture
+export class SwingQueued extends Frame
+    readonly art: Texture
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(QUEUE, QUEUE)
+        self.art = self:CreateTexture(nil, "ARTWORK")
+        self.art:SetPoint("TOPLEFT", 1, -1)
+        self.art:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.art:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        draw.border(self, "ink")
+        self:Hide()
+    end
 end
 
 -- The timer swingTimer makes.
@@ -87,66 +75,95 @@ end
 
 -- The stand-still window at the end of the ranged bar: a hatch with a 1px
 -- left edge, ink at rest, amber while you move inside it.
+-- The ranged row's stand-still window.
+export class SwingWindow extends Frame
+    hatch: Texture
+    edge: Texture
+
+    constructor(r: SwingRow)
+        super(nil, r)
+        self:SetPoint("TOPRIGHT", -1, -1)
+        self:SetPoint("BOTTOMRIGHT", -1, 1)
+        self:SetFrameLevel(r.bar:GetFrameLevel() + 1)
+        self.hatch = self:CreateTexture(nil, "ARTWORK")
+        self.hatch:SetAllPoints()
+        self.hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
+        self.hatch:SetHorizTile(true)
+        self.hatch:SetVertTile(true)
+        self.edge = self:CreateTexture(nil, "OVERLAY")
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.edge:SetWidth(1)
+        self:Hide()
+        r.window = self
+    end
+end
+
 local function buildWindow(r: SwingRow): SwingWindow
-    local w: SwingWindow = CreateFrame("Frame", nil, r) :: any
-    w:SetPoint("TOPRIGHT", -1, -1)
-    w:SetPoint("BOTTOMRIGHT", -1, 1)
-    w:SetFrameLevel(r.bar:GetFrameLevel() + 1)
-    w.hatch = w:CreateTexture(nil, "ARTWORK")
-    w.hatch:SetAllPoints()
-    w.hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
-    w.hatch:SetHorizTile(true)
-    w.hatch:SetVertTile(true)
-    w.edge = w:CreateTexture(nil, "OVERLAY")
-    w.edge:SetPoint("TOPLEFT")
-    w.edge:SetPoint("BOTTOMLEFT")
-    w.edge:SetWidth(1)
-    w:Hide()
-    r.window = w
-    return w
+    return SwingWindow.new(r)
+end
+
+-- One row: a weapon's swing.
+export class SwingRow extends Frame
+    bar: StatusBar
+    spark: Texture
+    border: draw.Border
+    flash: Texture
+    digits: Text
+    duration: LuaDurationObject
+    window?: SwingWindow
+    canSwing?: boolean
+    live?: boolean
+    endsAt?: number
+    length?: number
+    flashAt?: number
+    delayed?: boolean
+
+    constructor(t: SwingTimer, height: number)
+        super(nil, t)
+        self:SetSize(t.barW, height)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        local inner = CreateFrame("Frame", nil, self)
+        inner:SetPoint("TOPLEFT", 1, -1)
+        inner:SetPoint("BOTTOMRIGHT", -1, 1)
+        inner:SetClipsChildren(true)
+        local bar = CreateFrame("StatusBar", nil, inner)
+        bar:SetAllPoints()
+        bar:SetStatusBarTexture(WHITE)
+        local tex = bar:GetStatusBarTexture()
+        tex:SetSnapToPixelGrid(false)
+        draw.paintGradient(tex, "HORIZONTAL", "ghost", "ghost", 0)
+        bar:SetMinMaxValues(0, 1)
+        bar:SetValue(0)
+        self.spark = bar:CreateTexture(nil, "OVERLAY")
+        draw.paintFill(self.spark, "ink")
+        self.spark:SetPoint("TOPRIGHT", tex, "TOPRIGHT")
+        self.spark:SetPoint("BOTTOMRIGHT", tex, "BOTTOMRIGHT")
+        self.spark:SetWidth(2)
+        self.bar = bar
+        self.border = draw.border(self, "gilt-hairline", { layer = "OVERLAY" })
+        -- the landed flash: an ink sliver at the end that fades over dur-fast
+        self.flash = self:CreateTexture(nil, "OVERLAY", nil, 2)
+        draw.paintFill(self.flash, "ink")
+        self.flash:SetPoint("TOPRIGHT")
+        self.flash:SetPoint("BOTTOMRIGHT")
+        self.flash:SetWidth(3)
+        self.flash:SetAlpha(0)
+        self.digits = text(t, "micro", "ink")
+        self.digits:SetShadowed(true)
+        -- the digits hang directly off the bar's end; the main hand's move past
+        -- the queued spell's icon while one waits (ST:UpdateQueued)
+        self.digits:SetJustifyH("LEFT")
+        self.digits:SetWidth(DIGITS_W)
+        self.digits:SetPoint("LEFT", self, "RIGHT", S["space-2"], 0)
+        self.duration = C_DurationUtil.CreateDuration()
+        self:SetAlpha(T.opacity["opacity-oor"])
+        self.digits:SetValue("–")
+    end
 end
 
 local function buildRow(t: SwingTimer, height: number): SwingRow
-    local r: SwingRow = CreateFrame("Frame", nil, t) :: any
-    r:SetSize(t.barW, height)
-    draw.fill(r, "surface-sunk"):SetAllPoints()
-    local inner = CreateFrame("Frame", nil, r)
-    inner:SetPoint("TOPLEFT", 1, -1)
-    inner:SetPoint("BOTTOMRIGHT", -1, 1)
-    inner:SetClipsChildren(true)
-    local bar = CreateFrame("StatusBar", nil, inner)
-    bar:SetAllPoints()
-    bar:SetStatusBarTexture(WHITE)
-    local tex = bar:GetStatusBarTexture()
-    tex:SetSnapToPixelGrid(false)
-    draw.paintGradient(tex, "HORIZONTAL", "ghost", "ghost", 0)
-    bar:SetMinMaxValues(0, 1)
-    bar:SetValue(0)
-    r.spark = bar:CreateTexture(nil, "OVERLAY")
-    draw.paintFill(r.spark, "ink")
-    r.spark:SetPoint("TOPRIGHT", tex, "TOPRIGHT")
-    r.spark:SetPoint("BOTTOMRIGHT", tex, "BOTTOMRIGHT")
-    r.spark:SetWidth(2)
-    r.bar = bar
-    r.border = draw.border(r, "gilt-hairline", { layer = "OVERLAY" })
-    -- the landed flash: an ink sliver at the end that fades over dur-fast
-    r.flash = r:CreateTexture(nil, "OVERLAY", nil, 2)
-    draw.paintFill(r.flash, "ink")
-    r.flash:SetPoint("TOPRIGHT")
-    r.flash:SetPoint("BOTTOMRIGHT")
-    r.flash:SetWidth(3)
-    r.flash:SetAlpha(0)
-    r.digits = text(t, "micro", "ink")
-    r.digits:SetShadowed(true)
-    -- the digits hang directly off the bar's end; the main hand's move past
-    -- the queued spell's icon while one waits (ST:UpdateQueued)
-    r.digits:SetJustifyH("LEFT")
-    r.digits:SetWidth(DIGITS_W)
-    r.digits:SetPoint("LEFT", r, "RIGHT", S["space-2"], 0)
-    r.duration = C_DurationUtil.CreateDuration()
-    r:SetAlpha(T.opacity["opacity-oor"])
-    r.digits:SetValue("–")
-    return r
+    return SwingRow.new(t, height)
 end
 
 --------------------------------------------------------------------------------
@@ -155,7 +172,7 @@ end
 
 -- Whether a slot has a weapon that swings; nil when the client won't say.
 -- Only the off hand can lack one (the ranged row shows while you shoot).
-local function canSwing(kind: any): boolean?
+local function canSwing(kind: PlayerSwingType): boolean?
     if kind ~= SWING.OffHand then return true end
     local _, oh = UnitAttackSpeed("player")
     if isSecret(oh) then return nil end
@@ -166,12 +183,22 @@ end
 -- Events
 --------------------------------------------------------------------------------
 
+-- The frame's name, the bars' width (px or a size token), whether the
+-- Auto Shot window shows, and what to call when Auto Shot proves to fire
+-- while moving.
+export type SwingTimerOptions = {
+    name?: string,
+    width?: number | string,
+    autoShotWindow?: boolean,
+    onNoAutoShotCast?: () -> (),
+}
+
 export class SwingTimer extends Frame
     barW: number
     mainHand: SwingRow
     offHand: SwingRow
     ranged: SwingRow
-    rows: { [any]: SwingRow }
+    rows: { [PlayerSwingType]: SwingRow }
     window: SwingWindow
     autoShotWindow: boolean
     onNoAutoShotCast: (() -> ())? = nil
@@ -184,8 +211,8 @@ export class SwingTimer extends Frame
     stoppedAt: number? = nil
     shooting: boolean? = nil
 
-    constructor(parent: Frame, options: { [string]: any }?)
-        local opts: { [string]: any } = options or {}
+    constructor(parent: Frame, options: SwingTimerOptions?)
+        local opts = options or {}
         super(opts.name, parent)
         self.barW = draw.size(opts.width or 340)
         local mh, oh, gap = draw.size("swing"), draw.size("swing-oh"), S["space-2"]
@@ -204,15 +231,8 @@ export class SwingTimer extends Frame
         self.offHand:SetPoint("TOPLEFT", 0, -(mh + gap))
 
         -- the queued attack, hanging off the main hand's right end
-        self.queued = CreateFrame("Frame", nil, self) :: any
-        self.queued:SetSize(QUEUE, QUEUE)
+        self.queued = SwingQueued.new(self)
         self.queued:SetPoint("LEFT", self.mainHand, "RIGHT", S["space-2"], 0)
-        self.queued.art = self.queued:CreateTexture(nil, "ARTWORK")
-        self.queued.art:SetPoint("TOPLEFT", 1, -1)
-        self.queued.art:SetPoint("BOTTOMRIGHT", -1, 1)
-        self.queued.art:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        draw.border(self.queued, "ink")
-        self.queued:Hide()
 
         self:SetScript("OnUpdate", function() self:Tick() end)
     end
@@ -257,8 +277,8 @@ export class SwingTimer extends Frame
         end
     end
 
-    function SetAutoShotWindow(on: any)
-        self.autoShotWindow = on and true or false
+    function SetAutoShotWindow(on: unknown)
+        self.autoShotWindow = on ~= nil and on ~= false
         if not self.autoShotWindow then
             self.window:Hide()
             self:SetDelayed(self.ranged, false)
@@ -282,7 +302,7 @@ export class SwingTimer extends Frame
         end
     end
 
-    function Swing(length: any, kind: any)
+    function Swing(length: number | Secret<number>, kind: PlayerSwingType | Secret<PlayerSwingType>)
         if isSecret(length) or isSecret(kind) then return end
         local r = self.rows[kind]
         if not r or type(length) ~= "number" or length <= 0 then return end
@@ -402,7 +422,7 @@ export class SwingTimer extends Frame
     end
 end
 
-export function swingTimer(parent: Frame, options: { [string]: any }?): SwingTimer
+export function swingTimer(parent: Frame, options: SwingTimerOptions?): SwingTimer
     return SwingTimer.new(parent, options)
 end
 

@@ -46,12 +46,14 @@ export type TalentNode = {
     requiresAll?: boolean,
     choice?: boolean,
     entryIDs?: number[],
-    [string]: any,
+    [string]: unknown,
 }
 --- A class's tree: its nodes by ID, in the game's order.
-export type TalentTreeData = { treeID?: number, order?: number[], byID: { [number]: TalentNode }, [string]: any }
+export type TalentTreeData = { treeID?: number, order?: number[], byID: { [number]: TalentNode }, [string]: unknown }
 --- One rank of a talent in a build's order.
-export type TalentStep = { node: number, entry?: number, [string]: any }
+export type TalentStep = { node: number, entry?: number, [string]: unknown }
+--- A build to share: its name, class, tree and steps.
+export type TalentBuildShare = { name?: string, classID?: number, treeID?: number, steps?: TalentStep[] }
 --- A decoded share text's step: the node and its entry's index (a choice).
 export type DecodedStep = { node: number, entryIndex?: number }
 export type DecodedBuild = { name: string, classID: number, treeID: number, steps: DecodedStep[] }
@@ -209,7 +211,7 @@ local function cutUTF8(s: string, max: number): string
     return s:sub(1, i)
 end
 
-export function encodeTalentBuild(b: { [string]: any }, entryIndex: ((s: TalentStep) -> number?)?): (string?, string?)
+export function encodeTalentBuild(b: TalentBuildShare, entryIndex: ((s: TalentStep) -> number?)?): (string?, string?)
     local name = cutUTF8(b.name or "", NAME_MAX)
     local steps: TalentStep[] = b.steps or {}
     local base: number? = nil
@@ -285,7 +287,29 @@ local CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local INDEX: { [string]: number } = {}
 for i = 1, 64 do INDEX[CHARS:sub(i, i)] = i - 1 end
 
-type Reader = { at: number, bits: () -> number, take: (width: number) -> number? }
+-- Reads a share text's bits, 6 to a character, lowest first.
+class Reader
+    -- the bits read
+    at: number = 0
+
+    constructor(private readonly values: number[]) end
+
+    -- the bits left
+    function bits(): number return #self.values * 6 - self.at end
+
+    function take(width: number): number?
+        local value, shift = 0, 1
+        for _ = 1, width do
+            local c = self.values[math.floor(self.at / 6) + 1]
+            if not c then return nil end
+            local b = math.floor(c / 2 ^ (self.at % 6)) % 2
+            value = value + b * shift
+            shift = shift * 2
+            self.at = self.at + 1
+        end
+        return value
+    end
+end
 
 local function reader(text: string): Reader?
     local values: number[] = {}
@@ -294,51 +318,43 @@ local function reader(text: string): Reader?
         if not v then return nil end
         values[i] = v
     end
-    local r: Reader = { at = 0, bits = nil :: any, take = nil :: any } -- bits read
-    r.bits = function(): number return #values * 6 - r.at end
-    r.take = function(width: number): number?
-        local value, shift = 0, 1
-        for _ = 1, width do
-            local c = values[math.floor(r.at / 6) + 1]
-            if not c then return nil end
-            local b = math.floor(c / 2 ^ (r.at % 6)) % 2
-            value = value + b * shift
-            shift = shift * 2
-            r.at = r.at + 1
-        end
-        return value
-    end
-    return r
+    return Reader.new(values)
 end
 
-type Writer = { out: string[], cur: number, used: number, put: (width: number, value: number) -> (), text: () -> string }
+-- Writes a share text's bits, 6 to a character, lowest first.
+class Writer
+    out: string[] = {}
+    cur: number = 0
+    used: number = 0
 
-local function writer(): Writer
-    local w: Writer = { out = {}, cur = 0, used = 0, put = nil :: any, text = nil :: any }
-    w.put = function(width: number, value: number)
+    function put(width: number, value: number)
         for _ = 1, width do
             local b = value % 2
             value = math.floor(value / 2)
-            w.cur = w.cur + b * 2 ^ w.used
-            w.used = w.used + 1
-            if w.used == 6 then
-                w.out[#w.out + 1] = CHARS:sub(w.cur + 1, w.cur + 1)
-                w.cur, w.used = 0, 0
+            self.cur = self.cur + b * 2 ^ self.used
+            self.used = self.used + 1
+            if self.used == 6 then
+                self.out[#self.out + 1] = CHARS:sub(self.cur + 1, self.cur + 1)
+                self.cur, self.used = 0, 0
             end
         end
     end
-    w.text = function(): string
-        if w.used > 0 then return table.concat(w.out) .. CHARS:sub(w.cur + 1, w.cur + 1) end
-        return table.concat(w.out)
+
+    function text(): string
+        if self.used > 0 then return table.concat(self.out) .. CHARS:sub(self.cur + 1, self.cur + 1) end
+        return table.concat(self.out)
     end
-    return w
+end
+
+local function writer(): Writer
+    return Writer.new()
 end
 
 local function header(r: Reader?): (number?, number?, number[]?)
-    if not r or r.bits() < 8 + 16 + 128 then return nil, nil, nil end
-    local version, specID = r.take(8), r.take(16)
+    if not r or r:bits() < 8 + 16 + 128 then return nil, nil, nil end
+    local version, specID = r:take(8), r:take(16)
     local hash: number[] = {}
-    for i = 1, 16 do hash[i] = r.take(8) :: number end
+    for i = 1, 16 do hash[i] = r:take(8) :: number end
     return version, specID, hash
 end
 
@@ -354,17 +370,17 @@ export function readGameTalentString(input: string?, tree: TalentTreeData): (Gam
     local ranks: { [number]: number } = {}
     local entries: { [number]: number } = {}
     for _, id in ipairs(tree.order or {}) do
-        local selected = r.take(1)
+        local selected = r:take(1)
         if selected == nil then return nil, "The string is incomplete; copy all of it." end
         if selected == 1 then
-            local purchased = r.take(1)
+            local purchased = r:take(1)
             if purchased == 1 then
-                local partial = r.take(1)
+                local partial = r:take(1)
                 local n: number? = nil
-                if partial == 1 then n = r.take(6) end
-                local choice = r.take(1)
+                if partial == 1 then n = r:take(6) end
+                local choice = r:take(1)
                 local index: number? = nil
-                if choice == 1 then index = r.take(2) end
+                if choice == 1 then index = r:take(2) end
                 if partial == nil or choice == nil or (partial == 1 and n == nil) or (choice == 1 and index == nil) then
                     return nil, "The string is incomplete; copy all of it."
                 end
@@ -386,25 +402,25 @@ end
 export function writeGameTalentString(version: number?, specID: number?, hash: number[]?, tree: TalentTreeData,
                                       ranks: { [number]: number }, entries: { [number]: number }?): string
     local w = writer()
-    w.put(8, version or 0)
-    w.put(16, specID or 0)
-    for i = 1, 16 do w.put(8, hash and hash[i] or 0) end
+    w:put(8, version or 0)
+    w:put(16, specID or 0)
+    for i = 1, 16 do w:put(8, hash and hash[i] or 0) end
     for _, id in ipairs(tree.order or {}) do
         local r = ranks[id] or 0
         local node = tree.byID[id]
         if r > 0 and node then
-            w.put(1, 1)
-            w.put(1, 1)
+            w:put(1, 1)
+            w:put(1, 1)
             local partial = r ~= (node.max or 1)
-            w.put(1, partial and 1 or 0)
-            if partial then w.put(6, r) end
+            w:put(1, partial and 1 or 0)
+            if partial then w:put(6, r) end
             local index: number? = nil
             if node.choice and entries then index = entries[id] end
-            w.put(1, index and 1 or 0)
-            if index then w.put(2, index - 1) end
+            w:put(1, index and 1 or 0)
+            if index then w:put(2, index - 1) end
         else
-            w.put(1, 0)
+            w:put(1, 0)
         end
     end
-    return w.text()
+    return w:text()
 end

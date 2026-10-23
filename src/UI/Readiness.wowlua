@@ -9,7 +9,7 @@
 --   r:SetRows({ { icon, spell, who, class, endsAt (GetTime() it's ready; nil: ready) }, ... })
 --   r:SetActionShown(on)
 
-import tokens as T from "/Core/Tokens"
+import tokens as T, Color from "/Core/Tokens"
 import * as draw from "/UI/Draw"
 import text, Text from "/UI/Text"
 import icon, Icon from "/UI/Icon"
@@ -17,7 +17,7 @@ import Panel from "/UI/Panel"
 import button, SuuButton from "/UI/Controls"
 
 const S = T.space
-const COLORS = T.color :: { [string]: any }
+const COLORS = T.color :: { [string]: Color }
 
 const WIDTH = 340
 const ROW_H = draw.size("icon-md") + S["space-3"] * 2
@@ -28,43 +28,49 @@ local function fmtLeft(s: number): string
     return ("%ds"):format(s)
 end
 
-export type Entry = { icon?: any, spell?: string, who?: string, class?: string, endsAt?: number }
+export type Entry = { icon?: string | number, spell?: string, who?: string, class?: string, endsAt?: number }
+
+-- what the ready check button calls
+export type ReadinessOptions = { onReadyCheck?: () -> () }
+
+-- The panel readiness makes.
 
 -- One row: a shared cooldown.
-export interface ReadinessRow extends Frame
+export class ReadinessRow extends Frame
     rule: Texture
     icon: Icon
     spell: Text
     diamond: Texture
     who: Text
     status: Text
+
+    constructor(r: Readiness, i: number)
+        super(nil, r.body)
+        self:SetSize(WIDTH - S["space-5"] * 2, ROW_H)
+        self.rule = self:CreateTexture(nil, "BORDER")
+        draw.paintFill(self.rule, "gilt-faint")
+        self.rule:SetPoint("TOPLEFT")
+        self.rule:SetPoint("TOPRIGHT")
+        self.rule:SetHeight(1)
+        self.icon = icon(self, "icon-md")
+        self.icon:SetPoint("LEFT", 0, 0)
+        self.spell = text(self, "label", "ink")
+        self.spell:SetPoint("LEFT", self.icon, "RIGHT", S["space-4"], 0)
+        self.spell:SetWordWrap(false)
+        self.diamond = draw.diamond(self, 5, "gilt")
+        self.diamond:SetPoint("LEFT", self.spell, "RIGHT", S["space-4"] + 2, 0)
+        self.who = text(self, "caption", "ink-muted")
+        self.who:SetPoint("LEFT", self.diamond, "RIGHT", S["space-3"], 0)
+        self.who:SetWordWrap(false)
+        self.status = text(self, "label", "arcane")
+        self.status:SetPoint("RIGHT", 0, 0)
+        self.status:SetJustifyH("RIGHT")
+        r.rows[i] = self
+    end
 end
 
--- The panel readiness makes.
-
 local function buildRow(r: Readiness, i: number): ReadinessRow
-    local row: ReadinessRow = CreateFrame("Frame", nil, r.body) :: any
-    row:SetSize(WIDTH - S["space-5"] * 2, ROW_H)
-    row.rule = row:CreateTexture(nil, "BORDER")
-    draw.paintFill(row.rule, "gilt-faint")
-    row.rule:SetPoint("TOPLEFT")
-    row.rule:SetPoint("TOPRIGHT")
-    row.rule:SetHeight(1)
-    row.icon = icon(row, "icon-md")
-    row.icon:SetPoint("LEFT", 0, 0)
-    row.spell = text(row, "label", "ink")
-    row.spell:SetPoint("LEFT", row.icon, "RIGHT", S["space-4"], 0)
-    row.spell:SetWordWrap(false)
-    row.diamond = draw.diamond(row, 5, "gilt")
-    row.diamond:SetPoint("LEFT", row.spell, "RIGHT", S["space-4"] + 2, 0)
-    row.who = text(row, "caption", "ink-muted")
-    row.who:SetPoint("LEFT", row.diamond, "RIGHT", S["space-3"], 0)
-    row.who:SetWordWrap(false)
-    row.status = text(row, "label", "arcane")
-    row.status:SetPoint("RIGHT", 0, 0)
-    row.status:SetJustifyH("RIGHT")
-    r.rows[i] = row
-    return row
+    return ReadinessRow.new(r, i)
 end
 
 export class Readiness extends Panel
@@ -75,8 +81,8 @@ export class Readiness extends Panel
     actionShown: boolean
     listH: number? = nil
 
-    constructor(parent: Frame, options: { [string]: any }?)
-        local opts: { [string]: any } = options or {}
+    constructor(parent: Frame, options: ReadinessOptions?)
+        local opts = options or {}
         super(parent, { title = "Readiness", meta = "before pull", width = WIDTH })
         self.rows, self.data = {}, {}
         self.footRule = self.body:CreateTexture(nil, "BORDER")
@@ -136,8 +142,8 @@ export class Readiness extends Panel
         self:Layout(y)
     end
 
-    function SetActionShown(on: any)
-        self.actionShown = on and true or false
+    function SetActionShown(on: unknown)
+        self.actionShown = on ~= nil and on ~= false
         self:Layout(self.listH or 0)
     end
 
@@ -159,6 +165,6 @@ export class Readiness extends Panel
     end
 end
 
-export function readiness(parent: Frame, options: { [string]: any }?): Readiness
+export function readiness(parent: Frame, options: ReadinessOptions?): Readiness
     return Readiness.new(parent, options)
 end

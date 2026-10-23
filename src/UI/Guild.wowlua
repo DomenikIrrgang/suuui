@@ -38,7 +38,7 @@ import TextField, Checkbox from "/UI/Inputs"
 import ScrollArea from "/UI/Panel"
 
 export type GuildMember = {
-    key?: any,
+    key?: string,
     name?: string,
     class?: string,      -- the class file ("MAGE")
     className?: string,
@@ -63,35 +63,11 @@ export type RosterData = {
     showOffline?: boolean,
     sort?: string,
     members?: GuildMember[],
-    selected?: any,
+    selected?: string,
     actions?: { [string]: GuildAction },
 }
 
 export type RosterColumn = { x: number, w: number }
-
-export interface RosterRow extends Button
-    member?: GuildMember
-    sel: Texture
-    edge: Texture
-    hover: Texture
-    diamond: Texture
-    classIcon: Texture
-    cells: Text[]
-    badge: RosterBadge
-end
-
-export interface RosterBadge extends Frame
-    text: Text
-end
-
-export interface RosterHead extends Button
-    text: Text
-end
-
--- A foot button: why it's off, for its tooltip.
-export interface RosterButton extends SuuButton
-    reason?: string
-end
 
 local S = T.space
 
@@ -99,6 +75,48 @@ local ROW_H = 24
 local HEAD_ROW_H = 22
 local TOP_H = 30
 local FOOT_H = 26
+
+-- A member's status (Away, Busy) beside the name.
+export class RosterBadge extends Frame
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(14)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.text = uiText.text(self, "micro", "ink-muted")
+        self.text:SetPoint("CENTER")
+    end
+end
+
+-- A column's head: its label, a click sorts by it.
+export class RosterHead extends Button
+    readonly text: Text
+
+    constructor(parent: Frame, label: string)
+        super(nil, parent)
+        self:SetHeight(HEAD_ROW_H)
+        self.text = uiText.text(self, "caption", "ink-muted")
+        self.text:SetAllPoints()
+        self.text:SetValue(label)
+    end
+end
+
+-- A foot button: why it's off, for its tooltip.
+export class RosterButton extends SuuButton
+    reason?: string
+
+    constructor(parent: Frame, label: string, variant: string, onClick: () -> ())
+        super(parent, { text = label, variant = variant, onClick = onClick })
+        self:SetHeight(FOOT_H)
+        self:HookScript("OnEnter", function()
+            if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = label, description = self.reason }) end
+        end)
+        self:HookScript("OnLeave", function() tooltip.hideTooltip() end)
+    end
+end
+
 
 -- the columns: their share of the width after the fixed ones
 local COLUMNS = {
@@ -125,72 +143,75 @@ local function columnsFor(w: number): RosterColumn[]
     return out
 end
 
-local function makeRow(g: GuildRoster): RosterRow
-    local r: RosterRow = CreateFrame("Button", nil, g.list.child) :: any
-    r:SetHeight(ROW_H)
-    r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    r.sel = draw.fill(r, "arcane-soft", "BACKGROUND")
-    r.sel:SetAllPoints()
-    r.edge = draw.fill(r, "arcane", "ARTWORK")
-    r.edge:SetWidth(2)
-    r.edge:SetPoint("TOPLEFT")
-    r.edge:SetPoint("BOTTOMLEFT")
-    r.hover = draw.fill(r, "gilt-faint", "BACKGROUND", 1)
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.diamond = draw.diamond(r, 6, "ink")
-    r.classIcon = r:CreateTexture(nil, "ARTWORK")
-    r.classIcon:SetSize(16, 16)
-    r.cells = {}
-    for i, c in ipairs(COLUMNS) do
-        local t = uiText.text(r, i == 1 and "label" or "caption", "ink")
-        t:SetJustifyH(c.align or "LEFT")
-        r.cells[i] = t
-    end
-    r.badge = CreateFrame("Frame", nil, r) :: any
-    r.badge:SetHeight(14)
-    draw.fill(r.badge, "surface-raised"):SetAllPoints()
-    draw.border(r.badge, "gilt-line")
-    r.badge.text = uiText.text(r.badge, "micro", "ink-muted")
-    r.badge.text:SetPoint("CENTER")
-    r:SetScript("OnEnter", function(self: RosterRow)
-        self.hover:Show()
-        local m = self.member
-        if g.onRowEnter and m then g.onRowEnter(self, m) end
-        if m and m.officerNote and m.officerNote ~= "" then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip_SetTitle(GameTooltip, m.name or "")
-            if m.note and m.note ~= "" then GameTooltip_AddNormalLine(GameTooltip, "Note: " .. m.note) end
-            GameTooltip_AddNormalLine(GameTooltip, "Officer note: " .. m.officerNote)
-            GameTooltip:Show()
-        end
-    end)
-    r:SetScript("OnLeave", function(self: RosterRow)
+export class RosterRow extends Button
+    member?: GuildMember
+    sel: Texture
+    edge: Texture
+    hover: Texture
+    diamond: Texture
+    classIcon: Texture
+    cells: Text[]
+    badge: RosterBadge
+
+    constructor(g: GuildRoster)
+        super(nil, g.list.child)
+        self:SetHeight(ROW_H)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.sel = draw.fill(self, "arcane-soft", "BACKGROUND")
+        self.sel:SetAllPoints()
+        self.edge = draw.fill(self, "arcane", "ARTWORK")
+        self.edge:SetWidth(2)
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.hover = draw.fill(self, "gilt-faint", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
         self.hover:Hide()
-        GameTooltip:Hide()
-        if g.onRowLeave then g.onRowLeave(self) end
-    end)
-    r:SetScript("OnClick", function(self: RosterRow, button: string)
-        local m = self.member
-        if not m then return end
-        if g.onSelect then g.onSelect(m.key) end
-        if button == "RightButton" and g.onMenu then g.onMenu(m, self) end
-    end)
-    r:SetScript("OnDoubleClick", function(self: RosterRow)
-        local m = self.member
-        if m and m.online and g.onAction then g.onAction("whisper", m) end
-    end)
-    return r
+        self.diamond = draw.diamond(self, 6, "ink")
+        self.classIcon = self:CreateTexture(nil, "ARTWORK")
+        self.classIcon:SetSize(16, 16)
+        self.cells = {}
+        for i, c in ipairs(COLUMNS) do
+            local t = uiText.text(self, i == 1 and "label" or "caption", "ink")
+            t:SetJustifyH(c.align or "LEFT")
+            self.cells[i] = t
+        end
+        self.badge = RosterBadge.new(self)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            local m = self.member
+            if g.onRowEnter and m then g.onRowEnter(self, m) end
+            if m and m.officerNote and m.officerNote ~= "" then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip_SetTitle(GameTooltip, m.name or "")
+                if m.note and m.note ~= "" then GameTooltip_AddNormalLine(GameTooltip, "Note: " .. m.note) end
+                GameTooltip_AddNormalLine(GameTooltip, "Officer note: " .. m.officerNote)
+                GameTooltip:Show()
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+            if g.onRowLeave then g.onRowLeave(self) end
+        end)
+        self:SetScript("OnClick", function(_: RosterRow, button: string)
+            local m = self.member
+            if not m then return end
+            if g.onSelect then g.onSelect(m.key) end
+            if button == "RightButton" and g.onMenu then g.onMenu(m, self) end
+        end)
+        self:SetScript("OnDoubleClick", function()
+            local m = self.member
+            if m and m.online and g.onAction then g.onAction("whisper", m) end
+        end)
+    end
+end
+
+local function makeRow(g: GuildRoster): RosterRow
+    return RosterRow.new(g)
 end
 
 local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ()): RosterButton
-    local b = controls.button(parent, { text = text, variant = variant, onClick = onClick }) :: RosterButton
-    b:SetHeight(FOOT_H)
-    b:HookScript("OnEnter", function(self: RosterButton)
-        if self.reason and not self:IsEnabled() then tooltip.showTooltip(self, { title = text, description = self.reason }) end
-    end)
-    b:HookScript("OnLeave", function() tooltip.hideTooltip() end)
-    return b
+    return RosterButton.new(parent, text, variant, onClick)
 end
 
 export class GuildRoster extends Frame
@@ -210,7 +231,7 @@ export class GuildRoster extends Frame
     onSearch: ((text: string) -> ())? = nil
     onShowOffline: ((on: boolean) -> ())? = nil
     onSort: ((column: string) -> ())? = nil
-    onSelect: ((key: any) -> ())? = nil
+    onSelect: ((key: string?) -> ())? = nil
     onAction: ((name: string, member: GuildMember?) -> ())? = nil
     onMenu: ((member: GuildMember, owner: RosterRow) -> ())? = nil
     onRowEnter: ((row: RosterRow, member: GuildMember) -> ())? = nil
@@ -262,11 +283,7 @@ export class GuildRoster extends Frame
         rule:SetPoint("TOPLEFT", self.headRow, "BOTTOMLEFT")
         rule:SetPoint("TOPRIGHT", self.headRow, "BOTTOMRIGHT")
         for i, c in ipairs(COLUMNS) do
-            local h: RosterHead = CreateFrame("Button", nil, self.headRow) :: any
-            h:SetHeight(HEAD_ROW_H)
-            h.text = uiText.text(h, "caption", "ink-muted")
-            h.text:SetAllPoints()
-            h.text:SetValue(c.label)
+            local h = RosterHead.new(self.headRow, c.label)
             h:SetScript("OnClick", function() if self.onSort then self.onSort(c.key) end end)
             h:SetScript("OnEnter", function(obj: RosterHead) obj.text:SetColor("ink") end)
             h:SetScript("OnLeave", function(obj: RosterHead)
@@ -400,19 +417,30 @@ end
 export type GuildRank = { name?: string, count?: number }
 export type GuildInfoData = { info?: string, canEditInfo?: boolean, ranks?: GuildRank[] }
 
-export interface InfoBlock extends Frame
-    head: Text
-    edit: SuuButton
-    text: Text
+-- A rank and how many hold it.
+export class RankRow extends Frame
+    readonly name: Text
+    readonly count: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.name = uiText.text(self, "body", "ink")
+        self.name:SetPoint("LEFT")
+        self.count = uiText.text(self, "numeric", "ink-muted")
+        self.count:SetPoint("RIGHT")
+    end
 end
 
-export interface RankRow extends Frame
-    name: Text
-    count: Text
-end
+-- The ranks' box, under its head.
+export class RanksBox extends Frame
+    readonly head: Text
 
-export interface RanksBox extends Frame
-    head: Text
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.head = uiText.text(self, "header", "gilt-text")
+        self.head:SetPoint("TOPLEFT")
+        self.head:SetValue("Ranks")
+    end
 end
 
 -- the live pages, drawn again when the theme changes (colour codes in
@@ -426,21 +454,30 @@ local function placeEdit(b: InfoBlock)
     b.edit:SetPoint("RIGHT", b, "TOPRIGHT", -S["space-4"], -(S["space-5"] + T.type.header.lineHeight / 2))
 end
 
+export class InfoBlock extends Frame
+    head: Text
+    edit: SuuButton
+    text: Text
+
+    constructor(i: GuildInfo, title: string, key: string)
+        super(nil, i)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        draw.border(self, "gilt-faint")
+        self.head = uiText.text(self, "header", "gilt-text")
+        self.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+        self.head:SetValue(title)
+        self.edit = controls.button(self, { text = "Edit", variant = "quiet", onClick = function() if i.onEdit then i.onEdit(key) end end })
+        self.edit:SetHeight(22)
+        placeEdit(self)
+        self.text = uiText.text(self, "body", "ink")
+        self.text:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT", 0, -S["space-3"])
+        self.text:SetJustifyH("LEFT")
+        self.text:SetWordWrap(true)
+    end
+end
+
 local function infoBlock(i: GuildInfo, title: string, key: string): InfoBlock
-    local b: InfoBlock = CreateFrame("Frame", nil, i) :: any
-    draw.fill(b, "surface-sunk"):SetAllPoints()
-    draw.border(b, "gilt-faint")
-    b.head = uiText.text(b, "header", "gilt-text")
-    b.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
-    b.head:SetValue(title)
-    b.edit = controls.button(b, { text = "Edit", variant = "quiet", onClick = function() if i.onEdit then i.onEdit(key) end end })
-    b.edit:SetHeight(22)
-    placeEdit(b)
-    b.text = uiText.text(b, "body", "ink")
-    b.text:SetPoint("TOPLEFT", b.head, "BOTTOMLEFT", 0, -S["space-3"])
-    b.text:SetJustifyH("LEFT")
-    b.text:SetWordWrap(true)
-    return b
+    return InfoBlock.new(i, title, key)
 end
 
 export class GuildInfo extends Frame
@@ -454,10 +491,7 @@ export class GuildInfo extends Frame
         super(nil, parent)
         self.rankRows = {}
         self.info = infoBlock(self, "Guild information", "info")
-        self.ranks = CreateFrame("Frame", nil, self) :: any
-        self.ranks.head = uiText.text(self.ranks, "header", "gilt-text")
-        self.ranks.head:SetPoint("TOPLEFT")
-        self.ranks.head:SetValue("Ranks")
+        self.ranks = RanksBox.new(self)
         self:SetScript("OnSizeChanged", function() if self.data then self:Layout() end end)
         infos[self] = true
     end
@@ -473,11 +507,7 @@ export class GuildInfo extends Frame
         for i, r in ipairs(d.ranks or {}) do
             local row = self.rankRows[i]
             if not row then
-                row = CreateFrame("Frame", nil, self.ranks) :: RankRow
-                row.name = uiText.text(row, "body", "ink")
-                row.name:SetPoint("LEFT")
-                row.count = uiText.text(row, "numeric", "ink-muted")
-                row.count:SetPoint("RIGHT")
+                row = RankRow.new(self.ranks)
                 self.rankRows[i] = row
             end
             row:SetHeight(T.type.body.lineHeight + S["space-2"])
@@ -651,7 +681,7 @@ export class GuildMotdBanner extends Frame
             local d = self.data
             if not (d and self.has and self.message:IsTruncated()) then return end
             -- (the message, a font string: the declarations take only frames)
-            GameTooltip:SetOwner(self.message :: any, "ANCHOR_BOTTOMLEFT", 0, 0)
+            GameTooltip:SetOwner(self.message :: Region :: Frame, "ANCHOR_BOTTOMLEFT", 0, 0)
             GameTooltip_SetTitle(GameTooltip, "Message of the day")
             GameTooltip_AddNormalLine(GameTooltip, d.text or "", true)
             GameTooltip:Show()

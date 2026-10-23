@@ -27,7 +27,7 @@
 -- "Pulling" (amber). A tank or pet holding the mob reads "Tanking".
 
 import isSecret from "wowlua:secret"
-import tokens as T from "/Core/Tokens"
+import tokens as T, Color from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
@@ -35,7 +35,7 @@ import text, Text from "/UI/Text"
 import stateBadge, StateBadge from "/UI/Controls"
 
 const S = T.space
-const COLORS = T.color :: { [string]: any }
+const COLORS = T.color :: { [string]: Color }
 
 const WHITE = "Interface\\Buttons\\WHITE8X8"
 
@@ -47,7 +47,18 @@ local ROLE_ICON: { [string]: string } = {
 const CLASS_ICONS = "Interface\\TargetingFrame\\UI-Classes-Circles"
 
 -- One row of the list (see the top). Name, % and raw may be secret.
-export type ThreatEntry = { name?: any, class?: string, role?: string, status?: any, percent?: any, raw?: any, you?: boolean }
+export type ThreatEntry = {
+    name?: string | Secret<string>,
+    class?: string,
+    role?: string,
+    status?: number | Secret<number>,
+    percent?: number | Secret<number>,
+    raw?: number | Secret<number>,
+    you?: boolean,
+}
+
+-- the rows the meter keeps its height for
+export type ThreatMeterOptions = { rows?: number }
 -- SetRows' options (see the top).
 export type ThreatOptions = { show?: string, byState?: boolean, marker?: string, raw?: boolean, nameColor?: string }
 
@@ -55,16 +66,16 @@ export type ThreatOptions = { show?: string, byState?: boolean, marker?: string,
 
 -- The meter threatMeter makes.
 
-local function holder(role: any): boolean return role == "TANK" or role == "PET" end
+local function holder(role: string?): boolean return role == "TANK" or role == "PET" end
 -- a readable number (a secret one is never compared)
-local function readable(v: any): boolean return not isSecret(v) and type(v) == "number" end
+local function readable(v: unknown): v is number return not isSecret(v) and type(v) == "number" end
 const PCT_W = 34
 const RAW_W = 38
 
 -- The state a row shows: tone and word, or nil.
-local function stateOf(r: any): (string?, string?)
+local function stateOf(r: ThreatEntry): (string?, string?)
     local s = r.status
-    if isSecret(s) or type(s) ~= "number" then return nil end
+    if isSecret(s) or type(s) ~= "number" then return nil, nil end
     if holder(r.role) then return s == 2 and "warning" or nil, s == 2 and "Losing" or nil end
     if s >= 2 then return "danger", "Aggro" end
     if s == 1 then return "warning", "Pulling" end
@@ -80,7 +91,7 @@ end
 
 -- the bar's fill: unit-fill-deep to unit-fill, each mixed (draw.bind: again
 -- after a theme change)
-local function fillGradient(t: any)
+local function fillGradient(t: Texture)
     local r1, g1, b1 = mix("unit-fill-deep")
     local r2, g2, b2 = mix("unit-fill")
     t:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
@@ -145,9 +156,11 @@ export class ThreatRow extends Frame
         self.edge:SetColor(tone == "danger" and "ember" or tone == "warning" and "amber" or r.you and "ink" or "gilt-hairline")
         self.glow:SetShown(tone == "danger")
         -- the fill: the scaled %, straight to the engine (a secret one too)
-        local pct = r.percent
-        local known = isSecret(pct) or type(pct) == "number"
-        if known then self.bar:SetValue(pct) else self.bar:SetValue(0) end
+        local pct: number | Secret<number> = 0
+        local known = false
+        local given = r.percent
+        if isSecret(given) or type(given) == "number" then pct, known = given, true end
+        self.bar:SetValue(pct)
         -- rank (by % only)
         local x = S["space-2"]
         if rank then
@@ -242,8 +255,8 @@ export class ThreatMeter extends Frame
     note: Text
     empty: Text
 
-    constructor(parent: Frame, options: { [string]: any }?)
-        local opts: { [string]: any } = options or {}
+    constructor(parent: Frame, options: ThreatMeterOptions?)
+        local opts = options or {}
         super(nil, parent)
         self.maxRows = math.max(2, opts.rows or 8)
         local w = draw.size("meter-w")
@@ -295,8 +308,8 @@ export class ThreatMeter extends Frame
         extend.add(extend.Kind.Meter, self, { meter = "threat" })
     end
 
-    function SetTarget(name: any)
-        if name == nil then
+    function SetTarget(name: string | Secret<string> | nil)
+        if not isSecret(name) and name == nil then
             self.target:SetValue("")
             return
         end
@@ -372,6 +385,6 @@ export class ThreatMeter extends Frame
 end
 mixins.ThreatMeter = ThreatMeter
 
-export function threatMeter(parent: Frame, options: { [string]: any }?): ThreatMeter
+export function threatMeter(parent: Frame, options: ThreatMeterOptions?): ThreatMeter
     return ThreatMeter.new(parent, options)
 end
