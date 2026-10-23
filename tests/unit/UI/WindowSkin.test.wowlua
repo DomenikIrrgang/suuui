@@ -13,7 +13,8 @@ import * as tooltip from "/UI/Tooltip"
 import * as reskin from "/UI/Reskin"
 import measureText from "/UI/Text"
 import skinWindow, isCoveredByWindow, layout, centerWindow, queue, windowRow, WINDOW_HEAD_H from "/UI/WindowSkin"
-import internal fitTabs from "/UI/WindowSkin"
+import internal fitTabs, tabSkins from "/UI/WindowSkin"
+import chromeOf from "/UI/WindowSkin"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, themeChanged from "./WindowsHelpers"
 
@@ -70,7 +71,7 @@ end
 
 @test("fitTabs: full labels, a smaller gap, then the short labels")
 local function fitting()
-    local tabs: { [string]: any }[] = { { label = "Character", short = "Char" }, { label = "Reputation", short = "Rep" } }
+    local tabs: { label: string, short?: string }[] = { { label = "Character", short = "Char" }, { label = "Reputation", short = "Rep" } }
     local full = measureText("header", "Character") + measureText("header", "Reputation")
     local short, gap = fitTabs(tabs, full + S["space-5"])
     expect(short).toBe(false)
@@ -90,7 +91,7 @@ local function skinned()
     f:SetFrameStrata("MEDIUM")
     local chrome = skinWindow(f, { title = "Test", icon = "person", close = f.CloseButton,
         hide = { f.NineSlice, f.PortraitContainer, false }, topInset = 20 })
-    expect(f.suuChrome).toBe(chrome)
+    expect(chromeOf(f)).toBe(chrome)
     expect(skinWindow(f)).toBe(chrome)
     expect(chrome.frame).toBe(f)
     expect(chrome.protected).toBe(false)
@@ -173,10 +174,10 @@ local function keyChip()
     local chrome = skinWindow(f, { title = "Character", binding = "TOGGLECHARACTER0", close = f.CloseButton })
     local first = GetBindingKey("TOGGLECHARACTER0") :: string
     expect(chrome.key).never.toBeNil()
-    expect(chrome.key.text).toHaveText(GetBindingText(first, "KEY_"))
+    expect(assert(chrome.key).text).toHaveText(GetBindingText(first, "KEY_"))
     expect(chrome.keyRight).toBe(S["space-5"] + 22 + S["space-4"])
     chrome:SetBinding("TOGGLEBACKPACK")
-    expect(chrome.key.text).toHaveText(GetBindingText(GetBindingKey("TOGGLEBACKPACK") :: string, "KEY_"))
+    expect(assert(chrome.key).text).toHaveText(GetBindingText(GetBindingKey("TOGGLEBACKPACK") :: string, "KEY_"))
     expect(chrome.key).toBeShown()
     chrome:SetBinding("SUUUI_TEST_UNBOUND")
     expect(chrome.key).never.toBeShown()
@@ -229,8 +230,8 @@ local function tabs()
     })
     -- Blizzard's art away
     expect(t1.Left:GetAlpha()).toBe(0)
-    expect(t1.suuTab.label).toHaveText("Character")
-    expect(t2.suuTab.label).toHaveText("Reputation")
+    expect(assert(tabSkins[t1]).label).toHaveText("Character")
+    expect(assert(tabSkins[t2]).label).toHaveText("Reputation")
     expect(t1:GetHeight()).toBe(S["space-2"] + T.type.header.lineHeight + S["space-3"])
     expect(t1:GetWidth()).toBe(math.ceil(measureText("header", "Character")))
     expect(t1).toBeAnchoredTo(chrome.head, "BOTTOMLEFT", "BOTTOMLEFT")
@@ -239,25 +240,25 @@ local function tabs()
     expect(gap).toBe(S["space-5"])
     expect(t1:GetFrameLevel()).toBe(chrome.head:GetFrameLevel() + 2)
     -- the chosen one in gilt-text, the other muted; the marker on it
-    expect(tokenOf(t1.suuTab.label)).toBe("gilt-text")
-    expect(tokenOf(t2.suuTab.label)).toBe("ink-muted")
-    expect(chrome.tabMarker.chosen).toBe(t1)
+    expect(tokenOf(assert(tabSkins[t1]).label)).toBe("gilt-text")
+    expect(tokenOf(assert(tabSkins[t2]).label)).toBe("ink-muted")
+    expect(assert(chrome.tabMarker).chosen).toBe(t1)
     chosen = 2
     chrome:UpdateTabs()
-    expect(tokenOf(t1.suuTab.label)).toBe("ink-muted")
-    expect(tokenOf(t2.suuTab.label)).toBe("gilt-text")
-    expect(chrome.tabMarker.chosen).toBe(t2)
+    expect(tokenOf(assert(tabSkins[t1]).label)).toBe("ink-muted")
+    expect(tokenOf(assert(tabSkins[t2]).label)).toBe("gilt-text")
+    expect(assert(chrome.tabMarker).chosen).toBe(t2)
     -- hover: ink
     mock.hover(t1)
-    expect(tokenOf(t1.suuTab.label)).toBe("ink")
+    expect(tokenOf(assert(tabSkins[t1]).label)).toBe("ink")
     mock.hover(nil)
-    expect(tokenOf(t1.suuTab.label)).toBe("ink-muted")
+    expect(tokenOf(assert(tabSkins[t1]).label)).toBe("ink-muted")
     -- SetTabs again: the skins kept
-    local skin = t1.suuTab
+    local skin = assert(tabSkins[t1])
     chrome:SetTabs({ { button = t1, label = "Only" } })
-    expect(t1.suuTab).toBe(skin)
+    expect(tabSkins[t1]).toBe(skin)
     expect(skin.label).toHaveText("Only")
-    expect(chrome.tabMarker.chosen).toBeNil()
+    expect(assert(chrome.tabMarker).chosen).toBeNil()
 end
 
 @test("a narrow window: short labels, space-4 apart")
@@ -266,20 +267,20 @@ local function narrow()
     local chrome = skinWindow(f, {})
     local t1, t2 = tab(f, 1), tab(f, 2)
     chrome:SetTabs({ { button = t1, label = "Character Sheet", short = "Char" }, { button = t2, label = "Reputation", short = "Rep" } })
-    expect(t1.suuTab.label).toHaveText("Char")
-    expect(t2.suuTab.label).toHaveText("Rep")
+    expect(assert(tabSkins[t1]).label).toHaveText("Char")
+    expect(assert(tabSkins[t2]).label).toHaveText("Rep")
     local _, _, _, _, gap = t2:GetPoint(1)
     local _, _, _, x = t2:GetPoint(1)
     expect(x).toBe(S["space-4"])
     expect(gap).toBe(0)
     -- a tab without a short label keeps its long one
     chrome:SetTabs({ { button = t1, label = "Character Sheet" }, { button = t2, label = "Reputation and more", short = "Rep" } })
-    expect(t1.suuTab.label).toHaveText("Character Sheet")
+    expect(assert(tabSkins[t1]).label).toHaveText("Character Sheet")
     -- wider again: full labels
     f:SetWidth(800)
     mock.advanceFrames(1)
-    expect(t1.suuTab.label).toHaveText("Character Sheet")
-    expect(t2.suuTab.label).toHaveText("Reputation and more")
+    expect(assert(tabSkins[t1]).label).toHaveText("Character Sheet")
+    expect(assert(tabSkins[t2]).label).toHaveText("Reputation and more")
 end
 
 @test("a disabled tab: ink-faint, dimmed, covered; its cover says why")
@@ -290,11 +291,11 @@ local function disabledTab()
     local off = true
     chrome:SetTabs({ { button = t1, label = "Talents", reason = "From level 10", selected = function() return true end,
         disabled = function() return off end } })
-    local skin = t1.suuTab
+    local skin = assert(tabSkins[t1])
     expect(tokenOf(skin.label)).toBe("ink-faint")
     expect(skin.label:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
     expect(skin.cover).toBeShown()
-    expect(chrome.tabMarker.chosen).toBeNil()
+    expect(assert(chrome.tabMarker).chosen).toBeNil()
     mock.hover(skin.cover)
     expect(showSpy).toHaveBeenCalledWith(skin.cover, { title = "Talents", description = "From level 10" })
     mock.hover(nil)
@@ -312,9 +313,9 @@ local function coverNoDef()
     local chrome = skinWindow(f, {})
     local t1 = tab(f, 1)
     chrome:SetTabs({ { button = t1, label = "A" } })
-    t1.suuTab.def = nil
-    mock.script(t1.suuTab.cover, "OnEnter")
-    expect(showSpy).toHaveBeenCalledWith(t1.suuTab.cover, {})
+    assert(tabSkins[t1]).def = nil
+    mock.script(assert(tabSkins[t1]).cover, "OnEnter")
+    expect(showSpy).toHaveBeenCalledWith(assert(tabSkins[t1]).cover, {})
 end
 
 @test("Blizzard moving a tab: back in the row a frame later")
@@ -337,11 +338,11 @@ local function selectedTexture()
     local sel = t1.LeftActive
     chrome:SetTabs({ { button = t1, label = "A", selected = function() return sel:IsShown() end } })
     sel:Hide()
-    expect(tokenOf(t1.suuTab.label)).toBe("ink-muted")
+    expect(tokenOf(assert(tabSkins[t1]).label)).toBe("ink-muted")
     sel:Show()
-    expect(tokenOf(t1.suuTab.label)).toBe("gilt-text")
+    expect(tokenOf(assert(tabSkins[t1]).label)).toBe("gilt-text")
     sel:SetShown(false)
-    expect(tokenOf(t1.suuTab.label)).toBe("ink-muted")
+    expect(tokenOf(assert(tabSkins[t1]).label)).toBe("ink-muted")
 end
 
 @test("a def's own selected texture; a tab without one")
@@ -352,12 +353,12 @@ local function ownSelected()
     local mark = b:CreateTexture()
     chrome:SetTabs({ { button = b, label = "A", selectedTexture = mark, selected = function() return mark:IsShown() end } })
     mark:Hide()
-    expect(tokenOf(b.suuTab.label)).toBe("ink-muted")
+    expect(tokenOf(assert(tabSkins[b]).label)).toBe("ink-muted")
     mark:Show()
-    expect(tokenOf(b.suuTab.label)).toBe("gilt-text")
+    expect(tokenOf(assert(tabSkins[b]).label)).toBe("gilt-text")
     local plain = CreateFrame("Button", nil, f) :: any
     chrome:SetTabs({ { button = plain, label = "B" } })
-    expect(plain.suuTab).never.toBeNil()
+    expect(assert(tabSkins[plain])).never.toBeNil()
 end
 
 @test("LayoutTabs and UpdateTabs before SetTabs do nothing")
@@ -397,7 +398,7 @@ local function protectedCombat()
     mock.player:leaveCombat()
     expect(chrome.headAfterCombat).toBe(false)
     expect(chrome.layoutAfterCombat).toBe(false)
-    expect(t1.suuTab.label).toHaveText("Spells")
+    expect(assert(tabSkins[t1]).label).toHaveText("Spells")
     expect(t1).toBeAnchoredTo(chrome.head, "BOTTOMLEFT", "BOTTOMLEFT")
     -- out of combat, nothing waiting: the event does nothing
     mock.fireEvent("PLAYER_REGEN_ENABLED")
@@ -617,7 +618,7 @@ local function centering()
     centerWindow(g, true)
     skinWindow(g, {})
     centerWindow(g, true)
-    expect(g.suuChrome.centered).toBeNil()
+    expect(assert(chromeOf(g)).centered).toBeNil()
 end
 
 @test("the middle holds one window: opening one there closes the other")
@@ -712,13 +713,14 @@ end
 @test("CharacterFrame wears the chrome: header, tabs from its mode tabs, in the row")
 local function characterFrame()
     local cf = CharacterFrame :: any
-    local chrome = cf.suuChrome
+    local chrome = assert(chromeOf(cf))
     expect(chrome).never.toBeNil()
     expect(chrome.title).toHaveText("Character")
     expect(chrome.under).toBe("microMenu")
     expect(cf:GetFrameStrata()).toBe("HIGH")
     expect(cf.NineSlice:GetAlpha()).toBe(0)
-    expect(#chrome.tabs > 0).toBe(true)
+    local tabs = assert(chrome.tabs)
+    expect(#tabs > 0).toBe(true)
     -- opened the player's way (a click on SuuUI's micro menu, a secure
     -- click of Blizzard's micro button): from addon code Blizzard's status
     -- bars meet secret values tainted
@@ -726,8 +728,8 @@ local function characterFrame()
     mock.script(button, "OnClick", "LeftButton", true)
     expect(cf).toBeShown()
     local chosen = 0
-    for _, def in ipairs(chrome.tabs) do
-        if tokenOf(def.skin.label) == "gilt-text" then chosen = chosen + 1 end
+    for _, def in ipairs(tabs) do
+        if tokenOf(assert(tabSkins[def.button]).label) == "gilt-text" then chosen = chosen + 1 end
     end
     expect(chosen).toBe(1)
     mock.script(button, "OnClick", "LeftButton", true)

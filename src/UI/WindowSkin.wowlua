@@ -35,9 +35,9 @@ import * as events from "/Core/Events"
 import * as extend from "/Core/Extend"
 import * as draw from "/UI/Draw"
 import text, measureText, Text from "/UI/Text"
-import keyChip from "/UI/Panel"
-import tabMarker from "/UI/TabMarker"
-import markOwn from "/UI/Reskin"
+import keyChip, KeyChip from "/UI/Panel"
+import tabMarker, TabMarker from "/UI/TabMarker"
+import markOwn, asRegion from "/UI/Reskin"
 import showTooltip, hideTooltip from "/UI/Tooltip"
 
 local S = T.space
@@ -53,51 +53,94 @@ local function headH(): number
 end
 local HEAD_H = headH() -- (WINDOW_HEAD_H: the design's)
 
-local function hideRegions(f: any)
+-- What skinWindow takes (see the header).
+export type WindowSkinOptions = {
+    title?: string,
+    icon?: string,
+    binding?: string,
+    close?: Button,
+    hide?: { [number]: unknown },
+    topInset?: number,
+    headExtra?: number,
+    under?: string,
+}
+
+-- A tab of the window's (chrome:SetTabs).
+export type SkinTab = {
+    button: Button,
+    label: string,
+    short?: string,
+    selected?: () -> unknown,
+    disabled?: () -> unknown,
+    reason?: string,
+    selectedTexture?: Region,
+}
+
+local function hideRegions(f: Frame)
     for _, r in ipairs({ f:GetRegions() }) do r:SetAlpha(0) end
 end
 
--- A Blizzard tab button as a SuuUI text tab.
-local function skinTab(chrome: any, def: { [string]: any }): any
-    local b = def.button
-    if b.suuTab then return b.suuTab end
-    hideRegions(b)
-    local t: { [string]: any } = {}
-    t.label = text(b, "header", "ink-muted")
-    t.label:SetPoint("CENTER", 0, (S["space-3"] - S["space-2"]) / 2)
-    t.label:SetShadowColor(0, 0, 0, 0.9)
-    t.label:SetShadowOffset(0, -1)
-    hookScript(b, "OnEnter", function() t.hover = true; chrome:UpdateTabs() end)
-    hookScript(b, "OnLeave", function() t.hover = false; chrome:UpdateTabs() end)
-    -- while disabled: a cover of SuuUI's takes the click and says why
-    t.cover = CreateFrame("Frame", nil, b)
-    t.cover:SetAllPoints()
-    t.cover:SetFrameLevel(b:GetFrameLevel() + 5)
-    t.cover:EnableMouse(true)
-    t.cover:SetScript("OnEnter", function(c: any) showTooltip(c, { title = t.def and t.def.label, description = t.def and t.def.reason }) end)
-    t.cover:SetScript("OnLeave", function() hideTooltip() end)
-    t.cover:Hide()
-    -- Blizzard lays its tabs out again now and then: back in the row
-    hook(b, "SetPoint", function()
-        if chrome.placing then return end
-        after(0, function() chrome:LayoutTabs() end)
-    end)
-    -- the selected look follows Blizzard's own selected texture (or the
-    -- texture the def names: a tab system's LeftActive)
-    local sel = def.selectedTexture or b.SelectedTexture or b.LeftActive
-    if sel then
-        for _, m in ipairs({ "Show", "Hide", "SetShown" }) do
-            hook(sel, m, function() chrome:UpdateTabs() end)
+-- A Blizzard tab button as a SuuUI text tab: its label, hover and the cover
+-- that takes its click while it's disabled.
+class TabSkin
+    readonly label: Text
+    readonly cover: Frame
+    hover: boolean = false
+    def: SkinTab? = nil
+
+    constructor(chrome: WindowChrome, def: SkinTab)
+        local b = def.button
+        hideRegions(b)
+        self.label = text(b, "header", "ink-muted")
+        self.label:SetPoint("CENTER", 0, (S["space-3"] - S["space-2"]) / 2)
+        self.label:SetShadowColor(0, 0, 0, 0.9)
+        self.label:SetShadowOffset(0, -1)
+        hookScript(b, "OnEnter", function() self.hover = true; chrome:UpdateTabs() end)
+        hookScript(b, "OnLeave", function() self.hover = false; chrome:UpdateTabs() end)
+        -- while disabled: a cover of SuuUI's takes the click and says why
+        local cover = CreateFrame("Frame", nil, b)
+        self.cover = cover
+        cover:SetAllPoints()
+        cover:SetFrameLevel(b:GetFrameLevel() + 5)
+        cover:EnableMouse(true)
+        cover:SetScript("OnEnter", function()
+            local d = self.def
+            showTooltip(cover, { title = d and d.label, description = d and d.reason })
+        end)
+        cover:SetScript("OnLeave", function() hideTooltip() end)
+        cover:Hide()
+        -- Blizzard lays its tabs out again now and then: back in the row
+        hook(b, "SetPoint", function()
+            if chrome.placing then return end
+            after(0, function() chrome:LayoutTabs() end)
+        end)
+        -- the selected look follows Blizzard's own selected texture (or the
+        -- texture the def names: a tab system's LeftActive)
+        local sel = def.selectedTexture or asRegion((b :: { [string]: unknown }).SelectedTexture)
+            or asRegion((b :: { [string]: unknown }).LeftActive)
+        if sel then
+            for _, m in ipairs({ "Show", "Hide", "SetShown" }) do
+                hook(sel, m, function() chrome:UpdateTabs() end)
+            end
         end
     end
-    b.suuTab = t
+end
+
+-- the tab buttons skinned, by button
+local tabSkins: { [Button]: TabSkin } = setmetatable({}, { __mode = "k" })
+
+local function skinTab(chrome: WindowChrome, def: SkinTab): TabSkin
+    local made = tabSkins[def.button]
+    if made then return made end
+    local t = TabSkin.new(chrome, def)
+    tabSkins[def.button] = t
     return t
 end
 
 -- Whether the row takes the short labels, and the gap between the tabs, for
 -- `room` px: the full labels space-5 apart, else space-4 apart, else the
 -- short ones (space-4 apart).
-local function fitTabs(tabs: { [string]: any }[], room: number): (boolean, number)
+local function fitTabs<D extends { label: string, short?: string }>(tabs: D[], room: number): (boolean, number)
     local function width(short: boolean, gap: number): number
         local w = 0
         for i, def in ipairs(tabs) do
@@ -114,14 +157,22 @@ local function fitTabs(tabs: { [string]: any }[], room: number): (boolean, numbe
     return short, gap
 end
 
-local allChromes: any[] = {}
+local allChromes: WindowChrome[] = {}
+-- the chrome of each skinned window
+local chromes: { [Frame]: WindowChrome } = setmetatable({}, { __mode = "k" })
+
+-- A skinned window's chrome (nil: not skinned).
+export function chromeOf(frame: Frame?): WindowChrome?
+    return frame and chromes[frame] or nil
+end
+
+local function plain(v: unknown): v is number return v ~= nil and not (issecretvalue and issecretvalue(v)) end
 
 -- Whether an open window (one in SuuUI's look, its header included) covers
 -- part of `frame`: notes under it hide (asked for in game: the windows'
 -- glass let them show through). Edges secret in combat count as not.
-export function isCoveredByWindow(frame: any): boolean
+export function isCoveredByWindow(frame: Region): boolean
     local l, r, t, b = frame:GetLeft(), frame:GetRight(), frame:GetTop(), frame:GetBottom()
-    local function plain(v: any): boolean return v ~= nil and not (issecretvalue and issecretvalue(v)) end
     if not (plain(l) and plain(r) and plain(t) and plain(b)) then return false end
     local fs = frame:GetEffectiveScale()
     l, r, t, b = l * fs, r * fs, t * fs, b * fs
@@ -141,33 +192,39 @@ export function isCoveredByWindow(frame: any): boolean
 end
 
 export class WindowChrome
-    frame: any
-    protected: any
-    inset: any
-    headExtra: any
-    rowMid: any
-    bg: any
-    edgeHolder: any
+    frame: Frame
+    protected: boolean
+    inset: number
+    headExtra: number
+    rowMid: number
+    bg: Texture
+    edgeHolder: Frame
     edge: draw.Border
-    head: any
+    head: Frame
     jewel: Texture
     icon: Texture? = nil
-    titleX: any
+    titleX: number
     title: Text
-    close: any? = nil
-    key: any? = nil
-    keyRight: any? = nil
+    close: Button? = nil
+    key: KeyChip? = nil
+    keyRight: number = 0
     rule: Texture
     headAfterCombat: boolean? = nil
     layoutAfterCombat: boolean? = nil
-    under: any? = nil
-    tabs: any? = nil
-    tabMarker: any? = nil
+    under: string? = nil
+    tabs: SkinTab[]? = nil
+    tabMarker: TabMarker? = nil
     placing: boolean? = nil
-    riseH: any? = nil
-    rise: any? = nil
+    riseH: number? = nil
+    rise: number = 0
     -- when it opened, for the row of windows under an anchor
     openedAt: number? = nil
+    -- in the middle of the screen (centerWindow), out of the row
+    centered: boolean? = nil
+    -- a protected one to place once the fight ends
+    placeAfterCombat: boolean? = nil
+    -- its secure placer (securePlacement)
+    placer: SecurePlacer? = nil
     -- what a module adds to a window it skins (Units/Windows): the guild
     -- window's own tabs, the group finder's settings gear, the map's status
     logTab: Button? = nil
@@ -175,12 +232,12 @@ export class WindowChrome
     gear: Button? = nil
     status: Frame? = nil
 
-    constructor(frame: any, opts: { [string]: any }?)
-        opts = opts or {}
+    constructor(frame: Frame, opts: WindowSkinOptions?)
+        local o = opts or {}
         self.frame = frame
-        frame.suuChrome = self
+        chromes[frame] = self
         allChromes[#allChromes + 1] = self
-        self.protected = frame:IsProtected() and true or false
+        self.protected = frame:IsProtected() == true
         -- above the HUD (unit frames, bars): a window in the middle of the
         -- screen sat under the player frame (found in game); the bags and the
         -- loot window are on HIGH too. Skinned out of combat (protected ones).
@@ -191,11 +248,14 @@ export class WindowChrome
         -- character window came up behind the merchant's, its gear out of the
         -- repair cursor's reach (found in game, 2026-10-19)
         if not (self.protected and InCombatLockdown()) then frame:SetToplevel(true) end
-        hookScript(frame, "OnShow", function(f: any)
-            if not (self.protected and InCombatLockdown()) then f:Raise() end
+        hookScript(frame, "OnShow", function()
+            if not (self.protected and InCombatLockdown()) then frame:Raise() end
         end)
-        for _, f in pairs(opts.hide or {}) do if f and f.SetAlpha then f:SetAlpha(0) end end
-        self.inset, self.headExtra = opts.topInset or 0, opts.headExtra or 0
+        for _, f in pairs(o.hide or {}) do
+            local r = asRegion(f)
+            if r then r:SetAlpha(0) end
+        end
+        self.inset, self.headExtra = o.topInset or 0, o.headExtra or 0
         -- the line the second row's 22px controls sit centred on, up from the
         -- header's bottom (in the middle of headExtra)
         self.rowMid = S["space-1"] + 11 + self.headExtra / 2
@@ -222,18 +282,19 @@ export class WindowChrome
         self.jewel = draw.diamond(head, 7, "gilt")
         self.jewel:SetPoint("CENTER", head, "TOPLEFT", 0, 0)
         local x = S["space-5"]
-        if opts.icon then
-            self.icon = head:CreateTexture(nil, "ARTWORK")
-            self.icon:SetTexture(GLYPHS .. opts.icon .. ".tga")
-            self.icon:SetSize(15, 15)
-            draw.paint(self.icon, "gilt-text")
+        if o.icon then
+            local icon = head:CreateTexture(nil, "ARTWORK")
+            icon:SetTexture(GLYPHS .. o.icon .. ".tga")
+            icon:SetSize(15, 15)
+            draw.paint(icon, "gilt-text")
+            self.icon = icon
             x = x + 15 + S["space-4"]
         end
         self.titleX = x
         self.title = text(head, "header", "gilt-text")
-        self.title:SetValue(opts.title or "")
+        self.title:SetValue(o.title or "")
         -- close: Blizzard's button (its click closes the window as always), SuuUI's cross
-        local close = opts.close
+        local close = o.close
         local right = S["space-5"]
         if close then
             hideRegions(close)
@@ -250,7 +311,7 @@ export class WindowChrome
             right = right + 22 + S["space-4"]
         end
         -- the key chip: the binding's first key
-        local key = opts.binding and GetBindingKey(opts.binding)
+        local key = o.binding and GetBindingKey(o.binding)
         if key then
             self.key = keyChip(head, GetBindingText and GetBindingText(key, "KEY_") or key)
             self.keyRight = right
@@ -279,22 +340,23 @@ export class WindowChrome
         end
 
         -- the panel-position rule: in a row under an anchor (the micro menu)
-        if opts.under then
-            self.under = opts.under
+        if o.under then
+            self.under = o.under
             add(self)
         end
         extend.add(extend.Kind.Window, self, { name = frame:GetName(), skinned = frame })
     end
 
-    function SetTabs(list: { [string]: any }[])
+    function SetTabs(list: SkinTab[])
         self.tabs = list
         -- the chosen tab's underline and jewel, gliding (tabMarker), on the
         -- head: SuuUI's own frame, the tabs being Blizzard's
-        self.tabMarker = self.tabMarker or tabMarker(self.head, { level = 3 })
+        local marker = self.tabMarker or tabMarker(self.head, { level = 3 })
+        self.tabMarker = marker
         for _, def in ipairs(list) do
-            def.skin = skinTab(self, def)
-            def.skin.def = def
-            self.tabMarker:Track(def.button)
+            local skin = skinTab(self, def)
+            skin.def = def
+            marker:Track(def.button)
         end
         self:LayoutTabs()
     end
@@ -311,11 +373,11 @@ export class WindowChrome
         end
         local short, gap = fitTabs(tabs, self.frame:GetWidth() - S["space-5"] * 2)
         self.placing = true
-        local prev: any
+        local prev: Button? = nil
         for _, def in ipairs(tabs) do
             local b = def.button
             local label = (short and def.short) or def.label
-            def.skin.label:SetValue(label)
+            skinTab(self, def).label:SetValue(label)
             b:SetSize(math.ceil(measureText("header", label)), tabH())
             b:ClearAllPoints()
             if prev then
@@ -331,11 +393,12 @@ export class WindowChrome
     end
 
     function UpdateTabs()
-        local chosen: any
+        local chosen: Button? = nil
         for _, def in ipairs(self.tabs or {}) do
-            local t = def.skin
-            local off = def.disabled and def.disabled() or false
-            local on = not off and def.selected and def.selected() or false
+            local t = skinTab(self, def)
+            local disabled, selected = def.disabled, def.selected
+            local off = disabled ~= nil and (disabled() or false) ~= false
+            local on = not off and selected ~= nil and (selected() or false) ~= false
             t.label:SetColor(off and "ink-faint" or on and "gilt-text" or (t.hover and "ink" or "ink-muted"))
             t.label:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
             t.cover:SetShown(off)
@@ -384,18 +447,9 @@ export class WindowChrome
 end
 mixins.WindowChrome = WindowChrome
 
-export function skinWindow(frame: any, opts: { [string]: any }?): WindowChrome
-    if frame.suuChrome then return frame.suuChrome end
-    return WindowChrome.new(frame, opts)
+export function skinWindow(frame: Frame, opts: WindowSkinOptions?): WindowChrome
+    return chromes[frame] or WindowChrome.new(frame, opts)
 end
-
-events.on("SUUUI_THEME_CHANGED", function()
-    for _, c in ipairs(allChromes) do
-        c:PlaceHead()
-        c:LayoutTabs()
-    end
-    queue()
-end, "UI.SkinWindow")
 
 --------------------------------------------------------------------------------
 -- The window row: SuuUI-headed windows open in a row under the micro menu,
@@ -405,19 +459,21 @@ end, "UI.SkinWindow")
 -- on from where it stands.
 --------------------------------------------------------------------------------
 
-type RowState = { list: any[], seq: number, placing?: boolean, queued?: boolean }
+type RowState = { list: WindowChrome[], seq: number, placing?: boolean, queued?: boolean }
 
-local Row: RowState = { list = {}, seq = 0 } :: any
+local Row: RowState = { list = {}, seq = 0 }
 export const windowRow = Row
+
+local function byOpening(a: WindowChrome, b: WindowChrome): boolean return (a.openedAt or 0) < (b.openedAt or 0) end
 
 -- The windows asked to sit in the middle of the screen (their headers
 -- included), out of the row; opening one there closes the other (see
 -- add), so normally one: in the middle. Should two be open at once (a
 -- protected one can't be closed from here), side by side, the group
 -- centred. A protected one moves out of combat only.
-local function centerAll(list: any[])
+local function centerAll(list: WindowChrome[])
     if #list == 0 then return end
-    table.sort(list, function(a: any, b: any): boolean return (a.openedAt or 0) < (b.openedAt or 0) end)
+    table.sort(list, byOpening)
     local us = UIParent:GetEffectiveScale()
     local gap = S["space-5"] * us
     local total = 0
@@ -431,7 +487,7 @@ local function centerAll(list: any[])
             c.placeAfterCombat = true
         else
             f:ClearAllPoints()
-            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es, -(c.rise or 0) / 2)
+            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es, -c.rise / 2)
         end
         x = x + w + gap
     end
@@ -442,7 +498,7 @@ local updatePlacers: () -> ()
 export function layout()
     if Row.placing then return end
     updatePlacers()
-    local open: any[], middle: any[] = {}, {}
+    local open: WindowChrome[], middle: WindowChrome[] = {}, {}
     for _, c in ipairs(Row.list) do
         if c.frame:IsShown() then
             if c.centered then middle[#middle + 1] = c else open[#open + 1] = c end
@@ -452,8 +508,9 @@ export function layout()
     centerAll(middle)
     Row.placing = false
     if #open == 0 then return end
-    table.sort(open, function(a: any, b: any): boolean return (a.openedAt or 0) < (b.openedAt or 0) end)
-    local anchor = anchors.get(open[1].under)
+    table.sort(open, byOpening)
+    local under = open[1].under
+    local anchor = under and anchors.get(under)
     if not anchor or not anchor:IsVisible() then return end
     local as = anchor:GetEffectiveScale()
     local left, bottom = anchor:GetLeft(), anchor:GetBottom()
@@ -479,18 +536,6 @@ export function layout()
     Row.placing = false
 end
 
--- In the middle of the screen (on) or back in the row (off): SuuUI's Talents
--- tab centres the spells window while it shows (asked for in game).
-export function centerWindow(frame: any, center: any)
-    local chrome = frame and frame.suuChrome
-    if not chrome or not chrome.under then return end
-    local on = center and true or false
-    if chrome.centered == on then return end
-    chrome.centered = on
-    layout()
-    queue()
-end
-
 export function queue()
     if Row.queued then return end
     Row.queued = true
@@ -500,7 +545,19 @@ export function queue()
     end)
 end
 
-export function add(chrome: any)
+-- In the middle of the screen (on) or back in the row (off): SuuUI's Talents
+-- tab centres the spells window while it shows (asked for in game).
+export function centerWindow(frame: Frame?, center: unknown)
+    local chrome = chromeOf(frame)
+    if not chrome or not chrome.under then return end
+    local on = center ~= nil and center ~= false
+    if chrome.centered == on then return end
+    chrome.centered = on
+    layout()
+    queue()
+end
+
+export function add(chrome: WindowChrome)
     Row.list[#Row.list + 1] = chrome
     local f = chrome.frame
     hookScript(f, "OnShow", function()
@@ -535,6 +592,14 @@ export function add(chrome: any)
         queue()
     end
 end
+
+events.on("SUUUI_THEME_CHANGED", function()
+    for _, c in ipairs(allChromes) do
+        c:PlaceHead()
+        c:LayoutTabs()
+    end
+    queue()
+end, "UI.SkinWindow")
 
 events.onGame("PLAYER_REGEN_ENABLED", function() queue() end, "UI.WindowRow")
 
@@ -580,56 +645,52 @@ local PLACE = [=[
     end
 ]=]
 
-local placers: any[] = {}
+local placers: SecurePlacer[] = {}
 
--- Where the window goes, for its placer: the row's first place under its
--- anchor, or the middle (out of combat).
-local function place(p: any)
-    if InCombatLockdown() then return end
-    local chrome = p.chrome
-    local f = chrome.frame
-    local es = f:GetEffectiveScale()
-    local anchor = chrome.under and anchors.get(chrome.under)
-    local left, bottom = anchor and anchor:GetLeft(), anchor and anchor:GetBottom()
-    if left and bottom then
-        local as = anchor:GetEffectiveScale()
-        p:SetAttribute("rowX", left * as / es)
-        p:SetAttribute("rowY", (bottom * as - S["space-5"] * as) / es - (chrome.rise or 0))
+-- A placer's tab options: `centered` the middle instead of the row.
+export type PlacementOptions = { centered?: boolean }
+
+-- The secure handler inside a protected window that places it as it shows.
+export class SecurePlacer extends Frame
+    readonly chrome: WindowChrome
+    readonly keys: { [string]: number } = {}
+
+    constructor(chrome: WindowChrome)
+        local frame = chrome.frame
+        super(nil, frame, "SecureHandlerShowHideTemplate")
+        self.chrome = chrome
+        self:SetSize(1, 1)
+        self:SetPoint("TOPLEFT")
+        self:SetFrameRef("window", frame)
+        self:SetFrameRef("screen", UIParent)
+        self:SetAttribute("count", 0)
+        self:SetAttribute("_onshow", PLACE)
     end
-    p:SetAttribute("centerY", -(chrome.rise or 0) / 2)
-end
 
-updatePlacers = function()
-    for _, p in ipairs(placers) do place(p) end
-end
+    -- Where the window goes: the row's first place under its anchor, or the
+    -- middle (out of combat).
+    function Place()
+        if InCombatLockdown() then return end
+        local chrome = self.chrome
+        local f = chrome.frame
+        local es = f:GetEffectiveScale()
+        local under = chrome.under
+        local anchor = under and anchors.get(under)
+        local left, bottom = anchor and anchor:GetLeft(), anchor and anchor:GetBottom()
+        if anchor and left and bottom then
+            local as = anchor:GetEffectiveScale()
+            self:SetAttribute("rowX", left * as / es)
+            self:SetAttribute("rowY", (bottom * as - S["space-5"] * as) / es - chrome.rise)
+        end
+        self:SetAttribute("centerY", -chrome.rise / 2)
+    end
 
--- Placed again as a fight starts (the moment before the lockdown): the
--- anchors may not have been laid out when a placer was made at login, and
--- a window first opened in that fight would take Blizzard's place (found
--- in game: against the top of the screen).
-local placerEvents = CreateFrame("Frame")
-placerEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
-placerEvents:SetScript("OnEvent", function() updatePlacers() end)
-
--- The placer of a skinned protected window (one per window).
-export function securePlacement(frame: any): any
-    local chrome = frame and frame.suuChrome
-    if not chrome then return nil end
-    if chrome.placer then return chrome.placer end
-    if InCombatLockdown() then return nil end
-    local p = CreateFrame("Frame", nil, frame, "SecureHandlerShowHideTemplate")
-    p:SetSize(1, 1)
-    p:SetPoint("TOPLEFT")
-    p:SetFrameRef("window", frame)
-    p:SetFrameRef("screen", UIParent)
-    p:SetAttribute("count", 0)
-    p:SetAttribute("_onshow", PLACE)
-    p.chrome, p.keys = chrome, {}
     -- What a tab wants: `tab` its frame (the first shown one decides),
     -- `centered` the middle instead of the row. Out of combat.
-    function p:Track(key: string, tab: any, opts: { [string]: any }?)
+    function Track(key: string, tab: Frame, opts: PlacementOptions?)
         if InCombatLockdown() or self.keys[key] then return end
-        local i = (self:GetAttribute("count") or 0) + 1
+        local count = self:GetAttribute("count")
+        local i = (type(count) == "number" and count or 0) + 1
         self.keys[key] = i
         self:SetAttribute("count", i)
         -- (a protected mark inside the tab: secure code reads only a
@@ -641,16 +702,38 @@ export function securePlacement(frame: any): any
         self:SetFrameRef("tab" .. i, mark)
         self:SetAttribute("centered" .. i, opts and opts.centered or nil)
     end
+
     -- The size the tab gives the window. Out of combat.
-    function p:SetTabSize(key: string, w: number, h: number)
+    function SetTabSize(key: string, w: number, h: number)
         local i = self.keys[key]
         if not i or InCombatLockdown() then return end
         self:SetAttribute("w" .. i, w)
         self:SetAttribute("h" .. i, h)
     end
+end
+
+updatePlacers = function()
+    for _, p in ipairs(placers) do p:Place() end
+end
+
+-- Placed again as a fight starts (the moment before the lockdown): the
+-- anchors may not have been laid out when a placer was made at login, and
+-- a window first opened in that fight would take Blizzard's place (found
+-- in game: against the top of the screen).
+local placerEvents = CreateFrame("Frame")
+placerEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
+placerEvents:SetScript("OnEvent", function() updatePlacers() end)
+
+-- The placer of a skinned protected window (one per window).
+export function securePlacement(frame: Frame?): SecurePlacer?
+    local chrome = chromeOf(frame)
+    if not chrome then return nil end
+    if chrome.placer then return chrome.placer end
+    if InCombatLockdown() then return nil end
+    local p = SecurePlacer.new(chrome)
     chrome.placer = p
     placers[#placers + 1] = p
-    place(p)
+    p:Place()
     return p
 end
 
