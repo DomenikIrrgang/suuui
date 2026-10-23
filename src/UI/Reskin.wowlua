@@ -6,7 +6,7 @@
 -- redraws (each ScrollBox update).
 --
 --   reskin(frame)                 -- the frame and everything in it, once more
---                                 -- (frames marked suuOwn = true skipped)
+--                                 -- (SuuUI's own frames skipped: markOwn)
 --   reskinScrollBox(box)          -- its rows now and after every update
 --   reskinStatusBar(bar)          -- a flat bar on a track, standing colours kept
 --   reskinCheckButton(button)     -- a 16px box, arcane check
@@ -49,6 +49,51 @@ local function ask(r: any, method: string, ...: any): ...any
     local ok, a, b, c, d = pcall(r[method], r, ...)
     if ok then return a, b, c, d end
 end
+
+-- SuuUI's own frames inside the game's windows, and its own textures on the
+-- game's parts: a pass leaves them be (`f.suuOwn = true`, the plugins' way,
+-- counts too).
+local ownFrames: { [Region]: true } = setmetatable({}, { __mode = "k" })
+local ownArt: { [Region]: true } = setmetatable({}, { __mode = "k" })
+
+export function markOwn(f: Region) ownFrames[f] = true end
+
+export function isOwn(f: unknown): boolean
+    if type(f) ~= "table" then return false end
+    return ownFrames[f :: Region] == true or (f :: { [string]: unknown }).suuOwn == true
+end
+
+export function markArt(t: Region) ownArt[t] = true end
+
+export function isArt(t: unknown): boolean
+    return type(t) == "table" and ownArt[t :: Region] == true
+end
+
+-- The game's frames and their parts, read by name (`_G`) or key: a widget of
+-- the asked type, or nil (the game hasn't made it, or it is something else).
+export function named(name: string): unknown return _G[name] end
+
+export function part(f: unknown, key: string): unknown
+    if type(f) ~= "table" then return nil end
+    return (f :: { [string]: unknown })[key]
+end
+
+local function isA(v: unknown, kind: string): boolean
+    if type(v) ~= "table" then return false end
+    local is = (v :: { [string]: unknown }).IsObjectType
+    if type(is) ~= "function" then return false end
+    local ok, yes = pcall(is, v, kind)
+    return ok and yes == true
+end
+
+export function asRegion(v: unknown): Region? if isA(v, "Region") then return v :: Region end return nil end
+export function asFrame(v: unknown): Frame? if isA(v, "Frame") then return v :: Frame end return nil end
+export function asButton(v: unknown): Button? if isA(v, "Button") then return v :: Button end return nil end
+export function asCheckButton(v: unknown): CheckButton? if isA(v, "CheckButton") then return v :: CheckButton end return nil end
+export function asEditBox(v: unknown): EditBox? if isA(v, "EditBox") then return v :: EditBox end return nil end
+export function asScrollFrame(v: unknown): ScrollFrame? if isA(v, "ScrollFrame") then return v :: ScrollFrame end return nil end
+export function asFontString(v: unknown): FontString? if isA(v, "FontString") then return v :: FontString end return nil end
+export function asTexture(v: unknown): Texture? if isA(v, "Texture") then return v :: Texture end return nil end
 
 local function matchesAny(s: string, list: string[]): boolean
     for _, p in ipairs(list) do if s:find(p) then return true end end
@@ -271,7 +316,7 @@ export function reskinDropdown(d: any, opts: { glyph?: string }?)
         glyph:SetSize(14, 14)
         glyph:SetPoint("CENTER")
         draw.paint(glyph, "ink-muted")
-        glyph.suuArt = true
+        markArt(glyph)
         hookScript(d, "OnEnter", function() edge:SetShown(true); draw.paint(glyph, "ink") end)
         hookScript(d, "OnLeave", function() edge:SetShown(false); draw.paint(glyph, "ink-muted") end)
         if text then text:SetAlpha(0) end
@@ -280,14 +325,14 @@ export function reskinDropdown(d: any, opts: { glyph?: string }?)
         local bg = d:CreateTexture(nil, "BACKGROUND", nil, -7)
         draw.paintFill(bg, "surface-sunk")
         bg:SetAllPoints()
-        bg.suuArt = true
+        markArt(bg)
         local edge = draw.border(d, "gilt-line")
         local chev = d:CreateTexture(nil, "OVERLAY", nil, 7)
         chev:SetTexture(GLYPHS .. "chevronDown.tga")
         chev:SetSize(12, 12)
         chev:SetPoint("RIGHT", -S["space-3"], 0)
         draw.paint(chev, "ink-muted")
-        chev.suuArt = true
+        markArt(chev)
         hookScript(d, "OnEnter", function() edge:SetColor("gilt") end)
         hookScript(d, "OnLeave", function() edge:SetColor("gilt-line") end)
     end
@@ -348,7 +393,7 @@ local function restoreMenu(st: State)
 end
 
 local function hideRegion(st: State, r: any)
-    if r.suuArt then return end
+    if isArt(r) then return end
     local a = r:GetAlpha()
     -- (an alpha once set from a secret reads back secret: left as it is)
     if issecretvalue(a) or a == 0 then return end
@@ -378,7 +423,7 @@ local function menuRow(st: State, row: any)
     local texts: any[] = {}
     for _, r in ipairs({ row:GetRegions() }) do
         local kind = r:GetObjectType()
-        if kind == "Texture" and not r.suuArt then
+        if kind == "Texture" and not isArt(r) then
             local atlas = (ask(r, "GetAtlas") or ""):lower()
             if atlas:find("common%-dropdown%-icon") then
                 -- the chosen row's tick
@@ -580,7 +625,7 @@ export function reskinIconButton(b: any)
         local well = b:CreateTexture(nil, "BACKGROUND", nil, -8)
         draw.paintFill(well, "surface-sunk")
         well:SetAllPoints()
-        well.suuArt = true
+        markArt(well)
         local edgeHolder = CreateFrame("Frame", nil, b)
         edgeHolder:SetAllPoints()
         edgeHolder:EnableMouse(false)
@@ -604,7 +649,7 @@ export function reskinIconButton(b: any)
         if t and t ~= icon then t:SetAlpha(0) end
     end
     for _, r in ipairs({ b:GetRegions() }) do
-        if r:GetObjectType() == "Texture" and r ~= icon and not r.suuArt then r:SetAlpha(0) end
+        if r:GetObjectType() == "Texture" and r ~= icon and not isArt(r) then r:SetAlpha(0) end
     end
     if icon then
         icon:SetAlpha(1)
@@ -901,7 +946,7 @@ local function pass(f: any, depth: number, ctx: Ctx)
     if depth > 6 or ask(f, "IsForbidden") then return end
     -- SuuUI's own frames inside a Blizzard window (pages, the skin's header):
     -- never restyled
-    if f.suuOwn then return end
+    if isOwn(f) then return end
     local kind = ask(f, "GetObjectType")
     if f.GetFontStringContainer and f.ScrollBox and f.SetText then reskinScrollingFont(f) end
     -- Blizzard's coloured progress bar (a Fill it sizes itself: the
@@ -1007,7 +1052,7 @@ local function dialogBox(c: any)
     local bg = c:CreateTexture(nil, "BACKGROUND", nil, -7)
     draw.paintFill(bg, "surface-sunk")
     bg:SetAllPoints()
-    bg.suuArt = true
+    markArt(bg)
     draw.border(c, "gilt-line")
     -- the text inside: the box is its field already (no second edge)
     local function walk(fr: any, depth: number)
@@ -1046,7 +1091,7 @@ export function reskinDialog(f: any)
         panel:SetAllPoints()
         panel:SetFrameLevel(f:GetFrameLevel())
         panel:EnableMouse(false)
-        panel.suuOwn = true
+        markOwn(panel)
         draw.fill(panel, "surface-glass"):SetAllPoints()
         draw.border(panel, "gilt-line")
         draw.shadow(panel, "shadow-panel")
@@ -1149,8 +1194,8 @@ export function reskinPopup(dialog: any)
     st.skins[dialog]:Show()
     -- the game's frame art
     for _, key in ipairs({ "Border", "NineSlice", "BG", "Bg" }) do
-        local part = dialog[key]
-        if part and part.SetAlpha then hideRegion(st, part) end
+        local art = dialog[key]
+        if art and art.SetAlpha then hideRegion(st, art) end
     end
     for _, r in ipairs({ dialog:GetRegions() }) do
         if r:GetObjectType() == "Texture" then hideRegion(st, r) end
