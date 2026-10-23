@@ -49,8 +49,9 @@ import ScrollArea from "/UI/Panel"
 
 -- A group or a player looking (see the header for the fields).
 export type BrowseRow = {
-    key?: any,
-    entry?: any,
+    key?: string,
+    -- the tool's entry, handed back to whisper or invite
+    entry?: unknown,
     isPlayer?: boolean,
     activity?: string,
     level?: string,
@@ -79,9 +80,9 @@ export type BrowseData = {
     players?: BrowseRow[],
     collapsed?: { [string]: boolean },
     tool?: BrowseTool,
-    category?: any,
+    category?: string,
     categories?: SelectOption<string>[],
-    activities?: any[],
+    activities?: string[],
     activityOptions?: SelectOption<string>[],
     search?: string,
     fits?: boolean,
@@ -89,80 +90,72 @@ export type BrowseData = {
 }
 
 -- What a change in the bar reports (one field each time).
-export type BrowseFilter = { category?: any, activities?: any[], search?: string, fits?: boolean, show?: any }
+export type BrowseFilter = { category?: string, activities?: string[], search?: string, fits?: boolean, show?: string }
 
-export interface RoleIcon extends Frame
-    bg: Texture
-    edge: draw.Border
-    glyph: Texture
-    dot: Texture
-    function Set(kind: string, mine: boolean?)
+-- A quiet 24px button with a glyph (Whisper, Invite); its word in a tooltip.
+export class GlyphButton extends SuuButton
+    readonly glyph: Texture
+
+    constructor(parent: Frame, glyph: string, title: string, description: string, onClick: () -> ())
+        super(parent, { text = "", width = 24, onClick = onClick, tooltip = { title = title, description = description } })
+        self:SetHeight(24)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
+        self.glyph:SetSize(12, 12)
+        self.glyph:SetPoint("CENTER")
+    end
 end
 
-export interface SourceBadge extends Frame
-    text: Text
-    function SetLabel(s: string)
+-- A row's level range.
+export class LevelChip extends Frame
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(14)
+        draw.fill(self, "surface-sunk"):SetAllPoints()
+        draw.border(self, "gilt-faint")
+        self.text = uiText.text(self, "micro", "ink-muted")
+        self.text:SetPoint("CENTER")
+    end
 end
 
-export interface GlyphButton extends SuuButton
-    glyph: Texture
-end
-
-export interface LevelChip extends Frame
-    text: Text
-end
-
-export interface SlotsHit extends Frame
+-- Over a row's role slots: what they mean, in a tooltip.
+export class SlotsHit extends Frame
     tip?: string
 end
 
-export interface BrowseRowFrame extends Button
-    data?: BrowseRow
-    match: Texture
-    edge: Texture
-    hover: Texture
-    rule: Texture
-    lead: Texture
-    activity: Text
-    levelChip: LevelChip
-    sprout: Texture
-    reason: Text
-    leader: Text
-    who: Text
-    post: Text
-    invite: GlyphButton
-    whisper: GlyphButton
-    age: Text
-    badges: SourceBadge[]
-    slots: RoleIcon[]
-    count: Text
-    rolesLabel: Text
-    slotsHit: SlotsHit
-end
+-- What the list shows with nothing in it.
+export class BrowseEmpty extends Frame
+    readonly glyph: Texture
+    readonly title: Text
+    readonly text: Text
+    readonly clear: SuuButton
+    readonly refresh: SuuButton
 
-export interface SectionHead extends Button
-    text: Text
-    count: Text
-    glyph: Texture
-    note: Text
-    rule: Frame
-    label: string
-end
-
-export interface SkeletonRow extends Frame
-    a: Texture
-    b: Texture
-    b2: Texture
-    c: Texture
-    rule: Texture
-end
-
-export interface BrowseEmpty extends Frame
-    glyph: Texture
-    title: Text
-    text: Text
-    clear: SuuButton
-    refresh: SuuButton
+    constructor(parent: Frame, gap: number, onClear: () -> (), onRefresh: () -> ())
+        super(nil, parent)
+        local g = gap
+        self:SetSize(360, 140)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetTexture(GLYPHS .. "search.tga")
+        self.glyph:SetSize(24, 24)
+        draw.paint(self.glyph, "ink-faint")
+        self.glyph:SetPoint("TOP")
+        self.title = uiText.text(self, "label", "ink")
+        self.title:SetPoint("TOP", self.glyph, "BOTTOM", 0, -g)
+        self.title:SetValue("Nothing matches your filters")
+        self.text = uiText.text(self, "caption", "ink-muted")
+        self.text:SetWidth(360)
+        self.text:SetJustifyH("CENTER")
+        self.text:SetPoint("TOP", self.title, "BOTTOM", 0, -g)
+        self.text:SetValue("Chat posts show up here as they’re written. Clear a filter, or refresh the tool for new listings.")
+        self.clear = controls.button(self, { text = "Clear filters", icon = "close", onClick = onClear })
+        self.refresh = controls.button(self, { text = "Refresh", icon = "reset", onClick = onRefresh })
+        for _, btn in ipairs({ self.clear, self.refresh }) do btn:SetHeight(26) end
+        self.clear:SetPoint("TOPRIGHT", self.text, "BOTTOM", -g / 2, -g * 2)
+        self.refresh:SetPoint("TOPLEFT", self.text, "BOTTOM", g / 2, -g * 2)
+    end
 end
 
 local S = T.space
@@ -183,18 +176,26 @@ local ICON = 18
 -- A role icon (design component RoleIcon): filled (offered), has (a member
 -- with it: greyed, ink-faint in gilt-faint, no fill), needed (a dim edge),
 -- your role (arcane), a member with no role (a greyed diamond), open (hollow).
-local function roleIcon(parent: Frame): RoleIcon
-    local f: RoleIcon = CreateFrame("Frame", nil, parent) :: any
-    f:SetSize(ICON, ICON)
-    f.bg = draw.fill(f, "surface-raised")
-    f.bg:SetAllPoints()
-    f.edge = draw.border(f, "gilt-line")
-    f.glyph = f:CreateTexture(nil, "OVERLAY")
-    f.glyph:SetSize(ICON - 6, ICON - 6)
-    f.glyph:SetPoint("CENTER")
-    f.dot = draw.diamond(f, 5, "ink-muted")
-    f.dot:SetPoint("CENTER")
-    function f:Set(kind: string, mine: boolean?)
+export class RoleIcon extends Frame
+    bg: Texture
+    edge: draw.Border
+    glyph: Texture
+    dot: Texture
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(ICON, ICON)
+        self.bg = draw.fill(self, "surface-raised")
+        self.bg:SetAllPoints()
+        self.edge = draw.border(self, "gilt-line")
+        self.glyph = self:CreateTexture(nil, "OVERLAY")
+        self.glyph:SetSize(ICON - 6, ICON - 6)
+        self.glyph:SetPoint("CENTER")
+        self.dot = draw.diamond(self, 5, "ink-muted")
+        self.dot:SetPoint("CENTER")
+    end
+
+    function Set(kind: string, mine: boolean?)
         local need = kind:match("^need:(.+)$")
         local has = kind:match("^has:(.+)$")
         if kind == "member" then has = "none" end
@@ -232,118 +233,142 @@ local function roleIcon(parent: Frame): RoleIcon
             self.edge:SetColor("ink-faint")
         end
     end
-    return f
+end
+
+local function roleIcon(parent: Frame): RoleIcon
+    return RoleIcon.new(parent)
 end
 
 -- A source badge (design component SourceBadge): "Tool" or the channel.
-local function badge(parent: Frame): SourceBadge
-    local b: SourceBadge = CreateFrame("Frame", nil, parent) :: any
-    b:SetHeight(16)
-    draw.fill(b, "surface-raised"):SetAllPoints()
-    draw.border(b, "gilt-line")
-    b.text = uiText.text(b, "micro", "ink-muted")
-    b.text:SetPoint("CENTER")
-    function b:SetLabel(s: string)
+export class SourceBadge extends Frame
+    text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(16)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.text = uiText.text(self, "micro", "ink-muted")
+        self.text:SetPoint("CENTER")
+    end
+
+    function SetLabel(s: string)
         self.text:SetValue(s)
         self:SetWidth(math.ceil(self.text:GetUnboundedStringWidth()) + 10)
     end
-    return b
+end
+
+local function badge(parent: Frame): SourceBadge
+    return SourceBadge.new(parent)
 end
 
 --------------------------------------------------------------------------------
 -- A row
 --------------------------------------------------------------------------------
 
--- A quiet 24px button with a glyph (Whisper, Invite); its word in a tooltip.
 local function iconButton(parent: Frame, glyph: string, title: string, description: string, onClick: () -> ()): GlyphButton
-    local btn = controls.button(parent, { text = "", width = 24, onClick = onClick,
-        tooltip = { title = title, description = description } }) :: GlyphButton
-    btn:SetHeight(24)
-    btn.glyph = btn:CreateTexture(nil, "ARTWORK")
-    btn.glyph:SetTexture(GLYPHS .. glyph .. ".tga")
-    btn.glyph:SetSize(12, 12)
-    btn.glyph:SetPoint("CENTER")
-    draw.paint(btn.glyph, "ink")
-    return btn
+    return GlyphButton.new(parent, glyph, title, description, onClick)
+end
+
+export class BrowseRowFrame extends Button
+    data?: BrowseRow
+    match: Texture
+    edge: Texture
+    hover: Texture
+    rule: Texture
+    lead: Texture
+    activity: Text
+    levelChip: LevelChip
+    sprout: Texture
+    reason: Text
+    leader: Text
+    who: Text
+    post: Text
+    invite: GlyphButton
+    whisper: GlyphButton
+    age: Text
+    badges: SourceBadge[]
+    slots: RoleIcon[]
+    count: Text
+    rolesLabel: Text
+    slotsHit: SlotsHit
+
+    constructor(b: GroupFinderBrowse)
+        super(nil, b.list.child)
+        self:SetHeight(ROW_H)
+        self.match = draw.fill(self, "arcane-soft", "BACKGROUND")
+        self.match:SetAllPoints()
+        self.edge = draw.fill(self, "arcane", "ARTWORK")
+        self.edge:SetWidth(2)
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.hover = draw.fill(self, "gilt-faint", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.rule = draw.fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
+        self.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
+        -- the lead: centred in a 20px column (drawRow sizes it)
+        self.lead = self:CreateTexture(nil, "ARTWORK")
+        self.lead:SetSize(20, 20)
+        self.lead:SetPoint("CENTER", self, "LEFT", S["space-4"] + 10, 0)
+        -- line 1
+        self.activity = uiText.text(self, "label", "ink")
+        self.activity:SetPoint("TOPLEFT", self, "LEFT", S["space-4"] + 20 + S["space-4"], 18)
+        self.levelChip = LevelChip.new(self)
+        self.sprout = self:CreateTexture(nil, "ARTWORK")
+        self.sprout:SetTexture(GLYPHS .. "leaf.tga")
+        self.sprout:SetSize(11, 11)
+        draw.paint(self.sprout, "ink-muted")
+        self.reason = uiText.text(self, "caption", "arcane")
+        -- line 2
+        self.leader = uiText.text(self, "caption", "ink")
+        self.leader:SetPoint("TOPLEFT", self.activity, "BOTTOMLEFT", 0, -3)
+        self.who = uiText.text(self, "caption", "ink-muted")
+        self.who:SetPoint("LEFT", self.leader, "RIGHT", S["space-3"], 0)
+        self.post = uiText.text(self, "caption", "ink-muted")
+        self.post:SetPoint("LEFT", self.who, "RIGHT", S["space-4"], 0)
+        -- the right: Invite, Whisper, age, sources, roles
+        -- Whisper and Invite as 24px glyph buttons (asked for in game: words
+        -- took too much room), the word on hover
+        self.invite = iconButton(self, "plus", "Invite", "Invite this player to your group",
+            function() local d = self.data; if b.onInvite and d then b.onInvite(d) end end)
+        self.invite:SetPoint("RIGHT", -S["space-4"], 0)
+        self.whisper = iconButton(self, "chat", "Whisper", "An empty whisper to them",
+            function() local d = self.data; if b.onWhisper and d then b.onWhisper(d) end end)
+        -- always where it is on a player's row, so the column lines up
+        self.whisper:SetPoint("RIGHT", self.invite, "LEFT", -S["space-3"], 0)
+        self.age = uiText.text(self, "caption", "ink-faint")
+        self.age:SetJustifyH("RIGHT")
+        self.age:SetWidth(30)
+        self.badges, self.slots = {}, {}
+        self.count = uiText.text(self, "numeric", "ink-muted")
+        self.rolesLabel = uiText.text(self, "caption", "ink-muted")
+        self.slotsHit = SlotsHit.new(nil, self)
+        self.slotsHit:SetFrameLevel(self:GetFrameLevel() + 5)
+        self.slotsHit:SetScript("OnEnter", function(hit: SlotsHit)
+            self.hover:Show()
+            tooltip.showTooltip(hit, { title = "Roles", description = hit.tip })
+        end)
+        self.slotsHit:SetScript("OnLeave", function() self.hover:Hide(); tooltip.hideTooltip() end)
+        self.slotsHit:Hide()
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            local d = self.data
+            if d and d.post and d.post ~= "" then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip_SetTitle(GameTooltip, d.leader or "")
+                GameTooltip_AddNormalLine(GameTooltip, d.post, true)
+                GameTooltip:Show()
+            end
+        end)
+        self:SetScript("OnLeave", function() self.hover:Hide(); GameTooltip:Hide() end)
+    end
 end
 
 local function makeRow(b: GroupFinderBrowse): BrowseRowFrame
-    local r: BrowseRowFrame = CreateFrame("Button", nil, b.list.child) :: any
-    r:SetHeight(ROW_H)
-    r.match = draw.fill(r, "arcane-soft", "BACKGROUND")
-    r.match:SetAllPoints()
-    r.edge = draw.fill(r, "arcane", "ARTWORK")
-    r.edge:SetWidth(2)
-    r.edge:SetPoint("TOPLEFT")
-    r.edge:SetPoint("BOTTOMLEFT")
-    r.hover = draw.fill(r, "gilt-faint", "BACKGROUND", 1)
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.rule = draw.fill(r, "gilt-faint", "ARTWORK")
-    r.rule:SetHeight(1)
-    r.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
-    r.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
-    -- the lead: centred in a 20px column (drawRow sizes it)
-    r.lead = r:CreateTexture(nil, "ARTWORK")
-    r.lead:SetSize(20, 20)
-    r.lead:SetPoint("CENTER", r, "LEFT", S["space-4"] + 10, 0)
-    -- line 1
-    r.activity = uiText.text(r, "label", "ink")
-    r.activity:SetPoint("TOPLEFT", r, "LEFT", S["space-4"] + 20 + S["space-4"], 18)
-    r.levelChip = CreateFrame("Frame", nil, r) :: any
-    r.levelChip:SetHeight(14)
-    draw.fill(r.levelChip, "surface-sunk"):SetAllPoints()
-    draw.border(r.levelChip, "gilt-faint")
-    r.levelChip.text = uiText.text(r.levelChip, "micro", "ink-muted")
-    r.levelChip.text:SetPoint("CENTER")
-    r.sprout = r:CreateTexture(nil, "ARTWORK")
-    r.sprout:SetTexture(GLYPHS .. "leaf.tga")
-    r.sprout:SetSize(11, 11)
-    draw.paint(r.sprout, "ink-muted")
-    r.reason = uiText.text(r, "caption", "arcane")
-    -- line 2
-    r.leader = uiText.text(r, "caption", "ink")
-    r.leader:SetPoint("TOPLEFT", r.activity, "BOTTOMLEFT", 0, -3)
-    r.who = uiText.text(r, "caption", "ink-muted")
-    r.who:SetPoint("LEFT", r.leader, "RIGHT", S["space-3"], 0)
-    r.post = uiText.text(r, "caption", "ink-muted")
-    r.post:SetPoint("LEFT", r.who, "RIGHT", S["space-4"], 0)
-    -- the right: Invite, Whisper, age, sources, roles
-    -- Whisper and Invite as 24px glyph buttons (asked for in game: words
-    -- took too much room), the word on hover
-    r.invite = iconButton(r, "plus", "Invite", "Invite this player to your group",
-        function() local d = r.data; if b.onInvite and d then b.onInvite(d) end end)
-    r.invite:SetPoint("RIGHT", -S["space-4"], 0)
-    r.whisper = iconButton(r, "chat", "Whisper", "An empty whisper to them",
-        function() local d = r.data; if b.onWhisper and d then b.onWhisper(d) end end)
-    -- always where it is on a player's row, so the column lines up
-    r.whisper:SetPoint("RIGHT", r.invite, "LEFT", -S["space-3"], 0)
-    r.age = uiText.text(r, "caption", "ink-faint")
-    r.age:SetJustifyH("RIGHT")
-    r.age:SetWidth(30)
-    r.badges, r.slots = {}, {}
-    r.count = uiText.text(r, "numeric", "ink-muted")
-    r.rolesLabel = uiText.text(r, "caption", "ink-muted")
-    r.slotsHit = CreateFrame("Frame", nil, r) :: any
-    r.slotsHit:SetFrameLevel(r:GetFrameLevel() + 5)
-    r.slotsHit:SetScript("OnEnter", function(self: SlotsHit)
-        r.hover:Show()
-        tooltip.showTooltip(self, { title = "Roles", description = self.tip })
-    end)
-    r.slotsHit:SetScript("OnLeave", function() r.hover:Hide(); tooltip.hideTooltip() end)
-    r.slotsHit:Hide()
-    r:SetScript("OnEnter", function(self: BrowseRowFrame)
-        self.hover:Show()
-        local d = self.data
-        if d and d.post and d.post ~= "" then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip_SetTitle(GameTooltip, d.leader or "")
-            GameTooltip_AddNormalLine(GameTooltip, d.post, true)
-            GameTooltip:Show()
-        end
-    end)
-    r:SetScript("OnLeave", function(self: BrowseRowFrame) self.hover:Hide(); GameTooltip:Hide() end)
-    return r
+    return BrowseRowFrame.new(b)
 end
 
 local function drawRow(b: GroupFinderBrowse, r: BrowseRowFrame, d: BrowseRow, y: number, width: number)
@@ -467,50 +492,73 @@ end
 -- The page
 --------------------------------------------------------------------------------
 
+export class SectionHead extends Button
+    text: Text
+    count: Text
+    glyph: Texture
+    note: Text
+    rule: Frame
+    label: string
+
+    constructor(b: GroupFinderBrowse, key: "groups" | "players", label: string)
+        super(nil, b.list.child)
+        self:SetHeight(HEAD_H)
+        self.text = uiText.text(self, "header", "gilt-text")
+        self.text:SetPoint("LEFT", S["space-4"], 0)
+        self.count = uiText.text(self, "caption", "ink-muted")
+        self.count:SetPoint("LEFT", self.text, "RIGHT", S["space-3"], 0)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(12, 12)
+        self.glyph:SetPoint("RIGHT", -S["space-4"], 0)
+        draw.paint(self.glyph, "ink-muted")
+        -- a note before the chevron ("from chat so far" while the tool searches)
+        self.note = uiText.text(self, "caption", "ink-faint")
+        self.note:SetPoint("RIGHT", self.glyph, "LEFT", -S["space-3"], 0)
+        self.rule = draw.hairline(self, "gilt-line", "out")
+        self.rule:SetPoint("LEFT", self.count, "RIGHT", S["space-4"], 0)
+        self.rule:SetPoint("RIGHT", self.note, "LEFT", -S["space-4"], 0)
+        self.label = label
+        self:SetScript("OnClick", function() if b.onToggle then b.onToggle(key) end end)
+    end
+end
+
 local function sectionHead(b: GroupFinderBrowse, key: "groups" | "players", label: string): SectionHead
-    local h: SectionHead = CreateFrame("Button", nil, b.list.child) :: any
-    h:SetHeight(HEAD_H)
-    h.text = uiText.text(h, "header", "gilt-text")
-    h.text:SetPoint("LEFT", S["space-4"], 0)
-    h.count = uiText.text(h, "caption", "ink-muted")
-    h.count:SetPoint("LEFT", h.text, "RIGHT", S["space-3"], 0)
-    h.glyph = h:CreateTexture(nil, "ARTWORK")
-    h.glyph:SetSize(12, 12)
-    h.glyph:SetPoint("RIGHT", -S["space-4"], 0)
-    draw.paint(h.glyph, "ink-muted")
-    -- a note before the chevron ("from chat so far" while the tool searches)
-    h.note = uiText.text(h, "caption", "ink-faint")
-    h.note:SetPoint("RIGHT", h.glyph, "LEFT", -S["space-3"], 0)
-    h.rule = draw.hairline(h, "gilt-line", "out")
-    h.rule:SetPoint("LEFT", h.count, "RIGHT", S["space-4"], 0)
-    h.rule:SetPoint("RIGHT", h.note, "LEFT", -S["space-4"], 0)
-    h.label = label
-    h:SetScript("OnClick", function() if b.onToggle then b.onToggle(key) end end)
-    return h
+    return SectionHead.new(b, key, label)
 end
 
 -- Skeleton rows stand in for the tool's while it searches the first time:
 -- a square, two lines, a block at the right, in surface-raised.
+export class SkeletonRow extends Frame
+    a: Texture
+    b: Texture
+    b2: Texture
+    c: Texture
+    rule: Texture
+
+    constructor(b: GroupFinderBrowse)
+        super(nil, b.list.child)
+        self:SetHeight(ROW_H)
+        self.a = draw.fill(self, "surface-raised")
+        self.a:SetSize(14, 14)
+        self.a:SetPoint("CENTER", self, "LEFT", S["space-4"] + 10, 0)
+        self.b = draw.fill(self, "surface-raised")
+        self.b:SetHeight(10)
+        self.b:SetPoint("LEFT", S["space-4"] * 2 + 20, 5)
+        self.b2 = draw.fill(self, "surface-raised")
+        self.b2:SetHeight(6)
+        self.b2:SetPoint("TOPLEFT", self.b, "BOTTOMLEFT", 0, -4)
+        self.c = draw.fill(self, "surface-raised")
+        self.c:SetSize(92, 14)
+        self.c:SetPoint("RIGHT", -S["space-4"], 0)
+        self.rule = draw.fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
+        self.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
+    end
+end
+
 local function makeSkeleton(b: GroupFinderBrowse): SkeletonRow
-    local r: SkeletonRow = CreateFrame("Frame", nil, b.list.child) :: any
-    r:SetHeight(ROW_H)
-    r.a = draw.fill(r, "surface-raised")
-    r.a:SetSize(14, 14)
-    r.a:SetPoint("CENTER", r, "LEFT", S["space-4"] + 10, 0)
-    r.b = draw.fill(r, "surface-raised")
-    r.b:SetHeight(10)
-    r.b:SetPoint("LEFT", S["space-4"] * 2 + 20, 5)
-    r.b2 = draw.fill(r, "surface-raised")
-    r.b2:SetHeight(6)
-    r.b2:SetPoint("TOPLEFT", r.b, "BOTTOMLEFT", 0, -4)
-    r.c = draw.fill(r, "surface-raised")
-    r.c:SetSize(92, 14)
-    r.c:SetPoint("RIGHT", -S["space-4"], 0)
-    r.rule = draw.fill(r, "gilt-faint", "ARTWORK")
-    r.rule:SetHeight(1)
-    r.rule:SetPoint("BOTTOMLEFT", S["space-4"], 0)
-    r.rule:SetPoint("BOTTOMRIGHT", -S["space-4"], 0)
-    return r
+    return SkeletonRow.new(b)
 end
 
 -- What the bar says about the tool's results: searching, never searched, or
@@ -589,11 +637,11 @@ export class GroupFinderBrowse extends Frame
         local function changed(t: BrowseFilter) if self.onFilter then self.onFilter(t) end end
         local g = S["space-3"]
         self.category = uiSelect.select(self, { width = 150, placeholder = "Category",
-            onChange = function(v: any) changed({ category = v }) end })
+            onChange = function(v: string) changed({ category = v }) end })
         self.category:SetPoint("TOPLEFT")
         self.category:SetHeight(BAR_H)
         self.activity = uiSelect.select(self, { width = 190, multiple = true, maxShown = 1, placeholder = "Filter by activity", maxRows = 12,
-            onChangeAll = function(v: any) changed({ activities = v }) end })
+            onChangeAll = function(v: string[]) changed({ activities = v }) end })
         self.activity:SetPoint("LEFT", self.category, "RIGHT", g, 0)
         self.activity:SetHeight(BAR_H)
         self.search = inputs.textField(self, { width = 170, placeholder = "Search",
@@ -603,7 +651,7 @@ export class GroupFinderBrowse extends Frame
         self.fits:SetPoint("LEFT", self.search, "RIGHT", g * 2, 0)
         self.show = uiSelect.select(self, { width = 120, options = {
             { value = "both", label = "Both" }, { value = "group", label = "Groups" }, { value = "player", label = "Players looking" } },
-            onChange = function(v: any) changed({ show = v }) end })
+            onChange = function(v: string) changed({ show = v }) end })
         self.show:SetPoint("LEFT", self.fits, "RIGHT", g * 2, 0)
         self.show:SetHeight(BAR_H)
         -- the tool's age and Refresh, at the right (primary once stale)
@@ -643,27 +691,8 @@ export class GroupFinderBrowse extends Frame
         self.loadNote = uiText.text(self.list.child, "caption", "ink-muted")
         self.loadNote:SetValue("Searching the tool… Chat posts show up as they’re written.")
         -- nothing to show: a faint search glyph, what happened, Clear filters and Refresh
-        local e: BrowseEmpty = CreateFrame("Frame", nil, self.box) :: any
-        e:SetSize(360, 140)
+        local e = BrowseEmpty.new(self.box, g, function() if self.onClear then self.onClear() end end, refresh)
         e:SetPoint("CENTER")
-        e.glyph = e:CreateTexture(nil, "ARTWORK")
-        e.glyph:SetTexture(GLYPHS .. "search.tga")
-        e.glyph:SetSize(24, 24)
-        draw.paint(e.glyph, "ink-faint")
-        e.glyph:SetPoint("TOP")
-        e.title = uiText.text(e, "label", "ink")
-        e.title:SetPoint("TOP", e.glyph, "BOTTOM", 0, -g)
-        e.title:SetValue("Nothing matches your filters")
-        e.text = uiText.text(e, "caption", "ink-muted")
-        e.text:SetWidth(360)
-        e.text:SetJustifyH("CENTER")
-        e.text:SetPoint("TOP", e.title, "BOTTOM", 0, -g)
-        e.text:SetValue("Chat posts show up here as they’re written. Clear a filter, or refresh the tool for new listings.")
-        e.clear = controls.button(e, { text = "Clear filters", icon = "close", onClick = function() if self.onClear then self.onClear() end end })
-        e.refresh = controls.button(e, { text = "Refresh", icon = "reset", onClick = refresh })
-        for _, btn in ipairs({ e.clear, e.refresh }) do btn:SetHeight(26) end
-        e.clear:SetPoint("TOPRIGHT", e.text, "BOTTOM", -g / 2, -g * 2)
-        e.refresh:SetPoint("TOPLEFT", e.text, "BOTTOM", g / 2, -g * 2)
         e:Hide()
         self.empty = e
     end
