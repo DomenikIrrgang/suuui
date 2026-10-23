@@ -31,58 +31,56 @@
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
 import type Position from "/EditMode/EditMode"
+import type DurabilityInfo, DurabilityPiece, DurabilityParts from "/Core/ServiceKeys"
+import type StateBadge from "/UI/Controls"
+import type Text from "/UI/Text"
+import type TooltipData from "/UI/Tooltip"
+import asFrame, named, part from "/UI/Reskin"
 import after from "wowlua:timer"
 import isSecret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
-local M = SuuUI.RegisterModule({
-    id = "durability",
-    name = "Durability",
-    description = "How worn your gear is: a figure by the minimap, the Character button, the gear slots, the merchant, the Damaged gear note, and repairing at merchants.",
-    api = "0.17",
-    combatSafe = true,
-    defaults = {
-        line = 20,                 -- a piece at or below this percent is damaged
-        figure = true,             -- A: the figure by the minimap
-        figureShows = "damaged",   -- "damaged" | "always"
-        figurePercent = true,      -- the lowest percent (or Broken) under it
-        -- at the minimap's lower left, outside its ring and clear of the
-        -- ring's SuuUI button (the minimap's default place and size)
-        position = { point = "TOPRIGHT", x = -208, y = -165 } :: Position,
-        character = true,          -- B: the Character button's pill
-        gear = true,               -- C: gear slots, the stats block, the merchant, tooltips
-        gearBars = "always",       -- "always" | "damaged"
-        note = true,               -- D: the Damaged gear note names the pieces
-        breakAlert = true,         -- D: an alert when a piece breaks in combat
-        autoRepair = false,        -- D: repair at merchants by itself
-        guildFirst = false,        -- D: from the guild bank when it pays
-    },
-})
+local DEFAULTS = {
+    line = 20,                 -- a piece at or below this percent is damaged
+    figure = true,             -- A: the figure by the minimap
+    figureShows = "damaged",   -- "damaged" | "always"
+    figurePercent = true,      -- the lowest percent (or Broken) under it
+    -- at the minimap's lower left, outside its ring and clear of the
+    -- ring's SuuUI button (the minimap's default place and size)
+    position = { point = "TOPRIGHT", x = -208, y = -165 } :: Position,
+    character = true,          -- B: the Character button's pill
+    gear = true,               -- C: gear slots, the stats block, the merchant, tooltips
+    gearBars = "always",       -- "always" | "damaged"
+    note = true,               -- D: the Damaged gear note names the pieces
+    breakAlert = true,         -- D: an alert when a piece breaks in combat
+    autoRepair = false,        -- D: repair at merchants by itself
+    guildFirst = false,        -- D: from the guild bank when it pays
+}
 
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
-local function call(fn: any, ...: any): (any, any, any)
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c = pcall(fn, ...)
-    if ok then return a, b, c end
-end
+local M: DurabilityModule
 
-local QUALITY = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not isSecret(v) end
+local function plainNumber(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
+
+local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
 
 -- Equipment slots by the names the board uses; the ones that wear show on
 -- the figure as the game's parts.
 local SLOT_LABEL = { "Head", "Neck", "Shoulders", "Shirt", "Chest", "Waist", "Legs", "Feet", "Wrists", "Hands",
                      "Ring", "Ring", "Trinket", "Trinket", "Back", "Main hand", "Off hand", "Ranged", "Tabard" }
-local PART_OF = { [1] = "Head", [3] = "Shoulders", [5] = "Chest", [6] = "Waist", [7] = "Legs", [8] = "Feet",
+local PART_OF: { [number]: string } = { [1] = "Head", [3] = "Shoulders", [5] = "Chest", [6] = "Waist", [7] = "Legs", [8] = "Feet",
                   [9] = "Wrists", [10] = "Hands", [16] = "Main", [17] = "Off", [18] = "Ranged" }
 
-local function hex(token: string): string return "|cff" .. T.color[token].hex end
+local COLORS: { [string]: { hex: string } } = T.color
+local function hex(token: string): string return "|cff" .. assert(COLORS[token]).hex end
 
 -- "2g 31s 8c" in the coin colours, zero coins left out.
 local function coins(copper: number): string
     local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
-    local out = {}
+    local out: string[] = {}
     if g > 0 then out[#out + 1] = g .. hex("coin-gold") .. "g|r" end
     if s > 0 then out[#out + 1] = s .. hex("coin-silver") .. "s|r" end
     if c > 0 or #out == 0 then out[#out + 1] = c .. hex("coin-copper") .. "c|r" end
@@ -95,25 +93,24 @@ end
 
 -- Every worn piece that wears, lowest first: { slot, label, part, link,
 -- name, quality, current, max, percent, state }.
-export type Piece = {
-    slot: number, label: string, part: string?, link: string?, name: string, quality: string,
-    current: number, max: number, percent: number, state: string,
-}
+export type Piece = DurabilityPiece
 
 -- One worn piece from what the game reads for its slot (nil: it doesn't
 -- wear, or a number is secret).
-local function pieceOf(slot: number, cur: any, max: any, link: any, q: any, line: number): Piece?
-    if not (plain(cur) and plain(max) and cur and max and max > 0) then return nil end
+local function pieceOf(slot: number, given: unknown, givenMax: unknown, givenLink: unknown, q: unknown, line: number): Piece?
+    local cur, max = plainNumber(given), plainNumber(givenMax)
+    if not (cur and max and max > 0) then return nil end
     -- a piece with a point left reads 1%, never the 0% of a broken one
     local pct = cur <= 0 and 0 or math.max(1, math.floor(cur / max * 100))
-    if not plain(link) then link = nil end
+    local link: string? = plain(givenLink) and type(givenLink) == "string" and givenLink or nil
     local label = SLOT_LABEL[slot] or ("Slot " .. slot)
+    local quality = plainNumber(q)
+    local state: "fine" | "damaged" | "broken" = cur <= 0 and "broken" or (pct <= line and "damaged" or "fine")
     return {
         slot = slot, label = label, part = PART_OF[slot], link = link,
         name = link and link:match("%[(.-)%]") or label,
-        quality = (plain(q) and q and QUALITY[q]) or "common",
-        current = cur, max = max, percent = pct,
-        state = cur <= 0 and "broken" or (pct <= line and "damaged" or "fine"),
+        quality = (quality and QUALITY[quality]) or "common",
+        current = cur, max = max, percent = pct, state = state,
     }
 end
 
@@ -130,10 +127,8 @@ local function readPieces(line: number): Piece[]
     local pieces: Piece[] = {}
     for slot = 1, 19 do
         local cur, max = GetInventoryItemDurability(slot)
-        if plain(cur) and plain(max) and cur and max and max > 0 then
-            local p = pieceOf(slot, cur, max, GetInventoryItemLink("player", slot), GetInventoryItemQuality("player", slot), line)
-            if p then pieces[#pieces + 1] = p end
-        end
+        local p = pieceOf(slot, cur, max, GetInventoryItemLink("player", slot), GetInventoryItemQuality("player", slot), line)
+        if p then pieces[#pieces + 1] = p end
     end
     return sortPieces(pieces)
 end
@@ -160,58 +155,41 @@ end
 
 -- What the pieces say together (SuuUI.Durability() without its parts):
 -- the counts, the lowest, the average, the state and the texts.
-local function summarize(pieces: Piece[], line: number): { [string]: any }
-    local d = { line = line, pieces = pieces, lowest = pieces[1], bySlot = {}, damaged = 0, broken = 0 }
-    local sum = 0
+-- (`parts`: what each setting shows; all off without it)
+local function summarize(pieces: Piece[], line: number, parts: DurabilityParts?): DurabilityInfo
+    local bySlot: { [number]: Piece } = {}
+    local damaged, broken, sum = 0, 0, 0
     for _, p in ipairs(pieces) do
         sum = sum + p.percent
-        d.bySlot[p.slot] = p
-        if p.state == "broken" then d.broken = d.broken + 1 elseif p.state == "damaged" then d.damaged = d.damaged + 1 end
+        bySlot[p.slot] = p
+        if p.state == "broken" then broken = broken + 1 elseif p.state == "damaged" then damaged = damaged + 1 end
     end
-    d.average = #pieces > 0 and math.floor(sum / #pieces + 0.5) or nil
-    d.state = d.broken > 0 and "broken" or (d.damaged > 0 and "damaged" or "fine")
-    local counts = {}
-    if d.broken > 0 then counts[#counts + 1] = d.broken .. " broken" end
-    if d.damaged > 0 then counts[#counts + 1] = d.damaged .. " damaged" end
-    d.headline = #counts > 0 and ("Durability · " .. table.concat(counts, ", ")) or "Durability"
-    if d.lowest then
-        d.summary = #counts > 0 and (table.concat(counts, " · ") .. " · lowest " .. d.lowest.label)
-            or ("All above " .. line .. "% · lowest " .. d.lowest.label .. " " .. d.lowest.percent .. "%")
+    local state: "fine" | "damaged" | "broken" = broken > 0 and "broken" or (damaged > 0 and "damaged" or "fine")
+    local counts: string[] = {}
+    if broken > 0 then counts[#counts + 1] = broken .. " broken" end
+    if damaged > 0 then counts[#counts + 1] = damaged .. " damaged" end
+    local lowest = pieces[1]
+    local summary: string? = nil
+    if lowest then
+        summary = #counts > 0 and (table.concat(counts, " · ") .. " · lowest " .. lowest.label)
+            or ("All above " .. line .. "% · lowest " .. lowest.label .. " " .. lowest.percent .. "%")
     end
-    d.lines = tooltipLines(pieces)
-    return d
+    return {
+        line = line, pieces = pieces, lowest = lowest, bySlot = bySlot, damaged = damaged, broken = broken,
+        average = #pieces > 0 and math.floor(sum / #pieces + 0.5) or nil, state = state,
+        headline = #counts > 0 and ("Durability · " .. table.concat(counts, ", ")) or "Durability",
+        summary = summary, lines = tooltipLines(pieces),
+        parts = parts or { figure = false, character = false, gear = false, gearBars = "always", note = false },
+    }
 end
 
 -- What the others show, as one string: only whole percents count
 -- (durability moves with every hit in combat).
-local function signature(d: { [string]: any }): string
-    local sig = { d.line, tostring(d.parts.figure), tostring(d.parts.character), tostring(d.parts.gear),
+local function signature(d: DurabilityInfo): string
+    local sig: string[] = { tostring(d.line), tostring(d.parts.figure), tostring(d.parts.character), tostring(d.parts.gear),
                   d.parts.gearBars, tostring(d.parts.note) }
     for _, p in ipairs(d.pieces) do sig[#sig + 1] = p.slot .. ":" .. p.percent .. ":" .. (p.link or "") end
     return table.concat(sig, ",")
-end
-
--- Everything the other modules draw from (SuuUI.Durability()).
-function M:Read()
-    local line = self:Get("line")
-    local d = summarize(readPieces(line), line)
-    d.parts = {
-        figure = self:Get("figure"), character = self:Get("character"),
-        gear = self:Get("gear"), gearBars = self:Get("gearBars"), note = self:Get("note"),
-    }
-    return d
-end
-
--- Read again; tell the others when anything they show changed.
-function M:Update(force: boolean?)
-    local d = self:Read()
-    local sig = signature(d)
-    self:WatchBreaks(d)
-    if not force and sig == self.signature then return end
-    self.signature = sig
-    self.data = d
-    self:DrawFigure()
-    self:Emit("SUUUI_DURABILITY_CHANGED")
 end
 
 --------------------------------------------------------------------------------
@@ -237,22 +215,6 @@ local function newlyBroken(was: { [number]: { key: string, state: string } }, pi
     return now, broke
 end
 
-function M:WatchBreaks(d: { [string]: any })
-    local now, broke = newlyBroken(self.wasState or {}, d.pieces)
-    -- once per piece, until repaired
-    for _, p in ipairs(broke) do
-        if self:Get("breakAlert") and InCombatLockdown() then
-            SuuUI.ShowAlert(ALERT, "danger", "Your " .. p.label .. " broke", p.name .. " · no stats until repaired")
-            if self.alertTimer then self.alertTimer:Cancel() end
-            self.alertTimer = after(4, function()
-                self.alertTimer = nil
-                SuuUI.HideAlert(ALERT)
-            end)
-        end
-    end
-    self.wasState = now
-end
-
 --------------------------------------------------------------------------------
 -- A: the figure by the minimap
 --------------------------------------------------------------------------------
@@ -264,50 +226,59 @@ local PARTS = { "Main", "Head", "Shoulders", "Chest", "Wrists", "Hands", "Waist"
 local FIGURE = 64
 local BADGE_GAP = 4
 
-local function figureHeight() return FIGURE + BADGE_GAP + T.type.badge.lineHeight end
+local function figureHeight(): number return FIGURE + BADGE_GAP + T.type.badge.lineHeight end
 
-local function buildFigure(parent: Frame): any
-    local f = CreateFrame("Frame", nil, parent) :: any
-    f:SetSize(FIGURE, figureHeight())
-    f.art = CreateFrame("Frame", nil, f)
-    f.art:SetSize(FIGURE, FIGURE)
-    f.art:SetPoint("TOP")
-    f.fills, f.edges = {}, {}
-    for _, part in ipairs(PARTS) do
-        local fill = f.art:CreateTexture(nil, "BORDER")
-        fill:SetTexture(TEX .. part .. ".tga")
-        fill:SetAllPoints()
-        local edge = f.art:CreateTexture(nil, "ARTWORK")
-        edge:SetTexture(TEX .. part .. "Edge.tga")
-        edge:SetAllPoints()
-        f.fills[part], f.edges[part] = fill, edge
+-- The figure: each part's fill and outline, the chest's crack; under it a
+-- badge for a damaged or broken piece, quiet text when all is well.
+class DurabilityFigure extends Frame
+    readonly art: Frame
+    readonly fills: { [string]: Texture } = {}
+    readonly edges: { [string]: Texture } = {}
+    readonly crack: Texture
+    readonly badge: StateBadge
+    readonly calm: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(FIGURE, figureHeight())
+        self.art = CreateFrame("Frame", nil, self)
+        self.art:SetSize(FIGURE, FIGURE)
+        self.art:SetPoint("TOP")
+        for _, name in ipairs(PARTS) do
+            local fill = self.art:CreateTexture(nil, "BORDER")
+            fill:SetTexture(TEX .. name .. ".tga")
+            fill:SetAllPoints()
+            local edge = self.art:CreateTexture(nil, "ARTWORK")
+            edge:SetTexture(TEX .. name .. "Edge.tga")
+            edge:SetAllPoints()
+            self.fills[name], self.edges[name] = fill, edge
+        end
+        self.crack = self.art:CreateTexture(nil, "OVERLAY")
+        self.crack:SetTexture(TEX .. "Crack.tga")
+        self.crack:SetAllPoints()
+        UI.Paint(self.crack, "on-signal")
+        self.crack:Hide()
+        self.badge = UI.StateBadge(self, "warning", "")
+        self.badge:SetPoint("TOP", self.art, "BOTTOM", 0, -BADGE_GAP)
+        self.badge:Hide()
+        self.calm = UI.Text(self, "micro", "ink-faint")
+        self.calm:SetPoint("TOP", self.art, "BOTTOM", 0, -BADGE_GAP)
     end
-    f.crack = f.art:CreateTexture(nil, "OVERLAY")
-    f.crack:SetTexture(TEX .. "Crack.tga")
-    f.crack:SetAllPoints()
-    UI.Paint(f.crack, "on-signal")
-    f.crack:Hide()
-    -- under it: a badge for a damaged or broken piece, quiet text when all is well
-    f.badge = UI.StateBadge(f, "warning", "")
-    f.badge:SetPoint("TOP", f.art, "BOTTOM", 0, -BADGE_GAP)
-    f.badge:Hide()
-    f.calm = UI.Text(f, "micro", "ink-faint")
-    f.calm:SetPoint("TOP", f.art, "BOTTOM", 0, -BADGE_GAP)
-    return f
 end
 
 -- states: part -> "damaged" | "broken"; calm: all is well (fainter);
 -- badge: { tone, text } or nil, or text for the quiet line.
-local function paintFigure(f: any, states: { [string]: string }, calm: boolean, badge: string[]?, calmText: string?)
-    for _, part in ipairs(PARTS) do
-        local s = states[part]
+local function paintFigure(f: DurabilityFigure, states: { [string]: string }, calm: boolean, badge: string[]?, calmText: string?)
+    for _, name in ipairs(PARTS) do
+        local s = states[name]
+        local fill, edge = assert(f.fills[name]), assert(f.edges[name])
         if s == "broken" or s == "damaged" then
-            UI.Paint(f.fills[part], s == "broken" and "ember" or "amber")
-            UI.Paint(f.edges[part], "on-signal", 0.7)
+            UI.Paint(fill, s == "broken" and "ember" or "amber")
+            UI.Paint(edge, "on-signal", 0.7)
         else
             -- unlit: ink at 10% in the gilt outline (at rest fainter still)
-            UI.Paint(f.fills[part], "ink", calm and 0.04 or 0.1)
-            UI.Paint(f.edges[part], "gilt", calm and 0.3 or 0.6)
+            UI.Paint(fill, "ink", calm and 0.04 or 0.1)
+            UI.Paint(edge, "gilt", calm and 0.3 or 0.6)
         end
     end
     f.crack:SetShown(states.Chest == "broken")
@@ -322,37 +293,20 @@ local function paintFigure(f: any, states: { [string]: string }, calm: boolean, 
 end
 
 -- The game's rule that turns repairs off hides its figure; SuuUI's follows it.
-local function repairsOff()
-    local rules, rule = C_GameRules, Enum and Enum.GameRule and Enum.GameRule.RepairArmorDisabled
-    if not (rules and rules.IsGameRuleActive and rule) then return false end
-    local on = call(rules.IsGameRuleActive, rule)
-    return plain(on) and on == true
-end
-
-function M:TooltipData()
-    local d = self.data
-    if not d or not d.lowest then return { title = "Durability", subtitle = "Nothing you wear wears down." } end
-    return {
-        title = "Durability", subtitle = d.summary, lines = d.lines, maxWidth = 320,
-        description = d.broken > 0 and "A broken piece gives none of its stats until it's repaired." or nil,
-    }
-end
-
-function M:BuildFigure()
-    local f = buildFigure(SuuUI.Root)
-    f:SetFrameStrata("LOW")
-    f.suuManagedShow = true
-    f:EnableMouse(true)
-    f:SetScript("OnEnter", function(owner) UI.ShowTooltip(owner, function() return self:TooltipData() end) end)
-    f:SetScript("OnLeave", function() UI.HideTooltip() end)
-    self.figure = f
+local function repairsOff(): boolean
+    local isActive, rule = part(named("C_GameRules"), "IsGameRuleActive"), part(part(Enum, "GameRule"), "RepairArmorDisabled")
+    if type(isActive) ~= "function" or not rule then return false end
+    local ok: boolean, on: unknown = pcall(isActive :: (rule: unknown) -> unknown, rule)
+    return ok and plain(on) and on == true
 end
 
 -- What the figure shows for a reading: whether it is up (`settings`:
 -- figure, figureShows, figurePercent, position; `editing`: edit mode;
 -- `off`: the game turned repairs off), each part's state, the badge
 -- ({ tone, text }) or the quiet text under it.
-local function figureView(d: { [string]: any }, settings: { [string]: any }, editing: boolean, off: boolean)
+-- What decides the figure: the settings it reads.
+type FigureSettings = { figure: boolean, figureShows: string, figurePercent: boolean, position: { hidden?: boolean } }
+local function figureView(d: DurabilityInfo, settings: FigureSettings, editing: boolean, off: boolean)
     : (boolean, { [string]: string }, string[]?, string?)
     local always = settings.figureShows == "always"
     local shown = settings.figure and not settings.position.hidden and not off
@@ -362,57 +316,18 @@ local function figureView(d: { [string]: any }, settings: { [string]: any }, edi
         if p.part and p.state ~= "fine" then states[p.part] = p.state end
     end
     local badge: string[]?, calmText: string? = nil, nil
-    if settings.figurePercent and d.lowest then
+    local lowest = d.lowest
+    if settings.figurePercent and lowest then
         if d.state == "broken" then badge = { "danger", "Broken" }
-        elseif d.state == "damaged" then badge = { "warning", d.lowest.percent .. "%" }
-        else calmText = d.lowest.percent .. "%" end
+        elseif d.state == "damaged" then badge = { "warning", lowest.percent .. "%" }
+        else calmText = lowest.percent .. "%" end
     end
     return shown and true or false, states, badge, calmText
-end
-
-function M:DrawFigure()
-    local f, d = self.figure, self.data
-    if not (f and d) then return end
-    -- in edit mode it shows to be moved, worn or not
-    local shown, states, badge, calmText = figureView(d, {
-        figure = self:Get("figure"), figureShows = self:Get("figureShows"),
-        figurePercent = self:Get("figurePercent"), position = self:Get("position"),
-    }, SuuUI.EditMode.IsActive(), repairsOff())
-    f:SetShown(shown)
-    paintFigure(f, states, d.state == "fine", badge, calmText)
-end
-
--- The game's own figure out of sight while SuuUI's is on (only a reload
--- brings it back: SuppressBlizzard).
-function M:StandDownBlizzard()
-    if self.blizzardDown or not self:Get("figure") or not _G.DurabilityFrame then return end
-    self.blizzardDown = true
-    SuuUI.SuppressBlizzard(_G.DurabilityFrame)
 end
 
 --------------------------------------------------------------------------------
 -- C: a broken piece's tooltip
 --------------------------------------------------------------------------------
-
--- The game writes the Durability line (red when broken); SuuUI adds what
--- that means. (No Repair line: a piece's own repair cost isn't readable.)
-function M:HookItemTooltip()
-    if self.tooltipHooked or not (TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall
-        and Enum.TooltipDataType and Enum.TooltipDataType.Item) then return end
-    self.tooltipHooked = true
-    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip)
-        if tooltip ~= GameTooltip or not (self:IsEnabled() and self:Get("gear") and self.data) then return end
-        local info = tooltip.GetPrimaryTooltipInfo and call(tooltip.GetPrimaryTooltipInfo, tooltip)
-        local args = info and info.getterName == "GetInventoryItem" and info.getterArgs
-        local unit, slot = args and args[1], args and args[2]
-        if not (plain(unit) and plain(slot) and unit == "player") then return end
-        local p = self.data.bySlot[slot]
-        if p and p.state == "broken" then
-            local r, g, b = UI.RGBA("ember-text")
-            tooltip:AddLine("Broken: none of its stats count until repaired", r, g, b, true)
-        end
-    end)
-end
 
 --------------------------------------------------------------------------------
 -- D: repairing at merchants
@@ -421,38 +336,31 @@ end
 -- The guild pays: your rank may repair from its bank, and today's limit
 -- covers it (-1: no limit).
 local function guildPays(cost: number): boolean
-    if not call(CanGuildBankRepair) then return false end
-    local left = call(GetGuildBankWithdrawMoney)
-    return plain(left) and left ~= nil and (left < 0 or left >= cost)
+    local ok: boolean, can: unknown = pcall(CanGuildBankRepair)
+    if not ok or not can then return false end
+    local okLeft: boolean, given: unknown = pcall(GetGuildBankWithdrawMoney)
+    local left = okLeft and plainNumber(given) or nil
+    return left ~= nil and (left < 0 or left >= cost)
 end
 
-function M:AutoRepair()
-    if not self:Get("autoRepair") or not call(CanMerchantRepair) then return end
-    local cost, needed = call(GetRepairAllCost)
-    if not (plain(cost) and cost and cost > 0 and needed) then return end
-    local worn = 0
-    for _, p in ipairs(readPieces(self:Get("line"))) do
-        if p.current < p.max then worn = worn + 1 end
-    end
-    local money = GetMoney() or 0
-    local guild = self:Get("guildFirst") and guildPays(cost)
-    if not guild and money < cost then
-        self:Print(("Not enough gold to repair here: it costs %s."):format(coins(cost)))
-        return
-    end
-    call(RepairAllItems, guild and true or false)
-    -- what it cost and who paid, once the game has answered
-    after(1, function()
-        local left = call(GetRepairAllCost) or 0
-        if guild and left > 0 and (GetMoney() or 0) >= left then
-            -- the guild didn't pay after all: your own gold
-            guild = false
-            call(RepairAllItems, false)
-            after(1, function() self:ReportRepair(cost, money, worn) end)
-            return
-        end
-        self:ReportRepair(cost, money, worn)
-    end)
+-- What repairing everything costs here now (0: nothing, or no answer).
+local function repairCost(): number
+    local ok: boolean, cost: unknown = pcall(GetRepairAllCost)
+    return ok and plainNumber(cost) or 0
+end
+
+-- One of the game's tooltip hooks (TooltipDataProcessor, declared as a plain
+-- table): fn after the game filled a tooltip of `kind`.
+type PostCall = (tooltip: GameTooltip, data: unknown) -> ()
+local function postCall(kind: unknown, fn: PostCall)
+    local add = part(TooltipDataProcessor, "AddTooltipPostCall")
+    if type(add) == "function" then (add :: (kind: unknown, fn: PostCall) -> ())(kind, fn) end
+end
+
+-- The `i`th of a list the game gave (nil: not a list).
+local function at(list: unknown, i: number): unknown
+    if type(list) ~= "table" then return nil end
+    return (list :: { [number]: unknown })[i]
 end
 
 -- What a repair at `cost` did, from the money before and now and what
@@ -464,25 +372,9 @@ local function repairReport(cost: number, moneyBefore: number, moneyNow: number,
     return ("Repaired %s for %s%s."):format(piecesText(worn), coins(paid > 0 and paid or cost - left), from)
 end
 
-function M:ReportRepair(cost: number, moneyBefore: number, worn: number)
-    self:Print(repairReport(cost, moneyBefore, GetMoney() or 0, call(GetRepairAllCost) or 0, worn))
-end
-
 --------------------------------------------------------------------------------
 -- Settings and the preview
 --------------------------------------------------------------------------------
-
--- The board's broken example: Chest broken, Legs and Main hand damaged.
-function M:PreviewView(parent: Frame): any
-    if not self.preview then
-        self.preview = buildFigure(parent)
-    end
-    self.preview:SetParent(parent)
-    self.preview:SetSize(FIGURE, figureHeight())
-    paintFigure(self.preview, { Chest = "broken", Legs = "damaged", Main = "damaged" }, false,
-        self:Get("figurePercent") and { "danger", "Broken" } or nil)
-    return self.preview
-end
 
 local function figureOff() return not M:Get("figure"), "The figure is off." end
 local function repairOff() return not M:Get("autoRepair"), "Repair at merchants is off." end
@@ -490,7 +382,7 @@ local function gearOff() return not M:Get("gear"), "On your gear is off." end
 
 local SECTION = {
     id = "durability", label = "Durability", category = "General", order = 31,
-    preview = function(parent: Frame): any return M:PreviewView(parent) end,
+    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
     groups = {
         { title = "Durability", description = "When your gear wears down to the line, and when a piece breaks: amber for a damaged piece, ember for a broken one, always with its percent or the word Broken.", rows = {
             { key = "line", label = "Damaged at", control = "slider", min = 10, max = 50, step = 5, unit = "%",
@@ -533,40 +425,221 @@ local SECTION = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
-function M:OnEnable()
-    self:Provide("durability", { Get = function() return self.data end })
-    if not self.figure then self:BuildFigure() end
-    self:RegisterMover(self.figure, { key = "position", label = "Durability figure",
-        enabled = function() return self:Get("figure") end })
-    self:RegisterSettings(SECTION)
-    self:StandDownBlizzard()
-    self:HookItemTooltip()
-    self.signature = nil
-    self:Update(true)
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
-    for _, e in ipairs({ "UPDATE_INVENTORY_DURABILITY", "UPDATE_INVENTORY_ALERTS", "PLAYER_EQUIPMENT_CHANGED", "PLAYER_ENTERING_WORLD" }) do
-        if not valid or valid(e) then self:OnGameEvent(e, function() self:Update() end) end
+class DurabilityModule extends Module<typeof(DEFAULTS)>
+    alertTimer: TimerHandle? = nil
+    blizzardDown: boolean? = nil
+    -- the last reading (SuuUI.Durability())
+    data: DurabilityInfo? = nil
+    figure: DurabilityFigure? = nil
+    -- the settings' preview of the figure
+    preview: DurabilityFigure? = nil
+    signature: string? = nil
+    tooltipHooked: boolean? = nil
+    -- each slot's piece and state at the last reading (to see one break)
+    wasState: { [number]: { key: string, state: string } }? = nil
+
+    constructor()
+        super({
+            id = "durability",
+            name = "Durability",
+            description = "How worn your gear is: a figure by the minimap, the Character button, the gear slots, the merchant, the Damaged gear note, and repairing at merchants.",
+            api = "0.17",
+            combatSafe = true,
+            defaults = DEFAULTS,
+        })
     end
-    self:OnGameEvent("MERCHANT_SHOW", function() self:AutoRepair() end)
-    self:WatchAll({ "line", "figure", "figureShows", "figurePercent", "position", "character", "gear", "gearBars", "note" }, function(key)
-        if key == "figure" then
-            self:StandDownBlizzard()
-            SuuUI.EditMode.Refresh()
+
+    -- Everything the other modules draw from (SuuUI.Durability()).
+    function Read(): DurabilityInfo
+        local line = self:Get("line")
+        return summarize(readPieces(line), line, {
+            figure = self:Get("figure"), character = self:Get("character"),
+            gear = self:Get("gear"), gearBars = self:Get("gearBars"), note = self:Get("note"),
+        })
+    end
+
+    -- Read again; tell the others when anything they show changed.
+    function Update(force: boolean?)
+        local d = self:Read()
+        local sig = signature(d)
+        self:WatchBreaks(d)
+        if not force and sig == self.signature then return end
+        self.signature = sig
+        self.data = d
+        self:DrawFigure()
+        self:Emit("SUUUI_DURABILITY_CHANGED")
+    end
+
+    function WatchBreaks(d: DurabilityInfo)
+        local now, broke = newlyBroken(self.wasState or {}, d.pieces)
+        -- once per piece, until repaired
+        for _, p in ipairs(broke) do
+            if self:Get("breakAlert") and InCombatLockdown() then
+                SuuUI.ShowAlert(ALERT, "danger", "Your " .. p.label .. " broke", p.name .. " · no stats until repaired")
+                local timer = self.alertTimer
+                if timer then timer:Cancel() end
+                self.alertTimer = after(4, function()
+                    self.alertTimer = nil
+                    SuuUI.HideAlert(ALERT)
+                end)
+            end
         end
+        self.wasState = now
+    end
+
+    function TooltipData(): TooltipData
+        local d = self.data
+        if not d or not d.lowest then return { title = "Durability", subtitle = "Nothing you wear wears down." } end
+        return {
+            title = "Durability", subtitle = d.summary, lines = d.lines, maxWidth = 320,
+            description = d.broken > 0 and "A broken piece gives none of its stats until it's repaired." or nil,
+        }
+    end
+
+    function BuildFigure(): DurabilityFigure
+        local f = DurabilityFigure.new(SuuUI.Root)
+        f:SetFrameStrata("LOW")
+        f:EnableMouse(true)
+        f:SetScript("OnEnter", function() UI.ShowTooltip(f, function(): TooltipData return self:TooltipData() end) end)
+        f:SetScript("OnLeave", function() UI.HideTooltip() end)
+        self.figure = f
+        return f
+    end
+
+    function DrawFigure()
+        local f, d = self.figure, self.data
+        if not (f and d) then return end
+        -- in edit mode it shows to be moved, worn or not
+        local shown, states, badge, calmText = figureView(d, {
+            figure = self:Get("figure"), figureShows = self:Get("figureShows"),
+            figurePercent = self:Get("figurePercent"), position = self:Get("position"),
+        }, SuuUI.EditMode.IsActive(), repairsOff())
+        f:SetShown(shown)
+        paintFigure(f, states, d.state == "fine", badge, calmText)
+    end
+
+    -- The game's own figure out of sight while SuuUI's is on (only a reload
+    -- brings it back: SuppressBlizzard).
+    function StandDownBlizzard()
+        local frame = asFrame(named("DurabilityFrame"))
+        if self.blizzardDown or not self:Get("figure") or not frame then return end
+        self.blizzardDown = true
+        SuuUI.SuppressBlizzard(frame)
+    end
+
+    -- The game writes the Durability line (red when broken); SuuUI adds what
+    -- that means. (No Repair line: a piece's own repair cost isn't readable.)
+    function HookItemTooltip()
+        if self.tooltipHooked or not (part(TooltipDataProcessor, "AddTooltipPostCall")
+            and Enum.TooltipDataType and Enum.TooltipDataType.Item) then return end
+        self.tooltipHooked = true
+        postCall(Enum.TooltipDataType.Item, function(tooltip: GameTooltip, _: unknown)
+            local d = self.data
+            if tooltip ~= GameTooltip or not (self:IsEnabled() and self:Get("gear") and d) then return end
+            local getInfo = part(tooltip, "GetPrimaryTooltipInfo")
+            local info: unknown = nil
+            if type(getInfo) == "function" then
+                local ok: boolean, read: unknown = pcall(getInfo :: (tooltip: GameTooltip) -> unknown, tooltip)
+                if ok then info = read end
+            end
+            local args = part(info, "getterName") == "GetInventoryItem" and part(info, "getterArgs") or nil
+            local unit, slot = at(args, 1), at(args, 2)
+            if not (plain(unit) and plain(slot) and unit == "player" and type(slot) == "number") then return end
+            local p = d.bySlot[slot]
+            if p and p.state == "broken" then
+                local r, g, b = UI.RGBA("ember-text")
+                tooltip:AddLine("Broken: none of its stats count until repaired", r, g, b, true)
+            end
+        end)
+    end
+
+    function AutoRepair()
+        if not self:Get("autoRepair") then return end
+        local okShop: boolean, repairs: unknown = pcall(CanMerchantRepair)
+        if not okShop or not repairs then return end
+        local okCost: boolean, given: unknown, needed: unknown = pcall(GetRepairAllCost)
+        local cost = okCost and plainNumber(given) or nil
+        if not (cost and cost > 0 and needed) then return end
+        local worn = 0
+        for _, p in ipairs(readPieces(self:Get("line"))) do
+            if p.current < p.max then worn = worn + 1 end
+        end
+        local money = GetMoney() or 0
+        local guild = self:Get("guildFirst") and guildPays(cost)
+        if not guild and money < cost then
+            self:Print(("Not enough gold to repair here: it costs %s."):format(coins(cost)))
+            return
+        end
+        pcall(RepairAllItems, guild and true or false)
+        -- what it cost and who paid, once the game has answered
+        after(1, function()
+            local left = repairCost()
+            if guild and left > 0 and (GetMoney() or 0) >= left then
+                -- the guild didn't pay after all: your own gold
+                guild = false
+                pcall(RepairAllItems, false)
+                after(1, function() self:ReportRepair(cost, money, worn) end)
+                return
+            end
+            self:ReportRepair(cost, money, worn)
+        end)
+    end
+
+    function ReportRepair(cost: number, moneyBefore: number, worn: number)
+        self:Print(repairReport(cost, moneyBefore, GetMoney() or 0, repairCost(), worn))
+    end
+
+    -- The board's broken example: Chest broken, Legs and Main hand damaged.
+    function PreviewView(parent: Frame): DurabilityFigure
+        local preview = self.preview or DurabilityFigure.new(parent)
+        self.preview = preview
+        preview:SetParent(parent)
+        preview:SetSize(FIGURE, figureHeight())
+        paintFigure(preview, { Chest = "broken", Legs = "damaged", Main = "damaged" }, false,
+            self:Get("figurePercent") and { "danger", "Broken" } or nil)
+        return preview
+    end
+
+    override function OnEnable()
+        self:Provide("durability", { Get = function() return self.data end })
+        local figure = self.figure or self:BuildFigure()
+        self:RegisterMover(figure, { key = "position", label = "Durability figure", managedShow = true,
+            enabled = function() return self:Get("figure") end })
+        self:RegisterSettings(SECTION)
+        self:StandDownBlizzard()
+        self:HookItemTooltip()
+        self.signature = nil
         self:Update(true)
-        if self.preview and self.preview:IsVisible() then self:PreviewView(self.preview:GetParent()) end
-    end)
-    self:On("SUUUI_EDITMODE_CHANGED", function() self:DrawFigure() end)
-    -- the tooltip lines' colour codes, the badge's line height
-    self:On("SUUUI_THEME_CHANGED", function()
-        if self.figure then self.figure:SetHeight(figureHeight()) end
-        self:Update(true)
-    end)
+        local valid = C_EventUtils and C_EventUtils.IsEventValid
+        for _, e in ipairs({ "UPDATE_INVENTORY_DURABILITY", "UPDATE_INVENTORY_ALERTS", "PLAYER_EQUIPMENT_CHANGED", "PLAYER_ENTERING_WORLD" }) do
+            if not valid or valid(e) then self:OnGameEvent(e, function() self:Update() end) end
+        end
+        self:OnGameEvent("MERCHANT_SHOW", function() self:AutoRepair() end)
+        self:WatchAll({ "line", "figure", "figureShows", "figurePercent", "position", "character", "gear", "gearBars", "note" }, function(key)
+            if key == "figure" then
+                self:StandDownBlizzard()
+                SuuUI.EditMode.Refresh()
+            end
+            self:Update(true)
+            local preview = self.preview
+            if preview and preview:IsVisible() then self:PreviewView(assert(preview:GetParent())) end
+        end)
+        self:On("SUUUI_EDITMODE_CHANGED", function() self:DrawFigure() end)
+        -- the tooltip lines' colour codes, the badge's line height
+        self:On("SUUUI_THEME_CHANGED", function()
+            local f = self.figure
+            if f then f:SetHeight(figureHeight()) end
+            self:Update(true)
+        end)
+    end
+
+    override function OnDisable()
+        local f, timer = self.figure, self.alertTimer
+        if f then f:Hide() end
+        if timer then timer:Cancel(); self.alertTimer = nil end
+        SuuUI.HideAlert(ALERT)
+        self.data = nil
+    end
 end
 
-function M:OnDisable()
-    if self.figure then self.figure:Hide() end
-    if self.alertTimer then self.alertTimer:Cancel(); self.alertTimer = nil end
-    SuuUI.HideAlert(ALERT)
-    self.data = nil
-end
+M = SuuUI.AddModule(DurabilityModule.new())
