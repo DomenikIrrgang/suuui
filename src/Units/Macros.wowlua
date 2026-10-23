@@ -13,28 +13,40 @@
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SuuButton from "/UI/Controls"
+import type Segmented, TextField from "/UI/Inputs"
+import ItemSlot from "/UI/Inventory"
+import type ScrollArea, WindowFrame, Panel from "/UI/Panel"
+import type Select from "/UI/Select"
+import type Text from "/UI/Text"
+import type Icon from "/UI/Icon"
+import type Border from "/UI/Draw"
 import known from "wowlua:secret"
 import hookScript from "wowlua:hooks"
+import asFrame, named, part from "/UI/Reskin"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local M = SuuUI.RegisterModule({
-    id = "macros",
-    name = "Macros",
-    description = "SuuUI's macro window: general and character macros as tabs, an editor with the icon to drag, an icon picker with search.",
-    api = "0.17",
-    reloadToToggle = true,
-    defaults = {},
-})
+local DEFAULTS = {}
 
-local isSecret = issecretvalue or function() return false end
-local function plain(v: any): boolean return v ~= nil and not isSecret(v) end
-local function call(fn: any, ...: any): ...any
+local M: MacrosModule
+
+local function plain(v: unknown): v is (string | number | boolean | table) return v ~= nil and not issecretvalue(v) end
+-- One of the game's functions, if it has it: its results as they come (read
+-- each with `str` or `num`), nothing when it fails.
+local function call(fn: unknown, ...: unknown): ...unknown
     if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f, g, h = pcall(fn, ...)
+    local ok, a, b, c, d, e, f, g, h = pcall(fn :: (...unknown) -> ...unknown, ...)
     if ok then return a, b, c, d, e, f, g, h end
+    return nil
 end
+local function str(v: unknown): string? if plain(v) and type(v) == "string" then return v end return nil end
+local function num(v: unknown): number? if plain(v) and type(v) == "number" then return v end return nil end
+-- a texture: a file ID or a path
+type Art = number | string
+local function art(v: unknown): Art? return num(v) or str(v) end
 
 local WIDTH, HEIGHT = 780, 580
 local LIST_W = 270
@@ -44,418 +56,90 @@ local MAX_GENERAL = MAX_ACCOUNT_MACROS or 120
 local MAX_CHAR = MAX_CHARACTER_MACROS or 18
 local NAME_MAX, BODY_MAX = 16, 255
 local COMBAT = "Macros can't be changed in combat"
-local BANK = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
-local SPELL = (Enum.SpellBookItemType and Enum.SpellBookItemType.Spell) or 1
+local BANK = num(part(part(Enum, "SpellBookSpellBank"), "Player")) or 0
+local SPELL = num(part(part(Enum, "SpellBookItemType"), "Spell")) or 1
 
 --------------------------------------------------------------------------------
 -- Data
 --------------------------------------------------------------------------------
 
--- The macros of a tab: { index, name, icon, body }.
 -- A macro as the window keeps it.
-type Macro = { index: number, name: string, icon: any, body: string }
-
-function M:List(tab: string): Macro[]
-    local general, char = GetNumMacros()
-    local list: Macro[] = {}
-    local first, count = 1, general or 0
-    if tab == "character" then first, count = MAX_GENERAL + 1, char or 0 end
-    for i = first, first + count - 1 do
-        local name, icon, body = GetMacroInfo(i)
-        if name then list[#list + 1] = { index = i, name = name, icon = icon, body = body or "" } end
-    end
-    return list
-end
-
-function M:Counts()
-    local general, char = GetNumMacros()
-    return general or 0, char or 0
-end
+export type Macro = { index: number, name: string, icon?: Art, body: string }
+-- What the editor holds: a macro, or a new one (no index yet).
+type Draft = { index?: number, name: string, icon?: Art, body: string }
+-- The macro chosen, by its index and name (indexes shift when one is added
+-- or removed: found again by name).
+type Chosen = { index: number, name: string }
 
 --------------------------------------------------------------------------------
 -- The window
 --------------------------------------------------------------------------------
 
-function M:BuildRow(parent: Frame): any
-    local r = CreateFrame("Button", nil, parent)
-    r:SetHeight(ROW_H)
-    r.hover = UI.Fill(r, "surface-raised", "BACKGROUND")
-    r.hover:SetAllPoints()
-    r.hover:Hide()
-    r.on = UI.Fill(r, "arcane-soft", "BACKGROUND", 1)
-    r.on:SetAllPoints()
-    r.edge = UI.Fill(r, "arcane", "ARTWORK")
-    r.edge:SetPoint("TOPLEFT")
-    r.edge:SetPoint("BOTTOMLEFT")
-    r.edge:SetWidth(2)
-    r.icon = UI.Icon(r, "icon-lg")
-    r.icon:SetPoint("LEFT", S["space-3"], 0)
-    r.name = UI.Text(r, "label", "ink")
-    r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", S["space-4"], -2)
-    r.name:SetPoint("RIGHT", -S["space-3"], 0)
-    r.first = UI.Text(r, "caption", "ink-faint")
-    r.first:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -2)
-    r.first:SetPoint("RIGHT", -S["space-3"], 0)
-    r.first:SetWordWrap(false)
-    r.name:SetWordWrap(false)
-    r:RegisterForDrag("LeftButton")
-    r:SetScript("OnEnter", function(self) self.hover:Show() end)
-    r:SetScript("OnLeave", function(self) self.hover:Hide() end)
-    r:SetScript("OnClick", function(self) self.owner:Select(self.macro) end)
-    r:SetScript("OnDragStart", function(self) if self.macro then PickupMacro(self.macro.index) end end)
-    r.owner = self
-    return r
-end
+-- A macro's row: its icon, name and first line; a click chooses it, a drag
+-- picks it up for a bar.
+export class MacroRow extends Button
+    readonly hover: Texture
+    readonly on: Texture
+    readonly edge: Texture
+    readonly icon: Icon
+    readonly name: Text
+    readonly first: Text
+    macro: Macro? = nil
 
--- The two tabs share the list's width (by their labels' widths; a long
--- name gets the short labels).
-function M:FitTabs(who: string)
-    local function fit(labels: string[]): boolean
-        local inner = LIST_W - 6 - 2
-        local text = 0
-        for i, b in ipairs(self.tabs.buttons) do
-            b.label:SetValue(labels[i])
-            text = text + UI.MeasureText("label", labels[i])
-        end
-        local pad = (inner - text) / #self.tabs.buttons
-        if pad < 2 * S["space-3"] then return false end
-        local x = 3
-        for i, b in ipairs(self.tabs.buttons) do
-            b:SetWidth(UI.MeasureText("label", labels[i]) + pad)
-            b:ClearAllPoints()
-            b:SetPoint("TOPLEFT", x, -3)
-            x = x + b:GetWidth() + 2
-        end
-        return true
-    end
-    if not fit({ "General Macros", who .. " Specific Macros" }) and not fit({ "General", who }) then
-        fit({ "General", "Character" })
+    constructor(parent: Frame, owner: MacrosModule)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.on = UI.Fill(self, "arcane-soft", "BACKGROUND", 1)
+        self.on:SetAllPoints()
+        self.edge = UI.Fill(self, "arcane", "ARTWORK")
+        self.edge:SetPoint("TOPLEFT")
+        self.edge:SetPoint("BOTTOMLEFT")
+        self.edge:SetWidth(2)
+        self.icon = UI.Icon(self, "icon-lg")
+        self.icon:SetPoint("LEFT", S["space-3"], 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("TOPLEFT", self.icon, "TOPRIGHT", S["space-4"], -2)
+        self.name:SetPoint("RIGHT", -S["space-3"], 0)
+        self.first = UI.Text(self, "caption", "ink-faint")
+        self.first:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -2)
+        self.first:SetPoint("RIGHT", -S["space-3"], 0)
+        self.first:SetWordWrap(false)
+        self.name:SetWordWrap(false)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnEnter", function() self.hover:Show() end)
+        self:SetScript("OnLeave", function() self.hover:Hide() end)
+        self:SetScript("OnClick", function() owner:Select(self.macro) end)
+        self:SetScript("OnDragStart", function()
+            local macro = self.macro
+            if macro then PickupMacro(macro.index) end
+        end)
     end
 end
 
-function M:Build()
-    local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMacroWindow", title = "Macros", width = WIDTH, height = HEIGHT,
-        footer = true, onClose = function(win) win:Hide() end })
-    w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
-    w:Hide()
-    w.scroll:Hide()
-    w:HookScript("OnHide", function() self:ClosePicker() end)
-    self.window = w
-    local body = w.body
+-- Nothing at all yet: what a macro is, and New macro.
+class EmptyPage extends Frame
+    readonly title: Text
+    readonly text: Text
+    readonly newButton: SuuButton
 
-    -- the list: the two tabs, the count, the macros
-    local left = CreateFrame("Frame", nil, body)
-    left:SetPoint("TOPLEFT")
-    left:SetPoint("BOTTOMLEFT")
-    left:SetWidth(LIST_W)
-    local rule = UI.Fill(body, "gilt-faint", "ARTWORK")
-    rule:SetPoint("TOPLEFT", left, "TOPRIGHT", S["space-5"], 0)
-    rule:SetPoint("BOTTOMLEFT", left, "BOTTOMRIGHT", S["space-5"], 0)
-    rule:SetWidth(1)
-    local who = known(UnitName("player"), "Character")
-    self.tabs = UI.Segmented(left, { options = { { value = "general", label = "General Macros" },
-        { value = "character", label = who .. " Specific Macros" } }, value = "general", onChange = function(v: any)
-            self.tab = v
-            self.draft, self.chosen = nil, nil
-            self:Refresh()
-        end })
-    self.tabs:SetPoint("TOPLEFT")
-    self:FitTabs(who)
-    self.tabs.marker:Aim()
-    self.tabs:SetWidth(LIST_W)
-    self.count = UI.Text(left, "caption", "ink-muted")
-    self.count:SetPoint("TOPLEFT", self.tabs, "BOTTOMLEFT", 0, -S["space-3"])
-    local BAR = S["space-3"]
-    self.list = UI.ScrollArea(left, BAR)
-    self.list:SetPoint("TOPLEFT", self.count, "BOTTOMLEFT", 0, -S["space-4"])
-    self.list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
-    self.list:HookScript("OnSizeChanged", function(scroll, width) scroll.child:SetWidth(width) end)
-    self.none = UI.Text(left, "caption", "ink-muted")
-    self.none:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -S["space-5"])
-    self.none:SetValue("No macros here yet.")
-    self.rows = {}
-
-    -- the editor
-    local edit = CreateFrame("Frame", nil, body)
-    edit:SetPoint("TOPLEFT", left, "TOPRIGHT", S["space-6"] + 1, 0)
-    edit:SetPoint("BOTTOMRIGHT")
-    self.edit = edit
-    -- in combat: an ember band on top
-    local band = CreateFrame("Frame", nil, edit)
-    band:SetPoint("TOPLEFT")
-    band:SetPoint("TOPRIGHT")
-    band:SetHeight(28)
-    UI.Fill(band, "ember-soft"):SetAllPoints()
-    UI.Border(band, "ember")
-    band.text = UI.Text(band, "caption", "ember-text")
-    band.text:SetPoint("LEFT", S["space-4"], 0)
-    band.text:SetValue(COMBAT)
-    band:Hide()
-    self.band = band
-    local id = CreateFrame("Frame", nil, edit)
-    id:SetPoint("TOPLEFT")
-    id:SetPoint("TOPRIGHT")
-    id:SetHeight(70)
-    self.idRow = id
-    -- the icon: drag it to a bar
-    local big = UI.ItemSlot(id, 52)
-    big:SetPoint("TOPLEFT")
-    big:RegisterForDrag("LeftButton")
-    big:SetScript("OnDragStart", function()
-        if self.chosen then PickupMacro(self.chosen.index) end
-    end)
-    big:SetScript("OnEnter", function(b)
-        UI.ShowTooltip(b, { title = self.chosen and "Drag to a bar" or "Save it first", description = self.chosen and self.chosen.name or nil })
-    end)
-    big:SetScript("OnLeave", function() UI.HideTooltip() end)
-    self.big = big
-    local drag = UI.Text(id, "micro", "ink-muted")
-    drag:SetPoint("TOP", big, "BOTTOM", 0, -S["space-2"])
-    drag:SetValue("Drag to a bar")
-    self.dragHint = drag
-    local nameLabel = UI.Text(id, "caption", "ink-muted")
-    nameLabel:SetPoint("TOPLEFT", big, "TOPRIGHT", S["space-5"], 0)
-    nameLabel:SetValue("Name")
-    self.nameCount = UI.Text(id, "numeric", "ink-muted")
-    self.nameCount:SetPoint("TOPRIGHT", 0, 1)
-    self.iconButton = UI.Button(id, { text = "Change icon", icon = "gem", onClick = function() self:TogglePicker() end })
-    self.nameField = UI.TextField(id, { onTextChanged = function() self:DrawState() end, onChange = function() self:DrawState() end })
-    self.nameField:SetPoint("RIGHT", self.iconButton, "LEFT", -S["space-4"], 0)
-    self:PlaceName()
-    self.nameField.edit:SetMaxLetters(NAME_MAX)
-    -- the body
-    local bodyLabel = UI.Text(edit, "caption", "ink-muted")
-    bodyLabel:SetPoint("TOPLEFT", id, "BOTTOMLEFT", 0, -S["space-4"])
-    bodyLabel:SetValue("Body")
-    self.bodyCount = UI.Text(edit, "numeric", "ink-muted")
-    self.bodyCount:SetPoint("TOPRIGHT", id, "BOTTOMRIGHT", 0, -S["space-4"] + 1)
-    local well = CreateFrame("Frame", nil, edit)
-    well:SetPoint("TOPLEFT", bodyLabel, "BOTTOMLEFT", 0, -S["space-2"])
-    well:SetPoint("BOTTOMRIGHT")
-    UI.Fill(well, "surface-sunk"):SetAllPoints()
-    well.border = UI.Border(well, "gilt-line")
-    local scroll = UI.ScrollArea(well, -S["space-3"])
-    scroll:SetPoint("TOPLEFT", S["space-4"], -S["space-3"])
-    scroll:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-3"])
-    local e = CreateFrame("EditBox", nil, scroll.child)
-    e:SetMultiLine(true)
-    e:SetAutoFocus(false)
-    e:SetFontObject(self.nameField.edit:GetFontObject())
-    e:SetMaxLetters(BODY_MAX)
-    e:SetPoint("TOPLEFT")
-    e:SetScript("OnEscapePressed", e.ClearFocus)
-    e:SetScript("OnEditFocusGained", function() well.border:SetColor("arcane") end)
-    e:SetScript("OnEditFocusLost", function() well.border:SetColor("gilt-line") end)
-    e:SetScript("OnTextChanged", function(box)
-        scroll.child:SetHeight(math.max(scroll:GetHeight(), box:GetHeight()))
-        if box.lastText ~= box:GetText() then
-            box.lastText = box:GetText()
-            self:DrawState()
-        end
-    end)
-    scroll:HookScript("OnSizeChanged", function(sc, width) sc.child:SetWidth(width); e:SetWidth(width) end)
-    well:EnableMouse(true)
-    well:SetScript("OnMouseDown", function() if not InCombatLockdown() then e:SetFocus() end end)
-    self.body, self.well = e, well
-
-    -- nothing at all yet
-    local empty = CreateFrame("Frame", nil, body)
-    empty:SetPoint("TOPLEFT", edit)
-    empty:SetPoint("BOTTOMRIGHT", edit)
-    empty.title = UI.Text(empty, "alert", "ink")
-    empty.title:SetPoint("CENTER", 0, 40)
-    empty.title:SetValue("No macros yet")
-    empty.text = UI.Text(empty, "body", "ink-muted")
-    empty.text:SetWordWrap(true)
-    empty.text:SetJustifyH("CENTER")
-    empty.text:SetFixedWidth(340)
-    empty.text:SetPoint("TOP", empty.title, "BOTTOM", 0, -S["space-4"])
-    empty.text:SetValue("A macro is a button that runs a few lines: a cast with a target, a line in chat, several things at once. Make one, then drag its icon to a bar.")
-    empty.new = UI.Button(empty, { text = "New macro", icon = "plus", variant = "primary", onClick = function() self:New() end })
-    empty.new:SetPoint("TOP", empty.text, "BOTTOM", 0, -S["space-5"])
-    empty:Hide()
-    self.empty = empty
-
-    -- the foot
-    local foot = assert(w.footer)
-    self.hint = UI.Text(foot, "caption", "ink-muted")
-    self.hint:SetPoint("LEFT")
-    self.save = UI.Button(foot, { text = "Save", variant = "primary", width = 90, onClick = function() self:Save() end })
-    self.save:SetPoint("RIGHT")
-    self.delete = UI.Button(foot, { text = "Delete", icon = "trash", onClick = function() self:Delete() end })
-    self.delete:SetPoint("RIGHT", self.save, "LEFT", -S["space-4"], 0)
-    self.new = UI.Button(foot, { text = "New", icon = "plus", onClick = function() self:New() end })
-    self.new:SetPoint("RIGHT", self.delete, "LEFT", -S["space-4"], 0)
-end
-
---------------------------------------------------------------------------------
--- Drawing
---------------------------------------------------------------------------------
-
--- The name field and Change icon on one line, under the label (from the
--- caption's line height, which a theme can change).
-function M:PlaceName()
-    local fieldY = -(T.type.caption.lineHeight + S["space-2"])
-    self.iconButton:SetPoint("TOPRIGHT", 0, fieldY)
-    self.nameField:SetPoint("TOPLEFT", self.big, "TOPRIGHT", S["space-5"], fieldY)
-end
-
-function M:Refresh()
-    if not (self.window and self.window:IsShown()) then return end
-    local tab = self.tab or "general"
-    self.tabs:SetValue(tab)
-    local list = self:List(tab)
-    self.macros = list
-    local general, char = self:Counts()
-    local used, max = tab == "general" and general or char, tab == "general" and MAX_GENERAL or MAX_CHAR
-    self.count:SetValue(("%d of %d used"):format(used, max))
-    -- keep the chosen macro (by name: indexes shift when one is added or removed)
-    if self.chosen then
-        local found
-        for _, m in ipairs(list) do if m.name == self.chosen.name then found = m end end
-        self.chosen = found
+    constructor(parent: Frame, owner: MacrosModule)
+        super(nil, parent)
+        self.title = UI.Text(self, "alert", "ink")
+        self.title:SetPoint("CENTER", 0, 40)
+        self.title:SetValue("No macros yet")
+        self.text = UI.Text(self, "body", "ink-muted")
+        self.text:SetWordWrap(true)
+        self.text:SetJustifyH("CENTER")
+        self.text:SetFixedWidth(340)
+        self.text:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-4"])
+        self.text:SetValue("A macro is a button that runs a few lines: a cast with a target, a line in chat, several things at once. Make one, then drag its icon to a bar.")
+        self.newButton = UI.Button(self, { text = "New macro", icon = "plus", variant = "primary", onClick = function() owner:New() end })
+        self.newButton:SetPoint("TOP", self.text, "BOTTOM", 0, -S["space-5"])
+        self:Hide()
     end
-    if not self.chosen and not self.draft then self.chosen = list[1] end
-    local c = self.list.child
-    local y = 0
-    for i, m in ipairs(list) do
-        local r = self.rows[i] or self:BuildRow(c)
-        self.rows[i] = r
-        r.macro = m
-        r:ClearAllPoints()
-        r:SetPoint("TOPLEFT", 0, -y)
-        r:SetPoint("RIGHT")
-        r.icon:SetArt(m.icon)
-        r.name:SetValue(m.name)
-        r.first:SetValue((m.body:match("^[^\n]*") or ""))
-        local on = self.chosen and self.chosen.index == m.index and not self.draft
-        r.on:SetShown(on and true or false)
-        r.edge:SetShown(on and true or false)
-        r:Show()
-        y = y + ROW_H + 1
-    end
-    for i = #list + 1, #self.rows do self.rows[i]:Hide() end
-    c:SetHeight(math.max(1, y))
-    self.none:SetShown(#list == 0 and not self.draft)
-    -- nothing at all: the empty page instead of the editor
-    local nothing = general == 0 and char == 0 and not self.draft
-    self.empty:SetShown(nothing)
-    self.edit:SetShown(not nothing)
-    self:Load(self.draft or self.chosen)
-end
-
--- Puts a macro (or a new one) into the editor.
-function M:Load(m: any)
-    self.loaded = m
-    self.icon = m and m.icon or QUESTION
-    self.nameField:SetValue(m and m.name or "")
-    self.body:SetText(m and m.body or "")
-    self.body.lastText = self.body:GetText()
-    self:DrawState()
-end
-
-function M:Dirty()
-    local m = self.loaded
-    if not m then return false end
-    if self.draft then return true end
-    return self.nameField:GetValue() ~= m.name or self.body:GetText() ~= m.body or self.icon ~= m.icon
-end
-
--- What can be done now, and why not. `combat`: in combat already (the
--- game's PLAYER_REGEN_DISABLED comes before its lockdown begins).
-function M:DrawState(combat: boolean?)
-    combat = combat or InCombatLockdown()
-    local m = self.loaded
-    self.band:SetShown(combat)
-    self.idRow:ClearAllPoints()
-    self.idRow:SetPoint("TOPLEFT", 0, combat and -(28 + S["space-4"]) or 0)
-    self.idRow:SetPoint("RIGHT")
-    self.big.skin:SetItem(m and { icon = self.icon } or nil)
-    local name = self.nameField:GetValue() or ""
-    self.nameCount:SetValue(("%d / %d"):format(#name, NAME_MAX))
-    local len = #(self.body:GetText() or "")
-    self.bodyCount:SetValue(("%d / %d"):format(len, BODY_MAX))
-    self.bodyCount:SetColor(len > BODY_MAX - 15 and "ember-text" or "ink-muted")
-    local editable = m ~= nil and not combat
-    self.nameField:SetDisabled(not editable)
-    self.body:EnableMouse(editable)
-    if not editable then self.body:ClearFocus() end
-    self.well:SetAlpha(editable and 1 or 0.5)
-    self.iconButton:SetEnabledState(editable)
-    self.iconButton.tooltip = combat and { title = COMBAT } or nil
-    -- Save: something changed, and a name
-    local dirty = self:Dirty()
-    local why = combat and COMBAT or (not m and "Nothing to save") or (strtrim(name) == "" and "Give it a name first")
-        or (not dirty and "Nothing changed") or nil
-    self.save:SetEnabledState(why == nil)
-    self.save.tooltip = why and { title = why } or nil
-    -- New: room in this tab
-    local general, char = self:Counts()
-    local full = (self.tab or "general") == "general" and general >= MAX_GENERAL or (self.tab == "character" and char >= MAX_CHAR)
-    local newWhy = combat and COMBAT or (full and "This tab is full") or (self.draft and "Save or discard the new one first") or nil
-    self.new:SetEnabledState(newWhy == nil)
-    self.new.tooltip = newWhy and { title = newWhy } or nil
-    self.empty.new:SetEnabledState(not combat)
-    local delWhy = combat and COMBAT or (not m and "Nothing to delete") or nil
-    self.delete:SetEnabledState(delWhy == nil)
-    self.delete.tooltip = delWhy and { title = delWhy } or nil
-    self.delete:SetLabel(self.draft and "Discard" or "Delete")
-    self.hint:SetValue(combat and COMBAT or (self.draft and "A new macro: name it and Save") or "Drag the icon to an action bar")
-    self.hint:SetColor(combat and "ember-text" or "ink-muted")
-    self.dragHint:SetShown(self.chosen ~= nil and not self.draft)
-end
-
---------------------------------------------------------------------------------
--- Actions
---------------------------------------------------------------------------------
-
-function M:Select(m: any)
-    if InCombatLockdown() then return end
-    self.draft = nil
-    self.chosen = m
-    self:ClosePicker()
-    self:Refresh()
-end
-
-function M:New()
-    if InCombatLockdown() then return end
-    self.draft = { name = "", icon = QUESTION, body = "" }
-    self:ClosePicker()
-    self:Refresh()
-    self.nameField.edit:SetFocus()
-end
-
-function M:Save()
-    if InCombatLockdown() or not self.loaded then return end
-    local name = strtrim(self.nameField:GetValue() or "")
-    if name == "" then return end
-    local body = self.body:GetText() or ""
-    if self.draft then
-        local index = call(CreateMacro, name, self.icon or QUESTION, body, self.tab == "character")
-        self.draft = nil
-        self.chosen = index and { index = index, name = name } or nil
-    else
-        local index = call(EditMacro, self.loaded.index, name, self.icon or QUESTION, body)
-        self.chosen = { index = index or self.loaded.index, name = name }
-    end
-    self:Refresh()
-end
-
-function M:Delete()
-    if InCombatLockdown() or not self.loaded then return end
-    if self.draft then
-        self.draft = nil
-        self:Refresh()
-        return
-    end
-    local m = self.loaded
-    UI.Confirm({ title = "Delete " .. m.name .. "?", text = "The macro is gone for good, and its buttons on your bars with it.",
-        confirm = "Delete", onConfirm = function()
-            if InCombatLockdown() then return end
-            call(DeleteMacro, m.index)
-            self.chosen = nil
-            self:Refresh()
-        end })
 end
 
 --------------------------------------------------------------------------------
@@ -464,246 +148,718 @@ end
 
 local COLS, VISIBLE_ROWS, CELL = 8, 6, 36
 
--- every macro icon, spells first, then items ("?" leads)
-function M:AllIcons(kind: string?): any[]
-    local list: any[] = { QUESTION }
-    if kind ~= "items" then
-        local spells: any[] = {}
-        call(GetLooseMacroIcons, spells)
-        call(GetMacroIcons, spells)
-        for _, v in ipairs(spells) do list[#list + 1] = v end
+-- An icon of the picker's grid, ringed while picked.
+class PickerCell extends ItemSlot
+    readonly ring: Border
+    iconID: Art? = nil
+
+    constructor(parent: Frame)
+        super(parent, CELL)
+        self.ring = UI.Border(self, "arcane", { layer = "OVERLAY" })
     end
-    if kind ~= "spells" then
-        local items: any[] = {}
-        call(GetLooseMacroItemIcons, items)
-        call(GetMacroItemIcons, items)
-        for _, v in ipairs(items) do list[#list + 1] = v end
-    end
-    return list
 end
 
--- the icons of your spells and bag items whose name has what was typed
-function M:SearchIcons(text: string, kind: string?): any[]
-    text = text:lower()
-    local list: any[], seen: { [any]: boolean } = {}, {}
-    local function add(icon: any)
-        if icon and not seen[icon] then seen[icon] = true; list[#list + 1] = icon end
-    end
-    if kind ~= "items" then
-        for i = 1, (call(C_SpellBook.GetNumSpellBookSkillLines) or 0) do
-            local line = call(C_SpellBook.GetSpellBookSkillLineInfo, i)
-            if line then
-                for slot = line.itemIndexOffset + 1, line.itemIndexOffset + line.numSpellBookItems do
-                    local info = call(C_SpellBook.GetSpellBookItemInfo, slot, BANK)
-                    if info and info.itemType == SPELL and plain(info.name) and info.name:lower():find(text, 1, true) then
-                        add(info.iconID)
-                    end
-                end
+export class IconPicker extends Frame
+    readonly kind: Select<string>
+    readonly search: TextField
+    readonly grid: Frame
+    readonly cells: PickerCell[] = {}
+    readonly where: Text
+    -- a spell, an item or a macro dragged here gives its icon
+    readonly drop: Button
+    readonly note: Text
+    readonly use: SuuButton
+    kindValue: string? = nil
+    icons: Art[]? = nil
+    offset: number = 0
+    picked: Art? = nil
+
+    constructor(parent: Frame, owner: MacrosModule)
+        super(nil, parent)
+        self:SetFrameLevel(parent:GetFrameLevel() + 30)
+        self:SetSize(COLS * CELL + (COLS - 1) * S["space-3"] + 2 * S["space-5"], 0)
+        self:EnableMouse(true)
+        UI.Fill(self, "surface"):SetAllPoints()
+        UI.Border(self, "gilt-line")
+        UI.Shadow(self, "shadow-panel")
+        local head = UI.Text(self, "header", "gilt-text")
+        head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+        head:SetValue("Choose an icon")
+        self.kind = UI.Select(self, { width = 120, value = "all", options = { { value = "all", label = "All icons" },
+            { value = "spells", label = "Spells" }, { value = "items", label = "Items" } }, onChange = function(v: string)
+                self.kindValue = v
+                owner:FillPicker(true)
+            end })
+        self.search = UI.TextField(self, { placeholder = "Search your spells and items", onTextChanged = function() owner:FillPicker(true) end })
+        self.search:SetPoint("RIGHT", self.kind, "LEFT", -S["space-3"], 0)
+        self.grid = CreateFrame("Frame", nil, self)
+        self.grid:SetSize(COLS * CELL + (COLS - 1) * S["space-3"], VISIBLE_ROWS * CELL + (VISIBLE_ROWS - 1) * S["space-3"])
+        self.grid:EnableMouseWheel(true)
+        self.grid:SetScript("OnMouseWheel", function(_: Frame, delta: number)
+            local rows = math.ceil(#(self.icons or {}) / COLS)
+            self.offset = math.max(0, math.min(math.max(0, rows - VISIBLE_ROWS), self.offset - delta))
+            owner:FillPicker()
+        end)
+        for i = 1, COLS * VISIBLE_ROWS do
+            local cell = PickerCell.new(self.grid)
+            local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
+            cell:SetPoint("TOPLEFT", col * (CELL + S["space-3"]), -row * (CELL + S["space-3"]))
+            cell:SetScript("OnClick", function()
+                self.picked = cell.iconID
+                owner:FillPicker()
+            end)
+            cell:SetScript("OnDoubleClick", function()
+                self.picked = cell.iconID
+                owner:UseIcon()
+            end)
+            self.cells[i] = cell
+        end
+        self.where = UI.Text(self, "caption", "ink-muted")
+        local drop = CreateFrame("Button", nil, self)
+        drop:SetPoint("RIGHT", -S["space-5"], 0)
+        drop:SetHeight(40)
+        UI.Fill(drop, "surface-sunk"):SetAllPoints()
+        UI.Border(drop, "gilt-line")
+        local dropText = UI.Text(drop, "caption", "ink-muted")
+        dropText:SetPoint("CENTER")
+        dropText:SetValue("Drag a spell, an item or another macro here")
+        local function dropped()
+            local kind: string?, a: unknown, b: unknown, c: unknown = GetCursorInfo()
+            local icon: Art? = nil
+            if kind == "spell" then
+                local spellID = c or b
+                icon = spellID and art(call(C_Spell.GetSpellTexture, spellID)) or nil
+            elseif kind == "item" then
+                icon = a and art(call(C_Item.GetItemIconByID, a)) or nil
+            elseif kind == "macro" then
+                local _, mi = call(GetMacroInfo, a)
+                icon = art(mi)
+            end
+            if icon then
+                ClearCursor()
+                self.picked = icon
+                owner:UseIcon()
             end
         end
+        drop:SetScript("OnReceiveDrag", dropped)
+        drop:SetScript("OnClick", dropped)
+        self.drop = drop
+        self.note = UI.Text(self, "caption", "ink-muted")
+        self.note:SetValue("\"?\" uses the first spell's icon")
+        self.use = UI.Button(self, { text = "Use icon", variant = "primary", onClick = function() owner:UseIcon() end })
+        local cancel = UI.Button(self, { text = "Cancel", onClick = function() owner:ClosePicker() end })
+        cancel:SetPoint("RIGHT", self.use, "LEFT", -S["space-3"], 0)
+        self:Hide()
     end
-    if kind ~= "spells" then
-        for bag = 0, (NUM_BAG_SLOTS or 4) do
-            for slot = 1, (call(C_Container.GetContainerNumSlots, bag) or 0) do
-                local info = call(C_Container.GetContainerItemInfo, bag, slot)
-                local name = info and info.itemID and call(C_Item.GetItemNameByID, info.itemID)
-                if plain(name) and name:lower():find(text, 1, true) then add(info.iconFileID) end
-            end
-        end
-    end
-    return list
-end
 
-function M:BuildPicker()
-    local p = CreateFrame("Frame", nil, self.edit)
-    p:SetFrameLevel(self.edit:GetFrameLevel() + 30)
-    p:SetSize(COLS * CELL + (COLS - 1) * S["space-3"] + 2 * S["space-5"], 0)
-    p:EnableMouse(true)
-    UI.Fill(p, "surface"):SetAllPoints()
-    UI.Border(p, "gilt-line")
-    UI.Shadow(p, "shadow-panel")
-    local head = UI.Text(p, "header", "gilt-text")
-    head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
-    head:SetValue("Choose an icon")
-    p.kind = UI.Select(p, { width = 120, value = "all", options = { { value = "all", label = "All icons" },
-        { value = "spells", label = "Spells" }, { value = "items", label = "Items" } }, onChange = function(v: any)
-            p.kindValue = v
-            self:FillPicker(true)
-        end })
-    p.search = UI.TextField(p, { placeholder = "Search your spells and items", onTextChanged = function() self:FillPicker(true) end })
-    p.search:SetPoint("RIGHT", p.kind, "LEFT", -S["space-3"], 0)
-    p.grid = CreateFrame("Frame", nil, p)
-    p.grid:SetSize(COLS * CELL + (COLS - 1) * S["space-3"], VISIBLE_ROWS * CELL + (VISIBLE_ROWS - 1) * S["space-3"])
-    p.grid:EnableMouseWheel(true)
-    p.grid:SetScript("OnMouseWheel", function(_, delta)
-        local rows = math.ceil(#(p.icons or {}) / COLS)
-        p.offset = math.max(0, math.min(math.max(0, rows - VISIBLE_ROWS), (p.offset or 0) - delta))
-        self:FillPicker()
-    end)
-    p.cells = {}
-    for i = 1, COLS * VISIBLE_ROWS do
-        local cell = UI.ItemSlot(p.grid, CELL)
-        local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
-        cell:SetPoint("TOPLEFT", col * (CELL + S["space-3"]), -row * (CELL + S["space-3"]))
-        cell.ring = UI.Border(cell, "arcane", { layer = "OVERLAY" })
-        cell:SetScript("OnClick", function(c)
-            p.picked = c.iconID
-            self:FillPicker()
-        end)
-        cell:SetScript("OnDoubleClick", function(c)
-            p.picked = c.iconID
-            self:UseIcon()
-        end)
-        p.cells[i] = cell
+    -- The rows down from its heading (from the text styles' line heights,
+    -- which a theme can change), and its height.
+    function Place()
+        local y = S["space-5"] + T.type.header.lineHeight + S["space-3"]
+        self.kind:SetPoint("TOPRIGHT", -S["space-5"], -y)
+        self.search:SetPoint("TOPLEFT", S["space-5"], -y)
+        y = y + 30 + S["space-4"]
+        self.grid:SetPoint("TOPLEFT", S["space-5"], -y)
+        y = y + self.grid:GetHeight() + S["space-3"]
+        self.where:SetPoint("TOPLEFT", S["space-5"], -y)
+        y = y + T.type.caption.lineHeight + S["space-3"]
+        self.drop:SetPoint("TOPLEFT", S["space-5"], -y)
+        y = y + 40 + S["space-4"]
+        self.note:SetPoint("TOPLEFT", S["space-5"], -(y + 7))
+        self.use:SetPoint("TOPRIGHT", -S["space-5"], -y)
+        self:SetHeight(y + 30 + S["space-5"])
     end
-    p.where = UI.Text(p, "caption", "ink-muted")
-    -- the drop zone: a spell, an item or a macro dragged here gives its icon
-    local drop = CreateFrame("Button", nil, p)
-    drop:SetPoint("RIGHT", -S["space-5"], 0)
-    drop:SetHeight(40)
-    UI.Fill(drop, "surface-sunk"):SetAllPoints()
-    UI.Border(drop, "gilt-line")
-    drop.text = UI.Text(drop, "caption", "ink-muted")
-    drop.text:SetPoint("CENTER")
-    drop.text:SetValue("Drag a spell, an item or another macro here")
-    local function dropped()
-        local kind, a, b, c = GetCursorInfo()
-        local icon
-        if kind == "spell" then
-            local spellID = c or b
-            icon = spellID and call(C_Spell.GetSpellTexture, spellID)
-        elseif kind == "item" then
-            icon = a and call(C_Item.GetItemIconByID, a)
-        elseif kind == "macro" then
-            local _, mi = GetMacroInfo(a :: any)
-            icon = mi
-        end
-        if icon then
-            ClearCursor()
-            p.picked = icon
-            self:UseIcon()
-        end
-    end
-    drop:SetScript("OnReceiveDrag", dropped)
-    drop:SetScript("OnClick", dropped)
-    p.drop = drop
-    p.note = UI.Text(p, "caption", "ink-muted")
-    p.note:SetValue("\"?\" uses the first spell's icon")
-    p.use = UI.Button(p, { text = "Use icon", variant = "primary", onClick = function() self:UseIcon() end })
-    local cancel = UI.Button(p, { text = "Cancel", onClick = function() self:ClosePicker() end })
-    cancel:SetPoint("RIGHT", p.use, "LEFT", -S["space-3"], 0)
-    p:Hide()
-    self.picker = p
-    self:PlacePicker()
-end
-
--- The picker's rows down from its heading (from the text styles' line
--- heights, which a theme can change), and its height.
-function M:PlacePicker()
-    local p = self.picker
-    local y = S["space-5"] + T.type.header.lineHeight + S["space-3"]
-    p.kind:SetPoint("TOPRIGHT", -S["space-5"], -y)
-    p.search:SetPoint("TOPLEFT", S["space-5"], -y)
-    y = y + 30 + S["space-4"]
-    p.grid:SetPoint("TOPLEFT", S["space-5"], -y)
-    y = y + p.grid:GetHeight() + S["space-3"]
-    p.where:SetPoint("TOPLEFT", S["space-5"], -y)
-    y = y + T.type.caption.lineHeight + S["space-3"]
-    p.drop:SetPoint("TOPLEFT", S["space-5"], -y)
-    y = y + 40 + S["space-4"]
-    p.note:SetPoint("TOPLEFT", S["space-5"], -(y + 7))
-    p.use:SetPoint("TOPRIGHT", -S["space-5"], -y)
-    p:SetHeight(y + 30 + S["space-5"])
-end
-
-function M:FillPicker(reset: boolean?)
-    local p = self.picker
-    local text = strtrim(p.search:GetValue() or "")
-    if reset or not p.icons then
-        p.icons = text ~= "" and self:SearchIcons(text, p.kindValue) or self:AllIcons(p.kindValue)
-        p.offset = 0
-    end
-    local first = (p.offset or 0) * COLS
-    for i, cell in ipairs(p.cells) do
-        local icon = p.icons[first + i]
-        cell.iconID = icon
-        cell.skin:SetItem(icon and { icon = icon } or nil)
-        cell:SetShown(icon ~= nil)
-        cell.ring:SetShown(icon ~= nil and icon == p.picked)
-    end
-    local rows = math.ceil(#p.icons / COLS)
-    if text ~= "" then
-        p.where:SetValue(#p.icons == 0 and "None of your spells or items match" or ("%d of your spells and items"):format(#p.icons))
-    else
-        p.where:SetValue(rows > VISIBLE_ROWS and ("%d icons · rows %d–%d of %d (wheel to scroll)"):format(#p.icons, p.offset + 1,
-            math.min(rows, p.offset + VISIBLE_ROWS), rows) or ("%d icons"):format(#p.icons))
-    end
-    p.use:SetEnabledState(p.picked ~= nil)
-end
-
-function M:TogglePicker()
-    if self.picker and self.picker:IsShown() then return self:ClosePicker() end
-    if InCombatLockdown() or not self.loaded then return end
-    if not self.picker then self:BuildPicker() end
-    local p = self.picker
-    p.picked = self.icon
-    p:ClearAllPoints()
-    p:SetPoint("TOPLEFT", self.idRow, "TOPLEFT", 0, -64)
-    p:Show()
-    self:FillPicker(true)
-end
-
-function M:UseIcon()
-    local p = self.picker
-    if p and p.picked then self.icon = p.picked end
-    self:ClosePicker()
-    self:DrawState()
-end
-
-function M:ClosePicker()
-    if self.picker then self.picker:Hide() end
 end
 
 --------------------------------------------------------------------------------
 -- Opening: instead of the game's window
 --------------------------------------------------------------------------------
 
-function M:Toggle()
-    if self.window:IsShown() then self.window:Hide() return end
-    self.tab = self.tab or "general"
-    self.window:Show()
-    self:Refresh()
-end
+class MacrosModule extends Module<typeof(DEFAULTS)>
+    band: Frame? = nil
+    big: ItemSlot? = nil
+    body: EditBox? = nil
+    -- the body's text as last drawn
+    bodyText: string = ""
+    bodyCount: Text? = nil
+    chosen: Chosen? = nil
+    count: Text? = nil
+    delete: SuuButton? = nil
+    -- a new macro, not saved yet
+    draft: Draft? = nil
+    dragHint: Text? = nil
+    edit: Frame? = nil
+    empty: EmptyPage? = nil
+    hint: Text? = nil
+    hooked: boolean? = nil
+    -- the icon the editor shows
+    icon: Art? = nil
+    iconButton: SuuButton? = nil
+    idRow: Frame? = nil
+    list: ScrollArea? = nil
+    loaded: Draft? = nil
+    macros: Macro[] = {}
+    nameCount: Text? = nil
+    nameField: TextField? = nil
+    newButton: SuuButton? = nil
+    none: Text? = nil
+    picker: IconPicker? = nil
+    rows: MacroRow[] = {}
+    save: SuuButton? = nil
+    -- "general" or "character"
+    tab: string? = nil
+    tabs: Segmented<string>? = nil
+    well: Frame? = nil
+    wellBorder: Border? = nil
+    window: WindowFrame? = nil
 
-function M:HookGame()
-    local f = _G.MacroFrame
-    if not f or self.hooked then return end
-    self.hooked = true
-    hookScript(f, "OnShow", function()
-        if not self:IsEnabled() then return end
-        HideUIPanel(f)
-        if not self.window:IsShown() then self:Toggle() end
-    end)
-end
+    constructor()
+        super({
+            id = "macros",
+            name = "Macros",
+            description = "SuuUI's macro window: general and character macros as tabs, an editor with the icon to drag, an icon picker with search.",
+            api = "0.17",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
+    end
 
-function M:OnEnable()
-    if not self.window then self:Build() end
-    self:HookGame()
-    self:OnGameEvent("ADDON_LOADED", function(_, name) if name == "Blizzard_MacroUI" then self:HookGame() end end)
-    self:OnGameEvent("UPDATE_MACROS", function() self:Refresh() end)
-    self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-        self:ClosePicker()
-        if self.window:IsShown() then self:DrawState(true) end
-    end)
-    self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-        if self.window:IsShown() then self:DrawState() end
-    end)
-    self:On("SUUUI_THEME_CHANGED", function()
+    function List(tab: string): Macro[]
+        local general, char = GetNumMacros()
+        local list: Macro[] = {}
+        local first, count = 1, general or 0
+        if tab == "character" then first, count = MAX_GENERAL + 1, char or 0 end
+        for i = first, first + count - 1 do
+            local name, icon, body = call(GetMacroInfo, i)
+            local macroName = str(name)
+            if macroName then list[#list + 1] = { index = i, name = macroName, icon = art(icon), body = str(body) or "" } end
+        end
+        return list
+    end
+
+    function Counts(): (number, number)
+        local general, char = GetNumMacros()
+        return general or 0, char or 0
+    end
+
+    function BuildRow(parent: Frame): MacroRow
+        return MacroRow.new(parent, self)
+    end
+
+    -- The two tabs share the list's width (by their labels' widths; a long
+    -- name gets the short labels).
+    function FitTabs(who: string)
+        local tabs = assert(self.tabs)
+        local function fit(labels: string[]): boolean
+            local inner = LIST_W - 6 - 2
+            local text = 0
+            for i, b in ipairs(tabs.buttons) do
+                b.label:SetValue(labels[i])
+                text = text + UI.MeasureText("label", assert(labels[i]))
+            end
+            local pad = (inner - text) / #tabs.buttons
+            if pad < 2 * S["space-3"] then return false end
+            local x = 3
+            for i, b in ipairs(tabs.buttons) do
+                b:SetWidth(UI.MeasureText("label", assert(labels[i])) + pad)
+                b:ClearAllPoints()
+                b:SetPoint("TOPLEFT", x, -3)
+                x = x + b:GetWidth() + 2
+            end
+            return true
+        end
+        if not fit({ "General Macros", who .. " Specific Macros" }) and not fit({ "General", who }) then
+            fit({ "General", "Character" })
+        end
+    end
+
+    function Build()
+        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMacroWindow", title = "Macros", width = WIDTH, height = HEIGHT,
+            footer = true, onClose = function(win: Panel) win:Hide() end })
+        w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
+        w:Hide()
+        w.scroll:Hide()
+        w:HookScript("OnHide", function() self:ClosePicker() end)
+        self.window = w
+        local body = w.body
+
+        -- the list: the two tabs, the count, the macros
+        local left = CreateFrame("Frame", nil, body)
+        left:SetPoint("TOPLEFT")
+        left:SetPoint("BOTTOMLEFT")
+        left:SetWidth(LIST_W)
+        local rule = UI.Fill(body, "gilt-faint", "ARTWORK")
+        rule:SetPoint("TOPLEFT", left, "TOPRIGHT", S["space-5"], 0)
+        rule:SetPoint("BOTTOMLEFT", left, "BOTTOMRIGHT", S["space-5"], 0)
+        rule:SetWidth(1)
+        local who = known(UnitName("player"), "Character")
+        local tabs: Segmented<string> = UI.Segmented(left, { options = { { value = "general", label = "General Macros" },
+            { value = "character", label = who .. " Specific Macros" } }, value = "general", onChange = function(v: string)
+                self.tab = v
+                self.draft, self.chosen = nil, nil
+                self:Refresh()
+            end })
+        self.tabs = tabs
+        tabs:SetPoint("TOPLEFT")
+        self:FitTabs(who)
+        tabs.marker:Aim()
+        tabs:SetWidth(LIST_W)
+        local count = UI.Text(left, "caption", "ink-muted")
+        self.count = count
+        count:SetPoint("TOPLEFT", tabs, "BOTTOMLEFT", 0, -S["space-3"])
+        local BAR = S["space-3"]
+        local list = UI.ScrollArea(left, BAR)
+        self.list = list
+        list:SetPoint("TOPLEFT", count, "BOTTOMLEFT", 0, -S["space-4"])
+        list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
+        list:HookScript("OnSizeChanged", function(_: Frame, width: number) list.child:SetWidth(width) end)
+        local none = UI.Text(left, "caption", "ink-muted")
+        self.none = none
+        none:SetPoint("TOPLEFT", list, "TOPLEFT", 0, -S["space-5"])
+        none:SetValue("No macros here yet.")
+        self.rows = {}
+
+        -- the editor
+        local edit = CreateFrame("Frame", nil, body)
+        edit:SetPoint("TOPLEFT", left, "TOPRIGHT", S["space-6"] + 1, 0)
+        edit:SetPoint("BOTTOMRIGHT")
+        self.edit = edit
+        -- in combat: an ember band on top
+        local band = CreateFrame("Frame", nil, edit)
+        band:SetPoint("TOPLEFT")
+        band:SetPoint("TOPRIGHT")
+        band:SetHeight(28)
+        UI.Fill(band, "ember-soft"):SetAllPoints()
+        UI.Border(band, "ember")
+        local bandText = UI.Text(band, "caption", "ember-text")
+        bandText:SetPoint("LEFT", S["space-4"], 0)
+        bandText:SetValue(COMBAT)
+        band:Hide()
+        self.band = band
+        local id = CreateFrame("Frame", nil, edit)
+        id:SetPoint("TOPLEFT")
+        id:SetPoint("TOPRIGHT")
+        id:SetHeight(70)
+        self.idRow = id
+        -- the icon: drag it to a bar
+        local big = UI.ItemSlot(id, 52)
+        big:SetPoint("TOPLEFT")
+        big:RegisterForDrag("LeftButton")
+        big:SetScript("OnDragStart", function()
+            local chosen = self.chosen
+            if chosen then PickupMacro(chosen.index) end
+        end)
+        big:SetScript("OnEnter", function()
+            local chosen = self.chosen
+            UI.ShowTooltip(big, { title = chosen and "Drag to a bar" or "Save it first", description = chosen and chosen.name or nil })
+        end)
+        big:SetScript("OnLeave", function() UI.HideTooltip() end)
+        self.big = big
+        local drag = UI.Text(id, "micro", "ink-muted")
+        drag:SetPoint("TOP", big, "BOTTOM", 0, -S["space-2"])
+        drag:SetValue("Drag to a bar")
+        self.dragHint = drag
+        local nameLabel = UI.Text(id, "caption", "ink-muted")
+        nameLabel:SetPoint("TOPLEFT", big, "TOPRIGHT", S["space-5"], 0)
+        nameLabel:SetValue("Name")
+        local nameCount = UI.Text(id, "numeric", "ink-muted")
+        self.nameCount = nameCount
+        nameCount:SetPoint("TOPRIGHT", 0, 1)
+        local iconButton = UI.Button(id, { text = "Change icon", icon = "gem", onClick = function() self:TogglePicker() end })
+        self.iconButton = iconButton
+        local nameField = UI.TextField(id, { onTextChanged = function() self:DrawState() end, onChange = function() self:DrawState() end })
+        self.nameField = nameField
+        nameField:SetPoint("RIGHT", iconButton, "LEFT", -S["space-4"], 0)
         self:PlaceName()
-        if self.picker then self:PlacePicker() end
-    end)
+        nameField.edit:SetMaxLetters(NAME_MAX)
+        -- the body
+        local bodyLabel = UI.Text(edit, "caption", "ink-muted")
+        bodyLabel:SetPoint("TOPLEFT", id, "BOTTOMLEFT", 0, -S["space-4"])
+        bodyLabel:SetValue("Body")
+        local bodyCount = UI.Text(edit, "numeric", "ink-muted")
+        self.bodyCount = bodyCount
+        bodyCount:SetPoint("TOPRIGHT", id, "BOTTOMRIGHT", 0, -S["space-4"] + 1)
+        local well = CreateFrame("Frame", nil, edit)
+        well:SetPoint("TOPLEFT", bodyLabel, "BOTTOMLEFT", 0, -S["space-2"])
+        well:SetPoint("BOTTOMRIGHT")
+        UI.Fill(well, "surface-sunk"):SetAllPoints()
+        local wellBorder = UI.Border(well, "gilt-line")
+        self.wellBorder = wellBorder
+        local scroll = UI.ScrollArea(well, -S["space-3"])
+        scroll:SetPoint("TOPLEFT", S["space-4"], -S["space-3"])
+        scroll:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-3"])
+        local e = CreateFrame("EditBox", nil, scroll.child)
+        e:SetMultiLine(true)
+        e:SetAutoFocus(false)
+        e:SetFontObject(nameField.edit:GetFontObject())
+        e:SetMaxLetters(BODY_MAX)
+        e:SetPoint("TOPLEFT")
+        e:SetScript("OnEscapePressed", function() e:ClearFocus() end)
+        e:SetScript("OnEditFocusGained", function() wellBorder:SetColor("arcane") end)
+        e:SetScript("OnEditFocusLost", function() wellBorder:SetColor("gilt-line") end)
+        e:SetScript("OnTextChanged", function()
+            scroll.child:SetHeight(math.max(scroll:GetHeight(), e:GetHeight()))
+            local text = e:GetText() or ""
+            if self.bodyText ~= text then
+                self.bodyText = text
+                self:DrawState()
+            end
+        end)
+        scroll:HookScript("OnSizeChanged", function(_: Frame, width: number) scroll.child:SetWidth(width); e:SetWidth(width) end)
+        well:EnableMouse(true)
+        well:SetScript("OnMouseDown", function() if not InCombatLockdown() then e:SetFocus() end end)
+        self.body, self.well = e, well
+
+        -- nothing at all yet
+        local empty = EmptyPage.new(body, self)
+        empty:SetPoint("TOPLEFT", edit)
+        empty:SetPoint("BOTTOMRIGHT", edit)
+        self.empty = empty
+
+        -- the foot
+        local foot = assert(w.footer)
+        local hint = UI.Text(foot, "caption", "ink-muted")
+        self.hint = hint
+        hint:SetPoint("LEFT")
+        local save = UI.Button(foot, { text = "Save", variant = "primary", width = 90, onClick = function() self:Save() end })
+        self.save = save
+        save:SetPoint("RIGHT")
+        local delete = UI.Button(foot, { text = "Delete", icon = "trash", onClick = function() self:Delete() end })
+        self.delete = delete
+        delete:SetPoint("RIGHT", save, "LEFT", -S["space-4"], 0)
+        local new = UI.Button(foot, { text = "New", icon = "plus", onClick = function() self:New() end })
+        self.newButton = new
+        new:SetPoint("RIGHT", delete, "LEFT", -S["space-4"], 0)
+    end
+
+    -- The name field and Change icon on one line, under the label (from the
+    -- caption's line height, which a theme can change).
+    function PlaceName()
+        local fieldY = -(T.type.caption.lineHeight + S["space-2"])
+        assert(self.iconButton):SetPoint("TOPRIGHT", 0, fieldY)
+        assert(self.nameField):SetPoint("TOPLEFT", assert(self.big), "TOPRIGHT", S["space-5"], fieldY)
+    end
+
+    -- The window, while it's open.
+    function Shown(): boolean
+        local w = self.window
+        return w ~= nil and w:IsShown()
+    end
+
+    function Refresh()
+        if not self:Shown() then return end
+        local tab = self.tab or "general"
+        assert(self.tabs):SetValue(tab)
+        local list = self:List(tab)
+        self.macros = list
+        local general, char = self:Counts()
+        local used, max = tab == "general" and general or char, tab == "general" and MAX_GENERAL or MAX_CHAR
+        assert(self.count):SetValue(("%d of %d used"):format(used, max))
+        -- keep the chosen macro (by name: indexes shift when one is added or removed)
+        local chosen = self.chosen
+        local current: Macro? = nil
+        if chosen then
+            for _, m in ipairs(list) do if m.name == chosen.name then current = m end end
+        end
+        if not current and not self.draft then current = list[1] end
+        self.chosen = current
+        local c = assert(self.list).child
+        local y = 0
+        for i, m in ipairs(list) do
+            local r = self.rows[i] or self:BuildRow(c)
+            self.rows[i] = r
+            r.macro = m
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:SetPoint("RIGHT")
+            r.icon:SetArt(m.icon)
+            r.name:SetValue(m.name)
+            r.first:SetValue((m.body:match("^[^\n]*") or ""))
+            local on = current ~= nil and current.index == m.index and not self.draft
+            r.on:SetShown(on)
+            r.edge:SetShown(on)
+            r:Show()
+            y = y + ROW_H + 1
+        end
+        for i = #list + 1, #self.rows do self.rows[i]:Hide() end
+        c:SetHeight(math.max(1, y))
+        assert(self.none):SetShown(#list == 0 and not self.draft)
+        -- nothing at all: the empty page instead of the editor
+        local nothing = general == 0 and char == 0 and not self.draft
+        assert(self.empty):SetShown(nothing)
+        assert(self.edit):SetShown(not nothing)
+        self:Load(self.draft or current)
+    end
+
+    -- Puts a macro (or a new one) into the editor.
+    function Load(m: Draft?)
+        self.loaded = m
+        self.icon = m and m.icon or QUESTION
+        assert(self.nameField):SetValue(m and m.name or "")
+        local body = assert(self.body)
+        body:SetText(m and m.body or "")
+        self.bodyText = body:GetText() or ""
+        self:DrawState()
+    end
+
+    function Dirty(): boolean
+        local m = self.loaded
+        if not m then return false end
+        if self.draft then return true end
+        return assert(self.nameField):GetValue() ~= m.name or assert(self.body):GetText() ~= m.body or self.icon ~= m.icon
+    end
+
+    -- What can be done now, and why not. `combat`: in combat already (the
+    -- game's PLAYER_REGEN_DISABLED comes before its lockdown begins).
+    function DrawState(starting: boolean?)
+        -- (built with the window)
+        local band, idRow, big, nameField, body = assert(self.band), assert(self.idRow), assert(self.big), assert(self.nameField), assert(self.body)
+        local nameCount, bodyCount, well, iconButton = assert(self.nameCount), assert(self.bodyCount), assert(self.well), assert(self.iconButton)
+        local save, new, empty, delete, hint, dragHint = assert(self.save), assert(self.newButton), assert(self.empty), assert(self.delete), assert(self.hint), assert(self.dragHint)
+        local combat = starting or InCombatLockdown()
+        local m = self.loaded
+        band:SetShown(combat)
+        idRow:ClearAllPoints()
+        idRow:SetPoint("TOPLEFT", 0, combat and -(28 + S["space-4"]) or 0)
+        idRow:SetPoint("RIGHT")
+        big.skin:SetItem(m and { icon = self.icon } or nil)
+        local name = nameField:GetValue() or ""
+        nameCount:SetValue(("%d / %d"):format(#name, NAME_MAX))
+        local len = #(body:GetText() or "")
+        bodyCount:SetValue(("%d / %d"):format(len, BODY_MAX))
+        bodyCount:SetColor(len > BODY_MAX - 15 and "ember-text" or "ink-muted")
+        local editable = m ~= nil and not combat
+        nameField:SetDisabled(not editable)
+        body:EnableMouse(editable)
+        if not editable then body:ClearFocus() end
+        well:SetAlpha(editable and 1 or 0.5)
+        iconButton:SetEnabledState(editable)
+        iconButton.tooltip = combat and { title = COMBAT } or nil
+        -- Save: something changed, and a name
+        local dirty = self:Dirty()
+        local why = combat and COMBAT or (not m and "Nothing to save") or (strtrim(name) == "" and "Give it a name first")
+            or (not dirty and "Nothing changed") or nil
+        save:SetEnabledState(why == nil)
+        save.tooltip = why and { title = why } or nil
+        -- New: room in this tab
+        local general, char = self:Counts()
+        local full = (self.tab or "general") == "general" and general >= MAX_GENERAL or (self.tab == "character" and char >= MAX_CHAR)
+        local newWhy = combat and COMBAT or (full and "This tab is full") or (self.draft and "Save or discard the new one first") or nil
+        new:SetEnabledState(newWhy == nil)
+        new.tooltip = newWhy and { title = newWhy } or nil
+        empty.newButton:SetEnabledState(not combat)
+        local delWhy = combat and COMBAT or (not m and "Nothing to delete") or nil
+        delete:SetEnabledState(delWhy == nil)
+        delete.tooltip = delWhy and { title = delWhy } or nil
+        delete:SetLabel(self.draft and "Discard" or "Delete")
+        hint:SetValue(combat and COMBAT or (self.draft and "A new macro: name it and Save") or "Drag the icon to an action bar")
+        hint:SetColor(combat and "ember-text" or "ink-muted")
+        dragHint:SetShown(self.chosen ~= nil and not self.draft)
+    end
+
+    function Select(m: Macro?)
+        if InCombatLockdown() then return end
+        self.draft = nil
+        self.chosen = m
+        self:ClosePicker()
+        self:Refresh()
+    end
+
+    function New()
+        if InCombatLockdown() then return end
+        self.draft = { name = "", icon = QUESTION, body = "" }
+        self:ClosePicker()
+        self:Refresh()
+        assert(self.nameField).edit:SetFocus()
+    end
+
+    function Save()
+        local loaded = self.loaded
+        if InCombatLockdown() or not loaded then return end
+        local name = strtrim(assert(self.nameField):GetValue() or "")
+        if name == "" then return end
+        local body = assert(self.body):GetText() or ""
+        if self.draft then
+            local index = num(call(CreateMacro, name, self.icon or QUESTION, body, self.tab == "character"))
+            self.draft = nil
+            self.chosen = index and { index = index, name = name } or nil
+        else
+            local was = assert(loaded.index)
+            local index = num(call(EditMacro, was, name, self.icon or QUESTION, body))
+            self.chosen = { index = index or was, name = name }
+        end
+        self:Refresh()
+    end
+
+    function Delete()
+        local m = self.loaded
+        if InCombatLockdown() or not m then return end
+        if self.draft then
+            self.draft = nil
+            self:Refresh()
+            return
+        end
+        UI.Confirm({ title = "Delete " .. m.name .. "?", text = "The macro is gone for good, and its buttons on your bars with it.",
+            confirm = "Delete", onConfirm = function()
+                if InCombatLockdown() then return end
+                call(DeleteMacro, m.index)
+                self.chosen = nil
+                self:Refresh()
+            end })
+    end
+
+    -- every macro icon, spells first, then items ("?" leads)
+    function AllIcons(kind: string?): Art[]
+        local list: Art[] = { QUESTION }
+        if kind ~= "items" then
+            local spells: Art[] = {}
+            call(GetLooseMacroIcons, spells)
+            call(GetMacroIcons, spells)
+            for _, v in ipairs(spells) do list[#list + 1] = v end
+        end
+        if kind ~= "spells" then
+            local items: Art[] = {}
+            call(GetLooseMacroItemIcons, items)
+            call(GetMacroItemIcons, items)
+            for _, v in ipairs(items) do list[#list + 1] = v end
+        end
+        return list
+    end
+
+    -- the icons of your spells and bag items whose name has what was typed
+    function SearchIcons(given: string, kind: string?): Art[]
+        local text = given:lower()
+        local list: Art[], seen: { [Art]: boolean } = {}, {}
+        local function add(v: unknown)
+            local icon = art(v)
+            if icon and not seen[icon] then seen[icon] = true; list[#list + 1] = icon end
+        end
+        if kind ~= "items" then
+            for i = 1, (num(call(C_SpellBook.GetNumSpellBookSkillLines)) or 0) do
+                local line = call(C_SpellBook.GetSpellBookSkillLineInfo, i)
+                local offset, count = num(part(line, "itemIndexOffset")), num(part(line, "numSpellBookItems"))
+                if offset and count then
+                    for slot = offset + 1, offset + count do
+                        local info = call(C_SpellBook.GetSpellBookItemInfo, slot, BANK)
+                        local name = str(part(info, "name"))
+                        if part(info, "itemType") == SPELL and name and name:lower():find(text, 1, true) then
+                            add(part(info, "iconID"))
+                        end
+                    end
+                end
+            end
+        end
+        if kind ~= "spells" then
+            for bag = 0, (NUM_BAG_SLOTS or 4) do
+                for slot = 1, (num(call(C_Container.GetContainerNumSlots, bag)) or 0) do
+                    local info = call(C_Container.GetContainerItemInfo, bag, slot)
+                    local itemID = part(info, "itemID")
+                    local name = itemID and str(call(C_Item.GetItemNameByID, itemID))
+                    if name and name:lower():find(text, 1, true) then add(part(info, "iconFileID")) end
+                end
+            end
+        end
+        return list
+    end
+
+    function FillPicker(reset: boolean?)
+        local p = assert(self.picker)
+        local text = strtrim(p.search:GetValue() or "")
+        local icons = p.icons
+        if reset or not icons then
+            icons = text ~= "" and self:SearchIcons(text, p.kindValue) or self:AllIcons(p.kindValue)
+            p.icons = icons
+            p.offset = 0
+        end
+        local first = p.offset * COLS
+        for i, cell in ipairs(p.cells) do
+            local icon = icons[first + i]
+            cell.iconID = icon
+            cell.skin:SetItem(icon and { icon = icon } or nil)
+            cell:SetShown(icon ~= nil)
+            cell.ring:SetShown(icon ~= nil and icon == p.picked)
+        end
+        local rows = math.ceil(#icons / COLS)
+        if text ~= "" then
+            p.where:SetValue(#icons == 0 and "None of your spells or items match" or ("%d of your spells and items"):format(#icons))
+        else
+            p.where:SetValue(rows > VISIBLE_ROWS and ("%d icons · rows %d–%d of %d (wheel to scroll)"):format(#icons, p.offset + 1,
+                math.min(rows, p.offset + VISIBLE_ROWS), rows) or ("%d icons"):format(#icons))
+        end
+        p.use:SetEnabledState(p.picked ~= nil)
+    end
+
+    function TogglePicker()
+        local open = self.picker
+        if open and open:IsShown() then return self:ClosePicker() end
+        if InCombatLockdown() or not self.loaded then return end
+        local p = self.picker
+        if not p then
+            p = IconPicker.new(assert(self.edit), self)
+            p:Place()
+            self.picker = p
+        end
+        p.picked = self.icon
+        p:ClearAllPoints()
+        p:SetPoint("TOPLEFT", assert(self.idRow), "TOPLEFT", 0, -64)
+        p:Show()
+        self:FillPicker(true)
+    end
+
+    function UseIcon()
+        local p = self.picker
+        if p and p.picked then self.icon = p.picked end
+        self:ClosePicker()
+        self:DrawState()
+    end
+
+    function ClosePicker()
+        local p = self.picker
+        if p then p:Hide() end
+    end
+
+    function Toggle()
+        local w = assert(self.window)
+        if w:IsShown() then w:Hide() return end
+        self.tab = self.tab or "general"
+        w:Show()
+        self:Refresh()
+    end
+
+    function HookGame()
+        local f = asFrame(named("MacroFrame"))
+        if not f or self.hooked then return end
+        self.hooked = true
+        hookScript(f, "OnShow", function()
+            if not self:IsEnabled() then return end
+            HideUIPanel(f)
+            if not self:Shown() then self:Toggle() end
+        end)
+    end
+
+    override function OnEnable()
+        if not self.window then self:Build() end
+        self:HookGame()
+        self:OnGameEvent("ADDON_LOADED", function(_, name) if name == "Blizzard_MacroUI" then self:HookGame() end end)
+        self:OnGameEvent("UPDATE_MACROS", function() self:Refresh() end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self:ClosePicker()
+            if self:Shown() then self:DrawState(true) end
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            if self:Shown() then self:DrawState() end
+        end)
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:PlaceName()
+            local p = self.picker
+            if p then p:Place() end
+        end)
+    end
+
+    override function OnDisable()
+        local w = self.window
+        if w then w:Hide() end
+    end
 end
 
-function M:OnDisable()
-    if self.window then self.window:Hide() end
-end
+M = SuuUI.AddModule(MacrosModule.new())
