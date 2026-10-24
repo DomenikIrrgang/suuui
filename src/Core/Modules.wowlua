@@ -324,9 +324,17 @@ export class Module<D extends Settings> implements AnyModule
     -- instance of a kind, now and later (undo(object, info) for each when
     -- the module turns off); fn(object, ...) after a method; fn(object,
     -- original, ...) instead of one. All removed when the module turns off.
-    function Each(kind: string, fn: extend.Extender, undo: extend.Extender?) extend.each(kind, fn, undo, self) end
-    function Hook(kind: string, method: string, fn: extend.Hook) extend.hook(kind, method, fn, self) end
-    function Override(kind: string, method: string, fn: extend.Override) extend.override(kind, method, fn, self) end
+    function Each<K extends extend.Kinds>(kind: K, fn: (obj: extend.KindInstances[K], info: extend.Info) -> (),
+            undo: ((obj: extend.KindInstances[K], info: extend.Info) -> ())?)
+        extend.eachOf(kind, fn, undo, self)
+    end
+    function Hook<K extends extend.Kinds>(kind: K, method: string, fn: (this: extend.KindInstances[K], ...unknown) -> ())
+        extend.hookOf(kind, method, fn, self)
+    end
+    function Override<K extends extend.Kinds>(kind: K, method: string,
+            fn: (this: extend.KindInstances[K], original: extend.Method, ...unknown) -> ...unknown)
+        extend.overrideOf(kind, method, fn, self)
+    end
 
     -- 0.17: a service other modules reach by name (Core/Services.wowlua);
     -- gone when the module turns off.
@@ -433,9 +441,11 @@ export type ModuleOf<D> = {
     RegisterCommand: (self: ModuleOf<D>, cmd: string, help: string, fn: (rest: string) -> (), args: CommandArgs?) -> (),
     RegisterSettings: (self: ModuleOf<D>, def: SettingsSection) -> settingsRegistry.Section,
     RegisterMover: (self: ModuleOf<D>, frame: Region, opts: editMode.MoverOptions?) -> editMode.Mover,
-    Each: (self: ModuleOf<D>, kind: string, fn: extend.Extender, undo: extend.Extender?) -> (),
-    Hook: (self: ModuleOf<D>, kind: string, method: string, fn: extend.Hook) -> (),
-    Override: (self: ModuleOf<D>, kind: string, method: string, fn: extend.Override) -> (),
+    Each: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, fn: (obj: extend.KindInstances[K], info: extend.Info) -> (),
+        undo: ((obj: extend.KindInstances[K], info: extend.Info) -> ())?) -> (),
+    Hook: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, method: string, fn: (this: extend.KindInstances[K], ...unknown) -> ()) -> (),
+    Override: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, method: string,
+        fn: (this: extend.KindInstances[K], original: extend.Method, ...unknown) -> ...unknown) -> (),
     Provide: (self: ModuleOf<D>, serviceName: string, impl: { [string]: unknown }) -> (),
     ExtendMenu: (self: ModuleOf<D>, id: string, fn: extend.MenuExtension) -> (),
     AddMicroItem: (self: ModuleOf<D>, item: unknown) -> (),

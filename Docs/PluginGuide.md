@@ -8,6 +8,15 @@ Two examples ship with SuuUI:
 
 Both are written in [wowlua](https://github.com/DomenikIrrgang/wowlua), like SuuUI itself: run `wowlua install` in either folder to build it into `Interface/AddOns` (or `wowlua build` and copy `dist/dev/<Name>` there). A plugin doesn't have to use wowlua: the plain Lua addon below works as well.
 
+**In wowlua, SuuUI is typed.** A wowlua plugin in SuuUI's workspace that lists `SuuUI` in `addon-dependencies` sees the `SuuUI` global with all its types: `SuuUI.RegisterModule` gives a module whose `M:Get(key)` has each default's type, `M:Each("unitframe", fn)` hands `fn` a `UnitFrame`, and a mistake in a call is an error when you build. You can import SuuUI's types, never its code (SuuUI's values come through the global):
+
+```lua
+import type UnitFrame from "suuui/UI/UnitFrame"
+import type Info from "suuui/Core/Extend"
+```
+
+Keep what your plugin adds beside SuuUI's frames (a weak table by frame, as the LevelBadge example does) rather than in fields of their own: SuuUI's classes don't declare your fields, so wowlua can't type them.
+
 ## 1. The addon
 
 A folder in `Interface/AddOns`, for example `MyPlugin/`, with a TOC and a Lua file:
@@ -112,6 +121,7 @@ end
 - **Secret values in combat:** the game hands addons secret values (health, names, auras), which can be passed on but never compared. Hand them to the game's setters (`SetValue`, `SetText`, `SetAlphaFromBoolean`), or check with `issecretvalue(v)` and skip.
 - **Ordering:** several plugins' hooks chain in the order they were added. If an override fails, SuuUI's original runs instead.
 - **Finding instances:** `SuuUI.Instances(kind)` lists the existing ones, and `SuuUI.InstanceInfo(frame)` tells you what one is.
+- **In wowlua** each kind's instances have their class (`KindInstances` in `Core/Extend`): `"unitframe"` gives `UnitFrame`, `"actionbutton"` `ActionButton`, `"meter"` `DamageMeter | ThreatMeter`, and so on, in `Each`, `Hook`, `Override` and `SuuUI.Instances`.
 
 ## 5. Menus, buttons and presets
 

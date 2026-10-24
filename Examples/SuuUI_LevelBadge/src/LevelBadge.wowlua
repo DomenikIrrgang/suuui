@@ -19,6 +19,13 @@
 --
 --   /suu enable levelbadge   turns it on (it starts off)
 
+-- SuuUI's types: a plugin may import them (`import type`), not its code;
+-- SuuUI's values come through the SuuUI global.
+import type UnitFrame from "suuui/UI/UnitFrame"
+import type Text from "suuui/UI/Text"
+import type Info from "suuui/Core/Extend"
+import * as tbl from "wowlua:table"
+
 local UI = SuuUI.UI
 
 local M = SuuUI.RegisterModule({
@@ -31,47 +38,50 @@ local M = SuuUI.RegisterModule({
         party = true,       -- on party frames
         raid = true,        -- on raid frames
         own = false,        -- on your frame, your target's and the rest
-        corner = "TOPLEFT", -- where on the frame
+        corner = "TOPLEFT" :: FramePoint, -- where on the frame
     },
 })
 
 -- Which frames get one, from what SuuUI says each frame is.
-local OWN = { player = true, target = true, targettarget = true, focus = true, pet = true, boss = true }
-local function wanted(info: { [string]: any }?): boolean
+local OWN: { [string]: boolean } = { player = true, target = true, targettarget = true, focus = true, pet = true, boss = true }
+local function wanted(info: Info?): boolean
     if not info then return false end
     if info.role == "party" then return M:Get("party") end
     if info.role == "raid" then return M:Get("raid") end
-    if OWN[info.role] then return M:Get("own") end
+    if info.role and OWN[info.role] then return M:Get("own") end
     -- a settings preview's stand-ins: like the frames they stand in for
     return info.preview and M:Get("party") or false
 end
 
--- The badge: a dark chip with the level in gilt.
-local function badgeOf(f: any): Frame
-    if f.levelBadge then return f.levelBadge end
-    local b = CreateFrame("Frame", nil, f)
+-- The badge: a dark chip with the level in gilt. Kept by frame, beside
+-- SuuUI's frames rather than in them.
+type Badge = Frame & { text: Text }
+local badges: { [UnitFrame]: Badge } = tbl.weakKeys()
+local function badgeOf(f: UnitFrame): Badge
+    local made = badges[f]
+    if made then return made end
+    local b = CreateFrame("Frame", nil, f) :: Badge
     b:SetSize(22, 14)
     b:SetFrameLevel(f:GetFrameLevel() + 8)
     UI.Fill(b, "surface-sunk", "BACKGROUND"):SetAllPoints()
     UI.Border(b, "gilt-faint")
     b.text = UI.Text(b, "micro", "gilt-text")
     b.text:SetPoint("CENTER", 0, 0)
-    f.levelBadge = b
+    badges[f] = b
     return b
 end
 
 -- Shows the unit's level, or nothing. A frame's unit can be a stand-in
 -- (f.api answers for it) and, in combat, the game may keep a value secret:
 -- a secret level is never compared, the badge just hides.
-local function update(f: any)
-    local info = SuuUI.InstanceInfo(f)
-    local b = f.levelBadge
-    if not wanted(info) or not f.unit then
+local function update(f: UnitFrame)
+    local b = badges[f]
+    local unit = f.unit
+    if not wanted(SuuUI.InstanceInfo(f)) or not unit then
         if b then b:Hide() end
         return
     end
-    local api = f.api or _G
-    local ok, level = pcall(api.UnitLevel or UnitLevel, f.unit)
+    local ok, level = pcall(f.api.UnitLevel, unit)
     if not ok or level == nil or not canaccessvalue(level) or level <= 0 then
         if b then b:Hide() end
         return
@@ -90,14 +100,18 @@ end
 
 function M:OnEnable()
     -- every unit frame, now and later; hidden again when the plugin turns off
-    self:Each("unitframe", update, function(f: any) if f.levelBadge then f.levelBadge:Hide() end end)
+    self:Each("unitframe", update, function(f)
+        local b = badges[f]
+        if b then b:Hide() end
+    end)
     -- after SuuUI draws a frame's identity (name, level) or the whole frame
     self:Hook("unitframe", "UpdateIdentity", update)
     self:Hook("unitframe", "Refresh", update)
 
-    for _, key in ipairs({ "party", "raid", "own", "corner" }) do
-        self:Watch(key, updateAll)
-    end
+    self:Watch("party", updateAll)
+    self:Watch("raid", updateAll)
+    self:Watch("own", updateAll)
+    self:Watch("corner", updateAll)
 
     -- its settings on SuuUI's Unit frames page
     self:RegisterSettings({

@@ -22,6 +22,21 @@ import * as reflect from "wowlua:reflect"
 import * as tbl from "wowlua:table"
 import * as fault from "./Fault"
 import * as events from "./Events"
+import type UnitFrame from "/UI/UnitFrame"
+import type CastBar from "/UI/CastBar"
+import type UnitAuras from "/UI/Auras"
+import type ActionBar from "/UI/ActionBar"
+import type TotemBar from "/UI/ClassBars"
+import type ActionButton from "/UI/ActionButton"
+import type WindowFrame from "/UI/Panel"
+import type WindowChrome from "/UI/WindowSkin"
+import type Inventory from "/UI/Inventory"
+import type ObjectiveTracker from "/UI/ObjectiveTracker"
+import type CooldownTracker from "/UI/CooldownTracker"
+import type DamageMeter from "/UI/DamageMeter"
+import type ThreatMeter from "/UI/ThreatMeter"
+import type MicroMenu from "/UI/MicroMenu"
+import type Notification from "/UI/Notification"
 
 -- An instance a plugin reaches: one of SuuUI's frames or class instances.
 export type Instance = table
@@ -39,6 +54,19 @@ export type Info = {
     meter?: string, totems?: boolean, skinned?: Frame,
     [string]: unknown,
 }
+
+-- What the instances of each of SuuUI's kinds are, for a plugin's
+-- M:Each, M:Hook, M:Override and SuuUI.Instances (a kind of a plugin's
+-- own, and nameplates, are an Instance).
+export type KindInstances = {
+    unitframe: UnitFrame, castbar: CastBar, auracontainer: UnitAuras,
+    actionbar: ActionBar | TotemBar, actionbutton: ActionButton,
+    window: WindowFrame | WindowChrome, inventory: Inventory, tracker: ObjectiveTracker,
+    cooldowns: CooldownTracker, meter: DamageMeter | ThreatMeter, micromenu: MicroMenu,
+    notification: Notification,
+    [string]: Instance,
+}
+export type Kinds = keyof KindInstances
 
 -- each's function, and its undo.
 export type Extender = (obj: Instance, info: Info) -> ()
@@ -409,7 +437,21 @@ export const registry = ExtendRegistry.new()
 export function add(kind: string, object: Instance, given: Tags?): Info? return registry:add(kind, object, given) end
 export function tag(object: Instance, fields: Tags) registry:tag(object, fields) end
 export function info(object: Instance): Info? return registry:info(object) end
-export function list(kind: string): Instance[] return registry:list(kind) end
+-- (typed by kind: the registry keeps every kind's instances alike)
+export function list<K extends Kinds>(kind: K): KindInstances[K][]
+    return registry:list(kind) :: unknown :: KindInstances[K][]
+end
+export function eachOf<K extends Kinds>(kind: K, fn: (obj: KindInstances[K], info: Info) -> (),
+        undo: ((obj: KindInstances[K], info: Info) -> ())?, owner: unknown)
+    registry:each(kind, fn :: unknown :: Extender, undo :: unknown :: Extender?, owner)
+end
+export function hookOf<K extends Kinds>(kind: K, method: string, fn: (this: KindInstances[K], ...unknown) -> (), owner: unknown)
+    registry:hook(kind, method, fn :: unknown :: Hook, owner)
+end
+export function overrideOf<K extends Kinds>(kind: K, method: string,
+        fn: (this: KindInstances[K], original: Method, ...unknown) -> ...unknown, owner: unknown)
+    registry:override(kind, method, fn :: unknown :: Override, owner)
+end
 export function each(kind: string, fn: Extender, undo: Extender?, owner: unknown)
     registry:each(kind, fn, undo, owner)
 end
