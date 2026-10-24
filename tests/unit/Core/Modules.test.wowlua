@@ -128,28 +128,35 @@ end
 
 -- What the modules above went through at login (in combat), recorded once
 -- in @beforeAll (it logs in), so any test can run alone.
-type Seen = { [string]: any }
-local seen: Seen = {}
+type Snap = { state: State, error: string?, replacedBy: string?, enabledAtLoad: boolean? }
+type Seen = {
+    beforeSafe: Snap, beforeFuture: Snap,
+    inCombat: { safe: Snap, safeCalls: Calls, normal: Snap, normalCalls: Calls, off: Snap, old: Snap },
+    after: { normal: Snap, normalCalls: Calls, newer: Snap, offCalls: Calls, oldCalls: Calls, future: Snap },
+}
+local seen: Seen
 
-local function snapshot(m: Module): Seen
+local function snapshot(m: Module): Snap
     return { state = m.state, error = m.error, replacedBy = m.replacedBy, enabledAtLoad = m.enabledAtLoad }
 end
 
 @beforeAll
 local function logIn()
-    seen.beforeSafe = snapshot(safe)
-    seen.beforeFuture = snapshot(future)
+    local beforeSafe, beforeFuture = snapshot(safe), snapshot(future)
     mock.player:enterCombat()
     mock.login()
-    seen.inCombat = {
+    local inCombat = {
         safe = snapshot(safe), safeCalls = tbl.copy(safeCalls),
         normal = snapshot(normal), normalCalls = tbl.copy(normalCalls),
         off = snapshot(off), old = snapshot(old),
     }
     mock.player:leaveCombat()
-    seen.after = {
-        normal = snapshot(normal), normalCalls = tbl.copy(normalCalls), newer = snapshot(newer),
-        offCalls = tbl.copy(offCalls), oldCalls = tbl.copy(oldCalls), future = snapshot(future),
+    seen = {
+        beforeSafe = beforeSafe, beforeFuture = beforeFuture, inCombat = inCombat,
+        after = {
+            normal = snapshot(normal), normalCalls = tbl.copy(normalCalls), newer = snapshot(newer),
+            offCalls = tbl.copy(offCalls), oldCalls = tbl.copy(oldCalls), future = snapshot(future),
+        },
     }
 end
 
@@ -198,7 +205,8 @@ end
 
 @test("register: a table with a lower-case id that isn't taken")
 local function registerChecks()
-    expect(function() modules.register(5 :: any) end).toThrow()
+    local register = modules.register :: unknown :: (def: unknown) -> ()
+    expect(function() register(5) end).toThrow()
     for _, bad in ipairs({ "Bad", "1a", "a-b", "" }) do
         expect(function() modules.register({ id = bad }) end).toThrow("id must be lower case letters")
     end
@@ -295,9 +303,9 @@ end
 @test("Get, Peek, Set, Reset, Watch, Veto: the module's own namespace")
 local function settingMethods()
     local m = modules.register({ id = nextId(), defaults = { size = 1, list = { 1 } } })
-    local heard: any[] = {}
-    m:Watch("size", function(v: any) heard[#heard + 1] = v end)
-    m:Veto("size", function(new: any): (boolean?, string?) return new < 10, "too big" end)
+    local heard: unknown[] = {}
+    m:Watch("size", function(v) heard[#heard + 1] = v end)
+    m:Veto("size", function(new) return type(new) == "number" and new < 10, "too big" end)
     expect(m:Set("size", 3)).toBe(true)
     expect(m:Get("size")).toBe(3)
     expect(settings.get(m.id, "size")).toBe(3)
@@ -348,9 +356,9 @@ end
 @test("On, Off, Emit, OnGameEvent, OnUnitEvent: owned by the module")
 local function eventMethods()
     local m = modules.register({ id = nextId(), name = "ZZ Events" })
-    local msg = mock.spy(function(_: string, ...: any) end)
-    local game = mock.spy(function(_: string, ...: any) end)
-    local unit = mock.spy(function(_: string, ...: any) end)
+    local msg = mock.spy(function(_: string, ...: unknown) end)
+    local game = mock.spy(function(_: string, ...: unknown) end)
+    local unit = mock.spy(function(_: string, ...: unknown) end)
     m:On("SUUUI_ZZM_TEST", msg)
     m:OnGameEvent("PLAYER_MONEY", game)
     m:OnUnitEvent("UNIT_HEALTH", "player", unit)
@@ -412,16 +420,17 @@ local function registerMover()
     local m = modules.register({ id = nextId(), name = "ZZ Mover" })
     local original = editMode.register
     local defs: Opts[] = {}
-    mock.module(editMode, { register = function(frame: any, opts: Opts, owner: any): any
+    local MOVER: editMode.Mover = mock.partial({})
+    mock.module(editMode, { register = function(frame: Region, opts: editMode.MoverOptions, owner: unknown): editMode.Mover
         defs[#defs + 1] = { frame = frame, opts = opts, owner = owner }
-        return "mover"
+        return MOVER
     end })
     local frame = CreateFrame("Frame")
     local r1 = m:RegisterMover(frame)
     local r2 = m:RegisterMover(frame, { key = "pos2", label = "Own label" })
     mock.module(editMode, { register = original })
-    expect(r1 :: unknown).toBe("mover")
-    expect(r2 :: unknown).toBe("mover")
+    expect(r1).toBe(MOVER)
+    expect(r2).toBe(MOVER)
     expect(defs[1].opts).toEqual({ namespace = m.id, label = "ZZ Mover" })
     expect(defs[1].owner == m).toBe(true)
     expect(defs[2].opts).toEqual({ namespace = m.id, label = "Own label", key = "pos2" })
@@ -430,10 +439,10 @@ end
 @test("Each, Hook, Override, Provide, ExtendMenu: owned by the module, gone when it turns off")
 local function extensions()
     local m = modules.register({ id = nextId(), name = "ZZ Ext" })
-    local obj = { CoreATestPaint = function(_: any): string return "base" end }
+    local obj = { CoreATestPaint = function(_: unknown): string return "base" end }
     extend.add("meter", obj)
     local undone = false
-    m:Each("meter", function() end, function(o: any) if o == obj then undone = true end end)
+    m:Each("meter", function() end, function(o) if o == obj then undone = true end end)
     m:Override("meter", "CoreATestPaint", function(): string return "override" end)
     local hooked = 0
     m:Hook("meter", "CoreATestPaint", function() hooked += 1 end)
@@ -459,7 +468,7 @@ local function additions()
     local m = modules.register({ id = nextId() })
     local original = extend.addTo
     local added: Opts[] = {}
-    mock.module(extend, { addTo = function(listName: string, item: any, owner: any)
+    mock.module(extend, { addTo = function(listName: string, item: unknown, owner: unknown)
         added[#added + 1] = { list = listName, item = item, owner = owner }
     end })
     local micro, game = { key = "x" }, { label = "y" }
@@ -493,7 +502,7 @@ end
 @test("off and on again: OnDisable and cleanup, then OnEnable without a second OnInitialize")
 local function toggles()
     local disabled, enabled = listen("SUUUI_MODULE_DISABLED"), listen("SUUUI_MODULE_ENABLED")
-    local msg = mock.spy(function(_: string, ...: any) end)
+    local msg = mock.spy(function(_: string, ...: unknown) end)
     local m, calls = tracked({ id = nextId(), OnEnable = function(self: Module) self:On("SUUUI_ZZM_LIFE", msg) end })
     m:Set("enabled", false)
     expect(m.state).toBe(State.Disabled)
@@ -566,7 +575,7 @@ end
 
 @test("OnEnable fails: errored, OnDisable undoes it, what it registered is gone")
 local function enableFails()
-    local msg = mock.spy(function(_: string, ...: any) end)
+    local msg = mock.spy(function(_: string, ...: unknown) end)
     local m, calls = tracked({ id = nextId(), OnEnable = function(self: Module)
         self:On("SUUUI_ZZM_HALF", msg)
         error("modules-err-enable")
@@ -723,15 +732,15 @@ type Own = {
     fight: FakeCombat,
     reporter: FakeReporter,
     notifier: FakeNotifier,
-    released: any[],
+    released: string[],
 }
 
 local function own(): Own
     local reporter, notifier, fight = FakeReporter.new(), FakeNotifier.new(), FakeCombat.new()
     local store = settings.SettingsStore.new(reporter, notifier)
     local queue = combat.CombatQueue.new(fight, reporter)
-    local released: any[] = {}
-    local reg = modules.ModuleRegistry.new(store, queue, fight, reporter, notifier, function(m: any)
+    local released: string[] = {}
+    local reg = modules.ModuleRegistry.new(store, queue, fight, reporter, notifier, function(m)
         released[#released + 1] = m.id
     end)
     return { reg = reg, store = store, fight = fight, reporter = reporter, notifier = notifier, released = released }

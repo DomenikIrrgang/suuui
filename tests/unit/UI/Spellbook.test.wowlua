@@ -6,7 +6,7 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
-import spellbook, Spellbook, SpellbookOptions, BookSpell from "/UI/Spellbook"
+import spellbook, Spellbook, SpellbookOptions, BookSpell, SpellCell from "/UI/Spellbook"
 import measureText from "/UI/Text"
 import * as tooltipModule from "/UI/Tooltip"
 import expectNoErrors, newParent from "../../helpers"
@@ -66,7 +66,7 @@ local function schools()
     expect(x).toBe((40 - 20) / 2)
     expect(y).toBe(-2 * (32 + S["space-3"]))
     -- hover: bright, its tooltip; away: back to its alpha
-    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
     mock.stub(tooltipModule, "hideTooltip", function() end)
     -- (the tab's secure button takes the mouse)
     mock.hover(assert(fire.secure))
@@ -131,13 +131,12 @@ local function cost()
     b:SetHead("Fire", 1, { count = 1, cost = 10005 })
     local text = b.toTrain:GetText() :: string
     expect(plain(text)).toBe("1 spell to train · 1g 0s 5c")
-    local colors = T.color :: { [string]: any }
-    expect(text:find(colors["coin-gold"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(T.color["coin-gold"].hex, 1, true) ~= nil).toBe(true)
     b:SetHead("Fire", 1, { count = 1, cost = 5, short = true })
     text = b.toTrain:GetText() :: string
     expect(plain(text)).toBe("1 spell to train · 5c")
-    expect(text:find(colors["ember-text"].hex, 1, true) ~= nil).toBe(true)
-    expect(text:find(colors["coin-copper"].hex, 1, true)).toBeNil()
+    expect(text:find(T.color["ember-text"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(T.color["coin-copper"].hex, 1, true)).toBeNil()
     b:SetHead("Fire", 1, { count = 1 })
     expect(plain(b.toTrain:GetText())).toBe("1 spell to train · 0c")
 end
@@ -164,7 +163,7 @@ local function switches()
     b:SetSwitches(true, false)
     expect(b.unlearned.value).toBe(true)
     expect(b.allRanks.value).toBe(false)
-    local switched = mock.spy(function(_k: string, _on: any) end)
+    local switched = mock.spy(function(_k: string, _on: boolean) end)
     assert(b.unlearned.onChange)(false)
     b.onSwitch = switched
     assert(b.unlearned.onChange)(false)
@@ -290,8 +289,8 @@ local function cellInput()
     local b = make()
     b:SetSpells({ { label = "Fireball", icon = 1, status = "trainable", rank = 2 } })
     local c = b.cells[1]
-    local entered = mock.spy(function(_i: number, _c: any) end)
-    local left = mock.spy(function(_i: number, _c: any) end)
+    local entered = mock.spy(function(_i: number, _c: SpellCell) end)
+    local left = mock.spy(function(_i: number, _c: SpellCell) end)
     mock.hover(c.button)
     expect(c.icon.borderToken).toBe("gilt")
     mock.hover(nil)
@@ -319,9 +318,9 @@ local function cooldown()
     local b = make()
     b:SetSpells(spells(1))
     local cd = b.cells[1].cooldown
-    local set = mock.stub(cd, "SetCooldownFromDurationObject", function(_s: any, _d: any) end)
-    local digits = mock.stub(cd, "SetHideCountdownNumbers", function(_s: any, _h: boolean) end)
-    local clear = mock.stub(cd, "Clear", function(_s: any) end)
+    local set = mock.stub(cd, "SetCooldownFromDurationObject", function(_s: Cooldown, _d: unknown) end)
+    local digits = mock.stub(cd, "SetHideCountdownNumbers", function(_s: Cooldown, _h: boolean) end)
+    local clear = mock.stub(cd, "Clear", function(_s: Cooldown) end)
     local duration = C_DurationUtil.CreateDuration()
     b:SetCooldown(1, true, true, duration)
     expect(set).toHaveBeenCalledWith(cd, duration)

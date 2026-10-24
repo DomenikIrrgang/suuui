@@ -9,16 +9,18 @@ import * as events from "/Core/Events"
 import tokens as T from "/Core/Tokens"
 import internal isInterrupt, readyFrom, spellTarget, classColor, showYou from "/UI/CastBar"
 import internal paints from "/UI/Draw"
+import * as frames from "wowlua:frames"
 import expectNoErrors, errorsSoFar, newParent from "../../helpers"
 
 const S = T.space
 
 local parent: Frame
-local bars: any[] = {}
+local bars: castBar.CastBar[] = {}
 local units: mock.MockUnit[] = {}
 
-local function tokenOf(region: any): string?
-    local p = paints[region]
+local function tokenOf(region: unknown): string?
+    local r = frames.asRegion(region)
+    local p = r and paints[r]
     return p and p.token
 end
 
@@ -164,10 +166,10 @@ end
 @test("spellTarget: the name, class and 'you' while the client shows a target")
 local function spellTargets()
     expect(spellTarget("target")).toBeNil() -- the game's: none shown
-    local shown, name: any = true, "Anna"
+    local shown: boolean, name: castBar.Target = true, "Anna"
     local A: castBar.TargetApi = {
         UnitShouldDisplaySpellTargetName = function(_: string): boolean return shown end,
-        UnitSpellTargetName = function(_: string): any return name end,
+        UnitSpellTargetName = function(_: string): castBar.Target return name end,
         UnitSpellTargetClass = function(_: string): string return "PRIEST" end,
         PlayerIsSpellTarget = function(_: string): boolean return true end,
     }
@@ -212,7 +214,7 @@ local function you()
     expect(badge.SetAlphaFromBoolean).toHaveBeenCalledWith(badge, false, 1, 0)
     -- a secret answer handed on as it is (the matchers can't compare secrets)
     local s = mock.secret(true)
-    local got: any = nil
+    local got: unknown = nil
     local holder = CreateFrame("Frame")
     mock.stub(holder, "SetAlphaFromBoolean", function(_: Frame, v: unknown) got = v end)
     showYou(s, holder, line)
@@ -231,7 +233,7 @@ local function alphaFromBoolean()
     expect(f:GetAlpha()).toBe(0)
     -- from a secret answer: the alpha it stands for, secret too
     f:SetAlphaFromBoolean(mock.secret(true), 1, 0.5)
-    expect(f:GetAlpha() :: any).toBe(mock.secret(1))
+    expect(f:GetAlpha() :: unknown).toBe(mock.secret(1))
 end
 
 --------------------------------------------------------------------------------
@@ -391,8 +393,8 @@ end
 @test("off a plate: 'Spell › Target' in the target's class colour, or the spell")
 local function targetInline()
     local b = bar("target", { target = true })
-    local name: any, class: any, isYou: any = "Anna", "PRIEST", false
-    mock.stub(b, "SpellTarget", function(): (any, any, any) return name, class, isYou end)
+    local name: castBar.Target, class: castBar.TargetClass, isYou: castBar.TargetIsYou = "Anna", "PRIEST", false
+    mock.stub(b, "SpellTarget", function(): (castBar.Target, castBar.TargetClass, castBar.TargetIsYou) return name, class, isYou end)
     b:UpdateTarget() -- no cast: nothing
     expect(b.spell:GetText()).toBeNil()
     b.spellName = "Fireball"
@@ -423,7 +425,7 @@ local function targetInline()
     expect(b.spell:GetText()).toBe("Fireball › Anna")
     b.duration = nil
     -- the target refused: the spell alone
-    mock.stub(b, "SpellTarget", function(): (any, any, any) error("refused") end)
+    mock.stub(b, "SpellTarget", function(): (castBar.Target, castBar.TargetClass, castBar.TargetIsYou) error("refused") end)
     b:UpdateTarget()
     expect(b.spell:GetText()).toBe("Fireball")
 end
@@ -431,8 +433,8 @@ end
 @test("on a plate: the target's line under the spell")
 local function targetLine()
     local b = bar("nameplate1", { size = "plate", target = true })
-    local name: any = "Anna"
-    mock.stub(b, "SpellTarget", function(): (any, any, any) return name, "PRIEST", false end)
+    local name: castBar.Target = "Anna"
+    mock.stub(b, "SpellTarget", function(): (castBar.Target, castBar.TargetClass, castBar.TargetIsYou) return name, "PRIEST", false end)
     b:UpdateTarget()
     expect(assert(b.target):IsShown()).toBe(true)
     expect(assert(b.target).name:GetText()).toBe("Anna")
@@ -571,9 +573,9 @@ local function interruptible()
     expect(arcane).toHaveBeenCalledWith(b.arcane, false, 0, 1)
     expect(lock).toHaveBeenCalledWith(b.lockHost, false, 1, 0)
     local s = mock.secret(true)
-    local got: any[] = {}
-    mock.stub(b.arcane, "SetAlphaFromBoolean", function(_: any, v: any) got[1] = v end)
-    mock.stub(b.lockHost, "SetAlphaFromBoolean", function(_: any, v: any) got[2] = v end)
+    local got: unknown[] = {}
+    mock.stub(b.arcane, "SetAlphaFromBoolean", function(_: Region, v: unknown) got[1] = v end)
+    mock.stub(b.lockHost, "SetAlphaFromBoolean", function(_: Region, v: unknown) got[2] = v end)
     b:SetInterruptible(s)
     expect(issecretvalue(got[1]) and issecretvalue(got[2])).toBe(true)
 end

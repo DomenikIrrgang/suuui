@@ -12,7 +12,7 @@ import * as tooltip from "/UI/Tooltip"
 import * as draw from "/UI/Draw"
 import measureText from "/UI/Text"
 import closeButton, keyChip, panel, scrollArea, makeModal, confirm, sectionHeader, windowFrame, Panel, PanelOptions,
-    ScrollArea, TabButton, WindowFrame, WindowOptions, ConfirmOptions from "/UI/Panel"
+    ScrollArea, TabButton, WindowFrame, WindowOptions, ConfirmOptions, ConfirmDialog from "/UI/Panel"
 import type TabMarker from "/UI/TabMarker"
 import internal shade from "/UI/Panel"
 import expectNoErrors, newParent from "../../helpers"
@@ -22,7 +22,7 @@ local S = T.space
 local HEADER_LINE = T.type.header.lineHeight
 local parent: Frame? = nil
 local made: Frame[] = {}
-local shown = mock.spy(function(_owner: any, _data: any) end)
+local shown = mock.spy(function(_owner: Region, _data: tooltip.TooltipSource) end)
 local hidden = mock.spy(function() end)
 
 @beforeAll
@@ -53,8 +53,8 @@ local function host(): Frame
     return parent :: Frame
 end
 
-local function y(r: any, i: number?): number
-    return (pointOf(r, i) :: any).y
+local function y(r: Region?, i: number?): number
+    return assert(pointOf(r, i)).y
 end
 
 --------------------------------------------------------------------------------
@@ -200,7 +200,7 @@ end
 @test("the header's right side: close, then the key chip, then the meta")
 local function headRight()
     local p = make({ title = "Bags", meta = "12 free", keybind = "B", closable = true })
-    local closeB, key = p.close :: Button, p.key :: any
+    local closeB, key = p.close :: Button, assert(p.key)
     expect(p.headRight).toBe(closeB)
     expect(pointOf(key)).toEqual({ point = "RIGHT", relativeTo = closeB, relativePoint = "LEFT", x = -S["space-4"], y = 0 })
     expect(pointOf(p.meta)).toEqual({ point = "RIGHT", relativeTo = key, relativePoint = "LEFT", x = -S["space-3"], y = 0 })
@@ -431,18 +431,18 @@ local function modals()
     expect(f).never.toBeShown()
     expect(f:GetFrameStrata()).toBe("DIALOG")
     expect(f:IsToplevel()).toBe(true)
-    expect((pointOf(f) :: any).y).toBe(40)
+    expect(assert(pointOf(f)).y).toBe(40)
     f:Show()
     expect(shade).toBeShown()
-    expect((shade :: any).owner).toBe(f)
+    expect(shade.owner).toBe(f)
     expect(f:GetFrameLevel() >= 10).toBe(true)
     expect(assert(motion.presetsOf(f)).enter).toBeTruthy()
     -- Show again: still attached
     f:Show()
-    expect((shade :: any).owner).toBe(f)
+    expect(shade.owner).toBe(f)
     f:Hide()
     expect(shade).never.toBeShown()
-    expect((shade :: any).owner).toBeNil()
+    expect(shade.owner).toBeNil()
 end
 
 @test("Esc closes a modal; other keys go on to the game")
@@ -472,7 +472,7 @@ local function shadeOwner()
     local a, b = modal(), modal()
     a:Show()
     b:Show()
-    expect((shade :: any).owner).toBe(b)
+    expect(shade.owner).toBe(b)
     a:Hide()
     expect(shade).toBeShown()
     b:Hide()
@@ -484,8 +484,8 @@ end
 --------------------------------------------------------------------------------
 
 -- the confirm dialog's own fields
-local function ask(opts: ConfirmOptions): any
-    local p: any = confirm(opts)
+local function ask(opts: ConfirmOptions): ConfirmDialog
+    local p = confirm(opts)
     made[#made + 1] = p
     return p
 end
@@ -705,14 +705,14 @@ end
 
 @test("tabs: laid out under the head, SetTab chooses one and calls onTab")
 local function tabs()
-    local s = mock.spy(function(_k: any) end)
+    local s = mock.spy(function(_k: string) end)
     local w = win({ title = "Merchant", width = 500, height = 400, onTab = s,
         tabs = { { key = "buy", label = "Merchant" }, { key = "back", label = "Buyback" } } })
     local a, b = tab(w, 1), tab(w, 2)
     expect(#(w.tabButtons :: Button[])).toBe(2)
     local wa = measureText("header", "Merchant") + 2 * S["space-4"]
     expect(a:GetWidth()).toBeCloseTo(wa, 3)
-    expect((pointOf(b) :: any).x).toBe(wa + S["space-2"])
+    expect(assert(pointOf(b)).x).toBe(wa + S["space-2"])
     expect({ b.markLeft, b.markWidth }).toEqual({ wa + S["space-2"], measureText("header", "Buyback") + 2 * S["space-4"] })
     expect(y(w.tabRow)).toBe(-w:BodyTop())
     expect(y(w.body, 2)).toBe(-(w:BodyTop() + 28 + S["space-4"]))

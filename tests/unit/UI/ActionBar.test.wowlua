@@ -67,11 +67,10 @@ end
 
 @test("actionBarPaging without override or vehicle bars")
 local function pagingOld()
-    local g = _G :: any -- functions an older client lacks
-    local o, v = g.GetOverrideBarIndex, g.GetVehicleBarIndex
-    g.GetOverrideBarIndex, g.GetVehicleBarIndex = nil, nil
+    -- functions an older client lacks
+    mock.setField(_G, "GetOverrideBarIndex", nil)
+    mock.setField(_G, "GetVehicleBarIndex", nil)
     local p = actionBarPaging()
-    g.GetOverrideBarIndex, g.GetVehicleBarIndex = o, v
     expect(p:find("overridebar", 1, true)).toBeNil()
     expect(p:find("vehicleui", 1, true)).toBeNil()
     expect(p:sub(1, 9)).toBe("[bar:2] 2")
@@ -270,7 +269,7 @@ local function pagingBar()
     mock.advanceFrames(2)
     expect(b.buttons[1].slot).toBe(1)
     -- a page the parser can't read is 1
-    mock.fake("SecureCmdOptionParse", function(_: string): any return nil end)
+    mock.fake("SecureCmdOptionParse", function(_: string): string? return nil end)
     expect(b:Page()).toBe(1)
     expectNoErrors()
 end
@@ -305,7 +304,7 @@ end
 @test("range: the first state is read; range events dim the slot's buttons")
 local function range()
     mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
-    mock.fake("IsActionInRange", function(slot: number): any
+    mock.fake("IsActionInRange", function(slot: number): boolean?
         if slot == BASE then return false end
         return nil
     end)
@@ -324,7 +323,7 @@ local function range()
     handle("ACTION_RANGE_CHECK_UPDATE", BASE, false, mock.secret(true))
     expect(first.outOfRange).toBe(false)
     -- a new target reads it again
-    mock.fake("IsActionInRange", function(_: number): any return mock.secret(false) end)
+    mock.fake("IsActionInRange", function(_: number): Secret<boolean> return mock.secret(false) end)
     first:SetOutOfRange(true)
     local hogger = mock.spawnUnit({ name = "Hogger", reaction = "hostile" })
     mock.player:target(hogger)
@@ -367,7 +366,7 @@ local function passes()
     local first = b.buttons[1]
     local reads = 0
     -- (other bars read their own slots too: count this bar's first)
-    mock.fake("C_ActionBar.GetActionCooldown", function(slot: number): any
+    mock.fake("C_ActionBar.GetActionCooldown", function(slot: number): unknown
         if slot == BASE then reads = reads + 1 end
         return nil
     end)
@@ -388,11 +387,11 @@ local function passes()
     mock.advanceFrames(1)
     expect(first.unusable).toBe(true)
     -- active
-    mock.fake("IsCurrentAction", function(_: number): any return true end)
+    mock.fake("IsCurrentAction", function(_: number): boolean return true end)
     mock.fireEvent("ACTIONBAR_UPDATE_STATE")
     mock.advanceFrames(1)
     expect(first.active).toBe(true)
-    mock.fake("IsCurrentAction", function(_: number): any return false end)
+    mock.fake("IsCurrentAction", function(_: number): boolean return false end)
     for _, e in ipairs({ "PLAYER_ENTER_COMBAT", "PLAYER_LEAVE_COMBAT", "START_AUTOREPEAT_SPELL", "STOP_AUTOREPEAT_SPELL" }) do
         first.active = true
         mock.fireEvent(e)
@@ -422,7 +421,7 @@ end
 local function grid()
     local b = bar()
     local kind: string? = "spell"
-    mock.fake("GetCursorInfo", function(): any return kind end)
+    mock.fake("GetCursorInfo", function(): string? return kind end)
     mock.fireEvent("ACTIONBAR_SHOWGRID")
     expect(b.buttons[1].grid).toBe(true)
     expect(b.buttons[1].face:GetAlpha()).toBe(1)
@@ -454,10 +453,10 @@ local function pageEvents()
     local b = bar({ slot = 1, paging = actionBarPaging() })
     for _, e in ipairs({ "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORMS", "UPDATE_OVERRIDE_ACTIONBAR",
                          "UPDATE_VEHICLE_ACTIONBAR", "UPDATE_POSSESS_BAR" }) do
-        mock.fake("SecureCmdOptionParse", function(_: string): any return "2" end)
+        mock.fake("SecureCmdOptionParse", function(_: string): string? return "2" end)
         mock.fireEvent(e)
         expect(b.page).toBe(2)
-        mock.fake("SecureCmdOptionParse", function(_: string): any return "1" end)
+        mock.fake("SecureCmdOptionParse", function(_: string): string? return "1" end)
         handle("ACTIONBAR_PAGE_CHANGED")
         expect(b.page).toBe(1)
     end
@@ -479,7 +478,7 @@ local function poll()
     local b = bar()
     mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
     local out = false
-    mock.fake("IsActionInRange", function(_: number): any return not out end)
+    mock.fake("IsActionInRange", function(_: number): boolean return not out end)
     out = true
     pollRange(0.1)
     expect(b.buttons[1].outOfRange).never.toBe(true)

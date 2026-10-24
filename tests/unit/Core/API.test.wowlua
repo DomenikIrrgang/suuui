@@ -4,8 +4,9 @@
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
 import SuuUI from "/Core/API"
-import tokens as T from "/Core/Tokens"
+import tokens as T, Color from "/Core/Tokens"
 import * as services from "/Core/Services"
 import type TalentNext, DurabilityInfo from "/Core/ServiceKeys"
 import * as events from "/Core/Events"
@@ -34,14 +35,9 @@ import recipeSources from "/Data/RecipeSources"
 import expectNoErrors from "../../helpers"
 
 -- The API read by a name held in a string (the list below).
-local api: { [string]: any } = SuuUI :: any
-
-local function at(path: string): any
-    local v: any = api
-    for part in path:gmatch("[^%.]+") do
-        if type(v) ~= "table" then return nil end
-        v = v[part]
-    end
+local function at(path: string): unknown
+    local v: unknown = SuuUI
+    for part in path:gmatch("[^%.]+") do v = tbl.field(v, part) end
     return v
 end
 
@@ -143,9 +139,9 @@ end
 
 @test("every UI component is in Raw.UI too, under the same name")
 local function rawUI()
-    local raw: { [string]: any } = SuuUI.Raw.UI
+    local raw = SuuUI.Raw.UI :: { [string]: unknown }
     local missing: string[] = {}
-    for name, v in pairs(SuuUI.UI :: { [string]: any }) do
+    for name, v in pairs(SuuUI.UI :: { [string]: unknown }) do
         if raw[name] ~= v then missing[#missing + 1] = name end
     end
     table.sort(missing)
@@ -248,10 +244,10 @@ end
 local function settingsWindow()
     local opened = mock.stub(window, "open", function(_: string?) end)
     local toggled = mock.stub(window, "toggle", function() end)
-    local section = {}
-    mock.stub(registry, "register", function(_: { [string]: any }, _: any): any return section end)
-    local mover = {}
-    mock.stub(editMode, "register", function(_: any, _: { [string]: any }, _: any?): any return mover end)
+    local section: registry.Section = mock.partial({})
+    mock.stub(registry, "register", function(_: registry.SectionDef, _: unknown): registry.Section return section end)
+    local mover: editMode.Mover = mock.partial({})
+    mock.stub(editMode, "register", function(_: Region, _: editMode.MoverOptions, _: unknown?): editMode.Mover return mover end)
     SuuUI.OpenSettings("general")
     expect(opened).toHaveBeenCalledWith("general")
     SuuUI.OpenSettings()
@@ -426,26 +422,24 @@ end
 local function openRecipeUnknown()
     withServices()
     local opened = mock.fake("C_TradeSkillUI.OpenTradeSkill", function(_: number) end)
-    mock.fake("C_TradeSkillUI.GetTradeSkillLineForRecipe", function(_: number): any return nil end)
+    mock.fake("C_TradeSkillUI.GetTradeSkillLineForRecipe", function(_: number): unknown return nil end)
     SuuUI.OpenRecipe(3)
-    -- (the client's tables seen untyped, to take functions away)
-    local tradeSkill: { [string]: any } = C_TradeSkillUI :: any
+    -- (the client's functions taken away, put back when the test ends)
+    local tradeSkill = C_TradeSkillUI
     local lineFor = tradeSkill.GetTradeSkillLineForRecipe
-    tradeSkill.GetTradeSkillLineForRecipe = nil
+    mock.setField(tradeSkill, "GetTradeSkillLineForRecipe", nil)
     SuuUI.OpenRecipe(3)
-    tradeSkill.GetTradeSkillLineForRecipe = lineFor
-    local all: { [string]: any } = _G :: any
-    local saved = all.C_TradeSkillUI
-    all.C_TradeSkillUI = nil
+    mock.setField(tradeSkill, "GetTradeSkillLineForRecipe", lineFor)
+    mock.setField(_G, "C_TradeSkillUI", nil)
     SuuUI.OpenRecipe(3)
-    all.C_TradeSkillUI = saved
+    mock.setField(_G, "C_TradeSkillUI", tradeSkill)
     -- a professions service without OpenRecipe falls back; no OpenTradeSkill: nothing opens
     standIns.professions = {}
     mock.fake("C_TradeSkillUI.GetTradeSkillLineForRecipe", function(_: number): (number, string, number) return 171, "Alchemy", 0 end)
     local open = tradeSkill.OpenTradeSkill
-    tradeSkill.OpenTradeSkill = nil
+    mock.setField(tradeSkill, "OpenTradeSkill", nil)
     SuuUI.OpenRecipe(4)
-    tradeSkill.OpenTradeSkill = open
+    mock.setField(tradeSkill, "OpenTradeSkill", open)
     expect(opened).never.toHaveBeenCalled()
     SuuUI.OpenRecipe(4)
     expect(opened).toHaveBeenCalledWith(171)
@@ -462,7 +456,7 @@ local function professions(lines: { [number]: Profession })
         for _ in pairs(p.spells) do n += 1 end
         return "name", 0, 1, 300, n, p.offset, p.line
     end)
-    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number, _: any): any
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number, _: unknown): unknown
         for _, p in pairs(lines) do
             local s = p.spells[slot - p.offset]
             if s then return { spellID = s.id, isPassive = s.passive == true } end
@@ -500,7 +494,7 @@ local function openerGaps()
     mock.fake("GetProfessionInfo", function(_: number): (string, number, number, number, number?, number?, number)
         return "name", 0, 1, 300, 3, nil, 186
     end)
-    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(_: number, _: any): any
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(_: number, _: unknown): unknown
         slot += 1
         if slot == 1 then return nil end
         if slot == 2 then return { isPassive = false } end
@@ -508,11 +502,8 @@ local function openerGaps()
     end)
     mock.fake("C_TradeSkillUI.CanTradeSkillShowCraftingUI", function(_: number): boolean return true end)
     -- a client without the spell bank enum
-    local enumAll: { [string]: any } = Enum :: any
-    local banks = enumAll.SpellBookSpellBank
-    enumAll.SpellBookSpellBank = nil
+    mock.setField(Enum, "SpellBookSpellBank", nil)
     local answer = SuuUI.ProfessionOpener(186)
-    enumAll.SpellBookSpellBank = banks
     expect(answer).toBe(2580)
 end
 
@@ -578,25 +569,25 @@ end
 
 @test("AddFriend without the client's friend APIs")
 local function addFriendNoApi()
-    local all: { [string]: any } = _G :: any
-    local fl, bn = all.C_FriendList, all.C_BattleNet
+    local fl, bn = C_FriendList, C_BattleNet
     local added = mock.fake("C_FriendList.AddFriend", function(_: string) end)
     -- no Battle.net invite: the classic list
-    all.C_BattleNet = nil
+    mock.setField(_G, "C_BattleNet", nil)
     local viaList = SuuUI.AddFriend("Kaelith")
-    all.C_BattleNet = { }
+    mock.setField(_G, "C_BattleNet", {})
     local viaListToo = SuuUI.AddFriend("Kaelith")
     -- no legacy flag: the invite
-    all.C_BattleNet = { SendTitleFriendInviteByName = function(_: string) end }
-    all.C_FriendList = { AddFriend = fl.AddFriend }
+    mock.setField(_G, "C_BattleNet", { SendTitleFriendInviteByName = function(_: string) end })
+    mock.setField(_G, "C_FriendList", { AddFriend = fl.AddFriend })
     local viaInvite = SuuUI.AddFriend("Brannoc")
     -- nothing at all
-    all.C_BattleNet = nil
-    all.C_FriendList = nil
+    mock.setField(_G, "C_BattleNet", nil)
+    mock.setField(_G, "C_FriendList", nil)
     local nothing = SuuUI.AddFriend("Brannoc")
-    all.C_FriendList = {}
+    mock.setField(_G, "C_FriendList", {})
     local noAdd = SuuUI.AddFriend("Brannoc")
-    all.C_FriendList, all.C_BattleNet = fl, bn
+    mock.setField(_G, "C_FriendList", fl)
+    mock.setField(_G, "C_BattleNet", bn)
     expect({ viaList, viaListToo, viaInvite, nothing, noAdd }).toEqual({ true, true, true, false, false })
     expect(added).toHaveBeenCalledTimes(2)
 end
@@ -625,7 +616,7 @@ local function data()
     expect(SuuUI.RecipeSources(-1)).toBeNil()
     for _, fn in ipairs({ SuuUI.CooldownPresets, SuuUI.TrainerSpells, SuuUI.TrainerSpellIDs, SuuUI.Defensives,
         SuuUI.RaidCatalog, SuuUI.MapPlaces, SuuUI.MapOverlays, SuuUI.InstanceLevels, SuuUI.FlightRoutes,
-        SuuUI.FlightPaths, SuuUI.CollectionSources } :: { () -> any }) do
+        SuuUI.FlightPaths, SuuUI.CollectionSources } :: { () -> unknown }) do
         expect(type(fn())).toBe("table")
     end
 end
@@ -734,7 +725,7 @@ end
 @test("ColorVisionColor for a colour without an alpha reads it as opaque")
 local function visionColorNoAlpha()
     local presets = T.vision
-    T.vision = { redgreen = { ["glitter"] = { 1, 0, 1, hex = "ff00ff" } :: any } }
+    T.vision = { redgreen = { ["glitter"] = { 1, 0, 1, hex = "ff00ff" } :: Color } }
     local _, _, _, a = SuuUI.ColorVisionColor("redgreen", "glitter")
     T.vision = presets
     expect(a).toBe(1)
@@ -753,5 +744,5 @@ local function accountData()
     settings.setAccount("data", "broken")
     expect(SuuUI.AccountData("apitest")).toEqual({})
     settings.setAccount("data", saved)
-    expect(function() SuuUI.AccountData(nil :: any) end).toThrow("SuuUI.AccountData: a namespace is required")
+    expect(function() SuuUI.AccountData(nil :: unknown :: string) end).toThrow("SuuUI.AccountData: a namespace is required")
 end

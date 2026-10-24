@@ -11,43 +11,45 @@ import tokens as T from "/Core/Tokens"
 import internal G, reset, read, tooltipName, itemName, scan, digits, longTime from "/UI/WeaponEnchants"
 import internal paints from "/UI/Draw"
 import newParent from "../../helpers"
+import * as frames from "wowlua:frames"
 
 -- What the stand-in answers, by weapon slot (0 main, 1 off, 2 ranged) and
 -- inventory slot (16, 17, 18).
 type Fake = {
-    enchants: { [number]: any },
-    items: { [number]: number },
+    enchants: { [number]: unknown },
+    items: { [number]: number | Secret<number> },
     classes: { [number]: number },
     links: { [number]: string },
     textures: { [number]: number },
-    tips: { [number]: any },
+    tips: { [number]: unknown },
     spells: { [number]: string },
 }
 
 local parent: Frame
 local fake: Fake
 local heard = 0
-local listener: { [string]: any } = {}
+local listener: { [string]: unknown } = {}
 
-local function tokenOf(region: any): string?
-    local p = paints[region]
+local function tokenOf(region: unknown): string?
+    local r = frames.asRegion(region)
+    local p = r and paints[r]
     return p and p.token
 end
 
-local function enchant(seconds: number, extra: { [string]: any }?): { [string]: any }
-    local e: { [string]: any } = { hasEnchant = true, timeLeft = seconds * 1000, charges = 0, enchantID = 29, enchantIconID = 136086 }
+local function enchant(seconds: number, extra: { [string]: unknown }?): { [string]: unknown }
+    local e: { [string]: unknown } = { hasEnchant = true, timeLeft = seconds * 1000, charges = 0, enchantID = 29, enchantIconID = 136086 }
     for k, v in pairs(extra or {}) do e[k] = v end
     return e
 end
 
 local function stand(f: Fake)
     rawset(G, "C_Item", {
-        GetWeaponEnchantInfo = function(ws: number): any return f.enchants[ws] end,
+        GetWeaponEnchantInfo = function(ws: number): unknown return f.enchants[ws] end,
         GetItemInfoInstant = function(id: number): (number, nil, nil, nil, nil, number?) return id, nil, nil, nil, nil, f.classes[id] end,
     })
-    rawset(G, "C_TooltipInfo", { GetInventoryItem = function(_: string, inv: number): any return f.tips[inv] end })
+    rawset(G, "C_TooltipInfo", { GetInventoryItem = function(_: string, inv: number): unknown return f.tips[inv] end })
     rawset(G, "C_Spell", { GetSpellName = function(id: number): string? return f.spells[id] end })
-    rawset(G, "GetInventoryItemID", function(_: string, inv: number): number? return f.items[inv] end)
+    rawset(G, "GetInventoryItemID", function(_: string, inv: number): (number | Secret<number>)? return f.items[inv] end)
     rawset(G, "GetInventoryItemLink", function(_: string, inv: number): string? return f.links[inv] end)
     rawset(G, "GetInventoryItemTexture", function(_: string, inv: number): number? return f.textures[inv] end)
 end
@@ -89,7 +91,7 @@ local function reading()
     expect(read(0)).toBeNil()
     fake.enchants[0] = "nope"
     expect(read(0)).toBeNil()
-    rawset(G, "C_Item", { GetWeaponEnchantInfo = function(_: number): any error("refused") end })
+    rawset(G, "C_Item", { GetWeaponEnchantInfo = function(_: number): unknown error("refused") end })
     expect(read(0)).toBeNil()
     rawset(G, "C_Item", {})
     expect(read(0)).toBeNil()
@@ -137,9 +139,9 @@ local function enchantable()
     expect(we.weaponEnchantable("off")).toBe(false) -- empty
     fake.items[17] = 2001 -- a shield
     expect(we.weaponEnchantable("off")).toBe(false)
-    fake.items[17] = mock.secret(1002) :: any
+    fake.items[17] = mock.secret(1002)
     expect(we.weaponEnchantable("off")).toBe(false)
-    fake.items[17] = nil :: any
+    fake.items[17] = nil
     fake.enchants[1] = { enchant(60) }
     scan()
     expect(we.weaponEnchantable("off")).toBe(true)
@@ -211,7 +213,7 @@ local function changes()
     expect(heard).toBe(n + 3)
     expect((we.weaponEnchant("main") :: we.Info).weaponID).toBe(1002)
     -- a secret weapon reads as none
-    fake.items[16] = mock.secret(1002) :: any
+    fake.items[16] = mock.secret(1002)
     scan()
     expect((we.weaponEnchant("main") :: we.Info).weaponID).toBeNil()
 end
@@ -249,7 +251,7 @@ end
 -- The icon
 --------------------------------------------------------------------------------
 
-local function icon(size: any?): any
+local function icon(size: number | string | nil)
     local i = we.weaponEnchantIcon(parent, size)
     i:SetPoint("CENTER")
     return i
@@ -391,15 +393,15 @@ local function tips()
     local i = icon()
     i:SetSlot("main")
     mock.hover(i)
-    local data: any = nil
-    shown = mock.stub(tooltip, "showTooltip", function(_: any, d: any) data = d end)
+    local data: tooltip.TooltipData? = nil
+    shown = mock.stub(tooltip, "showTooltip", function(_: Region, d: tooltip.TooltipSource) if type(d) == "table" then data = d end end)
     mock.hover(nil)
     expect(hidden).toHaveBeenCalled()
     mock.hover(i)
-    expect(data.title).toBe("Main hand enchant")
-    expect(data.subtitle).toBe("Main hand · Stone Hammer")
-    expect(data.lines).toEqual({ { "Not on the weapon" } })
-    expect(data.meta).toBeNil()
+    expect(assert(data).title).toBe("Main hand enchant")
+    expect(assert(data).subtitle).toBe("Main hand · Stone Hammer")
+    expect(assert(data).lines).toEqual({ { "Not on the weapon" } })
+    expect(assert(data).meta).toBeNil()
     mock.hover(nil)
     -- seen put on by a spell: what to cast
     mock.defineSpell(8017, { name = "Rockbiter Weapon" })
@@ -409,24 +411,24 @@ local function tips()
     scan()
     i:Refresh()
     mock.hover(i)
-    expect(data.title).toBe("Rockbiter Weapon")
-    expect(data.lines).toEqual({ { "Time left", "52 min" }, { "Charges", "2" } })
+    expect(assert(data).title).toBe("Rockbiter Weapon")
+    expect(assert(data).lines).toEqual({ { "Time left", "52 min" }, { "Charges", "2" } })
     mock.hover(nil)
     fake.enchants[0] = nil
     scan()
     mock.hover(i)
-    expect(data.title).toBe("Rockbiter Weapon")
-    expect(data.meta).toBe("Cast Rockbiter Weapon to put it back.")
+    expect(assert(data).title).toBe("Rockbiter Weapon")
+    expect(assert(data).meta).toBe("Cast Rockbiter Weapon to put it back.")
     mock.hover(nil)
     -- an enchant without a name: the slot's; no weapon: the slot alone
     fake.enchants[0] = { enchant(29.5) }
-    fake.links[16] = nil :: any
+    fake.links[16] = nil
     reset()
     scan()
     mock.hover(i)
-    expect(data.title).toBe("Main hand enchant")
-    expect(data.subtitle).toBe("Main hand")
-    expect(data.lines).toEqual({ { "Time left", "30 sec" } })
+    expect(assert(data).title).toBe("Main hand enchant")
+    expect(assert(data).subtitle).toBe("Main hand")
+    expect(assert(data).lines).toEqual({ { "Time left", "30 sec" } })
     mock.hover(nil)
     -- a preview, or no slot: none
     mock.resetSpies()
