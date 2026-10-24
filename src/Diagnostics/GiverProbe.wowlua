@@ -15,6 +15,8 @@ import print from "/Core/Init"
 import SuuUI from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as tbl from "wowlua:table"
+import * as reflect from "wowlua:reflect"
+import WorldMapModule from "/Units/WorldMap"
 
 -- the frame hearing the quest events, and whether it's on
 local eventFrame: Frame? = nil
@@ -49,20 +51,20 @@ local function offered(event: string): { [number]: string }
         local ok, n = pcall(GetNumAvailableQuests)
         for i = 1, ok and secret.readable(n) and n or 0 do
             local okInfo, _a, _b, _c, _d, id = pcall(GetAvailableQuestInfo, i)
-            local okTitle, title = pcall(GetAvailableTitle, i)
+            local okTitle: boolean, title: unknown = pcall(GetAvailableTitle, i)
             -- (the quest ID is GetAvailableQuestInfo's fifth value)
-            if okInfo and secret.readable(id) and type(id) == "number" then out[id] = okTitle and title or "?" end
+            if okInfo and secret.readable(id) and type(id) == "number" then out[id] = okTitle and secret.asString(title) or "?" end
         end
     elseif event == "QUEST_DETAIL" then
         local ok, id = pcall(GetQuestID)
         local okTitle, title = pcall(GetTitleText)
-        if ok and secret.readable(id) and id > 0 then out[id] = okTitle and title or "?" end
+        if ok and secret.readable(id) and id > 0 then out[id] = okTitle and secret.asString(title) or "?" end
     end
     return out
 end
 
 -- the quests before one and instead of it, done or not ("97246 done")
-local function why(id: number, done: unknown[]): string
+local function why(id: number, done: { [number]: boolean }): string
     local row = SuuUI.QuestStarts().quests[id]
     if not row then return "not in the data" end
     local q = quest(row)
@@ -82,8 +84,8 @@ local function why(id: number, done: unknown[]): string
 end
 
 export function check(event: string)
-    local map: any = SuuUI.GetModule and SuuUI.GetModule("worldmap")
-    if not (map and map.QuestsFor) then return end
+    local map = SuuUI.GetModule("worldmap")
+    if not reflect.isInstance(map, WorldMapModule) then return end
     local id, name = npc()
     if not id then return end
     local offers = offered(event)
@@ -94,7 +96,7 @@ export function check(event: string)
     local s = store()
     s.checked = s.checked + 1
     local missing, extra = {}, {}
-    local shown = {}
+    local shown: { [number]: boolean } = {}
     for _, q in ipairs(expected) do
         if q.state then
             shown[q.id] = true

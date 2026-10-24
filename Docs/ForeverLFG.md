@@ -239,6 +239,10 @@ ListingExpiring(secondsLeft)   your listing runs out soon
 Delisted()                     your listing ended or was removed
 ```
 
+In wowlua the events are typed (`LfgEvents`, `LfgEvent`, `MatchReason` and
+`ContactNews` from `foreverlfg`): `On` checks the event's name and gives the
+listener its arguments' types, so `function(e, reasons)` needs no annotations.
+
 ## API
 
 ```

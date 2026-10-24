@@ -24,6 +24,7 @@
 - Plugin API 0.19: `chrome:SetTabs` takes any frame as a tab's `button` (the Character window's mode tabs are frames on some clients); the Social pages' `onMenu` and `onMember` get the frame clicked as a `Frame`, and their rows may carry the owner's own fields (`bnetID`, `gameAccountID`, `inviteName`, `guid`, `unit`, …).
 - Plugin API 0.19: a module from `SuuUI.GetModule(id)` has all of a module's methods typed for a wowlua plugin (`:Setting(key)`, `:Guard(fn)`, `:RunOutOfCombat`, `:RegisterMover`, …); a method a module adds itself reads as `unknown` until you check it (`type(m.PreviewView) == "function"`).
 - Plugin API 0.19: `SuuUI.ListModules()` is typed for a wowlua plugin: a `ModuleSummary[]` (`id`, `name`, `description`, `state`, `source`, `builtIn`, `error`, `pendingReload`, `replaces`, `replacedBy`), where it was untyped.
+- Plugin API 0.19: ForeverLFG (`SuuUI.LFG`) is typed in wowlua: `On(event, fn)` checks the event's name and types the listener's arguments (`Match` gets the entry and its `MatchReason[]`, `Contacted` a `ContactNews`, …), from the types `LfgEvents`, `LfgEvent`, `MatchReason` and `ContactNews`.
 
 ### Fixed
 

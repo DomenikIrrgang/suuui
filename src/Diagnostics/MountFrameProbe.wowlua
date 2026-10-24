@@ -38,6 +38,7 @@ interface PlacePanel extends Panel
     prev?: SuuButton
     next?: SuuButton
     wider?: SuuButton
+    run?: { show: (step: number) -> () }
 end
 
 interface FramePanel extends Panel
@@ -60,7 +61,7 @@ local function show(...: unknown): string
 end
 
 local function ask(m: unknown, method: string): string
-    local f = m[method]
+    local f = tbl.field(m, method)
     if type(f) ~= "function" then return "missing" end
     local res = { pcall(f, m) }
     if not res[1] then return "error " .. tostring(res[2]):sub(1, 80) end
@@ -95,7 +96,7 @@ end
 
 export function place()
     local MJ = C_MountJournal
-    local list: { name: string, display: any }[] = {}
+    local list: { name: string, display: unknown }[] = {}
     for _, id in ipairs(MJ.GetMountIDs() or {}) do
         local name, _, _, _, _, _, _, _, _, hidden = MJ.GetMountInfoByID(id)
         if name and not hidden then list[#list + 1] = { name = name, display = (MJ.GetMountInfoExtraByID(id)) } end
@@ -157,22 +158,22 @@ export function place()
                 table.insert(tbl.listAt(out, "lines"), text)
             end)
         end)
-        pcall(m.SetDisplayInfo, m, e.display)
+        pcall(m.SetDisplayInfo, m, e.display :: number)
         pcall(m.SetFacing, m, p.mode == 1 and 0.5 or 1.4)
     end
     -- the buttons are made once: their clicks go through p.run, replaced each
     -- run (they used to step through the first run's mounts)
     p.run = { show = showMount }
     if not p.next then
-        local prev = button(p.body, { text = "Previous", width = 110, onClick = function() p.run.show(-1) end })
+        local prev = button(p.body, { text = "Previous", width = 110, onClick = function() assert(p.run).show(-1) end })
         p.prev = prev
         prev:SetPoint("BOTTOMLEFT")
-        local nextButton = button(p.body, { text = "Next", width = 110, onClick = function() p.run.show(1) end })
+        local nextButton = button(p.body, { text = "Next", width = 110, onClick = function() assert(p.run).show(1) end })
         p.next = nextButton
         nextButton:SetPoint("BOTTOMRIGHT")
         local wider = button(p.body, { text = "Wider", width = 110, onClick = function()
             p.mode = (p.mode or 1) % #MODES + 1
-            p.run.show(0)
+            assert(p.run).show(0)
         end })
         p.wider = wider
         wider:SetPoint("BOTTOM")
@@ -185,7 +186,7 @@ end
 export function command(rest: string?)
     if rest == "place" then return place() end
     local MJ = C_MountJournal
-    local list: { name: string, display: any }[] = {}
+    local list: { name: string, display: unknown }[] = {}
     for _, id in ipairs(MJ and MJ.GetMountIDs() or {}) do
         local name, _, _, _, _, _, _, _, _, hidden = MJ.GetMountInfoByID(id)
         if name and not hidden and #list < 10 then
@@ -211,13 +212,12 @@ export function command(rest: string?)
     p:Show()
     -- which methods the frame has (by name)
     local names: string[] = {}
-    local mt = getmetatable(m)
-    local index = mt and mt.__index
+    local index = tbl.field(getmetatable(m), "__index")
     if type(index) == "table" then
         for k in pairs(index) do
-            local lk = k:lower()
-            if lk:find("box") or lk:find("bound") or lk:find("camera") or lk:find("position") or lk:find("scale")
-                or lk:find("center") or lk:find("transform") or lk:find("project") or lk:find("inset") then
+            local lk = type(k) == "string" and k:lower() or ""
+            if type(k) == "string" and (lk:find("box") or lk:find("bound") or lk:find("camera") or lk:find("position") or lk:find("scale")
+                or lk:find("center") or lk:find("transform") or lk:find("project") or lk:find("inset")) then
                 names[#names + 1] = k
             end
         end
@@ -242,7 +242,7 @@ export function command(rest: string?)
             after(1.2, nextMount)
         end
         m:SetScript("OnModelLoaded", function() after(0.2, function() record("loaded") end) end)
-        pcall(m.SetDisplayInfo, m, e.display)
+        pcall(m.SetDisplayInfo, m, e.display :: number)
         pcall(m.SetFacing, m, 0)
         after(2.5, function() record("timeout") end)
     end

@@ -37,10 +37,11 @@ end
 local PASSES = { 0, 2, 6 }
 
 export function command()
-    local mapID = (WorldMapFrame and WorldMapFrame:IsShown() and WorldMapFrame:GetMapID()) or C_Map.GetBestMapForUnit("player")
+    local mapID: number? = (WorldMapFrame and WorldMapFrame:IsShown() and WorldMapFrame:GetMapID()) or C_Map.GetBestMapForUnit("player")
     local starts = questStarts
-    local out = { at = date("%H:%M:%S"), mapID = mapID, map = {}, log = {}, counts = { quests = 0, ours = 0 } }
-    local ids, seen, inLog = {}, {}, {}
+    local counts: { [string]: number } = { quests = 0, ours = 0 }
+    local out = { at = date("%H:%M:%S"), mapID = mapID, map = {}, log = {}, counts = counts }
+    local ids: number[], seen: { [number]: boolean }, inLog: { [number]: boolean } = {}, {}, {}
     for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
         local info = C_QuestLog.GetInfo(i)
         if info and not info.isHeader and info.questID then inLog[info.questID] = true end
@@ -54,28 +55,29 @@ export function command()
             end
         end
     end
-    local answers = {}
+    local answers: { [number]: string[] } = {}
     local function pass(n: number)
         local tagged = 0
         for _, id in ipairs(ids) do
-            answers[id] = answers[id] or {}
+            local a = answers[id] or {}
+            answers[id] = a
             local tag = tagOf(id)
-            answers[id][n] = tag
+            a[n] = tag
             if tag:find("tagID=") then tagged = tagged + 1 end
             if n == 1 and C_QuestLog.RequestLoadQuestByID then pcall(C_QuestLog.RequestLoadQuestByID, id) end
         end
-        out.counts["tagged" .. PASSES[n] .. "s"] = tagged
+        counts["tagged" .. PASSES[n] .. "s"] = tagged
     end
     local function finish()
         for _, id in ipairs(ids) do
             local q = starts.quests and starts.quests[id]
             local ours = starts.group and starts.group[id]
-            if ours then out.counts.ours = out.counts.ours + 1 end
-            local a = answers[id]
+            if ours then counts.ours = (counts.ours or 0) + 1 end
+            local a = answers[id] or {}
             table.insert(tbl.listAt(out, "map"), ("%d %s: now %s | 2 s %s | 6 s %s · group %s · ours %s"):format(id, tostring(q and q[1]),
                 a[1], a[2], a[3], groupOf(id), tostring(ours)))
         end
-        out.counts.quests = #ids
+        counts.quests = #ids
         for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
             local info = C_QuestLog.GetInfo(i)
             if info and not info.isHeader and info.questID then
@@ -85,7 +87,7 @@ export function command()
         end
         DB.probe.questGroup = out
         print(("Quest group probe done: %d quests on map %s not in your log, tagged %d now, %d after 2 s, %d after 6 s (%d in SuuUI's data). /reload to save it.")
-            :format(#ids, tostring(mapID), out.counts.tagged0s, out.counts.tagged2s, out.counts.tagged6s, out.counts.ours))
+            :format(#ids, tostring(mapID), counts.tagged0s or 0, counts.tagged2s or 0, counts.tagged6s or 0, counts.ours))
     end
     pass(1)
     print(("Quest group probe: asking about %d quests on map %s, again in 2 and 6 seconds…"):format(#ids, tostring(mapID)))

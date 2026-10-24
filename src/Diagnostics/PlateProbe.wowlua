@@ -17,6 +17,7 @@ import after from "wowlua:timer"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import * as Events from "/Core/Events"
+import * as tbl from "wowlua:table"
 
 -- owns the fight listeners (was the probe's table)
 local OWNER = {}
@@ -39,7 +40,9 @@ end
 
 local function forbidden(frame: unknown): string
     if not frame then return "none" end
-    local ok, f = pcall(frame.IsForbidden, frame)
+    local isForbidden = tbl.field(frame, "IsForbidden")
+    if type(isForbidden) ~= "function" then return "error" end
+    local ok, f = pcall(isForbidden, frame)
     if not ok then return "error" end
     return f and "forbidden" or "ok"
 end
@@ -77,13 +80,12 @@ local function environment(): { [string]: string }
 end
 
 local function samplePlate(unit: string): { [string]: string }
-    local plate: any = C_NamePlate.GetNamePlateForUnit(unit)
+    local plate = C_NamePlate.GetNamePlateForUnit(unit)
     local r: { [string]: string } = {}
     r.plate = forbidden(plate)
     if plate and r.plate == "ok" then
-        local uf = plate.UnitFrame
-        r.unitFrame = forbidden(uf)
-        r.stackingBounds = plate.SetStackingBoundsFrame and "function" or "missing"
+        r.unitFrame = forbidden(tbl.field(plate, "UnitFrame"))
+        r.stackingBounds = tbl.field(plate, "SetStackingBoundsFrame") and "function" or "missing"
     end
     r.name = try(UnitName, unit)
     r.attackable = try(UnitCanAttack, "player", unit)
@@ -92,9 +94,9 @@ local function samplePlate(unit: string): { [string]: string }
     r.threatOnYou = try(UnitThreatSituation, "player", unit)
     r.isTarget = try(UnitIsUnit, unit, "target")
     r.reaction = try(UnitReaction, unit, "player")
-    local okCast, castName, _, _, _, _, _, _, notInterruptible = pcall(UnitCastingInfo :: any, unit)
+    local okCast, castName, _, _, _, _, _, _, notInterruptible = pcall(UnitCastingInfo, unit)
     r.casting = not okCast and "error" or (isSecret(castName) and "secret" or (castName and ("readable: " .. castName) or "none"))
-    if okCast and castName ~= nil then r.castInterruptible = describe(notInterruptible) end
+    if okCast and (isSecret(castName) or castName ~= nil) then r.castInterruptible = describe(notInterruptible) end
     r.castDuration = UnitCastingDuration and try(UnitCastingDuration, unit) or "missing"
     return r
 end

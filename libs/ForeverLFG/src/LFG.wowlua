@@ -17,10 +17,12 @@
 
 import type CatalogueApi from "./Catalogue"
 import type ChatApi from "./Chat"
-import type Interest, MatchReason from "./Interest"
+import type Interest, MatchReason, ContactNews from "./Interest"
 import type ParserApi, LangApi from "./Parser"
 import type StoreApi, Entry, Filter from "./Store"
 import type ToolApi, Listing from "./Tool"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 
 export const version = "0.1.0"
 
@@ -61,24 +63,24 @@ export type ForeverLFG = {
     parts: Part[],
     running: boolean,
     OnConfigure?: () -> (),
-    Configure: (t: { [string]: any }?) -> (),
-    On: (event: string, fn: Listener) -> Listener,
-    Off: (event: string, fn: Listener) -> (),
-    Fire: (event: string, ...any) -> (),
+    Configure: (t: { [string]: unknown }?) -> (),
+    On: <E extends LfgEvent>(event: E, fn: LfgEvents[E]) -> LfgEvents[E],
+    Off: <E extends LfgEvent>(event: E, fn: LfgEvents[E]) -> (),
+    Fire: (event: LfgEvent, ...unknown) -> (),
     AddPart: (part: Part) -> (),
     Start: () -> (),
     Stop: () -> (),
     Now: () -> number,
     Catalogue: CatalogueApi,
     Chat: ChatApi,
-    IsHiddenChannel: (name: any) -> boolean,
+    IsHiddenChannel: (name: unknown) -> boolean,
     Interest: () -> Interest,
-    Watch: (key: string, on: any) -> (),
+    Watch: (key: string, on: unknown) -> (),
     Watches: () -> { [string]: boolean },
     Languages: () -> string[],
     MatchReasons: (e: Entry?, interest: Interest?) -> MatchReason[],
     ContactedAt: (key: string?) -> number?,
-    Social: (name: any) -> string?,
+    Social: (name: unknown) -> string?,
     Parser: ParserApi,
     Lang: LangApi,
     Store: StoreApi,
@@ -88,7 +90,7 @@ export type ForeverLFG = {
     Refresh: (category: number?) -> boolean,
     ToolAge: (category: number?) -> number?,
     Listing: () -> Listing?,
-    Delist: () -> (boolean?, any),
+    Delist: () -> (boolean?, unknown),
     CanInvite: (e: Entry?) -> boolean,
     Invite: (e: Entry?) -> (),
     Whisper: (e: Entry?) -> (),
@@ -99,8 +101,8 @@ export type ForeverLFG = {
 -- stay on it as before.
 export const lfg = { version = version, config = config, parts = parts, running = false } :: ForeverLFG
 
-export function configure(t: { [string]: any }?)
-    local into = config :: any
+export function configure(t: { [string]: unknown }?)
+    local into = config :: { [string]: unknown }
     for k, v in pairs(t or {}) do into[k] = v end
     -- LFG.OnConfigure: a hook on the public table, set by whoever wants it
     local hook = lfg.OnConfigure
@@ -111,25 +113,45 @@ end
 -- Events
 --------------------------------------------------------------------------------
 
-export type Listener = (...any) -> ()
+-- The library's events and what each listener gets.
+export type LfgEvents = {
+    EntryAdded: (e: Entry) -> (),
+    EntryUpdated: (e: Entry) -> (),
+    EntryRefreshed: (e: Entry) -> (),
+    EntryRemoved: (e: Entry, reason: string) -> (),
+    Match: (e: Entry, reasons: MatchReason[]) -> (),
+    Contacted: (e: Entry, news: ContactNews) -> (),
+    ToolSearched: (category: number?, count: number) -> (),
+    ToolSearchFailed: (category: number?) -> (),
+    ToolStale: (category: number, age: number?) -> (),
+    ListingExpiring: (seconds: number) -> (),
+    ListingChanged: (listing: Listing?) -> (),
+    Delisted: () -> (),
+}
+export type LfgEvent = keyof LfgEvents
+
+-- A listener as it is kept (each event's own signature, called with
+-- what fire passes).
+export type Listener = (...unknown) -> ()
 
 local listeners: { [string]: Listener[] } = {}
 
-export function on(event: string, fn: Listener): Listener
+export function on<E extends LfgEvent>(event: E, fn: LfgEvents[E]): LfgEvents[E]
     local list: Listener[] = listeners[event] or {}
     listeners[event] = list
-    table.insert(list, fn)
+    table.insert(list, fn :: unknown :: Listener)
     return fn
 end
 
-export function off(event: string, fn: Listener)
+export function off<E extends LfgEvent>(event: E, fn: LfgEvents[E])
     local list = listeners[event]
     if not list then return end
-    for i = #list, 1, -1 do if list[i] == fn then table.remove(list, i) end end
+    local kept = fn :: unknown :: Listener
+    for i = #list, 1, -1 do if list[i] == kept then table.remove(list, i) end end
 end
 
 -- Every listener runs, whatever another one does.
-export function fire(event: string, ...: any)
+export function fire(event: LfgEvent, ...: unknown)
     local list = listeners[event]
     if not list then return end
     for _, fn in ipairs({ unpack(list) }) do
@@ -169,7 +191,9 @@ end
 
 -- A clock that works in game and in the offline tools.
 export function now(): number
-    return (GetTime and GetTime()) or (_G :: any).os.time()
+    if GetTime then return GetTime() end
+    local clock = tbl.field(_G, "os", "time")
+    return type(clock) == "function" and secret.asNumber(clock()) or 0
 end
 
 lfg.Configure = configure

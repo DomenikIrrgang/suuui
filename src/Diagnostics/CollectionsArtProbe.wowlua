@@ -43,20 +43,28 @@ local function keyOf(parent: unknown, child: Region): string
     return child:GetName() or ("<" .. child:GetObjectType() .. ">")
 end
 
-local function pointOf(r: unknown): string
+-- a method's first result, protected (nil when it is missing or errors)
+local function ask(obj: unknown, method: string): unknown
+    local fn = tbl.field(obj, method)
+    if type(fn) ~= "function" then return nil end
+    local ok, v = pcall(fn, obj)
+    return ok and v or nil
+end
+
+local function pointOf(r: Region): string
     local ok, p, rel, rp, x, y = pcall(r.GetPoint, r, 1)
     if not ok or not p then return "-" end
-    local relName = rel and (rel.GetName and rel:GetName() or "?") or "nil"
+    local relName = rel and (ask(rel, "GetName") or "?") or "nil"
     return ("%s>%s.%s %s,%s"):format(show(p), show(relName), show(rp), num(x), num(y))
 end
 
-local function textures(frame: unknown, path: string, lines: string[], depth: number)
+local function textures(frame: Frame, path: string, lines: string[], depth: number)
     if depth > 7 or #lines > 600 then return end
-    for _, r in ipairs({ frame:GetRegions() }) do
-        if r:GetObjectType() == "Texture" then
+    for _, r in ipairs(wf.textures(frame)) do
+        do
             -- each on its own: one that can't be read is a line saying why
             local ok, line = pcall(function()
-                local atlas = r.GetAtlas and r:GetAtlas()
+                local atlas = r:GetAtlas()
                 local file = r:GetTexture()
                 local w, h = r:GetSize()
                 local layer, sub = r:GetDrawLayer()
@@ -67,7 +75,7 @@ local function textures(frame: unknown, path: string, lines: string[], depth: nu
             lines[#lines + 1] = ok and line or (path .. ".? error " .. tostring(line))
         end
     end
-    for _, c in ipairs({ frame:GetChildren() }) do
+    for _, c in ipairs(wf.children(frame)) do
         if c:IsShown() then textures(c, path .. "." .. keyOf(frame, c), lines, depth + 1) end
     end
 end
@@ -75,30 +83,32 @@ end
 local PANES = { "MountJournal", "PetJournal", "ToyBox", "HeirloomsJournal", "WardrobeCollectionFrame" }
 
 export function record()
-    local f = _G.CollectionsJournal
+    local f = wf.find("CollectionsJournal")
     if not (f and f:IsShown()) then return end
     local o = out()
     o.at = date("%Y-%m-%d %H:%M:%S")
-    local tabs = {}
-    for i, t in ipairs(f.TabContainer and f.TabContainer.Tabs or {}) do
-        local ok, line = pcall(function()
-            local w, h = t:GetSize()
-            return ("%d id=%s %s %sx%s %s checked=%s enabled=%s skinned=%s type=%s"):format(i, show(t:GetID()), t:IsShown() and "shown" or "hidden",
-                num(w), num(h), pointOf(t), show(t.GetChecked and t:GetChecked()), show(t.IsEnabled and t:IsEnabled()), show(t.suuSkin ~= nil), t:GetObjectType())
+    local tabs: string[] = {}
+    for i, tab in ipairs(tbl.list(tbl.field(f, "TabContainer", "Tabs"))) do
+        local t = wf.asFrame(tab)
+        local ok, line = pcall(function(): string
+            local tf = assert(t, "not a frame")
+            local w, h = tf:GetSize()
+            return ("%d id=%s %s %sx%s %s checked=%s enabled=%s skinned=%s type=%s"):format(i, show(tf:GetID()), tf:IsShown() and "shown" or "hidden",
+                num(w), num(h), pointOf(tf), show(ask(tf, "GetChecked")), show(ask(tf, "IsEnabled")), show(tbl.field(tf, "suuSkin") ~= nil), tf:GetObjectType())
         end)
         tabs[#tabs + 1] = ok and line or (i .. " error " .. tostring(line))
     end
     o.tabs = tabs
-    local own = {}
-    for _, r in ipairs({ f:GetRegions() }) do
-        if r:GetObjectType() == "Texture" and r:IsShown() and (r:GetAlpha() or 0) > 0 then
+    local own: string[] = {}
+    for _, r in ipairs(wf.textures(f)) do
+        if r:IsShown() and (r:GetAlpha() or 0) > 0 then
             local ok, line = pcall(function() return ("%s %s %s"):format(keyOf(f, r), show(r:GetAtlas() or r:GetTexture()), pointOf(r)) end)
             own[#own + 1] = ok and line or ("error " .. tostring(line))
         end
     end
     o.window = own
     for _, name in ipairs(PANES) do
-        local p = _G[name]
+        local p = wf.find(name)
         if p and p:IsShown() then
             local lines: string[] = {}
             local ok, err = pcall(textures, p, name, lines, 0)
@@ -110,14 +120,14 @@ export function record()
 end
 
 export function command()
-    local f = _G.CollectionsJournal
+    local f = wf.find("CollectionsJournal")
     if not (f and f:IsShown()) then
         print("Collections art probe: open Collections first.")
         return
     end
     DB.probe.collectionsArt = {}
     record()
-    if not hooked and _G.CollectionsJournal_UpdateSelectedTab then
+    if not hooked and tbl.field(_G, "CollectionsJournal_UpdateSelectedTab") then
         hooked = true
         -- loaded already (checked above), so this hooks it now
         hook(_G, "CollectionsJournal_UpdateSelectedTab", function()

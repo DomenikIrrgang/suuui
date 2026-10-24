@@ -16,6 +16,7 @@
 
 import lang, parser from "./Parser"
 import languages from "./Interest"
+import * as tbl from "wowlua:table"
 
 -- What a group can be for (Docs/ForeverLFG.md, "Activity").
 export type Activity = {
@@ -46,25 +47,27 @@ local C = catalogue
 local byKey: { [string]: Activity } = {}
 local byTool: { [number]: string } = {}
 
-local function add(key: string, kind: string, tool: number?, size: number?, extra: { [string]: any }?): Activity
+local function add(key: string, kind: string, tool: number?, size: number?, extra: { [string]: unknown }?): Activity
     local a: Activity = { key = key, kind = kind, toolActivity = tool, size = size }
-    for k, v in pairs(extra or {}) do (a :: any)[k] = v end
+    for k, v in pairs(extra or {}) do (a :: { [string]: unknown })[k] = v end
     byKey[key] = a
     if tool then byTool[tool] = key end
     return a
 end
 
 -- Dungeons (category 2 on Forever), the tool's IDs
-local DUNGEONS: { [number]: any }[] = {
-    { "rfc", 798 }, { "wc", 796 }, { "dm", 799 }, { "sfk", 800 }, { "bfd", 801 }, { "stocks" },
-    { "gnomer", 803 }, { "rfk", 804 }, { "smgy", 805 }, { "smlib", 829 }, { "smarm", 827 }, { "smcath", 828 },
-    { "rfd", 806 }, { "ulda", 807 }, { "zf", 808 }, { "mara", 809 }, { "st", 810 }, { "brd", 811 },
-    { "lbrs", 812 }, { "ubrs", 837, 10 }, { "dme", 813 }, { "dmw", 814 }, { "dmn", 815 },
-    { "stratlive", 816 }, { "stratud", 1603 }, { "scholo", 797 },
+local DUNGEONS: { key: string, tool?: number, size?: number }[] = {
+    { key = "rfc", tool = 798 }, { key = "wc", tool = 796 }, { key = "dm", tool = 799 }, { key = "sfk", tool = 800 },
+    { key = "bfd", tool = 801 }, { key = "stocks" }, { key = "gnomer", tool = 803 }, { key = "rfk", tool = 804 },
+    { key = "smgy", tool = 805 }, { key = "smlib", tool = 829 }, { key = "smarm", tool = 827 }, { key = "smcath", tool = 828 },
+    { key = "rfd", tool = 806 }, { key = "ulda", tool = 807 }, { key = "zf", tool = 808 }, { key = "mara", tool = 809 },
+    { key = "st", tool = 810 }, { key = "brd", tool = 811 }, { key = "lbrs", tool = 812 }, { key = "ubrs", tool = 837, size = 10 },
+    { key = "dme", tool = 813 }, { key = "dmw", tool = 814 }, { key = "dmn", tool = 815 }, { key = "stratlive", tool = 816 },
+    { key = "stratud", tool = 1603 }, { key = "scholo", tool = 797 },
     -- Forever's own
-    { "excavation", 1981 }, { "lordaeron", 1982 }, { "dalaran", 1983 }, { "thanes", 1984 },
+    { key = "excavation", tool = 1981 }, { key = "lordaeron", tool = 1982 }, { key = "dalaran", tool = 1983 }, { key = "thanes", tool = 1984 },
 }
-for _, d in ipairs(DUNGEONS) do add("dungeon:" .. d[1], "dungeon", d[2], d[3] or 5) end
+for _, d in ipairs(DUNGEONS) do add("dungeon:" .. d.key, "dungeon", d.tool, d.size or 5) end
 
 -- Umbrellas: a word that means any of several ("SM", "Strat", "DM" for Dire Maul)
 local UMBRELLAS: { [string]: string[] } = {
@@ -76,10 +79,13 @@ local UMBRELLAS: { [string]: string[] } = {
 for key, parts in pairs(UMBRELLAS) do add(key, key:match("^(%a+)") :: string, nil, nil, { parts = parts }) end
 
 -- Raids (no tool category for them at low levels yet)
-local RAIDS: { [number]: any }[] = { { "mc", 40, 60 }, { "ony", 40, 60 }, { "bwl", 40, 60 }, { "zg", 20, 60 },
-                                     { "aq20", 20, 60 }, { "aq40", 40, 60 }, { "naxx", 40, 60 } }
+local RAIDS: { key: string, size: number, level: number }[] = {
+    { key = "mc", size = 40, level = 60 }, { key = "ony", size = 40, level = 60 }, { key = "bwl", size = 40, level = 60 },
+    { key = "zg", size = 20, level = 60 }, { key = "aq20", size = 20, level = 60 }, { key = "aq40", size = 40, level = 60 },
+    { key = "naxx", size = 40, level = 60 },
+}
 for _, r in ipairs(RAIDS) do
-    add("raid:" .. r[1], "raid", nil, r[2], { level = { r[3], r[3] } })
+    add("raid:" .. r.key, "raid", nil, r.size, { level = { r.level, r.level } })
 end
 
 -- World bosses
@@ -142,21 +148,29 @@ end
 -- The tool's categories as kinds; anything new by its size.
 local CATEGORY_KIND: { [number]: string } = { [2] = "dungeon", [116] = "zone", [120] = "custom" }
 
+-- The tool's lists of ids, which the game's data leaves untyped: the
+-- numbers in what a protected call gave (none when it failed).
+local function ids(ok: boolean, list: unknown): number[]
+    local out: number[] = {}
+    if not ok then return out end
+    for _, v in ipairs(tbl.list(list)) do
+        if type(v) == "number" then out[#out + 1] = v end
+    end
+    return out
+end
+
 -- From the tool: each activity's name (client language), its level range,
 -- its category; new activities join. Names go to the parser as words.
 function C.ReadTool()
-    local lfg = C_LFGList :: any
+    local lfg = C_LFGList
     if not (lfg and lfg.GetAvailableCategories) then return end
-    local okCats, cats = pcall(lfg.GetAvailableCategories)
-    for _, cat in ipairs(okCats and cats or {}) do
+    for _, cat in ipairs(ids(pcall(lfg.GetAvailableCategories))) do
         local acts: number[], seen: { [number]: boolean } = {}, {}
         local okG, groups = pcall(lfg.GetAvailableActivityGroups, cat)
         for _, g in ipairs(okG and groups or {}) do
-            local okA, ga = pcall(lfg.GetAvailableActivities, cat, g)
-            for _, id in ipairs(okA and ga or {}) do if not seen[id] then seen[id] = true; acts[#acts + 1] = id end end
+            for _, id in ipairs(ids(pcall(lfg.GetAvailableActivities, cat, g))) do if not seen[id] then seen[id] = true; acts[#acts + 1] = id end end
         end
-        local okA, all = pcall(lfg.GetAvailableActivities, cat, nil)
-        for _, id in ipairs(okA and all or {}) do if not seen[id] then seen[id] = true; acts[#acts + 1] = id end end
+        for _, id in ipairs(ids(pcall(lfg.GetAvailableActivities, cat, nil))) do if not seen[id] then seen[id] = true; acts[#acts + 1] = id end end
         for _, id in ipairs(acts) do
             local okT, t = pcall(lfg.GetActivityInfoTable, id)
             if okT and type(t) == "table" then

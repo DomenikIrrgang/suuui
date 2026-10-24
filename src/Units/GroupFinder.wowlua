@@ -39,7 +39,7 @@ import type MatrixValue from "/UI/SettingsMatrix"
 import type ChipOption from "/UI/Pickers"
 import type Text from "/UI/Text"
 
-import type Interest, Listing from "foreverlfg"
+import type Interest, Listing, LfgEvent, MatchReason from "foreverlfg"
 import * as chatLine from "wowlua:chat"
 import invite as groupInvite from "wowlua:unit"
 
@@ -683,7 +683,8 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         self:RegisterSettings(self:SettingsSection())
         LFG.Start()
         -- the list follows the library
-        for _, ev in ipairs({ "EntryAdded", "EntryUpdated", "EntryRemoved", "ListingChanged" }) do
+        local changes: LfgEvent[] = { "EntryAdded", "EntryUpdated", "EntryRemoved", "ListingChanged" }
+        for _, ev in ipairs(changes) do
             LFG.On(ev, function() self:QueueRender() end)
         end
         LFG.On("ToolSearched", function() self.searching = nil; self:QueueRender() end)
@@ -867,7 +868,7 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     end
 
     -- A group or player that concerns you: one note, for its most telling reason.
-    function OnMatch(e: Entry, reasons: string[])
+    function OnMatch(e: Entry, reasons: MatchReason[])
         if e.you then return end
         local now = LFG.Now()
         local last = self.noted[e.key]
@@ -1068,11 +1069,11 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     function StartNotes()
         if self.notesOn then return end
         self.notesOn = true
-        LFG.On("Match", function(e: Entry, reasons: string[]) self:OnMatch(e, reasons) end)
-        LFG.On("Contacted", function(e: Entry, what: string) self:OnContacted(e, what) end)
-        LFG.On("ToolStale", function(category: number?, age: number?) self:OnStale(category, age) end)
+        LFG.On("Match", function(e, reasons) self:OnMatch(e, reasons) end)
+        LFG.On("Contacted", function(e, what) self:OnContacted(e, what) end)
+        LFG.On("ToolStale", function(category, age) self:OnStale(category, age) end)
         LFG.On("ToolSearched", function() SuuUI.DismissNotification("lfg:stale") end)
-        LFG.On("ListingExpiring", function(seconds: number) self:OnExpiring(seconds) end)
+        LFG.On("ListingExpiring", function(seconds) self:OnExpiring(seconds) end)
         LFG.On("ListingChanged", function(listing: Listing?) self:OnListingChanged(listing) end)
         LFG.On("Delisted", function() self:OnDelisted() end)
         -- your own delisting (the game's Unlist, a note's Delist)

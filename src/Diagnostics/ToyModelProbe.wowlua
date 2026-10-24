@@ -9,20 +9,23 @@
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import SuuUI from "/Core/API"
-import panel from "/UI/Panel"
-import text as uiText from "/UI/Text"
+import panel, Panel from "/UI/Panel"
+import text as uiText, Text from "/UI/Text"
+import type SuuButton from "/UI/Controls"
 import button from "/UI/Controls"
 import after, every from "wowlua:timer"
 
 -- the probe's window, made once
-local window: any
+type ToyWindow = Panel & { model?: PlayerModel, label?: Text, prev?: SuuButton, next?: SuuButton }
+local window: ToyWindow? = nil
 
 export function command()
     local list: number[] = {}
-    for _, itemID in ipairs((SuuUI.CollectionSources() :: any).toys or {}) do list[#list + 1] = itemID end
-    local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S"), toys = {} }
+    for _, itemID in ipairs(SuuUI.CollectionSources().toys) do list[#list + 1] = itemID end
+    local toys: { [number]: string } = {}
+    local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S"), toys = toys }
     DB.probe.toyModels = out
-    local p: any = window or panel(UIParent, { title = "Toy models", width = 800, height = 600, solid = true })
+    local p = window or panel(UIParent, { title = "Toy models", width = 800, height = 600, solid = true }) :: ToyWindow
     window = p
     p:SetFrameStrata("DIALOG")
     p:SetPoint("CENTER")
@@ -47,14 +50,16 @@ export function command()
             local text = ("%d/%d %s (%d): SetItem %s, loaded %s, model file %s"):format(i, #list, name, itemID,
                 ok and "ok" or ("error " .. tostring(err)), tostring(loaded), tostring(file))
             label:SetValue(text)
-            out.toys[itemID] = text
+            toys[itemID] = text
         end)
     end
     if not p.next then
-        p.prev = button(p.body, { text = "Previous", width = 110, onClick = function() show(-1) end })
-        p.prev:SetPoint("BOTTOMLEFT")
-        p.next = button(p.body, { text = "Next", width = 110, onClick = function() show(1) end })
-        p.next:SetPoint("BOTTOMRIGHT")
+        local prev = button(p.body, { text = "Previous", width = 110, onClick = function() show(-1) end })
+        p.prev = prev
+        prev:SetPoint("BOTTOMLEFT")
+        local nextButton = button(p.body, { text = "Next", width = 110, onClick = function() show(1) end })
+        p.next = nextButton
+        nextButton:SetPoint("BOTTOMRIGHT")
     end
     p:Show()
     show(1)

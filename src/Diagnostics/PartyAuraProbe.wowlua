@@ -12,6 +12,7 @@ import PartyFramesModule from "/Units/PartyFrames"
 import SuuUI from "/Core/API"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
+import * as tbl from "wowlua:table"
 
 local function show(v: unknown): string if isSecret(v) then return "secret" end return tostring(v) end
 
@@ -51,9 +52,11 @@ local LISTS = {
 }
 
 local function auraName(unit: string, id: unknown): string
-    local ok, a = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID :: any, unit, id)
+    local get: unknown = C_UnitAuras.GetAuraDataByAuraInstanceID
+    if type(get) ~= "function" then return "#" .. show(id) end
+    local ok, a = pcall(get, unit, id)
     if not ok or not a then return "#" .. show(id) end
-    return ("%s (%s%s)"):format(show(a.name), show(a.spellId), a.isHarmful == true and ", harmful" or "")
+    return ("%s (%s%s)"):format(show(tbl.field(a, "name")), show(tbl.field(a, "spellId")), tbl.field(a, "isHarmful") == true and ", harmful" or "")
 end
 
 local function lists(unit: string): string[]
@@ -92,8 +95,8 @@ export function command(_rest: string?)
             local line: { [string]: unknown } = { unit = unit, name = show(name), auras = auras }
             for _, base in ipairs({ "HELPFUL", "HARMFUL" }) do
                 for i = 1, 40 do
-                    local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex :: any, unit, i, base)
-                    if not ok or not a then break end
+                    local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, base)
+                    if not ok or not a or isSecret(a) then break end
                     local parts: string[] = {}
                     for key, filter in pairs(FILTERS) do
                         local ok2, out2 = pcall(C_UnitAuras.IsAuraFilteredOutByInstanceID, unit, a.auraInstanceID, filter)

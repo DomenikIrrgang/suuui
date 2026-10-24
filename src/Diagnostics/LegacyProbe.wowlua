@@ -14,6 +14,7 @@
 --   /suu probe legacy     (out of combat), then /reload
 
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import * as tbl from "wowlua:table"
@@ -46,11 +47,13 @@ local function call(fn: unknown, ...: unknown): string
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: unknown, ...: unknown): (any, any, any)
+local function raw(fn: unknown, ...: unknown): (unknown, unknown, unknown)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c = pcall(fn, ...)
     if ok then return a, b, c end
 end
+
+local field = tbl.field
 
 local TREES = { 1187, 1188, 1189 }
 local FACTION = 2802
@@ -68,33 +71,35 @@ local function sampleTree(store: Map[], treeID: number)
     t.staged = call(C_Traits.ConfigHasStagedChanges, configID)
     t.canEdit = call(C_Traits.CanEditConfig, configID)
     t.groups = call(C_Traits.GetGroupDisplayInfoByTreeID, treeID)
-    local nodes = raw(C_Traits.GetTreeNodes, treeID) or {}
+    local nodes = tbl.list(raw(C_Traits.GetTreeNodes, treeID))
     t.nodeCount = #nodes
     t.nodes = {}
-    local conds = {}
+    local conds: { [unknown]: boolean } = {}
     for i, nodeID in ipairs(nodes) do
         if i > 80 then break end
         local n = raw(C_Traits.GetNodeInfo, configID, nodeID)
-        local line = { id = nodeID }
+        local line: Map = { id = nodeID }
         if n then
-            line.pos = ("%s,%s"):format(show(n.posX), show(n.posY))
-            line.ranks = ("%s/%s purchased=%s active=%s"):format(show(n.currentRank), show(n.maxRanks), show(n.ranksPurchased), show(n.activeRank))
+            line.pos = ("%s,%s"):format(show(field(n, "posX")), show(field(n, "posY")))
+            line.ranks = ("%s/%s purchased=%s active=%s"):format(show(field(n, "currentRank")), show(field(n, "maxRanks")),
+                show(field(n, "ranksPurchased")), show(field(n, "activeRank")))
             line.state = ("visible=%s available=%s canPurchase=%s canRefund=%s meetsEdges=%s type=%s flags=%s groups=%s"):format(
-                show(n.isVisible), show(n.isAvailable), show(n.canPurchaseRank), show(n.canRefundRank),
-                show(n.meetsEdgeRequirements), show(n.type), show(n.flags), show(n.groupIDs))
-            local edges = {}
-            for _, e in ipairs(n.visibleEdges or {}) do edges[#edges + 1] = show(e) end
+                show(field(n, "isVisible")), show(field(n, "isAvailable")), show(field(n, "canPurchaseRank")), show(field(n, "canRefundRank")),
+                show(field(n, "meetsEdgeRequirements")), show(field(n, "type")), show(field(n, "flags")), show(field(n, "groupIDs")))
+            local edges: string[] = {}
+            for _, e in ipairs(tbl.list(field(n, "visibleEdges"))) do edges[#edges + 1] = show(e) end
             line.edges = table.concat(edges, " ")
-            line.conditions = show(n.conditionIDs)
-            for _, c in ipairs(n.conditionIDs or {}) do conds[c] = true end
-            local entries = {}
-            for _, entryID in ipairs(n.entryIDs or {}) do
+            line.conditions = show(field(n, "conditionIDs"))
+            for _, c in ipairs(tbl.list(field(n, "conditionIDs"))) do conds[c] = true end
+            local entries: string[] = {}
+            for _, entryID in ipairs(tbl.list(field(n, "entryIDs"))) do
                 local entry = raw(C_Traits.GetEntryInfo, configID, entryID)
-                local def = entry and entry.definitionID and raw(C_Traits.GetDefinitionInfo, entry.definitionID)
-                local spellID = def and def.spellID
+                local definitionID = field(entry, "definitionID")
+                local def = definitionID and raw(C_Traits.GetDefinitionInfo, definitionID)
+                local spellID = secret.asNumber(field(def, "spellID"))
                 entries[#entries + 1] = ("%s def=%s spell=%s name=%s icon=%s maxRanks=%s desc=%s"):format(show(entryID),
-                    show(entry and entry.definitionID), show(spellID), show(def and (def.overrideName or (spellID and C_Spell.GetSpellName(spellID)))),
-                    show(def and (def.overrideIcon or (spellID and C_Spell.GetSpellTexture(spellID)))), show(entry and entry.maxRanks),
+                    show(definitionID), show(spellID), show(def and (field(def, "overrideName") or (spellID and C_Spell.GetSpellName(spellID)))),
+                    show(def and (field(def, "overrideIcon") or (spellID and C_Spell.GetSpellTexture(spellID)))), show(field(entry, "maxRanks")),
                     show(C_Traits.GetTraitDescription and raw(C_Traits.GetTraitDescription, entryID, 1)):sub(1, 120))
             end
             line.entries = entries
@@ -108,56 +113,59 @@ local function sampleTree(store: Map[], treeID: number)
     end
 end
 
-export function sample()
+-- What a sample keeps (SuuUIProbe.legacy).
+type Sample = {
+    at: string, level: number, class: (string | Secret<string>)?,
+    points?: Map, trees: Map[], rewards: { faction: string, hidden: string, levels: string[] },
+    challenges: { categories: Map[], count?: number },
+}
+
+export function sample(): Sample
     if C_AddOns and C_AddOns.IsAddOnLoaded and not C_AddOns.IsAddOnLoaded("Blizzard_LegacySystem") then
         pcall(C_AddOns.LoadAddOn, "Blizzard_LegacySystem")
     end
-    local store = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")) }
+    local mf = C_MajorFactions
+    local store: Sample = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")),
+        trees = {}, challenges = { categories = {} },
+        rewards = { faction = call(mf and mf.GetMajorFactionData, FACTION), hidden = call(mf and mf.IsMajorFactionHiddenFromExpansionPage, FACTION), levels = {} } }
     DB.probe.legacy = store
     -- points
+    local legacy = field(_G, "LegacySystem")
     store.points = {
-        renown = call(C_MajorFactions and C_MajorFactions.GetCurrentRenownLevel, FACTION),
+        renown = call(mf and mf.GetCurrentRenownLevel, FACTION),
         maxAvailable = call(C_Traits.GetMaxAvailableTraitCurrency, CURRENCY, false),
         maxAvailableSourced = call(C_Traits.GetMaxAvailableTraitCurrency, CURRENCY, true),
-        blizzardInfo = LegacySystem and LegacySystem.GetCurrencyInfo and call(LegacySystem.GetCurrencyInfo) or "no LegacySystem",
-        constants = show(Constants and Constants.LegacyConsts),
+        blizzardInfo = legacy and call(field(legacy, "GetCurrencyInfo")) or "no LegacySystem",
+        constants = show(field(_G, "Constants", "LegacyConsts")),
     }
     -- the trees
-    store.trees = {}
     for _, id in ipairs(TREES) do
         local ok, err = pcall(sampleTree, store.trees, id)
-        if not ok then table.insert(tbl.listAt(store, "trees"), { id = id, error = tostring(err) }) end
+        if not ok then table.insert(store.trees, { id = id, error = tostring(err) }) end
     end
     -- the reward track
-    local mf = C_MajorFactions
-    store.rewards = {
-        faction = call(mf and mf.GetMajorFactionData, FACTION),
-        hidden = call(mf and mf.IsMajorFactionHiddenFromExpansionPage, FACTION),
-        levels = {},
-    }
-    local levels = mf and raw(mf.GetRenownLevels, FACTION) or {}
+    local levels = tbl.list(mf and raw(mf.GetRenownLevels, FACTION))
     for i, lv in ipairs(levels) do
         if i > 40 then break end
-        table.insert(tbl.listAt(store.rewards, "levels"), show(lv) .. " REWARDS " .. call(mf.GetRenownRewardsForLevel, FACTION, lv.level))
+        table.insert(store.rewards.levels, show(lv) .. " REWARDS " .. call(mf and mf.GetRenownRewardsForLevel, FACTION, field(lv, "level")))
     end
     -- the challenges (achievement categories)
-    store.challenges = { categories = {} }
-    local cats = raw(GetCategoryList) or {}
+    local cats = tbl.list(raw(GetCategoryList))
     store.challenges.count = #cats
     for i, cat in ipairs(cats) do
         if i > 40 then break end
         local name, parent = raw(GetCategoryInfo, cat)
         local total, done, open = raw(GetCategoryNumAchievements, cat)
-        local c = { id = cat, name = show(name), parent = show(parent), counts = ("%s total, %s done, %s open"):format(show(total), show(done), show(open)), items = {} }
-        for j = 1, math.min(4, tonumber(total) or 0) do
+        local c: Map = { id = cat, name = show(name), parent = show(parent), counts = ("%s total, %s done, %s open"):format(show(total), show(done), show(open)), items = {} }
+        for j = 1, math.min(4, secret.asNumber(total) or 0) do
             local info = call(GetAchievementInfo, cat, j)
             local id = raw(GetAchievementInfo, cat, j)
-            local crit = {}
-            local n = id and raw(GetAchievementNumCriteria, id) or 0
-            for k = 1, math.min(3, n or 0) do crit[#crit + 1] = call(GetAchievementCriteriaInfo, id, k) end
+            local crit: string[] = {}
+            local n = id and secret.asNumber(raw(GetAchievementNumCriteria, id)) or 0
+            for k = 1, math.min(3, n) do crit[#crit + 1] = call(GetAchievementCriteriaInfo, id, k) end
             table.insert(tbl.listAt(c, "items"), info:sub(1, 300) .. " CRITERIA(" .. tostring(n) .. ") " .. table.concat(crit, " ; "):sub(1, 300))
         end
-        table.insert(tbl.listAt(store.challenges, "categories"), c)
+        table.insert(store.challenges.categories, c)
     end
     return store
 end
@@ -166,7 +174,7 @@ export function command(_rest: string?)
     if InCombatLockdown() then print("Legacy probe: out of combat, please.") return end
     local store = sample()
     local nodes = 0
-    for _, t in ipairs(store.trees) do nodes = nodes + (t.nodeCount or 0) end
+    for _, t in ipairs(store.trees) do nodes = nodes + (secret.asNumber(t.nodeCount) or 0) end
     print(("Legacy probe: %d trees (%d nodes), %d reward levels, %d challenge categories. /reload to save."):format(
         #store.trees, nodes, #store.rewards.levels, store.challenges.count or 0))
 end

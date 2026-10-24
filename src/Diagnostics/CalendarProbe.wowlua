@@ -14,6 +14,7 @@ import print from "/Core/Init"
 import isSecret from "wowlua:secret"
 import after from "wowlua:timer"
 import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 
 
 local function show(v: unknown, depth: number?): string
@@ -31,23 +32,24 @@ local function show(v: unknown, depth: number?): string
     return "{" .. table.concat(parts, ", ") .. "}"
 end
 
-local function call(t: unknown, name: string, ...: unknown): (any, any, any)
-    if not (t and type(t[name]) == "function") then return "missing" end
-    local ok, a, b, c = pcall(t[name], ...)
+local function call(t: unknown, name: string, ...: unknown): (unknown, unknown, unknown)
+    local fn = tbl.field(t, name)
+    if type(fn) ~= "function" then return "missing" end
+    local ok, a, b, c = pcall(fn, ...)
     if not ok then return "error: " .. tostring(a) end
     return a, b, c
 end
 
 export function snapshot(waited: boolean)
-    local s = { at = date("%Y-%m-%d %H:%M:%S"), waited = waited }
+    local functions: string[] = {}
+    local s: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S"), waited = waited, functions = functions }
     DB.probe.calendar = s
     local cal = C_Calendar
     s.exists = cal ~= nil
-    s.functions = {}
-    for k, v in pairs((cal or {}) :: any) do
-        if type(v) == "function" then table.insert(tbl.listAt(s, "functions"), k) end
+    for k, v in pairs(cal or {}) do
+        if type(v) == "function" and type(k) == "string" then functions[#functions + 1] = k end
     end
-    table.sort(s.functions)
+    table.sort(functions)
     local now = C_DateAndTime and call(C_DateAndTime, "GetCurrentCalendarTime")
     s.now = show(now)
     if not (cal and type(now) == "table") then
@@ -59,31 +61,34 @@ export function snapshot(waited: boolean)
     local holidays = 0
     for offset = 0, 1 do
         local info = call(cal, "GetMonthInfo", offset)
-        local m = { info = show(info), events = {} }
+        local events: { [string]: unknown }[] = {}
+        local m = { info = show(info), events = events }
         table.insert(tbl.listAt(s, "months"), m)
-        local days = type(info) == "table" and info.numDays or 31
+        local days = secret.asNumber(tbl.field(info, "numDays")) or 31
         for day = 1, days do
             local n = call(cal, "GetNumDayEvents", offset, day)
-            for i = 1, (type(n) == "number" and n or 0) do
+            for i = 1, (secret.asNumber(n) or 0) do
                 local e = call(cal, "GetDayEvent", offset, day, i)
-                local entry = { day = day, event = show(e) }
-                if type(e) == "table" and e.calendarType == "HOLIDAY" then
+                local entry: { [string]: unknown } = { day = day, event = show(e) }
+                if tbl.field(e, "calendarType") == "HOLIDAY" then
                     holidays = holidays + 1
                     entry.holiday = show((call(cal, "GetHolidayInfo", offset, day, i)))
                 end
                 -- one line per event a day, not one per day it lasts
-                if #m.events < 120 then table.insert(tbl.listAt(m, "events"), entry) end
+                if #events < 120 then events[#events + 1] = entry end
             end
         end
     end
     -- today's
-    s.today = {}
-    local n = call(cal, "GetNumDayEvents", 0, now.monthDay)
-    for i = 1, (type(n) == "number" and n or 0) do
-        table.insert(tbl.listAt(s, "today"), show((call(cal, "GetDayEvent", 0, now.monthDay, i))))
+    local today: string[] = {}
+    s.today = today
+    local monthDay = tbl.field(now, "monthDay")
+    local n = call(cal, "GetNumDayEvents", 0, monthDay)
+    for i = 1, (secret.asNumber(n) or 0) do
+        today[#today + 1] = show((call(cal, "GetDayEvent", 0, monthDay, i)))
     end
     print(("Calendar probe: %d events today, %d holiday days in two months%s; /reload."):format(
-        #s.today, holidays, waited and "" or " (the calendar didn't answer in 5 s)"))
+        #today, holidays, waited and "" or " (the calendar didn't answer in 5 s)"))
 end
 
 export function command()

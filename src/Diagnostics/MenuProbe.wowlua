@@ -10,15 +10,17 @@ import * as DB from "/Core/DB"
 import after from "wowlua:timer"
 import hook from "wowlua:hooks"
 import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 
 local armed, hooked = false, false
 
-local function describe(f: unknown, menuTop: number): string
+local function describe(f: Frame, menuTop: number): string
     local t, b = f:GetTop(), f:GetBottom()
     local texts: string[], regions: string[] = {}, {}
     for _, r in ipairs({ f:GetRegions() }) do
         local kind = r:GetObjectType()
-        if kind == "FontString" then texts[#texts + 1] = tostring(r:GetText()) end
+        local fs = frames.asFontString(r)
+        if fs then texts[#texts + 1] = tostring(fs:GetText()) end
         regions[#regions + 1] = kind .. (r:IsShown() and "" or "(hidden)") .. ("a%.2f"):format(r:GetAlpha() or 0)
     end
     return ("%s shown=%s alpha=%.2f top=%s bottom=%s h=%s text=[%s] regions=%s kids=%d"):format(
@@ -29,8 +31,8 @@ local function describe(f: unknown, menuTop: number): string
 end
 
 export function command()
-    local mgr: any = _G.UnitPopupManager
-    if not (mgr and mgr.OpenMenu) then print("Unit menu probe: no UnitPopupManager.") return end
+    local mgr = tbl.field(_G, "UnitPopupManager")
+    if not (type(mgr) == "table" and tbl.field(mgr, "OpenMenu")) then print("Unit menu probe: no UnitPopupManager.") return end
     armed = true
     if not hooked then
         hooked = true
@@ -38,17 +40,16 @@ export function command()
             if not armed then return end
             armed = false
             after(0.1, function()
-                local M: any = _G.Menu
-                local manager = M and M.GetManager and M.GetManager()
-                local menu = manager and manager:GetOpenMenu()
+                local menu = Menu and Menu.GetManager():GetOpenMenu()
                 local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S"), children = {}, target = {} }
                 DB.probe.unitMenu = out
                 if not menu then out.menu = "none open" return end
                 local top = menu:GetTop() or 0
+                local box = frames.asFrame(tbl.field(menu, "ScrollBox"))
                 out.menu = ("top=0 bottom=%.0f h=%.0f w=%.0f scroll=%s"):format(top - (menu:GetBottom() or 0), menu:GetHeight() or 0,
-                    menu:GetWidth() or 0, tostring(menu.ScrollBox and menu.ScrollBox:IsShown()))
+                    menu:GetWidth() or 0, tostring(box and box:IsShown()))
                 for _, c in ipairs({ menu:GetChildren() }) do table.insert(tbl.listAt(out, "children"), describe(c, top)) end
-                local target = menu.ScrollBox and menu.ScrollBox.ScrollTarget
+                local target = frames.asFrame(tbl.field(box, "ScrollTarget"))
                 if target then
                     for _, c in ipairs({ target:GetChildren() }) do table.insert(tbl.listAt(out, "target"), describe(c, top)) end
                 end

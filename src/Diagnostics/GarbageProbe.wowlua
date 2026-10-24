@@ -12,12 +12,24 @@ import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import * as modules from "/Core/Modules"
 import * as settings from "/Core/Settings"
+import * as tbl from "wowlua:table"
 
 local RUNS = 10
 
-local function mod(id: string): any
-    local m: any = modules.get(id)
-    return m and m.IsEnabled and m:IsEnabled() and m or nil
+local field = tbl.field
+
+-- A module of SuuUI's, if it is on.
+local function mod(id: string): modules.AnyModule?
+    local m = modules.get(id)
+    return m and m:IsEnabled() and m or nil
+end
+
+-- `obj:name(...)` as a job, when `obj` has the method.
+local function bound(obj: unknown, name: string, ...: unknown): (() -> ())?
+    local fn = field(obj, name)
+    if type(fn) ~= "function" then return nil end
+    local args, n = { ... }, select("#", ...)
+    return function() fn(obj, unpack(args, 1, n)) end
 end
 
 -- The action buttons SuuUI made (bars 1-8).
@@ -25,7 +37,7 @@ local function actionButtons(): unknown[]
     local out: unknown[] = {}
     for bar = 1, 8 do
         for i = 1, 12 do
-            local b = _G["SuuUIActionBar" .. bar .. "Button" .. i]
+            local b = field(_G, "SuuUIActionBar" .. bar .. "Button" .. i)
             if b then out[#out + 1] = b end
         end
     end
@@ -35,7 +47,8 @@ end
 local function eachMethod(list: unknown[], method: string): () -> ()
     return function()
         for _, b in ipairs(list) do
-            if b[method] then b[method](b) end
+            local fn = field(b, method)
+            if type(fn) == "function" then fn(b) end
         end
     end
 end
@@ -52,42 +65,36 @@ local function jobs(): Job[]
             add("ActionButton:" .. method, eachMethod(buttons, method), #buttons .. " buttons")
         end
     end
-    local stance: any = _G.SuuUIStanceBar
-    if stance and stance.buttons then add("Stance button Update", eachMethod(stance.buttons, "Update"), #stance.buttons .. " buttons") end
+    local stance = tbl.list(field(_G, "SuuUIStanceBar", "buttons"))
+    if #stance > 0 then add("Stance button Update", eachMethod(stance, "Update"), #stance .. " buttons") end
     local chat = mod("chat")
-    if chat then
-        add("Chat:Tick", function() chat:Tick() end)
-        add("Chat:UpdateTabs", function() chat:UpdateTabs() end)
-    end
-    local threat = mod("threat")
-    if threat then add("Threat:Update", function() threat:Update() end) end
-    local micro = mod("micromenu")
-    if micro then add("MicroMenu:UpdateActive", function() micro:UpdateActive() end) end
-    local notes = mod("notifications")
-    if notes then add("Notifications:Tick", function() notes:Tick() end) end
+    add("Chat:Tick", bound(chat, "Tick"))
+    add("Chat:UpdateTabs", bound(chat, "UpdateTabs"))
+    add("Threat:Update", bound(mod("threat"), "Update"))
+    add("MicroMenu:UpdateActive", bound(mod("micromenu"), "UpdateActive"))
+    add("Notifications:Tick", bound(mod("notifications"), "Tick"))
     local tracker = mod("tracker")
-    if tracker then
-        add("ObjectiveTracker:Refresh", function() tracker:Refresh() end)
-        add("ObjectiveTracker:TickItems", function() tracker:TickItems() end)
-    end
-    local ready = mod("readiness")
-    if ready then add("Readiness:Update", function() ready:Update() end) end
+    add("ObjectiveTracker:Refresh", bound(tracker, "Refresh"))
+    add("ObjectiveTracker:TickItems", bound(tracker, "TickItems"))
+    add("Readiness:Update", bound(mod("readiness"), "Update"))
     local cds = mod("cooldowns")
-    if cds and cds.tracker then
-        add("CooldownTracker:UpdateCooldowns", function() cds.tracker:UpdateCooldowns(true) end)
-        add("CooldownManager:Lists", function() cds:Lists(cds:EditSpec()) end)
+    local cdTracker = field(cds, "tracker")
+    if cdTracker then
+        add("CooldownTracker:UpdateCooldowns", bound(cdTracker, "UpdateCooldowns", true))
+        local editSpec, lists = field(cds, "EditSpec"), field(cds, "Lists")
+        if type(editSpec) == "function" and type(lists) == "function" then
+            add("CooldownManager:Lists", function() lists(cds, editSpec(cds)) end)
+        end
     end
-    local party = mod("party")
-    if party then add("Party:UpdateRange", function() party:UpdateRange() end) end
-    local raid = mod("raid")
-    if raid then add("Raid:UpdateRange", function() raid:UpdateRange() end) end
-    local swing: any = _G.SuuUISwingTimer
-    if swing and swing.Tick then add("SwingTimer:Tick", function() swing:Tick() end) end
+    add("Party:UpdateRange", bound(mod("party"), "UpdateRange"))
+    add("Raid:UpdateRange", bound(mod("raid"), "UpdateRange"))
+    add("SwingTimer:Tick", bound(field(_G, "SuuUISwingTimer"), "Tick"))
     for _, name in ipairs({ "SuuUIPlayerFrame", "SuuUITargetFrame", "SuuUITargetTargetFrame" }) do
-        local f: any = _G[name]
-        if f and f.UpdateHealth then
-            add(name .. ":UpdateHealth", function() f:UpdateHealth(true) end)
-            add(name .. ":UpdatePower", function() f:UpdatePower() end)
+        local f = field(_G, name)
+        local health = bound(f, "UpdateHealth", true)
+        if health then
+            add(name .. ":UpdateHealth", health)
+            add(name .. ":UpdatePower", bound(f, "UpdatePower"))
         end
     end
     -- the settings: a position (a table, copied) and a number
@@ -99,7 +106,8 @@ end
 type Row = { name: string, line: string, kb: number }
 
 export function command()
-    local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S"), inCombat = InCombatLockdown() and true or false, jobs = {} }
+    local lines: string[] = {}
+    local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S"), inCombat = InCombatLockdown() and true or false, jobs = lines }
     local rows: Row[] = {}
     collectgarbage("collect")
     collectgarbage("stop")
@@ -109,7 +117,7 @@ export function command()
         if not ok then
             rows[#rows + 1] = { name = job.name, line = job.name .. ": error " .. tostring(err):sub(1, 120), kb = -1 }
         else
-            local before = collectgarbage("count")
+            local before: number = collectgarbage("count")
             for _ = 1, RUNS do pcall(job.fn) end
             local per = (collectgarbage("count") - before) / RUNS
             rows[#rows + 1] = { name = job.name, kb = per,
@@ -118,7 +126,7 @@ export function command()
     end
     collectgarbage("restart")
     table.sort(rows, function(a: Row, b: Row): boolean return a.kb > b.kb end)
-    for i, r in ipairs(rows) do out.jobs[i] = r.line end
+    for i, r in ipairs(rows) do lines[i] = r.line end
     DB.probe.garbage = out
     print(("Garbage probe: %d jobs measured. /reload to save it."):format(#rows))
     for i = 1, math.min(6, #rows) do print("  " .. rows[i].line) end

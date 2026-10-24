@@ -22,13 +22,15 @@
 --     what (a group you whispered): "full", "gone", "reposted"
 
 import * as events from "wowlua:events"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 import config, fire, on, off, now from "./LFG"
 import catalogue from "./Catalogue"
 import entry from "./Store"
 import listing from "./Tool"
 import type Entry from "./Store"
 import type Listing from "./Tool"
-import type Listener, Part from "./LFG"
+import type Part from "./LFG"
 
 -- Why an entry concerns you (LFG.MatchReasons; the Match event).
 export enum MatchReason {
@@ -62,10 +64,10 @@ export type Interest = {
 type State = {
     watches: { [string]: boolean },
     preferred?: string,
-    onAdded?: Listener,
-    onUpdated?: Listener,
-    onRefreshed?: Listener,
-    onRemoved?: Listener,
+    onAdded?: (e: Entry) -> (),
+    onUpdated?: (e: Entry) -> (),
+    onRefreshed?: (e: Entry) -> (),
+    onRemoved?: (e: Entry) -> (),
 }
 
 local I: State = { watches = {} }
@@ -82,14 +84,16 @@ local OWNER = {}
 local LOCALE_BY_NAME: { [string]: string } = { ["English"] = "enUS", ["LatAm Spanish"] = "esMX", ["Brazilian Portuguese"] = "ptBR" }
 
 local function readPreferred()
-    local acc = C_AccountServices :: any
-    if not (acc and acc.GetPreferredPlaySettings and acc.GetPreferredLocales) then return end
-    local ok, loaded, localeID = pcall(acc.GetPreferredPlaySettings)
+    -- (not on every client: read through the namespace untyped)
+    local acc = C_AccountServices
+    local settings, locales = tbl.field(acc, "GetPreferredPlaySettings"), tbl.field(acc, "GetPreferredLocales")
+    if not (type(settings) == "function" and type(locales) == "function") then return end
+    local ok, loaded, localeID = pcall(settings)
     if not (ok and loaded and localeID) then return end
-    local okL, ids, names = pcall(acc.GetPreferredLocales)
+    local okL, ids, names = pcall(locales)
     if not okL or type(ids) ~= "table" then return end
-    for i, id in ipairs(ids :: any[]) do
-        if id == localeID then I.preferred = LOCALE_BY_NAME[names and names[i] or ""] end
+    for i, id in ipairs(tbl.list(ids)) do
+        if id == localeID then I.preferred = LOCALE_BY_NAME[secret.asString(tbl.list(names)[i]) or ""] end
     end
 end
 
@@ -111,11 +115,11 @@ local socials: { [string]: string } = {}
 
 local function readQuests()
     wipe(quests)
-    local ql = C_QuestLog :: any
+    local ql = C_QuestLog
     if not (ql and ql.GetNumQuestLogEntries and ql.GetInfo) then return end
     for i = 1, (ql.GetNumQuestLogEntries()) or 0 do
         local ok, info = pcall(ql.GetInfo, i)
-        if ok and type(info) == "table" and not info.isHeader and info.questID then quests[info.questID] = true end
+        if ok and info and not info.isHeader and info.questID then quests[info.questID] = true end
     end
 end
 
@@ -128,17 +132,17 @@ local function readSocial()
             if ok and type(name) == "string" then socials[Ambiguate(name, "short")] = "guild" end
         end
     end
-    local bn = C_BattleNet :: any
+    local bn = C_BattleNet
     if bn and bn.GetFriendAccountInfo and BNGetNumFriends then
         for i = 1, (BNGetNumFriends()) or 0 do
             local ok, info = pcall(bn.GetFriendAccountInfo, i)
-            local game = ok and type(info) == "table" and info.gameAccountInfo
-            if game and type(game.characterName) == "string" then socials[game.characterName] = "friend" end
+            local name = ok and secret.asString(tbl.field(info, "gameAccountInfo", "characterName"))
+            if name then socials[name] = "friend" end
         end
     end
 end
 
-export function social(name: any): string?
+export function social(name: unknown): string?
     if type(name) ~= "string" then return nil end
     return socials[name] or socials[Ambiguate and Ambiguate(name, "short") or name]
 end
@@ -163,7 +167,7 @@ export function interest(): Interest
     }
 end
 
-export function watch(key: string, isOn: any)
+export function watch(key: string, isOn: unknown)
     I.watches[key] = isOn and true or nil
 end
 
@@ -246,7 +250,7 @@ local function contactedUpdate(e: Entry, removed: boolean?)
     end
 end
 
-local function onEvent(event: string, _: any, a2: any)
+local function onEvent(event: string, _: unknown, a2: unknown)
     if event == "QUEST_LOG_UPDATE" then readQuests()
     elseif event == "PREFERRED_PLAY_SETTINGS_UPDATED" then readPreferred()
     elseif event == "CHAT_MSG_WHISPER_INFORM" then
@@ -261,20 +265,18 @@ export const part = {
         readQuests()
         readSocial()
         readPreferred()
-        local acc = C_AccountServices :: any
-        if acc and acc.RequestPreferredPlaySettings then
-            pcall(acc.RequestPreferredPlaySettings)
-        end
+        local request = tbl.field(C_AccountServices, "RequestPreferredPlaySettings")
+        if type(request) == "function" then pcall(request) end
         for _, ev in ipairs({ "QUEST_LOG_UPDATE", "GUILD_ROSTER_UPDATE", "BN_FRIEND_INFO_CHANGED",
                               "PREFERRED_PLAY_SETTINGS_UPDATED", "CHAT_MSG_WHISPER_INFORM" }) do
-            events.on(ev, function(...: any) onEvent(ev, ...) end, OWNER)
+            events.on(ev, function(...: unknown) onEvent(ev, ...) end, OWNER)
         end
-        local onAdded: Listener = I.onAdded or function(e: Entry) check(e) end
-        local onUpdated: Listener = I.onUpdated or function(e: Entry) check(e); contactedUpdate(e) end
-        local onRefreshed: Listener = I.onRefreshed or function(e: Entry)
+        local onAdded = I.onAdded or function(e: Entry) check(e) end
+        local onUpdated = I.onUpdated or function(e: Entry) check(e); contactedUpdate(e) end
+        local onRefreshed = I.onRefreshed or function(e: Entry)
             if contacted[e.key] and e.intent == "group" and (e.need or 1) > 0 then fire("Contacted", e, ContactNews.Reposted) end
         end
-        local onRemoved: Listener = I.onRemoved or function(e: Entry) contactedUpdate(e, true) end
+        local onRemoved = I.onRemoved or function(e: Entry) contactedUpdate(e, true) end
         I.onAdded, I.onUpdated, I.onRefreshed, I.onRemoved = onAdded, onUpdated, onRefreshed, onRemoved
         on("EntryAdded", onAdded)
         on("EntryUpdated", onUpdated)

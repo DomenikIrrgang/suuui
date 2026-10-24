@@ -9,6 +9,7 @@ import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import isSecret from "wowlua:secret"
 import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 
 local function show(v: unknown): string
     if isSecret(v) then return "SECRET" end
@@ -18,10 +19,11 @@ end
 -- the atlases (or files) of a pin's own textures
 local function art(pin: unknown): string
     local out: string[] = {}
-    for _, r in ipairs({ pin:GetRegions() }) do
-        if r.GetAtlas and r:IsShown() then
+    local f = frames.asFrame(pin)
+    for _, r in ipairs(f and frames.textures(f) or {}) do
+        if r:IsShown() then
             local a = r:GetAtlas()
-            local t = not a and r.GetTexture and r:GetTexture()
+            local t = not a and r:GetTexture()
             if a or t then out[#out + 1] = show(a or t) end
         end
     end
@@ -31,14 +33,16 @@ end
 local function describe(pin: unknown): string
     local parts: string[] = {}
     for _, key in ipairs({ "poiInfo", "areaPoiInfo", "vignetteInfo", "plotInfo", "taxiNodeData" }) do
-        local i = pin[key]
+        local i = tbl.field(pin, key)
         if type(i) == "table" then
-            parts[#parts + 1] = ("%s: name %s, atlas %s, id %s"):format(key, show(i.name), show(i.atlasName),
-                show(i.areaPoiID or i.poiID or i.vignetteID or i.plotDataID or i.nodeID))
+            local field = function(k: string): unknown return tbl.field(i, k) end
+            parts[#parts + 1] = ("%s: name %s, atlas %s, id %s"):format(key, show(field("name")), show(field("atlasName")),
+                show(field("areaPoiID") or field("poiID") or field("vignetteID") or field("plotDataID") or field("nodeID")))
         end
     end
-    local x, y = nil, nil
-    if pin.GetPosition then x, y = pin:GetPosition() end
+    local x: unknown, y: unknown = nil, nil
+    local position = tbl.field(pin, "GetPosition")
+    if type(position) == "function" then x, y = position(pin) end
     parts[#parts + 1] = ("at %s,%s"):format(show(x), show(y))
     parts[#parts + 1] = "art " .. art(pin)
     return table.concat(parts, "; ")

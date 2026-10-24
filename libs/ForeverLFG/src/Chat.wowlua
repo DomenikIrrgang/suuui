@@ -12,6 +12,8 @@
 
 import * as events from "wowlua:events"
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 import config, isRunning, now from "./LFG"
 import type Part from "./LFG"
 import parser from "./Parser"
@@ -52,18 +54,18 @@ export type ChatApi = {
     Hide: () -> (),
     Join: () -> (),
     Leave: () -> (),
-    Read: (event: string, ...any) -> (),
+    Read: (event: string, ...unknown) -> (),
 }
 
 export const chat = {} :: ChatApi
 local CH = chat
 
-local isSecret: (v: any) -> boolean = issecretvalue or function(_: any) return false end
+local isSecret: (v: unknown) -> boolean = issecretvalue or function(_: unknown) return false end
 local LFG_CHANNEL = "LookingForGroup"
 -- the events' owner (wowlua:events), for Stop
 local OWNER = {}
 
-export function isHiddenChannel(name: any): boolean
+export function isHiddenChannel(name: unknown): boolean
     return isRunning() and config.hideLookingForGroup and type(name) == "string"
         and name:lower() == LFG_CHANNEL:lower() or false
 end
@@ -72,9 +74,10 @@ end
 local function windowsWith(channel: string): number[]
     local out: number[] = {}
     for i = 1, (NUM_CHAT_WINDOWS or 10) do
-        local list: any[] = { GetChatWindowChannels(i) }
+        local list: unknown[] = { GetChatWindowChannels(i) }
         for j = 1, #list, 2 do
-            if type(list[j]) == "string" and list[j]:lower() == channel:lower() then out[#out + 1] = i end
+            local name = list[j]
+            if type(name) == "string" and name:lower() == channel:lower() then out[#out + 1] = i end
         end
     end
     return out
@@ -83,8 +86,9 @@ end
 function CH.Hide()
     if not config.hideLookingForGroup or InCombatLockdown() then return end
     for _, i in ipairs(windowsWith(LFG_CHANNEL)) do
-        local cf = (_G :: any)["ChatFrame" .. i]
-        if cf and cf.RemoveChannel then pcall(cf.RemoveChannel, cf, LFG_CHANNEL) end
+        local cf = tbl.field(_G, "ChatFrame" .. i)
+        local remove = tbl.field(cf, "RemoveChannel")
+        if type(remove) == "function" then pcall(remove, cf, LFG_CHANNEL) end
     end
 end
 
@@ -92,7 +96,7 @@ function CH.Join()
     if not config.joinLookingForGroup then return end
     local index = GetChannelName(LFG_CHANNEL)
     if not index or index == 0 then
-        pcall(JoinChannelByName :: any, LFG_CHANNEL)
+        pcall(JoinChannelByName, LFG_CHANNEL)
         CH.joined = true
     end
     after(1, CH.Hide)
@@ -106,9 +110,10 @@ end
 -- Your own whole name, from SuuUI when it's there (SuuUI.FullName: Forever's
 -- characters have a surname). A soft use of the host addon's public API:
 -- the library imports nothing from SuuUI.
-local function player(): any
-    local host = (_G :: any).SuuUI
-    return host and host.FullName and host.FullName("player")
+local function player(): string?
+    local fullName = tbl.field(_G, "SuuUI", "FullName")
+    if type(fullName) ~= "function" then return nil end
+    return secret.asString(fullName("player"))
 end
 
 -- What happened to the lines, for diagnostics: seen, secret, channel off,
@@ -116,21 +121,21 @@ end
 CH.stats = { seen = 0, secret = 0, channelOff = 0, nothing = 0, lowConfidence = 0, entries = 0, errors = 0 }
 
 local function count(k: string)
-    local stats = CH.stats :: any
+    local stats = CH.stats :: { [string]: number }
     stats[k] = (stats[k] or 0) + 1
 end
 
 -- One line.
-function CH.Read(event: string, text: any, author: any, _: any, channelName: any, _: any, _: any, _: any, _: any,
-                 channelBase: any, _: any, _: any, guid: any)
+function CH.Read(event: string, text: unknown, author: unknown, _: unknown, channelName: unknown, _: unknown, _: unknown, _: unknown,
+                 _: unknown, channelBase: unknown, _: unknown, _: unknown, guid: unknown)
     count("seen")
     if isSecret(text) or isSecret(author) or type(text) ~= "string" or type(author) ~= "string" then count("secret") return end
-    local channel
+    local channel: string
     if event == "CHAT_MSG_CHANNEL" then
-        channel = (type(channelBase) == "string" and channelBase ~= "" and channelBase) or channelName
-        if isSecret(channel) or type(channel) ~= "string" then return end
+        local named = (type(channelBase) == "string" and channelBase ~= "" and channelBase) or channelName
+        if isSecret(named) or type(named) ~= "string" then return end
         -- "Trade - City" and the like: the channel's first word
-        channel = channel:match("^(%a+)") or channel
+        channel = named:match("^(%a+)") or named
     else
         channel = event == "CHAT_MSG_SAY" and "SAY" or "YELL"
     end
@@ -142,21 +147,22 @@ function CH.Read(event: string, text: any, author: any, _: any, channelName: any
     local key = author
     local old = entry(key)
     local prev = old and old.sources.chat
-    local class
-    if not isSecret(guid) and type(guid) == "string" and GetPlayerInfoByGUID then
-        local ok, _, file = pcall(GetPlayerInfoByGUID, guid)
-        if ok then class = file end
+    local class: string? = nil
+    local plainGuid = not isSecret(guid) and type(guid) == "string" and guid or nil
+    if plainGuid and GetPlayerInfoByGUID then
+        local ok, _, file = pcall(GetPlayerInfoByGUID, plainGuid)
+        if ok then class = secret.asString(file) end
     end
     local data: ChatSource = {
         channel = channel, text = text, intent = r.intent, activities = r.activities, quests = r.quests,
         roles = r.roles, classes = r.classes, need = r.need, members = r.members, level = r.level,
-        confidence = r.confidence, languages = r.languages, guid = not isSecret(guid) and guid or nil, class = class,
+        confidence = r.confidence, languages = r.languages, guid = plainGuid, class = class,
         lastPost = now(), posts = (prev and prev.posts or 0) + 1, self = (author == player()),
     }
     store.Put(key, "chat", data)
 end
 
-local function onEvent(event: string, ...: any)
+local function onEvent(event: string, ...: unknown)
     if event == "CHANNEL_UI_UPDATE" then
         -- joined (by anyone): off the windows again
         after(0.5, CH.Hide)
@@ -173,7 +179,7 @@ end
 export const part = {
     Start = function()
         for _, e in ipairs({ "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHANNEL_UI_UPDATE" }) do
-            events.on(e, function(...: any) onEvent(e, ...) end, OWNER)
+            events.on(e, function(...: unknown) onEvent(e, ...) end, OWNER)
         end
         -- after the login's own channel joins
         after(5, CH.Join)

@@ -15,8 +15,12 @@ import button from "/UI/Controls"
 import panel as makePanel, Panel from "/UI/Panel"
 import text from "/UI/Text"
 import * as tbl from "wowlua:table"
+import type Text from "/UI/Text"
 
-local panel: Panel? = nil
+-- the probe's panel and what it keeps
+type PortraitPanel = Panel & { model?: PlayerModel, label?: Text, zoom?: number, buttons?: boolean }
+
+local panel: PortraitPanel? = nil
 
 -- the game's animation IDs: stand, talk, exclamation, question, bow, point
 local ANIMS: { id: number, name: string }[] = {
@@ -36,7 +40,7 @@ end
 export function command()
     local out = { at = date("%Y-%m-%d %H:%M:%S"), npcs = {} }
     DB.probe.npcPortrait = out
-    local p = panel or makePanel(UIParent, { title = "NPC portrait", width = 420, height = 520, solid = true })
+    local p = panel or makePanel(UIParent, { title = "NPC portrait", width = 420, height = 520, solid = true }) :: PortraitPanel
     panel = p
     p:SetFrameStrata("DIALOG")
     p:ClearAllPoints()
@@ -70,7 +74,7 @@ export function command()
             p:Show()
             return
         end
-        local e = { event = event, unit = unit, name = UnitName(unit), at = date("%H:%M:%S") }
+        local e: { [string]: unknown } = { event = event, unit = unit, name = UnitName(unit), at = date("%H:%M:%S") }
         entry = e
         table.insert(tbl.listAt(out, "npcs"), e)
         m:SetScript("OnModelLoaded", function()
@@ -82,20 +86,21 @@ export function command()
         end)
         e.setUnit = call(m.SetUnit, m, unit)
         -- the title line under the name (Innkeeper, Warrior Trainer)
-        local info = C_TooltipInfo and C_TooltipInfo.GetUnit and C_TooltipInfo.GetUnit(unit)
+        local info: unknown = C_TooltipInfo and C_TooltipInfo.GetUnit and C_TooltipInfo.GetUnit(unit)
         local lines: string[] = {}
-        for i, line in ipairs(info and info.lines or {}) do
-            if i <= 4 then lines[#lines + 1] = tostring(line.leftText) end
+        for i, line in ipairs(tbl.list(tbl.field(info, "lines"))) do
+            if i <= 4 then lines[#lines + 1] = tostring(tbl.field(line, "leftText")) end
         end
-        e.tooltip = table.concat(lines, " / ")
+        local tooltip = table.concat(lines, " / ")
+        e.tooltip = tooltip
         e.reaction = call(UnitReaction, unit, "player")
         e.creature = call(UnitCreatureType, unit)
-        label:SetValue(("%s (%s): %s"):format(tostring(e.name), event, e.tooltip))
+        label:SetValue(("%s (%s): %s"):format(tostring(e.name), event, tooltip))
         p:Show()
     end
     if not p.buttons then
         p.buttons = true
-        local prev
+        local prev: Button? = nil
         for _, a in ipairs(ANIMS) do
             local b = button(p.body, { text = a.name, width = 60, onClick = function()
                 if entry then entry["played " .. a.name] = call(m.SetAnimation, m, a.id) end

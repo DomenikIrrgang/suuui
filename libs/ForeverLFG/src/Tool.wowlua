@@ -21,6 +21,8 @@
 
 import * as events from "wowlua:events"
 import every from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 import config, fire, now from "./LFG"
 import type Part from "./LFG"
 import catalogue from "./Catalogue"
@@ -71,7 +73,7 @@ export type ToolApi = {
 export const tool = {} :: ToolApi
 local T = tool
 
-local isSecret: (v: any) -> boolean = issecretvalue or function(_: any) return false end
+local isSecret: (v: unknown) -> boolean = issecretvalue or function(_: unknown) return false end
 local DUNGEONS = 2
 
 local ticker: TickerHandle?
@@ -81,9 +83,9 @@ T.lastSearch = {}       -- categoryID -> time
 T.staleFired = {}       -- categoryID -> true once ToolStale went out
 T.pending = nil
 
-local function lfg(): any return C_LFGList end
+local function lfg() return C_LFGList end
 
-local function tableOK(t: any): boolean return type(t) == "table" and not isSecret(t) end
+local function tableOK<T>(t: T?): t is T return type(t) == "table" and not isSecret(t) end
 
 -- One result as the store's tool source.
 local function readResult(id: number, category: number?): (string?, ToolSource?)
@@ -91,7 +93,8 @@ local function readResult(id: number, category: number?): (string?, ToolSource?)
     local ok, info = pcall(L.GetSearchResultInfo, id)
     if not ok or not tableOK(info) then return nil end
     local acts: string[] = {}
-    for _, a in ipairs(info.activityIDs or { info.activityID }) do
+    -- (one activity on older clients)
+    for _, a in ipairs(info.activityIDs or { tbl.field(info, "activityID") }) do
         acts[#acts + 1] = catalogue.ForTool(a) or ("tool:" .. a)
     end
     local data = {
@@ -101,12 +104,13 @@ local function readResult(id: number, category: number?): (string?, ToolSource?)
         newPlayerFriendly = info.newPlayerFriendly, playstyle = info.generalPlaystyle,
         self = info.hasSelf, needed = {}, offered = {}, seenAt = now(),
     } :: ToolSource
-    local okC, counts = pcall(L.GetSearchResultMemberCounts, id)
+    -- (the game's data leaves the counts untyped: read field by field)
+    local okC: boolean, counts: unknown = pcall(L.GetSearchResultMemberCounts, id)
     -- (for a single player these are a whole group's open spots: not theirs)
     if data.intent == "group" and okC and tableOK(counts) then
         local need = 0
         for role, field in pairs({ tank = "TANK_REMAINING", healer = "HEALER_REMAINING", damage = "DAMAGER_REMAINING" }) do
-            local n = counts[field]
+            local n = tbl.field(counts, field)
             if type(n) == "number" and n > 0 then data.needed[role] = n; need = need + n end
         end
         if data.intent == "group" then data.need = need end
@@ -116,7 +120,7 @@ local function readResult(id: number, category: number?): (string?, ToolSource?)
         -- and a healer, found in game)
         local has: { [string]: number } = {}
         for role, field in pairs({ tank = "TANK", healer = "HEALER", damage = "DAMAGER", none = "NOROLE" }) do
-            local n = counts[field]
+            local n = tbl.field(counts, field)
             if type(n) == "number" and n > 0 then has[role] = n end
         end
         data.has = has
@@ -126,7 +130,11 @@ local function readResult(id: number, category: number?): (string?, ToolSource?)
         data.leader = { name = leader.name, class = leader.classFilename, level = leader.level }
         local roles = leader.lfgRoles
         if data.intent == "player" and tableOK(roles) then
-            data.offered = { tank = roles.tank or nil, healer = roles.healer or nil, damage = roles.dps or nil }
+            local offered: { [string]: boolean } = {}
+            if roles.tank then offered.tank = true end
+            if roles.healer then offered.healer = true end
+            if roles.dps then offered.damage = true end
+            data.offered = offered
         end
     end
     local first = catalogue.Get(acts[1] or "")
@@ -185,7 +193,9 @@ local function received()
     fire("ToolSearched", cat, count)
 end
 
-local function updated(id: any)
+local function updated(value: unknown)
+    local id = secret.asNumber(value)
+    if not id then return end
     local category: number?
     store.Each(function(_: string, e: Entry)
         local source = e.sources.tool
@@ -237,7 +247,7 @@ export function listing(): Listing?
     }
 end
 
-export function delist(): (boolean?, any)
+export function delist(): (boolean?, unknown)
     local L = lfg()
     if L and L.RemoveListing then return pcall(L.RemoveListing) end
     return nil
@@ -251,16 +261,15 @@ end
 
 export function invite(e: Entry?)
     if not e or not canInvite(e) then return end
-    local inviteUnit = (C_PartyInfo and C_PartyInfo.InviteUnit) or (_G :: any).InviteUnit
-    if inviteUnit then pcall(inviteUnit, e.key) end
+    local inviteUnit = (C_PartyInfo and C_PartyInfo.InviteUnit) or tbl.field(_G, "InviteUnit")
+    if type(inviteUnit) == "function" then pcall(inviteUnit, e.key) end
 end
 
 -- An empty whisper to the leader.
 export function whisper(e: Entry?)
     if not e then return end
-    local g = _G :: any
-    local tell = (g.ChatFrameUtil and g.ChatFrameUtil.SendTell) or g.ChatFrame_SendTell
-    if tell then tell(e.key) end
+    local tell = tbl.field(_G, "ChatFrameUtil", "SendTell") or tbl.field(_G, "ChatFrame_SendTell")
+    if type(tell) == "function" then tell(e.key) end
 end
 
 --------------------------------------------------------------------------------
@@ -315,7 +324,7 @@ local function listingChanged()
     expiringFired = nil
 end
 
-local function onEvent(event: string, a1: any)
+local function onEvent(event: string, a1: unknown)
     if event == "LFG_LIST_SEARCH_RESULTS_RECEIVED" then received()
     elseif event == "LFG_LIST_SEARCH_FAILED" then
         fire("ToolSearchFailed", T.pending)
@@ -329,7 +338,7 @@ export const part = {
     Start = function()
         for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED",
                              "LFG_LIST_SEARCH_RESULT_UPDATED", "LFG_LIST_ACTIVE_ENTRY_UPDATE" }) do
-            events.on(e, function(...: any) onEvent(e, ...) end, OWNER)
+            events.on(e, function(...: unknown) onEvent(e, ...) end, OWNER)
         end
         catalogue.ReadTool()
         wasListed = listing() ~= nil

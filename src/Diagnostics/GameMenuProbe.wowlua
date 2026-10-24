@@ -19,10 +19,10 @@ import panel as makePanel, Panel from "/UI/Panel"
 import after from "wowlua:timer"
 import * as tbl from "wowlua:table"
 
-local panel: Panel? = nil
+local panel: (Panel & { buttons?: boolean })? = nil
 
 local function taintedFields(fname: string): string
-    local f: any, list: string[] = _G[fname], {}
+    local f: unknown, list: string[] = field(_G, fname), {}
     if type(f) ~= "table" then return "missing" end
     for k in pairs(f) do
         if type(k) == "string" then
@@ -43,27 +43,28 @@ local ENTRIES = {
 }
 
 export function command()
-    local out = { at = date("%Y-%m-%d %H:%M:%S"), calls = {}, start = {
+    local calls: string[] = {}
+    local out = { at = date("%Y-%m-%d %H:%M:%S"), calls = calls, start = {
         settings = taintedFields("SettingsPanel"), editMode = taintedFields("EditModeManagerFrame"),
     } }
     DB.probe.gameMenu = out
-    local p = panel or makePanel(UIParent, { title = "Game menu probe", width = 240, height = 330, solid = true })
+    local p = panel or makePanel(UIParent, { title = "Game menu probe", width = 240, height = 330, solid = true }) :: Panel & { buttons?: boolean }
     panel = p
     p:SetFrameStrata("DIALOG")
     p:ClearAllPoints()
     p:SetPoint("LEFT", 40, 0)
     if not p.buttons then
-        p.buttons = {}
-        local prev
+        p.buttons = true
+        local prev: Button? = nil
         for _, e in ipairs(ENTRIES) do
             local b = button(p.body, { text = e.text, width = 200, onClick = function()
                 local ok, err = pcall(e.call)
-                local line = #out.calls + 1
-                out.calls[line] = ("%s %s: %s, combat %s"):format(date("%H:%M:%S"), e.key,
+                local line = #calls + 1
+                calls[line] = ("%s %s: %s, combat %s"):format(date("%H:%M:%S"), e.key,
                     ok and "ok" or ("error " .. tostring(err)), tostring(InCombatLockdown()))
                 -- what addon code wrote by opening it, a moment after
                 after(1, function()
-                    out.calls[line] = out.calls[line] .. "; written by addon code: SettingsPanel " .. taintedFields("SettingsPanel")
+                    calls[line] = calls[line] .. "; written by addon code: SettingsPanel " .. taintedFields("SettingsPanel")
                         .. "; EditModeManagerFrame " .. taintedFields("EditModeManagerFrame")
                 end)
             end })

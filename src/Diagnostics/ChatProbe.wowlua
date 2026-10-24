@@ -12,6 +12,7 @@ import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import isSecret from "wowlua:secret"
 import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 
 local WORDS = { "channel", "messagegroup", "chatwindow", "fcf_", "chatframe_" }
 
@@ -68,31 +69,38 @@ export function command()
     for i = 1, #list, 3 do chans[#chans + 1] = tostring(list[i]) .. ":" .. tostring(list[i + 1]) end
     out.channelList = table.concat(chans, ", ")
     -- the input field and its history
-    local eb = _G.ChatFrame1EditBox
-    local edit = {}
+    local eb = frames.asEditBox(tbl.field(_G, "ChatFrame1EditBox"))
+    local edit: { [string]: unknown } = {}
     if eb then
-        local function try(m: string): string if eb[m] then local ok, v = pcall(eb[m], eb); return ok and (isSecret(v) and "secret" or tostring(v)) or "error" end return "missing" end
+        local function try(m: string): string
+            local fn = tbl.field(eb, m)
+            if type(fn) ~= "function" then return "missing" end
+            local ok, v = pcall(fn, eb)
+            return ok and (isSecret(v) and "secret" or tostring(v)) or "error"
+        end
         edit.historyLines = try("GetHistoryLines")
         edit.altArrowKeyMode = try("GetAltArrowKeyMode")
         edit.multiLine = try("IsMultiLine")
         edit.focused = try("HasFocus")
-        edit.scripts = {}
+        local scripts: { [string]: string } = {}
+        edit.scripts = scripts
         for _, sc in ipairs({ "OnArrowPressed", "OnKeyDown", "OnKeyUp", "OnChar", "OnEnterPressed", "OnTabPressed", "OnEditFocusGained" }) do
             local ok, has = pcall(eb.HasScript, eb, sc)
             local fn = ok and has and eb:GetScript(sc)
-            edit.scripts[sc] = fn and "set" or (ok and has and "none" or "unsupported")
+            scripts[sc] = fn and "set" or (ok and has and "none" or "unsupported")
         end
-        edit.fields = {}
-        for k, v in pairs(eb) do
+        local fields: string[] = {}
+        edit.fields = fields
+        for k, v in pairs(eb :: { [unknown]: unknown }) do
             if type(k) == "string" and (k:lower():find("history") or k:lower():find("arrow")) then
-                table.insert(tbl.listAt(edit, "fields"), k .. " = " .. type(v) .. (type(v) == "table" and (" #" .. #v) or (type(v) ~= "function" and (" " .. tostring(v)) or "")))
+                fields[#fields + 1] = k .. " = " .. type(v) .. (type(v) == "table" and (" #" .. #v) or (type(v) ~= "function" and (" " .. tostring(v)) or ""))
             end
         end
-        table.sort(edit.fields)
-        local emt = getmetatable(eb)
-        local methods = {}
-        if emt and type(emt.__index) == "table" then
-            for k in pairs(emt.__index) do
+        table.sort(fields)
+        local index = tbl.field(getmetatable(eb), "__index")
+        local methods: string[] = {}
+        if type(index) == "table" then
+            for k in pairs(index) do
                 if type(k) == "string" and (k:find("History") or k:find("Arrow")) then methods[#methods + 1] = k end
             end
         end
@@ -107,9 +115,9 @@ export function command()
     end
     table.sort(hist)
     edit.globals = hist
-    local lastActive = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+    local lastActive = frames.asFrame(ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow())
     edit.activeWindow = lastActive and lastActive:GetName() or "none"
-    local lastUsed = ChatEdit_GetLastActiveWindow and ChatEdit_GetLastActiveWindow()
+    local lastUsed = frames.asFrame(ChatEdit_GetLastActiveWindow and ChatEdit_GetLastActiveWindow())
     edit.lastActiveWindow = lastUsed and lastUsed:GetName() or "none"
     out.editBox = edit
     DB.probe.chat = out

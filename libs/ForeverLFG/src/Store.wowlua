@@ -61,7 +61,7 @@ export type Filter = {
 }
 
 export type StoreApi = {
-    Put: (key: string?, source: string, data: any) -> Entry?,
+    Put: (key: string?, source: string, data: ToolSource | ChatSource) -> Entry?,
     Drop: (key: string, source: string, reason: string) -> (),
     Rename: (old: string, new: string) -> (),
     Each: (fn: (key: string, e: Entry) -> ()) -> (),
@@ -69,7 +69,7 @@ export type StoreApi = {
     Expire: () -> (),
 }
 
-local function union(into: any[], list: any[]?, seen: { [any]: boolean })
+local function union<T>(into: T[], list: T[]?, seen: { [T]: boolean })
     for _, v in ipairs(list or {}) do
         if not seen[v] then seen[v] = true; into[#into + 1] = v end
     end
@@ -81,7 +81,8 @@ local function signature(e: Entry): string
     local parts: string[] = { e.intent or "", table.concat(e.activities, ","), e.text or "", tostring(e.need),
                               members and (members[1] .. "/" .. members[2]) or "" }
     for _, side in ipairs({ "needed", "offered" }) do
-        for _, role in ipairs({ "tank", "healer", "damage" }) do parts[#parts + 1] = tostring((e.roles :: any)[side][role]) end
+        local map = side == "needed" and e.roles.needed or e.roles.offered
+        for _, role in ipairs({ "tank", "healer", "damage" }) do parts[#parts + 1] = tostring(map[role]) end
     end
     for _, role in ipairs({ "tank", "healer", "damage", "none" }) do parts[#parts + 1] = tostring(e.roles.has and e.roles.has[role]) end
     return table.concat(parts, "|")
@@ -90,11 +91,11 @@ end
 -- The entry's own fields from its sources (the tool's first).
 local function rebuild(e: Entry)
     local tool, chat = e.sources.tool, e.sources.chat
-    local acts: string[], seen: { [any]: boolean } = {}, {}
+    local acts: string[], seen: { [string]: boolean } = {}, {}
     union(acts, tool and tool.activities, seen)
     union(acts, chat and chat.activities, seen)
     e.activities = acts
-    local quests: number[], seenQ: { [any]: boolean } = {}, {}
+    local quests: number[], seenQ: { [number]: boolean } = {}, {}
     union(quests, chat and chat.quests, seenQ)
     e.quests = quests
     e.intent = (tool and tool.intent) or (chat and chat.intent)
@@ -126,7 +127,7 @@ local function rebuild(e: Entry)
 end
 
 -- Where the store tells what changed (LFG's events).
-export type Emit = (event: string, ...any) -> ()
+export type Emit = (event: "EntryAdded" | "EntryUpdated" | "EntryRefreshed" | "EntryRemoved", e: Entry, reason: string?) -> ()
 
 -- The merged list (a class: a test builds one over its own clock, events
 -- and catalogue). `entryStore` is the library's; `store` (LFG.Store) is its
@@ -142,7 +143,7 @@ export class EntryStore
     )
     end
 
-    function put(key: string?, source: string, data: any): Entry?
+    function put(key: string?, source: string, data: ToolSource | ChatSource): Entry?
         if not key or key == "" then return end
         local t = self.clock()
         local e = self.byKey[key]
@@ -152,7 +153,7 @@ export class EntryStore
             self.byKey[key] = e
         end
         local before = not new and signature(e)
-        local sources = e.sources :: any
+        local sources = e.sources :: { [string]: unknown }
         sources[source] = data
         e.lastSeen = t
         rebuild(e)
@@ -169,8 +170,9 @@ export class EntryStore
 
     function drop(key: string, source: string, reason: string)
         local e = self.byKey[key]
-        local sources = e and e.sources :: any
-        if not (e and sources[source]) then return end
+        if not e then return end
+        local sources = e.sources :: { [string]: unknown }
+        if not sources[source] then return end
         sources[source] = nil
         if not next(sources) then
             self.byKey[key] = nil
@@ -188,8 +190,8 @@ export class EntryStore
         self.byKey[old] = nil
         local other = self.byKey[new]
         if other then
-            local into = other.sources :: any
-            for source, data in pairs(e.sources :: any) do into[source] = into[source] or data end
+            local into = other.sources :: { [string]: unknown }
+            for source, data in pairs(e.sources :: { [string]: unknown }) do into[source] = into[source] or data end
             rebuild(other)
             self.emit("EntryRemoved", e, "merged")
             self.emit("EntryUpdated", other)
@@ -250,7 +252,7 @@ export class EntryStore
             local sources = f.sources
             if keep and sources then
                 keep = false
-                for source in pairs(e.sources :: any) do if sources[source] then keep = true end end
+                for source in pairs(e.sources :: { [string]: unknown }) do if sources[source] then keep = true end end
             end
             local kinds = f.kinds
             if keep and (kinds or wanted) then
@@ -279,7 +281,7 @@ export const entryStore = EntryStore.new()
 
 -- LFG.Store, as published (dot calls).
 export const store: StoreApi = {
-    Put = function(key: string?, source: string, data: any): Entry? return entryStore:put(key, source, data) end,
+    Put = function(key: string?, source: string, data: ToolSource | ChatSource): Entry? return entryStore:put(key, source, data) end,
     Drop = function(key: string, source: string, reason: string) entryStore:drop(key, source, reason) end,
     Rename = function(old: string, new: string) entryStore:rename(old, new) end,
     Each = function(fn: (key: string, e: Entry) -> ()) entryStore:each(fn) end,

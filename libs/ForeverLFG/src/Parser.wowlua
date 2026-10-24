@@ -56,8 +56,8 @@ export type LangModule = {
 export type ParseOptions = { languages: string[]? }
 
 export type ParserApi = {
-    Parse: (text: any, opts: ParseOptions?) -> (ParseResult?, string?),
-    AddName: (key: string, name: any) -> (),
+    Parse: (text: unknown, opts: ParseOptions?) -> (ParseResult?, string?),
+    AddName: (key: string, name: unknown) -> (),
     Normalize: (s: string) -> string,
     Scripts: (s: string) -> { [string]: number },
 }
@@ -73,7 +73,9 @@ local P = parser
 export const lang = { modules = {} } :: LangApi
 local Lang = lang
 
-type Phrase = { text: string, value: any, field: string, ascii: boolean }
+-- value: the activity key, role or class a phrase stands for (its field
+-- for the intent and noise words)
+type Phrase = { text: string, value: string, field: string, ascii: boolean }
 type Compiled = { module: LangModule, activities: Phrase[], words: Phrase[] }
 
 local compiled: { [string]: Compiled } = {}      -- per language: aliases, sorted longest first
@@ -85,7 +87,7 @@ function Lang.Register(code: string, def: LangModule)
     compiled[code] = nil
 end
 
-function P.AddName(key: string, name: any)
+function P.AddName(key: string, name: unknown)
     if type(name) ~= "string" or name == "" then return end
     names[#names + 1] = { key = key, text = name }
     for code in pairs(compiled) do compiled[code] = nil end
@@ -145,7 +147,7 @@ local function isAscii(s: string): boolean return not s:find("[\128-\255]") end
 -- A language, compiled: every phrase it knows, longest first
 --------------------------------------------------------------------------------
 
-local function phrase(list: string[]?, out: Phrase[], value: any, field: string)
+local function phrase(list: string[]?, out: Phrase[], value: string, field: string)
     for _, w in ipairs(list or {}) do
         local n = normalize(w):sub(2, -2)
         if n ~= "" then out[#out + 1] = { text = n, value = value, field = field, ascii = isAscii(n) } end
@@ -162,9 +164,9 @@ local function compile(code: string): Compiled?
     -- the tool's names count for every language (they're in the client's)
     for _, nm in ipairs(names) do phrase({ nm.text }, c.activities, nm.key, "activity") end
     local w: LangWords = m.words or {}
-    phrase(w.group, c.words, true, "group")
-    phrase(w.player, c.words, true, "player")
-    phrase(w.noise, c.words, true, "noise")
+    phrase(w.group, c.words, "group", "group")
+    phrase(w.player, c.words, "player", "player")
+    phrase(w.noise, c.words, "noise", "noise")
     for role, list in pairs(w.roles or {}) do phrase(list, c.words, role, "role") end
     for class, list in pairs(w.classes or {}) do phrase(list, c.words, class, "class") end
     table.sort(c.activities, function(a: Phrase, b: Phrase) return #a.text > #b.text end)
@@ -209,10 +211,10 @@ local function languagesFor(text: string, asked: string[]?): string[]
     return out
 end
 
-function P.Parse(text: any, opts: ParseOptions?): (ParseResult?, string?)
+function P.Parse(text: unknown, opts: ParseOptions?): (ParseResult?, string?)
     if type(text) ~= "string" or text == "" then return nil, "nothing" end
     local o: ParseOptions = opts or {}
-    local r: ParseResult = { activities = {}, quests = {}, roles = {}, classes = {}, languages = {} } :: any
+    local r: ParseResult = { activities = {}, quests = {}, roles = {}, classes = {}, languages = {}, confidence = 0 }
     -- quest links first: the quest for certain
     for id in text:gmatch("|Hquest:(%d+)") do r.quests[#r.quests + 1] = tonumber(id) :: number end
     local hay = normalize(text)
