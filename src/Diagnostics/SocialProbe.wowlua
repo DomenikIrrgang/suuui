@@ -20,10 +20,12 @@ import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import * as modules from "/Core/Modules"
 import hook from "wowlua:hooks"
-import isSecret from "wowlua:secret"
+import isSecret, asString, asNumber from "wowlua:secret"
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
 
-type Record = { [string]: any }
+type Record = { [string]: unknown }
 
 -- set by the friend system probe: SuuUI's social pages step aside until
 -- /reload, so the game's own lists can be used (Core/API asks)
@@ -38,8 +40,7 @@ export function showsBlizzardSocial(): boolean
     return socialBlizzard
 end
 
-
-local function show(v: any, depth: number?): string
+local function show(v: unknown, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
@@ -56,7 +57,8 @@ local function show(v: any, depth: number?): string
     return tostring(v)
 end
 
-local function call(fn: any, ...: any): string
+-- `fn(...)`'s results as text, "missing" or "error: …".
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -65,18 +67,50 @@ local function call(fn: any, ...: any): string
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: any, ...: any): ...any
-    if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e = pcall(fn, ...)
-    if ok then return a, b, c, d, e end
+-- `fn(...)`'s results as they are (nothing when it's missing or raises).
+local function raw(fn: unknown, ...: unknown): (unknown, unknown)
+    if type(fn) ~= "function" then return nil, nil end
+    local ok, a, b = pcall(fn, ...)
+    if ok then return a, b end
+    return nil, nil
 end
 
-local function namesIn(t: any): string[]
+-- A number the game gave (0 when it isn't one).
+local function count(v: unknown): number
+    return asNumber(v) or 0
+end
+
+local function namesIn(t: unknown): string[]
     local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
     table.sort(out)
     return out
+end
+
+-- The fields of a table the game made (a frame's own, a row's), by name and type.
+local function fieldsOf(t: unknown, values: boolean?): string[]
+    local out: string[] = {}
+    if type(t) ~= "table" then return out end
+    for k, v in pairs(t) do
+        if type(k) == "string" then
+            if not values then
+                out[#out + 1] = k
+            elseif type(v) ~= "table" and type(v) ~= "function" then
+                out[#out + 1] = k .. "=" .. tostring(v)
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- A frame's label: its `Text` or `text` font string, or a button's own.
+local function labelOf(f: Frame): FontString?
+    local fs = wf.asFontString(tbl.field(f, "Text")) or wf.asFontString(tbl.field(f, "text"))
+    if fs then return fs end
+    local b = wf.asButton(f)
+    return b and b:GetFontString()
 end
 
 local PRESENCE_EVENTS = { "FRIENDLIST_UPDATE", "BN_FRIEND_ACCOUNT_ONLINE", "BN_FRIEND_ACCOUNT_OFFLINE",
@@ -85,140 +119,155 @@ local PRESENCE_EVENTS = { "FRIENDLIST_UPDATE", "BN_FRIEND_ACCOUNT_ONLINE", "BN_F
     "GUILD_MOTD", "PLAYER_GUILD_UPDATE" }
 
 local function frameInfo(name: string): string
-    local f = _G[name]
+    local f = wf.find(name)
     if not f then return "missing" end
     local tabs: string[] = {}
     for i = 1, 8 do
-        local t = _G[name .. "Tab" .. i]
+        local t = wf.find(name .. "Tab" .. i)
         if t then
-            local fs = t.Text or t.text
+            local fs = labelOf(t)
             tabs[#tabs + 1] = i .. ":" .. show(fs and fs:GetText())
         end
     end
-    return ("shown=%s protected=%s w=%s h=%s tabs=%s"):format(show(f:IsShown()), show(f:IsProtected()),
+    return ("shown=%s protected=%s w=%s h=%s tabs=%s"):format(show(f:IsShown()), show((f:IsProtected())),
         show(f:GetWidth()), show(f:GetHeight()), table.concat(tabs, " "))
 end
 
-export function sample(): Record
-    local store = DB.probe.social or {}
-    DB.probe.social = store
-    store.at = date("%Y-%m-%d %H:%M:%S")
-    store.level, store.class = UnitLevel("player"), select(2, UnitClass("player"))
-    -- friends
+-- What the main probe saves (SuuUIProbe.social): the friends, Battle.net,
+-- the guild, the raid, the group finder, the frames, and the presence
+-- events heard since.
+type Social = {
+    at: string, friends: { count: string, [string]: unknown }, bnet: { count: string, [string]: unknown },
+    guild: { members: string, [string]: unknown },
+    events?: string[], eventCounts?: { [string]: number }, lfgSearch?: Record, [string]: unknown,
+}
+
+export function sample(): Social
     local fl = C_FriendList
-    store.friends = {
-        count = call(fl and fl.GetNumFriends), online = call(fl and fl.GetNumOnlineFriends),
-        api = namesIn(fl), first = {},
+    local friendsFirst: string[] = {}
+    local friends = {
+        count = call(fl.GetNumFriends), online = call(fl.GetNumOnlineFriends),
+        api = namesIn(fl), first = friendsFirst,
     }
-    for i = 1, math.min(4, tonumber((raw(fl and fl.GetNumFriends))) or 0) do
-        store.friends.first[i] = call(fl.GetFriendInfoByIndex, i)
+    for i = 1, math.min(4, count((raw(fl.GetNumFriends)))) do
+        friendsFirst[i] = call(fl.GetFriendInfoByIndex, i)
     end
-    store.ignores = call(fl and fl.GetNumIgnores)
     -- Battle.net
-    store.bnet = { count = call(BNGetNumFriends), api = namesIn(C_BattleNet), first = {},
-                   connected = call(BNConnected), myInfo = call(BNGetInfo) }
-    local bnCount = (raw(BNGetNumFriends))
-    store.bnet.games = {}
-    for i = 1, math.min(4, tonumber(bnCount) or 0) do
-        store.bnet.first[i] = call(C_BattleNet and C_BattleNet.GetFriendAccountInfo, i)
+    local bnFirst: string[], bnGames: Record[] = {}, {}
+    local bnet = { count = call(BNGetNumFriends), api = namesIn(C_BattleNet), first = bnFirst,
+                   connected = call(BNConnected), myInfo = call(BNGetInfo), games = bnGames }
+    for i = 1, math.min(4, count((raw(BNGetNumFriends)))) do
+        bnFirst[i] = call(C_BattleNet.GetFriendAccountInfo, i)
         -- what they're playing: each game account (character, zone, client)
-        local n = (raw(C_BattleNet and C_BattleNet.GetFriendNumGameAccounts, i))
-        store.bnet.games[i] = { count = show(n) }
-        for j = 1, math.min(3, tonumber(n) or 0) do
-            store.bnet.games[i][j] = call(C_BattleNet.GetFriendGameAccountInfo, i, j)
+        local n = (raw(C_BattleNet.GetFriendNumGameAccounts, i))
+        local games: Record = { count = show(n) }
+        bnGames[i] = games
+        for j = 1, math.min(3, count(n)) do
+            games[tostring(j)] = call(C_BattleNet.GetFriendGameAccountInfo, i, j)
         end
     end
     -- the guild
-    store.guild = {
+    local guildFirst: string[], rankNames: string[] = {}, {}
+    local guild = {
         inGuild = call(IsInGuild), info = call(GetGuildInfo, "player"), members = call(GetNumGuildMembers),
         motd = call(GetGuildRosterMOTD), ranks = call(GuildControlGetNumRanks),
-        canEditPublic = call(CanEditPublicNote), canEditOfficer = call(_G.CanEditOfficerNote),
-        canViewOfficer = call(C_GuildInfo and C_GuildInfo.CanViewOfficerNote), canInvite = call(CanGuildInvite),
+        canEditPublic = call(CanEditPublicNote), canEditOfficer = call(tbl.field(_G, "CanEditOfficerNote")),
+        canViewOfficer = call(tbl.field(C_GuildInfo, "CanViewOfficerNote")), canInvite = call(CanGuildInvite),
         canRemove = call(CanGuildRemove), canPromote = call(CanGuildPromote), isLeader = call(IsGuildLeader),
-        guildInfoApi = namesIn(C_GuildInfo), clubApi = namesIn(C_Club), first = {}, rankNames = {},
-    }
-    for i = 1, math.min(5, tonumber((raw(GetNumGuildMembers))) or 0) do
-        store.guild.first[i] = call(GetGuildRosterInfo, i)
+        guildInfoApi = namesIn(C_GuildInfo), clubApi = namesIn(C_Club), first = guildFirst, rankNames = rankNames,
+    } :: { members: string, [string]: unknown }
+    for i = 1, math.min(5, count((raw(GetNumGuildMembers)))) do
+        guildFirst[i] = call(GetGuildRosterInfo, i)
     end
-    for i = 1, math.min(10, tonumber((raw(GuildControlGetNumRanks))) or 0) do
-        store.guild.rankNames[i] = call(GuildControlGetRankName, i)
+    for i = 1, math.min(10, count((raw(GuildControlGetNumRanks)))) do
+        rankNames[i] = call(GuildControlGetRankName, i)
     end
     -- the guild's community: its chat streams (the Guild window's Chat)
-    local clubID = raw(C_Club and C_Club.GetGuildClubId)
-    store.guild.club = show(clubID)
-    if clubID then
-        store.guild.clubInfo = call(C_Club.GetClubInfo, clubID)
-        store.guild.streams = call(C_Club.GetStreams, clubID)
-        store.guild.memberCount = show(#(raw(C_Club.GetClubMembers, clubID) or {}))
-        local me = raw(C_Club.GetMemberInfoForSelf, clubID)
-        store.guild.self = show(me)
+    local clubID = (raw(C_Club.GetGuildClubId))
+    guild.club = show(clubID)
+    if clubID ~= nil then
+        guild.clubInfo = call(C_Club.GetClubInfo, clubID)
+        guild.streams = call(C_Club.GetStreams, clubID)
+        guild.memberCount = show(#tbl.list((raw(C_Club.GetClubMembers, clubID))))
+        guild.self = show((raw(C_Club.GetMemberInfoForSelf, clubID)))
     end
-    store.guild.news = call(C_GuildInfo and C_GuildInfo.GetGuildNewsInfo, 1)
-    store.guild.events = call(GetNumGuildEvents)
+    guild.news = call(tbl.field(C_GuildInfo, "GetGuildNewsInfo"), 1)
+    guild.events = call(GetNumGuildEvents)
+    local store = DB.probeData("social", function(): Social
+        return { at = "", friends = friends, bnet = bnet, guild = guild }
+    end)
+    store.at = date("%Y-%m-%d %H:%M:%S")
+    store.level, store.class = UnitLevel("player"), select(2, UnitClass("player"))
+    store.friends, store.bnet, store.guild = friends, bnet, guild
+    store.ignores = call(fl.GetNumIgnores)
     -- the raid
     store.raid = { inRaid = call(IsInRaid), members = call(GetNumGroupMembers), first = call(GetRaidRosterInfo, 1) }
     -- the group finder
     local lfg = C_LFGList
-    store.lfg = { api = namesIn(lfg), categories = {}, active = call(lfg and lfg.HasActiveEntryInfo) }
-    local cats = raw(lfg and lfg.GetAvailableCategories) or {}
-    for i, cat in ipairs(cats) do
+    local categories: Record[] = {}
+    local lfgRecord: Record = { api = namesIn(lfg), categories = categories, active = call(tbl.field(lfg, "HasActiveEntryInfo")) }
+    store.lfg = lfgRecord
+    for i, cat in ipairs(tbl.list((raw(tbl.field(lfg, "GetAvailableCategories"))))) do
         if i > 12 then break end
-        local c = { id = cat, info = call(lfg.GetLfgCategoryInfo or (lfg :: any).GetCategoryInfo, cat), activities = {} }
-        local acts = raw(lfg.GetAvailableActivities, cat) or {}
-        c.activityCount = #acts
+        local activities: string[] = {}
+        local acts = tbl.list((raw(tbl.field(lfg, "GetAvailableActivities"), cat)))
+        local c: Record = { id = cat, activities = activities, activityCount = #acts,
+            info = call(tbl.field(lfg, "GetLfgCategoryInfo") or tbl.field(lfg, "GetCategoryInfo"), cat) }
         for j, a in ipairs(acts) do
             if j > 6 then break end
-            c.activities[j] = show(a) .. " " .. call(lfg.GetActivityInfoTable, a)
+            activities[j] = show(a) .. " " .. call(tbl.field(lfg, "GetActivityInfoTable"), a)
         end
-        store.lfg.categories[#store.lfg.categories + 1] = c
+        categories[#categories + 1] = c
     end
-    store.lfgBrowse = namesIn(_G.C_LFGBrowse)
-    store.lfg.activeEntry = call(lfg and lfg.GetActiveEntryInfo)
-    store.lfg.filters = call(lfg and lfg.GetAvailableLanguageSearchFilter)
+    store.lfgBrowse = namesIn(tbl.field(_G, "C_LFGBrowse"))
+    lfgRecord.activeEntry = call(tbl.field(lfg, "GetActiveEntryInfo"))
+    lfgRecord.filters = call(tbl.field(lfg, "GetAvailableLanguageSearchFilter"))
     -- Blizzard's frames
-    store.frames = {}
+    local framesInfo: { [string]: string } = {}
+    store.frames = framesInfo
     for _, name in ipairs({ "FriendsFrame", "CommunitiesFrame", "GuildFrame", "LFGListFrame", "PVEFrame",
                             "LFGParentFrame", "LFGBrowseFrame", "GroupFinderFrame", "RaidFrame", "WhoFrame",
                             "ChannelFrame", "BNToastFrame", "GuildMicroButton", "LFDMicroButton",
                             "SocialsMicroButton", "FriendsMicroButton", "QuickJoinToastButton" }) do
-        store.frames[name] = frameInfo(name)
+        framesInfo[name] = frameInfo(name)
     end
     -- how online and offline are announced
     store.strings = {
         ERR_FRIEND_ONLINE_SS = show(ERR_FRIEND_ONLINE_SS), ERR_FRIEND_OFFLINE_S = show(ERR_FRIEND_OFFLINE_S),
         BN_INLINE_TOAST_FRIEND_ONLINE = show(BN_INLINE_TOAST_FRIEND_ONLINE),
         BN_INLINE_TOAST_FRIEND_OFFLINE = show(BN_INLINE_TOAST_FRIEND_OFFLINE),
-        GUILD_MEMBER_ONLINE = show(_G.GUILD_MEMBER_ONLINE), GUILD_MEMBER_OFFLINE = show(_G.GUILD_MEMBER_OFFLINE),
+        GUILD_MEMBER_ONLINE = show(tbl.field(_G, "GUILD_MEMBER_ONLINE")), GUILD_MEMBER_OFFLINE = show(tbl.field(_G, "GUILD_MEMBER_OFFLINE")),
     }
     store.chatFilter = {
-        util = (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter) and "ChatFrameUtil.AddMessageEventFilter" or "missing",
-        global = ChatFrame_AddMessageEventFilter and "ChatFrame_AddMessageEventFilter" or "missing",
+        util = tbl.field(ChatFrameUtil, "AddMessageEventFilter") and "ChatFrameUtil.AddMessageEventFilter" or "missing",
+        global = tbl.field(_G, "ChatFrame_AddMessageEventFilter") and "ChatFrame_AddMessageEventFilter" or "missing",
     }
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
-    store.eventsValid = {}
-    for _, e in ipairs(PRESENCE_EVENTS) do store.eventsValid[e] = valid and tostring(valid(e)) or "?" end
+    local valid = C_EventUtils.IsEventValid
+    local eventsValid: { [string]: string } = {}
+    store.eventsValid = eventsValid
+    for _, e in ipairs(PRESENCE_EVENTS) do eventsValid[e] = tostring(valid(e)) end
     return store
 end
 
 -- Ten minutes of presence events, as they come.
 local presenceListener: Frame? = nil
-export function listen(store: Record)
-    store.events = store.events or {}
+export function listen(store: Social)
+    local events = store.events or {}
+    store.events = events
+    local counts = store.eventCounts or {}
+    store.eventCounts = counts
     if not presenceListener then presenceListener = CreateFrame("Frame") end
     local listener = presenceListener
     listener:UnregisterAllEvents()
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs(PRESENCE_EVENTS) do
-        if not valid or valid(e) then listener:RegisterEvent(e) end
+        if C_EventUtils.IsEventValid(e) then listener:RegisterEvent(e) end
     end
     local untilTime = GetTime() + 600
-    listener:SetScript("OnEvent", function(_, event, ...)
+    listener:SetScript("OnEvent", function(_, event: string, ...: unknown)
         if GetTime() > untilTime then listener:UnregisterAllEvents() return end
-        local events = DB.probe.social.events
         -- the roster's own updates come in floods: a count, not each
         if event == "GUILD_ROSTER_UPDATE" or event == "FRIENDLIST_UPDATE" or event == "BN_FRIEND_INFO_CHANGED" then
-            events.counts = events.counts or {}
-            events.counts[event] = (events.counts[event] or 0) + 1
+            counts[event] = (counts[event] or 0) + 1
             return
         end
         if #events >= 60 then return end
@@ -230,29 +279,30 @@ end
 
 -- One group finder search in the first category: whether an addon may
 -- search, and what a result looks like.
-export function search(store: Record)
+export function search(store: Social)
     local lfg = C_LFGList
-    local cat = (raw(lfg and lfg.GetAvailableCategories) or {})[1]
-    store.lfgSearch = { category = show(cat) }
-    if not cat then return end
+    local cat = tbl.list((raw(tbl.field(lfg, "GetAvailableCategories"))))[1]
+    local s: Record = { category = show(cat) }
+    store.lfgSearch = s
+    if cat == nil then return end
     local f = CreateFrame("Frame")
     f:RegisterEvent("LFG_LIST_SEARCH_RESULTS_RECEIVED")
     f:RegisterEvent("LFG_LIST_SEARCH_FAILED")
     f:SetScript("OnEvent", function(self, event)
         self:UnregisterAllEvents()
-        local s = DB.probe.social.lfgSearch
         s.event = event
-        local count, list = raw(lfg.GetSearchResults)
-        s.count = show(count)
-        s.results = {}
-        for i, id in ipairs(list or {}) do
+        local n, list = raw(tbl.field(lfg, "GetSearchResults"))
+        s.count = show(n)
+        local results: string[] = {}
+        s.results = results
+        for i, id in ipairs(tbl.list(list)) do
             if i > 4 then break end
-            s.results[i] = call(lfg.GetSearchResultInfo, id)
-            s["members" .. i] = call(lfg.GetSearchResultMemberCounts, id)
-            s["leader" .. i] = call((lfg :: any).GetSearchResultMemberInfo, id, 1)
+            results[i] = call(tbl.field(lfg, "GetSearchResultInfo"), id)
+            s["members" .. i] = call(tbl.field(lfg, "GetSearchResultMemberCounts"), id)
+            s["leader" .. i] = call(tbl.field(lfg, "GetSearchResultMemberInfo"), id, 1)
         end
     end)
-    store.lfgSearch.call = call(lfg.Search, cat)
+    s.call = call(tbl.field(lfg, "Search"), cat)
 end
 
 -- Forever's two-part names ("Suther Stargazer"): what each API gives for
@@ -264,8 +314,8 @@ export function names(): Record
     n.UnitFullName = call(UnitFullName, "player")
     n.GetUnitName = call(GetUnitName, "player", true)
     n.UnitNameUnmodified = call(UnitNameUnmodified, "player")
-    n.UnitNameFull = call(_G.UnitNameFull, "player")
-    n.UnitNameWithSurname = call(_G.UnitNameWithSurname, "player")
+    n.UnitNameFull = call(tbl.field(_G, "UnitNameFull"), "player")
+    n.UnitNameWithSurname = call(tbl.field(_G, "UnitNameWithSurname"), "player")
     n.realm = call(GetNormalizedRealmName)
     n.guid = call(UnitGUID, "player")
     n.byGUID = call(GetPlayerInfoByGUID, UnitGUID("player"))
@@ -278,30 +328,35 @@ export function names(): Record
     end
     table.sort(surname)
     n.globals = surname
-    local club = raw(C_Club and C_Club.GetGuildClubId)
-    n.clubSelf = club and call(C_Club.GetMemberInfoForSelf, club) or "no guild"
+    local club = (raw(C_Club.GetGuildClubId))
+    n.clubSelf = club ~= nil and call(C_Club.GetMemberInfoForSelf, club) or "no guild"
     n.target = call(UnitName, "target")
     n.targetFull = call(UnitFullName, "target")
     print("Names probe: saved; /reload. (Target another player first if you can.)")
     return n
 end
 
+-- A frame's parts by their key on it (`frame.ScrollBox`), for parts
+-- without a global name.
+local function keysOf(f: Frame): { [Region]: string }
+    local keys: { [Region]: string } = {}
+    for key, r in pairs(wf.keyed(f)) do keys[r] = key end
+    return keys
+end
+
 -- What the windows are made of: each child (its key on the parent, or its
 -- global name), shown, protected, size, and its own children two levels
 -- down. Open each window once before (they load on first use).
-local function children(f: any, depth: number, out: string[], prefix: string)
-    if depth > 3 or not f or not f.GetChildren then return end
-    -- keys on the parent, for frames without a global name
-    local keys: { [any]: string } = {}
-    for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then keys[v] = k end end
-    for _, c in ipairs({ f:GetChildren() }) do
+local function children(f: Frame, depth: number, out: string[], prefix: string)
+    if depth > 3 then return end
+    local keys = keysOf(f)
+    for _, c in ipairs(wf.children(f)) do
         if #out >= 400 then return end
         local name = c:GetName() or keys[c] or "?"
-        local text = ""
-        local fs = c.Text or c.text or (c.GetFontString and c:GetFontString())
-        if fs and fs.GetText then text = " \"" .. show(fs:GetText()) .. "\"" end
+        local fs = labelOf(c)
+        local text = fs and (" \"" .. show(fs:GetText()) .. "\"") or ""
         out[#out + 1] = ("%s%s [%s] shown=%s prot=%s %dx%d%s"):format(prefix, name, c:GetObjectType(), show(c:IsShown()),
-            show(c:IsProtected()), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), text)
+            show((c:IsProtected())), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), text)
         children(c, depth + 1, out, prefix .. "  ")
     end
 end
@@ -310,107 +365,114 @@ export function frames()
     local store: Record = { at = date("%Y-%m-%d %H:%M:%S") }
     DB.probe.socialFrames = store
     for _, addon in ipairs({ "Blizzard_Communities", "Blizzard_GuildUI", "Blizzard_RaidUI", "Blizzard_LookingForGroupUI" }) do
-        if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, addon) end
+        pcall(C_AddOns.LoadAddOn, addon)
     end
     for _, name in ipairs({ "FriendsFrame", "RaidFrame", "CommunitiesFrame", "LFGParentFrame", "LFGBrowseFrame",
                             "LFGListingFrame", "WhoFrame" }) do
-        local f = _G[name]
+        local f = wf.find(name)
         local out: string[] = {}
         if f then children(f, 1, out, "") end
         store[name] = f and out or "missing"
     end
     -- the functions that open them
-    store.openers = {}
+    local openers: { [string]: string } = {}
+    store.openers = openers
     for _, fn in ipairs({ "ToggleFriendsFrame", "ToggleGuildFrame", "ToggleCommunitiesFrame", "ToggleLFGParentFrame",
                           "ToggleRaidFrame", "FriendsFrame_ShowSubFrame", "ToggleLFDParentFrame", "PVEFrame_ToggleFrame" }) do
-        store.openers[fn] = type(_G[fn])
+        openers[fn] = type(tbl.field(_G, fn))
     end
     print("Social frames probe: saved; /reload.")
+end
+
+-- Every shown frame whose global name has one of `words`: "Name [Type]".
+local function shownNamed(match: (name: string) -> boolean): string[]
+    local named: string[] = {}
+    for k, v in pairs(_G) do
+        local f = type(k) == "string" and match(k) and wf.asRegion(v)
+        if type(k) == "string" and f then
+            local ok, shown = pcall(f.IsShown, f)
+            if ok and shown then named[#named + 1] = k .. " [" .. f:GetObjectType() .. "]" end
+        end
+    end
+    table.sort(named)
+    return named
 end
 
 -- What's under the mouse, and every shown frame named like a social one:
 -- for windows that aren't the ones probed before (Forever's own friends
 -- window). Hover the window, then run it.
 export function mouse()
-    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), chain = {} :: string[], named = {} :: string[], tree = {} :: string[] }
+    local chain: string[], tree: string[] = {}, {}
+    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), chain = chain, tree = tree }
     DB.probe.socialMouse = store
-    local foci = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
-    local top: any = nil
-    local f: any = foci and foci[1]
+    local top: Frame? = nil
+    local f = wf.asRegion(GetMouseFoci()[1])
     local guard = 0
     while f and guard < 20 do
-        local name = f.GetName and f:GetName() or "?"
-        store.chain[#store.chain + 1] = ("%s [%s] prot=%s %dx%d"):format(tostring(name), f.GetObjectType and f:GetObjectType() or "?",
-            show(f.IsProtected and f:IsProtected()), math.floor((f.GetWidth and f:GetWidth()) or 0), math.floor((f.GetHeight and f:GetHeight()) or 0))
-        if f.GetName and f:GetName() then top = f end
-        f = f.GetParent and f:GetParent()
-        if f == UIParent then break end
+        local name = f:GetName() or "?"
+        chain[#chain + 1] = ("%s [%s] prot=%s %dx%d"):format(name, f:GetObjectType(),
+            show((f:IsProtected())), math.floor(f:GetWidth() or 0), math.floor(f:GetHeight() or 0))
+        local frame = wf.asFrame(f)
+        if frame and frame:GetName() then top = frame end
+        local parent = f:GetParent()
+        f = parent
+        if parent == UIParent then break end
         guard = guard + 1
     end
-    for k, v in pairs(_G) do
-        if type(k) == "string" and type(v) == "table" and v.IsShown and v.GetObjectType
-            and (k:find("Friend") or k:find("Social") or k:find("Contact")) then
-            local ok, shown = pcall(v.IsShown, v)
-            if ok and shown then store.named[#store.named + 1] = k .. " [" .. v:GetObjectType() .. "]" end
-        end
-    end
-    table.sort(store.named)
+    store.named = shownNamed(function(k: string): boolean
+        return (k:find("Friend") or k:find("Social") or k:find("Contact")) ~= nil
+    end)
     -- the topmost named frame under the mouse: what it's made of
+    local topName = top and top:GetName()
     if top then
-        store.top = top:GetName()
-        children(top, 1, store.tree, "")
+        store.top = topName
+        children(top, 1, tree, "")
     end
-    print(("Mouse probe: %s under the mouse; /reload."):format(tostring(store.top)))
+    print(("Mouse probe: %s under the mouse; /reload."):format(tostring(topName)))
 end
 
 -- Recent Allies and Friend Requests: what their APIs give.
 export function lists()
     local store: Record = { at = date("%Y-%m-%d %H:%M:%S") }
     DB.probe.socialLists = store
-    local ra = C_RecentAllies
+    local ra = tbl.field(_G, "C_RecentAllies")
     store.recentApi = namesIn(ra)
-    store.recentEnabled = call(ra and ra.IsSystemEnabled)
-    store.recentReady = call(ra and ra.IsRecentAllyDataReady)
+    store.recentEnabled = call(tbl.field(ra, "IsSystemEnabled"))
+    store.recentReady = call(tbl.field(ra, "IsRecentAllyDataReady"))
     -- (TryRequestRecentAlliesData is protected: an addon's call is blocked)
-    local list = raw(ra and ra.GetRecentAllies) or {}
-    store.recentCount = #list
-    store.recent = {}
+    local list = tbl.list((raw(tbl.field(ra, "GetRecentAllies"))))
+    local recentCount = #list
+    store.recentCount = recentCount
+    local recent: string[] = {}
+    store.recent = recent
     for i, a in ipairs(list) do
         if i > 4 then break end
-        store.recent[i] = show(a, 0)
-        local inter = a.interactionData and a.interactionData.interactions
-        store["interactions" .. i] = show(inter, -2)
+        recent[i] = show(a, 0)
+        store["interactions" .. i] = show(tbl.field(a, "interactionData", "interactions"), -2)
     end
-    store.invites = { count = call(BNGetNumFriendInvites), first = call(BNGetFriendInviteInfo, 1),
+    local invites = call(BNGetNumFriendInvites)
+    store.invites = { count = invites, first = call(BNGetFriendInviteInfo, 1),
                       accept = type(BNAcceptFriendInvite), decline = type(BNDeclineFriendInvite),
-                      cbn = call(C_BattleNet and C_BattleNet.GetFriendInviteInfo, 1) }
+                      cbn = call(tbl.field(C_BattleNet, "GetFriendInviteInfo"), 1) }
     -- the lists' own frames: what their rows hold (the first row's keys)
-    local f = _G.SocialUIFrame
+    local f = wf.find("SocialUIFrame")
     for _, key in ipairs({ "RecentAlliesList", "FriendRequestsList" }) do
-        local lst = f and f[key]
-        local box = lst and lst.ScrollBox
-        local target = box and box.ScrollTarget
-        local first = target and select(1, target:GetChildren())
-        local keys: string[] = {}
-        if first then for k in pairs(first) do if type(k) == "string" then keys[#keys + 1] = k end end end
-        table.sort(keys)
-        store[key] = { shown = show(lst and lst:IsShown()), rowKeys = keys }
+        local lst = wf.asFrame(tbl.field(f, key))
+        local target = wf.asFrame(tbl.field(lst, "ScrollBox", "ScrollTarget"))
+        local first = target and wf.children(target)[1]
+        store[key] = { shown = show(lst and lst:IsShown()), rowKeys = fieldsOf(first) }
     end
     -- the side buttons: their fields (which page each opens)
-    store.sideButtons = {}
+    local side: string[] = {}
+    store.sideButtons = side
     if f then
-        for _, c in ipairs({ f:GetChildren() }) do
+        for _, c in ipairs(wf.children(f)) do
             if c:GetObjectType() == "Button" and not c:GetName() and math.abs((c:GetWidth() or 0) - 54) < 3 then
-                local fields: string[] = {}
-                for k, v in pairs(c) do
-                    if type(k) == "string" and type(v) ~= "table" and type(v) ~= "function" then fields[#fields + 1] = k .. "=" .. tostring(v) end
-                end
-                table.sort(fields)
-                store.sideButtons[#store.sideButtons + 1] = ("top=%d %s"):format(math.floor(c:GetTop() or 0), table.concat(fields, " "))
+                side[#side + 1] = ("top=%d %s"):format(math.floor(c:GetTop() or 0), table.concat(fieldsOf(c, true), " "))
             end
         end
     end
-    print(("Lists probe: %d recent allies, %s friend requests; /reload."):format(store.recentCount, tostring(store.invites.count)))
+    print(("Lists probe: %d recent allies, %s friend requests; /reload."):format(recentCount, invites))
 end
 
 -- How Forever adds a friend: which systems are on, and which function the
@@ -418,22 +480,24 @@ end
 -- social pages step aside meanwhile, so the game's own lists can be used.
 local watching = false
 export function friendSystem()
-    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), calls = {} :: string[] }
+    local calls: string[] = {}
+    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), calls = calls }
     DB.probe.friendSystem = store
-    store.legacy = call(C_FriendList and C_FriendList.IsLegacyFriendSystemEnabled)
-    store.titleFriends = call(C_BattleNet and C_BattleNet.AreTitleFriendsEnabled)
-    store.bnetList = call(C_BattleNet and C_BattleNet.IsBattleNetFriendsListEnabled)
-    store.bnetSupported = call(C_BattleNet and C_BattleNet.IsBattleNetFriendsListSupported)
-    store.customNames = call(C_BattleNet and C_BattleNet.AreTitleFriendCustomNamesEnabled)
+    local legacy = call(tbl.field(C_FriendList, "IsLegacyFriendSystemEnabled"))
+    local titleFriends = call(tbl.field(C_BattleNet, "AreTitleFriendsEnabled"))
+    store.legacy, store.titleFriends = legacy, titleFriends
+    store.bnetList = call(tbl.field(C_BattleNet, "IsBattleNetFriendsListEnabled"))
+    store.bnetSupported = call(tbl.field(C_BattleNet, "IsBattleNetFriendsListSupported"))
+    store.customNames = call(tbl.field(C_BattleNet, "AreTitleFriendCustomNamesEnabled"))
     if not watching then
         watching = true
-        local function watch(tbl: any, tname: string, fname: string)
-            if tbl and type(tbl[fname]) == "function" then
-                hook(tbl, fname, function(...)
+        local function watch(owner: unknown, tname: string, fname: string)
+            if type(owner) == "table" and type(tbl.field(owner, fname)) == "function" then
+                hook(owner, fname, function(...)
                     local args: string[] = {}
                     for i = 1, math.min(6, select("#", ...)) do args[i] = show((select(i, ...))) end
-                    local calls = DB.probe.friendSystem.calls
-                    if #calls < 30 then calls[#calls + 1] = date("%H:%M:%S") .. " " .. tname .. "." .. fname .. "(" .. table.concat(args, ", ") .. ")" end
+                    local saved = tbl.listAt(tbl.recordAt(DB.probe, "friendSystem"), "calls")
+                    if #saved < 30 then saved[#saved + 1] = date("%H:%M:%S") .. " " .. tname .. "." .. fname .. "(" .. table.concat(args, ", ") .. ")" end
                 end)
             end
         end
@@ -446,20 +510,22 @@ export function friendSystem()
         for _, fn in ipairs({ "BNSendFriendInvite", "BNSendFriendInviteByID", "BNSendVerifiedBattleNetFriendInvite" }) do watch(_G, "_G", fn) end
     end
     socialBlizzard = true
-    local social = modules.get("social") :: any
-    if social and social.Follow then social:Follow() end
+    local social = modules.get("social")
+    local follow = tbl.field(social, "Follow")
+    if type(follow) == "function" then follow(social) end
     print(("Friend system: legacy friends %s, title friends %s. SuuUI's social pages step aside until /reload: add a friend with the game's own window (your alt is a safe test), then /reload."):format(
-        store.legacy, store.titleFriends))
+        legacy, titleFriends))
 end
 
 -- Guild control: the ranks and their permissions, and whether an addon may
 -- change them. Every write puts back what's already there (nothing
 -- changes); blocked or forbidden calls are caught by their events.
 export function guildControl()
-    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), ranks = {}, blocked = {} :: string[], writes = {} :: string[] }
+    local ranks: Record[], blocked: string[], writes: string[] = {}, {}, {}
+    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), ranks = ranks, blocked = blocked, writes = writes }
     DB.probe.guildControl = store
     if not IsInGuild() then print("Guild control probe: not in a guild.") return end
-    if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
+    pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI")
     store.leader = call(IsGuildLeader)
     -- the functions there are
     local fns: string[] = {}
@@ -472,19 +538,22 @@ export function guildControl()
     store.globals = fns
     store.guildInfoApi = namesIn(C_GuildInfo)
     -- the flags' labels
-    store.labels = {}
+    local labels: string[] = {}
+    store.labels = labels
     for i = 1, 25 do
-        local label = _G["GUILDCONTROL_OPTION" .. i]
-        if label then store.labels[#store.labels + 1] = i .. "=" .. tostring(label) end
+        local label = tbl.field(_G, "GUILDCONTROL_OPTION" .. i)
+        if label then labels[#labels + 1] = i .. "=" .. tostring(label) end
     end
     -- the ranks and their flags
-    local n = tonumber((raw(GuildControlGetNumRanks))) or 0
+    local n = count((raw(GuildControlGetNumRanks)))
     store.numRanks = n
+    local setRank = tbl.field(_G, "GuildControlSetRank")
+    local rankFlags = tbl.field(_G, "GuildControlGetRankFlags")
     for i = 1, n do
-        local name = raw(GuildControlGetRankName, i)
-        if GuildControlSetRank then pcall(GuildControlSetRank, i) end
-        store.ranks[i] = { name = show(name), flags = call(_G.GuildControlGetRankFlags),
-                           byOrder = call(C_GuildInfo and C_GuildInfo.GuildControlGetRankFlags, i) }
+        local name = (raw(GuildControlGetRankName, i))
+        raw(setRank, i)
+        ranks[i] = { name = show(name), flags = call(rankFlags),
+                     byOrder = call(tbl.field(C_GuildInfo, "GuildControlGetRankFlags"), i) }
     end
     -- the writes, each putting back what's there; the game's verdict comes
     -- as an event
@@ -493,27 +562,30 @@ export function guildControl()
     listener:RegisterEvent("ADDON_ACTION_BLOCKED")
     local current: string? = nil
     listener:SetScript("OnEvent", function(_, event, addon, fn)
-        store.blocked[#store.blocked + 1] = event .. " " .. tostring(fn) .. " during " .. tostring(current)
+        blocked[#blocked + 1] = event .. " " .. tostring(fn) .. " during " .. tostring(current)
     end)
-    local function try(label: string, fn: any, ...: any)
+    local function try(label: string, fn: unknown, ...: unknown)
         current = label
+        if type(fn) ~= "function" then return end
         local ok, err = pcall(fn, ...)
-        store.writes[#store.writes + 1] = label .. ": " .. (ok and "called" or ("error " .. tostring(err):sub(1, 120)))
+        writes[#writes + 1] = label .. ": " .. (ok and "called" or ("error " .. tostring(err):sub(1, 120)))
     end
-    if n > 1 and GuildControlSetRank then
+    if n > 1 and type(setRank) == "function" then
         local lowest = n
-        local name = raw(GuildControlGetRankName, lowest)
-        try("GuildControlSetRank", GuildControlSetRank, lowest)
-        local flags = { raw(_G.GuildControlGetRankFlags) }
-        if GuildControlSetRankFlag and flags[1] ~= nil then
-            try("GuildControlSetRankFlag(1, same)", GuildControlSetRankFlag, 1, flags[1] and true or false)
+        local name = (raw(GuildControlGetRankName, lowest))
+        try("GuildControlSetRank", setRank, lowest)
+        local flag = (raw(rankFlags))
+        local setFlag = tbl.field(_G, "GuildControlSetRankFlag")
+        if setFlag and flag ~= nil then
+            try("GuildControlSetRankFlag(1, same)", setFlag, 1, flag and true or false)
         end
-        if GuildControlSaveRank and name then try("GuildControlSaveRank(same name)", GuildControlSaveRank, name) end
+        local saveRank = tbl.field(_G, "GuildControlSaveRank")
+        if saveRank and name then try("GuildControlSaveRank(same name)", saveRank, name) end
     end
-    local motd = raw(GetGuildRosterMOTD)
-    if motd and C_GuildInfo and C_GuildInfo.SetMOTD then try("C_GuildInfo.SetMOTD(same)", C_GuildInfo.SetMOTD, motd) end
-    local info = raw(GetGuildInfoText)
-    if info and C_GuildInfo and C_GuildInfo.SetInfoText then try("C_GuildInfo.SetInfoText(same)", C_GuildInfo.SetInfoText, info) end
+    local motd = (raw(GetGuildRosterMOTD))
+    if motd then try("C_GuildInfo.SetMOTD(same)", tbl.field(C_GuildInfo, "SetMOTD"), motd) end
+    local info = (raw(GetGuildInfoText))
+    if info then try("C_GuildInfo.SetInfoText(same)", tbl.field(C_GuildInfo, "SetInfoText"), info) end
     after(2, function() listener:UnregisterAllEvents() end)
     print(("Guild control probe: %d ranks; writes tried, blocked ones recorded. /reload in a few seconds."):format(n))
 end
@@ -521,107 +593,114 @@ end
 -- Blizzard's guild control window: every frame and text in it, with its
 -- anchor, so the parts that run into each other can be moved apart. Open
 -- the Settings tab on the page to look at (Rank Permissions) first.
-local function anchorOf(r: any): string
+-- (each part's key on its parent, for anchors to parts without a name)
+local probeKeys: { [Region]: string } = tbl.weakKeys()
+
+local function anchorOf(r: Region): string
     local ok, point, rel, relPoint, x, y = pcall(r.GetPoint, r, 1)
     if not ok or not point then return "" end
-    local relName = rel and ((rel.GetName and rel:GetName()) or rel.suuProbeKey or "?") or "nil"
-    return (" @%s>%s.%s %d,%d"):format(point, tostring(relName), tostring(relPoint), math.floor(x or 0), math.floor(y or 0))
+    local relName = rel and (rel:GetName() or probeKeys[rel] or "?") or "nil"
+    return (" @%s>%s.%s %d,%d"):format(tostring(point), tostring(relName), tostring(relPoint), math.floor(x or 0), math.floor(y or 0))
 end
 
-local function tree(f: any, depth: number, out: string[], prefix: string, textures: boolean?)
-    if depth > 6 or not f or not f.GetChildren or #out >= 600 then return end
-    local keys: { [any]: string } = {}
-    for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then keys[v] = k end end
-    for _, r in ipairs({ f:GetRegions() }) do
-        if textures and r:GetObjectType() == "Texture" then
+local function tree(f: Frame, depth: number, out: string[], prefix: string, textures: boolean?)
+    if depth > 6 or #out >= 600 then return end
+    local keys = keysOf(f)
+    if textures then
+        for _, r in ipairs(wf.textures(f)) do
             local okA, atlas = pcall(r.GetAtlas, r)
             local okT, file = pcall(r.GetTexture, r)
             out[#out + 1] = ("%s. %s [Tex] shown=%s a=%.2f %dx%d%s atlas=%s file=%s"):format(prefix, r:GetName() or keys[r] or "?",
                 show(r:IsShown()), r:GetAlpha() or 0, math.floor(r:GetWidth() or 0), math.floor(r:GetHeight() or 0), anchorOf(r),
                 tostring(okA and atlas or nil), tostring(okT and file or nil))
-        elseif r:GetObjectType() == "FontString" then
-            r.suuProbeKey = keys[r]
-            out[#out + 1] = ("%s. %s [FS] shown=%s %dx%d%s \"%s\""):format(prefix, r:GetName() or keys[r] or "?", show(r:IsShown()),
-                math.floor(r:GetWidth() or 0), math.floor(r:GetHeight() or 0), anchorOf(r), show(r:GetText()))
         end
     end
-    for _, c in ipairs({ f:GetChildren() }) do
-        c.suuProbeKey = keys[c]
-        local fs = c.Text or c.text or (c.GetFontString and c:GetFontString())
-        local text = (fs and fs.GetText) and (" \"" .. show(fs:GetText()) .. "\"") or ""
+    for _, r in ipairs(wf.fontStrings(f)) do
+        probeKeys[r] = keys[r]
+        out[#out + 1] = ("%s. %s [FS] shown=%s %dx%d%s \"%s\""):format(prefix, r:GetName() or keys[r] or "?", show(r:IsShown()),
+            math.floor(r:GetWidth() or 0), math.floor(r:GetHeight() or 0), anchorOf(r), show(r:GetText()))
+    end
+    for _, c in ipairs(wf.children(f)) do
+        probeKeys[c] = keys[c]
+        local fs = labelOf(c)
+        local text = fs and (" \"" .. show(fs:GetText()) .. "\"") or ""
         out[#out + 1] = ("%s%s [%s] shown=%s %dx%d%s%s"):format(prefix, c:GetName() or keys[c] or "?", c:GetObjectType(),
             show(c:IsShown()), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), anchorOf(c), text)
         tree(c, depth + 1, out, prefix .. "  ", textures)
     end
 end
 
+-- One page of the guild control window: when, its tree, the frames it shows outside itself.
+type GuildPage = { at: string, tree: string[], shownNamed: string[] }
+
 export function guildUI()
-    if C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
-    local ui = _G.GuildControlUI
+    pcall(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI")
+    local ui = wf.find("GuildControlUI")
     if not ui then print("Guild UI probe: no GuildControlUI.") return end
     -- one dump per page, kept across runs: open each page and run it again
-    local store = type(DB.probe.guildUI) == "table" and DB.probe.guildUI or {}
-    DB.probe.guildUI = store
-    store.at = date("%Y-%m-%d %H:%M:%S")
-    store.pages = store.pages or {}
-    local cur = ui.currFrame
+    local store = DB.probeData("guildUI", function(): { at: string, pages: { [string]: GuildPage } } return { at = "", pages = {} } end)
+    local at = date("%Y-%m-%d %H:%M:%S")
+    store.at = at
+    local cur = wf.asFrame(tbl.field(ui, "currFrame"))
     local key = cur and cur:GetName() or "?"
     local out: string[] = {}
     -- frames the page shows outside itself (a purchase prompt, a popup)
-    local named: string[] = {}
-    for k, v in pairs(_G) do
-        if type(k) == "string" and (k:find("^GuildControl") or k:find("^GuildBank")) and type(v) == "table"
-            and v.IsShown and v.GetObjectType then
-            local ok, shown = pcall(v.IsShown, v)
-            if ok and shown then named[#named + 1] = k .. " [" .. v:GetObjectType() .. "]" end
-        end
-    end
-    table.sort(named)
+    local named = shownNamed(function(k: string): boolean
+        return (k:find("^GuildControl") or k:find("^GuildBank")) ~= nil
+    end)
     if cur then tree(cur, 1, out, "", true) end
-    store.pages[key] = { at = store.at, tree = out, shownNamed = named }
+    store.pages[key] = { at = at, tree = out, shownNamed = named }
     print(("Guild UI probe: %s, %d lines saved; /reload."):format(key, #out))
 end
 
 -- The menu a Blizzard dropdown opens (the guild control's Page and Rank):
 -- what it's made of, to restyle it. Run it, then open one of them.
 export function menu()
-    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), api = {} :: Record, opened = {} :: Record[] }
+    local eventRegistry: string[] = {}
+    local opened: Record[] = {}
+    local api: Record = { eventRegistry = eventRegistry }
+    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), api = api, opened = opened }
     DB.probe.blizzMenu = store
-    store.api.Menu = Menu and namesIn(Menu) or "missing"
-    local manager = Menu and Menu.GetManager and Menu.GetManager()
-    store.api.manager = manager and namesIn(manager) or "missing"
-    store.api.events = (DropdownButtonMixin and DropdownButtonMixin.Event) and namesIn(DropdownButtonMixin.Event) or "missing"
-    store.api.eventRegistry = {}
-    local function dump(label: string, m: any)
-        if not m or not m.GetChildren then return end
+    api.Menu = Menu and namesIn(Menu) or "missing"
+    local manager = (raw(tbl.field(Menu, "GetManager")))
+    api.manager = manager ~= nil and namesIn(manager) or "missing"
+    local dropdownEvents = tbl.field(_G, "DropdownButtonMixin", "Event")
+    api.events = dropdownEvents ~= nil and namesIn(dropdownEvents) or "missing"
+    local function dump(label: string, value: unknown)
+        local m = wf.asFrame(value)
+        if not m then return end
         local out: string[] = {}
         out[#out + 1] = ("%s [%s] %dx%d strata=%s"):format(m:GetName() or "?", m:GetObjectType(),
             math.floor(m:GetWidth() or 0), math.floor(m:GetHeight() or 0), tostring(m:GetFrameStrata()))
         local keys: string[] = {}
-        for k, v in pairs(m) do keys[#keys + 1] = k .. "=" .. type(v) end
+        if type(value) == "table" then
+            for k, v in pairs(value) do keys[#keys + 1] = tostring(k) .. "=" .. type(v) end
+        end
         table.sort(keys)
-        store.opened[#store.opened + 1] = { label = label, tree = out, keys = keys }
+        opened[#opened + 1] = { label = label, tree = out, keys = keys }
         tree(m, 1, out, "  ", true)
     end
     local n = 0
+    local event = tbl.field(dropdownEvents, "OnMenuOpen")
     for _, name in ipairs({ "GuildControlUINavigationDropdown", "GuildControlUIRankSettingsFrameRankDropdown",
                             "GuildControlUIRankBankFrameRankDropdown" }) do
-        local dd = _G[name]
-        local event = DropdownButtonMixin and DropdownButtonMixin.Event and DropdownButtonMixin.Event.OnMenuOpen
-        if dd and dd.RegisterCallback and event then
+        local dd = wf.find(name)
+        local register = tbl.field(dd, "RegisterCallback")
+        if dd and type(register) == "function" and event ~= nil then
             n = n + 1
-            dd:RegisterCallback(event, function(_, ...)
+            register(dd, event, function(_: unknown, ...: unknown)
                 local args = { ... }
                 for i, a in ipairs(args) do
-                    store.api.eventRegistry[#store.api.eventRegistry + 1] = ("%s arg%d %s"):format(name, i,
-                        type(a) == "table" and (a.GetObjectType and a:GetObjectType() or "table") or type(a))
+                    local r = wf.asRegion(a)
+                    eventRegistry[#eventRegistry + 1] = ("%s arg%d %s"):format(name, i,
+                        r and r:GetObjectType() or type(a))
                 end
                 after(0.1, function()
                     for i, a in ipairs(args) do
-                        if type(a) == "table" and a.GetChildren and a ~= dd then dump(name .. " arg" .. i, a) end
+                        if a ~= dd then dump(name .. " arg" .. i, a) end
                     end
-                    local open = manager and manager.GetOpenMenu and manager:GetOpenMenu()
-                    if open then dump(name .. " GetOpenMenu", open) end
+                    local open = (raw(tbl.field(manager, "GetOpenMenu"), manager))
+                    if open ~= nil then dump(name .. " GetOpenMenu", open) end
                     print("Menu probe: saved; /reload.")
                 end)
             end, store)
@@ -630,44 +709,52 @@ export function menu()
     print(("Menu probe: armed on %d dropdowns. Open the Settings tab's Page or Rank dropdown."):format(n))
 end
 
+-- Your own name as the roster shows it ("Name", without the realm).
+local function myShortName(): string
+    return Ambiguate(asString(SuuUI.FullName("player")) or "", "short")
+end
+
 -- Guild notes: C_GuildInfo.SetNote is restricted (HasRestrictions in the
 -- game's API docs). Can a secure button's macro save one through /run?
 -- The probe puts a button in the middle of the screen; a click saves your
 -- own public note unchanged, and the game's verdict (blocked or not) is
 -- recorded. The old note functions are looked up too.
 export function notes()
-    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), blocked = {} :: string[], legacy = {} :: Record }
+    local blocked: string[] = {}
+    local legacy: { [string]: string } = {}
+    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), blocked = blocked, legacy = legacy }
     DB.probe.guildNotes = store
     for _, fn in ipairs({ "GuildRosterSetPublicNote", "GuildRosterSetOfficerNote", "SetGuildRosterSelection", "GetGuildRosterSelection" }) do
-        store.legacy[fn] = type(_G[fn])
+        legacy[fn] = type(tbl.field(_G, fn))
     end
     if InCombatLockdown() then print("Notes probe: out of combat, please.") return end
     -- you in the roster, by name (as the roster finds you); every step caught
-    local guid: any, note: any
+    local guid: unknown, note: unknown = nil, nil
     local ok, err = pcall(function()
-        local me = Ambiguate(SuuUI.FullName("player") :: any, "short")
+        local me = myShortName()
         -- the game's values as they are (this file's call() formats them as text)
         for i = 1, (GetNumGuildMembers()) or 0 do
             local r = { GetGuildRosterInfo(i) }
-            local name = r[1]
-            if name and not isSecret(name) and Ambiguate(name :: any, "short") == me then
+            local name = asString(r[1])
+            if name and Ambiguate(name, "short") == me then
                 note, guid = r[7], r[17]
                 break
             end
         end
     end)
     store.find = ok and "ok" or tostring(err)
-    store.guidSecret = guid ~= nil and isSecret(guid) or false
-    store.noteSecret = note ~= nil and isSecret(note) or false
-    if type(guid) ~= "string" or store.guidSecret then
+    local guidSecret = guid ~= nil and isSecret(guid)
+    local noteSecret = note ~= nil and isSecret(note)
+    store.guidSecret, store.noteSecret = guidSecret, noteSecret
+    if type(guid) ~= "string" or guidSecret then
         print("Notes probe: couldn't read your guild GUID (saved); /reload.")
         return
     end
     -- an unreadable note is never overwritten: stop instead
-    if store.noteSecret then print("Notes probe: your note is a secret value (saved); /reload.") return end
-    if type(note) ~= "string" then note = "" end
-    store.note = note
-    note = note:gsub("\\", "\\\\"):gsub("\"", "\\\"")
+    if noteSecret then print("Notes probe: your note is a secret value (saved); /reload.") return end
+    local text = type(note) == "string" and note or ""
+    store.note = text
+    text = text:gsub("\\", "\\\\"):gsub("\"", "\\\"")
     local b = notesButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
     notesButton = b
     b:SetSize(260, 30)
@@ -677,7 +764,7 @@ export function notes()
     b:SetText("Notes probe: click to save your note")
     b:RegisterForClicks("LeftButtonUp", "LeftButtonDown")
     b:SetAttribute("type1", "macro")
-    b:SetAttribute("macrotext1", ('/run C_GuildInfo.SetNote("%s", "%s", true)'):format(guid, note))
+    b:SetAttribute("macrotext1", ('/run C_GuildInfo.SetNote("%s", "%s", true)'):format(guid, text))
     store.macro = b:GetAttribute("macrotext1")
     local listener = CreateFrame("Frame")
     listener:RegisterEvent("ADDON_ACTION_BLOCKED")
@@ -685,14 +772,14 @@ export function notes()
     listener:RegisterEvent("MACRO_ACTION_BLOCKED")
     listener:RegisterEvent("MACRO_ACTION_FORBIDDEN")
     listener:SetScript("OnEvent", function(_, event, a1, a2)
-        store.blocked[#store.blocked + 1] = event .. " " .. tostring(a1) .. " " .. tostring(a2)
+        blocked[#blocked + 1] = event .. " " .. tostring(a1) .. " " .. tostring(a2)
     end)
     b:SetScript("PostClick", function(self)
         store.clicked = date("%H:%M:%S")
         after(1, function()
             listener:UnregisterAllEvents()
             self:Hide()
-            print(("Notes probe: %s; /reload."):format(#store.blocked > 0 and "blocked" or "not blocked"))
+            print(("Notes probe: %s; /reload."):format(#blocked > 0 and "blocked" or "not blocked"))
         end)
     end)
     b:Show()
@@ -704,43 +791,45 @@ end
 -- checked for taint, a secure button that clicks your row, then the game's
 -- member panel brought forward: click your Note there and Accept it
 -- unchanged. Every step's verdict is saved. Open Guild > Roster first.
-local function secure(t: any, key: string): string
-    if not (t and issecurevariable) then return "?" end
+local function secure(t: unknown, key: string): string
+    if type(t) ~= "table" then return "?" end
     local ok, by = issecurevariable(t, key)
     return ok and "secure" or ("tainted by " .. tostring(by))
 end
 
 export function noteList()
-    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), rows = {} :: string[], blocked = {} :: string[], steps = {} :: string[] }
+    local rowsSeen: string[], blocked: string[], steps: string[] = {}, {}, {}
+    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), rows = rowsSeen, blocked = blocked, steps = steps }
     DB.probe.guildNoteList = store
-    local f = _G.CommunitiesFrame
-    local list = f and f.MemberList
-    if not (f and f:IsShown() and list and list.ScrollBox) then print("Note list probe: open Guild > Roster first.") return end
+    local f = wf.find("CommunitiesFrame")
+    local list = wf.asFrame(tbl.field(f, "MemberList"))
+    local box = tbl.field(list, "ScrollBox")
+    if not (f and f:IsShown() and list and box) then print("Note list probe: open Guild > Roster first.") return end
     if InCombatLockdown() then print("Note list probe: out of combat, please.") return end
     store.selectedClubId = secure(f, "selectedClubId")
-    store.mode = tostring(f.GetDisplayMode and f:GetDisplayMode())
+    store.mode = tostring((raw(tbl.field(f, "GetDisplayMode"), f)))
     -- tall enough for everyone, where it is
     local n = (GetNumGuildMembers()) or 0
-    local top = list:GetTop() and (list:GetTop() - f:GetTop()) or -60
+    local listTop, frameTop = list:GetTop(), f:GetTop()
+    local top = listTop and frameTop and (listTop - frameTop) or -60
     list:ClearAllPoints()
     list:SetPoint("TOPLEFT", f, "TOPLEFT", 20, top)
     list:SetSize(math.max(300, list:GetWidth() or 300), n * 22 + 60)
-    store.steps[#store.steps + 1] = "list made " .. (n * 22 + 60) .. "px tall for " .. n
+    steps[#steps + 1] = "list made " .. (n * 22 + 60) .. "px tall for " .. n
     local listener = CreateFrame("Frame")
     for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do listener:RegisterEvent(e) end
     listener:SetScript("OnEvent", function(_, event, a1, a2)
-        store.blocked[#store.blocked + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
+        blocked[#blocked + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
     end)
     after(1, function()
-        local me = Ambiguate(SuuUI.FullName("player") :: any, "short")
-        local mine: any = nil
-        list.ScrollBox:ForEachFrame(function(row)
-            local info = row.memberInfo
-            local name = info and info.name
-            store.rows[#store.rows + 1] = ("%s memberInfo=%s"):format(tostring(name), secure(row, "memberInfo"))
+        local me = myShortName()
+        local mine: Frame? = nil
+        for _, row in ipairs(wf.rows(box)) do
+            local name = asString(tbl.field(row, "memberInfo", "name"))
+            rowsSeen[#rowsSeen + 1] = ("%s memberInfo=%s"):format(tostring(name), secure(row, "memberInfo"))
             if name and Ambiguate(name, "short") == me then mine = row end
-        end)
-        store.steps[#store.steps + 1] = #store.rows .. " rows exist"
+        end
+        steps[#steps + 1] = #rowsSeen .. " rows exist"
         if not mine then print("Note list probe: your row isn't there (saved); /reload.") return end
         local b = noteListButton or CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate, UIPanelButtonTemplate")
         noteListButton = b
@@ -755,9 +844,10 @@ export function noteList()
         b:SetScript("PostClick", function(self)
             after(0.3, function()
                 self:Hide()
-                local d = f.GuildMemberDetailFrame
-                store.steps[#store.steps + 1] = ("detail shown=%s name=%s clubId=%s memberId=%s"):format(
-                    tostring(d and d:IsShown()), tostring(d and d.Name and d.Name:GetText()),
+                local d = wf.asFrame(tbl.field(f, "GuildMemberDetailFrame"))
+                local nameText = wf.asFontString(tbl.field(d, "Name"))
+                steps[#steps + 1] = ("detail shown=%s name=%s clubId=%s memberId=%s"):format(
+                    tostring(d and d:IsShown()), tostring(nameText and nameText:GetText()),
                     secure(d, "clubId"), secure(d, "memberId"))
                 if not (d and d:IsShown()) then print("Note list probe: the game's panel didn't open (saved); /reload.") return end
                 -- the game's own panel in front of everything
@@ -778,35 +868,35 @@ end
 -- many rows it made, and the game's member panel. Select a member in the
 -- roster first.
 export function rows()
-    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), rows = {} :: string[] }
+    local rowsSeen: string[] = {}
+    local store: Record = { at = date("%Y-%m-%d %H:%M:%S"), rows = rowsSeen }
     DB.probe.guildRows = store
-    local f = _G.CommunitiesFrame
-    local list = f and f.MemberList
+    local f = wf.find("CommunitiesFrame")
+    local list = wf.asFrame(tbl.field(f, "MemberList"))
     if not list then print("Rows probe: open the Guild window first.") return end
     local p1, rel, p2, x, y = list:GetPoint(1)
     store.list = ("shown=%s visible=%s alpha=%.2f %dx%d at %s>%s.%s %d,%d"):format(tostring(list:IsShown()), tostring(list:IsVisible()),
         list:GetAlpha() or 0, math.floor(list:GetWidth() or 0), math.floor(list:GetHeight() or 0), tostring(p1),
-        tostring(rel and (rel.GetName and rel:GetName() or "?")), tostring(p2), math.floor(x or 0), math.floor(y or 0))
-    local box = list.ScrollBox
+        tostring(rel and (rel:GetName() or "?")), tostring(p2), math.floor(x or 0), math.floor(y or 0))
+    local box = wf.asFrame(tbl.field(list, "ScrollBox"))
     store.box = box and ("shown=%s visible=%s %dx%d"):format(tostring(box:IsShown()), tostring(box:IsVisible()),
         math.floor(box:GetWidth() or 0), math.floor(box:GetHeight() or 0)) or "none"
-    store.cvar = tostring(GetCVar and GetCVar("communitiesShowOffline"))
-    store.showOffline = tostring(list.showOfflinePlayers)
-    store.expanded = tostring(list.expandedDisplay)
-    store.mode = tostring(f.GetDisplayMode and f:GetDisplayMode())
-    local dp = box and box.GetDataProvider and box:GetDataProvider()
-    store.data = dp and dp.GetSize and dp:GetSize() or "none"
-    if box and box.ForEachFrame then
-        box:ForEachFrame(function(row)
-            local info = row.memberInfo
-            store.rows[#store.rows + 1] = tostring(info and info.name) .. (row:IsShown() and "" or " (hidden)")
-        end)
+    store.cvar = tostring(GetCVar("communitiesShowOffline"))
+    store.showOffline = tostring(tbl.field(list, "showOfflinePlayers"))
+    store.expanded = tostring(tbl.field(list, "expandedDisplay"))
+    store.mode = tostring((raw(tbl.field(f, "GetDisplayMode"), f)))
+    local dp = (raw(tbl.field(box, "GetDataProvider"), box))
+    local data = (raw(tbl.field(dp, "GetSize"), dp)) or "none"
+    store.data = data
+    for _, row in ipairs(wf.rows(box)) do
+        rowsSeen[#rowsSeen + 1] = tostring(tbl.field(row, "memberInfo", "name")) .. (row:IsShown() and "" or " (hidden)")
     end
-    local d = f.GuildMemberDetailFrame
-    local info = d and d.GetMemberInfo and d:GetMemberInfo()
-    store.detail = d and ("shown=%s member=%s"):format(tostring(d:IsShown()), tostring(info and info.name)) or "none"
-    store.members = (GetNumGuildMembers())
-    print(("Rows probe: %s rows of %s in the data, %s members; /reload."):format(#store.rows, tostring(store.data), tostring(store.members)))
+    local d = wf.asFrame(tbl.field(f, "GuildMemberDetailFrame"))
+    local info = (raw(tbl.field(d, "GetMemberInfo"), d))
+    store.detail = d and ("shown=%s member=%s"):format(tostring(d:IsShown()), tostring(tbl.field(info, "name"))) or "none"
+    local members = (GetNumGuildMembers())
+    store.members = members
+    print(("Rows probe: %s rows of %s in the data, %s members; /reload."):format(#rowsSeen, tostring(data), tostring(members)))
 end
 
 export function command(rest: string?)
@@ -822,7 +912,8 @@ export function command(rest: string?)
     if rest == "mouse" then mouse() return end
     if rest == "frames" then frames() return end
     -- the roster asked for first: it's often empty until then
-    if C_GuildInfo and C_GuildInfo.GuildRoster then pcall(C_GuildInfo.GuildRoster) elseif GuildRoster then pcall(GuildRoster) end
+    local roster = tbl.field(C_GuildInfo, "GuildRoster") or tbl.field(_G, "GuildRoster")
+    raw(roster)
     local store = sample()
     listen(store)
     search(store)

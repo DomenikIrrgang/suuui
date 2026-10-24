@@ -16,10 +16,11 @@
 import isSecret from "wowlua:secret"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
+import * as tbl from "wowlua:table"
 
-type Map = { [string]: any }
+type Map = { [string]: unknown }
 
-local function show(v: any, depth: number?): string
+local function show(v: unknown, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
@@ -36,7 +37,7 @@ local function show(v: any, depth: number?): string
     return tostring(v)
 end
 
-local function call(fn: any, ...: any): string
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -45,7 +46,7 @@ local function call(fn: any, ...: any): string
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: any, ...: any): (any, any, any)
+local function raw(fn: unknown, ...: unknown): (any, any, any)
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c = pcall(fn, ...)
     if ok then return a, b, c end
@@ -98,11 +99,12 @@ local function sampleTree(store: Map[], treeID: number)
             end
             line.entries = entries
         end
-        t.nodes[#t.nodes + 1] = line
+        table.insert(tbl.listAt(t, "nodes"), line)
     end
-    t.conditions = {}
+    local conditions: string[] = {}
+    t.conditions = conditions
     for c in pairs(conds) do
-        if #t.conditions < 30 then t.conditions[#t.conditions + 1] = show(c) .. " " .. call(C_Traits.GetConditionInfo, configID, c) end
+        if #conditions < 30 then table.insert(conditions, show(c) .. " " .. call(C_Traits.GetConditionInfo, configID, c)) end
     end
 end
 
@@ -124,7 +126,7 @@ export function sample()
     store.trees = {}
     for _, id in ipairs(TREES) do
         local ok, err = pcall(sampleTree, store.trees, id)
-        if not ok then store.trees[#store.trees + 1] = { id = id, error = tostring(err) } end
+        if not ok then table.insert(tbl.listAt(store, "trees"), { id = id, error = tostring(err) }) end
     end
     -- the reward track
     local mf = C_MajorFactions
@@ -136,7 +138,7 @@ export function sample()
     local levels = mf and raw(mf.GetRenownLevels, FACTION) or {}
     for i, lv in ipairs(levels) do
         if i > 40 then break end
-        store.rewards.levels[#store.rewards.levels + 1] = show(lv) .. " REWARDS " .. call(mf.GetRenownRewardsForLevel, FACTION, lv.level)
+        table.insert(tbl.listAt(store.rewards, "levels"), show(lv) .. " REWARDS " .. call(mf.GetRenownRewardsForLevel, FACTION, lv.level))
     end
     -- the challenges (achievement categories)
     store.challenges = { categories = {} }
@@ -153,9 +155,9 @@ export function sample()
             local crit = {}
             local n = id and raw(GetAchievementNumCriteria, id) or 0
             for k = 1, math.min(3, n or 0) do crit[#crit + 1] = call(GetAchievementCriteriaInfo, id, k) end
-            c.items[#c.items + 1] = info:sub(1, 300) .. " CRITERIA(" .. tostring(n) .. ") " .. table.concat(crit, " ; "):sub(1, 300)
+            table.insert(tbl.listAt(c, "items"), info:sub(1, 300) .. " CRITERIA(" .. tostring(n) .. ") " .. table.concat(crit, " ; "):sub(1, 300))
         end
-        store.challenges.categories[#store.challenges.categories + 1] = c
+        table.insert(tbl.listAt(store.challenges, "categories"), c)
     end
     return store
 end

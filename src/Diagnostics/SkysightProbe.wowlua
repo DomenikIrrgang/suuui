@@ -11,30 +11,39 @@
 --          they come and go (VIGNETTE_MINIMAP_UPDATED), with their places
 -- Saved in SuuUIProbe.skysight on /reload. Values the game hides read SECRET.
 
-import isSecret from "wowlua:secret"
+import isSecret, asNumber from "wowlua:secret"
 import after from "wowlua:timer"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
+import * as tbl from "wowlua:table"
 
-local function show(v: any): string
+-- What the probe saves in SuuUIProbe.skysight.
+type Out = { now?: { [string]: unknown }, casts: string[], vignetteEvents: string[] }
+
+local field = tbl.field
+
+local function show(v: unknown): string
     if isSecret(v) then return "SECRET" end
-    if type(v) == "table" and v.x then return ("%.4f,%.4f"):format(v.x, v.y) end
+    local x, y = field(v, "x"), field(v, "y")
+    if type(v) == "table" and x then return ("%.4f,%.4f"):format(asNumber(x) or 0, asNumber(y) or 0) end
     return tostring(v)
 end
 
-local function call(fn: any, ...: any): (any, any, any, any)
-    if type(fn) ~= "function" then return nil end
+local function call(fn: unknown, ...: unknown): (unknown, unknown, unknown, unknown)
+    if type(fn) ~= "function" then return nil, nil, nil, nil end
     local ok, a, b, c, d = pcall(fn, ...)
     if ok then return a, b, c, d end
+    return nil, nil, nil, nil
 end
 
-local function out(): { [string]: any }
-    DB.probe.skysight = DB.probe.skysight or {}
-    return DB.probe.skysight
+local function out(): Out
+    local o = DB.probeData("skysight", function(): Out return { casts = {}, vignetteEvents = {} } end)
+    o.casts, o.vignetteEvents = o.casts or {}, o.vignetteEvents or {}
+    return o
 end
 
 local NAMES = { "skysight", "convergen", "tornado", "cyclone" }
-local function matches(text: any): boolean
+local function matches(text: unknown): boolean
     if type(text) ~= "string" or isSecret(text) then return false end
     local low = text:lower()
     for _, n in ipairs(NAMES) do
@@ -45,27 +54,27 @@ end
 
 local function here(): string
     local map = C_Map.GetBestMapForUnit("player")
-    local pos = map and call(C_Map.GetPlayerMapPosition, map, "player")
+    local pos = map and (call(C_Map.GetPlayerMapPosition, map, "player"))
     return ("map %s at %s"):format(show(map), show(pos))
 end
 
 -- Skysight in the spellbook, by name
 local function findSkysight(): string
     local SB = C_SpellBook
-    if not (SB and SB.GetNumSpellBookSkillLines) then return "no C_SpellBook" end
-    local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
-    for line = 1, call(SB.GetNumSpellBookSkillLines) or 0 do
+    local bank = Enum.SpellBookSpellBank.Player
+    for line = 1, asNumber((call(SB.GetNumSpellBookSkillLines))) or 0 do
         local info = call(SB.GetSpellBookSkillLineInfo, line)
-        if type(info) == "table" and info.itemIndexOffset and info.numSpellBookItems then
-            for i = info.itemIndexOffset + 1, info.itemIndexOffset + info.numSpellBookItems do
+        local offset, count = asNumber(field(info, "itemIndexOffset")), asNumber(field(info, "numSpellBookItems"))
+        if offset and count then
+            for i = offset + 1, offset + count do
                 local item = call(SB.GetSpellBookItemInfo, i, bank)
-                if type(item) == "table" and matches(item.name) then
-                    local id = item.spellID or item.actionID
+                if type(item) == "table" and matches(field(item, "name")) then
+                    local id = field(item, "spellID") or field(item, "actionID")
                     local usable, noMana = call(C_Spell.IsSpellUsable, id)
                     local cd = call(C_Spell.GetSpellCooldown, id)
-                    return ("%s (spell %s, line %s): usable here %s/%s, cooldown %s"):format(show(item.name), show(id),
-                        show(info.name), show(usable), show(noMana),
-                        type(cd) == "table" and ("start %s, duration %s"):format(show(cd.startTime), show(cd.duration)) or show(cd))
+                    return ("%s (spell %s, line %s): usable here %s/%s, cooldown %s"):format(show(field(item, "name")), show(id),
+                        show(field(info, "name")), show(usable), show(noMana),
+                        type(cd) == "table" and ("start %s, duration %s"):format(show(field(cd, "startTime")), show(field(cd, "duration"))) or show(cd))
                 end
             end
         end
@@ -76,12 +85,13 @@ end
 local function vignettes(): string[]
     local list: string[] = {}
     local map = C_Map.GetBestMapForUnit("player")
-    for _, guid in ipairs(call(C_VignetteInfo and C_VignetteInfo.GetVignettes) or {}) do
-        local v = call(C_VignetteInfo.GetVignetteInfo, guid)
+    local VI = C_VignetteInfo
+    for _, guid in ipairs(tbl.list((call(VI.GetVignettes)))) do
+        local v = call(VI.GetVignetteInfo, guid)
         if type(v) == "table" then
-            local pos = map and call(C_VignetteInfo.GetVignettePosition, guid, map)
-            list[#list + 1] = ("%s: vignetteID %s, atlas %s, onMinimap %s, onWorldMap %s, at %s"):format(show(v.name),
-                show(v.vignetteID), show(v.atlasName), show(v.onMinimap), show(v.onWorldMap), show(pos))
+            local pos = map and (call(VI.GetVignettePosition, guid, map))
+            list[#list + 1] = ("%s: vignetteID %s, atlas %s, onMinimap %s, onWorldMap %s, at %s"):format(show(field(v, "name")),
+                show(field(v, "vignetteID")), show(field(v, "atlasName")), show(field(v, "onMinimap")), show(field(v, "onWorldMap")), show(pos))
         end
     end
     return list
@@ -90,35 +100,38 @@ end
 local function areaPOIs(): string[]
     local list: string[] = {}
     local map = C_Map.GetBestMapForUnit("player")
-    for _, id in ipairs(map and call(C_AreaPoiInfo and C_AreaPoiInfo.GetAreaPOIForMap, map) or {}) do
+    if not map then return list end
+    for _, id in ipairs(tbl.list((call(C_AreaPoiInfo.GetAreaPOIForMap, map)))) do
         local p = call(C_AreaPoiInfo.GetAreaPOIInfo, map, id)
         if type(p) == "table" then
-            list[#list + 1] = ("%s (%s): atlas %s, at %s"):format(show(p.name), show(id), show(p.atlasName), show(p.position))
+            list[#list + 1] = ("%s (%s): atlas %s, at %s"):format(show(field(p, "name")), show(id), show(field(p, "atlasName")), show(field(p, "position")))
         end
     end
     return list
 end
 
 -- achievements with a criterion naming one (the game's own list of them)
-local function achievements(): any
-    local found: { [any]: any } = {}
-    local A = C_AchievementInfo
-    if not (GetCategoryList and GetCategoryNumAchievements and GetAchievementInfo) then return "no achievement API" end
-    for _, cat in ipairs(call(GetCategoryList) or {}) do
-        for i = 1, (call(GetCategoryNumAchievements, cat, true)) or 0 do
-            local id, name = call(GetAchievementInfo, cat, i)
+local function achievements(): unknown
+    local found: { [unknown]: unknown } = {}
+    local list: unknown[] = {}
+    local catList, count, info = field(_G, "GetCategoryList"), field(_G, "GetCategoryNumAchievements"), field(_G, "GetAchievementInfo")
+    if not (catList and count and info) then return "no achievement API" end
+    for _, cat in ipairs(tbl.list((call(catList)))) do
+        for i = 1, asNumber((call(count, cat, true))) or 0 do
+            local id, name = call(info, cat, i)
             if id then
                 local hit = matches(name)
                 local crit: string[] = {}
-                for c = 1, (call(GetAchievementNumCriteria, id)) or 0 do
-                    local text, _, done = call(GetAchievementCriteriaInfo, id, c)
+                for c = 1, asNumber((call(field(_G, "GetAchievementNumCriteria"), id))) or 0 do
+                    local text, _, done = call(field(_G, "GetAchievementCriteriaInfo"), id, c)
                     if matches(text) or hit then crit[#crit + 1] = ("%s%s"):format(show(text), done and " (done)" or "") end
                 end
-                if hit or #crit > 0 then found[#found + 1] = { id = id, name = show(name), criteria = crit } end
+                if hit or #crit > 0 then list[#list + 1] = { id = id, name = show(name), criteria = crit } end
             end
         end
     end
-    if A then found.api = "C_AchievementInfo present" end
+    for i, v in ipairs(list) do found[i] = v end
+    if field(_G, "C_AchievementInfo") then found.api = "C_AchievementInfo present" end
     return found
 end
 
@@ -131,18 +144,18 @@ end
 local listening: Frame? = nil
 local function listen()
     if listening then return end
-    listening = CreateFrame("Frame")
-    pcall(listening.RegisterUnitEvent, listening, "UNIT_SPELLCAST_SUCCEEDED", "player")
-    pcall(listening.RegisterEvent, listening, "VIGNETTE_MINIMAP_UPDATED")
-    pcall(listening.RegisterEvent, listening, "VIGNETTES_UPDATED")
-    listening:SetScript("OnEvent", function(_, event, a, b, c)
+    local f = CreateFrame("Frame")
+    listening = f
+    pcall(f.RegisterUnitEvent, f, "UNIT_SPELLCAST_SUCCEEDED", "player")
+    pcall(f.RegisterEvent, f, "VIGNETTE_MINIMAP_UPDATED")
+    pcall(f.RegisterEvent, f, "VIGNETTES_UPDATED")
+    f:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown, c: unknown)
         local o = out()
         if event == "UNIT_SPELLCAST_SUCCEEDED" then
             local name = call(C_Spell.GetSpellName, c)
             if not matches(name) then return end
-            o.casts = o.casts or {}
             local line = ("%s: %s (spell %s) %s; target %s, mouseover %s; vignettes: %s"):format(date("%H:%M:%S"),
-                show(name), show(c), here(), show(call(UnitName, "target")), show(call(UnitName, "mouseover")),
+                show(name), show(c), here(), show((call(UnitName, "target"))), show((call(UnitName, "mouseover"))),
                 table.concat(vignettes(), " | "))
             local i = #o.casts + 1
             o.casts[i] = line
@@ -155,11 +168,11 @@ local function listen()
                     if type(aura) ~= "table" then break end
                     -- by its name or spell, or any buff that just began (it may
                     -- be named otherwise)
-                    local d, e = aura.duration, aura.expirationTime
-                    local fresh = not isSecret(d) and not isSecret(e) and type(d) == "number" and type(e) == "number"
-                        and d > 0 and math.abs((e - d) - GetTime()) < 2
-                    if matches(aura.name) or aura.spellId == c or fresh then
-                        buffs[#buffs + 1] = ("%s (spell %s): duration %s, expires %s"):format(show(aura.name), show(aura.spellId),
+                    local d, e = asNumber(field(aura, "duration")), asNumber(field(aura, "expirationTime"))
+                    local fresh = d and e and d > 0 and math.abs((e - d) - GetTime()) < 2
+                    local auraName, spellId = field(aura, "name"), field(aura, "spellId")
+                    if matches(auraName) or spellId == c or fresh then
+                        buffs[#buffs + 1] = ("%s (spell %s): duration %s, expires %s"):format(show(auraName), show(spellId),
                             show(d), show(e))
                     end
                 end
@@ -167,10 +180,9 @@ local function listen()
                 print(("Skysight probe: %s recorded where you stand; buff %s."):format(show(name), #buffs > 0 and buffs[1] or "not found"))
             end)
         else
-            o.vignetteEvents = o.vignetteEvents or {}
             if #o.vignetteEvents < 80 then
-                o.vignetteEvents[#o.vignetteEvents + 1] = ("%s %s %s %s; %s"):format(date("%H:%M:%S"), event, show(a), show(b),
-                    table.concat(vignettes(), " | "))
+                table.insert(o.vignetteEvents, ("%s %s %s %s; %s"):format(date("%H:%M:%S"), event, show(a), show(b),
+                    table.concat(vignettes(), " | ")))
             end
         end
     end)

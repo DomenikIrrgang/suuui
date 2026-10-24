@@ -7,11 +7,13 @@
 -- to SuuUIProbe.partyAuras. Out of combat.
 
 import isSecret from "wowlua:secret"
+import * as reflect from "wowlua:reflect"
+import PartyFramesModule from "/Units/PartyFrames"
 import SuuUI from "/Core/API"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
 
-local function show(v: any): string if isSecret(v) then return "secret" end return tostring(v) end
+local function show(v: unknown): string if isSecret(v) then return "secret" end return tostring(v) end
 
 local FILTERS = {
     dispel = "HARMFUL|RAID_PLAYER_DISPELLABLE",
@@ -48,7 +50,7 @@ local LISTS = {
     { "tTheirBuffs", "HELPFUL|!PLAYER" },
 }
 
-local function auraName(unit: string, id: any): string
+local function auraName(unit: string, id: unknown): string
     local ok, a = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID :: any, unit, id)
     if not ok or not a then return "#" .. show(id) end
     return ("%s (%s%s)"):format(show(a.name), show(a.spellId), a.isHarmful == true and ", harmful" or "")
@@ -68,7 +70,7 @@ local function lists(unit: string): string[]
     return out
 end
 
-local function shownChildren(frame: any): (number, number)
+local function shownChildren(frame: Frame): (number, number)
     -- the engine's buttons answer IsShown with a secret: those count as "?"
     local n, unknown = 0, 0
     for _, c in ipairs({ frame:GetChildren() }) do
@@ -80,13 +82,14 @@ end
 
 export function command(_rest: string?)
     if InCombatLockdown() then print("Party aura probe: out of combat, please.") return end
-    local out: { [any]: any } = { at = date("%H:%M:%S") }
+    local out: { [unknown]: unknown } = { at = date("%H:%M:%S") }
     DB.probe.partyAuras = out
     local m = SuuUI.GetModule("party")
     for _, unit in ipairs({ "player", "party1", "party2", "party3", "party4", "target" }) do
         if UnitExists(unit) then
             local name = UnitName(unit)
-            local line: { [string]: any } = { unit = unit, name = show(name), auras = {} }
+            local auras: string[] = {}
+            local line: { [string]: unknown } = { unit = unit, name = show(name), auras = auras }
             for _, base in ipairs({ "HELPFUL", "HARMFUL" }) do
                 for i = 1, 40 do
                     local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex :: any, unit, i, base)
@@ -99,21 +102,22 @@ export function command(_rest: string?)
                     table.sort(parts)
                     local text = ("%s (%s) from %s, mine %s: %s"):format(show(a.name), show(a.spellId), show(a.sourceUnit),
                         show(a.isFromPlayerOrPlayerPet), table.concat(parts, " "))
-                    line.auras[#line.auras + 1] = text
+                    auras[#auras + 1] = text
                     print(unit .. " " .. show(name) .. " · " .. text)
                 end
             end
             line.lists = lists(unit)
             -- (saved only: 14 lines a unit would flood the chat)
             -- the frame's container: how many icons it shows
-            if m and m.frames then
+            if m and reflect.isInstance(m, PartyFramesModule) then
                 for _, f in ipairs(m.frames) do
                     local ac = f.unit == unit and f.auras
                     if ac then
                         local n, unknown = shownChildren(ac.container)
                         line.icons, line.unknown = n, unknown
-                        line.containerUnit = show(ac.unit)
-                        print(("%s frame: %d icons shown (%d secret), container unit %s"):format(unit, n, unknown, line.containerUnit))
+                        local containerUnit = show(ac.unit)
+                        line.containerUnit = containerUnit
+                        print(("%s frame: %d icons shown (%d secret), container unit %s"):format(unit, n, unknown, containerUnit))
                     end
                 end
             end

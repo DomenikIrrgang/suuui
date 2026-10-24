@@ -14,21 +14,24 @@ import isSecret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
 
+-- An auction house event while the scan waits: how often, first and last.
+type EventCount = { count: number, first?: string, last?: string }
+
 -- the scan being waited for, and the frame that hears its answer
 local waiting: boolean? = nil
 local listFrame: Frame? = nil
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     return tostring(v)
 end
 
-local function store(out: { [string]: any })
+local function store(out: { [string]: unknown })
     DB.probe.ahScan = out
 end
 
 -- What came back: the count, the share with all info, five samples.
-local function collect(out: { [string]: any })
+local function collect(out: { [string]: unknown })
     local ok, n = pcall(C_AuctionHouse.GetNumReplicateItems)
     out.count = ok and show(n) or ("error: " .. tostring(n))
     if not ok or type(n) ~= "number" then return end
@@ -56,7 +59,7 @@ export function command()
         return
     end
     if waiting then print("Auction house scan probe: already waiting for the scan.") return end
-    local out: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S") }
+    local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S") }
     store(out)
     local okReady, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
     out.throttleReady = okReady and show(ready) or ("error: " .. tostring(ready))
@@ -66,14 +69,15 @@ export function command()
     f:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
     -- what fills while it waits: the count every quarter second (when it
     -- changes), and every auction house event by name
-    out.while_waiting, out.events = {}, {}
+    local counts: string[], events: { [string]: EventCount } = {}, {}
+    out.while_waiting, out.events = counts, events
     local last: string? = nil
     local ticker = every(0.25, function()
         local okN, n = pcall(C_AuctionHouse.GetNumReplicateItems)
         local v = okN and show(n) or "error"
         if v ~= last then
             last = v
-            table.insert(out.while_waiting, ("%.2fs: %s"):format(GetTime() - started, v))
+            table.insert(counts, ("%.2fs: %s"):format(GetTime() - started, v))
         end
     end)
     local watch = CreateFrame("Frame")
@@ -82,9 +86,9 @@ export function command()
                          "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "ITEM_KEY_ITEM_INFO_RECEIVED" }) do
         pcall(watch.RegisterEvent, watch, e)
     end
-    watch:SetScript("OnEvent", function(_, e)
-        out.events[e] = out.events[e] or { count = 0 }
-        local ev = out.events[e]
+    watch:SetScript("OnEvent", function(_, e: string)
+        local ev = events[e] or { count = 0 }
+        events[e] = ev
         ev.count = ev.count + 1
         ev.first = ev.first or ("%.2fs"):format(GetTime() - started)
         ev.last = ("%.2fs"):format(GetTime() - started)

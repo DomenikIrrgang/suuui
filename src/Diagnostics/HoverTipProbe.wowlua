@@ -9,15 +9,18 @@ import * as DB from "/Core/DB"
 import isTooltipSkinned from "/UI/Tooltip"
 import after from "wowlua:timer"
 import isSecret from "wowlua:secret"
+import * as wf from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
-local function show(v: any): string if isSecret(v) then return "secret" end return tostring(v) end
+local function show(v: unknown): string if isSecret(v) then return "secret" end return tostring(v) end
 
-local function describe(f: any): string
+local function describe(f: Frame): string
     local name = f:GetName() or f:GetDebugName() or "?"
-    local ns9 = f.NineSlice
+    local ns9 = wf.asFrame(tbl.field(f, "NineSlice"))
     local owner = "?"
     pcall(function()
-        local o = f:GetOwner()
+        local getOwner = tbl.field(f, "GetOwner")
+        local o = type(getOwner) == "function" and wf.asRegion(getOwner(f)) or nil
         owner = o and (o:GetName() or o:GetDebugName() or "unnamed") or "nil"
     end)
     local parent = f:GetParent()
@@ -30,41 +33,46 @@ end
 export function command()
     print("Hover tooltip probe: hover a buff now; in 3 seconds SuuUI lists the tooltips on screen.")
     after(3, function()
-        local out: { [any]: any } = { at = date("%H:%M:%S") }
+        local out: { [unknown]: unknown } = { at = date("%H:%M:%S") }
         DB.probe.hoverTip = out
-        local f: any = EnumerateFrames()
+        local f = wf.asFrame(EnumerateFrames())
         while f do
-            local ok, text = pcall(function()
-                if f:IsForbidden() then return nil end
-                if not f:IsVisible() then return nil end
-                local t = f:GetObjectType()
-                if t ~= "GameTooltip" and not (f.NineSlice and f:GetFrameStrata() == "TOOLTIP") then return nil end
-                return describe(f)
+            local frame = f
+            local ok, text = pcall(function(): string?
+                if frame:IsForbidden() then return nil end
+                if not frame:IsVisible() then return nil end
+                local t = frame:GetObjectType()
+                if t ~= "GameTooltip" and not (tbl.field(frame, "NineSlice") and frame:GetFrameStrata() == "TOOLTIP") then return nil end
+                return describe(frame)
             end)
             if ok and text then
                 out[#out + 1] = text
                 print(text)
             end
-            f = EnumerateFrames(f)
+            f = wf.asFrame(EnumerateFrames(frame))
         end
         if #out == 0 then print("Hover tooltip probe: no tooltip SuuUI can see on screen.") end
         -- what's under the mouse, and whether it draws its own tooltip
-        local foci: any[] = GetMouseFoci and GetMouseFoci() or { _G.GetMouseFocus and _G.GetMouseFocus() }
+        local foci = GetMouseFoci()
         local forbiddenTips = 0
-        local g: any = EnumerateFrames()
+        local g = wf.asFrame(EnumerateFrames())
         while g do
             if g:IsForbidden() then forbiddenTips = forbiddenTips + 1 end
-            g = EnumerateFrames(g)
+            g = wf.asFrame(EnumerateFrames(g))
         end
         out.forbiddenFrames = forbiddenTips
         print(("Forbidden frames in the UI: %d"):format(forbiddenTips))
-        for _, m in ipairs(foci or {}) do
-            local ok, text = pcall(function()
+        for _, focus in ipairs(foci) do
+            local m = wf.asRegion(focus)
+            local ok, text = pcall(function(): string
+                if not m then return "under the mouse: something else" end
                 if m:IsForbidden() then return "under the mouse: a forbidden frame" end
                 local p = m:GetParent()
+                local mf = wf.asFrame(m)
+                local onEnter = mf and mf:GetScript("OnEnter") and "yes" or "none"
                 return ("under the mouse: %s (%s) protected=%s OnEnter=%s parent=%s (%s) GameTooltip shown=%s owner=%s"):format(
-                    m:GetName() or m:GetDebugName() or "?", m:GetObjectType(), show(m:IsProtected()),
-                    m:GetScript("OnEnter") and "yes" or "none",
+                    m:GetName() or m:GetDebugName() or "?", m:GetObjectType(), show((m:IsProtected())),
+                    onEnter,
                     p and (p:GetName() or p:GetDebugName() or "?") or "nil", p and p:GetObjectType() or "-",
                     show(GameTooltip:IsShown()), (function()
                         local o = GameTooltip:GetOwner()

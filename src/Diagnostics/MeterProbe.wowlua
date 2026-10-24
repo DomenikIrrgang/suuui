@@ -19,10 +19,20 @@ import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import * as Events from "/Core/Events"
 import * as apiDocs from "/Diagnostics/ApiDocs"
+import * as tbl from "wowlua:table"
 
-type Map = { [any]: any }
+type Map = { [unknown]: unknown }
 
-const isSecretTable = (_G.issecrettable :: ((v: any) -> boolean)?) or function(_: any): boolean return false end
+local function isSecretTable(v: unknown): boolean
+    return type(v) == "table" and issecrettable(v) == true
+end
+-- What the probe saves in SuuUIProbe.meter.
+type Meter = { samples: Map[], [string]: unknown }
+local field = tbl.field
+
+local function store(): Meter
+    return DB.probeData("meter", function(): Meter return { samples = {} } end)
+end
 local MAX_SAMPLES = 10
 local armed = false
 local eventFrame: Frame? = nil
@@ -34,12 +44,11 @@ local OWNER = {}
 
 -- A value's shape: "secret", "nil", "<type>: <value>" for plain ones, and
 -- tables as tables of shapes (lists: the count and the first two items).
-local function shape(v: any, depth: number?): any
+local function shape(v: unknown, depth: number?): unknown
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
-    local t = type(v)
-    if t ~= "table" then return t .. ": " .. tostring(v):sub(1, 60) end
+    if type(v) ~= "table" then return type(v) .. ": " .. tostring(v):sub(1, 60) end
     if isSecretTable(v) then return "secret table" end
     if depth >= 4 then return "table (deeper)" end
     local out: Map, n = {}, 0
@@ -55,7 +64,7 @@ local function shape(v: any, depth: number?): any
     return out
 end
 
-local function call(fn: any, ...: any): any
+local function call(fn: unknown, ...: unknown): unknown
     if type(fn) ~= "function" then return "missing" end
     local ok, a, b = pcall(fn, ...)
     if not ok then return "error: " .. tostring(a):sub(1, 160) end
@@ -63,8 +72,14 @@ local function call(fn: any, ...: any): any
     return shape(a)
 end
 
+-- `fn(...)`'s first result as it is (false and the error when it raises).
+local function attempt(fn: unknown, ...: unknown): (boolean, unknown)
+    if type(fn) ~= "function" then return false, "missing" end
+    return pcall(fn, ...)
+end
+
 -- The documentation: functions, events and tables of the meter and death recap.
-local function docs(): any
+local function docs(): unknown
     local lines, err = apiDocs.dump({ "damagemeter", "deathrecap" })
     return lines or err
 end
@@ -72,11 +87,9 @@ end
 -- Event names from the documentation (DAMAGE_METER…, DEATH_RECAP…).
 local function eventNames(): string[]
     local names: string[] = {}
-    local docsTable = _G.APIDocumentation
-    if not (docsTable and type(docsTable.systems) == "table") then return names end
-    for _, sys in ipairs(docsTable.systems) do
-        for _, e in ipairs(sys.Events or {}) do
-            local n = e.LiteralName
+    for _, sys in ipairs(tbl.list(field(_G, "APIDocumentation", "systems"))) do
+        for _, e in ipairs(tbl.list(field(sys, "Events"))) do
+            local n = field(e, "LiteralName")
             if type(n) == "string" and (n:find("DAMAGE_METER") or n:find("DEATH_RECAP") or n:find("COMBAT_SESSION")) then
                 names[#names + 1] = n
             end
@@ -86,15 +99,16 @@ local function eventNames(): string[]
 end
 
 local function watchEvents(): string[]?
-    if eventFrame then return end
-    eventFrame = CreateFrame("Frame")
+    if eventFrame then return nil end
+    local f = CreateFrame("Frame")
+    eventFrame = f
     local counts: { [string]: number }, payloads: Map = {}, {}
     eventCounts, eventPayloads = counts, payloads
     local registered: string[] = {}
     for _, n in ipairs(eventNames()) do
-        if pcall(eventFrame.RegisterEvent, eventFrame, n) then registered[#registered + 1] = n end
+        if pcall(f.RegisterEvent, f, n) then registered[#registered + 1] = n end
     end
-    eventFrame:SetScript("OnEvent", function(_, event, ...)
+    f:SetScript("OnEvent", function(_, event: string, ...: unknown)
         counts[event] = (counts[event] or 0) + 1
         if not payloads[event] then payloads[event] = shape({ ... }) end
     end)
@@ -107,10 +121,10 @@ local function globals(): { [string]: string }
     for k, v in pairs(_G) do
         if type(k) == "string" and k:find("DamageMeter") then
             local t = type(v)
-            if t == "table" and v.GetObjectType then
-                local ok, ot = pcall(v.GetObjectType, v)
+            if t == "table" and field(v, "GetObjectType") then
+                local ok, ot = attempt(field(v, "GetObjectType"), v)
                 t = ok and ("frame " .. tostring(ot)) or "frame?"
-                local okShown, shown = pcall(v.IsShown, v)
+                local okShown, shown = attempt(field(v, "IsShown"), v)
                 if okShown then t = t .. (shown and ", shown" or ", hidden") end
             end
             out[k] = t
@@ -123,74 +137,87 @@ type MeterType = { name: string, value: number }
 
 local function meterTypes(): MeterType[]
     local list: MeterType[] = {}
-    for name, value in pairs((Enum.DamageMeterType :: any) or {}) do list[#list + 1] = { name = name, value = value } end
+    for name, value in pairs(Enum.DamageMeterType) do list[#list + 1] = { name = name, value = value } end
     table.sort(list, function(a: MeterType, b: MeterType): boolean return a.value < b.value end)
     return list
 end
 
 export function sample(label: string?): Map
-    local store = DB.probe.meter or { samples = {} }
-    DB.probe.meter = store
-    local DM = C_DamageMeter
-    local ST: any = Enum.DamageMeterSessionType or {}
+    local DM: unknown = field(_G, "C_DamageMeter")
+    local ST: unknown = field(Enum, "DamageMeterSessionType")
+    local current, overall = field(ST, "Current"), field(ST, "Overall")
+    local damageDone, deathsType = Enum.DamageMeterType.DamageDone, Enum.DamageMeterType.Deaths
     local s: Map = {
         at = date("%H:%M:%S"), label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         instance = select(2, IsInInstance()) or "none",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
     }
-    if not DM then
+    if DM == nil then
         s.error = "no C_DamageMeter"
     else
-        s.available = call(DM.IsDamageMeterAvailable)
-        s.sessions = call(DM.GetAvailableCombatSessions)
-        s.duration = {}
-        for name, v in pairs(ST) do s.duration[name] = call(DM.GetSessionDurationSeconds, v) end
+        s.available = call(field(DM, "IsDamageMeterAvailable"))
+        s.sessions = call(field(DM, "GetAvailableCombatSessions"))
+        local duration: { [unknown]: unknown } = {}
+        s.duration = duration
+        if type(ST) == "table" then
+            for name, v in pairs(ST) do duration[name] = call(field(DM, "GetSessionDurationSeconds"), v) end
+        end
         -- every meter type of the current and the overall session
-        s.current, s.overall = {}, {}
+        local currentTypes: { [string]: unknown }, overallTypes: { [string]: unknown } = {}, {}
+        s.current, s.overall = currentTypes, overallTypes
+        local fromType = field(DM, "GetCombatSessionFromType")
         for _, mt in ipairs(meterTypes()) do
-            if ST.Current then s.current[mt.name] = call(DM.GetCombatSessionFromType, ST.Current, mt.value) end
-            if ST.Overall and (mt.name == "DamageDone" or mt.name == "Deaths") then
-                s.overall[mt.name] = call(DM.GetCombatSessionFromType, ST.Overall, mt.value)
+            if current ~= nil then currentTypes[mt.name] = call(fromType, current, mt.value) end
+            if overall ~= nil and (mt.name == "DamageDone" or mt.name == "Deaths") then
+                overallTypes[mt.name] = call(fromType, overall, mt.value)
             end
         end
         -- one source's breakdown: the first damage source of the current session
-        local ok, sess = pcall(DM.GetCombatSessionFromType, ST.Current, Enum.DamageMeterType.DamageDone)
-        local src = ok and type(sess) == "table" and not isSecretTable(sess) and type(sess.combatSources) == "table"
-            and not isSecretTable(sess.combatSources) and sess.combatSources[1]
+        local sourceFromType = field(DM, "GetCombatSessionSourceFromType")
+        local ok, sess = attempt(fromType, current, damageDone)
+        local sources = field(sess, "combatSources")
+        local src = ok and type(sess) == "table" and not isSecretTable(sess) and type(sources) == "table"
+            and not isSecretTable(sources) and tbl.list(sources)[1]
         if src then
-            s.sourceBreakdown = call(DM.GetCombatSessionSourceFromType, ST.Current, Enum.DamageMeterType.DamageDone, src.sourceGUID)
-            s.sourceBreakdownWithCreature = call(DM.GetCombatSessionSourceFromType, ST.Current, Enum.DamageMeterType.DamageDone,
-                src.sourceGUID, src.sourceCreatureID)
+            s.sourceBreakdown = call(sourceFromType, current, damageDone, field(src, "sourceGUID"))
+            s.sourceBreakdownWithCreature = call(sourceFromType, current, damageDone,
+                field(src, "sourceGUID"), field(src, "sourceCreatureID"))
         else
             s.sourceBreakdown = "no first source (" .. (ok and shape(sess) and "session read" or "session error") .. ")"
         end
         -- your own breakdown by your GUID (always readable)
-        s.ownBreakdown = call(DM.GetCombatSessionSourceFromType, ST.Current, Enum.DamageMeterType.DamageDone, UnitGUID("player"))
+        s.ownBreakdown = call(sourceFromType, current, damageDone, UnitGUID("player"))
         -- the combat restriction (lags combat's end) and Blizzard's meter switch
-        if C_RestrictedActions and C_RestrictedActions.IsAddOnRestrictionActive and Enum.AddOnRestrictionType then
-            s.restricted = call(C_RestrictedActions.IsAddOnRestrictionActive, Enum.AddOnRestrictionType.Combat)
+        local restriction = field(Enum, "AddOnRestrictionType", "Combat")
+        if restriction ~= nil then
+            s.restricted = call(field(_G, "C_RestrictedActions", "IsAddOnRestrictionActive"), restriction)
         end
         s.cvarDamageMeterEnabled = call(C_CVar.GetCVar, "damageMeterEnabled")
         -- a session by ID: the first available one
-        local okList, list = pcall(DM.GetAvailableCombatSessions :: any)
-        local first = okList and type(list) == "table" and not isSecretTable(list) and list[1]
-        if first and first.sessionID ~= nil then
-            s.byID = call(DM.GetCombatSessionFromID, first.sessionID, Enum.DamageMeterType.DamageDone)
+        local okList, list = attempt(field(DM, "GetAvailableCombatSessions"))
+        local first = okList and type(list) == "table" and not isSecretTable(list) and tbl.list(list)[1]
+        local sessionID = field(first, "sessionID")
+        if first and sessionID ~= nil then
+            s.byID = call(field(DM, "GetCombatSessionFromID"), sessionID, damageDone)
         end
         -- a death recap, if the deaths list names one
-        local okD, deaths = pcall(DM.GetCombatSessionFromType, ST.Overall, Enum.DamageMeterType.Deaths)
-        local d = okD and type(deaths) == "table" and not isSecretTable(deaths) and type(deaths.combatSources) == "table"
-            and not isSecretTable(deaths.combatSources) and deaths.combatSources[1]
-        if d and C_DeathRecap then
+        local okD, deaths = attempt(fromType, overall, deathsType)
+        local deathSources = field(deaths, "combatSources")
+        local d = okD and type(deaths) == "table" and not isSecretTable(deaths) and type(deathSources) == "table"
+            and not isSecretTable(deathSources) and tbl.list(deathSources)[1]
+        if d then
             for _, fn in ipairs({ "GetRecapEvents", "GetRecapMaxHealth", "GetRecapLink", "HasRecapEvents" }) do
-                if C_DeathRecap[fn] then s["deathRecap." .. fn] = call(C_DeathRecap[fn], d.deathRecapID) end
+                local recapFn = field(C_DeathRecap, fn)
+                if recapFn then s["deathRecap." .. fn] = call(recapFn, field(d, "deathRecapID")) end
             end
         end
     end
-    s.events = eventCounts and CopyTable(eventCounts) or nil
-    table.insert(store.samples, s)
-    while #store.samples > MAX_SAMPLES do table.remove(store.samples, 1) end
+    local counts = eventCounts
+    s.events = counts and tbl.shallowCopy(counts) or nil
+    local samples = store().samples
+    table.insert(samples, s)
+    while #samples > MAX_SAMPLES do table.remove(samples, 1) end
     return s
 end
 
@@ -215,13 +242,12 @@ export function command(arg: string?)
         print("Meter probe: off.")
         return
     end
-    local store = DB.probe.meter or { samples = {} }
-    DB.probe.meter = store
-    store.docs = docs()
-    store.registeredEvents = watchEvents() or store.registeredEvents
-    store.eventPayloads = eventPayloads
-    store.globals = globals()
-    store.deathRecapAPI = C_DeathRecap and shape(C_DeathRecap) or "missing"
+    local m = store()
+    m.docs = docs()
+    m.registeredEvents = watchEvents() or m.registeredEvents
+    m.eventPayloads = eventPayloads
+    m.globals = globals()
+    m.deathRecapAPI = shape(C_DeathRecap)
     if not armed then
         armed = true
         Events.onGame("PLAYER_REGEN_DISABLED", onFight, OWNER)

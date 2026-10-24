@@ -10,35 +10,45 @@ import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import trackerSoundFiles, trackerAuraSounds from "/UI/CooldownTracker"
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
+
+-- A field of the documentation's tables (nil through anything else).
+local field = tbl.field
 
 local DOC_ADDONS = { "Blizzard_APIDocumentationBasic", "Blizzard_APIDocumentation", "Blizzard_APIDocumentationGenerated" }
 
-local function load(): any
+-- The documentation's systems (nil when it didn't load).
+local function load(): unknown[]?
     for _, name in ipairs(DOC_ADDONS) do
-        if C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(name) and not C_AddOns.IsAddOnLoaded(name) then
+        if C_AddOns.DoesAddOnExist(name) and not C_AddOns.IsAddOnLoaded(name) then
             pcall(C_AddOns.LoadAddOn, name)
         end
     end
-    return _G.APIDocumentation
+    local systems = field(_G, "APIDocumentation", "systems")
+    if type(systems) ~= "table" then return nil end
+    return tbl.list(systems)
 end
 
-local function typeText(v: any): string
-    local t = tostring(v.Type or "?")
-    if v.InnerType then t = t .. "<" .. tostring(v.InnerType) .. ">" end
-    if v.Mixin then t = t .. "(" .. tostring(v.Mixin) .. ")" end
-    if v.Nilable then t = t .. "?" end
-    if v.Default ~= nil then t = t .. " = " .. tostring(v.Default) end
-    if v.EnumValue ~= nil then t = t .. " = " .. tostring(v.EnumValue) end
+local function typeText(v: unknown): string
+    local t = tostring(field(v, "Type") or "?")
+    local inner, mixin = field(v, "InnerType"), field(v, "Mixin")
+    if inner then t = t .. "<" .. tostring(inner) .. ">" end
+    if mixin then t = t .. "(" .. tostring(mixin) .. ")" end
+    if field(v, "Nilable") then t = t .. "?" end
+    local default, enumValue = field(v, "Default"), field(v, "EnumValue")
+    if default ~= nil then t = t .. " = " .. tostring(default) end
+    if enumValue ~= nil then t = t .. " = " .. tostring(enumValue) end
     return t
 end
 
-local function fields(list: any): string
+local function fields(list: unknown): string
     local parts: string[] = {}
-    for _, v in ipairs(list or {}) do parts[#parts + 1] = tostring(v.Name) .. ": " .. typeText(v) end
+    for _, v in ipairs(tbl.list(list)) do parts[#parts + 1] = tostring(field(v, "Name")) .. ": " .. typeText(v) end
     return table.concat(parts, ", ")
 end
 
-local function matches(name: any, words: string[]): boolean
+local function matches(name: unknown, words: string[]): boolean
     name = tostring(name or ""):lower()
     for _, w in ipairs(words) do
         if name:find(w, 1, true) then return true end
@@ -47,57 +57,61 @@ local function matches(name: any, words: string[]): boolean
 end
 
 export function dump(words: string[]): (string[]?, string?)
-    local docs = load()
-    if not docs or type(docs.systems) ~= "table" then
+    local systems = load()
+    if not systems then
         return nil, "the client's API documentation didn't load"
     end
     local lines: string[] = {}
     local function add(s: string) lines[#lines + 1] = s end
-    for _, sys in ipairs(docs.systems) do
-        local sysName = (sys.Namespace or sys.Name or "?")
-        local whole = matches(sys.Name, words) or matches(sys.Namespace, words)
+    for _, sys in ipairs(systems) do
+        local name, namespace = field(sys, "Name"), field(sys, "Namespace")
+        local sysName = tostring(namespace or name or "?")
+        local whole = matches(name, words) or matches(namespace, words)
         local header = false
         local function head()
             if not header then
                 header = true
-                add(("== %s (%s, %s)"):format(tostring(sys.Name), tostring(sys.Namespace or "-"), tostring(sys.Type or "System")))
+                add(("== %s (%s, %s)"):format(tostring(name), tostring(namespace or "-"), tostring(field(sys, "Type") or "System")))
             end
         end
-        for _, f in ipairs(sys.Functions or {}) do
-            if whole or matches(f.Name, words) then
+        for _, f in ipairs(tbl.list(field(sys, "Functions"))) do
+            if whole or matches(field(f, "Name"), words) then
                 head()
-                add(("  fn %s.%s(%s) -> %s"):format(sysName, tostring(f.Name), fields(f.Arguments), fields(f.Returns)))
+                add(("  fn %s.%s(%s) -> %s"):format(sysName, tostring(field(f, "Name")), fields(field(f, "Arguments")), fields(field(f, "Returns"))))
             end
         end
-        for _, e in ipairs(sys.Events or {}) do
-            if whole or matches(e.Name, words) or matches(e.LiteralName, words) then
+        for _, e in ipairs(tbl.list(field(sys, "Events"))) do
+            local literal = field(e, "LiteralName")
+            if whole or matches(field(e, "Name"), words) or matches(literal, words) then
                 head()
-                add(("  event %s(%s)"):format(tostring(e.LiteralName or e.Name), fields(e.Payload)))
+                add(("  event %s(%s)"):format(tostring(literal or field(e, "Name")), fields(field(e, "Payload"))))
             end
         end
-        for _, t in ipairs(sys.Tables or {}) do
-            if whole or matches(t.Name, words) then
+        for _, t in ipairs(tbl.list(field(sys, "Tables"))) do
+            if whole or matches(field(t, "Name"), words) then
                 head()
-                add(("  %s %s { %s }"):format(tostring(t.Type or "Table"), tostring(t.Name), fields(t.Fields or t.Values)))
+                add(("  %s %s { %s }"):format(tostring(field(t, "Type") or "Table"), tostring(field(t, "Name")),
+                    fields(field(t, "Fields") or field(t, "Values"))))
             end
         end
     end
-    return lines
+    return lines, nil
 end
 
 -- What the documentation says of some functions beyond their types: every
 -- plain field of each one's entry (HasRestrictions, SecretArguments and the
 -- like), keyed by its full name; "not documented" for a name it lacks.
 export function flags(names: string[]): ({ [string]: string }?, string?)
-    local docs = load()
-    if not docs or type(docs.systems) ~= "table" then
+    local systems = load()
+    if not systems then
         return nil, "the client's API documentation didn't load"
     end
     local found: { [string]: string }, seen: { [string]: boolean } = {}, {}
-    for _, sys in ipairs(docs.systems) do
-        for _, f in ipairs(sys.Functions or {}) do
+    for _, sys in ipairs(systems) do
+        local namespace = field(sys, "Namespace")
+        for _, f in ipairs(tbl.list(field(sys, "Functions"))) do
             for _, want in ipairs(names) do
-                if f.Name == want then
+                if field(f, "Name") == want and type(f) == "table" then
                     local parts: string[] = {}
                     for k, v in pairs(f) do
                         if type(v) ~= "table" and type(v) ~= "function" and k ~= "Name" and k ~= "Type" then
@@ -105,7 +119,7 @@ export function flags(names: string[]): ({ [string]: string }?, string?)
                         end
                     end
                     table.sort(parts)
-                    found[(sys.Namespace and (sys.Namespace .. ".") or "") .. want] = #parts > 0 and table.concat(parts, "  ") or "no flags"
+                    found[(namespace and (tostring(namespace) .. ".") or "") .. want] = #parts > 0 and table.concat(parts, "  ") or "no flags"
                     seen[want] = true
                 end
             end
@@ -114,7 +128,7 @@ export function flags(names: string[]): ({ [string]: string }?, string?)
     for _, want in ipairs(names) do
         if not seen[want] then found[want] = "not documented" end
     end
-    return found
+    return found, nil
 end
 
 --------------------------------------------------------------------------------
@@ -126,7 +140,7 @@ end
 
 local RUNTIME_WORDS = { "aura", "candidate", "filter" }
 
-local function keysOf(t: { [any]: any }): string
+local function keysOf(t: table): string
     local out: string[] = {}
     for k, v in pairs(t) do
         out[#out + 1] = tostring(k) .. (type(v) == "function" and "()" or (type(v) == "table" and " {…}" or (" = " .. tostring(v))))
@@ -140,7 +154,7 @@ export function runtime()
     local function add(s: string) lines[#lines + 1] = s end
 
     -- Enums
-    for name, t in pairs(((Enum :: any) or {}) :: { [any]: any }) do
+    for name, t in pairs(Enum) do
         if type(t) == "table" and matches(name, RUNTIME_WORDS) then add("Enum." .. name .. " { " .. keysOf(t) .. " }") end
     end
     -- global tables and functions (mixins, constants, utilities)
@@ -148,7 +162,7 @@ export function runtime()
         if type(name) == "string" and matches(name, RUNTIME_WORDS) then
             -- some globals are forbidden objects: reading them errors
             pcall(function()
-                if type(v) == "table" and not (v.GetObjectType) then
+                if type(v) == "table" and not field(v, "GetObjectType") then
                     add("global table " .. name .. " { " .. keysOf(v) .. " }")
                 elseif type(v) == "function" then
                     add("global function " .. name .. "()")
@@ -160,12 +174,15 @@ export function runtime()
     if not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") end
     local ok, c = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
     if ok and c then
-        local mt = getmetatable(c)
+        local raw: unknown = c
         local methods: string[] = {}
-        if mt and type(mt.__index) == "table" then
-            for k, v in pairs(mt.__index) do if type(v) == "function" then methods[#methods + 1] = k end end
+        if type(raw) == "table" then
+            local index = field(getmetatable(raw), "__index")
+            if type(index) == "table" then
+                for k, v in pairs(index) do if type(v) == "function" then methods[#methods + 1] = tostring(k) end end
+            end
+            for k, v in pairs(raw) do if type(v) == "function" then methods[#methods + 1] = tostring(k) .. " (mixin)" end end
         end
-        for k, v in pairs(c) do if type(v) == "function" then methods[#methods + 1] = k .. " (mixin)" end end
         table.sort(methods)
         add("AuraContainer methods: " .. table.concat(methods, ", "))
         c:Hide()
@@ -195,18 +212,20 @@ local FILTER_TESTS = {
 
 export function filters()
     local lines: string[] = {}
-    local AU: any = _G.AuraUtil or {}
-    local function dumpTable(name: string, t: any, depth: number)
+    local AU = field(_G, "AuraUtil")
+    local function dumpTable(name: string, t: unknown, depth: number)
         if type(t) ~= "table" or depth > 2 then return end
         for k, v in pairs(t) do
             if type(v) == "table" then dumpTable(name .. "." .. tostring(k), v, depth + 1)
             elseif type(v) ~= "function" then lines[#lines + 1] = ("%s.%s = %s"):format(name, tostring(k), tostring(v)) end
         end
     end
-    dumpTable("AuraUtil.AuraFilters", AU.AuraFilters, 0)
-    lines[#lines + 1] = "AuraUtil.AuraFilterNegationPrefix = " .. tostring(AU.AuraFilterNegationPrefix)
+    dumpTable("AuraUtil.AuraFilters", field(AU, "AuraFilters"), 0)
+    lines[#lines + 1] = "AuraUtil.AuraFilterNegationPrefix = " .. tostring(field(AU, "AuraFilterNegationPrefix"))
+    local isValid = field(AU, "IsValidFilterString")
     for _, f in ipairs(FILTER_TESTS) do
-        local ok, valid = pcall(AU.IsValidFilterString or function() return "n/a" end, f)
+        local ok, valid = true, "n/a"
+        if type(isValid) == "function" then ok, valid = pcall(isValid, f) end
         lines[#lines + 1] = ("valid %-34s %s"):format(f, ok and tostring(valid) or ("error: " .. tostring(valid)))
     end
     -- the same, as the engine sees it: does a container take the group?
@@ -214,7 +233,9 @@ export function filters()
     local ok, c = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
     if ok and c then
         for i, f in ipairs({ "HARMFUL|!PLAYER", "HELPFUL|!PLAYER", "HELPFUL|NOTAFILTER" }) do
-            local added, err = pcall(c.AddAuraGroup, c, "t" .. i, f, { maxFrameCount = 1 })
+            local addGroup = field(c, "AddAuraGroup")
+            local added, err = false, "no AddAuraGroup"
+            if type(addGroup) == "function" then added, err = pcall(addGroup, c, "t" .. i, f, { maxFrameCount = 1 }) end
             lines[#lines + 1] = ("container takes %-24s %s"):format(f, added and "yes" or ("no: " .. tostring(err)))
         end
         c:Hide()
@@ -238,12 +259,15 @@ local FILE_CANDIDATES = {
     warning = { 567397 },
 }
 
-type Step = { key: string, kit?: any, file?: any }
+type Step = { key: string, kit?: unknown, file?: number }
+-- One call of AddAuraSound: what it tries, and the table it passes.
+type SoundTry = { label: string, args: { [string]: unknown } }
 
 export function soundPlay()
     local lines: string[] = {}
     local steps: Step[] = {}
-    local files: any = trackerSoundFiles() or {}
+    local files = trackerSoundFiles()
+    local record = { at = date("%Y-%m-%d %H:%M"), lines = lines }
     for _, key in ipairs({ "chime", "ping", "proc", "warning" }) do
         local s = files[key]
         if s then
@@ -253,59 +277,66 @@ export function soundPlay()
     end
     for i, step in ipairs(steps) do
         after((i - 1) * 2, function()
-            local ok, willPlay, label
-            if step.kit then
-                label = ("%s: sound kit %s"):format(step.key, step.kit)
-                ok, willPlay = pcall(PlaySound, SOUNDKIT and SOUNDKIT[step.kit] or 0, "Master")
+            local ok: boolean, willPlay: unknown, label: string
+            local kit, file = step.kit, step.file
+            if kit then
+                label = ("%s: sound kit %s"):format(step.key, tostring(kit))
+                ok, willPlay = pcall(PlaySound, secret.asNumber(field(_G, "SOUNDKIT", tostring(kit))) or 0, "Master")
             else
-                label = ("%s: file %d"):format(step.key, step.file)
-                ok, willPlay = pcall(PlaySoundFile, step.file, "Master")
+                label = ("%s: file %d"):format(step.key, file or 0)
+                ok, willPlay = pcall(PlaySoundFile, file or 0, "Master")
             end
             local line = ("%d. %s -> %s"):format(i, label, ok and tostring(willPlay) or ("error " .. tostring(willPlay)))
             lines[#lines + 1] = line
             print("Sound check " .. line)
-            DB.probe.auraSoundPlay.lines = lines
+            record.lines = lines
         end)
     end
-    local ids: any, what: any = trackerAuraSounds()
+    local ids, what = trackerAuraSounds()
     lines[#lines + 1] = ("%d aura sounds registered"):format(#ids)
     for i, id in ipairs(ids) do lines[#lines + 1] = ("  #%s %s"):format(tostring(id), tostring(what[i])) end
-    if what.error then lines[#lines + 1] = "last error: " .. what.error end
-    DB.probe.auraSoundPlay = { at = date("%Y-%m-%d %H:%M"), lines = lines }
+    local lastError = what.error
+    if lastError then lines[#lines + 1] = "last error: " .. lastError end
+    DB.probe.auraSoundPlay = record
     print(("Sound check: %d lines saved. /reload to save them."):format(#lines))
 end
 
 export function sound()
     local lines: string[] = {}
-    local U: any = C_UnitAuras or {}
-    local E: any = Enum
-    local trig = E.UnitAuraSoundTrigger and E.UnitAuraSoundTrigger.Added or 0
+    local U: unknown = C_UnitAuras
+    local trig = secret.asNumber(field(Enum, "UnitAuraSoundTrigger", "Added")) or 0
     local id = 1126 -- Mark of the Wild, rank 1
     -- unitToken is required (round 1); now the sound field's name
-    local base = function(extra: { [string]: any }): { [string]: any }
-        local t: { [string]: any } = { spellID = id, unitToken = "player" }
+    local base = function(extra: { [string]: unknown }): { [string]: unknown }
+        local t: { [string]: unknown } = { spellID = id, unitToken = "player" }
         for k, v in pairs(extra) do t[k] = v end
         return t
     end
-    local tries: { [number]: any }[] = {
-        { "soundKitID", base({ soundKitID = 8960 }) },
-        { "soundKit", base({ soundKit = 8960 }) },
-        { "soundID", base({ soundID = 8960 }) },
-        { "soundFileID", base({ soundFileID = 567478 }) },
-        { "fileID", base({ fileID = 567478 }) },
-        { "soundFileName", base({ soundFileName = "Sound\\Interface\\RaidWarning.ogg" }) },
-        { "soundFile", base({ soundFile = "Sound\\Interface\\RaidWarning.ogg" }) },
-        { "soundKitID outputChannel", base({ soundKitID = 8960, outputChannel = "Master" }) },
-        { "soundFileID outputChannel", base({ soundFileID = 567478, outputChannel = "Master" }) },
-        { "soundFileName outputChannel", base({ soundFileName = "Sound\\Interface\\RaidWarning.ogg", outputChannel = "Master" }) },
-        { "spellID as name", { spellID = "Mark of the Wild", unitToken = "player", soundKitID = 8960 } },
+    local tries: SoundTry[] = {
+        { label = "soundKitID", args = base({ soundKitID = 8960 }) },
+        { label = "soundKit", args = base({ soundKit = 8960 }) },
+        { label = "soundID", args = base({ soundID = 8960 }) },
+        { label = "soundFileID", args = base({ soundFileID = 567478 }) },
+        { label = "fileID", args = base({ fileID = 567478 }) },
+        { label = "soundFileName", args = base({ soundFileName = "Sound\\Interface\\RaidWarning.ogg" }) },
+        { label = "soundFile", args = base({ soundFile = "Sound\\Interface\\RaidWarning.ogg" }) },
+        { label = "soundKitID outputChannel", args = base({ soundKitID = 8960, outputChannel = "Master" }) },
+        { label = "soundFileID outputChannel", args = base({ soundFileID = 567478, outputChannel = "Master" }) },
+        { label = "soundFileName outputChannel", args = base({ soundFileName = "Sound\\Interface\\RaidWarning.ogg", outputChannel = "Master" }) },
+        { label = "spellID as name", args = { spellID = "Mark of the Wild", unitToken = "player", soundKitID = 8960 } },
     }
-    for _, t in ipairs(tries) do
-        local ok, res = pcall(U.AddAuraSound, trig, t[2])
-        lines[#lines + 1] = ("AddAuraSound(trigger, {%s}) -> %s"):format(t[1], ok and ("ok, " .. tostring(res)) or ("error: " .. tostring(res)))
-        if ok and res and U.RemoveAuraSound then pcall(U.RemoveAuraSound, res) end
+    -- `U[name](...)`, protected
+    local function try(name: string, ...: unknown): (boolean, unknown)
+        local fn = field(U, name)
+        if type(fn) ~= "function" then return false, "missing" end
+        return pcall(fn, ...)
     end
-    local ok, res = pcall(U.AddPrivateAuraAppliedSound, {})
+    for _, t in ipairs(tries) do
+        local ok, res = try("AddAuraSound", trig, t.args)
+        lines[#lines + 1] = ("AddAuraSound(trigger, {%s}) -> %s"):format(t.label, ok and ("ok, " .. tostring(res)) or ("error: " .. tostring(res)))
+        if ok and res then try("RemoveAuraSound", res) end
+    end
+    local ok, res = try("AddPrivateAuraAppliedSound", {})
     lines[#lines + 1] = "AddPrivateAuraAppliedSound({}) -> " .. (ok and ("ok, " .. tostring(res)) or ("error: " .. tostring(res)))
     DB.probe.auraSound = { at = date("%Y-%m-%d %H:%M"), lines = lines }
     print(("Sound probe: %d tries saved. /reload to save them."):format(#lines))

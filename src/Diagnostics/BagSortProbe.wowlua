@@ -28,29 +28,38 @@ import isSecret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
 
 -- a step's record, a slot ({ bag, slot }) and a slot's content
-type Rec = { [string]: any }
+-- A step's record: when it started, what the game said meanwhile, and its
+-- own findings by name.
+type Rec = {
+    at: string, t0: number, events: string[], errors: string[], steps: string[],
+    error?: string, ended?: string, result?: string, skipped?: string,
+    burst?: string, waited?: string, moved?: string, took?: string, restored?: string,
+    [string]: unknown,
+}
 type Slot = number[]
-type Content = { id: any, count: any, locked: boolean }
+type Content = { id: unknown, count: number, locked: boolean }
+-- What the probe saves: each step's record, the snapshot, refusals in combat.
+type Out = { now?: { [string]: unknown }, combat?: string[], [string]: unknown }
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "SECRET" end
     if type(v) == "number" and v ~= math.floor(v) then return ("%.3f"):format(v) end
     return tostring(v)
 end
 
 
-local function out(): { [string]: any }
-    DB.probe.bagsort = DB.probe.bagsort or {}
-    return DB.probe.bagsort
+local function out(): Out
+    return DB.probeData("bagsort", function(): Out return {} end)
 end
 
 local function push(list: string[], line: string, cap: number?)
     if #list < (cap or 60) then list[#list + 1] = line end
 end
 
-local C: any = C_Container or {}
+local C = C_Container
 local TIMEOUT = 3
 
 --------------------------------------------------------------------------------
@@ -66,16 +75,17 @@ local function numSlots(bag: number): number
     return ok and secret.readable(n) and type(n) == "number" and n or 0
 end
 
-local function family(bag: number): any
+local function family(bag: number): number?
     local ok, _, fam = pcall(C.GetContainerNumFreeSlots, bag)
-    if ok and secret.readable(fam) then return fam end
+    if ok and secret.isNumber(fam) then return fam end
+    return nil
 end
 
 -- A slot's content: { id, count, locked } or nil when empty.
 local function slot(bag: number, i: number): Content?
     local ok, info = pcall(C.GetContainerItemInfo, bag, i)
     if not ok or type(info) ~= "table" then return nil end
-    return { id = secret.readable(info.itemID) and info.itemID or "SECRET", count = secret.readable(info.stackCount) and info.stackCount or 0,
+    return { id = secret.readable(info.itemID) and info.itemID or "SECRET", count = secret.asNumber(info.stackCount) or 0,
              locked = info.isLocked == true }
 end
 
@@ -165,13 +175,13 @@ local function start(name: string, fn: (rec: Rec) -> ())
         return
     end
     if InCombatLockdown() then
-        o.combat = o.combat or {}
-        push(o.combat, ("%s %s: refused, in combat"):format(date("%H:%M:%S"), name), 20)
+        local combat = o.combat or {}
+        o.combat = combat
+        push(combat, ("%s %s: refused, in combat"):format(date("%H:%M:%S"), name), 20)
         print("Bag sort probe: not in combat. Try again after the fight.")
         return
     end
-    local rec: Rec = { at = date("%H:%M:%S"), events = {}, errors = {} }
-    rec.t0 = GetTime()
+    local rec: Rec = { at = date("%H:%M:%S"), t0 = GetTime(), events = {}, errors = {}, steps = {} }
     o[name] = rec
     cur = rec
     running = coroutine.create(function() fn(rec) end)
@@ -179,7 +189,7 @@ local function start(name: string, fn: (rec: Rec) -> ())
 end
 
 -- Yields frames until cond() or the timeout: true and the seconds, or false.
-local function waitFor(cond: () -> any, timeout: number?): (boolean, number)
+local function waitFor(cond: () -> unknown, timeout: number?): (boolean, number)
     local t = GetTime()
     while GetTime() - t < (timeout or TIMEOUT) do
         coroutine.yield()
@@ -202,7 +212,7 @@ local function pickPlace(a: Slot, b: Slot): (boolean, string)
         ok1 and "ok" or tostring(e1):sub(1, 80), held, key(b), ok2 and "ok" or tostring(e2):sub(1, 80), cursorLine())
 end
 
-local function same(c: Content?, id: any): boolean? return c and c.id == id and not c.locked end
+local function same(c: Content?, id: unknown): boolean? return c and c.id == id and not c.locked end
 
 -- a → b (b empty): landed when b holds the item and neither slot is locked.
 local function moveAndWait(rec: Rec, a: Slot, b: Slot, label: string): boolean
@@ -268,7 +278,7 @@ local function stepSwap(rec: Rec)
         (na and na.id == ia.id and nb and nb.id == ib.id) and "restored" or "NOT restored")
 end
 
-type Move = { a: Slot, b: Slot, id: any }
+type Move = { a: Slot, b: Slot, id: unknown }
 
 -- Up to 6 pairs (from the end → the first empty slots).
 local function pairsFor(list: Slot[], n: number): Move[]
@@ -334,12 +344,13 @@ local function stepBurst(rec: Rec)
     rec.result = ("%d errors"):format(#rec.errors)
 end
 
-local function maxStack(id: any): any
+local function maxStack(id: unknown): number?
     if not secret.readable(id) or type(id) ~= "number" then return nil end
     local n = C_Item and C_Item.GetItemMaxStackSizeByID and select(2, pcall(C_Item.GetItemMaxStackSizeByID, id))
-    if secret.readable(n) and type(n) == "number" then return n end
+    if secret.isNumber(n) then return n end
     local info = { pcall(C_Item and C_Item.GetItemInfo or GetItemInfo, id) }
-    if info[1] and secret.readable(info[9]) then return info[9] end
+    if info[1] then return secret.asNumber(info[9]) end
+    return nil
 end
 
 local function stepStack(rec: Rec)
@@ -397,7 +408,8 @@ local function stepDirection(rec: Rec)
     if type(C.SortBags) ~= "function" then rec.skipped = "no C_Container.SortBags" return end
     local okGet, was = pcall(C.GetSortBagsRightToLeft)
     rec.rightToLeft = okGet and show(was) or "error"
-    rec.before = layout()
+    local before = layout()
+    rec.before = before
     local okSet, e = pcall(C.SetSortBagsRightToLeft, not was)
     rec.flipped = okSet and ("set to " .. tostring(not was)) or ("error: " .. tostring(e):sub(1, 80))
     local t = GetTime()
@@ -411,9 +423,10 @@ local function stepDirection(rec: Rec)
         return GetTime() - t > 1 and not anyLocked() and GetTime() - lastEvent > 1
     end, 20)
     rec.took = ("%.3fs"):format(GetTime() - t)
-    rec.after = layout()
+    local after = layout()
+    rec.after = after
     local moved = 0
-    for i, line in ipairs(rec.after) do if line ~= rec.before[i] then moved = moved + 1 end end
+    for i, line in ipairs(after) do if line ~= before[i] then moved = moved + 1 end end
     rec.moved = moved .. " slots changed"
     pcall(C.SetSortBagsRightToLeft, was)
     rec.restored = "setting back to " .. tostring(was)
@@ -433,10 +446,11 @@ local INFO_NAMES = { "name", "link", "quality", "itemLevel", "minLevel", "type",
 
 local function snapshot()
     local o = out()
-    local now: { [string]: any } = { at = date("%H:%M:%S"), combat = tostring(InCombatLockdown()), container = {}, item = {}, bags = {} }
-    for _, f in ipairs(FUNCS) do push(now.container, f .. ": " .. type(C[f]), 40) end
-    for _, f in ipairs(ITEM_FUNCS) do push(now.item, "C_Item." .. f .. ": " .. type(C_Item and C_Item[f]), 40) end
-    push(now.item, "GetItemInfo (global): " .. type(GetItemInfo), 40)
+    local container, item, bags = {} :: string[], {} :: string[], {} :: string[]
+    local now: { [string]: unknown } = { at = date("%H:%M:%S"), combat = tostring(InCombatLockdown()), container = container, item = item, bags = bags }
+    for _, f in ipairs(FUNCS) do push(container, f .. ": " .. type(tbl.field(C, f)), 40) end
+    for _, f in ipairs(ITEM_FUNCS) do push(item, "C_Item." .. f .. ": " .. type(tbl.field(C_Item, f)), 40) end
+    push(item, "GetItemInfo (global): " .. type(GetItemInfo), 40)
     local ok, r = pcall(C.GetSortBagsRightToLeft)
     now.rightToLeft = ok and show(r) or "error"
     for bag = 0, lastBag() do
@@ -445,14 +459,14 @@ local function snapshot()
         if okF then free, fam = f1, f2 end
         local flags = {}
         if Enum and Enum.BagSlotFlags and type(C.GetBagSlotFlag) == "function" then
-            for name, v in pairs(Enum.BagSlotFlags :: any) do
+            for name, v in pairs(Enum.BagSlotFlags) do
                 local okB, on = pcall(C.GetBagSlotFlag, bag, v)
                 if okB and on then flags[#flags + 1] = name end
             end
             table.sort(flags)
         end
         local okN, bname = pcall(C.GetBagName, bag)
-        push(now.bags, ("bag %d %s: %d slots, %s free, family %s, flags %s"):format(bag, okN and show(bname) or "?",
+        push(bags, ("bag %d %s: %d slots, %s free, family %s, flags %s"):format(bag, okN and show(bname) or "?",
             numSlots(bag), show(free), show(fam), #flags > 0 and table.concat(flags, " ") or "none"), 12)
     end
     -- the first item: its container info and item info, field by field
@@ -509,7 +523,7 @@ export function command(arg: string?)
         fn(rec)
         local msg = rec.skipped and ("skipped (" .. rec.skipped .. ")") or (rec.result or "done")
         if mode == "burst" and rec.burst then msg = "burst " .. rec.burst .. "; one at a time " .. tostring(rec.waited) end
-        if mode == "direction" and rec.moved then msg = rec.moved .. " in " .. tostring(rec.took) .. ", " .. rec.restored end
+        if mode == "direction" and rec.moved then msg = rec.moved .. " in " .. tostring(rec.took) .. ", " .. tostring(rec.restored) end
         print(("Bag sort probe, %s: %s.%s"):format(mode, msg,
             NEXT[mode] and (" Next: /suu probe bagsort " .. (NEXT[mode] :: string)) or " Now /reload to save it."))
     end)

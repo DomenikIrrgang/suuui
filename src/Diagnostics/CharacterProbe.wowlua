@@ -18,14 +18,20 @@ import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
 
-local function show(v: any): string
+type Record = { [string]: unknown }
+-- What the probe saves in SuuUIProbe.character.
+type Character = { log: string[], views: Record[], [string]: unknown }
+
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     return tostring(v)
 end
 
-local function namesIn(t: any): string[]
+local function namesIn(t: unknown): string[]
     local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
@@ -33,39 +39,32 @@ local function namesIn(t: any): string[]
     return out
 end
 
-local function keyedChildren(f: any): string[]
-    local out: string[] = {}
-    for k, v in pairs(f) do
-        if type(k) == "string" and type(v) == "table" and v.GetObjectType and not (v.IsForbidden and v:IsForbidden()) then
-            out[#out + 1] = k
-        end
-    end
-    table.sort(out)
-    return out
-end
-
 -- Any widget: a frame, a texture, a font string, an animation (each answers
 -- only some of these).
-local function frameLine(f: any): string
-    if type(f) ~= "table" or not f.GetObjectType then return "missing" end
-    local function ask(method: string): (any, any)
-        if type(f[method]) ~= "function" then return nil end
-        local ok, a, b = pcall(f[method], f)
+local function frameLine(f: unknown): string
+    local kind = tbl.field(f, "GetObjectType")
+    if type(kind) ~= "function" then return "missing" end
+    local function ask(method: string): (unknown, unknown)
+        local fn = tbl.field(f, method)
+        if type(fn) ~= "function" then return nil, nil end
+        local ok, a, b = pcall(fn, f)
         if ok then return a, b end
+        return nil, nil
     end
     local w, h = ask("GetSize")
-    return ("%s shown=%s protected=%s size=%dx%d strata=%s"):format(f:GetObjectType(), show(ask("IsShown")),
-        show(ask("IsProtected")), tonumber(w) or 0, tonumber(h) or 0, show(ask("GetFrameStrata")))
+    return ("%s shown=%s protected=%s size=%dx%d strata=%s"):format(tostring((ask("GetObjectType"))), show((ask("IsShown"))),
+        show((ask("IsProtected"))), tonumber(w) or 0, tonumber(h) or 0, show((ask("GetFrameStrata"))))
 end
 
 -- A frame and its keyed children, two levels deep.
-local function tree(f: any, depth: number): any
-    if type(f) ~= "table" or not f.GetObjectType then return "missing" end
-    local node = { info = frameLine(f) }
+local function tree(f: unknown, depth: number): unknown
+    if type(tbl.field(f, "GetObjectType")) ~= "function" then return "missing" end
+    local node: Record = { info = frameLine(f) }
     if depth > 0 then
-        node.children = {}
-        for _, k in ipairs(keyedChildren(f)) do
-            node.children[k] = (depth > 1) and tree(f[k], depth - 1) or frameLine(f[k])
+        local children: { [string]: unknown } = {}
+        node.children = children
+        for k, part in pairs(wf.keyed(f)) do
+            children[k] = (depth > 1) and tree(part, depth - 1) or frameLine(part)
         end
     end
     return node
@@ -86,7 +85,7 @@ local FUNCS = { "ToggleCharacter", "CharacterFrame_ShowSubFrame", "CharacterFram
                 "ToggleTokenFrame", "TogglePVPUI", "TogglePVPFrame", "ToggleHonorFrame", "PanelTemplates_SetTab",
                 "PanelTemplates_TabResize", "CharacterFrame_Collapse", "CharacterFrame_Expand", "ShowUIPanel", "HideUIPanel" }
 
-local store: { [string]: any }? = nil
+local store: Character? = nil
 local function note(s: string)
     local log = store and store.log
     if not log then return end
@@ -101,17 +100,18 @@ local function startLog()
     for _, name in ipairs({ "ToggleCharacter", "CharacterFrame_ShowSubFrame", "CharacterFrameTab_OnClick", "PaperDollFrame_SetSidebar",
                             "ToggleTokenFrame", "TogglePVPUI", "TogglePVPFrame", "ToggleHonorFrame", "PanelTemplates_SetTab",
                             "CharacterFrame_Collapse", "CharacterFrame_Expand" }) do
-        if type(_G[name]) == "function" then
-            hook(name, function(a: any, b: any)
-                local function label(v: any): string
-                    if type(v) == "table" and v.GetName then return v:GetName() or "frame" end
+        if type(tbl.field(_G, name)) == "function" then
+            hook(name, function(a: unknown, b: unknown)
+                local function label(v: unknown): string
+                    local r = wf.asRegion(v)
+                    if r then return r:GetName() or "frame" end
                     return show(v)
                 end
                 note(name .. "(" .. label(a) .. ", " .. label(b) .. ")")
             end)
         end
     end
-    local cf = _G.CharacterFrame
+    local cf = wf.find("CharacterFrame")
     if cf then
         hookScript(cf, "OnShow", function() note("CharacterFrame shown") end)
         hookScript(cf, "OnHide", function() note("CharacterFrame hidden") end)
@@ -121,75 +121,81 @@ local function startLog()
                          "UPDATE_FACTION", "CURRENCY_DISPLAY_UPDATE", "SKILL_LINES_CHANGED" }) do
         pcall(f.RegisterEvent, f, e)
     end
-    f:SetScript("OnEvent", function(_, e, a, b) note(e .. " " .. show(a) .. " " .. show(b)) end)
+    f:SetScript("OnEvent", function(_, e: string, a: unknown, b: unknown) note(e .. " " .. show(a) .. " " .. show(b)) end)
 end
 
 export function sample()
-    local s: { [string]: any } = DB.probe.character or {}
+    local s = DB.probeData("character", function(): Character return { log = {}, views = {} } end)
     store = s
-    DB.probe.character = s
     s.at = date("%Y-%m-%d %H:%M:%S")
-    local cf = _G.CharacterFrame
+    local cf = wf.find("CharacterFrame")
     s.frame = tree(cf, 2)
     if cf then
-        s.panel = {}
+        local panel: { [string]: string } = {}
+        s.panel = panel
         for _, key in ipairs({ "UIPanelLayout-defined", "UIPanelLayout-area", "UIPanelLayout-pushable", "UIPanelLayout-width",
                                "UIPanelLayout-whileDead" }) do
-            s.panel[key] = show(cf:GetAttribute(key))
+            panel[key] = show(cf:GetAttribute(key))
         end
-        s.panelWindows = UIPanelWindows and UIPanelWindows.CharacterFrame and "listed" or "not in UIPanelWindows"
-        s.numTabs = show(cf.numTabs)
-        s.selectedTab = show(cf.selectedTab)
-        local regions = {}
+        s.panelWindows = tbl.field(_G, "UIPanelWindows", "CharacterFrame") and "listed" or "not in UIPanelWindows"
+        s.numTabs = show(tbl.field(cf, "numTabs"))
+        s.selectedTab = show(tbl.field(cf, "selectedTab"))
+        local regions: string[] = {}
         for _, r in ipairs({ cf:GetRegions() }) do
             regions[#regions + 1] = (r:GetDebugName() or "?"):gsub("^.*%.", "") .. "(" .. r:GetObjectType() .. ")"
         end
         s.regions = table.concat(regions, " ")
     end
-    s.tabs = {}
+    local tabs: string[] = {}
+    s.tabs = tabs
     for i = 1, 10 do
-        local t = _G["CharacterFrameTab" .. i]
+        local t = wf.asButton(wf.find("CharacterFrameTab" .. i))
         if t then
-            s.tabs[i] = ("%s text=%s shown=%s enabled=%s protected=%s"):format(t:GetName(), show(t:GetText()),
-                show(t:IsShown()), show(t:IsEnabled()), show(t:IsProtected()))
+            tabs[i] = ("%s text=%s shown=%s enabled=%s protected=%s"):format(t:GetName(), show(t:GetText()),
+                show(t:IsShown()), show(t:IsEnabled()), show((t:IsProtected())))
         end
     end
-    s.slots = {}
+    local slots: { [string]: string } = {}
+    s.slots = slots
     for _, slot in ipairs(SLOTS) do
-        local b = _G["Character" .. slot .. "Slot"]
-        s.slots[slot] = b and ("%s protected=%s id=%s"):format(b:GetObjectType(), show(b:IsProtected()), show(b:GetID())) or "missing"
+        local b = wf.find("Character" .. slot .. "Slot")
+        slots[slot] = b and ("%s protected=%s id=%s"):format(b:GetObjectType(), show((b:IsProtected())), show(b:GetID())) or "missing"
     end
-    s.panes = {}
+    local panes: { [string]: string } = {}
+    s.panes = panes
     for _, name in ipairs(PANES) do
-        local v = _G[name]
-        s.panes[name] = type(v) == "table" and frameLine(v) or type(v)
+        local v = tbl.field(_G, name)
+        panes[name] = type(v) == "table" and frameLine(v) or type(v)
     end
-    s.funcs = {}
-    for _, name in ipairs(FUNCS) do s.funcs[name] = type(_G[name]) end
+    local funcs: { [string]: string } = {}
+    s.funcs = funcs
+    for _, name in ipairs(FUNCS) do funcs[name] = type(tbl.field(_G, name)) end
     s.C_EquipmentSet = namesIn(C_EquipmentSet)
     s.C_Reputation = namesIn(C_Reputation)
     s.C_CurrencyInfo = namesIn(C_CurrencyInfo)
     s.C_PaperDollInfo = namesIn(C_PaperDollInfo)
     -- anything model- or HD-like in the window
-    local found = {}
-    local function scan(f: any, path: string, depth: number)
-        if depth > 3 or type(f) ~= "table" or not f.GetObjectType then return end
-        for _, k in ipairs(keyedChildren(f)) do
+    local found: string[] = {}
+    local function scan(f: unknown, path: string, depth: number)
+        if depth > 3 then return end
+        local parts = wf.keyed(f)
+        for _, k in ipairs(tbl.keys(parts)) do
             local l = k:lower()
             if l:find("model") or l:find("hd") or l:find("toggle") or l:find("quality") then
-                found[#found + 1] = path .. "." .. k .. " " .. frameLine(f[k])
+                found[#found + 1] = path .. "." .. k .. " " .. frameLine(parts[k])
             end
-            scan(f[k], path .. "." .. k, depth + 1)
+            scan(parts[k], path .. "." .. k, depth + 1)
         end
     end
     if cf then scan(cf, "CharacterFrame", 0) end
     s.modelThings = found
     -- what shows right now (one entry per run: run it on each tab)
     s.views = s.views or {}
-    local view = { at = date("%H:%M:%S"), selectedTab = show(cf and cf.selectedTab), shown = {} }
+    local shown: string[] = {}
+    local view: Record = { at = date("%H:%M:%S"), selectedTab = show(tbl.field(cf, "selectedTab")), shown = shown }
     for _, name in ipairs(PANES) do
-        local v = _G[name]
-        if type(v) == "table" and v.IsVisible and v:IsVisible() then view.shown[#view.shown + 1] = name end
+        local v = wf.asRegion(tbl.field(_G, name))
+        if v and v:IsVisible() then table.insert(shown, name) end
     end
     table.insert(s.views, view)
     while #s.views > 10 do table.remove(s.views, 1) end

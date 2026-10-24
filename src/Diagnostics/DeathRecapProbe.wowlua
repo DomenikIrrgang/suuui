@@ -10,14 +10,14 @@ import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import isSecret from "wowlua:secret"
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "SECRET" end
     return tostring(v)
 end
 
 export function command()
-    local out: { [string]: any } = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false, dead = UnitIsDeadOrGhost("player") and true or false }
-    local api: any = _G.C_DeathRecap
+    local out: { [string]: unknown } = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false, dead = UnitIsDeadOrGhost("player") and true or false }
+    local api = C_DeathRecap
     if not api then
         out.api = "missing"
     else
@@ -28,15 +28,19 @@ export function command()
         local okL, link = pcall(api.GetRecapLink)
         out.link = okL and show(link) or "error"
         local okE, events = pcall(api.GetRecapEvents)
-        out.secretTable = okE and issecrettable and issecrettable(events) and true or false
-        out.events = {}
-        if okE and type(events) == "table" and not out.secretTable then
-            for i, e in ipairs(events :: any[]) do
+        local secretTable = okE and issecrettable and issecrettable(events) and true or false
+        out.secretTable = secretTable
+        local lines: string[] = {}
+        out.events = lines
+        if okE and type(events) == "table" and not secretTable then
+            for i, e in ipairs(events :: unknown[]) do
                 if i > 6 then break end
                 local fields: string[] = {}
-                for k, v in pairs(e) do fields[#fields + 1] = tostring(k) .. "=" .. show(v) end
+                if type(e) == "table" then
+                    for k, v in pairs(e) do fields[#fields + 1] = tostring(k) .. "=" .. show(v) end
+                end
                 table.sort(fields)
-                out.events[i] = table.concat(fields, "  ")
+                lines[i] = table.concat(fields, "  ")
             end
         end
     end

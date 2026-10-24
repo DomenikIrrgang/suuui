@@ -14,15 +14,17 @@ import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import SuuUI from "/Core/API"
 import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
 
 -- the frame hearing the quest events, and whether it's on
 local eventFrame: Frame? = nil
 local on: boolean? = nil
 
 
-local function store(): { [string]: any }
-    DB.probe.givers = DB.probe.givers or { npcs = {}, checked = 0, differences = 0 }
-    return DB.probe.givers
+type Store = { npcs: { [unknown]: unknown }, checked: number, differences: number }
+
+local function store(): Store
+    return DB.probeData("givers", function(): Store return { npcs = {}, checked = 0, differences = 0 } end)
 end
 
 -- the NPC you're talking to: its ID from its GUID ("Creature-0-…-<id>-…")
@@ -60,7 +62,7 @@ local function offered(event: string): { [number]: string }
 end
 
 -- the quests before one and instead of it, done or not ("97246 done")
-local function why(id: number, done: { [number]: any }): string
+local function why(id: number, done: unknown[]): string
     local row = SuuUI.QuestStarts().quests[id]
     if not row then return "not in the data" end
     local q = quest(row)
@@ -118,9 +120,9 @@ export function check(event: string)
     end
     local entry = {
         name = name, at = date("%Y-%m-%d %H:%M"), level = UnitLevel("player"), event = event,
-        offered = {}, missing = missing, extra = extra, red = red,
+        offered = {} :: string[], missing = missing, extra = extra, red = red,
     }
-    for qid, title in pairs(offers) do entry.offered[#entry.offered + 1] = qid .. " " .. title end
+    for qid, title in pairs(offers) do table.insert(tbl.listAt(entry, "offered"), qid .. " " .. title) end
     s.npcs[id] = entry
     if #missing > 0 or #extra > 0 then
         s.differences = s.differences + 1

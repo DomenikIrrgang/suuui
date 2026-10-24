@@ -13,9 +13,10 @@ import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import isSecret from "wowlua:secret"
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
 
 
-local function show(v: any, depth: number?): string
+local function show(v: unknown, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "<secret>" end
     if type(v) ~= "table" then return tostring(v) end
@@ -30,7 +31,7 @@ local function show(v: any, depth: number?): string
     return "{" .. table.concat(parts, ", ") .. "}"
 end
 
-local function call(t: any, name: string, ...: any): (any, any, any)
+local function call(t: unknown, name: string, ...: unknown): (any, any, any)
     if not (t and type(t[name]) == "function") then return "missing" end
     local ok, a, b, c = pcall(t[name], ...)
     if not ok then return "error: " .. tostring(a) end
@@ -44,7 +45,7 @@ export function snapshot(waited: boolean)
     s.exists = cal ~= nil
     s.functions = {}
     for k, v in pairs((cal or {}) :: any) do
-        if type(v) == "function" then s.functions[#s.functions + 1] = k end
+        if type(v) == "function" then table.insert(tbl.listAt(s, "functions"), k) end
     end
     table.sort(s.functions)
     local now = C_DateAndTime and call(C_DateAndTime, "GetCurrentCalendarTime")
@@ -59,7 +60,7 @@ export function snapshot(waited: boolean)
     for offset = 0, 1 do
         local info = call(cal, "GetMonthInfo", offset)
         local m = { info = show(info), events = {} }
-        s.months[#s.months + 1] = m
+        table.insert(tbl.listAt(s, "months"), m)
         local days = type(info) == "table" and info.numDays or 31
         for day = 1, days do
             local n = call(cal, "GetNumDayEvents", offset, day)
@@ -71,7 +72,7 @@ export function snapshot(waited: boolean)
                     entry.holiday = show((call(cal, "GetHolidayInfo", offset, day, i)))
                 end
                 -- one line per event a day, not one per day it lasts
-                if #m.events < 120 then m.events[#m.events + 1] = entry end
+                if #m.events < 120 then table.insert(tbl.listAt(m, "events"), entry) end
             end
         end
     end
@@ -79,7 +80,7 @@ export function snapshot(waited: boolean)
     s.today = {}
     local n = call(cal, "GetNumDayEvents", 0, now.monthDay)
     for i = 1, (type(n) == "number" and n or 0) do
-        s.today[#s.today + 1] = show((call(cal, "GetDayEvent", 0, now.monthDay, i)))
+        table.insert(tbl.listAt(s, "today"), show((call(cal, "GetDayEvent", 0, now.monthDay, i))))
     end
     print(("Calendar probe: %d events today, %d holiday days in two months%s; /reload."):format(
         #s.today, holidays, waited and "" or " (the calendar didn't answer in 5 s)"))

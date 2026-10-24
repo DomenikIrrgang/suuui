@@ -12,6 +12,7 @@
 
 import isSecret from "wowlua:secret"
 import * as DB from "/Core/DB"
+import * as tbl from "wowlua:table"
 import print from "/Core/Init"
 import panel, closeButton, Panel from "/UI/Panel"
 import itemSlot from "/UI/Inventory"
@@ -19,27 +20,34 @@ import text as uiText from "/UI/Text"
 import button from "/UI/Controls"
 
 -- the item put in the slot, the panel, and whether its events are heard
-local itemLoc: any = nil
+local itemLoc: ItemLocationMixin? = nil
 local probePanel: Panel? = nil
 local listening = false
 local BUYOUT = 999 * 10000
 
 local function out(text: string)
-    DB.probe.ahPost = DB.probe.ahPost or { lines = {} }
-    local lines = DB.probe.ahPost.lines
+    local lines = tbl.listAt(tbl.recordAt(DB.probe, "ahPost"), "lines")
     lines[#lines + 1] = date("%H:%M:%S") .. " " .. text
     print("AH post probe: " .. text)
 end
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     return tostring(v)
 end
 
 -- The item in the slot as the auction house takes it.
-local function location(): any
+local function location(): ItemLocationMixin?
     local loc = itemLoc
-    if loc and loc.IsValid and loc:IsValid() then return loc end
+    if loc and loc:IsValid() then return loc end
+    return nil
+end
+
+-- A call of a function the client may lack, with arguments of the probe's
+-- own choosing (what the documentation doesn't say).
+local function attempt(fn: unknown, ...: unknown): (boolean, unknown)
+    if type(fn) ~= "function" then return false, "missing" end
+    return pcall(fn, ...)
 end
 
 local function build(): Panel
@@ -86,13 +94,13 @@ export function post()
     local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, loc)
     local commodity = ok and Enum.ItemCommodityStatus and status == Enum.ItemCommodityStatus.Commodity
     if commodity then
-        local okPost, res = pcall((C_AuctionHouse :: any).PostCommodity, loc, 1, 1, BUYOUT)
+        local okPost, res = attempt(C_AuctionHouse.PostCommodity, loc, 1, 1, BUYOUT)
         out(("PostCommodity(…, 12h, 1, 999g): %s %s"):format(okPost and "returned" or "error", show(res)))
     else
-        local okPost, res = pcall((C_AuctionHouse :: any).PostItem, loc, 1, 1, nil, BUYOUT)
+        local okPost, res = attempt(C_AuctionHouse.PostItem, loc, 1, 1, nil, BUYOUT)
         out(("PostItem(…, 12h, 1, no bid, 999g): %s %s"):format(okPost and "returned" or "error", show(res)))
         if okPost and res == true and C_AuctionHouse.ConfirmPostItem then
-            local okC, resC = pcall((C_AuctionHouse :: any).ConfirmPostItem, loc, 1, 1, nil, BUYOUT)
+            local okC, resC = attempt(C_AuctionHouse.ConfirmPostItem, loc, 1, 1, nil, BUYOUT)
             out(("ConfirmPostItem: %s %s"):format(okC and "returned" or "error", show(resC)))
         end
     end
@@ -103,7 +111,7 @@ end
 export function cancel()
     local loc = location()
     local itemID = loc and C_Item.GetItemID(loc)
-    local best: any = nil
+    local best: OwnedAuctionInfo? = nil
     for i = 1, (C_AuctionHouse.GetNumOwnedAuctions() or 0) do
         local a = C_AuctionHouse.GetOwnedAuctionInfo(i)
         if a and a.itemKey and (not itemID or a.itemKey.itemID == itemID) and a.status == 0 then

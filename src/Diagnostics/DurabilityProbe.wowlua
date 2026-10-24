@@ -26,24 +26,35 @@ import * as DB from "/Core/DB"
 import print, name as addonName from "/Core/Init"
 import * as apiDocs from "/Diagnostics/ApiDocs"
 import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "SECRET" end
     return tostring(v)
 end
 
 -- A function that may not exist, may error or may answer secret.
-local function call(fn: any, ...: any): (any, any, any, any)
-    if type(fn) ~= "function" then return "missing" end
+local function call(fn: unknown, ...: unknown): (unknown, unknown, unknown, unknown)
+    if type(fn) ~= "function" then return "missing", nil, nil, nil end
     local ok, a, b, c, d = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 120) end
+    if not ok then return "error: " .. tostring(a):sub(1, 120), nil, nil, nil end
     return a, b, c, d
 end
 
+-- What a merchant offers for repairs (and your money then).
+type Merchant = { canRepair: string, repairAllCost: string, repairAllCan: string, guildBank: string, money: string,
+                  at?: string, costLater?: string }
+type Sample = { at: string, why: string, inCombat: boolean, durabilityFrame: string, slots: string[], merchantNow?: Merchant }
+-- The repair test: RepairAllItems at MERCHANT_SHOW, with no click.
+type Repair = { at: string, before: Merchant, blocked: string[], call?: string, after?: Merchant, moneyWentDown?: string,
+                slotsAfter?: string[] }
+-- What the probe saves in SuuUIProbe.durability.
+type Out = { now?: Sample, api?: { [string]: string }, docs?: unknown, docFlags?: unknown, autorepair?: Repair[],
+             merchants?: Merchant[], inCombat?: Sample[], events?: string[] }
 
-local function out(): { [string]: any }
-    DB.probe.durability = DB.probe.durability or {}
-    return DB.probe.durability
+local function out(): Out
+    return DB.probeData("durability", function(): Out return {} end)
 end
 
 local MAX_SAMPLES = 6
@@ -51,37 +62,38 @@ local MAX_EVENTS = 80
 
 -- A hidden tooltip: GameTooltip:SetInventoryItem returns hasItem,
 -- hasCooldown, repairCost on the clients that still do.
-local tip: any = nil
+local tip: GameTooltip? = nil
 local function tipCost(slot: number): string
-    if not tip then
-        local ok, t = pcall(CreateFrame, "GameTooltip", "SuuUIDurabilityProbeTip", nil, "GameTooltipTemplate")
-        if not ok then return "no tooltip: " .. tostring(t):sub(1, 80) end
-        tip = t
+    local t = tip
+    if not t then
+        local ok, made = pcall(CreateFrame, "GameTooltip", "SuuUIDurabilityProbeTip", nil, "GameTooltipTemplate")
+        if not ok then return "no tooltip: " .. tostring(made):sub(1, 80) end
+        t = made
+        tip = made
     end
-    pcall(tip.SetOwner, tip, WorldFrame, "ANCHOR_NONE")
-    local ok, hasItem, cooldown, cost = pcall(tip.SetInventoryItem, tip, "player", slot)
-    pcall(tip.Hide, tip)
+    pcall(t.SetOwner, t, WorldFrame, "ANCHOR_NONE")
+    local ok, hasItem, cooldown, cost = pcall(t.SetInventoryItem, t, "player", slot)
+    pcall(t.Hide, t)
     if not ok then return "error: " .. tostring(hasItem):sub(1, 80) end
     return ("hasItem %s, cooldown %s, repairCost %s"):format(show(hasItem), show(cooldown), show(cost))
 end
 
 -- The tooltip data's secret.readable fields, and its lines about repairs or durability.
 local function tooltipData(slot: number): string
-    local T = C_TooltipInfo or {}
-    local data = call(T.GetInventoryItem, "player", slot)
+    local data = call(tbl.field(C_TooltipInfo, "GetInventoryItem"), "player", slot)
     if type(data) ~= "table" then return show(data) end
     if isSecret(data) then return "SECRET" end
-    local parts = {}
+    local parts: string[] = {}
     for k, v in pairs(data) do
         if type(v) ~= "table" then parts[#parts + 1] = tostring(k) .. "=" .. show(v) end
     end
     table.sort(parts)
-    for _, line in ipairs(data.lines or {}) do
-        local text = line.leftText
+    for _, line in ipairs(tbl.list(tbl.field(data, "lines"))) do
+        local text, price = tbl.field(line, "leftText"), tbl.field(line, "price")
         if secret.readable(text) and type(text) == "string" and (text:lower():find("repair") or text:lower():find("durab")) then
-            parts[#parts + 1] = "line: " .. text .. (line.price and (" price=" .. show(line.price)) or "")
-        elseif secret.readable(line.price) and line.price then
-            parts[#parts + 1] = "price line: " .. show(text) .. " " .. show(line.price)
+            parts[#parts + 1] = "line: " .. text .. (price and (" price=" .. show(price)) or "")
+        elseif secret.readable(price) and price then
+            parts[#parts + 1] = "price line: " .. show(text) .. " " .. show(price)
         end
     end
     return table.concat(parts, "  ")
@@ -93,7 +105,7 @@ local function slots(withTooltips: boolean): string[]
         local link = call(GetInventoryItemLink, "player", slot)
         local cur, max = call(GetInventoryItemDurability, slot)
         local entry = ("%d %s: durability %s/%s, alert %s"):format(slot, show(link), show(cur), show(max),
-            show(call(GetInventoryAlertStatus, slot)))
+            show((call(GetInventoryAlertStatus, slot))))
         if withTooltips and link ~= nil then
             entry = entry .. "; tip " .. tipCost(slot) .. "; data " .. tooltipData(slot)
         end
@@ -103,34 +115,36 @@ local function slots(withTooltips: boolean): string[]
 end
 
 local function frameState(): string
-    local f = _G.DurabilityFrame
+    local f = wf.find("DurabilityFrame")
     if not f then return "missing" end
     local okS, shown = pcall(f.IsShown, f)
     local okV, visible = pcall(f.IsVisible, f)
     return ("exists, shown %s, visible %s"):format(okS and show(shown) or "?", okV and show(visible) or "?")
 end
 
-local function merchant(): { [string]: any }
+local function merchant(): Merchant
     local cost, can = call(GetRepairAllCost)
-    return { canRepair = show(call(CanMerchantRepair)), repairAllCost = show(cost), repairAllCan = show(can),
-        guildBank = show(call(CanGuildBankRepair)), money = show(call(GetMoney)) }
+    return { canRepair = show((call(CanMerchantRepair))), repairAllCost = show(cost), repairAllCan = show(can),
+        guildBank = show((call(CanGuildBankRepair))), money = show((call(GetMoney))) }
 end
 
-local function sample(why: string): { [string]: any }
+local function sample(why: string): Sample
     return { at = date("%H:%M:%S"), why = why, inCombat = InCombatLockdown() and true or false,
         durabilityFrame = frameState(), slots = slots(true) }
 end
 
 local function snapshot()
     local o = out()
-    o.now = sample("asked")
-    o.now.merchantNow = merchant()
-    o.api = {}
+    local now = sample("asked")
+    now.merchantNow = merchant()
+    o.now = now
+    local api: { [string]: string } = {}
+    o.api = api
     for _, name in ipairs({ "GetInventoryItemDurability", "GetInventoryAlertStatus", "GetRepairAllCost", "CanMerchantRepair",
             "RepairAllItems", "CanGuildBankRepair", "ShowRepairCursor", "HideRepairCursor", "InRepairMode" }) do
-        o.api[name] = type(_G[name]) == "function" and "yes" or "missing"
+        api[name] = type(tbl.field(_G, name)) == "function" and "yes" or "missing"
     end
-    o.api["C_TooltipInfo.GetInventoryItem"] = C_TooltipInfo and type(C_TooltipInfo.GetInventoryItem) == "function" and "yes" or "missing"
+    api["C_TooltipInfo.GetInventoryItem"] = type(tbl.field(C_TooltipInfo, "GetInventoryItem")) == "function" and "yes" or "missing"
     do
         local lines, err = apiDocs.dump({ "durability", "repair", "inventoryalert" })
         o.docs = lines or err
@@ -146,30 +160,32 @@ end
 
 local autorepair = false
 
-local function repairTest(o: { [string]: any }, before: { [string]: any })
+local function repairTest(o: Out, before: Merchant)
     autorepair = false -- once: it spends gold
-    local r = { at = date("%H:%M:%S"), before = before, blocked = {} }
-    o.autorepair = o.autorepair or {}
-    o.autorepair[#o.autorepair + 1] = r
+    local r: Repair = { at = date("%H:%M:%S"), before = before, blocked = {} }
+    local tests = o.autorepair or {}
+    o.autorepair = tests
+    tests[#tests + 1] = r
     local watch = CreateFrame("Frame")
     watch:RegisterEvent("ADDON_ACTION_BLOCKED")
     watch:RegisterEvent("ADDON_ACTION_FORBIDDEN")
     watch:RegisterEvent("UI_ERROR_MESSAGE")
-    watch:SetScript("OnEvent", function(_, event, a, b)
-        r.blocked[#r.blocked + 1] = ("%s %s %s%s"):format(event, show(a), show(b), a == addonName and " (SuuUI)" or "")
+    watch:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown)
+        table.insert(r.blocked, ("%s %s %s%s"):format(event, show(a), show(b), a == addonName and " (SuuUI)" or ""))
     end)
     -- at MERCHANT_SHOW, with no click
     local ok, err = pcall(RepairAllItems)
-    r.call = ok and "ran" or ("error: " .. tostring(err):sub(1, 120))
+    local result = ok and "ran" or ("error: " .. tostring(err):sub(1, 120))
+    r.call = result
     after(1.5, function()
         watch:UnregisterAllEvents()
-        r.after = merchant()
-        local m0, m1 = before.money, r.after.money
-        local n0, n1 = tonumber(m0), tonumber(m1)
+        local later = merchant()
+        r.after = later
+        local n0, n1 = tonumber(before.money), tonumber(later.money)
         r.moneyWentDown = tostring(n1 and n0 and n1 < n0)
         r.slotsAfter = slots(false)
         print(("Durability probe: RepairAllItems at the merchant: %s; cost now %s (was %s); %d blocked or error messages. /reload to save it."):format(
-            r.call, r.after.repairAllCost, before.repairAllCost, #r.blocked))
+            result, later.repairAllCost, before.repairAllCost, #r.blocked))
     end)
 end
 
@@ -177,8 +193,9 @@ local function atMerchant()
     local o = out()
     local m = merchant()
     m.at = date("%H:%M:%S")
-    o.merchants = o.merchants or {}
-    if #o.merchants < MAX_SAMPLES then o.merchants[#o.merchants + 1] = m end
+    local merchants = o.merchants or {}
+    o.merchants = merchants
+    if #merchants < MAX_SAMPLES then table.insert(merchants, m) end
     if autorepair and m.canRepair == "true" then
         repairTest(o, m)
     elseif autorepair then
@@ -200,13 +217,14 @@ local function listen()
     for _, e in ipairs({ "UPDATE_INVENTORY_DURABILITY", "UPDATE_INVENTORY_ALERTS", "PLAYER_REGEN_DISABLED", "MERCHANT_SHOW" }) do
         pcall(f.RegisterEvent, f, e)
     end
-    f:SetScript("OnEvent", function(_, event)
+    f:SetScript("OnEvent", function(_, event: string)
         local o = out()
         if event == "PLAYER_REGEN_DISABLED" then
             after(2, function()
-                o.inCombat = o.inCombat or {}
-                if #o.inCombat < MAX_SAMPLES then
-                    o.inCombat[#o.inCombat + 1] = sample("2 s after entering combat")
+                local inCombat = o.inCombat or {}
+                o.inCombat = inCombat
+                if #inCombat < MAX_SAMPLES then
+                    table.insert(inCombat, sample("2 s after entering combat"))
                     print("Durability probe: durability read 2 s into the fight.")
                 end
             end)
@@ -215,13 +233,15 @@ local function listen()
             -- the cost once more a moment later, in case it came late
             atMerchant()
             after(0.5, function()
-                local last = o.merchants and o.merchants[#o.merchants]
+                local merchants = o.merchants
+                local last = merchants and merchants[#merchants]
                 if last and not last.costLater then last.costLater = merchant().repairAllCost end
             end)
         else
-            o.events = o.events or {}
-            if #o.events < MAX_EVENTS then
-                o.events[#o.events + 1] = ("%s %s%s"):format(date("%H:%M:%S"), event, InCombatLockdown() and " in combat" or "")
+            local events = o.events or {}
+            o.events = events
+            if #events < MAX_EVENTS then
+                table.insert(events, ("%s %s%s"):format(date("%H:%M:%S"), event, InCombatLockdown() and " in combat" or ""))
             end
         end
     end)

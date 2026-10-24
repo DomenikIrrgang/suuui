@@ -33,10 +33,11 @@ import hook from "wowlua:hooks"
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
 
-type Map = { [any]: any }
+type Map = { [unknown]: unknown }
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
@@ -62,7 +63,7 @@ local function show(v: any): string
 end
 
 -- every return as text ("missing" for no function, "error: …")
-local function call(fn: any, ...: any): string
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -72,26 +73,34 @@ local function call(fn: any, ...: any): string
 end
 
 -- the first return itself, or nil
-local function get(fn: any, ...: any): (any, any)
-    if type(fn) ~= "function" then return nil end
+local function get(fn: unknown, ...: unknown): (unknown, unknown)
+    if type(fn) ~= "function" then return nil, nil end
     local ok, a, b = pcall(fn, ...)
     if ok then return a, b end
+    return nil, nil
 end
 
 
-local function push(list: any[], line: any, most: number?)
+
+
+local function push<T>(list: T[], line: T, most: number?)
     if #list < (most or 60) then list[#list + 1] = line end
 end
 
-local function out(): Map
-    DB.probe.talentbuilds = DB.probe.talentbuilds or {}
-    return DB.probe.talentbuilds
+-- A step's record: what the game said meanwhile, and what the step did.
+type Step = { at: string, events: string[], blocked: string[], steps: string[], [string]: unknown }
+-- What the probe saves in SuuUIProbe.talentbuilds: the read-only snapshot,
+-- other classes, and each step's record by its name.
+type Out = { now?: Map, otherClasses?: Map[], [string]: unknown }
+
+local function out(): Out
+    return DB.probeData("talentbuilds", function(): Out return {} end)
 end
 
-local CT: any = C_ClassTalents or {}
-local TR: any = C_Traits or {}
+local CT: unknown = C_ClassTalents
+local TR: unknown = C_Traits
 
-local VIEW_ID: any = Constants and Constants.TraitConsts and Constants.TraitConsts.VIEW_TRAIT_CONFIG_ID
+local VIEW_ID: unknown = tbl.field(_G, "Constants", "TraitConsts", "VIEW_TRAIT_CONFIG_ID")
 
 --------------------------------------------------------------------------------
 -- Watching: blocked actions, UI errors and the talent events
@@ -106,42 +115,45 @@ local EVENTS = {
 
 local watcher: Frame? = nil
 -- (read anew wherever it's used, as before: a later step replaces it)
-local step: any = nil
+local step: Step = { at = "", events = {}, blocked = {}, steps = {} }
 local t0 = 0
-local createdIDs: any[] = {}
+local createdIDs: unknown[] = {}
 
-local function watch(name: string): any
+local function watch(name: string): Step
     local o = out()
-    step = { at = date("%H:%M:%S"), events = {}, blocked = {}, steps = {} }
-    o[name] = step
+    local s: Step = { at = date("%H:%M:%S"), events = {}, blocked = {}, steps = {} }
+    step = s
+    o[name] = s
     t0 = GetTime()
     if not watcher then
-        watcher = CreateFrame("Frame")
-        for _, e in ipairs(EVENTS) do pcall(watcher.RegisterEvent, watcher, e) end
-        watcher:SetScript("OnEvent", function(_, event, a, b)
-            if not step then return end
+        local w = CreateFrame("Frame")
+        watcher = w
+        for _, e in ipairs(EVENTS) do pcall(w.RegisterEvent, w, e) end
+        w:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown)
             local line = ("%.2fs %s %s %s"):format(GetTime() - t0, event, show(a), show(b))
             push(step.events, line, 80)
             if event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" or event == "UI_ERROR_MESSAGE"
                 or event == "CONFIG_COMMIT_FAILED" then
                 push(step.blocked, line, 20)
             end
-            if event == "TRAIT_CONFIG_CREATED" and type(a) == "table" and secret.readable(a.ID) then
-                createdIDs[#createdIDs + 1] = a.ID
+            local id = tbl.field(a, "ID")
+            if event == "TRAIT_CONFIG_CREATED" and id ~= nil and secret.readable(id) then
+                createdIDs[#createdIDs + 1] = id
             end
         end)
     end
-    return step
+    return s
 end
 
 local function note(text: string) push(step.steps, ("%.2fs %s"):format(GetTime() - t0, text), 60) end
 
-local function refuseCombat(): boolean?
+local function refuseCombat(): boolean
     if InCombatLockdown() then
         out().combatTry = date("%H:%M:%S") .. ": refused in combat"
         print("Talent builds probe: out of combat, please.")
         return true
     end
+    return false
 end
 
 --------------------------------------------------------------------------------
@@ -150,9 +162,9 @@ end
 
 -- Forever has one spec per class: its ID, by the player's spec index first
 local function mySpecID(): any
-    local SI: any = C_SpecializationInfo or {}
-    local index = get(SI.GetSpecialization) or get(GetSpecialization) or 1
-    local id = get(SI.GetSpecializationInfo, index) or get(GetSpecializationInfo, index)
+    local SI: unknown = C_SpecializationInfo
+    local index = get(tbl.field(SI, "GetSpecialization")) or get(GetSpecialization) or 1
+    local id = get(tbl.field(SI, "GetSpecializationInfo"), index) or get(GetSpecializationInfo, index)
     if secret.readable(id) and type(id) == "number" then return id end
     local _, _, classID = UnitClass("player")
     id = get(GetSpecializationInfoForClassID, classID, 1)
@@ -162,25 +174,25 @@ end
 local function classSpecID(classID: number): (any, string?)
     local id = get(GetSpecializationInfoForClassID, classID, 1)
     if secret.readable(id) and type(id) == "number" then return id, "GetSpecializationInfoForClassID" end
-    local SI: any = C_SpecializationInfo or {}
-    local list = get(SI.GetSpecIDs, classID)
+    local SI: unknown = C_SpecializationInfo
+    local list = get(tbl.field(SI, "GetSpecIDs"), classID)
     if type(list) == "table" and secret.readable(list[1]) then return list[1], "C_SpecializationInfo.GetSpecIDs" end
 end
 
-local function savedConfigs(specID: any): any[]
-    local list = specID and get(CT.GetConfigIDsBySpecID, specID)
-    local outList: any[] = {}
+local function savedConfigs(specID: unknown): unknown[]
+    local list = specID and get(tbl.field(CT, "GetConfigIDsBySpecID"), specID)
+    local outList: unknown[] = {}
     if type(list) == "table" then
-        for _, id in ipairs(list :: any[]) do if secret.readable(id) then outList[#outList + 1] = id end end
+        for _, id in ipairs(list :: unknown[]) do if secret.readable(id) then outList[#outList + 1] = id end end
     end
     return outList
 end
 
 -- The nodes you bought, as ImportLoadout takes them.
-local function entriesOf(configID: any, treeID: any): Map[]
+local function entriesOf(configID: unknown, treeID: any): Map[]
     local entries: Map[] = {}
-    for _, nodeID in ipairs(get(TR.GetTreeNodes, treeID) or {}) do
-        local n = get(TR.GetNodeInfo, configID, nodeID)
+    for _, nodeID in ipairs(tbl.list((get(tbl.field(TR, "GetTreeNodes"), treeID)))) do
+        local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
         if type(n) == "table" and secret.readable(n.ranksPurchased) and n.ranksPurchased > 0 then
             local entryID = n.activeEntry and n.activeEntry.entryID or (n.entryIDs and n.entryIDs[1])
             -- ranksGranted is required (the first run failed on it: "Current Field: [ranksGranted]")
@@ -192,19 +204,19 @@ local function entriesOf(configID: any, treeID: any): Map[]
     return entries
 end
 
-local function activeTree(configID: any): (any, any)
-    local info = configID and get(TR.GetConfigInfo, configID)
+local function activeTree(configID: unknown): (any, any)
+    local info = configID and get(tbl.field(TR, "GetConfigInfo"), configID)
     return info and info.treeIDs and info.treeIDs[1], info
 end
 
 -- A node, briefly: what a planner needs.
-local function nodeLine(configID: any, nodeID: any): string
-    local n = get(TR.GetNodeInfo, configID, nodeID)
+local function nodeLine(configID: unknown, nodeID: any): string
+    local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
     if type(n) ~= "table" then return show(nodeID) .. ": no info" end
     local spells: string[] = {}
     for _, entryID in ipairs(n.entryIDs or {}) do
-        local entry = get(TR.GetEntryInfo, configID, entryID)
-        local def = entry and entry.definitionID and get(TR.GetDefinitionInfo, entry.definitionID)
+        local entry = get(tbl.field(TR, "GetEntryInfo"), configID, entryID)
+        local def = entry and entry.definitionID and get(tbl.field(TR, "GetDefinitionInfo"), entry.definitionID)
         spells[#spells + 1] = ("%s→%s"):format(show(entryID), show(def and def.spellID))
     end
     return ("%s: pos %s,%s ranks %s/%s purchased %s, entries %s, edges %d, conditions %s, visible %s, canPurchase %s"):format(
@@ -214,27 +226,27 @@ local function nodeLine(configID: any, nodeID: any): string
 end
 
 -- How much of a tree reads: node count, positions and spells readable.
-local function treeSummary(configID: any, treeID: any): Map
-    local nodes = get(TR.GetTreeNodes, treeID)
-    if type(nodes) ~= "table" then return { nodes = "GetTreeNodes: " .. call(TR.GetTreeNodes, treeID) } end
+local function treeSummary(configID: unknown, treeID: any): Map
+    local nodes = get(tbl.field(TR, "GetTreeNodes"), treeID)
+    if type(nodes) ~= "table" then return { nodes = "GetTreeNodes: " .. call(tbl.field(TR, "GetTreeNodes"), treeID) } end
     local s: Map = { nodes = #nodes, withPos = 0, withSpell = 0, withInfo = 0, sample = {} }
-    for i, nodeID in ipairs(nodes :: any[]) do
-        local n = get(TR.GetNodeInfo, configID, nodeID)
+    for i, nodeID in ipairs(nodes :: unknown[]) do
+        local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
         if type(n) == "table" and secret.readable(n.ID) and n.ID ~= 0 then
             s.withInfo = s.withInfo + 1
             if secret.readable(n.posX) and n.posX ~= 0 then s.withPos = s.withPos + 1 end
             local entryID = n.entryIDs and n.entryIDs[1]
-            local entry = entryID and get(TR.GetEntryInfo, configID, entryID)
-            local def = entry and entry.definitionID and get(TR.GetDefinitionInfo, entry.definitionID)
+            local entry = entryID and get(tbl.field(TR, "GetEntryInfo"), configID, entryID)
+            local def = entry and entry.definitionID and get(tbl.field(TR, "GetDefinitionInfo"), entry.definitionID)
             if def and secret.readable(def.spellID) and def.spellID ~= 0 then s.withSpell = s.withSpell + 1 end
         end
-        if i <= 3 then s.sample[#s.sample + 1] = nodeLine(configID, nodeID) end
+        if i <= 3 then table.insert(tbl.listAt(s, "sample"), nodeLine(configID, nodeID)) end
     end
     -- a gate ("5 points in …"): the first condition found
-    for _, nodeID in ipairs(nodes :: any[]) do
-        local n = get(TR.GetNodeInfo, configID, nodeID)
+    for _, nodeID in ipairs(nodes :: unknown[]) do
+        local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
         local cid = n and n.conditionIDs and n.conditionIDs[1]
-        if cid then s.gate = show(cid) .. " " .. call(TR.GetConditionInfo, configID, cid) break end
+        if cid then s.gate = show(cid) .. " " .. call(tbl.field(TR, "GetConditionInfo"), configID, cid) break end
     end
     return s
 end
@@ -250,21 +262,21 @@ local function functionList(): string[]
                          "ImportLoadout", "ViewLoadout", "InitializeViewLoadout", "RequestNewConfig", "SaveConfig",
                          "LoadConfig", "DeleteConfig", "RenameConfig", "GetTraitTreeForSpec", "CommitConfig",
                          "GetLoadoutExportString" }) do
-        names[#names + 1] = ("C_ClassTalents.%s: %s"):format(n, type(CT[n]))
+        names[#names + 1] = ("C_ClassTalents.%s: %s"):format(n, type(tbl.field(CT, n)))
     end
     for _, n in ipairs({ "GenerateImportString", "GenerateSearchString", "GetLoadoutSerializationVersion", "GetTreeHash",
                          "GetConfigsByType", "ResetTree", "ResetTreeByCurrency", "StageConfig", "CanEditConfig",
                          "TryPurchaseToNode", "PurchaseRank", "RollbackConfig" }) do
-        names[#names + 1] = ("C_Traits.%s: %s"):format(n, type(TR[n]))
+        names[#names + 1] = ("C_Traits.%s: %s"):format(n, type(tbl.field(TR, n)))
     end
     for _, n in ipairs({ "GetNumTalentGroups", "GetActiveTalentGroup", "GetNumSpecGroups", "GetActiveSpecGroup",
                          "SetActiveTalentGroup", "LearnDualSpec", "GetTalentResetCost", "GetTalentWipeCost",
                          "CheckTalentMasterDist", "ConfirmTalentWipe", "GetSpecializationInfoForClassID" }) do
-        names[#names + 1] = ("%s: %s"):format(n, type(_G[n]))
+        names[#names + 1] = ("%s: %s"):format(n, type(tbl.field(_G, n)))
     end
-    local SI: any = C_SpecializationInfo or {}
+    local SI: unknown = C_SpecializationInfo
     for _, n in ipairs({ "GetActiveSpecGroup", "GetNumSpecGroups", "SetActiveSpecGroup", "GetSpecIDs" }) do
-        names[#names + 1] = ("C_SpecializationInfo.%s: %s"):format(n, type(SI[n]))
+        names[#names + 1] = ("C_SpecializationInfo.%s: %s"):format(n, type(tbl.field(SI, n)))
     end
     return names
 end
@@ -278,52 +290,52 @@ local function snapshot(): Map
     local specID = mySpecID()
     now.specID = show(specID)
     now.viewConfigID = show(VIEW_ID)
-    local activeID = get(CT.GetActiveConfigID)
+    local activeID = get(tbl.field(CT, "GetActiveConfigID"))
     now.active = show(activeID)
-    now.lastSelected = specID and call(CT.GetLastSelectedSavedConfigID, specID) or "no spec"
-    now.canCreateNew = call(CT.CanCreateNewConfig)
-    now.canChange = call(CT.CanChangeTalents)
-    now.canEdit = call(CT.CanEditTalents)
-    now.starter = ("has %s, active %s"):format(call(CT.GetHasStarterBuild), call(CT.GetStarterBuildActive))
-    now.unspent = call(CT.HasUnspentTalentPoints)
-    now.treeForSpec = specID and call(CT.GetTraitTreeForSpec, specID) or "no spec"
-    now.serialization = call(TR.GetLoadoutSerializationVersion)
+    now.lastSelected = specID and call(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID) or "no spec"
+    now.canCreateNew = call(tbl.field(CT, "CanCreateNewConfig"))
+    now.canChange = call(tbl.field(CT, "CanChangeTalents"))
+    now.canEdit = call(tbl.field(CT, "CanEditTalents"))
+    now.starter = ("has %s, active %s"):format(call(tbl.field(CT, "GetHasStarterBuild")), call(tbl.field(CT, "GetStarterBuildActive")))
+    now.unspent = call(tbl.field(CT, "HasUnspentTalentPoints"))
+    now.treeForSpec = specID and call(tbl.field(CT, "GetTraitTreeForSpec"), specID) or "no spec"
+    now.serialization = call(tbl.field(TR, "GetLoadoutSerializationVersion"))
     -- the configs: the active one, the saved ones, every one by type
-    now.saved = {}
+    local saved: string[] = {}
+    now.saved = saved
     for _, id in ipairs(savedConfigs(specID)) do
-        now.saved[#now.saved + 1] = show(id) .. " " .. call(TR.GetConfigInfo, id)
+        saved[#saved + 1] = show(id) .. " " .. call(tbl.field(TR, "GetConfigInfo"), id)
     end
     local treeID, info = activeTree(activeID)
     now.activeInfo = show(info)
     if treeID then
-        now.tree = ("%s: %s; hash %s"):format(show(treeID), call(TR.GetTreeInfo, activeID, treeID),
-            (function() local h = get(TR.GetTreeHash, treeID) return type(h) == "table" and (#h .. " numbers") or show(h) end)())
-        now.currency = call(TR.GetTreeCurrencyInfo, activeID, treeID, false)
+        now.tree = ("%s: %s; hash %s"):format(show(treeID), call(tbl.field(TR, "GetTreeInfo"), activeID, treeID),
+            (function(): string local h = get(tbl.field(TR, "GetTreeHash"), treeID) return type(h) == "table" and (#tbl.list(h) .. " numbers") or show(h) end)())
+        now.currency = call(tbl.field(TR, "GetTreeCurrencyInfo"), activeID, treeID, false)
         now.boughtNodes = #entriesOf(activeID, treeID)
     end
-    now.byType = {}
-    if Enum.TraitConfigType then
-        for name, value in pairs(Enum.TraitConfigType :: any) do
-            local list = get(TR.GetConfigsByType, value)
-            now.byType[#now.byType + 1] = ("%s (%s): %s"):format(name, show(value), show(list))
-        end
-        table.sort(now.byType)
+    local byType: string[] = {}
+    now.byType = byType
+    for name, value in pairs(Enum.TraitConfigType) do
+        local list = get(tbl.field(TR, "GetConfigsByType"), value)
+        byType[#byType + 1] = ("%s (%s): %s"):format(name, show(value), show(list))
     end
+    table.sort(byType)
     -- the export string, read only
     if activeID then
-        local s = get(TR.GenerateImportString, activeID)
+        local s = get(tbl.field(TR, "GenerateImportString"), activeID)
         now.exportString = secret.readable(s) and type(s) == "string" and ("%d chars: %s"):format(#s, s:sub(1, 120))
-            or ("GenerateImportString: " .. call(TR.GenerateImportString, activeID))
+            or ("GenerateImportString: " .. call(tbl.field(TR, "GenerateImportString"), activeID))
     end
     -- talent groups (dual spec) and respec
-    local SI: any = C_SpecializationInfo or {}
+    local SI: unknown = C_SpecializationInfo
     now.groups = {
         numTalentGroups = call(_G.GetNumTalentGroups),
         activeTalentGroup = call(GetActiveTalentGroup),
         numSpecGroups = call(GetNumSpecGroups),
         activeSpecGroup = call(GetActiveSpecGroup),
-        siActiveSpecGroup = call(SI.GetActiveSpecGroup, false, false),
-        siNumSpecGroups = call(SI.GetNumSpecGroups),
+        siActiveSpecGroup = call(tbl.field(SI, "GetActiveSpecGroup"), false, false),
+        siNumSpecGroups = call(tbl.field(SI, "GetNumSpecGroups")),
     }
     now.respec = {
         resetCost = call(_G.GetTalentResetCost),
@@ -341,7 +353,7 @@ local function otherClasses()
     local o = out()
     local list: Map[] = {}
     o.otherClasses = list
-    local activeID = get(CT.GetActiveConfigID)
+    local activeID = get(tbl.field(CT, "GetActiveConfigID"))
     local _, _, myClassID: any = UnitClass("player")
     local viewTried = false
     for classID = 1, 13 do
@@ -350,31 +362,31 @@ local function otherClasses()
             local c: Map = { class = ("%s (%s)"):format(show(file), classID), mine = classID == myClassID }
             local specID, how = classSpecID(classID)
             c.specID = ("%s via %s"):format(show(specID), show(how))
-            local treeID = specID and get(CT.GetTraitTreeForSpec, specID)
+            local treeID = specID and get(tbl.field(CT, "GetTraitTreeForSpec"), specID)
             c.treeID = show(treeID)
             if secret.readable(treeID) and treeID then
                 c.withYourConfig = activeID and treeSummary(activeID, treeID) or "no config"
                 -- the game's view loadout: another spec's tree to look at
                 -- (and plan in?) without touching yours
-                if type(CT.InitializeViewLoadout) == "function" and VIEW_ID then
-                    c.initView = call(CT.InitializeViewLoadout, specID, 60)
-                    c.viewLoadout = call(CT.ViewLoadout, {})
+                if type(tbl.field(CT, "InitializeViewLoadout")) == "function" and VIEW_ID then
+                    c.initView = call(tbl.field(CT, "InitializeViewLoadout"), specID, 60)
+                    c.viewLoadout = call(tbl.field(CT, "ViewLoadout"), {})
                     c.inView = treeSummary(VIEW_ID, treeID)
-                    c.viewCanEdit = call(TR.CanEditConfig, VIEW_ID)
-                    c.viewCurrency = call(TR.GetTreeCurrencyInfo, VIEW_ID, treeID, false)
+                    c.viewCanEdit = call(tbl.field(TR, "CanEditConfig"), VIEW_ID)
+                    c.viewCurrency = call(tbl.field(TR, "GetTreeCurrencyInfo"), VIEW_ID, treeID, false)
                     -- plan one point there and undo it (once, on the first
                     -- other class): may an addon plan another class's build?
                     if not viewTried and classID ~= myClassID then
                         viewTried = true
-                        for _, nodeID in ipairs(get(TR.GetTreeNodes, treeID) or {}) do
-                            local n = get(TR.GetNodeInfo, VIEW_ID, nodeID)
+                        for _, nodeID in ipairs(tbl.list((get(tbl.field(TR, "GetTreeNodes"), treeID)))) do
+                            local n = get(tbl.field(TR, "GetNodeInfo"), VIEW_ID, nodeID)
                             if type(n) == "table" and n.canPurchaseRank then
                                 c.viewPlan = {
                                     node = nodeLine(VIEW_ID, nodeID),
-                                    purchase = call(TR.PurchaseRank, VIEW_ID, nodeID),
+                                    purchase = call(tbl.field(TR, "PurchaseRank"), VIEW_ID, nodeID),
                                     after = nodeLine(VIEW_ID, nodeID),
-                                    staged = call(TR.ConfigHasStagedChanges, VIEW_ID),
-                                    rollback = call(TR.RollbackConfig, VIEW_ID),
+                                    staged = call(tbl.field(TR, "ConfigHasStagedChanges"), VIEW_ID),
+                                    rollback = call(tbl.field(TR, "RollbackConfig"), VIEW_ID),
                                 }
                                 break
                             end
@@ -393,14 +405,14 @@ local function otherClasses()
     if not found then
         local scan: string[] = {}
         for treeID = 1100, 1140 do
-            local nodes = get(TR.GetTreeNodes, treeID)
+            local nodes = get(tbl.field(TR, "GetTreeNodes"), treeID)
             if type(nodes) == "table" and #nodes > 0 then scan[#scan + 1] = ("%d: %d nodes"):format(treeID, #nodes) end
         end
         o.treeScan = scan
     end
     -- the view loadout back to your own spec (harmless either way)
     local specID = mySpecID()
-    if specID and type(CT.InitializeViewLoadout) == "function" then pcall(CT.InitializeViewLoadout, specID, UnitLevel("player")) end
+    if specID then get(tbl.field(CT, "InitializeViewLoadout"), specID, UnitLevel("player")) end
 end
 
 --------------------------------------------------------------------------------
@@ -410,8 +422,8 @@ end
 local NAME = "SuuUI probe"
 
 -- the configs that came since `before` (a list of IDs)
-local function newSince(before: any[]): any[]
-    local had: Map, out_: any[] = {}, {}
+local function newSince(before: unknown[]): unknown[]
+    local had: Map, out_: unknown[] = {}, {}
     for _, id in ipairs(before) do had[id] = true end
     for _, id in ipairs(savedConfigs(mySpecID())) do if not had[id] then out_[#out_ + 1] = id end end
     for _, id in ipairs(createdIDs) do if not had[id] and not tContains(out_, id) then out_[#out_ + 1] = id end end
@@ -420,29 +432,29 @@ end
 
 -- every config named NAME: the spec's saved ones and each config type's (a
 -- probe left behind by an early /reload)
-local function leftovers(): any[]
-    local ids: any[], seen: Map = {}, {}
-    local function add(id: any)
+local function leftovers(): unknown[]
+    local ids: unknown[], seen: Map = {}, {}
+    local function add(id: unknown)
         if not secret.readable(id) or seen[id] then return end
         seen[id] = true
-        local info = get(TR.GetConfigInfo, id)
+        local info = get(tbl.field(TR, "GetConfigInfo"), id)
         if type(info) == "table" and info.name == NAME then ids[#ids + 1] = id end
     end
     for _, id in ipairs(savedConfigs(mySpecID())) do add(id) end
     for _, value in pairs((Enum.TraitConfigType :: any) or {}) do
-        local list = get(TR.GetConfigsByType, value)
-        if type(list) == "table" then for _, id in ipairs(list :: any[]) do add(id) end end
+        local list = get(tbl.field(TR, "GetConfigsByType"), value)
+        if type(list) == "table" then for _, id in ipairs(list :: unknown[]) do add(id) end end
     end
     for _, id in ipairs(createdIDs) do add(id) end
     return ids
 end
 
-local function deleteNew(before: any[], label: string)
+local function deleteNew(before: unknown[], label: string)
     local made = newSince(before)
     note(("%s: new configs %s"):format(label, show(made)))
     for _, id in ipairs(made) do
-        note(("config %s: %s"):format(show(id), call(TR.GetConfigInfo, id)))
-        note(("DeleteConfig(%s): %s"):format(show(id), call(CT.DeleteConfig, id)))
+        note(("config %s: %s"):format(show(id), call(tbl.field(TR, "GetConfigInfo"), id)))
+        note(("DeleteConfig(%s): %s"):format(show(id), call(tbl.field(CT, "DeleteConfig"), id)))
     end
     after(1, function()
         note(("after delete: saved %s"):format(show(savedConfigs(mySpecID()))))
@@ -455,17 +467,17 @@ end
 export function export()
     local s = watch("export")
     s.moneyBefore = GetMoney()
-    local activeID = get(CT.GetActiveConfigID)
+    local activeID = get(tbl.field(CT, "GetActiveConfigID"))
     local treeID = activeTree(activeID)
     if not (activeID and treeID) then print("Talent builds probe: no active talent config.") return end
-    local str = get(TR.GenerateImportString, activeID)
+    local str = get(tbl.field(TR, "GenerateImportString"), activeID)
     s.string = secret.readable(str) and type(str) == "string" and ("%d chars: %s"):format(#str, str:sub(1, 200))
-        or ("GenerateImportString: " .. call(TR.GenerateImportString, activeID))
+        or ("GenerateImportString: " .. call(tbl.field(TR, "GenerateImportString"), activeID))
     local entries = entriesOf(activeID, treeID)
     s.entries = #entries
     -- the string as a preview (the view loadout), read only
-    s.viewFromString = call(CT.ViewLoadout, entries, secret.readable(str) and str or nil)
-    local can = get(CT.CanCreateNewConfig)
+    s.viewFromString = call(tbl.field(CT, "ViewLoadout"), entries, secret.readable(str) and str or nil)
+    local can = get(tbl.field(CT, "CanCreateNewConfig"))
     s.canCreateNew = show(can)
     if not can then
         print("Talent builds probe: export recorded. The game won't make a new loadout here (CanCreateNewConfig), so no import. /reload to save.")
@@ -474,14 +486,14 @@ export function export()
     print("Talent builds probe: importing that string as a new saved loadout \"" .. NAME .. "\", then deleting it again (your talents stay).")
     local before = savedConfigs(mySpecID())
     wipe(createdIDs)
-    note("ImportLoadout(active, entries, name, string): " .. call(CT.ImportLoadout, activeID, entries, NAME, secret.readable(str) and str or ""))
+    note("ImportLoadout(active, entries, name, string): " .. call(tbl.field(CT, "ImportLoadout"), activeID, entries, NAME, secret.readable(str) and str or ""))
     after(2, function() deleteNew(before, "import") end)
 end
 
 export function save()
     local s = watch("save")
     s.moneyBefore = GetMoney()
-    local can = get(CT.CanCreateNewConfig)
+    local can = get(tbl.field(CT, "CanCreateNewConfig"))
     s.canCreateNew = show(can)
     if not can then
         print("Talent builds probe: the game won't make a new loadout here (CanCreateNewConfig false). /reload to save.")
@@ -490,11 +502,11 @@ export function save()
     print("Talent builds probe: making a new saved loadout \"" .. NAME .. "\" from your talents, then deleting it again (your talents stay).")
     local before = savedConfigs(mySpecID())
     wipe(createdIDs)
-    note("RequestNewConfig(name): " .. call(CT.RequestNewConfig, NAME))
+    note("RequestNewConfig(name): " .. call(tbl.field(CT, "RequestNewConfig"), NAME))
     after(1.5, function()
         local made = newSince(before)
         for _, id in ipairs(made) do
-            note(("SaveConfig(%s): %s"):format(show(id), call(CT.SaveConfig, id)))
+            note(("SaveConfig(%s): %s"):format(show(id), call(tbl.field(CT, "SaveConfig"), id)))
             note(("in saved list: %s"):format(show(tContains(savedConfigs(mySpecID()), id))))
         end
         -- deleted right away: the first run's /reload came before a later delete
@@ -511,7 +523,7 @@ local armedSwitch: number? = nil
 export function switch()
     local specID = mySpecID()
     local saved = savedConfigs(specID)
-    local last = specID and get(CT.GetLastSelectedSavedConfigID, specID)
+    local last = specID and get(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)
     local other
     for _, id in ipairs(saved) do if id ~= last then other = id break end end
     if #saved < 2 or not other then
@@ -530,12 +542,12 @@ export function switch()
     local s = watch("switch")
     s.moneyBefore = GetMoney()
     s.from, s.to = show(last), show(other)
-    note(("LoadConfig(%s, true): %s"):format(show(other), call(CT.LoadConfig, other, true)))
+    note(("LoadConfig(%s, true): %s"):format(show(other), call(tbl.field(CT, "LoadConfig"), other, true)))
     after(3, function()
-        note(("active now %s, last selected %s"):format(call(CT.GetActiveConfigID), call(CT.GetLastSelectedSavedConfigID, specID)))
-        if last then note(("LoadConfig(%s, true) back: %s"):format(show(last), call(CT.LoadConfig, last, true))) end
+        note(("active now %s, last selected %s"):format(call(tbl.field(CT, "GetActiveConfigID")), call(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)))
+        if last then note(("LoadConfig(%s, true) back: %s"):format(show(last), call(tbl.field(CT, "LoadConfig"), last, true))) end
         after(3, function()
-            note(("active now %s, last selected %s"):format(call(CT.GetActiveConfigID), call(CT.GetLastSelectedSavedConfigID, specID)))
+            note(("active now %s, last selected %s"):format(call(tbl.field(CT, "GetActiveConfigID")), call(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)))
             s.money = ("%s → %s"):format(show(s.moneyBefore), show(GetMoney()))
             print(("Talent builds probe: switch done%s. /reload to save."):format(
                 #s.blocked > 0 and (" (" .. s.blocked[1] .. ")") or ", nothing blocked"))
@@ -558,29 +570,29 @@ local popupHooked = false
 
 -- Your talents now: learned ranks, the points, money, the reset functions.
 local function talentState(): string
-    local activeID = get(CT.GetActiveConfigID)
+    local activeID = get(tbl.field(CT, "GetActiveConfigID"))
     local treeID = activeID and activeTree(activeID)
     local ranks, nodes = 0, 0
     if activeID and treeID then
-        for _, nodeID in ipairs(get(TR.GetTreeNodes, treeID) or {}) do
-            local n = get(TR.GetNodeInfo, activeID, nodeID)
+        for _, nodeID in ipairs(tbl.list((get(tbl.field(TR, "GetTreeNodes"), treeID)))) do
+            local n = get(tbl.field(TR, "GetNodeInfo"), activeID, nodeID)
             if type(n) == "table" and secret.readable(n.ranksPurchased) and n.ranksPurchased > 0 then
                 ranks, nodes = ranks + n.ranksPurchased, nodes + 1
             end
         end
     end
     return ("%d ranks in %d talents · points %s · money %s · staged %s · wipe cost %s · reset cost %s · master %s"):format(
-        ranks, nodes, activeID and treeID and call(TR.GetTreeCurrencyInfo, activeID, treeID, false) or "no config",
-        show(GetMoney()), activeID and call(TR.ConfigHasStagedChanges, activeID) or "?",
+        ranks, nodes, activeID and treeID and call(tbl.field(TR, "GetTreeCurrencyInfo"), activeID, treeID, false) or "no config",
+        show(GetMoney()), activeID and call(tbl.field(TR, "ConfigHasStagedChanges"), activeID) or "?",
         call(_G.GetTalentWipeCost), call(_G.GetTalentResetCost), call(CheckTalentMasterDist))
 end
 
 local function gossipOptions(): string
-    local G: any = C_GossipInfo or {}
-    local opts = get(G.GetOptions)
-    if type(opts) ~= "table" then return call(G.GetOptions) end
+    local G: unknown = C_GossipInfo
+    local opts = get(tbl.field(G, "GetOptions"))
+    if type(opts) ~= "table" then return call(tbl.field(G, "GetOptions")) end
     local parts: string[] = {}
-    for _, o in ipairs(opts :: any[]) do
+    for _, o in ipairs(opts :: unknown[]) do
         parts[#parts + 1] = ("%s:%s%s"):format(show(o.gossipOptionID), show(o.name),
             o.status and (" status " .. show(o.status)) or "")
     end
@@ -591,12 +603,15 @@ export function trainer()
     local s = watch("trainer")
     local ok, before = pcall(talentState)
     s.before = ok and before or ("error: " .. tostring(before):sub(1, 160))
-    s.timeline = {}
+    local timeline: string[] = {}
+    s.timeline = timeline
     trainerUntil = GetTime() + 180
-    local function mark(line: string) push(s.timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120) end
-    if not trainerFrame then
-        trainerFrame = CreateFrame("Frame")
-        trainerFrame:SetScript("OnEvent", function(_, event, a, b, c)
+    local function mark(line: string) push(timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120) end
+    local tf = trainerFrame
+    if not tf then
+        tf = CreateFrame("Frame")
+        trainerFrame = tf
+        tf:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown, c: unknown)
             if not trainerUntil or GetTime() > trainerUntil then return end
             local line = ("%s %s %s %s"):format(event, show(a), show(b), show(c))
             if event == "GOSSIP_SHOW" then line = line .. " · options " .. gossipOptions() end
@@ -612,19 +627,21 @@ export function trainer()
             end
         end)
     end
-    for _, e in ipairs(TRAINER_EVENTS) do pcall(trainerFrame.RegisterEvent, trainerFrame, e) end
+    for _, e in ipairs(TRAINER_EVENTS) do pcall(tf.RegisterEvent, tf, e) end
     -- which popup the game shows (its name and text), without touching it
     if not popupHooked and type(StaticPopup_Show) == "function" then
         popupHooked = true
-        hook("StaticPopup_Show", function(which: any, text1: any, text2: any)
+        hook("StaticPopup_Show", function(which: unknown, text1: unknown, text2: unknown)
             if trainerUntil and GetTime() <= trainerUntil then
                 mark(("popup %s %s %s"):format(show(which), show(text1), show(text2)))
             end
         end)
     end
     after(180, function()
-        local tf = trainerFrame :: Frame
-        for _, e in ipairs(TRAINER_EVENTS) do pcall(tf.UnregisterEvent, tf, e) end
+        local frame = trainerFrame
+        if frame then
+            for _, e in ipairs(TRAINER_EVENTS) do pcall(frame.UnregisterEvent, frame, e) end
+        end
         trainerUntil = nil
         -- say done first: an error reading the state must not swallow it
         print("Talent builds probe: trainer watch done. /reload to save.")
@@ -645,7 +662,7 @@ export function command(arg: string?)
         local s = watch("cleanup")
         local ids = leftovers()
         s.found = show(ids)
-        for _, id in ipairs(ids) do note(("DeleteConfig(%s): %s"):format(show(id), call(CT.DeleteConfig, id))) end
+        for _, id in ipairs(ids) do note(("DeleteConfig(%s): %s"):format(show(id), call(tbl.field(CT, "DeleteConfig"), id))) end
         after(1, function()
             note(("left: %s"):format(show(leftovers())))
             print(("Talent builds probe: cleanup deleted %d loadout(s) named \"%s\". /reload to save."):format(#ids, NAME))
@@ -653,14 +670,15 @@ export function command(arg: string?)
         return
     end
     watch("readOnly")
-    snapshot()
+    local snapshotNow = snapshot()
     otherClasses()
     local o = out()
     local left = leftovers()
-    o.now.leftovers = show(left)
+    local now = snapshotNow or {}
+    now.leftovers = show(left)
     if #left > 0 then
         print(("Talent builds probe: a loadout named \"%s\" is left from an earlier run; /suu probe talentbuilds cleanup deletes it."):format(NAME))
     end
     print(("Talent builds probe: recorded (spec %s, %d saved loadouts, %d classes). Next: /suu probe talentbuilds export, then save, then switch; /reload to save."):format(
-        o.now.specID, #o.now.saved, #o.otherClasses))
+        show(now.specID), #tbl.list(now.saved), #(o.otherClasses or {})))
 end

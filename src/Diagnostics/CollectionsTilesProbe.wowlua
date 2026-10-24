@@ -24,6 +24,7 @@ import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import panel, closeButton, Panel from "/UI/Panel"
 import fill from "/UI/Draw"
+import * as tbl from "wowlua:table"
 
 interface TilesPanel extends Panel
     closeButton?: Button
@@ -33,7 +34,7 @@ end
 
 local probePanel: TilesPanel? = nil
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     if type(v) == "table" then
         local parts = {}
@@ -46,7 +47,7 @@ local function show(v: any): string
     return tostring(v)
 end
 
-local function call(fn: any, ...: any): string
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -55,16 +56,15 @@ local function call(fn: any, ...: any): string
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: any, ...: any): ...any
+local function raw(fn: unknown, ...: unknown): ...any
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k end
 end
 
-local out: { [string]: any } = {}
+local out: { [string]: unknown } = {}
 local function line(section: string, text: string)
-    out[section] = out[section] or {}
-    table.insert(out[section], text)
+    table.insert(tbl.listAt(out, section), text)
 end
 
 -- Every toy: the filter shows the ones you lack too, and the list is read
@@ -159,9 +159,9 @@ local function flags()
 end
 
 -- Up to 18 of your appearances in one slot (chest, else any armor slot).
-local function appearancesToShow(): { [string]: any }[]
+local function appearancesToShow(): { [string]: unknown }[]
     local TC = C_TransmogCollection
-    local list: { [string]: any }[] = {}
+    local list: { [string]: unknown }[] = {}
     for _, cat in ipairs({ 4, 10, 8, 11, 3, 7, 9, 2 }) do
         for _, a in ipairs(raw(TC.GetCategoryAppearances, cat) or {}) do
             if a.isCollected then
@@ -213,7 +213,8 @@ local function tiles()
         local apply = m.ApplyUICamera or _G.Model_ApplyUICamera
         local camOK = a.camera and apply and pcall(apply, m, a.camera)
         a.camOK = camOK and true or false
-        pcall(m.TryOn, m, a.source)
+        local source = a.source
+        if type(source) == "number" or type(source) == "string" then pcall(m.TryOn, m, source) end
         m:Show()
     end
     local built = debugprofilestop() - t0

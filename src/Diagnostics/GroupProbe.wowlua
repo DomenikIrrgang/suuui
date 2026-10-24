@@ -29,14 +29,14 @@ local MAX_SAMPLES = 24
 local armed = false
 
 -- One value as text: secret, nil, or readable (with what it was).
-local function describe(v: any): string
+local function describe(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     return "readable: " .. tostring(v)
 end
 
 -- Calls fn and describes its first (or chosen) returns; errors are kept short.
-local function try(fn: any, ...: any): string
+local function try(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local ok, a, b = pcall(fn, ...)
     if not ok then return "error: " .. tostring(a):sub(1, 120) end
@@ -56,9 +56,9 @@ local function dispelCurve(): any
     return colorCurve or nil
 end
 
-local function sampleUnit(unit: string): { [string]: any }?
+local function sampleUnit(unit: string): { [string]: unknown }?
     if not UnitExists(unit) then return nil end
-    local r: { [string]: any } = {}
+    local r: { [string]: unknown } = {}
     r.name = try(UnitName, unit)
     r.range = try(UnitInRange, unit)
     r.threat = try(UnitThreatSituation, unit)
@@ -96,15 +96,17 @@ local function sampleUnit(unit: string): { [string]: any }?
     return r
 end
 
-export function sample(label: string): { [string]: any }
-    local store = DB.probe.group or { samples = {} }
-    DB.probe.group = store
-    local s = {
+-- One sample: when, the group, and each unit's readings.
+export type Sample = { at: string, label: string, combat: string, group: string, instance: string, units: { [string]: unknown } }
+
+export function sample(label: string): Sample
+    local store = DB.probeData("group", function(): { samples: Sample[] } return { samples = {} } end)
+    local s: Sample = {
         at = date("%H:%M:%S"), label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
         instance = select(2, IsInInstance()) or "none",
-        units = {} :: { [string]: any },
+        units = {},
     }
     for _, unit in ipairs(UNITS) do s.units[unit] = sampleUnit(unit) end
     table.insert(store.samples, s)

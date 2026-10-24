@@ -15,19 +15,23 @@
 --
 --   /suu probe professions   with a profession's window open (cooking, first
 --                            aid, a crafting one), then /reload
-
-import isSecret from "wowlua:secret"
+import isSecret, asNumber, asString from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
+import * as tbl from "wowlua:table"
+import tryValue from "wowlua:errors"
 
+type Record = { [string]: unknown }
+-- One profession's sample (SuuUIProbe.professions[professionID]).
+type Sample = { at: string, name?: string, all: string[], ready: string, [string]: unknown }
 
-local function show(v: any, depth: number?): string
+local function show(v: unknown, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
         if depth > 3 then return "{…}" end
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
             parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1)
             if #parts > 40 then break end
@@ -38,22 +42,25 @@ local function show(v: any, depth: number?): string
     return tostring(v)
 end
 
-local function call(fn: any, ...: any): string
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: any, ...: any): ...any
-    if type(fn) ~= "function" then return nil end
+-- `fn(...)`'s results as they are: an empty list when it's missing or raises.
+local function results(fn: unknown, ...: unknown): unknown[]
+    if type(fn) ~= "function" then return {} end
     local res = { pcall(fn, ...) }
-    if res[1] then return select(2, unpack(res)) end
+    if not res[1] then return {} end
+    table.remove(res, 1)
+    return res
 end
 
-local function namesIn(t: any): string[]
+local function namesIn(t: unknown): string[]
     local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
@@ -61,128 +68,141 @@ local function namesIn(t: any): string[]
     return out
 end
 
-export function sample(): { [string]: any }
-    local store: { [string]: any } = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")) }
+local TS = C_TradeSkillUI
+
+export function sample(): Sample
+    local all: string[] = {}
+    local store: Sample = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")),
+        all = all, ready = call(TS.IsTradeSkillReady) }
     -- one per profession (its skill line), so each open window keeps its own;
     -- a probe from before that layout (a single one) is dropped
     local saved = DB.probe.professions
-    if type(saved) ~= "table" or saved.at then saved = {} end
+    if type(saved) ~= "table" or tbl.field(saved, "at") then saved = {} end
     DB.probe.professions = saved
-    store.api = namesIn(C_TradeSkillUI)
+    store.api = namesIn(TS)
     -- your professions
-    local list = { raw(GetProfessions) }
-    store.professions = {}
+    local list = results(tbl.field(_G, "GetProfessions"))
+    local professions: Record[] = {}
+    store.professions = professions
     for slot = 1, 6 do
         local index = list[slot]
-        local p = { slot = slot, index = show(index) }
-        if index then
-            local name, icon, skill, maxSkill, numAbilities, offset, skillLine, mod, spec, specOffset = raw(GetProfessionInfo, index)
+        local p: Record = { slot = slot, index = show(index) }
+        if index ~= nil then
+            local info = results(tbl.field(_G, "GetProfessionInfo"), index)
+            local name, icon, skill, maxSkill, numAbilities, offset, skillLine, mod, spec, specOffset =
+                info[1], info[2], info[3], info[4], info[5], info[6], info[7], info[8], info[9], info[10]
             p.info = ("name=%s icon=%s skill=%s/%s abilities=%s offset=%s skillLine=%s mod=%s spec=%s specOffset=%s"):format(
                 show(name), show(icon), show(skill), show(maxSkill), show(numAbilities), show(offset), show(skillLine), show(mod), show(spec), show(specOffset))
-            p.bySkillLine = call(C_TradeSkillUI.GetProfessionInfoBySkillLineID, skillLine)
-            p.spells = {}
-            for k = 1, (tonumber(numAbilities) or 0) do
-                local slotIndex = (tonumber(offset) or 0) + k
-                p.spells[#p.spells + 1] = call(C_SpellBook.GetSpellBookItemInfo, slotIndex, Enum.SpellBookSpellBank.Player)
+            p.bySkillLine = call(TS.GetProfessionInfoBySkillLineID, skillLine)
+            local spells: string[] = {}
+            p.spells = spells
+            for k = 1, asNumber(numAbilities) or 0 do
+                local slotIndex = (asNumber(offset) or 0) + k
+                spells[#spells + 1] = call(C_SpellBook.GetSpellBookItemInfo, slotIndex, Enum.SpellBookSpellBank.Player)
             end
         end
-        store.professions[#store.professions + 1] = p
+        professions[#professions + 1] = p
     end
     -- the open trade skill
-    store.ready = call(C_TradeSkillUI.IsTradeSkillReady)
-    store.base = call(C_TradeSkillUI.GetBaseProfessionInfo)
-    local base = raw(C_TradeSkillUI.GetBaseProfessionInfo)
-    store.name = base and base.professionName
+    store.base = call(TS.GetBaseProfessionInfo)
+    local base = tryValue(TS.GetBaseProfessionInfo)
+    store.name = base and asString(base.professionName)
     saved[base and base.professionID or 0] = store
-    store.child = call(C_TradeSkillUI.GetChildProfessionInfo)
-    store.isNPC = call(C_TradeSkillUI.IsNPCCrafting)
-    store.isGuild = call(C_TradeSkillUI.IsTradeSkillGuild)
-    store.linked = call(C_TradeSkillUI.IsTradeSkillLinked)
-    store.canShow = call(C_TradeSkillUI.CanTradeSkillShowCraftingUI)
-    local ids = raw(C_TradeSkillUI.GetAllRecipeIDs) or {}
-    local filtered = raw(C_TradeSkillUI.GetFilteredRecipeIDs) or {}
+    store.child = call(TS.GetChildProfessionInfo)
+    store.isNPC = call(TS.IsNPCCrafting)
+    store.isGuild = call(TS.IsTradeSkillGuild)
+    store.linked = call(TS.IsTradeSkillLinked)
+    store.canShow = call(TS.CanTradeSkillShowCraftingUI)
+    local ids: number[] = {}
+    for _, id in ipairs(tbl.list(results(TS.GetAllRecipeIDs)[1])) do
+        local n = asNumber(id)
+        if n then ids[#ids + 1] = n end
+    end
+    local filtered = tbl.list(results(TS.GetFilteredRecipeIDs)[1])
     store.recipeCount, store.filteredCount = #ids, #filtered
-    store.categories = {}
-    local cats = { raw(C_TradeSkillUI.GetCategories) }
-    for _, c in ipairs(cats) do
-        if #store.categories < 30 then store.categories[#store.categories + 1] = show(c) .. " " .. call(C_TradeSkillUI.GetCategoryInfo, c) end
+    local categories: string[] = {}
+    store.categories = categories
+    for _, c in ipairs(results(TS.GetCategories)) do
+        if #categories < 30 then categories[#categories + 1] = show(c) .. " " .. call(TS.GetCategoryInfo, c) end
     end
     -- every recipe's category up to its header, and how many under each
     -- and every recipe, one line each: id|name|category|learned|ability|grey
-    store.tree, store.perRoot, store.all = {}, {}, {}
-    local seenCat = {}
+    local tree: string[], perRoot: { [string]: number }, dupes: string[] = {}, {}, {}
+    store.tree, store.perRoot = tree, perRoot
+    local function add(key: string) perRoot[key] = (perRoot[key] or 0) + 1 end
+    local seenCat: { [unknown]: boolean } = {}
+    local names: { [string]: { [string]: number } } = {}
     for _, id in ipairs(ids) do
-        local info = raw(C_TradeSkillUI.GetRecipeInfo, id)
+        local info = tryValue(TS.GetRecipeInfo, id)
         if info then
-            store.all[#store.all + 1] = ("%d|%s|%d|%d|%d|%d"):format(id, show(info.name), tonumber(info.categoryID) or 0,
-                info.learned and 1 or 0, tonumber(info.skillLineAbilityID) or 0,
-                tonumber(info.maxTrivialLevel) or 0)
+            all[#all + 1] = ("%d|%s|%d|%d|%d|%d"):format(id, show(info.name), asNumber(info.categoryID) or 0,
+                info.learned and 1 or 0, asNumber(info.skillLineAbilityID) or 0,
+                asNumber(info.maxTrivialLevel) or 0)
         else
-            store.all[#store.all + 1] = ("%d|nil"):format(id)
+            all[#all + 1] = ("%d|nil"):format(id)
         end
-        local cat = info and info.categoryID
-        local chain, root = {}, nil
+        local cat: unknown = info and info.categoryID
+        local root: unknown = nil
         local guard = 0
         while cat and cat ~= 0 and guard < 8 do
-            local ci = raw(C_TradeSkillUI.GetCategoryInfo, cat)
-            if not ci then break end
+            local ci = results(TS.GetCategoryInfo, cat)[1]
+            if ci == nil then break end
             if not seenCat[cat] then
                 seenCat[cat] = true
-                if #store.tree < 120 then store.tree[#store.tree + 1] = show(cat) .. " " .. show(ci) end
+                if #tree < 120 then tree[#tree + 1] = show(cat) .. " " .. show(ci) end
             end
-            root = ci.name
-            chain[#chain + 1] = cat
-            cat = ci.parentCategoryID
+            root = tbl.field(ci, "name")
+            cat = tbl.field(ci, "parentCategoryID")
             guard = guard + 1
         end
-        local key = tostring(root) .. (info and info.learned and " learned" or "")
-        store.perRoot[key] = (store.perRoot[key] or 0) + 1
+        add(tostring(root) .. (info and info.learned and " learned" or ""))
         -- duplicates by name, disabled ones, past the level-60 range
         if info then
             local r = tostring(root)
-            store.names = store.names or {}
-            store.names[r] = store.names[r] or {}
-            local seen = store.names[r]
-            if seen[info.name] then
-                store.perRoot[r .. " duplicate names"] = (store.perRoot[r .. " duplicate names"] or 0) + 1
-                store.dupes = store.dupes or {}
-                if #store.dupes < 40 then store.dupes[#store.dupes + 1] = ("%s: %s and %s"):format(info.name, show(seen[info.name]), show(id)) end
+            local seen = names[r] or {}
+            names[r] = seen
+            local name = asString(info.name) or "?"
+            local before = seen[name]
+            if before then
+                add(r .. " duplicate names")
+                store.dupes = dupes
+                if #dupes < 40 then dupes[#dupes + 1] = ("%s: %s and %s"):format(name, show(before), show(id)) end
             else
-                seen[info.name] = id
+                seen[name] = id
             end
-            if info.disabled then store.perRoot[r .. " disabled"] = (store.perRoot[r .. " disabled"] or 0) + 1 end
-            if (info.maxTrivialLevel or 0) > 300 then store.perRoot[r .. " trivial past 300"] = (store.perRoot[r .. " trivial past 300"] or 0) + 1 end
-            if (info.itemLevel or 0) > 70 then store.perRoot[r .. " item level past 70"] = (store.perRoot[r .. " item level past 70"] or 0) + 1 end
+            if info.disabled then add(r .. " disabled") end
+            if (asNumber(info.maxTrivialLevel) or 0) > 300 then add(r .. " trivial past 300") end
+            if (asNumber(tbl.field(info, "itemLevel")) or 0) > 70 then add(r .. " item level past 70") end
         end
     end
-    store.names = nil
-    store.recipes = {}
+    local recipes: Record[] = {}
+    store.recipes = recipes
     for i, id in ipairs(ids) do
         if i > 25 then break end
-        local r = { id = id }
-        r.info = call(C_TradeSkillUI.GetRecipeInfo, id)
-        r.schematic = call(C_TradeSkillUI.GetRecipeSchematic, id, false)
-        r.requirements = call(C_TradeSkillUI.GetRecipeRequirements, id)
-        r.cooldown = call(C_TradeSkillUI.GetRecipeCooldown, id)
-        r.tracked = call(C_TradeSkillUI.IsRecipeTracked, id, false)
-        r.description = call(C_TradeSkillUI.GetRecipeDescription, id, {})
-        r.outputLink = call(C_TradeSkillUI.GetRecipeItemLink, id)
-        r.numMade = call((C_TradeSkillUI :: any).GetRecipeNumItemsProduced, id)
-        r.tools = call((C_TradeSkillUI :: any).GetRecipeTools, id)
-        r.source = call(C_TradeSkillUI.GetRecipeSourceText, id)
+        local r: Record = { id = id }
+        r.info = call(TS.GetRecipeInfo, id)
+        r.schematic = call(TS.GetRecipeSchematic, id, false)
+        r.requirements = call(TS.GetRecipeRequirements, id)
+        r.cooldown = call(TS.GetRecipeCooldown, id)
+        r.tracked = call(TS.IsRecipeTracked, id, false)
+        r.description = call(TS.GetRecipeDescription, id, {})
+        r.outputLink = call(TS.GetRecipeItemLink, id)
+        r.numMade = call(tbl.field(TS, "GetRecipeNumItemsProduced"), id)
+        r.tools = call(tbl.field(TS, "GetRecipeTools"), id)
+        r.source = call(TS.GetRecipeSourceText, id)
         -- your counts of its reagents
-        local sch = raw(C_TradeSkillUI.GetRecipeSchematic, id, false)
-        local counts = {}
-        for _, slot in ipairs(sch and sch.reagentSlotSchematics or {}) do
-            local reagent = slot.reagents and slot.reagents[1]
-            local itemID = reagent and reagent.itemID
-            if itemID then
-                counts[#counts + 1] = ("%s x%s have=%s name=%s"):format(show(itemID), show(slot.quantityRequired),
-                    call(C_Item.GetItemCount, itemID, true, false, true), show(raw(C_Item.GetItemNameByID, itemID)))
+        local sch = results(TS.GetRecipeSchematic, id, false)[1]
+        local counts: string[] = {}
+        for _, slot in ipairs(tbl.list(tbl.field(sch, "reagentSlotSchematics"))) do
+            local reagent = tbl.list(tbl.field(slot, "reagents"))[1]
+            local itemID = tbl.field(reagent, "itemID")
+            if itemID ~= nil then
+                counts[#counts + 1] = ("%s x%s have=%s name=%s"):format(show(itemID), show(tbl.field(slot, "quantityRequired")),
+                    call(C_Item.GetItemCount, itemID, true, false, true), show(results(C_Item.GetItemNameByID, itemID)[1]))
             end
         end
         r.counts = counts
-        store.recipes[#store.recipes + 1] = r
+        recipes[#recipes + 1] = r
     end
     return store
 end
@@ -190,5 +210,5 @@ end
 export function command()
     local store = sample()
     print(("Profession probe: %s, %d recipes saved (ready: %s). /reload to save."):format(
-        tostring(store.name or "no profession window open"), #store.all, tostring(store.ready)))
+        store.name or "no profession window open", #store.all, store.ready))
 end

@@ -16,16 +16,17 @@
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import isSecret from "wowlua:secret"
+import * as tbl from "wowlua:table"
 
 local ARROW = "Interface\\AddOns\\SuuUI\\Media\\Textures\\PlayerArrow.tga"
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     return tostring(v)
 end
 
-local function call(fn: any, ...: any): string
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 140) end
@@ -50,16 +51,15 @@ local function methods(): string[]
     return out
 end
 
-export function sample(): { [string]: any }
-    local store = DB.probe.minimap or { samples = {} }
-    DB.probe.minimap = store
+export function sample(): { [string]: unknown }
+    local store = tbl.recordAt(DB.probe, "minimap")
     store.methods = methods()
     local s = {
         at = date("%H:%M:%S"),
         instance = select(2, IsInInstance()) or "none",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
         combat = InCombatLockdown() and "in combat" or "out of combat",
-    } :: { [string]: any }
+    } :: { [string]: unknown }
     s.zoom = call(Minimap.GetZoom, Minimap) .. " of " .. call(Minimap.GetZoomLevels, Minimap)
     s.viewRadius = C_Minimap and call(C_Minimap.GetViewRadius) or "missing"
     s.uiMapID = C_Minimap and call(C_Minimap.GetUiMapID) or "missing"
@@ -101,8 +101,9 @@ export function sample(): { [string]: any }
         s.difficultyShown = show(diff:IsShown())
     end
     s.instanceInfo = call(GetInstanceInfo)
-    table.insert(store.samples, s)
-    while #store.samples > 8 do table.remove(store.samples, 1) end
+    local samples = tbl.listAt(store, "samples")
+    table.insert(samples, s)
+    while #samples > 8 do table.remove(samples, 1) end
     return s
 end
 
@@ -121,5 +122,5 @@ export function command(arg: string?)
     end
     local s = sample()
     print(("Minimap probe: %d methods, %s, %s. Sample in a dungeon and in a group too, then /reload."):format(
-        #DB.probe.minimap.methods, s.instance, s.group))
+        #tbl.list(tbl.field(DB.probe, "minimap", "methods")), tostring(s.instance), tostring(s.group)))
 end

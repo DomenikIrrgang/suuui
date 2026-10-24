@@ -32,29 +32,43 @@ import * as apiDocs from "/Diagnostics/ApiDocs"
 import isSecret from "wowlua:secret"
 import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
 
 -- a raid member as the roster reads them, a move a test makes, a call it runs
 type Entry = { index: number, name: string, group: number, me: boolean }
 type Member = { name: string, from: number, to: number }
-type Call = { label: string, fn: any, args: any[] }
-type Record = { [string]: any }
+type Call = { label: string, fn: (a: number, b: number) -> (), args: number[] }
+type Record = { [string]: unknown }
+-- A move test: what it moved, its calls, and what the game answered.
+type Test = { kind: string, via: string, at: string, leader: string, assistant: string, members: Member[],
+              calls: string[], blocked: string[], uiErrors: string[], rosterUpdates: string[], started: number,
+              after2s?: string[], landed?: string, atFirstUpdate?: string[] }
+-- An inspect of your target, and what it gave.
+type Inspect = { at: string, unit: string, name: string, inRaid: string, canInspect: string, visible: string,
+                 connected: string, inRange: string, interact: string, inCombat: boolean, started: number,
+                 notify?: string, ready?: string, talents?: Record, otherReady?: number }
+type Snapshot = { at: string, inRaid: string, inGroup: string, leader: string, assistant: string, everyoneAssistant: string,
+                  members: string, inCombat: boolean, api: { [string]: string }, roster: string[] }
+-- What the probe saves in SuuUIProbe.raid.
+type Out = { now?: Snapshot, docs?: unknown, docFlags?: unknown, tests?: Test[], inspects?: Inspect[] }
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "SECRET" end
     return tostring(v)
 end
 
 -- A function that may not exist, may error or may answer secret.
-local function call(fn: any, ...: any): ...any
-    if type(fn) ~= "function" then return "missing" end
+local function call(fn: unknown, ...: unknown): (unknown, unknown, unknown, unknown)
+    if type(fn) ~= "function" then return "missing", nil, nil, nil end
     local ok, a, b, c, d = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 120) end
+    if not ok then return "error: " .. tostring(a):sub(1, 120), nil, nil, nil end
     return a, b, c, d
 end
 
 -- Every return of a call, shown, and how many there were.
-local function pack(ok: boolean, ...: any): (boolean, number, any[]) return ok, select("#", ...), { ... } end
-local function every(fn: any, ...: any): (string, number)
+local function pack(ok: boolean, ...: unknown): (boolean, number, unknown[]) return ok, select("#", ...), { ... } end
+local function every(fn: unknown, ...: unknown): (string, number)
     if type(fn) ~= "function" then return "missing", 0 end
     local ok, n, res = pack(pcall(fn, ...))
     if not ok then return "error: " .. tostring(res[1]):sub(1, 120), 0 end
@@ -64,12 +78,11 @@ local function every(fn: any, ...: any): (string, number)
 end
 
 
-local function out(): Record
-    DB.probe.raid = DB.probe.raid or {}
-    return DB.probe.raid
+local function out(): Out
+    return DB.probeData("raid", function(): Out return {} end)
 end
 
-local GROUPS = NUM_RAID_GROUPS or 8
+local GROUPS = secret.asNumber(tbl.field(_G, "NUM_RAID_GROUPS")) or 8
 local FUNCTIONS = { "SetRaidSubgroup", "SwapRaidSubgroup", "ConvertToRaid", "ConvertToParty", "GetRaidRosterInfo",
     "PromoteToAssistant", "DemoteAssistant", "SetEveryoneIsAssistant", "IsEveryoneAssistant", "NotifyInspect",
     "ClearInspectPlayer", "CanInspect", "GetInspectSpecialization", "GetTalentTabInfo", "GetNumTalentTabs" }
@@ -89,7 +102,7 @@ local function roster(): (Entry[], number[])
         local name, _, group = call(GetRaidRosterInfo, i)
         if type(name) == "string" and secret.readable(name) and type(group) == "number" and secret.readable(group) then
             local okMe, me = pcall(UnitIsUnit, "raid" .. i, "player")
-            list[#list + 1] = { index = i, name = name, group = group, me = okMe and secret.readable(me) and (me :: any) == true }
+            list[#list + 1] = { index = i, name = name, group = group, me = okMe and secret.flag(me) }
             counts[group] = (counts[group] or 0) + 1
         end
     end
@@ -106,16 +119,15 @@ local function groupsOf(members: Member[]): (string[], { [string]: number })
     return now, at
 end
 
-local function snapshot(): Record
+local function snapshot(): Snapshot
     local o = out()
-    local s = { at = date("%H:%M:%S"), inRaid = show(call(IsInRaid)), inGroup = show(call(IsInGroup)),
+    local s: Snapshot = { at = date("%H:%M:%S"), inRaid = show(call(IsInRaid)), inGroup = show(call(IsInGroup)),
         leader = show(call(UnitIsGroupLeader, "player")), assistant = show(call(UnitIsGroupAssistant, "player")),
         everyoneAssistant = show(call(IsEveryoneAssistant)), members = show(call(GetNumGroupMembers)),
-        inCombat = InCombatLockdown() and true or false, api = {} :: { [string]: string }, roster = {} :: string[] }
-    for _, name in ipairs(FUNCTIONS) do s.api[name] = type(_G[name]) == "function" and "yes" or "missing" end
-    local P: any = C_PartyInfo or {}
+        inCombat = InCombatLockdown() and true or false, api = {}, roster = {} }
+    for _, name in ipairs(FUNCTIONS) do s.api[name] = type(tbl.field(_G, name)) == "function" and "yes" or "missing" end
     for _, name in ipairs({ "ConvertToRaid", "ConvertToParty", "SetRaidSubgroup", "SwapRaidSubgroup" }) do
-        s.api["C_PartyInfo." .. name] = type(P[name]) == "function" and "yes" or "missing"
+        s.api["C_PartyInfo." .. name] = type(tbl.field(C_PartyInfo, name)) == "function" and "yes" or "missing"
     end
     -- every return of GetRaidRosterInfo, so the planner knows what it has
     local n = call(GetNumGroupMembers)
@@ -146,6 +158,7 @@ local function roomIn(counts: number[], except: number?): number?
     for g = 1, GROUPS do
         if g ~= except and (counts[g] or 0) < 5 then return g end
     end
+    return nil
 end
 
 -- The last member who isn't you (or in `skip`), in a group that isn't full,
@@ -158,14 +171,15 @@ local function pickMove(list: Entry[], counts: number[], skip: { [string]: boole
             if to then return m, to end
         end
     end
+    return nil, nil
 end
 
-local test: Record? = nil -- the test waiting for its answer
+local test: Test? = nil -- the test waiting for its answer
 local listener: Frame? = nil
 local again: Button? = nil
-local inspectReady: (guid: any) -> ()
+local inspectReady: (guid: unknown) -> ()
 
-local function finish(t: Record)
+local function finish(t: Test)
     if test ~= t then return end
     test = nil
     local o = out()
@@ -175,33 +189,35 @@ local function finish(t: Record)
     for _, m in ipairs(t.members) do
         if at[m.name] == m.to then landed = landed + 1 end
     end
-    t.landed = ("%d of %d"):format(landed, #t.members)
-    t.started = nil
-    o.tests = o.tests or {}
-    o.tests[#o.tests + 1] = t
-    print(("Raid probe: %s (%s): %s landed, %d blocked, %d roster updates."):format(t.kind, t.via, t.landed,
+    local result = ("%d of %d"):format(landed, #t.members)
+    t.landed = result
+    local tests = o.tests or {}
+    o.tests = tests
+    tests[#tests + 1] = t
+    print(("Raid probe: %s (%s): %s landed, %d blocked, %d roster updates."):format(t.kind, t.via, result,
         #t.blocked, #t.rosterUpdates))
 end
 
 local function listen()
     if listener then return end
-    listener = CreateFrame("Frame")
+    local f = CreateFrame("Frame")
+    listener = f
     for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE", "INSPECT_READY" }) do
-        pcall(listener.RegisterEvent, listener, e)
+        pcall(f.RegisterEvent, f, e)
     end
-    listener:SetScript("OnEvent", function(_, event, a, b)
+    f:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown)
         if event == "INSPECT_READY" then return inspectReady(a) end
         local t = test
         if not t then return end
         local dt = ("%.2f s"):format(GetTime() - t.started)
         if event == "GROUP_ROSTER_UPDATE" then
-            t.rosterUpdates[#t.rosterUpdates + 1] = dt
+            table.insert(t.rosterUpdates, dt)
             if not t.atFirstUpdate then t.atFirstUpdate = (groupsOf(t.members)) end
         elseif event == "UI_ERROR_MESSAGE" then
-            t.uiErrors[#t.uiErrors + 1] = dt .. " " .. show(a) .. " " .. show(b)
+            table.insert(t.uiErrors, dt .. " " .. show(a) .. " " .. show(b))
         else
             -- anyone's, marked when it is SuuUI's
-            t.blocked[#t.blocked + 1] = ("%s %s %s %s%s"):format(dt, event, show(a), show(b), a == addonName and " (SuuUI)" or "")
+            table.insert(t.blocked, ("%s %s %s %s%s"):format(dt, event, show(a), show(b), a == addonName and " (SuuUI)" or ""))
         end
     end)
 end
@@ -211,8 +227,8 @@ local function plan(kind: string, list: Entry[], counts: number[]): (Member[], C
     local members: Member[], calls: Call[] = {}, {}
     if kind == "move" then
         local m, to = pickMove(list, counts)
-        if m then
-            members[1] = { name = m.name, from = m.group, to = to :: number }
+        if m and to then
+            members[1] = { name = m.name, from = m.group, to = to }
             calls[1] = { label = ("SetRaidSubgroup(%d, %d)"):format(m.index, to), fn = SetRaidSubgroup, args = { m.index, to } }
         end
     elseif kind == "swap" then
@@ -237,11 +253,11 @@ local function plan(kind: string, list: Entry[], counts: number[]): (Member[], C
         local skip: { [string]: boolean } = {}
         for _ = 1, 3 do
             local m, to = pickMove(list, counts, skip)
-            if not m then break end
+            if not (m and to) then break end
             skip[m.name] = true
             counts[m.group] = counts[m.group] - 1
-            counts[to :: number] = counts[to :: number] + 1
-            members[#members + 1] = { name = m.name, from = m.group, to = to :: number }
+            counts[to] = counts[to] + 1
+            members[#members + 1] = { name = m.name, from = m.group, to = to }
             calls[#calls + 1] = { label = ("SetRaidSubgroup(%d, %d)"):format(m.index, to), fn = SetRaidSubgroup, args = { m.index, to } }
         end
         -- fewer than three to move (a small raid): the last one on again, group
@@ -263,18 +279,18 @@ local function plan(kind: string, list: Entry[], counts: number[]): (Member[], C
     return members, calls
 end
 
-local function run(kind: string, via: string): Record?
+local function run(kind: string, via: string): Test?
     if InCombatLockdown() then
         print("Raid probe: not in combat. Moving raid members waits until the fight is over; try again then.")
-        return
+        return nil
     end
     if call(IsInRaid) ~= true then
         print("Raid probe: you're not in a raid. Make one (you as leader or assistant, a few members) and try again.")
-        return
+        return nil
     end
     if test then
         print("Raid probe: the last test is still waiting for its answer (2 s).")
-        return
+        return nil
     end
     local list, counts = roster()
     local members, calls = plan(kind, list, counts)
@@ -282,19 +298,18 @@ local function run(kind: string, via: string): Record?
         print(kind == "swap"
             and "Raid probe: no two members (other than you) in different groups to swap."
             or "Raid probe: no member (other than you) with a group that has room to go to.")
-        return
+        return nil
     end
-    local t: Record = { kind = kind, via = via, at = date("%H:%M:%S"),
-        leader = show(call(UnitIsGroupLeader, "player")), assistant = show(call(UnitIsGroupAssistant, "player")),
-        members = members, calls = {} :: string[], blocked = {} :: string[], uiErrors = {} :: string[], rosterUpdates = {} :: string[] }
-    for _, m in ipairs(members) do t.calls[#t.calls + 1] = ("%s: group %d to %d"):format(m.name, m.from, m.to) end
+    local t: Test = { kind = kind, via = via, at = date("%H:%M:%S"),
+        leader = show((call(UnitIsGroupLeader, "player"))), assistant = show((call(UnitIsGroupAssistant, "player"))),
+        members = members, calls = {}, blocked = {}, uiErrors = {}, rosterUpdates = {}, started = GetTime() }
+    for _, m in ipairs(members) do table.insert(t.calls, ("%s: group %d to %d"):format(m.name, m.from, m.to)) end
     listen()
     test = t
-    t.started = GetTime()
     -- all in this frame (the burst's point)
     for _, c in ipairs(calls) do
-        local ok, err = pcall(c.fn, unpack(c.args))
-        t.calls[#t.calls + 1] = c.label .. ": " .. (ok and "ran" or ("error: " .. tostring(err):sub(1, 120)))
+        local ok, err = pcall(c.fn, c.args[1], c.args[2])
+        table.insert(t.calls, c.label .. ": " .. (ok and "ran" or ("error: " .. tostring(err):sub(1, 120))))
     end
     after(2, function() finish(t) end)
     if t.leader ~= "true" and t.assistant ~= "true" then
@@ -324,46 +339,50 @@ end
 
 -- Constants.TraitConsts.INSPECT_TRAIT_CONFIG_ID: the inspected player's
 -- talents, as SuuUI's Talents window reads them (after INSPECT_READY).
-local INSPECT_CONFIG = Constants and Constants.TraitConsts and Constants.TraitConsts.INSPECT_TRAIT_CONFIG_ID or -1
-local inspecting: Record? = nil
+local INSPECT_CONFIG = secret.asNumber(tbl.field(_G, "Constants", "TraitConsts", "INSPECT_TRAIT_CONFIG_ID")) or -1
+local inspecting: Inspect? = nil
 
 -- What the inspect gives for talents and spec, read as the Talents window does.
 local function talentsOf(unit: string): Record
-    local s: Record = { hasValidData = show(call(C_Traits and C_Traits.HasValidInspectData)),
-        spec = show(call(GetInspectSpecialization, unit)), itemLevel = show(call(C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel, unit)),
-        tabs = show(call(_G.GetNumTalentTabs, true)) }
+    local s: Record = { hasValidData = show((call(tbl.field(C_Traits, "HasValidInspectData")))),
+        spec = show((call(GetInspectSpecialization, unit))), itemLevel = show((call(tbl.field(C_PaperDollInfo, "GetInspectItemLevel"), unit))),
+        tabs = show((call(tbl.field(_G, "GetNumTalentTabs"), true))) }
     -- the old talent tabs, for the inspected player
-    s.talentTabs = {}
-    for i = 1, 3 do s.talentTabs[i] = (every(GetTalentTabInfo, i, true)) end
+    local talentTabs: string[] = {}
+    s.talentTabs = talentTabs
+    for i = 1, 3 do talentTabs[i] = (every(GetTalentTabInfo, i, true)) end
     -- the trait tree: its groups' points and how many nodes have ranks
-    local info = C_Traits and call(C_Traits.GetConfigInfo, INSPECT_CONFIG)
-    local treeID = type(info) == "table" and info.treeIDs and info.treeIDs[1]
-    s.configType = type(info) == "table" and show(info.type) or show(info)
+    local info = call(tbl.field(C_Traits, "GetConfigInfo"), INSPECT_CONFIG)
+    local treeID = tbl.list(tbl.field(info, "treeIDs"))[1]
+    s.configType = type(info) == "table" and show(tbl.field(info, "type")) or show(info)
     s.treeID = show(treeID)
     if type(treeID) == "number" then
-        local displays = call(C_Traits.GetGroupDisplayInfoByTreeID, treeID)
+        local displays = call(tbl.field(C_Traits, "GetGroupDisplayInfoByTreeID"), treeID)
         local ids: number[], names: { [number]: string } = {}, {}
-        if type(displays) == "table" then
-            for i, d in ipairs(displays :: any[]) do ids[i] = d.groupID; names[d.groupID] = show(d.displayName) end
+        for _, d in ipairs(tbl.list(displays)) do
+            local id = secret.asNumber(tbl.field(d, "groupID"))
+            if id then ids[#ids + 1] = id; names[id] = show(tbl.field(d, "displayName")) end
         end
-        s.groups = {}
-        local groups = #ids > 0 and call(C_Traits.GetGroupCurrencyInfo, INSPECT_CONFIG, ids)
+        local groups = #ids > 0 and call(tbl.field(C_Traits, "GetGroupCurrencyInfo"), INSPECT_CONFIG, ids)
         if type(groups) == "table" then
-            for _, g in ipairs(groups :: any[]) do
-                local c = g.currencyInfos and g.currencyInfos[1]
-                s.groups[#s.groups + 1] = ("%s: spent %s"):format(names[g.traitNodeGroupID] or show(g.traitNodeGroupID), c and show(c.spent) or "?")
+            local lines: string[] = {}
+            s.groups = lines
+            for _, g in ipairs(tbl.list(groups)) do
+                local c = tbl.list(tbl.field(g, "currencyInfos"))[1]
+                local groupID = tbl.field(g, "traitNodeGroupID")
+                lines[#lines + 1] = ("%s: spent %s"):format(names[secret.asNumber(groupID) or -1] or show(groupID), c ~= nil and show(tbl.field(c, "spent")) or "?")
             end
         else
             s.groups = show(groups)
         end
-        local nodes = call(C_Traits.GetTreeNodes, treeID)
+        local nodes = call(tbl.field(C_Traits, "GetTreeNodes"), treeID)
         local ranked, total, secrets = 0, 0, 0
         if type(nodes) == "table" then
-            for _, nodeID in ipairs(nodes :: any[]) do
-                local ni = call(C_Traits.GetNodeInfo, INSPECT_CONFIG, nodeID)
+            for _, nodeID in ipairs(tbl.list(nodes)) do
+                local ni = call(tbl.field(C_Traits, "GetNodeInfo"), INSPECT_CONFIG, nodeID)
                 if type(ni) == "table" then
                     total = total + 1
-                    local r = ni.activeRank or ni.currentRank
+                    local r = tbl.field(ni, "activeRank") or tbl.field(ni, "currentRank")
                     if isSecret(r) then secrets = secrets + 1 elseif type(r) == "number" and r > 0 then ranked = ranked + 1 end
                 end
             end
@@ -373,21 +392,22 @@ local function talentsOf(unit: string): Record
     return s
 end
 
-inspectReady = function(guid: any)
+inspectReady = function(guid: unknown)
     local t = inspecting
     if not t then return end
     local okG, target = pcall(UnitGUID, t.unit)
-    if not (okG and secret.readable(target) and secret.readable(guid) and (target :: any) == guid) then
+    if not (okG and secret.readable(target) and secret.readable(guid) and target == guid) then
         t.otherReady = (t.otherReady or 0) + 1
         return
     end
     inspecting = nil
-    t.ready = ("%.2f s"):format(GetTime() - t.started)
+    local ready = ("%.2f s"):format(GetTime() - t.started)
+    t.ready = ready
     t.talents = talentsOf(t.unit)
-    t.started = nil
     -- the game's inspect window keeps its player; this one is let go
-    if not (_G.InspectFrame and _G.InspectFrame:IsShown()) then call(ClearInspectPlayer) end
-    print(("Raid probe: INSPECT_READY after %s; what it gave is recorded. /reload to save it."):format(t.ready))
+    local inspectFrame = wf.find("InspectFrame")
+    if not (inspectFrame and inspectFrame:IsShown()) then call(ClearInspectPlayer) end
+    print(("Raid probe: INSPECT_READY after %s; what it gave is recorded. /reload to save it."):format(ready))
 end
 
 local function inspect()
@@ -397,25 +417,24 @@ local function inspect()
         return
     end
     local o = out()
-    o.inspects = o.inspects or {}
+    local inspects = o.inspects or {}
+    o.inspects = inspects
     local okN, name = pcall(GetUnitName, unit, true)
-    local t: Record = { at = date("%H:%M:%S"), unit = unit, name = okN and show(name) or "?",
-        inRaid = show(call(UnitInRaid, unit)), canInspect = show(call(CanInspect, unit)),
-        visible = show(call(UnitIsVisible, unit)), connected = show(call(UnitIsConnected, unit)),
-        inRange = (every(UnitInRange, unit)), interact = show(call(CheckInteractDistance, unit, 1)),
-        inCombat = InCombatLockdown() and true or false }
+    local t: Inspect = { at = date("%H:%M:%S"), unit = unit, name = okN and show(name) or "?",
+        inRaid = show((call(UnitInRaid, unit))), canInspect = show((call(CanInspect, unit))),
+        visible = show((call(UnitIsVisible, unit))), connected = show((call(UnitIsConnected, unit))),
+        inRange = (every(UnitInRange, unit)), interact = show((call(CheckInteractDistance, unit, 1))),
+        inCombat = InCombatLockdown() and true or false, started = GetTime() }
     listen()
     inspecting = t
-    t.started = GetTime()
     local ok, err = pcall(NotifyInspect, unit)
     t.notify = ok and "called" or ("error: " .. tostring(err):sub(1, 120))
-    o.inspects[#o.inspects + 1] = t
+    inspects[#inspects + 1] = t
     after(10, function()
         if inspecting == t then
             inspecting = nil
             t.ready = "no INSPECT_READY in 10 s"
             t.talents = talentsOf(unit)
-            t.started = nil
             print("Raid probe: no INSPECT_READY for your target in 10 s; recorded. /reload to save it.")
         end
     end)

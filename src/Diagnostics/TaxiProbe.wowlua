@@ -29,55 +29,78 @@
 --                          landing: when, where, the nearest flight master;
 --                          and whether the game's own leave button shows
 
-import isSecret from "wowlua:secret"
 import after, every from "wowlua:timer"
 import print, name as ADDON from "/Core/Init"
 import * as DB from "/Core/DB"
 import * as apiDocs from "/Diagnostics/ApiDocs"
 import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
 
-type Map = { [any]: any }
+type Record = { [string]: unknown }
+-- A click's test: what it called, and what the game said meanwhile.
+type ClickTest = { at: string, before: string, events: string[], started: number, what?: string, call?: string,
+                   onTaxi?: string, after?: string }
+-- This master's take test.
+type Take = { at: string, frames: string, node: string, fly?: ClickTest, hide?: ClickTest, hiding?: boolean }
+-- A flight's land test: SuuUI's button in the air, and where it ended.
+type Land = { at: string, inAir: string, events: string[], started: number, clicked?: string, flown?: string,
+              call?: string, after2s?: string, landed?: string }
+-- A flight, from losing control to getting it back.
+type Flight = { started: number, at: string, from?: number, samples: string[], ticker?: TickerHandle, seconds?: string, to?: number }
+-- What the probe saves in SuuUIProbe.taxi.
+type Out = { away?: Record, docs?: unknown, docFlags?: unknown, masters?: Record[], take?: Take[], land?: Land[],
+             flights?: Record[], opened?: string[], closed?: string[] }
 
-local function show(v: any): string
-    if isSecret(v) then return "SECRET" end
-    if type(v) == "table" and v.x then
-        if isSecret(v.x) or isSecret(v.y) then return "SECRET,SECRET" end
-        return ("%.4f,%.4f"):format(v.x, v.y)
+local function show(v: unknown): string
+    if secret.isSecret(v) then return "SECRET" end
+    local x, y = tbl.field(v, "x"), tbl.field(v, "y")
+    if type(v) == "table" and x then
+        if secret.isSecret(x) or secret.isSecret(y) then return "SECRET,SECRET" end
+        return ("%.4f,%.4f"):format(secret.asNumber(x) or 0, secret.asNumber(y) or 0)
     end
     return tostring(v)
 end
 
 -- A function that may not exist, may error or may answer secret.
-local function call(fn: any, ...: any): (any, any, any, any)
-    if type(fn) ~= "function" then return "missing" end
+local function call(fn: unknown, ...: unknown): (unknown, unknown, unknown, unknown)
+    if type(fn) ~= "function" then return "missing", nil, nil, nil end
     local ok, a, b, c, d = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 120) end
+    if not ok then return "error: " .. tostring(a):sub(1, 120), nil, nil, nil end
     return a, b, c, d
 end
 
-
-local function nodeList(list: any): any
+-- A list of nodes the game gave: each one's fields, one line each.
+local function nodeList(list: unknown): unknown
     if type(list) ~= "table" then return show(list) end
-    if isSecret(list) then return "SECRET" end
+    if secret.isSecret(list) then return "SECRET" end
     local out: string[] = {}
-    for i, n in ipairs(list :: any[]) do
+    for i, n in ipairs(tbl.list(list)) do
         local parts: string[] = {}
-        for k, v in pairs(n) do parts[#parts + 1] = tostring(k) .. "=" .. show(v) end
+        if type(n) == "table" then
+            for k, v in pairs(n) do parts[#parts + 1] = tostring(k) .. "=" .. show(v) end
+        end
         table.sort(parts)
         out[i] = table.concat(parts, "  ")
     end
     return out
 end
 
-local function out(): Map
-    DB.probe.taxi = DB.probe.taxi or {}
-    return DB.probe.taxi
+local function out(): Out
+    return DB.probeData("taxi", function(): Out return {} end)
+end
+
+-- `list` with `item` added (a new list when there is none).
+local function push<T>(list: T[]?, item: T): T[]
+    local l = list or {}
+    l[#l + 1] = item
+    return l
 end
 
 local function continentOf(zone: number?): number?
     local continent = zone
     local info = zone and C_Map.GetMapInfo(zone)
-    while info and info.mapType and Enum.UIMapType and info.mapType > Enum.UIMapType.Continent and info.parentMapID do
+    while info and info.mapType > Enum.UIMapType.Continent and info.parentMapID do
         continent = info.parentMapID
         info = C_Map.GetMapInfo(continent)
     end
@@ -88,7 +111,7 @@ end
 local function frames(): string
     local parts: string[] = {}
     for _, name in ipairs({ "TaxiFrame", "FlightMapFrame" }) do
-        local f: any = _G[name]
+        local f = wf.find(name)
         if f then
             local ok, shown = pcall(f.IsShown, f)
             parts[#parts + 1] = name .. " shown " .. (ok and show(shown) or "?")
@@ -96,37 +119,35 @@ local function frames(): string
             parts[#parts + 1] = name .. " missing"
         end
     end
-    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded and call(C_AddOns.IsAddOnLoaded, "Blizzard_FlightMap")
-    parts[#parts + 1] = "Blizzard_FlightMap loaded " .. show(loaded)
+    parts[#parts + 1] = "Blizzard_FlightMap loaded " .. show((call(C_AddOns.IsAddOnLoaded, "Blizzard_FlightMap")))
     return table.concat(parts, ", ")
 end
+
+local T = C_TaxiMap
 
 -- Away from a flight master: the zone's and the continent's nodes.
 local function snapshot()
     local o = out()
-    local T: any = C_TaxiMap or {}
     local zone = C_Map.GetBestMapForUnit("player")
-    local shown = WorldMapFrame and WorldMapFrame:IsShown() and WorldMapFrame:GetMapID() or nil
+    local shown = WorldMapFrame:IsShown() and WorldMapFrame:GetMapID() or nil
     local continent = continentOf(zone)
-    local s: Map = { at = date("%H:%M:%S"), zone = zone, continent = continent, shownMap = shown,
-        onTaxi = show(call(UnitOnTaxi, "player")), taxiNodes = show(call(NumTaxiNodes)),
-        api = {} }
+    local api: { [string]: string } = {}
+    local s: Record = { at = date("%H:%M:%S"), zone = zone, continent = continent, shownMap = shown,
+        onTaxi = show((call(UnitOnTaxi, "player"))), taxiNodes = show((call(NumTaxiNodes))), api = api }
     for _, name in ipairs({ "GetAllTaxiNodes", "GetTaxiNodesForMap", "ShouldMapShowTaxiNodes", "GetTaxiNodeInfo" }) do
-        s.api[name] = type(T[name]) == "function" and "yes" or "missing"
+        api[name] = type(tbl.field(T, name)) == "function" and "yes" or "missing"
     end
     for _, name in ipairs({ "NumTaxiNodes", "TaxiNodeName", "TaxiNodeGetType", "TaxiNodeCost", "TaxiNodePosition",
             "GetNumRoutes", "TaxiGetNodeSlot", "TakeTaxiNode", "UnitOnTaxi", "TaxiRequestEarlyLanding", "CloseTaxiMap",
             "GetTaxiMapID" }) do
-        s.api[name] = type(_G[name]) == "function" and "yes" or "missing"
+        api[name] = type(tbl.field(_G, name)) == "function" and "yes" or "missing"
     end
     -- what TaxiRequestEarlyLanding is, wherever it lives
-    s.earlyLanding = ("global %s, C_TaxiMap %s"):format(type(_G.TaxiRequestEarlyLanding), type(T.TaxiRequestEarlyLanding))
+    s.earlyLanding = ("global %s, C_TaxiMap %s"):format(type(tbl.field(_G, "TaxiRequestEarlyLanding")), type(tbl.field(T, "TaxiRequestEarlyLanding")))
     for _, m in ipairs({ zone, continent, shown }) do
-        if m then
-            s["all " .. m] = nodeList(call(T.GetAllTaxiNodes, m))
-            s["forMap " .. m] = nodeList(call(T.GetTaxiNodesForMap, m))
-            s["shouldShow " .. m] = show(call(T.ShouldMapShowTaxiNodes, m))
-        end
+        s["all " .. m] = nodeList((call(T.GetAllTaxiNodes, m)))
+        s["forMap " .. m] = nodeList((call(T.GetTaxiNodesForMap, m)))
+        s["shouldShow " .. m] = show((call(tbl.field(T, "ShouldMapShowTaxiNodes"), m)))
     end
     o.away = s
     -- the documentation
@@ -141,18 +162,21 @@ end
 
 -- The C_TaxiMap entries for the master's maps, by name (and by slotIndex,
 -- when the entries carry one).
-local function nodeIDs(zone: number?): ({ [any]: any }, { [any]: any }, any)
-    local T: any = C_TaxiMap or {}
-    local byName: Map, bySlot: Map = {}, {}
-    local maps: any[] = { zone, continentOf(zone) }
+local function nodeIDs(zone: number?): ({ [unknown]: unknown }, { [unknown]: unknown }, unknown)
+    local byName: { [unknown]: unknown }, bySlot: { [unknown]: unknown } = {}, {}
+    local maps: number[] = {}
+    if zone then maps[#maps + 1] = zone end
+    local continent = continentOf(zone)
+    if continent then maps[#maps + 1] = continent end
     local taxiMap = call(GetTaxiMapID)
     if type(taxiMap) == "number" then maps[#maps + 1] = taxiMap end
     for _, m in ipairs(maps) do
-        local list = m and call(T.GetAllTaxiNodes, m)
-        if type(list) == "table" and not isSecret(list) then
-            for _, n in ipairs(list :: any[]) do
-                if secret.readable(n.name) and secret.readable(n.nodeID) and not byName[n.name] then byName[n.name] = n.nodeID end
-                if secret.readable(n.slotIndex) and secret.readable(n.nodeID) and n.slotIndex then bySlot[n.slotIndex] = n.nodeID end
+        local list = call(T.GetAllTaxiNodes, m)
+        if type(list) == "table" and not secret.isSecret(list) then
+            for _, n in ipairs(tbl.list(list)) do
+                local name, id, slot = tbl.field(n, "name"), tbl.field(n, "nodeID"), tbl.field(n, "slotIndex")
+                if secret.readable(name) and secret.readable(id) and name ~= nil and byName[name] == nil then byName[name] = id end
+                if secret.readable(slot) and secret.readable(id) and slot then bySlot[slot] = id end
             end
         end
     end
@@ -163,32 +187,30 @@ end
 local function atMaster()
     local o = out()
     local n = call(NumTaxiNodes)
-    local s: Map = { at = date("%H:%M:%S"), count = show(n), zone = C_Map.GetBestMapForUnit("player"), nodes = {},
-        frames = frames() }
-    local byName, bySlot, taxiMap = nodeIDs(s.zone)
+    local zone = C_Map.GetBestMapForUnit("player")
+    local nodes: string[] = {}
+    local s: Record = { at = date("%H:%M:%S"), count = show(n), zone = zone, nodes = nodes, frames = frames() }
+    local byName, bySlot, taxiMap = nodeIDs(zone)
     s.taxiMapID = show(taxiMap)
-    if type(n) == "number" and not isSecret(n) then
+    if type(n) == "number" and not secret.isSecret(n) then
         for i = 1, n do
             local x, y = call(TaxiNodePosition, i)
             local routes = call(GetNumRoutes, i)
             local hops: string[] = {}
-            if type(routes) == "number" and not isSecret(routes) then
+            if type(routes) == "number" and not secret.isSecret(routes) then
                 for r = 1, routes do
-                    hops[#hops + 1] = show(call(TaxiGetNodeSlot, i, r, true)) .. ">" .. show(call(TaxiGetNodeSlot, i, r, false))
+                    hops[#hops + 1] = show((call(TaxiGetNodeSlot, i, r, true))) .. ">" .. show((call(TaxiGetNodeSlot, i, r, false)))
                 end
             end
             local name = call(TaxiNodeName, i)
-            local id = secret.readable(name) and byName[name]
-            s.nodes[i] = ("%d %s: type %s, cost %s, at %s,%s, routes %s [%s], nodeID %s (by name), %s (by slot)"):format(i,
-                show(name), show(call(TaxiNodeGetType, i)), show(call(TaxiNodeCost, i)), show(x), show(y), show(routes),
+            local id = secret.readable(name) and name ~= nil and byName[name]
+            nodes[i] = ("%d %s: type %s, cost %s, at %s,%s, routes %s [%s], nodeID %s (by name), %s (by slot)"):format(i,
+                show(name), show((call(TaxiNodeGetType, i))), show((call(TaxiNodeCost, i))), show(x), show(y), show(routes),
                 table.concat(hops, " "), show(id), show(bySlot[i]))
         end
     end
-    local T: any = C_TaxiMap or {}
-    local map = s.zone
-    if map then s.allHere = nodeList(call(T.GetAllTaxiNodes, map)) end
-    o.masters = o.masters or {}
-    o.masters[#o.masters + 1] = s
+    if zone then s.allHere = nodeList((call(T.GetAllTaxiNodes, zone))) end
+    o.masters = push(o.masters, s)
     print(("Taxi probe: the flight master's %s nodes recorded."):format(show(n)))
 end
 
@@ -199,15 +221,14 @@ end
 local takeMode = false
 local flyButton: Button? = nil
 local hideButton: Button? = nil
-local take: Map? = nil -- this master's take test: what the clicks did
+local take: Take? = nil -- this master's take test: what the clicks did
 
-local function button(text: string, y: number, onClick: any): Button
+local function button(text: string, y: number): Button
     local b = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
     b:SetSize(300, 30)
     b:SetPoint("CENTER", UIParent, "CENTER", 0, y)
     b:SetFrameStrata("FULLSCREEN_DIALOG")
     b:SetText(text)
-    b:SetScript("OnClick", onClick)
     return b
 end
 
@@ -217,46 +238,52 @@ local function hideButtons()
 end
 
 -- What the game says while a click's call runs and just after.
-local watch: any = nil
-local function watchFor(t: Map)
-    watch = watch or CreateFrame("Frame")
-    watch:UnregisterAllEvents()
+local watch: Frame? = nil
+local watchOwner: table? = nil
+local function watchFor(t: { events: string[], started: number })
+    local w = watch or CreateFrame("Frame")
+    watch = w
+    w:UnregisterAllEvents()
     for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE", "TAXIMAP_CLOSED" }) do
-        pcall(watch.RegisterEvent, watch, e)
+        pcall(w.RegisterEvent, w, e)
     end
-    watch:SetScript("OnEvent", function(_, event, a, b)
-        t.events[#t.events + 1] = ("%.2f s %s %s %s%s"):format(GetTime() - t.started, event, show(a), show(b),
-            a == ADDON and " (SuuUI)" or "")
+    w:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown)
+        table.insert(t.events, ("%.2f s %s %s %s%s"):format(GetTime() - t.started, event, show(a), show(b),
+            a == ADDON and " (SuuUI)" or ""))
     end)
     local mine = {}
-    watch.owner = mine
-    after(3, function() if watch.owner == mine then watch:UnregisterAllEvents() end end)
+    watchOwner = mine
+    after(3, function() if watchOwner == mine then w:UnregisterAllEvents() end end)
 end
 
-local function fly(slot: number, name: any)
-    local t: Map = { at = date("%H:%M:%S"), what = ("TakeTaxiNode(%d) to %s, from a click"):format(slot, show(name)),
-        before = ("frames %s, nodes %s"):format(frames(), show(call(NumTaxiNodes))), events = {}, started = GetTime() }
-    take.fly = t
+local function fly(slot: number, name: unknown)
+    local t: ClickTest = { at = date("%H:%M:%S"), what = ("TakeTaxiNode(%d) to %s, from a click"):format(slot, show(name)),
+        before = ("frames %s, nodes %s"):format(frames(), show((call(NumTaxiNodes)))), events = {}, started = GetTime() }
+    if take then take.fly = t end
     watchFor(t)
     local ok, err = pcall(TakeTaxiNode, slot)
-    t.call = ok and "ran" or ("error: " .. tostring(err):sub(1, 120))
+    local result = ok and "ran" or ("error: " .. tostring(err):sub(1, 120))
+    t.call = result
     after(3, function()
-        t.onTaxi = show(call(UnitOnTaxi, "player"))
-        t.started = nil
-        print(("Taxi probe: TakeTaxiNode %s; on a taxi 3 s later: %s."):format(t.call, t.onTaxi))
+        local onTaxi = show((call(UnitOnTaxi, "player")))
+        t.onTaxi = onTaxi
+        print(("Taxi probe: TakeTaxiNode %s; on a taxi 3 s later: %s."):format(result, onTaxi))
     end)
     hideButtons()
 end
 
 local function hideMap()
-    local t: Map = { at = date("%H:%M:%S"), before = ("frames %s, nodes %s"):format(frames(), show(call(NumTaxiNodes))),
+    local t: ClickTest = { at = date("%H:%M:%S"), before = ("frames %s, nodes %s"):format(frames(), show((call(NumTaxiNodes)))),
         events = {}, started = GetTime() }
-    take.hide = t
-    take.hiding = true
+    if take then
+        take.hide = t
+        take.hiding = true
+    end
     watchFor(t)
     -- hiding it closes the flight master (probed 2026-10-19): shown, but unseen
     -- and not in the mouse's way
-    local f = _G.FlightMapFrame and _G.FlightMapFrame:IsShown() and _G.FlightMapFrame or _G.TaxiFrame
+    local flightMap = wf.find("FlightMapFrame")
+    local f = flightMap and flightMap:IsShown() and flightMap or wf.find("TaxiFrame")
     if f then
         local ok, err = pcall(f.SetAlpha, f, 0)
         local ok2, err2 = pcall(f.EnableMouse, f, false)
@@ -266,9 +293,9 @@ local function hideMap()
         t.call = "no TaxiFrame"
     end
     after(0.5, function()
-        t.after = ("frames %s, nodes %s, alpha %s"):format(frames(), show(call(NumTaxiNodes)), f and show(f:GetAlpha()) or "-")
-        t.started = nil
-        print(("Taxi probe: the game's map made invisible; after it: %s. Now click Fly to see whether a flight starts."):format(t.after))
+        local result = ("frames %s, nodes %s, alpha %s"):format(frames(), show((call(NumTaxiNodes))), f and show(f:GetAlpha()) or "-")
+        t.after = result
+        print(("Taxi probe: the game's map made invisible; after it: %s. Now click Fly to see whether a flight starts."):format(result))
     end)
     if hideButton then hideButton:Hide() end
 end
@@ -277,121 +304,131 @@ end
 local function offerTake()
     local n = call(NumTaxiNodes)
     if not (type(n) == "number" and secret.readable(n)) then return end
-    local slot, name
+    local slot: number?, name: unknown = nil, nil
     for i = 1, n do
         if call(TaxiNodeGetType, i) == "REACHABLE" then slot, name = i, call(TaxiNodeName, i) break end
     end
     local o = out()
-    take = { at = date("%H:%M:%S"), frames = frames(), node = slot and ("%d %s"):format(slot, show(name)) or "none reachable" }
-    o.take = o.take or {}
-    o.take[#o.take + 1] = take
+    local t: Take = { at = date("%H:%M:%S"), frames = frames(), node = slot and ("%d %s"):format(slot, show(name)) or "none reachable" }
+    take = t
+    o.take = push(o.take, t)
     if not slot then
         print("Taxi probe: no reachable node from this flight master; try another.")
         return
     end
-    flyButton = flyButton or button("", 200, nil)
-    flyButton:SetText("Fly to " .. show(name))
-    flyButton:SetScript("OnClick", function() fly(slot, name) end)
-    flyButton:Show()
-    hideButton = hideButton or button("Make the game's map invisible", 220, nil)
-    hideButton:SetScript("OnClick", hideMap)
-    hideButton:Show()
+    local target = slot
+    local fb = flyButton or button("", 200)
+    flyButton = fb
+    fb:SetText("Fly to " .. show(name))
+    fb:SetScript("OnClick", function() fly(target, name) end)
+    fb:Show()
+    local hb = hideButton or button("Make the game's map invisible", 220)
+    hideButton = hb
+    hb:SetScript("OnClick", hideMap)
+    hb:Show()
     print(("Taxi probe: two buttons above the middle. Click \"Make the game's map invisible\" first, then \"Fly to %s\" (how SuuUI's own map would fly); if the flight master closed, open it again and click Fly alone. Then /reload."):format(show(name)))
 end
 
 -- A flight, from losing control to getting it back; where you are every 5 s.
-local flight: Map? = nil
+local flight: Flight? = nil
 local MAX_FLIGHT_SAMPLES = 60
 local function flightSample()
-    if not flight or #flight.samples >= MAX_FLIGHT_SAMPLES then return end
+    local f = flight
+    if not f or #f.samples >= MAX_FLIGHT_SAMPLES then return end
     local zone = C_Map.GetBestMapForUnit("player")
     local continent = continentOf(zone)
-    flight.samples[#flight.samples + 1] = ("%.0f s: onTaxi %s, map %s at %s, continent %s at %s"):format(
-        GetTime() - flight.started, show(call(UnitOnTaxi, "player")), show(zone),
-        show(zone and call(C_Map.GetPlayerMapPosition, zone, "player")), show(continent),
-        show(continent and call(C_Map.GetPlayerMapPosition, continent, "player")))
+    table.insert(f.samples, ("%.0f s: onTaxi %s, map %s at %s, continent %s at %s"):format(
+        GetTime() - f.started, show((call(UnitOnTaxi, "player"))), show(zone),
+        show(zone and (call(C_Map.GetPlayerMapPosition, zone, "player"))), show(continent),
+        show(continent and (call(C_Map.GetPlayerMapPosition, continent, "player")))))
 end
 
 -- The land test: SuuUI's button in the air, and where the flight ends.
 local landMode = false
 local landButton: Button? = nil
 -- (read anew wherever it's used, as before: a later test replaces it)
-local land: any = nil -- this flight's land test
+local land: Land? = nil -- this flight's land test
 
 -- the flight master nearest you on your continent, and how far (in the
 -- continent map's 0-1)
 local function nearestMaster(): string
     local continent = continentOf(C_Map.GetBestMapForUnit("player"))
     local me = continent and call(C_Map.GetPlayerMapPosition, continent, "player")
-    if not (type(me) == "table" and me.x and secret.readable(me.x)) then return "no position" end
-    local best, far
-    local list = call(C_TaxiMap.GetTaxiNodesForMap, continent)
-    for _, n in ipairs((type(list) == "table" and list or {}) :: any) do
-        local x, y
-        if n.position and n.position.GetXY then x, y = n.position:GetXY() end
-        if secret.readable(x) and secret.readable(y) and x and y then
-            local d = ((x - me.x) ^ 2 + (y - me.y) ^ 2) ^ 0.5
+    local mx, my = secret.asNumber(tbl.field(me, "x")), secret.asNumber(tbl.field(me, "y"))
+    if not (mx and my) then return "no position" end
+    local best: unknown, far: number? = nil, nil
+    for _, n in ipairs(tbl.list((call(T.GetTaxiNodesForMap, continent)))) do
+        local pos = tbl.field(n, "position")
+        local px, py = call(tbl.field(pos, "GetXY"), pos)
+        local x, y = secret.asNumber(px), secret.asNumber(py)
+        if x and y then
+            local d = ((x - mx) ^ 2 + (y - my) ^ 2) ^ 0.5
             if not far or d < far then best, far = n, d end
         end
     end
-    if not best then return "no flight masters" end
-    return ("%s (nodeID %s), %.4f away on map %s"):format(show(best.name), show(best.nodeID), far, show(continent))
+    if not (best and far) then return "no flight masters" end
+    return ("%s (nodeID %s), %.4f away on map %s"):format(show(tbl.field(best, "name")), show(tbl.field(best, "nodeID")), far, show(continent))
 end
 
 local function leaveButtonState(): string
-    local b = _G.MainMenuBarVehicleLeaveButton
+    local b = wf.find("MainMenuBarVehicleLeaveButton")
     return ("game's leave button %s; CanExitVehicle %s"):format(b and (b:IsShown() and "shown" or "hidden") or "missing",
-        show(call(CanExitVehicle)))
+        show((call(CanExitVehicle))))
 end
 
 local function offerLand()
-    land = { at = date("%H:%M:%S"), inAir = leaveButtonState(), events = {} }
+    local l: Land = { at = date("%H:%M:%S"), inAir = leaveButtonState(), events = {}, started = 0 }
+    land = l
     local o = out()
-    o.land = o.land or {}
-    o.land[#o.land + 1] = land
-    landButton = landButton or button("Land at the next stop (SuuUI)", 220, nil)
-    landButton:SetScript("OnClick", function()
-        land.clicked = date("%H:%M:%S")
-        land.started = GetTime()
-        land.flown = flight and ("%.1f s into the flight"):format(GetTime() - flight.started) or "?"
-        watchFor(land)
+    o.land = push(o.land, l)
+    local lb = landButton or button("Land at the next stop (SuuUI)", 220)
+    landButton = lb
+    lb:SetScript("OnClick", function()
+        l.clicked = date("%H:%M:%S")
+        l.started = GetTime()
+        local f = flight
+        l.flown = f and ("%.1f s into the flight"):format(GetTime() - f.started) or "?"
+        watchFor(l)
         local ok, err = pcall(TaxiRequestEarlyLanding)
-        land.call = ok and "ran" or ("error: " .. tostring(err):sub(1, 120))
-        local lb = landButton :: Button
+        local result = ok and "ran" or ("error: " .. tostring(err):sub(1, 120))
+        l.call = result
         lb:Hide()
         after(2, function()
-            land.after2s = leaveButtonState() .. "; onTaxi " .. show(call(UnitOnTaxi, "player"))
-            print(("Taxi probe: TaxiRequestEarlyLanding %s. Keep flying until you land, then /reload."):format(land.call))
+            l.after2s = leaveButtonState() .. "; onTaxi " .. show((call(UnitOnTaxi, "player")))
+            print(("Taxi probe: TaxiRequestEarlyLanding %s. Keep flying until you land, then /reload."):format(result))
         end)
     end)
-    landButton:Show()
+    lb:Show()
     print("Taxi probe: click \"Land at the next stop (SuuUI)\" above the middle, then stay on until you land.")
 end
 
 local function flightStart()
     local on = call(UnitOnTaxi, "player")
     if on ~= true then return end
-    flight = { started = GetTime(), at = date("%H:%M:%S"), from = C_Map.GetBestMapForUnit("player"), samples = {} }
+    local f: Flight = { started = GetTime(), at = date("%H:%M:%S"), from = C_Map.GetBestMapForUnit("player"), samples = {} }
+    flight = f
     flightSample()
-    flight.ticker = every(5, flightSample)
+    f.ticker = every(5, flightSample)
     if landMode then offerLand() end
 end
 
 local function flightEnd()
-    if not flight then return end
+    local f = flight
+    if not f then return end
     local o = out()
-    flight.seconds = ("%.1f"):format(GetTime() - flight.started)
-    flight.to = C_Map.GetBestMapForUnit("player")
-    if flight.ticker then flight.ticker:Cancel() end
-    o.flights = o.flights or {}
-    o.flights[#o.flights + 1] = { summary = ("%s: %s s, map %s to %s"):format(flight.at, flight.seconds, show(flight.from), show(flight.to)),
-        positions = flight.samples }
-    print(("Taxi probe: a flight of %s s recorded."):format(flight.seconds))
+    local seconds = ("%.1f"):format(GetTime() - f.started)
+    f.seconds = seconds
+    f.to = C_Map.GetBestMapForUnit("player")
+    local ticker = f.ticker
+    if ticker then ticker:Cancel() end
+    o.flights = push(o.flights, { summary = ("%s: %s s, map %s to %s"):format(f.at, seconds, show(f.from), show(f.to)),
+        positions = f.samples })
+    print(("Taxi probe: a flight of %s s recorded."):format(seconds))
     -- the land test: where it set you down
-    if land and not land.landed then
-        land.landed = ("%s, %s s after take-off%s; nearest master: %s"):format(date("%H:%M:%S"), flight.seconds,
-            land.started and (", %.1f s after the click"):format(GetTime() - land.started) or " (not clicked)", nearestMaster())
-        land.started = nil
+    local l = land
+    if l and not l.landed then
+        l.landed = ("%s, %s s after take-off%s; nearest master: %s"):format(date("%H:%M:%S"), seconds,
+            l.started > 0 and (", %.1f s after the click"):format(GetTime() - l.started) or " (not clicked)", nearestMaster())
         if landButton then landButton:Hide() end
     end
     flight = nil
@@ -400,29 +437,31 @@ end
 local listening: Frame? = nil
 local function listen()
     if listening then return end
-    listening = CreateFrame("Frame")
+    local lf = CreateFrame("Frame")
+    listening = lf
     for _, e in ipairs({ "TAXIMAP_OPENED", "TAXIMAP_CLOSED", "PLAYER_CONTROL_LOST", "PLAYER_CONTROL_GAINED" }) do
-        pcall(listening.RegisterEvent, listening, e)
+        pcall(lf.RegisterEvent, lf, e)
     end
-    listening:SetScript("OnEvent", function(_, event, a)
+    lf:SetScript("OnEvent", function(_, event: string, a: unknown)
         if event == "TAXIMAP_OPENED" then
             -- the map's nodes are in a moment after it opens
             local o = out()
-            o.opened = o.opened or {}
-            o.opened[#o.opened + 1] = ("%s TAXIMAP_OPENED %s; at once: %s"):format(date("%H:%M:%S"), show(a), frames())
+            o.opened = push(o.opened, ("%s TAXIMAP_OPENED %s; at once: %s"):format(date("%H:%M:%S"), show(a), frames()))
             after(0.2, function()
                 atMaster()
                 if takeMode then offerTake() end
             end)
         elseif event == "TAXIMAP_CLOSED" then
             local o = out()
-            o.closed = o.closed or {}
-            o.closed[#o.closed + 1] = ("%s TAXIMAP_CLOSED; nodes %s%s"):format(date("%H:%M:%S"), show(call(NumTaxiNodes)),
-                take and take.hiding and " (after the invisible button)" or "")
+            local t = take
+            local hiding = t and t.hiding
+            o.closed = push(o.closed, ("%s TAXIMAP_CLOSED; nodes %s%s"):format(date("%H:%M:%S"), show((call(NumTaxiNodes))),
+                hiding and " (after the invisible button)" or ""))
             -- walked away: the buttons go; closed after the invisible button: Fly stays, to try it
-            if not (take and take.hiding) then hideButtons() end
+            if not hiding then hideButtons() end
             -- the game's map seen again next time
-            for _, f in ipairs({ _G.TaxiFrame, _G.FlightMapFrame }) do
+            for _, name in ipairs({ "TaxiFrame", "FlightMapFrame" }) do
+                local f = wf.find(name)
                 if f and f:GetAlpha() == 0 then
                     pcall(f.SetAlpha, f, 1)
                     pcall(f.EnableMouse, f, true)

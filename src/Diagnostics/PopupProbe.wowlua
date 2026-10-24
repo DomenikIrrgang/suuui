@@ -26,10 +26,23 @@ import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+
+-- What the probe saves in SuuUIProbe.popups.
+type Popups = { log: string[], dialogs: { [string]: string }, frames: { [string]: string }, answers: { [string]: string },
+                events: { [string]: string }, tries: { [string]: string }, host: string[], dialogCount?: number, [string]: unknown }
+
+local function popups(): Popups
+    return DB.probeData("popups", function(): Popups
+        return { log = {}, dialogs = {}, frames = {}, answers = {}, events = {}, tries = {}, host = {} }
+    end)
+end
 
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "function" then return "function" end
@@ -81,40 +94,44 @@ local EVENTS = {
     "SPELL_CONFIRMATION_PROMPT", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN",
 }
 
-local function lookup(path: string): any
-    local v: any = _G
+local function lookup(path: string): unknown
+    local v: unknown = _G
     for part in path:gmatch("[^%.]+") do
         if type(v) ~= "table" then return nil end
-        v = v[part]
+        v = tbl.field(v, part)
     end
     return v
 end
 
 -- A function's entry in the client's API documentation: every key that
 -- isn't its name, arguments, returns or prose (its flags).
-local docIndex: any = nil
+-- (built on first use; false: the client has no documentation)
+local docIndex: { [string]: unknown } | false | nil = nil
 local function docFlags(path: string): string
     if docIndex == nil then
         docIndex = false
         for _, name in ipairs({ "Blizzard_APIDocumentationBasic", "Blizzard_APIDocumentation", "Blizzard_APIDocumentationGenerated" }) do
-            if C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(name) and not C_AddOns.IsAddOnLoaded(name) then
+            if C_AddOns.DoesAddOnExist(name) and not C_AddOns.IsAddOnLoaded(name) then
                 pcall(C_AddOns.LoadAddOn, name)
             end
         end
-        local docs = _G.APIDocumentation
-        if docs and type(docs.systems) == "table" then
-            docIndex = {}
-            for _, sys in ipairs(docs.systems) do
-                for _, f in ipairs(sys.Functions or {}) do
-                    local key = (sys.Namespace and (sys.Namespace .. ".") or "") .. tostring(f.Name)
-                    docIndex[key] = f
+        local systems = tbl.field(_G, "APIDocumentation", "systems")
+        if type(systems) == "table" then
+            local index: { [string]: unknown } = {}
+            for _, sys in ipairs(tbl.list(systems)) do
+                local ns = tbl.field(sys, "Namespace")
+                for _, f in ipairs(tbl.list(tbl.field(sys, "Functions"))) do
+                    local key = (ns and (tostring(ns) .. ".") or "") .. tostring(tbl.field(f, "Name"))
+                    index[key] = f
                 end
             end
+            docIndex = index
         end
     end
-    if not docIndex then return "no docs" end
-    local f = docIndex[path]
-    if not f then return "not documented" end
+    local index = docIndex
+    if not index then return "no docs" end
+    local f = index[path]
+    if type(f) ~= "table" then return "not documented" end
     local parts: string[] = {}
     for k, v in pairs(f) do
         if k ~= "Name" and k ~= "Arguments" and k ~= "Returns" and k ~= "Documentation" and k ~= "System" and type(v) ~= "function" then
@@ -125,27 +142,31 @@ local function docFlags(path: string): string
     return #parts > 0 and table.concat(parts, ", ") or "no flags"
 end
 
+-- A frame's keyed parts, each marked when protected.
+local function keyedLine(f: unknown): string[]
+    local kids: string[] = {}
+    for k, v in pairs(wf.keyed(f)) do
+        local okP, prot = pcall(v.IsProtected, v)
+        kids[#kids + 1] = k .. ((okP and prot) and "(protected)" or "")
+    end
+    table.sort(kids)
+    return kids
+end
+
 local function frameInfo(name: string): string
-    local f = _G[name]
+    local f = wf.asRegion(tbl.field(_G, name))
     if not f then return "missing" end
     local out: string[] = {}
     local ok, p = pcall(f.IsProtected, f)
     out[#out + 1] = "protected=" .. (ok and show(p) or "?")
-    if f.IsForbidden then out[#out + 1] = "forbidden=" .. show(f:IsForbidden()) end
-    if f.GetObjectType then out[#out + 1] = f:GetObjectType() end
-    local kids: string[] = {}
-    for k, v in pairs(f) do
-        if type(k) == "string" and type(v) == "table" and v.GetObjectType then
-            local okP, prot = pcall(v.IsProtected, v)
-            kids[#kids + 1] = k .. ((okP and prot) and "(protected)" or "")
-        end
-    end
-    table.sort(kids)
+    out[#out + 1] = "forbidden=" .. show(f:IsForbidden())
+    out[#out + 1] = f:GetObjectType()
+    local kids = keyedLine(f)
     if #kids > 0 then out[#out + 1] = "children: " .. table.concat(kids, " ") end
     return table.concat(out, ", ")
 end
 
-local function args(...: any): string
+local function args(...: unknown): string
     local parts: string[] = {}
     for i = 1, select("#", ...) do parts[#parts + 1] = show((select(i, ...))) end
     return table.concat(parts, " | ")
@@ -153,75 +174,60 @@ end
 
 -- the log, from the first sample until /reload
 local logging = false
-local function startLog(store: { [string]: any })
+local function startLog(store: Popups)
     if logging then return end
     logging = true
     store.log = store.log or {}
     local function note(s: string)
-        local log = DB.probe.popups and DB.probe.popups.log
-        if not log then return end
+        local log = popups().log
         log[#log + 1] = date("%H:%M:%S") .. (InCombatLockdown() and " [combat] " or " ") .. s
         while #log > 200 do table.remove(log, 1) end
     end
     if StaticPopup_Show then
-        hook("StaticPopup_Show", function(which, text1, text2, data)
+        hook("StaticPopup_Show", function(which: unknown, text1: unknown, text2: unknown, data: unknown)
             note("StaticPopup_Show " .. show(which) .. " | " .. show(text1) .. " | " .. show(text2) .. " | data " .. show(data))
         end)
     end
     if StaticPopup_Hide then
-        hook("StaticPopup_Hide", function(which) note("StaticPopup_Hide " .. show(which)) end)
+        hook("StaticPopup_Hide", function(which: unknown) note("StaticPopup_Hide " .. show(which)) end)
     end
     local f = CreateFrame("Frame")
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs(EVENTS) do
-        if not valid or valid(e) then f:RegisterEvent(e) end
+        if C_EventUtils.IsEventValid(e) then f:RegisterEvent(e) end
     end
-    f:SetScript("OnEvent", function(_, event, ...) note(event .. " " .. args(...)) end)
+    f:SetScript("OnEvent", function(_, event: string, ...: unknown) note(event .. " " .. args(...)) end)
 end
 
-export function sample(): { [string]: any }
-    local store = DB.probe.popups or {}
-    DB.probe.popups = store
+export function sample(): Popups
+    local store = popups()
     store.at = date("%H:%M:%S")
     store.dialogs = {}
-    local dialogs = StaticPopupDialogs or {}
-    local total = 0
-    for _ in pairs(dialogs) do total = total + 1 end
-    store.dialogCount = total
+    local dialogs = tbl.field(_G, "StaticPopupDialogs")
+    store.dialogCount = type(dialogs) == "table" and tbl.count(dialogs) or 0
     for _, which in ipairs(DIALOGS) do
-        local d = dialogs[which]
-        if d then
+        local d = tbl.field(dialogs, which)
+        if d ~= nil then
+            local function f(key: string): string return show(tbl.field(d, key)) end
             store.dialogs[which] = ("button1=%s button2=%s button3=%s timeout=%s whileDead=%s hideOnEscape=%s exclusive=%s editBox=%s OnAccept=%s OnCancel=%s OnShow=%s"):format(
-                show(d.button1), show(d.button2), show(d.button3), show(d.timeout), show(d.whileDead), show(d.hideOnEscape),
-                show(d.exclusive), show(d.hasEditBox), show(d.OnAccept), show(d.OnCancel), show(d.OnShow))
+                f("button1"), f("button2"), f("button3"), f("timeout"), f("whileDead"), f("hideOnEscape"),
+                f("exclusive"), f("hasEditBox"), f("OnAccept"), f("OnCancel"), f("OnShow"))
         else
             store.dialogs[which] = "missing"
         end
     end
     store.frames = {}
     for _, name in ipairs(FRAMES) do store.frames[name] = frameInfo(name) end
-    if StaticPopup1 and StaticPopup1.ButtonContainer then
-        local bc = StaticPopup1.ButtonContainer
-        store.frames["StaticPopup1.ButtonContainer"] = "children: " .. (function()
-            local kids: string[] = {}
-            for k, v in pairs(bc) do
-                if type(v) == "table" and v.GetObjectType then
-                    local ok, p = pcall(v.IsProtected, v)
-                    kids[#kids + 1] = tostring(k) .. ((ok and p) and "(protected)" or "")
-                end
-            end
-            table.sort(kids)
-            return table.concat(kids, " ")
-        end)()
+    local bc = tbl.field(_G, "StaticPopup1", "ButtonContainer")
+    if bc ~= nil then
+        store.frames["StaticPopup1.ButtonContainer"] = "children: " .. table.concat(keyedLine(bc), " ")
     end
     store.answers = {}
     for _, path in ipairs(ANSWERS) do
         local fn = lookup(path)
         store.answers[path] = (type(fn) == "function" and "function" or "missing") .. " · " .. docFlags(path)
     end
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     store.events = {}
-    for _, e in ipairs(EVENTS) do store.events[e] = valid and show(valid(e)) or "unknown" end
+    for _, e in ipairs(EVENTS) do store.events[e] = show(C_EventUtils.IsEventValid(e)) end
     store.cvars = { autoAcceptQuickJoinRequests = show(GetCVar("autoAcceptQuickJoinRequests")) }
     startLog(store)
     return store
@@ -256,9 +262,10 @@ export function try()
     local watch = CreateFrame("Frame")
     watch:RegisterEvent("ADDON_ACTION_BLOCKED")
     watch:RegisterEvent("ADDON_ACTION_FORBIDDEN")
-    watch:SetScript("OnEvent", function(_, event, addon, fn)
-        if current then
-            store.tries[current] = (store.tries[current] or "") .. " " .. event .. "(" .. show(fn) .. ")"
+    watch:SetScript("OnEvent", function(_, event: string, addon: unknown, fn: unknown)
+        local now = current
+        if now then
+            store.tries[now] = (store.tries[now] or "") .. " " .. event .. "(" .. show(fn) .. ")"
         end
     end)
     local i = 0
@@ -271,7 +278,7 @@ export function try()
             print("Popup probe: tried them all. /reload to save.")
             return
         end
-        local path = t[1] :: string
+        local path = t[1] or "?"
         current = path
         local fn = lookup(path)
         if type(fn) ~= "function" then
@@ -280,15 +287,15 @@ export function try()
             store.tries[path] = "skipped: something on the cursor"
         elseif t.needsAlive and UnitIsDeadOrGhost("player") then
             store.tries[path] = "skipped: dead"
-        elseif t.needsNoTrade and TradeFrame and TradeFrame:IsShown() then
+        elseif t.needsNoTrade and TradeFrame:IsShown() then
             store.tries[path] = "skipped: trading"
-        elseif t.needsNoQueue and GetBattlefieldStatus and GetBattlefieldStatus(1) ~= "none" then
+        elseif t.needsNoQueue and GetBattlefieldStatus(1) ~= "none" then
             store.tries[path] = "skipped: queued"
         else
             store.tries[path] = ""
             local ok, err = pcall(fn, unpack(t.args or {}))
             -- a block noted while it ran stays (it comes inside the call)
-            store.tries[path] = (ok and "called" or ("error: " .. tostring(err):sub(1, 160))) .. store.tries[path]
+            store.tries[path] = (ok and "called" or ("error: " .. tostring(err):sub(1, 160))) .. (store.tries[path] or "")
         end
         after(0.5, step)
     end
@@ -301,39 +308,44 @@ end
 -- Blizzard's frames but points and alpha.
 local HOSTED = { CAMP = true, QUIT = true, DELETE_ITEM = true, DELETE_GOOD_ITEM = true,
                  DELETE_QUEST_ITEM = true, DELETE_GOOD_QUEST_ITEM = true }
-local hostPanel: any, hostArmed: boolean?, hostHooked: boolean? = nil, nil, nil
+local hostPanel: Frame?, hostText: FontString?, hostArmed: boolean?, hostHooked: boolean? = nil, nil, nil, nil
 
 local function hostNote(s: string)
-    local p = DB.probe.popups
-    if not p then return end
+    local p = popups()
     p.host = p.host or {}
-    p.host[#p.host + 1] = date("%H:%M:%S") .. " " .. s
+    table.insert(p.host, date("%H:%M:%S") .. " " .. s)
 end
 
 local function host(which: string)
-    local dialog = StaticPopup_FindVisible and StaticPopup_FindVisible(which)
+    local findVisible = tbl.field(_G, "StaticPopup_FindVisible")
+    local dialog = type(findVisible) == "function" and wf.asFrame(findVisible(which)) or nil
     if not dialog then hostNote("no visible dialog for " .. tostring(which)) return end
-    if not hostPanel then
-        hostPanel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-        hostPanel:SetSize(340, 110)
-        hostPanel:SetPoint("LEFT", 60, 80)
-        hostPanel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-        hostPanel:SetBackdropColor(0.05, 0.05, 0.07, 0.92)
-        hostPanel:SetBackdropBorderColor(0.6, 0.5, 0.3, 0.8)
-        hostPanel.text = hostPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        hostPanel.text:SetPoint("TOPLEFT", 12, -12)
-        hostPanel.text:SetPoint("TOPRIGHT", -12, -12)
-        hostPanel.text:SetJustifyH("LEFT")
+    local panel, text = hostPanel, hostText
+    if not (panel and text) then
+        panel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        hostPanel = panel
+        panel:SetSize(340, 110)
+        panel:SetPoint("LEFT", 60, 80)
+        panel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+        panel:SetBackdropColor(0.05, 0.05, 0.07, 0.92)
+        panel:SetBackdropBorderColor(0.6, 0.5, 0.3, 0.8)
+        text = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        hostText = text
+        text:SetPoint("TOPLEFT", 12, -12)
+        text:SetPoint("TOPRIGHT", -12, -12)
+        text:SetJustifyH("LEFT")
     end
-    hostPanel.text:SetText("SuuUI hosting test (" .. which .. "): Blizzard's buttons below are its own. Click Cancel or No.")
-    hostPanel:Show()
+    text:SetText("SuuUI hosting test (" .. which .. "): Blizzard's buttons below are its own. Click Cancel or No.")
+    panel:Show()
     -- everything but the buttons invisible
-    for _, region in ipairs({ dialog:GetRegions() }) do region:SetAlpha(0) end
-    for _, child in ipairs({ dialog:GetChildren() }) do
-        if child ~= dialog.ButtonContainer then child:SetAlpha(0) end
+    for _, region in ipairs(wf.textures(dialog)) do region:SetAlpha(0) end
+    for _, region in ipairs(wf.fontStrings(dialog)) do region:SetAlpha(0) end
+    local buttons = tbl.field(dialog, "ButtonContainer")
+    for _, child in ipairs(wf.children(dialog)) do
+        if child ~= buttons then child:SetAlpha(0) end
     end
     dialog:ClearAllPoints()
-    dialog:SetPoint("BOTTOM", hostPanel, "BOTTOM", 0, -10)
+    dialog:SetPoint("BOTTOM", panel, "BOTTOM", 0, -10)
     hostNote("hosted " .. which .. " on " .. tostring(dialog:GetName()))
 end
 
@@ -343,15 +355,17 @@ local function hostTest()
     hostArmed = true
     if not hostHooked then
         hostHooked = true
-        hook("StaticPopup_Show", function(which)
-            if hostArmed and HOSTED[which] then
+        hook("StaticPopup_Show", function(value: unknown)
+            local which = secret.asString(value)
+            if hostArmed and which and HOSTED[which] then
                 hostArmed = false
                 after(0, function() host(which) end)
             end
         end)
         if StaticPopup_Hide then
-            hook("StaticPopup_Hide", function(which)
-                if HOSTED[which] then
+            hook("StaticPopup_Hide", function(value: unknown)
+                local which = secret.asString(value)
+                if which and HOSTED[which] then
                     hostNote("hidden " .. tostring(which))
                     if hostPanel then hostPanel:Hide() end
                 end
@@ -361,7 +375,7 @@ local function hostTest()
         for _, e in ipairs({ "PLAYER_CAMPING", "LOGOUT_CANCEL", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "DELETE_ITEM_CONFIRM" }) do
             f:RegisterEvent(e)
         end
-        f:SetScript("OnEvent", function(_, event, a, b) hostNote(event .. " " .. show(a) .. " " .. show(b)) end)
+        f:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown) hostNote(event .. " " .. show(a) .. " " .. show(b)) end)
     end
     print("Popup probe: hosting armed. Type /camp (or start deleting an item), then click Cancel / No on the moved popup. /reload after.")
 end

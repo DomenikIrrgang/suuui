@@ -23,10 +23,13 @@ import hookScript from "wowlua:hooks"
 import onAddonLoaded from "wowlua:lifecycle"
 import isSecret from "wowlua:secret"
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+import * as secret from "wowlua:secret"
 
 -- a window the probe knows: its frames, load-on-demand addons, events, APIs
 type Window = { frames: string[], addons?: string[], events?: string[], apis: string[] }
-type Record = { [string]: any }
+type Record = { [string]: unknown }
 
 -- the event frame and which windows' OnShow are hooked (once a session)
 local frame: Frame? = nil
@@ -34,7 +37,7 @@ local journalHooked, dressHooked, inspectHooked, menuHooked = false, false, fals
 local shownHooked: { [string]: boolean }? = nil
 
 
-local function show(v: any, depth: number?): string
+local function show(v: unknown, depth: number?): string
     depth = depth or 0
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
@@ -52,7 +55,7 @@ local function show(v: any, depth: number?): string
 end
 
 -- a call's every result, or why it failed
-local function call(fn: any, ...: any): string
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
@@ -61,36 +64,41 @@ local function call(fn: any, ...: any): string
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: any, ...: any): any
+-- a call's first result as it is (nil when it's missing or raises)
+local function raw(fn: unknown, ...: unknown): unknown
     if type(fn) ~= "function" then return nil end
     local ok, a = pcall(fn, ...)
     if ok then return a end
+    return nil
 end
 
 -- "C_MountJournal.GetNumMounts" -> the function, or nil
-local function resolve(path: string): any
-    local t: any = _G
+local function resolve(path: string): unknown
+    local t: unknown = _G
     for part in path:gmatch("[^%.]+") do
         if type(t) ~= "table" then return nil end
-        t = t[part]
+        t = tbl.field(t, part)
     end
     return t
 end
 
-local function anchorOf(r: any): string
+-- (each part's key on its parent, for anchors to parts without a name)
+local probeKeys: { [Region]: string } = tbl.weakKeys()
+
+local function anchorOf(r: Region): string
     local ok, point, rel, relPoint, x, y = pcall(r.GetPoint, r, 1)
     if not ok or not point then return "" end
-    local relName = rel and ((rel.GetName and rel:GetName()) or rel.suuProbeKey or "?") or "nil"
-    return (" @%s>%s.%s %d,%d"):format(point, tostring(relName), tostring(relPoint), math.floor(x or 0), math.floor(y or 0))
+    local relName = rel and (rel:GetName() or probeKeys[rel] or "?") or "nil"
+    return (" @%s>%s.%s %d,%d"):format(tostring(point), tostring(relName), tostring(relPoint), math.floor(x or 0), math.floor(y or 0))
 end
 
 -- frames and texts (no textures: the trees are long enough), 700 lines at most
-local function tree(f: any, depth: number, out: string[], prefix: string)
-    if depth > 7 or not f or not f.GetChildren or #out >= 700 then return end
-    local keys: { [any]: string } = {}
-    for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then keys[v] = k end end
-    for _, r in ipairs({ f:GetRegions() }) do
-        if r:GetObjectType() == "FontString" and #out < 700 then
+local function tree(f: Frame, depth: number, out: string[], prefix: string)
+    if depth > 7 or #out >= 700 then return end
+    local keys: { [Region]: string } = {}
+    for k, part in pairs(wf.keyed(f)) do keys[part] = k end
+    for _, r in ipairs(wf.fontStrings(f)) do
+        if #out < 700 then
             local text = r:GetText()
             if text and text ~= "" then
                 out[#out + 1] = ("%s. %s [FS] shown=%s %dx%d \"%s\""):format(prefix, r:GetName() or keys[r] or "?",
@@ -98,9 +106,9 @@ local function tree(f: any, depth: number, out: string[], prefix: string)
             end
         end
     end
-    for _, c in ipairs({ f:GetChildren() }) do
+    for _, c in ipairs(wf.children(f)) do
         if #out >= 700 then return end
-        c.suuProbeKey = keys[c]
+        probeKeys[c] = keys[c]
         local okP, protected = pcall(c.IsProtected, c)
         out[#out + 1] = ("%s%s [%s] shown=%s %dx%d%s%s"):format(prefix, c:GetName() or keys[c] or "?", c:GetObjectType(),
             show(c:IsShown()), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), anchorOf(c),
@@ -235,7 +243,7 @@ local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip
 -- ones the probe doesn't know by name (the inspected player's talents).
 export function openWindows(): string[]
     local out: string[] = {}
-    for _, f in ipairs({ UIParent:GetChildren() }) do
+    for _, f in ipairs(wf.children(UIParent)) do
         local okS, shown = pcall(f.IsShown, f)
         if okS and shown and not f:IsForbidden() then
             local w, h = f:GetWidth() or 0, f:GetHeight() or 0
@@ -252,10 +260,11 @@ end
 
 local function frameInfo(name: string): string
     -- "Parent.Key" for a child kept by key
-    local f: any = _G[name:match("^[^.]+") or ""]
-    for key in name:gmatch("%.([^.]+)") do f = type(f) == "table" and f[key] or nil end
-    if not f then return "missing" end
-    if type(f) ~= "table" or not f.GetObjectType then return "not a frame: " .. type(f) end
+    local v = tbl.field(_G, name:match("^[^.]+") or "")
+    for key in name:gmatch("%.([^.]+)") do v = tbl.field(v, key) end
+    if v == nil then return "missing" end
+    local f = wf.asRegion(v)
+    if not f then return "not a frame: " .. type(v) end
     local okP, protected = pcall(f.IsProtected, f)
     return ("%s shown=%s protected=%s %dx%d"):format(f:GetObjectType(), show(f:IsShown()), show(okP and protected),
         math.floor(f:GetWidth() or 0), math.floor(f:GetHeight() or 0))
@@ -266,7 +275,7 @@ local function apiInfo(path: string): string
     if v == nil then return "missing" end
     if type(v) == "table" then
         local n: string[] = {}
-        for k, x in pairs(v) do if type(x) == "function" then n[#n + 1] = k end end
+        for k, x in pairs(v) do if type(x) == "function" then n[#n + 1] = tostring(k) end end
         table.sort(n)
         return "namespace: " .. table.concat(n, ", ")
     end
@@ -277,19 +286,21 @@ end
 -- (restrictions and the like), not their arguments.
 local function docFlags(names: string[]): string | { [string]: string }
     for _, a in ipairs({ "Blizzard_APIDocumentationBasic", "Blizzard_APIDocumentation", "Blizzard_APIDocumentationGenerated" }) do
-        if C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(a) and not C_AddOns.IsAddOnLoaded(a) then
+        if C_AddOns.DoesAddOnExist(a) and not C_AddOns.IsAddOnLoaded(a) then
             pcall(C_AddOns.LoadAddOn, a)
         end
     end
-    local docs = _G.APIDocumentation
-    if not (docs and docs.systems) then return "no APIDocumentation" end
+    local systems = tbl.field(_G, "APIDocumentation", "systems")
+    if systems == nil then return "no APIDocumentation" end
     local want: { [string]: boolean } = {}
     for _, n in ipairs(names) do want[n] = true end
     local out: { [string]: string } = {}
-    for _, sys in ipairs(docs.systems) do
-        for _, fn in ipairs(sys.Functions or {}) do
-            local full = (sys.Namespace and (sys.Namespace .. ".") or "") .. tostring(fn.Name)
-            if want[full] or want[fn.Name] then
+    for _, sys in ipairs(tbl.list(systems)) do
+        local namespace = tbl.field(sys, "Namespace")
+        for _, fn in ipairs(tbl.list(tbl.field(sys, "Functions"))) do
+            local name = tostring(tbl.field(fn, "Name"))
+            local full = (namespace and (tostring(namespace) .. ".") or "") .. name
+            if type(fn) == "table" and (want[full] or want[name]) then
                 local flags: string[] = {}
                 for k, v in pairs(fn) do
                     if type(v) ~= "table" and type(v) ~= "function" and k ~= "Name" and k ~= "Type" then
@@ -307,20 +318,22 @@ end
 -- What each window's APIs give while it's open.
 local SAMPLES: { [string]: (s: Record) -> () } = {
     mail = function(s)
-        local n = raw(GetInboxNumItems) or 0
+        local n = secret.asNumber(raw(GetInboxNumItems)) or 0
         s.inbox = call(GetInboxNumItems)
-        s.headers = {}
-        for i = 1, math.min(3, n) do s.headers[i] = call(GetInboxHeaderInfo, i) end
+        local headers: string[] = {}
+        s.headers = headers
+        for i = 1, math.min(3, n) do headers[i] = call(GetInboxHeaderInfo, i) end
         s.sendPrice = call(GetSendMailPrice)
     end,
     merchant = function(s)
-        local n = raw(GetMerchantNumItems) or 0
+        local n = secret.asNumber(raw(GetMerchantNumItems)) or 0
         s.items = call(GetMerchantNumItems)
-        s.sample = {}
+        local sample: Record[] = {}
+        s.sample = sample
         for i = 1, math.min(3, n) do
-            s.sample[i] = {
-                info = call(_G.GetMerchantItemInfo, i),
-                infoC = C_MerchantFrame and call(C_MerchantFrame.GetItemInfo, i) or "no C_MerchantFrame",
+            sample[i] = {
+                info = call(tbl.field(_G, "GetMerchantItemInfo"), i),
+                infoC = call(tbl.field(_G, "C_MerchantFrame", "GetItemInfo"), i),
                 link = call(GetMerchantItemLink, i),
                 cost = call(GetMerchantItemCostInfo, i),
                 maxStack = call(GetMerchantItemMaxStack, i),
@@ -334,15 +347,17 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
         s.filter = call(GetMerchantFilter)
     end,
     trainer = function(s)
-        local n = raw(GetNumTrainerServices) or 0
+        local n = secret.asNumber(raw(GetNumTrainerServices)) or 0
         s.services = call(GetNumTrainerServices)
         s.greeting = call(GetTrainerGreetingText)
         s.tradeskill = call(IsTradeskillTrainer)
-        s.filters = {}
-        for _, f in ipairs({ "available", "unavailable", "used" }) do s.filters[f] = call(GetTrainerServiceTypeFilter, f) end
-        s.sample = {}
+        local filters: { [string]: string } = {}
+        s.filters = filters
+        for _, f in ipairs({ "available", "unavailable", "used" }) do filters[f] = call(GetTrainerServiceTypeFilter, f) end
+        local sample: Record[] = {}
+        s.sample = sample
         for i = 1, math.min(4, n) do
-            s.sample[i] = {
+            sample[i] = {
                 info = call(GetTrainerServiceInfo, i),
                 cost = call(GetTrainerServiceCost, i),
                 level = call(GetTrainerServiceLevelReq, i),
@@ -353,15 +368,13 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
         end
     end,
     auction = function(s)
-        s.canQuery = type(_G.CanSendAuctionQuery) == "function" and call(_G.CanSendAuctionQuery) or "missing"
-        s.listed = call(_G.GetNumAuctionItems, "list")
-        s.owner = call(_G.GetNumAuctionItems, "owner")
+        s.canQuery = call(tbl.field(_G, "CanSendAuctionQuery"))
+        s.listed = call(tbl.field(_G, "GetNumAuctionItems"), "list")
+        s.owner = call(tbl.field(_G, "GetNumAuctionItems"), "owner")
         local ah = C_AuctionHouse
-        if ah then
-            s.throttleReady = call(ah.IsThrottledMessageSystemReady)
-            s.replicate = call(ah.GetNumReplicateItems)
-            s.postCount = call(ah.GetAvailablePostCount)
-        end
+        s.throttleReady = call(ah.IsThrottledMessageSystemReady)
+        s.replicate = call(ah.GetNumReplicateItems)
+        s.postCount = call(ah.GetAvailablePostCount)
     end,
     gossip = function(s)
         s.text = call(C_GossipInfo.GetText)
@@ -388,7 +401,7 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
     macros = function(s)
         s.counts = call(GetNumMacros)
         s.first = call(GetMacroInfo, 1)
-        s.icons = #(GetMacroIcons and GetMacroIcons() or {})
+        s.icons = #tbl.list(raw(tbl.field(_G, "GetMacroIcons")))
     end,
     addons = function(s)
         s.count = call(C_AddOns.GetNumAddOns)
@@ -401,10 +414,10 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
         s.disallowed = call(C_AddOns.GetScriptsDisallowedForBeta)
     end,
     help = function(s)
-        local f = _G.HelpFrame
+        local f = wf.find("HelpFrame")
         local kinds: string[] = {}
         if f then
-            for _, c in ipairs({ f:GetChildren() }) do
+            for _, c in ipairs(wf.children(f)) do
                 kinds[#kinds + 1] = ("%s %s shown=%s"):format(c:GetObjectType(), c:GetName() or c:GetDebugName() or "?", show(c:IsShown()))
             end
         end
@@ -412,10 +425,11 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
     end,
     gamemenu = function(s)
         -- its buttons: each one's text and what it is
-        local f = _G.GameMenuFrame
+        local f = wf.find("GameMenuFrame")
         local buttons: string[] = {}
-        for _, c in ipairs({ f and f:GetChildren() or nil }) do
-            if c.GetText and c:IsShown() then
+        for _, child in ipairs(f and wf.children(f) or {}) do
+            local c = wf.asButton(child)
+            if c and c:IsShown() then
                 local okP, protected = pcall(c.IsProtected, c)
                 buttons[#buttons + 1] = ("%s \"%s\"%s"):format(c:GetName() or "?", show(c:GetText()), (okP and protected) and " PROTECTED" or "")
             end
@@ -424,60 +438,66 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
     end,
     inspect = function(s)
         s.canInspect = call(CanInspect, "target")
-        s.itemLevel = call(C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel, "target")
+        s.itemLevel = call(tbl.field(C_PaperDollInfo, "GetInspectItemLevel"), "target")
         s.head = call(GetInventoryItemLink, "target", 1)
-        s.talentTabs = call(_G.GetNumTalentTabs, true)
+        s.talentTabs = call(tbl.field(_G, "GetNumTalentTabs"), true)
         s.firstTab = call(GetTalentTabInfo, 1, true)
     end,
     collections = function(s)
-        s.mounts = C_MountJournal and call(C_MountJournal.GetNumMounts) or "missing"
-        s.mountsShown = C_MountJournal and call(C_MountJournal.GetNumDisplayedMounts) or "missing"
-        s.pets = C_PetJournal and call(C_PetJournal.GetNumPets) or "missing"
-        s.toys = C_ToyBox and call(C_ToyBox.GetNumToys) or "missing"
-        s.heirlooms = C_Heirloom and call(C_Heirloom.GetNumHeirlooms) or "missing"
-        local j = _G.CollectionsJournal
-        s.tabs = {}
+        s.mounts = call(tbl.field(_G, "C_MountJournal", "GetNumMounts"))
+        s.mountsShown = call(tbl.field(_G, "C_MountJournal", "GetNumDisplayedMounts"))
+        s.pets = call(tbl.field(_G, "C_PetJournal", "GetNumPets"))
+        s.toys = call(tbl.field(_G, "C_ToyBox", "GetNumToys"))
+        s.heirlooms = call(tbl.field(_G, "C_Heirloom", "GetNumHeirlooms"))
+        local j = wf.find("CollectionsJournal")
+        local tabs: string[] = {}
+        s.tabs = tabs
         for i = 1, 8 do
-            local t = _G["CollectionsJournalTab" .. i]
+            local t = wf.asButton(wf.find("CollectionsJournalTab" .. i))
             if t then
-                local fs = t.Text or (t.GetFontString and t:GetFontString())
-                s.tabs[i] = ("%s shown=%s"):format(show(fs and fs:GetText()), show(t:IsShown()))
+                local fs = wf.asFontString(tbl.field(t, "Text")) or t:GetFontString()
+                tabs[i] = ("%s shown=%s"):format(show(fs and fs:GetText()), show(t:IsShown()))
             end
         end
-        s.selectedTab = j and show(j.selectedTab) or "no journal"
+        s.selectedTab = j and show(tbl.field(j, "selectedTab")) or "no journal"
     end,
 }
 
 local function store(): Record
-    if type(DB.probe.windows) ~= "table" then DB.probe.windows = {} end
-    return DB.probe.windows
+    return tbl.recordAt(DB.probe, "windows")
 end
 
 -- One window as it shows now.
 export function snapshot(key: string)
     local def = WINDOWS[key] :: Window
     local s: Record = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown() }
-    s.frames = {}
-    for _, name in ipairs(def.frames) do s.frames[name] = frameInfo(name) end
-    local ok, err = pcall(SAMPLES[key] :: any, s)
-    if not ok then s.sampleError = tostring(err) end
+    local frameList: { [string]: string } = {}
+    s.frames = frameList
+    for _, name in ipairs(def.frames) do frameList[name] = frameInfo(name) end
+    local sampleFn = SAMPLES[key]
+    if sampleFn then
+        local ok, err = pcall(sampleFn, s)
+        if not ok then s.sampleError = tostring(err) end
+    end
     s.openWindows = openWindows()
     -- the open window's tree: the first of its frames that shows
+    local treeLines = 0
     for _, name in ipairs(def.frames) do
-        local f = _G[name]
-        if type(f) == "table" and f.IsShown and f:IsShown() then
+        local f = wf.find(name)
+        if f and f:IsShown() then
             local out: string[] = {}
             tree(f, 1, out, "")
             s.treeOf, s.tree = name, out
+            treeLines = #out
             break
         end
     end
     -- every named frame of its family that shows (popups, side panels)
     local prefix = def.frames[1]:gsub("Frame$", ""):gsub("Journal$", "")
     local named: string[] = {}
-    for k, v in pairs(_G) do
-        if type(k) == "string" and k:find("^" .. prefix) and type(v) == "table" and v.IsShown and v.GetObjectType
-            and not k:find("%d$") then
+    for k, value in pairs(_G) do
+        local v = type(k) == "string" and k:find("^" .. prefix) and not k:find("%d$") and wf.asRegion(value)
+        if type(k) == "string" and v then
             local okS, shown = pcall(v.IsShown, v)
             if okS and shown then named[#named + 1] = k .. " [" .. v:GetObjectType() .. "]" end
             if #named > 80 then break end
@@ -486,30 +506,30 @@ export function snapshot(key: string)
     table.sort(named)
     s.shownNamed = named
     store()[key] = s
-    print(("Windows probe: %s saved (%s lines of its frames); /reload when you're done."):format(key, s.tree and #s.tree or 0))
+    print(("Windows probe: %s saved (%s lines of its frames); /reload when you're done."):format(key, treeLines))
 end
 
 -- What exists now, before any window opens.
 export function static()
     local w = store()
-    w.static = { at = date("%Y-%m-%d %H:%M:%S") }
+    local found: Record = { at = date("%Y-%m-%d %H:%M:%S") }
+    w.static = found
     local names: string[] = {}
     for _, key in ipairs(ORDER) do
         local def = WINDOWS[key] :: Window
-        local s: Record = { frames = {}, apis = {}, addons = {} }
+        local frameList: { [string]: string }, apis: { [string]: string }, addons: { [string]: string } = {}, {}, {}
         for _, a in ipairs(def.addons or {}) do
-            s.addons[a] = ("exists=%s loaded=%s lod=%s"):format(
-                show(C_AddOns.DoesAddOnExist and C_AddOns.DoesAddOnExist(a)), show((C_AddOns.IsAddOnLoaded(a))),
-                show(C_AddOns.IsAddOnLoadOnDemand and C_AddOns.IsAddOnLoadOnDemand(a)))
+            addons[a] = ("exists=%s loaded=%s lod=%s"):format(
+                show(C_AddOns.DoesAddOnExist(a)), show((C_AddOns.IsAddOnLoaded(a))), show(C_AddOns.IsAddOnLoadOnDemand(a)))
         end
-        for _, name in ipairs(def.frames) do s.frames[name] = frameInfo(name) end
+        for _, name in ipairs(def.frames) do frameList[name] = frameInfo(name) end
         for _, api in ipairs(def.apis) do
-            s.apis[api] = apiInfo(api)
+            apis[api] = apiInfo(api)
             names[#names + 1] = api
         end
-        w.static[key] = s
+        found[key] = { frames = frameList, apis = apis, addons = addons }
     end
-    w.static.docs = docFlags(names)
+    found.docs = docFlags(names)
 end
 
 -- For 30 minutes: each window as it opens (a moment after, when its
@@ -526,13 +546,13 @@ export function arm()
         end
     end
     local untilT = GetTime() + 30 * 60
-    f:SetScript("OnEvent", function(_, event)
+    f:SetScript("OnEvent", function(_, event: string)
         if GetTime() > untilT then f:UnregisterAllEvents() return end
         local key = byEvent[event]
         if key then after(0.6, function() snapshot(key) end) end
     end)
     local function hookJournal()
-        local j = _G.CollectionsJournal
+        local j = wf.find("CollectionsJournal")
         if j and not journalHooked then
             journalHooked = true
             hookScript(j, "OnShow", function()
@@ -541,7 +561,7 @@ export function arm()
         end
     end
     hookJournal()
-    local d = _G.DressUpFrame
+    local d = wf.find("DressUpFrame")
     if d and not dressHooked then
         dressHooked = true
         hookScript(d, "OnShow", function()
@@ -550,7 +570,7 @@ export function arm()
     end
     -- inspect: saved when its window shows (INSPECT_READY came before it did)
     local function hookInspect()
-        local i = _G.InspectFrame
+        local i = wf.find("InspectFrame")
         if i and not inspectHooked then
             inspectHooked = true
             hookScript(i, "OnShow", function()
@@ -562,7 +582,7 @@ export function arm()
     if not inspectHooked then
         onAddonLoaded("Blizzard_InspectUI", hookInspect)
     end
-    local g = _G.GameMenuFrame
+    local g = wf.find("GameMenuFrame")
     if g and not menuHooked then
         menuHooked = true
         hookScript(g, "OnShow", function()
@@ -571,7 +591,7 @@ export function arm()
     end
     -- the game menu's windows, each when it shows
     local function hookShow(key: string, name: string)
-        local w = _G[name]
+        local w = wf.find(name)
         local hooked = shownHooked or {}
         shownHooked = hooked
         if w and not hooked[key] then
@@ -595,14 +615,15 @@ end
 -- Whatever is open now: every large window and the tree of each.
 export function now()
     local s = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown(), openWindows = openWindows(), trees = {} :: { [string]: string[] } }
-    for _, f in ipairs({ UIParent:GetChildren() }) do
+    for _, f in ipairs(wf.children(UIParent)) do
         local okS, shown = pcall(f.IsShown, f)
         local w, h = f:GetWidth() or 0, f:GetHeight() or 0
+        local name = f:GetName()
         if okS and shown and not f:IsForbidden() and not (isSecret(w) or isSecret(h))
-            and w >= 250 and h >= 200 and f:GetName() and not f:GetName():find("^SuuUI") then
+            and w >= 250 and h >= 200 and name and not name:find("^SuuUI") then
             local out: string[] = {}
             tree(f, 1, out, "")
-            s.trees[f:GetName()] = out
+            s.trees[name] = out
         end
     end
     store().now = s

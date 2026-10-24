@@ -14,7 +14,8 @@
 
 import print, version from "/Core/Init"
 import * as DB from "/Core/DB"
-import isSecret from "wowlua:secret"
+import isSecret, asString from "wowlua:secret"
+import * as tbl from "wowlua:table"
 import * as ahDataProbe from "/Diagnostics/AhDataProbe"
 import * as ahPostProbe from "/Diagnostics/AhPostProbe"
 import * as ahScanProbe from "/Diagnostics/AhScanProbe"
@@ -106,7 +107,7 @@ type Item = {
 }
 type Section = { title: string, items: Item[] }
 -- the full lists a run collects, saved beside the report
-type Saved = { namespaces: { [string]: string[] }, enums: { [string]: { [any]: any } }, scans: { [string]: string[] } }
+type Saved = { namespaces: { [string]: string[] }, enums: { [string]: { [unknown]: unknown } }, scans: { [string]: string[] } }
 
 local SECTIONS: Section[] = {
     { title = "Client", items = {
@@ -281,17 +282,19 @@ local SAMPLE_SPELLS = { 29515, 61304 }
 -- Helpers
 --------------------------------------------------------------------------------
 
-local function resolve(path: string): any
-    local v: any = _G
+-- A value by its dotted path from the globals ("C_Spell.GetSpellInfo").
+local function resolve(path: string): unknown
+    local v: unknown = _G
     for part in path:gmatch("[^%.]+") do
         if type(v) ~= "table" then return nil end
-        v = v[part]
+        v = tbl.field(v, part)
     end
     return v
 end
 
-local function sortedKeys(t: { [any]: any }, filter: ((k: string, v: any) -> boolean)?): string[]
+local function sortedKeys(t: unknown, filter: ((k: string, v: unknown) -> boolean)?): string[]
     local out: string[] = {}
+    if type(t) ~= "table" then return out end
     for k, v in pairs(t) do
         if type(k) == "string" and (not filter or filter(k, v)) then
             out[#out + 1] = k
@@ -301,8 +304,8 @@ local function sortedKeys(t: { [any]: any }, filter: ((k: string, v: any) -> boo
     return out
 end
 
-local function functionNames(t: { [any]: any }): string[]
-    return sortedKeys(t, function(_, v) return type(v) == "function" end)
+local function functionNames(t: unknown): string[]
+    return sortedKeys(t, function(_: string, v: unknown): boolean return type(v) == "function" end)
 end
 
 local function matchesAny(lower: string, needles: string[]): boolean
@@ -320,11 +323,8 @@ local function scan(item: Item): string[]
     local hits: string[] = {}
     local within = item.within
     if within then
-        local t = resolve(within)
-        if type(t) == "table" then
-            for _, name in ipairs(functionNames(t)) do
-                if wanted(name) then hits[#hits + 1] = within .. "." .. name end
-            end
+        for _, name in ipairs(functionNames(resolve(within))) do
+            if wanted(name) then hits[#hits + 1] = within .. "." .. name end
         end
         return hits
     end
@@ -335,8 +335,8 @@ local function scan(item: Item): string[]
             hits[#hits + 1] = name
         end
     end
-    for name in pairs(Enum :: any) do
-        if type(name) == "string" and wanted(name) then hits[#hits + 1] = "Enum." .. name end
+    for _, name in ipairs(sortedKeys(Enum)) do
+        if wanted(name) then hits[#hits + 1] = "Enum." .. name end
     end
     table.sort(hits)
     return hits
@@ -346,14 +346,14 @@ local function addonState(name: string): (boolean, string)
     local ok, exists = pcall(C_AddOns.DoesAddOnExist, name)
     if not ok or not exists then return false, "absent" end
     if C_AddOns.IsAddOnLoaded(name) then return true, "loaded" end
-    if C_AddOns.IsAddOnLoadOnDemand and C_AddOns.IsAddOnLoadOnDemand(name) then
+    if C_AddOns.IsAddOnLoadOnDemand(name) then
         return true, "on demand"
     end
     return true, "present, not loaded"
 end
 
-local widgets: { [string]: any }?
-local function widget(kind: string): any
+local widgets: { [string]: unknown }? = nil
+local function widget(kind: string): unknown
     local w = widgets
     if not w then
         local host = CreateFrame("Frame")
@@ -370,9 +370,11 @@ local function widget(kind: string): any
     return w[kind]
 end
 
-local function methodsOf(kind: string): { [any]: any }
-    local mt = getmetatable(widget(kind))
-    local index = mt and mt.__index
+-- A widget kind's methods (its metatable's __index).
+local function methodsOf(kind: string): unknown
+    local w = widget(kind)
+    local mt = type(w) == "table" and getmetatable(w)
+    local index = tbl.field(mt, "__index")
     return type(index) == "table" and index or {}
 end
 
@@ -391,29 +393,29 @@ end
 local function check(item: Item, saved: Saved): (boolean, string, string?)
     local api, ns, frame, addon, enum, method, scanName = item.api, item.ns, item.frame, item.addon, item.enum, item.method, item.scan
     if api then
-        return type(resolve(api)) == "function", api
+        return type(resolve(api)) == "function", api, nil
     elseif ns then
         local t = resolve(ns)
-        if type(t) ~= "table" then return false, ns end
+        if type(t) ~= "table" then return false, ns, nil end
         local names = functionNames(t)
         saved.namespaces[ns] = names
         return true, ns, ("%d functions"):format(#names)
     elseif frame then
-        return type(_G[frame]) == "table", frame
+        return type(tbl.field(_G, frame)) == "table", frame, nil
     elseif addon then
         local ok, state = addonState(addon)
         return ok, addon, state
     elseif enum then
         local label = "Enum." .. enum
-        local t = (Enum :: any)[enum]
-        if type(t) ~= "table" then return false, label end
-        local copy: { [any]: any }, n = {}, 0
+        local t = tbl.field(Enum, enum)
+        if type(t) ~= "table" then return false, label, nil end
+        local copy: { [unknown]: unknown }, n = {}, 0
         for k, v in pairs(t) do copy[k] = v; n = n + 1 end
         saved.enums[enum] = copy
         return true, label, ("%d values"):format(n)
     elseif method then
         local kind, name = method[1], method[2]
-        return type(methodsOf(kind)[name]) == "function", kind .. ":" .. name
+        return type(tbl.field(methodsOf(kind), name)) == "function", kind .. ":" .. name, nil
     elseif scanName then
         local hits = scan(item)
         saved.scans[scanName] = hits
@@ -421,13 +423,13 @@ local function check(item: Item, saved: Saved): (boolean, string, string?)
         return true, scanName, preview(hits, 6)
     end
     -- (every item is one of the kinds above)
-    return false, "?"
+    return false, "?", nil
 end
 
 local function collectMethods(): { [string]: string[] }
     local out: { [string]: string[] } = {}
     for _, kind in ipairs(METHOD_WIDGETS) do
-        out[kind] = sortedKeys(methodsOf(kind), function(k: string, v: any): boolean
+        out[kind] = sortedKeys(methodsOf(kind), function(k: string, v: unknown): boolean
             return type(v) == "function" and matchesAny(k:lower(), METHOD_HINTS)
         end)
     end
@@ -435,12 +437,13 @@ local function collectMethods(): { [string]: string[] }
 end
 
 local function collectCVars(): string[]?
-    if not (C_Console and C_Console.GetAllCommands) then return nil end
-    local ok, all = pcall(C_Console.GetAllCommands)
+    local getAll = tbl.field(_G, "C_Console", "GetAllCommands")
+    if type(getAll) ~= "function" then return nil end
+    local ok, all = pcall(getAll)
     if not ok or type(all) ~= "table" then return nil end
     local out: string[] = {}
-    for _, info in ipairs(all :: any[]) do
-        local name = info.command
+    for _, info in ipairs(tbl.list(all)) do
+        local name = tbl.field(info, "command")
         if type(name) == "string" and matchesAny(name:lower(), CVAR_HINTS) then
             out[#out + 1] = name
         end
@@ -453,22 +456,24 @@ end
 -- Secret-value samples for the current context
 --------------------------------------------------------------------------------
 
-local isSecretTable: (t: any) -> boolean = issecrettable or function(_: any) return false end
+local function isSecretTable(t: unknown): boolean
+    return type(t) == "table" and issecrettable(t) == true
+end
 
-local function errText(msg: any): string
+local function errText(msg: unknown): string
     return (tostring(msg):gsub("^Interface\\[^:]*:%d+: ", "")):sub(1, 160)
 end
 
 -- "secret", "readable" or "none" for one value; never keeps the value.
-local function state(v: any): string
+local function state(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "none" end
     return "readable"
 end
 
--- The state of every string-keyed field of a table the client returned, or
--- the state of a non-table value.
-local function describe(t: any): any
+-- The state of every string-keyed field of a table the client returned
+-- (a table of states), or the state of a non-table value (text).
+local function describe(t: unknown): unknown
     if isSecret(t) or type(t) ~= "table" then return state(t) end
     if isSecretTable(t) then return "secret table" end
     local out: { [string]: string } = {}
@@ -484,60 +489,63 @@ local function describe(t: any): any
 end
 
 -- Calls fn and describes its first result; errors become "error: <message>".
-local function call(fn: any, ...: any): any
+local function call(fn: unknown, ...: unknown): unknown
     if type(fn) ~= "function" then return "missing" end
     local ok, v = pcall(fn, ...)
     if not ok then return "error: " .. errText(v) end
     return describe(v)
 end
 
-local UNIT_FIELDS: { [number]: any }[] = {
-    { "name", function(u) return UnitName(u) end },
-    { "class", function(u) return (select(2, UnitClass(u))) end },
-    { "level", UnitLevel },
-    { "classification", UnitClassification },
-    { "reaction", function(u) return UnitReaction(u, "player") end },
-    { "dead", UnitIsDeadOrGhost },
-    { "role", UnitGroupRolesAssigned },
-    { "health", UnitHealth },
-    { "healthMax", UnitHealthMax },
-    { "healthPercent", UnitHealthPercent },
-    { "healthPercentScaled", function(u) return UnitHealthPercent(u, true, CurveConstants.ScaleTo100) end },
-    { "powerPercentScaled", function(u) return UnitPowerPercent(u, UnitPowerType(u), true, CurveConstants.ScaleTo100) end },
-    { "power", UnitPower },
-    { "powerType", UnitPowerType },
-    { "absorbs", UnitGetTotalAbsorbs },
-    { "incomingHeals", UnitGetIncomingHeals },
-    { "threat", function(u) return UnitThreatSituation("player", u) end },
-    { "castName", UnitCastingInfo },
-    { "castNotInterruptible", function(u) return (select(8, UnitCastingInfo(u))) end },
-    { "castDuration", UnitCastingDuration },
+type UnitField = { name: string, read: (u: string) -> unknown }
+local UNIT_FIELDS: UnitField[] = {
+    { name = "name", read = function(u: string): unknown return (UnitName(u)) end },
+    { name = "class", read = function(u: string): unknown return (select(2, UnitClass(u))) end },
+    { name = "level", read = function(u: string): unknown return UnitLevel(u) end },
+    { name = "classification", read = function(u: string): unknown return UnitClassification(u) end },
+    { name = "reaction", read = function(u: string): unknown return (UnitReaction(u, "player")) end },
+    { name = "dead", read = function(u: string): unknown return UnitIsDeadOrGhost(u) end },
+    { name = "role", read = function(u: string): unknown return UnitGroupRolesAssigned(u) end },
+    { name = "health", read = function(u: string): unknown return UnitHealth(u) end },
+    { name = "healthMax", read = function(u: string): unknown return UnitHealthMax(u) end },
+    { name = "healthPercent", read = function(u: string): unknown return UnitHealthPercent(u) end },
+    { name = "healthPercentScaled", read = function(u: string): unknown return UnitHealthPercent(u, true, CurveConstants.ScaleTo100) end },
+    { name = "powerPercentScaled", read = function(u: string): unknown return UnitPowerPercent(u, UnitPowerType(u), true, CurveConstants.ScaleTo100) end },
+    { name = "power", read = function(u: string): unknown return UnitPower(u) end },
+    { name = "powerType", read = function(u: string): unknown return (UnitPowerType(u)) end },
+    { name = "absorbs", read = function(u: string): unknown return UnitGetTotalAbsorbs(u) end },
+    { name = "incomingHeals", read = function(u: string): unknown return UnitGetIncomingHeals(u) end },
+    { name = "threat", read = function(u: string): unknown return (UnitThreatSituation("player", u)) end },
+    { name = "castName", read = function(u: string): unknown return (UnitCastingInfo(u)) end },
+    { name = "castNotInterruptible", read = function(u: string): unknown return (select(8, UnitCastingInfo(u))) end },
+    { name = "castDuration", read = function(u: string): unknown return UnitCastingDuration(u) end },
 }
 
 -- The first aura of each filter, read three ways: by index, through the slot
 -- API that Blizzard's AuraUtil uses, and as a list.
-local function sampleAuras(unit: string): { [string]: any }
-    local A: any = C_UnitAuras or {}
-    local out: { [string]: any } = {}
+local function sampleAuras(unit: string): { [string]: unknown }
+    local A = C_UnitAuras
+    local out: { [string]: unknown } = {}
     for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
         out["byIndex " .. filter] = call(A.GetAuraDataByIndex, unit, 1, filter)
-        if A.GetAuraSlots then
-            local ok, tokenOrError, slot = pcall(A.GetAuraSlots, unit, filter)
+        local slots = tbl.field(A, "GetAuraSlots")
+        if type(slots) == "function" then
+            local ok, tokenOrError, slot = pcall(slots, unit, filter)
             if not ok then
                 out["slots " .. filter] = "error: " .. errText(tokenOrError)
             else
                 out["slots " .. filter] = state(slot)
                 if slot ~= nil and not isSecret(slot) then
-                    out["bySlot " .. filter] = call(A.GetAuraDataBySlot, unit, slot)
+                    out["bySlot " .. filter] = call(tbl.field(A, "GetAuraDataBySlot"), unit, slot)
                 end
             end
         end
-        if A.GetUnitAuras then
-            local ok, list = pcall(A.GetUnitAuras, unit, filter, 1)
+        local unitAuras = tbl.field(A, "GetUnitAuras")
+        if type(unitAuras) == "function" then
+            local ok, list = pcall(unitAuras, unit, filter, 1)
             if not ok then
                 out["list " .. filter] = "error: " .. errText(list)
             elseif type(list) == "table" and not isSecret(list) and not isSecretTable(list) then
-                out["list " .. filter] = describe(list[1])
+                out["list " .. filter] = describe(tbl.list(list)[1])
             else
                 out["list " .. filter] = describe(list)
             end
@@ -546,14 +554,17 @@ local function sampleAuras(unit: string): { [string]: any }
     return out
 end
 
-local function sampleUnits(): { [string]: any }
-    local out: { [string]: any } = {}
+-- A unit's samples: its fields and its auras, each a describe() result.
+type UnitSample = { fields: { [string]: unknown }, auras: { [string]: unknown } }
+
+local function sampleUnits(): { [string]: UnitSample }
+    local out: { [string]: UnitSample } = {}
     for _, unit in ipairs(SAMPLE_UNITS) do
         if UnitExists(unit) then
-            local fields: { [string]: any } = {}
+            local fields: { [string]: unknown } = {}
             for _, f in ipairs(UNIT_FIELDS) do
-                if not (f[1] == "threat" and unit == "player") then
-                    fields[f[1]] = call(f[2], unit)
+                if not (f.name == "threat" and unit == "player") then
+                    fields[f.name] = call(f.read, unit)
                 end
             end
             out[unit] = { fields = fields, auras = sampleAuras(unit) }
@@ -563,19 +574,19 @@ local function sampleUnits(): { [string]: any }
 end
 
 -- The GCD reference spells, then up to three actions on the current bar 1.
-local function sampleCooldowns(): { [string]: any }
-    local out: { [string]: any } = {}
+local function sampleCooldowns(): { [string]: unknown }
+    local out: { [string]: unknown } = {}
     for _, id in ipairs(SAMPLE_SPELLS) do
-        out["spell " .. id] = call(C_Spell and C_Spell.GetSpellCooldown, id)
+        out["spell " .. id] = call(C_Spell.GetSpellCooldown, id)
     end
-    local AB: any = C_ActionBar or {}
-    local hasAction = _G.HasAction or AB.HasAction
+    local AB = C_ActionBar
+    local hasAction = tbl.field(_G, "HasAction") or tbl.field(AB, "HasAction")
     local n = 0
     for slot = 1, 12 do
-        if n < 3 and hasAction and hasAction(slot) then
+        if n < 3 and type(hasAction) == "function" and hasAction(slot) then
             n = n + 1
-            out["action " .. slot] = call(AB.GetActionCooldown, slot)
-            out["action " .. slot .. " duration object"] = call(AB.GetActionCooldownDuration, slot)
+            out["action " .. slot] = call(tbl.field(AB, "GetActionCooldown"), slot)
+            out["action " .. slot .. " duration object"] = call(tbl.field(AB, "GetActionCooldownDuration"), slot)
         end
     end
     return out
@@ -587,8 +598,9 @@ local function sampleMessaging(saved: Saved): { [string]: string }
     local out: { [string]: string } = {}
     for _, path in ipairs(saved.scans["Messaging lockdown APIs"] or {}) do
         local short = path:match("%.(%w+)$")
-        if short and (short:find("^Is") or short:find("^In") or short:find("^Are")) then
-            local ok, v = pcall(resolve(path))
+        local fn = resolve(path)
+        if short and type(fn) == "function" and (short:find("^Is") or short:find("^In") or short:find("^Are")) then
+            local ok, v = pcall(fn)
             if not ok then out[short] = "error: " .. errText(v)
             elseif isSecret(v) then out[short] = "secret"
             else out[short] = tostring(v) end
@@ -599,12 +611,12 @@ end
 
 -- One report line from a describe() result: fields grouped by state, then
 -- each error with its message.
-local function summarize(label: string, d: any): string[]
-    if type(d) ~= "table" then return { ("  %s: %s"):format(label, d) } end
+local function summarize(label: string, d: unknown): string[]
+    if type(d) ~= "table" then return { ("  %s: %s"):format(label, tostring(d)) } end
     local groups: { [string]: string[] }, errors: string[] = {}, {}
     for _, k in ipairs(sortedKeys(d)) do
-        local v = d[k]
-        if type(v) == "table" then v = "table" end
+        local raw = tbl.field(d, k)
+        local v = type(raw) == "table" and "table" or tostring(raw)
         if v:find("^error") then
             errors[#errors + 1] = ("    %s %s"):format(k, v)
         else
@@ -623,7 +635,10 @@ local function summarize(label: string, d: any): string[]
     return lines
 end
 
-local function context(): { [string]: any }
+type Context = { time: string, combat: boolean, instance: string, group: string, size: number, zone: string,
+                 level: number, class: unknown, key: string }
+
+local function context(): Context
     local _, instance = IsInInstance()
     local group = IsInRaid() and "raid" or IsInGroup() and "party" or "solo"
     local combat = InCombatLockdown()
@@ -640,7 +655,10 @@ local function context(): { [string]: any }
     }
 end
 
-local function clientInfo(): { [string]: any }
+type Client = { version: string, build: string, date: string, toc: number, locale: string, screen: string,
+                uiScale: number, useUiScale: unknown }
+
+local function clientInfo(): Client
     local clientVersion, build, buildDate, toc = GetBuildInfo()
     local w, h = GetPhysicalScreenSize()
     return {
@@ -665,13 +683,13 @@ local function run(): (string, number, number)
     report[#report + 1] = ("Client %s build %s (interface %d), %s, screen %s, UI scale %.2f (useUiScale %s)")
         :format(client.version, client.build, client.toc, client.locale, client.screen, client.uiScale, tostring(client.useUiScale))
     report[#report + 1] = ("Context: %s, level %d %s, %s")
-        :format(ctx.key, ctx.level, ctx.class or "?", ctx.zone or "?")
+        :format(ctx.key, ctx.level, tostring(ctx.class or "?"), ctx.zone or "?")
 
-    local sections: { [string]: any }[] = {}
+    local sections: { [string]: unknown }[] = {}
     for _, section in ipairs(SECTIONS) do
         report[#report + 1] = ""
         report[#report + 1] = section.title
-        local rows: { [string]: any }[] = {}
+        local rows: { [string]: unknown }[] = {}
         for _, item in ipairs(section.items) do
             local ok, label, detail = check(item, saved)
             total = total + 1
@@ -722,12 +740,12 @@ local function run(): (string, number, number)
     db.scans = saved.scans
     db.methods = collectMethods()
     db.cvars = collectCVars()
-    db.allNamespaces = sortedKeys(_G, function(k: string, v: any): boolean return type(v) == "table" and k:find("^C_") ~= nil end)
-    db.runs = db.runs or {}
-    db.runs[ctx.key] = samples
-    db.lastReport = table.concat(report, "\n")
+    db.allNamespaces = sortedKeys(_G, function(k: string, v: unknown): boolean return type(v) == "table" and k:find("^C_") ~= nil end)
+    tbl.recordAt(db, "runs")[ctx.key] = samples
+    local text = table.concat(report, "\n")
+    db.lastReport = text
 
-    return db.lastReport, found, total
+    return text, found, total
 end
 
 --------------------------------------------------------------------------------
@@ -735,10 +753,12 @@ end
 -- text can be selected and copied. It is a diagnostic, not part of the design.
 --------------------------------------------------------------------------------
 
-local window: any
+type ReportWindow = { frame: Frame, edit: EditBox, report: string }
+local window: ReportWindow? = nil
 
-local function buildWindow(): any
-    local f: any = CreateFrame("Frame", "SuuUIProbeFrame", UIParent, "BackdropTemplate")
+local function buildWindow(): ReportWindow
+    local f = CreateFrame("Frame", "SuuUIProbeFrame", UIParent, "BackdropTemplate")
+    local w: ReportWindow
     f:SetSize(720, 540)
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
@@ -775,23 +795,24 @@ local function buildWindow(): any
     edit:SetScript("OnEscapePressed", function() f:Hide() end)
     -- Read-only: typing puts the report back.
     edit:SetScript("OnTextChanged", function(self, userInput)
-        if userInput then self:SetText(f.report or "") end
+        if userInput then self:SetText(w.report) end
     end)
     scroll:SetScrollChild(edit)
 
-    f.edit = edit
+    w = { frame = f, edit = edit, report = "" }
     tinsert(UISpecialFrames, "SuuUIProbeFrame")
-    return f
+    return w
 end
 
 local function show(text: string)
-    window = window or buildWindow()
-    window.report = text
-    window.edit:SetText(text)
-    window.edit:SetCursorPosition(0)
-    window:Show()
-    window.edit:SetFocus()
-    window.edit:HighlightText()
+    local w = window or buildWindow()
+    window = w
+    w.report = text
+    w.edit:SetText(text)
+    w.edit:SetCursorPosition(0)
+    w.frame:Show()
+    w.edit:SetFocus()
+    w.edit:HighlightText()
 end
 
 -- Run by the diagnostics module's /suu probe.
@@ -809,7 +830,8 @@ export const TOPICS: string[] = {
 }
 
 export function hide()
-    if window then window:Hide() end
+    local w = window
+    if w then w.frame:Hide() end
 end
 
 -- Each topic's command, called with the words after the topic. (One
@@ -901,8 +923,9 @@ export function command(arg: string?)
         return
     end
     if arg == "show" then
-        if DB.probe.lastReport then
-            show(DB.probe.lastReport)
+        local last = asString(DB.probe.lastReport)
+        if last then
+            show(last)
         else
             print("No probe report yet. Run /suu probe.")
         end

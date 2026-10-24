@@ -13,45 +13,44 @@ import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
 
 -- whether the tab switch is hooked, and until when it records
 local hooked = false
 local untilTime: number? = nil
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     return tostring(v)
 end
 -- a size or offset, rounded; geometry can be secret on Forever
-local function num(v: any): string
+local function num(v: unknown): string
     if isSecret(v) then return "secret" end
     if type(v) ~= "number" then return tostring(v) end
     return tostring(math.floor(v + 0.5))
 end
 
-local function out(): { [string]: any }
-    DB.probe.collectionsArt = DB.probe.collectionsArt or {}
-    return DB.probe.collectionsArt
+local function out(): { [string]: unknown }
+    return tbl.recordAt(DB.probe, "collectionsArt")
 end
 
 -- The key a child sits under in its parent (MountJournal.LeftInset), else its name.
-local function keyOf(parent: any, child: any): string
-    if parent then
-        for k, v in pairs(parent) do
-            if v == child and type(k) == "string" then return k end
-        end
+local function keyOf(parent: unknown, child: Region): string
+    for k, v in pairs(wf.keyed(parent)) do
+        if v == child then return k end
     end
     return child:GetName() or ("<" .. child:GetObjectType() .. ">")
 end
 
-local function pointOf(r: any): string
+local function pointOf(r: unknown): string
     local ok, p, rel, rp, x, y = pcall(r.GetPoint, r, 1)
     if not ok or not p then return "-" end
     local relName = rel and (rel.GetName and rel:GetName() or "?") or "nil"
     return ("%s>%s.%s %s,%s"):format(show(p), show(relName), show(rp), num(x), num(y))
 end
 
-local function textures(frame: any, path: string, lines: string[], depth: number)
+local function textures(frame: unknown, path: string, lines: string[], depth: number)
     if depth > 7 or #lines > 600 then return end
     for _, r in ipairs({ frame:GetRegions() }) do
         if r:GetObjectType() == "Texture" then

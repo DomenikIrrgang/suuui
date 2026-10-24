@@ -63,8 +63,8 @@ export function command()
         if name and not hidden then list[#list + 1] = { name = name, display = (MJ.GetMountInfoExtraByID(id)) } end
     end
     table.sort(list, function(a, b) return a.name < b.name end)
-    DB.probe.mountFeet = DB.probe.mountFeet or {}
-    local saved = DB.probe.mountFeet
+    -- each model's drop by its file, kept across runs
+    local saved = DB.probeData("mountFeet", function(): { [number]: { drop: number, name: string } } return {} end)
     local p = probePanel or panel(UIParent, { title = "Mount feet", width = 800, height = 640, solid = true }) :: FeetPanel
     probePanel = p
     p:SetFrameStrata("DIALOG")
@@ -85,7 +85,7 @@ export function command()
     p.label = label
     label:SetPoint("BOTTOM", 0, 44)
     local i, nudge = 0, 0
-    local current: { name: string, file?: any }? = nil
+    local current: { name: string, file?: number }? = nil
     local function place()
         m:ClearAllPoints()
         -- the frame where the stage has it relative to the line, moved by the nudge
@@ -107,7 +107,8 @@ export function command()
             pcall(m.SetCamDistanceScale, m, CAM_SCALE)
             after(0.1, function()
                 local file = m:GetModelFileID()
-                local c = current :: { name: string, file?: any } -- set before the model loads
+                local c = current
+                if not c then return end -- set before the model loads
                 c.file = file
                 if file and saved[file] then return nextMount() end
                 local px, py, pz = m:GetCameraPosition()

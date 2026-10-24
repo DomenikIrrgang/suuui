@@ -9,6 +9,7 @@
 -- answer. Saved in SuuUIProbe.castTarget on /reload.
 
 import print from "/Core/Init"
+import * as tbl from "wowlua:table"
 import * as DB from "/Core/DB"
 import isSecret from "wowlua:secret"
 
@@ -17,12 +18,13 @@ local testText: FontString?
 local testHost: Frame?
 local eventFrame: Frame?
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "SECRET" end
     return tostring(v)
 end
 
-local function try(fn: any, ...: any): string
+local function try(fn: unknown, ...: unknown): string
+    if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error " .. tostring(res[2]):sub(1, 100) end
     local out: string[] = {}
@@ -30,42 +32,55 @@ local function try(fn: any, ...: any): string
     return table.concat(out, ", ")
 end
 
-local function record(unit: string, out: { [string]: any }[])
-    local r: { [string]: any } = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false, unit = unit }
-    local okN, name = pcall(_G.UnitSpellTargetName, unit)
-    local okC, class = pcall(_G.UnitSpellTargetClass, unit)
-    r.shouldDisplay = try(_G.UnitShouldDisplaySpellTargetName, unit)
+-- `fn(...)`'s first result, protected.
+local function attempt(fn: unknown, ...: unknown): (boolean, unknown)
+    if type(fn) ~= "function" then return false, "missing" end
+    return pcall(fn, ...)
+end
+
+local function record(unit: string, out: { [string]: unknown }[])
+    local r: { [string]: unknown } = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false, unit = unit }
+    local okN, name = attempt(tbl.field(_G, "UnitSpellTargetName"), unit)
+    local okC, class = attempt(tbl.field(_G, "UnitSpellTargetClass"), unit)
+    r.shouldDisplay = try(tbl.field(_G, "UnitShouldDisplaySpellTargetName"), unit)
     r.name = okN and show(name) or "error"
     r.class = okC and show(class) or "error"
-    r.playerIsTarget = try(_G.PlayerIsSpellTarget, unit)
+    r.playerIsTarget = try(tbl.field(_G, "PlayerIsSpellTarget"), unit)
     -- the colour, as far as a secret class lets it go
     local fs = testText or UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     testText = fs
-    local okColor, c: any = pcall(C_ClassColor.GetClassColor, class)
+    -- (the class as the game gave it: a secret one goes in as it is)
+    local okColor, c = attempt(tbl.field(C_ClassColor, "GetClassColor"), class)
     r.getClassColor = okColor and (c and "colour" or "nil") or ("error " .. tostring(c):sub(1, 80))
     if okColor and c then
-        r.setTextColor = try(function() fs:SetTextColor(c:GetRGB()) end)
-        r.hex = try(c.GenerateHexColor, c)
-        r.formatted = try(function() fs:SetFormattedText("%s › |c%s%s|r", "Spell", c:GenerateHexColor(), name) end)
+        local getRGB, hex = tbl.field(c, "GetRGB"), tbl.field(c, "GenerateHexColor")
+        r.setTextColor = try(function()
+            if type(getRGB) == "function" then fs:SetTextColor(getRGB(c)) end
+        end)
+        r.hex = try(hex, c)
+        -- (the values as the game gave them, secret or not: what the font string takes)
+        local okHex, hexText = attempt(hex, c)
+        r.formatted = okHex and try(fs.SetFormattedText, fs, "%s › |c%s%s|r", "Spell", hexText, name)
+            or ("error " .. tostring(hexText):sub(1, 80))
     end
     -- the You badge: the boolean into SetAlphaFromBoolean on a frame
-    local host: any = testHost or CreateFrame("Frame", nil, UIParent)
+    local host = testHost or CreateFrame("Frame", nil, UIParent)
     testHost = host
-    local okY, isYou = pcall(_G.PlayerIsSpellTarget, unit)
-    r.alphaFromBoolean = okY and try(host.SetAlphaFromBoolean, host, isYou, 1, 0) or "no answer"
+    local okY, isYou = attempt(tbl.field(_G, "PlayerIsSpellTarget"), unit)
+    r.alphaFromBoolean = okY and try(tbl.field(host, "SetAlphaFromBoolean"), host, isYou, 1, 0) or "no answer"
     out[#out + 1] = r
 end
 
 export function command()
-    local out: { [string]: any }[] = {}
+    local out: { [string]: unknown }[] = {}
     DB.probe.castTarget = out
     local f = eventFrame or CreateFrame("Frame")
     eventFrame = f
     f:UnregisterAllEvents()
     f:RegisterUnitEvent("UNIT_SPELLCAST_START", "target")
     f:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START", "target")
-    f:SetScript("OnEvent", function(self, _, unit: any)
-        record(unit, out)
+    f:SetScript("OnEvent", function(self, _, unit: unknown)
+        record(tostring(unit), out)
         if #out >= 5 then
             self:UnregisterAllEvents()
             print("Cast target probe: five casts recorded. /reload to save them.")

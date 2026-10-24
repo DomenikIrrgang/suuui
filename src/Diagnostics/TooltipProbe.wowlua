@@ -20,13 +20,16 @@ import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
 
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
             parts[#parts + 1] = tostring(k) .. "=" .. (isSecret(x) and "secret" or (type(x) == "table" and "table" or tostring(x)))
         end
@@ -36,7 +39,7 @@ local function show(v: any): string
     return tostring(v)
 end
 
-local function namesIn(t: any): string[]
+local function namesIn(t: unknown): string[]
     local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
@@ -44,7 +47,7 @@ local function namesIn(t: any): string[]
     return out
 end
 
-local function enumList(e: any): string[]
+local function enumList(e: unknown): string[]
     local out: string[] = {}
     if type(e) ~= "table" then return { "missing" } end
     for k, v in pairs(e) do out[#out + 1] = tostring(k) .. "=" .. tostring(v) end
@@ -62,9 +65,20 @@ local GLOBALS = { "GameTooltip_SetDefaultAnchor", "GameTooltip_SetBackdropStyle"
                   "TooltipBackdropTemplateMixin", "NineSliceUtil", "GameTooltip_UnitColor", "GameTooltip_OnTooltipSetUnit",
                   "UnitPopupSharedUtil", "C_TooltipComparison", "TooltipComparisonManager" }
 
-local function regionsOf(f: any): string
+-- `obj:name(...)`, protected: whether it ran, and its first two results.
+local function ask(obj: unknown, name: string, ...: unknown): (boolean, unknown, unknown)
+    local fn = tbl.field(obj, name)
+    if type(fn) ~= "function" then return false, nil, nil end
+    local ok, a, b = pcall(fn, obj, ...)
+    return ok, a, b
+end
+
+local function regionsOf(f: Frame): string
     local out: string[] = {}
-    for _, r in ipairs({ f:GetRegions() }) do
+    local regions: Region[] = {}
+    for _, t in ipairs(wf.textures(f)) do regions[#regions + 1] = t end
+    for _, t in ipairs(wf.fontStrings(f)) do regions[#regions + 1] = t end
+    for _, r in ipairs(regions) do
         local name = r:GetDebugName() or "?"
         out[#out + 1] = name:gsub("^.*%.", "") .. "(" .. r:GetObjectType() .. ")"
         if #out >= 12 then break end
@@ -72,26 +86,29 @@ local function regionsOf(f: any): string
     return table.concat(out, " ")
 end
 
-local function frameInfo(name: string): any
-    local f = _G[name]
-    if type(f) ~= "table" or not f.GetObjectType then return "missing" end
-    local kids = {}
-    for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then kids[#kids + 1] = k end end
-    table.sort(kids)
-    local info: { [string]: any } = {
-        type = f:GetObjectType(), protected = show(f:IsProtected()), strata = show(f:GetFrameStrata()),
+local function fontOf(name: string): string?
+    local fs = wf.asFontString(tbl.field(_G, name))
+    if not fs then return nil end
+    local font, size, flags = fs:GetFont()
+    return show(font) .. " " .. show(size) .. " " .. show(flags)
+end
+
+local function frameInfo(name: string): unknown
+    local f = wf.find(name)
+    if not f then return "missing" end
+    local kids = tbl.keys(wf.keyed(f))
+    local nineSlice = wf.asFrame(tbl.field(f, "NineSlice"))
+    local info: { [string]: unknown } = {
+        type = f:GetObjectType(), protected = show((f:IsProtected())), strata = show(f:GetFrameStrata()),
         children = table.concat(kids, " "), regions = regionsOf(f),
-        nineSlice = f.NineSlice and ("layout=" .. show(f.NineSlice.layoutType) .. " protected=" .. show(f.NineSlice:IsProtected())) or "none",
-        backdrop = f.GetBackdrop and "has SetBackdrop" or "no backdrop API",
-        layoutType = show(f.layoutType),
+        nineSlice = nineSlice and ("layout=" .. show(tbl.field(nineSlice, "layoutType")) .. " protected=" .. show((nineSlice:IsProtected()))) or "none",
+        backdrop = tbl.field(f, "GetBackdrop") and "has SetBackdrop" or "no backdrop API",
+        layoutType = show(tbl.field(f, "layoutType")),
         scale = show(f:GetScale()),
     }
-    local left1 = _G[name .. "TextLeft1"]
-    if left1 then
-        local font, size, flags = left1:GetFont()
-        info.textLeft1 = show(font) .. " " .. show(size) .. " " .. show(flags)
-    end
-    local left2 = _G[name .. "TextLeft2"]
+    local left1 = fontOf(name .. "TextLeft1")
+    if left1 then info.textLeft1 = left1 end
+    local left2 = wf.asFontString(tbl.field(_G, name .. "TextLeft2"))
     if left2 then
         local font, size = left2:GetFont()
         info.textLeft2 = show(font) .. " " .. show(size)
@@ -99,7 +116,11 @@ local function frameInfo(name: string): any
     return info
 end
 
-local store: { [string]: any }? = nil
+-- What the probe saves in SuuUIProbe.tooltips: the API there is, then the
+-- tooltips seen by kind, Blizzard's tooltip calls, and a log.
+type Tooltips = { log: string[], byType: { [string]: { [string]: unknown }[] }, calls: { [string]: number }, [string]: unknown }
+
+local store: Tooltips? = nil
 local function note(s: string)
     local log = store and store.log
     if not log then return end
@@ -107,54 +128,67 @@ local function note(s: string)
     while #log > 200 do table.remove(log, 1) end
 end
 
-local TYPE_NAMES: { [any]: string } = {}
+local TYPE_NAMES: { [unknown]: string } = {}
+
+-- A colour's r, g, b as text.
+local function rgb(r: unknown, g: unknown, b: unknown): string
+    if isSecret(r) then return "secret" end
+    return ("%.2f,%.2f,%.2f"):format(secret.asNumber(r) or 0, secret.asNumber(g) or 0, secret.asNumber(b) or 0)
+end
 
 -- One tooltip as the post call sees it: its data and its lines.
-local function sampleTooltip(tooltip: any, data: any): { [string]: any }
-    local s: { [string]: any } = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false }
-    s.tooltip = tooltip and tooltip.GetName and show(tooltip:GetName()) or "?"
-    s.type = show(data and data.type)
-    s.id = show(data and data.id)
-    s.guid = show(data and data.guid)
+local function sampleTooltip(tooltip: unknown, data: unknown): { [string]: unknown }
+    local s: { [string]: unknown } = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false }
+    local _, tipName = ask(tooltip, "GetName")
+    s.tooltip = tbl.field(tooltip, "GetName") and show(tipName) or "?"
+    s.type = show(tbl.field(data, "type"))
+    s.id = show(tbl.field(data, "id"))
+    s.guid = show(tbl.field(data, "guid"))
     s.dataKeys = show(data)
-    if data and type(data.lines) == "table" then
-        s.lineCount = #data.lines
-        s.lines = {}
-        for i, line in ipairs(data.lines) do
+    local dataLines = tbl.field(data, "lines")
+    if type(dataLines) == "table" then
+        local all = tbl.list(dataLines)
+        s.lineCount = #all
+        local lines: string[] = {}
+        s.lines = lines
+        for i, line in ipairs(all) do
             if i > 8 then break end
-            local c = line.leftColor
-            local color = c and (isSecret(c.r) and "secret" or ("%.2f,%.2f,%.2f"):format(c.r or 0, c.g or 0, c.b or 0)) or "nil"
-            s.lines[i] = ("type=%s left=%s right=%s color=%s"):format(show(line.type),
-                isSecret(line.leftText) and "secret" or show(line.leftText):sub(1, 60),
-                isSecret(line.rightText) and "secret" or show(line.rightText):sub(1, 30), color)
+            local c = tbl.field(line, "leftColor")
+            local color = c ~= nil and rgb(tbl.field(c, "r"), tbl.field(c, "g"), tbl.field(c, "b")) or "nil"
+            local left, right = tbl.field(line, "leftText"), tbl.field(line, "rightText")
+            lines[i] = ("type=%s left=%s right=%s color=%s"):format(show(tbl.field(line, "type")),
+                isSecret(left) and "secret" or show(left):sub(1, 60),
+                isSecret(right) and "secret" or show(right):sub(1, 30), color)
         end
     else
-        s.lines = show(data and data.lines)
+        s.lines = show(dataLines)
     end
     -- what the tooltip's own font strings say
-    local name = tooltip and tooltip.GetName and tooltip:GetName()
-    if name and not isSecret(name) then
-        local fs = _G[name .. "TextLeft1"]
+    local name = secret.asString(tipName)
+    if name then
+        local fs = wf.asFontString(tbl.field(_G, name .. "TextLeft1"))
         if fs then
             local text = fs:GetText()
             s.textLeft1 = isSecret(text) and "secret" or show(text):sub(1, 60)
             local r, g, b = fs:GetTextColor()
-            s.textLeft1Color = isSecret(r) and "secret" or ("%.2f,%.2f,%.2f"):format(r or 0, g or 0, b or 0)
+            s.textLeft1Color = rgb(r, g, b)
         end
-        s.numLines = show(tooltip.NumLines and tooltip:NumLines())
+        local _, numLines = ask(tooltip, "NumLines")
+        s.numLines = show(numLines)
     end
     -- a unit tooltip: which unit, and what of it is readable
-    if tooltip and tooltip.GetUnit then
-        local ok, uname, unit = pcall(tooltip.GetUnit, tooltip)
+    if tbl.field(tooltip, "GetUnit") then
+        local ok, uname, unit = ask(tooltip, "GetUnit")
+        local plain = secret.asString(unit)
         if ok and unit then
             s.unit = show(unit)
-            if not isSecret(unit) then
-                s.unitName = show(UnitName(unit))
-                s.unitClass = show(select(2, UnitClass(unit)))
-                s.unitReaction = show(UnitReaction(unit, "player"))
-                s.unitIsPlayer = show(UnitIsPlayer(unit))
-                s.unitLevel = show(UnitLevel(unit))
-                s.unitClassification = show(UnitClassification(unit))
+            if plain then
+                s.unitName = show(UnitName(plain))
+                s.unitClass = show(select(2, UnitClass(plain)))
+                s.unitReaction = show(UnitReaction(plain, "player"))
+                s.unitIsPlayer = show(UnitIsPlayer(plain))
+                s.unitLevel = show(UnitLevel(plain))
+                s.unitClassification = show(UnitClassification(plain))
             end
         elseif ok then
             s.unit = "none (" .. show(uname) .. ")"
@@ -162,18 +196,19 @@ local function sampleTooltip(tooltip: any, data: any): { [string]: any }
             s.unit = "error " .. tostring(uname):sub(1, 80)
         end
     end
-    if tooltip and tooltip.GetItem then
-        local ok, iname, link = pcall(tooltip.GetItem, tooltip)
+    if tbl.field(tooltip, "GetItem") then
+        local ok, iname, link = ask(tooltip, "GetItem")
         if ok then s.item = show(iname) .. " " .. (isSecret(link) and "secret" or show(link)) end
     end
-    if tooltip and tooltip.GetSpell then
-        local ok, sname, sid = pcall(tooltip.GetSpell, tooltip)
+    if tbl.field(tooltip, "GetSpell") then
+        local ok, sname, sid = ask(tooltip, "GetSpell")
         if ok then s.spell = show(sname) .. " " .. show(sid) end
     end
-    if tooltip and tooltip.GetOwner then
-        local ok, text = pcall(function()
-            local owner = tooltip:GetOwner()
-            return owner and (show(owner.GetName and owner:GetName()) .. " protected=" .. show(owner.IsProtected and owner:IsProtected())) or "nil"
+    if tbl.field(tooltip, "GetOwner") then
+        local ok, text = pcall(function(): string
+            local _, value = ask(tooltip, "GetOwner")
+            local owner = wf.asRegion(value)
+            return owner and (show(owner:GetName()) .. " protected=" .. show((owner:IsProtected()))) or "nil"
         end)
         s.owner = ok and text or ("error " .. tostring(text):sub(1, 80))
     end
@@ -181,16 +216,17 @@ local function sampleTooltip(tooltip: any, data: any): { [string]: any }
 end
 
 local logging = false
-local function startLog()
+local function startLog(st: Tooltips)
     if logging then return end
     logging = true
-    local st = store :: { [string]: any } -- sampled before the log starts
-    if not (TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall) then
+    local processor = tbl.field(_G, "TooltipDataProcessor")
+    local addPostCall = tbl.field(processor, "AddTooltipPostCall")
+    if type(addPostCall) ~= "function" then
         st.logError = "no TooltipDataProcessor.AddTooltipPostCall"
         return
     end
-    local all = TooltipDataProcessor.AllTypes or "ALL"
-    local ok, err = pcall(TooltipDataProcessor.AddTooltipPostCall, all, function(tooltip, data)
+    local all = tbl.field(processor, "AllTypes") or "ALL"
+    local ok, err = pcall(addPostCall, all, function(tooltip: unknown, data: unknown)
         local cur = store
         if not cur then return end
         local ok2, s = pcall(sampleTooltip, tooltip, data)
@@ -198,61 +234,67 @@ local function startLog()
             note("sample error: " .. tostring(s):sub(1, 160))
             return
         end
-        local key = (TYPE_NAMES[data and data.type] or s.type) .. (s.combat and " combat" or "")
-        cur.byType = cur.byType or {}
+        local key = (TYPE_NAMES[tbl.field(data, "type")] or tostring(s.type)) .. (s.combat and " combat" or "")
         local list = cur.byType[key] or {}
         cur.byType[key] = list
         -- the same thing again: replace, else add (a few per type)
-        local same = list[#list] and list[#list].id == s.id and list[#list].tooltip == s.tooltip
+        local last = list[#list]
+        local same = last and last.id == s.id and last.tooltip == s.tooltip
         if same then list[#list] = s else list[#list + 1] = s end
         while #list > 3 do table.remove(list, 1) end
     end)
     st.postCall = ok and "added" or ("error: " .. tostring(err))
     local f = CreateFrame("Frame")
     for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do f:RegisterEvent(e) end
-    f:SetScript("OnEvent", function(_, event, a, b) note(event .. " " .. show(a) .. " " .. show(b)) end)
+    f:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown) note(event .. " " .. show(a) .. " " .. show(b)) end)
     -- which of Blizzard's tooltip functions run when (compare, anchor, style)
     for _, name in ipairs({ "GameTooltip_SetDefaultAnchor", "GameTooltip_ShowCompareItem", "SharedTooltip_SetBackdropStyle",
                             "GameTooltip_SetBackdropStyle" }) do
-        if type(_G[name]) == "function" then
-            hook(name, function(tt: any)
-                local cur = store :: { [string]: any }
-                local log = cur.calls or {}
-                cur.calls = log
-                local key = name .. "(" .. show(tt and tt.GetName and tt:GetName()) .. ")"
-                log[key] = (log[key] or 0) + 1
+        if type(tbl.field(_G, name)) == "function" then
+            hook(name, function(tt: unknown)
+                local cur = store
+                if not cur then return end
+                local _, ttName = ask(tt, "GetName")
+                local key = name .. "(" .. show(ttName) .. ")"
+                cur.calls[key] = (cur.calls[key] or 0) + 1
             end)
         end
     end
 end
 
 export function sample()
-    local s: { [string]: any } = DB.probe.tooltips or {}
+    local s = DB.probeData("tooltips", function(): Tooltips return { log = {}, byType = {}, calls = {} } end)
+    s.byType, s.calls = s.byType or {}, s.calls or {}
     store = s
-    DB.probe.tooltips = s
     s.at = date("%Y-%m-%d %H:%M:%S")
-    s.TooltipDataProcessor = namesIn(TooltipDataProcessor)
-    s.allTypes = show(TooltipDataProcessor and TooltipDataProcessor.AllTypes)
+    local processor = tbl.field(_G, "TooltipDataProcessor")
+    s.TooltipDataProcessor = namesIn(processor)
+    s.allTypes = show(tbl.field(processor, "AllTypes"))
     s.C_TooltipInfo = namesIn(C_TooltipInfo)
-    s.C_TooltipComparison = namesIn(C_TooltipComparison)
+    s.C_TooltipComparison = namesIn(tbl.field(_G, "C_TooltipComparison"))
     s.dataTypes = enumList(Enum.TooltipDataType)
     s.lineTypes = enumList(Enum.TooltipDataLineType)
-    for k, v in pairs((Enum.TooltipDataType :: any) or {}) do TYPE_NAMES[v] = k end
-    s.globals = {}
-    for _, name in ipairs(GLOBALS) do s.globals[name] = type(_G[name]) end
-    s.frames = {}
-    for _, name in ipairs(FRAMES) do s.frames[name] = frameInfo(name) end
-    s.cvars = {}
+    for k, v in pairs(Enum.TooltipDataType) do TYPE_NAMES[v] = k end
+    local globals: { [string]: string } = {}
+    s.globals = globals
+    for _, name in ipairs(GLOBALS) do globals[name] = type(tbl.field(_G, name)) end
+    local frameList: { [string]: unknown } = {}
+    s.frames = frameList
+    for _, name in ipairs(FRAMES) do frameList[name] = frameInfo(name) end
+    local cvars: { [string]: string } = {}
+    s.cvars = cvars
     for _, c in ipairs({ "showTargetOfTarget", "UberTooltips", "alwaysCompareItems", "showQuestTrackingTooltips",
                          "showNPETutorials", "colorblindMode" }) do
-        s.cvars[c] = show(GetCVar(c))
+        cvars[c] = show(GetCVar(c))
     end
-    if GameTooltipStatusBar then
-        s.statusBar = { shown = show(GameTooltipStatusBar:IsShown()), texture = show(GameTooltipStatusBar:GetStatusBarTexture() and GameTooltipStatusBar:GetStatusBarTexture():GetTexture()),
-                            height = show(GameTooltipStatusBar:GetHeight()), protected = show(GameTooltipStatusBar:IsProtected()) }
+    local bar = wf.asStatusBar(tbl.field(_G, "GameTooltipStatusBar"))
+    if bar then
+        local texture = bar:GetStatusBarTexture()
+        s.statusBar = { shown = show(bar:IsShown()), texture = show(texture and texture:GetTexture()),
+                        height = show(bar:GetHeight()), protected = show((bar:IsProtected())) }
     end
     s.log = s.log or {}
-    startLog()
+    startLog(s)
 end
 
 export function command()

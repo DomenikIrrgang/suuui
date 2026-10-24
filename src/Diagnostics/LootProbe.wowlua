@@ -16,13 +16,20 @@
 import isSecret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+
+type Record = { [string]: unknown }
+-- What the probe saves in SuuUIProbe.loot: the API there is, then loot
+-- windows, rolls and loot history as they come, and the event log.
+type Loot = { log: string[], windows: Record[], rolls: Record[], history: Record[], take?: Record, [string]: unknown }
 
 
-local function show(v: any): string
+local function show(v: unknown): string
     if isSecret(v) then return "secret" end
     if v == nil then return "nil" end
     if type(v) == "table" then
-        local parts = {}
+        local parts: string[] = {}
         for k, x in pairs(v) do
             parts[#parts + 1] = tostring(k) .. "=" .. (isSecret(x) and "secret" or (type(x) == "table" and "table" or tostring(x)))
         end
@@ -32,7 +39,7 @@ local function show(v: any): string
     return tostring(v)
 end
 
-local function namesIn(t: any): string[]
+local function namesIn(t: unknown): string[]
     local out: string[] = {}
     if type(t) ~= "table" then return { "missing" } end
     for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
@@ -40,11 +47,11 @@ local function namesIn(t: any): string[]
     return out
 end
 
-local function call(fn: any, ...: any): string
+local function call(fn: unknown, ...: unknown): string
     if type(fn) ~= "function" then return "missing" end
     local res = { pcall(fn, ...) }
     if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
-    local parts = {}
+    local parts: string[] = {}
     for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
     return table.concat(parts, " | ")
 end
@@ -74,16 +81,14 @@ local EVENTS = {
 }
 
 local function frameInfo(name: string): string
-    local f = _G[name]
-    if type(f) ~= "table" or not f.GetObjectType then return "missing" end
-    local kids = {}
-    for k, v in pairs(f) do if type(k) == "string" and type(v) == "table" and v.GetObjectType then kids[#kids + 1] = k end end
-    table.sort(kids)
-    return f:GetObjectType() .. " protected=" .. show(f:IsProtected()) .. " shown=" .. show(f:IsShown())
+    local f = wf.find(name)
+    if not f then return "missing" end
+    local kids = tbl.keys(wf.keyed(f))
+    return f:GetObjectType() .. " protected=" .. show((f:IsProtected())) .. " shown=" .. show(f:IsShown())
         .. " children: " .. table.concat(kids, " ")
 end
 
-local store: { [string]: any }? = nil
+local store: Loot? = nil
 local function note(s: string)
     local log = store and store.log
     if not log then return end
@@ -92,16 +97,17 @@ local function note(s: string)
 end
 
 -- A loot window as the game gives it: every slot's info.
-local function lootWindow(): { [string]: any }
-    local n = GetNumLootItems and GetNumLootItems()
-    local w = { at = date("%H:%M:%S"), count = show(n), fishing = call(IsFishingLoot), slots = {},
-                autoLoot = call(GetCVarBool, "autoLootDefault"), method = call(C_PartyInfo and C_PartyInfo.GetLootMethod or _G.GetLootMethod),
+local function lootWindow(): Record
+    local n = GetNumLootItems()
+    local slots: string[] = {}
+    local w: Record = { at = date("%H:%M:%S"), count = show(n), fishing = call(IsFishingLoot), slots = slots,
+                autoLoot = call(GetCVarBool, "autoLootDefault"), method = call(tbl.field(C_PartyInfo, "GetLootMethod") or tbl.field(_G, "GetLootMethod")),
                 threshold = call(GetLootThreshold) }
     if type(n) == "number" and not isSecret(n) then
         for i = 1, math.min(n, 12) do
-            w.slots[#w.slots + 1] = i .. ": info=" .. call(GetLootSlotInfo, i) .. " type=" .. call(GetLootSlotType, i)
+            table.insert(slots, i .. ": info=" .. call(GetLootSlotInfo, i) .. " type=" .. call(GetLootSlotType, i)
                 .. " link=" .. call(GetLootSlotLink, i) .. " hasItem=" .. call(LootSlotHasItem, i)
-                .. " source=" .. call(GetLootSourceInfo, i)
+                .. " source=" .. call(GetLootSourceInfo, i))
         end
     end
     w.info = call(GetLootInfo)
@@ -114,50 +120,54 @@ local function startLog()
     if logging then return end
     logging = true
     local f = CreateFrame("Frame")
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
     for _, e in ipairs(EVENTS) do
-        if not valid or valid(e) then f:RegisterEvent(e) end
+        if C_EventUtils.IsEventValid(e) then f:RegisterEvent(e) end
     end
-    f:SetScript("OnEvent", function(_, event, ...)
-        local args = {}
+    f:SetScript("OnEvent", function(_, event: string, ...: unknown)
+        local args: string[] = {}
         for i = 1, math.min(select("#", ...), 6) do args[#args + 1] = show((select(i, ...))) end
         note(event .. " " .. table.concat(args, " "))
-        local s = store :: { [string]: any } -- sampled before the log starts
+        local s = store
+        if not s then return end -- sampled before the log starts
         if event == "LOOT_OPENED" or event == "LOOT_READY" then
-            s.windows = s.windows or {}
             local w = lootWindow()
             w.event = event
             table.insert(s.windows, w)
             while #s.windows > 6 do table.remove(s.windows, 1) end
             if event == "LOOT_OPENED" and takeNext then
                 takeNext = false
-                s.take = { at = date("%H:%M:%S"), slot1 = call(GetLootSlotInfo, 1) }
-                s.take.result = call(LootSlot, 1)
+                local take: Record = { at = date("%H:%M:%S"), slot1 = call(GetLootSlotInfo, 1) }
+                s.take = take
+                take.result = call(LootSlot, 1)
                 print("Loot probe: SuuUI took the first slot itself. /reload to save what happened.")
             end
         elseif event == "START_LOOT_ROLL" then
             local rollID = ...
-            s.rolls = s.rolls or {}
             table.insert(s.rolls, {
                 at = date("%H:%M:%S"), rollID = show(rollID), time = show(select(2, ...)),
                 info = call(GetLootRollItemInfo, rollID), link = call(GetLootRollItemLink, rollID),
                 left = call(GetLootRollTimeLeft, rollID), active = call(GetActiveLootRollIDs),
             })
             while #s.rolls > 8 do table.remove(s.rolls, 1) end
-        elseif event:find("^LOOT_HISTORY") and C_LootHistory then
-            s.history = s.history or {}
-            local h = { at = date("%H:%M:%S"), event = event }
-            if C_LootHistory.GetAllEncounterInfos then
-                local ok, list = pcall(C_LootHistory.GetAllEncounterInfos)
-                h.encounters = ok and type(list) == "table" and #list or show(list)
-                if ok and type(list) == "table" and list[#list] then
-                    local e = list[#list]
+        elseif event:find("^LOOT_HISTORY") then
+            local h: Record = { at = date("%H:%M:%S"), event = event }
+            local all = tbl.field(C_LootHistory, "GetAllEncounterInfos")
+            if type(all) == "function" then
+                local ok, value = pcall(all)
+                local list = tbl.list(value)
+                h.encounters = ok and type(value) == "table" and #list or show(value)
+                local e = ok and list[#list]
+                if e then
                     h.lastEncounter = show(e)
-                    if C_LootHistory.GetSortedDropsForEncounter and e.encounterID then
-                        local ok2, drops = pcall(C_LootHistory.GetSortedDropsForEncounter, e.encounterID)
-                        if ok2 and type(drops) == "table" and drops[1] then
-                            h.firstDrop = show(drops[1])
-                            h.firstDropRolls = drops[1].rollInfos and show(drops[1].rollInfos[1]) or "none"
+                    local sorted = tbl.field(C_LootHistory, "GetSortedDropsForEncounter")
+                    local id = tbl.field(e, "encounterID")
+                    if type(sorted) == "function" and id ~= nil then
+                        local ok2, drops = pcall(sorted, id)
+                        local first = ok2 and tbl.list(drops)[1]
+                        if first then
+                            h.firstDrop = show(first)
+                            local rolls = tbl.field(first, "rollInfos")
+                            h.firstDropRolls = rolls ~= nil and show(tbl.list(rolls)[1]) or "none"
                         end
                     end
                 end
@@ -168,34 +178,36 @@ local function startLog()
     end)
 end
 
-export function sample(): { [string]: any }
-    local s: { [string]: any } = DB.probe.loot or {}
+export function sample(): Loot
+    local s = DB.probeData("loot", function(): Loot return { log = {}, windows = {}, rolls = {}, history = {} } end)
+    s.windows, s.rolls, s.history = s.windows or {}, s.rolls or {}, s.history or {}
     store = s
-    DB.probe.loot = s
     s.at = date("%Y-%m-%d %H:%M:%S")
     s.C_Loot = namesIn(C_Loot)
     s.C_LootHistory = namesIn(C_LootHistory)
     s.C_PartyInfo = namesIn(C_PartyInfo)
-    local globals = {}
+    local globals: { [string]: string } = {}
     for _, name in ipairs(GLOBALS) do
-        local v = _G[name]
+        local v = tbl.field(_G, name)
         globals[name] = (type(v) == "number" or type(v) == "string") and (type(v) .. " " .. tostring(v)) or type(v)
     end
     s.globals = globals
-    local valid = C_EventUtils and C_EventUtils.IsEventValid
-    s.events = {}
-    for _, e in ipairs(EVENTS) do s.events[e] = valid and show(valid(e)) or "unknown" end
-    s.cvars = {}
+    local events: { [string]: string } = {}
+    for _, e in ipairs(EVENTS) do events[e] = show(C_EventUtils.IsEventValid(e)) end
+    s.events = events
+    local cvars: { [string]: string } = {}
     for _, c in ipairs({ "autoLootDefault", "lootUnderMouse", "autoLootKey", "showLootSpam", "lootLeftmostBag" }) do
-        s.cvars[c] = show(GetCVar(c))
+        cvars[c] = show(GetCVar(c))
     end
-    s.frames = {}
+    s.cvars = cvars
+    local frameList: { [string]: string } = {}
     for _, name in ipairs({ "LootFrame", "GroupLootFrame1", "GroupLootContainer", "GroupLootHistoryFrame",
                             "MasterLooterFrame", "BonusRollFrame", "LootHistoryFrame" }) do
-        s.frames[name] = frameInfo(name)
+        frameList[name] = frameInfo(name)
     end
+    s.frames = frameList
     s.now = {
-        method = call(C_PartyInfo and C_PartyInfo.GetLootMethod or _G.GetLootMethod),
+        method = call(tbl.field(C_PartyInfo, "GetLootMethod") or tbl.field(_G, "GetLootMethod")),
         threshold = call(GetLootThreshold), optOut = call(GetOptOutOfLoot), activeRolls = call(GetActiveLootRollIDs),
     }
     s.log = s.log or {}
