@@ -16,6 +16,7 @@
 -- Saved in SuuUIProbe.collectionsOwn on /reload.
 
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import * as tbl from "wowlua:table"
 import print from "/Core/Init"
@@ -33,10 +34,10 @@ interface OwnPanel extends Panel
 end
 
 -- what the data steps found, for the panel's buttons
-local mountIDs: any = nil
-local usableMount: any = nil
-local firstToy: any = nil
-local firstSource: any = nil
+local mountIDs: unknown[]? = nil
+local usableMount: unknown = nil
+local firstToy: number? = nil
+local firstSource: unknown = nil
 local probePanel: OwnPanel? = nil
 local listening = false
 
@@ -66,7 +67,7 @@ local function call(fn: unknown, ...: unknown): string
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: unknown, ...: unknown): ...any
+local function raw(fn: unknown, ...: unknown): ...unknown
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k, l, m, n = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k, l, m, n end
@@ -89,8 +90,8 @@ end
 local function mounts()
     local MJ = C_MountJournal
     if not MJ then line("mounts", "C_MountJournal missing") return end
-    local ids = raw(MJ.GetMountIDs) or {}
-    local yours, usable = 0, nil
+    local ids = tbl.list(raw(MJ.GetMountIDs))
+    local yours: number, usable: unknown = 0, nil
     for _, id in ipairs(ids) do
         local _name, _spellID, _icon, _active, isUsable, _sourceType, _fav, _faction, _factionID, _hide, collected = raw(MJ.GetMountInfoByID, id)
         if collected then
@@ -119,10 +120,10 @@ local function toys()
     if not TB then line("toys", "C_ToyBox missing") return end
     line("toys", ("GetNumToys %s, filtered %s, learned displayed %s"):format(call(TB.GetNumToys), call(TB.GetNumFilteredToys),
         call(TB.GetNumLearnedDisplayedToys)))
-    local first
-    for i = 1, (raw(TB.GetNumFilteredToys) or 0) do
+    local first: number? = nil
+    for i = 1, (secret.asNumber(raw(TB.GetNumFilteredToys)) or 0) do
         local itemID = raw(TB.GetToyFromIndex, i)
-        if itemID and raw(PlayerHasToy, itemID) and not first then first = itemID end
+        if secret.isNumber(itemID) and raw(PlayerHasToy, itemID) and not first then first = itemID end
         if i <= 3 then line("toys", ("%d: %s info %s has %s"):format(i, show(itemID), call(TB.GetToyInfo, itemID), call(PlayerHasToy, itemID))) end
     end
     line("toys", "first of yours " .. tostring(first))
@@ -143,41 +144,43 @@ local function appearances()
     if not TC then line("appearances", "C_TransmogCollection missing") return end
     line("appearances", ("class filter %s, collected shown %s, uncollected shown %s"):format(call(TC.GetClassFilter),
         call(TC.GetCollectedShown), call(TC.GetUncollectedShown)))
-    local sample
+    local sample: unknown = nil
     for cat = 1, 40 do
         local name = raw(TC.GetCategoryInfo, cat)
         if name then
-            local list = raw(TC.GetCategoryAppearances, cat) or {}
+            local list = tbl.list(raw(TC.GetCategoryAppearances, cat))
             local yours = 0
-            for _, a in ipairs(list) do if a.isCollected then yours = yours + 1 end end
+            for _, a in ipairs(list) do if tbl.field(a, "isCollected") then yours = yours + 1 end end
             line("appearances", ("%d %s: %d appearances, %d yours, total %s collected %s"):format(cat, tostring(name), #list, yours,
                 call(TC.GetCategoryTotal, cat), call(TC.GetCategoryCollectedCount, cat)))
             if not sample and list[1] then
                 sample = list[1]
                 line("appearances", "  sample " .. show(sample))
-                local sources = raw(TC.GetAppearanceSources, sample.visualID) or {}
+                local sources = tbl.list(raw(TC.GetAppearanceSources, tbl.field(sample, "visualID")))
                 line("appearances", ("  %d sources, first %s"):format(#sources, show(sources[1])))
-                if sources[1] and sources[1].sourceID then
-                    line("appearances", "  source info " .. call(TC.GetSourceInfo, sources[1].sourceID))
-                    firstSource = sources[1].sourceID
+                local sourceID = tbl.field(sources[1], "sourceID")
+                if sourceID then
+                    line("appearances", "  source info " .. call(TC.GetSourceInfo, sourceID))
+                    firstSource = sourceID
                 end
             end
         end
     end
     -- every category ID, asked plainly and with a slot (the game's wardrobe
     -- asks for armor with the slot's transmog location)
-    local function location(slot: unknown): any
-        if not (TransmogUtil and TransmogUtil.GetTransmogLocation and Enum.TransmogType) then return nil end
-        local ok, loc = pcall(TransmogUtil.GetTransmogLocation, slot, Enum.TransmogType.Appearance, false)
-        return ok and loc and loc.GetData and loc:GetData() or nil
+    local function location(slot: unknown): unknown
+        local get = tbl.field(_G, "TransmogUtil", "GetTransmogLocation")
+        if not (type(get) == "function" and Enum.TransmogType) then return nil end
+        local ok, loc = pcall(get, slot, Enum.TransmogType.Appearance, false)
+        local data = ok and tbl.field(loc, "GetData")
+        return type(data) == "function" and raw(data, loc) or nil
     end
     for cat = 1, 30 do
-        local plain = raw(TC.GetCategoryAppearances, cat) or {}
-        local slotName = CollectionWardrobeUtil and CollectionWardrobeUtil.GetSlotFromCategoryID
-            and raw(CollectionWardrobeUtil.GetSlotFromCategoryID, cat)
-        local withSlot = slotName and raw(TC.GetCategoryAppearances, cat, location(slotName)) or {}
+        local plain = tbl.list(raw(TC.GetCategoryAppearances, cat))
+        local slotName = raw(tbl.field(_G, "CollectionWardrobeUtil", "GetSlotFromCategoryID"), cat)
+        local withSlot = slotName and tbl.list(raw(TC.GetCategoryAppearances, cat, location(slotName))) or {}
         local yours = 0
-        for _, a in ipairs(withSlot) do if a.isCollected then yours = yours + 1 end end
+        for _, a in ipairs(withSlot) do if tbl.field(a, "isCollected") then yours = yours + 1 end end
         line("categories", ("%d info %s | slot %s | plain %d | with slot %d (yours %d)"):format(cat, call(TC.GetCategoryInfo, cat),
             tostring(slotName), #plain, #withSlot, yours))
     end
@@ -216,12 +219,12 @@ local function build(): OwnPanel
     local mountName = uiText(p.body, "caption", "ink-muted")
     mountName:SetPoint("TOP", m, "BOTTOM", 0, -4)
     local function nextMount()
-        local ids = mountIDs or {}
+        local ids: unknown[] = mountIDs or {}
         if #ids == 0 then mountName:SetValue("no mounts") return end
         mi = mi % #ids + 1
         local name = raw(C_MountJournal.GetMountInfoByID, ids[mi])
         local display = raw(C_MountJournal.GetMountInfoExtraByID, ids[mi])
-        local ok, err = pcall(m.SetDisplayInfo, m, display or 0)
+        local ok, err = pcall(m.SetDisplayInfo, m, secret.asNumber(display) or 0)
         mountName:SetValue(("%s (display %s)%s"):format(tostring(name), tostring(display), ok and "" or (" error " .. tostring(err))))
     end
     local nm = button(p.body, { text = "Next mount", width = 110, onClick = nextMount })
@@ -236,7 +239,7 @@ local function build(): OwnPanel
         local ok = pcall(d.SetUnit, d, "player")
         local src = firstSource
         local ok2, err = true, nil
-        if src then ok2, err = pcall(d.TryOn, d, src) end
+        if src then ok2, err = pcall(d.TryOn, d, src :: number | string) end
         tryText:SetValue(("you %s, try on source %s %s"):format(ok and "shown" or "error", tostring(src), ok2 and "ok" or ("error " .. tostring(err))))
     end
     local tb = button(p.body, { text = "Try on", width = 110, onClick = tryOn })
@@ -248,7 +251,7 @@ local function build(): OwnPanel
         if IsMounted and IsMounted() then
             note("Dismiss: " .. call(C_MountJournal.Dismiss))
         else
-            note("SummonByID(" .. id .. "): " .. call(C_MountJournal.SummonByID, id))
+            note("SummonByID(" .. tostring(id) .. "): " .. call(C_MountJournal.SummonByID, id))
         end
     end })
     sum:SetPoint("BOTTOMLEFT")
@@ -296,7 +299,7 @@ export function command()
                              "COMPANION_UPDATE", "NEW_MOUNT_ADDED" }) do
             pcall(f.RegisterEvent, f, e)
         end
-        f:SetScript("OnEvent", function(_, e, a, b, c)
+        f:SetScript("OnEvent", function(_, e: string, a: unknown, b: unknown, c: unknown)
             if e == "UNIT_SPELLCAST_SUCCEEDED" and a ~= "player" then return end
             note(("%s %s %s %s"):format(e, show(a), show(b), show(c)))
         end)

@@ -4,6 +4,7 @@
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
 import * as perf from "/Core/Perf"
 import internal ns from "/Core/Perf"
 import * as fault from "/Core/Fault"
@@ -103,23 +104,19 @@ local function noMemory()
     local out = perf.report()
     expect(out.memory).toBeNil()
     expect(updates).toHaveBeenCalled()
-    local api = _G.UpdateAddOnMemoryUsage
-    _G.UpdateAddOnMemoryUsage = nil
+    mock.setField(_G, "UpdateAddOnMemoryUsage", nil)
     memoryKB(1024)
     expect(perf.report().memory).toBe("1.0 MB")
-    _G.UpdateAddOnMemoryUsage = api
 end
 
 @test("the game's profiler, when it runs: SuuUI's share of the frame")
 local function share()
     spent({})
-    local enumAll: { [string]: any } = Enum :: any
-    local metrics = enumAll.AddOnProfilerMetric
-    local saved = _G.C_AddOnProfiler
-    -- a stand-in profiler, its parts swapped per case
-    local profiler: { [string]: any } = {}
+    -- a stand-in profiler, its parts swapped per case (the client's put
+    -- back when the test ends)
+    local profiler: { [string]: unknown } = {}
     local function reset()
-        enumAll.AddOnProfilerMetric = { RecentAverageTime = 7 }
+        mock.setField(Enum, "AddOnProfilerMetric", { RecentAverageTime = 7 })
         profiler.IsEnabled = function(): boolean return true end
         profiler.GetAddOnMetric = function(addon: string, metric: number): number?
             expect(addon).toBe("SuuUI")
@@ -127,7 +124,7 @@ local function share()
             return 0.5
         end
         profiler.GetApplicationMetric = function(_: number): number? return 4 end
-        _G.C_AddOnProfiler = profiler
+        mock.setField(_G, "C_AddOnProfiler", profiler)
     end
     local function shareNow(): string? return perf.report().share end
     local answers: { [string]: string | boolean } = {}
@@ -139,16 +136,14 @@ local function share()
     case("running", function() end)
     case("off", function() profiler.IsEnabled = function(): boolean return false end end)
     case("no IsEnabled", function() profiler.IsEnabled = nil end)
-    case("no profiler", function() _G.C_AddOnProfiler = nil end)
-    case("no metric enum", function() enumAll.AddOnProfilerMetric = nil end)
-    case("no metric", function() enumAll.AddOnProfilerMetric = {} end)
+    case("no profiler", function() mock.setField(_G, "C_AddOnProfiler", nil) end)
+    case("no metric enum", function() mock.setField(Enum, "AddOnProfilerMetric", nil) end)
+    case("no metric", function() mock.setField(Enum, "AddOnProfilerMetric", {}) end)
     case("addon metric fails", function() profiler.GetAddOnMetric = function(_: string, _: number): number? error("x") end end)
     case("app metric fails", function() profiler.GetApplicationMetric = function(_: number): number? error("x") end end)
     case("no addon metric", function() profiler.GetAddOnMetric = function(_: string, _: number): number? return nil end end)
     case("no app metric", function() profiler.GetApplicationMetric = function(_: number): number? return nil end end)
     case("app metric 0", function() profiler.GetApplicationMetric = function(_: number): number? return 0 end end)
-    _G.C_AddOnProfiler = saved
-    enumAll.AddOnProfilerMetric = metrics
     expect(answers).toEqual({
         running = "0.50 ms a frame, 12.5% of the frame", off = false, ["no IsEnabled"] = false, ["no profiler"] = false,
         ["no metric enum"] = false, ["no metric"] = false, ["addon metric fails"] = false, ["app metric fails"] = false,
@@ -165,19 +160,18 @@ end
 
 @test("a source without an allocation count counts 0 KB")
 local function noKB()
-    local row: { [string]: any } = { ms = 1, calls = 1, peak = 1 }
-    spent({ Old = row :: any })
+    local row: Spent = mock.partial({ ms = 1, calls = 1, peak = 1 })
+    spent({ Old = row })
     expect(perf.report().modules).toEqual({ "Old: 1.0 ms (1.000 ms/s), 1 calls, slowest 1.00 ms, 0 KB allocated" })
 end
 
 -- A dev build's runtime (wowlua dev): its profiler's and monitor's stats.
 -- (a stand-in runtime: the addon table seen untyped)
-local function devRuntime(wl: { [string]: any }?, fn: () -> ())
-    local addonTable: { [string]: any } = ns :: any
-    local saved = addonTable.__wowlua
-    addonTable.__wowlua = wl
+local function devRuntime(wl: { [string]: unknown }?, fn: () -> ())
+    local saved = tbl.field(ns, "__wowlua")
+    mock.setField(ns, "__wowlua", wl)
     local ok, err = pcall(fn)
-    addonTable.__wowlua = saved
+    mock.setField(ns, "__wowlua", saved)
     if not ok then error(err, 0) end
 end
 

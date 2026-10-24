@@ -2,6 +2,7 @@
 -- place under Profiles › By role; plugins' values per role.
 
 import test, expect, afterEach from "wowlua:test"
+import * as tbl from "wowlua:table"
 import * as mock from "wowlua:mock"
 import * as rolePresets from "/Core/RolePresets"
 import * as settings from "/Core/Settings"
@@ -10,7 +11,7 @@ import expectNoErrors from "../../helpers"
 
 local profiles = settings.profiles
 
-local function stored(profileName: string): { [string]: any }
+local function stored(profileName: string): settings.Profile
     local exported = assert(profiles.export(profileName))
     return exported.data
 end
@@ -65,10 +66,10 @@ end
 local function healer()
     expect(rolePresets.apply("HEALER")).toBe(true)
     local data = stored("SuuHeal")
-    expect(data.party.width).toBe(120)
-    expect(data.party.direction).toBe("right")
-    expect(data.unitframes.playerPosition).toEqual({ point = "BOTTOM", x = -474, y = 300 })
-    expect(data.raid.arrangement).toBe("rows")
+    expect(tbl.field(data, "party", "width")).toBe(120)
+    expect(tbl.field(data, "party", "direction")).toBe("right")
+    expect(tbl.field(data, "unitframes", "playerPosition")).toEqual({ point = "BOTTOM", x = -474, y = 300 })
+    expect(tbl.field(data, "raid", "arrangement")).toBe("rows")
 end
 
 @test("applying again puts the layout back")
@@ -76,9 +77,9 @@ local function again()
     expect(rolePresets.apply("HEALER")).toBe(true)
     -- a player's edit of the preset's profile
     profiles.setValues("SuuHeal", { { "party", "width", 161 } })
-    expect(stored("SuuHeal").party.width).toBe(161)
+    expect(tbl.field(stored("SuuHeal"), "party", "width")).toBe(161)
     expect(rolePresets.apply("HEALER")).toBe(true)
-    expect(stored("SuuHeal").party.width).toBe(120)
+    expect(tbl.field(stored("SuuHeal"), "party", "width")).toBe(120)
 end
 
 @test("a preset of the profile in use applies through the settings at once")
@@ -106,7 +107,7 @@ end
 
 @test("a plugin's values for the role are stored; another role's keys go to their default")
 local function additions()
-    mock.stub(extend, "additions", function(listName: string): any[]
+    mock.stub(extend, "additions", function(listName: string): unknown[]
         expect(listName).toBe("rolepresets")
         return {
             { role = "HEALER", namespace = "ui", values = { reducedMotion = true } },
@@ -118,17 +119,17 @@ local function additions()
     end)
     expect(rolePresets.apply("HEALER")).toBe(true)
     local healer = stored("SuuHeal")
-    expect(healer.ui.reducedMotion).toBe(true)
-    expect(healer.ui.hideIssueReporter).toBeNil()
+    expect(tbl.field(healer, "ui", "reducedMotion")).toBe(true)
+    expect(tbl.field(healer, "ui", "hideIssueReporter")).toBeNil()
     expect(rolePresets.apply("TANK")).toBe(true)
     local tank = stored("SuuTank")
-    expect(tank.ui.hideIssueReporter).toBe(false)
-    expect(tank.ui.reducedMotion).toBeNil()
+    expect(tbl.field(tank, "ui", "hideIssueReporter")).toBe(false)
+    expect(tbl.field(tank, "ui", "reducedMotion")).toBeNil()
 end
 
 @test("a preset whose values can't be stored says why")
 local function cannotStore()
-    mock.stub(profiles, "setValues", function(_: string?, _: { [number]: any }[]): (boolean, string?)
+    mock.stub(profiles, "setValues", function(_: string?, _: { [number]: unknown }[]): (boolean, string?)
         return false, "A profile needs a name."
     end)
     local ok, why = rolePresets.apply("DAMAGER")

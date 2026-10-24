@@ -14,12 +14,12 @@ const CONFIG = 9001
 
 local profiles = settings.profiles
 
-type Node = { posX?: number, ranksPurchased?: any, activeRank?: number, currentRank?: number }
+type Node = { posX?: number, ranksPurchased?: unknown, activeRank?: number, currentRank?: number }
 
 -- A talent config of these nodes (by node ID) in one tree.
 local function talents(nodes: { [number]: Node })
     mock.fake("C_ClassTalents.GetActiveConfigID", function(): number return CONFIG end)
-    mock.fake("C_Traits.GetConfigInfo", function(cfg: number): any
+    mock.fake("C_Traits.GetConfigInfo", function(cfg: number): unknown
         expect(cfg).toBe(CONFIG)
         return { treeIDs = { 77 } }
     end)
@@ -30,7 +30,7 @@ local function talents(nodes: { [number]: Node })
         table.sort(ids)
         return ids
     end)
-    mock.fake("C_Traits.GetNodeInfo", function(_: number, nodeID: number): any return nodes[nodeID] end)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, nodeID: number): unknown return nodes[nodeID] end)
 end
 
 -- Points in the three trees, laid out side by side at x 0-99, 100-199, 200-300.
@@ -128,7 +128,7 @@ local function none()
     noTalents()
     expect(roles.spec()).toBe(0)
     mock.fake("C_ClassTalents.GetActiveConfigID", function(): number return CONFIG end)
-    mock.fake("C_Traits.GetConfigInfo", function(_: number): any return {} end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number): unknown return {} end)
     expect(roles.spec()).toBe(0)
     -- only far-off nodes, or nodes without a position
     talents({ [1] = { posX = 30000, ranksPurchased = 5 }, [2] = { ranksPurchased = 5 } })
@@ -139,25 +139,24 @@ end
 
 @test("a client without the talent APIs, a tree without nodes, a node without info: none")
 local function missingApis()
-    local all: { [string]: any } = _G :: any
+    -- (the client's functions taken away, put back when the test ends)
     local answers: number[] = {}
-    local saved = all.C_ClassTalents
-    all.C_ClassTalents = nil
+    local classTalents, traits = C_ClassTalents, C_Traits
+    mock.setField(_G, "C_ClassTalents", nil)
     answers[#answers + 1] = (roles.spec())
-    all.C_ClassTalents = {}
+    mock.setField(_G, "C_ClassTalents", {})
     answers[#answers + 1] = (roles.spec())
-    all.C_ClassTalents = saved
+    mock.setField(_G, "C_ClassTalents", classTalents)
     mock.fake("C_ClassTalents.GetActiveConfigID", function(): number return CONFIG end)
-    local traits = all.C_Traits
-    all.C_Traits = nil
+    mock.setField(_G, "C_Traits", nil)
     answers[#answers + 1] = (roles.spec())
-    all.C_Traits = traits
+    mock.setField(_G, "C_Traits", traits)
     talents({})
     mock.fake("C_Traits.GetTreeNodes", function(_: number): number[]? return nil end)
     answers[#answers + 1] = (roles.spec())
     -- node 2 has no info: skipped
     mock.fake("C_Traits.GetTreeNodes", function(_: number): number[] return { 1, 2, 3 } end)
-    mock.fake("C_Traits.GetNodeInfo", function(_: number, id: number): any
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, id: number): unknown
         if id == 2 then return nil end
         return { posX = id == 1 and 0 or 300, ranksPurchased = id }
     end)
@@ -168,7 +167,7 @@ end
 @test("an error reading the talents reads as none")
 local function broken()
     points(1, 2, 3)
-    mock.fake("C_Traits.GetNodeInfo", function(_: number, _: number): any error("boom") end)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, _: number): unknown error("boom") end)
     local tree, pts = roles.spec()
     expect(tree).toBe(0)
     expect(pts).toEqual({ 0, 0, 0 })
@@ -219,13 +218,11 @@ end
 @test("a secret assigned role, or no group roles API, falls through to talents")
 local function secretAssigned()
     points(0, 0, 9)
-    mock.fake("UnitGroupRolesAssigned", function(_: string): any return mock.secret("TANK") end)
+    mock.fake("UnitGroupRolesAssigned", function(_: string): unknown return mock.secret("TANK") end)
     local _, source = roles.current()
     expect(source).toBe(roles.RoleSource.Talents)
-    local api = _G.UnitGroupRolesAssigned
-    _G.UnitGroupRolesAssigned = nil
+    mock.setField(_G, "UnitGroupRolesAssigned", nil)
     local _, source2 = roles.current()
-    _G.UnitGroupRolesAssigned = api
     expect(source2).toBe(roles.RoleSource.Talents)
 end
 

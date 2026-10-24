@@ -3,6 +3,7 @@
 -- close, and putting a frame back when the game reparents it.
 
 import test, expect, afterEach from "wowlua:test"
+import * as tbl from "wowlua:table"
 import * as mock from "wowlua:mock"
 import * as blizzard from "/Core/Blizzard"
 import expectNoErrors from "../../helpers"
@@ -69,11 +70,11 @@ end
 
 @test("the named children stop their events too, by path")
 local function children()
-    -- (Blizzard's frames carry their children as fields: an untyped view)
-    local f: any = blizzardFrame()
+    -- (Blizzard's frames carry their children as fields)
+    local f = blizzardFrame() :: Frame & { healthbar: Frame, Container: Frame }
     local direct = CreateFrame("Frame", nil, f)
     direct:RegisterEvent("UNIT_HEALTH")
-    local container = CreateFrame("Frame", nil, f)
+    local container = CreateFrame("Frame", nil, f) :: Frame & { bar: StatusBar }
     local nested = CreateFrame("StatusBar", nil, container)
     nested:RegisterEvent("UNIT_POWER_UPDATE")
     f.healthbar, f.Container, container.bar = direct, container, nested
@@ -191,11 +192,10 @@ end
 
 @test("a client without Edit Mode's manager moves the frame at once")
 local function noEditMode()
-    local all: { [string]: any } = _G :: any
-    local manager = all.EditModeManagerFrame
-    all.EditModeManagerFrame = nil
+    local manager = tbl.field(_G, "EditModeManagerFrame")
+    mock.setField(_G, "EditModeManagerFrame", nil)
     local f = blizzardFrame()
     blizzard.suppress(f)
-    all.EditModeManagerFrame = manager
+    mock.setField(_G, "EditModeManagerFrame", manager)
     expect(f:GetParent()).toBe(hidden)
 end

@@ -5,6 +5,7 @@
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
 import * as rb from "/UI/ResourceBar"
 import type ResourceApi, ResourceBar, ResourceBarOptions from "/UI/ResourceBar"
 import * as editMode from "/EditMode/EditMode"
@@ -18,22 +19,23 @@ const S = T.space
 
 -- What the stand-in answers.
 type World = {
-    class: string, token: string, pType: number, power: any, max: any, pct: number,
-    target: boolean, hostile: any, combo: any, comboAPI: boolean, fighting: boolean,
+    class: string, token: string, pType: number, power: number | Secret<number>, max: number | Secret<number>, pct: number,
+    target: boolean, hostile: boolean | Secret<boolean>, combo: number | Secret<number>, comboAPI: boolean, fighting: boolean,
 }
 
 local parent: Frame
-local made: any[] = {}
+local made: ResourceBar[] = {}
 
-local function tokenOf(region: any): string?
-    local p = paints[region]
+local function tokenOf(region: unknown): string?
+    local r = frames.asRegion(region)
+    local p = r and paints[r]
     return p and p.token
 end
 
-local function world(w: { [string]: any }?): World
+local function world(w: { [string]: unknown }?): World
     local d: World = { class = "WARRIOR", token = "RAGE", pType = 1, power = 30, max = 100, pct = 30,
         target = false, hostile = true, combo = 0, comboAPI = true, fighting = false }
-    for k, v in pairs(w or {}) do (d :: any)[k] = v end
+    for k, v in pairs(w or {}) do (d :: { [string]: unknown })[k] = v end
     return d
 end
 
@@ -51,7 +53,7 @@ local function api(d: World): ResourceApi
             return d.pct < 25 and 1 or 0
         end,
         UnitExists = function(_) return d.target end,
-        UnitCanAttack = function(_, _) return d.hostile end,
+        UnitCanAttack = function(_, _) return d.hostile :: boolean end, -- (a secret handed on as the game would)
         UnitAffectingCombat = function(_) return d.fighting end,
     }
     if d.comboAPI then a.GetComboPoints = function(_, _) return d.combo end end
@@ -146,7 +148,7 @@ end
 local function resize()
     local r = resource(world())
     local resized = mock.spy()
-    r.onResize = function(self: any) resized(self) end
+    r.onResize = function(self) resized(self) end
     r:SetOptions({ number = "value" })
     expect(resized).never.toHaveBeenCalled()
     r:SetOptions({ show = "off" })

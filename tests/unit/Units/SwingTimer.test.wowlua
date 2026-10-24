@@ -7,6 +7,8 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/SwingTimer"
+import internal M as castBars from "/Units/CastBars"
+import type AnyModule from "/Core/Modules"
 import migrations as settingMigrations from "/Core/Settings"
 import expectNoErrors, testRow, TestRow from "../../helpers"
 
@@ -15,7 +17,7 @@ local function cleanup()
     if InCombatLockdown() then mock.player:leaveCombat() end
     mock.group:leave()
     M:ResetAll({ "shows", "hideForHealers", "autoShotWindow", "autoShotNoCast", "position" })
-    local cast: any = SuuUI.GetModule("castbars")
+    local cast = castBars
     cast:Reset("playerWidth")
     mock.advanceFrames(2)
     expectNoErrors()
@@ -31,7 +33,7 @@ end
 @test("as wide as your cast bar, following its width")
 local function width()
     local t = assert(M.timer)
-    local cast: any = SuuUI.GetModule("castbars")
+    local cast = castBars
     expect(t:GetWidth()).toBe(cast:Get("playerWidth"))
     cast:Set("playerWidth", 400)
     expect(t:GetWidth()).toBe(400)
@@ -110,14 +112,14 @@ local function migration()
     for _, m in ipairs(settingMigrations()) do
         if m.namespace == "swingtimer" and m.id == "shows" then
             found = true
-            local on: { [string]: any } = { inCombatOnly = true }
+            local on: { [string]: unknown } = { inCombatOnly = true }
             m.fn(on)
             expect(on.shows).toBe("combat")
             expect(on.inCombatOnly).toBeNil()
-            local off: { [string]: any } = { inCombatOnly = false }
+            local off: { [string]: unknown } = { inCombatOnly = false }
             m.fn(off)
             expect(off.shows).toBe("always")
-            local new: { [string]: any } = { shows = "off" }
+            local new: { [string]: unknown } = { shows = "off" }
             m.fn(new)
             expect(new.shows).toBe("off")
         end
@@ -129,8 +131,7 @@ end
 @test("stopped: the timer gone")
 local function disabled()
     M:Set("shows", "always")
-    local m: any = M
-    m:OnDisable()
+    ;(M :: AnyModule):OnDisable()
     expect(assert(M.timer):IsShown()).toBe(false)
     expect(assert(M.timer).active).toBe(false)
 end

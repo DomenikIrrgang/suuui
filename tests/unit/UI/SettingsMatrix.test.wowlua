@@ -6,7 +6,9 @@ import test, expect, afterEach, beforeAll, beforeEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import * as tooltip from "/UI/Tooltip"
-import settingsMatrix, SettingsMatrix, MatrixColumn, MatrixRowDef from "/UI/SettingsMatrix"
+import settingsMatrix, SettingsMatrix, MatrixColumn, MatrixRowDef, MatrixValue, MatrixCell from "/UI/SettingsMatrix"
+import type Checkbox from "/UI/Inputs"
+import type Select, SelectValue from "/UI/Select"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, pointOf from "./PrimitivesHelpers"
 
@@ -46,7 +48,7 @@ local ROWS: MatrixRowDef[] = {
     { key = "full", label = "Group is full" },
 }
 
-type Values = { [string]: { [string]: any } }
+type Values = MatrixValue
 
 local function make(onChange: ((v: Values) -> ())?, width: number?): SettingsMatrix
     local m = settingsMatrix(parent :: Frame, { columns = COLUMNS, rows = ROWS, onChange = onChange, width = width })
@@ -54,8 +56,12 @@ local function make(onChange: ((v: Values) -> ())?, width: number?): SettingsMat
     return m
 end
 
-local function cell(m: SettingsMatrix, row: number, col: string): any
-    return (m.rowFrames[row].cells :: any)[col]
+local function cell(m: SettingsMatrix, row: number, col: string): MatrixCell
+    return assert(m.rowFrames[row].cells[col])
+end
+
+local function control(m: SettingsMatrix, row: number, col: string): Checkbox | Select<SelectValue>
+    return assert(cell(m, row, col).control)
 end
 
 @test("the grid: a 28px header, 36px rows, the cells centred in their columns")
@@ -68,19 +74,19 @@ local function build()
     expect(pointOf(r1)).toEqual({ point = "TOPLEFT", relativeTo = m, relativePoint = "TOPLEFT", x = 0, y = -28 })
     expect(assert(pointOf(m.rowFrames[2])).y).toBe(-64)
     expect(r1.name).toHaveText("Your role is needed")
-    expect((r1.desc :: any)).toHaveText("Tank or healer")
+    expect(r1.desc).toHaveText("Tank or healer")
     expect(m.rowFrames[2].desc).toBeNil()
     expect(m.rowFrames[2].name).toBeAnchoredTo(m.rowFrames[2], "LEFT", "LEFT")
     -- the columns from the right: say, conf, on
     local sayX = 640 - S["space-4"] - 34
     local confX = sayX - S["space-3"] - 78
     local onX = confX - S["space-3"] - 34
-    expect(assert(pointOf(cell(m, 1, "say").control)).x).toBe(sayX + 17)
-    expect(assert(pointOf(cell(m, 1, "conf").control)).x).toBe(confX + 39)
+    expect(assert(pointOf(control(m, 1, "say"))).x).toBe(sayX + 17)
+    expect(assert(pointOf(control(m, 1, "conf"))).x).toBe(confX + 39)
     expect(assert(pointOf(cell(m, 1, "on").none)).x).toBe(onX + 17)
     expect(r1.name:GetWidth()).toBe(onX - S["space-3"] - S["space-4"])
-    expect(cell(m, 1, "conf").control:GetWidth()).toBe(78)
-    expect(cell(m, 1, "conf").control:GetHeight()).toBe(24)
+    expect(control(m, 1, "conf"):GetWidth()).toBe(78)
+    expect(control(m, 1, "conf"):GetHeight()).toBe(24)
     expect(cell(m, 1, "say").none).toHaveText("—")
 end
 
@@ -91,7 +97,7 @@ local function empty()
     for _, row in ipairs(m.rowFrames) do
         expect(tokenOf(row.name)).toBe("ink-faint")
         for _, col in ipairs(COLUMNS) do
-            local c = (row.cells :: any)[col.key]
+            local c = assert(row.cells[col.key])
             expect(c.none).toBeShown()
             expect(c.control).never.toBeShown()
         end
@@ -105,13 +111,13 @@ local function setValue()
     m:SetValue({ role = { on = true, conf = 90, say = false } })
     expect(tokenOf(m.rowFrames[1].name)).toBe("ink")
     expect(cell(m, 1, "on").none).never.toBeShown()
-    expect(cell(m, 1, "on").control).toBeShown()
-    expect(cell(m, 1, "on").control.value).toBe(true)
-    expect(cell(m, 1, "conf").control.value).toBe(90)
-    expect(cell(m, 1, "conf").control.disabled).toBe(false)
-    expect(cell(m, 1, "say").control.value).toBe(false)
-    expect(cell(m, 1, "say").control.disabled).toBe(false)
-    expect(cell(m, 2, "say").control).never.toBeShown()
+    expect(control(m, 1, "on")).toBeShown()
+    expect(control(m, 1, "on").value).toBe(true)
+    expect(control(m, 1, "conf").value).toBe(90)
+    expect(control(m, 1, "conf").disabled).toBe(false)
+    expect(control(m, 1, "say").value).toBe(false)
+    expect(control(m, 1, "say").disabled).toBe(false)
+    expect(control(m, 2, "say")).never.toBeShown()
 end
 
 @test("a row switched off greys its name and disables its other cells, which keep their values")
@@ -119,22 +125,22 @@ local function masterOff()
     local m = make()
     m:SetValue({ role = { on = false, conf = 70, say = true } })
     expect(tokenOf(m.rowFrames[1].name)).toBe("ink-faint")
-    expect(cell(m, 1, "on").control.disabled).toBe(false)
-    expect(cell(m, 1, "conf").control.disabled).toBe(true)
-    expect(cell(m, 1, "say").control.disabled).toBe(true)
-    expect(cell(m, 1, "say").control.value).toBe(true)
+    expect(control(m, 1, "on").disabled).toBe(false)
+    expect(control(m, 1, "conf").disabled).toBe(true)
+    expect(control(m, 1, "say").disabled).toBe(true)
+    expect(control(m, 1, "say").value).toBe(true)
     expect(m:GetValue()).toEqual({ role = { on = false, conf = 70, say = true } })
 end
 
 @test("values in and out are copies")
 local function copies()
     local m = make()
-    local role: { [string]: any } = { on = true }
+    local role: { [string]: SelectValue } = { on = true }
     m:SetValue({ role = role })
     role.on = false
     expect(m:GetValue()).toEqual({ role = { on = true } })
     local out = m:GetValue()
-    local outRole = out.role :: { [string]: any }
+    local outRole = assert(out.role)
     outRole.on = false
     expect(m:GetValue()).toEqual({ role = { on = true } })
 end
@@ -145,7 +151,7 @@ local function set()
     local m = make(s)
     m:Set("full", "say", true)
     expect(s).toHaveBeenCalledWith({ full = { say = true } })
-    expect(cell(m, 2, "say").control).toBeShown()
+    expect(control(m, 2, "say")).toBeShown()
     m:Set("full", "on", true)
     expect(s).toHaveBeenCalledWith({ full = { say = true, on = true } })
     expect(tokenOf(m.rowFrames[2].name)).toBe("ink")
@@ -159,11 +165,11 @@ local function clickCell()
     local s = mock.spy(function(_v: Values) end)
     local m = make(s)
     m:SetValue({ role = { on = true, say = false } })
-    mock.click(cell(m, 1, "say").control)
+    mock.click(control(m, 1, "say"))
     expect(s).toHaveBeenCalledWith({ role = { on = true, say = true } })
-    mock.click(cell(m, 1, "on").control)
+    mock.click(control(m, 1, "on"))
     expect(tokenOf(m.rowFrames[1].name)).toBe("ink-faint")
-    expect(cell(m, 1, "say").control.disabled).toBe(true)
+    expect(control(m, 1, "say").disabled).toBe(true)
 end
 
 @test("a pick in a select cell sets it")
@@ -171,9 +177,9 @@ local function pickCell()
     local s = mock.spy(function(_v: Values) end)
     local m = make(s)
     m:SetValue({ role = { on = true, conf = 70 } })
-    local sel = cell(m, 1, "conf").control
+    local sel = control(m, 1, "conf") :: Select<SelectValue>
     mock.click(sel)
-    mock.click(sel.list.rows[2])
+    mock.click(assert(sel.list).rows[2])
     expect(s).toHaveBeenCalledWith({ role = { on = true, conf = 90 } })
     expect(sel.value).toBe(90)
 end

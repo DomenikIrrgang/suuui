@@ -13,15 +13,15 @@ import version from "/Core/Init"
 const PREFIX = "|cff9fd3c7SuuUI|r "
 
 -- What taintScan.scan gives in these tests (replaced for the whole file).
-local scanResult: () -> any = function(): any return {} end
-mock.module(taintScan, { scan = function(): string[] return scanResult() end })
+local scanResult: () -> unknown = function(): unknown return {} end
+mock.module(taintScan, { scan = function(): string[] return scanResult() :: string[] end })
 
 @afterEach
 local function cleanup()
     fault.setTiming(false)
     mock.slash("/suu errors clear")
     DB.db.blocked = nil
-    scanResult = function(): any return {} end
+    scanResult = function(): unknown return {} end
 end
 
 local function printedBy(fn: () -> ()): string[]
@@ -68,7 +68,7 @@ local function dedupes()
     expect(out).toEqual({})
     expect(#fault.entries()).toBe(1)
     expect(last().count).toBe(2)
-    expect(#(DB.db.errors :: any[])).toBe(1)
+    expect(#(DB.db.errors :: unknown[])).toBe(1)
     fault.report("Chat", "fault-same")
     expect(#fault.entries()).toBe(2)
 end
@@ -356,7 +356,7 @@ end
 
 @test("a protected call blocked for SuuUI: reported as Taint, with what addon code wrote")
 local function blockedMine()
-    scanResult = function(): any return { "PlayerFrame.x", "ActionButton1.y" } end
+    scanResult = function(): unknown return { "PlayerFrame.x", "ActionButton1.y" } end
     mock.player:enterCombat()
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "CastSpellByName")
     mock.player:leaveCombat()
@@ -373,17 +373,17 @@ end
 local function blockedScan()
     local many: string[] = {}
     for i = 1, 45 do many[i] = "w" .. i end
-    scanResult = function(): any return many end
+    scanResult = function(): unknown return many end
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncMany")
     local stack = last().stack :: string
     expect(stack:find("; w40", 1, true) ~= nil).toBe(true)
     expect(stack:find("; w41", 1, true)).toBeNil()
-    scanResult = function(): any error("scan failed") end
+    scanResult = function(): unknown error("scan failed") end
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncErr")
     -- (out of combat: a call that needs the user's click)
     expect(last().message).toBe("Blocked: FuncErr")
     expect((last().stack :: string):find("Written by addon code", 1, true)).toBeNil()
-    scanResult = function(): any return "nothing" end
+    scanResult = function(): unknown return "nothing" end
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncOdd")
     expect((last().stack :: string):find("Written by addon code", 1, true)).toBeNil()
 end

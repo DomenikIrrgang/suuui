@@ -20,6 +20,7 @@
 
 import after from "wowlua:timer"
 import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
 import * as DB from "/Core/DB"
 import print from "/Core/Init"
 import panel, closeButton, Panel from "/UI/Panel"
@@ -29,7 +30,7 @@ import * as tbl from "wowlua:table"
 interface TilesPanel extends Panel
     closeButton?: Button
     tiles?: DressUpModel[]
-    scene?: any
+    scene?: ModelScene
 end
 
 local probePanel: TilesPanel? = nil
@@ -56,7 +57,7 @@ local function call(fn: unknown, ...: unknown): string
     return table.concat(parts, " | ")
 end
 
-local function raw(fn: unknown, ...: unknown): ...any
+local function raw(fn: unknown, ...: unknown): ...unknown
     if type(fn) ~= "function" then return nil end
     local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
     if ok then return a, b, c, d, e, f, g, h, i, j, k end
@@ -88,14 +89,15 @@ local function toys()
         if done then return end
         done = true
         f:UnregisterAllEvents()
-        local n = raw(TB.GetNumFilteredToys) or 0
+        local n = secret.asNumber(raw(TB.GetNumFilteredToys)) or 0
         line("toys", ("(%s) filtered with everything shown: %d"):format(why, n))
         for i = 1, math.min(n, 25) do
             local itemID = raw(TB.GetToyFromIndex, i)
             local data = itemID and C_TooltipInfo and raw(C_TooltipInfo.GetToyByItemID, itemID)
-            local texts = {}
-            for _, l in ipairs(data and data.lines or {}) do
-                if l.leftText and not isSecret(l.leftText) then texts[#texts + 1] = l.leftText end
+            local texts: string[] = {}
+            for _, l in ipairs(tbl.list(tbl.field(data, "lines"))) do
+                local text = secret.asString(tbl.field(l, "leftText"))
+                if text then texts[#texts + 1] = text end
             end
             line("toys", ("%d: %s info %s has %s | %s"):format(i, show(itemID), call(TB.GetToyInfo, itemID), call(PlayerHasToy, itemID),
                 table.concat(texts, " / "):sub(1, 240)))
@@ -110,33 +112,36 @@ end
 
 local function sources()
     local MJ, TC = C_MountJournal, C_TransmogCollection
-    local ids = raw(MJ and MJ.GetMountIDs) or {}
+    local ids = tbl.list(raw(MJ and MJ.GetMountIDs))
     local shown = 0
     for _, id in ipairs(ids) do
         local _, _description, source = raw(MJ.GetMountInfoExtraByID, id)
         local name, _, _, _, _, sourceType = raw(MJ.GetMountInfoByID, id)
-        if shown < 10 and source and source ~= "" then
+        local text = secret.asString(source)
+        if shown < 10 and text and text ~= "" then
             shown = shown + 1
-            line("sources", ("mount %s (type %s): %s"):format(tostring(name), tostring(sourceType), tostring(source):gsub("|n", " / ")))
+            line("sources", ("mount %s (type %s): %s"):format(tostring(name), tostring(sourceType), (text:gsub("|n", " / "))))
         end
     end
     local withText = 0
     for _, id in ipairs(ids) do
         local _, _, source = raw(MJ.GetMountInfoExtraByID, id)
-        if source and source ~= "" then withText = withText + 1 end
+        local text = secret.asString(source)
+        if text and text ~= "" then withText = withText + 1 end
     end
     line("sources", ("%d of %d mounts have a source text"):format(withText, #ids))
     -- an appearance you lack: its source type and drops
     local found = 0
     for _, cat in ipairs({ 4, 10, 14 }) do
-        for _, a in ipairs(raw(TC.GetCategoryAppearances, cat) or {}) do
-            if not a.isCollected and found < 4 then
-                local srcs = raw(TC.GetAppearanceSources, a.visualID) or {}
-                local s1 = srcs[1]
-                if s1 and s1.sourceID then
+        for _, a in ipairs(tbl.list(raw(TC.GetCategoryAppearances, cat))) do
+            local visual = tbl.field(a, "visualID")
+            if not tbl.field(a, "isCollected") and found < 4 then
+                local s1 = tbl.list(raw(TC.GetAppearanceSources, visual))[1]
+                local sourceID = tbl.field(s1, "sourceID")
+                if sourceID then
                     found = found + 1
-                    line("sources", ("appearance %s item %s %s, source type %s, drops %s"):format(tostring(a.visualID), tostring(s1.itemID),
-                        tostring(s1.name), tostring(s1.sourceType), call(TC.GetAppearanceSourceDrops, s1.sourceID)))
+                    line("sources", ("appearance %s item %s %s, source type %s, drops %s"):format(tostring(visual), tostring(tbl.field(s1, "itemID")),
+                        tostring(tbl.field(s1, "name")), tostring(tbl.field(s1, "sourceType")), call(TC.GetAppearanceSourceDrops, sourceID)))
                 end
             end
         end
@@ -146,7 +151,7 @@ end
 local function flags()
     local MJ, TC = C_MountJournal, C_TransmogCollection
     line("flags", "mounts needing fanfare " .. call(MJ and MJ.GetNumMountsNeedingFanfare))
-    local ids = raw(MJ and MJ.GetMountIDs) or {}
+    local ids = tbl.list(raw(MJ and MJ.GetMountIDs))
     if ids[1] then
         line("flags", "first mount: needs fanfare " .. call(MJ.NeedsFanfare, ids[1]) .. ", favourite " .. call(MJ.GetIsFavorite, 1))
         line("flags", "mount camera via display " .. call(MJ.GetMountInfoExtraByID, ids[1]))
@@ -163,12 +168,12 @@ local function appearancesToShow(): { [string]: unknown }[]
     local TC = C_TransmogCollection
     local list: { [string]: unknown }[] = {}
     for _, cat in ipairs({ 4, 10, 8, 11, 3, 7, 9, 2 }) do
-        for _, a in ipairs(raw(TC.GetCategoryAppearances, cat) or {}) do
-            if a.isCollected then
-                local found = raw(TC.GetAppearanceSources, a.visualID) or {}
-                local src = found[1] and found[1].sourceID
-                if src then list[#list + 1] = { cat = cat, visual = a.visualID, source = src, new = raw(TC.IsNewAppearance, a.visualID),
-                    fav = raw(TC.GetIsAppearanceFavorite, a.visualID), camera = raw(TC.GetAppearanceCameraID, a.visualID) } end
+        for _, a in ipairs(tbl.list(raw(TC.GetCategoryAppearances, cat))) do
+            if tbl.field(a, "isCollected") then
+                local visual = tbl.field(a, "visualID")
+                local src = tbl.field(tbl.list(raw(TC.GetAppearanceSources, visual))[1], "sourceID")
+                if src then list[#list + 1] = { cat = cat, visual = visual, source = src, new = raw(TC.IsNewAppearance, visual),
+                    fav = raw(TC.GetIsAppearanceFavorite, visual), camera = raw(TC.GetAppearanceCameraID, visual) } end
             end
             if #list >= 18 then break end
         end
@@ -210,8 +215,8 @@ local function tiles()
         end
         pcall(m.SetUnit, m, "player")
         pcall(m.Undress, m)
-        local apply = m.ApplyUICamera or _G.Model_ApplyUICamera
-        local camOK = a.camera and apply and pcall(apply, m, a.camera)
+        local apply = tbl.field(m, "ApplyUICamera") or tbl.field(_G, "Model_ApplyUICamera")
+        local camOK = a.camera ~= nil and type(apply) == "function" and pcall(apply, m, a.camera)
         a.camOK = camOK and true or false
         local source = a.source
         if type(source) == "number" or type(source) == "string" then pcall(m.TryOn, m, source) end
@@ -219,11 +224,11 @@ local function tiles()
     end
     local built = debugprofilestop() - t0
     line("tiles", ("built %d previews in %.1f ms; frame rate before %.0f"):format(#list, built, fpsBefore))
-    line("tiles", ("model:ApplyUICamera %s, Model_ApplyUICamera %s; cameras used %s"):format(tostring(previews[1] and previews[1].ApplyUICamera ~= nil),
-        tostring(_G.Model_ApplyUICamera ~= nil), tostring(list[1] and list[1].camOK)))
+    line("tiles", ("model:ApplyUICamera %s, Model_ApplyUICamera %s; cameras used %s"):format(tostring(tbl.field(previews[1], "ApplyUICamera") ~= nil),
+        tostring(tbl.field(_G, "Model_ApplyUICamera") ~= nil), tostring(list[1] and list[1].camOK)))
     -- a mount in a ModelScene, framed by its own scene
-    local ids = raw(C_MountJournal.GetMountIDs) or {}
-    local id, hidden = nil, 0
+    local ids = tbl.list(raw(C_MountJournal.GetMountIDs))
+    local id: unknown, hidden = nil, 0
     for _, mid in ipairs(ids) do
         local _, _, _, _, _, _, _, _, _, hide = raw(C_MountJournal.GetMountInfoByID, mid)
         if hide then hidden = hidden + 1 elseif not id then id = mid end
@@ -239,17 +244,18 @@ local function tiles()
             p.scene = scene
         end
     end
-    if id and p.scene then
+    local scene = p.scene
+    if id and scene then
         local display, _, _, isSelf, _, sceneID = raw(C_MountJournal.GetMountInfoExtraByID, id)
         local name = raw(C_MountJournal.GetMountInfoByID, id)
         line("scene", ("mount %s display %s scene %s self %s"):format(tostring(name), tostring(display), tostring(sceneID), tostring(isSelf)))
-        line("scene", "TransitionToModelSceneID " .. call(p.scene.TransitionToModelSceneID, p.scene, sceneID,
+        line("scene", "TransitionToModelSceneID " .. call(tbl.field(scene, "TransitionToModelSceneID"), scene, sceneID,
             CAMERA_TRANSITION_TYPE_IMMEDIATE, CAMERA_MODIFICATION_TYPE_DISCARD, true))
-        local actor = raw(p.scene.GetActorByTag, p.scene, "unwrapped")
+        local actor = raw(tbl.field(scene, "GetActorByTag"), scene, "unwrapped")
         line("scene", "actor 'unwrapped' " .. tostring(actor ~= nil))
         if actor then
-            line("scene", "SetModelByCreatureDisplayID " .. call(actor.SetModelByCreatureDisplayID, actor, display))
-            if isSelf then pcall(actor.SetAnimation, actor, 618) end
+            line("scene", "SetModelByCreatureDisplayID " .. call(tbl.field(actor, "SetModelByCreatureDisplayID"), actor, display))
+            if isSelf then call(tbl.field(actor, "SetAnimation"), actor, 618) end
         end
     end
     p:Show()

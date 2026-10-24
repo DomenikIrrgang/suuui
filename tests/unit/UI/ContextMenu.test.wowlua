@@ -4,11 +4,12 @@
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
 import tokens as T from "/Core/Tokens"
 import * as extend from "/Core/Extend"
 import * as tooltip from "/UI/Tooltip"
 import measureText from "/UI/Text"
-import contextMenu, contextMenuFrom, closeContextMenu, MenuOptions from "/UI/ContextMenu"
+import contextMenu, contextMenuFrom, closeContextMenu, MenuOptions, MenuFrame from "/UI/ContextMenu"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf from "./WindowsHelpers"
 
@@ -34,9 +35,9 @@ end
 
 -- The screen-wide catcher under the menu: the button whose click is close.
 local function catcher(): Button?
-    for _, c in ipairs({ UIParent:GetChildren() }) do
-        local f = c :: any
-        if not f:IsForbidden() and f:GetObjectType() == "Button" and f:GetScript("OnClick") == closeContextMenu then return f end
+    for _, c in ipairs(frames.children(UIParent)) do
+        local b = frames.asButton(c)
+        if b and not b:IsForbidden() and b:GetObjectType() == "Button" and b:GetScript("OnClick") == closeContextMenu then return b end
     end
     return nil
 end
@@ -140,9 +141,9 @@ end
 @test("picking a row closes the menu, then runs it")
 local function picking()
     local order: string[] = {}
-    local m: any = nil
-    m = open({ items = { { label = "Go", onClick = function() order[#order + 1] = m:IsShown() and "open" or "closed" end } } })
-    mock.click(m.rows[1])
+    local m: MenuFrame? = nil
+    m = open({ items = { { label = "Go", onClick = function() order[#order + 1] = assert(m):IsShown() and "open" or "closed" end } } })
+    mock.click(assert(m).rows[1])
     expect(order).toEqual({ "closed" })
     expect(m).never.toBeShown()
     expect(catcher()).never.toBeShown()
@@ -183,7 +184,7 @@ end
 @test("a click outside closes it")
 local function outside()
     local m = open({ items = { { label = "A" } } })
-    mock.click(catcher() :: any)
+    mock.click(catcher())
     expect(m).never.toBeShown()
     expect(catcher()).never.toBeShown()
 end
@@ -211,7 +212,7 @@ end
 @test("with an id, plugins' entries join with the context")
 local function plugins()
     local seen = mock.spy()
-    extend.extendMenu("test-menu", function(menu: any, context: any)
+    extend.extendMenu("test-menu", function(menu, context)
         seen(context)
         menu.items[#menu.items + 1] = { label = "From a plugin" }
     end, "ContextMenuTest")
@@ -226,9 +227,10 @@ end
 @test("contextMenuFrom: the game's builder calls make the same menu")
 local function builder()
     local a, b = mock.spy(), mock.spy()
-    parent = newParent()
-    local m = contextMenuFrom(parent, function(owner: any, root: any)
-        expect(owner).toBe(parent)
+    local p = newParent()
+    parent = p
+    local m = contextMenuFrom(p, function(owner, root)
+        expect(owner).toBe(p)
         root:CreateTitle("Title")
         root:CreateTitle("Second title: ignored")
         root:CreateButton("A", a)
@@ -252,8 +254,8 @@ end
 @test("contextMenuFrom passes its id and context on")
 local function builderId()
     local seen = mock.spy()
-    extend.extendMenu("test-built", function(_: any, context: any) seen(context) end, "ContextMenuTest")
+    extend.extendMenu("test-built", function(_, context) seen(context) end, "ContextMenuTest")
     parent = newParent()
-    contextMenuFrom(parent, function(_: any, root: any) root:CreateButton("A") end, "test-built", "ctx")
+    contextMenuFrom(parent, function(_, root) root:CreateButton("A") end, "test-built", "ctx")
     expect(seen).toHaveBeenCalledWith("ctx")
 end

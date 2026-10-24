@@ -15,8 +15,13 @@ import print from "/Core/Init"
 import button from "/UI/Controls"
 import panel as makePanel, Panel from "/UI/Panel"
 import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 
-local panel: Panel? = nil
+-- the probe's panel and what it keeps
+type SupportPanel = Panel & { area?: Frame, own?: Browser, borrowed?: () -> (), buttons?: boolean }
+type Anchor = { point: FramePoint, rel: ScriptRegion?, relPoint: FramePoint?, x: number?, y: number? }
+
+local panel: SupportPanel? = nil
 
 local EVENTS = { "SIMPLE_BROWSER_WEB_PROXY_FAILED", "SIMPLE_BROWSER_WEB_ERROR" }
 
@@ -36,7 +41,7 @@ export function command()
         note(("%s: %s"):format(label, ok and "ok" or ("error " .. tostring(err))))
         return ok
     end
-    local p = panel or makePanel(UIParent, { title = "Support probe", width = 1000, height = 700, solid = true })
+    local p = panel or makePanel(UIParent, { title = "Support probe", width = 1000, height = 700, solid = true }) :: SupportPanel
     panel = p
     p:SetFrameStrata("HIGH")
     p:ClearAllPoints()
@@ -46,10 +51,11 @@ export function command()
     area:SetPoint("TOPLEFT", 0, -36)
     area:SetPoint("BOTTOMRIGHT")
 
-    local current
+    local current: Browser? = nil
     -- 1: SuuUI's own Browser frame
     local function own()
-        if p.borrowed then p.borrowed() end
+        local back = p.borrowed
+        if back then back() end
         if not p.own then
             local ok, b = pcall(CreateFrame, "Browser", nil, area)
             note("CreateFrame(\"Browser\"): " .. (ok and (b and "ok" or "nil") or ("error " .. tostring(b))))
@@ -57,10 +63,10 @@ export function command()
             p.own = b
             b:SetAllPoints(area)
             local methods: string[] = {}
-            local mt = getmetatable(b)
-            if mt and type(mt.__index) == "table" then
-                for k in pairs(mt.__index) do
-                    if k:find("Navigate") or k:find("Zoom") or k:find("Focus") or k:find("Link") or k:find("Ticket") then
+            local index = tbl.field(getmetatable(b), "__index")
+            if type(index) == "table" then
+                for k in pairs(index) do
+                    if type(k) == "string" and (k:find("Navigate") or k:find("Zoom") or k:find("Focus") or k:find("Link") or k:find("Ticket")) then
                         methods[#methods + 1] = k
                     end
                 end
@@ -68,22 +74,27 @@ export function command()
             table.sort(methods)
             out.ownMethods = table.concat(methods, " ")
         end
-        p.own:Show()
-        current = p.own
-        try("own NavigateHome(\"KnowledgeBase\")", p.own.NavigateHome, p.own, "KnowledgeBase")
+        local browser = assert(p.own)
+        browser:Show()
+        current = browser
+        try("own NavigateHome(\"KnowledgeBase\")", browser.NavigateHome, browser, "KnowledgeBase")
     end
     -- 2: the game's HelpBrowser, moved in for as long as the panel shows
     local function borrow()
-        if p.own then p.own:Hide() end
-        local b = _G.HelpBrowser
+        local mine = p.own
+        if mine then mine:Hide() end
+        local b = frames.find("HelpBrowser") :: Browser?
         if not b then note("HelpBrowser missing") return end
         if not p.borrowed then
-            local parent, points = b:GetParent(), {}
-            for i = 1, b:GetNumPoints() do points[i] = { b:GetPoint(i) } end
+            local parent: Frame?, points: Anchor[] = b:GetParent(), {}
+            for i = 1, b:GetNumPoints() do
+                local point, rel, relPoint, x, y = b:GetPoint(i)
+                if point then points[#points + 1] = { point = point, rel = rel, relPoint = relPoint, x = x, y = y } end
+            end
             p.borrowed = function()
                 b:ClearAllPoints()
                 b:SetParent(parent)
-                for _, pt in ipairs(points) do b:SetPoint(unpack(pt)) end
+                for _, pt in ipairs(points) do b:SetPoint(pt.point, pt.rel, pt.relPoint, pt.x, pt.y) end
                 p.borrowed = nil
             end
             try("HelpBrowser into the panel", function()
@@ -107,7 +118,7 @@ export function command()
             { label = "Reload", fn = function() if current then try("NavigateReload", current.NavigateReload, current) end end },
             { label = "Home", fn = function() if current then try("NavigateHome", current.NavigateHome, current, "KnowledgeBase") end end },
         }
-        local prev
+        local prev: Button? = nil
         for _, d in ipairs(defs) do
             local b = button(p.body, { text = d.label, width = 120, onClick = d.fn })
             b:SetPoint("TOPLEFT", prev or p.body, prev and "TOPRIGHT" or "TOPLEFT", prev and 8 or 0, 0)
@@ -119,7 +130,8 @@ export function command()
             table.insert(tbl.listAt(out, "events"), date("%H:%M:%S ") .. event .. " " .. tostring((...)))
         end)
         p:HookScript("OnHide", function()
-            if p.borrowed then p.borrowed() end
+            local back = p.borrowed
+            if back then back() end
         end)
     end
     p:Show()
