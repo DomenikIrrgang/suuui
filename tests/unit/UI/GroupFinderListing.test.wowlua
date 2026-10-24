@@ -9,15 +9,31 @@ import tokens as T from "/Core/Tokens"
 import expectNoErrors from "../../helpers"
 import tokenOf, themeChanged from "./SocialHelpers"
 
--- the game's panel and its parts: typed loosely (the game's frames)
-local g: any = _G
-local f: any = nil
+-- the game's panel and the parts of it the tests reach (its parentKeys)
+type RoleToggle = Button & { CheckButton: CheckButton, cover?: Frame }
+type ListingFrame = LFGListingMixin & Frame & {
+    SoloRoleButtons: Frame & { Tank: RoleToggle, Healer: RoleToggle },
+    NewPlayerFriendlyButton: Frame,
+    GroupRoleButtons: Frame & { RoleIcon: Frame & { roleID?: string }, RoleDropdown: Frame },
+    CategoryView: Frame & { CategoryButtons?: (Button & { categoryID: number })[] },
+    ActivityView: Frame & { generalPlaystyle?: number, ScrollBox: Frame,
+        Comment: Frame & { EditBox: EditBox & { Instructions?: FontString } } },
+    LockedView: Frame & { ErrorText?: FontString },
+    BackButton: Button,
+    PostButton: Button,
+    categorySelection?: number,
+}
+-- a row of the activity tree (LFGListingActivityRowTemplate)
+type TreeRow = Frame & { Level: FontString, NameButton: Button & { Name: FontString }, CheckButton: CheckButton,
+    GetElementData?: (self: Frame) -> unknown }
+
+local f: ListingFrame
 local skin: ListingSkin? = nil
 
 @beforeAll
 local function load()
     mock.loadAddon("Blizzard_GroupFinder_VanillaStyle")
-    f = g.LFGListingFrame
+    f = LFGListingFrame :: ListingFrame
     f:SetSize(700, 500)
     f:SetPoint("CENTER", UIParent, "CENTER")
     skin = skinGroupFinderListing(f)
@@ -28,13 +44,13 @@ local function s(): ListingSkin
 end
 
 -- The activity step's parts (the test frame has its ActivityView).
-local function act(): any
+local function act()
     return assert(s().activity)
 end
 
 -- A row of the activity tree, made from the game's own template.
-local function treeRow(): any
-    return CreateFrame("Frame", nil, UIParent, "LFGListingActivityRowTemplate")
+local function treeRow(): TreeRow
+    return CreateFrame("Frame", nil, UIParent, "LFGListingActivityRowTemplate") :: TreeRow
 end
 
 @test("skinned once: later calls, and a call without a panel, hand back the same")
@@ -52,11 +68,12 @@ local function roleToggle()
     local p = assert(toggles[tank])
     expect(p ~= nil).toBe(true)
     expect(tank:GetWidth()).toBe(36)
-    expect(p.word).toHaveText(g.TANK or "Tank")
+    expect(p.word).toHaveText(TANK or "Tank")
     local check = tank.CheckButton
     -- (the game covers a role the class can't take)
-    local covered = tank.cover and tank.cover:IsShown()
-    if tank.cover then tank.cover:Hide() end
+    local cover = tank.cover
+    local covered = cover and cover:IsShown()
+    if cover then cover:Hide() end
     check:SetChecked(true)
     expect(tokenOf(p.edge)).toBe("arcane")
     expect(tokenOf(p.fill)).toBe("surface-raised")
@@ -77,11 +94,11 @@ local function roleToggle()
     check:SetEnabled(true)
     expect(tank:GetAlpha()).toBe(1)
     -- the game's cover over it: faded too
-    if tank.cover then
-        tank.cover:Show()
+    if cover then
+        cover:Show()
         p.draw()
         expect(tank:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"])
-        tank.cover:SetShown(covered and true or false)
+        cover:SetShown(covered and true or false)
         p.draw()
     end
     -- New player friendly is one too
@@ -100,7 +117,7 @@ local function groupRole()
     icon.roleID = "HEALER"
     mock.script(icon, "OnShow")
     expect(tostring(p.glyph:GetTexture())).toContain("RoleHealer")
-    expect(p.word).toHaveText(g.HEALER or "Healer")
+    expect(p.word).toHaveText(HEALER or "Healer")
     -- no role: the damage glyph, no word
     icon.roleID = nil
     mock.script(icon, "OnShow")
@@ -108,12 +125,12 @@ local function groupRole()
     expect(p.word).toHaveText("")
     -- the game's own update
     mock.fake("UnitGroupRolesAssigned", function(_u: string): string return "TANK" end)
-    g.LFGListingRoleIcon_UpdateRoleTexture(icon)
-    expect(p.word).toHaveText(g.TANK or "Tank")
+    LFGListingRoleIcon_UpdateRoleTexture(icon)
+    expect(p.word).toHaveText(TANK or "Tank")
     -- another icon passed to the game's update: not ours
     local other = CreateFrame("Button", nil, UIParent)
-    pcall(g.LFGListingRoleIcon_UpdateRoleTexture, other)
-    expect(p.word).toHaveText(g.TANK or "Tank")
+    pcall(LFGListingRoleIcon_UpdateRoleTexture, other)
+    expect(p.word).toHaveText(TANK or "Tank")
     expectNoErrors()
 end
 
@@ -208,11 +225,11 @@ local function details()
     local e = av.Comment.EditBox
     local instr = e.Instructions
     if instr then
-        instr:SetText(g.DESCRIPTION_OF_YOUR_GROUP)
+        instr:SetText(DESCRIPTION_OF_YOUR_GROUP)
         av.ScrollBox:Show()
         s():LayoutActivities()
         expect(instr).toHaveText("Route, quests, gear check: anything people should know")
-        instr:SetText(g.DESCRIPTION_OF_YOUR_GROUP)
+        instr:SetText(DESCRIPTION_OF_YOUR_GROUP)
         av.ScrollBox:Hide()
         s():LayoutActivities()
         expect(instr).toHaveText("What you’re after, for a Custom listing")
@@ -257,13 +274,13 @@ end
 local function groupRow()
     local row = treeRow()
     local all, any = true, false
-    mock.stub(f, "AreAllActivitiesForActivityGroupSelected", function(_s: any, _id: number): boolean return all end)
-    mock.stub(f, "IsAnyActivityForActivityGroupSelected", function(_s: any, _id: number): boolean return any end)
-    mock.stub(f, "IsActivitySelected", function(_s: any, id: number): boolean return id == 11 end)
-    local function child(id: number?): any
-        return { GetData = function(_c: any): any return { activityID = id } end }
+    mock.stub(f, "AreAllActivitiesForActivityGroupSelected", function(_s: ListingFrame, _id: number): boolean return all end)
+    mock.stub(f, "IsAnyActivityForActivityGroupSelected", function(_s: ListingFrame, _id: number): boolean return any end)
+    mock.stub(f, "IsActivitySelected", function(_s: ListingFrame, id: number): boolean return id == 11 end)
+    local function child(id: number?)
+        return { GetData = function(_c: unknown): { activityID: number? } return { activityID = id } end }
     end
-    row.GetElementData = function(_r: any): any return { nodes = { child(11), child(12), child(nil) } } end
+    row.GetElementData = function(_r: Frame): unknown return { nodes = { child(11), child(12), child(nil) } } end
     skinGroupRow(row, { activityGroupID = 5 }, false)
     local p = assert(rows[row])
     expect(p.tick).toBeShown()
@@ -277,7 +294,7 @@ local function groupRow()
     expect(p.tick).never.toBeShown()
     expect(tostring(p.chevron:GetTexture())).toContain("chevronRight")
     all, any = false, false
-    mock.stub(f, "IsActivitySelected", function(_s: any, _id: number): boolean return false end)
+    mock.stub(f, "IsActivitySelected", function(_s: ListingFrame, _id: number): boolean return false end)
     skinGroupRow(row, { activityGroupID = 5 })
     expect(tokenOf(p.fill)).toBe("surface-sunk")
     expect(p.count).toHaveText("2")
@@ -295,7 +312,7 @@ end
 local function activityRow()
     local row = treeRow()
     local picked = false
-    mock.stub(f, "IsActivitySelected", function(_s: any, _id: number): boolean return picked end)
+    mock.stub(f, "IsActivitySelected", function(_s: ListingFrame, _id: number): boolean return picked end)
     mock.setPlayer({ level = 30 })
     row.Level:SetText("(20 - 30)")
     skinActivityRow(row, { activityID = 7, minLevel = 20, maxLevel = 30 })
@@ -327,9 +344,9 @@ end
 @test("the game's own row setup runs the skins")
 local function gameRows()
     local row = treeRow()
-    mock.stub(f, "AreAllActivitiesForActivityGroupSelected", function(_s: any, _id: number): boolean return false end)
-    mock.stub(f, "IsAnyActivityForActivityGroupSelected", function(_s: any, _id: number): boolean return false end)
-    g.LFGListingActivityView_InitActivityGroupButton(row, { activityGroupID = 3, name = "Dungeons", showExpandCollapseButton = true }, false)
+    mock.stub(f, "AreAllActivitiesForActivityGroupSelected", function(_s: ListingFrame, _id: number): boolean return false end)
+    mock.stub(f, "IsAnyActivityForActivityGroupSelected", function(_s: ListingFrame, _id: number): boolean return false end)
+    LFGListingActivityView_InitActivityGroupButton(row, { activityGroupID = 3, name = "Dungeons", showExpandCollapseButton = true }, false)
     expect(rows[row] ~= nil).toBe(true)
     expectNoErrors()
 end
@@ -404,7 +421,7 @@ end
 local function redraws()
     local queued = 0
     local real = s().Queue
-    mock.stub(s() :: any, "Queue", function(self: ListingSkin)
+    mock.stub(s(), "Queue", function(self: ListingSkin)
         queued = queued + 1
         real(self)
     end)
@@ -416,9 +433,9 @@ local function redraws()
     expect(assert(toggles[tank]).hover).toBe(false)
     -- the parts that show and hide, each queueing a layout (the game's own
     -- OnShow reads the chosen category)
-    mock.fake("C_LFGList.GetLfgCategoryInfo", function(_id: any): any return { name = "Dungeons", separateRecommended = false } end)
-    mock.fake("C_LFGList.GetAvailableActivityGroups", function(_id: any, _f: any): number[] return {} end)
-    mock.fake("C_LFGList.GetAvailableActivities", function(_id: any, _g: any, _f: any): number[] return {} end)
+    mock.fake("C_LFGList.GetLfgCategoryInfo", function(_id: number): unknown return { name = "Dungeons", separateRecommended = false } end)
+    mock.fake("C_LFGList.GetAvailableActivityGroups", function(_id: number, _f: number?): number[] return {} end)
+    mock.fake("C_LFGList.GetAvailableActivities", function(_id: number?, _g: number?, _f: number?): number[] return {} end)
     local chosen = f.categorySelection
     f.categorySelection = 2
     for _, frame in ipairs({ f.GroupRoleButtons, f.CategoryView, f.LockedView, f.ActivityView }) do
@@ -433,18 +450,18 @@ local function redraws()
     -- the game's own redraws
     mock.fake("C_LFGList.GetAvailableCategories", function(): number[] return {} end)
     local n1 = queued
-    g.LFGListingCategorySelection_UpdateCategoryButtons(f.CategoryView)
+    LFGListingCategorySelection_UpdateCategoryButtons(f.CategoryView)
     expect(queued > n1).toBe(true)
     local n2 = queued
     pcall(f.UpdateFrameView, f)
     expect(queued > n2).toBe(true)
     local before = queued
-    pcall(g.LFGListingLockedView_RefreshContent, f.LockedView)
+    pcall(LFGListingLockedView_RefreshContent, f.LockedView)
     expect(queued > before).toBe(true)
     -- the play style chosen, the post button's state: the activities again
     act().psLabel:SetText("x")
     act().psLabel.value = nil
-    pcall(g.LFGListingActivityView_OnPlayStyleSelectedInternal, f.ActivityView, 1)
+    pcall(LFGListingActivityView_OnPlayStyleSelectedInternal, f.ActivityView, 1)
     expect(act().psLabel:GetText()).toContain("Playstyle")
     act().psLabel:SetText("x")
     act().psLabel.value = nil
@@ -452,10 +469,10 @@ local function redraws()
     expect(act().psLabel:GetText()).toContain("Playstyle")
     -- the foot's words change: as wide as them again
     f.BackButton:SetWidth(5)
-    pcall(g.LFGListingBackButton_UpdateText, f.BackButton)
+    pcall(LFGListingBackButton_UpdateText, f.BackButton)
     expect(f.BackButton:GetWidth() >= 72).toBe(true)
     f.PostButton:SetWidth(5)
-    pcall(g.LFGListingPostButton_UpdateText, f.PostButton)
+    pcall(LFGListingPostButton_UpdateText, f.PostButton)
     expect(f.PostButton:GetWidth() >= 72).toBe(true)
     mock.advanceFrames(2)
     expectNoErrors()

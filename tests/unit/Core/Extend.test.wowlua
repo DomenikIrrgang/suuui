@@ -17,7 +17,8 @@ const OTHER = { name = "Extend Test Other" }
 const LISTENER = { name = "Extend Test Listener" }
 
 -- An object with a method that records its calls.
-type Thing = { calls: number[], CoreATestPaint: (self: Thing, x: number) -> (string, string, string, string, string), [string]: any }
+type Thing = { calls: number[], CoreATestPaint: (self: Thing, x: number) -> (string, string, string, string, string),
+    CoreATestOther?: (self: Thing) -> string, [string]: unknown }
 
 local function paint(self: Thing, x: number): (string, string, string, string, string)
     self.calls[#self.calls + 1] = x
@@ -29,7 +30,7 @@ local function newThing(): Thing
 end
 
 -- this file's objects (kept referenced: instances are weak)
-local mine: { [any]: boolean } = {}
+local mine: { [unknown]: boolean } = {}
 local function track<T>(obj: T): T
     mine[obj] = true
     return obj
@@ -50,8 +51,8 @@ local function faultWith(text: string): fault.Entry?
     return nil
 end
 
-local function mineOf(list: any[]): any[]
-    local out: any[] = {}
+local function mineOf<T>(list: T[]): T[]
+    local out: T[] = {}
     for _, o in ipairs(list) do if mine[o] then out[#out + 1] = o end end
     return out
 end
@@ -115,9 +116,9 @@ end
 local function each()
     local early = track(newThing())
     extend.add("notification", early, { n = 1 })
-    local seen: any[] = {}
+    local seen: extend.Instance[] = {}
     local infos: extend.Info[] = {}
-    extend.each("notification", function(obj: any, info: extend.Info)
+    extend.each("notification", function(obj, info)
         if not mine[obj] then return end
         seen[#seen + 1] = obj
         infos[#infos + 1] = info
@@ -142,12 +143,12 @@ local function eachError()
     local t = track(newThing())
     extend.add("inventory", t)
     local ran = false
-    extend.each("inventory", function(obj: any) if mine[obj] then error("extend-err-each") end end, nil, OWNER)
-    extend.each("inventory", function(obj: any) if mine[obj] then ran = true end end, nil, OTHER)
+    extend.each("inventory", function(obj) if mine[obj] then error("extend-err-each") end end, nil, OWNER)
+    extend.each("inventory", function(obj) if mine[obj] then ran = true end end, nil, OTHER)
     expect(ran).toBe(true)
     local e = faultWith("extend-err-each")
     expect(e and e.source).toBe("Extend Test")
-    expect(function() extend.each("inventory", nil :: any, nil, OWNER) end).toThrow()
+    expect(function() extend.each("inventory", nil :: unknown :: extend.Extender, nil, OWNER) end).toThrow()
     expect(function() extend.each("bogus", function() end, nil, OWNER) end).toThrow("unknown kind")
 end
 
@@ -155,10 +156,10 @@ end
 local function undo()
     local t = track(newThing())
     extend.add("window", t)
-    local undone: any[] = {}
+    local undone: string[] = {}
     local applied = 0
-    extend.each("window", function(obj: any) if mine[obj] then applied += 1 end end,
-        function(obj: any, info: extend.Info) if mine[obj] then undone[#undone + 1] = info.kind end end, OWNER)
+    extend.each("window", function(obj) if mine[obj] then applied += 1 end end,
+        function(obj, info) if mine[obj] then undone[#undone + 1] = info.kind end end, OWNER)
     expect(applied).toBe(1)
     extend.unregister(OWNER)
     expect(undone).toEqual({ "window" })
@@ -170,8 +171,8 @@ end
 @test("unregister: an each without undo just stops; another owner's stays")
 local function keepsOthers()
     local applied: string[] = {}
-    extend.each("cooldowns", function(obj: any) if mine[obj] then applied[#applied + 1] = "mine" end end, nil, OWNER)
-    extend.each("cooldowns", function(obj: any) if mine[obj] then applied[#applied + 1] = "other" end end, nil, OTHER)
+    extend.each("cooldowns", function(obj) if mine[obj] then applied[#applied + 1] = "mine" end end, nil, OWNER)
+    extend.each("cooldowns", function(obj) if mine[obj] then applied[#applied + 1] = "other" end end, nil, OTHER)
     extend.unregister(OWNER)
     extend.add("cooldowns", track(newThing()))
     mock.nextFrame()
@@ -186,7 +187,7 @@ end
 local function hook()
     local t = track(newThing())
     extend.add("meter", t)
-    local after = mock.spy(function(_: any, _x: number) end)
+    local after = mock.spy(function(_: extend.Instance, _x: unknown) end)
     extend.hook("meter", "CoreATestPaint", after, OWNER)
     local a, b, c, d, e = t:CoreATestPaint(7)
     expect({ a, b, c, d }).toEqual({ "r1", "r2", "r3", "r4" })
@@ -200,7 +201,7 @@ end
 
 @test("hook: an instance made later gets the hooks at once")
 local function hookLater()
-    local after = mock.spy(function(_: any, _x: number) end)
+    local after = mock.spy(function(_: extend.Instance, _x: unknown) end)
     extend.hook("actionbar", "CoreATestPaint", after, OWNER)
     local t = track(newThing())
     extend.add("actionbar", t)
@@ -212,7 +213,7 @@ end
 local function hookError()
     local t = track(newThing())
     extend.add("micromenu", t)
-    local second = mock.spy(function(_: any, _x: number) end)
+    local second = mock.spy(function(_: extend.Instance, _x: unknown) end)
     extend.hook("micromenu", "CoreATestPaint", function() error("extend-err-hook") end, OWNER)
     extend.hook("micromenu", "CoreATestPaint", second, OTHER)
     expect((t:CoreATestPaint(3))).toBe("r1")
@@ -273,7 +274,7 @@ local function fromMetatable()
     local Class = { CoreATestPaint = paint }
     local t = track(setmetatable({ calls = {} }, { __index = Class }) :: Thing)
     extend.add("actionbutton", t)
-    local after = mock.spy(function(_: any, _x: number) end)
+    local after = mock.spy(function(_: extend.Instance, _x: unknown) end)
     extend.hook("actionbutton", "CoreATestPaint", after, OWNER)
     expect(rawget(t, "CoreATestPaint") ~= nil).toBe(true)
     t:CoreATestPaint(1)
@@ -288,13 +289,13 @@ end
 local function ownersAndMethods()
     local anon = {}
     local t = track(newThing())
-    local other = function(_: any): string return "o" end
+    local other = function(_: Thing): string return "o" end
     t.CoreATestOther = other
     extend.add("tracker", t)
     extend.hook("tracker", "CoreATestPaint", function() error("extend-err-strowner") end, "String Owner")
     extend.hook("tracker", "CoreATestOther", function() error("extend-err-anon") end, anon)
     t:CoreATestPaint(1)
-    expect(t:CoreATestOther()).toBe("o")
+    expect(assert(t.CoreATestOther)(t)).toBe("o")
     expect((faultWith("extend-err-strowner") :: fault.Entry).source).toBe("String Owner")
     expect((faultWith("extend-err-anon") :: fault.Entry).source).toBe(tostring(anon))
     extend.unregister("String Owner")
@@ -315,8 +316,8 @@ end
 
 @test("hook and override need a method name and a function")
 local function hookArgs()
-    expect(function() extend.hook("meter", 5 :: any, function() end, OWNER) end).toThrow()
-    expect(function() extend.override("meter", "X", nil :: any, OWNER) end).toThrow()
+    expect(function() extend.hook("meter", 5 :: unknown :: string, function() end, OWNER) end).toThrow()
+    expect(function() extend.override("meter", "X", nil :: unknown :: extend.Override, OWNER) end).toThrow()
     expect(function() extend.hook("bogus", "X", function() end, OWNER) end).toThrow("unknown kind")
 end
 
@@ -352,12 +353,12 @@ local function menus()
     extend.applyMenu("coreatest.menu", menu, {})
     expect(#seen).toBe(2)
     expect(#menu.items).toBe(3)
-    expect(function() extend.extendMenu(5 :: any, function() end, OWNER) end).toThrow()
+    expect(function() extend.extendMenu(5 :: unknown :: string, function() end, OWNER) end).toThrow()
 end
 
 @test("additions: in the order added, each change announced; an owner's off removes its own")
 local function additions()
-    local heard = mock.spy(function(_: string, ...: any) end)
+    local heard = mock.spy(function(_: string, ...: unknown) end)
     events.on("SUUUI_ADDITIONS_CHANGED", heard, LISTENER)
     expect(extend.additions("coreatest.list")).toEqual({})
     extend.addTo("coreatest.list", "a", OWNER)
@@ -391,8 +392,8 @@ local function ownEach()
     local reg, _, frame = own()
     local a = newThing()
     reg:add(extend.Kind.Meter, a)
-    local seen: any[] = {}
-    reg:each(extend.Kind.Meter, function(obj: any) seen[#seen + 1] = obj end, nil, OWNER)
+    local seen: extend.Instance[] = {}
+    reg:each(extend.Kind.Meter, function(obj) seen[#seen + 1] = obj end, nil, OWNER)
     expect(seen).toEqual({ a })
     -- nothing waits while no each is registered for the kind
     reg:add(extend.Kind.Tracker, newThing())

@@ -9,6 +9,7 @@ import tokens as T, Color from "/Core/Tokens"
 import * as pixel from "/Core/Pixel"
 import * as events from "/Core/Events"
 import * as draw from "/UI/Draw"
+import * as tbl from "wowlua:table"
 import expectNoErrors, newParent from "../../helpers"
 import paintOf, tokenOf, colorIs, setToken, restoreTokens, pointOf from "./PrimitivesHelpers"
 
@@ -30,12 +31,12 @@ local function cleanup()
     expectNoErrors()
 end
 
-type Call = { [number]: any }
+type Call = number[]
 
 -- the calls of a region's method after now (a post-hook)
-local function record(region: any, method: string): Call[]
+local function record(region: Region, method: string): Call[]
     local calls: Call[] = {}
-    hooksecurefunc(region, method, function(_: any, ...: any) calls[#calls + 1] = { ... } end)
+    hooksecurefunc(region, method, function(_: Region, ...: number) calls[#calls + 1] = { ... } end)
     return calls
 end
 
@@ -81,11 +82,11 @@ local function paintKinds()
     draw.paint(edit, "arcane", 0.5)
     draw.paint(bar, "ember")
     draw.paint(tex, "gilt")
-    expect((paintOf(fs) :: any).kind).toBe("text")
-    expect((paintOf(edit) :: any).kind).toBe("text")
-    expect((paintOf(edit) :: any).alpha).toBe(0.5)
-    expect((paintOf(bar) :: any).kind).toBe("bar")
-    expect((paintOf(tex) :: any).kind).toBe("vertex")
+    expect(assert(paintOf(fs)).kind).toBe("text")
+    expect(assert(paintOf(edit)).kind).toBe("text")
+    expect(assert(paintOf(edit)).alpha).toBe(0.5)
+    expect(assert(paintOf(bar)).kind).toBe("bar")
+    expect(assert(paintOf(tex)).kind).toBe("vertex")
     local r, g, b, a = fs:GetTextColor()
     expect(colorIs(r, g, b, a, "ink")).toBe(true)
     r, g, b, a = bar:GetStatusBarColor()
@@ -123,15 +124,17 @@ end
 })
 local function letsGo(kind: string, setter: string)
     local p = host()
-    local region: any
+    local region: Region
     if kind == "FontString" then region = p:CreateFontString(nil, "OVERLAY")
     elseif kind == "Texture" then region = p:CreateTexture()
     else
-        region = CreateFrame("StatusBar", nil, p)
-        region:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        local bar = CreateFrame("StatusBar", nil, p)
+        bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        region = bar
     end
     draw.paint(region, "ink")
-    region[setter](region, 1, 0, 0, 1)
+    local set = tbl.field(region, setter)
+    if type(set) == "function" then set(region, 1, 0, 0, 1) end
     expect(paintOf(region)).toBeNil()
     -- a repaint leaves the raw colour alone
     setToken("ink", 0.2, 0.4, 0.6)
@@ -166,12 +169,15 @@ end
 local function gradients()
     local p = host()
     local t = p:CreateTexture()
-    local calls = record(t, "SetGradient")
+    local calls: { orientation: string, from: colorRGBA, to: colorRGBA }[] = {}
+    hooksecurefunc(t, "SetGradient", function(_: Texture, orientation: string, from: colorRGBA, to: colorRGBA)
+        calls[#calls + 1] = { orientation = orientation, from = from, to = to }
+    end)
     draw.paintGradient(t, "VERTICAL", "ink", "arcane", 0.2, 0.8)
     expect(paintOf(t)).toEqual({ kind = "gradient", token = "ink", alpha = 0.2, token2 = "arcane", alpha2 = 0.8, orientation = "VERTICAL" })
     expect(#calls).toBe(1)
-    expect(calls[1][1]).toBe("VERTICAL")
-    local from, to = calls[1][2], calls[1][3]
+    expect(calls[1].orientation).toBe("VERTICAL")
+    local from, to = calls[1].from, calls[1].to
     expect(colorIs(from.r, from.g, from.b, from.a, "ink", 0.2)).toBe(true)
     expect(colorIs(to.r, to.g, to.b, to.a, "arcane", 0.8)).toBe(true)
     draw.repaint()
@@ -184,13 +190,13 @@ end
 local function binds()
     local p = host()
     local t = p:CreateTexture()
-    local seen: any[] = {}
+    local seen: Texture[] = {}
     draw.bind(t, function(tex: Texture)
         seen[#seen + 1] = tex
         tex:SetVertexColor(0.5, 0.5, 0.5, 1) -- painting: not a let-go
     end)
     expect(seen).toEqual({ t })
-    expect((paintOf(t) :: any).kind).toBe("fn")
+    expect(assert(paintOf(t)).kind).toBe("fn")
     draw.repaint()
     expect(#seen).toBe(2)
     t:SetVertexColor(1, 1, 1, 1)
@@ -226,8 +232,8 @@ local function repaintIsolates()
     -- the error handler, faked: what reaches the real one stays in
     -- mock.errors() for the rest of the file
     local reported: string[] = {}
-    mock.fake("geterrorhandler", function(): (err: any) -> ()
-        return function(err: any) reported[#reported + 1] = tostring(err) end
+    mock.fake("geterrorhandler", function(): (err: unknown) -> ()
+        return function(err: unknown) reported[#reported + 1] = tostring(err) end
     end)
     draw.repaint()
     expect(#reported).toBe(1)
@@ -245,7 +251,7 @@ local function repaintAddsRegions()
     draw.bind(a, function(_: Texture) draw.paint(b, "arcane") end)
     draw.repaint()
     expect(tokenOf(b)).toBe("arcane")
-    expect((paintOf(a) :: any).kind).toBe("fn")
+    expect(assert(paintOf(a)).kind).toBe("fn")
 end
 
 --------------------------------------------------------------------------------
@@ -286,10 +292,10 @@ local function borderOptions()
     local b = draw.border(p, "ink", { width = 3, inset = 2, layer = "OVERLAY", sublevel = 2 })
     local px = pixel.size(p)
     expect(b.bottom:GetHeight()).toBeCloseTo(3 * px, 4)
-    local top = pointOf(b.top) :: any
+    local top = assert(pointOf(b.top))
     expect(top.x).toBeCloseTo(2 * px, 4)
     expect(top.y).toBeCloseTo(-2 * px, 4)
-    local left = pointOf(b.left) :: any
+    local left = assert(pointOf(b.left))
     expect(left.y).toBeCloseTo(-5 * px, 4)
     local layer, sub = b.right:GetDrawLayer()
     expect({ layer, sub }).toEqual({ "OVERLAY", 2 })
@@ -351,10 +357,10 @@ local function hairlineBoth()
     local line = draw.hairline(p, "gilt", "both")
     local regions = { line:GetRegions() }
     expect(#regions).toBe(2)
-    expect((paintOf(regions[1]) :: any).alpha).toBe(0)
-    expect((paintOf(regions[1]) :: any).alpha2).toBe(1)
-    expect((paintOf(regions[2]) :: any).alpha).toBe(1)
-    expect((paintOf(regions[2]) :: any).alpha2).toBe(0)
+    expect(assert(paintOf(regions[1])).alpha).toBe(0)
+    expect(assert(paintOf(regions[1])).alpha2).toBe(1)
+    expect(assert(paintOf(regions[2])).alpha).toBe(1)
+    expect(assert(paintOf(regions[2])).alpha2).toBe(0)
     expect(regions[1]).toBeAnchoredTo(line, "BOTTOMRIGHT", "BOTTOM")
 end
 
@@ -444,7 +450,7 @@ local function shadowToken()
     -- shadow-panel sits 12 below
     local panel = draw.shadow(p, "shadow-panel")
     local pl = T.shadow["shadow-panel"][1]
-    expect((pointOf(panel.holder) :: any).y).toBe(pl.blur * 1.5 - pl.y)
+    expect(assert(pointOf(panel.holder)).y).toBe(pl.blur * 1.5 - pl.y)
 end
 
 @test("shadow of an unknown token, or one with inset layers only, is an error")

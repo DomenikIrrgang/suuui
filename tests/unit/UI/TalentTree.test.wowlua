@@ -11,6 +11,7 @@ import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import talentTree, traitTooltip, TALENT_TREE_W, TALENT_ORDER_W from "/UI/TalentTree"
+import type TalentTree, TalentNode, TalentData, TalentSpec, OrderLineData from "/UI/TalentTree"
 import * as tooltipModule from "/UI/Tooltip"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, borderToken from "./WorldHelpers"
@@ -19,7 +20,7 @@ local S = T.space
 
 local parent: Frame? = nil
 
-local function make(w: number?, h: number?): any
+local function make(w: number?, h: number?): TalentTree
     parent = newParent(w or TALENT_TREE_W + TALENT_ORDER_W, h or 520)
     local tt = talentTree(parent)
     tt:SetAllPoints()
@@ -40,17 +41,17 @@ local function plain(s: string?): string
     return ((s or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
 end
 
-local function node(over: { [string]: any }?): { [string]: any }
-    local n: { [string]: any } = { id = 1, row = 0, col = 0, rank = 0, max = 5, icon = 132292 }
+local function node(over: { [string]: unknown }?): TalentNode
+    local n: TalentNode = { id = 1, row = 0, col = 0, rank = 0, max = 5, icon = 132292 }
     for k, v in pairs(over or {}) do n[k] = v end
     return n
 end
 
-local function data(over: { [string]: any }?): { [string]: any }
+local function data(over: TalentData?): TalentData
     local a = node({ id = 1, row = 0, col = 1, rank = 5, max = 5 })
     local b = node({ id = 2, row = 1, col = 1, rank = 1, max = 3, canSpend = true })
     local c = node({ id = 3, row = 1, col = 2, rank = 0, max = 1, locked = true })
-    local d: { [string]: any } = {
+    local d: TalentData = {
         name = "Arms", available = 3, pending = 0, editable = true,
         trees = {
             { name = "Arms", points = 6, nodes = { a, b, c },
@@ -110,9 +111,9 @@ local function nodeInput()
     tt:SetData(data())
     local p = tt.panels[1]
     local spend, locked = p.nodes[2], p.nodes[3]
-    local clicked = mock.spy(function(_n: any) end)
-    local removed = mock.spy(function(_n: any) end)
-    local entered = mock.spy(function(_b: any, _n: any) end)
+    local clicked = mock.spy(function(_n: TalentNode) end)
+    local removed = mock.spy(function(_n: TalentNode) end)
+    local entered = mock.spy(function(_b: Button, _n: TalentNode) end)
     local left = mock.spy()
     mock.hover(spend)
     expect(spend.icon.borderToken).toBe("gilt")
@@ -124,11 +125,11 @@ local function nodeInput()
     tt.onClick, tt.onRemove, tt.onEnter, tt.onLeave = clicked, removed, entered, left
     mock.click(spend)
     mock.click(spend, "RightButton")
-    expect(clicked).toHaveBeenCalledWith(spend.data)
-    expect(removed).toHaveBeenCalledWith(spend.data)
+    expect(clicked).toHaveBeenCalledWith(assert(spend.data))
+    expect(removed).toHaveBeenCalledWith(assert(spend.data))
     mock.hover(nil)
     mock.hover(spend)
-    expect(entered).toHaveBeenCalledWith(spend, spend.data)
+    expect(entered).toHaveBeenCalledWith(spend, assert(spend.data))
     mock.hover(nil)
     expect(left).toHaveBeenCalled()
     -- a node no longer used: no data, no clicks
@@ -148,7 +149,7 @@ local function nextTalent()
     local b = tt.panels[1].nodes[1]
     expect(b.ring).toBeShown()
     expect(b.tag).toBeShown()
-    expect(b.tag.text).toHaveText("Next")
+    expect(assert(b.tag).text).toHaveText("Next")
     tt:SetData(data({ trees = { { name = "A", nodes = { node() } } } }))
     expect(b.ring).never.toBeShown()
     expect(b.tag).never.toBeShown()
@@ -233,12 +234,12 @@ local function specs()
     local tt = make()
     tt:SetSpecs({ { label = "Primary", name = "Arms", active = true } }, 1)
     expect(tt.specRow).never.toBeShown()
-    local specs = { { label = "Primary", name = "Arms", active = true }, { label = "Secondary", name = "", locked = true } }
+    local specs: TalentSpec[] = { { label = "Primary", name = "Arms", active = true }, { label = "Secondary", name = "", locked = true } }
     tt:SetSpecs(specs, 1)
     expect(tt.specRow).toBeShown()
     expect(tt.activeBadge).toBeShown()
     expect(tt.activate).never.toBeShown()
-    expect(tt.segmented.value).toBe(1)
+    expect(assert(tt.segmented).value).toBe(1)
     -- the summary under the row
     local _, _, _, _, y = tt.summary:GetPoint(1)
     expect(y).toBe(-(30 + S["space-5"]))
@@ -253,13 +254,13 @@ local function specs()
     tt:SetSpecs({ { label = "A", name = "" }, { label = "B", name = "" }, { label = "C", name = "" } }, nil)
     expect(tt.segmented ~= seg).toBe(true)
     expect(seg).never.toBeShown()
-    expect(tt.segmented.value).toBe(1)
-    local onSpec = mock.spy(function(_v: any) end)
+    expect(assert(tt.segmented).value).toBe(1)
+    local onSpec = mock.spy(function(_v: number) end)
     local onActivate = mock.spy()
-    tt.segmented.onChange(2)
+    assert(assert(tt.segmented).onChange)(2)
     mock.click(tt.activate)
     tt.onSpec, tt.onActivate = onSpec, onActivate
-    tt.segmented.onChange(2)
+    assert(assert(tt.segmented).onChange)(2)
     expect(onSpec).toHaveBeenCalledWith(2)
     tt:SetSpecs({ { label = "A", name = "" }, { label = "B", name = "" }, { label = "C", name = "" } }, 2)
     mock.click(tt.activate)
@@ -328,9 +329,9 @@ end
 @test("the build picker in the summary's place: options, the diamond, the badge, its buttons")
 local function builds()
     local tt = make()
-    local changed = mock.spy(function(_v: any) end)
+    local changed = mock.spy(function(_v: string) end)
     local saved, deleted = mock.spy(), mock.spy()
-    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
     mock.stub(tooltipModule, "hideTooltip", function() end)
     tt:SetBuilds({ options = { { value = "a", label = "Leveling" }, { value = "b", label = "Raid" } }, value = "a",
         onChange = changed, diamond = "class-warrior", badge = "Active", foot = { { label = "New build" } },
@@ -338,9 +339,9 @@ local function builds()
                     { label = "Delete", onClick = deleted, disabled = true, reason = "Your only build" } } })
     tt:SetData(data())
     expect(tt.picker).toBeShown()
-    expect(tt.picker.value).toBe("a")
-    expect(#tt.picker.options).toBe(2)
-    expect(tt.picker.foot).toEqual({ { label = "New build" } })
+    expect(assert(tt.picker).value).toBe("a")
+    expect(#assert(tt.picker).options).toBe(2)
+    expect(assert(tt.picker).foot).toEqual({ { label = "New build" } })
     expect(tt.summaryDiamond).toBeShown()
     expect(tokenOf(tt.summaryDiamond)).toBe("class-warrior")
     expect(tt.pickerBadge).toBeShown()
@@ -358,7 +359,7 @@ local function builds()
     expect(show).toHaveBeenCalledWith(delete, { title = "Delete", description = "Your only build" })
     mock.hover(save)
     expect(show).toHaveBeenCalledTimes(1)
-    tt.picker.onChange("b")
+    assert(assert(tt.picker).onChange)("b")
     expect(changed).toHaveBeenCalledWith("b")
     -- no diamond, no badge, one button
     tt:SetBuilds({ options = {}, buttons = { { label = "Save" } } })
@@ -369,14 +370,14 @@ local function builds()
     expect(delete).never.toBeShown()
     mock.click(save)
     expect(saved).toHaveBeenCalledTimes(1)
-    tt.picker.onChange("x")
+    assert(assert(tt.picker).onChange)("x")
     -- none: the summary as before
     tt:SetBuilds(nil)
     tt:SetData(data())
     expect(tt.picker).never.toBeShown()
     expect(save).never.toBeShown()
     expect(tt.summaryName).toHaveText("Arms")
-    tt.picker.onChange("x")
+    assert(assert(tt.picker).onChange)("x")
 end
 
 --------------------------------------------------------------------------------
@@ -444,8 +445,8 @@ end
 -- The order panel
 --------------------------------------------------------------------------------
 
-local function lines(n: number): { [string]: any }[]
-    local list: { [string]: any }[] = {}
+local function lines(n: number): OrderLineData[]
+    local list: OrderLineData[] = {}
     for i = 1, n do
         list[i] = { levels = (10 + i) .. "–" .. (10 + i), name = "Talent " .. i, ranks = i == 1 and "1–5" or "", icon = 1000 + i,
             state = i == 1 and "learned" or (i == 2 and "next" or nil), count = i == 1 and 5 or 1 }
@@ -457,7 +458,7 @@ end
 local function order()
     local tt = make()
     tt:SetOrder({})
-    local o = tt.order
+    local o = assert(tt.order)
     expect(o).toBeShown()
     expect(o.empty).toBeShown()
     expect(o.count).toHaveText("0")
@@ -489,23 +490,23 @@ end
 local function orderHover()
     local tt = make()
     tt:SetOrder(lines(2))
-    local l = tt.order.lines[2]
-    local entered = mock.spy(function(_d: any, _l: any) end)
-    local left = mock.spy(function(_d: any) end)
+    local l = assert(tt.order).lines[2]
+    local entered = mock.spy(function(_d: OrderLineData, _l: Button) end)
+    local left = mock.spy(function(_d: OrderLineData) end)
     mock.hover(l)
     expect(l.hoverFill).toBeShown()
     tt.onOrderEnter, tt.onOrderLeave = entered, left
     mock.hover(nil)
     expect(l.hoverFill).never.toBeShown()
     mock.hover(l)
-    expect(entered).toHaveBeenCalledWith(l.data, l)
+    expect(entered).toHaveBeenCalledWith(assert(l.data), l)
     mock.hover(nil)
-    expect(left).toHaveBeenCalledWith(l.data)
+    expect(left).toHaveBeenCalledWith(assert(l.data))
 end
 
 -- The cursor `below` px under the top of the order list.
-local function cursorAt(o: any, below: number)
-    local child = o.scroll.child
+local function cursorAt(tt: TalentTree, below: number)
+    local child = assert(tt.order).scroll.child
     local s = child:GetEffectiveScale()
     mock.setCursorPosition(child:GetLeft() * s + 10, (child:GetTop() - below) * s)
 end
@@ -514,20 +515,20 @@ end
 local function orderDrag()
     local tt = make()
     tt:SetOrder(lines(5))
-    local o = tt.order
+    local o = assert(tt.order)
     local moved = mock.spy(function(_f: number, _b: number) end)
-    local left = mock.spy(function(_d: any) end)
+    local left = mock.spy(function(_d: OrderLineData) end)
     tt.onOrderMove, tt.onOrderLeave = moved, left
     mock.fake("IsMouseButtonDown", function(_b: string?): boolean return true end)
     local l = o.lines[1]
-    cursorAt(o, 11)
+    cursorAt(tt, 11)
     mock.script(l, "OnMouseDown", "LeftButton")
     -- not moved far enough yet: nothing
-    cursorAt(o, 13)
+    cursorAt(tt, 13)
     mock.advanceFrames(1)
     expect(o.dragging).toBeNil()
     -- dragged down past the fourth line
-    cursorAt(o, 90)
+    cursorAt(tt, 90)
     mock.advanceFrames(1)
     expect(o.dragging).toBe(true)
     expect(l.dragged).toBe(true)
@@ -535,16 +536,16 @@ local function orderDrag()
     expect(o.plate).toBeShown()
     expect(o.plate.name:GetText()).toBe(l.name:GetText())
     expect(o.drop).toBeShown()
-    expect(left).toHaveBeenCalledWith(l.data)
+    expect(left).toHaveBeenCalledWith(assert(l.data))
     mock.script(l, "OnMouseUp", "LeftButton")
     expect(moved).toHaveBeenCalledWith(1, 5)
     expect(o.plate).never.toBeShown()
     expect(o.drop).never.toBeShown()
     expect(l.dragged).toBe(false)
     -- dropped where it was: no move
-    cursorAt(o, 23 + 11)
+    cursorAt(tt, 23 + 11)
     mock.script(o.lines[2], "OnMouseDown", "LeftButton")
-    cursorAt(o, 23 + 20)
+    cursorAt(tt, 23 + 20)
     mock.advanceFrames(1)
     mock.script(o.lines[2], "OnMouseUp", "LeftButton")
     expect(moved).toHaveBeenCalledTimes(1)
@@ -560,13 +561,13 @@ end
 local function orderRelease()
     local tt = make(nil, 300)
     tt:SetOrder(lines(30))
-    local o = tt.order
+    local o = assert(tt.order)
     local moved = mock.spy(function(_f: number, _b: number) end)
     tt.onOrderMove = moved
     local down = true
     mock.fake("IsMouseButtonDown", function(_b: string?): boolean return down end)
     local l = o.lines[3]
-    cursorAt(o, 2 * 23 + 11)
+    cursorAt(tt, 2 * 23 + 11)
     mock.script(l, "OnMouseDown", "LeftButton")
     -- down near the bottom: scrolls along
     local sc = o.scroll
@@ -595,8 +596,8 @@ local function theme()
     local tt = make()
     tt:SetData(data())
     tt:SetOrder(lines(2))
-    local set = mock.spy(function(_s: any, _d: any) end)
-    local order = mock.spy(function(_s: any, _l: any) end)
+    local set = mock.spy(function(_s: TalentTree, _d: TalentData) end)
+    local order = mock.spy(function(_s: TalentTree, _l: OrderLineData[]) end)
     mock.stub(tt, "SetData", set)
     mock.stub(tt, "SetOrder", order)
     events.emit("SUUUI_THEME_CHANGED", "suuui")
@@ -611,12 +612,12 @@ end
 @test("traitTooltip: the title, the rank, the entry and the next, what a click does, what it needs")
 local function tooltip()
     local owner = make()
-    local appended = mock.stub(GameTooltip, "AppendInfo", function(_t: any, _k: string, _id: number, _r: number) end)
-    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): any
+    local appended = mock.stub(GameTooltip, "AppendInfo", function(_t: GameTooltip, _k: string, _id: number, _r: number) end)
+    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): unknown
         return { currentRank = 1, maxRanks = 3, ranksIncreased = 0, ranksPurchased = 1,
             activeEntry = { entryID = 11, rank = 1 }, nextEntry = { entryID = 11, rank = 2 } }
     end)
-    mock.fake("C_Traits.GetConditionInfo", function(_c: number, id: number): any
+    mock.fake("C_Traits.GetConditionInfo", function(_c: number, id: number): unknown
         if id == 1 then return { isMet = false, tooltipText = "Requires 5 points in Arms", spentAmountRequired = 5 } end
         if id == 2 then return { isMet = false, tooltipText = "Requires 10 points in Arms", spentAmountRequired = 10 } end
         return { isMet = true }
@@ -633,14 +634,14 @@ end
 @test("traitTooltip: a planned point's line; a node the game doesn't answer for: nothing")
 local function tooltipPending()
     local owner = make()
-    mock.stub(GameTooltip, "AppendInfo", function(_t: any, _k: string, _id: number, _r: number) end)
-    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): any
+    mock.stub(GameTooltip, "AppendInfo", function(_t: GameTooltip, _k: string, _id: number, _r: number) end)
+    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): unknown
         return { currentRank = mock.secret(1), maxRanks = 1 }
     end)
     traitTooltip(owner, 1, 2, { pending = 1 })
     expect(GameTooltip).toHaveLines({ "", "Rank 0/1", " ", "Right-click to take a planned point back" })
     GameTooltip:Hide()
-    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): any return nil end)
+    mock.fake("C_Traits.GetNodeInfo", function(_c: number, _n: number): unknown return nil end)
     traitTooltip(owner, 1, 2, nil)
     expect(GameTooltip:IsShown()).toBe(false)
 end

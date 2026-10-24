@@ -18,7 +18,7 @@ const DISABLED = T.opacity["opacity-disabled"]
 local parent: Frame? = nil
 local made: ActionButton[] = {}
 
-local function button(size: any?): ActionButton
+local function button(size: number | string | nil): ActionButton
     local p = parent or newParent(200, 200)
     parent = p
     local b: ActionButton = actionButton(p, nil, size)
@@ -32,13 +32,15 @@ local function spellInSlot()
 end
 
 -- A cooldown read as the game gives it.
-local function cooldownInfo(active: any, gcd: any): SpellCooldownInfo
-    return { startTime = 0, duration = 0, isEnabled = true, modRate = 1, isActive = active, isOnGCD = gcd } :: any
+-- (`active` and `gcd` may be secrets)
+local function cooldownInfo(active: unknown, gcd: unknown): SpellCooldownInfo
+    local info: SpellCooldownInfo = mock.partial({ startTime = 0, duration = 0, isEnabled = true, modRate = 1, isActive = active, isOnGCD = gcd })
+    return info
 end
 
-local function fakeActionCooldown(active: any, gcd: any)
-    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): any return cooldownInfo(active, gcd) end)
-    mock.fake("C_ActionBar.GetActionCooldownDuration", function(_: number): any return { duration = true } end)
+local function fakeActionCooldown(active: unknown, gcd: unknown)
+    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): SpellCooldownInfo return cooldownInfo(active, gcd) end)
+    mock.fake("C_ActionBar.GetActionCooldownDuration", function(_: number): unknown return { duration = true } end)
 end
 
 @afterEach
@@ -199,8 +201,8 @@ local function hover()
     local b = button()
     spellInSlot()
     b:SetSlot(SLOT)
-    local setAction = mock.spy(function(_: any, _: any) end)
-    mock.stub(GameTooltip :: any, "SetAction", setAction)
+    local setAction = mock.spy(function(_: GameTooltip, _: number) end)
+    mock.stub(GameTooltip, "SetAction", setAction)
     b.tooltipNote = "Bar 1: page 2"
     mock.hover(b)
     expect(b.hover).toBe(true)
@@ -296,8 +298,8 @@ local function noDuration()
     local b = button()
     spellInSlot()
     b:SetSlot(SLOT)
-    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): any return cooldownInfo(true, false) end)
-    mock.fake("C_ActionBar.GetActionCooldownDuration", function(_: number): any return nil end)
+    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): SpellCooldownInfo return cooldownInfo(true, false) end)
+    mock.fake("C_ActionBar.GetActionCooldownDuration", function(_: number): unknown return nil end)
     b:UpdateCooldown()
     expect(b.coolingDown).toBe(true)
 end
@@ -310,7 +312,7 @@ local function cooldownDone()
     fakeActionCooldown(true, false)
     b:UpdateCooldown()
     local reads = 0
-    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): any
+    mock.fake("C_ActionBar.GetActionCooldown", function(_: number): SpellCooldownInfo
         reads = reads + 1
         return cooldownInfo(false, false)
     end)
@@ -325,13 +327,13 @@ end
 local function spellCooldown()
     local b = button()
     b.hasAction = true
-    mock.fake("C_Spell.GetSpellCooldown", function(_: any): any return cooldownInfo(true, false) end)
-    mock.fake("C_Spell.GetSpellCooldownDuration", function(_: any): any return { duration = true } end)
+    mock.fake("C_Spell.GetSpellCooldown", function(_: number): SpellCooldownInfo return cooldownInfo(true, false) end)
+    mock.fake("C_Spell.GetSpellCooldownDuration", function(_: number): unknown return { duration = true } end)
     b:ShowSpellCooldown(2457)
     expect(b.cooldownSpell).toBe(2457)
     expect(b.coolingDown).toBe(true)
     -- UpdateCooldown follows the spell
-    mock.fake("C_Spell.GetSpellCooldown", function(_: any): any return cooldownInfo(false, false) end)
+    mock.fake("C_Spell.GetSpellCooldown", function(_: number): SpellCooldownInfo return cooldownInfo(false, false) end)
     b:UpdateCooldown()
     expect(b.coolingDown).toBe(false)
     -- without a spell nothing is read
@@ -349,8 +351,8 @@ local function usable()
     local b = button()
     spellInSlot()
     b:SetSlot(SLOT)
-    local answer: { any } = { true, false }
-    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (any, any) return answer[1], answer[2] end)
+    local answer: unknown[] = { true, false }
+    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (unknown, unknown) return answer[1], answer[2] end)
     b:UpdateUsable()
     expect(b.unusable).toBe(false)
     expect(b.face:GetAlpha()).toBe(1)
@@ -375,12 +377,9 @@ local function usableFallback()
     local b = button()
     spellInSlot()
     b:SetSlot(SLOT)
-    local api = C_ActionBar :: any -- remove a function the declarations type as present
-    local was = api.IsUsableAction
-    api.IsUsableAction = nil
+    mock.setField(C_ActionBar, "IsUsableAction", nil) -- a function the declarations type as present
     mock.fake("IsUsableAction", function(_: number): (boolean, boolean) return false, false end)
     b:UpdateUsable()
-    api.IsUsableAction = was
     expect(b.unusable).toBe(true)
 end
 
@@ -390,14 +389,14 @@ local function active()
     spellInSlot()
     b:SetSlot(SLOT)
     expect(b.active).toBe(false)
-    mock.fake("IsCurrentAction", function(_: number): any return true end)
+    mock.fake("IsCurrentAction", function(_: number): boolean return true end)
     b:UpdateActive()
     expect(b.active).toBe(true)
-    mock.fake("IsCurrentAction", function(_: number): any return mock.secret(true) end)
-    mock.fake("IsAutoRepeatAction", function(_: number): any return true end)
+    mock.fake("IsCurrentAction", function(_: number): Secret<boolean> return mock.secret(true) end)
+    mock.fake("IsAutoRepeatAction", function(_: number): boolean return true end)
     b:UpdateActive()
     expect(b.active).toBe(true)
-    mock.fake("IsAutoRepeatAction", function(_: number): any return false end)
+    mock.fake("IsAutoRepeatAction", function(_: number): boolean return false end)
     b:UpdateActive()
     expect(b.active).toBe(false)
 end
@@ -476,11 +475,10 @@ local function olderClients()
     local b = button()
     spellInSlot()
     b:SetSlot(SLOT)
-    local api = C_ActionBar :: any -- remove functions the declarations type as present
-    local count, cd = api.GetActionDisplayCount, api.GetActionCooldown
-    api.GetActionDisplayCount, api.GetActionCooldown = nil, nil
+    -- functions the declarations type as present
+    mock.setField(C_ActionBar, "GetActionDisplayCount", nil)
+    mock.setField(C_ActionBar, "GetActionCooldown", nil)
     b:Update()
-    api.GetActionDisplayCount, api.GetActionCooldown = count, cd
     expect(b.count).toHaveText("")
     expect(b.coolingDown).toBe(false)
     -- a real cooldown read twice stays one
@@ -489,12 +487,9 @@ local function olderClients()
     b:UpdateCooldown()
     expect(b.coolingDown).toBe(true)
     -- a spell cooldown without a duration API
-    local spell = C_Spell :: any
-    local dur = spell.GetSpellCooldownDuration
-    spell.GetSpellCooldownDuration = nil
-    mock.fake("C_Spell.GetSpellCooldown", function(_: any): any return cooldownInfo(true, false) end)
+    mock.setField(C_Spell, "GetSpellCooldownDuration", nil)
+    mock.fake("C_Spell.GetSpellCooldown", function(_: number): SpellCooldownInfo return cooldownInfo(true, false) end)
     b:ShowSpellCooldown(2457)
-    spell.GetSpellCooldownDuration = dur
     expect(b.coolingDown).toBe(true)
 end
 
@@ -502,7 +497,7 @@ end
 local function countdownFont()
     local b = button()
     local fonts: { string } = {}
-    mock.stub(b.cooldown :: any, "SetCountdownFont", function(_: any, name: string) fonts[#fonts + 1] = name end)
+    mock.stub(b.cooldown, "SetCountdownFont", function(_: Cooldown, name: string) fonts[#fonts + 1] = name end)
     b:SetTextSize(13)
     expect(fonts).toEqual({ "SuuUIActionDigits130" })
 end
@@ -512,7 +507,7 @@ local function tooltipOwner()
     local b = button()
     spellInSlot()
     b:SetSlot(SLOT)
-    mock.stub(GameTooltip :: any, "SetAction", function(_: any, _: any) end)
+    mock.stub(GameTooltip, "SetAction", function(_: GameTooltip, _: number) end)
     mock.hover(b)
     expect(GameTooltip:GetOwner()).toBe(b)
     GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
@@ -521,7 +516,7 @@ local function tooltipOwner()
     expect(GameTooltip).toBeShown()
     GameTooltip:Hide()
     -- a forbidden tooltip is left alone
-    mock.stub(GameTooltip :: any, "IsForbidden", function(_: any): boolean return true end)
+    mock.stub(GameTooltip, "IsForbidden", function(_: GameTooltip): boolean return true end)
     mock.hover(b)
     expect(GameTooltip:GetOwner()).never.toBe(b)
     mock.hover(nil)

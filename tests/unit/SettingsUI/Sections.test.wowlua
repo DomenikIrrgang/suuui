@@ -24,6 +24,9 @@ import * as settingsWindow from "/SettingsUI/Window"
 import _ from "/SettingsUI/Sections"
 import expectNoErrors, newParent from "../../helpers"
 import printedSince, printedCount, hasLine from "./UiSettingsHelpers"
+import type TextField from "/UI/Inputs"
+import type SuuButton from "/UI/Controls"
+import type Select, SelectOption from "/UI/Select"
 
 local profiles = settings.profiles
 
@@ -50,7 +53,7 @@ local function cleanup()
 end
 
 -- A row of a section, by its label.
-local function row(id: string, label: string): { [string]: any }
+local function rowDef(id: string, label: string): registry.RowDef
     local s = registry.get(id)
     assert(s, "no section " .. id)
     for _, g in ipairs(s.groups or {}) do
@@ -60,6 +63,30 @@ local function row(id: string, label: string): { [string]: any }
     end
     error("no row " .. label .. " in " .. id)
 end
+
+-- A row as these tests use it: the functions of the rows they read.
+type Row = {
+    key?: string, namespace?: string, label?: string,
+    description: () -> string,
+    get: () -> unknown, set: (value: unknown) -> (boolean?, string?), isDefault: () -> boolean, reset: () -> (),
+    options: () -> SelectOption<string>[], disabled: () -> (boolean?, string?), onClick: () -> (),
+    format: (v: number) -> string,
+    build: (parent: Frame) -> Frame,
+}
+local function row(id: string, label: string): Row
+    return rowDef(id, label) :: Row
+end
+
+-- A row's description, written or worked out.
+local function describe(r: registry.RowDef): string?
+    local d = r.description
+    if type(d) == "function" then return d() end
+    return d
+end
+
+-- The parts of the profile rows' controls.
+type NameAndButton = Frame & { name: TextField, button: SuuButton }
+type PickAndButton = Frame & { select: Select<string>, button: SuuButton }
 
 local function remember()
     startProfile = profiles.current()
@@ -120,7 +147,7 @@ local function theme()
     expect(settings.account("theme")).toBe(other.id)
     expect(apply).toHaveBeenCalledTimes(1)
     expect(r.isDefault()).toBe(false)
-    expect(r.description()).toBe(other.description)
+    expect(r.description()).toBe(assert(other.description))
     -- back to SuuUI's: nothing kept
     r.set(themes.DEFAULT)
     expect(settings.account("theme")).toBeNil()
@@ -175,11 +202,11 @@ local function welcome()
     local r = row("appearance", "First steps")
     local close = mock.stub(settingsWindow, "close", function() end)
     local show = mock.stub(SuuUI, "ShowWelcome", function() end)
-    mock.stub(services, "get", function(_n: string): any return nil end)
+    mock.stub(services, "get", function(_n: string): { [string]: unknown }? return nil end)
     local off, why = r.disabled()
     expect(off).toBe(true)
     expect(why).toBe("The Welcome module is off (Settings › Modules).")
-    mock.stub(services, "get", function(_n: string): any return {} end)
+    mock.stub(services, "get", function(_n: string): { [string]: unknown }? return {} end)
     expect((r.disabled())).toBe(false)
     r.onClick()
     expect(close).toHaveBeenCalledTimes(1)
@@ -196,7 +223,7 @@ local function profileRow()
     local r = row("profiles", "Profile")
     profiles.create("Test A")
     local names: string[] = {}
-    for _, o in ipairs(r.options()) do names[#names + 1] = o.value end
+    for _, o in ipairs(r.options()) do names[#names + 1] = o.value or "" end
     expect(names).toContain("Test A")
     expect(r.get()).toBe(profiles.current())
     expect(r.set("Test A")).toBe(true)
@@ -206,7 +233,7 @@ end
 @test("a new profile: Create with its name, Enter too; a bad name printed")
 local function newProfile()
     remember()
-    local f = row("profiles", "New profile").build(host())
+    local f = row("profiles", "New profile").build(host()) :: NameAndButton
     f.name:SetValue("Test New")
     mock.click(f.button)
     expect(profiles.current()).toBe("Test New")
@@ -231,15 +258,15 @@ local function copyFrom()
     profiles.create("Test Source")
     -- (stubbed first: the row hands the function to its control when built)
     local copy = mock.stub(profiles, "copyFrom", function(_n: string): (boolean, string?) return true, nil end)
-    local f = row("profiles", "Copy settings from").build(host())
+    local f = row("profiles", "Copy settings from").build(host()) :: PickAndButton
     -- nothing chosen: nothing
     mock.click(f.button)
     expect(f.button.label).toHaveText("Copy")
     local names: string[] = {}
-    for _, o in ipairs(f.select.options) do names[#names + 1] = o.value end
+    for _, o in ipairs(f.select.options) do names[#names + 1] = o.value or "" end
     expect(names).toContain("Test Source")
     expect(names).never.toContain(profiles.current())
-    f.select.onChange("Test Source")
+    assert(f.select.onChange)("Test Source")
     mock.click(f.button)
     expect(f.button.label).toHaveText("Click again")
     expect(copy).never.toHaveBeenCalled()
@@ -253,8 +280,8 @@ local function copyFrom()
     expect(f.select.value).toBeNil()
     -- a failure printed
     mock.stub(profiles, "copyFrom", function(_n: string): (boolean, string?) return false, "SuuUI: that didn't work" end)
-    f = row("profiles", "Copy settings from").build(host())
-    f.select.onChange("Test Source")
+    f = row("profiles", "Copy settings from").build(host()) :: PickAndButton
+    assert(f.select.onChange)("Test Source")
     local before = printedCount()
     mock.click(f.button)
     mock.click(f.button)
@@ -264,12 +291,12 @@ end
 @test("the list follows profiles made and deleted elsewhere; a chosen one gone is dropped")
 local function follows()
     remember()
-    local f = row("profiles", "Delete a profile").build(host())
+    local f = row("profiles", "Delete a profile").build(host()) :: PickAndButton
     profiles.create("Test Gone")
     local names: string[] = {}
-    for _, o in ipairs(f.select.options) do names[#names + 1] = o.value end
+    for _, o in ipairs(f.select.options) do names[#names + 1] = o.value or "" end
     expect(names).toContain("Test Gone")
-    f.select.onChange("Test Gone")
+    assert(f.select.onChange)("Test Gone")
     mock.click(f.button)
     expect(f.button.label).toHaveText("Click again")
     profiles.delete("Test Gone")
@@ -277,20 +304,20 @@ local function follows()
     expect(f.button.label).toHaveText("Delete")
     -- a chosen one still there is kept
     profiles.create("Test Kept")
-    f.select.onChange("Test Kept")
+    assert(f.select.onChange)("Test Kept")
     profiles.create("Test Other")
     events.emit("SUUUI_PROFILES_CHANGED")
     mock.click(f.button)
     mock.click(f.button)
     local left: string[] = {}
-    for _, o in ipairs(f.select.options) do left[#left + 1] = o.value end
+    for _, o in ipairs(f.select.options) do left[#left + 1] = o.value or "" end
     expect(left).never.toContain("Test Kept")
 end
 
 @test("a role preset: Create, then Reset its layout with a second click; what happened printed")
 local function presets()
     remember()
-    local b = row("profiles", "Tank").build(host())
+    local b = row("profiles", "Tank").build(host()) :: SuuButton
     local name = rolePresets.NAME.TANK :: string
     expect(b.label).toHaveText("Create " .. name)
     local before = printedCount()
@@ -339,7 +366,7 @@ local function byRole()
     expect(yours.options()[1].label).toBe("Automatic")
     yours.set("auto")
     local tank = row("profiles", "Tank profile")
-    expect(tank.description).toBe("When you're a " .. (roles.LABEL.TANK :: string) .. ", use this profile.")
+    expect(rowDef("profiles", "Tank profile").description).toBe("When you're a " .. (roles.LABEL.TANK :: string) .. ", use this profile.")
     expect(tank.options()[1]).toEqual({ value = "none", label = "Don't switch" })
     expect(tank.get()).toBe("none")
     expect(tank.set("Test Tank")).toBe(true)
@@ -360,7 +387,7 @@ end
 
 @test("reset everything: a first click arms, a second resets the profile and says so")
 local function resetEverything()
-    local b = row("profiles", "Reset every setting").build(host())
+    local b = row("profiles", "Reset every setting").build(host()) :: SuuButton
     local reset = mock.stub(settings, "reset", function(_n: string?, _k: string?): boolean return true end)
     mock.click(b)
     expect(b.label).toHaveText("Click again to reset")
@@ -379,33 +406,41 @@ end
 -- Modules
 --------------------------------------------------------------------------------
 
-type FakePage = { groups: { [string]: any }[], Clear: (self: FakePage) -> (), AddGroup: (self: FakePage, g: { [string]: any }) -> (),
+type FakePage = { groups: registry.GroupDef[], Clear: (self: FakePage) -> (), AddGroup: (self: FakePage, g: registry.GroupDef) -> Frame,
     Refresh: (self: FakePage) -> (), refreshed: number, badModuleSaid?: boolean }
 
 local function page(): FakePage
     local p: FakePage = {
         groups = {}, refreshed = 0,
         Clear = function(self: FakePage) self.groups = {} end,
-        AddGroup = function(self: FakePage, g: { [string]: any }) self.groups[#self.groups + 1] = g end,
+        AddGroup = function(self: FakePage, g: registry.GroupDef): Frame
+            self.groups[#self.groups + 1] = g
+            return CreateFrame("Frame")
+        end,
         Refresh = function(self: FakePage) self.refreshed += 1 end,
     }
     return p
 end
 
-local function fakeModule(over: { [string]: any }): any
-    local m: { [string]: any } = { id = "zzfake", name = "Fake", builtIn = true, source = "SuuUI", state = "enabled" }
+-- The modules page, built on a fake page.
+local function buildModules(p: FakePage)
+    assert((registry.get("modules") :: registry.Section).build)(p)
+end
+
+local function fakeModule(over: { [string]: unknown }): modules.AnyModule
+    local m: { [string]: unknown } = { id = "zzfake", name = "Fake", builtIn = true, source = "SuuUI", state = "enabled" }
     for k, v in pairs(over) do m[k] = v end
-    return m
+    local fake: modules.AnyModule = mock.partial(m)
+    return fake
 end
 
 @test("the modules page: built in, plugins when there are any, the developer's toggle; drawn")
 local function modulesPage()
-    local section = registry.get("modules") :: registry.Section
     local p = page()
-    mock.stub(modules, "all", function(): any[]
+    mock.stub(modules, "all", function(): modules.AnyModule[]
         return { fakeModule({ id = "a", name = "A", description = "Bars" }), fakeModule({ id = "b", name = "B", builtIn = false, source = "Plug" }) }
     end)
-    ;(section.build :: any)(p)
+    buildModules(p)
     expect(#p.groups).toBe(3)
     expect(p.groups[1].title).toBe("Built in")
     expect(p.groups[2].title).toBe("Plugins")
@@ -414,10 +449,10 @@ local function modulesPage()
     local a, b = p.groups[1].rows[1], p.groups[2].rows[1]
     expect(a.namespace).toBe("a")
     expect(a.key).toBe("enabled")
-    expect(a.description()).toBe("Bars · Built in · On")
-    expect(b.description()).toBe("From Plug · On")
+    expect(describe(a)).toBe("Bars · Built in · On")
+    expect(describe(b)).toBe("From Plug · On")
     -- no plugins: no group for them
-    mock.stub(modules, "all", function(): any[] return { fakeModule({}) } end)
+    mock.stub(modules, "all", function(): modules.AnyModule[] return { fakeModule({}) } end)
     events.emit("SUUUI_MODULE_REGISTERED", "plug")
     expect(#p.groups).toBe(2)
     expect(p.refreshed).toBe(2)
@@ -436,34 +471,34 @@ end
     { { state = "errored", error = "OnEnable failed" }, "Built in · Errored: OnEnable failed. Turn it off and on to try again" },
     { { state = "errored" }, "Built in · Errored: . Turn it off and on to try again" },
 })
-local function descriptions(over: { [string]: any }, shown: string)
-    mock.stub(modules, "get", function(id: string): any return id == "a" and { name = "A" } or nil end)
+local function descriptions(over: { [string]: unknown }, shown: string)
+    mock.stub(modules, "get", function(id: string): modules.AnyModule? return id == "a" and mock.partial({ name = "A" }) or nil end)
     local p = page()
-    mock.stub(modules, "all", function(): any[] return { fakeModule(over) } end)
-    ;((registry.get("modules") :: registry.Section).build :: any)(p)
+    mock.stub(modules, "all", function(): modules.AnyModule[] return { fakeModule(over) } end)
+    buildModules(p)
     local rows = #p.groups[1].rows > 0 and p.groups[1].rows or p.groups[2].rows
-    expect(rows[1].description()).toBe(shown)
+    expect(describe(rows[1])).toBe(shown)
 end
 
 @test("an errored module that reloads to toggle: it tries again after a reload")
 local function erroredRetry()
     local p = page()
-    mock.stub(modules, "all", function(): any[]
+    mock.stub(modules, "all", function(): modules.AnyModule[]
         return { fakeModule({ id = "diagnostics", state = "errored", reloadToToggle = true, pendingReload = true, error = "OnEnable failed" }) }
     end)
-    ;((registry.get("modules") :: registry.Section).build :: any)(p)
-    expect(p.groups[1].rows[1].description()).toBe("Built in · Errored: OnEnable failed. It tries again after a reload")
+    buildModules(p)
+    expect(describe(p.groups[1].rows[1])).toBe("Built in · Errored: OnEnable failed. It tries again after a reload")
 end
 
 @test("what can't be turned on: one that can't load, one a plugin stands in for")
 local function cannot()
     local p = page()
-    mock.stub(modules, "all", function(): any[]
+    mock.stub(modules, "all", function(): modules.AnyModule[]
         return { fakeModule({ name = "Old", state = "incompatible", error = "needs SuuUI API 2" }),
                  fakeModule({ name = "Bars", replacedBy = "Plug Bars" }),
                  fakeModule({ name = "Fine" }), fakeModule({ name = "Odd", state = "incompatible" }) }
     end)
-    ;((registry.get("modules") :: registry.Section).build :: any)(p)
+    buildModules(p)
     local rows = p.groups[1].rows
     local off, why = assert(rows[1].disabled)()
     expect(off).toBe(true)
@@ -478,12 +513,12 @@ end
 @test("a module without a proper id: left out, said once")
 local function badModule()
     local p = page()
-    mock.stub(modules, "all", function(): any[] return { fakeModule({ id = 5, name = "Broken", source = "Plug" }), fakeModule({}) } end)
+    mock.stub(modules, "all", function(): modules.AnyModule[] return { fakeModule({ id = 5, name = "Broken", source = "Plug" }), fakeModule({}) } end)
     local before = printedCount()
-    ;((registry.get("modules") :: registry.Section).build :: any)(p)
+    buildModules(p)
     expect(#p.groups[1].rows).toBe(1)
     local said = printedSince(before)
     expect(hasLine(said, "left out a module without a proper id (Broken, from Plug)")).toBe(true)
-    ;((registry.get("modules") :: registry.Section).build :: any)(p)
+    buildModules(p)
     expect(#printedSince(before)).toBe(#said)
 end

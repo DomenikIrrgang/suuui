@@ -9,6 +9,7 @@ import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import skinItemSlot, itemSlot, moneyText, money, inventory, Inventory, FoundItem from "/UI/Inventory"
+import type InventoryOptions, ResultRow from "/UI/Inventory"
 import * as tooltipModule from "/UI/Tooltip"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, borderToken from "./WorldHelpers"
@@ -102,7 +103,7 @@ end
 @test("a template's button: its own icon used, its parts and textures hidden")
 local function templateButton()
     local p = host()
-    local b: any = CreateFrame("Button", "SuuUITestSlot", p)
+    local b = CreateFrame("Button", "SuuUITestSlot", p) :: Button & { icon: Texture, IconBorder: Texture, Count: FontString, flash: number }
     b:SetSize(SLOT, SLOT)
     b.icon = b:CreateTexture(nil, "ARTWORK")
     b.IconBorder = b:CreateTexture(nil, "OVERLAY")
@@ -119,7 +120,7 @@ local function templateButton()
     expect(b:GetNormalTexture():GetAlpha()).toBe(0)
     expect(b:GetHighlightTexture():GetAlpha()).toBe(0)
     -- an Icon (capitalised) too; unnamed: no global parts
-    local c: any = CreateFrame("Button", nil, p)
+    local c = CreateFrame("Button", nil, p) :: Button & { Icon: Texture }
     c.Icon = c:CreateTexture(nil, "ARTWORK")
     expect(skinItemSlot(c).icon).toBe(c.Icon)
 end
@@ -134,17 +135,16 @@ end
     { 123456789, "12,345g  67s  89c" }, { 1000000000, "100,000g" }, { 10100, "1g  1s" },
     { -5, "0c" }, { 12.7, "12c" }, { "abc", "0c" }, { nil, "0c" },
 })
-local function texts(total: any, shown: string)
+local function texts(total: unknown, shown: string)
     expect(plain(moneyText(total))).toBe(shown)
 end
 
 @test("moneyText: the units in the coin colours")
 local function coinColours()
     local text = moneyText(10101)
-    local colors = T.color :: { [string]: any }
-    expect(text:find(colors["coin-gold"].hex, 1, true) ~= nil).toBe(true)
-    expect(text:find(colors["coin-silver"].hex, 1, true) ~= nil).toBe(true)
-    expect(text:find(colors["coin-copper"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(T.color["coin-gold"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(T.color["coin-silver"].hex, 1, true) ~= nil).toBe(true)
+    expect(text:find(T.color["coin-copper"].hex, 1, true) ~= nil).toBe(true)
 end
 
 @test("money: the amount kept, as wide as its text, a numeric line high")
@@ -165,8 +165,8 @@ end
 -- The inventory panel
 --------------------------------------------------------------------------------
 
-local function make(opts: { [string]: any }?): Inventory
-    local inv = inventory(host(), opts :: any)
+local function make(opts: InventoryOptions?): Inventory
+    local inv = inventory(host(), opts)
     inv:SetPoint("CENTER")
     inv:Show()
     return inv
@@ -200,7 +200,7 @@ end
 @test("the sort button: gilt and its tip on hover when enabled, faded when disabled")
 local function sortButton()
     local inv = make()
-    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
     local hide = mock.stub(tooltipModule, "hideTooltip", function() end)
     mock.hover(inv.sort)
     expect(borderToken(inv.sort.edge)).toBe("gilt")
@@ -254,7 +254,7 @@ local function sections()
         { at = 3, label = "Reagents", note = "a quiet note" },
         { at = 6, note = "Nothing in the bank bag" },
     })
-    local heads = inv.heads :: any[]
+    local heads = assert(inv.heads)
     local a, b, c = heads[1], heads[2], heads[3]
     expect(a.label).toHaveText("Backpack")
     expect(tokenOf(a.label)).toBe("gilt-text")
@@ -291,10 +291,10 @@ local function foot()
     expect(inv.money).never.toBeShown()
     inv:SetMeta("18 free of 80")
     local clicked = mock.spy()
-    local show = mock.stub(tooltipModule, "showTooltip", function(_o: any, _d: any) end)
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
     mock.stub(tooltipModule, "hideTooltip", function() end)
     inv:SetAction({ text = "Sell junk", onClick = clicked, tooltip = { title = "Sell junk" } })
-    local b = inv.action :: any
+    local b = assert(inv.action)
     expect(b).toBeShown()
     expect(b.label).toHaveText("Sell junk")
     expect(inv.note).toBeAnchoredTo(b, "LEFT", "RIGHT")
@@ -323,11 +323,11 @@ local function close()
     local inv = make()
     local closed = mock.spy()
     inv.onClose = closed
-    mock.click((inv :: any).close)
+    mock.click(inv.close)
     expect(closed).toHaveBeenCalledTimes(1)
     expect(inv).toBeShown()
     inv.onClose = nil
-    mock.click((inv :: any).close)
+    mock.click(inv.close)
     expect(inv).never.toBeShown()
 end
 
@@ -340,8 +340,8 @@ local function characters()
     local inv = make({ characters = true })
     expect(inv.title).never.toBeShown()
     expect(inv.who ~= nil).toBe(true)
-    expect((inv.view :: any).value).toBe("bags")
-    expect((inv.all :: any).value).toBe(false)
+    expect(assert(inv.view).value).toBe("bags")
+    expect(assert(inv.all).value).toBe(false)
     expect(inv.allLabel).toHaveText("All characters")
     expect(inv.banner).never.toBeShown()
     expect(inv.results).never.toBeShown()
@@ -353,7 +353,7 @@ local function banner()
     local inv = make({ characters = true })
     local before = inv.body:GetHeight()
     inv:SetBanner("Tamsin's bags as of 2 days ago · read only")
-    local b = inv.banner :: any
+    local b = assert(inv.banner)
     expect(b).toBeShown()
     expect(b.text).toHaveText("Tamsin's bags as of 2 days ago · read only")
     expect(tokenOf(b.eye)).toBe("ink-muted")
@@ -379,7 +379,7 @@ local function results()
         { icon = 3 },
     }
     expect(inv:SetResults(list)).toBe(0)
-    local rows = inv.resultRows :: any[]
+    local rows = assert(inv.resultRows)
     expect(inv.results).toBeShown()
     expect(inv.grid).never.toBeShown()
     expect(rows[1].label).toHaveText("Linen Cloth")
@@ -393,8 +393,8 @@ local function results()
     -- never shorter than the grid it stands in for
     expect((inv.results :: Frame):GetHeight()).toBe(gridH)
     -- hover: the row's callbacks
-    local entered = mock.spy(function(_r: any) end)
-    local left = mock.spy(function(_r: any) end)
+    local entered = mock.spy(function(_r: ResultRow) end)
+    local left = mock.spy(function(_r: ResultRow) end)
     mock.hover(rows[1])
     rows[1].onEnter, rows[1].onLeave = entered, left
     mock.hover(nil)

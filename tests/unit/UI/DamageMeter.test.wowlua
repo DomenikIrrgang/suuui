@@ -4,73 +4,78 @@
 
 import test, cases, expect, beforeAll, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
-import damageMeter, DamageMeter, DAMAGE_METER_TYPES, DamageMeterOptions, MeterApi from "/UI/DamageMeter"
+import damageMeter, DamageMeter, DAMAGE_METER_TYPES, DamageMeterOptions, MeterApi, RecapApi, MeterSession from "/UI/DamageMeter"
 import internal abbr, count, clock, since, shortName, group3, sessionArg, fetch, inCombat from "/UI/DamageMeter"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, borderToken from "./HudHelpers"
 import * as tooltip from "/UI/Tooltip"
+import * as tbl from "wowlua:table"
 
 -- The stand-in's data: sessions by meter type enum, sources' spells, the past fights.
-type Source = { [string]: any }
-local sessions: { [any]: any } = {}
-local spells: { [any]: any } = {}
-local past: { [string]: any }[] = {}
+-- (unknown: the tests also give it what the game shouldn't, secrets and gaps)
+type Source = { [string]: unknown }
+local sessions: { [unknown]: unknown } = {}
+local spells: { [unknown]: unknown } = {}
+local past: unknown[] = {}
 local duration = 75
 local asked: { string } = {}
 
-local function typeEnum(value: string): any
+local function typeEnum(value: string): unknown
     for _, t in ipairs(DAMAGE_METER_TYPES) do
-        if t.value == value then return (Enum.DamageMeterType :: any)[t.enum :: string] end
+        if t.value == value then return tbl.field(Enum.DamageMeterType, t.enum or "") end
     end
     return nil
 end
 
-local API = {
-    GetCombatSessionFromType = function(st: any, meterType: any): any
+local API: MeterApi = {
+    GetCombatSessionFromType = function(st, meterType)
         asked[#asked + 1] = "type:" .. tostring(st)
-        return sessions[meterType]
+        return sessions[meterType] :: DamageMeterCombatSessionSecret
     end,
-    GetCombatSessionFromID = function(id: number, meterType: any): any
+    GetCombatSessionFromID = function(id, meterType)
         asked[#asked + 1] = "id:" .. id
-        return sessions[meterType]
+        return sessions[meterType] :: DamageMeterCombatSessionSecret
     end,
-    GetCombatSessionSourceFromType = function(_: any, _: any, guid: any, creature: any): any
+    GetCombatSessionSourceFromType = function(_, _, guid, creature)
         asked[#asked + 1] = "src:" .. tostring(guid) .. ":" .. tostring(creature)
-        return spells[guid]
+        return spells[guid] :: DamageMeterCombatSessionSourceSecret
     end,
-    GetCombatSessionSourceFromID = function(id: number, _: any, guid: any, _: any): any
+    GetCombatSessionSourceFromID = function(id, _, guid, _)
         asked[#asked + 1] = "srcid:" .. id
-        return spells[guid]
+        return spells[guid] :: DamageMeterCombatSessionSourceSecret
     end,
-    GetSessionDurationSeconds = function(_: any): number return duration end,
-    GetAvailableCombatSessions = function(): any return past end,
+    GetSessionDurationSeconds = function(_) return duration end,
+    GetAvailableCombatSessions = function() return past :: DamageMeterAvailableCombatSession[] end,
 }
 
-local recapEvents: any = {}
-local recapMax: any = 1000
-local RECAP = {
-    GetRecapEvents = function(_: number?): any
+local recapEvents: unknown = {}
+local recapMax: unknown = 1000
+local RECAP: RecapApi = {
+    GetRecapEvents = function(_)
         if recapEvents == "error" then error("no recap") end
         return recapEvents
     end,
-    GetRecapMaxHealth = function(_: number?): any
+    GetRecapMaxHealth = function(_)
         if recapMax == "error" then error("no max") end
-        return recapMax
+        return recapMax :: number
     end,
 }
 
 local parent: Frame? = nil
 
 -- SuuUI's tooltip, recorded (it shows after a hover intent)
-local tips: { any } = {}
-local function lastTip(): any
-    for i = #tips, 1, -1 do if type(tips[i]) == "table" then return tips[i] end end
+local tips: unknown[] = {}
+local function lastTip(): tooltip.TooltipData
+    for i = #tips, 1, -1 do
+        local t = tips[i]
+        if type(t) == "table" then return t :: tooltip.TooltipData end
+    end
     return {}
 end
 @beforeAll
 local function recordTips()
     mock.module(tooltip, {
-        showTooltip = function(_: any, data: any) tips[#tips + 1] = data end,
+        showTooltip = function(_: Region, data: tooltip.TooltipSource) tips[#tips + 1] = data end,
         hideTooltip = function() tips[#tips + 1] = "hide" end,
     })
 end
@@ -136,12 +141,8 @@ end
 
 @test("group3 without BreakUpLargeNumbers")
 local function group3Plain()
-    local g = _G :: any -- a global the declarations type as always there
-    local was = g.BreakUpLargeNumbers
-    g.BreakUpLargeNumbers = nil
-    local out = group3(12345)
-    g.BreakUpLargeNumbers = was
-    expect(out).toBe("12345")
+    mock.setField(_G, "BreakUpLargeNumbers", nil) -- a global the declarations type as always there
+    expect(group3(12345)).toBe("12345")
 end
 
 @test("clock and since")
@@ -160,15 +161,11 @@ local function names()
     expect(shortName("Thrall-Realm")).toBe("Thrall")
     expect(shortName(7)).toBe("")
     expect(shortName(mock.secret("Thrall-Realm"))).never.toBeNil() -- through Ambiguate
-    mock.fake("Ambiguate", function(_: any, _: string): any error("refused") end)
+    mock.fake("Ambiguate", function(_: unknown, _: string): unknown error("refused") end)
     local s = shortName(mock.secret("X"))
     expect(issecretvalue(s)).toBe(true)
-    local g = _G :: any -- a global the declarations type as always there
-    local was = g.Ambiguate
-    g.Ambiguate = nil
-    local plain = shortName("Jaina-Other")
-    g.Ambiguate = was
-    expect(plain).toBe("Jaina")
+    mock.setField(_G, "Ambiguate", nil) -- a global the declarations type as always there
+    expect(shortName("Jaina-Other")).toBe("Jaina")
 end
 
 @test("sessionArg and fetch")
@@ -186,16 +183,16 @@ local function fetching()
     session("damage", sources(1))
     expect(fetch(API, 3, "damage")).never.toBeNil()
     expect(asked[#asked]).toBe("id:3")
-    local broken: MeterApi = setmetatable({ GetCombatSessionFromType = function(): any error("no") end }, { __index = API })
+    local broken: MeterApi = setmetatable({ GetCombatSessionFromType = function(): DamageMeterCombatSessionSecret error("no") end }, { __index = API })
     expect(fetch(broken, "current", "damage")).toBeNil()
 end
 
 @test("inCombat: lockdown or the player in combat")
 local function combat()
     expect(inCombat()).toBe(false)
-    mock.fake("UnitAffectingCombat", function(_: string): any return true end)
+    mock.fake("UnitAffectingCombat", function(_: string): boolean return true end)
     expect(inCombat()).toBe(true)
-    mock.fake("UnitAffectingCombat", function(_: string): any return mock.secret(true) end)
+    mock.fake("UnitAffectingCombat", function(_: string): Secret<boolean> return mock.secret(true) end)
     expect(inCombat()).toBe(false)
 end
 
@@ -323,7 +320,7 @@ local function looks()
     expect(tokenOf(w.rows[1].name)).toBe("ink")
     -- class icons from the circles when there is no atlas
     w:SetOptions({ marker = "icon", nameColor = "class" })
-    mock.fake("GetClassAtlas", function(_: string): any return nil end)
+    mock.fake("GetClassAtlas", function(_: string): string? return nil end)
     w:Refresh()
     expect(w.rows[1].icon).toBeShown()
 end
@@ -353,7 +350,7 @@ local function drill()
         { spellID = 133, totalAmount = 400, amountPerSecond = 4, creatureName = "Imp" },
         { spellID = 999999, totalAmount = 0, amountPerSecond = 0 },
     } }
-    mock.fake("C_Spell.GetSpellName", function(id: number): any
+    mock.fake("C_Spell.GetSpellName", function(id: number): string
         if id == 999999 then error("unknown") end
         return "Fireball"
     end)
@@ -442,7 +439,7 @@ local function sessionOptions()
     w:SetView("damage", "overall")
     expect(w.time).toHaveText("")
     -- a broken list: Current and Overall only
-    local broken = setmetatable({ GetAvailableCombatSessions = function(): any error("no") end }, { __index = API })
+    local broken: MeterApi = setmetatable({ GetAvailableCombatSessions = function(): DamageMeterAvailableCombatSession[] error("no") end }, { __index = API })
     w.api = broken
     expect(#w:SessionOptions()).toBe(2)
 end
@@ -450,15 +447,15 @@ end
 @test("the selects change the view and tell onView")
 local function selects()
     local seen: { string } = {}
-    local w = meter({ onView = function(t: string, s: any) seen[#seen + 1] = t .. "/" .. tostring(s) end })
-    ;(w.typeSelect.onChange :: (v: any) -> ())("healing")
+    local w = meter({ onView = function(t: string, s: MeterSession) seen[#seen + 1] = t .. "/" .. tostring(s) end })
+    assert(w.typeSelect.onChange)("healing")
     expect(w.type).toBe("healing")
-    ;(w.sessionSelect.onChange :: (v: any) -> ())("overall")
+    assert(w.sessionSelect.onChange)("overall")
     expect(w.session).toBe("overall")
     expect(seen).toEqual({ "healing/current", "healing/overall" })
     local quiet = meter()
-    ;(quiet.typeSelect.onChange :: (v: any) -> ())("dps")
-    ;(quiet.sessionSelect.onChange :: (v: any) -> ())("current")
+    assert(quiet.typeSelect.onChange)("dps")
+    assert(quiet.sessionSelect.onChange)("current")
     expect(quiet.type).toBe("dps")
 end
 
@@ -626,7 +623,7 @@ end
 local function secrets()
     local w = meter()
     w:SetOptions({ numbers = "complete" })
-    mock.fake("UnitAffectingCombat", function(_: string): any return true end)
+    mock.fake("UnitAffectingCombat", function(_: string): boolean return true end)
     session("damage", {
         { name = mock.secret("Foe-Realm"), classFilename = "MAGE", totalAmount = mock.secret(5000), amountPerSecond = mock.secret(50),
           isLocalPlayer = mock.secret(false), sourceGUID = mock.secret("G") },

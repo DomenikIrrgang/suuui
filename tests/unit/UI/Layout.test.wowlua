@@ -36,8 +36,8 @@ local function placedAt(r: Region): Placement
 end
 
 -- where a child sits: its TOPLEFT offsets from the container
-local function at(f: any): number[]
-    local pt = pointOf(f) :: any
+local function at(f: Region): number[]
+    local pt = assert(pointOf(f))
     return { pt.x, pt.y }
 end
 
@@ -91,7 +91,7 @@ end
 @cases({ { "list" }, { "named" } })
 local function paddings(kind: string)
     local c = host()
-    local pad: any = kind == "list" and { 1, 2, 3, 4 } or { left = 1, right = 2, top = 3, bottom = 4 }
+    local pad = kind == "list" and { 1, 2, 3, 4 } or { left = 1, right = 2, top = 3, bottom = 4 }
     local l = stack(c, { padding = pad })
     expect(l.padding).toEqual({ left = 1, right = 2, top = 3, bottom = 4 })
     local a = box(c, 10, 10)
@@ -301,8 +301,8 @@ end
 local function ownSize()
     local c = host()
     local l = stack(c)
-    local a: any = box(c, 10, 10)
-    a.GetLayoutSize = function(_: any): (number, number) return 33, 44 end
+    local a = box(c, 10, 10) :: Frame & { GetLayoutSize: (self: Frame) -> (number, number) }
+    a.GetLayoutSize = function(_: Frame): (number, number) return 33, 44 end
     l:Add(a)
     mock.advanceFrames(1)
     expect(c).toHaveSize(33, 44)
@@ -328,27 +328,27 @@ local function secretText()
     local c = host()
     local l = stack(c, { direction = "horizontal" })
     -- a stand-in text whose sizes read back secret (an enemy's name in combat)
-    local placed: any[] = {}
-    local fake: any = {
-        IsObjectType = function(_: any, _t: string): boolean return false end,
-        GetObjectType = function(_: any): string return "FontString" end,
-        IsShown = function(_: any): boolean return true end,
-        GetUnboundedStringWidth = function(_: any): any return mock.secret(50) end,
-        GetStringHeight = function(_: any): any return mock.secret(12) end,
-        ClearAllPoints = function(_: any) end,
-        SetPoint = function(_: any, ...: any) placed[#placed + 1] = { ... } end,
-    }
+    local placed: unknown[][] = {}
+    local fake: FontString = mock.partial({
+        IsObjectType = function(_: FontString, _t: string): boolean return false end,
+        GetObjectType = function(_: FontString): string return "FontString" end,
+        IsShown = function(_: FontString): boolean return true end,
+        GetUnboundedStringWidth = function(_: FontString): Secret<number> return mock.secret(50) end,
+        GetStringHeight = function(_: FontString): Secret<number> return mock.secret(12) end,
+        ClearAllPoints = function(_: FontString) end,
+        SetPoint = function(_: FontString, ...: unknown) placed[#placed + 1] = { ... } end,
+    })
     l:Add(fake)
     -- and one whose sizes read back nil
-    local blank: any = {
-        IsObjectType = function(_: any, _t: string): boolean return false end,
-        GetObjectType = function(_: any): string return "FontString" end,
-        IsShown = function(_: any): boolean return true end,
-        GetUnboundedStringWidth = function(_: any): any return nil end,
-        GetStringHeight = function(_: any): any return nil end,
-        ClearAllPoints = function(_: any) end,
-        SetPoint = function(_: any, ...: any) end,
-    }
+    local blank: FontString = mock.partial({
+        IsObjectType = function(_: FontString, _t: string): boolean return false end,
+        GetObjectType = function(_: FontString): string return "FontString" end,
+        IsShown = function(_: FontString): boolean return true end,
+        GetUnboundedStringWidth = function(_: FontString): number? return nil end,
+        GetStringHeight = function(_: FontString): number? return nil end,
+        ClearAllPoints = function(_: FontString) end,
+        SetPoint = function(_: FontString, ...: unknown) end,
+    })
     l:Add(blank)
     l:Add(box(c, 10, 10))
     mock.advanceFrames(1)

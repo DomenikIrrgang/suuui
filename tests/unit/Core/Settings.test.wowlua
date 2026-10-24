@@ -25,7 +25,7 @@ const W2 = "Settings Test W2"
 const VETO = "Settings Test Veto"
 const profiles = settings.profiles
 
-type Heard = (value: any, namespace: string, key: string) -> ()
+type Heard = settings.Watcher
 type Message = (name: string, ...unknown) -> ()
 
 -- Registered before the saved settings load, as a module's file does.
@@ -35,8 +35,8 @@ settings.register("zzsh", { n = 1 })
 settings.migrate("zzsb", "toNumber", function(values: settings.Values)
     if type(values.level) == "string" then values.level = tonumber(values.level) end
 end)
-settings.veto("zzsa", "num", function(new: any): (boolean?, string?)
-    if new > 100 then return false, "too big" end
+settings.veto("zzsa", "num", function(new)
+    if type(new) == "number" and new > 100 then return false, "too big" end
     return true, nil
 end, "Settings Test Load Veto")
 local readyHeard = 0
@@ -71,7 +71,7 @@ local function printedBy(fn: () -> ()): string[]
 end
 
 local function watcher(): Heard
-    return mock.spy(function(_: any, _ns: string, _key: string) end)
+    return mock.spy(function(_: unknown, _ns: string, _key: string) end)
 end
 
 local function listen<N extends MessageName>(name: N): Message
@@ -97,7 +97,7 @@ end
 
 -- What the file saw before and right after the saved settings loaded,
 -- recorded once in @beforeAll (it logs in), so any test can run alone.
-type Seen = { [string]: any }
+type Seen = { [string]: unknown }
 local before: Seen = {}
 local atLoadSeen: Seen = {}
 
@@ -187,26 +187,26 @@ end
 @test("at load: this character's profile, every profile migrated, the current one screened")
 local function atLoad()
     local seen = atLoadSeen
-    local p: { [string]: any } = seen.profiles
+    local p = seen.profiles
     expect(seen.ready).toBe(true)
     expect(seen.readyHeard).toBe(1)
     expect(seen.charKey).toBe(seen.key)
     expect(seen.current).toBe("Main")
     -- migrated, in every profile, once
     expect(seen.level).toBe(9)
-    expect(p.Main.zzsb).toEqual({ level = 9 })
-    expect(p.Main.__migrated["zzsb/toNumber"]).toBe(true)
+    expect(tbl.field(p, "Main", "zzsb")).toEqual({ level = 9 })
+    expect(tbl.field(p, "Main", "__migrated", "zzsb/toNumber")).toBe(true)
     -- what a migration leaves at its default isn't stored
-    expect(p.Other.zzsb).toEqual({ level = 3 })
-    expect(p.Other.__migrated["zzsb/toNumber"]).toBe(true)
+    expect(tbl.field(p, "Other", "zzsb")).toEqual({ level = 3 })
+    expect(tbl.field(p, "Other", "__migrated", "zzsb/toNumber")).toBe(true)
     -- nothing to migrate counts as done
-    expect(p.Empty.__migrated["zzsb/toNumber"]).toBe(true)
-    expect(p.Broken).toBe("not a table")
+    expect(tbl.field(p, "Empty", "__migrated", "zzsb/toNumber")).toBe(true)
+    expect(tbl.field(p, "Broken")).toBe("not a table")
     -- a value the veto refuses is dropped, so the default applies
-    expect(p.Main.zzsa.num).toBeNil()
+    expect(tbl.field(p, "Main", "zzsa", "num")).toBeNil()
     expect(seen.num).toBe(1)
     -- a value of the wrong type stays stored but is ignored
-    expect(p.Main.zzsa.text).toBe(7)
+    expect(tbl.field(p, "Main", "zzsa", "text")).toBe(7)
     expect(seen.text).toBe("a")
     expect(seen.textDefault).toBe(true)
 end
@@ -230,9 +230,9 @@ end
 
 @test("register: a string namespace, once, with string keys")
 local function register()
-    expect(function() settings.register(5 :: any, {}) end).toThrow()
+    expect(function() settings.register(5 :: unknown :: string, {}) end).toThrow()
     expect(function() settings.register("zzsa", {}) end).toThrow("namespace zzsa is already registered")
-    expect(function() settings.register("zzbadkeys", { [1] = true } :: any) end).toThrow()
+    expect(function() settings.register("zzbadkeys", { [1] = true } :: unknown :: settings.Values) end).toThrow()
     expect(settings.has("zzbadkeys")).toBe(false)
 end
 
@@ -310,8 +310,8 @@ end
 
 @test("set: a table is stored as a copy, and watchers get copies")
 local function setTable()
-    local got: any[] = {}
-    settings.watch("zzsa", "list", function(v: any) got[#got + 1] = v end, W1)
+    local got: number[][] = {}
+    settings.watch("zzsa", "list", function(v) got[#got + 1] = v :: number[] end, W1)
     local mine = { 3 }
     settings.set("zzsa", "list", mine)
     mine[1] = 4
@@ -333,8 +333,8 @@ end
 local function veto()
     local heard = watcher()
     settings.watch("zzsa", "num", heard, W1)
-    local seen: any[] = {}
-    settings.veto("zzsa", "num", function(new: any, old: any): (boolean?, string?)
+    local seen: unknown[][] = {}
+    settings.veto("zzsa", "num", function(new, old)
         seen[#seen + 1] = { new, old }
         if new == 13 then return false, nil end
         return true, nil
@@ -362,19 +362,19 @@ end
 @test("watch and veto need a known setting, a function and an owner")
 local function watchArgs()
     expect(function() settings.watch("zzsa", "nope", function() end, W1) end).toThrow("zzsa has no setting \"nope\"")
-    expect(function() settings.watch("zzsa", "num", nil :: any, W1) end).toThrow()
+    expect(function() settings.watch("zzsa", "num", nil :: unknown :: settings.Watcher, W1) end).toThrow()
     expect(function() settings.veto("zzsa", "num", function(): (boolean?, string?) return true, nil end, nil) end)
         .toThrow("a function and an owner are required")
 end
 
 @test("a watcher that changes the setting: the others hear only the newest value")
 local function supersede()
-    local second: any[] = {}
+    local second: unknown[] = {}
     local changed = listen("SUUUI_SETTING_CHANGED")
-    settings.watch("zzsa", "num", function(v: any)
-        if v > 10 then settings.set("zzsa", "num", 10) end
+    settings.watch("zzsa", "num", function(v)
+        if type(v) == "number" and v > 10 then settings.set("zzsa", "num", 10) end
     end, W1)
-    settings.watch("zzsa", "num", function(v: any) second[#second + 1] = v end, W2)
+    settings.watch("zzsa", "num", function(v) second[#second + 1] = v end, W2)
     settings.set("zzsa", "num", 50)
     expect(settings.get("zzsa", "num")).toBe(10)
     expect(second).toEqual({ 10 })
@@ -465,7 +465,7 @@ end
 @test("migrate after load: what a veto refuses afterwards is dropped from the current profile")
 local function lateMigrationScreened()
     settings.register("zzse", { n = 1 })
-    settings.veto("zzse", "n", function(new: any): (boolean?, string?) return new < 100, nil end, VETO)
+    settings.veto("zzse", "n", function(new) return type(new) == "number" and new < 100, nil end, VETO)
     saved("Main").zzse = { m = 500 }
     settings.migrate("zzse", "m to n", function(values: settings.Values)
         values.n, values.m = values.m, nil
@@ -508,7 +508,7 @@ end
 @test("use: a vetoed value of the wrong type is ignored; a veto that errors keeps the value")
 local function useScreens()
     settings.register("zzsf", { a = 1, b = 1 })
-    settings.veto("zzsf", "a", function(new: any): (boolean?, string?) return new < 10, "no" end, VETO)
+    settings.veto("zzsf", "a", function(new) return type(new) == "number" and new < 10, "no" end, VETO)
     settings.veto("zzsf", "b", function(): (boolean?, string?) error("settings-err-screen") end, VETO)
     profiles.create("ZzScreen")
     saved("ZzScreen").zzsf = { a = "text", b = 50 }
@@ -523,7 +523,7 @@ end
 local function migrateArgs()
     expect(function() settings.migrate("zznope", "x", function() end) end).toThrow("unknown namespace \"zznope\"")
     expect(function() settings.migrate("zzsb", "", function() end) end).toThrow("a migration needs an id and a function")
-    expect(function() settings.migrate("zzsb", "x", nil :: any) end).toThrow()
+    expect(function() settings.migrate("zzsb", "x", nil :: unknown :: (values: settings.Values) -> ()) end).toThrow()
     expect(function() settings.migrate("zzsb", "toNumber", function() end) end).toThrow("migration zzsb/toNumber is already registered")
 end
 
@@ -731,7 +731,7 @@ end
 
 @test("import: plain data only, migrated, wrong types dropped, unknown plugins kept; switches to it")
 local function import()
-    local data: { [any]: any } = {
+    local data: { [unknown]: unknown } = {
         zzsa = { num = "bad", list = "not a list", flag = true, extra = 5, [5] = 1 },
         zzsb = { level = "6" },
         zzsh = { n = "x" }, -- its only value of the wrong type: the namespace goes
@@ -914,7 +914,7 @@ const CHAR = "Tamsin Ashford - Realm"
 
 -- A store over fakes, its namespace registered and a migration in, bound
 -- to saved data the test made: SuuUIDB is never touched.
-local function ownStore(data: { [string]: any }): (settings.SettingsStore, FakeReporter, FakeNotifier)
+local function ownStore(data: { [string]: unknown }): (settings.SettingsStore, FakeReporter, FakeNotifier)
     local reporter, notifier = FakeReporter.new(), FakeNotifier.new()
     local store = settings.SettingsStore.new(reporter, notifier)
     store:register("bars", { scale = 1, shown = true })
@@ -927,17 +927,17 @@ end
 
 @test("a store of its own: bound to its data, migrated at bind, its changes told to its notifier")
 local function ownBind()
-    local data: { [string]: any } = { profiles = { [CHAR] = { bars = { size = 2 } }, Raid = { bars = { shown = false } } } }
+    local data: { [string]: unknown } = { profiles = { [CHAR] = { bars = { size = 2 } }, Raid = { bars = { shown = false } } } }
     local store, _, notifier = ownStore(data)
     expect(store:ready()).toBe(true)
     expect(store:currentProfile()).toBe(CHAR)
-    expect(data.chars[CHAR]).toBe(CHAR)
+    expect(tbl.field(data, "chars", CHAR)).toBe(CHAR)
     -- the migration reshaped every profile
     expect(store:get("bars", "scale")).toBe(2)
-    expect(data.profiles[CHAR].bars.size).toBeNil()
+    expect(tbl.field(data, "profiles", CHAR, "bars", "size")).toBeNil()
     expect(notifier.told).toEqual({ "SUUUI_SETTINGS_READY nil" })
     store:set("bars", "scale", 3)
-    expect(data.profiles[CHAR].bars.scale).toBe(3)
+    expect(tbl.field(data, "profiles", CHAR, "bars", "scale")).toBe(3)
     expect(store:useProfile("raid")).toBe(true)
     expect(store:get("bars", "shown")).toBe(false)
     expect(store:get("bars", "scale")).toBe(1)
