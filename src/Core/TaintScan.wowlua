@@ -7,6 +7,9 @@
 -- refuses or blocks an action, so the culprit is caught then;
 -- "/suu probe taint" (Diagnostics, dev builds) shows it on demand.
 
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+
 -- the globals the Escape chain reads (ToggleGameMenu, CloseAllWindows,
 -- CloseAllBags, CloseWindows, HideUIPanel, CloseSpecialWindows)
 local GLOBALS = {
@@ -53,15 +56,16 @@ export function scan(): string[]
     for i in ipairs(UISpecialFrames or {}) do
         check("UISpecialFrames[" .. i .. "] = " .. tostring(UISpecialFrames[i]), UISpecialFrames, i)
     end
-    for _, fname in ipairs(FRAMES) do fields(fname, _G[fname]) end
-    local bank = _G.BankFrame
-    if type(bank) == "table" then fields("BankFrame.BankPanel", bank.BankPanel) end
+    for _, fname in ipairs(FRAMES) do fields(fname, tbl.field(_G, fname)) end
+    local bankPanel = tbl.field(_G, "BankFrame", "BankPanel")
+    if bankPanel ~= nil then fields("BankFrame.BankPanel", bankPanel) end
     -- SuuUI's slots: one of each bag (they're made alike), and its bag frame
     for bag = -3, 12 do
-        local b = _G[("SuuUIBag%dSlot1"):format(bag + 2)]
+        local name = ("SuuUIBag%dSlot1"):format(bag + 2)
+        local b = wf.find(name)
         if b then
-            fields(b:GetName(), b)
-            fields(b:GetName() .. ":GetParent()", b:GetParent())
+            fields(name, b)
+            fields(name .. ":GetParent()", b:GetParent())
         end
     end
     return tainted

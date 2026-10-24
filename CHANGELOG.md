@@ -14,7 +14,7 @@
 - Social: a friend last online a year ago or more says so in years ("1 year ago", where it counted months).
 - Plugin API 0.19: a `Select` with `multiple` reports the chosen list through `onChangeAll(values)` and keeps it in `select.values`; `onChange` and `select.value` are for one value.
 - Plugin API 0.19: an aura container's `ShowPreview(items, place)` takes the place with named fields: `{ point =, relativeTo =, relativePoint =, x =, y = }`.
-- Plugin API 0.19: `RegisterMover`'s option `managedShow = true` says your module shows and hides the frame itself; edit mode then leaves its visibility alone (as `frame.suuManagedShow = true` did, which still works).
+- Plugin API 0.19: `RegisterMover`'s option `managedShow = true` says your module shows and hides the frame itself; edit mode then leaves its visibility alone. It replaces `frame.suuManagedShow = true`, which edit mode no longer reads. `RegisterMover`'s options are typed (`MoverOptions` from `/EditMode/EditMode`).
 - Plugin API 0.19: `SuuUI.UI.UnitStandIn(person)` needs each person's `health`, and its `UnitCreatureFamily` answers `""` for no family.
 - Plugin API 0.19: two new services, `marks` (your map marks, for the world map) and `worldmap` (its Marks filters and the pin showing a mark); the world map and the marks module now talk only through them.
 - Plugin API 0.19: three more services, `convergences`, `campfires` and `flightmap`, and the `worldmap` service's `Refresh()` and `OpenWith(group, item)`: the world map, the flight map, the Convergences, the campsite and the notifications now talk only through them.

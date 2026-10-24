@@ -111,6 +111,8 @@ import * as socialProbe from "/Diagnostics/SocialProbe"
 import API_VERSION from "/Core/Modules"
 import root from "/Core/Root"
 import * as blizzard from "/Core/Blizzard"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 
 
 local API = {}
@@ -636,7 +638,8 @@ function API.OpenRecipe(recipeID: number)
     -- (called on its own line: `a and f()` keeps only f's first value, and
     -- the parent line is its third)
     if not (C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe) then return end
-    local line, _, parent = C_TradeSkillUI.GetTradeSkillLineForRecipe(recipeID)
+    local lineValue, _, parentValue = C_TradeSkillUI.GetTradeSkillLineForRecipe(recipeID)
+    local line, parent = secret.asNumber(lineValue), secret.asNumber(parentValue)
     local skillLine = (parent and parent ~= 0) and parent or line
     if skillLine and C_TradeSkillUI.OpenTradeSkill then pcall(C_TradeSkillUI.OpenTradeSkill, skillLine) end
 end
@@ -677,7 +680,9 @@ end
 -- gives "Suther Stargazer" (with "-Realm" for another realm), the form
 -- whispers, invites, the roster and chat use.
 function API.FullName(unit: string?): (string | Secret<string>)?
-    local name = GetUnitName and GetUnitName(unit or "player", true)
+    -- (the game's name for the unit, secret in some places)
+    local name: (string | Secret<string>)? = GetUnitName and GetUnitName(unit or "player", true) or nil
+    if secret.isSecret(name) then return name end
     if name and name ~= "" then return name end
     return (UnitName(unit or "player"))
 end
@@ -983,12 +988,14 @@ end
 function API.AccountData(namespace: string): { [string]: unknown }
     assert(type(namespace) == "string", "SuuUI.AccountData: a namespace is required")
     local all = settings.account("data")
-    if type(all) ~= "table" then
-        all = {}
-        settings.setAccount("data", all)
+    local map: { [unknown]: unknown }
+    if type(all) == "table" then
+        map = all
+    else
+        map = {}
+        settings.setAccount("data", map)
     end
-    all[namespace] = all[namespace] or {}
-    return all[namespace]
+    return tbl.recordAt(map, namespace)
 end
 
 -- Opens the first-run welcome again (the welcome module). False when that

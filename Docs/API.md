@@ -369,7 +369,7 @@ OnEnable = function(self)
 end,
 ```
 
-`point` is one of the nine screen anchors (`TOPLEFT` … `BOTTOMRIGHT`, `CENTER`) and `x`, `y` the offset of the frame's same point from it, in design pixels; `hidden = true` hides the frame. 0.19: a frame your module shows and hides itself (it reads `hidden` from its position) passes `managedShow = true` to `RegisterMover`, and edit mode leaves its visibility alone (`frame.suuManagedShow = true` still works). A dropped frame takes the anchor of the screen third its centre is in, so layouts keep their shape on every resolution. Protected frames are placed after combat.
+`point` is one of the nine screen anchors (`TOPLEFT` … `BOTTOMRIGHT`, `CENTER`) and `x`, `y` the offset of the frame's same point from it, in design pixels; `hidden = true` hides the frame. 0.19: a frame your module shows and hides itself (it reads `hidden` from its position) passes `managedShow = true` to `RegisterMover`, and edit mode leaves its visibility alone (`frame.suuManagedShow`, its older form, is no longer read). A dropped frame takes the anchor of the screen third its centre is in, so layouts keep their shape on every resolution. Protected frames are placed after combat.
 
 0.17: the toolbar over the selected frame types its position: the anchor (a new one converts `x` and `y`, so the frame stays where it is), X and Y (exact, off the snap grid, kept on screen). An anchor picked there sets `pinned = true`: a drag keeps that anchor and changes only `x`, `y`, and Reset (the default has no `pinned`) brings the automatic anchor back. A module that writes its own position table keeps a pinned anchor with `AnchorFor(l, b, w, h, pos.pinned and pos.point)`.
 

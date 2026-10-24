@@ -161,22 +161,24 @@ end
 --------------------------------------------------------------------------------
 
 -- Forever has one spec per class: its ID, by the player's spec index first
-local function mySpecID(): any
+local function mySpecID(): unknown
     local SI: unknown = C_SpecializationInfo
     local index = get(tbl.field(SI, "GetSpecialization")) or get(GetSpecialization) or 1
     local id = get(tbl.field(SI, "GetSpecializationInfo"), index) or get(GetSpecializationInfo, index)
-    if secret.readable(id) and type(id) == "number" then return id end
+    if secret.isNumber(id) then return id end
     local _, _, classID = UnitClass("player")
     id = get(GetSpecializationInfoForClassID, classID, 1)
     if secret.readable(id) then return id end
+    return nil
 end
 
-local function classSpecID(classID: number): (any, string?)
+local function classSpecID(classID: number): (unknown, string?)
     local id = get(GetSpecializationInfoForClassID, classID, 1)
-    if secret.readable(id) and type(id) == "number" then return id, "GetSpecializationInfoForClassID" end
+    if secret.isNumber(id) then return id, "GetSpecializationInfoForClassID" end
     local SI: unknown = C_SpecializationInfo
-    local list = get(tbl.field(SI, "GetSpecIDs"), classID)
-    if type(list) == "table" and secret.readable(list[1]) then return list[1], "C_SpecializationInfo.GetSpecIDs" end
+    local first = tbl.list((get(tbl.field(SI, "GetSpecIDs"), classID)))[1]
+    if first ~= nil and secret.readable(first) then return first, "C_SpecializationInfo.GetSpecIDs" end
+    return nil, nil
 end
 
 local function savedConfigs(specID: unknown): unknown[]
@@ -188,65 +190,86 @@ local function savedConfigs(specID: unknown): unknown[]
     return outList
 end
 
+-- A field of the game's tables (nil through anything else).
+local field = tbl.field
+
+-- A node's purchased ranks (0 when unreadable).
+local function purchased(n: unknown): number
+    return secret.asNumber(field(n, "ranksPurchased")) or 0
+end
+
 -- The nodes you bought, as ImportLoadout takes them.
-local function entriesOf(configID: unknown, treeID: any): Map[]
+local function entriesOf(configID: unknown, treeID: unknown): Map[]
     local entries: Map[] = {}
-    for _, nodeID in ipairs(tbl.list((get(tbl.field(TR, "GetTreeNodes"), treeID)))) do
-        local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
-        if type(n) == "table" and secret.readable(n.ranksPurchased) and n.ranksPurchased > 0 then
-            local entryID = n.activeEntry and n.activeEntry.entryID or (n.entryIDs and n.entryIDs[1])
+    for _, nodeID in ipairs(tbl.list((get(field(TR, "GetTreeNodes"), treeID)))) do
+        local n = get(field(TR, "GetNodeInfo"), configID, nodeID)
+        local ranks = purchased(n)
+        if ranks > 0 then
+            local entryID = field(n, "activeEntry", "entryID") or tbl.list(field(n, "entryIDs"))[1]
             -- ranksGranted is required (the first run failed on it: "Current Field: [ranksGranted]")
-            entries[#entries + 1] = { nodeID = nodeID, ranksPurchased = n.ranksPurchased, selectionEntryID = entryID,
-                                      ranksGranted = secret.readable(n.ranksGranted) and n.ranksGranted or 0,
-                                      isChoiceNode = n.type == (Enum.TraitNodeType and Enum.TraitNodeType.Selection) }
+            entries[#entries + 1] = { nodeID = nodeID, ranksPurchased = ranks, selectionEntryID = entryID,
+                                      ranksGranted = secret.asNumber(field(n, "ranksGranted")) or 0,
+                                      isChoiceNode = field(n, "type") == field(Enum, "TraitNodeType", "Selection") }
         end
     end
     return entries
 end
 
-local function activeTree(configID: unknown): (any, any)
-    local info = configID and get(tbl.field(TR, "GetConfigInfo"), configID)
-    return info and info.treeIDs and info.treeIDs[1], info
+local function activeTree(configID: unknown): (unknown, unknown)
+    local info = configID and get(field(TR, "GetConfigInfo"), configID)
+    return tbl.list(field(info, "treeIDs"))[1], info
+end
+
+-- The spell an entry teaches.
+local function spellOf(configID: unknown, entryID: unknown): unknown
+    local entry = get(field(TR, "GetEntryInfo"), configID, entryID)
+    local defID = field(entry, "definitionID")
+    local def = defID and get(field(TR, "GetDefinitionInfo"), defID)
+    return field(def, "spellID")
 end
 
 -- A node, briefly: what a planner needs.
-local function nodeLine(configID: unknown, nodeID: any): string
-    local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
+local function nodeLine(configID: unknown, nodeID: unknown): string
+    local n = get(field(TR, "GetNodeInfo"), configID, nodeID)
     if type(n) ~= "table" then return show(nodeID) .. ": no info" end
     local spells: string[] = {}
-    for _, entryID in ipairs(n.entryIDs or {}) do
-        local entry = get(tbl.field(TR, "GetEntryInfo"), configID, entryID)
-        local def = entry and entry.definitionID and get(tbl.field(TR, "GetDefinitionInfo"), entry.definitionID)
-        spells[#spells + 1] = ("%s→%s"):format(show(entryID), show(def and def.spellID))
+    for _, entryID in ipairs(tbl.list(field(n, "entryIDs"))) do
+        spells[#spells + 1] = ("%s→%s"):format(show(entryID), show(spellOf(configID, entryID)))
     end
+    local function f(name: string): string return show(field(n, name)) end
     return ("%s: pos %s,%s ranks %s/%s purchased %s, entries %s, edges %d, conditions %s, visible %s, canPurchase %s"):format(
-        show(nodeID), show(n.posX), show(n.posY), show(n.currentRank), show(n.maxRanks), show(n.ranksPurchased),
-        table.concat(spells, " "), n.visibleEdges and #n.visibleEdges or 0, show(n.conditionIDs), show(n.isVisible),
-        show(n.canPurchaseRank))
+        show(nodeID), f("posX"), f("posY"), f("currentRank"), f("maxRanks"), f("ranksPurchased"),
+        table.concat(spells, " "), #tbl.list(field(n, "visibleEdges")), f("conditionIDs"), f("isVisible"),
+        f("canPurchaseRank"))
 end
 
 -- How much of a tree reads: node count, positions and spells readable.
-local function treeSummary(configID: unknown, treeID: any): Map
-    local nodes = get(tbl.field(TR, "GetTreeNodes"), treeID)
-    if type(nodes) ~= "table" then return { nodes = "GetTreeNodes: " .. call(tbl.field(TR, "GetTreeNodes"), treeID) } end
-    local s: Map = { nodes = #nodes, withPos = 0, withSpell = 0, withInfo = 0, sample = {} }
-    for i, nodeID in ipairs(nodes :: unknown[]) do
-        local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
-        if type(n) == "table" and secret.readable(n.ID) and n.ID ~= 0 then
-            s.withInfo = s.withInfo + 1
-            if secret.readable(n.posX) and n.posX ~= 0 then s.withPos = s.withPos + 1 end
-            local entryID = n.entryIDs and n.entryIDs[1]
-            local entry = entryID and get(tbl.field(TR, "GetEntryInfo"), configID, entryID)
-            local def = entry and entry.definitionID and get(tbl.field(TR, "GetDefinitionInfo"), entry.definitionID)
-            if def and secret.readable(def.spellID) and def.spellID ~= 0 then s.withSpell = s.withSpell + 1 end
+local function treeSummary(configID: unknown, treeID: unknown): Map
+    local nodes = get(field(TR, "GetTreeNodes"), treeID)
+    if type(nodes) ~= "table" then return { nodes = "GetTreeNodes: " .. call(field(TR, "GetTreeNodes"), treeID) } end
+    local list = tbl.list(nodes)
+    local sample: string[] = {}
+    local withInfo, withPos, withSpell = 0, 0, 0
+    local s: Map = { nodes = #list, sample = sample }
+    for i, nodeID in ipairs(list) do
+        local n = get(field(TR, "GetNodeInfo"), configID, nodeID)
+        local id = secret.asNumber(field(n, "ID"))
+        if id and id ~= 0 then
+            withInfo = withInfo + 1
+            local x = secret.asNumber(field(n, "posX"))
+            if x and x ~= 0 then withPos = withPos + 1 end
+            local entryID = tbl.list(field(n, "entryIDs"))[1]
+            local spellID = entryID ~= nil and secret.asNumber(spellOf(configID, entryID))
+            if spellID and spellID ~= 0 then withSpell = withSpell + 1 end
         end
-        if i <= 3 then table.insert(tbl.listAt(s, "sample"), nodeLine(configID, nodeID)) end
+        if i <= 3 then sample[#sample + 1] = nodeLine(configID, nodeID) end
     end
+    s.withInfo, s.withPos, s.withSpell = withInfo, withPos, withSpell
     -- a gate ("5 points in …"): the first condition found
-    for _, nodeID in ipairs(nodes :: unknown[]) do
-        local n = get(tbl.field(TR, "GetNodeInfo"), configID, nodeID)
-        local cid = n and n.conditionIDs and n.conditionIDs[1]
-        if cid then s.gate = show(cid) .. " " .. call(tbl.field(TR, "GetConditionInfo"), configID, cid) break end
+    for _, nodeID in ipairs(list) do
+        local n = get(field(TR, "GetNodeInfo"), configID, nodeID)
+        local cid = tbl.list(field(n, "conditionIDs"))[1]
+        if cid then s.gate = show(cid) .. " " .. call(field(TR, "GetConditionInfo"), configID, cid) break end
     end
     return s
 end
@@ -354,7 +377,8 @@ local function otherClasses()
     local list: Map[] = {}
     o.otherClasses = list
     local activeID = get(tbl.field(CT, "GetActiveConfigID"))
-    local _, _, myClassID: any = UnitClass("player")
+    local _, _, classValue = UnitClass("player")
+    local myClassID = secret.asNumber(classValue)
     local viewTried = false
     for classID = 1, 13 do
         local name, file = get(GetClassInfo, classID)
@@ -438,10 +462,10 @@ local function leftovers(): unknown[]
         if not secret.readable(id) or seen[id] then return end
         seen[id] = true
         local info = get(tbl.field(TR, "GetConfigInfo"), id)
-        if type(info) == "table" and info.name == NAME then ids[#ids + 1] = id end
+        if field(info, "name") == NAME then ids[#ids + 1] = id end
     end
     for _, id in ipairs(savedConfigs(mySpecID())) do add(id) end
-    for _, value in pairs((Enum.TraitConfigType :: any) or {}) do
+    for _, value in pairs(Enum.TraitConfigType) do
         local list = get(tbl.field(TR, "GetConfigsByType"), value)
         if type(list) == "table" then for _, id in ipairs(list :: unknown[]) do add(id) end end
     end
@@ -575,16 +599,16 @@ local function talentState(): string
     local ranks, nodes = 0, 0
     if activeID and treeID then
         for _, nodeID in ipairs(tbl.list((get(tbl.field(TR, "GetTreeNodes"), treeID)))) do
-            local n = get(tbl.field(TR, "GetNodeInfo"), activeID, nodeID)
-            if type(n) == "table" and secret.readable(n.ranksPurchased) and n.ranksPurchased > 0 then
-                ranks, nodes = ranks + n.ranksPurchased, nodes + 1
+            local bought = purchased((get(field(TR, "GetNodeInfo"), activeID, nodeID)))
+            if bought > 0 then
+                ranks, nodes = ranks + bought, nodes + 1
             end
         end
     end
     return ("%d ranks in %d talents · points %s · money %s · staged %s · wipe cost %s · reset cost %s · master %s"):format(
         ranks, nodes, activeID and treeID and call(tbl.field(TR, "GetTreeCurrencyInfo"), activeID, treeID, false) or "no config",
         show(GetMoney()), activeID and call(tbl.field(TR, "ConfigHasStagedChanges"), activeID) or "?",
-        call(_G.GetTalentWipeCost), call(_G.GetTalentResetCost), call(CheckTalentMasterDist))
+        call(field(_G, "GetTalentWipeCost")), call(field(_G, "GetTalentResetCost")), call(field(_G, "CheckTalentMasterDist")))
 end
 
 local function gossipOptions(): string
@@ -592,9 +616,10 @@ local function gossipOptions(): string
     local opts = get(tbl.field(G, "GetOptions"))
     if type(opts) ~= "table" then return call(tbl.field(G, "GetOptions")) end
     local parts: string[] = {}
-    for _, o in ipairs(opts :: unknown[]) do
-        parts[#parts + 1] = ("%s:%s%s"):format(show(o.gossipOptionID), show(o.name),
-            o.status and (" status " .. show(o.status)) or "")
+    for _, o in ipairs(tbl.list(opts)) do
+        local status = field(o, "status")
+        parts[#parts + 1] = ("%s:%s%s"):format(show(field(o, "gossipOptionID")), show(field(o, "name")),
+            status and (" status " .. show(status)) or "")
     end
     return table.concat(parts, " / ")
 end
