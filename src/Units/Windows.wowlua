@@ -153,6 +153,12 @@ type SocialPage = { label: string, short?: string, frame: Frame? }
 --------------------------------------------------------------------------------
 
 -- "Kalimdor › Durotar": the map's continent before its name.
+-- The map the world map shows (Blizzard's code keeps it in a field its
+-- declarations can't type).
+local function shownMap(): number?
+    return WorldMapFrame and secret.asNumber(WorldMapFrame:GetMapID()) or nil
+end
+
 local function mapTitle(mapID: number?): string
     local info = mapID and C_Map.GetMapInfo(mapID)
     if not info then return "World map" end
@@ -1187,7 +1193,7 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         if chromeOf(f) then return end
         local b = part(f, "BorderFrame")
         local chrome = UI.SkinWindow(f, {
-            title = mapTitle(f:GetMapID()), icon = "map", binding = "TOGGLEWORLDMAP",
+            title = mapTitle(shownMap()), icon = "map", binding = "TOGGLEWORLDMAP",
             close = button(b, "CloseButton") or button(_G, "WorldMapFrameCloseButton"), topInset = 24 + ROW_EXTRA, headExtra = ROW_EXTRA,
             under = "microMenu",
             hide = { field(b, "NineSlice"), field(b, "PortraitContainer"), field(b, "TitleContainer"), field(b, "Bg"),
@@ -1206,12 +1212,14 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         up:SetPoint("BOTTOMRIGHT", title, "BOTTOMRIGHT", 2, -2)
         up:SetFrameLevel(chrome.head:GetFrameLevel() + 2)
         up:SetScript("OnClick", function()
-            local info = C_Map.GetMapInfo(f:GetMapID())
+            local id = shownMap()
+            local info = id and C_Map.GetMapInfo(id)
             local parent = info and info.parentMapID
             if parent and parent > 0 then f:SetMapID(parent) end
         end)
         up:SetScript("OnEnter", function(self2: Button)
-            local info = C_Map.GetMapInfo(f:GetMapID())
+            local id = shownMap()
+            local info = id and C_Map.GetMapInfo(id)
             local parent = info and info.parentMapID and C_Map.GetMapInfo(info.parentMapID)
             if parent then UI.ShowTooltip(self2, { title = "Up to " .. parent.name, description = "Or right-click the map" }) end
             title:SetColor("ink")
@@ -1374,11 +1382,13 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
             -- canvas loses the mouse focus to the pin: it read your position;
             -- found in game); yours off the map
             if container and container:IsMouseOver() then
-                local cx: number?, cy: number? = f:GetNormalizedCursorPosition()
+                local rx, ry = f:GetNormalizedCursorPosition()
+                local cx, cy = secret.asNumber(rx), secret.asNumber(ry)
                 if cx and cy and cx >= 0 and cx <= 1 and cy >= 0 and cy <= 1 then x, y = cx, cy end
             end
             if not x then
-                local pos = C_Map.GetPlayerMapPosition(f:GetMapID(), "player")
+                local id = shownMap()
+                local pos = id and C_Map.GetPlayerMapPosition(id, "player")
                 if pos then
                     x, y = pos:GetXY()
                     you = true

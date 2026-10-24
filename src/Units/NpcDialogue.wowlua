@@ -814,7 +814,8 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
             text = asString(try(C_GossipInfo.GetText)) or ""
             local ok, got = pcall(C_GossipInfo.GetOptions)
             local options: GossipOptionUIInfo[] = ok and type(got) == "table" and got or {}
-            if GossipOptionSort then table.sort(options, GossipOptionSort) end
+            local sort = GossipOptionSort
+            if sort then table.sort(options, function(a, b) return sort(a, b) == true end) end
             for _, o in ipairs(options) do
                 local icon = o.overrideIconID or o.icon
                 answers[#answers + 1] = { label = o.name, glyph = OPTION_GLYPH[icon] or icon or "chat",
@@ -835,34 +836,35 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
             end
             answers[#answers + 1] = goodbye
         elseif view == "greeting" then
-            text = GetGreetingText() or ""
+            text = asString(GetGreetingText()) or ""
             for i = 1, GetNumActiveQuests() or 0 do
-                local title: string?, done: boolean? = GetActiveTitle(i)
+                local rawTitle, rawDone = GetActiveTitle(i)
+                local title, done = asString(rawTitle), rawDone == true
                 answers[#answers + 1] = { label = title, mark = { text = "?", color = done and "gilt-text" or "ink-faint" },
                     tag = done and { text = "Ready", color = "gilt-text" } or nil, act = function() try(SelectActiveQuest, i) end }
             end
             for i = 1, GetNumAvailableQuests() or 0 do
                 local trivial, frequency, repeatable = GetAvailableQuestInfo(i)
                 local daily = frequency and frequency > 0
-                answers[#answers + 1] = { label = GetAvailableTitle(i), mark = { text = "!", color = (daily or repeatable) and "arcane" or (trivial and "ink-faint") or "gilt-text" },
+                answers[#answers + 1] = { label = asString(GetAvailableTitle(i)), mark = { text = "!", color = (daily or repeatable) and "arcane" or (trivial and "ink-faint") or "gilt-text" },
                     tag = daily and { text = "Daily", color = "arcane" } or repeatable and { text = "Repeatable", color = "arcane" } or nil,
                     act = function() try(SelectAvailableQuest, i) end }
             end
             answers[#answers + 1] = goodbye
         elseif view == "detail" then
-            qtitle = GetTitleText()
+            qtitle = asString(GetTitleText())
             local id = GetQuestID and GetQuestID()
             qlevel = id and C_QuestLog and C_QuestLog.GetQuestDifficultyLevel and asNumber(try(C_QuestLog.GetQuestDifficultyLevel, id)) or nil
-            text = GetQuestText() or ""
-            ask = GetObjectiveText()
+            text = asString(GetQuestText()) or ""
+            ask = asString(GetObjectiveText())
             items, caption, gains = self:Rewards(false)
             answers = {
                 { label = "Accept", glyph = "check", act = function() click("QuestFrameAcceptButton") end },
                 { label = "Decline", glyph = "close", leave = true, act = function() click("QuestFrameDeclineButton") end },
             }
         elseif view == "progress" then
-            qtitle = GetTitleText()
-            text = GetProgressText() or ""
+            qtitle = asString(GetTitleText())
+            text = asString(GetProgressText()) or ""
             local needed: Card[] = {}
             need = true
             local short: string? = nil
@@ -888,8 +890,8 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
             }
             gains = { money = money }
         elseif view == "reward" then
-            qtitle = GetTitleText()
-            text = GetRewardText() or ""
+            qtitle = asString(GetTitleText())
+            text = asString(GetRewardText()) or ""
             if (GetNumQuestChoices() or 0) == 1 then self.chosen = 1 end
             items, caption, gains = self:Rewards(true)
             local choose = (GetNumQuestChoices() or 0) > 1 and not self.chosen
