@@ -9,6 +9,7 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
 import reskin, reskinScrollBar, reskinStatusBar, reskinFillBar, reskinDropdown, reskinMenu, reskinIconButton,
@@ -51,13 +52,47 @@ local function skin(r: unknown): Skin
     return region and skins[region] or {}
 end
 
-local function texturesOf(f: any): any[]
-    local out: any[] = {}
-    for _, r in ipairs({ f:GetRegions() }) do
-        if (r :: any):GetObjectType() == "Texture" then out[#out + 1] = r end
-    end
-    return out
-end
+-- The parts of Blizzard's templates these tests reach (their parentKeys and
+-- mixin methods), and the stand-ins built like them.
+type ScrollBarParts = Frame & { Track: Frame & { Thumb: Frame }, Back: Frame, Forward: Frame }
+type BarParts = StatusBar & { bg: Texture, text: FontString }
+type FillBarParts = Frame & {
+    Fill: Texture, FillArea: Frame, Text: FontString,
+    SetFillTextureByColorType: (self: Frame, colorType: unknown) -> (),
+    SetFillPercent: (self: Frame, percent: number) -> (),
+    SetText: (self: Frame, text: string) -> (),
+}
+type DropdownParts = Frame & {
+    Arrow: Texture, Background: Texture, Text: FontString,
+    SetupMenu: (self: Frame, generator: (owner: Region, root: RootMenuDescriptionProxy) -> ()) -> (),
+}
+type ListRow = Button & { label?: FontString }
+type LinearView = {
+    SetElementExtent: (self: LinearView, extent: number) -> (),
+    SetElementInitializer: (self: LinearView, template: string, init: (row: ListRow, data: { name: string }) -> ()) -> (),
+}
+type ScrollBoxList = Frame & {
+    Init: (self: Frame, view: LinearView) -> (),
+    SetDataProvider: (self: Frame, provider: DataProvider) -> (),
+    ForEachFrame: (self: Frame, fn: (row: ListRow) -> ()) -> (),
+}
+type DataProvider = { Insert: (self: DataProvider, item: { name: string }) -> () }
+type ScrollingFont = Frame & {
+    SetText: (self: Frame, text: string) -> (),
+    GetFontString: (self: Frame) -> FontString,
+    GetFontStringContainer: (self: Frame) -> Frame,
+}
+type PopupParts = Frame & {
+    Text: FontString, button1: Button, button2: Button,
+    ButtonContainer?: Frame & { Button1: Button, Button2: Button },
+}
+
+-- Blizzard's list helpers, as these tests call them.
+local scrollUtil = ScrollUtil :: { InitScrollBoxListWithScrollBar: (box: Frame, bar: Frame, view: LinearView) -> () }
+local function linearView(): LinearView return CreateScrollBoxListLinearView() end
+
+-- A ColoredProgressBarMixin colour type.
+local function colorType(name: string): unknown return tbl.field(ColoredProgressBarMixin, "ColorType", name) end
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -102,18 +137,19 @@ end
 
 @test("reskinScrollBar: Blizzard's minimal bar as a 2px gilt-line thumb")
 local function scrollBar()
-    local bar = CreateFrame("EventFrame", nil, host(), "MinimalScrollBar") :: any
+    local bar = CreateFrame("EventFrame", nil, host(), "MinimalScrollBar") :: ScrollBarParts
     reskinScrollBar(bar)
     expect(skin(bar).scrollBar).toBe(true)
-    for _, t in ipairs(texturesOf(bar.Track)) do expect(t:GetAlpha()).toBe(0) end
+    for _, t in ipairs(frames.textures(bar.Track)) do expect(t:GetAlpha()).toBe(0) end
     expect(bar.Back:GetAlpha()).toBe(0)
     expect(bar.Forward:GetAlpha()).toBe(0)
     local thumb = bar.Track.Thumb
-    local line: any = nil
-    for _, t in ipairs(texturesOf(thumb)) do
-        if tokenOf(t) == "gilt-line" then line = t else expect(t:GetAlpha()).toBe(0) end
+    local found: Texture? = nil
+    for _, t in ipairs(frames.textures(thumb)) do
+        if tokenOf(t) == "gilt-line" then found = t else expect(t:GetAlpha()).toBe(0) end
     end
-    expect(line).never.toBeNil()
+    expect(found).never.toBeNil()
+    local line = assert(found)
     expect(line:GetWidth()).toBe(2)
     -- hovered: gilt and wider
     mock.script(thumb, "OnEnter")
@@ -123,36 +159,37 @@ local function scrollBar()
     expect(tokenOf(line)).toBe("gilt-line")
     expect(line:GetWidth()).toBe(2)
     -- again: nothing more
-    local n = #texturesOf(thumb)
+    local n = #frames.textures(thumb)
     reskinScrollBar(bar)
-    expect(#texturesOf(thumb)).toBe(n)
+    expect(#frames.textures(thumb)).toBe(n)
     reskinScrollBar(nil)
 end
 
 @test("reskinScrollBar: a bar without a track or a thumb")
 local function scrollBarBare()
-    local bare = CreateFrame("Frame", nil, host()) :: any
+    local bare = CreateFrame("Frame", nil, host())
     reskinScrollBar(bare)
     expect(skin(bare).scrollBar).toBe(true)
-    local noThumb = CreateFrame("Frame", nil, host()) :: any
+    local noThumb = CreateFrame("Frame", nil, host()) :: Frame & { Track: Frame }
     noThumb.Track = CreateFrame("Frame", nil, noThumb)
     noThumb.Track:CreateTexture()
     reskinScrollBar(noThumb)
-    expect(texturesOf(noThumb.Track)[1]:GetAlpha()).toBe(0)
+    expect(frames.textures(noThumb.Track)[1]:GetAlpha()).toBe(0)
     -- a thumb that is a texture (no scripts): no hover
-    local texThumb = CreateFrame("Frame", nil, host()) :: any
-    texThumb.Track = CreateFrame("Frame", nil, texThumb)
-    texThumb.Track.Thumb = CreateFrame("Frame", nil, texThumb.Track)
-    texThumb.Track.Thumb.HookScript = nil
+    local texThumb = CreateFrame("Frame", nil, host()) :: Frame & { Track: Frame & { Thumb: Texture } }
+    local track = CreateFrame("Frame", nil, texThumb) :: Frame & { Thumb: Texture }
+    track.Thumb = track:CreateTexture()
+    texThumb.Track = track
     reskinScrollBar(texThumb)
+    expect(skin(texThumb).scrollBar).toBe(true)
 end
 
 --------------------------------------------------------------------------------
 -- Status bars
 --------------------------------------------------------------------------------
 
-local function statusBar(atlas: string?): any
-    local bar = CreateFrame("StatusBar", nil, host()) :: any
+local function statusBar(atlas: string?): BarParts
+    local bar = CreateFrame("StatusBar", nil, host()) :: BarParts
     bar:SetSize(120, 12)
     bar:SetPoint("CENTER")
     local bg = bar:CreateTexture(nil, "BACKGROUND")
@@ -203,7 +240,7 @@ end
 
 @test("reskinStatusBar: a bar without a fill gets a track of its own height")
 local function statusBarNoFill()
-    local bar = CreateFrame("StatusBar", nil, host()) :: any
+    local bar = CreateFrame("StatusBar", nil, host())
     bar:SetSize(100, 10)
     reskinStatusBar(bar)
     expect(assert(skin(bar).track):GetHeight()).toBe(10)
@@ -221,9 +258,9 @@ end
 
 @test("reskinFillBar: Blizzard's coloured progress bar, its share kept on resize")
 local function fillBar()
-    local bar = CreateFrame("Frame", nil, host(), "ColoredProgressBarTemplate") :: any
+    local bar = CreateFrame("Frame", nil, host(), "ColoredProgressBarTemplate") :: FillBarParts
     bar:SetPoint("CENTER")
-    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.Green)
+    bar:SetFillTextureByColorType(colorType("Green"))
     bar:SetFillPercent(0.5)
     bar:SetText("3,210 / 6,000")
     reskinFillBar(bar)
@@ -240,11 +277,11 @@ local function fillBar()
     bar:SetFillPercent(0.25)
     expect(skin(bar).percent).toBe(0.25)
     expect(bar.Fill:GetWidth()).toBeCloseTo(0.25 * bar.FillArea:GetWidth())
-    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.Red)
+    bar:SetFillTextureByColorType(colorType("Red"))
     expect(bar.Fill:GetTexture()).toBe(WHITE)
     expect(sameColor("rep-hostile", bar.Fill:GetVertexColor())).toBe(true)
     -- a tint of Blizzard's own on a word SuuUI has no colour for: kept
-    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.White)
+    bar:SetFillTextureByColorType(colorType("White"))
     bar.Fill:SetVertexColor(0.2, 0.4, 0.6)
     expect(skin(bar).atlasWord).toBe("white")
     -- the width: a share of nothing hides the fill (the emulated client
@@ -262,7 +299,7 @@ local function fillBar()
     reskinFillBar(bar)
     expect(skin(bar).track).toBe(track)
     -- a theme change tints again
-    bar:SetFillTextureByColorType(ColoredProgressBarMixin.ColorType.Blue)
+    bar:SetFillTextureByColorType(colorType("Blue"))
     bar.Fill:SetVertexColor(1, 1, 1)
     themeChanged()
     expect(sameColor("progress-fill", bar.Fill:GetVertexColor())).toBe(true)
@@ -271,10 +308,10 @@ end
 @test("reskinFillBar: nothing without a Fill; no share without SetFillPercent")
 local function fillBarOdd()
     reskinFillBar(nil)
-    local plain = CreateFrame("Frame", nil, host()) :: any
+    local plain = CreateFrame("Frame", nil, host())
     reskinFillBar(plain)
     expect(skin(plain).fillBar).toBeNil()
-    local own = CreateFrame("Frame", nil, host()) :: any
+    local own = CreateFrame("Frame", nil, host()) :: Frame & { Fill: Texture }
     own.Fill = own:CreateTexture()
     own.Fill:SetAtlas("skills-stat-bar-blue")
     own:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -283,7 +320,7 @@ local function fillBarOdd()
     expect(skin(own).sizeFill).toBeNil()
     expect(skin(own).atlasWord).toBe("blue")
     -- no atlas: no word, no tint
-    local blank = CreateFrame("Frame", nil, host()) :: any
+    local blank = CreateFrame("Frame", nil, host()) :: Frame & { Fill: Texture }
     blank.Fill = blank:CreateTexture()
     reskinFillBar(blank)
     expect(skin(blank).atlasWord).toBeNil()
@@ -293,12 +330,12 @@ end
 -- Dropdowns and menus
 --------------------------------------------------------------------------------
 
-local function dropdown(): any
-    local d = CreateFrame("DropdownButton", nil, host(), "WowStyle1DropdownTemplate") :: any
+local function dropdown(): DropdownParts
+    local d = CreateFrame("DropdownButton", nil, host(), "WowStyle1DropdownTemplate") :: DropdownParts
     d:SetPoint("CENTER")
     d:SetWidth(140)
     local chosen = 1
-    d:SetupMenu(function(_: any, root: any)
+    d:SetupMenu(function(_, root)
         root:CreateTitle("Sort")
         root:CreateRadio("By name", function() return chosen == 1 end, function() chosen = 1 end)
         root:CreateRadio("By level", function() return chosen == 2 end, function() chosen = 2 end)
@@ -316,8 +353,8 @@ local function dropdowns()
     expect(d.Arrow:GetAlpha()).toBe(0)
     expect(d.Background:GetAlpha()).toBe(0)
     expect(tokenOf(d.Text)).toBe("ink")
-    local chev, bg: any = nil, nil
-    for _, t in ipairs(texturesOf(d)) do
+    local chev: Texture?, bg: Texture? = nil, nil
+    for _, t in ipairs(frames.textures(d)) do
         if t:GetTexture() == GLYPHS .. "chevronDown.tga" then chev = t end
         if tokenOf(t) == "surface-sunk" then bg = t end
     end
@@ -325,7 +362,7 @@ local function dropdowns()
     expect(bg).never.toBeNil()
     mock.hover(d)
     local edge = 0
-    for _, t in ipairs(texturesOf(d)) do if tokenOf(t) == "gilt" then edge = edge + 1 end end
+    for _, t in ipairs(frames.textures(d)) do if tokenOf(t) == "gilt" then edge = edge + 1 end end
     expect(edge).toBe(4)
     mock.hover(nil)
     reskinDropdown(d)
@@ -337,8 +374,8 @@ local function glyphDropdown()
     local d = dropdown()
     reskinDropdown(d, { glyph = "filter" })
     expect(d.Text:GetAlpha()).toBe(0)
-    local glyph: any = nil
-    for _, t in ipairs(texturesOf(d)) do
+    local glyph: Texture? = nil
+    for _, t in ipairs(frames.textures(d)) do
         if t:GetTexture() == GLYPHS .. "filter.tga" then glyph = t end
     end
     expect(glyph).never.toBeNil()
@@ -350,21 +387,17 @@ local function glyphDropdown()
 end
 
 -- The rows of the open menu (its buttons), and their texts.
-local function rowMenuOf(row: any): any
-    return rowMenu[row]
-end
+local function rowMenuOf(row: Frame) return rowMenu[row] end
 
-local function openMenu(): any
+local function openMenu(): MenuProxy?
     return Menu.GetManager():GetOpenMenu()
 end
 
-local function menuTexts(menu: any): any[]
-    local out: any[] = {}
-    local function walk(f: any)
-        for _, r in ipairs({ f:GetRegions() }) do
-            if (r :: any):GetObjectType() == "FontString" then out[#out + 1] = r end
-        end
-        for _, c in ipairs({ f:GetChildren() }) do walk(c) end
+local function menuTexts(menu: Frame): FontString[]
+    local out: FontString[] = {}
+    local function walk(f: Frame)
+        for _, fs in ipairs(frames.fontStrings(f)) do out[#out + 1] = fs end
+        for _, c in ipairs(frames.children(f)) do walk(c) end
     end
     walk(menu)
     return out
@@ -375,8 +408,8 @@ local function dropdownMenu()
     local d = dropdown()
     reskinDropdown(d)
     mock.click(d)
-    local menu = openMenu()
-    expect(menu).never.toBeNil()
+    expect(openMenu()).never.toBeNil()
+    local menu = assert(openMenu())
     mock.advanceFrames(1)
     local texts = menuTexts(menu)
     expect(#texts > 0).toBe(true)
@@ -388,8 +421,8 @@ local function dropdownMenu()
     expect(anyInk).toBe(true)
     -- the chosen radio: an arcane check
     local marks = 0
-    for _, c in ipairs({ menu:GetChildren() }) do
-        for _, t in ipairs(texturesOf(c)) do
+    for _, c in ipairs(frames.children(menu)) do
+        for _, t in ipairs(frames.textures(c)) do
             if t:GetTexture() == GLYPHS .. "check.tga" and t:IsShown() then marks = marks + 1 end
         end
     end
@@ -405,31 +438,31 @@ local function contextMenus()
     -- a menu opened and closed before: the game's rows come back from its
     -- pool with their scripts set again (SuuUI's hover hooks gone: bug,
     -- fixed; they are hooked again)
-    MenuUtil.CreateContextMenu(owner, function(_: any, root: any) root:CreateButton("First", function() end) end)
+    MenuUtil.CreateContextMenu(owner, function(_, root) root:CreateButton("First", function() end) end)
     reskinMenu(openMenu())
     Menu.GetManager():CloseMenus()
     mock.advanceFrames(1)
     local clicked = mock.spy()
-    MenuUtil.CreateContextMenu(owner, function(_: any, root: any)
+    MenuUtil.CreateContextMenu(owner, function(_, root)
         root:CreateTitle("Tamsin Ashford")
         root:CreateButton("Whisper", function() clicked() end)
         root:CreateCheckbox("Ignore", function() return true end, function() end)
         local sub = root:CreateButton("More")
         sub:CreateButton("Inner", function() end)
     end)
-    local menu = openMenu()
-    expect(menu).never.toBeNil()
+    expect(openMenu()).never.toBeNil()
+    local menu = assert(openMenu())
     local texts = menuTexts(menu)
-    local before: any[] = {}
+    local before: number[][] = {}
     for i, fs in ipairs(texts) do before[i] = { fs:GetTextColor() } end
     reskinMenu(menu)
     reskinMenu(menu) -- a second pass starts from the game's look again
     local inked = 0
     for _, fs in ipairs(texts) do if sameColor("ink", fs:GetTextColor()) then inked = inked + 1 end end
     expect(inked > 0).toBe(true)
-    local rows: any[] = {}
-    for _, c in ipairs({ menu:GetChildren() }) do
-        if (c :: any):GetObjectType() == "Button" then rows[#rows + 1] = c end
+    local rows: Button[] = {}
+    for _, c in ipairs(frames.children(menu)) do
+        if c:GetObjectType() == "Button" then rows[#rows + 1] = c :: Button end
     end
     expect(#rows >= 3).toBe(true)
     -- hovering a row: the arcane-soft band under it
@@ -439,7 +472,7 @@ local function contextMenus()
     mock.script(rows[1], "OnLeave")
     expect(st.hover).never.toBeShown()
     -- the submenu opened from it: restyled too
-    local more: any, whisper: any = nil, nil
+    local more: Button?, whisper: Button? = nil, nil
     for _, r in ipairs(rows) do
         for _, fs in ipairs(menuTexts(r)) do
             if fs:GetText() == "More" then more = r end
@@ -474,13 +507,13 @@ end
 local function menuParts()
     -- a stand-in with the parts the game's menu frames have (probed
     -- 2026-10-14: common-dropdown textures, rows with a radio or check)
-    local menu = CreateFrame("Frame", nil, host()) :: any
+    local menu = CreateFrame("Frame", nil, host()) :: Frame & { ScrollBox: Frame, ReinitializeAll: (self: Frame) -> () }
     menu:SetSize(160, 200)
     menu:SetPoint("CENTER")
     local bg = menu:CreateTexture()
     bg:SetAtlas("common-dropdown-bg")
-    local function row(p: any, y: number, label: string?): any
-        local r = CreateFrame("Button", nil, p) :: any
+    local function row(p: Frame, y: number, label: string?): Button
+        local r = CreateFrame("Button", nil, p)
         r:SetSize(150, 20)
         r:SetPoint("TOPLEFT", 5, y)
         if label then
@@ -507,7 +540,7 @@ local function menuParts()
     inner:SetAllPoints()
     local innerText = inner:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     innerText:SetText("Text in a child")
-    local sub = row(menu, -70, "More")
+    local sub = row(menu, -70, "More") :: Button & { arrow: Texture }
     sub.arrow = sub:CreateTexture()
     sub.arrow:SetPoint("RIGHT")
     local markless = row(menu, -90, "Plain")
@@ -515,13 +548,14 @@ local function menuParts()
     ownTick:SetAtlas("common-dropdown-icon-checkmark-yellow")
     local spacer = row(menu, -110, nil)
     -- a scrolling list: its rows in the box's target
-    menu.ScrollBox = CreateFrame("Frame", nil, menu)
-    menu.ScrollBox:SetAllPoints()
-    menu.ScrollBox.ScrollTarget = CreateFrame("Frame", nil, menu.ScrollBox)
-    menu.ScrollBox.ScrollTarget:SetAllPoints()
-    local scrolled = row(menu.ScrollBox.ScrollTarget, -130, "Scrolled")
+    local box = CreateFrame("Frame", nil, menu) :: Frame & { ScrollTarget: Frame }
+    menu.ScrollBox = box
+    box:SetAllPoints()
+    box.ScrollTarget = CreateFrame("Frame", nil, box)
+    box.ScrollTarget:SetAllPoints()
+    local scrolled = row(box.ScrollTarget, -130, "Scrolled")
     local reinit = mock.spy()
-    menu.ReinitializeAll = function() reinit() end
+    menu.ReinitializeAll = function(_: Frame) reinit() end
     reskinMenu(menu)
     local st = assert(menus[menu])
     expect(st.active).toBe(true)
@@ -564,7 +598,7 @@ end
 
 @test("reskinMenu: a menu whose last row runs below it covers all of it")
 local function menuOverflow()
-    local menu = CreateFrame("Frame", nil, host()) :: any
+    local menu = CreateFrame("Frame", nil, host())
     menu:SetSize(160, 40)
     menu:SetPoint("CENTER")
     local r = CreateFrame("Button", nil, menu)
@@ -585,7 +619,7 @@ end
 
 @test("reskinIconButton: Blizzard's selector button as a well, gilt on hover, arcane when selected")
 local function iconButton()
-    local b = CreateFrame("Button", nil, host(), "SelectorButtonTemplate") :: any
+    local b = CreateFrame("Button", nil, host(), "SelectorButtonTemplate") :: Button & { Icon: Texture, SelectedTexture: Texture }
     b:SetPoint("CENTER")
     b.Icon:SetTexture(134400)
     reskinIconButton(b)
@@ -608,7 +642,7 @@ end
 
 @test("reskinIconButton: a button with neither icon nor selected texture")
 local function iconButtonBare()
-    local b = CreateFrame("Button", nil, host()) :: any
+    local b = CreateFrame("Button", nil, host())
     b:CreateTexture()
     reskinIconButton(b)
     expect(tokenOf(assert(skin(b).icon).edge.top)).toBe("gilt-hairline")
@@ -616,14 +650,14 @@ end
 
 @test("reskinCheckButton: a 16px box, the arcane check following Blizzard's state")
 local function checkButton()
-    local b = CreateFrame("CheckButton", nil, host(), "UICheckButtonTemplate") :: any
+    local b = CreateFrame("CheckButton", nil, host(), "UICheckButtonTemplate")
     b:SetPoint("CENTER")
     reskinCheckButton(b)
     local st = assert(skin(b).check)
     expect(st.box).toHaveSize(16, 16)
     expect(b:GetNormalTexture():GetAlpha()).toBe(0)
-    local check: any = nil
-    for _, t in ipairs(texturesOf(st.box)) do if t:GetTexture() == GLYPHS .. "check.tga" then check = t end end
+    local check: Texture? = nil
+    for _, t in ipairs(frames.textures(st.box)) do if t:GetTexture() == GLYPHS .. "check.tga" then check = t end end
     expect(check).never.toBeShown()
     b:SetChecked(true)
     expect(check).toBeShown()
@@ -641,7 +675,7 @@ end
 
 @test("reskinButton: Blizzard's panel button quiet; dimmed while disabled")
 local function panelButton()
-    local b = CreateFrame("Button", nil, host(), "UIPanelButtonTemplate") :: any
+    local b = CreateFrame("Button", nil, host(), "UIPanelButtonTemplate") :: Button & { Left: Texture, Middle: Texture }
     b:SetSize(100, 22)
     b:SetText("Accept")
     reskinButton(b)
@@ -658,7 +692,7 @@ local function panelButton()
     b:SetEnabled(true)
     mock.hover(b)
     local gilt = 0
-    for _, t in ipairs(texturesOf(b)) do if tokenOf(t) == "gilt" then gilt = gilt + 1 end end
+    for _, t in ipairs(frames.textures(b)) do if tokenOf(t) == "gilt" then gilt = gilt + 1 end end
     expect(gilt).toBe(4)
     mock.hover(nil)
     reskinButton(b)
@@ -667,7 +701,7 @@ end
 
 @test("reskinButton: a red button's atlas art away")
 local function redButton()
-    local b = CreateFrame("Button", nil, host()) :: any
+    local b = CreateFrame("Button", nil, host())
     local art = b:CreateTexture()
     art:SetAtlas("128-redbutton-up")
     reskinButton(b)
@@ -676,7 +710,7 @@ end
 
 @test("reskinEditBox: Blizzard's input box sunk, an arcane edge while typing")
 local function editBox()
-    local e = CreateFrame("EditBox", "SuuUITestEdit", host(), "InputBoxTemplate") :: any
+    local e = CreateFrame("EditBox", "SuuUITestEdit", host(), "InputBoxTemplate") :: EditBox & { Left: Texture }
     e:SetSize(120, 20)
     e:SetPoint("CENTER")
     e:SetAutoFocus(false)
@@ -684,10 +718,10 @@ local function editBox()
     expect(skin(e).edit).toBe(true)
     expect(e.Left:GetAlpha()).toBe(0)
     expect(tokenOf(e)).toBe("ink")
-    local edge: any[] = {}
-    local function scan(f: any)
-        for _, c in ipairs({ f:GetChildren() }) do
-            for _, t in ipairs(texturesOf(c)) do if tokenOf(t) == "gilt-line" or tokenOf(t) == "arcane" then edge[#edge + 1] = t end end
+    local edge: Texture[] = {}
+    local function scan(f: Frame)
+        for _, c in ipairs(frames.children(f)) do
+            for _, t in ipairs(frames.textures(c)) do if tokenOf(t) == "gilt-line" or tokenOf(t) == "arcane" then edge[#edge + 1] = t end end
         end
     end
     scan(e)
@@ -702,7 +736,7 @@ end
 
 @test("reskinEditBox: a search box: the field itself, its hint inset")
 local function searchBox()
-    local e = CreateFrame("EditBox", nil, host(), "SearchBoxTemplate") :: any
+    local e = CreateFrame("EditBox", nil, host(), "SearchBoxTemplate") :: EditBox & { Instructions: FontString }
     e:SetSize(120, 20)
     reskinEditBox(e)
     expect(skin(e.Instructions).skip).toBe(true)
@@ -715,8 +749,8 @@ end
 
 @test("reskinEditBox: a box with a backdrop child")
 local function editBoxChild()
-    local e = CreateFrame("EditBox", nil, host()) :: any
-    local child = CreateFrame("Frame", nil, e) :: any
+    local e = CreateFrame("EditBox", nil, host()) :: EditBox & { NineSlice: Frame }
+    local child = CreateFrame("Frame", nil, e) :: Frame & { NineSlice: Frame }
     child.NineSlice = CreateFrame("Frame", nil, child)
     local art = child:CreateTexture()
     e.NineSlice = CreateFrame("Frame", nil, e)
@@ -728,16 +762,17 @@ end
 
 @test("reskinCollapseButton: SuuUI's minus or plus, following Blizzard's texture")
 local function collapseButton()
-    local b = CreateFrame("Button", nil, host()) :: any
+    local b = CreateFrame("Button", nil, host())
     b:SetSize(16, 16)
     b:SetNormalTexture("Interface\\Buttons\\UI-MinusButton-Up")
     b:SetPushedTexture("Interface\\Buttons\\UI-MinusButton-Down")
     -- Blizzard's own click (set before SuuUI hooks it): the texture changed
     -- without a hooked method, so only the redraw after the click sees it
-    b:SetScript("OnClick", function(self: any) self:GetNormalTexture():SetAtlas("ui-hud-minus") end)
+    b:SetScript("OnClick", function(self) self:GetNormalTexture():SetAtlas("ui-hud-minus") end)
     reskinCollapseButton(b)
-    local glyph: any = nil
-    for _, t in ipairs(texturesOf(b)) do if tokenOf(t) == "gilt-text" then glyph = t end end
+    local found: Texture? = nil
+    for _, t in ipairs(frames.textures(b)) do if tokenOf(t) == "gilt-text" then found = t end end
+    local glyph = assert(found)
     expect(glyph:GetTexture()).toBe(GLYPHS .. "minus.tga")
     expect(b:GetNormalTexture():GetAlpha()).toBe(0)
     b:SetNormalTexture("Interface\\Buttons\\UI-PlusButton-Up")
@@ -759,16 +794,16 @@ local function panelButtons()
     local p = host()
     local a = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
     expect(isPanelButton(a) and true or false).toBe(true)
-    local b = CreateFrame("Button", nil, p) :: any
+    local b = CreateFrame("Button", nil, p)
     b:CreateTexture():SetAtlas("common-button-square-gray-up")
     expect(isPanelButton(b) and true or false).toBe(true)
-    local c = CreateFrame("Button", nil, p) :: any
+    local c = CreateFrame("Button", nil, p)
     c:CreateTexture():SetAtlas("ui-list-button-minus")
     expect(isPanelButton(c)).toBe(false)
-    local d = CreateFrame("Button", nil, p) :: any
+    local d = CreateFrame("Button", nil, p)
     d:SetNormalTexture("Interface\\Buttons\\UI-Panel-Button-Up")
     expect(isPanelButton(d) and true or false).toBe(true)
-    local e = CreateFrame("Button", nil, p) :: any
+    local e = CreateFrame("Button", nil, p)
     e:SetNormalTexture("Interface\\Icons\\INV_Misc_QuestionMark")
     expect(isPanelButton(e) and true or false).toBe(false)
 end
@@ -779,7 +814,7 @@ end
 
 @test("reskin: textures by atlas, texts by colour and size, a category row's head")
 local function passTextures()
-    local f = CreateFrame("Frame", nil, host()) :: any
+    local f = CreateFrame("Frame", nil, host())
     f:SetSize(200, 100)
     local hide = f:CreateTexture()
     hide:SetAtlas("Options_List_Active-scrollline")
@@ -795,7 +830,7 @@ local function passTextures()
     local hover = f:CreateTexture()
     hover:SetAtlas("talents-hover")
     local plain = f:CreateTexture()
-    local function fs(font: string, r: number, g: number, b: number, text: string): any
+    local function fs(font: string, r: number, g: number, b: number, text: string): FontString
         local s = f:CreateFontString(nil, "OVERLAY", font)
         s:SetTextColor(r, g, b)
         s:SetText(text)
@@ -836,7 +871,7 @@ end
 
 @test("reskin: a text with a secret value is not measured")
 local function passSecret()
-    local f = CreateFrame("Frame", nil, host()) :: any
+    local f = CreateFrame("Frame", nil, host())
     local s = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     s:SetText(mock.secret("A name"))
     reskin(f)
@@ -845,7 +880,7 @@ end
 
 @test("reskin: a category row: its name a header, a rule under it")
 local function categoryRow()
-    local f = CreateFrame("Frame", nil, host()) :: any
+    local f = CreateFrame("Frame", nil, host())
     f:SetSize(200, 20)
     local bar = f:CreateTexture()
     bar:SetAtlas("Options_ListExpand_Right-collapseexpand")
@@ -862,32 +897,32 @@ end
 
 @test("reskin: the parts inside a frame, by kind; SuuUI's own frames left out")
 local function passChildren()
-    local f = CreateFrame("Frame", nil, host()) :: any
+    local f = CreateFrame("Frame", nil, host()) :: Frame & { CollapseButton: Button }
     f:SetSize(300, 200)
-    local status = CreateFrame("StatusBar", nil, f) :: any
+    local status = CreateFrame("StatusBar", nil, f)
     status:SetStatusBarTexture(WHITE)
-    local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate") :: any
-    local noCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate") :: any
+    local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+    local noCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate") :: CheckButton & { suuNoCheck: boolean }
     noCheck.suuNoCheck = true
-    local eb = CreateFrame("EditBox", nil, f, "InputBoxTemplate") :: any
+    local eb = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
     eb:SetAutoFocus(false)
-    local dd = CreateFrame("DropdownButton", nil, f, "WowStyle1DropdownTemplate") :: any
-    local fill = CreateFrame("Frame", nil, f, "ColoredProgressBarTemplate") :: any
-    local ownFill = CreateFrame("Frame", nil, f) :: any
+    local dd = CreateFrame("DropdownButton", nil, f, "WowStyle1DropdownTemplate")
+    local fill = CreateFrame("Frame", nil, f, "ColoredProgressBarTemplate")
+    local ownFill = CreateFrame("Frame", nil, f) :: Frame & { Fill: Texture }
     ownFill.Fill = ownFill:CreateTexture()
     ownFill.Fill:SetAtlas("ui-stat-bar-blue")
-    local collapse = CreateFrame("Button", nil, f) :: any
+    local collapse = CreateFrame("Button", nil, f)
     f.CollapseButton = collapse
     collapse:SetNormalTexture("Interface\\Buttons\\UI-MinusButton-Up")
-    local panel = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") :: any
-    local noButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") :: any
+    local panel = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local noButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") :: Button & { suuNoButton: boolean }
     noButton.suuNoButton = true
-    local scroll = CreateFrame("EventFrame", nil, f, "MinimalScrollBar") :: any
-    local own = CreateFrame("Frame", nil, f) :: any
+    local scroll = CreateFrame("EventFrame", nil, f, "MinimalScrollBar")
+    local own = CreateFrame("Frame", nil, f) :: Frame & { suuOwn: boolean }
     own.suuOwn = true
     local ownText = own:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     ownText:SetTextColor(1, 0.82, 0)
-    local arrowButton = CreateFrame("Button", nil, f) :: any
+    local arrowButton = CreateFrame("Button", nil, f) :: Button & { Arrow: Texture, Text: FontString }
     arrowButton.Arrow = arrowButton:CreateTexture()
     arrowButton.Text = arrowButton:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     reskin(f)
@@ -913,9 +948,9 @@ end
 
 @test("reskin: seven levels deep at most")
 local function depth()
-    local f = CreateFrame("Frame", nil, host()) :: any
+    local f = CreateFrame("Frame", nil, host())
     local cur = f
-    local texts: any[] = {}
+    local texts: FontString[] = {}
     for i = 1, 8 do
         cur = CreateFrame("Frame", nil, cur)
         local s = cur:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -930,25 +965,26 @@ end
 @test("reskinScrollBox: Blizzard's list, its rows now and after each update")
 local function scrollBox()
     local p = host()
-    local box = CreateFrame("Frame", nil, p, "WowScrollBoxList") :: any
+    local box = CreateFrame("Frame", nil, p, "WowScrollBoxList") :: ScrollBoxList
     box:SetSize(200, 200)
     box:SetPoint("CENTER")
     local bar = CreateFrame("EventFrame", nil, p, "MinimalScrollBar")
-    local view = CreateScrollBoxListLinearView()
+    local view = linearView()
     view:SetElementExtent(20)
-    view:SetElementInitializer("Button", function(row: any, data: any)
-        row.label = row.label or row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        row.label:SetAllPoints()
-        row.label:SetTextColor(1, 0.82, 0)
-        row.label:SetText(data.name)
+    view:SetElementInitializer("Button", function(row, data)
+        local label = row.label or row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.label = label
+        label:SetAllPoints()
+        label:SetTextColor(1, 0.82, 0)
+        label:SetText(data.name)
     end)
-    ScrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
-    local provider = CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } })
+    scrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+    local provider: DataProvider = CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } })
     box:SetDataProvider(provider)
     reskinScrollBox(box)
     expect(skin(box).scrollBox).toBe(true)
     local seen = 0
-    box:ForEachFrame(function(row: any)
+    box:ForEachFrame(function(row)
         seen = seen + 1
         expect(tokenOf(row.label)).toBe("ink")
     end)
@@ -956,7 +992,7 @@ local function scrollBox()
     -- an update: the new rows too
     provider:Insert({ name = "Gamma" })
     mock.advanceFrames(2)
-    box:ForEachFrame(function(row: any) expect(tokenOf(row.label)).toBe("ink") end)
+    box:ForEachFrame(function(row) expect(tokenOf(row.label)).toBe("ink") end)
     -- shown again: a frame later
     box:Hide()
     box:Show()
@@ -967,7 +1003,7 @@ end
 
 @test("reskinScrollBox: a box without ForEachFrame walks its target's children")
 local function scrollBoxPlain()
-    local box = CreateFrame("Frame", nil, host()) :: any
+    local box = CreateFrame("Frame", nil, host()) :: Frame & { ScrollTarget: Frame, Shadows: Frame }
     box.ScrollTarget = CreateFrame("Frame", nil, box)
     local row = CreateFrame("Frame", nil, box.ScrollTarget)
     local bar = row:CreateTexture()
@@ -982,9 +1018,9 @@ end
 
 @test("a pass over a frame with a ScrollBox reskins the box's rows")
 local function passScrollBox()
-    local f = CreateFrame("Frame", nil, host()) :: any
-    local box = CreateFrame("Frame", nil, f, "WowScrollBoxList") :: any
-    box:Init(CreateScrollBoxListLinearView())
+    local f = CreateFrame("Frame", nil, host())
+    local box = CreateFrame("Frame", nil, f, "WowScrollBoxList") :: ScrollBoxList
+    box:Init(linearView())
     reskin(f)
     expect(skin(box).scrollBox).toBe(true)
 end
@@ -992,7 +1028,7 @@ end
 @test("Blizzard's scrolling text: measured again a frame after the pass and each text")
 local function scrollingFont()
     -- (the character window's side pane holds one, its font named)
-    local pane = CreateFrame("Frame", nil, host(), "CharacterFrameSidePaneTemplate") :: any
+    local pane = CreateFrame("Frame", nil, host(), "CharacterFrameSidePaneTemplate") :: Frame & { Description: ScrollingFont }
     pane:SetSize(220, 200)
     pane:SetPoint("CENTER")
     local f = pane.Description
@@ -1016,17 +1052,17 @@ end
 
 @test("reskinDialog: Blizzard's small dialog as a SuuUI panel; its close as the cross")
 local function dialogPanel()
-    local f = CreateFrame("Frame", "SuuUITestDialog", host(), "BasicFrameTemplate") :: any
+    local f = CreateFrame("Frame", "SuuUITestDialog", host(), "BasicFrameTemplate") :: Frame & { TitleText: FontString, TitleBg: Texture, CloseButton: Button }
     f:SetSize(300, 200)
     f:SetPoint("CENTER")
     f.TitleText:SetText("Guild Information")
-    local box = CreateFrame("Frame", nil, f) :: any
+    local box = CreateFrame("Frame", nil, f) :: Frame & { NineSlice: Frame }
     box:SetSize(260, 120)
     box:SetPoint("CENTER")
     box.NineSlice = CreateFrame("Frame", nil, box)
-    local edit = CreateFrame("EditBox", nil, CreateFrame("ScrollFrame", nil, box)) :: any
+    local edit = CreateFrame("EditBox", nil, CreateFrame("ScrollFrame", nil, box))
     edit:SetAutoFocus(false)
-    local small = CreateFrame("Frame", nil, f) :: any
+    local small = CreateFrame("Frame", nil, f)
     small:SetSize(20, 20)
     reskinDialog(f)
     expect(skin(f).dialog).toBe(true)
@@ -1056,8 +1092,9 @@ local function popup()
     local accepted = mock.spy()
     StaticPopupDialogs[POPUP] = { text = "Set the note for %s", button1 = ACCEPT, button2 = CANCEL, hasEditBox = true,
         OnAccept = function() accepted() end, timeout = 0, whileDead = true, hideOnEscape = true }
-    local dialog = StaticPopup_Show(POPUP, "Tamsin Ashford") :: any
-    expect(dialog).never.toBeNil()
+    local shown: PopupParts? = StaticPopup_Show(POPUP, "Tamsin Ashford")
+    expect(shown).never.toBeNil()
+    local dialog = assert(shown)
     local text = dialog.Text
     local r0, g0, b0 = text:GetTextColor()
     reskinPopup(dialog)

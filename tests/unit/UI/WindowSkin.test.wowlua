@@ -15,6 +15,7 @@ import measureText from "/UI/Text"
 import skinWindow, isCoveredByWindow, layout, centerWindow, queue, windowRow, WINDOW_HEAD_H from "/UI/WindowSkin"
 import internal fitTabs, tabSkins from "/UI/WindowSkin"
 import chromeOf from "/UI/WindowSkin"
+import type WindowChrome from "/UI/WindowSkin"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, themeChanged from "./WindowsHelpers"
 
@@ -27,18 +28,23 @@ end
 local showSpy = mock.spy()
 local hideSpy = mock.spy()
 mock.module(tooltip, {
-    showTooltip = function(owner: any, data: any) showSpy(owner, data) end,
+    showTooltip = function(owner: Region, data: tooltip.TooltipSource) showSpy(owner, data) end,
     hideTooltip = function() hideSpy() end,
 })
 
-local made: any[] = {}
+-- The parts of Blizzard's ButtonFrameTemplate and PanelTabButtonTemplate the
+-- tests reach.
+type ButtonWindow = Frame & { CloseButton: Button, NineSlice: Frame, PortraitContainer: Frame }
+type TabParts = Button & { Left: Texture, LeftActive: Texture }
+
+local made: Frame[] = {}
 local count = 0
 local parent: Frame? = nil
 
 -- One of Blizzard's windows: a ButtonFrameTemplate frame, shown, 400 wide.
-local function window(width: number?): any
+local function window(width: number?): ButtonWindow
     count = count + 1
-    local f = CreateFrame("Frame", "SuuUITestWindow" .. count, UIParent, "ButtonFrameTemplate") :: any
+    local f = CreateFrame("Frame", "SuuUITestWindow" .. count, UIParent, "ButtonFrameTemplate") :: ButtonWindow
     f:SetSize(width or 400, 300)
     f:SetPoint("CENTER")
     f:Show()
@@ -46,8 +52,8 @@ local function window(width: number?): any
     return f
 end
 
-local function tab(f: any, i: number): any
-    local b = CreateFrame("Button", f:GetName() .. "Tab" .. i, f, "PanelTabButtonTemplate") :: any
+local function tab(f: Frame, i: number): TabParts
+    local b = CreateFrame("Button", (f:GetName() or "") .. "Tab" .. i, f, "PanelTabButtonTemplate") :: TabParts
     b:SetPoint("TOPLEFT", f, "BOTTOMLEFT", (i - 1) * 80, 0)
     return b
 end
@@ -150,10 +156,10 @@ local function closeButton()
     skinWindow(f, { close = f.CloseButton })
     local close = f.CloseButton
     -- Blizzard's art away; SuuUI's edge (gilt-line parts) only on hover
-    local edge: any[] = {}
+    local edge: Region[] = {}
     for _, r in ipairs({ close:GetRegions() }) do
         if tokenOf(r) == "gilt-line" then edge[#edge + 1] = r
-        elseif (r :: any):GetObjectType() == "Texture" then expect((r :: any):GetAlpha()).toBe(0) end
+        elseif r:GetObjectType() == "Texture" then expect(r:GetAlpha()).toBe(0) end
     end
     expect(#edge).toBe(4)
     expect(edge[1]).never.toBeShown()
@@ -349,14 +355,14 @@ end
 local function ownSelected()
     local f = window(600)
     local chrome = skinWindow(f, {})
-    local b = CreateFrame("Button", nil, f) :: any
+    local b = CreateFrame("Button", nil, f)
     local mark = b:CreateTexture()
     chrome:SetTabs({ { button = b, label = "A", selectedTexture = mark, selected = function() return mark:IsShown() end } })
     mark:Hide()
     expect(tokenOf(assert(tabSkins[b]).label)).toBe("ink-muted")
     mark:Show()
     expect(tokenOf(assert(tabSkins[b]).label)).toBe("gilt-text")
-    local plain = CreateFrame("Button", nil, f) :: any
+    local plain = CreateFrame("Button", nil, f)
     chrome:SetTabs({ { button = plain, label = "B" } })
     expect(assert(tabSkins[plain])).never.toBeNil()
 end
@@ -472,7 +478,7 @@ local function coveredSecret()
     local f = window()
     skinWindow(f, {})
     parent = newParent(20, 20)
-    local p = parent :: any
+    local p = assert(parent)
     p:ClearAllPoints()
     p:SetPoint("CENTER", f, "CENTER")
     mock.stub(p, "GetLeft", function() return mock.secret(10) end)
@@ -513,7 +519,7 @@ local function rowAnchor(): Frame
     return a
 end
 
-local function rowWindow(width: number?): (any, any)
+local function rowWindow(width: number?): (ButtonWindow, WindowChrome)
     local f = window(width)
     f:Hide()
     local chrome = skinWindow(f, { under = "testRow" })
@@ -529,7 +535,7 @@ local function row()
     expect(windowRow.list).toContain(c1)
     f2:Show()
     f1:Show()
-    expect(c1.openedAt > c2.openedAt).toBe(true)
+    expect(assert(c1.openedAt) > assert(c2.openedAt)).toBe(true)
     local left, bottom = a:GetLeft(), a:GetBottom()
     local es = f2:GetEffectiveScale()
     local _, _, _, x2, y2 = f2:GetPoint(1)
@@ -712,7 +718,7 @@ end
 
 @test("CharacterFrame wears the chrome: header, tabs from its mode tabs, in the row")
 local function characterFrame()
-    local cf = CharacterFrame :: any
+    local cf = CharacterFrame :: Frame & { NineSlice: Frame }
     local chrome = assert(chromeOf(cf))
     expect(chrome).never.toBeNil()
     expect(chrome.title).toHaveText("Character")

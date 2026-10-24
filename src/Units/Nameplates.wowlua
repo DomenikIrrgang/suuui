@@ -35,7 +35,7 @@
 import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
 import type SettingsSection from "/Core/Modules"
-import gameUnits from "/UI/UnitFrame"
+import gameUnits, curveAmount from "/UI/UnitFrame"
 import type StandInPerson, UnitApi from "/UI/UnitFrame"
 import type Text from "/UI/Text"
 import type StateBadge from "/UI/Controls"
@@ -496,7 +496,7 @@ export class Nameplate extends Frame
         local curve = belowLow()
         local percent = A.UnitHealthPercent
         if curve and percent then
-            self.healthLow:SetAlpha(amount(percent(u, true, curve)))
+            self.healthLow:SetAlpha(curveAmount(percent(u, true, curve)))
         else
             self.healthLow:SetAlpha(0)
         end
@@ -510,8 +510,9 @@ export class Nameplate extends Frame
         local hasPct = (mode == "percent" or mode == "both") and percent ~= nil and CurveConstants ~= nil
         local hasValue = false -- a plain flag: the value itself may be secret
         if hasPct and percent then
-            local p = percent(u, true, CurveConstants.ScaleTo100)
-            pct = isSecret(p) and p or (p or 0) + 0.5
+            local p = curveAmount(percent(u, true, CurveConstants.ScaleTo100))
+            -- (a plain if: `secret and secret or …` would test the secret)
+            if isSecret(p) then pct = p else pct = p + 0.5 end
         end
         if mode == "value" or mode == "both" then
             local ok, text = pcall(AbbreviateNumbers, amount(cur))
@@ -541,7 +542,7 @@ export class Nameplate extends Frame
             local okPlayer, player = pcall(A.UnitIsPlayer, u)
             if okPlayer and flag(player) then
                 local _, class = A.UnitClass(u)
-                if class ~= nil then
+                if isSecret(class) or class ~= nil then
                     local c = errors.tryValue(C_ClassColor.GetClassColor, class)
                     if c then pcall(self.name.SetTextColor, self.name, c:GetRGB()) end
                 end

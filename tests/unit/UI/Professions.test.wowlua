@@ -11,6 +11,8 @@ import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import professions, PROFESSIONS_W, PROFESSIONS_H, PROFESSION_FILTER_DEFAULTS, ProfessionsOptions from "/UI/Professions"
+import type Professions, RecipeRow, ProfessionCard, ProfessionOverview, CraftingData, RecipeDetail, RecipeEntry, RecipeReagent from "/UI/Professions"
+import type FilterValues from "/UI/FilterMenu"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, borderToken from "./WorldHelpers"
 
@@ -18,7 +20,7 @@ local S = T.space
 
 local parent: Frame? = nil
 
-local function make(opts: ProfessionsOptions?): any
+local function make(opts: ProfessionsOptions?): Professions
     parent = newParent(PROFESSIONS_W, PROFESSIONS_H)
     local p = professions(parent, opts)
     p:SetAllPoints()
@@ -36,8 +38,8 @@ local function cleanup()
     expectNoErrors()
 end
 
-local function shownRows(p: any): any[]
-    local out: any[] = {}
+local function shownRows(p: Professions): RecipeRow[]
+    local out: RecipeRow[] = {}
     for _, r in ipairs(p.listRows) do if r:IsShown() then out[#out + 1] = r end end
     return out
 end
@@ -49,7 +51,7 @@ end
 @test("the rail: a tab per entry, the chosen one gilt, the rest hairline; centred by edgeInset")
 local function rail()
     local p = make({ edgeInset = 30 })
-    local onTab = mock.spy(function(_k: any) end)
+    local onTab = mock.spy(function(_k: string | number) end)
     p:SetTabs({
         { key = "overview", label = "Overview", glyph = "compass" },
         { key = "alchemy", label = "Alchemy", icon = 136240 },
@@ -64,7 +66,7 @@ local function rail()
     expect(b.icon.art:GetTextureFileID()).toBe(136240)
     expect(b.icon.borderToken).toBe("gilt")
     expect(a.icon.borderToken).toBe("gilt-hairline")
-    expect(p.tabMarker.chosen).toBe(b)
+    expect(assert(p.tabMarker).chosen).toBe(b)
     local _, _, _, x, y = c:GetPoint(1)
     expect(x).toBe(15)
     expect(y).toBe(-2 * (32 + S["space-4"]))
@@ -82,7 +84,7 @@ local function rail()
     p:SetTabs({ { key = "overview", label = "Overview" } }, "nothing")
     expect(b).never.toBeShown()
     expect(c).never.toBeShown()
-    expect(p.tabMarker.chosen).toBeNil()
+    expect(assert(p.tabMarker).chosen).toBeNil()
     p:SetTabs(nil, nil)
     expect(a).never.toBeShown()
 end
@@ -91,7 +93,7 @@ end
 -- Overview
 --------------------------------------------------------------------------------
 
-local ALCHEMY: { [string]: any } = {
+local ALCHEMY: ProfessionCard = {
     name = "Alchemy", rank = "Journeyman", icon = 136240, skill = 83, max = 150, crafting = true,
     recipes = { learned = 12, total = 40 },
 }
@@ -180,7 +182,7 @@ end
 @test("spells: under the bars, active ones arcane, clickable ink, the rest muted; hover, click and drag")
 local function spells()
     local p = make()
-    local clicked, entered, left, dragged = mock.spy(), mock.spy(function(_o: any) end), mock.spy(), mock.spy()
+    local clicked, entered, left, dragged = mock.spy(), mock.spy(function(_o: Frame) end), mock.spy(), mock.spy()
     p:SetOverview({ primary = { {
         name = "Enchanting", rank = "Apprentice", icon = 136244, skill = 1, max = 75, crafting = true,
         spells = {
@@ -230,9 +232,9 @@ end
 @test("a card: hover gilds a crafting one, a click opens it, a drag its spell, Unlearn its own")
 local function cardInput()
     local p = make()
-    local opened = mock.spy(function(_c: any) end)
+    local opened = mock.spy(function(_c: ProfessionCard) end)
     local dragged, unlearned = mock.spy(), mock.spy()
-    local card: { [string]: any } = { name = "Alchemy", rank = "", icon = 1, skill = 1, max = 75, crafting = true,
+    local card: ProfessionCard = { name = "Alchemy", rank = "", icon = 1, skill = 1, max = 75, crafting = true,
         onDrag = dragged, onUnlearn = unlearned }
     p:SetOverview({ primary = { card, { name = "Mining", rank = "", icon = 2, skill = 1, max = 75 } } })
     local c, mining = p.cards[1], p.cards[2]
@@ -274,7 +276,7 @@ end
 @test("the secondary row wraps after three; the overview before it has a width")
 local function secondaryRows()
     local p = make()
-    local sec: { [string]: any }[] = {}
+    local sec: ProfessionCard[] = {}
     for i = 1, 4 do sec[i] = { name = "Secondary " .. i, rank = "", icon = i, skill = 1, max = 75 } end
     p:SetOverview({ secondary = sec })
     local first, fourth = p.cards[3], p.cards[6]
@@ -298,8 +300,8 @@ end
 -- Crafting: the head and the list
 --------------------------------------------------------------------------------
 
-local function craft(over: { [string]: any }?): { [string]: any }
-    local d: { [string]: any } = {
+local function craft(over: CraftingData?): CraftingData
+    local d: CraftingData = {
         name = "Alchemy", rank = "Journeyman", skill = 83, max = 150, recipes = { learned = 3, total = 10 },
         categories = {
             { name = "Potions", recipes = {
@@ -391,7 +393,7 @@ local function folding()
         { id = 1, name = "A" }, { id = 2, name = "B" } } } } }))
     local rows = shownRows(p)
     expect(#rows).toBe(2)
-    expect(rows[1].recipe.name).toBe("A")
+    expect(assert(rows[1].recipe).name).toBe("A")
     -- a recipe without a difficulty: trivial
     expect(tokenOf(rows[1].label)).toBe("quest-trivial")
 end
@@ -401,16 +403,16 @@ local function rowInput()
     local p = make()
     p:SetCrafting(craft())
     local heal = shownRows(p)[2]
-    local entered = mock.spy(function(_r: any, _o: any) end)
-    local selected = mock.spy(function(_id: any) end)
-    local linked = mock.spy(function(_id: any) end)
+    local entered = mock.spy(function(_r: RecipeEntry, _o: Frame) end)
+    local selected = mock.spy(function(_id: number) end)
+    local linked = mock.spy(function(_id: number) end)
     mock.hover(heal)
     expect(heal.hover).toBeShown()
     p.onRecipeEnter = entered
     mock.hover(nil)
     expect(heal.hover).never.toBeShown()
     mock.hover(heal)
-    expect(entered).toHaveBeenCalledWith(heal.recipe, heal)
+    expect(entered).toHaveBeenCalledWith(assert(heal.recipe), heal)
     mock.click(heal)
     p.onSelect = selected
     mock.click(heal)
@@ -436,8 +438,8 @@ end
 -- Crafting: the chosen recipe
 --------------------------------------------------------------------------------
 
-local function recipe(over: { [string]: any }?): { [string]: any }
-    local r: { [string]: any } = {
+local function recipe(over: RecipeDetail?): RecipeDetail
+    local r: RecipeDetail = {
         name = "Minor Healing Potion", quality = 1, qualityName = "common", icon = 134829, makes = 1,
         desc = "Restores 70 to 90 health.",
         reagents = {
@@ -481,18 +483,18 @@ local function chosen()
     expect(tokenOf(a.name)).toBe("quality-common")
     expect(a.count).toHaveText("3 / 1")
     expect(tokenOf(a.count)).toBe("ink")
-    expect(a.slot.skin.item.dim).toBe(false)
+    expect(assert(a.slot.skin.item).dim).toBe(false)
     -- short of one: muted, the count ember, the slot dimmed
     expect(tokenOf(b.name)).toBe("ink-muted")
     expect(b.count).toHaveText("0 / 1")
     expect(tokenOf(b.count)).toBe("ember-text")
-    expect(b.slot.skin.item.dim).toBe(true)
+    expect(assert(b.slot.skin.item).dim).toBe(true)
     -- one product: no Makes
     p:SetRecipe(recipe())
     expect(v.makes).toHaveText("")
     -- a reagent's and the product's hover to their callbacks
-    local onReagent = mock.spy(function(_i: number, _o: any) end)
-    local onProduct = mock.spy(function(_o: any) end)
+    local onReagent = mock.spy(function(_i: number, _o: Frame) end)
+    local onProduct = mock.spy(function(_o: Frame) end)
     mock.hover(a.slot)
     p:SetRecipe(recipe({ onReagent = onReagent, onProduct = onProduct }))
     mock.hover(b.slot)
@@ -524,7 +526,7 @@ end
 @test("a source: its head, the recipe item with its note, where it is; or only lines, or only the item")
 local function source()
     local p = make()
-    local entered = mock.spy(function(_o: any) end)
+    local entered = mock.spy(function(_o: Frame) end)
     p:SetRecipe(recipe({ source = {
         item = { icon = 134939, name = "Recipe: Swiftness Potion", quality = 1, qualityName = "common", note = "Vendor", onEnter = entered },
         lines = { "Sold by Tamsin Ashford", "Elwynn Forest" },
@@ -579,7 +581,7 @@ end
 @test("a new recipe starts at the top; the same one keeps the scroll")
 local function scrollBack()
     local p = make()
-    local many: { [string]: any }[] = {}
+    local many: RecipeReagent[] = {}
     for i = 1, 20 do many[i] = { name = "Reagent " .. i, icon = i, have = 1, need = 1 } end
     p:SetRecipe(recipe({ reagents = many }))
     local v = p.recipe
@@ -647,7 +649,7 @@ end
 @test("the product Shift-clicked: the selected recipe linked")
 local function productLink()
     local p = make()
-    local linked = mock.spy(function(_id: any) end)
+    local linked = mock.spy(function(_id: number) end)
     p:SetCrafting(craft())
     p:SetRecipe(recipe())
     local v = p.recipe
@@ -693,8 +695,8 @@ local function filters()
     local p = make()
     p:SetCrafting(craft())
     local searched = mock.spy(function(_t: string) end)
-    local filtered = mock.spy(function(_v: any) end)
-    local sorted = mock.spy(function(_v: any) end)
+    local filtered = mock.spy(function(_v: FilterValues) end)
+    local sorted = mock.spy(function(_v: string) end)
     mock.typeText(p.search.edit, "po")
     p.onSearch, p.onFilters, p.onSort = searched, filtered, sorted
     mock.typeText(p.search.edit, "t")
@@ -702,20 +704,20 @@ local function filters()
     p:SetFilters({ show = "all", difficulty = { "optimal" } })
     expect(p.filterMenu:GetValue().show).toBe("all")
     expect(p.filterMenu:GetValue().difficulty).toEqual({ "optimal" })
-    p.filterMenu.onChange({ show = "unlearned" })
+    assert(p.filterMenu.onChange)({ show = "unlearned" })
     expect(filtered).toHaveBeenCalledWith({ show = "unlearned" })
     p:SetSort("name")
     expect(p.sort.value).toBe("name")
     p:SetSort(nil)
     expect(p.sort.value).toBe("category")
-    p.sort.onChange("skill")
+    assert(p.sort.onChange)("skill")
     expect(sorted).toHaveBeenCalledWith("skill")
     expect(PROFESSION_FILTER_DEFAULTS.show).toBe("learned")
     -- without callbacks: nothing
     p.onSearch, p.onFilters, p.onSort = nil, nil, nil
     mock.typeText(p.search.edit, "x")
-    p.filterMenu.onChange({})
-    p.sort.onChange("name")
+    assert(p.filterMenu.onChange)({})
+    assert(p.sort.onChange)("name")
 end
 
 --------------------------------------------------------------------------------
@@ -732,8 +734,8 @@ local function theme(mode: string)
         p:SetCrafting(craft())
         p:SetRecipe(recipe())
     end
-    local set = mock.spy(function(_d: any) end)
-    local crafting = mock.spy(function(_d: any) end)
+    local set = mock.spy(function(_d: ProfessionOverview) end)
+    local crafting = mock.spy(function(_d: CraftingData) end)
     mock.stub(p, "SetOverview", set)
     mock.stub(p, "SetCrafting", crafting)
     events.emit("SUUUI_THEME_CHANGED", "suuui")
